@@ -1,0 +1,16 @@
+{
+  "name": "ralph",
+  "version": "0.1.0",
+  "description": "Autonomous Claude Code task iteration loop with HTTP control plane",
+  "main": "server.js",
+  "bin": {
+    "ralph": "./ralph.sh",
+    "ralph-server": "./server.js"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "loop": "bash ralph.sh"
+  },
+  "keywords": ["claude", "ai", "automation", "loop", "agent"],
+  "license": "MIT"
+}
