@@ -373,35 +373,33 @@ run_claude() {
 # --- Build prompt for Claude ---
 build_prompt() {
   local task_prompt="$1"
-  local template
+  local template_file
 
   if [[ "$EXTERNAL_PLAN" == true ]]; then
-    template="$PROMPTS_DIR/external.md"
+    template_file="$PROMPTS_DIR/external.md"
   else
-    template="$PROMPTS_DIR/internal.md"
+    template_file="$PROMPTS_DIR/internal.md"
   fi
 
-  if [[ ! -f "$template" ]]; then
-    log_error "Prompt template not found: $template"
+  if [[ ! -f "$template_file" ]]; then
+    log_error "Prompt template not found: $template_file"
     exit 1
   fi
 
-  local escaped_task
-  escaped_task=$(printf '%s' "$task_prompt" | sed 's/[&|\]/\\&/g')
+  local result
+  result=$(<"$template_file")
+  result+=$'\n'
+  result+=$(<"$PROMPTS_DIR/signal.md")
 
-  local subs=(
-    -e "s|{{WORK_DIR}}|$WORK_DIR|g"
-    -e "s|{{RALPH_DIR}}|$RALPH_DIR|g"
-    -e "s|{{PLAN_FILE}}|$PLAN_FILE|g"
-    -e "s|{{SIGNAL_FILE}}|$SIGNAL_FILE|g"
-    -e "s|{{SIGNAL_TOKEN}}|$SIGNAL_TOKEN|g"
-    -e "s|{{CURRENT_TASK_TOKEN}}|$CURRENT_TASK_TOKEN|g"
-    -e "s|{{TASK_PROMPT}}|$escaped_task|g"
-  )
+  result="${result//\{\{WORK_DIR\}\}/$WORK_DIR}"
+  result="${result//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
+  result="${result//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
+  result="${result//\{\{SIGNAL_FILE\}\}/$SIGNAL_FILE}"
+  result="${result//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
+  result="${result//\{\{CURRENT_TASK_TOKEN\}\}/$CURRENT_TASK_TOKEN}"
+  result="${result//\{\{TASK_PROMPT\}\}/$task_prompt}"
 
-  sed "${subs[@]}" "$template"
-  echo ""
-  sed "${subs[@]}" "$PROMPTS_DIR/signal.md"
+  printf '%s' "$result"
 }
 
 # --- Planning phase ---
