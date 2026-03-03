@@ -182,12 +182,15 @@ remap_plan_file() {
   if [[ "$EXTERNAL_PLAN" == true && "$WORK_DIR" != "$PROJECT_DIR" ]]; then
     local rel_plan="${PLAN_FILE#$PROJECT_DIR/}"
     if [[ "$rel_plan" == /* ]]; then
-      # Plan file is outside project dir — copy to worktree root
       rel_plan="$(basename "$PLAN_FILE")"
     fi
     local worktree_plan="$WORK_DIR/$rel_plan"
-    mkdir -p "$(dirname "$worktree_plan")"
-    cp "$PLAN_FILE" "$worktree_plan"
+    # On resume, the worktree already has the plan file (possibly modified by
+    # previous iterations). Only copy on first run to seed the worktree.
+    if [[ "$RESUME" != true ]]; then
+      mkdir -p "$(dirname "$worktree_plan")"
+      cp "$PLAN_FILE" "$worktree_plan"
+    fi
     PLAN_FILE="$worktree_plan"
   fi
 }
@@ -264,12 +267,12 @@ read_signal_summary() {
   [[ -f "$SIGNAL_FILE" ]] && grep "$SIGNAL_TOKEN" "$SIGNAL_FILE" | sed "s/.*$SIGNAL_TOKEN *//" | head -1
 }
 
-# --- Run Claude with watcher ---
-# Runs claude in the project dir. A background watcher monitors the signal file.
+# --- Run Claude with signal polling ---
+# Runs claude in the project dir. Polls the signal file inline.
 # When the signal is detected OR claude exits, we proceed.
 run_claude() {
   local prompt="$1"
-  local claude_pid watcher_pid tail_pid exit_code
+  local claude_pid tail_pid
   tail_pid=""
 
   clear_signal
@@ -323,53 +326,48 @@ run_claude() {
     tail_pid=$!
   fi
 
-  # Background watcher: polls signal file
-  (
-    task_logged=false
-    while kill -0 "$claude_pid" 2>/dev/null; do
-      # Log current task when agent signals it (once)
-      if [[ "$task_logged" == false ]] && check_current_task; then
-        task_desc=$(read_current_task)
+  # Poll for completion signal or Claude exit (inline, no subshell —
+  # a background watcher subshell inherits set -e and can die silently
+  # on harmless races between check_current_task and read_current_task)
+  local task_logged=false signal_detected=false
+  while kill -0 "$claude_pid" 2>/dev/null; do
+    if [[ "$task_logged" == false ]] && check_current_task; then
+      local task_desc
+      task_desc=$(read_current_task) || true
+      if [[ -n "$task_desc" ]]; then
         log "Working on: $task_desc"
         write_state "last_task" "$task_desc"
         task_logged=true
       fi
-      # Kill on completion signal
-      if check_signal; then
-        summary=$(read_signal_summary)
-        log_success "Completed: ${summary:-task done}"
-        kill "$claude_pid" 2>/dev/null || true
-        [[ -n "$tail_pid" ]] && kill "$tail_pid" 2>/dev/null || true
-        exit 0
-      fi
-      sleep "$WATCHER_INTERVAL"
-    done
-  ) &
-  watcher_pid=$!
+    fi
+    if check_signal; then
+      local summary
+      summary=$(read_signal_summary) || true
+      log_success "Completed: ${summary:-task done}"
+      kill "$claude_pid" 2>/dev/null || true
+      sleep 2
+      kill -0 "$claude_pid" 2>/dev/null && kill -9 "$claude_pid" 2>/dev/null || true
+      signal_detected=true
+      break
+    fi
+    sleep "$WATCHER_INTERVAL"
+  done
 
-  # Wait for claude to finish
+  # Reap claude process
   wait "$claude_pid" 2>/dev/null || true
-  exit_code=$?
 
-  # Clean up tail and watcher
+  # Clean up tail
   [[ -n "$tail_pid" ]] && kill "$tail_pid" 2>/dev/null || true
   [[ -n "$tail_pid" ]] && wait "$tail_pid" 2>/dev/null || true
-  kill "$watcher_pid" 2>/dev/null || true
-  wait "$watcher_pid" 2>/dev/null || true
 
   # Check if signal was written (claude may have exited after writing it)
   if check_signal; then
-    log_success "Task completed via signal"
+    [[ "$signal_detected" == false ]] && log_success "Task completed via signal"
     return 0
   fi
 
-  if [[ $exit_code -eq 0 ]]; then
-    log "Claude exited cleanly (no signal)"
-    return 0
-  else
-    log_warn "Claude exited with code $exit_code"
-    return $exit_code
-  fi
+  log "Claude exited (no completion signal)"
+  return 0
 }
 
 # --- Build prompt for Claude ---
@@ -434,16 +432,12 @@ Look at CLAUDE.md, prompt.md, README.md, or any task-related files for context.
 Create a plan of atomic, self-contained tasks."
   fi
 
-  local escaped_context
-  escaped_context=$(printf '%s' "$planning_context" | sed 's/[&|\]/\\&/g')
-
   local planning_prompt
-  planning_prompt=$(sed \
-    -e "s|{{PLANNING_CONTEXT}}|$escaped_context|g" \
-    -e "s|{{PLAN_FILE}}|$PLAN_FILE|g" \
-    -e "s|{{SIGNAL_TOKEN}}|$SIGNAL_TOKEN|g" \
-    -e "s|{{SIGNAL_FILE}}|$SIGNAL_FILE|g" \
-    "$PROMPTS_DIR/planning.md")
+  planning_prompt=$(<"$PROMPTS_DIR/planning.md")
+  planning_prompt="${planning_prompt//\{\{PLANNING_CONTEXT\}\}/$planning_context}"
+  planning_prompt="${planning_prompt//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
+  planning_prompt="${planning_prompt//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
+  planning_prompt="${planning_prompt//\{\{SIGNAL_FILE\}\}/$SIGNAL_FILE}"
 
   run_claude "$planning_prompt"
 
@@ -504,8 +498,8 @@ run_execution() {
       fi
 
       # Post-iteration: read signal summary
-      local summary
-      summary=$(read_signal_summary)
+      local summary=""
+      summary=$(read_signal_summary) || true
       if [[ -n "$summary" ]]; then
         log "Summary: $summary"
       fi
@@ -545,8 +539,8 @@ run_execution() {
       fi
 
       # Post-iteration: read signal summary
-      local summary
-      summary=$(read_signal_summary)
+      local summary=""
+      summary=$(read_signal_summary) || true
       if [[ -n "$summary" ]]; then
         log "Summary: $summary"
       fi
