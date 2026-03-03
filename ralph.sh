@@ -42,7 +42,7 @@ usage() {
 ${BOLD}Ralph Loop v${VERSION}${NC} - Autonomous Claude Code task iteration
 
 ${BOLD}USAGE:${NC}
-  ralph.sh [OPTIONS]
+  ralph.sh [OPTIONS] [directory]
 
 ${BOLD}OPTIONS:${NC}
   -d, --dir <path>       Project directory (default: cwd)
@@ -54,9 +54,10 @@ ${BOLD}OPTIONS:${NC}
   -h, --help             Show this help
 
 ${BOLD}EXAMPLES:${NC}
-  ralph.sh -d ~/myproject -n 20
+  ralph.sh ~/myproject -n 20
   ralph.sh --resume
   ralph.sh -p "Fix all failing tests"
+  ralph.sh . --plan-file docs/TODO.md
 
 ${BOLD}HOW IT WORKS:${NC}
   1. Planning: Claude reads the repo and creates .ralph/plan.md with atomic tasks
@@ -80,7 +81,8 @@ while [[ $# -gt 0 ]]; do
     --resume)       RESUME=true; shift ;;
     --plan)         PLAN_ONLY=true; shift ;;
     -h|--help)      usage; exit 0 ;;
-    *)              log_error "Unknown option: $1"; usage; exit 1 ;;
+    -*)             log_error "Unknown option: $1"; usage; exit 1 ;;
+    *)              PROJECT_DIR="$1"; shift ;;
   esac
 done
 
