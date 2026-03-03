@@ -82,7 +82,7 @@ done
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 RALPH_DIR="$PROJECT_DIR/.ralph"
 PLAN_FILE="$RALPH_DIR/plan.md"
-STATE_FILE="$RALPH_DIR/state.json"
+STATE_FILE="$RALPH_DIR/state.md"
 SIGNAL_FILE="$RALPH_DIR/signal"
 STOP_FILE="$RALPH_DIR/stop"
 LOG_FILE="$RALPH_DIR/loop.log"
@@ -94,43 +94,31 @@ init_ralph_dir() {
   touch "$LOG_FILE"
 
   if [[ ! -f "$STATE_FILE" ]]; then
-    cat > "$STATE_FILE" <<'STATE'
-{
-  "iteration": 0,
-  "status": "initialized",
-  "started_at": null,
-  "completed_tasks": 0,
-  "total_tasks": 0,
-  "last_task": null
-}
+    cat > "$STATE_FILE" <<STATE
+# Ralph Loop State
+# Edit freely - ralph reads this on each iteration.
+
+status: initialized
+iteration: 0
+max_iterations: $MAX_ITERATIONS
+started_at:
 STATE
   fi
 }
 
 # --- State helpers ---
+# state.md uses simple "key: value" lines. Human-readable, grep-parseable.
 read_state() {
-  if command -v jq &>/dev/null; then
-    jq -r "$1" "$STATE_FILE"
-  else
-    # Fallback: basic grep/sed for environments without jq
-    local key="${1#.}"
-    grep "\"$key\"" "$STATE_FILE" | sed 's/.*: *"\?\([^",}]*\)"\?.*/\1/'
-  fi
+  local key="$1"
+  grep -m1 "^${key}:" "$STATE_FILE" 2>/dev/null | sed "s/^${key}: *//"
 }
 
 write_state() {
   local key="$1" value="$2"
-  if command -v jq &>/dev/null; then
-    local tmp
-    tmp=$(mktemp)
-    jq --arg v "$value" ".$key = (\$v | try tonumber catch \$v)" "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+  if grep -q "^${key}:" "$STATE_FILE" 2>/dev/null; then
+    sed -i "s|^${key}:.*|${key}: ${value}|" "$STATE_FILE"
   else
-    # Fallback: sed-based update
-    if echo "$value" | grep -qE '^[0-9]+$'; then
-      sed -i "s/\"$key\": *[^,}]*/\"$key\": $value/" "$STATE_FILE"
-    else
-      sed -i "s/\"$key\": *[^,}]*/\"$key\": \"$value\"/" "$STATE_FILE"
-    fi
+    echo "${key}: ${value}" >> "$STATE_FILE"
   fi
 }
 
@@ -287,7 +275,6 @@ After writing the plan, signal completion: echo \"$SIGNAL_TOKEN\" > \"$SIGNAL_FI
 
   local total
   total=$(count_total)
-  write_state "total_tasks" "$total"
   write_state "status" "planned"
   log_success "Plan created with $total tasks"
 }
@@ -329,8 +316,6 @@ run_execution() {
     write_state "iteration" "$iteration"
     write_state "status" "running"
     write_state "last_task" "$next_task"
-    write_state "completed_tasks" "$completed"
-    write_state "total_tasks" "$total"
 
     # Build task prompt
     local task_prompt="Complete this task: $next_task"
@@ -340,10 +325,8 @@ run_execution() {
       log_warn "Claude failed on iteration $iteration, continuing..."
     fi
 
-    # Update completed count
+    # Recount after claude ran
     completed=$(count_completed)
-    write_state "completed_tasks" "$completed"
-
     log "Iteration $iteration complete. ${completed}/${total} tasks done."
     echo ""
   done
@@ -405,7 +388,7 @@ main() {
 
   init_ralph_dir
 
-  write_state "started_at" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  write_state "started_at" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
   # Planning
   run_planning
