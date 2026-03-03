@@ -286,7 +286,7 @@ run_claude() {
     --add-dir "$WORK_DIR" \
     --permission-mode acceptEdits \
     --allowedTools "Bash" \
-    "$full_prompt" < /dev/null >> "$LOG_FILE" 2>&1 &
+    -p "$full_prompt" < /dev/null >> "$LOG_FILE" 2>&1 &
   claude_pid=$!
   log "Claude started (PID: $claude_pid)"
 
