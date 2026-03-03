@@ -46,6 +46,14 @@ log_warn()    { echo -e "${YELLOW}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
 log_error()   { echo -e "${RED}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
 log_phase()   { echo -e "${BOLD}${BLUE}[ralph]${NC} ${BOLD}$*${NC}" | tee -a "$LOG_FILE"; }
 
+# --- Helpers ---
+slugify() {
+  echo "$1" | tr '[:upper:]' '[:lower:]' | \
+    sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//' | cut -c1-50
+}
+
+_BRANCH_RENAMED=false
+
 # --- Usage ---
 usage() {
   cat <<EOF
@@ -173,10 +181,16 @@ setup_worktree() {
     fi
   fi
 
-  local session_id
-  session_id="ralph-$(date +%s)"
-  WORKTREE_BRANCH="$session_id"
-  WORK_DIR="$RALPH_DIR/worktrees/$session_id"
+  local project
+  project=$(basename "$PROJECT_DIR")
+  local existing
+  existing=$(git -C "$PROJECT_DIR" branch --list "ralph/$project/*" 2>/dev/null | wc -l | tr -d ' ')
+  local seq_num
+  seq_num=$(printf "%02d" $((existing + 1)))
+
+  WORKTREE_BRANCH="ralph/$project/$seq_num"
+  local worktree_id="ralph-${project}-${seq_num}"
+  WORK_DIR="$RALPH_DIR/worktrees/$worktree_id"
 
   mkdir -p "$RALPH_DIR/worktrees"
   git -C "$PROJECT_DIR" worktree add -b "$WORKTREE_BRANCH" "$WORK_DIR" HEAD
@@ -187,6 +201,29 @@ setup_worktree() {
 
   SIGNAL_FILE="$WORK_DIR/.ralph-signal"
   remap_plan_file
+}
+
+rename_branch_for_task() {
+  local task_desc="$1"
+  if [[ "$_BRANCH_RENAMED" == true || -z "$WORKTREE_BRANCH" || -z "$task_desc" ]]; then
+    return
+  fi
+  if [[ "$WORK_DIR" == "$PROJECT_DIR" ]]; then
+    return
+  fi
+
+  local slug
+  slug=$(slugify "$task_desc")
+  if [[ -z "$slug" ]]; then
+    return
+  fi
+
+  local new_branch="${WORKTREE_BRANCH}-${slug}"
+  if git -C "$WORK_DIR" branch -m "$WORKTREE_BRANCH" "$new_branch" 2>/dev/null; then
+    WORKTREE_BRANCH="$new_branch"
+    write_state "worktree_branch" "$WORKTREE_BRANCH"
+    _BRANCH_RENAMED=true
+  fi
 }
 
 remap_plan_file() {
@@ -206,6 +243,38 @@ remap_plan_file() {
   fi
 }
 
+# --- Stream filter helper ---
+write_stream_filter() {
+  cat > "$RALPH_DIR/.stream-filter.sh" <<'STREAM'
+#!/usr/bin/env bash
+tail -f "$1" | jq --raw-input --join-output --unbuffered '
+  fromjson? // empty |
+  if .type == "assistant" then
+    [.message.content[]? |
+      if .type == "text" then .text
+      elif .type == "tool_use" then
+        if .name == "TodoWrite" then
+          ([.input.todos[]? | .content] | if length == 0 then "[]"
+            else join(", ") end) as $items |
+          "\n[TodoWrite] " + $items + "\n"
+        else
+          (.input.file_path // .input.command // .input.pattern //
+            .input.query // .input.url // .input.description //
+            null) as $target |
+          if $target then "\n[" + .name + "] " + $target + "\n"
+          else "\n[" + .name + "]\n"
+          end
+        end
+      else empty end
+    ] | join("")
+  elif .type == "result" then
+    "\n[done]\n"
+  else empty end
+' 2>/dev/null
+STREAM
+  chmod +x "$RALPH_DIR/.stream-filter.sh"
+}
+
 # --- Tmux mode ---
 setup_tmux() {
   if ! command -v tmux &>/dev/null; then
@@ -216,29 +285,7 @@ setup_tmux() {
 
   TMUX_SESSION="ralph-$$"
 
-  # Write jq stream filter to a helper script (avoids quoting issues in tmux send-keys)
-  cat > "$RALPH_DIR/.tmux-stream.sh" <<'STREAM'
-#!/usr/bin/env bash
-tail -f "$1" | jq --raw-input --join-output --unbuffered '
-  fromjson? // empty |
-  if .type == "assistant" then
-    [.message.content[]? |
-      if .type == "text" then .text
-      elif .type == "tool_use" then
-        (.input.file_path // .input.command // .input.pattern //
-          .input.query // .input.url // .input.description //
-          null) as $target |
-        if $target then "\n[" + .name + "] " + $target + "\n"
-        else "\n[" + .name + "]\n"
-        end
-      else empty end
-    ] | join("")
-  elif .type == "result" then
-    "\n[done]\n"
-  else empty end
-' 2>/dev/null
-STREAM
-  chmod +x "$RALPH_DIR/.tmux-stream.sh"
+  write_stream_filter
 
   tmux new-session -d -s "$TMUX_SESSION" -c "$PROJECT_DIR"
   tmux split-window -h -t "$TMUX_SESSION"
@@ -246,7 +293,7 @@ STREAM
 
   # Top-right: jq-parsed Claude output
   tmux send-keys -t "$TMUX_SESSION:.1" \
-    "bash '$RALPH_DIR/.tmux-stream.sh' '$LOG_FILE'" Enter
+    "bash '$RALPH_DIR/.stream-filter.sh' '$LOG_FILE'" Enter
 
   # Bottom-right: plan + state watch
   tmux send-keys -t "$TMUX_SESSION:.2" \
@@ -459,36 +506,10 @@ run_claude() {
   log "Claude started (PID: $claude_pid)"
 
   # Stream parsed output to terminal unless --quiet
-  # Use process substitution (not a pipeline) so $! is tail's PID.
-  # Killing tail closes jq's stdin → jq exits. A pipeline would make
-  # $! = jq's PID, and bash wait would block on the entire job including
-  # the unkillable tail -f.
   if [[ "$QUIET" == false ]]; then
     if command -v jq &>/dev/null; then
-      tail -f -n 0 "$LOG_FILE" > >(jq --raw-input --join-output --unbuffered '
-        fromjson? // empty |
-        if .type == "assistant" then
-          [.message.content[]? |
-            if .type == "text" then .text
-            elif .type == "tool_use" then
-              if .name == "TodoWrite" then
-                ([.input.todos[]? | .content] | if length == 0 then "[]"
-                  else join(", ") end) as $items |
-                "\n[TodoWrite] " + $items + "\n"
-              else
-                (.input.file_path // .input.command // .input.pattern //
-                  .input.query // .input.url // .input.description //
-                  null) as $target |
-                if $target then "\n[" + .name + "] " + $target + "\n"
-                else "\n[" + .name + "]\n"
-                end
-              end
-            else empty end
-          ] | join("")
-        elif .type == "result" then
-          "\n[done]\n"
-        else empty end
-      ' 2>/dev/null) &
+      write_stream_filter
+      bash "$RALPH_DIR/.stream-filter.sh" "$LOG_FILE" &
     else
       tail -f -n 0 "$LOG_FILE" &
     fi
@@ -506,6 +527,7 @@ run_claude() {
       if [[ -n "$task_desc" ]]; then
         log "Working on: $task_desc"
         write_state "last_task" "$task_desc"
+        rename_branch_for_task "$task_desc"
         task_logged=true
       fi
     fi
@@ -525,7 +547,7 @@ run_claude() {
   # Reap claude process
   wait "$claude_pid" 2>/dev/null || true
 
-  # Clean up tail (process substitution: killing tail closes jq's stdin)
+  # Clean up stream filter
   [[ -n "$tail_pid" ]] && kill "$tail_pid" 2>/dev/null || true
   [[ -n "$tail_pid" ]] && wait "$tail_pid" 2>/dev/null || true
 
@@ -644,7 +666,7 @@ analyze_iteration() {
 
   # --- Permission denial detection (3+ in single iteration → halt) ---
   local perm_count=0
-  perm_count=$(echo "$iter_log" | grep -ciE 'permission denied|cannot write|sandbox|blocked by' || true)
+  perm_count=$(echo "$iter_log" | grep -ciE 'permission denied|cannot write|blocked by sandbox|not allowed' || true)
   if (( perm_count >= 3 )); then
     ANALYSIS_RESULT="halt:permission_denied"
     return
@@ -861,6 +883,7 @@ run_execution() {
       write_state "iteration" "$iteration"
       write_state "status" "running"
       write_state "last_task" "$next_task"
+      rename_branch_for_task "$next_task"
 
       # Build task prompt
       local task_prompt="Complete this task: $next_task"
