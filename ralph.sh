@@ -82,7 +82,7 @@ done
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 RALPH_DIR="$PROJECT_DIR/.ralph"
 PLAN_FILE="$RALPH_DIR/plan.md"
-STATE_FILE="$RALPH_DIR/state.md"
+STATE_FILE="$RALPH_DIR/state.json"
 SIGNAL_FILE="$RALPH_DIR/signal"
 STOP_FILE="$RALPH_DIR/stop"
 LOG_FILE="$RALPH_DIR/loop.log"
@@ -94,31 +94,39 @@ init_ralph_dir() {
   touch "$LOG_FILE"
 
   if [[ ! -f "$STATE_FILE" ]]; then
-    cat > "$STATE_FILE" <<STATE
-# Ralph Loop State
-# Edit freely - ralph reads this on each iteration.
-
-status: initialized
-iteration: 0
-max_iterations: $MAX_ITERATIONS
-started_at:
+    cat > "$STATE_FILE" <<'STATE'
+{
+  "iteration": 0,
+  "status": "initialized",
+  "started_at": null,
+  "last_task": null
+}
 STATE
   fi
 }
 
 # --- State helpers ---
-# state.md uses simple "key: value" lines. Human-readable, grep-parseable.
 read_state() {
-  local key="$1"
-  grep -m1 "^${key}:" "$STATE_FILE" 2>/dev/null | sed "s/^${key}: *//"
+  if command -v jq &>/dev/null; then
+    jq -r ".$1" "$STATE_FILE"
+  else
+    local key="$1"
+    grep "\"$key\"" "$STATE_FILE" | sed 's/.*: *"\?\([^",}]*\)"\?.*/\1/'
+  fi
 }
 
 write_state() {
   local key="$1" value="$2"
-  if grep -q "^${key}:" "$STATE_FILE" 2>/dev/null; then
-    sed -i "s|^${key}:.*|${key}: ${value}|" "$STATE_FILE"
+  if command -v jq &>/dev/null; then
+    local tmp
+    tmp=$(mktemp)
+    jq --arg v "$value" ".$key = (\$v | try tonumber catch \$v)" "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
   else
-    echo "${key}: ${value}" >> "$STATE_FILE"
+    if echo "$value" | grep -qE '^[0-9]+$'; then
+      sed -i "s/\"$key\": *[^,}]*/\"$key\": $value/" "$STATE_FILE"
+    else
+      sed -i "s/\"$key\": *[^,}]*/\"$key\": \"$value\"/" "$STATE_FILE"
+    fi
   fi
 }
 

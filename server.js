@@ -23,18 +23,9 @@ function ralphDir(projectDir) {
   return path.join(projectDir, ".ralph");
 }
 
-function readState(filePath) {
+function readJSON(filePath) {
   try {
-    const content = fs.readFileSync(filePath, "utf-8");
-    const state = {};
-    for (const line of content.split("\n")) {
-      if (line.startsWith("#") || !line.includes(":")) continue;
-      const idx = line.indexOf(":");
-      const key = line.substring(0, idx).trim();
-      const val = line.substring(idx + 1).trim();
-      state[key] = /^\d+$/.test(val) ? parseInt(val, 10) : val;
-    }
-    return state;
+    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
   } catch {
     return null;
   }
@@ -140,7 +131,7 @@ function handleStatus(req, res) {
   }
 
   const rd = ralphDir(dir);
-  const state = readState(path.join(rd, "state.md"));
+  const state = readJSON(path.join(rd, "state.json"));
   const plan = readFile(path.join(rd, "plan.md"));
   const logTail = tailFile(path.join(rd, "loop.log"), 30);
 
