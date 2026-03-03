@@ -299,7 +299,10 @@ run_claude() {
           [.message.content[]? |
             if .type == "text" then .text
             elif .type == "tool_use" then
-              if .name == "TodoWrite" then empty
+              if .name == "TodoWrite" then
+                ([.input.todos[]? | .content] | if length == 0 then "[]"
+                  else join(", ") end) as $items |
+                "\n[TodoWrite] " + $items + "\n"
               else
                 (.input.file_path // .input.command // .input.pattern //
                   .input.query // .input.url // .input.description //
