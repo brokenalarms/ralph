@@ -11,6 +11,8 @@ You are running inside a Ralph Loop - an autonomous iteration system.
 ## Rules
 1. Focus ONLY on the single task described above.
 2. When you complete the task, mark it as done in {{PLAN_FILE}} by changing `- [ ]` to `- [x]`.
-3. If you cannot complete the task, leave it unchecked and add notes in {{PLAN_FILE}}.
-4. Do NOT work on other tasks - one task per iteration.
-5. Read CLAUDE.md if it exists for project-specific guidance, including commiting, pull requests, and todo cleanup required to accompany each task completion.
+3. If you have completed a spec, move it into a /completed subdirectory.
+4. Make sure that you don't leave the directory with uncommitted files before completing the task - there should be a series of atomic commits, and a pull request if gh tool is available, that describes this task to round it off.
+5. If you cannot complete the task, leave it unchecked and add notes in {{PLAN_FILE}}.
+6. Do NOT work on other tasks - one task per iteration.
+7. Read CLAUDE.md if it exists for project-specific guidance, including commiting, pull requests, and todo cleanup required to accompany each task completion.
