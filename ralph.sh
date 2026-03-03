@@ -3,9 +3,11 @@ set -euo pipefail
 
 # Ralph Loop - Autonomous Claude Code task iteration
 # Runs Claude Code CLI in fresh-context iterations against a project repo.
-# The repo is the source of truth: CLAUDE.md / prompt.md guide Claude's work.
+# Prompts live in ./prompts/ — edit them to change Claude's behavior.
 
 VERSION="0.1.0"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROMPTS_DIR="$SCRIPT_DIR/prompts"
 
 # --- Defaults ---
 PROJECT_DIR="$(pwd)"
@@ -177,6 +179,10 @@ setup_worktree() {
 remap_plan_file() {
   if [[ "$EXTERNAL_PLAN" == true && "$WORK_DIR" != "$PROJECT_DIR" ]]; then
     local rel_plan="${PLAN_FILE#$PROJECT_DIR/}"
+    if [[ "$rel_plan" == /* ]]; then
+      # Plan file is outside project dir — copy to worktree root
+      rel_plan="$(basename "$PLAN_FILE")"
+    fi
     local worktree_plan="$WORK_DIR/$rel_plan"
     mkdir -p "$(dirname "$worktree_plan")"
     cp "$PLAN_FILE" "$worktree_plan"
@@ -287,10 +293,12 @@ run_claude() {
           [.message.content[]? |
             if .type == "text" then .text
             elif .type == "tool_use" then
-              "\n[" + .name + "] " + (
-                .input.file_path // .input.pattern // .input.command //
-                .input.query // .input.url // ""
-              ) + "\n"
+              (.input.file_path // .input.command // .input.pattern //
+                .input.query // .input.url // .input.description //
+                .input.content // null) as $target |
+              if $target then "\n[" + .name + "] " + $target + "\n"
+              else "\n[" + .name + "]\n"
+              end
             else empty end
           ] | join("")
         elif .type == "result" then
@@ -355,54 +363,31 @@ run_claude() {
 # --- Build prompt for Claude ---
 build_prompt() {
   local task_prompt="$1"
+  local template
 
   if [[ "$EXTERNAL_PLAN" == true ]]; then
-    cat <<PROMPT
-You are running inside a Ralph Loop — an autonomous iteration system that
-gives you fresh context each session.
-
-## Current iteration context
-- Project: $WORK_DIR
-- Ralph state dir: $RALPH_DIR
-- Plan file: $PLAN_FILE
-
-## Before doing anything else
-1. Read AGENTS.md — it defines your task selection method and workflow. Follow it.
-2. Read the plan file at $PLAN_FILE to see available tasks.
-3. Select your task using the criteria defined in AGENTS.md.
-   If no AGENTS.md exists, pick the most impactful available task.
-
-## RALPH SIGNAL PROTOCOL (you MUST do both)
-1. When you pick a task, signal what you're working on:
-   echo "$CURRENT_TASK_TOKEN <one-line task description>" > "$SIGNAL_FILE"
-2. When you finish, signal completion (overwrites the file):
-   echo "$SIGNAL_TOKEN <one-line summary of what you did>" > "$SIGNAL_FILE"
-If blocked, still write $SIGNAL_TOKEN so the loop can proceed to the next iteration.
-PROMPT
+    template="$PROMPTS_DIR/external.md"
   else
-    cat <<PROMPT
-You are running inside a Ralph Loop - an autonomous iteration system.
-
-## Current iteration context
-- Project: $WORK_DIR
-- Ralph state dir: $RALPH_DIR
-- Plan file: $PLAN_FILE
-
-## Your task this iteration
-$task_prompt
-
-## Rules
-1. Focus ONLY on the single task described above.
-2. When you pick the task, signal what you're working on:
-   echo "$CURRENT_TASK_TOKEN <one-line task description>" > "$SIGNAL_FILE"
-3. When you complete the task, mark it as done in $PLAN_FILE by changing \`- [ ]\` to \`- [x]\`.
-4. After marking the task done, write the completion signal:
-   echo "$SIGNAL_TOKEN <one-line summary>" > "$SIGNAL_FILE"
-5. If you cannot complete the task, leave it unchecked and add notes in $PLAN_FILE.
-6. Do NOT work on other tasks - one task per iteration.
-7. Read CLAUDE.md if it exists for project-specific guidance.
-PROMPT
+    template="$PROMPTS_DIR/internal.md"
   fi
+
+  if [[ ! -f "$template" ]]; then
+    log_error "Prompt template not found: $template"
+    exit 1
+  fi
+
+  local escaped_task
+  escaped_task=$(printf '%s' "$task_prompt" | sed 's/[&|\]/\\&/g')
+
+  sed \
+    -e "s|{{WORK_DIR}}|$WORK_DIR|g" \
+    -e "s|{{RALPH_DIR}}|$RALPH_DIR|g" \
+    -e "s|{{PLAN_FILE}}|$PLAN_FILE|g" \
+    -e "s|{{SIGNAL_FILE}}|$SIGNAL_FILE|g" \
+    -e "s|{{SIGNAL_TOKEN}}|$SIGNAL_TOKEN|g" \
+    -e "s|{{CURRENT_TASK_TOKEN}}|$CURRENT_TASK_TOKEN|g" \
+    -e "s|{{TASK_PROMPT}}|$escaped_task|g" \
+    "$template"
 }
 
 # --- Planning phase ---
