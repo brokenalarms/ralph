@@ -1,152 +1,194 @@
 # Ralph
 
-Autonomous Claude Code task iteration loop. Runs Claude Code CLI in fresh-context iterations against a project repo, with an optional HTTP server for remote monitoring via Tailscale.
+Autonomous [Claude Code](https://docs.anthropic.com/en/docs/claude-code) task iteration loop. Runs the Claude Code CLI in fresh-context iterations against a project repo.
+
+Ralph is deliberately simple and non-opinionated. There are no wizards, no scaffolding, no framework to adopt. It's a bash script that runs Claude in a loop with a signal protocol so each iteration knows when to stop. Point it at an existing project that already has its own commit conventions, task management, and agent instructions — ralph just orchestrates the loop.
 
 ## How it works
 
-Ralph runs Claude Code repeatedly in a loop. Each iteration gets fresh context (~200k tokens). Claude works on one task per iteration, signals completion, and ralph moves to the next.
+Claude Code has ~200k tokens of context per session. Ralph runs Claude repeatedly, one task per session, with fresh context each time. Claude signals when it's done, ralph moves to the next task.
 
-**Two modes:**
+```
+ralph.sh
+  ├── planning phase (optional) — Claude reads the repo + creates a task list
+  └── execution loop
+       ├── iteration 1 → Claude picks task, works, signals done
+       ├── iteration 2 → fresh context, next task
+       ├── ...
+       └── iteration N → all tasks complete (or max reached)
+```
 
-1. **Managed mode** (default) — Ralph creates `.ralph/plan.md` with checkbox tasks. Claude checks them off one by one.
-2. **External plan mode** (`--plan-file`) — Your repo already has task files (TODO.md, etc.) and agent instructions (AGENTS.md). Ralph defers to your project's workflow and just orchestrates the loop + signal protocol.
+### Two modes
+
+**Managed mode** (default) — Ralph runs a planning phase first. Claude reads the repo, creates `.ralph/plan.md` with checkbox tasks, then works through them.
+
+**External plan mode** (`--plan-file`) — Your repo already has task files and agent instructions. Ralph skips planning and defers to your project's workflow. This is the mode for existing projects — point `--plan-file` at your AGENTS.md or TODO.md and ralph handles the iteration loop while your project's own rules handle everything else.
+
+```bash
+# Existing project with its own AGENTS.md defining tasks and workflow
+ralph.sh --plan-file AGENTS.md -d ~/myproject
+```
 
 ### Signal protocol
 
-Claude communicates with ralph via a signal file (`.ralph/signal`):
+Claude communicates with ralph via a file (`.ralph-signal` in the worktree):
 
 ```
-###RALPH_CURRENT_TASK### <description>   # agent writes when it picks a task
-###RALPH_TASK_COMPLETE### <summary>       # agent writes when done (triggers next iteration)
+###RALPH_CURRENT_TASK### <description>    # written when Claude picks a task
+###RALPH_TASK_COMPLETE### <summary>        # written when done — triggers next iteration
 ```
+
+The signal instructions are appended to every prompt automatically. If Claude gets stuck, it still writes the completion signal so the loop can proceed.
 
 ## Requirements
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- Node.js 18+ (for the HTTP server only)
 - bash
+- jq (optional — enables parsed output streaming)
+- tmux (optional — enables 3-pane layout)
+- Node.js 18+ (for the HTTP server only)
 
-## Running ralph.sh
+## Usage
 
 ```bash
-# Basic: run against current directory
-bash ralph.sh
+# Run against current directory
+ralph.sh
 
 # Specify project and iteration cap
-bash ralph.sh -d ~/myproject -n 20
+ralph.sh -d ~/myproject -n 20
+
+# External plan mode — use your repo's existing task file
+ralph.sh --plan-file AGENTS.md
 
 # With a prompt override
-bash ralph.sh -p "Fix all failing tests"
+ralph.sh -p "Fix all failing tests"
+
+# Plan only — creates .ralph/plan.md, then exits
+ralph.sh --plan
 
 # Resume a previous run
-bash ralph.sh --resume
+ralph.sh --resume
 
-# Plan only (creates .ralph/plan.md, then exits)
-bash ralph.sh --plan
-
-# External plan mode: use your repo's existing task file
-bash ralph.sh --plan-file docs/TODO.md
+# Tmux 3-pane layout (loop status | claude output | plan + state)
+ralph.sh --tmux
 ```
 
 ### Options
 
-| Flag | Description |
-|---|---|
-| `-d, --dir <path>` | Project directory (default: cwd) |
-| `-n, --max <N>` | Max iterations (default: 50) |
-| `-p, --prompt <text>` | Prompt override |
-| `--plan-file <path>` | Use external plan file (skip planning, lighter prompt) |
-| `--resume` | Resume from previous state |
-| `--plan` | Run planning phase only |
+| Flag | Description | Default |
+|---|---|---|
+| `-d, --dir <path>` | Project directory | cwd |
+| `-n, --max <N>` | Max iterations | 50 |
+| `-p, --prompt <text>` | Prompt override | — |
+| `--plan-file <path>` | External plan file (skips planning phase) | — |
+| `--resume` | Resume from previous state | — |
+| `--plan` | Run planning phase only | — |
+| `-q, --quiet` | Suppress streaming output (log only) | — |
+| `--no-worktree` | Run directly in project dir (no git isolation) | — |
+| `--calls-per-hour <N>` | Rate limit Claude calls per hour | 80 |
+| `--tmux` | 3-pane tmux layout | — |
 
 ### Controlling a running loop
 
-- Create `.ralph/stop` to halt after the current iteration
-- The generated `.ralph/resume.sh` script resumes from where you left off
+- **Stop gracefully:** `touch .ralph/stop` — halts after the current iteration finishes
+- **Resume:** run the generated `.ralph/resume.sh`, or `ralph.sh --resume`
+- **Rate limiting:** ralph tracks calls per clock hour and pauses with a countdown when the cap is reached, then resumes automatically
 
-## Running server.js
+## Prompts
 
-The HTTP server wraps ralph.sh for remote monitoring and control.
+Ralph's prompts live in `prompts/` and are designed to be read and modified. They're short — the longest is ~20 lines. There's no hidden logic or complex prompt engineering. They provide just enough structure for the iteration loop to work, and defer to your project's own AGENTS.md / CLAUDE.md for everything else.
 
-```bash
-# Start the server (localhost only by default)
-node server.js
+| File | Used when | Purpose |
+|---|---|---|
+| `planning.md` | Managed mode, planning phase | Tells Claude to create a checkbox task list |
+| `internal.md` | Managed mode, execution | Gives Claude the task and rules for one iteration |
+| `external.md` | `--plan-file` mode | Tells Claude to read the project's own agent instructions for task selection |
+| `signal.md` | Always (appended to all prompts) | Documents the signal protocol |
 
-# Or via npm
-npm start
+Placeholders like `{{WORK_DIR}}`, `{{PLAN_FILE}}`, `{{SIGNAL_FILE}}` are substituted at runtime. Edit the prompts to change how Claude behaves in your loops.
+
+## Git worktrees
+
+By default, ralph creates a git worktree so Claude works on an isolated branch while your main branch stays clean. Branches are named by project and task:
+
+```
+ralph/myproject/01-add-authentication
+ralph/myproject/02-fix-failing-tests
 ```
 
-### Environment variables
+The branch is created with a sequence number at the start and renamed to include a task slug once Claude picks its first task. Merge when ready with `git merge ralph/myproject/01-add-authentication`.
+
+Use `--no-worktree` to skip this and work directly in the project directory.
+
+## Response analyzer
+
+Ralph watches for problems after each iteration and halts early rather than burning through iterations with no progress:
+
+- **Permission denials** — 3+ in a single iteration → halt
+- **Stagnation** — 3 consecutive iterations with no file changes → halt
+- **Test saturation** — 3 consecutive iterations modifying only test files → halt
+- **Stuck loops** — repeated identical tool calls or "I'm blocked" language → warn, then halt
+
+## .ralph directory
+
+Ralph stores all state in `.ralph/` inside the project directory. Add it to `.gitignore`.
+
+```
+.ralph/
+  state.json       # iteration count, status, worktree info
+  plan.md          # task list (managed mode)
+  loop.log         # full Claude output (stream-json)
+  resume.sh        # auto-generated resume script
+  stop             # create this file to halt gracefully
+  worktrees/       # git worktree directories
+```
+
+## HTTP server
+
+Optional HTTP wrapper for remote monitoring and control.
+
+```bash
+node server.js
+# or: npm start
+```
 
 | Variable | Default | Description |
 |---|---|---|
 | `RALPH_PORT` | `3411` | Server port |
-| `RALPH_HOST` | `127.0.0.1` | Bind address |
+| `RALPH_HOST` | `127.0.0.1` | Bind address (localhost only) |
 
-### Tailscale access
-
-The server binds to `127.0.0.1` (localhost) by default, which means it is **not** accessible from the network. To expose via Tailscale only:
+Bind to a Tailscale IP for network access without exposing to LAN:
 
 ```bash
-# Find your Tailscale IP
-tailscale ip -4
-# e.g. 100.64.1.23
-
-# Bind to your Tailscale IP
-RALPH_HOST=100.64.1.23 node server.js
+RALPH_HOST=$(tailscale ip -4) node server.js
 ```
 
-This binds the server to only the Tailscale network interface. It won't be accessible from your LAN or the public internet — only other devices on your Tailscale network.
-
-**Do not use `RALPH_HOST=0.0.0.0`** unless you want the server accessible on all network interfaces.
-
-### API endpoints
+### Endpoints
 
 | Route | Method | Description |
 |---|---|---|
 | `/` | GET | Server info |
 | `/start` | POST | Start a ralph loop |
-| `/status` | GET | Get loop status and state |
-| `/stop` | POST | Request graceful stop |
+| `/status` | GET | Loop status and state |
+| `/stop` | POST | Graceful stop |
 | `/kill` | POST | Kill running process |
-| `/log` | GET | Tail the loop log |
+| `/log` | GET | Tail the log (`?lines=50`) |
 | `/plan` | GET | View the plan file |
 | `/reset` | DELETE | Clean .ralph state |
 
-### Examples
-
 ```bash
 # Start a loop
-curl -X POST http://100.64.1.23:3411/start \
+curl -X POST http://localhost:3411/start \
   -H 'Content-Type: application/json' \
-  -d '{"dir": "/home/user/myproject", "max": 20}'
-
-# Start with external plan file
-curl -X POST http://100.64.1.23:3411/start \
-  -H 'Content-Type: application/json' \
-  -d '{"dir": "/home/user/myproject", "plan_file": "docs/TODO.md"}'
+  -d '{"dir": "/home/user/myproject", "plan_file": "AGENTS.md"}'
 
 # Check status
-curl http://100.64.1.23:3411/status
-
-# View logs
-curl http://100.64.1.23:3411/log?lines=50
+curl http://localhost:3411/status
 
 # Graceful stop
-curl -X POST http://100.64.1.23:3411/stop
+curl -X POST http://localhost:3411/stop
 ```
 
-## .ralph directory
+## License
 
-Ralph stores its state in `.ralph/` inside the project directory:
-
-```
-.ralph/
-  plan.md         # Task list (managed mode only)
-  state.json      # Loop state (iteration, status, timestamps)
-  signal          # Agent-to-ralph communication file
-  stop            # Create this to halt gracefully
-  loop.log        # Full output log
-  resume.sh       # Auto-generated resume script
-  .plan_snapshot  # Pre-iteration plan snapshot (for diffing)
-```
+MIT
