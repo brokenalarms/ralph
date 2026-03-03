@@ -278,9 +278,24 @@ run_claude() {
   claude_pid=$!
   log "Claude started (PID: $claude_pid)"
 
-  # Stream log file to terminal unless --quiet
+  # Stream parsed output to terminal unless --quiet
   if [[ "$QUIET" == false ]]; then
-    tail -f -n 0 "$LOG_FILE" &
+    if command -v jq &>/dev/null; then
+      tail -f -n 0 "$LOG_FILE" | jq --raw-input --join-output --unbuffered '
+        fromjson? // empty |
+        if .type == "assistant" then
+          [.message.content[]? |
+            if .type == "text" then .text
+            elif .type == "tool_use" then "\n[tool] " + .name + "\n"
+            else empty end
+          ] | join("")
+        elif .type == "result" then
+          "\n[done]\n"
+        else empty end
+      ' 2>/dev/null &
+    else
+      tail -f -n 0 "$LOG_FILE" &
+    fi
     tail_pid=$!
   fi
 
