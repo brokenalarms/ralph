@@ -408,29 +408,26 @@ run_planning() {
     return 0
   fi
 
-  local planning_prompt
+  local planning_context
   if [[ -n "$PROMPT_OVERRIDE" ]]; then
-    planning_prompt="$PROMPT_OVERRIDE
-
-Break this into atomic, self-contained tasks. Write the plan to $PLAN_FILE using markdown checkboxes:
-- [ ] Task 1 description
-- [ ] Task 2 description
-...
-
-Each task should be completable in a single Claude session. Be specific and actionable.
-After writing the plan, signal completion: echo \"$SIGNAL_TOKEN\" > \"$SIGNAL_FILE\""
+    planning_context="$PROMPT_OVERRIDE"
   else
-    planning_prompt="Read this repository and understand what needs to be done.
+    planning_context="Read this repository and understand what needs to be done.
 Look at CLAUDE.md, prompt.md, README.md, or any task-related files for context.
 
-Create a plan of atomic, self-contained tasks and write it to $PLAN_FILE using markdown checkboxes:
-- [ ] Task 1 description
-- [ ] Task 2 description
-...
-
-Each task should be completable in a single Claude session. Be specific and actionable.
-After writing the plan, signal completion: echo \"$SIGNAL_TOKEN\" > \"$SIGNAL_FILE\""
+Create a plan of atomic, self-contained tasks."
   fi
+
+  local escaped_context
+  escaped_context=$(printf '%s' "$planning_context" | sed 's/[&|\]/\\&/g')
+
+  local planning_prompt
+  planning_prompt=$(sed \
+    -e "s|{{PLANNING_CONTEXT}}|$escaped_context|g" \
+    -e "s|{{PLAN_FILE}}|$PLAN_FILE|g" \
+    -e "s|{{SIGNAL_TOKEN}}|$SIGNAL_TOKEN|g" \
+    -e "s|{{SIGNAL_FILE}}|$SIGNAL_FILE|g" \
+    "$PROMPTS_DIR/planning.md")
 
   run_claude "$planning_prompt"
 
