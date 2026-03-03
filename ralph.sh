@@ -310,15 +310,15 @@ has_remaining_tasks() {
 }
 
 count_completed() {
-  [[ -f "$PLAN_FILE" ]] && grep -cE '^\s*- \[x\]' "$PLAN_FILE" 2>/dev/null || echo 0
+  [[ -f "$PLAN_FILE" ]] && { grep -cE '^\s*- \[x\]' "$PLAN_FILE" 2>/dev/null || true; } || echo 0
 }
 
 count_remaining() {
-  [[ -f "$PLAN_FILE" ]] && grep -cE '^\s*- \[ \]' "$PLAN_FILE" 2>/dev/null || echo 0
+  [[ -f "$PLAN_FILE" ]] && { grep -cE '^\s*- \[ \]' "$PLAN_FILE" 2>/dev/null || true; } || echo 0
 }
 
 count_total() {
-  [[ -f "$PLAN_FILE" ]] && grep -cE '^\s*- \[[ x]\]' "$PLAN_FILE" 2>/dev/null || echo 0
+  [[ -f "$PLAN_FILE" ]] && { grep -cE '^\s*- \[[ x]\]' "$PLAN_FILE" 2>/dev/null || true; } || echo 0
 }
 
 get_next_task() {
@@ -660,7 +660,7 @@ analyze_iteration() {
   if [[ "$stuck_detected" == false ]]; then
     local max_repeats=0
     if command -v jq &>/dev/null; then
-      max_repeats=$(echo "$iter_log" | \
+      max_repeats=$(echo "$iter_log" 2>/dev/null | \
         jq -r '
           select(.type == "assistant") |
           .message.content[]? |
@@ -783,7 +783,8 @@ run_execution() {
 
     if [[ "$EXTERNAL_PLAN" == true ]]; then
       local bullet_count
-      bullet_count=$(grep -cE '^\s*[-*]' "$PLAN_FILE" 2>/dev/null || echo 0)
+      bullet_count=$(grep -cE '^\s*[-*]' "$PLAN_FILE" 2>/dev/null || true)
+      bullet_count=${bullet_count:-0}
       log_phase "--- Iteration $iteration/$MAX_ITERATIONS [$bullet_count items in plan] ---"
 
       # Update state
@@ -825,8 +826,8 @@ run_execution() {
       # Post-iteration: diff plan file
       if [[ -f "$RALPH_DIR/.plan_snapshot" ]]; then
         local removed added
-        removed=$(diff "$RALPH_DIR/.plan_snapshot" "$PLAN_FILE" 2>/dev/null | grep -c '^<' || echo 0)
-        added=$(diff "$RALPH_DIR/.plan_snapshot" "$PLAN_FILE" 2>/dev/null | grep -c '^>' || echo 0)
+        removed=$(diff "$RALPH_DIR/.plan_snapshot" "$PLAN_FILE" 2>/dev/null | grep -c '^<' || true)
+        added=$(diff "$RALPH_DIR/.plan_snapshot" "$PLAN_FILE" 2>/dev/null | grep -c '^>' || true)
         if [[ $removed -gt 0 || $added -gt 0 ]]; then
           log "Plan diff: $removed removed, $added added"
         fi
@@ -957,7 +958,8 @@ print_summary() {
 
   if [[ "$EXTERNAL_PLAN" == true ]]; then
     local bullet_count last_task
-    bullet_count=$(grep -cE '^\s*[-*]' "$PLAN_FILE" 2>/dev/null || echo 0)
+    bullet_count=$(grep -cE '^\s*[-*]' "$PLAN_FILE" 2>/dev/null || true)
+    bullet_count=${bullet_count:-0}
     last_task=$(read_state "last_task")
     log "Items left: $bullet_count"
     [[ -n "$last_task" && "$last_task" != "null" ]] && log "Last task:  $last_task"
