@@ -18,6 +18,7 @@ CURRENT_TASK_TOKEN="###RALPH_CURRENT_TASK###"
 WATCHER_INTERVAL=2  # seconds between signal checks
 EXTERNAL_PLAN=false
 PLAN_FILE_ARG=""
+LOG_FILE="/dev/null"  # real path set after dir resolution
 
 # --- Colors ---
 RED='\033[0;31m'
@@ -519,18 +520,21 @@ print_summary() {
 cleanup() {
   # Kill any backgrounded processes
   jobs -p | xargs -r kill 2>/dev/null || true
-  generate_resume_script
-  print_summary
+  # Only run summary/resume if .ralph dir was created
+  if [[ -d "$RALPH_DIR" ]]; then
+    generate_resume_script
+    print_summary
+  fi
 }
 trap cleanup EXIT
 
 # --- Main ---
 main() {
+  init_ralph_dir
+
   log_phase "Ralph Loop v${VERSION}"
   log "Project: $PROJECT_DIR"
   log "Max iterations: $MAX_ITERATIONS"
-
-  init_ralph_dir
 
   write_state "started_at" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
