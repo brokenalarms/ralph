@@ -18,6 +18,7 @@ CURRENT_TASK_TOKEN="###RALPH_CURRENT_TASK###"
 WATCHER_INTERVAL=2  # seconds between signal checks
 EXTERNAL_PLAN=false
 PLAN_FILE_ARG=""
+QUIET=false
 LOG_FILE="/dev/null"  # real path set after dir resolution
 
 # --- Colors ---
@@ -51,6 +52,7 @@ ${BOLD}OPTIONS:${NC}
   --plan-file <path>     Use external plan file (skip planning, lighter prompt)
   --resume               Resume from previous state
   --plan                 Run planning phase only
+  -q, --quiet            Suppress Claude output streaming (log only)
   -h, --help             Show this help
 
 ${BOLD}EXAMPLES:${NC}
@@ -80,6 +82,7 @@ while [[ $# -gt 0 ]]; do
     --plan-file)    PLAN_FILE_ARG="$2"; EXTERNAL_PLAN=true; shift 2 ;;
     --resume)       RESUME=true; shift ;;
     --plan)         PLAN_ONLY=true; shift ;;
+    -q|--quiet)     QUIET=true; shift ;;
     -h|--help)      usage; exit 0 ;;
     -*)             log_error "Unknown option: $1"; usage; exit 1 ;;
     *)              PROJECT_DIR="$1"; shift ;;
@@ -199,7 +202,8 @@ read_signal_summary() {
 # When the signal is detected OR claude exits, we proceed.
 run_claude() {
   local prompt="$1"
-  local claude_pid watcher_pid exit_code
+  local claude_pid watcher_pid tail_pid exit_code
+  tail_pid=""
 
   clear_signal
 
@@ -212,6 +216,12 @@ run_claude() {
   claude --print --verbose "$full_prompt" >> "$LOG_FILE" 2>&1 &
   claude_pid=$!
   log "Claude started (PID: $claude_pid)"
+
+  # Stream output to terminal unless --quiet
+  if [[ "$QUIET" == false ]]; then
+    tail -f -n 0 "$LOG_FILE" &
+    tail_pid=$!
+  fi
 
   # Background watcher: polls signal file
   (
@@ -229,6 +239,7 @@ run_claude() {
         summary=$(read_signal_summary)
         log_success "Completed: ${summary:-task done}"
         kill "$claude_pid" 2>/dev/null || true
+        [[ -n "$tail_pid" ]] && kill "$tail_pid" 2>/dev/null || true
         exit 0
       fi
       sleep "$WATCHER_INTERVAL"
@@ -240,7 +251,9 @@ run_claude() {
   wait "$claude_pid" 2>/dev/null || true
   exit_code=$?
 
-  # Clean up watcher
+  # Clean up tail and watcher
+  [[ -n "$tail_pid" ]] && kill "$tail_pid" 2>/dev/null || true
+  [[ -n "$tail_pid" ]] && wait "$tail_pid" 2>/dev/null || true
   kill "$watcher_pid" 2>/dev/null || true
   wait "$watcher_pid" 2>/dev/null || true
 
@@ -271,9 +284,13 @@ gives you fresh context each session.
 ## Current iteration context
 - Project: $PROJECT_DIR
 - Ralph state dir: $RALPH_DIR
+- Plan file: $PLAN_FILE
 
-Follow the project's own docs (AGENTS.md, CLAUDE.md, etc.) for what to work on
-and how to track progress.
+## Before doing anything else
+1. Read AGENTS.md — it defines your task selection method and workflow. Follow it.
+2. Read the plan file at $PLAN_FILE to see available tasks.
+3. Select your task using the criteria defined in AGENTS.md.
+   If no AGENTS.md exists, pick the most impactful available task.
 
 ## RALPH SIGNAL PROTOCOL (you MUST do both)
 1. When you pick a task, signal what you're working on:
@@ -474,6 +491,9 @@ generate_resume_script() {
   local extra_args=""
   if [[ "$EXTERNAL_PLAN" == true ]]; then
     extra_args=" --plan-file \"$PLAN_FILE\""
+  fi
+  if [[ "$QUIET" == true ]]; then
+    extra_args="$extra_args --quiet"
   fi
   cat > "$RESUME_SCRIPT" <<RESUME
 #!/usr/bin/env bash
