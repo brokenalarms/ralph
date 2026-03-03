@@ -23,6 +23,9 @@ PLAN_FILE_ARG=""
 QUIET=false
 USE_WORKTREE=true
 CALLS_PER_HOUR=80
+USE_TMUX=false
+TMUX_SESSION=""
+_TMUX_OUTER=false
 WORK_DIR=""
 WORKTREE_BRANCH=""
 LOG_FILE="/dev/null"  # real path set after dir resolution
@@ -61,6 +64,7 @@ ${BOLD}OPTIONS:${NC}
   -q, --quiet            Suppress Claude output streaming (log only)
   --no-worktree          Run directly in project dir (no git worktree isolation)
   --calls-per-hour <N>   Max Claude calls per hour (default: 80)
+  --tmux                 Run in tmux 3-pane layout (status / output / plan)
   -h, --help             Show this help
 
 ${BOLD}EXAMPLES:${NC}
@@ -81,6 +85,9 @@ ${BOLD}CONTROL:${NC}
 EOF
 }
 
+# --- Save original args (for tmux re-exec) ---
+RALPH_ORIG_ARGS=("$@")
+
 # --- Parse args ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -93,6 +100,7 @@ while [[ $# -gt 0 ]]; do
     -q|--quiet)     QUIET=true; shift ;;
     --no-worktree)  USE_WORKTREE=false; shift ;;
     --calls-per-hour) CALLS_PER_HOUR="$2"; shift 2 ;;
+    --tmux)         USE_TMUX=true; shift ;;
     -h|--help)      usage; exit 0 ;;
     -*)             log_error "Unknown option: $1"; usage; exit 1 ;;
     *)              PROJECT_DIR="$1"; shift ;;
@@ -196,6 +204,74 @@ remap_plan_file() {
     fi
     PLAN_FILE="$worktree_plan"
   fi
+}
+
+# --- Tmux mode ---
+setup_tmux() {
+  if ! command -v tmux &>/dev/null; then
+    log_error "tmux not found, falling back to inline mode"
+    USE_TMUX=false
+    return
+  fi
+
+  TMUX_SESSION="ralph-$$"
+
+  # Write jq stream filter to a helper script (avoids quoting issues in tmux send-keys)
+  cat > "$RALPH_DIR/.tmux-stream.sh" <<'STREAM'
+#!/usr/bin/env bash
+tail -f "$1" | jq --raw-input --join-output --unbuffered '
+  fromjson? // empty |
+  if .type == "assistant" then
+    [.message.content[]? |
+      if .type == "text" then .text
+      elif .type == "tool_use" then
+        (.input.file_path // .input.command // .input.pattern //
+          .input.query // .input.url // .input.description //
+          null) as $target |
+        if $target then "\n[" + .name + "] " + $target + "\n"
+        else "\n[" + .name + "]\n"
+        end
+      else empty end
+    ] | join("")
+  elif .type == "result" then
+    "\n[done]\n"
+  else empty end
+' 2>/dev/null
+STREAM
+  chmod +x "$RALPH_DIR/.tmux-stream.sh"
+
+  tmux new-session -d -s "$TMUX_SESSION" -c "$PROJECT_DIR"
+  tmux split-window -h -t "$TMUX_SESSION"
+  tmux split-window -v -t "$TMUX_SESSION:.1"
+
+  # Top-right: jq-parsed Claude output
+  tmux send-keys -t "$TMUX_SESSION:.1" \
+    "bash '$RALPH_DIR/.tmux-stream.sh' '$LOG_FILE'" Enter
+
+  # Bottom-right: plan + state watch
+  tmux send-keys -t "$TMUX_SESSION:.2" \
+    "watch -n 5 'echo \"=== State ===\"; cat \"$STATE_FILE\" 2>/dev/null; echo; echo \"=== Plan ===\"; head -30 \"$PLAN_FILE\" 2>/dev/null'" Enter
+
+  # Left pane: re-exec ralph without --tmux, with --quiet
+  local relaunch_args=()
+  for arg in "${RALPH_ORIG_ARGS[@]}"; do
+    [[ "$arg" == "--tmux" ]] && continue
+    relaunch_args+=("$arg")
+  done
+  local cmd
+  cmd="$(printf '%q' "$SCRIPT_DIR/ralph.sh")"
+  for arg in "${relaunch_args[@]}"; do
+    cmd+=" $(printf '%q' "$arg")"
+  done
+  cmd+=" --quiet"
+
+  tmux send-keys -t "$TMUX_SESSION:.0" \
+    "_RALPH_TMUX_SESSION=$TMUX_SESSION $cmd; tmux kill-session -t '$TMUX_SESSION' 2>/dev/null" Enter
+  tmux select-pane -t "$TMUX_SESSION:.0"
+
+  _TMUX_OUTER=true
+  tmux attach-session -t "$TMUX_SESSION"
+  exit 0
 }
 
 # --- State helpers ---
@@ -539,11 +615,146 @@ Create a plan of atomic, self-contained tasks."
   log_success "Plan created with $total tasks"
 }
 
+# --- Response analyzer ---
+# Counters for multi-iteration detection (reset per execution phase)
+_stagnant_count=0
+_test_only_count=0
+_stuck_count=0
+
+# analyze_iteration LOG_FILE START_LINE HEAD_BEFORE
+# Sets ANALYSIS_RESULT to one of: continue, warn:<reason>, halt:<reason>
+# Updates global counters for multi-iteration detection
+analyze_iteration() {
+  local log_file="$1"
+  local start_line="$2"
+  local head_before="$3"
+
+  ANALYSIS_RESULT="continue"
+
+  local iter_log
+  iter_log=$(tail -n "+${start_line}" "$log_file" 2>/dev/null || true)
+
+  if [[ -z "$iter_log" ]]; then
+    return
+  fi
+
+  # --- Permission denial detection (3+ in single iteration → halt) ---
+  local perm_count=0
+  perm_count=$(echo "$iter_log" | grep -ciE 'permission denied|cannot write|sandbox|blocked by' || true)
+  if (( perm_count >= 3 )); then
+    ANALYSIS_RESULT="halt:permission_denied"
+    return
+  fi
+
+  # --- Stuck loop detection ---
+  local stuck_detected=false
+
+  if echo "$iter_log" | grep -qiE "I'm blocked|I cannot proceed|unable to complete"; then
+    stuck_detected=true
+  fi
+
+  if [[ "$stuck_detected" == false ]]; then
+    local max_repeats=0
+    if command -v jq &>/dev/null; then
+      max_repeats=$(echo "$iter_log" | \
+        jq -r '
+          select(.type == "assistant") |
+          .message.content[]? |
+          select(.type == "tool_use") |
+          (.name + ":" + (.input.command // .input.file_path // .input.pattern // ""))
+        ' 2>/dev/null | sort | uniq -c | sort -rn | head -1 | awk '{print $1+0}') || true
+    else
+      max_repeats=$(echo "$iter_log" | \
+        grep -oE '"(command|file_path)"\s*:\s*"[^"]*"' | \
+        sort | uniq -c | sort -rn | head -1 | awk '{print $1+0}') || true
+    fi
+    max_repeats=${max_repeats:-0}
+    if (( max_repeats >= 3 )); then
+      stuck_detected=true
+    fi
+  fi
+
+  if [[ "$stuck_detected" == true ]]; then
+    _stuck_count=$((_stuck_count + 1))
+    if (( _stuck_count >= 2 )); then
+      ANALYSIS_RESULT="halt:stuck_loop"
+      return
+    fi
+    ANALYSIS_RESULT="warn:stuck_indicators_detected"
+    return
+  else
+    _stuck_count=0
+  fi
+
+  # --- Progress detection (used by stagnation and test saturation) ---
+  local has_changes=false has_signal=false new_commits=false
+
+  if [[ -n "$(git -C "$WORK_DIR" diff --stat 2>/dev/null)" ]] || \
+     [[ -n "$(git -C "$WORK_DIR" diff --cached --stat 2>/dev/null)" ]]; then
+    has_changes=true
+  fi
+
+  local head_after
+  head_after=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
+  if [[ -n "$head_before" && "$head_before" != "$head_after" ]]; then
+    new_commits=true
+    has_changes=true
+  fi
+
+  if check_signal; then
+    has_signal=true
+  fi
+
+  # --- Stagnation detection (3 consecutive no-change → halt) ---
+  if [[ "$has_changes" == false && "$has_signal" == false && "$new_commits" == false ]]; then
+    _stagnant_count=$((_stagnant_count + 1))
+    if (( _stagnant_count >= 3 )); then
+      ANALYSIS_RESULT="halt:stagnation"
+      return
+    fi
+  else
+    _stagnant_count=0
+  fi
+
+  # --- Test saturation detection (3 consecutive test-only → halt) ---
+  if [[ "$has_changes" == true ]]; then
+    local changed_files
+    changed_files=$(git -C "$WORK_DIR" diff --name-only 2>/dev/null || true)
+    changed_files+=$'\n'
+    changed_files+=$(git -C "$WORK_DIR" diff --cached --name-only 2>/dev/null || true)
+    if [[ "$new_commits" == true ]]; then
+      changed_files+=$'\n'
+      changed_files+=$(git -C "$WORK_DIR" diff --name-only "${head_before}...${head_after}" 2>/dev/null || true)
+    fi
+    changed_files=$(echo "$changed_files" | grep -v '^$' | sort -u)
+
+    if [[ -n "$changed_files" ]]; then
+      local non_test_files
+      non_test_files=$(echo "$changed_files" | grep -viE '(test|spec|_test\.|test_)' || true)
+
+      if [[ -z "$non_test_files" ]]; then
+        _test_only_count=$((_test_only_count + 1))
+        if (( _test_only_count >= 3 )); then
+          ANALYSIS_RESULT="halt:test_saturation"
+          return
+        fi
+      else
+        _test_only_count=0
+      fi
+    fi
+  fi
+}
+
 # --- Execution phase ---
 run_execution() {
   log_phase "=== PHASE 2: EXECUTION ==="
 
   init_call_tracking
+
+  # Reset response analyzer counters
+  _stagnant_count=0
+  _test_only_count=0
+  _stuck_count=0
 
   local iteration
   iteration=$(read_state "iteration")
@@ -588,6 +799,12 @@ run_execution() {
         fi
       fi
 
+      # Capture log offset and HEAD before running claude
+      local log_start_line
+      log_start_line=$(( $(wc -l < "$LOG_FILE" 2>/dev/null || echo 0) + 1 ))
+      local head_before
+      head_before=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
+
       # Run claude
       if ! run_claude "$task_prompt"; then
         log_warn "Claude failed on iteration $iteration, continuing..."
@@ -612,6 +829,19 @@ run_execution() {
       fi
 
       log "Iteration $iteration complete."
+
+      # Analyze iteration for problems
+      analyze_iteration "$LOG_FILE" "$log_start_line" "$head_before"
+      case "$ANALYSIS_RESULT" in
+        halt:*)
+          log_error "Halting: ${ANALYSIS_RESULT#halt:}"
+          write_state "status" "halted_${ANALYSIS_RESULT#halt:}"
+          break
+          ;;
+        warn:*)
+          log_warn "Analysis: ${ANALYSIS_RESULT#warn:}"
+          ;;
+      esac
     else
       local next_task completed remaining total
       next_task=$(get_next_task)
@@ -637,6 +867,12 @@ run_execution() {
         fi
       fi
 
+      # Capture log offset and HEAD before running claude
+      local log_start_line
+      log_start_line=$(( $(wc -l < "$LOG_FILE" 2>/dev/null || echo 0) + 1 ))
+      local head_before
+      head_before=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
+
       # Run claude for this task
       if ! run_claude "$task_prompt"; then
         log_warn "Claude failed on iteration $iteration, continuing..."
@@ -653,6 +889,19 @@ run_execution() {
       # Recount after claude ran
       completed=$(count_completed)
       log "Iteration $iteration complete. ${completed}/${total} tasks done."
+
+      # Analyze iteration for problems
+      analyze_iteration "$LOG_FILE" "$log_start_line" "$head_before"
+      case "$ANALYSIS_RESULT" in
+        halt:*)
+          log_error "Halting: ${ANALYSIS_RESULT#halt:}"
+          write_state "status" "halted_${ANALYSIS_RESULT#halt:}"
+          break
+          ;;
+        warn:*)
+          log_warn "Analysis: ${ANALYSIS_RESULT#warn:}"
+          ;;
+      esac
     fi
     echo ""
   done
@@ -677,6 +926,9 @@ generate_resume_script() {
   fi
   if [[ "$CALLS_PER_HOUR" != 80 ]]; then
     extra_args="$extra_args --calls-per-hour $CALLS_PER_HOUR"
+  fi
+  if [[ "${_RALPH_TMUX_SESSION:-}" != "" ]]; then
+    extra_args="$extra_args --tmux"
   fi
   cat > "$RESUME_SCRIPT" <<RESUME
 #!/usr/bin/env bash
@@ -729,6 +981,11 @@ print_summary() {
 
 # --- Cleanup on exit ---
 cleanup() {
+  # If this is the outer tmux process, just kill the session
+  if [[ "$_TMUX_OUTER" == true ]]; then
+    [[ -n "$TMUX_SESSION" ]] && tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+    return
+  fi
   # Kill any backgrounded processes
   jobs -p | xargs -r kill 2>/dev/null || true
   # Only run summary/resume if .ralph dir was created
@@ -742,6 +999,11 @@ trap cleanup EXIT
 # --- Main ---
 main() {
   init_ralph_dir
+
+  if [[ "$USE_TMUX" == true ]]; then
+    setup_tmux
+  fi
+
   setup_worktree
 
   log_phase "Ralph Loop v${VERSION}"
