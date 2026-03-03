@@ -155,6 +155,7 @@ setup_worktree() {
     if [[ -n "$stored_worktree" && "$stored_worktree" != "null" && -d "$stored_worktree" ]]; then
       WORK_DIR="$stored_worktree"
       WORKTREE_BRANCH=$(read_state "worktree_branch")
+      SIGNAL_FILE="$WORK_DIR/.ralph-signal"
       log "Resuming in worktree: $WORK_DIR (branch: $WORKTREE_BRANCH)"
       remap_plan_file
       return
@@ -173,6 +174,7 @@ setup_worktree() {
   write_state "worktree_dir" "$WORK_DIR"
   write_state "worktree_branch" "$WORKTREE_BRANCH"
 
+  SIGNAL_FILE="$WORK_DIR/.ralph-signal"
   remap_plan_file
 }
 
