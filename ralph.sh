@@ -22,6 +22,7 @@ EXTERNAL_PLAN=false
 PLAN_FILE_ARG=""
 QUIET=false
 USE_WORKTREE=true
+CALLS_PER_HOUR=80
 WORK_DIR=""
 WORKTREE_BRANCH=""
 LOG_FILE="/dev/null"  # real path set after dir resolution
@@ -59,6 +60,7 @@ ${BOLD}OPTIONS:${NC}
   --plan                 Run planning phase only
   -q, --quiet            Suppress Claude output streaming (log only)
   --no-worktree          Run directly in project dir (no git worktree isolation)
+  --calls-per-hour <N>   Max Claude calls per hour (default: 80)
   -h, --help             Show this help
 
 ${BOLD}EXAMPLES:${NC}
@@ -90,6 +92,7 @@ while [[ $# -gt 0 ]]; do
     --plan)         PLAN_ONLY=true; shift ;;
     -q|--quiet)     QUIET=true; shift ;;
     --no-worktree)  USE_WORKTREE=false; shift ;;
+    --calls-per-hour) CALLS_PER_HOUR="$2"; shift 2 ;;
     -h|--help)      usage; exit 0 ;;
     -*)             log_error "Unknown option: $1"; usage; exit 1 ;;
     *)              PROJECT_DIR="$1"; shift ;;
@@ -265,6 +268,92 @@ read_current_task() {
 
 read_signal_summary() {
   [[ -f "$SIGNAL_FILE" ]] && grep "$SIGNAL_TOKEN" "$SIGNAL_FILE" | sed "s/.*$SIGNAL_TOKEN *//" | head -1
+}
+
+# --- Rate limiting ---
+init_call_tracking() {
+  local call_count_file="$RALPH_DIR/.call_count"
+  local call_hour_file="$RALPH_DIR/.call_hour"
+  local current_hour
+  current_hour=$(date +%Y%m%d%H)
+
+  if [[ ! -f "$call_hour_file" ]] || [[ "$(cat "$call_hour_file")" != "$current_hour" ]]; then
+    echo "0" > "$call_count_file"
+    echo "$current_hour" > "$call_hour_file"
+  fi
+}
+
+check_rate_limit() {
+  local call_count_file="$RALPH_DIR/.call_count"
+  local call_hour_file="$RALPH_DIR/.call_hour"
+  local current_hour
+  current_hour=$(date +%Y%m%d%H)
+
+  if [[ "$(cat "$call_hour_file")" != "$current_hour" ]]; then
+    echo "0" > "$call_count_file"
+    echo "$current_hour" > "$call_hour_file"
+    return 0
+  fi
+
+  local count
+  count=$(cat "$call_count_file")
+  if (( count >= CALLS_PER_HOUR )); then
+    return 1
+  fi
+  return 0
+}
+
+increment_call_count() {
+  local call_count_file="$RALPH_DIR/.call_count"
+  local count
+  count=$(cat "$call_count_file")
+  echo "$((count + 1))" > "$call_count_file"
+}
+
+wait_for_rate_reset() {
+  local call_hour_file="$RALPH_DIR/.call_hour"
+  local call_count_file="$RALPH_DIR/.call_count"
+  local stored_hour current_hour seconds_left
+
+  stored_hour=$(cat "$call_hour_file")
+  current_hour=$(date +%Y%m%d%H)
+
+  if [[ "$stored_hour" != "$current_hour" ]]; then
+    echo "0" > "$call_count_file"
+    echo "$current_hour" > "$call_hour_file"
+    return 0
+  fi
+
+  local current_min current_sec
+  current_min=$(date +%M)
+  current_sec=$(date +%S)
+  seconds_left=$(( (60 - ${current_min#0}) * 60 - ${current_sec#0} ))
+
+  log_warn "Rate limit reached ($CALLS_PER_HOUR calls/hour). Waiting ${seconds_left}s for next hour..."
+
+  while (( seconds_left > 0 )); do
+    if [[ -f "$STOP_FILE" ]]; then
+      log_warn "Stop file detected during rate limit wait"
+      return 1
+    fi
+    local display_min=$(( seconds_left / 60 ))
+    local display_sec=$(( seconds_left % 60 ))
+    printf "\r${YELLOW}[ralph]${NC} Rate limit reset in %02d:%02d " "$display_min" "$display_sec"
+    sleep 10
+    current_hour=$(date +%Y%m%d%H)
+    if [[ "$stored_hour" != "$current_hour" ]]; then
+      break
+    fi
+    current_min=$(date +%M)
+    current_sec=$(date +%S)
+    seconds_left=$(( (60 - ${current_min#0}) * 60 - ${current_sec#0} ))
+  done
+
+  printf "\n"
+  echo "0" > "$call_count_file"
+  echo "$(date +%Y%m%d%H)" > "$call_hour_file"
+  log "Rate limit reset, resuming"
+  return 0
 }
 
 # --- Run Claude with signal polling ---
@@ -454,6 +543,8 @@ Create a plan of atomic, self-contained tasks."
 run_execution() {
   log_phase "=== PHASE 2: EXECUTION ==="
 
+  init_call_tracking
+
   local iteration
   iteration=$(read_state "iteration")
   iteration=${iteration:-0}
@@ -490,10 +581,18 @@ run_execution() {
       # External mode: no task prompt (agent picks via project docs)
       local task_prompt=""
 
+      # Rate limit check
+      if ! check_rate_limit; then
+        if ! wait_for_rate_reset; then
+          break
+        fi
+      fi
+
       # Run claude
       if ! run_claude "$task_prompt"; then
         log_warn "Claude failed on iteration $iteration, continuing..."
       fi
+      increment_call_count
 
       # Post-iteration: read signal summary
       local summary=""
@@ -531,10 +630,18 @@ run_execution() {
       # Build task prompt
       local task_prompt="Complete this task: $next_task"
 
+      # Rate limit check
+      if ! check_rate_limit; then
+        if ! wait_for_rate_reset; then
+          break
+        fi
+      fi
+
       # Run claude for this task
       if ! run_claude "$task_prompt"; then
         log_warn "Claude failed on iteration $iteration, continuing..."
       fi
+      increment_call_count
 
       # Post-iteration: read signal summary
       local summary=""
@@ -567,6 +674,9 @@ generate_resume_script() {
   fi
   if [[ "$USE_WORKTREE" == false ]]; then
     extra_args="$extra_args --no-worktree"
+  fi
+  if [[ "$CALLS_PER_HOUR" != 80 ]]; then
+    extra_args="$extra_args --calls-per-hour $CALLS_PER_HOUR"
   fi
   cat > "$RESUME_SCRIPT" <<RESUME
 #!/usr/bin/env bash
