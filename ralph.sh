@@ -119,7 +119,7 @@ init_ralph_dir() {
   mkdir -p "$RALPH_DIR"
   touch "$LOG_FILE"
 
-  if [[ ! -f "$STATE_FILE" ]]; then
+  if [[ ! -f "$STATE_FILE" ]] || [[ "$RESUME" == false ]]; then
     cat > "$STATE_FILE" <<'STATE'
 {
   "iteration": 0,
@@ -281,31 +281,21 @@ run_claude() {
   # Stream parsed output to terminal unless --quiet
   if [[ "$QUIET" == false ]]; then
     if command -v jq &>/dev/null; then
-      tail -f -n 0 "$LOG_FILE" | jq --null-input --raw-input --join-output --unbuffered '
-        foreach inputs as $line (
-          {seen: 0, msg_id: null};
-          (($line | fromjson?) // null) as $event |
-          if $event == null then . + {out: ""}
-          elif $event.type == "assistant" then
-            (if ($event.message.id == .msg_id) then .seen else 0 end) as $prev |
-            ($event.message.content | length) as $total |
-            . + {
-              seen: $total,
-              msg_id: $event.message.id,
-              out: ([$event.message.content[$prev:][] |
-                if .type == "text" then .text
-                elif .type == "tool_use" then
-                  "\n[" + .name + "] " + (
-                    .input.file_path // .input.pattern // .input.command //
-                    .input.query // .input.url // ""
-                  ) + "\n"
-                else empty end
-              ] | join(""))
-            }
-          elif $event.type == "result" then . + {out: "\n[done]\n"}
-          else . + {out: ""} end;
-          .out | select(length > 0)
-        )
+      tail -f -n 0 "$LOG_FILE" | jq --raw-input --join-output --unbuffered '
+        fromjson? // empty |
+        if .type == "assistant" then
+          [.message.content[]? |
+            if .type == "text" then .text
+            elif .type == "tool_use" then
+              "\n[" + .name + "] " + (
+                .input.file_path // .input.pattern // .input.command //
+                .input.query // .input.url // ""
+              ) + "\n"
+            else empty end
+          ] | join("")
+        elif .type == "result" then
+          "\n[done]\n"
+        else empty end
       ' 2>/dev/null &
     else
       tail -f -n 0 "$LOG_FILE" &
