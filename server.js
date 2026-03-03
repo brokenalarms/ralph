@@ -89,6 +89,8 @@ async function handleStart(req, res) {
   const prompt = body.prompt || "";
   const resume = body.resume || false;
   const planFile = body.plan_file || null;
+  const callsPerHour = body.calls_per_hour || null;
+  const tmux = body.tmux || false;
 
   if (!fs.existsSync(projectDir)) {
     return json(res, 400, { error: `Directory not found: ${projectDir}` });
@@ -98,6 +100,8 @@ async function handleStart(req, res) {
   if (prompt) args.push("--prompt", prompt);
   if (planFile) args.push("--plan-file", planFile);
   if (resume) args.push("--resume");
+  if (callsPerHour) args.push("--calls-per-hour", String(callsPerHour));
+  if (tmux) args.push("--tmux");
 
   activeProjectDir = projectDir;
   activePlanFile = planFile;
