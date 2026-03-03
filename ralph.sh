@@ -286,7 +286,16 @@ run_claude() {
         if .type == "assistant" then
           [.message.content[]? |
             if .type == "text" then .text
-            elif .type == "tool_use" then "\n[tool] " + .name + "\n"
+            elif .type == "tool_use" then
+              "\n[" + .name + "] " + (
+                .input.file_path //
+                .input.pattern //
+                .input.command //
+                .input.query //
+                .input.url //
+                (.input.content // empty | .[0:80]) //
+                ""
+              ) + "\n"
             else empty end
           ] | join("")
         elif .type == "result" then
