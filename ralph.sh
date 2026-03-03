@@ -98,11 +98,11 @@ done
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 RALPH_DIR="$PROJECT_DIR/.ralph"
 if [[ "$EXTERNAL_PLAN" == true ]]; then
-  # Resolve plan-file relative to project dir
+  # Resolve plan-file to absolute path
   if [[ "$PLAN_FILE_ARG" == /* ]]; then
     PLAN_FILE="$PLAN_FILE_ARG"
   else
-    PLAN_FILE="$PROJECT_DIR/$PLAN_FILE_ARG"
+    PLAN_FILE="$(cd "$(dirname "$PROJECT_DIR/$PLAN_FILE_ARG")" && pwd)/$(basename "$PLAN_FILE_ARG")"
   fi
 else
   PLAN_FILE="$RALPH_DIR/plan.md"
@@ -261,8 +261,7 @@ read_signal_summary() {
 # When the signal is detected OR claude exits, we proceed.
 run_claude() {
   local prompt="$1"
-  local claude_pid watcher_pid tail_pid exit_code
-  tail_pid=""
+  local claude_pid watcher_pid exit_code
 
   clear_signal
 
@@ -271,16 +270,16 @@ run_claude() {
   full_prompt=$(build_prompt "$prompt")
 
   # Launch claude in background
+  # In non-quiet mode, use process substitution with tee to stream output
+  # to both terminal and log file (avoids stdio buffering issues with >> + tail -f)
   cd "$WORK_DIR"
-  claude --print --verbose "$full_prompt" >> "$LOG_FILE" 2>&1 &
+  if [[ "$QUIET" == false ]]; then
+    claude --print --verbose "$full_prompt" > >(tee -a "$LOG_FILE") 2>&1 &
+  else
+    claude --print --verbose "$full_prompt" >> "$LOG_FILE" 2>&1 &
+  fi
   claude_pid=$!
   log "Claude started (PID: $claude_pid)"
-
-  # Stream output to terminal unless --quiet
-  if [[ "$QUIET" == false ]]; then
-    tail -f -n 0 "$LOG_FILE" &
-    tail_pid=$!
-  fi
 
   # Background watcher: polls signal file
   (
@@ -298,7 +297,6 @@ run_claude() {
         summary=$(read_signal_summary)
         log_success "Completed: ${summary:-task done}"
         kill "$claude_pid" 2>/dev/null || true
-        [[ -n "$tail_pid" ]] && kill "$tail_pid" 2>/dev/null || true
         exit 0
       fi
       sleep "$WATCHER_INTERVAL"
@@ -310,9 +308,7 @@ run_claude() {
   wait "$claude_pid" 2>/dev/null || true
   exit_code=$?
 
-  # Clean up tail and watcher
-  [[ -n "$tail_pid" ]] && kill "$tail_pid" 2>/dev/null || true
-  [[ -n "$tail_pid" ]] && wait "$tail_pid" 2>/dev/null || true
+  # Clean up watcher
   kill "$watcher_pid" 2>/dev/null || true
   wait "$watcher_pid" 2>/dev/null || true
 
