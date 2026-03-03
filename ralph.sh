@@ -11,7 +11,7 @@ PROMPTS_DIR="$SCRIPT_DIR/prompts"
 
 # --- Defaults ---
 PROJECT_DIR="$(pwd)"
-MAX_ITERATIONS=20
+MAX_ITERATIONS=50
 PROMPT_OVERRIDE=""
 RESUME=false
 PLAN_ONLY=false
@@ -209,10 +209,12 @@ write_state() {
     tmp=$(mktemp)
     jq --arg v "$value" ".$key = (\$v | try tonumber catch \$v)" "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
   else
+    local tmp
+    tmp=$(mktemp)
     if echo "$value" | grep -qE '^[0-9]+$'; then
-      sed -i "s/\"$key\": *[^,}]*/\"$key\": $value/" "$STATE_FILE"
+      sed "s/\"$key\": *[^,}]*/\"$key\": $value/" "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
     else
-      sed -i "s/\"$key\": *[^,}]*/\"$key\": \"$value\"/" "$STATE_FILE"
+      sed "s/\"$key\": *[^,}]*/\"$key\": \"$value\"/" "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
     fi
   fi
 }
@@ -228,15 +230,21 @@ has_remaining_tasks() {
 }
 
 count_completed() {
-  [[ -f "$PLAN_FILE" ]] && grep -cE '^\s*- \[x\]' "$PLAN_FILE" 2>/dev/null || echo 0
+  local count
+  count=$(grep -cE '^\s*- \[x\]' "$PLAN_FILE" 2>/dev/null) || true
+  echo "${count:-0}"
 }
 
 count_remaining() {
-  [[ -f "$PLAN_FILE" ]] && grep -cE '^\s*- \[ \]' "$PLAN_FILE" 2>/dev/null || echo 0
+  local count
+  count=$(grep -cE '^\s*- \[ \]' "$PLAN_FILE" 2>/dev/null) || true
+  echo "${count:-0}"
 }
 
 count_total() {
-  [[ -f "$PLAN_FILE" ]] && grep -cE '^\s*- \[[ x]\]' "$PLAN_FILE" 2>/dev/null || echo 0
+  local count
+  count=$(grep -cE '^\s*- \[[ x]\]' "$PLAN_FILE" 2>/dev/null) || true
+  echo "${count:-0}"
 }
 
 get_next_task() {
@@ -348,8 +356,8 @@ run_claude() {
   watcher_pid=$!
 
   # Wait for claude to finish
-  wait "$claude_pid" 2>/dev/null || true
-  exit_code=$?
+  exit_code=0
+  wait "$claude_pid" 2>/dev/null || exit_code=$?
 
   # Clean up tail and watcher
   [[ -n "$tail_pid" ]] && kill "$tail_pid" 2>/dev/null || true
@@ -628,7 +636,9 @@ print_summary() {
 # --- Cleanup on exit ---
 cleanup() {
   # Kill any backgrounded processes
-  jobs -p | xargs -r kill 2>/dev/null || true
+  local pids
+  pids=$(jobs -p) || true
+  [[ -n "$pids" ]] && kill $pids 2>/dev/null || true
   # Only run summary/resume if .ralph dir was created
   if [[ -d "$RALPH_DIR" ]]; then
     generate_resume_script
