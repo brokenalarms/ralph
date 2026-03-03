@@ -286,7 +286,7 @@ run_claude() {
     --add-dir "$WORK_DIR" \
     --permission-mode acceptEdits \
     --allowedTools "Bash" \
-    "$full_prompt" >> "$LOG_FILE" 2>&1 &
+    "$full_prompt" < /dev/null >> "$LOG_FILE" 2>&1 &
   claude_pid=$!
   log "Claude started (PID: $claude_pid)"
 
@@ -574,7 +574,7 @@ generate_resume_script() {
 #!/usr/bin/env bash
 # Ralph Loop - Resume Script
 # Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-exec "$(realpath "$0")" --dir "$PROJECT_DIR" --max "$MAX_ITERATIONS"$extra_args --resume
+exec "$SCRIPT_DIR/ralph.sh" --dir "$PROJECT_DIR" --max "$MAX_ITERATIONS"$extra_args --resume
 RESUME
   chmod +x "$RESUME_SCRIPT"
   log "Resume script: $RESUME_SCRIPT"
