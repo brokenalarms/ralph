@@ -261,7 +261,8 @@ read_signal_summary() {
 # When the signal is detected OR claude exits, we proceed.
 run_claude() {
   local prompt="$1"
-  local claude_pid watcher_pid exit_code
+  local claude_pid watcher_pid tail_pid exit_code
+  tail_pid=""
 
   clear_signal
 
@@ -270,16 +271,18 @@ run_claude() {
   full_prompt=$(build_prompt "$prompt")
 
   # Launch claude in background
-  # In non-quiet mode, use process substitution with tee to stream output
-  # to both terminal and log file (avoids stdio buffering issues with >> + tail -f)
+  # Use stream-json output format so output flows to the log file in real-time
+  # (default text format batches all output until exit)
   cd "$WORK_DIR"
-  if [[ "$QUIET" == false ]]; then
-    claude --print --verbose "$full_prompt" > >(tee -a "$LOG_FILE") 2>&1 &
-  else
-    claude --print --verbose "$full_prompt" >> "$LOG_FILE" 2>&1 &
-  fi
+  claude --print --verbose --output-format stream-json "$full_prompt" >> "$LOG_FILE" 2>&1 &
   claude_pid=$!
   log "Claude started (PID: $claude_pid)"
+
+  # Stream log file to terminal unless --quiet
+  if [[ "$QUIET" == false ]]; then
+    tail -f -n 0 "$LOG_FILE" &
+    tail_pid=$!
+  fi
 
   # Background watcher: polls signal file
   (
@@ -297,6 +300,7 @@ run_claude() {
         summary=$(read_signal_summary)
         log_success "Completed: ${summary:-task done}"
         kill "$claude_pid" 2>/dev/null || true
+        [[ -n "$tail_pid" ]] && kill "$tail_pid" 2>/dev/null || true
         exit 0
       fi
       sleep "$WATCHER_INTERVAL"
@@ -308,7 +312,9 @@ run_claude() {
   wait "$claude_pid" 2>/dev/null || true
   exit_code=$?
 
-  # Clean up watcher
+  # Clean up tail and watcher
+  [[ -n "$tail_pid" ]] && kill "$tail_pid" 2>/dev/null || true
+  [[ -n "$tail_pid" ]] && wait "$tail_pid" 2>/dev/null || true
   kill "$watcher_pid" 2>/dev/null || true
   wait "$watcher_pid" 2>/dev/null || true
 
