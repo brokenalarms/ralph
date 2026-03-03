@@ -19,6 +19,9 @@ WATCHER_INTERVAL=2  # seconds between signal checks
 EXTERNAL_PLAN=false
 PLAN_FILE_ARG=""
 QUIET=false
+USE_WORKTREE=true
+WORK_DIR=""
+WORKTREE_BRANCH=""
 LOG_FILE="/dev/null"  # real path set after dir resolution
 
 # --- Colors ---
@@ -53,6 +56,7 @@ ${BOLD}OPTIONS:${NC}
   --resume               Resume from previous state
   --plan                 Run planning phase only
   -q, --quiet            Suppress Claude output streaming (log only)
+  --no-worktree          Run directly in project dir (no git worktree isolation)
   -h, --help             Show this help
 
 ${BOLD}EXAMPLES:${NC}
@@ -83,6 +87,7 @@ while [[ $# -gt 0 ]]; do
     --resume)       RESUME=true; shift ;;
     --plan)         PLAN_ONLY=true; shift ;;
     -q|--quiet)     QUIET=true; shift ;;
+    --no-worktree)  USE_WORKTREE=false; shift ;;
     -h|--help)      usage; exit 0 ;;
     -*)             log_error "Unknown option: $1"; usage; exit 1 ;;
     *)              PROJECT_DIR="$1"; shift ;;
@@ -102,6 +107,7 @@ if [[ "$EXTERNAL_PLAN" == true ]]; then
 else
   PLAN_FILE="$RALPH_DIR/plan.md"
 fi
+ORIG_PLAN_FILE="$PLAN_FILE"
 STATE_FILE="$RALPH_DIR/state.json"
 SIGNAL_FILE="$RALPH_DIR/signal"
 STOP_FILE="$RALPH_DIR/stop"
@@ -119,9 +125,62 @@ init_ralph_dir() {
   "iteration": 0,
   "status": "initialized",
   "started_at": null,
-  "last_task": null
+  "last_task": null,
+  "worktree_dir": null,
+  "worktree_branch": null
 }
 STATE
+  fi
+}
+
+# --- Worktree setup ---
+setup_worktree() {
+  WORK_DIR="$PROJECT_DIR"
+
+  if [[ "$USE_WORKTREE" == false ]]; then
+    return
+  fi
+
+  if ! git -C "$PROJECT_DIR" rev-parse --git-dir &>/dev/null; then
+    log_warn "Not a git repo, skipping worktree"
+    return
+  fi
+
+  # On resume, reuse existing worktree if stored in state
+  if [[ "$RESUME" == true ]]; then
+    local stored_worktree
+    stored_worktree=$(read_state "worktree_dir")
+    if [[ -n "$stored_worktree" && "$stored_worktree" != "null" && -d "$stored_worktree" ]]; then
+      WORK_DIR="$stored_worktree"
+      WORKTREE_BRANCH=$(read_state "worktree_branch")
+      log "Resuming in worktree: $WORK_DIR (branch: $WORKTREE_BRANCH)"
+      remap_plan_file
+      return
+    fi
+  fi
+
+  local session_id
+  session_id="ralph-$(date +%s)"
+  WORKTREE_BRANCH="$session_id"
+  WORK_DIR="$RALPH_DIR/worktrees/$session_id"
+
+  mkdir -p "$RALPH_DIR/worktrees"
+  git -C "$PROJECT_DIR" worktree add -b "$WORKTREE_BRANCH" "$WORK_DIR" HEAD
+  log "Worktree: $WORK_DIR (branch: $WORKTREE_BRANCH)"
+
+  write_state "worktree_dir" "$WORK_DIR"
+  write_state "worktree_branch" "$WORKTREE_BRANCH"
+
+  remap_plan_file
+}
+
+remap_plan_file() {
+  if [[ "$EXTERNAL_PLAN" == true && "$WORK_DIR" != "$PROJECT_DIR" ]]; then
+    local rel_plan="${PLAN_FILE#$PROJECT_DIR/}"
+    local worktree_plan="$WORK_DIR/$rel_plan"
+    mkdir -p "$(dirname "$worktree_plan")"
+    cp "$PLAN_FILE" "$worktree_plan"
+    PLAN_FILE="$worktree_plan"
   fi
 }
 
@@ -212,7 +271,7 @@ run_claude() {
   full_prompt=$(build_prompt "$prompt")
 
   # Launch claude in background
-  cd "$PROJECT_DIR"
+  cd "$WORK_DIR"
   claude --print --verbose "$full_prompt" >> "$LOG_FILE" 2>&1 &
   claude_pid=$!
   log "Claude started (PID: $claude_pid)"
@@ -282,7 +341,7 @@ You are running inside a Ralph Loop — an autonomous iteration system that
 gives you fresh context each session.
 
 ## Current iteration context
-- Project: $PROJECT_DIR
+- Project: $WORK_DIR
 - Ralph state dir: $RALPH_DIR
 - Plan file: $PLAN_FILE
 
@@ -304,7 +363,7 @@ PROMPT
 You are running inside a Ralph Loop - an autonomous iteration system.
 
 ## Current iteration context
-- Project: $PROJECT_DIR
+- Project: $WORK_DIR
 - Ralph state dir: $RALPH_DIR
 - Plan file: $PLAN_FILE
 
@@ -490,10 +549,13 @@ run_execution() {
 generate_resume_script() {
   local extra_args=""
   if [[ "$EXTERNAL_PLAN" == true ]]; then
-    extra_args=" --plan-file \"$PLAN_FILE\""
+    extra_args=" --plan-file \"$ORIG_PLAN_FILE\""
   fi
   if [[ "$QUIET" == true ]]; then
     extra_args="$extra_args --quiet"
+  fi
+  if [[ "$USE_WORKTREE" == false ]]; then
+    extra_args="$extra_args --no-worktree"
   fi
   cat > "$RESUME_SCRIPT" <<RESUME
 #!/usr/bin/env bash
@@ -533,6 +595,12 @@ print_summary() {
   log "Log:        $LOG_FILE"
   log "Plan:       $PLAN_FILE"
 
+  if [[ -n "$WORKTREE_BRANCH" ]]; then
+    log "Worktree:   $WORK_DIR"
+    log "Branch:     $WORKTREE_BRANCH"
+    log "To merge:   git merge $WORKTREE_BRANCH"
+  fi
+
   if has_remaining_tasks 2>/dev/null; then
     log "Resume:     $RESUME_SCRIPT"
   fi
@@ -553,9 +621,11 @@ trap cleanup EXIT
 # --- Main ---
 main() {
   init_ralph_dir
+  setup_worktree
 
   log_phase "Ralph Loop v${VERSION}"
   log "Project: $PROJECT_DIR"
+  [[ "$WORK_DIR" != "$PROJECT_DIR" ]] && log "Worktree: $WORK_DIR"
   log "Max iterations: $MAX_ITERATIONS"
 
   write_state "started_at" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
