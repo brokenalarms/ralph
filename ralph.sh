@@ -379,15 +379,19 @@ build_prompt() {
   local escaped_task
   escaped_task=$(printf '%s' "$task_prompt" | sed 's/[&|\]/\\&/g')
 
-  sed \
-    -e "s|{{WORK_DIR}}|$WORK_DIR|g" \
-    -e "s|{{RALPH_DIR}}|$RALPH_DIR|g" \
-    -e "s|{{PLAN_FILE}}|$PLAN_FILE|g" \
-    -e "s|{{SIGNAL_FILE}}|$SIGNAL_FILE|g" \
-    -e "s|{{SIGNAL_TOKEN}}|$SIGNAL_TOKEN|g" \
-    -e "s|{{CURRENT_TASK_TOKEN}}|$CURRENT_TASK_TOKEN|g" \
-    -e "s|{{TASK_PROMPT}}|$escaped_task|g" \
-    "$template"
+  local subs=(
+    -e "s|{{WORK_DIR}}|$WORK_DIR|g"
+    -e "s|{{RALPH_DIR}}|$RALPH_DIR|g"
+    -e "s|{{PLAN_FILE}}|$PLAN_FILE|g"
+    -e "s|{{SIGNAL_FILE}}|$SIGNAL_FILE|g"
+    -e "s|{{SIGNAL_TOKEN}}|$SIGNAL_TOKEN|g"
+    -e "s|{{CURRENT_TASK_TOKEN}}|$CURRENT_TASK_TOKEN|g"
+    -e "s|{{TASK_PROMPT}}|$escaped_task|g"
+  )
+
+  sed "${subs[@]}" "$template"
+  echo ""
+  sed "${subs[@]}" "$PROMPTS_DIR/signal.md"
 }
 
 # --- Planning phase ---
