@@ -294,9 +294,13 @@ run_claude() {
   log "Claude started (PID: $claude_pid)"
 
   # Stream parsed output to terminal unless --quiet
+  # Use process substitution (not a pipeline) so $! is tail's PID.
+  # Killing tail closes jq's stdin → jq exits. A pipeline would make
+  # $! = jq's PID, and bash wait would block on the entire job including
+  # the unkillable tail -f.
   if [[ "$QUIET" == false ]]; then
     if command -v jq &>/dev/null; then
-      tail -f -n 0 "$LOG_FILE" | jq --raw-input --join-output --unbuffered '
+      tail -f -n 0 "$LOG_FILE" > >(jq --raw-input --join-output --unbuffered '
         fromjson? // empty |
         if .type == "assistant" then
           [.message.content[]? |
@@ -319,7 +323,7 @@ run_claude() {
         elif .type == "result" then
           "\n[done]\n"
         else empty end
-      ' 2>/dev/null &
+      ' 2>/dev/null) &
     else
       tail -f -n 0 "$LOG_FILE" &
     fi
@@ -356,7 +360,7 @@ run_claude() {
   # Reap claude process
   wait "$claude_pid" 2>/dev/null || true
 
-  # Clean up tail
+  # Clean up tail (process substitution: killing tail closes jq's stdin)
   [[ -n "$tail_pid" ]] && kill "$tail_pid" 2>/dev/null || true
   [[ -n "$tail_pid" ]] && wait "$tail_pid" 2>/dev/null || true
 
