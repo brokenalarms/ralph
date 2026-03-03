@@ -14,7 +14,10 @@ PROMPT_OVERRIDE=""
 RESUME=false
 PLAN_ONLY=false
 SIGNAL_TOKEN="###RALPH_TASK_COMPLETE###"
+CURRENT_TASK_TOKEN="###RALPH_CURRENT_TASK###"
 WATCHER_INTERVAL=2  # seconds between signal checks
+EXTERNAL_PLAN=false
+PLAN_FILE_ARG=""
 
 # --- Colors ---
 RED='\033[0;31m'
@@ -44,6 +47,7 @@ ${BOLD}OPTIONS:${NC}
   -d, --dir <path>       Project directory (default: cwd)
   -n, --max <N>          Max iterations (default: 50)
   -p, --prompt <text>    Prompt override (otherwise Claude reads repo context)
+  --plan-file <path>     Use external plan file (skip planning, lighter prompt)
   --resume               Resume from previous state
   --plan                 Run planning phase only
   -h, --help             Show this help
@@ -71,6 +75,7 @@ while [[ $# -gt 0 ]]; do
     -d|--dir)       PROJECT_DIR="$2"; shift 2 ;;
     -n|--max)       MAX_ITERATIONS="$2"; shift 2 ;;
     -p|--prompt)    PROMPT_OVERRIDE="$2"; shift 2 ;;
+    --plan-file)    PLAN_FILE_ARG="$2"; EXTERNAL_PLAN=true; shift 2 ;;
     --resume)       RESUME=true; shift ;;
     --plan)         PLAN_ONLY=true; shift ;;
     -h|--help)      usage; exit 0 ;;
@@ -81,7 +86,16 @@ done
 # --- Resolve paths ---
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 RALPH_DIR="$PROJECT_DIR/.ralph"
-PLAN_FILE="$RALPH_DIR/plan.md"
+if [[ "$EXTERNAL_PLAN" == true ]]; then
+  # Resolve plan-file relative to project dir
+  if [[ "$PLAN_FILE_ARG" == /* ]]; then
+    PLAN_FILE="$PLAN_FILE_ARG"
+  else
+    PLAN_FILE="$PROJECT_DIR/$PLAN_FILE_ARG"
+  fi
+else
+  PLAN_FILE="$RALPH_DIR/plan.md"
+fi
 STATE_FILE="$RALPH_DIR/state.json"
 SIGNAL_FILE="$RALPH_DIR/signal"
 STOP_FILE="$RALPH_DIR/stop"
@@ -132,7 +146,12 @@ write_state() {
 
 # --- Task helpers ---
 has_remaining_tasks() {
-  [[ -f "$PLAN_FILE" ]] && grep -qE '^\s*- \[ \]' "$PLAN_FILE"
+  [[ -f "$PLAN_FILE" ]] || return 1
+  if [[ "$EXTERNAL_PLAN" == true ]]; then
+    grep -qE '^\s*[-*]' "$PLAN_FILE"
+  else
+    grep -qE '^\s*- \[ \]' "$PLAN_FILE"
+  fi
 }
 
 count_completed() {
@@ -160,6 +179,18 @@ check_signal() {
   [[ -f "$SIGNAL_FILE" ]] && grep -q "$SIGNAL_TOKEN" "$SIGNAL_FILE"
 }
 
+check_current_task() {
+  [[ -f "$SIGNAL_FILE" ]] && grep -q "$CURRENT_TASK_TOKEN" "$SIGNAL_FILE"
+}
+
+read_current_task() {
+  [[ -f "$SIGNAL_FILE" ]] && grep "$CURRENT_TASK_TOKEN" "$SIGNAL_FILE" | sed "s/.*$CURRENT_TASK_TOKEN *//" | head -1
+}
+
+read_signal_summary() {
+  [[ -f "$SIGNAL_FILE" ]] && grep "$SIGNAL_TOKEN" "$SIGNAL_FILE" | sed "s/.*$SIGNAL_TOKEN *//" | head -1
+}
+
 # --- Run Claude with watcher ---
 # Runs claude in the project dir. A background watcher monitors the signal file.
 # When the signal is detected OR claude exits, we proceed.
@@ -181,9 +212,19 @@ run_claude() {
 
   # Background watcher: polls signal file
   (
+    task_logged=false
     while kill -0 "$claude_pid" 2>/dev/null; do
+      # Log current task when agent signals it (once)
+      if [[ "$task_logged" == false ]] && check_current_task; then
+        task_desc=$(read_current_task)
+        log "Working on: $task_desc"
+        write_state "last_task" "$task_desc"
+        task_logged=true
+      fi
+      # Kill on completion signal
       if check_signal; then
-        log_success "Signal detected - task complete"
+        summary=$(read_signal_summary)
+        log_success "Completed: ${summary:-task done}"
         kill "$claude_pid" 2>/dev/null || true
         exit 0
       fi
@@ -219,7 +260,27 @@ run_claude() {
 build_prompt() {
   local task_prompt="$1"
 
-  cat <<PROMPT
+  if [[ "$EXTERNAL_PLAN" == true ]]; then
+    cat <<PROMPT
+You are running inside a Ralph Loop — an autonomous iteration system that
+gives you fresh context each session.
+
+## Current iteration context
+- Project: $PROJECT_DIR
+- Ralph state dir: $RALPH_DIR
+
+Follow the project's own docs (AGENTS.md, CLAUDE.md, etc.) for what to work on
+and how to track progress.
+
+## RALPH SIGNAL PROTOCOL (you MUST do both)
+1. When you pick a task, signal what you're working on:
+   echo "$CURRENT_TASK_TOKEN <one-line task description>" > "$SIGNAL_FILE"
+2. When you finish, signal completion (overwrites the file):
+   echo "$SIGNAL_TOKEN <one-line summary of what you did>" > "$SIGNAL_FILE"
+If blocked, still write $SIGNAL_TOKEN so the loop can proceed to the next iteration.
+PROMPT
+  else
+    cat <<PROMPT
 You are running inside a Ralph Loop - an autonomous iteration system.
 
 ## Current iteration context
@@ -232,18 +293,30 @@ $task_prompt
 
 ## Rules
 1. Focus ONLY on the single task described above.
-2. When you complete the task, mark it as done in $PLAN_FILE by changing \`- [ ]\` to \`- [x]\`.
-3. After marking the task done, write the completion signal:
-   echo "$SIGNAL_TOKEN" > "$SIGNAL_FILE"
-4. If you cannot complete the task, leave it unchecked and add notes in $PLAN_FILE.
-5. Do NOT work on other tasks - one task per iteration.
-6. Read CLAUDE.md if it exists for project-specific guidance.
+2. When you pick the task, signal what you're working on:
+   echo "$CURRENT_TASK_TOKEN <one-line task description>" > "$SIGNAL_FILE"
+3. When you complete the task, mark it as done in $PLAN_FILE by changing \`- [ ]\` to \`- [x]\`.
+4. After marking the task done, write the completion signal:
+   echo "$SIGNAL_TOKEN <one-line summary>" > "$SIGNAL_FILE"
+5. If you cannot complete the task, leave it unchecked and add notes in $PLAN_FILE.
+6. Do NOT work on other tasks - one task per iteration.
+7. Read CLAUDE.md if it exists for project-specific guidance.
 PROMPT
+  fi
 }
 
 # --- Planning phase ---
 run_planning() {
   log_phase "=== PHASE 1: PLANNING ==="
+
+  if [[ "$EXTERNAL_PLAN" == true ]]; then
+    log "Using external plan file: $PLAN_FILE"
+    if [[ ! -f "$PLAN_FILE" ]]; then
+      log_error "External plan file not found: $PLAN_FILE"
+      exit 1
+    fi
+    return 0
+  fi
 
   if [[ -f "$PLAN_FILE" ]] && [[ "$RESUME" == true ]]; then
     log "Existing plan found, resuming"
@@ -311,31 +384,79 @@ run_execution() {
     fi
 
     iteration=$((iteration + 1))
-    local next_task completed remaining total
-    next_task=$(get_next_task)
-    completed=$(count_completed)
-    remaining=$(count_remaining)
-    total=$(count_total)
 
-    log_phase "--- Iteration $iteration/$MAX_ITERATIONS [${completed}/${total} done] ---"
-    log "Next task: $next_task"
+    if [[ "$EXTERNAL_PLAN" == true ]]; then
+      local bullet_count
+      bullet_count=$(grep -cE '^\s*[-*]' "$PLAN_FILE" 2>/dev/null || echo 0)
+      log_phase "--- Iteration $iteration/$MAX_ITERATIONS [$bullet_count items in plan] ---"
 
-    # Update state
-    write_state "iteration" "$iteration"
-    write_state "status" "running"
-    write_state "last_task" "$next_task"
+      # Update state
+      write_state "iteration" "$iteration"
+      write_state "status" "running"
 
-    # Build task prompt
-    local task_prompt="Complete this task: $next_task"
+      # Snapshot plan file before iteration
+      cp "$PLAN_FILE" "$RALPH_DIR/.plan_snapshot" 2>/dev/null || true
 
-    # Run claude for this task
-    if ! run_claude "$task_prompt"; then
-      log_warn "Claude failed on iteration $iteration, continuing..."
+      # External mode: no task prompt (agent picks via project docs)
+      local task_prompt=""
+
+      # Run claude
+      if ! run_claude "$task_prompt"; then
+        log_warn "Claude failed on iteration $iteration, continuing..."
+      fi
+
+      # Post-iteration: read signal summary
+      local summary
+      summary=$(read_signal_summary)
+      if [[ -n "$summary" ]]; then
+        log "Summary: $summary"
+      fi
+
+      # Post-iteration: diff plan file
+      if [[ -f "$RALPH_DIR/.plan_snapshot" ]]; then
+        local removed added
+        removed=$(diff "$RALPH_DIR/.plan_snapshot" "$PLAN_FILE" 2>/dev/null | grep -c '^<' || echo 0)
+        added=$(diff "$RALPH_DIR/.plan_snapshot" "$PLAN_FILE" 2>/dev/null | grep -c '^>' || echo 0)
+        if [[ $removed -gt 0 || $added -gt 0 ]]; then
+          log "Plan diff: $removed removed, $added added"
+        fi
+      fi
+
+      log "Iteration $iteration complete."
+    else
+      local next_task completed remaining total
+      next_task=$(get_next_task)
+      completed=$(count_completed)
+      remaining=$(count_remaining)
+      total=$(count_total)
+
+      log_phase "--- Iteration $iteration/$MAX_ITERATIONS [${completed}/${total} done] ---"
+      log "Next task: $next_task"
+
+      # Update state
+      write_state "iteration" "$iteration"
+      write_state "status" "running"
+      write_state "last_task" "$next_task"
+
+      # Build task prompt
+      local task_prompt="Complete this task: $next_task"
+
+      # Run claude for this task
+      if ! run_claude "$task_prompt"; then
+        log_warn "Claude failed on iteration $iteration, continuing..."
+      fi
+
+      # Post-iteration: read signal summary
+      local summary
+      summary=$(read_signal_summary)
+      if [[ -n "$summary" ]]; then
+        log "Summary: $summary"
+      fi
+
+      # Recount after claude ran
+      completed=$(count_completed)
+      log "Iteration $iteration complete. ${completed}/${total} tasks done."
     fi
-
-    # Recount after claude ran
-    completed=$(count_completed)
-    log "Iteration $iteration complete. ${completed}/${total} tasks done."
     echo ""
   done
 
@@ -347,11 +468,15 @@ run_execution() {
 
 # --- Generate resume script ---
 generate_resume_script() {
+  local extra_args=""
+  if [[ "$EXTERNAL_PLAN" == true ]]; then
+    extra_args=" --plan-file \"$PLAN_FILE\""
+  fi
   cat > "$RESUME_SCRIPT" <<RESUME
 #!/usr/bin/env bash
 # Ralph Loop - Resume Script
 # Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-exec "$(realpath "$0")" --dir "$PROJECT_DIR" --max "$MAX_ITERATIONS" --resume
+exec "$(realpath "$0")" --dir "$PROJECT_DIR" --max "$MAX_ITERATIONS"$extra_args --resume
 RESUME
   chmod +x "$RESUME_SCRIPT"
   log "Resume script: $RESUME_SCRIPT"
@@ -359,10 +484,7 @@ RESUME
 
 # --- Print summary ---
 print_summary() {
-  local completed remaining total iteration status
-  completed=$(count_completed)
-  remaining=$(count_remaining)
-  total=$(count_total)
+  local iteration status
   iteration=$(read_state "iteration")
   status=$(read_state "status")
 
@@ -370,11 +492,25 @@ print_summary() {
   log_phase "=== SUMMARY ==="
   log "Status:     $status"
   log "Iterations: $iteration/$MAX_ITERATIONS"
-  log "Tasks:      $completed/$total completed, $remaining remaining"
+
+  if [[ "$EXTERNAL_PLAN" == true ]]; then
+    local bullet_count last_task
+    bullet_count=$(grep -cE '^\s*[-*]' "$PLAN_FILE" 2>/dev/null || echo 0)
+    last_task=$(read_state "last_task")
+    log "Items left: $bullet_count"
+    [[ -n "$last_task" && "$last_task" != "null" ]] && log "Last task:  $last_task"
+  else
+    local completed remaining total
+    completed=$(count_completed)
+    remaining=$(count_remaining)
+    total=$(count_total)
+    log "Tasks:      $completed/$total completed, $remaining remaining"
+  fi
+
   log "Log:        $LOG_FILE"
   log "Plan:       $PLAN_FILE"
 
-  if [[ "$remaining" -gt 0 ]]; then
+  if has_remaining_tasks 2>/dev/null; then
     log "Resume:     $RESUME_SCRIPT"
   fi
 }

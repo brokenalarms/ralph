@@ -10,12 +10,13 @@ const fs = require("fs");
 const path = require("path");
 
 const PORT = parseInt(process.env.RALPH_PORT || "3411", 10);
-const HOST = process.env.RALPH_HOST || "0.0.0.0";
+const HOST = process.env.RALPH_HOST || "127.0.0.1";
 const RALPH_SCRIPT = path.join(__dirname, "ralph.sh");
 
 // Active loop state
 let activeProcess = null;
 let activeProjectDir = null;
+let activePlanFile = null;
 
 // --- Helpers ---
 
@@ -87,6 +88,7 @@ async function handleStart(req, res) {
   const maxIterations = body.max || 50;
   const prompt = body.prompt || "";
   const resume = body.resume || false;
+  const planFile = body.plan_file || null;
 
   if (!fs.existsSync(projectDir)) {
     return json(res, 400, { error: `Directory not found: ${projectDir}` });
@@ -94,9 +96,11 @@ async function handleStart(req, res) {
 
   const args = ["--dir", projectDir, "--max", String(maxIterations)];
   if (prompt) args.push("--prompt", prompt);
+  if (planFile) args.push("--plan-file", planFile);
   if (resume) args.push("--resume");
 
   activeProjectDir = projectDir;
+  activePlanFile = planFile;
   activeProcess = spawn("bash", [RALPH_SCRIPT, ...args], {
     cwd: projectDir,
     stdio: ["ignore", "pipe", "pipe"],
@@ -114,6 +118,7 @@ async function handleStart(req, res) {
   activeProcess.on("close", (code) => {
     console.log(`[ralph-server] Loop exited with code ${code}`);
     activeProcess = null;
+    activePlanFile = null;
   });
 
   json(res, 200, {
@@ -132,13 +137,17 @@ function handleStatus(req, res) {
 
   const rd = ralphDir(dir);
   const state = readJSON(path.join(rd, "state.json"));
-  const plan = readFile(path.join(rd, "plan.md"));
+  const planPath = activePlanFile
+    ? (path.isAbsolute(activePlanFile) ? activePlanFile : path.join(dir, activePlanFile))
+    : path.join(rd, "plan.md");
+  const plan = readFile(planPath);
   const logTail = tailFile(path.join(rd, "loop.log"), 30);
 
   json(res, 200, {
     running: activeProcess !== null,
     pid: activeProcess?.pid || null,
     project: dir,
+    plan_file: activePlanFile || null,
     state,
     log_tail: logTail,
     plan_preview: plan ? plan.substring(0, 2000) : null,
@@ -210,6 +219,7 @@ function handleReset(req, res) {
   }
 
   activeProjectDir = null;
+  activePlanFile = null;
   json(res, 200, { status: "reset", message: ".ralph directory removed" });
 }
 
@@ -219,7 +229,9 @@ function handlePlan(req, res) {
     return json(res, 404, { error: "No project directory" });
   }
 
-  const planPath = path.join(ralphDir(dir), "plan.md");
+  const planPath = activePlanFile
+    ? (path.isAbsolute(activePlanFile) ? activePlanFile : path.join(dir, activePlanFile))
+    : path.join(ralphDir(dir), "plan.md");
   const content = readFile(planPath);
 
   if (content === null) {
