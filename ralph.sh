@@ -299,11 +299,14 @@ run_claude() {
           [.message.content[]? |
             if .type == "text" then .text
             elif .type == "tool_use" then
-              (.input.file_path // .input.command // .input.pattern //
-                .input.query // .input.url // .input.description //
-                .input.content // null) as $target |
-              if $target then "\n[" + .name + "] " + $target + "\n"
-              else "\n[" + .name + "]\n"
+              if .name == "TodoWrite" then empty
+              else
+                (.input.file_path // .input.command // .input.pattern //
+                  .input.query // .input.url // .input.description //
+                  null) as $target |
+                if $target then "\n[" + .name + "] " + $target + "\n"
+                else "\n[" + .name + "]\n"
+                end
               end
             else empty end
           ] | join("")
