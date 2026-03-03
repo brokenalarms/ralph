@@ -282,7 +282,7 @@ run_claude() {
   # Use stream-json output format so output flows to the log file in real-time
   # (default text format batches all output until exit)
   cd "$WORK_DIR"
-  claude --print --verbose --output-format stream-json "$full_prompt" >> "$LOG_FILE" 2>&1 &
+  claude --print --verbose --output-format stream-json --dangerously-skip-permissions "$full_prompt" >> "$LOG_FILE" 2>&1 &
   claude_pid=$!
   log "Claude started (PID: $claude_pid)"
 
