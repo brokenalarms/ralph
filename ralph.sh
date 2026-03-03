@@ -52,7 +52,7 @@ ${BOLD}USAGE:${NC}
 
 ${BOLD}OPTIONS:${NC}
   -d, --dir <path>       Project directory (default: cwd)
-  -n, --max <N>          Max iterations (default: 50)
+  -n, --max <N>          Max iterations (default: 20)
   -p, --prompt <text>    Prompt override (otherwise Claude reads repo context)
   --plan-file <path>     Use external plan file (skip planning, lighter prompt)
   --resume               Resume from previous state
@@ -228,15 +228,27 @@ has_remaining_tasks() {
 }
 
 count_completed() {
-  [[ -f "$PLAN_FILE" ]] && grep -cE '^\s*- \[x\]' "$PLAN_FILE" 2>/dev/null || echo 0
+  if [[ -f "$PLAN_FILE" ]]; then
+    grep -cE '^\s*- \[x\]' "$PLAN_FILE" 2>/dev/null || true
+  else
+    echo 0
+  fi
 }
 
 count_remaining() {
-  [[ -f "$PLAN_FILE" ]] && grep -cE '^\s*- \[ \]' "$PLAN_FILE" 2>/dev/null || echo 0
+  if [[ -f "$PLAN_FILE" ]]; then
+    grep -cE '^\s*- \[ \]' "$PLAN_FILE" 2>/dev/null || true
+  else
+    echo 0
+  fi
 }
 
 count_total() {
-  [[ -f "$PLAN_FILE" ]] && grep -cE '^\s*- \[[ x]\]' "$PLAN_FILE" 2>/dev/null || echo 0
+  if [[ -f "$PLAN_FILE" ]]; then
+    grep -cE '^\s*- \[[ x]\]' "$PLAN_FILE" 2>/dev/null || true
+  else
+    echo 0
+  fi
 }
 
 get_next_task() {
@@ -388,22 +400,24 @@ build_prompt() {
     exit 1
   fi
 
-  local escaped_task
-  escaped_task=$(printf '%s' "$task_prompt" | sed 's/[&|\]/\\&/g')
-
-  local subs=(
-    -e "s|{{WORK_DIR}}|$WORK_DIR|g"
-    -e "s|{{RALPH_DIR}}|$RALPH_DIR|g"
-    -e "s|{{PLAN_FILE}}|$PLAN_FILE|g"
-    -e "s|{{SIGNAL_FILE}}|$SIGNAL_FILE|g"
-    -e "s|{{SIGNAL_TOKEN}}|$SIGNAL_TOKEN|g"
-    -e "s|{{CURRENT_TASK_TOKEN}}|$CURRENT_TASK_TOKEN|g"
-    -e "s|{{TASK_PROMPT}}|$escaped_task|g"
-  )
-
-  sed "${subs[@]}" "$template"
+  # Use bash parameter expansion instead of sed to handle multiline content
+  local content
+  content=$(<"$template")
+  content="${content//\{\{WORK_DIR\}\}/$WORK_DIR}"
+  content="${content//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
+  content="${content//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
+  content="${content//\{\{SIGNAL_FILE\}\}/$SIGNAL_FILE}"
+  content="${content//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
+  content="${content//\{\{CURRENT_TASK_TOKEN\}\}/$CURRENT_TASK_TOKEN}"
+  content="${content//\{\{TASK_PROMPT\}\}/$task_prompt}"
+  echo "$content"
   echo ""
-  sed "${subs[@]}" "$PROMPTS_DIR/signal.md"
+  local signal
+  signal=$(<"$PROMPTS_DIR/signal.md")
+  signal="${signal//\{\{SIGNAL_FILE\}\}/$SIGNAL_FILE}"
+  signal="${signal//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
+  signal="${signal//\{\{CURRENT_TASK_TOKEN\}\}/$CURRENT_TASK_TOKEN}"
+  echo "$signal"
 }
 
 # --- Planning phase ---
@@ -434,16 +448,13 @@ Look at CLAUDE.md, prompt.md, README.md, or any task-related files for context.
 Create a plan of atomic, self-contained tasks."
   fi
 
-  local escaped_context
-  escaped_context=$(printf '%s' "$planning_context" | sed 's/[&|\]/\\&/g')
-
+  # Use bash parameter expansion instead of sed to handle multiline content
   local planning_prompt
-  planning_prompt=$(sed \
-    -e "s|{{PLANNING_CONTEXT}}|$escaped_context|g" \
-    -e "s|{{PLAN_FILE}}|$PLAN_FILE|g" \
-    -e "s|{{SIGNAL_TOKEN}}|$SIGNAL_TOKEN|g" \
-    -e "s|{{SIGNAL_FILE}}|$SIGNAL_FILE|g" \
-    "$PROMPTS_DIR/planning.md")
+  planning_prompt=$(<"$PROMPTS_DIR/planning.md")
+  planning_prompt="${planning_prompt//\{\{PLANNING_CONTEXT\}\}/$planning_context}"
+  planning_prompt="${planning_prompt//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
+  planning_prompt="${planning_prompt//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
+  planning_prompt="${planning_prompt//\{\{SIGNAL_FILE\}\}/$SIGNAL_FILE}"
 
   run_claude "$planning_prompt"
 
