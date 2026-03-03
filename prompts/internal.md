@@ -13,4 +13,4 @@ You are running inside a Ralph Loop - an autonomous iteration system.
 2. When you complete the task, mark it as done in {{PLAN_FILE}} by changing `- [ ]` to `- [x]`.
 3. If you cannot complete the task, leave it unchecked and add notes in {{PLAN_FILE}}.
 4. Do NOT work on other tasks - one task per iteration.
-5. Read CLAUDE.md if it exists for project-specific guidance.
+5. Read CLAUDE.md if it exists for project-specific guidance, including commiting, pull requests, and todo cleanup required to accompany each task completion.
