@@ -369,7 +369,7 @@ write_state() {
 has_remaining_tasks() {
   [[ -f "$PLAN_FILE" ]] || return 1
   if [[ "$EXTERNAL_PLAN" == true ]]; then
-    grep -qE '^\s*[-*]' "$PLAN_FILE"
+    return 0
   else
     grep -qE '^\s*- \[ \]' "$PLAN_FILE"
   fi
@@ -799,9 +799,12 @@ run_execution() {
   _test_only_count=0
   _stuck_count=0
 
-  local iteration=0
+  local run_iteration=0
+  local iteration
+  iteration=$(read_state "iteration")
+  iteration=${iteration:-0}
 
-  while (( iteration < MAX_ITERATIONS )); do
+  while (( run_iteration < MAX_ITERATIONS )); do
     # Check stop file
     if [[ -f "$STOP_FILE" ]]; then
       log_warn "Stop file detected - halting"
@@ -816,10 +819,11 @@ run_execution() {
       break
     fi
 
+    run_iteration=$((run_iteration + 1))
     iteration=$((iteration + 1))
 
     # Each iteration gets its own branch, stacked on the previous
-    if (( iteration > 1 )); then
+    if (( run_iteration > 1 )); then
       rotate_branch
     fi
 
@@ -827,7 +831,7 @@ run_execution() {
       local bullet_count
       bullet_count=$(grep -cE '^\s*[-*]' "$PLAN_FILE" 2>/dev/null || true)
       bullet_count=${bullet_count:-0}
-      log_phase "--- Iteration $iteration/$MAX_ITERATIONS [$bullet_count items in plan] ---"
+      log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS ---"
 
       # Update state
       write_state "iteration" "$iteration"
@@ -854,7 +858,7 @@ run_execution() {
 
       # Run claude
       if ! run_claude "$task_prompt"; then
-        log_warn "Claude failed on iteration $iteration, continuing..."
+        log_warn "Claude failed on iteration $run_iteration, continuing..."
       fi
       increment_call_count
 
@@ -875,7 +879,7 @@ run_execution() {
         fi
       fi
 
-      log "Iteration $iteration complete."
+      log "Iteration $run_iteration complete."
 
       # Analyze iteration for problems
       analyze_iteration "$LOG_FILE" "$log_start_line" "$head_before"
@@ -896,7 +900,7 @@ run_execution() {
       remaining=$(count_remaining)
       total=$(count_total)
 
-      log_phase "--- Iteration $iteration/$MAX_ITERATIONS [${completed}/${total} done] ---"
+      log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS [${completed}/${total} done] ---"
       log "Next task: $next_task"
 
       # Update state
@@ -923,7 +927,7 @@ run_execution() {
 
       # Run claude for this task
       if ! run_claude "$task_prompt"; then
-        log_warn "Claude failed on iteration $iteration, continuing..."
+        log_warn "Claude failed on iteration $run_iteration, continuing..."
       fi
       increment_call_count
 
@@ -936,7 +940,7 @@ run_execution() {
 
       # Recount after claude ran
       completed=$(count_completed)
-      log "Iteration $iteration complete. ${completed}/${total} tasks done."
+      log "Iteration $run_iteration complete. ${completed}/${total} tasks done."
 
       # Analyze iteration for problems
       analyze_iteration "$LOG_FILE" "$log_start_line" "$head_before"
@@ -954,7 +958,7 @@ run_execution() {
     echo ""
   done
 
-  if (( iteration >= MAX_ITERATIONS )); then
+  if (( run_iteration >= MAX_ITERATIONS )); then
     log_warn "Max iterations ($MAX_ITERATIONS) reached"
     write_state "status" "max_iterations_reached"
   fi
@@ -997,14 +1001,11 @@ print_summary() {
   echo ""
   log_phase "=== SUMMARY ==="
   log "Status:     $status"
-  log "Iterations: $iteration/$MAX_ITERATIONS"
+  log "Iterations: $iteration total"
 
   if [[ "$EXTERNAL_PLAN" == true ]]; then
-    local bullet_count last_task
-    bullet_count=$(grep -cE '^\s*[-*]' "$PLAN_FILE" 2>/dev/null || true)
-    bullet_count=${bullet_count:-0}
+    local last_task
     last_task=$(read_state "last_task")
-    log "Items left: $bullet_count"
     [[ -n "$last_task" && "$last_task" != "null" ]] && log "Last task:  $last_task"
   else
     local completed remaining total
