@@ -792,6 +792,20 @@ analyze_iteration() {
 run_execution() {
   log_phase "=== PHASE 2: EXECUTION ==="
 
+  # Rebase onto default branch to pick up changes merged since worktree was created
+  if [[ -n "$WORKTREE_BRANCH" && "$WORK_DIR" != "$PROJECT_DIR" ]]; then
+    local default_branch
+    default_branch=$(git -C "$PROJECT_DIR" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||') || true
+    default_branch=${default_branch:-main}
+    git -C "$WORK_DIR" fetch origin "$default_branch" 2>/dev/null || true
+    if git -C "$WORK_DIR" rebase "origin/$default_branch" 2>/dev/null; then
+      log "Rebased onto origin/$default_branch"
+    else
+      git -C "$WORK_DIR" rebase --abort 2>/dev/null || true
+      log_warn "Rebase onto $default_branch failed (conflicts), continuing on current base"
+    fi
+  fi
+
   init_call_tracking
 
   # Reset response analyzer counters
