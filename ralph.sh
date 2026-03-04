@@ -799,9 +799,7 @@ run_execution() {
   _test_only_count=0
   _stuck_count=0
 
-  local iteration
-  iteration=$(read_state "iteration")
-  iteration=${iteration:-0}
+  local iteration=0
 
   while (( iteration < MAX_ITERATIONS )); do
     # Check stop file
