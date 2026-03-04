@@ -230,7 +230,7 @@ setup_worktree() {
     run_seq=$((existing_today + 1))
   fi
 
-  WORKTREE_BRANCH="ralph-temp"
+  WORKTREE_BRANCH="ralph/$PROJECT_NAME/temp"
   WORK_DIR="$RALPH_DIR/worktrees/ralph-${today}-$(printf "%02d" $run_seq)"
 
   mkdir -p "$RALPH_DIR/worktrees"
@@ -277,7 +277,7 @@ rotate_branch() {
     return
   fi
 
-  local new_branch="ralph-temp"
+  local new_branch="ralph/$PROJECT_NAME/temp"
 
   git -C "$WORK_DIR" branch -D "$new_branch" 2>/dev/null || true
   if git -C "$WORK_DIR" checkout -b "$new_branch" 2>/dev/null; then
@@ -1181,8 +1181,8 @@ cleanup() {
   fi
   # Kill any backgrounded processes
   jobs -p | xargs -r kill 2>/dev/null || true
-  # Clean up unused worktree branch (still named ralph-temp = no work committed)
-  if [[ -n "${WORKTREE_BRANCH:-}" && "$WORKTREE_BRANCH" == "ralph-temp" && "${WORK_DIR:-}" != "$PROJECT_DIR" ]]; then
+  # Clean up unused worktree branch (still named /temp = no work committed)
+  if [[ -n "${WORKTREE_BRANCH:-}" && "$WORKTREE_BRANCH" == */temp && "${WORK_DIR:-}" != "$PROJECT_DIR" ]]; then
     git -C "$PROJECT_DIR" worktree remove --force "$WORK_DIR" 2>/dev/null || true
     git -C "$PROJECT_DIR" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
   fi

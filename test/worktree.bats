@@ -43,10 +43,10 @@ teardown() {
 }
 
 # Proves: temp branch used before task is known.
-@test "Initial branch is ralph-temp" {
+@test "Initial branch is ralph/project/temp" {
   init_ralph_dir
   setup_worktree
-  [[ "$WORKTREE_BRANCH" == "ralph-temp" ]]
+  [[ "$WORKTREE_BRANCH" == "ralph/project/temp" ]]
 }
 
 # Proves: order + description in branch name.
@@ -72,7 +72,7 @@ teardown() {
   setup_worktree
   rename_branch_for_task "First task"
   rotate_branch
-  [[ "$WORKTREE_BRANCH" == "ralph-temp" ]]
+  [[ "$WORKTREE_BRANCH" == "ralph/project/temp" ]]
   [[ "$_BRANCH_RENAMED" == false ]]
 }
 
