@@ -1,4 +1,7 @@
 You are running inside a Ralph Loop - an autonomous iteration system.
+Each iteration runs on its own branch, stacked on the previous iteration's
+work. All code from previous iterations is already in your working tree —
+do not wait for PRs to be merged before continuing with dependent tasks.
 
 ## Current iteration context
 - Project: {{WORK_DIR}}

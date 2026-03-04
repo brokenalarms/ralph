@@ -28,6 +28,8 @@ TMUX_SESSION=""
 _TMUX_OUTER=false
 WORK_DIR=""
 WORKTREE_BRANCH=""
+PROJECT_NAME=""
+_BRANCH_SEQ=0
 LOG_FILE="/dev/null"  # real path set after dir resolution
 
 # --- Colors ---
@@ -174,6 +176,10 @@ setup_worktree() {
     if [[ -n "$stored_worktree" && "$stored_worktree" != "null" && -d "$stored_worktree" ]]; then
       WORK_DIR="$stored_worktree"
       WORKTREE_BRANCH=$(read_state "worktree_branch")
+      PROJECT_NAME=$(basename "$PROJECT_DIR")
+      local existing
+      existing=$(git -C "$PROJECT_DIR" branch --list "ralph/$PROJECT_NAME/*" 2>/dev/null | wc -l | tr -d ' ')
+      _BRANCH_SEQ=$((existing))
       SIGNAL_FILE="$WORK_DIR/.ralph-signal"
       log "Resuming in worktree: $WORK_DIR (branch: $WORKTREE_BRANCH)"
       remap_plan_file
@@ -181,16 +187,13 @@ setup_worktree() {
     fi
   fi
 
-  local project
-  project=$(basename "$PROJECT_DIR")
+  PROJECT_NAME=$(basename "$PROJECT_DIR")
   local existing
-  existing=$(git -C "$PROJECT_DIR" branch --list "ralph/$project/*" 2>/dev/null | wc -l | tr -d ' ')
-  local seq_num
-  seq_num=$(printf "%02d" $((existing + 1)))
+  existing=$(git -C "$PROJECT_DIR" branch --list "ralph/$PROJECT_NAME/*" 2>/dev/null | wc -l | tr -d ' ')
+  _BRANCH_SEQ=$((existing + 1))
 
-  WORKTREE_BRANCH="ralph/$project/$seq_num"
-  local worktree_id="ralph-${project}-${seq_num}"
-  WORK_DIR="$RALPH_DIR/worktrees/$worktree_id"
+  WORKTREE_BRANCH="ralph/$PROJECT_NAME/$(printf "%02d" $_BRANCH_SEQ)"
+  WORK_DIR="$RALPH_DIR/worktrees/ralph-${PROJECT_NAME}-$(printf "%02d" $_BRANCH_SEQ)"
 
   mkdir -p "$RALPH_DIR/worktrees"
   git -C "$PROJECT_DIR" worktree add -b "$WORKTREE_BRANCH" "$WORK_DIR" HEAD
@@ -223,6 +226,22 @@ rename_branch_for_task() {
     WORKTREE_BRANCH="$new_branch"
     write_state "worktree_branch" "$WORKTREE_BRANCH"
     _BRANCH_RENAMED=true
+  fi
+}
+
+rotate_branch() {
+  if [[ -z "$WORKTREE_BRANCH" || "$WORK_DIR" == "$PROJECT_DIR" ]]; then
+    return
+  fi
+
+  _BRANCH_SEQ=$((_BRANCH_SEQ + 1))
+  local new_branch="ralph/$PROJECT_NAME/$(printf "%02d" $_BRANCH_SEQ)"
+
+  if git -C "$WORK_DIR" checkout -b "$new_branch" 2>/dev/null; then
+    WORKTREE_BRANCH="$new_branch"
+    write_state "worktree_branch" "$WORKTREE_BRANCH"
+    _BRANCH_RENAMED=false
+    log "Branch: $WORKTREE_BRANCH (from previous iteration)"
   fi
 }
 
@@ -666,7 +685,7 @@ analyze_iteration() {
 
   # --- Permission denial detection (3+ in single iteration → halt) ---
   local perm_count=0
-  perm_count=$(echo "$iter_log" | grep -ciE 'permission denied|cannot write|blocked by sandbox|not allowed' || true)
+  perm_count=$(grep -ciE 'permission denied|cannot write|blocked by sandbox|not allowed' <<< "$iter_log" || true)
   if (( perm_count >= 3 )); then
     ANALYSIS_RESULT="halt:permission_denied"
     return
@@ -675,23 +694,21 @@ analyze_iteration() {
   # --- Stuck loop detection ---
   local stuck_detected=false
 
-  if echo "$iter_log" | grep -qiE "I'm blocked|I cannot proceed|unable to complete"; then
+  if grep -qiE "I'm blocked|I cannot proceed|unable to complete" <<< "$iter_log"; then
     stuck_detected=true
   fi
 
   if [[ "$stuck_detected" == false ]]; then
     local max_repeats=0
     if command -v jq &>/dev/null; then
-      max_repeats=$(echo "$iter_log" 2>/dev/null | \
-        jq -r '
+      max_repeats=$(jq -r '
           select(.type == "assistant") |
           .message.content[]? |
           select(.type == "tool_use") |
           (.name + ":" + (.input.command // .input.file_path // .input.pattern // ""))
-        ' 2>/dev/null | sort | uniq -c | sort -rn | head -1 | awk '{print $1+0}') || true
+        ' <<< "$iter_log" 2>/dev/null | sort | uniq -c | sort -rn | head -1 | awk '{print $1+0}') || true
     else
-      max_repeats=$(echo "$iter_log" | \
-        grep -oE '"(command|file_path)"\s*:\s*"[^"]*"' | \
+      max_repeats=$(grep -oE '"(command|file_path)"\s*:\s*"[^"]*"' <<< "$iter_log" | \
         sort | uniq -c | sort -rn | head -1 | awk '{print $1+0}') || true
     fi
     max_repeats=${max_repeats:-0}
@@ -802,6 +819,11 @@ run_execution() {
     fi
 
     iteration=$((iteration + 1))
+
+    # Each iteration gets its own branch, stacked on the previous
+    if (( iteration > 1 )); then
+      rotate_branch
+    fi
 
     if [[ "$EXTERNAL_PLAN" == true ]]; then
       local bullet_count
@@ -997,9 +1019,18 @@ print_summary() {
   log "Log:        $LOG_FILE"
   log "Plan:       $PLAN_FILE"
 
-  if [[ -n "$WORKTREE_BRANCH" ]]; then
+  if [[ -n "$WORKTREE_BRANCH" && -n "$PROJECT_NAME" ]]; then
     log "Worktree:   $WORK_DIR"
-    log "Branch:     $WORKTREE_BRANCH"
+    local branches
+    branches=$(git -C "$PROJECT_DIR" branch --list "ralph/$PROJECT_NAME/*" 2>/dev/null | sed 's/^[ *]*//' || true)
+    if [[ $(echo "$branches" | wc -l | tr -d ' ') -gt 1 ]]; then
+      log "Branches:"
+      echo "$branches" | while read -r b; do
+        log "  $b"
+      done
+    else
+      log "Branch:     $WORKTREE_BRANCH"
+    fi
     log "To merge:   git merge $WORKTREE_BRANCH"
   fi
 
