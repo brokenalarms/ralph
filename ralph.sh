@@ -831,7 +831,7 @@ run_execution() {
       local bullet_count
       bullet_count=$(grep -cE '^\s*[-*]' "$PLAN_FILE" 2>/dev/null || true)
       bullet_count=${bullet_count:-0}
-      log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS ---"
+      log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS ($iteration total) ---"
 
       # Update state
       write_state "iteration" "$iteration"
@@ -900,7 +900,7 @@ run_execution() {
       remaining=$(count_remaining)
       total=$(count_total)
 
-      log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS [${completed}/${total} done] ---"
+      log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS ($iteration total) [${completed}/${total} done] ---"
       log "Next task: $next_task"
 
       # Update state
