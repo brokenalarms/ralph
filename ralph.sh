@@ -17,6 +17,7 @@ MAX_ITERATIONS=20
 PROMPT_OVERRIDE=""
 RESUME=false
 PLAN_ONLY=false
+NO_PLAN=false
 SIGNAL_TOKEN="###RALPH_TASK_COMPLETE###"
 CURRENT_TASK_TOKEN="###RALPH_CURRENT_TASK###"
 WATCHER_INTERVAL=2  # seconds between signal checks
@@ -31,6 +32,7 @@ _TMUX_OUTER=false
 WORK_DIR=""
 WORKTREE_BRANCH=""
 PROJECT_NAME=""
+temp_branch() { echo "ralph/$PROJECT_NAME/temp"; }
 _TASK_SEQ=0
 ALL_COMPLETE_TOKEN="###RALPH_ALL_COMPLETE###"
 LOG_FILE="/dev/null"  # real path set after dir resolution
@@ -74,6 +76,7 @@ ${BOLD}OPTIONS:${NC}
   --plan-file <path>     Use external plan file (skip planning, lighter prompt)
   --resume               Resume from previous state
   --plan                 Run planning phase only
+  --no-plan              Skip planning, go straight to execution
   -q, --quiet            Suppress Claude output streaming (log only)
   --no-worktree          Run directly in project dir (no git worktree isolation)
   --calls-per-hour <N>   Max Claude calls per hour (default: 80)
@@ -92,11 +95,33 @@ ${BOLD}HOW IT WORKS:${NC}
   3. Completion: Claude writes a signal file when each task is done
   4. Repeat: Loop continues until all tasks complete or iteration cap is hit
 
+${BOLD}SUBCOMMANDS:${NC}
+  ralph feedback <message>   Queue feedback for the next iteration
+
 ${BOLD}CONTROL:${NC}
   Create .ralph/stop to halt after the current iteration.
+  ralph feedback "your message" to inject context into the next iteration.
   The repo's CLAUDE.md is the source of truth for Claude's behavior.
 EOF
 }
+
+# --- Subcommands (before flag parsing) ---
+if [[ "${1:-}" == "feedback" ]]; then
+  shift
+  local_dir="."
+  if [[ -n "${1:-}" && "${1:0:1}" != "-" && -d "$1" ]]; then
+    local_dir="$1"
+    shift
+  fi
+  ralph_dir="$local_dir/.ralph"
+  if [[ ! -d "$ralph_dir" ]]; then
+    echo "No .ralph directory found. Is ralph running here?"
+    exit 1
+  fi
+  echo "$*" >> "$ralph_dir/feedback"
+  echo "Feedback queued for next iteration."
+  exit 0
+fi
 
 # --- Save original args (for tmux re-exec) ---
 RALPH_ORIG_ARGS=("$@")
@@ -110,6 +135,7 @@ while [[ $# -gt 0 ]]; do
     --plan-file)    PLAN_FILE_ARG="$2"; EXTERNAL_PLAN=true; shift 2 ;;
     --resume)       RESUME=true; shift ;;
     --plan)         PLAN_ONLY=true; shift ;;
+    --no-plan)      NO_PLAN=true; shift ;;
     -q|--quiet)     QUIET=true; shift ;;
     --no-worktree)  USE_WORKTREE=false; shift ;;
     --calls-per-hour) CALLS_PER_HOUR="$2"; shift 2 ;;
@@ -172,8 +198,8 @@ setup_worktree() {
   fi
 
   if ! git -C "$PROJECT_DIR" rev-parse --git-dir &>/dev/null; then
-    log_warn "Not a git repo, skipping worktree"
-    return
+    log_error "Not a git repo — ralph requires git. Use --no-worktree to run without git isolation."
+    exit 1
   fi
 
   # On resume, reuse existing worktree if stored in state
@@ -185,7 +211,7 @@ setup_worktree() {
       WORKTREE_BRANCH=$(read_state "worktree_branch")
       PROJECT_NAME=$(basename "$PROJECT_DIR")
       local named_branches
-      named_branches=$(git -C "$PROJECT_DIR" branch --list "ralph/$PROJECT_NAME/*" 2>/dev/null | { grep -v '/next$' || true; } | wc -l | tr -d ' ')
+      named_branches=$(git -C "$PROJECT_DIR" branch --list "ralph/$PROJECT_NAME/*" 2>/dev/null | wc -l | tr -d ' ')
       _TASK_SEQ=$((named_branches))
       SIGNAL_FILE="$WORK_DIR/.ralph-signal"
       log "Resuming in worktree: $WORK_DIR (branch: $WORKTREE_BRANCH)"
@@ -205,10 +231,14 @@ setup_worktree() {
     run_seq=$((existing_today + 1))
   fi
 
-  WORKTREE_BRANCH="ralph/$PROJECT_NAME/next"
+  WORKTREE_BRANCH=$(temp_branch)
   WORK_DIR="$RALPH_DIR/worktrees/ralph-${today}-$(printf "%02d" $run_seq)"
 
   mkdir -p "$RALPH_DIR/worktrees"
+
+  # Clean up leftover temp branch from previous runs
+  git -C "$PROJECT_DIR" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+
   git -C "$PROJECT_DIR" worktree add -b "$WORKTREE_BRANCH" "$WORK_DIR" HEAD
   log "Worktree: $WORK_DIR (branch: $WORKTREE_BRANCH)"
 
@@ -248,10 +278,9 @@ rotate_branch() {
     return
   fi
 
-  local new_branch="ralph/$PROJECT_NAME/next"
-
-  if git -C "$WORK_DIR" checkout -b "$new_branch" 2>/dev/null; then
-    WORKTREE_BRANCH="$new_branch"
+  WORKTREE_BRANCH=$(temp_branch)
+  git -C "$WORK_DIR" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+  if git -C "$WORK_DIR" checkout -b "$WORKTREE_BRANCH" 2>/dev/null; then
     write_state "worktree_branch" "$WORKTREE_BRANCH"
     _BRANCH_RENAMED=false
     log "Branch: $WORKTREE_BRANCH (from previous iteration)"
@@ -411,6 +440,14 @@ clear_signal() {
   rm -f "$SIGNAL_FILE"
 }
 
+consume_feedback() {
+  local feedback_file="$RALPH_DIR/feedback"
+  if [[ -f "$feedback_file" && -s "$feedback_file" ]]; then
+    cat "$feedback_file"
+    rm -f "$feedback_file"
+  fi
+}
+
 check_signal() {
   [[ -f "$SIGNAL_FILE" ]] && grep -q "$SIGNAL_TOKEN" "$SIGNAL_FILE"
 }
@@ -522,6 +559,7 @@ wait_for_rate_reset() {
 # When the signal is detected OR claude exits, we proceed.
 run_claude() {
   local prompt="$1"
+  local feedback="${2:-}"
   local claude_pid tail_pid
   tail_pid=""
 
@@ -529,7 +567,7 @@ run_claude() {
 
   # Build the prompt that includes ralph loop context
   local full_prompt
-  full_prompt=$(build_prompt "$prompt")
+  full_prompt=$(build_prompt "$prompt" "$feedback")
 
   # Launch claude in background
   # Use stream-json output format so output flows to the log file in real-time
@@ -602,6 +640,7 @@ run_claude() {
 # --- Build prompt for Claude ---
 build_prompt() {
   local task_prompt="$1"
+  local feedback="${2:-}"
   local template_file
 
   if [[ "$EXTERNAL_PLAN" == true ]]; then
@@ -616,9 +655,16 @@ build_prompt() {
   fi
 
   local result
-  result=$(<"$template_file")
+  result=$(<"$PROMPTS_DIR/shared.md")
+  result+=$'\n'
+  result+=$(<"$template_file")
   result+=$'\n'
   result+=$(<"$PROMPTS_DIR/signal.md")
+
+  if [[ -n "$feedback" ]]; then
+    result+=$'\n\n## User feedback\nThe user has provided the following feedback. Incorporate this into your approach:\n\n'
+    result+="$feedback"
+  fi
 
   result="${result//\{\{WORK_DIR\}\}/$WORK_DIR}"
   result="${result//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
@@ -650,6 +696,41 @@ run_planning() {
     return 0
   fi
 
+  if [[ "$NO_PLAN" == true ]]; then
+    log "Skipping planning (--no-plan)"
+    return 0
+  fi
+
+  # Interactive planning: launch Claude for the user to define spec + plan
+  if [[ ! -f "$PLAN_FILE" ]]; then
+    log "Starting interactive planning session..."
+    log "Chat with Claude to define your spec and plan. Exit when done."
+
+    local interactive_prompt
+    interactive_prompt=$(<"$PROMPTS_DIR/interactive-planning.md")
+    interactive_prompt="${interactive_prompt//\{\{WORK_DIR\}\}/$WORK_DIR}"
+    interactive_prompt="${interactive_prompt//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
+    interactive_prompt="${interactive_prompt//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
+
+    cd "$WORK_DIR"
+    claude --add-dir "$WORK_DIR" \
+      --permission-mode acceptEdits \
+      --allowedTools "Bash" \
+      --system-prompt "$interactive_prompt" || true
+
+    log "Interactive planning session ended."
+  fi
+
+  # If interactive session created a plan, use it
+  if [[ -f "$PLAN_FILE" ]]; then
+    local total
+    total=$(count_total)
+    write_state "status" "planned"
+    log_success "Plan created with $total tasks"
+    return 0
+  fi
+
+  # Fallback: autonomous planning if no plan was created interactively
   local planning_context
   if [[ -n "$PROMPT_OVERRIDE" ]]; then
     planning_context="$PROMPT_OVERRIDE"
@@ -887,8 +968,15 @@ run_execution() {
       local head_before
       head_before=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
 
+      # Consume any queued user feedback
+      local feedback=""
+      feedback=$(consume_feedback) || true
+      if [[ -n "$feedback" ]]; then
+        log "Injecting user feedback into this iteration"
+      fi
+
       # Run claude
-      if ! run_claude "$task_prompt"; then
+      if ! run_claude "$task_prompt" "$feedback"; then
         log_warn "Claude failed on iteration $run_iteration, continuing..."
       fi
       increment_call_count
@@ -963,8 +1051,15 @@ run_execution() {
       local head_before
       head_before=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
 
+      # Consume any queued user feedback
+      local feedback=""
+      feedback=$(consume_feedback) || true
+      if [[ -n "$feedback" ]]; then
+        log "Injecting user feedback into this iteration"
+      fi
+
       # Run claude for this task
-      if ! run_claude "$task_prompt"; then
+      if ! run_claude "$task_prompt" "$feedback"; then
         log_warn "Claude failed on iteration $run_iteration, continuing..."
       fi
       increment_call_count
@@ -1085,6 +1180,11 @@ cleanup() {
   fi
   # Kill any backgrounded processes
   jobs -p | xargs -r kill 2>/dev/null || true
+  # Clean up unused worktree branch (still named /temp = no work committed)
+  if [[ -n "${WORKTREE_BRANCH:-}" && "$WORKTREE_BRANCH" == */temp && "${WORK_DIR:-}" != "$PROJECT_DIR" ]]; then
+    git -C "$PROJECT_DIR" worktree remove --force "$WORK_DIR" 2>/dev/null || true
+    git -C "$PROJECT_DIR" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+  fi
   # Only run summary/resume if .ralph dir was created
   if [[ -d "$RALPH_DIR" ]]; then
     generate_resume_script
