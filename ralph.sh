@@ -130,6 +130,10 @@ if [[ "$EXTERNAL_PLAN" == true ]]; then
 else
   PLAN_FILE="$RALPH_DIR/plan.md"
 fi
+if [[ "$EXTERNAL_PLAN" == true && ! -f "$PLAN_FILE" ]]; then
+  log_error "Plan file not found: $PLAN_FILE"
+  exit 1
+fi
 ORIG_PLAN_FILE="$PLAN_FILE"
 STATE_FILE="$RALPH_DIR/state.json"
 SIGNAL_FILE="$RALPH_DIR/signal"
@@ -242,6 +246,8 @@ rotate_branch() {
     write_state "worktree_branch" "$WORKTREE_BRANCH"
     _BRANCH_RENAMED=false
     log "Branch: $WORKTREE_BRANCH (from previous iteration)"
+  else
+    log_warn "Branch rotation failed, continuing on $WORKTREE_BRANCH"
   fi
 }
 
