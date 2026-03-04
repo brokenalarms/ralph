@@ -31,7 +31,8 @@ _TMUX_OUTER=false
 WORK_DIR=""
 WORKTREE_BRANCH=""
 PROJECT_NAME=""
-_BRANCH_SEQ=0
+_TASK_SEQ=0
+ALL_COMPLETE_TOKEN="###RALPH_ALL_COMPLETE###"
 LOG_FILE="/dev/null"  # real path set after dir resolution
 
 # --- Colors ---
@@ -183,9 +184,9 @@ setup_worktree() {
       WORK_DIR="$stored_worktree"
       WORKTREE_BRANCH=$(read_state "worktree_branch")
       PROJECT_NAME=$(basename "$PROJECT_DIR")
-      local existing
-      existing=$(git -C "$PROJECT_DIR" branch --list "ralph/$PROJECT_NAME/*" 2>/dev/null | wc -l | tr -d ' ')
-      _BRANCH_SEQ=$((existing))
+      local named_branches
+      named_branches=$(git -C "$PROJECT_DIR" branch --list "ralph/$PROJECT_NAME/*" 2>/dev/null | { grep -v '/next$' || true; } | wc -l | tr -d ' ')
+      _TASK_SEQ=$((named_branches))
       SIGNAL_FILE="$WORK_DIR/.ralph-signal"
       log "Resuming in worktree: $WORK_DIR (branch: $WORKTREE_BRANCH)"
       remap_plan_file
@@ -194,12 +195,18 @@ setup_worktree() {
   fi
 
   PROJECT_NAME=$(basename "$PROJECT_DIR")
-  local existing
-  existing=$(git -C "$PROJECT_DIR" branch --list "ralph/$PROJECT_NAME/*" 2>/dev/null | wc -l | tr -d ' ')
-  _BRANCH_SEQ=$((existing + 1))
 
-  WORKTREE_BRANCH="ralph/$PROJECT_NAME/$(printf "%02d" $_BRANCH_SEQ)"
-  WORK_DIR="$RALPH_DIR/worktrees/ralph-${PROJECT_NAME}-$(printf "%02d" $_BRANCH_SEQ)"
+  local today
+  today=$(date +%Y%m%d)
+  local run_seq=1
+  if [[ -d "$RALPH_DIR/worktrees" ]]; then
+    local existing_today
+    existing_today=$(find "$RALPH_DIR/worktrees" -maxdepth 1 -name "ralph-${today}-*" -type d 2>/dev/null | wc -l | tr -d ' ')
+    run_seq=$((existing_today + 1))
+  fi
+
+  WORKTREE_BRANCH="ralph/$PROJECT_NAME/next"
+  WORK_DIR="$RALPH_DIR/worktrees/ralph-${today}-$(printf "%02d" $run_seq)"
 
   mkdir -p "$RALPH_DIR/worktrees"
   git -C "$PROJECT_DIR" worktree add -b "$WORKTREE_BRANCH" "$WORK_DIR" HEAD
@@ -227,7 +234,8 @@ rename_branch_for_task() {
     return
   fi
 
-  local new_branch="${WORKTREE_BRANCH}-${slug}"
+  _TASK_SEQ=$((_TASK_SEQ + 1))
+  local new_branch="ralph/$PROJECT_NAME/$(printf "%02d" $_TASK_SEQ)-${slug}"
   if git -C "$WORK_DIR" branch -m "$WORKTREE_BRANCH" "$new_branch" 2>/dev/null; then
     WORKTREE_BRANCH="$new_branch"
     write_state "worktree_branch" "$WORKTREE_BRANCH"
@@ -240,8 +248,7 @@ rotate_branch() {
     return
   fi
 
-  _BRANCH_SEQ=$((_BRANCH_SEQ + 1))
-  local new_branch="ralph/$PROJECT_NAME/$(printf "%02d" $_BRANCH_SEQ)"
+  local new_branch="ralph/$PROJECT_NAME/next"
 
   if git -C "$WORK_DIR" checkout -b "$new_branch" 2>/dev/null; then
     WORKTREE_BRANCH="$new_branch"
@@ -408,6 +415,10 @@ check_signal() {
   [[ -f "$SIGNAL_FILE" ]] && grep -q "$SIGNAL_TOKEN" "$SIGNAL_FILE"
 }
 
+check_all_complete() {
+  [[ -f "$SIGNAL_FILE" ]] && grep -q "$ALL_COMPLETE_TOKEN" "$SIGNAL_FILE"
+}
+
 check_current_task() {
   [[ -f "$SIGNAL_FILE" ]] && grep -q "$CURRENT_TASK_TOKEN" "$SIGNAL_FILE"
 }
@@ -558,7 +569,7 @@ run_claude() {
         task_logged=true
       fi
     fi
-    if check_signal; then
+    if check_signal || check_all_complete; then
       local summary
       summary=$(read_signal_summary) || true
       log_success "Completed: ${summary:-task done}"
@@ -579,7 +590,7 @@ run_claude() {
   [[ -n "$tail_pid" ]] && wait "$tail_pid" 2>/dev/null || true
 
   # Check if signal was written (claude may have exited after writing it)
-  if check_signal; then
+  if check_signal || check_all_complete; then
     [[ "$signal_detected" == false ]] && log_success "Task completed via signal"
     return 0
   fi
@@ -615,6 +626,7 @@ build_prompt() {
   result="${result//\{\{SIGNAL_FILE\}\}/$SIGNAL_FILE}"
   result="${result//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
   result="${result//\{\{CURRENT_TASK_TOKEN\}\}/$CURRENT_TASK_TOKEN}"
+  result="${result//\{\{ALL_COMPLETE_TOKEN\}\}/$ALL_COMPLETE_TOKEN}"
   result="${result//\{\{TASK_PROMPT\}\}/$task_prompt}"
 
   printf '%s' "$result"
@@ -752,7 +764,7 @@ analyze_iteration() {
     has_changes=true
   fi
 
-  if check_signal; then
+  if check_signal || check_all_complete; then
     has_signal=true
   fi
 
@@ -850,9 +862,6 @@ run_execution() {
     fi
 
     if [[ "$EXTERNAL_PLAN" == true ]]; then
-      local bullet_count
-      bullet_count=$(grep -cE '^\s*[-*]' "$PLAN_FILE" 2>/dev/null || true)
-      bullet_count=${bullet_count:-0}
       log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS ($iteration total) ---"
 
       # Update state
@@ -902,6 +911,13 @@ run_execution() {
       fi
 
       log "Iteration $run_iteration complete."
+
+      # Check if Claude signaled all tasks are done
+      if check_all_complete; then
+        log_success "All tasks complete (signaled by Claude)!"
+        write_state "status" "completed"
+        break
+      fi
 
       # Analyze iteration for problems
       analyze_iteration "$LOG_FILE" "$log_start_line" "$head_before"
@@ -1106,4 +1122,4 @@ main() {
   run_execution
 }
 
-main
+[[ "${RALPH_SOURCED:-}" == true ]] || main
