@@ -6,7 +6,9 @@ set -euo pipefail
 # Prompts live in ./prompts/ — edit them to change Claude's behavior.
 
 VERSION="0.1.0"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_source="${BASH_SOURCE[0]}"
+while [[ -L "$_source" ]]; do _source="$(readlink "$_source")"; done
+SCRIPT_DIR="$(cd "$(dirname "$_source")" && pwd)"
 PROMPTS_DIR="$SCRIPT_DIR/prompts"
 
 # --- Defaults ---
