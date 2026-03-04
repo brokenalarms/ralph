@@ -20,7 +20,7 @@ ralph.sh
 
 ### Two modes
 
-**Managed mode** (default) — Ralph runs a planning phase first. Claude reads the repo, creates `.ralph/plan.md` with checkbox tasks, then works through them.
+**Managed mode** (default) — On the first run, ralph launches an interactive Claude session where you chat to define a spec and task plan. Once you exit, ralph takes over and works through the tasks autonomously. Use `--no-plan` to skip planning.
 
 **External plan mode** (`--plan-file`) — Your repo already has task files and agent instructions. Ralph skips planning and defers to your project's workflow. This is the mode for existing projects — point `--plan-file` at your AGENTS.md or TODO.md and ralph handles the iteration loop while your project's own rules handle everything else.
 
@@ -83,6 +83,7 @@ ralph.sh --tmux
 | `--plan-file <path>` | External plan file (skips planning phase) | — |
 | `--resume` | Resume from previous state | — |
 | `--plan` | Run planning phase only | — |
+| `--no-plan` | Skip planning, go straight to execution | — |
 | `-q, --quiet` | Suppress streaming output (log only) | — |
 | `--no-worktree` | Run directly in project dir (no git isolation) | — |
 | `--calls-per-hour <N>` | Rate limit Claude calls per hour | 80 |
@@ -91,6 +92,7 @@ ralph.sh --tmux
 ### Controlling a running loop
 
 - **Stop gracefully:** `touch .ralph/stop` — halts after the current iteration finishes
+- **Send feedback:** `ralph feedback "your message"` — queues feedback for the next iteration. Multiple calls stack up. Feedback is injected into Claude's prompt once, then cleared.
 - **Resume:** run the generated `.ralph/resume.sh`, or `ralph.sh --resume`
 - **Rate limiting:** ralph tracks calls per clock hour and pauses with a countdown when the cap is reached, then resumes automatically
 
@@ -100,7 +102,9 @@ Ralph's prompts live in `prompts/` and are designed to be read and modified. The
 
 | File | Used when | Purpose |
 |---|---|---|
-| `planning.md` | Managed mode, planning phase | Tells Claude to create a checkbox task list |
+| `shared.md` | Always (prepended to all prompts) | Baseline quality standards: testing, commits, housekeeping |
+| `interactive-planning.md` | First run, interactive planning | System prompt for the interactive spec/plan session |
+| `planning.md` | Managed mode, autonomous planning fallback | Tells Claude to create a checkbox task list |
 | `internal.md` | Managed mode, execution | Gives Claude the task and rules for one iteration |
 | `external.md` | `--plan-file` mode | Tells Claude to read the project's own agent instructions for task selection |
 | `signal.md` | Always (appended to all prompts) | Documents the signal protocol |
@@ -140,6 +144,7 @@ Ralph stores all state in `.ralph/` inside the project directory. Add it to `.gi
   loop.log         # full Claude output (stream-json)
   resume.sh        # auto-generated resume script
   stop             # create this file to halt gracefully
+  feedback         # queued user feedback (consumed at next iteration)
   worktrees/       # git worktree directories
 ```
 
@@ -171,6 +176,7 @@ RALPH_HOST=$(tailscale ip -4) node server.js
 | `/start` | POST | Start a ralph loop |
 | `/status` | GET | Loop status and state |
 | `/stop` | POST | Graceful stop |
+| `/feedback` | POST | Queue feedback for next iteration |
 | `/kill` | POST | Kill running process |
 | `/log` | GET | Tail the log (`?lines=50`) |
 | `/plan` | GET | View the plan file |

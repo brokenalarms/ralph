@@ -174,6 +174,27 @@ function handleStop(req, res) {
   });
 }
 
+async function handleFeedback(req, res) {
+  if (!activeProjectDir) {
+    return json(res, 404, { error: "No active loop" });
+  }
+
+  const body = await parseBody(req);
+  const message = body.message;
+  if (!message) {
+    return json(res, 400, { error: "Missing 'message' field" });
+  }
+
+  const rd = ralphDir(activeProjectDir);
+  fs.mkdirSync(rd, { recursive: true });
+  fs.appendFileSync(path.join(rd, "feedback"), message + "\n");
+
+  json(res, 200, {
+    status: "feedback_queued",
+    message: "Feedback will be injected into the next iteration.",
+  });
+}
+
 function handleKill(req, res) {
   if (!activeProcess) {
     return json(res, 404, { error: "No active process" });
@@ -273,6 +294,8 @@ const server = http.createServer(async (req, res) => {
         return handleStatus(req, res);
       case "POST /stop":
         return handleStop(req, res);
+      case "POST /feedback":
+        return await handleFeedback(req, res);
       case "POST /kill":
         return handleKill(req, res);
       case "GET /log":
@@ -289,6 +312,7 @@ const server = http.createServer(async (req, res) => {
             "POST /start   - Start a ralph loop",
             "GET  /status   - Get loop status",
             "POST /stop     - Request graceful stop",
+            "POST /feedback - Queue feedback for next iteration",
             "POST /kill     - Kill the running process",
             "GET  /log      - Tail the loop log",
             "GET  /plan     - View the plan file",

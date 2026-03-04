@@ -36,3 +36,33 @@ teardown() {
   external_prompt=$(build_prompt "")
   [[ "$external_prompt" == *"Task selection"* ]]
 }
+
+# Proves: shared quality standards are included in all prompts.
+@test "Shared prompt included in both modes" {
+  EXTERNAL_PLAN=false
+  local internal_prompt
+  internal_prompt=$(build_prompt "task")
+  [[ "$internal_prompt" == *"Standards"* ]]
+  [[ "$internal_prompt" == *".gitignore"* ]]
+
+  EXTERNAL_PLAN=true
+  local external_prompt
+  external_prompt=$(build_prompt "")
+  [[ "$external_prompt" == *"Standards"* ]]
+  [[ "$external_prompt" == *".gitignore"* ]]
+}
+
+# Proves: user feedback is injected into the prompt when provided.
+@test "Feedback included in prompt when provided" {
+  local prompt
+  prompt=$(build_prompt "task" "make it generic, use plugins")
+  [[ "$prompt" == *"User feedback"* ]]
+  [[ "$prompt" == *"make it generic"* ]]
+}
+
+# Proves: no feedback section when none provided.
+@test "No feedback section when feedback is empty" {
+  local prompt
+  prompt=$(build_prompt "task" "")
+  [[ "$prompt" != *"User feedback"* ]]
+}

@@ -42,11 +42,11 @@ teardown() {
   [[ "$WORK_DIR" == "$saved_dir" ]]
 }
 
-# Proves: placeholder naming.
-@test "Initial branch is ralph/{project}/next" {
+# Proves: temp branch used before task is known.
+@test "Initial branch is ralph-temp" {
   init_ralph_dir
   setup_worktree
-  [[ "$WORKTREE_BRANCH" == "ralph/project/next" ]]
+  [[ "$WORKTREE_BRANCH" == "ralph-temp" ]]
 }
 
 # Proves: order + description in branch name.
@@ -72,7 +72,7 @@ teardown() {
   setup_worktree
   rename_branch_for_task "First task"
   rotate_branch
-  [[ "$WORKTREE_BRANCH" == "ralph/project/next" ]]
+  [[ "$WORKTREE_BRANCH" == "ralph-temp" ]]
   [[ "$_BRANCH_RENAMED" == false ]]
 }
 
@@ -84,4 +84,15 @@ teardown() {
   run rotate_branch
   # Should not crash (rotate_branch handles the error)
   [[ "$status" -eq 0 ]]
+}
+
+# Proves: ralph requires a git repo and fails fast without one.
+@test "Non-git directory exits with error" {
+  local non_git_dir
+  non_git_dir="$(mktemp -d)"
+  PROJECT_DIR="$non_git_dir"
+  run setup_worktree
+  [[ "$status" -eq 1 ]]
+  [[ "$output" == *"Not a git repo"* ]]
+  rm -rf "$non_git_dir"
 }
