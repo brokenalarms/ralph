@@ -17,7 +17,9 @@ setup_test_repo() {
   PROJECT_DIR="$TEST_TMPDIR/project"
   mkdir -p "$PROJECT_DIR"
   git -C "$PROJECT_DIR" init -q
-  git -C "$PROJECT_DIR" -c user.name="test" -c user.email="test@test" commit --allow-empty -m "init" -q
+  git -C "$PROJECT_DIR" config user.name "test"
+  git -C "$PROJECT_DIR" config user.email "test@test"
+  git -C "$PROJECT_DIR" commit --allow-empty -m "init" -q
 
   RALPH_DIR="$PROJECT_DIR/.ralph"
   mkdir -p "$RALPH_DIR"
