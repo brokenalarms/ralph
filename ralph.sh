@@ -32,6 +32,7 @@ _TMUX_OUTER=false
 WORK_DIR=""
 WORKTREE_BRANCH=""
 PROJECT_NAME=""
+temp_branch() { echo "ralph/$PROJECT_NAME/temp"; }
 _TASK_SEQ=0
 ALL_COMPLETE_TOKEN="###RALPH_ALL_COMPLETE###"
 LOG_FILE="/dev/null"  # real path set after dir resolution
@@ -230,7 +231,7 @@ setup_worktree() {
     run_seq=$((existing_today + 1))
   fi
 
-  WORKTREE_BRANCH="ralph/$PROJECT_NAME/temp"
+  WORKTREE_BRANCH=$(temp_branch)
   WORK_DIR="$RALPH_DIR/worktrees/ralph-${today}-$(printf "%02d" $run_seq)"
 
   mkdir -p "$RALPH_DIR/worktrees"
@@ -277,11 +278,9 @@ rotate_branch() {
     return
   fi
 
-  local new_branch="ralph/$PROJECT_NAME/temp"
-
-  git -C "$WORK_DIR" branch -D "$new_branch" 2>/dev/null || true
-  if git -C "$WORK_DIR" checkout -b "$new_branch" 2>/dev/null; then
-    WORKTREE_BRANCH="$new_branch"
+  WORKTREE_BRANCH=$(temp_branch)
+  git -C "$WORK_DIR" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+  if git -C "$WORK_DIR" checkout -b "$WORKTREE_BRANCH" 2>/dev/null; then
     write_state "worktree_branch" "$WORKTREE_BRANCH"
     _BRANCH_RENAMED=false
     log "Branch: $WORKTREE_BRANCH (from previous iteration)"
