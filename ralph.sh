@@ -320,27 +320,15 @@ write_stream_filter() {
 #!/usr/bin/env bash
 # Track how many content blocks we've already output so cumulative
 # assistant events don't re-emit earlier blocks.
-# Uses a temp file because piped while-read runs in a subshell where
-# variable assignments are lost between iterations.
-count_file=$(mktemp)
-echo 0 > "$count_file"
-trap 'rm -f "$count_file"' EXIT
+seen_count=0
 
-tail -f -n 0 "$1" | jq --raw-input --unbuffered -c '
-  fromjson? // empty |
-  if .type == "assistant" then
-    { blocks: [.message.content[]?], type: "assistant" }
-  elif .type == "result" then
-    { type: "result" }
-  else empty end
-' 2>/dev/null | while IFS= read -r event; do
+while IFS= read -r event; do
   evt_type=$(echo "$event" | jq -r '.type')
   if [[ "$evt_type" == "result" ]]; then
     printf '\n[done]\n'
-    echo 0 > "$count_file"
+    seen_count=0
     continue
   fi
-  seen_count=$(cat "$count_file")
   total=$(echo "$event" | jq '.blocks | length')
   if (( total <= seen_count )); then
     continue
@@ -365,8 +353,15 @@ tail -f -n 0 "$1" | jq --raw-input --unbuffered -c '
       end
     else empty end
   ' 2>/dev/null
-  echo "$total" > "$count_file"
-done
+  seen_count=$total
+done < <(tail -f -n 0 "$1" | jq --raw-input --unbuffered -c '
+  fromjson? // empty |
+  if .type == "assistant" then
+    { blocks: [.message.content[]?], type: "assistant" }
+  elif .type == "result" then
+    { type: "result" }
+  else empty end
+' 2>/dev/null)
 STREAM
   chmod +x "$RALPH_DIR/.stream-filter.sh"
 }
@@ -396,14 +391,10 @@ setup_tmux() {
     "watch -n 5 'echo \"=== State ===\"; cat \"$STATE_FILE\" 2>/dev/null; echo; echo \"=== Plan ===\"; head -30 \"$PLAN_FILE\" 2>/dev/null'" Enter
 
   # Left pane: re-exec ralph without --tmux, with --quiet
-  local relaunch_args=()
-  for arg in "${RALPH_ORIG_ARGS[@]}"; do
-    [[ "$arg" == "--tmux" ]] && continue
-    relaunch_args+=("$arg")
-  done
   local cmd
   cmd="$(printf '%q' "$SCRIPT_DIR/ralph.sh")"
-  for arg in "${relaunch_args[@]}"; do
+  for arg in "${RALPH_ORIG_ARGS[@]+"${RALPH_ORIG_ARGS[@]}"}"; do
+    [[ "$arg" == "--tmux" ]] && continue
     cmd+=" $(printf '%q' "$arg")"
   done
   cmd+=" --quiet"
@@ -995,7 +986,7 @@ run_execution() {
     local feedback=""
     feedback=$(read_feedback) || true
     if [[ -n "$feedback" ]]; then
-      log "Feedback: $feedback"
+      log "Feedback: \"$feedback\""
     fi
 
     # Run claude for this task
