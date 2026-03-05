@@ -318,32 +318,34 @@ rotate_branch() {
 write_stream_filter() {
   cat > "$RALPH_DIR/.stream-filter.sh" <<'STREAM'
 #!/usr/bin/env bash
+# Only process the last content block from each assistant event.
+# stream-json sends cumulative messages — event N contains blocks 0..N.
+# We only want block N (the new one).
 tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   fromjson? // empty |
   if .type == "assistant" then
-    [.message.content[]? |
-      if .type == "text" then .text
-      elif .type == "tool_use" then
-        if (.name | test("^ToolSearch$")) then empty
-        elif .name == "TodoWrite" then
-          ([.input.todos[]? | .content] | if length == 0 then "[]"
-            else join(", ") end) as $items |
-          "\n[TodoWrite] " + $items + "\n"
-        else
-          (.input.file_path // .input.command // .input.pattern //
-            .input.query // .input.url // .input.description //
-            .input.task_id // .input.skill // .input.prompt //
-            null) as $target |
-          if $target then "\n[" + .name + "] " + $target + "\n"
-          else "\n[" + .name + "]\n"
-          end
+    (.message.content // []) | if length == 0 then empty else .[-1] end |
+    if .type == "text" then .text
+    elif .type == "tool_use" then
+      if (.name | test("^ToolSearch$")) then empty
+      elif .name == "TodoWrite" then
+        ([.input.todos[]? | .content] | if length == 0 then "[]"
+          else join(", ") end) as $items |
+        "\n[TodoWrite] " + $items + "\n"
+      else
+        (.input.file_path // .input.command // .input.pattern //
+          .input.query // .input.url // .input.description //
+          .input.task_id // .input.skill // .input.prompt //
+          null) as $target |
+        if $target then "\n[" + .name + "] " + $target + "\n"
+        else "\n[" + .name + "]\n"
         end
-      else empty end
-    ] | join("")
+      end
+    else empty end
   elif .type == "result" then
     "\n[done]\n"
   else empty end
-' 2>/dev/null | uniq
+' 2>/dev/null
 STREAM
   chmod +x "$RALPH_DIR/.stream-filter.sh"
 }
