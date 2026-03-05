@@ -318,50 +318,32 @@ rotate_branch() {
 write_stream_filter() {
   cat > "$RALPH_DIR/.stream-filter.sh" <<'STREAM'
 #!/usr/bin/env bash
-# Track how many content blocks we've already output so cumulative
-# assistant events don't re-emit earlier blocks.
-seen_count=0
-
-while IFS= read -r event; do
-  evt_type=$(echo "$event" | jq -r '.type')
-  if [[ "$evt_type" == "result" ]]; then
-    printf '\n[done]\n'
-    seen_count=0
-    continue
-  fi
-  total=$(echo "$event" | jq '.blocks | length')
-  if (( total <= seen_count )); then
-    continue
-  fi
-  echo "$event" | jq --arg skip "$seen_count" --raw-output --join-output '
-    .blocks[($skip | tonumber):][] |
-    if .type == "text" then .text
-    elif .type == "tool_use" then
-      if (.name | test("^ToolSearch$")) then empty
-      elif .name == "TodoWrite" then
-        ([.input.todos[]? | .content] | if length == 0 then "[]"
-          else join(", ") end) as $items |
-        "\n[TodoWrite] " + $items + "\n"
-      else
-        (.input.file_path // .input.command // .input.pattern //
-          .input.query // .input.url // .input.description //
-          .input.task_id // .input.skill // .input.prompt //
-          null) as $target |
-        if $target then "\n[" + .name + "] " + $target + "\n"
-        else "\n[" + .name + "]\n"
-        end
-      end
-    else empty end
-  ' 2>/dev/null
-  seen_count=$total
-done < <(tail -f -n 0 "$1" | jq --raw-input --unbuffered -c '
+tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   fromjson? // empty |
   if .type == "assistant" then
-    { blocks: [.message.content[]?], type: "assistant" }
+    [.message.content[]? |
+      if .type == "text" then .text
+      elif .type == "tool_use" then
+        if (.name | test("^ToolSearch$")) then empty
+        elif .name == "TodoWrite" then
+          ([.input.todos[]? | .content] | if length == 0 then "[]"
+            else join(", ") end) as $items |
+          "\n[TodoWrite] " + $items + "\n"
+        else
+          (.input.file_path // .input.command // .input.pattern //
+            .input.query // .input.url // .input.description //
+            .input.task_id // .input.skill // .input.prompt //
+            null) as $target |
+          if $target then "\n[" + .name + "] " + $target + "\n"
+          else "\n[" + .name + "]\n"
+          end
+        end
+      else empty end
+    ] | join("")
   elif .type == "result" then
-    { type: "result" }
+    "\n[done]\n"
   else empty end
-' 2>/dev/null)
+' 2>/dev/null | uniq
 STREAM
   chmod +x "$RALPH_DIR/.stream-filter.sh"
 }
