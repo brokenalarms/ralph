@@ -321,7 +321,7 @@ write_stream_filter() {
 # Track how many content blocks we've already output so cumulative
 # assistant events don't re-emit earlier blocks.
 seen_count=0
-tail -f "$1" | jq --raw-input --unbuffered -c '
+tail -f -n 0 "$1" | jq --raw-input --unbuffered -c '
   fromjson? // empty |
   if .type == "assistant" then
     { blocks: [.message.content[]?], type: "assistant" }
