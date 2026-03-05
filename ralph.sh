@@ -318,13 +318,11 @@ rotate_branch() {
 write_stream_filter() {
   cat > "$RALPH_DIR/.stream-filter.sh" <<'STREAM'
 #!/usr/bin/env bash
-# Only process the last content block from each assistant event.
-# stream-json sends cumulative messages — event N contains blocks 0..N.
-# We only want block N (the new one).
+# stream-json: each event has 1 content block. Filter and format.
 tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   fromjson? // empty |
   if .type == "assistant" then
-    (.message.content // []) | if length == 0 then empty else .[-1] end |
+    .message.content[0]? //empty |
     if .type == "text" then .text
     elif .type == "tool_use" then
       if (.name | test("^ToolSearch$")) then empty
