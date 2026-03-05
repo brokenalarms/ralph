@@ -17,7 +17,6 @@ MAX_ITERATIONS=20
 PROMPT_OVERRIDE=""
 RESUME=false
 PLAN_ONLY=false
-NO_PLAN=false
 SIGNAL_TOKEN="###RALPH_TASK_COMPLETE###"
 CURRENT_TASK_TOKEN="###RALPH_CURRENT_TASK###"
 WATCHER_INTERVAL=2  # seconds between signal checks
@@ -74,7 +73,6 @@ ${BOLD}OPTIONS:${NC}
   -p, --prompt <text>    Prompt override (otherwise Claude reads repo context)
   --plan-file <path>     Pre-made plan in Ralph format (markdown checkboxes). Skips planning phase.
   --plan                 Run planning phase only
-  --no-plan              Skip planning, go straight to execution
   -q, --quiet            Suppress Claude output streaming (log only)
   --no-worktree          Run directly in project dir (no git worktree isolation)
   --calls-per-hour <N>   Max Claude calls per hour (default: 80)
@@ -93,16 +91,30 @@ ${BOLD}HOW IT WORKS:${NC}
   4. Repeat: Loop continues until all tasks complete or iteration cap is hit
 
 ${BOLD}SUBCOMMANDS:${NC}
-  ralph feedback <message>   Queue feedback for the next iteration
-
-${BOLD}CONTROL:${NC}
-  Create .ralph/stop to halt after the current iteration.
-  ralph feedback "your message" to inject context into the next iteration.
-  The repo's CLAUDE.md is the source of truth for Claude's behavior.
+  ralph stop [directory]       Halt after the current iteration
+  ralph feedback <message>     Queue feedback for the next iteration
 EOF
 }
 
 # --- Subcommands (before flag parsing) ---
+if [[ "${1:-}" == "stop" ]]; then
+  shift
+  local_dir="."
+  if [[ -n "${1:-}" && "${1:0:1}" != "-" && -d "$1" ]]; then
+    local_dir="$1"
+    shift
+  fi
+  ralph_dir="$local_dir/.ralph"
+  if [[ ! -d "$ralph_dir" ]]; then
+    echo "No .ralph directory found. Is ralph running here?"
+    exit 1
+  fi
+  touch "$ralph_dir/stop"
+  echo "Stop requested — ralph will halt after the current iteration."
+  echo "Ctrl+C to kill immediately if you don't need iteration results."
+  exit 0
+fi
+
 if [[ "${1:-}" == "feedback" ]]; then
   shift
   local_dir="."
@@ -131,7 +143,6 @@ while [[ $# -gt 0 ]]; do
     -p|--prompt)    PROMPT_OVERRIDE="$2"; shift 2 ;;
     --plan-file)    PLAN_FILE_ARG="$2"; shift 2 ;;
     --plan)         PLAN_ONLY=true; shift ;;
-    --no-plan)      NO_PLAN=true; shift ;;
     -q|--quiet)     QUIET=true; shift ;;
     --no-worktree)  USE_WORKTREE=false; shift ;;
     --calls-per-hour) CALLS_PER_HOUR="$2"; shift 2 ;;
@@ -680,11 +691,6 @@ run_planning() {
 
   if [[ -f "$PLAN_FILE" ]] && [[ "$RESUME" == true ]]; then
     log "Existing plan found, resuming"
-    return 0
-  fi
-
-  if [[ "$NO_PLAN" == true ]]; then
-    log "Skipping planning (--no-plan)"
     return 0
   fi
 
