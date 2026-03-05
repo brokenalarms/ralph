@@ -318,6 +318,7 @@ rotate_branch() {
 write_stream_filter() {
   cat > "$RALPH_DIR/.stream-filter.sh" <<'STREAM'
 #!/usr/bin/env bash
+trap 'kill 0' EXIT
 # stream-json: each event has 1 content block. Filter and format.
 tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   fromjson? // empty |
