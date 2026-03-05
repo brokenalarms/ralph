@@ -318,7 +318,6 @@ rotate_branch() {
 write_stream_filter() {
   cat > "$RALPH_DIR/.stream-filter.sh" <<'STREAM'
 #!/usr/bin/env bash
-trap 'kill 0' EXIT
 # stream-json: each event has 1 content block. Filter and format.
 tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   fromjson? // empty |
@@ -628,9 +627,12 @@ run_claude() {
   # Reap claude process
   wait "$claude_pid" 2>/dev/null || true
 
-  # Clean up stream filter
-  [[ -n "$tail_pid" ]] && kill "$tail_pid" 2>/dev/null || true
-  [[ -n "$tail_pid" ]] && wait "$tail_pid" 2>/dev/null || true
+  # Clean up stream filter and its children (tail, jq)
+  if [[ -n "$tail_pid" ]]; then
+    pkill -P "$tail_pid" 2>/dev/null || true
+    kill "$tail_pid" 2>/dev/null || true
+    wait "$tail_pid" 2>/dev/null || true
+  fi
 
   # Check if signal was written (claude may have exited after writing it)
   if check_signal || check_all_complete; then
@@ -1086,8 +1088,11 @@ cleanup() {
     [[ -n "$TMUX_SESSION" ]] && tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
     return
   fi
-  # Kill any backgrounded processes
-  jobs -p | xargs -r kill 2>/dev/null || true
+  # Kill any backgrounded processes and their children
+  for pid in $(jobs -p 2>/dev/null); do
+    pkill -P "$pid" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true
+  done
   # Clean up unused worktree branch (still named /next = no work committed)
   if [[ -n "${WORKTREE_BRANCH:-}" && "$WORKTREE_BRANCH" == */next && "${WORK_DIR:-}" != "$PROJECT_DIR" ]]; then
     git -C "$PROJECT_DIR" worktree remove --force "$WORK_DIR" 2>/dev/null || true
