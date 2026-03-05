@@ -318,32 +318,49 @@ rotate_branch() {
 write_stream_filter() {
   cat > "$RALPH_DIR/.stream-filter.sh" <<'STREAM'
 #!/usr/bin/env bash
-tail -f "$1" | jq --raw-input --join-output --unbuffered '
+# Track how many content blocks we've already output so cumulative
+# assistant events don't re-emit earlier blocks.
+seen_count=0
+tail -f "$1" | jq --raw-input --unbuffered -c '
   fromjson? // empty |
   if .type == "assistant" then
-    [.message.content[]? |
-      if .type == "text" then .text
-      elif .type == "tool_use" then
-        if (.name | test("^(ToolSearch|TodoRead|TaskList|TaskGet)$")) then empty
-        elif .name == "TodoWrite" then
-          ([.input.todos[]? | .content] | if length == 0 then "[]"
-            else join(", ") end) as $items |
-          "\n[TodoWrite] " + $items + "\n"
-        else
-          (.input.file_path // .input.command // .input.pattern //
-            .input.query // .input.url // .input.description //
-            .input.task_id // .input.skill // .input.prompt //
-            null) as $target |
-          if $target then "\n[" + .name + "] " + $target + "\n"
-          else "\n[" + .name + "]\n"
-          end
-        end
-      else empty end
-    ] | join("")
+    { blocks: [.message.content[]?], type: "assistant" }
   elif .type == "result" then
-    "\n[done]\n"
+    { type: "result" }
   else empty end
-' 2>/dev/null | awk '!seen[$0]++'
+' 2>/dev/null | while IFS= read -r event; do
+  evt_type=$(echo "$event" | jq -r '.type')
+  if [[ "$evt_type" == "result" ]]; then
+    printf '\n[done]\n'
+    seen_count=0
+    continue
+  fi
+  total=$(echo "$event" | jq '.blocks | length')
+  if (( total <= seen_count )); then
+    continue
+  fi
+  echo "$event" | jq --arg skip "$seen_count" --raw-output --join-output '
+    .blocks[($skip | tonumber):][] |
+    if .type == "text" then .text
+    elif .type == "tool_use" then
+      if (.name | test("^ToolSearch$")) then empty
+      elif .name == "TodoWrite" then
+        ([.input.todos[]? | .content] | if length == 0 then "[]"
+          else join(", ") end) as $items |
+        "\n[TodoWrite] " + $items + "\n"
+      else
+        (.input.file_path // .input.command // .input.pattern //
+          .input.query // .input.url // .input.description //
+          .input.task_id // .input.skill // .input.prompt //
+          null) as $target |
+        if $target then "\n[" + .name + "] " + $target + "\n"
+        else "\n[" + .name + "]\n"
+        end
+      end
+    else empty end
+  ' 2>/dev/null
+  seen_count=$total
+done
 STREAM
   chmod +x "$RALPH_DIR/.stream-filter.sh"
 }
