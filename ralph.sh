@@ -320,7 +320,12 @@ write_stream_filter() {
 #!/usr/bin/env bash
 # Track how many content blocks we've already output so cumulative
 # assistant events don't re-emit earlier blocks.
-seen_count=0
+# Uses a temp file because piped while-read runs in a subshell where
+# variable assignments are lost between iterations.
+count_file=$(mktemp)
+echo 0 > "$count_file"
+trap 'rm -f "$count_file"' EXIT
+
 tail -f -n 0 "$1" | jq --raw-input --unbuffered -c '
   fromjson? // empty |
   if .type == "assistant" then
@@ -332,9 +337,10 @@ tail -f -n 0 "$1" | jq --raw-input --unbuffered -c '
   evt_type=$(echo "$event" | jq -r '.type')
   if [[ "$evt_type" == "result" ]]; then
     printf '\n[done]\n'
-    seen_count=0
+    echo 0 > "$count_file"
     continue
   fi
+  seen_count=$(cat "$count_file")
   total=$(echo "$event" | jq '.blocks | length')
   if (( total <= seen_count )); then
     continue
@@ -359,7 +365,7 @@ tail -f -n 0 "$1" | jq --raw-input --unbuffered -c '
       end
     else empty end
   ' 2>/dev/null
-  seen_count=$total
+  echo "$total" > "$count_file"
 done
 STREAM
   chmod +x "$RALPH_DIR/.stream-filter.sh"
@@ -463,12 +469,15 @@ clear_signal() {
   rm -f "$SIGNAL_FILE"
 }
 
-consume_feedback() {
+read_feedback() {
   local feedback_file="$RALPH_DIR/feedback"
   if [[ -f "$feedback_file" && -s "$feedback_file" ]]; then
     cat "$feedback_file"
-    rm -f "$feedback_file"
   fi
+}
+
+clear_feedback() {
+  rm -f "$RALPH_DIR/feedback"
 }
 
 check_signal() {
@@ -982,11 +991,11 @@ run_execution() {
     local head_before
     head_before=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
 
-    # Consume any queued user feedback
+    # Read any queued user feedback
     local feedback=""
-    feedback=$(consume_feedback) || true
+    feedback=$(read_feedback) || true
     if [[ -n "$feedback" ]]; then
-      log "Injecting user feedback into this iteration"
+      log "Feedback: $feedback"
     fi
 
     # Run claude for this task
@@ -994,6 +1003,11 @@ run_execution() {
       log_warn "Claude failed on iteration $run_iteration, continuing..."
     fi
     increment_call_count
+
+    # Clear feedback only after Claude has consumed it
+    if [[ -n "$feedback" ]]; then
+      clear_feedback
+    fi
 
     # Post-iteration: read signal summary
     local summary=""
