@@ -331,6 +331,7 @@ tail -f "$1" | jq --raw-input --join-output --unbuffered '
         else
           (.input.file_path // .input.command // .input.pattern //
             .input.query // .input.url // .input.description //
+            .input.task_id // .input.skill // .input.prompt //
             null) as $target |
           if $target then "\n[" + .name + "] " + $target + "\n"
           else "\n[" + .name + "]\n"
