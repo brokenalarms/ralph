@@ -1,8 +1,10 @@
 ## Standards
 
 ### Testing
-- Every feature must be accompanied by tests proving the feature works. Each test needs a preamble comment explaining what user-facing functionality it proves.
+- Test behavioral logic — code with branching, state, algorithms, or business rules. Don't write tests for static content, markup, configuration, or simple data changes where a build check is sufficient.
+- If the project has an existing test framework, use it. Don't invent ad-hoc test scripts for projects that don't have tests.
 - Tests should assert actual state changes (before/after), not just exit codes or stdout. Testing `returncode == 0` is useless — it only confirms the script didn't crash.
+- Each test needs a preamble comment explaining what user-facing functionality it proves.
 - Never consider a task finished if any tests are broken — even unrelated ones. Fix them as part of the task.
 - Run only scoped and relevant tests during development, not the full suite if possible, unless a change affects interrelated concerns.
 - Always run tests before committing and confirm they pass.
@@ -14,7 +16,7 @@
 ### Commits
 - Atomic commits: one feature or fix per commit.
 - Every commit message needs a subject line + blank line + body. Body: concise bullets covering why, how, and test coverage.
-- Every code change must be backed by a test covering that change.
+- Behavioral code changes should be backed by tests. Static content, markup, and config changes don't need tests — a passing build is verification enough.
 
 ### Github
 - Grouped commits for a task should end in a pull request, if the environment supports it (gh is available). Never push directly to main.

@@ -324,7 +324,8 @@ tail -f "$1" | jq --raw-input --join-output --unbuffered '
     [.message.content[]? |
       if .type == "text" then .text
       elif .type == "tool_use" then
-        if .name == "TodoWrite" then
+        if (.name | test("^(ToolSearch|TodoRead|TaskList|TaskGet)$")) then empty
+        elif .name == "TodoWrite" then
           ([.input.todos[]? | .content] | if length == 0 then "[]"
             else join(", ") end) as $items |
           "\n[TodoWrite] " + $items + "\n"
@@ -342,7 +343,7 @@ tail -f "$1" | jq --raw-input --join-output --unbuffered '
   elif .type == "result" then
     "\n[done]\n"
   else empty end
-' 2>/dev/null
+' 2>/dev/null | awk '!seen[$0]++'
 STREAM
   chmod +x "$RALPH_DIR/.stream-filter.sh"
 }
