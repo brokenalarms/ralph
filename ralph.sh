@@ -324,10 +324,9 @@ tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   fromjson? // empty |
   if .type == "assistant" then
     .message.content[0]? //empty |
-    if .type == "text" then .text
+    if .type == "text" then "\n[claude] " + .text + "\n"
     elif .type == "tool_use" then
-      if (.name | test("^ToolSearch$")) then empty
-      elif .name == "TodoWrite" then
+      if .name == "TodoWrite" then
         ([.input.todos[]? | .content] | if length == 0 then "[]"
           else join(", ") end) as $items |
         "\n[TodoWrite] " + $items + "\n"
