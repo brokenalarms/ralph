@@ -8,13 +8,17 @@ do not wait for PRs to be merged before continuing with dependent tasks.
 - Ralph state dir: {{RALPH_DIR}}
 - Plan file: {{PLAN_FILE}}
 
+## Task selection
+1. Read AGENTS.md or CLAUDE.md if present (mandatory — do not skip or summarize). Follow any project-specific guidance.
+2. Read the plan file at {{PLAN_FILE}} and pick the next unchecked task in order (the planning phase already determined priority).
+
 ## Your task this iteration
 {{TASK_PROMPT}}
 
 ## Rules
 1. Focus ONLY on the single task described above.
 2. When you complete the task, mark it as done in {{PLAN_FILE}} by changing `- [ ]` to `- [x]`.
-3. Make sure that you don't leave the directory with uncommitted files before completing the task - there should be a series of atomic commits, and a pull request if gh tool is available, that describes this task to round it off.
-4. If you cannot complete the task, leave it unchecked and add notes in {{PLAN_FILE}}.
-5. Do NOT work on other tasks - one task per iteration.
-6. Read CLAUDE.md if it exists for project-specific guidance, including commiting, pull requests, and todo cleanup required to accompany each task completion.
+3. If the project has its own todo tracking (defined in AGENTS.md or CLAUDE.md), update it as part of your work.
+4. Atomic commits, and a pull request if gh is available.
+5. If you cannot complete the task, leave it unchecked and add notes in {{PLAN_FILE}}.
+6. Do NOT work on other tasks — one task per iteration.

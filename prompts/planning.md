@@ -1,9 +1,15 @@
+Read the project at {{WORK_DIR}}.
+
+1. Read AGENTS.md or CLAUDE.md if AGENTS.md is not present (mandatory — do not skip or summarize).
+2. Read todo files, specs/, README.md, and any task-related files for context.
+
+If the project's AGENTS.md or CLAUDE.md defines task priority or selection order, it is the sole authority. Do NOT pick tasks based on recency, specificity, or your own judgment of what seems easiest. If no such instructions exist, plan in order of most high-leverage impactful task first. Recency of entry is not something that should be accorded any weight in this decision.
+
 {{PLANNING_CONTEXT}}
 
-Break this into atomic, self-contained tasks. Write the plan to {{PLAN_FILE}} using markdown checkboxes:
+Break the work into atomic, self-contained tasks. Write the plan to {{PLAN_FILE}} using markdown checkboxes:
 - [ ] Task 1 description
 - [ ] Task 2 description
-...
 
 Each task should be completable in a single Claude session. Be specific and actionable.
 After writing the plan, signal completion: echo "{{SIGNAL_TOKEN}}" > "{{SIGNAL_FILE}}"

@@ -9,14 +9,26 @@ load test_helper
   [[ "$output" == *"not found"* ]]
 }
 
+# Proves: plan file without checkboxes is rejected.
+@test "--plan-file without checkboxes exits with format error" {
+  local bad_plan
+  bad_plan="$(mktemp)"
+  echo "Just some text without checkboxes" > "$bad_plan"
+  run bash -c "$(printf '%q' "$RALPH_SH") --plan-file $(printf '%q' "$bad_plan") -d /tmp 2>&1" </dev/null
+  [[ "$status" -ne 0 ]]
+  [[ "$output" == *"Ralph format"* ]]
+  rm -f "$bad_plan"
+}
+
 # Proves: valid plans accepted.
 @test "--plan-file with existing file proceeds" {
   setup_test_repo
   local plan="$TEST_TMPDIR/plan.md"
   echo "- [ ] Test task" > "$plan"
   # Just check it gets past validation (will fail later without claude, but
-  # should not fail with "not found")
+  # should not fail with "not found" or format error)
   run bash -c "$(printf '%q' "$RALPH_SH") --plan-file $(printf '%q' "$plan") -d $(printf '%q' "$PROJECT_DIR") --plan 2>&1" </dev/null
   [[ "$output" != *"not found"* ]]
+  [[ "$output" != *"Ralph format"* ]]
   teardown_test_repo
 }

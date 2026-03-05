@@ -24,32 +24,20 @@ teardown() {
   [[ "$prompt" != *"{{RALPH_DIR}}"* ]]
 }
 
-# Proves: correct prompt template for each mode.
-@test "External vs internal template selection" {
-  EXTERNAL_PLAN=false
-  local internal_prompt
-  internal_prompt=$(build_prompt "Fix auth")
-  [[ "$internal_prompt" == *"Your task this iteration"* ]]
-
-  EXTERNAL_PLAN=true
-  local external_prompt
-  external_prompt=$(build_prompt "")
-  [[ "$external_prompt" == *"Task selection"* ]]
+# Proves: prompt includes task selection and task content.
+@test "Prompt includes task selection and task content" {
+  local prompt
+  prompt=$(build_prompt "Fix auth")
+  [[ "$prompt" == *"Task selection"* ]]
+  [[ "$prompt" == *"Fix auth"* ]]
 }
 
-# Proves: shared quality standards are included in all prompts.
-@test "Shared prompt included in both modes" {
-  EXTERNAL_PLAN=false
-  local internal_prompt
-  internal_prompt=$(build_prompt "task")
-  [[ "$internal_prompt" == *"Standards"* ]]
-  [[ "$internal_prompt" == *".gitignore"* ]]
-
-  EXTERNAL_PLAN=true
-  local external_prompt
-  external_prompt=$(build_prompt "")
-  [[ "$external_prompt" == *"Standards"* ]]
-  [[ "$external_prompt" == *".gitignore"* ]]
+# Proves: shared quality standards are included in prompts.
+@test "Shared prompt included" {
+  local prompt
+  prompt=$(build_prompt "task")
+  [[ "$prompt" == *"Standards"* ]]
+  [[ "$prompt" == *".gitignore"* ]]
 }
 
 # Proves: user feedback is injected into the prompt when provided.

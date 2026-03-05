@@ -3,7 +3,7 @@ You are in a Ralph planning session — an interactive conversation to define wh
 ## Your goal
 Work with the user to understand what they want to build, then produce two artifacts:
 
-1. **Spec file** at `specs/<feature-name>.md` — describes what to build and why. This persists in the repo as documentation.
+1. **Spec files** at `specs/<feature-name>.md` — one per feature/task area. Describes what to build and why. These persist in the repo as documentation.
 2. **Task checklist** at `{{PLAN_FILE}}` — atomic tasks in markdown checkbox format that Ralph will execute one per iteration:
    ```
    - [ ] Task 1 description

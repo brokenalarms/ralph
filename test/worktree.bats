@@ -42,11 +42,11 @@ teardown() {
   [[ "$WORK_DIR" == "$saved_dir" ]]
 }
 
-# Proves: temp branch used before task is known.
-@test "Initial branch is ralph/project/temp" {
+# Proves: next branch used before task is known.
+@test "Initial branch is ralph/project/next" {
   init_ralph_dir
   setup_worktree
-  [[ "$WORKTREE_BRANCH" == "ralph/project/temp" ]]
+  [[ "$WORKTREE_BRANCH" == "ralph/project/next" ]]
 }
 
 # Proves: order + description in branch name.
@@ -67,12 +67,12 @@ teardown() {
 }
 
 # Proves: per-task isolation.
-@test "rotate_branch creates new next branch" {
+@test "rotate_branch resets to next branch" {
   init_ralph_dir
   setup_worktree
   rename_branch_for_task "First task"
   rotate_branch
-  [[ "$WORKTREE_BRANCH" == "ralph/project/temp" ]]
+  [[ "$WORKTREE_BRANCH" == "ralph/project/next" ]]
   [[ "$_BRANCH_RENAMED" == false ]]
 }
 

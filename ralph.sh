@@ -21,7 +21,6 @@ NO_PLAN=false
 SIGNAL_TOKEN="###RALPH_TASK_COMPLETE###"
 CURRENT_TASK_TOKEN="###RALPH_CURRENT_TASK###"
 WATCHER_INTERVAL=2  # seconds between signal checks
-EXTERNAL_PLAN=false
 PLAN_FILE_ARG=""
 QUIET=false
 USE_WORKTREE=true
@@ -32,19 +31,19 @@ _TMUX_OUTER=false
 WORK_DIR=""
 WORKTREE_BRANCH=""
 PROJECT_NAME=""
-temp_branch() { echo "ralph/$PROJECT_NAME/temp"; }
+temp_branch() { echo "ralph/$PROJECT_NAME/next"; }
 _TASK_SEQ=0
 ALL_COMPLETE_TOKEN="###RALPH_ALL_COMPLETE###"
 LOG_FILE="/dev/null"  # real path set after dir resolution
 
 # --- Colors ---
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[0;33m'
+BLUE=$'\033[0;34m'
+CYAN=$'\033[0;36m'
+BOLD=$'\033[1m'
+NC=$'\033[0m'
 
 # --- Logging ---
 log()         { echo -e "${CYAN}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
@@ -73,8 +72,7 @@ ${BOLD}OPTIONS:${NC}
   -d, --dir <path>       Project directory (default: cwd)
   -n, --max <N>          Max iterations (default: 50)
   -p, --prompt <text>    Prompt override (otherwise Claude reads repo context)
-  --plan-file <path>     Use external plan file (skip planning, lighter prompt)
-  --resume               Resume from previous state
+  --plan-file <path>     Pre-made plan in Ralph format (markdown checkboxes). Skips planning phase.
   --plan                 Run planning phase only
   --no-plan              Skip planning, go straight to execution
   -q, --quiet            Suppress Claude output streaming (log only)
@@ -85,9 +83,8 @@ ${BOLD}OPTIONS:${NC}
 
 ${BOLD}EXAMPLES:${NC}
   ralph.sh ~/myproject -n 20
-  ralph.sh --resume
   ralph.sh -p "Fix all failing tests"
-  ralph.sh . --plan-file docs/TODO.md
+  ralph.sh . --plan-file plan.md
 
 ${BOLD}HOW IT WORKS:${NC}
   1. Planning: Claude reads the repo and creates .ralph/plan.md with atomic tasks
@@ -132,8 +129,7 @@ while [[ $# -gt 0 ]]; do
     -d|--dir)       PROJECT_DIR="$2"; shift 2 ;;
     -n|--max)       MAX_ITERATIONS="$2"; shift 2 ;;
     -p|--prompt)    PROMPT_OVERRIDE="$2"; shift 2 ;;
-    --plan-file)    PLAN_FILE_ARG="$2"; EXTERNAL_PLAN=true; shift 2 ;;
-    --resume)       RESUME=true; shift ;;
+    --plan-file)    PLAN_FILE_ARG="$2"; shift 2 ;;
     --plan)         PLAN_ONLY=true; shift ;;
     --no-plan)      NO_PLAN=true; shift ;;
     -q|--quiet)     QUIET=true; shift ;;
@@ -149,21 +145,21 @@ done
 # --- Resolve paths ---
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 RALPH_DIR="$PROJECT_DIR/.ralph"
-if [[ "$EXTERNAL_PLAN" == true ]]; then
+PLAN_FILE="$RALPH_DIR/plan.md"
+if [[ -n "$PLAN_FILE_ARG" ]]; then
   # Resolve plan-file to absolute path
-  if [[ "$PLAN_FILE_ARG" == /* ]]; then
-    PLAN_FILE="$PLAN_FILE_ARG"
-  else
-    PLAN_FILE="$(cd "$(dirname "$PROJECT_DIR/$PLAN_FILE_ARG")" && pwd)/$(basename "$PLAN_FILE_ARG")"
+  if [[ "$PLAN_FILE_ARG" != /* ]]; then
+    PLAN_FILE_ARG="$(cd "$(dirname "$PROJECT_DIR/$PLAN_FILE_ARG")" && pwd)/$(basename "$PLAN_FILE_ARG")"
   fi
-else
-  PLAN_FILE="$RALPH_DIR/plan.md"
+  if [[ ! -f "$PLAN_FILE_ARG" ]]; then
+    log_error "Plan file not found: $PLAN_FILE_ARG"
+    exit 1
+  fi
+  if ! grep -qE '^\s*- \[ \]' "$PLAN_FILE_ARG"; then
+    log_error "Plan file is not in Ralph format (must contain '- [ ]' checkboxes): $PLAN_FILE_ARG"
+    exit 1
+  fi
 fi
-if [[ "$EXTERNAL_PLAN" == true && ! -f "$PLAN_FILE" ]]; then
-  log_error "Plan file not found: $PLAN_FILE"
-  exit 1
-fi
-ORIG_PLAN_FILE="$PLAN_FILE"
 STATE_FILE="$RALPH_DIR/state.json"
 SIGNAL_FILE="$RALPH_DIR/signal"
 STOP_FILE="$RALPH_DIR/stop"
@@ -175,7 +171,27 @@ init_ralph_dir() {
   mkdir -p "$RALPH_DIR"
   touch "$LOG_FILE"
 
-  if [[ ! -f "$STATE_FILE" ]] || [[ "$RESUME" == false ]]; then
+  if [[ -f "$STATE_FILE" ]]; then
+    local status
+    status=$(read_state "status")
+    if [[ "$status" == "completed" ]]; then
+      log "All tasks completed from previous run."
+      printf "${YELLOW}[ralph]${NC} Run fresh? (y/n) "
+      read -r answer
+      if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
+        rm -rf "$RALPH_DIR"
+        mkdir -p "$RALPH_DIR"
+        touch "$LOG_FILE"
+      else
+        exit 0
+      fi
+    else
+      RESUME=true
+      log "Resuming from previous state (status: $status)"
+    fi
+  fi
+
+  if [[ ! -f "$STATE_FILE" ]]; then
     cat > "$STATE_FILE" <<'STATE'
 {
   "iteration": 0,
@@ -215,7 +231,6 @@ setup_worktree() {
       _TASK_SEQ=$((named_branches))
       SIGNAL_FILE="$WORK_DIR/.ralph-signal"
       log "Resuming in worktree: $WORK_DIR (branch: $WORKTREE_BRANCH)"
-      remap_plan_file
       return
     fi
   fi
@@ -246,7 +261,6 @@ setup_worktree() {
   write_state "worktree_branch" "$WORKTREE_BRANCH"
 
   SIGNAL_FILE="$WORK_DIR/.ralph-signal"
-  remap_plan_file
 }
 
 rename_branch_for_task() {
@@ -286,23 +300,6 @@ rotate_branch() {
     log "Branch: $WORKTREE_BRANCH (from previous iteration)"
   else
     log_warn "Branch rotation failed, continuing on $WORKTREE_BRANCH"
-  fi
-}
-
-remap_plan_file() {
-  if [[ "$EXTERNAL_PLAN" == true && "$WORK_DIR" != "$PROJECT_DIR" ]]; then
-    local rel_plan="${PLAN_FILE#$PROJECT_DIR/}"
-    if [[ "$rel_plan" == /* ]]; then
-      rel_plan="$(basename "$PLAN_FILE")"
-    fi
-    local worktree_plan="$WORK_DIR/$rel_plan"
-    # On resume, the worktree already has the plan file (possibly modified by
-    # previous iterations). Only copy on first run to seed the worktree.
-    if [[ "$RESUME" != true ]]; then
-      mkdir -p "$(dirname "$worktree_plan")"
-      cp "$PLAN_FILE" "$worktree_plan"
-    fi
-    PLAN_FILE="$worktree_plan"
   fi
 }
 
@@ -412,11 +409,7 @@ write_state() {
 # --- Task helpers ---
 has_remaining_tasks() {
   [[ -f "$PLAN_FILE" ]] || return 1
-  if [[ "$EXTERNAL_PLAN" == true ]]; then
-    return 0
-  else
-    grep -qE '^\s*- \[ \]' "$PLAN_FILE"
-  fi
+  grep -qE '^\s*- \[ \]' "$PLAN_FILE"
 }
 
 count_completed() {
@@ -641,13 +634,7 @@ run_claude() {
 build_prompt() {
   local task_prompt="$1"
   local feedback="${2:-}"
-  local template_file
-
-  if [[ "$EXTERNAL_PLAN" == true ]]; then
-    template_file="$PROMPTS_DIR/external.md"
-  else
-    template_file="$PROMPTS_DIR/internal.md"
-  fi
+  local template_file="$PROMPTS_DIR/internal.md"
 
   if [[ ! -f "$template_file" ]]; then
     log_error "Prompt template not found: $template_file"
@@ -682,12 +669,12 @@ build_prompt() {
 run_planning() {
   log_phase "=== PHASE 1: PLANNING ==="
 
-  if [[ "$EXTERNAL_PLAN" == true ]]; then
-    log "Using external plan file: $PLAN_FILE"
-    if [[ ! -f "$PLAN_FILE" ]]; then
-      log_error "External plan file not found: $PLAN_FILE"
-      exit 1
-    fi
+  if [[ -n "$PLAN_FILE_ARG" && ! -f "$PLAN_FILE" ]]; then
+    cp "$PLAN_FILE_ARG" "$PLAN_FILE"
+    local total
+    total=$(count_total)
+    write_state "status" "planned"
+    log "Copied plan from $PLAN_FILE_ARG ($total tasks)"
     return 0
   fi
 
@@ -735,10 +722,7 @@ run_planning() {
   if [[ -n "$PROMPT_OVERRIDE" ]]; then
     planning_context="$PROMPT_OVERRIDE"
   else
-    planning_context="Read this repository and understand what needs to be done.
-Look at CLAUDE.md, prompt.md, README.md, or any task-related files for context.
-
-Create a plan of atomic, self-contained tasks."
+    planning_context=""
   fi
 
   local planning_prompt
@@ -942,152 +926,73 @@ run_execution() {
       rotate_branch
     fi
 
-    if [[ "$EXTERNAL_PLAN" == true ]]; then
-      log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS ($iteration total) ---"
+    local next_task completed remaining total
+    next_task=$(get_next_task)
+    completed=$(count_completed)
+    remaining=$(count_remaining)
+    total=$(count_total)
 
-      # Update state
-      write_state "iteration" "$iteration"
-      write_state "status" "running"
+    log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS ($iteration total) [${completed}/${total} done] ---"
+    log "Next task: $next_task"
 
-      # Snapshot plan file before iteration
-      cp "$PLAN_FILE" "$RALPH_DIR/.plan_snapshot" 2>/dev/null || true
+    # Update state
+    write_state "iteration" "$iteration"
+    write_state "status" "running"
+    write_state "last_task" "$next_task"
+    rename_branch_for_task "$next_task"
 
-      # External mode: no task prompt (agent picks via project docs)
-      local task_prompt=""
+    # Build task prompt
+    local task_prompt="Complete this task: $next_task"
 
-      # Rate limit check
-      if ! check_rate_limit; then
-        if ! wait_for_rate_reset; then
-          break
-        fi
-      fi
-
-      # Capture log offset and HEAD before running claude
-      local log_start_line
-      log_start_line=$(( $(wc -l < "$LOG_FILE" 2>/dev/null || echo 0) + 1 ))
-      local head_before
-      head_before=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
-
-      # Consume any queued user feedback
-      local feedback=""
-      feedback=$(consume_feedback) || true
-      if [[ -n "$feedback" ]]; then
-        log "Injecting user feedback into this iteration"
-      fi
-
-      # Run claude
-      if ! run_claude "$task_prompt" "$feedback"; then
-        log_warn "Claude failed on iteration $run_iteration, continuing..."
-      fi
-      increment_call_count
-
-      # Post-iteration: read signal summary
-      local summary=""
-      summary=$(read_signal_summary) || true
-      if [[ -n "$summary" ]]; then
-        log "Summary: $summary"
-      fi
-
-      # Post-iteration: diff plan file
-      if [[ -f "$RALPH_DIR/.plan_snapshot" ]]; then
-        local removed added
-        removed=$(diff "$RALPH_DIR/.plan_snapshot" "$PLAN_FILE" 2>/dev/null | grep -c '^<' || true)
-        added=$(diff "$RALPH_DIR/.plan_snapshot" "$PLAN_FILE" 2>/dev/null | grep -c '^>' || true)
-        if [[ $removed -gt 0 || $added -gt 0 ]]; then
-          log "Plan diff: $removed removed, $added added"
-        fi
-      fi
-
-      log "Iteration $run_iteration complete."
-
-      # Check if Claude signaled all tasks are done
-      if check_all_complete; then
-        log_success "All tasks complete (signaled by Claude)!"
-        write_state "status" "completed"
+    # Rate limit check
+    if ! check_rate_limit; then
+      if ! wait_for_rate_reset; then
         break
       fi
-
-      # Analyze iteration for problems
-      analyze_iteration "$LOG_FILE" "$log_start_line" "$head_before"
-      case "$ANALYSIS_RESULT" in
-        halt:*)
-          log_error "Halting: ${ANALYSIS_RESULT#halt:}"
-          write_state "status" "halted_${ANALYSIS_RESULT#halt:}"
-          break
-          ;;
-        warn:*)
-          log_warn "Analysis: ${ANALYSIS_RESULT#warn:}"
-          ;;
-      esac
-    else
-      local next_task completed remaining total
-      next_task=$(get_next_task)
-      completed=$(count_completed)
-      remaining=$(count_remaining)
-      total=$(count_total)
-
-      log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS ($iteration total) [${completed}/${total} done] ---"
-      log "Next task: $next_task"
-
-      # Update state
-      write_state "iteration" "$iteration"
-      write_state "status" "running"
-      write_state "last_task" "$next_task"
-      rename_branch_for_task "$next_task"
-
-      # Build task prompt
-      local task_prompt="Complete this task: $next_task"
-
-      # Rate limit check
-      if ! check_rate_limit; then
-        if ! wait_for_rate_reset; then
-          break
-        fi
-      fi
-
-      # Capture log offset and HEAD before running claude
-      local log_start_line
-      log_start_line=$(( $(wc -l < "$LOG_FILE" 2>/dev/null || echo 0) + 1 ))
-      local head_before
-      head_before=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
-
-      # Consume any queued user feedback
-      local feedback=""
-      feedback=$(consume_feedback) || true
-      if [[ -n "$feedback" ]]; then
-        log "Injecting user feedback into this iteration"
-      fi
-
-      # Run claude for this task
-      if ! run_claude "$task_prompt" "$feedback"; then
-        log_warn "Claude failed on iteration $run_iteration, continuing..."
-      fi
-      increment_call_count
-
-      # Post-iteration: read signal summary
-      local summary=""
-      summary=$(read_signal_summary) || true
-      if [[ -n "$summary" ]]; then
-        log "Summary: $summary"
-      fi
-
-      # Recount after claude ran
-      completed=$(count_completed)
-      log "Iteration $run_iteration complete. ${completed}/${total} tasks done."
-
-      # Analyze iteration for problems
-      analyze_iteration "$LOG_FILE" "$log_start_line" "$head_before"
-      case "$ANALYSIS_RESULT" in
-        halt:*)
-          log_error "Halting: ${ANALYSIS_RESULT#halt:}"
-          write_state "status" "halted_${ANALYSIS_RESULT#halt:}"
-          break
-          ;;
-        warn:*)
-          log_warn "Analysis: ${ANALYSIS_RESULT#warn:}"
-          ;;
-      esac
     fi
+
+    # Capture log offset and HEAD before running claude
+    local log_start_line
+    log_start_line=$(( $(wc -l < "$LOG_FILE" 2>/dev/null || echo 0) + 1 ))
+    local head_before
+    head_before=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
+
+    # Consume any queued user feedback
+    local feedback=""
+    feedback=$(consume_feedback) || true
+    if [[ -n "$feedback" ]]; then
+      log "Injecting user feedback into this iteration"
+    fi
+
+    # Run claude for this task
+    if ! run_claude "$task_prompt" "$feedback"; then
+      log_warn "Claude failed on iteration $run_iteration, continuing..."
+    fi
+    increment_call_count
+
+    # Post-iteration: read signal summary
+    local summary=""
+    summary=$(read_signal_summary) || true
+    if [[ -n "$summary" ]]; then
+      log "Summary: $summary"
+    fi
+
+    # Recount after claude ran
+    completed=$(count_completed)
+    log "Iteration $run_iteration complete. ${completed}/${total} tasks done."
+
+    # Analyze iteration for problems
+    analyze_iteration "$LOG_FILE" "$log_start_line" "$head_before"
+    case "$ANALYSIS_RESULT" in
+      halt:*)
+        log_error "Halting: ${ANALYSIS_RESULT#halt:}"
+        write_state "status" "halted_${ANALYSIS_RESULT#halt:}"
+        break
+        ;;
+      warn:*)
+        log_warn "Analysis: ${ANALYSIS_RESULT#warn:}"
+        ;;
+    esac
     echo ""
   done
 
@@ -1100,9 +1005,6 @@ run_execution() {
 # --- Generate resume script ---
 generate_resume_script() {
   local extra_args=""
-  if [[ "$EXTERNAL_PLAN" == true ]]; then
-    extra_args=" --plan-file \"$ORIG_PLAN_FILE\""
-  fi
   if [[ "$QUIET" == true ]]; then
     extra_args="$extra_args --quiet"
   fi
@@ -1119,7 +1021,7 @@ generate_resume_script() {
 #!/usr/bin/env bash
 # Ralph Loop - Resume Script
 # Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-exec "$SCRIPT_DIR/ralph.sh" --dir "$PROJECT_DIR" --max "$MAX_ITERATIONS"$extra_args --resume
+exec "$SCRIPT_DIR/ralph.sh" --dir "$PROJECT_DIR" --max "$MAX_ITERATIONS"$extra_args
 RESUME
   chmod +x "$RESUME_SCRIPT"
   log "Resume script: $RESUME_SCRIPT"
@@ -1136,17 +1038,11 @@ print_summary() {
   log "Status:     $status"
   log "Iterations: $iteration total"
 
-  if [[ "$EXTERNAL_PLAN" == true ]]; then
-    local last_task
-    last_task=$(read_state "last_task")
-    [[ -n "$last_task" && "$last_task" != "null" ]] && log "Last task:  $last_task"
-  else
-    local completed remaining total
-    completed=$(count_completed)
-    remaining=$(count_remaining)
-    total=$(count_total)
-    log "Tasks:      $completed/$total completed, $remaining remaining"
-  fi
+  local completed remaining total
+  completed=$(count_completed)
+  remaining=$(count_remaining)
+  total=$(count_total)
+  log "Tasks:      $completed/$total completed, $remaining remaining"
 
   log "Log:        $LOG_FILE"
   log "Plan:       $PLAN_FILE"
@@ -1180,8 +1076,8 @@ cleanup() {
   fi
   # Kill any backgrounded processes
   jobs -p | xargs -r kill 2>/dev/null || true
-  # Clean up unused worktree branch (still named /temp = no work committed)
-  if [[ -n "${WORKTREE_BRANCH:-}" && "$WORKTREE_BRANCH" == */temp && "${WORK_DIR:-}" != "$PROJECT_DIR" ]]; then
+  # Clean up unused worktree branch (still named /next = no work committed)
+  if [[ -n "${WORKTREE_BRANCH:-}" && "$WORKTREE_BRANCH" == */next && "${WORK_DIR:-}" != "$PROJECT_DIR" ]]; then
     git -C "$PROJECT_DIR" worktree remove --force "$WORK_DIR" 2>/dev/null || true
     git -C "$PROJECT_DIR" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
   fi
