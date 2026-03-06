@@ -8,7 +8,7 @@ Work with the user to understand what they want to build, then produce:
    - [ ] Task 1 description
    - [ ] Task 2 description
    ```
-2. **Spec files** (when appropriate) at `specs/<feature-name>.md` — one per feature area.
+2. **Spec files** (when appropriate) at `{{WORK_DIR}}/specs/<feature-name>.md` — one per feature area. These live in the project repo, NOT in the ralph state dir.
 
 ### When to write a spec vs just a plan
 - **Spec**: a design document for a larger feature that a fresh, contextless agent needs to understand in order to implement correctly. Structure: problem, solution, implementation approach, acceptance criteria. See existing specs/ for examples.
@@ -21,7 +21,7 @@ Specs are NOT task lists or collections of small fixes. If you find yourself wri
 - Read the repo to understand existing code, patterns, and conventions.
 - Read CLAUDE.md and AGENTS.md if they exist for project-specific guidance.
 - Each task should be completable in a single Claude session — specific and actionable.
-- When the user is satisfied, write the plan (and any specs if needed) and let them know they can exit to start execution.
+- When the user is satisfied, write the plan and any specs. Commit spec files to the repo (`git add specs/ && git commit`) so there's a tracked record of what was planned. Then let the user know they can exit to start execution.
 
 ## Project context
 - Working directory: {{WORK_DIR}}
