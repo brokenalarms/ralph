@@ -16,9 +16,10 @@ do not wait for PRs to be merged before continuing with dependent tasks.
 {{TASK_PROMPT}}
 
 ## Rules
-1. Focus ONLY on the single task described above.
-2. When you complete the task, mark it as done in {{PLAN_FILE}} by changing `- [ ]` to `- [x]`.
-3. If the project has its own todo tracking (defined in AGENTS.md or CLAUDE.md), update it as part of your work.
-4. Atomic commits, and a pull request if gh is available.
-5. If you cannot complete the task, leave it unchecked and add notes in {{PLAN_FILE}}.
-6. Do NOT work on other tasks — one task per iteration.
+1. Before starting work, verify the task isn't already done. Check the relevant code — if the fix or feature already exists, mark it `[x]` in {{PLAN_FILE}} and signal completion without making changes.
+2. Focus ONLY on the single task described above.
+3. When you complete the task, mark it as done in {{PLAN_FILE}} by changing `- [ ]` to `- [x]`.
+4. If the project has its own todo tracking (defined in AGENTS.md or CLAUDE.md), update it as part of your work.
+5. Atomic commits, and a pull request if gh is available.
+6. If you cannot complete the task, leave it unchecked and add notes in {{PLAN_FILE}}.
+7. Do NOT work on other tasks — one task per iteration.
