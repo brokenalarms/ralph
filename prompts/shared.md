@@ -23,6 +23,6 @@
 - If you end up pushing a commit to a pull request after creating the request, the pull request title and description need to be regenerated to capture all commits.
 
 ### Housekeeping
-- Ensure `.ralph` is in `.gitignore` (create the file if it doesn't exist).
+- Specs are design documents describing features for a contextless agent — not task lists or fix lists. Never create spec files containing lists of small fixes; those belong in the plan.
 - When a spec is fully complete, move it from `specs/` to `specs/completed/`.
 - Don't add status reports, "Done" sections, or temporal comments — commit history is the record.

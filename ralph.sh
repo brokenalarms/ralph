@@ -182,6 +182,12 @@ init_ralph_dir() {
   mkdir -p "$RALPH_DIR"
   touch "$LOG_FILE"
 
+  # Ensure .ralph is gitignored
+  local gitignore="$PROJECT_DIR/.gitignore"
+  if [[ ! -f "$gitignore" ]] || ! grep -qx '.ralph' "$gitignore"; then
+    echo '.ralph' >> "$gitignore"
+  fi
+
   if [[ -f "$STATE_FILE" ]]; then
     local status
     status=$(read_state "status")

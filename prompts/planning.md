@@ -7,6 +7,13 @@ If the project's AGENTS.md or CLAUDE.md defines task priority or selection order
 
 {{PLANNING_CONTEXT}}
 
+## Specs
+If `specs/` contains spec files, derive the plan from them — break each spec into atomic tasks.
+Before creating tasks for a spec, check whether the described feature already exists in the codebase. Read the spec's acceptance criteria and verify against actual code. Skip specs whose work is already implemented.
+
+Do NOT create new spec files. Specs are design artifacts that frame how work gets done — getting them wrong is worse than not having them. Without a user in the loop to validate design decisions, stick to deriving plans from existing specs or repo context.
+
+## Output
 Break the work into atomic, self-contained tasks. Write the plan to {{PLAN_FILE}} using markdown checkboxes:
 - [ ] Task 1 description
 - [ ] Task 2 description
