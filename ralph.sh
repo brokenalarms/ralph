@@ -819,6 +819,7 @@ analyze_iteration() {
   local head_before="$3"
 
   ANALYSIS_RESULT="continue"
+  ANALYSIS_DETAIL=""
 
   local iter_log
   iter_log=$(tail -n "+${start_line}" "$log_file" 2>/dev/null || true)
@@ -828,9 +829,14 @@ analyze_iteration() {
   fi
 
   # --- Permission denial detection (3+ in single iteration → halt) ---
+  local perm_matches=""
+  perm_matches=$(grep -iE 'permission denied|cannot write|blocked by sandbox|not allowed' <<< "$iter_log" | head -5 || true)
   local perm_count=0
-  perm_count=$(grep -ciE 'permission denied|cannot write|blocked by sandbox|not allowed' <<< "$iter_log" || true)
+  if [[ -n "$perm_matches" ]]; then
+    perm_count=$(echo "$perm_matches" | wc -l | tr -d ' ')
+  fi
   if (( perm_count >= 3 )); then
+    ANALYSIS_DETAIL="$perm_matches"
     ANALYSIS_RESULT="halt:permission_denied"
     return
   fi
@@ -1066,6 +1072,11 @@ run_execution() {
     case "$ANALYSIS_RESULT" in
       halt:*)
         log_error "Halting: ${ANALYSIS_RESULT#halt:}"
+        if [[ -n "$ANALYSIS_DETAIL" ]]; then
+          echo "$ANALYSIS_DETAIL" | while IFS= read -r detail_line; do
+            log_error "  $detail_line"
+          done
+        fi
         write_state "status" "halted_${ANALYSIS_RESULT#halt:}"
         break
         ;;
