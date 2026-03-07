@@ -98,19 +98,19 @@ teardown() {
   [[ "$result" == "" ]]
 }
 
-# Proves: init_task_backend creates .beads dir and gitignore entry
+# Proves: init_task_backend creates .beads dir in PROJECT_DIR and updates gitignore
 @test "bd: init_task_backend initializes bd and updates gitignore" {
   init_task_backend
-  [[ -d "$WORK_DIR/.beads" ]]
-  grep -qx '.beads' "$WORK_DIR/.gitignore"
+  [[ -d "$PROJECT_DIR/.beads" ]]
+  grep -qx '.beads' "$PROJECT_DIR/.gitignore"
 }
 
 # Proves: init_task_backend is idempotent for gitignore
 @test "bd: init_task_backend doesn't duplicate gitignore entry" {
-  echo '.beads' > "$WORK_DIR/.gitignore"
+  echo '.beads' > "$PROJECT_DIR/.gitignore"
   init_task_backend
   local count
-  count=$(grep -cx '.beads' "$WORK_DIR/.gitignore")
+  count=$(grep -cx '.beads' "$PROJECT_DIR/.gitignore")
   [[ "$count" == "1" ]]
 }
 
@@ -118,7 +118,7 @@ teardown() {
 @test "checklist: init_task_backend is a no-op" {
   TASK_BACKEND="checklist"
   init_task_backend
-  [[ ! -d "$WORK_DIR/.beads" ]]
+  [[ ! -d "$PROJECT_DIR/.beads" ]]
 }
 
 # Proves: bd execution instructions mention bd commands
@@ -163,3 +163,31 @@ teardown() {
   [[ "$result" == *"[x]"* ]]
 }
 
+# Proves: bd has_tasks returns true when tasks exist
+@test "bd: has_tasks true with tasks" {
+  run has_tasks
+  [[ "$status" -eq 0 ]]
+}
+
+# Proves: bd needs_planning returns false when tasks exist
+@test "bd: needs_planning false with tasks" {
+  run needs_planning
+  [[ "$status" -ne 0 ]]
+}
+
+# Proves: bd planning_succeeded returns true when tasks exist
+@test "bd: planning_succeeded true with tasks" {
+  run planning_succeeded
+  [[ "$status" -eq 0 ]]
+}
+
+# Proves: _validate_backend catches missing functions
+@test "_validate_backend passes for valid backends" {
+  TASK_BACKEND="bd"
+  run _validate_backend
+  [[ "$status" -eq 0 ]]
+
+  TASK_BACKEND="checklist"
+  run _validate_backend
+  [[ "$status" -eq 0 ]]
+}

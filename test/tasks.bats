@@ -55,3 +55,47 @@ EOF
   result=$(get_next_task)
   [[ "$result" == "Second task is next" ]]
 }
+
+# Proves: has_tasks returns true when plan has checkbox items.
+@test "checklist: has_tasks true with tasks" {
+  cat > "$PLAN_FILE" <<'EOF'
+- [ ] A task
+EOF
+  run has_tasks
+  [[ "$status" -eq 0 ]]
+}
+
+# Proves: has_tasks returns false with no plan file.
+@test "checklist: has_tasks false without plan" {
+  rm -f "$PLAN_FILE"
+  run has_tasks
+  [[ "$status" -ne 0 ]]
+}
+
+# Proves: needs_planning returns true when no plan file exists.
+@test "checklist: needs_planning true without plan" {
+  rm -f "$PLAN_FILE"
+  run needs_planning
+  [[ "$status" -eq 0 ]]
+}
+
+# Proves: needs_planning returns false when plan file exists.
+@test "checklist: needs_planning false with plan" {
+  touch "$PLAN_FILE"
+  run needs_planning
+  [[ "$status" -ne 0 ]]
+}
+
+# Proves: planning_succeeded requires actual tasks, not just a file.
+@test "checklist: planning_succeeded false with empty plan" {
+  echo "no tasks here" > "$PLAN_FILE"
+  run planning_succeeded
+  [[ "$status" -ne 0 ]]
+}
+
+# Proves: planning_succeeded true when plan has checkboxes.
+@test "checklist: planning_succeeded true with tasks" {
+  echo "- [ ] A task" > "$PLAN_FILE"
+  run planning_succeeded
+  [[ "$status" -eq 0 ]]
+}

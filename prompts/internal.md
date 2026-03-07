@@ -7,6 +7,5 @@ to be merged before continuing with dependent tasks.
 ## Current iteration context
 - Project: {{WORK_DIR}}
 - Ralph state dir: {{RALPH_DIR}}
-- Plan file: {{PLAN_FILE}}
 
 {{TASK_INSTRUCTIONS}}
