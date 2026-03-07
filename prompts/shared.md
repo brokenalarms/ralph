@@ -7,6 +7,7 @@
 - Each test needs a preamble comment explaining what user-facing functionality it proves.
 - Never consider a task finished if any tests are broken — even unrelated ones. Fix them as part of the task.
 - Run only scoped and relevant tests during development, not the full suite if possible, unless a change affects interrelated concerns.
+- Unit tests are the building block — prefer them for verifying logic. Visual/UI/integration/end-to-end tests are expensive and should only run when significant UI changes have been made, not as routine verification for non-UI work.
 - Always run tests before committing and confirm they pass.
 - Try to keep testing cycles below 20% of total work.
 - Always run a final full test run before committing and confirm they pass.
