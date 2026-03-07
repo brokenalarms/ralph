@@ -916,8 +916,19 @@ analyze_iteration() {
     changed_files=$(echo "$changed_files" | grep -v '^$' | sort -u)
 
     if [[ -n "$changed_files" ]]; then
-      local non_test_files
-      non_test_files=$(echo "$changed_files" | sed 's|.*/||' | grep -viE '(test|spec|_test\.|test_)' || true)
+      local non_test_files=""
+      while IFS= read -r f; do
+        local base="${f##*/}"
+        local top_dir="${f%%/*}"
+        if echo "$base" | grep -qiE '(test|spec|_test\.|test_)'; then
+          continue
+        fi
+        if echo "$top_dir" | grep -qiE '^(tests?|specs?|__tests__)$'; then
+          continue
+        fi
+        non_test_files+="$f"$'\n'
+      done <<< "$changed_files"
+      non_test_files=$(echo "$non_test_files" | grep -v '^$' || true)
 
       if [[ -z "$non_test_files" ]]; then
         _test_only_count=$((_test_only_count + 1))

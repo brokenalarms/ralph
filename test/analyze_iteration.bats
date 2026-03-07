@@ -136,3 +136,24 @@ EOF
   [[ "$ANALYSIS_RESULT" == "continue" ]]
   [[ "$_test_only_count" -eq 0 ]]
 }
+
+@test "Files under top-level test dir count as test files" {
+  local logfile="$RALPH_DIR/test_iter.log"
+  echo "some output" > "$logfile"
+
+  git -C "$WORK_DIR" add -A
+  git -C "$WORK_DIR" commit -m "baseline" -q
+
+  _test_only_count=0
+
+  mkdir -p "$WORK_DIR/tests/helpers"
+  echo "helper" > "$WORK_DIR/tests/helpers/setup.js"
+  git -C "$WORK_DIR" add -A
+  git -C "$WORK_DIR" commit -m "test helper" -q
+
+  local head_before
+  head_before=$(git -C "$WORK_DIR" rev-parse HEAD~1)
+  analyze_iteration "$logfile" 1 "$head_before"
+  [[ "$ANALYSIS_RESULT" == "continue" ]]
+  [[ "$_test_only_count" -eq 1 ]]
+}
