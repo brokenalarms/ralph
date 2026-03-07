@@ -371,6 +371,7 @@ write_stream_filter() {
 #!/usr/bin/env bash
 set +m
 # stream-json: each event has 1 content block. Filter and format.
+{
 tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   fromjson? // empty |
   if .type == "assistant" then
@@ -398,6 +399,7 @@ tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   -e $'s/\\[done\\]/\033[0;32m[done]\033[0m/g' \
   -e $'s/\\[claude\\]/\033[0;36m[claude]\033[0m/g' \
   -e $'s/\\[([A-Z][A-Za-z]*)\\]/\033[0;34m[\\1]\033[0m/g'
+} 2>/dev/null
 STREAM
   chmod +x "$RALPH_DIR/.stream-filter.sh"
 }
@@ -704,6 +706,7 @@ build_prompt() {
   task_instructions=$(task_execution_instructions)
   result="${result//\{\{TASK_INSTRUCTIONS\}\}/$task_instructions}"
 
+  result="${result//\{\{PROJECT_DIR\}\}/$PROJECT_DIR}"
   result="${result//\{\{WORK_DIR\}\}/$WORK_DIR}"
   result="${result//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
   result="${result//\{\{PLAN_FILE\}\}/$PLAN_FILE}"

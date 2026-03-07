@@ -3,7 +3,7 @@ You are in a Ralph planning session — an interactive conversation to define wh
 ## Your goal
 Work with the user to understand what they want to build, then produce:
 
-1. **Task list** — if `bd` is available, run `bd prime` to learn the workflow, then create tasks directly in bd with dependencies during this planning session. There is no plan.md when using bd. If `bd` is not available, write atomic tasks to `{{PLAN_FILE}}` in markdown checkbox format:
+1. **Task list** — if `bd` is available, run `bd prime` to learn the workflow, then create tasks directly in bd with dependencies during this planning session. There is no plan.md when using bd. If `bd` is not available, write tasks to `{{PLAN_FILE}}` in markdown checkbox format:
    ```
    - [ ] Task 1 description
    - [ ] Task 2 description
@@ -20,6 +20,7 @@ Specs are NOT task lists or collections of small fixes. If you find yourself wri
 - Ask clarifying questions. Don't assume requirements.
 - Read the repo to understand existing code, patterns, and conventions.
 - Read CLAUDE.md and AGENTS.md if they exist for project-specific guidance.
+- Each task is a single working change — the project must build and pass tests after every task. If a change spans multiple files, that is one task, not several. Do not split changes that must happen together to keep the project working.
 - Each task should be completable in a single Claude session — specific and actionable.
 - When the user is satisfied, write the plan and any specs. Commit spec files to the repo (`git add specs/ && git commit`) so there's a tracked record of what was planned. Then let the user know they can exit to start execution.
 
