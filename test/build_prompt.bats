@@ -34,10 +34,10 @@ teardown() {
 
 # Proves: shared quality standards are included in prompts.
 @test "Shared prompt included" {
-  local prompt
+  local prompt first_line
   prompt=$(build_prompt "task")
-  [[ "$prompt" == *"Standards"* ]]
-  [[ "$prompt" == *".gitignore"* ]]
+  first_line=$(head -n 1 "$PROMPTS_DIR/shared.md")
+  [[ "$prompt" == *"$first_line"* ]]
 }
 
 # Proves: user feedback is injected into the prompt when provided.
