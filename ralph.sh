@@ -136,7 +136,7 @@ if [[ "${1:-}" == "feedback" ]]; then
     exit 1
   fi
   if [[ -z "$*" ]]; then
-    local feedback_file="$ralph_dir/feedback"
+    feedback_file="$ralph_dir/feedback"
     if [[ -f "$feedback_file" && -s "$feedback_file" ]]; then
       echo -e "${CYAN}[ralph]${NC} Queued feedback:"
       cat "$feedback_file"
