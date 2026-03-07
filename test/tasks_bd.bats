@@ -124,8 +124,8 @@ teardown() {
 # Proves: bd execution instructions mention bd commands
 @test "bd: task_execution_instructions references bd" {
   result=$(task_execution_instructions)
-  [[ "$result" == *"bd ready"* ]]
-  [[ "$result" == *"bd close"* ]]
+  [[ "$result" == *"bd prime"* ]]
+  [[ "$result" == *"close the task"* ]]
 }
 
 # Proves: checklist execution instructions reference plan file
@@ -136,16 +136,3 @@ teardown() {
   [[ "$result" == *"[x]"* ]]
 }
 
-# Proves: bd planning instructions use bd create
-@test "bd: task_planning_instructions references bd create" {
-  result=$(task_planning_instructions)
-  [[ "$result" == *"bd create"* ]]
-}
-
-# Proves: checklist planning instructions reference markdown checkboxes
-@test "checklist: task_planning_instructions references checkboxes" {
-  TASK_BACKEND="checklist"
-  result=$(task_planning_instructions)
-  [[ "$result" == *"- [ ]"* ]]
-  [[ "$result" == *"{{PLAN_FILE}}"* ]]
-}

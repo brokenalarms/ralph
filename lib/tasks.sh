@@ -73,10 +73,4 @@ task_execution_instructions() {
   cat "$PROMPTS_DIR/execution-${TASK_BACKEND}.md"
 }
 
-task_planning_instructions() {
-  cat "$PROMPTS_DIR/planning-${TASK_BACKEND}.md"
-}
 
-interactive_planning_instructions() {
-  cat "$PROMPTS_DIR/interactive-planning-${TASK_BACKEND}.md"
-}

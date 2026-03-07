@@ -737,9 +737,6 @@ run_planning() {
 
     local interactive_prompt
     interactive_prompt=$(<"$PROMPTS_DIR/interactive-planning.md")
-    local i_planning_inst
-    i_planning_inst=$(interactive_planning_instructions)
-    interactive_prompt="${interactive_prompt//\{\{PLANNING_INSTRUCTIONS\}\}/$i_planning_inst}"
     interactive_prompt="${interactive_prompt//\{\{WORK_DIR\}\}/$WORK_DIR}"
     interactive_prompt="${interactive_prompt//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
     interactive_prompt="${interactive_prompt//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
@@ -782,9 +779,6 @@ run_planning() {
 
   local planning_prompt
   planning_prompt=$(<"$PROMPTS_DIR/planning.md")
-  local planning_inst
-  planning_inst=$(task_planning_instructions)
-  planning_prompt="${planning_prompt//\{\{PLANNING_INSTRUCTIONS\}\}/$planning_inst}"
   planning_prompt="${planning_prompt//\{\{PLANNING_CONTEXT\}\}/$planning_context}"
   planning_prompt="${planning_prompt//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
   planning_prompt="${planning_prompt//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
