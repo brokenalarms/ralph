@@ -86,6 +86,44 @@ teardown() {
   [[ "$status" -eq 0 ]]
 }
 
+# Proves: stale worktrees (directory removed) are pruned before branch creation.
+@test "Stale worktree branch is cleaned up via prune" {
+  init_ralph_dir
+  setup_worktree
+  local first_work_dir="$WORK_DIR"
+
+  # Simulate a stale worktree: remove the directory but leave git metadata
+  rm -rf "$first_work_dir"
+
+  # Reset state so setup_worktree runs fresh (not resume path)
+  RESUME=false
+  WORK_DIR=""
+  WORKTREE_BRANCH=""
+  _TASK_SEQ=0
+
+  # Should succeed because prune cleans the stale reference
+  setup_worktree
+  [[ -d "$WORK_DIR" ]]
+}
+
+# Proves: live ralph worktrees are force-removed when branch conflicts.
+@test "Live ralph worktree is removed when branch already exists" {
+  init_ralph_dir
+  setup_worktree
+  local first_work_dir="$WORK_DIR"
+
+  # Worktree directory still exists (not stale), but we start a new run
+  RESUME=false
+  WORK_DIR=""
+  WORKTREE_BRANCH=""
+  _TASK_SEQ=0
+
+  setup_worktree
+  [[ -d "$WORK_DIR" ]]
+  # Old worktree should have been removed
+  [[ ! -d "$first_work_dir" ]]
+}
+
 # Proves: ralph requires a git repo and fails fast without one.
 @test "Non-git directory exits with error" {
   local non_git_dir

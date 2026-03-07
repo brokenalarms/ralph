@@ -268,8 +268,23 @@ setup_worktree() {
 
   mkdir -p "$RALPH_DIR/worktrees"
 
-  # Clean up leftover temp branch from previous runs
-  git -C "$PROJECT_DIR" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+  # Clean up leftover ralph worktrees and temp branch from previous runs
+  git -C "$PROJECT_DIR" worktree prune 2>/dev/null || true
+  if git -C "$PROJECT_DIR" rev-parse --verify "$WORKTREE_BRANCH" &>/dev/null; then
+    if ! git -C "$PROJECT_DIR" branch -D "$WORKTREE_BRANCH" 2>/dev/null; then
+      # Branch can't be deleted — find and remove the ralph worktree holding it
+      local existing_wt
+      existing_wt=$(git -C "$PROJECT_DIR" worktree list --porcelain 2>/dev/null | grep -B2 "branch refs/heads/$WORKTREE_BRANCH" | grep "^worktree " | sed 's/^worktree //')
+      if [[ -n "$existing_wt" && "$existing_wt" == */.ralph/worktrees/* ]]; then
+        log_warn "Removing stale ralph worktree: $existing_wt"
+        git -C "$PROJECT_DIR" worktree remove --force "$existing_wt" 2>/dev/null || true
+        git -C "$PROJECT_DIR" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+      else
+        log_error "Cannot delete branch '$WORKTREE_BRANCH' — it is checked out in a non-ralph worktree: ${existing_wt:-unknown}"
+        exit 1
+      fi
+    fi
+  fi
 
   git -C "$PROJECT_DIR" worktree add -b "$WORKTREE_BRANCH" "$WORK_DIR" HEAD
   log "Worktree: $WORK_DIR (branch: $WORKTREE_BRANCH)"
