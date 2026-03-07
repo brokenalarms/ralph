@@ -14,7 +14,7 @@ Before creating tasks for a spec, check whether the described feature already ex
 Do NOT create new spec files. Specs are design artifacts that frame how work gets done — getting them wrong is worse than not having them. Without a user in the loop to validate design decisions, stick to deriving plans from existing specs or repo context.
 
 ## Output
-Break the work into atomic, self-contained tasks. If `bd` is available, run `bd prime` for task workflow and create tasks with dependencies. Otherwise, write the plan to {{PLAN_FILE}} using markdown checkboxes:
+Break the work into atomic, self-contained tasks. If `bd` is available, run `bd prime` to learn the workflow, then create tasks directly in bd with dependencies during this planning session. There is no plan.md when using bd. If `bd` is not available, write the plan to {{PLAN_FILE}} using markdown checkboxes:
 - [ ] Task 1 description
 - [ ] Task 2 description
 
