@@ -3,7 +3,7 @@ You are in a Ralph planning session — an interactive conversation to define wh
 ## Your goal
 Work with the user to understand what they want to build, then produce:
 
-1. **Task checklist** at `{{PLAN_FILE}}` — atomic tasks in markdown checkbox format that Ralph will execute one per iteration:
+1. **Task list** — if `bd` is available, run `bd prime` for workflow and create tasks with dependencies. Otherwise, write atomic tasks to `{{PLAN_FILE}}` in markdown checkbox format:
    ```
    - [ ] Task 1 description
    - [ ] Task 2 description

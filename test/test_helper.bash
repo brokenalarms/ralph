@@ -41,6 +41,7 @@ setup_test_repo() {
   CURRENT_TASK_TOKEN="###RALPH_CURRENT_TASK###"
   ALL_COMPLETE_TOKEN="###RALPH_ALL_COMPLETE###"
 
+  TASK_BACKEND="checklist"
   PLAN_FILE_ARG=""
   RESUME=false
   USE_WORKTREE=true
