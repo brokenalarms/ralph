@@ -115,7 +115,7 @@ EOF
   [[ "$_test_only_count" -eq 0 ]]
 }
 
-@test "Source files under test-named directories are not test-only" {
+@test "Mixed test and source changes reset test-only count" {
   local logfile="$RALPH_DIR/test_iter.log"
   echo "some output" > "$logfile"
 
@@ -124,9 +124,9 @@ EOF
 
   _test_only_count=2
 
-  mkdir -p "$WORK_DIR/AppTests/App/Engine" "$WORK_DIR/AppTests/AppTests"
-  echo "source" > "$WORK_DIR/AppTests/App/Engine/HTTPClient.swift"
-  echo "tests" > "$WORK_DIR/AppTests/AppTests/HTTPClientTests.swift"
+  mkdir -p "$WORK_DIR/AppTests" "$WORK_DIR/src"
+  echo "tests" > "$WORK_DIR/AppTests/HTTPClientTests.swift"
+  echo "source" > "$WORK_DIR/src/HTTPClient.swift"
   git -C "$WORK_DIR" add -A
   git -C "$WORK_DIR" commit -m "add source and tests" -q
 
@@ -150,6 +150,28 @@ EOF
   echo "helper" > "$WORK_DIR/tests/helpers/setup.js"
   git -C "$WORK_DIR" add -A
   git -C "$WORK_DIR" commit -m "test helper" -q
+
+  local head_before
+  head_before=$(git -C "$WORK_DIR" rev-parse HEAD~1)
+  analyze_iteration "$logfile" 1 "$head_before"
+  [[ "$ANALYSIS_RESULT" == "continue" ]]
+  [[ "$_test_only_count" -eq 1 ]]
+}
+
+@test "Files under suffixed test dirs (e.g. AppTests, AppUITests) count as test files" {
+  local logfile="$RALPH_DIR/test_iter.log"
+  echo "some output" > "$logfile"
+
+  git -C "$WORK_DIR" add -A
+  git -C "$WORK_DIR" commit -m "baseline" -q
+
+  _test_only_count=0
+
+  mkdir -p "$WORK_DIR/musicXmusicTests" "$WORK_DIR/musicXmusicUITests"
+  echo "helper" > "$WORK_DIR/musicXmusicTests/SetupHelper.swift"
+  echo "fixture" > "$WORK_DIR/musicXmusicUITests/UIFixture.swift"
+  git -C "$WORK_DIR" add -A
+  git -C "$WORK_DIR" commit -m "test helpers" -q
 
   local head_before
   head_before=$(git -C "$WORK_DIR" rev-parse HEAD~1)

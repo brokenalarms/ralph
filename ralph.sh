@@ -923,7 +923,7 @@ analyze_iteration() {
         if echo "$base" | grep -qiE '(test|spec|_test\.|test_)'; then
           continue
         fi
-        if echo "$top_dir" | grep -qiE '^(tests?|specs?|__tests__)$'; then
+        if echo "$top_dir" | grep -qiE '(tests?|specs?|__tests__)$'; then
           continue
         fi
         non_test_files+="$f"$'\n'
