@@ -917,7 +917,7 @@ analyze_iteration() {
 
     if [[ -n "$changed_files" ]]; then
       local non_test_files
-      non_test_files=$(echo "$changed_files" | grep -viE '(test|spec|_test\.|test_)' || true)
+      non_test_files=$(echo "$changed_files" | sed 's|.*/||' | grep -viE '(test|spec|_test\.|test_)' || true)
 
       if [[ -z "$non_test_files" ]]; then
         _test_only_count=$((_test_only_count + 1))

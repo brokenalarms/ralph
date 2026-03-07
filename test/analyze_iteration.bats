@@ -114,3 +114,25 @@ EOF
   [[ "$_stagnant_count" -eq 0 ]]
   [[ "$_test_only_count" -eq 0 ]]
 }
+
+@test "Source files under test-named directories are not test-only" {
+  local logfile="$RALPH_DIR/test_iter.log"
+  echo "some output" > "$logfile"
+
+  git -C "$WORK_DIR" add -A
+  git -C "$WORK_DIR" commit -m "baseline" -q
+
+  _test_only_count=2
+
+  mkdir -p "$WORK_DIR/AppTests/App/Engine" "$WORK_DIR/AppTests/AppTests"
+  echo "source" > "$WORK_DIR/AppTests/App/Engine/HTTPClient.swift"
+  echo "tests" > "$WORK_DIR/AppTests/AppTests/HTTPClientTests.swift"
+  git -C "$WORK_DIR" add -A
+  git -C "$WORK_DIR" commit -m "add source and tests" -q
+
+  local head_before
+  head_before=$(git -C "$WORK_DIR" rev-parse HEAD~1)
+  analyze_iteration "$logfile" 1 "$head_before"
+  [[ "$ANALYSIS_RESULT" == "continue" ]]
+  [[ "$_test_only_count" -eq 0 ]]
+}
