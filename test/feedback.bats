@@ -12,6 +12,17 @@ teardown() {
   teardown_test_repo
 }
 
+# Proves: `ralph feedback <msg>` queues and `ralph feedback` lists it.
+@test "ralph feedback queues and lists feedback" {
+  run "$RALPH_SH" feedback "$PROJECT_DIR" fix the tests
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"Feedback queued"* ]]
+
+  run "$RALPH_SH" feedback "$PROJECT_DIR"
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"fix the tests"* ]]
+}
+
 # Proves: feedback is read without deleting the file.
 @test "read_feedback returns content without deleting" {
   echo "make it generic" > "$RALPH_DIR/feedback"
