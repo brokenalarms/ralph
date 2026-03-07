@@ -1217,6 +1217,8 @@ main() {
     stored_backend=$(read_state "task_backend")
     if [[ "$stored_backend" == "bd" || "$stored_backend" == "checklist" ]]; then
       TASK_BACKEND="$stored_backend"
+    elif [[ -f "$PLAN_FILE" ]] && grep -qE '^\s*- \[[ x]\]' "$PLAN_FILE"; then
+      TASK_BACKEND="checklist"
     fi
   fi
 

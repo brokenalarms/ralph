@@ -140,6 +140,21 @@ teardown() {
   [[ "$TASK_BACKEND" == "checklist" ]]
 }
 
+# Proves: migration — old state without task_backend infers checklist from plan file
+@test "resume infers checklist backend from plan file when no stored backend" {
+  init_ralph_dir
+  echo '- [ ] Do something' > "$PLAN_FILE"
+  TASK_BACKEND="bd"
+  RESUME=true
+  stored_backend=$(read_state "task_backend")
+  if [[ "$stored_backend" == "bd" || "$stored_backend" == "checklist" ]]; then
+    TASK_BACKEND="$stored_backend"
+  elif [[ -f "$PLAN_FILE" ]] && grep -qE '^\s*- \[[ x]\]' "$PLAN_FILE"; then
+    TASK_BACKEND="checklist"
+  fi
+  [[ "$TASK_BACKEND" == "checklist" ]]
+}
+
 # Proves: checklist execution instructions reference plan file
 @test "checklist: task_execution_instructions references plan file" {
   TASK_BACKEND="checklist"
