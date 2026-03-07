@@ -10,6 +10,7 @@ _source="${BASH_SOURCE[0]}"
 while [[ -L "$_source" ]]; do _source="$(readlink "$_source")"; done
 SCRIPT_DIR="$(cd "$(dirname "$_source")" && pwd)"
 PROMPTS_DIR="$SCRIPT_DIR/prompts"
+source "$SCRIPT_DIR/lib/tasks.sh"
 
 # --- Defaults ---
 PROJECT_DIR="$(pwd)"
@@ -166,6 +167,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# --- Detect task backend ---
+if command -v bd &>/dev/null; then
+  TASK_BACKEND="bd"
+else
+  TASK_BACKEND="checklist"
+fi
+
 # --- Resolve paths ---
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 RALPH_DIR="$PROJECT_DIR/.ralph"
@@ -183,6 +191,10 @@ if [[ -n "$PLAN_FILE_ARG" ]]; then
     log_error "Plan file is not in Ralph format (must contain '- [ ]' checkboxes): $PLAN_FILE_ARG"
     exit 1
   fi
+  if [[ "$TASK_BACKEND" == "bd" ]]; then
+    log "Note: --plan-file forces checklist backend (bd available but not used)"
+  fi
+  TASK_BACKEND="checklist"
 fi
 STATE_FILE="$RALPH_DIR/state.json"
 SIGNAL_FILE="$RALPH_DIR/signal"
@@ -453,28 +465,6 @@ write_state() {
   fi
 }
 
-# --- Task helpers ---
-has_remaining_tasks() {
-  [[ -f "$PLAN_FILE" ]] || return 1
-  grep -qE '^\s*- \[ \]' "$PLAN_FILE"
-}
-
-count_completed() {
-  [[ -f "$PLAN_FILE" ]] && { grep -cE '^\s*- \[x\]' "$PLAN_FILE" 2>/dev/null || true; } || echo 0
-}
-
-count_remaining() {
-  [[ -f "$PLAN_FILE" ]] && { grep -cE '^\s*- \[ \]' "$PLAN_FILE" 2>/dev/null || true; } || echo 0
-}
-
-count_total() {
-  [[ -f "$PLAN_FILE" ]] && { grep -cE '^\s*- \[[ x]\]' "$PLAN_FILE" 2>/dev/null || true; } || echo 0
-}
-
-get_next_task() {
-  [[ -f "$PLAN_FILE" ]] && grep -m1 -E '^\s*- \[ \]' "$PLAN_FILE" | sed 's/^\s*- \[ \] *//'
-}
-
 # --- Signal file mechanism ---
 clear_signal() {
   rm -f "$SIGNAL_FILE"
@@ -706,6 +696,10 @@ build_prompt() {
     result+="$feedback"
   fi
 
+  local task_instructions
+  task_instructions=$(task_execution_instructions)
+  result="${result//\{\{TASK_INSTRUCTIONS\}\}/$task_instructions}"
+
   result="${result//\{\{WORK_DIR\}\}/$WORK_DIR}"
   result="${result//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
   result="${result//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
@@ -743,6 +737,9 @@ run_planning() {
 
     local interactive_prompt
     interactive_prompt=$(<"$PROMPTS_DIR/interactive-planning.md")
+    local i_planning_inst
+    i_planning_inst=$(interactive_planning_instructions)
+    interactive_prompt="${interactive_prompt//\{\{PLANNING_INSTRUCTIONS\}\}/$i_planning_inst}"
     interactive_prompt="${interactive_prompt//\{\{WORK_DIR\}\}/$WORK_DIR}"
     interactive_prompt="${interactive_prompt//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
     interactive_prompt="${interactive_prompt//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
@@ -757,9 +754,13 @@ run_planning() {
   fi
 
   # If interactive session created a plan, use it
-  if [[ -f "$PLAN_FILE" ]]; then
-    local total
-    total=$(count_total)
+  local total
+  total=$(count_total)
+  if [[ "$TASK_BACKEND" == "bd" && "$total" -gt 0 ]]; then
+    write_state "status" "planned"
+    log_success "Plan created with $total tasks (bd)"
+    return 0
+  elif [[ -f "$PLAN_FILE" ]]; then
     if (( total == 0 )); then
       log_error "Plan file exists but contains no tasks in checkbox format (- [ ] ...)"
       log_error "Re-run to try again, or provide a plan with --plan-file"
@@ -781,6 +782,9 @@ run_planning() {
 
   local planning_prompt
   planning_prompt=$(<"$PROMPTS_DIR/planning.md")
+  local planning_inst
+  planning_inst=$(task_planning_instructions)
+  planning_prompt="${planning_prompt//\{\{PLANNING_INSTRUCTIONS\}\}/$planning_inst}"
   planning_prompt="${planning_prompt//\{\{PLANNING_CONTEXT\}\}/$planning_context}"
   planning_prompt="${planning_prompt//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
   planning_prompt="${planning_prompt//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
@@ -788,21 +792,28 @@ run_planning() {
 
   run_claude "$planning_prompt"
 
-  if [[ ! -f "$PLAN_FILE" ]]; then
-    log_error "Planning failed - no plan.md created"
-    exit 1
-  fi
-
-  local total
   total=$(count_total)
-  if (( total == 0 )); then
-    log_error "Plan file exists but contains no tasks in checkbox format (- [ ] ...)"
-    log_error "Re-run to try again, or provide a plan with --plan-file"
-    rm "$PLAN_FILE"
-    exit 1
+  if [[ "$TASK_BACKEND" == "bd" ]]; then
+    if (( total == 0 )); then
+      log_error "Planning failed - no tasks created in bd"
+      exit 1
+    fi
+    write_state "status" "planned"
+    log_success "Plan created with $total tasks (bd)"
+  else
+    if [[ ! -f "$PLAN_FILE" ]]; then
+      log_error "Planning failed - no plan.md created"
+      exit 1
+    fi
+    if (( total == 0 )); then
+      log_error "Plan file exists but contains no tasks in checkbox format (- [ ] ...)"
+      log_error "Re-run to try again, or provide a plan with --plan-file"
+      rm "$PLAN_FILE"
+      exit 1
+    fi
+    write_state "status" "planned"
+    log_success "Plan created with $total tasks"
   fi
-  write_state "status" "planned"
-  log_success "Plan created with $total tasks"
 }
 
 # --- Response analyzer ---
@@ -1024,7 +1035,12 @@ run_execution() {
     rename_branch_for_task "$next_task"
 
     # Build task prompt
+    local task_id
+    task_id=$(get_next_task_id)
     local task_prompt="Complete this task: $next_task"
+    if [[ -n "$task_id" ]]; then
+      task_prompt="Complete this task (bd id: $task_id): $next_task"
+    fi
 
     # Rate limit check
     if ! check_rate_limit; then
@@ -1193,6 +1209,7 @@ main() {
   fi
 
   setup_worktree
+  init_task_backend
 
   log_phase "Ralph Loop v${VERSION}"
   log "Project: $PROJECT_DIR"

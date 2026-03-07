@@ -13,10 +13,4 @@ Before creating tasks for a spec, check whether the described feature already ex
 
 Do NOT create new spec files. Specs are design artifacts that frame how work gets done — getting them wrong is worse than not having them. Without a user in the loop to validate design decisions, stick to deriving plans from existing specs or repo context.
 
-## Output
-Break the work into atomic, self-contained tasks. Write the plan to {{PLAN_FILE}} using markdown checkboxes:
-- [ ] Task 1 description
-- [ ] Task 2 description
-
-Each task should be completable in a single Claude session. Be specific and actionable.
-After writing the plan, signal completion: echo "{{SIGNAL_TOKEN}}" > "{{SIGNAL_FILE}}"
+{{PLANNING_INSTRUCTIONS}}

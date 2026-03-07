@@ -3,11 +3,7 @@ You are in a Ralph planning session — an interactive conversation to define wh
 ## Your goal
 Work with the user to understand what they want to build, then produce:
 
-1. **Task checklist** at `{{PLAN_FILE}}` — atomic tasks in markdown checkbox format that Ralph will execute one per iteration:
-   ```
-   - [ ] Task 1 description
-   - [ ] Task 2 description
-   ```
+{{PLANNING_INSTRUCTIONS}}
 2. **Spec files** (when appropriate) at `{{WORK_DIR}}/specs/<feature-name>.md` — one per feature area. These live in the project repo, NOT in the ralph state dir.
 
 ### When to write a spec vs just a plan
