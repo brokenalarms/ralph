@@ -53,6 +53,11 @@ log_warn()    { echo -e "${YELLOW}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
 log_error()   { echo -e "${RED}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
 log_phase()   { echo -e "${BOLD}${BLUE}[ralph]${NC} ${BOLD}$*${NC}" | tee -a "$LOG_FILE"; }
 
+task_label() { if [[ "$TASK_BACKEND" == "bd" ]]; then echo "beads"; else echo "checklist"; fi; }
+log_task()         { echo -e "${CYAN}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
+log_task_success() { echo -e "${GREEN}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
+log_task_error()   { echo -e "${RED}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
+
 # --- Helpers ---
 slugify() {
   echo "$1" | tr '[:upper:]' '[:lower:]' | \
@@ -217,7 +222,7 @@ init_ralph_dir() {
     local status
     status=$(read_state "status")
     if [[ "$status" == "completed" ]]; then
-      log "All tasks completed from previous run."
+      log_task "All tasks completed from previous run."
       printf "${YELLOW}[ralph]${NC} Run fresh? (y/n) "
       read -r answer
       if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
@@ -634,7 +639,7 @@ run_claude() {
       local task_desc
       task_desc=$(read_current_task) || true
       if [[ -n "$task_desc" ]]; then
-        log "Working on: $task_desc"
+        log_task "Working on: $task_desc"
         write_state "last_task" "$task_desc"
         rename_branch_for_task "$task_desc"
         task_logged=true
@@ -643,7 +648,7 @@ run_claude() {
     if check_signal || check_all_complete; then
       local summary
       summary=$(read_signal_summary) || true
-      log_success "Completed: ${summary:-task done}"
+      log_task_success "Completed: ${summary:-task done}"
       kill "$claude_pid" 2>/dev/null || true
       sleep 2
       kill -0 "$claude_pid" 2>/dev/null && kill -9 "$claude_pid" 2>/dev/null || true
@@ -665,7 +670,7 @@ run_claude() {
 
   # Check if signal was written (claude may have exited after writing it)
   if check_signal || check_all_complete; then
-    [[ "$signal_detected" == false ]] && log_success "Task completed via signal"
+    [[ "$signal_detected" == false ]] && log_task_success "Task completed via signal"
     return 0
   fi
 
@@ -721,7 +726,7 @@ run_planning() {
     local total
     total=$(count_total)
     write_state "status" "planned"
-    log "Copied plan from $PLAN_FILE_ARG ($total tasks)"
+    log_task "Copied plan from $PLAN_FILE_ARG ($total tasks)"
     return 0
   fi
 
@@ -755,17 +760,17 @@ run_planning() {
   total=$(count_total)
   if [[ "$TASK_BACKEND" == "bd" && "$total" -gt 0 ]]; then
     write_state "status" "planned"
-    log_success "Plan created with $total tasks (bd)"
+    log_task_success "Plan created with $total tasks"
     return 0
   elif [[ -f "$PLAN_FILE" ]]; then
     if (( total == 0 )); then
-      log_error "Plan file exists but contains no tasks in checkbox format (- [ ] ...)"
+      log_task_error "Plan file exists but contains no tasks in checkbox format (- [ ] ...)"
       log_error "Re-run to try again, or provide a plan with --plan-file"
       rm "$PLAN_FILE"
       exit 1
     fi
     write_state "status" "planned"
-    log_success "Plan created with $total tasks"
+    log_task_success "Plan created with $total tasks"
     return 0
   fi
 
@@ -789,24 +794,24 @@ run_planning() {
   total=$(count_total)
   if [[ "$TASK_BACKEND" == "bd" ]]; then
     if (( total == 0 )); then
-      log_error "Planning failed - no tasks created in bd"
+      log_task_error "Planning failed - no tasks created"
       exit 1
     fi
     write_state "status" "planned"
-    log_success "Plan created with $total tasks (bd)"
+    log_task_success "Plan created with $total tasks"
   else
     if [[ ! -f "$PLAN_FILE" ]]; then
-      log_error "Planning failed - no plan.md created"
+      log_task_error "Planning failed - no plan.md created"
       exit 1
     fi
     if (( total == 0 )); then
-      log_error "Plan file exists but contains no tasks in checkbox format (- [ ] ...)"
+      log_task_error "Plan file exists but contains no tasks in checkbox format (- [ ] ...)"
       log_error "Re-run to try again, or provide a plan with --plan-file"
       rm "$PLAN_FILE"
       exit 1
     fi
     write_state "status" "planned"
-    log_success "Plan created with $total tasks"
+    log_task_success "Plan created with $total tasks"
   fi
 }
 
@@ -996,11 +1001,11 @@ run_execution() {
     # Check remaining tasks
     if ! has_remaining_tasks; then
       if (( run_iteration == 0 )) && (( $(count_total) == 0 )); then
-        log_error "Plan has no tasks in checkbox format"
+        log_task_error "Plan has no tasks in checkbox format"
         write_state "status" "error"
         break
       fi
-      log_success "All tasks complete!"
+      log_task_success "All tasks complete!"
       write_state "status" "completed"
       break
     fi
@@ -1020,7 +1025,7 @@ run_execution() {
     total=$(count_total)
 
     log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS ($iteration total) [${completed}/${total} done] ---"
-    log "Next task: $next_task"
+    log_task "Next task: $next_task"
 
     # Update state
     write_state "iteration" "$iteration"
@@ -1076,7 +1081,7 @@ run_execution() {
 
     # Recount after claude ran
     completed=$(count_completed)
-    log "Iteration $run_iteration complete. ${completed}/${total} tasks done."
+    log_task "Iteration $run_iteration complete. ${completed}/${total} tasks done."
 
     # Analyze iteration for problems
     analyze_iteration "$LOG_FILE" "$log_start_line" "$head_before"
@@ -1144,7 +1149,7 @@ print_summary() {
   completed=$(count_completed)
   remaining=$(count_remaining)
   total=$(count_total)
-  log "Tasks:      $completed/$total completed, $remaining remaining"
+  log_task "Tasks: $completed/$total completed, $remaining remaining"
 
   log "Log:        $LOG_FILE"
   log "Plan:       $PLAN_FILE"
@@ -1208,6 +1213,7 @@ main() {
   log_phase "Ralph Loop v${VERSION}"
   log "Project: $PROJECT_DIR"
   [[ "$WORK_DIR" != "$PROJECT_DIR" ]] && log "Worktree: $WORK_DIR"
+  log "Task backend: $(task_label)"
   log "Max iterations: $MAX_ITERATIONS"
 
   write_state "started_at" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
