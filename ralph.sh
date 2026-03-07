@@ -1001,7 +1001,11 @@ run_execution() {
     # Check remaining tasks
     if ! has_remaining_tasks; then
       if (( run_iteration == 0 )) && (( $(count_total) == 0 )); then
-        log_task_error "Plan has no tasks in checkbox format"
+        if [[ "$TASK_BACKEND" == "bd" ]]; then
+          log_task_error "No tasks found in bd"
+        else
+          log_task_error "Plan has no tasks in checkbox format"
+        fi
         write_state "status" "error"
         break
       fi
@@ -1208,7 +1212,16 @@ main() {
   fi
 
   setup_worktree
+
+  if [[ "$RESUME" == true ]]; then
+    stored_backend=$(read_state "task_backend")
+    if [[ "$stored_backend" == "bd" || "$stored_backend" == "checklist" ]]; then
+      TASK_BACKEND="$stored_backend"
+    fi
+  fi
+
   init_task_backend
+  write_state "task_backend" "$TASK_BACKEND"
 
   log_phase "Ralph Loop v${VERSION}"
   log "Project: $PROJECT_DIR"

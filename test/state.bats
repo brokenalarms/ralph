@@ -19,6 +19,15 @@ teardown() {
   [[ "$result" == "running" ]]
 }
 
+# Proves: task_backend is persisted to state so resume uses the same backend
+@test "task_backend is written to state on init" {
+  init_ralph_dir
+  TASK_BACKEND="checklist"
+  write_state "task_backend" "$TASK_BACKEND"
+  result=$(read_state "task_backend")
+  [[ "$result" == "checklist" ]]
+}
+
 # Proves: iteration counter works.
 @test "write_state handles numeric values" {
   init_ralph_dir

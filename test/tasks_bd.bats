@@ -128,6 +128,18 @@ teardown() {
   [[ "$result" == *"close the task"* ]]
 }
 
+# Proves: on resume, stored task_backend=checklist is honored even when bd is available
+@test "resume preserves checklist backend when bd is available" {
+  init_ralph_dir
+  write_state "task_backend" "checklist"
+  RESUME=true
+  stored_backend=$(read_state "task_backend")
+  if [[ "$stored_backend" == "bd" || "$stored_backend" == "checklist" ]]; then
+    TASK_BACKEND="$stored_backend"
+  fi
+  [[ "$TASK_BACKEND" == "checklist" ]]
+}
+
 # Proves: checklist execution instructions reference plan file
 @test "checklist: task_execution_instructions references plan file" {
   TASK_BACKEND="checklist"

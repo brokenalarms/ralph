@@ -8,11 +8,11 @@ init_task_backend() {
     return
   fi
 
-  if [[ ! -d "$WORK_DIR/.beads" ]]; then
-    run_bd init
+  if [[ ! -d "$PROJECT_DIR/.beads" ]]; then
+    (cd "$PROJECT_DIR" && bd init)
   fi
 
-  local gitignore="$WORK_DIR/.gitignore"
+  local gitignore="$PROJECT_DIR/.gitignore"
   if [[ ! -f "$gitignore" ]] || ! grep -qx '.beads' "$gitignore"; then
     echo '.beads' >> "$gitignore"
   fi
