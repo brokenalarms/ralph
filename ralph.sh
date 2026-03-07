@@ -727,6 +727,12 @@ run_planning() {
   if [[ -f "$PLAN_FILE" ]]; then
     local total
     total=$(count_total)
+    if (( total == 0 )); then
+      log_error "Plan file exists but contains no tasks in checkbox format (- [ ] ...)"
+      log_error "Re-run to try again, or provide a plan with --plan-file"
+      rm "$PLAN_FILE"
+      exit 1
+    fi
     write_state "status" "planned"
     log_success "Plan created with $total tasks"
     return 0
@@ -756,6 +762,12 @@ run_planning() {
 
   local total
   total=$(count_total)
+  if (( total == 0 )); then
+    log_error "Plan file exists but contains no tasks in checkbox format (- [ ] ...)"
+    log_error "Re-run to try again, or provide a plan with --plan-file"
+    rm "$PLAN_FILE"
+    exit 1
+  fi
   write_state "status" "planned"
   log_success "Plan created with $total tasks"
 }
@@ -928,6 +940,11 @@ run_execution() {
 
     # Check remaining tasks
     if ! has_remaining_tasks; then
+      if (( run_iteration == 0 )) && (( $(count_total) == 0 )); then
+        log_error "Plan has no tasks in checkbox format"
+        write_state "status" "error"
+        break
+      fi
       log_success "All tasks complete!"
       write_state "status" "completed"
       break
