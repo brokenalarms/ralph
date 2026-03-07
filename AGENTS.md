@@ -1,6 +1,7 @@
 # Git usage
 - ralph requires a git repository. Running in a non-git directory exits with an error. Use `--no-worktree` to skip git isolation, but a git repo is still required.
 - never push to main - atomic commits comprising a feature should be pushed as a PR from the branch you're working on, this should be part of considering a task finished.
+- The final stage of a piece of work is always commiting and pushing - I shouldn't have to ask.
 
 # Testing
 - Tests should be put in place to lock in new features and prevent regressions.
