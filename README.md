@@ -83,7 +83,7 @@ ralph.sh --tmux
 | `--plan-file <path>` | External plan file (skips planning phase) | — |
 | `--resume` | Resume from previous state | — |
 | `--plan` | Run planning phase only | — |
-| `--no-plan` | Skip planning, go straight to execution | — |
+| `--skip-planning` | Skip interactive planning, go straight to autonomous execution | — |
 | `-q, --quiet` | Suppress streaming output (log only) | — |
 | `--no-worktree` | Run directly in project dir (no git isolation) | — |
 | `--calls-per-hour <N>` | Rate limit Claude calls per hour | 80 |

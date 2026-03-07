@@ -17,6 +17,7 @@ MAX_ITERATIONS=20
 PROMPT_OVERRIDE=""
 RESUME=false
 PLAN_ONLY=false
+SKIP_PLANNING=false
 SIGNAL_TOKEN="###RALPH_TASK_COMPLETE###"
 CURRENT_TASK_TOKEN="###RALPH_CURRENT_TASK###"
 WATCHER_INTERVAL=2  # seconds between signal checks
@@ -73,6 +74,7 @@ ${BOLD}OPTIONS:${NC}
   -p, --prompt <text>    Prompt override (otherwise Claude reads repo context)
   --plan-file <path>     Pre-made plan in Ralph format (markdown checkboxes). Skips planning phase.
   --plan                 Run planning phase only
+  --skip-planning        Skip interactive planning, go straight to autonomous execution
   -q, --quiet            Suppress Claude output streaming (log only)
   --no-worktree          Run directly in project dir (no git worktree isolation)
   --calls-per-hour <N>   Max Claude calls per hour (default: 80)
@@ -92,7 +94,7 @@ ${BOLD}HOW IT WORKS:${NC}
 
 ${BOLD}SUBCOMMANDS:${NC}
   ralph stop [directory]       Halt after the current iteration
-  ralph feedback <message>     Queue feedback for the next iteration
+  ralph feedback [message]     Show queued feedback, or queue a new message
 EOF
 }
 
@@ -106,12 +108,12 @@ if [[ "${1:-}" == "stop" ]]; then
   fi
   ralph_dir="$local_dir/.ralph"
   if [[ ! -d "$ralph_dir" ]]; then
-    echo "No .ralph directory found. Is ralph running here?"
+    echo -e "${RED}[ralph]${NC} No .ralph directory found. Is ralph running here?"
     exit 1
   fi
   touch "$ralph_dir/stop"
-  echo "Stop requested — ralph will halt after the current iteration."
-  echo "Ctrl+C to kill immediately if you don't need iteration results."
+  echo -e "${YELLOW}[ralph]${NC} Stop requested — ralph will halt after the current iteration."
+  echo -e "${YELLOW}[ralph]${NC} Ctrl+C to kill immediately if you don't need iteration results."
   exit 0
 fi
 
@@ -124,11 +126,21 @@ if [[ "${1:-}" == "feedback" ]]; then
   fi
   ralph_dir="$local_dir/.ralph"
   if [[ ! -d "$ralph_dir" ]]; then
-    echo "No .ralph directory found. Is ralph running here?"
+    echo -e "${RED}[ralph]${NC} No .ralph directory found. Is ralph running here?"
     exit 1
   fi
+  if [[ -z "$*" ]]; then
+    local feedback_file="$ralph_dir/feedback"
+    if [[ -f "$feedback_file" && -s "$feedback_file" ]]; then
+      echo -e "${CYAN}[ralph]${NC} Queued feedback:"
+      cat "$feedback_file"
+    else
+      echo -e "${CYAN}[ralph]${NC} No feedback queued."
+    fi
+    exit 0
+  fi
   echo "$*" >> "$ralph_dir/feedback"
-  echo "Feedback queued for next iteration."
+  echo -e "${GREEN}[ralph]${NC} Feedback queued for next iteration: $*"
   exit 0
 fi
 
@@ -143,6 +155,7 @@ while [[ $# -gt 0 ]]; do
     -p|--prompt)    PROMPT_OVERRIDE="$2"; shift 2 ;;
     --plan-file)    PLAN_FILE_ARG="$2"; shift 2 ;;
     --plan)         PLAN_ONLY=true; shift ;;
+    --skip-planning) SKIP_PLANNING=true; shift ;;
     -q|--quiet)     QUIET=true; shift ;;
     --no-worktree)  USE_WORKTREE=false; shift ;;
     --calls-per-hour) CALLS_PER_HOUR="$2"; shift 2 ;;
@@ -364,7 +377,10 @@ tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   elif .type == "result" then
     "\n[done]\n"
   else empty end
-' 2>/dev/null
+' 2>/dev/null | sed -E \
+  -e $'s/\\[done\\]/\033[0;32m[done]\033[0m/g' \
+  -e $'s/\\[claude\\]/\033[0;36m[claude]\033[0m/g' \
+  -e $'s/\\[([A-Z][A-Za-z]*)\\]/\033[0;34m[\\1]\033[0m/g'
 STREAM
   chmod +x "$RALPH_DIR/.stream-filter.sh"
 }
@@ -720,7 +736,7 @@ run_planning() {
   fi
 
   # Interactive planning: launch Claude for the user to define spec + plan
-  if [[ ! -f "$PLAN_FILE" ]]; then
+  if [[ ! -f "$PLAN_FILE" && "$SKIP_PLANNING" != true ]]; then
     log "Starting interactive planning session..."
     log "Chat with Claude to define your spec and plan. Exit when done."
 
