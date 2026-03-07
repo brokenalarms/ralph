@@ -53,7 +53,6 @@ log_warn()    { echo -e "${YELLOW}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
 log_error()   { echo -e "${RED}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
 log_phase()   { echo -e "${BOLD}${BLUE}[ralph]${NC} ${BOLD}$*${NC}" | tee -a "$LOG_FILE"; }
 
-task_label() { if [[ "$TASK_BACKEND" == "bd" ]]; then echo "beads"; else echo "checklist"; fi; }
 log_task()         { echo -e "${CYAN}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
 log_task_success() { echo -e "${GREEN}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
 log_task_error()   { echo -e "${RED}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
@@ -730,13 +729,13 @@ run_planning() {
     return 0
   fi
 
-  if [[ -f "$PLAN_FILE" ]] && [[ "$RESUME" == true ]]; then
-    log "Existing plan found, resuming"
+  if [[ "$RESUME" == true ]] && has_tasks; then
+    log_task "Existing tasks found, resuming"
     return 0
   fi
 
   # Interactive planning: launch Claude for the user to define spec + plan
-  if [[ ! -f "$PLAN_FILE" && "$SKIP_PLANNING" != true ]]; then
+  if needs_planning && [[ "$SKIP_PLANNING" != true ]]; then
     log "Starting interactive planning session..."
     log "Chat with Claude to define your spec and plan. Exit when done."
 
@@ -756,21 +755,9 @@ run_planning() {
   fi
 
   # If interactive session created a plan, use it
-  local total
-  total=$(count_total)
-  if [[ "$TASK_BACKEND" == "bd" && "$total" -gt 0 ]]; then
+  if planning_succeeded; then
     write_state "status" "planned"
-    log_task_success "Plan created with $total tasks"
-    return 0
-  elif [[ -f "$PLAN_FILE" ]]; then
-    if (( total == 0 )); then
-      log_task_error "Plan file exists but contains no tasks in checkbox format (- [ ] ...)"
-      log_error "Re-run to try again, or provide a plan with --plan-file"
-      rm "$PLAN_FILE"
-      exit 1
-    fi
-    write_state "status" "planned"
-    log_task_success "Plan created with $total tasks"
+    log_task_success "Plan created with $(count_total) tasks"
     return 0
   fi
 
@@ -791,27 +778,12 @@ run_planning() {
 
   run_claude "$planning_prompt"
 
-  total=$(count_total)
-  if [[ "$TASK_BACKEND" == "bd" ]]; then
-    if (( total == 0 )); then
-      log_task_error "Planning failed - no tasks created"
-      exit 1
-    fi
+  if planning_succeeded; then
     write_state "status" "planned"
-    log_task_success "Plan created with $total tasks"
+    log_task_success "Plan created with $(count_total) tasks"
   else
-    if [[ ! -f "$PLAN_FILE" ]]; then
-      log_task_error "Planning failed - no plan.md created"
-      exit 1
-    fi
-    if (( total == 0 )); then
-      log_task_error "Plan file exists but contains no tasks in checkbox format (- [ ] ...)"
-      log_error "Re-run to try again, or provide a plan with --plan-file"
-      rm "$PLAN_FILE"
-      exit 1
-    fi
-    write_state "status" "planned"
-    log_task_success "Plan created with $total tasks"
+    log_task_error "Planning failed — no tasks created"
+    exit 1
   fi
 }
 
@@ -1001,11 +973,7 @@ run_execution() {
     # Check remaining tasks
     if ! has_remaining_tasks; then
       if (( run_iteration == 0 )) && (( $(count_total) == 0 )); then
-        if [[ "$TASK_BACKEND" == "bd" ]]; then
-          log_task_error "No tasks found in bd"
-        else
-          log_task_error "Plan has no tasks in checkbox format"
-        fi
+        log_task_error "No tasks found"
         write_state "status" "error"
         break
       fi
@@ -1156,7 +1124,9 @@ print_summary() {
   log_task "Tasks: $completed/$total completed, $remaining remaining"
 
   log "Log:        $LOG_FILE"
-  log "Plan:       $PLAN_FILE"
+  if [[ "$TASK_BACKEND" == "checklist" ]]; then
+    log "Plan:       $PLAN_FILE"
+  fi
 
   if [[ -n "$WORKTREE_BRANCH" && -n "$PROJECT_NAME" ]]; then
     log "Worktree:   $WORK_DIR"
@@ -1222,6 +1192,7 @@ main() {
     fi
   fi
 
+  _validate_backend
   init_task_backend
   write_state "task_backend" "$TASK_BACKEND"
 
