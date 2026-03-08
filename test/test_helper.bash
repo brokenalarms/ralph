@@ -46,6 +46,7 @@ setup_test_repo() {
   RESUME=false
   USE_WORKTREE=true
   CALLS_PER_HOUR=80
+  REFACTOR_EVERY=5
   QUIET=false
 
   PROMPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/prompts"

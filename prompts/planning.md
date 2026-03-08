@@ -7,6 +7,17 @@ If the project's AGENTS.md or CLAUDE.md defines task priority or selection order
 
 {{PLANNING_CONTEXT}}
 
+## Debt assessment
+Before writing tasks, scan the areas you plan to touch for tech debt:
+- Duplicated patterns or copy-paste code
+- Functions over ~50 lines or deeply nested logic (3+ levels)
+- Unclear or inconsistent naming
+- Dead code, commented-out blocks, unused imports
+- Tight coupling between modules (functions reaching into internals of other modules)
+- Boolean flag parameters that split function behavior
+
+If you find actionable debt in code the planned work will touch, add refactor tasks to the plan. Interleave them with feature tasks — don't batch all refactors at the end. Refactor tasks should use a `refactor:` prefix in their description.
+
 ## Specs
 If `specs/` contains spec files, derive the plan from them — break each spec into tasks.
 Before creating tasks for a spec, check whether the described feature already exists in the codebase. Read the spec's acceptance criteria and verify against actual code. Skip specs whose work is already implemented.

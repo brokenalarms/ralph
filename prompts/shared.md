@@ -23,6 +23,14 @@
 - Grouped commits for a task should end in a pull request, if the environment supports it (gh is available). Never push directly to main.
 - If you end up pushing a commit to a pull request after creating the request, the pull request title and description need to be regenerated to capture all commits.
 
+### Boy Scout Rule
+Before committing, review the files you touched in this task. Clean up:
+- Duplication you introduced or found in modified code
+- Unclear names in code you modified
+- Dead code: unused functions, unreachable branches, commented-out code
+- Unnecessary complexity: extract a function, flatten nesting, remove boolean flag params
+Keep cleanup scoped to files you changed. Don't refactor code you didn't touch.
+
 ### Housekeeping
 - Specs are design documents describing features for a contextless agent — not task lists or fix lists. Never create spec files containing lists of small fixes; those belong in the plan.
 - When a spec is fully complete, move it from `specs/` to `specs/completed/`.
