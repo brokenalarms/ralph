@@ -6,43 +6,36 @@ AI-assisted development accelerates feature delivery but compounds tech debt inv
 Ralph orchestrates autonomous iterations that ship features fast. But it has no mechanism to make Claude *feel* the weight of accumulated debt or to periodically pause feature work and pay it down. The result: a ratchet that only turns one direction.
 
 ## Philosophy
-Drawn from the Boy Scout Rule ("leave it cleaner than you found it") and the principle that refactoring should be a continuous rhythm, not a crisis response:
+Inspired by [The Holy Order of Clean Code](https://church.btas.dev/) (btachinardi/church) — a Claude Code plugin that deploys specialized purist agents to enforce code quality — and the Boy Scout Rule ("leave it cleaner than you found it").
 
-1. **Debt is felt, not tracked** — Rather than maintaining a separate debt ledger, the planning prompt forces Claude to *look* at the codebase critically before planning work. If debt is visible at planning time, it gets scheduled.
-2. **Refactor tasks are first-class** — They appear in the plan alongside feature tasks, with the same atomic-commit and test requirements. No separate "cleanup sprint."
-3. **Periodic cadence** — Every Nth iteration, the execution prompt reminds Claude to inspect the code it just touched and clean up collateral mess. Small, frequent refactors prevent debt from compounding.
-4. **Scope discipline** — Refactor tasks are scoped to code that was recently changed or that the current task touches. No speculative whole-codebase rewrites.
+The key insight from the Church's size-purist: files are organisms that want to grow. They feed on lazy additions. But the refactoring response must be **proportionate and human-centered**:
+
+1. **Refactoring serves human readability, not arbitrary rules** — The goal is code that humans can read and navigate. A 500-line file with one cohesive responsibility is fine. A 300-line file with three distinct responsibilities needs splitting.
+2. **Don't refactor for the sake of activity** — If a refactor iteration finds nothing worth cleaning, it should signal completion without making changes. Churn pollutes git history and wastes iterations.
+3. **Balance extraction with indirection cost** — One-line utility functions used once create navigation overhead without value. Extract shared code when it represents a genuine single source of truth (e.g., a format string used everywhere). Three similar lines are better than a premature abstraction.
+4. **Dead code is always worth removing** — Unused functions, commented-out blocks, unreachable branches. Git remembers. Delete them. (Church's dead-code-purist: "Commented code is not 'maybe useful later' — it's clutter.")
+5. **500 lines is the split signal, not a hard cap** — Per the Church's size-purist thresholds, 500+ lines is the "critical" mark for any file type. When a file crosses this, look for distinct responsibilities. If they exist, split. If the file is cohesive, leave it.
+6. **Periodic cadence** — Every Nth iteration, Ralph injects a refactor-only iteration. Small, frequent cleanups prevent debt from compounding to crisis levels.
+7. **Scope discipline** — Refactor tasks are scoped to recently changed code. No speculative whole-codebase rewrites.
 
 ## Design
 
 ### 1. Planning-phase debt scan
-During planning (`planning.md`), after reading the repo and before writing tasks, Claude performs a structured debt assessment of the areas it plans to touch:
+During planning (`planning.md`), after reading the repo and before writing tasks, Claude scans the areas it plans to touch for readability issues: bloated files (500+ lines with distinct responsibilities), dead code, unclear naming, deep nesting (4+ levels), and genuine duplication. Refactor tasks get interleaved with feature tasks — but only when the cleanup genuinely improves human readability, not because a checklist said to.
 
-- **Duplication**: repeated patterns, copy-paste code across files
-- **Naming**: unclear variable/function names, inconsistent conventions
-- **Complexity**: functions longer than ~50 lines, deep nesting, boolean flag params
-- **Dead code**: unused functions, unreachable branches, commented-out code
-- **Coupling**: modules that reach too far into each other's internals
-
-If the assessment surfaces actionable items, they become plan tasks — interleaved with feature work so debt gets paid incrementally, not deferred to "later."
-
-### 2. Execution-phase refactor check
-A new prompt section in the execution template (`shared.md`) instructs Claude to apply the Boy Scout Rule after completing its primary task:
-
-> Before committing, review the files you touched. If you see duplication, unclear names, dead code, or unnecessary complexity that you introduced or that was already there, clean it up as part of this commit. Keep refactoring scoped to the files you modified — don't go on a codebase-wide crusade.
-
-This is lightweight — no extra iteration, no separate task. It piggybacks on work already in progress.
+### 2. Execution-phase Boy Scout Rule
+A section in `shared.md` reminds Claude to glance at files it touched before committing. If dead code, unclear names, or growing file sizes are present, clean them up. But if the code reads fine, leave it alone. Don't extract helpers used once. Don't create abstractions for one-time operations.
 
 ### 3. Periodic dedicated refactor iteration
-Every N iterations (configurable, default 5), ralph injects a refactor-only task into the execution loop. This task uses a dedicated prompt (`prompts/refactor.md`) that instructs Claude to:
+Every N iterations (configurable, default 5), ralph injects a refactor-only task into the execution loop. This task uses `prompts/refactor.md` which instructs Claude to:
 
-1. Run static analysis if available (shellcheck, eslint, etc.)
-2. Review recent git history for patterns of growing complexity
-3. Identify the highest-leverage cleanup in the files changed over the last N iterations
-4. Execute the refactor with full test coverage
-5. Commit with a clear "refactor:" prefix
+1. Read project conventions (AGENTS.md/CLAUDE.md)
+2. Review recently changed files for debt signals
+3. **If nothing meaningful stands out, signal completion without changes**
+4. If genuine debt exists, pick the single highest-impact cleanup
+5. Execute with tests, commit with `refactor:` prefix
 
-The refactor iteration is injected *between* regular tasks — it doesn't consume a task slot from the plan.
+The refactor iteration is injected *between* regular tasks — it doesn't consume a plan task slot.
 
 ### 4. Configuration
 New CLI flag:
@@ -54,42 +47,15 @@ State tracking:
 ## Implementation
 
 ### File: `prompts/refactor.md`
-Dedicated prompt for refactor iterations. Template variables: `{{WORK_DIR}}`, `{{RECENT_FILES}}` (files changed in last N iterations, populated by ralph.sh).
+Dedicated prompt for refactor iterations. Template variables: `{{WORK_DIR}}`, `{{RECENT_FILES}}`.
 
-Content instructs Claude to:
-- Read AGENTS.md/CLAUDE.md for project conventions
-- Review `{{RECENT_FILES}}` for debt signals (duplication, complexity, naming, dead code)
-- Pick the single highest-impact refactor
-- Execute it with tests
-- Commit with `refactor:` prefix
+Critically, the prompt explicitly states: "If nothing meaningful stands out, signal completion without making changes. Refactoring for the sake of activity is worse than no refactoring."
 
 ### File: `prompts/shared.md`
-Add a "Boy Scout Rule" section to the existing standards:
-
-```markdown
-### Boy Scout Rule
-Before committing, review the files you touched in this task. Clean up:
-- Duplication you introduced or found
-- Unclear names in code you modified
-- Dead code (unused functions, unreachable branches, commented-out code)
-- Unnecessary complexity (extract a function, flatten nesting)
-Keep cleanup scoped to files you changed. Don't refactor code you didn't touch.
-```
+Boy Scout Rule section — a lightweight reminder, not a mandate. Emphasizes dead code removal and 500-line file awareness. Explicitly discourages extracting one-line helpers and premature abstractions.
 
 ### File: `prompts/planning.md`
-Add a debt assessment step between reading the repo and writing tasks:
-
-```markdown
-## Debt assessment
-Before writing tasks, scan the areas you plan to touch for tech debt:
-- Duplicated patterns or copy-paste code
-- Functions over ~50 lines or deeply nested logic
-- Unclear or inconsistent naming
-- Dead code, commented-out blocks, unused imports
-- Tight coupling between modules
-
-If you find actionable debt in code the planned work will touch, add refactor tasks to the plan. Interleave them with feature tasks — don't batch all refactors at the end.
-```
+Debt assessment step between reading the repo and writing tasks. Focuses on human readability signals. Explicitly states: "don't add refactor tasks just because you can."
 
 ### File: `ralph.sh`
 In `run_execution()`, after the iteration counter increment:
@@ -106,11 +72,9 @@ if (( REFACTOR_EVERY > 0 && since_refactor >= REFACTOR_EVERY )); then
   recent_files=$(git -C "$WORK_DIR" diff --name-only "HEAD~${REFACTOR_EVERY}" HEAD 2>/dev/null || echo "")
 
   local refactor_prompt
-  refactor_prompt=$(<"$PROMPTS_DIR/refactor.md")
-  refactor_prompt="${refactor_prompt//\{\{WORK_DIR\}\}/$WORK_DIR}"
-  refactor_prompt="${refactor_prompt//\{\{RECENT_FILES\}\}/$recent_files}"
+  refactor_prompt=$(build_refactor_prompt "$recent_files")
 
-  run_claude "$refactor_prompt"
+  run_claude "$refactor_prompt" "" "raw"
   write_state "iterations_since_refactor" "0"
   continue  # don't count this as a task iteration
 fi
@@ -118,12 +82,13 @@ fi
 write_state "iterations_since_refactor" "$((since_refactor + 1))"
 ```
 
-Add CLI flag parsing for `--refactor-every`.
+Add CLI flag parsing for `--refactor-every`. Add `build_refactor_prompt()` function. Modify `run_claude()` to accept raw pre-built prompts.
 
 ## Acceptance criteria
-- Planning phase includes debt assessment — plans contain interleaved refactor tasks when debt is found
-- Shared execution prompt includes Boy Scout Rule — files touched during a task get cleaned up before commit
+- Planning phase includes debt assessment — plans contain interleaved refactor tasks when genuinely valuable debt is found
+- Shared execution prompt includes Boy Scout Rule as a reminder, not a mandate
 - Every N iterations (default 5), a dedicated refactor iteration runs targeting recently-changed files
+- Refactor iterations that find no meaningful debt complete without changes (no forced busywork)
 - `--refactor-every 0` disables periodic refactor iterations
 - `--refactor-every N` configures the cadence
 - Refactor iterations don't consume plan task slots

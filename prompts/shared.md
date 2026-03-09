@@ -24,12 +24,11 @@
 - If you end up pushing a commit to a pull request after creating the request, the pull request title and description need to be regenerated to capture all commits.
 
 ### Boy Scout Rule
-Before committing, review the files you touched in this task. Clean up:
-- Duplication you introduced or found in modified code
-- Unclear names in code you modified
-- Dead code: unused functions, unreachable branches, commented-out code
-- Unnecessary complexity: extract a function, flatten nesting, remove boolean flag params
-Keep cleanup scoped to files you changed. Don't refactor code you didn't touch.
+Before committing, glance at the files you touched. If you see something genuinely worth cleaning up, do it:
+- Dead code: unused functions, unreachable branches, commented-out code — delete it, git remembers
+- Unclear names in code you modified — names should reveal intent
+- Files growing past ~500 lines — consider whether they have distinct responsibilities worth splitting
+But don't clean up for the sake of it. Don't extract one-line helpers used once. Don't create abstractions for one-time operations. Three similar lines are better than a premature abstraction. If the code reads fine, leave it alone.
 
 ### Housekeeping
 - Specs are design documents describing features for a contextless agent — not task lists or fix lists. Never create spec files containing lists of small fixes; those belong in the plan.

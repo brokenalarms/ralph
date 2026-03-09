@@ -64,22 +64,23 @@ test/auth.bats")
   [[ "$REFACTOR_EVERY" == "5" ]]
 }
 
-# Proves: planning prompt includes debt assessment instructions so Claude scans for tech debt.
+# Proves: planning prompt includes debt assessment with balanced guidance (not just a checklist).
 @test "planning prompt includes debt assessment section" {
   local planning_prompt
   planning_prompt=$(<"$PROMPTS_DIR/planning.md")
   [[ "$planning_prompt" == *"Debt assessment"* ]]
-  [[ "$planning_prompt" == *"Duplicated patterns"* ]]
-  [[ "$planning_prompt" == *"refactor tasks"* ]]
+  [[ "$planning_prompt" == *"Dead code"* ]]
+  [[ "$planning_prompt" == *"500 lines"* ]]
+  [[ "$planning_prompt" == *"don't add refactor tasks just because you can"* ]]
 }
 
-# Proves: shared prompt includes Boy Scout Rule so every execution iteration cleans up touched files.
+# Proves: shared prompt includes Boy Scout Rule as a reminder, not a mandate.
 @test "shared prompt includes Boy Scout Rule" {
   local shared
   shared=$(<"$PROMPTS_DIR/shared.md")
   [[ "$shared" == *"Boy Scout Rule"* ]]
   [[ "$shared" == *"Dead code"* ]]
-  [[ "$shared" == *"scoped to files you changed"* ]]
+  [[ "$shared" == *"leave it alone"* ]]
 }
 
 # Proves: refactor prompt enforces behavior preservation — refactoring must not change functionality.
@@ -94,4 +95,25 @@ test/auth.bats")
   local prompt
   prompt=$(build_refactor_prompt "file.sh")
   [[ "$prompt" == *'refactor:'* ]]
+}
+
+# Proves: refactor prompt allows skipping when no meaningful debt exists (no forced busywork).
+@test "refactor prompt allows no-op when nothing meaningful found" {
+  local prompt
+  prompt=$(build_refactor_prompt "file.sh")
+  [[ "$prompt" == *"signal completion without making changes"* ]]
+}
+
+# Proves: refactor prompt warns against premature abstractions and one-line utility extraction.
+@test "refactor prompt discourages premature abstractions" {
+  local prompt
+  prompt=$(build_refactor_prompt "file.sh")
+  [[ "$prompt" == *"utility functions"* || "$prompt" == *"one-time operations"* ]]
+}
+
+# Proves: refactor prompt uses 500 lines as the split signal per Church of Clean Code thresholds.
+@test "refactor prompt references 500 line threshold" {
+  local prompt
+  prompt=$(build_refactor_prompt "file.sh")
+  [[ "$prompt" == *"500"* ]]
 }
