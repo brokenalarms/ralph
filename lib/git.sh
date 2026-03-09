@@ -140,7 +140,14 @@ rebase_onto_default_branch() {
     branch="${branch#"${branch%%[![:space:]]*}"}"
     branch="${branch#\* }"
     [[ "$branch" == */next ]] && continue
-    if git -C "$WORK_DIR" diff "origin/$default_branch" "$branch" --quiet 2>/dev/null; then
+    local merge_base
+    merge_base=$(git -C "$WORK_DIR" merge-base "origin/$default_branch" "$branch" 2>/dev/null) || continue
+    local branch_files
+    branch_files=$(git -C "$WORK_DIR" diff --name-only "$merge_base" "$branch" 2>/dev/null)
+    if [[ -z "$branch_files" ]]; then
+      continue
+    fi
+    if git -C "$WORK_DIR" diff --quiet "$branch" "origin/$default_branch" -- $branch_files 2>/dev/null; then
       last_merged="$branch"
     fi
   done < <(git -C "$PROJECT_DIR" branch --list "ralph/$PROJECT_NAME/*" --sort=refname 2>/dev/null)

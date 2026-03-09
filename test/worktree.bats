@@ -192,6 +192,48 @@ teardown() {
   [[ -f "$WORK_DIR/second.txt" ]]
 }
 
+# Proves: squash-merge detection works even when main has unrelated commits.
+@test "rebase_onto_default_branch detects squash-merge with extra main commits" {
+  echo "original" > "$PROJECT_DIR/shared.txt"
+  git -C "$PROJECT_DIR" add shared.txt
+  git -C "$PROJECT_DIR" commit -m "add shared" -q
+
+  setup_rebase_env
+
+  rename_branch_for_task "first task"
+  echo "step one" > "$WORK_DIR/shared.txt"
+  git -C "$WORK_DIR" add shared.txt
+  git -C "$WORK_DIR" commit -m "first task step one" -q
+  echo "final" > "$WORK_DIR/shared.txt"
+  echo "first" > "$WORK_DIR/first.txt"
+  git -C "$WORK_DIR" add shared.txt first.txt
+  git -C "$WORK_DIR" commit -m "first task final" -q
+
+  rotate_branch
+  rename_branch_for_task "second task"
+  echo "second" > "$WORK_DIR/second.txt"
+  git -C "$WORK_DIR" add second.txt
+  git -C "$WORK_DIR" commit -m "second task" -q
+
+  # Simulate squash-merge of branch 01 into main on origin
+  echo "final" > "$PROJECT_DIR/shared.txt"
+  echo "first" > "$PROJECT_DIR/first.txt"
+  git -C "$PROJECT_DIR" add shared.txt first.txt
+  git -C "$PROJECT_DIR" commit -m "squash: first task" -q
+
+  # Simulate another PR merged to main (unrelated file)
+  echo "other pr work" > "$PROJECT_DIR/other.txt"
+  git -C "$PROJECT_DIR" add other.txt
+  git -C "$PROJECT_DIR" commit -m "other: unrelated PR" -q
+  push_to_origin
+
+  run rebase_onto_default_branch
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"squash-merged"* ]]
+  [[ -f "$WORK_DIR/second.txt" ]]
+  [[ -f "$WORK_DIR/other.txt" ]]
+}
+
 # Proves: real conflicts halt ralph instead of continuing on stale base.
 @test "rebase_onto_default_branch halts on real conflicts" {
   setup_rebase_env
