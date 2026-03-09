@@ -155,13 +155,23 @@ teardown() {
 }
 
 # Proves: squash-merged branches are detected and skipped during rebase.
+# Uses intermediate commits so the 3-way merge produces a real conflict
+# (newer git auto-resolves single add/add with identical content).
 @test "rebase_onto_default_branch skips squash-merged branches" {
+  echo "original" > "$PROJECT_DIR/shared.txt"
+  git -C "$PROJECT_DIR" add shared.txt
+  git -C "$PROJECT_DIR" commit -m "add shared" -q
+
   setup_rebase_env
 
   rename_branch_for_task "first task"
+  echo "step one" > "$WORK_DIR/shared.txt"
+  git -C "$WORK_DIR" add shared.txt
+  git -C "$WORK_DIR" commit -m "first task step one" -q
+  echo "final" > "$WORK_DIR/shared.txt"
   echo "first" > "$WORK_DIR/first.txt"
-  git -C "$WORK_DIR" add first.txt
-  git -C "$WORK_DIR" commit -m "first task" -q
+  git -C "$WORK_DIR" add shared.txt first.txt
+  git -C "$WORK_DIR" commit -m "first task final" -q
 
   rotate_branch
   rename_branch_for_task "second task"
@@ -170,8 +180,9 @@ teardown() {
   git -C "$WORK_DIR" commit -m "second task" -q
 
   # Simulate squash-merge of branch 01 into main on origin
+  echo "final" > "$PROJECT_DIR/shared.txt"
   echo "first" > "$PROJECT_DIR/first.txt"
-  git -C "$PROJECT_DIR" add first.txt
+  git -C "$PROJECT_DIR" add shared.txt first.txt
   git -C "$PROJECT_DIR" commit -m "squash: first task" -q
   push_to_origin
 
