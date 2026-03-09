@@ -647,9 +647,13 @@ run_planning() {
     return 0
   fi
 
-  if [[ "$RESUME" == true ]] && has_tasks; then
-    log_task "Existing tasks found, resuming"
-    return 0
+  if [[ "$RESUME" == true ]]; then
+    local status
+    status=$(read_state "status")
+    if [[ "$status" != "initialized" ]]; then
+      log_task "Resuming execution (status: $status)"
+      return 0
+    fi
   fi
 
   # Interactive planning: launch Claude for the user to define spec + plan
