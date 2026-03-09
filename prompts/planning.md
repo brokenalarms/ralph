@@ -7,6 +7,16 @@ If the project's AGENTS.md or CLAUDE.md defines task priority or selection order
 
 {{PLANNING_CONTEXT}}
 
+## Debt assessment
+Before writing tasks, scan the areas you plan to touch for readability issues:
+- **Bloated files**: Files over ~500 lines with distinct responsibilities that should be split. But don't split files that are cohesive just because they're long.
+- **Dead code**: Unused functions, commented-out blocks, unused imports. These are never worth keeping — git remembers.
+- **Unclear naming**: Variable/function names that don't reveal intent.
+- **Deep nesting**: 4+ levels of indentation — use early returns, guard clauses, extract functions.
+- **Genuine duplication**: Copy-paste code that represents a single source of truth being maintained in multiple places. But three similar lines are better than a premature abstraction. Don't extract one-line utilities used once or twice.
+
+If you find high-value debt in code the planned work will touch, add refactor tasks to the plan. Interleave them with feature tasks — don't batch all refactors at the end. Refactor tasks should use a `refactor:` prefix. But don't add refactor tasks just because you can — only when the cleanup genuinely improves human readability.
+
 ## Specs
 If `specs/` contains spec files, derive the plan from them — break each spec into tasks.
 Before creating tasks for a spec, check whether the described feature already exists in the codebase. Read the spec's acceptance criteria and verify against actual code. Skip specs whose work is already implemented.

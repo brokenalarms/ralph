@@ -26,6 +26,7 @@ PLAN_FILE_ARG=""
 QUIET=false
 USE_WORKTREE=true
 CALLS_PER_HOUR=80
+REFACTOR_EVERY=5
 USE_TMUX=false
 TMUX_SESSION=""
 _TMUX_OUTER=false
@@ -83,6 +84,7 @@ ${BOLD}OPTIONS:${NC}
   -q, --quiet            Suppress Claude output streaming (log only)
   --no-worktree          Run directly in project dir (no git worktree isolation)
   --calls-per-hour <N>   Max Claude calls per hour (default: 80)
+  --refactor-every <N>   Inject a refactor iteration every N iterations (default: 5, 0 to disable)
   --tmux                 Run in tmux 3-pane layout (status / output / plan)
   -h, --help             Show this help
 
@@ -164,6 +166,7 @@ while [[ $# -gt 0 ]]; do
     -q|--quiet)     QUIET=true; shift ;;
     --no-worktree)  USE_WORKTREE=false; shift ;;
     --calls-per-hour) CALLS_PER_HOUR="$2"; shift 2 ;;
+    --refactor-every) REFACTOR_EVERY="$2"; shift 2 ;;
     --tmux)         USE_TMUX=true; shift ;;
     -h|--help)      usage; exit 0 ;;
     -*)             log_error "Unknown option: $1"; usage; exit 1 ;;
@@ -605,8 +608,13 @@ run_claude() {
   clear_signal
 
   # Build the prompt that includes ralph loop context
+  local raw="${3:-}"
   local full_prompt
-  full_prompt=$(build_prompt "$prompt" "$feedback")
+  if [[ "$raw" == "raw" ]]; then
+    full_prompt="$prompt"
+  else
+    full_prompt=$(build_prompt "$prompt" "$feedback")
+  fi
 
   # Launch claude in background
   # Use stream-json output format so output flows to the log file in real-time
@@ -715,6 +723,25 @@ build_prompt() {
   result="${result//\{\{CURRENT_TASK_TOKEN\}\}/$CURRENT_TASK_TOKEN}"
   result="${result//\{\{ALL_COMPLETE_TOKEN\}\}/$ALL_COMPLETE_TOKEN}"
   result="${result//\{\{TASK_PROMPT\}\}/$task_prompt}"
+
+  printf '%s' "$result"
+}
+
+build_refactor_prompt() {
+  local recent_files="$1"
+
+  local result
+  result=$(<"$PROMPTS_DIR/shared.md")
+  result+=$'\n'
+  result+=$(<"$PROMPTS_DIR/refactor.md")
+  result+=$'\n'
+  result+=$(<"$PROMPTS_DIR/signal.md")
+
+  result="${result//\{\{WORK_DIR\}\}/$WORK_DIR}"
+  result="${result//\{\{RECENT_FILES\}\}/$recent_files}"
+  result="${result//\{\{SIGNAL_FILE\}\}/$SIGNAL_FILE}"
+  result="${result//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
+  result="${result//\{\{ALL_COMPLETE_TOKEN\}\}/$ALL_COMPLETE_TOKEN}"
 
   printf '%s' "$result"
 }
@@ -991,6 +1018,38 @@ run_execution() {
     # Each iteration gets its own branch, stacked on the previous
     if (( run_iteration > 1 )); then
       rotate_branch
+    fi
+
+    # Check if a refactor iteration is due
+    local since_refactor
+    since_refactor=$(read_state "iterations_since_refactor")
+    since_refactor=${since_refactor:-0}
+
+    if (( REFACTOR_EVERY > 0 && since_refactor >= REFACTOR_EVERY )); then
+      log_phase "--- Refactor iteration (every ${REFACTOR_EVERY} iterations) ---"
+      local recent_files
+      recent_files=$(git -C "$WORK_DIR" diff --name-only "HEAD~${REFACTOR_EVERY}" HEAD 2>/dev/null || echo "")
+
+      if [[ -n "$recent_files" ]]; then
+        local refactor_prompt
+        refactor_prompt=$(build_refactor_prompt "$recent_files")
+
+        if ! check_rate_limit; then
+          if ! wait_for_rate_reset; then
+            break
+          fi
+        fi
+
+        run_claude "$refactor_prompt" "" "raw"
+        increment_call_count
+        log_task_success "Refactor iteration complete"
+      else
+        log "No recently changed files — skipping refactor"
+      fi
+      write_state "iterations_since_refactor" "0"
+      # Don't count refactor as a task iteration — continue to the real task
+    else
+      write_state "iterations_since_refactor" "$((since_refactor + 1))"
     fi
 
     local next_task completed remaining total
