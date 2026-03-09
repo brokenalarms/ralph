@@ -451,12 +451,14 @@ setup_tmux() {
 
 # --- State helpers ---
 read_state() {
+  local val
   if command -v jq &>/dev/null; then
-    jq -r ".$1" "$STATE_FILE"
+    val=$(jq -r ".$1 // empty" "$STATE_FILE")
   else
     local key="$1"
-    grep "\"$key\"" "$STATE_FILE" | sed 's/.*: *"\?\([^",}]*\)"\?.*/\1/'
+    val=$(grep "\"$key\"" "$STATE_FILE" | sed 's/.*: *"\?\([^",}]*\)"\?.*/\1/')
   fi
+  printf '%s' "$val"
 }
 
 write_state() {
