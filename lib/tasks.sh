@@ -11,7 +11,7 @@ bd_init() {
   fi
 
   local gitignore="$PROJECT_DIR/.gitignore"
-  if [[ ! -f "$gitignore" ]] || ! grep -qx '.beads' "$gitignore"; then
+  if [[ ! -f "$gitignore" ]] || ! grep -qE '^\.beads(/\*?)?$' "$gitignore"; then
     echo '.beads' >> "$gitignore"
   fi
 }

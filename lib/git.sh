@@ -64,7 +64,13 @@ setup_worktree() {
     fi
   fi
 
-  git -C "$PROJECT_DIR" worktree add -b "$WORKTREE_BRANCH" "$WORK_DIR" HEAD
+  local default_branch
+  default_branch=$(git -C "$PROJECT_DIR" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||') || true
+  default_branch=${default_branch:-main}
+
+  git -C "$PROJECT_DIR" fetch origin "$default_branch" 2>/dev/null || true
+  git -C "$PROJECT_DIR" worktree add -b "$WORKTREE_BRANCH" "$WORK_DIR" "origin/$default_branch" 2>/dev/null \
+    || git -C "$PROJECT_DIR" worktree add -b "$WORKTREE_BRANCH" "$WORK_DIR" HEAD
   git -C "$WORK_DIR" config rebase.updateRefs true
   log "Worktree: $WORK_DIR (branch: $WORKTREE_BRANCH)"
 

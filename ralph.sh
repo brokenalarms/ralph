@@ -216,7 +216,7 @@ init_ralph_dir() {
 
   # Ensure .ralph is gitignored
   local gitignore="$PROJECT_DIR/.gitignore"
-  if [[ ! -f "$gitignore" ]] || ! grep -qx '.ralph' "$gitignore"; then
+  if [[ ! -f "$gitignore" ]] || ! grep -qE '^\.ralph(/\*?)?$' "$gitignore"; then
     echo '.ralph' >> "$gitignore"
   fi
 
@@ -857,7 +857,7 @@ run_execution() {
   if [[ -n "$WORKTREE_BRANCH" && "$WORK_DIR" != "$PROJECT_DIR" ]]; then
     if ! rebase_onto_default_branch; then
       write_state "status" "error"
-      break
+      return 1
     fi
   fi
 
