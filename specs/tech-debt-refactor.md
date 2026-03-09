@@ -1,22 +1,24 @@
 # Tech Debt Refactoring Strategy
 
 ## Problem
-AI-assisted development accelerates feature delivery but compounds tech debt invisibly. Research shows AI-generated code produces 4x code duplication, +30% static analysis warnings, and +41% increased complexity. Without a forcing function, codebases degrade iteration by iteration — each Claude session adds functional code that works but quietly erodes structure.
+AI-assisted development removes the pain signal that traditionally forced refactoring. When a human works in a messy module, they feel friction — they slow down, misread code, make mistakes, and that pain forces them to clean up. Claude doesn't feel that friction. It understands tangled code just fine. It'll explain it, extend it, work around it. But it won't tell you it's time to refactor.
 
-Ralph orchestrates autonomous iterations that ship features fast. But it has no mechanism to make Claude *feel* the weight of accumulated debt or to periodically pause feature work and pay it down. The result: a ratchet that only turns one direction.
+The result: MVP-quality solutions get dragged deep into production. Code that would have caused a human developer pain at iteration 5 sails through to iteration 20 because Claude absorbs the complexity that would normally force a stop-and-clean. And when you finally attempt a big architectural cleanup with AI, it's actually *less* trustworthy — things get missed, unnecessary fallbacks creep in, corner cases aren't covered, and neither you nor Claude holds the full module in your head anymore.
+
+Ralph orchestrates autonomous iterations that ship features fast. Without a forcing function, codebases degrade iteration by iteration — each Claude session adds functional code that works but quietly erodes structure. The ratchet only turns one direction.
 
 ## Philosophy
-Inspired by [The Holy Order of Clean Code](https://church.btas.dev/) (btachinardi/church) — a Claude Code plugin that deploys specialized purist agents to enforce code quality — and the Boy Scout Rule ("leave it cleaner than you found it").
+Inspired by [The Holy Order of Clean Code](https://church.btas.dev/) (btachinardi/church) — a Claude Code plugin deploying specialized purist agents to enforce code quality — and hard-won lessons from developers using Claude Code in production.
 
-The key insight from the Church's size-purist: files are organisms that want to grow. They feed on lazy additions. But the refactoring response must be **proportionate and human-centered**:
+The core principles:
 
-1. **Refactoring serves human readability, not arbitrary rules** — The goal is code that humans can read and navigate. A 500-line file with one cohesive responsibility is fine. A 300-line file with three distinct responsibilities needs splitting.
-2. **Don't refactor for the sake of activity** — If a refactor iteration finds nothing worth cleaning, it should signal completion without making changes. Churn pollutes git history and wastes iterations.
-3. **Balance extraction with indirection cost** — One-line utility functions used once create navigation overhead without value. Extract shared code when it represents a genuine single source of truth (e.g., a format string used everywhere). Three similar lines are better than a premature abstraction.
-4. **Dead code is always worth removing** — Unused functions, commented-out blocks, unreachable branches. Git remembers. Delete them. (Church's dead-code-purist: "Commented code is not 'maybe useful later' — it's clutter.")
-5. **500 lines is the split signal, not a hard cap** — Per the Church's size-purist thresholds, 500+ lines is the "critical" mark for any file type. When a file crosses this, look for distinct responsibilities. If they exist, split. If the file is cohesive, leave it.
-6. **Periodic cadence** — Every Nth iteration, Ralph injects a refactor-only iteration. Small, frequent cleanups prevent debt from compounding to crisis levels.
-7. **Scope discipline** — Refactor tasks are scoped to recently changed code. No speculative whole-codebase rewrites.
+1. **The pain signal is gone — replace it with a cadence** — Since Claude won't feel the friction that forces humans to refactor, Ralph must periodically inject the question: "is this code still readable to a human?" The answer might be yes. That's fine. But the question must be asked, because no one else will ask it.
+2. **Small, early, scoped** — Refactoring works best when the code is still fresh and the module is still comprehensible. Big architectural cleanups are dangerous with AI — things get missed, unnecessary abstractions creep in. The refactor iteration should catch debt while it's young, not attempt heroic rewrites of code that's grown beyond anyone's grasp.
+3. **Refactoring serves human readability, not arbitrary rules** — The goal is code that humans can read and navigate. A 500-line file with one cohesive responsibility is fine. A 300-line file with three distinct responsibilities needs splitting.
+4. **Don't refactor for the sake of activity** — If a refactor iteration finds nothing worth cleaning, it should signal completion without making changes. Churn pollutes git history and wastes iterations.
+5. **Balance extraction with indirection cost** — One-line utility functions used once create navigation overhead without value. Extract shared code when it represents a genuine single source of truth (e.g., a format string used everywhere). Three similar lines are better than a premature abstraction.
+6. **Dead code is always worth removing** — Unused functions, commented-out blocks, unreachable branches. Git remembers. Delete them. (Church's dead-code-purist: "Commented code is not 'maybe useful later' — it's clutter.")
+7. **500 lines is the split signal, not a hard cap** — Per the Church's size-purist thresholds, 500+ lines is the "critical" mark for any file type. When a file crosses this, look for distinct responsibilities. If they exist, split. If the file is cohesive, leave it.
 
 ## Design
 

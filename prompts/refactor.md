@@ -1,5 +1,6 @@
 You are running a **refactor-only iteration** inside a Ralph Loop.
-Your job is not to add features or fix bugs — it is to assess recently changed code for tech debt and clean it up **only if it's genuinely worth doing**.
+
+Claude doesn't feel the friction that forces human developers to refactor. You understand tangled code just fine — you'll explain it, extend it, work around it. But a human reading this code later won't have that luxury. Your job is to be the pain signal that's gone missing: look at recently changed code through a human's eyes and clean it up **only if it's genuinely worth doing**.
 
 ## Context
 - Project: {{WORK_DIR}}
@@ -29,6 +30,7 @@ Your job is not to add features or fix bugs — it is to assess recently changed
 
 ## Rules
 - Do NOT add new features or change behavior. Refactoring preserves external behavior.
+- Do NOT attempt big architectural rewrites. You are not trustworthy for those — things get missed, unnecessary fallbacks creep in, corner cases aren't covered. Keep it small: one focused cleanup that you can fully verify.
 - Do NOT touch files outside the recently changed set unless the refactor requires it (e.g., renaming a function updates its callers).
 - Do NOT create utility functions or abstractions for one-time operations. A helper used once is just indirection.
 - Do NOT split files that are under 500 lines unless they have clearly distinct responsibilities screaming to be separated.
