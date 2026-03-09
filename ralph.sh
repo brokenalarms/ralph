@@ -11,6 +11,7 @@ while [[ -L "$_source" ]]; do _source="$(readlink "$_source")"; done
 SCRIPT_DIR="$(cd "$(dirname "$_source")" && pwd)"
 PROMPTS_DIR="$SCRIPT_DIR/prompts"
 source "$SCRIPT_DIR/lib/tasks.sh"
+source "$SCRIPT_DIR/lib/git.sh"
 
 # --- Defaults ---
 PROJECT_DIR="$(pwd)"
@@ -33,7 +34,6 @@ _TMUX_OUTER=false
 WORK_DIR=""
 WORKTREE_BRANCH=""
 PROJECT_NAME=""
-temp_branch() { echo "ralph/$PROJECT_NAME/next"; }
 _TASK_SEQ=0
 ALL_COMPLETE_TOKEN="###RALPH_ALL_COMPLETE###"
 LOG_FILE="/dev/null"  # real path set after dir resolution
@@ -216,7 +216,7 @@ init_ralph_dir() {
 
   # Ensure .ralph is gitignored
   local gitignore="$PROJECT_DIR/.gitignore"
-  if [[ ! -f "$gitignore" ]] || ! grep -qx '.ralph' "$gitignore"; then
+  if [[ ! -f "$gitignore" ]] || ! grep -qE '^\.ralph(/\*?)?$' "$gitignore"; then
     echo '.ralph' >> "$gitignore"
   fi
 
@@ -251,120 +251,6 @@ init_ralph_dir() {
   "worktree_branch": null
 }
 STATE
-  fi
-}
-
-# --- Worktree setup ---
-setup_worktree() {
-  WORK_DIR="$PROJECT_DIR"
-
-  if [[ "$USE_WORKTREE" == false ]]; then
-    return
-  fi
-
-  if ! git -C "$PROJECT_DIR" rev-parse --git-dir &>/dev/null; then
-    log_error "Not a git repo — ralph requires git. Use --no-worktree to run without git isolation."
-    exit 1
-  fi
-
-  # On resume, reuse existing worktree if stored in state
-  if [[ "$RESUME" == true ]]; then
-    local stored_worktree
-    stored_worktree=$(read_state "worktree_dir")
-    if [[ -n "$stored_worktree" && "$stored_worktree" != "null" && -d "$stored_worktree" ]]; then
-      WORK_DIR="$stored_worktree"
-      WORKTREE_BRANCH=$(read_state "worktree_branch")
-      PROJECT_NAME=$(basename "$PROJECT_DIR")
-      local named_branches
-      named_branches=$(git -C "$PROJECT_DIR" branch --list "ralph/$PROJECT_NAME/*" 2>/dev/null | wc -l | tr -d ' ')
-      _TASK_SEQ=$((named_branches))
-      SIGNAL_FILE="$WORK_DIR/.ralph-signal"
-      log "Resuming in worktree: $WORK_DIR (branch: $WORKTREE_BRANCH)"
-      return
-    fi
-  fi
-
-  PROJECT_NAME=$(basename "$PROJECT_DIR")
-
-  local today
-  today=$(date +%Y%m%d)
-  local run_seq=1
-  if [[ -d "$RALPH_DIR/worktrees" ]]; then
-    local existing_today
-    existing_today=$(find "$RALPH_DIR/worktrees" -maxdepth 1 -name "ralph-${today}-*" -type d 2>/dev/null | wc -l | tr -d ' ')
-    run_seq=$((existing_today + 1))
-  fi
-
-  WORKTREE_BRANCH=$(temp_branch)
-  WORK_DIR="$RALPH_DIR/worktrees/ralph-${today}-$(printf "%02d" $run_seq)"
-
-  mkdir -p "$RALPH_DIR/worktrees"
-
-  # Clean up leftover ralph worktrees and temp branch from previous runs
-  git -C "$PROJECT_DIR" worktree prune 2>/dev/null || true
-  if git -C "$PROJECT_DIR" rev-parse --verify "$WORKTREE_BRANCH" &>/dev/null; then
-    if ! git -C "$PROJECT_DIR" branch -D "$WORKTREE_BRANCH" 2>/dev/null; then
-      # Branch can't be deleted — find and remove the ralph worktree holding it
-      local existing_wt
-      existing_wt=$(git -C "$PROJECT_DIR" worktree list --porcelain 2>/dev/null | grep -B2 "branch refs/heads/$WORKTREE_BRANCH" | grep "^worktree " | sed 's/^worktree //')
-      if [[ -n "$existing_wt" && "$existing_wt" == */.ralph/worktrees/* ]]; then
-        log_warn "Removing stale ralph worktree: $existing_wt"
-        git -C "$PROJECT_DIR" worktree remove --force "$existing_wt" 2>/dev/null || true
-        git -C "$PROJECT_DIR" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
-      else
-        log_error "Cannot delete branch '$WORKTREE_BRANCH' — it is checked out in a non-ralph worktree: ${existing_wt:-unknown}"
-        exit 1
-      fi
-    fi
-  fi
-
-  git -C "$PROJECT_DIR" worktree add -b "$WORKTREE_BRANCH" "$WORK_DIR" HEAD
-  git -C "$WORK_DIR" config rebase.updateRefs true
-  log "Worktree: $WORK_DIR (branch: $WORKTREE_BRANCH)"
-
-  write_state "worktree_dir" "$WORK_DIR"
-  write_state "worktree_branch" "$WORKTREE_BRANCH"
-
-  SIGNAL_FILE="$WORK_DIR/.ralph-signal"
-}
-
-rename_branch_for_task() {
-  local task_desc="$1"
-  if [[ "$_BRANCH_RENAMED" == true || -z "$WORKTREE_BRANCH" || -z "$task_desc" ]]; then
-    return
-  fi
-  if [[ "$WORK_DIR" == "$PROJECT_DIR" ]]; then
-    return
-  fi
-
-  local slug
-  slug=$(slugify "$task_desc")
-  if [[ -z "$slug" ]]; then
-    return
-  fi
-
-  _TASK_SEQ=$((_TASK_SEQ + 1))
-  local new_branch="ralph/$PROJECT_NAME/$(printf "%02d" $_TASK_SEQ)-${slug}"
-  if git -C "$WORK_DIR" branch -m "$WORKTREE_BRANCH" "$new_branch" 2>/dev/null; then
-    WORKTREE_BRANCH="$new_branch"
-    write_state "worktree_branch" "$WORKTREE_BRANCH"
-    _BRANCH_RENAMED=true
-  fi
-}
-
-rotate_branch() {
-  if [[ -z "$WORKTREE_BRANCH" || "$WORK_DIR" == "$PROJECT_DIR" ]]; then
-    return
-  fi
-
-  WORKTREE_BRANCH=$(temp_branch)
-  git -C "$WORK_DIR" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
-  if git -C "$WORK_DIR" checkout -b "$WORKTREE_BRANCH" 2>/dev/null; then
-    write_state "worktree_branch" "$WORKTREE_BRANCH"
-    _BRANCH_RENAMED=false
-    log "Branch: $WORKTREE_BRANCH (from previous iteration)"
-  else
-    log_warn "Branch rotation failed, continuing on $WORKTREE_BRANCH"
   fi
 }
 
@@ -968,17 +854,10 @@ analyze_iteration() {
 run_execution() {
   log_phase "=== PHASE 2: EXECUTION ==="
 
-  # Rebase onto default branch to pick up changes merged since worktree was created
   if [[ -n "$WORKTREE_BRANCH" && "$WORK_DIR" != "$PROJECT_DIR" ]]; then
-    local default_branch
-    default_branch=$(git -C "$PROJECT_DIR" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||') || true
-    default_branch=${default_branch:-main}
-    git -C "$WORK_DIR" fetch origin "$default_branch" 2>/dev/null || true
-    if git -C "$WORK_DIR" rebase --update-refs "origin/$default_branch" 2>/dev/null; then
-      log "Rebased onto origin/$default_branch"
-    else
-      git -C "$WORK_DIR" rebase --abort 2>/dev/null || true
-      log_warn "Rebase onto $default_branch failed (conflicts), continuing on current base"
+    if ! rebase_onto_default_branch; then
+      write_state "status" "error"
+      return 1
     fi
   fi
 

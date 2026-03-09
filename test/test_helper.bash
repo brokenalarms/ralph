@@ -53,6 +53,30 @@ setup_test_repo() {
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 }
 
+setup_rebase_env() {
+  local origin_dir="$TEST_TMPDIR/origin"
+  local default_branch
+  default_branch=$(git -C "$PROJECT_DIR" branch --show-current)
+
+  git clone --bare "$PROJECT_DIR" "$origin_dir" 2>/dev/null
+  git -C "$PROJECT_DIR" remote add origin "$origin_dir" 2>/dev/null || true
+  git -C "$PROJECT_DIR" fetch origin 2>/dev/null
+  git -C "$origin_dir" symbolic-ref HEAD "refs/heads/$default_branch" 2>/dev/null || true
+
+  init_ralph_dir
+  setup_worktree
+
+  git -C "$WORK_DIR" remote set-url origin "$origin_dir" 2>/dev/null || true
+  git -C "$WORK_DIR" fetch origin 2>/dev/null
+
+  TEST_DEFAULT_BRANCH="$default_branch"
+  TEST_ORIGIN_DIR="$origin_dir"
+}
+
+push_to_origin() {
+  git -C "$PROJECT_DIR" push origin "$TEST_DEFAULT_BRANCH" -q 2>/dev/null
+}
+
 teardown_test_repo() {
   if [[ -n "${TEST_TMPDIR:-}" && -d "$TEST_TMPDIR" ]]; then
     # Remove any worktrees before deleting
