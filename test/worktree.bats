@@ -134,3 +134,67 @@ teardown() {
   [[ "$output" == *"Not a git repo"* ]]
   rm -rf "$non_git_dir"
 }
+
+# Proves: clean rebase works when no squash merges have happened.
+@test "rebase_onto_default_branch succeeds on clean rebase" {
+  setup_rebase_env
+
+  echo "new file on main" > "$PROJECT_DIR/mainfile.txt"
+  git -C "$PROJECT_DIR" add mainfile.txt
+  git -C "$PROJECT_DIR" commit -m "add mainfile" -q
+  push_to_origin
+
+  echo "worktree file" > "$WORK_DIR/workfile.txt"
+  git -C "$WORK_DIR" add workfile.txt
+  git -C "$WORK_DIR" commit -m "add workfile" -q
+
+  run rebase_onto_default_branch
+  [[ "$status" -eq 0 ]]
+  [[ -f "$WORK_DIR/mainfile.txt" ]]
+  [[ -f "$WORK_DIR/workfile.txt" ]]
+}
+
+# Proves: squash-merged branches are detected and skipped during rebase.
+@test "rebase_onto_default_branch skips squash-merged branches" {
+  setup_rebase_env
+
+  rename_branch_for_task "first task"
+  echo "first" > "$WORK_DIR/first.txt"
+  git -C "$WORK_DIR" add first.txt
+  git -C "$WORK_DIR" commit -m "first task" -q
+
+  rotate_branch
+  rename_branch_for_task "second task"
+  echo "second" > "$WORK_DIR/second.txt"
+  git -C "$WORK_DIR" add second.txt
+  git -C "$WORK_DIR" commit -m "second task" -q
+
+  # Simulate squash-merge of branch 01 into main on origin
+  echo "first" > "$PROJECT_DIR/first.txt"
+  git -C "$PROJECT_DIR" add first.txt
+  git -C "$PROJECT_DIR" commit -m "squash: first task" -q
+  push_to_origin
+
+  run rebase_onto_default_branch
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"squash-merged"* ]]
+  [[ -f "$WORK_DIR/second.txt" ]]
+}
+
+# Proves: real conflicts halt ralph instead of continuing on stale base.
+@test "rebase_onto_default_branch halts on real conflicts" {
+  setup_rebase_env
+
+  echo "worktree version" > "$WORK_DIR/conflict.txt"
+  git -C "$WORK_DIR" add conflict.txt
+  git -C "$WORK_DIR" commit -m "worktree change" -q
+
+  echo "main version" > "$PROJECT_DIR/conflict.txt"
+  git -C "$PROJECT_DIR" add conflict.txt
+  git -C "$PROJECT_DIR" commit -m "main change" -q
+  push_to_origin
+
+  run rebase_onto_default_branch
+  [[ "$status" -eq 1 ]]
+  [[ "$output" == *"real conflicts"* ]]
+}
