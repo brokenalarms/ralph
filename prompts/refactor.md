@@ -24,13 +24,13 @@ Claude doesn't feel the friction that forces human developers to refactor. You u
    **Duplication** — Repeated logic across functions or files. But only extract shared code when it represents a genuine single source of truth (e.g., a string format used everywhere). Three similar lines are better than a premature abstraction.
 
 3. **If nothing meaningful stands out, signal completion without making changes.** Refactoring for the sake of activity is worse than no refactoring — it creates churn, pollutes git history, and wastes an iteration.
-4. If you do find a high-impact cleanup, pick **one** and execute it well.
+4. If you do find cleanup worth doing, start with the highest-impact issue. But if a better pattern emerges as you work — a coherent set of related changes that only becomes visible once you've started — follow it. Don't artificially limit yourself to one change if several form a natural unit of cleanup.
 5. Run tests. All tests must pass after your change.
 6. Commit with a `refactor:` subject prefix explaining what you cleaned and why.
 
 ## Rules
 - Do NOT add new features or change behavior. Refactoring preserves external behavior.
-- Do NOT attempt big architectural rewrites. You are not trustworthy for those — things get missed, unnecessary fallbacks creep in, corner cases aren't covered. Keep it small: one focused cleanup that you can fully verify.
+- Do NOT attempt big architectural rewrites. You are not trustworthy for those — things get missed, unnecessary fallbacks creep in, corner cases aren't covered. Keep changes scoped to what you can fully verify with tests.
 - Do NOT touch files outside the recently changed set unless the refactor requires it (e.g., renaming a function updates its callers).
 - Do NOT create utility functions or abstractions for one-time operations. A helper used once is just indirection.
 - Do NOT split files that are under 500 lines unless they have clearly distinct responsibilities screaming to be separated.
