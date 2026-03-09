@@ -7,3 +7,4 @@
 # Testing
 - Tests should be put in place to lock in new features and prevent regressions.
 - They should explain in a comment for each why the test is being created, and what user functionality it is proving, so that a test has a specific feature based meaning, and isn't just written to be correct eg assert 1 = true.
+- Do not write tests that assert specific strings or phrases from prompt templates (.md files) are present. Prompts are loose, natural-language guidance — testing that a particular word or sentence exists misunderstands the point of tests. Tests should verify behavior and functionality, not pin down prose.
