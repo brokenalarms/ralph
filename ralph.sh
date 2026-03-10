@@ -97,7 +97,7 @@ ${BOLD}EXAMPLES:${NC}
 ${BOLD}HOW IT WORKS:${NC}
   1. Planning: Claude reads the repo and creates .ralph/plan.md with atomic tasks
   2. Execution: Each task runs in a fresh Claude context (~200k tokens)
-  3. Completion: Claude writes a signal file when each task is done
+  3. Completion: Claude echoes a signal token when each task is done
   4. Repeat: Loop continues until all tasks complete or iteration cap is hit
 
 ${BOLD}SUBCOMMANDS:${NC}
@@ -207,9 +207,9 @@ if [[ -n "$PLAN_FILE_ARG" ]]; then
   TASK_BACKEND="checklist"
 fi
 STATE_FILE="$RALPH_DIR/state.json"
-SIGNAL_FILE="$RALPH_DIR/signal"
 STOP_FILE="$RALPH_DIR/stop"
 LOG_FILE="$RALPH_DIR/loop.log"
+_SIGNAL_LOG_OFFSET=0
 RESUME_SCRIPT="$RALPH_DIR/resume.sh"
 
 # --- Init .ralph directory ---
@@ -405,9 +405,9 @@ write_state() {
   fi
 }
 
-# --- Signal file mechanism ---
+# --- Signal detection (scan log from offset) ---
 clear_signal() {
-  rm -f "$SIGNAL_FILE"
+  _SIGNAL_LOG_OFFSET=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
 }
 
 read_feedback() {
@@ -421,24 +421,28 @@ clear_feedback() {
   rm -f "$RALPH_DIR/feedback"
 }
 
+_signal_log_tail() {
+  tail -n "+$((_SIGNAL_LOG_OFFSET + 1))" "$LOG_FILE" 2>/dev/null
+}
+
 check_signal() {
-  [[ -f "$SIGNAL_FILE" ]] && grep -q "$SIGNAL_TOKEN" "$SIGNAL_FILE"
+  _signal_log_tail | grep -q "$SIGNAL_TOKEN"
 }
 
 check_all_complete() {
-  [[ -f "$SIGNAL_FILE" ]] && grep -q "$ALL_COMPLETE_TOKEN" "$SIGNAL_FILE"
+  _signal_log_tail | grep -q "$ALL_COMPLETE_TOKEN"
 }
 
 check_current_task() {
-  [[ -f "$SIGNAL_FILE" ]] && grep -q "$CURRENT_TASK_TOKEN" "$SIGNAL_FILE"
+  _signal_log_tail | grep -q "$CURRENT_TASK_TOKEN"
 }
 
 read_current_task() {
-  [[ -f "$SIGNAL_FILE" ]] && grep "$CURRENT_TASK_TOKEN" "$SIGNAL_FILE" | sed "s/.*$CURRENT_TASK_TOKEN *//" | head -1
+  _signal_log_tail | grep "$CURRENT_TASK_TOKEN" | sed "s/.*$CURRENT_TASK_TOKEN *//" | head -1
 }
 
 read_signal_summary() {
-  [[ -f "$SIGNAL_FILE" ]] && grep "$SIGNAL_TOKEN" "$SIGNAL_FILE" | sed "s/.*$SIGNAL_TOKEN *//" | head -1
+  _signal_log_tail | grep "$SIGNAL_TOKEN" | sed "s/.*$SIGNAL_TOKEN *//" | head -1
 }
 
 # --- Worktree theme renaming ---
@@ -543,7 +547,7 @@ wait_for_rate_reset() {
 }
 
 # --- Run Claude with signal polling ---
-# Runs claude in the project dir. Polls the signal file inline.
+# Runs claude in the project dir. Polls the log for signal tokens inline.
 # When the signal is detected OR claude exits, we proceed.
 run_claude() {
   local prompt="$1"
@@ -667,7 +671,6 @@ build_prompt() {
   result="${result//\{\{WORK_DIR\}\}/$WORK_DIR}"
   result="${result//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
   result="${result//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
-  result="${result//\{\{SIGNAL_FILE\}\}/$SIGNAL_FILE}"
   result="${result//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
   result="${result//\{\{CURRENT_TASK_TOKEN\}\}/$CURRENT_TASK_TOKEN}"
   result="${result//\{\{ALL_COMPLETE_TOKEN\}\}/$ALL_COMPLETE_TOKEN}"
@@ -688,7 +691,6 @@ build_refactor_prompt() {
 
   result="${result//\{\{WORK_DIR\}\}/$WORK_DIR}"
   result="${result//\{\{RECENT_FILES\}\}/$recent_files}"
-  result="${result//\{\{SIGNAL_FILE\}\}/$SIGNAL_FILE}"
   result="${result//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
   result="${result//\{\{CURRENT_TASK_TOKEN\}\}/$CURRENT_TASK_TOKEN}"
   result="${result//\{\{ALL_COMPLETE_TOKEN\}\}/$ALL_COMPLETE_TOKEN}"
@@ -766,7 +768,6 @@ run_planning() {
   planning_prompt="${planning_prompt//\{\{PLANNING_CONTEXT\}\}/$planning_context}"
   planning_prompt="${planning_prompt//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
   planning_prompt="${planning_prompt//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
-  planning_prompt="${planning_prompt//\{\{SIGNAL_FILE\}\}/$SIGNAL_FILE}"
   planning_prompt="${planning_prompt//\{\{STATE_FILE\}\}/$STATE_FILE}"
   planning_prompt="${planning_prompt//\{\{TASK_INSTRUCTIONS\}\}/$(task_planning_instructions)}"
 
