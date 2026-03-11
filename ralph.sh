@@ -663,6 +663,7 @@ run_planning() {
   # Interactive planning: launch Claude for the user to define spec + plan
   if needs_planning && [[ "$SKIP_PLANNING" != true ]]; then
     log "Starting interactive planning session..."
+    log "Task backend: $(task_label)"
     log "Chat with Claude to define your spec and plan. Exit when done."
 
     local interactive_prompt
@@ -670,6 +671,7 @@ run_planning() {
     interactive_prompt="${interactive_prompt//\{\{WORK_DIR\}\}/$WORK_DIR}"
     interactive_prompt="${interactive_prompt//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
     interactive_prompt="${interactive_prompt//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
+    interactive_prompt="${interactive_prompt//\{\{TASK_INSTRUCTIONS\}\}/$(task_planning_instructions)}"
 
     cd "$WORK_DIR"
     claude --add-dir "$WORK_DIR" \
@@ -701,6 +703,7 @@ run_planning() {
   planning_prompt="${planning_prompt//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
   planning_prompt="${planning_prompt//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
   planning_prompt="${planning_prompt//\{\{SIGNAL_FILE\}\}/$SIGNAL_FILE}"
+  planning_prompt="${planning_prompt//\{\{TASK_INSTRUCTIONS\}\}/$(task_planning_instructions)}"
 
   run_claude "$planning_prompt"
 

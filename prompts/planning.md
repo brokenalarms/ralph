@@ -26,9 +26,7 @@ Do NOT create new spec files. Specs are design artifacts that frame how work get
 ## Output
 Break the work into tasks. Each task is a single working change — the project must build and pass tests after every task. If a change spans multiple files (removing a module and its references, renaming an interface and its implementors), that is one task, not several. Do not split changes that must happen together to keep the project working.
 
-If `bd` is available, run `bd prime` to learn the workflow, then create tasks directly in bd with dependencies during this planning session. There is no plan.md when using bd. If `bd` is not available, write the plan to {{PLAN_FILE}} using markdown checkboxes:
-- [ ] Task 1 description
-- [ ] Task 2 description
+{{TASK_INSTRUCTIONS}}
 
 Each task should be completable in a single Claude session. Be specific and actionable.
 After creating the plan, signal completion: echo "{{SIGNAL_TOKEN}}" > "{{SIGNAL_FILE}}"

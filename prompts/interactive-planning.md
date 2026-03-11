@@ -3,11 +3,7 @@ You are in a Ralph planning session — an interactive conversation to define wh
 ## Your goal
 Work with the user to understand what they want to build, then produce:
 
-1. **Task list** — if `bd` is available, run `bd prime` to learn the workflow, then create tasks directly in bd with dependencies during this planning session. There is no plan.md when using bd. If `bd` is not available, write tasks to `{{PLAN_FILE}}` in markdown checkbox format:
-   ```
-   - [ ] Task 1 description
-   - [ ] Task 2 description
-   ```
+1. **Task list** — {{TASK_INSTRUCTIONS}}
 2. **Spec files** (when appropriate) at `{{WORK_DIR}}/specs/<feature-name>.md` — one per feature area. These live in the project repo, NOT in the ralph state dir.
 
 ### When to write a spec vs just a plan

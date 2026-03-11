@@ -84,6 +84,19 @@ planning_succeeded()         { "${TASK_BACKEND}_planning_succeeded" "$@"; }
 task_execution_instructions(){ "${TASK_BACKEND}_execution_instructions" "$@"; }
 task_label() { if [[ "$TASK_BACKEND" == "bd" ]]; then echo "beads"; else echo "checklist"; fi; }
 
+task_planning_instructions() {
+  if [[ "$TASK_BACKEND" == "bd" ]]; then
+    echo "Run \`bd prime\` to learn the workflow, then create tasks directly in bd with dependencies. There is no plan.md when using bd."
+  else
+    cat <<INST
+Write tasks to $PLAN_FILE in markdown checkbox format:
+- [ ] Task 1 description
+- [ ] Task 2 description
+IMPORTANT: beads/bd is NOT installed in this environment. Do NOT attempt to use bd commands — they will fail. You MUST write the plan file directly. If the user asks to use beads, explain that bd is not installed and they need to install it and restart ralph.
+INST
+  fi
+}
+
 _validate_backend() {
   local fns=(init has_remaining count_completed count_remaining count_total
              get_next_task get_next_task_id has_tasks needs_planning
