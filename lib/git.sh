@@ -127,6 +127,12 @@ rebase_onto_default_branch() {
   default_branch=${default_branch:-main}
   git -C "$WORK_DIR" fetch origin "$default_branch" 2>/dev/null || true
 
+  # Skip rebase if remote branch doesn't exist (e.g. repo never pushed)
+  if ! git -C "$WORK_DIR" rev-parse --verify "origin/$default_branch" &>/dev/null; then
+    log "No remote branch origin/$default_branch — skipping rebase"
+    return 0
+  fi
+
   if git -C "$WORK_DIR" rebase --update-refs "origin/$default_branch" 2>/dev/null; then
     log "Rebased onto origin/$default_branch"
     return 0

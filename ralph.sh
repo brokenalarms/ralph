@@ -670,8 +670,12 @@ run_planning() {
     interactive_prompt=$(<"$PROMPTS_DIR/interactive-planning.md")
     interactive_prompt="${interactive_prompt//\{\{WORK_DIR\}\}/$WORK_DIR}"
     interactive_prompt="${interactive_prompt//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
-    interactive_prompt="${interactive_prompt//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
     interactive_prompt="${interactive_prompt//\{\{TASK_INSTRUCTIONS\}\}/$(task_planning_instructions)}"
+    if [[ "$TASK_BACKEND" == "bd" ]]; then
+      interactive_prompt="${interactive_prompt//\{\{PLAN_FILE_LINE\}\}/}"
+    else
+      interactive_prompt="${interactive_prompt//\{\{PLAN_FILE_LINE\}\}/- Plan file: $PLAN_FILE}"
+    fi
 
     cd "$WORK_DIR"
     claude --add-dir "$WORK_DIR" \

@@ -86,7 +86,7 @@ task_label() { if [[ "$TASK_BACKEND" == "bd" ]]; then echo "beads"; else echo "c
 
 task_planning_instructions() {
   if [[ "$TASK_BACKEND" == "bd" ]]; then
-    echo "Run \`bd prime\` to learn the workflow, then create tasks directly in bd with dependencies. There is no plan.md when using bd."
+    echo "Run \`bd prime\` to learn the workflow, then create tasks directly in bd with dependencies. Do NOT write a plan.md file — tasks live exclusively in bd."
   else
     cat <<INST
 Write tasks to $PLAN_FILE in markdown checkbox format:

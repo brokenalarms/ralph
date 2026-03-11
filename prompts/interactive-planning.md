@@ -23,4 +23,4 @@ Specs are NOT task lists or collections of small fixes. If you find yourself wri
 ## Project context
 - Working directory: {{WORK_DIR}}
 - Ralph state dir: {{RALPH_DIR}}
-- Plan file: {{PLAN_FILE}}
+{{PLAN_FILE_LINE}}
