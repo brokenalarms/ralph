@@ -15,6 +15,7 @@ setup_worktree() {
     exit 1
   fi
 
+
   # On resume, reuse existing worktree if stored in state
   if [[ "$RESUME" == true ]]; then
     local stored_worktree

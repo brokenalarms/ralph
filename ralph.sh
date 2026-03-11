@@ -214,10 +214,14 @@ init_ralph_dir() {
   mkdir -p "$RALPH_DIR"
   touch "$LOG_FILE"
 
-  # Ensure .ralph is gitignored
+  # Ensure .ralph is gitignored and committed
   local gitignore="$PROJECT_DIR/.gitignore"
   if [[ ! -f "$gitignore" ]] || ! grep -qE '^\.ralph(/\*?)?$' "$gitignore"; then
     echo '.ralph' >> "$gitignore"
+    if git -C "$PROJECT_DIR" rev-parse --git-dir &>/dev/null; then
+      git -C "$PROJECT_DIR" add .gitignore 2>/dev/null || true
+      git -C "$PROJECT_DIR" commit -m "Add .ralph to .gitignore" 2>/dev/null || true
+    fi
   fi
 
   if [[ -f "$STATE_FILE" ]]; then
