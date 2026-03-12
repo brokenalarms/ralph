@@ -937,6 +937,13 @@ run_execution() {
     # Each iteration gets its own branch, stacked on the previous
     if (( run_iteration > 1 )); then
       rotate_branch
+      # Rebase onto latest main between tasks to pick up squash-merged PRs
+      if [[ -n "$WORKTREE_BRANCH" && "$WORK_DIR" != "$PROJECT_DIR" ]]; then
+        if ! rebase_onto_default_branch; then
+          write_state "status" "error"
+          break
+        fi
+      fi
     fi
 
     # Check if a refactor iteration is due
