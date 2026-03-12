@@ -181,6 +181,42 @@ teardown() {
   [[ "$status" -eq 0 ]]
 }
 
+# Proves: bd_init falls back to checklist when Dolt server is unreachable
+@test "bd: init falls back to checklist when server is unhealthy" {
+  # Replace bd mock with one that fails on count (simulates bad Dolt server)
+  local mock_dir="$TEST_TMPDIR/mock_bin"
+  cat > "$mock_dir/bd" <<'MOCK'
+#!/usr/bin/env bash
+case "$1" in
+  init) mkdir -p .beads ;;
+  count) echo "Error: database not found" >&2; exit 1 ;;
+  *) exit 1 ;;
+esac
+MOCK
+  chmod +x "$mock_dir/bd"
+
+  TASK_BACKEND="bd"
+  init_task_backend
+  [[ "$TASK_BACKEND" == "checklist" ]]
+}
+
+# Proves: bd_init falls back to checklist when bd init itself fails
+@test "bd: init falls back to checklist when bd init fails" {
+  # Replace bd mock with one that always fails
+  local mock_dir="$TEST_TMPDIR/mock_bin"
+  cat > "$mock_dir/bd" <<'MOCK'
+#!/usr/bin/env bash
+exit 1
+MOCK
+  chmod +x "$mock_dir/bd"
+
+  # Remove .beads so init is attempted
+  rm -rf "$PROJECT_DIR/.beads"
+  TASK_BACKEND="bd"
+  init_task_backend
+  [[ "$TASK_BACKEND" == "checklist" ]]
+}
+
 # Proves: _validate_backend catches missing functions
 @test "_validate_backend passes for valid backends" {
   TASK_BACKEND="bd"

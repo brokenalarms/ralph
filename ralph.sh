@@ -180,6 +180,8 @@ if command -v bd &>/dev/null; then
 else
   TASK_BACKEND="checklist"
 fi
+# NOTE: bd health is verified later in bd_init() which falls back to checklist
+# if the Dolt server is unreachable or misconfigured.
 
 # --- Resolve paths ---
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
@@ -400,6 +402,15 @@ read_current_task() {
 
 read_signal_summary() {
   [[ -f "$SIGNAL_FILE" ]] && grep "$SIGNAL_TOKEN" "$SIGNAL_FILE" | sed "s/.*$SIGNAL_TOKEN *//" | head -1
+}
+
+# --- Worktree theme renaming ---
+_rename_worktree_from_theme() {
+  local theme
+  theme=$(read_state "theme")
+  if [[ -n "$theme" ]]; then
+    rename_worktree_for_theme "$theme"
+  fi
 }
 
 # --- Rate limiting ---
@@ -670,6 +681,7 @@ run_planning() {
     interactive_prompt=$(<"$PROMPTS_DIR/interactive-planning.md")
     interactive_prompt="${interactive_prompt//\{\{WORK_DIR\}\}/$WORK_DIR}"
     interactive_prompt="${interactive_prompt//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
+    interactive_prompt="${interactive_prompt//\{\{STATE_FILE\}\}/$STATE_FILE}"
     interactive_prompt="${interactive_prompt//\{\{TASK_INSTRUCTIONS\}\}/$(task_planning_instructions)}"
     if [[ "$TASK_BACKEND" == "bd" ]]; then
       interactive_prompt="${interactive_prompt//\{\{PLAN_FILE_LINE\}\}/}"
@@ -690,6 +702,7 @@ run_planning() {
   if planning_succeeded; then
     write_state "status" "planned"
     log_task_success "Plan created with $(count_total) tasks"
+    _rename_worktree_from_theme
     return 0
   fi
 
@@ -707,6 +720,7 @@ run_planning() {
   planning_prompt="${planning_prompt//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
   planning_prompt="${planning_prompt//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
   planning_prompt="${planning_prompt//\{\{SIGNAL_FILE\}\}/$SIGNAL_FILE}"
+  planning_prompt="${planning_prompt//\{\{STATE_FILE\}\}/$STATE_FILE}"
   planning_prompt="${planning_prompt//\{\{TASK_INSTRUCTIONS\}\}/$(task_planning_instructions)}"
 
   run_claude "$planning_prompt"
@@ -714,6 +728,7 @@ run_planning() {
   if planning_succeeded; then
     write_state "status" "planned"
     log_task_success "Plan created with $(count_total) tasks"
+    _rename_worktree_from_theme
   else
     log_task_error "Planning failed — no tasks created"
     exit 1
@@ -1151,7 +1166,13 @@ main() {
   fi
 
   _validate_backend
+  local pre_init_backend="$TASK_BACKEND"
   init_task_backend
+  # bd_init may have fallen back to checklist — re-validate if backend changed
+  if [[ "$TASK_BACKEND" != "$pre_init_backend" ]]; then
+    _validate_backend
+    init_task_backend
+  fi
   write_state "task_backend" "$TASK_BACKEND"
 
   log_phase "Ralph Loop v${VERSION}"

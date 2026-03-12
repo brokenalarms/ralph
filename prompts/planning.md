@@ -29,4 +29,7 @@ Break the work into tasks. Each task is a single working change — the project 
 {{TASK_INSTRUCTIONS}}
 
 Each task should be completable in a single Claude session. Be specific and actionable.
-After creating the plan, signal completion: echo "{{SIGNAL_TOKEN}}" > "{{SIGNAL_FILE}}"
+After creating the plan:
+1. Write a short theme (2-5 words) summarizing the overall work into state. This names the worktree, so keep it concise and descriptive. Use jq:
+   jq --arg v "auth middleware rewrite" '.theme = $v' "{{STATE_FILE}}" > /tmp/ralph-state && mv /tmp/ralph-state "{{STATE_FILE}}"
+2. Signal completion: echo "{{SIGNAL_TOKEN}}" > "{{SIGNAL_FILE}}"

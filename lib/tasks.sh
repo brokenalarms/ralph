@@ -3,11 +3,33 @@
 
 run_bd() { (cd "$PROJECT_DIR" && bd "$@"); }
 
+# --- bd health check & fallback ---
+
+bd_is_healthy() {
+  # Quick check: can bd actually talk to its server?
+  # "bd count" is lightweight and exercises the DB connection.
+  run_bd count &>/dev/null 2>&1
+}
+
+_fallback_to_checklist() {
+  log_warn "Beads/Dolt unavailable — falling back to checklist backend"
+  TASK_BACKEND="checklist"
+}
+
 # --- bd backend ---
 
 bd_init() {
   if [[ ! -d "$PROJECT_DIR/.beads" ]]; then
-    (cd "$PROJECT_DIR" && bd init)
+    if ! (cd "$PROJECT_DIR" && bd init) 2>/dev/null; then
+      _fallback_to_checklist
+      return
+    fi
+  fi
+
+  # Verify the server is actually reachable after init
+  if ! bd_is_healthy; then
+    _fallback_to_checklist
+    return
   fi
 
   local gitignore="$PROJECT_DIR/.gitignore"

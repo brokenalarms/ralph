@@ -18,7 +18,10 @@ Specs are NOT task lists or collections of small fixes. If you find yourself wri
 - Read CLAUDE.md and AGENTS.md if they exist for project-specific guidance.
 - Each task is a single working change — the project must build and pass tests after every task. If a change spans multiple files, that is one task, not several. Do not split changes that must happen together to keep the project working.
 - Each task should be completable in a single Claude session — specific and actionable.
-- When the user is satisfied, write the plan and any specs. Commit spec files to the repo (`git add specs/ && git commit`) so there's a tracked record of what was planned. Then let the user know they can exit to start execution.
+- When the user is satisfied, write the plan and any specs. Commit spec files to the repo (`git add specs/ && git commit`) so there's a tracked record of what was planned.
+- Write a short theme (2-5 words) summarizing the overall work into state — this names the worktree:
+  jq --arg v "auth middleware rewrite" '.theme = $v' "{{STATE_FILE}}" > /tmp/ralph-state && mv /tmp/ralph-state "{{STATE_FILE}}"
+- Then let the user know they can exit to start execution.
 
 ## Project context
 - Working directory: {{WORK_DIR}}

@@ -14,6 +14,12 @@
 - If the dev environment supports it (package.json, Makefile, cargo, xcodegen in MacOS), additionally run a build to verify compilation before committing,
   and make sure that any auto-generated project files (e.g., .xcodeproj) are up to date with the changes.
 
+### Typing
+- Use typed languages and variants from the outset: TypeScript over JavaScript, typed Python (type hints + mypy/pyright), etc.
+- When creating new projects or files, always set up the build system to accommodate typing (e.g., `tsconfig.json` for TypeScript, pyproject.toml with pyrefly for Python type-checking).
+- If adding code to an existing untyped project, introduce typing incrementally — add types to new files and functions you touch, don't rewrite the whole codebase.
+- Prefer strict type-checking settings where the ecosystem supports it (e.g., `"strict": true` in tsconfig).
+
 ### Commits
 - Atomic commits: one feature or fix per commit.
 - Every commit message needs a subject line + blank line + body. Body: concise bullets covering why, how, and test coverage.

@@ -70,6 +70,15 @@ setup_worktree() {
   default_branch=${default_branch:-main}
 
   git -C "$PROJECT_DIR" fetch origin "$default_branch" 2>/dev/null || true
+
+  # If remote has no branches yet (empty repo clone), push main so it becomes the default on GitHub
+  if ! git -C "$PROJECT_DIR" rev-parse --verify "origin/$default_branch" &>/dev/null \
+     && git -C "$PROJECT_DIR" rev-parse --verify HEAD &>/dev/null \
+     && git -C "$PROJECT_DIR" remote get-url origin &>/dev/null; then
+    log "Pushing $default_branch to origin (empty remote — ensures correct default branch)"
+    git -C "$PROJECT_DIR" push -u origin "$default_branch" 2>/dev/null || true
+  fi
+
   git -C "$PROJECT_DIR" worktree add -b "$WORKTREE_BRANCH" "$WORK_DIR" "origin/$default_branch" 2>/dev/null \
     || git -C "$PROJECT_DIR" worktree add -b "$WORKTREE_BRANCH" "$WORK_DIR" HEAD
   git -C "$WORK_DIR" config rebase.updateRefs true
@@ -79,6 +88,46 @@ setup_worktree() {
   write_state "worktree_branch" "$WORKTREE_BRANCH"
 
   SIGNAL_FILE="$WORK_DIR/.ralph-signal"
+}
+
+rename_worktree_for_theme() {
+  local theme_desc="$1"
+  if [[ -z "$theme_desc" || "$WORK_DIR" == "$PROJECT_DIR" ]]; then
+    return
+  fi
+
+  local slug
+  slug=$(slugify "$theme_desc")
+  if [[ -z "$slug" ]]; then
+    return
+  fi
+
+  local today
+  today=$(date +%Y%m%d)
+  local new_dir="$RALPH_DIR/worktrees/ralph-${today}-${slug}"
+
+  # Don't rename if already at a themed path (not the generic -01, -02 pattern)
+  if [[ "$WORK_DIR" == "$new_dir" ]]; then
+    return
+  fi
+
+  # Avoid collision — append sequence if the themed name already exists
+  if [[ -d "$new_dir" ]]; then
+    local i=2
+    while [[ -d "${new_dir}-${i}" ]]; do
+      i=$((i + 1))
+    done
+    new_dir="${new_dir}-${i}"
+  fi
+
+  if git -C "$PROJECT_DIR" worktree move "$WORK_DIR" "$new_dir" 2>/dev/null; then
+    WORK_DIR="$new_dir"
+    write_state "worktree_dir" "$WORK_DIR"
+    SIGNAL_FILE="$WORK_DIR/.ralph-signal"
+    log "Worktree renamed: $new_dir"
+  else
+    log_warn "Could not rename worktree (continuing with current name)"
+  fi
 }
 
 rename_branch_for_task() {
