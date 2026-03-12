@@ -609,8 +609,16 @@ build_prompt() {
   result+=$(<"$PROMPTS_DIR/signal.md")
 
   if [[ -n "$feedback" ]]; then
-    result+=$'\n\n## User feedback\nThe user has provided the following feedback. Incorporate this into your approach:\n\n'
+    result+=$'\n\n## User feedback\n'
+    result+='The user has provided the following feedback:\n\n'
     result+="$feedback"
+    result+=$'\n\n'
+    result+='If this feedback relates to your current task, incorporate it directly. '
+    if [[ "$TASK_BACKEND" == "bd" ]]; then
+      result+='If it is unrelated to your current task, add it as a new task for a future iteration and then continue with your current task.'
+    else
+      result+="If it is unrelated to your current task, append it as a new \`- [ ]\` line to $PLAN_FILE and then continue with your current task."
+    fi
   fi
 
   local task_instructions
@@ -1003,7 +1011,7 @@ run_execution() {
     local feedback=""
     feedback=$(read_feedback) || true
     if [[ -n "$feedback" ]]; then
-      log "Feedback: \"$feedback\""
+      log_warn "[feedback] $feedback"
     fi
 
     # Run claude for this task
