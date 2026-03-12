@@ -103,15 +103,15 @@ teardown() {
   init_task_backend
   [[ -d "$PROJECT_DIR/.beads" ]]
   grep -qx '.beads' "$PROJECT_DIR/.gitignore"
+  grep -qx '.dolt' "$PROJECT_DIR/.gitignore"
 }
 
 # Proves: init_task_backend is idempotent for gitignore
 @test "bd: init_task_backend doesn't duplicate gitignore entry" {
-  echo '.beads' > "$PROJECT_DIR/.gitignore"
+  printf '.beads\n.dolt\n' > "$PROJECT_DIR/.gitignore"
   init_task_backend
-  local count
-  count=$(grep -cx '.beads' "$PROJECT_DIR/.gitignore")
-  [[ "$count" == "1" ]]
+  [[ $(grep -cx '.beads' "$PROJECT_DIR/.gitignore") == "1" ]]
+  [[ $(grep -cx '.dolt' "$PROJECT_DIR/.gitignore") == "1" ]]
 }
 
 # Proves: checklist init is a no-op
@@ -198,6 +198,32 @@ MOCK
   TASK_BACKEND="bd"
   init_task_backend
   [[ "$TASK_BACKEND" == "checklist" ]]
+}
+
+# Proves: bd_init retries init when .beads exists but server is stale
+@test "bd: init retries when .beads exists but health check fails initially" {
+  # Pre-create .beads to simulate a previous run
+  mkdir -p "$PROJECT_DIR/.beads"
+
+  # bd mock: init reconnects (makes count work), count fails until init is called
+  local mock_dir="$TEST_TMPDIR/mock_bin"
+  local flag_file="$TEST_TMPDIR/bd_reinited"
+  cat > "$mock_dir/bd" <<MOCK
+#!/usr/bin/env bash
+case "\$1" in
+  init) mkdir -p .beads; touch "$flag_file" ;;
+  count)
+    if [[ -f "$flag_file" ]]; then echo "5"; else exit 1; fi
+    ;;
+  *) exit 1 ;;
+esac
+MOCK
+  chmod +x "$mock_dir/bd"
+
+  TASK_BACKEND="bd"
+  init_task_backend
+  [[ "$TASK_BACKEND" == "bd" ]]
+  [[ -f "$flag_file" ]]
 }
 
 # Proves: bd_init falls back to checklist when bd init itself fails

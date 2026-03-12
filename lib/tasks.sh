@@ -26,15 +26,25 @@ bd_init() {
     fi
   fi
 
-  # Verify the server is actually reachable after init
+  # Verify the server is actually reachable; retry init if stale
   if ! bd_is_healthy; then
-    _fallback_to_checklist
-    return
+    if ! (cd "$PROJECT_DIR" && bd init) 2>/dev/null || ! bd_is_healthy; then
+      _fallback_to_checklist
+      return
+    fi
   fi
 
   local gitignore="$PROJECT_DIR/.gitignore"
-  if [[ ! -f "$gitignore" ]] || ! grep -qE '^\.beads(/\*?)?$' "$gitignore"; then
-    echo '.beads' >> "$gitignore"
+  local changed=false
+  for entry in .beads .dolt; do
+    if [[ ! -f "$gitignore" ]] || ! grep -qE "^\\${entry}(/\\*?)?$" "$gitignore"; then
+      echo "$entry" >> "$gitignore"
+      changed=true
+    fi
+  done
+  if $changed && git -C "$PROJECT_DIR" rev-parse --git-dir &>/dev/null; then
+    git -C "$PROJECT_DIR" add .gitignore 2>/dev/null || true
+    git -C "$PROJECT_DIR" commit -m "Add beads/dolt to .gitignore" 2>/dev/null || true
   fi
 }
 

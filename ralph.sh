@@ -1169,8 +1169,6 @@ main() {
     setup_tmux
   fi
 
-  setup_worktree
-
   if [[ "$RESUME" == true ]]; then
     stored_backend=$(read_state "task_backend")
     if [[ "$stored_backend" == "bd" || "$stored_backend" == "checklist" ]]; then
@@ -1180,6 +1178,7 @@ main() {
     fi
   fi
 
+  # Init task backend BEFORE worktree so .beads/.dolt are gitignored first
   _validate_backend
   local pre_init_backend="$TASK_BACKEND"
   init_task_backend
@@ -1189,6 +1188,8 @@ main() {
     init_task_backend
   fi
   write_state "task_backend" "$TASK_BACKEND"
+
+  setup_worktree
 
   log_phase "Ralph Loop v${VERSION}"
   log "Project: $PROJECT_DIR"
