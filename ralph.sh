@@ -147,7 +147,7 @@ if [[ "${1:-}" == "feedback" ]]; then
     exit 0
   fi
   echo "$*" >> "$ralph_dir/feedback"
-  echo -e "${GREEN}[ralph]${NC} Feedback queued for next iteration: $*"
+  echo -e "${GREEN}[ralph]${NC} Feedback queued for next iteration."
   exit 0
 fi
 
