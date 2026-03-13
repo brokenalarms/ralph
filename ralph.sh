@@ -48,15 +48,16 @@ BOLD=$'\033[1m'
 NC=$'\033[0m'
 
 # --- Logging ---
-log()         { echo -e "${CYAN}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
-log_success() { echo -e "${GREEN}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
-log_warn()    { echo -e "${YELLOW}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
-log_error()   { echo -e "${RED}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
-log_phase()   { echo -e "${BOLD}${BLUE}[ralph]${NC} ${BOLD}$*${NC}" | tee -a "$LOG_FILE"; }
+_ts() { date +%H:%M:%S; }
+log()         { echo -e "$(_ts) ${CYAN}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
+log_success() { echo -e "$(_ts) ${GREEN}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
+log_warn()    { echo -e "$(_ts) ${YELLOW}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
+log_error()   { echo -e "$(_ts) ${RED}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
+log_phase()   { echo -e "$(_ts) ${BOLD}${BLUE}[ralph]${NC} ${BOLD}$*${NC}" | tee -a "$LOG_FILE"; }
 
-log_task()         { echo -e "${CYAN}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
-log_task_success() { echo -e "${GREEN}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
-log_task_error()   { echo -e "${RED}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
+log_task()         { echo -e "$(_ts) ${CYAN}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
+log_task_success() { echo -e "$(_ts) ${GREEN}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
+log_task_error()   { echo -e "$(_ts) ${RED}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
 
 # --- Helpers ---
 slugify() {
@@ -291,20 +292,17 @@ tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   elif .type == "result" then
     "\n[done]\n"
   else empty end
-' | awk '{
-  now = systime()
-  if (start == 0) start = now
-  elapsed = now - start
-  if (elapsed >= 60) {
-    mins = int(elapsed / 60)
-    secs = elapsed % 60
-    prefix = sprintf("\033[0;33m%dm%02ds\033[0m ", mins, secs)
-  } else {
-    prefix = ""
+' | perl -e '
+  $|=1; my $start=time();
+  while(<STDIN>) {
+    chomp;
+    next if $_ eq "";
+    my $e = time()-$start;
+    my $t = sprintf("%dm%02ds", int($e/60), $e%60);
+    print "\033]2;stream ${t}\033\\";
+    print "$_\n";
   }
-  if ($0 != "") print prefix $0
-  fflush()
-}' | sed -u -E \
+' | sed -u -E \
   -e $'s/\\[done\\]/\033[0;32m[done]\033[0m/g' \
   -e $'s/\\[claude\\]/\033[0;36m[claude]\033[0m/g' \
   -e $'s/\\[([A-Z][A-Za-z]*)\\]/\033[0;34m[\\1]\033[0m/g'
@@ -932,7 +930,11 @@ run_execution() {
   iteration=$(read_state "iteration")
   iteration=${iteration:-0}
 
-  while (( run_iteration < MAX_ITERATIONS )); do
+  write_state "max_iterations" "$MAX_ITERATIONS"
+  while true; do
+    MAX_ITERATIONS=$(read_state "max_iterations")
+    MAX_ITERATIONS=${MAX_ITERATIONS:-20}
+    if (( run_iteration >= MAX_ITERATIONS )); then break; fi
     # Check stop file
     if [[ -f "$STOP_FILE" ]]; then
       log_warn "Stop file detected - halting"
@@ -1043,9 +1045,11 @@ run_execution() {
     fi
 
     # Run claude for this task
+    local task_start=$SECONDS
     if ! run_claude "$task_prompt" "$feedback"; then
       log_warn "Claude failed on iteration $run_iteration, continuing..."
     fi
+    local task_elapsed=$(( SECONDS - task_start ))
     increment_call_count
 
     # Clear feedback after Claude completes the iteration
@@ -1062,7 +1066,8 @@ run_execution() {
 
     # Recount after claude ran
     completed=$(count_completed)
-    log_task "Iteration $run_iteration complete. ${completed}/${total} tasks done."
+    local mins=$(( task_elapsed / 60 )) secs=$(( task_elapsed % 60 ))
+    log_task "Iteration $run_iteration complete (${mins}m${secs}s). ${completed}/${total} tasks done."
 
     # Analyze iteration for problems
     analyze_iteration "$LOG_FILE" "$log_start_line" "$head_before"
