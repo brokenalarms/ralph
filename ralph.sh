@@ -293,14 +293,12 @@ tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
     "\n[done]\n"
   else empty end
 ' | perl -e '
-  $|=1; my $start=time();
+  use POSIX; $|=1;
   while(<STDIN>) {
     chomp;
     next if $_ eq "";
-    my $e = time()-$start;
-    my $t = sprintf("%dm%02ds", int($e/60), $e%60);
-    print "\033]2;stream ${t}\033\\";
-    print "$_\n";
+    my $ts = strftime("%H:%M:%S", localtime());
+    print "$ts $_\n";
   }
 ' | sed -u -E \
   -e $'s/\\[done\\]/\033[0;32m[done]\033[0m/g' \
@@ -322,26 +320,21 @@ setup_tmux() {
 
   write_stream_filter
 
-  tmux new-session -d -s "$TMUX_SESSION" -c "$PROJECT_DIR"
-  tmux split-window -h -t "$TMUX_SESSION"
-  tmux split-window -v -t "$TMUX_SESSION:.1"
+  # Write plan watcher script — waits for signal file, then clears and re-renders
+  cat > "$RALPH_DIR/.plan-watch.sh" <<PLAN_SCRIPT
+#!/usr/bin/env bash
+while true; do
+  if [[ -f '$RALPH_DIR/.plan-refresh' ]]; then
+    rm -f '$RALPH_DIR/.plan-refresh'
+    printf '\033[2J\033[H'
+    cat '$PLAN_FILE' 2>/dev/null
+  fi
+  sleep 1
+done
+PLAN_SCRIPT
+  chmod +x "$RALPH_DIR/.plan-watch.sh"
 
-  # Pane titles
-  tmux select-pane -t "$TMUX_SESSION:.0" -T "ralph"
-  tmux select-pane -t "$TMUX_SESSION:.1" -T "stream"
-  tmux select-pane -t "$TMUX_SESSION:.2" -T "plan"
-  tmux set-option -t "$TMUX_SESSION" pane-border-status top
-  tmux set-option -t "$TMUX_SESSION" pane-border-format " #{pane_title} "
-
-  # Top-right: jq-parsed Claude output
-  tmux send-keys -t "$TMUX_SESSION:.1" \
-    "bash '$RALPH_DIR/.stream-filter.sh' '$LOG_FILE'" Enter
-
-  # Bottom-right: plan (re-renders on change, scrollable via tmux scroll mode)
-  tmux send-keys -t "$TMUX_SESSION:.2" \
-    "prev=''; while true; do curr=\$(cat '$PLAN_FILE' 2>/dev/null); if [[ \"\$curr\" != \"\$prev\" ]]; then clear; echo \"\$curr\"; prev=\"\$curr\"; fi; sleep 3; done" Enter
-
-  # Left pane: re-exec ralph without --tmux, with --quiet
+  # Build ralph re-exec command
   local cmd
   cmd="$(printf '%q' "$SCRIPT_DIR/ralph.sh")"
   for arg in "${RALPH_ORIG_ARGS[@]+"${RALPH_ORIG_ARGS[@]}"}"; do
@@ -350,9 +343,30 @@ setup_tmux() {
   done
   cmd+=" --quiet"
 
-  tmux send-keys -t "$TMUX_SESSION:.0" \
-    "_RALPH_TMUX_SESSION=$TMUX_SESSION $cmd; tmux kill-session -t '$TMUX_SESSION' 2>/dev/null" Enter
+  # Create tmux session with panes running commands directly (no send-keys)
+  tmux new-session -d -s "$TMUX_SESSION" -c "$PROJECT_DIR" \
+    "export _RALPH_TMUX_SESSION=$TMUX_SESSION; $cmd; tmux kill-session -t '$TMUX_SESSION' 2>/dev/null"
+  tmux split-window -h -t "$TMUX_SESSION" \
+    "bash '$RALPH_DIR/.stream-filter.sh' '$LOG_FILE'"
+  tmux split-window -v -t "$TMUX_SESSION:.1" \
+    "bash '$RALPH_DIR/.plan-watch.sh'"
+
+  # Pane titles
+  tmux select-pane -t "$TMUX_SESSION:.0" -T "ralph"
+  tmux select-pane -t "$TMUX_SESSION:.1" -T "stream"
+  tmux select-pane -t "$TMUX_SESSION:.2" -T "plan"
+  tmux set-option -t "$TMUX_SESSION" pane-border-status top
+  tmux set-option -t "$TMUX_SESSION" pane-border-format " #{pane_title} "
   tmux select-pane -t "$TMUX_SESSION:.0"
+
+  # Background timer updates stream pane title every second
+  date +%s > "$RALPH_DIR/.stream-start"
+  ( while tmux has-session -t "$TMUX_SESSION" 2>/dev/null; do
+      _st=$(cat "$RALPH_DIR/.stream-start" 2>/dev/null || echo 0)
+      _el=$(( $(date +%s) - _st ))
+      tmux select-pane -t "$TMUX_SESSION:.1" -T "stream $(printf '%dm%02ds' $((_el/60)) $((_el%60)))" 2>/dev/null
+      sleep 1
+    done ) &
 
   _TMUX_OUTER=true
   tmux attach-session -t "$TMUX_SESSION"
@@ -554,6 +568,7 @@ run_claude() {
     -p "$full_prompt" < /dev/null >> "$LOG_FILE" 2>&1 &
   claude_pid=$!
   log "Claude started (PID: $claude_pid)"
+  date +%s > "$RALPH_DIR/.stream-start" 2>/dev/null || true
 
   # Stream parsed output to terminal unless --quiet
   if [[ "$QUIET" == false ]]; then
@@ -1009,6 +1024,7 @@ run_execution() {
 
     log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS ($iteration total) [${completed}/${total} done] ---"
     log_task "Next task: $next_task"
+    touch "$RALPH_DIR/.plan-refresh"
 
     # Update state
     write_state "iteration" "$iteration"
