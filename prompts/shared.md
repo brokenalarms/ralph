@@ -22,7 +22,7 @@
 - Prefer strict type-checking settings where the ecosystem supports it (e.g., `"strict": true` in tsconfig).
 
 ### Commits
-- Atomic commits: one feature or fix per commit.
+- Atomic commits: one feature or fix per commit. Multiple grouped commits with an overarching theme may together constitute a single PR if their relation is clear.
 - Every commit message needs a subject line + blank line + body. Body: concise bullets covering why, how, and test coverage.
 - Behavioral code changes should be backed by tests. Static content, markup, and config changes don't need tests — a passing build is verification enough.
 
@@ -34,6 +34,7 @@
 Before committing, glance at the files you touched. If you see something genuinely worth cleaning up, do it:
 - Dead code: unused functions, unreachable branches, commented-out code — delete it, git remembers
 - Unclear names in code you modified — names should reveal intent
+- Don't fix flags like ANIMATE = true because it's 'hardcoded' - these are config flags extracted to a certain point for dev convenience. Extract them to a config object or module if this makes the intent clearer.
 - Files growing past ~500 lines — consider whether they have distinct responsibilities worth splitting
 But don't clean up for the sake of it. Don't extract one-line helpers used once. Don't create abstractions for one-time operations. Three similar lines are better than a premature abstraction. If the code reads fine, leave it alone.
 
