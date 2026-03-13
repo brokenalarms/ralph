@@ -234,6 +234,155 @@ teardown() {
   [[ -f "$WORK_DIR/other.txt" ]]
 }
 
+# Proves: squash-merge rebase works when stacked branch modifies the same file.
+# Reproduces: branch 03 adds tests across multiple commits, branch 04 moves some
+# of those tests elsewhere. Multiple intermediate commits create divergent context
+# that causes git's 3-way merge to conflict on the squashed rebase.
+@test "rebase_onto_default_branch handles stacked branch modifying same file" {
+  # Start with a file that branch 03 will modify
+  cat > "$PROJECT_DIR/tests.txt" <<'EOF'
+test_alpha() { run alpha; }
+test_beta() { run beta; }
+test_gamma() { run gamma; }
+EOF
+  git -C "$PROJECT_DIR" add tests.txt
+  git -C "$PROJECT_DIR" commit -m "initial tests" -q
+
+  setup_rebase_env
+
+  # Branch 03: add tests in multiple commits (creates intermediate history
+  # that will conflict with squash on rebase)
+  rename_branch_for_task "add more tests"
+  # First commit: partial addition — this intermediate state differs from squash
+  cat > "$WORK_DIR/tests.txt" <<'EOF'
+test_alpha() { run alpha; }
+test_beta() { run beta; }
+test_gamma() { run gamma; }
+
+// new tests
+test_delta() {
+  setup();
+  run delta;
+}
+EOF
+  git -C "$WORK_DIR" add tests.txt
+  git -C "$WORK_DIR" commit -m "add delta test" -q
+
+  # Second commit: add more tests and reformat
+  cat > "$WORK_DIR/tests.txt" <<'EOF'
+test_alpha() { run alpha; }
+test_beta() { run beta; }
+test_gamma() { run gamma; }
+
+// new tests
+test_delta() {
+  setup();
+  run delta;
+}
+test_epsilon() {
+  setup();
+  run epsilon;
+}
+
+// layout-dependent tests
+test_overlay() {
+  const el = makeElement("DIV", { top: 10 });
+  assert.ok(el.style.top === "10px");
+}
+test_clipping() {
+  const el = makeElement("DIV", { overflow: "hidden" });
+  assert.ok(!isVisible(el));
+}
+EOF
+  git -C "$WORK_DIR" add tests.txt
+  git -C "$WORK_DIR" commit -m "add epsilon, overlay, clipping tests" -q
+
+  # Branch 04: move layout tests to separate file (modifies same file as 03)
+  rotate_branch
+  rename_branch_for_task "move layout tests"
+  cat > "$WORK_DIR/tests.txt" <<'EOF'
+test_alpha() { run alpha; }
+test_beta() { run beta; }
+test_gamma() { run gamma; }
+
+// new tests
+test_delta() {
+  setup();
+  run delta;
+}
+test_epsilon() {
+  setup();
+  run epsilon;
+}
+EOF
+  cat > "$WORK_DIR/layout_tests.txt" <<'EOF'
+// layout-dependent tests (moved from tests.txt)
+test_overlay() {
+  const el = makeElement("DIV", { top: 10 });
+  assert.ok(el.style.top === "10px");
+}
+test_clipping() {
+  const el = makeElement("DIV", { overflow: "hidden" });
+  assert.ok(!isVisible(el));
+}
+EOF
+  git -C "$WORK_DIR" add tests.txt layout_tests.txt
+  git -C "$WORK_DIR" commit -m "move layout tests to separate file" -q
+
+  # Another PR lands on main touching the same file
+  cat > "$PROJECT_DIR/tests.txt" <<'EOF'
+test_alpha() { run alpha; }
+test_beta() { run beta; }
+test_gamma() { run gamma; }
+// added by another PR
+test_zeta() { run zeta; }
+EOF
+  git -C "$PROJECT_DIR" add tests.txt
+  git -C "$PROJECT_DIR" commit -m "other PR: add zeta test" -q
+
+  # Simulate squash-merge of branch 03 into main (conflict resolution with
+  # the other PR means content differs from branch 03's tip)
+  cat > "$PROJECT_DIR/tests.txt" <<'EOF'
+test_alpha() { run alpha; }
+test_beta() { run beta; }
+test_gamma() { run gamma; }
+// added by another PR
+test_zeta() { run zeta; }
+
+// new tests
+test_delta() {
+  setup();
+  run delta;
+}
+test_epsilon() {
+  setup();
+  run epsilon;
+}
+
+// layout-dependent tests
+test_overlay() {
+  const el = makeElement("DIV", { top: 10 });
+  assert.ok(el.style.top === "10px");
+}
+test_clipping() {
+  const el = makeElement("DIV", { overflow: "hidden" });
+  assert.ok(!isVisible(el));
+}
+EOF
+  git -C "$PROJECT_DIR" add tests.txt
+  git -C "$PROJECT_DIR" commit -m "squash: add more tests" -q
+  push_to_origin
+
+  run rebase_onto_default_branch
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"squash-merged"* ]]
+  # Branch 04's changes should be intact
+  [[ -f "$WORK_DIR/layout_tests.txt" ]]
+  # tests.txt should have layout tests removed (branch 04's change)
+  ! grep -q "test_overlay" "$WORK_DIR/tests.txt"
+  grep -q "test_alpha" "$WORK_DIR/tests.txt"
+}
+
 # Proves: real conflicts halt ralph instead of continuing on stale base.
 @test "rebase_onto_default_branch halts on real conflicts" {
   setup_rebase_env

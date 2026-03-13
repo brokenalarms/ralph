@@ -206,9 +206,18 @@ rebase_onto_default_branch() {
     if [[ -z "$branch_files" ]]; then
       continue
     fi
-    if git -C "$WORK_DIR" diff --quiet "$branch" "origin/$default_branch" -- $branch_files 2>/dev/null; then
+    # Check if the branch's changes are already absorbed into main by
+    # reverse-applying the branch's patch against main's tree. If main
+    # contains the branch's changes, the reverse-apply succeeds — even
+    # when other PRs also modified the same files.
+    local tmp_index
+    tmp_index=$(mktemp "${TMPDIR:-/tmp}/ralph_squash_check.XXXXXX")
+    if GIT_INDEX_FILE="$tmp_index" git -C "$WORK_DIR" read-tree "origin/$default_branch" 2>/dev/null \
+       && git -C "$WORK_DIR" diff "$merge_base" "$branch" \
+          | GIT_INDEX_FILE="$tmp_index" git -C "$WORK_DIR" apply --cached --reverse --check -C0 2>/dev/null; then
       last_merged="$branch"
     fi
+    rm -f "$tmp_index"
   done < <(git -C "$PROJECT_DIR" branch --list "ralph/$PROJECT_NAME/*" --sort=refname 2>/dev/null)
 
   if [[ -z "$last_merged" ]]; then
