@@ -1,6 +1,8 @@
 ## Standards
 
 ### Testing
+- You MUST run the full test suite before final commit and push and confirm they pass. Never push broken code, even if unrelated to your changes.
+- You MUST NOT run the full test suite on first startup - assume this is correct from the previous run, and don't waste context.
 - Test behavioral logic — code with branching, state, algorithms, or business rules. Don't write tests for static content, markup, configuration, or simple data changes where a build check is sufficient.
 - If the project has an existing test framework, use it. Don't invent ad-hoc test scripts for projects that don't have tests.
 - Tests should assert actual state changes (before/after), not just exit codes or stdout. Testing `returncode == 0` is useless — it only confirms the script didn't crash.
@@ -11,7 +13,6 @@
 - Always run tests in fast-fail mode with minimal output. Only show output for failing tests — passing test noise wastes context.
 - Always run tests before committing and confirm they pass.
 - Try to keep testing cycles below 20% of total work.
-- Always run a final full test run before committing and confirm they pass.
 - If the dev environment supports it (package.json, Makefile, cargo, xcodegen in MacOS), additionally run a build to verify compilation before committing,
   and make sure that any auto-generated project files (e.g., .xcodeproj) are up to date with the changes.
 
