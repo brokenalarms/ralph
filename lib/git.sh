@@ -182,6 +182,12 @@ rebase_onto_default_branch() {
     return 0
   fi
 
+  # Nothing to rebase if already up to date
+  if git -C "$WORK_DIR" merge-base --is-ancestor HEAD "origin/$default_branch" 2>/dev/null; then
+    log "Already up to date with origin/$default_branch"
+    return 0
+  fi
+
   if git -C "$WORK_DIR" rebase --update-refs "origin/$default_branch" 2>/dev/null; then
     log "Rebased onto origin/$default_branch"
     return 0

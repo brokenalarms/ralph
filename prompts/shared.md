@@ -29,6 +29,7 @@
 
 ### Github
 - Grouped commits for a task should end in a pull request, if the environment supports it (gh is available). Never push directly to main.
+- Before creating a PR, fetch and rebase onto the latest origin main to avoid merge conflicts.
 - If you end up pushing a commit to a pull request after creating the request, the pull request title and description need to be regenerated to capture all commits.
 
 ### Boy Scout Rule

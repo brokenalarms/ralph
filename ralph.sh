@@ -266,7 +266,8 @@ write_stream_filter() {
 #!/usr/bin/env bash
 set +m
 # stream-json: each event has 1 content block. Filter and format.
-{
+LOGDIR="$(dirname "$1")"
+exec 2>"$LOGDIR/.stream-filter.err"
 tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   fromjson? // empty |
   if .type == "assistant" then
@@ -290,11 +291,23 @@ tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   elif .type == "result" then
     "\n[done]\n"
   else empty end
-' 2>/dev/null | sed -E \
+' | awk '{
+  now = systime()
+  if (start == 0) start = now
+  elapsed = now - start
+  if (elapsed >= 60) {
+    mins = int(elapsed / 60)
+    secs = elapsed % 60
+    prefix = sprintf("\033[0;33m%dm%02ds\033[0m ", mins, secs)
+  } else {
+    prefix = ""
+  }
+  if ($0 != "") print prefix $0
+  fflush()
+}' | sed -u -E \
   -e $'s/\\[done\\]/\033[0;32m[done]\033[0m/g' \
   -e $'s/\\[claude\\]/\033[0;36m[claude]\033[0m/g' \
   -e $'s/\\[([A-Z][A-Za-z]*)\\]/\033[0;34m[\\1]\033[0m/g'
-} 2>/dev/null
 STREAM
   chmod +x "$RALPH_DIR/.stream-filter.sh"
 }
@@ -315,13 +328,20 @@ setup_tmux() {
   tmux split-window -h -t "$TMUX_SESSION"
   tmux split-window -v -t "$TMUX_SESSION:.1"
 
+  # Pane titles
+  tmux select-pane -t "$TMUX_SESSION:.0" -T "ralph"
+  tmux select-pane -t "$TMUX_SESSION:.1" -T "stream"
+  tmux select-pane -t "$TMUX_SESSION:.2" -T "plan"
+  tmux set-option -t "$TMUX_SESSION" pane-border-status top
+  tmux set-option -t "$TMUX_SESSION" pane-border-format " #{pane_title} "
+
   # Top-right: jq-parsed Claude output
   tmux send-keys -t "$TMUX_SESSION:.1" \
     "bash '$RALPH_DIR/.stream-filter.sh' '$LOG_FILE'" Enter
 
-  # Bottom-right: plan + state watch
+  # Bottom-right: plan (re-renders on change, scrollable via tmux scroll mode)
   tmux send-keys -t "$TMUX_SESSION:.2" \
-    "watch -n 5 'echo \"=== State ===\"; cat \"$STATE_FILE\" 2>/dev/null; echo; echo \"=== Plan ===\"; head -30 \"$PLAN_FILE\" 2>/dev/null'" Enter
+    "prev=''; while true; do curr=\$(cat '$PLAN_FILE' 2>/dev/null); if [[ \"\$curr\" != \"\$prev\" ]]; then clear; echo \"\$curr\"; prev=\"\$curr\"; fi; sleep 3; done" Enter
 
   # Left pane: re-exec ralph without --tmux, with --quiet
   local cmd
@@ -615,16 +635,10 @@ build_prompt() {
   result+=$(<"$PROMPTS_DIR/signal.md")
 
   if [[ -n "$feedback" ]]; then
-    result+=$'\n\n## User feedback\n'
-    result+='The user has provided the following feedback:\n\n'
-    result+="$feedback"
-    result+=$'\n\n'
-    result+='If this feedback relates to your current task, incorporate it directly. '
-    if [[ "$TASK_BACKEND" == "bd" ]]; then
-      result+='If it is unrelated to your current task, add it as a new task for a future iteration and then continue with your current task.'
-    else
-      result+="If it is unrelated to your current task, append it as a new \`- [ ]\` line to $PLAN_FILE and then continue with your current task."
-    fi
+    local feedback_prompt
+    feedback_prompt=$(<"$PROMPTS_DIR/feedback.md")
+    feedback_prompt="${feedback_prompt//\{\{FEEDBACK\}\}/$feedback}"
+    result+=$'\n\n'"$feedback_prompt"
   fi
 
   local task_instructions
@@ -1034,7 +1048,7 @@ run_execution() {
     fi
     increment_call_count
 
-    # Clear feedback only after Claude has consumed it
+    # Clear feedback after Claude completes the iteration
     if [[ -n "$feedback" ]]; then
       clear_feedback
     fi

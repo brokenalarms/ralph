@@ -44,9 +44,10 @@ The signal instructions are appended to every prompt automatically. If Claude ge
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 - bash
-- jq (optional — enables parsed output streaming)
-- tmux (optional — enables 3-pane layout)
+- Homebrew (for dependency installation)
 - Node.js 18+ (for the HTTP server only)
+
+The install script (`./install.sh`) will brew-install `jq`, `tmux`, and `gh` if missing.
 
 ## Usage
 
