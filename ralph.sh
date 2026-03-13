@@ -217,14 +217,20 @@ init_ralph_dir() {
   mkdir -p "$RALPH_DIR"
   touch "$LOG_FILE"
 
-  # Ensure .ralph is gitignored and committed
+  # Ensure .ralph and .beads are gitignored and committed
   local gitignore="$PROJECT_DIR/.gitignore"
+  local needs_commit=false
   if [[ ! -f "$gitignore" ]] || ! grep -qE '^\.ralph(/\*?)?$' "$gitignore"; then
     echo '.ralph' >> "$gitignore"
-    if git -C "$PROJECT_DIR" rev-parse --git-dir &>/dev/null; then
-      git -C "$PROJECT_DIR" add .gitignore 2>/dev/null || true
-      git -C "$PROJECT_DIR" commit -m "Add .ralph to .gitignore" 2>/dev/null || true
-    fi
+    needs_commit=true
+  fi
+  if [[ ! -f "$gitignore" ]] || ! grep -qE '^\.beads(/\*?)?$' "$gitignore"; then
+    echo '.beads' >> "$gitignore"
+    needs_commit=true
+  fi
+  if [[ "$needs_commit" == true ]] && git -C "$PROJECT_DIR" rev-parse --git-dir &>/dev/null; then
+    git -C "$PROJECT_DIR" add .gitignore 2>/dev/null || true
+    git -C "$PROJECT_DIR" commit -m "Add .ralph and .beads to .gitignore" 2>/dev/null || true
   fi
 
   if [[ -f "$STATE_FILE" ]]; then
@@ -267,8 +273,7 @@ write_stream_filter() {
 #!/usr/bin/env bash
 set +m
 # stream-json: each event has 1 content block. Filter and format.
-LOGDIR="$(dirname "$1")"
-exec 2>"$LOGDIR/.stream-filter.err"
+exec 2>"$(dirname "$0")/.stream-filter.err"
 tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   fromjson? // empty |
   if .type == "assistant" then

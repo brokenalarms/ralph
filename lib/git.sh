@@ -27,7 +27,6 @@ setup_worktree() {
       local named_branches
       named_branches=$(git -C "$PROJECT_DIR" branch --list "ralph/$PROJECT_NAME/*" 2>/dev/null | wc -l | tr -d ' ')
       _TASK_SEQ=$((named_branches))
-      SIGNAL_FILE="$WORK_DIR/.ralph-signal"
       log "Resuming in worktree: $WORK_DIR (branch: $WORKTREE_BRANCH)"
       return
     fi
@@ -87,7 +86,6 @@ setup_worktree() {
   write_state "worktree_dir" "$WORK_DIR"
   write_state "worktree_branch" "$WORKTREE_BRANCH"
 
-  SIGNAL_FILE="$WORK_DIR/.ralph-signal"
 }
 
 rename_worktree_for_theme() {
@@ -123,7 +121,6 @@ rename_worktree_for_theme() {
   if git -C "$PROJECT_DIR" worktree move "$WORK_DIR" "$new_dir" 2>/dev/null; then
     WORK_DIR="$new_dir"
     write_state "worktree_dir" "$WORK_DIR"
-    SIGNAL_FILE="$WORK_DIR/.ralph-signal"
     log "Worktree renamed: $new_dir"
   else
     log_warn "Could not rename worktree (continuing with current name)"

@@ -31,7 +31,7 @@ ralph.sh --plan-file AGENTS.md -d ~/myproject
 
 ### Signal protocol
 
-Claude communicates with ralph via a file (`.ralph-signal` in the worktree):
+Claude communicates with ralph via a signal file (`.ralph/signal`):
 
 ```
 ###RALPH_CURRENT_TASK### <description>    # written when Claude picks a task

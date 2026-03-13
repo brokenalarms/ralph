@@ -1,3 +1,7 @@
 .claude
-.ralph-signal
 .ralph
+.beads
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
