@@ -8,28 +8,44 @@ run_bd() { (cd "$PROJECT_DIR" && bd "$@"); }
 bd_is_healthy() {
   # Quick check: can bd actually talk to its server?
   # "bd count" is lightweight and exercises the DB connection.
-  run_bd count &>/dev/null 2>&1
+  run_bd count 2>/dev/null >/dev/null
 }
 
 _fallback_to_checklist() {
-  log_warn "Beads/Dolt unavailable — falling back to checklist backend"
-  TASK_BACKEND="checklist"
+  local reason="${1:-unknown}"
+  log_warn "Beads/Dolt unavailable: $reason"
+  printf "${YELLOW}[ralph]${NC} Continue with checklist backend instead? (y/n) "
+  read -r answer
+  if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
+    TASK_BACKEND="checklist"
+  else
+    log_error "Fix beads/dolt and retry. Run 'bd doctor' to diagnose."
+    exit 1
+  fi
 }
 
 # --- bd backend ---
 
 bd_init() {
+  local bd_err
+
   if [[ ! -d "$PROJECT_DIR/.beads" ]]; then
-    if ! (cd "$PROJECT_DIR" && bd init) 2>/dev/null; then
-      _fallback_to_checklist
+    if ! bd_err=$(cd "$PROJECT_DIR" && bd init 2>&1); then
+      _fallback_to_checklist "bd init failed: $bd_err"
       return
     fi
   fi
 
   # Verify the server is actually reachable; retry init if stale
   if ! bd_is_healthy; then
-    if ! (cd "$PROJECT_DIR" && bd init) 2>/dev/null || ! bd_is_healthy; then
-      _fallback_to_checklist
+    log_warn "Beads health check failed — retrying bd init..."
+    if ! bd_err=$(cd "$PROJECT_DIR" && bd init 2>&1); then
+      _fallback_to_checklist "bd init retry failed: $bd_err"
+      return
+    fi
+    if ! bd_is_healthy; then
+      bd_err=$(run_bd count 2>&1) || true
+      _fallback_to_checklist "server unreachable after retry: $bd_err"
       return
     fi
   fi
