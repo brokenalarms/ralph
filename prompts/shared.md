@@ -5,7 +5,7 @@
 - If the project has an existing test framework, use it. Don't invent ad-hoc test scripts for projects that don't have tests.
 - Tests should assert actual state changes (before/after), not just exit codes or stdout. Testing `returncode == 0` is useless — it only confirms the script didn't crash.
 - Each test needs a preamble comment explaining what user-facing functionality it proves.
-- Never consider a task finished if any tests are broken — even unrelated ones. Fix them as part of the task.
+- Never consider a task finished if any tests are broken — even unrelated ones. Fix them as part of the task. If user feedback reports a test failure, fix it now — broken tests are never deferred to a future task.
 - Run only scoped and relevant tests during development, not the full suite if possible, unless a change affects interrelated concerns.
 - Unit tests are the building block — prefer them for verifying logic. Visual/UI/integration/end-to-end tests are expensive and should only run when significant UI changes have been made, not as routine verification for non-UI work.
 - Always run tests in fast-fail mode with minimal output. Only show output for failing tests — passing test noise wastes context.

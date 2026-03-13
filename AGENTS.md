@@ -2,7 +2,11 @@
 - ralph requires a git repository. Running in a non-git directory exits with an error. Use `--no-worktree` to skip git isolation, but a git repo is still required.
 - never push to main - atomic commits comprising a feature should be pushed as a PR from the branch you're working on, this should be part of considering a task finished.
 - The final stage of a piece of work is always commiting and pushing to a branched PR- I shouldn't have to ask.
+- Before you push, you must pull in the latest from main to your branch. Branches may have been merged while you worked.
 - It is up to the user to work through these stacks and merge them. Never merge a PR to main without asking first.
+
+# Prompts
+- User-facing text strings and instructions for Claude belong in `.md` files under `prompts/`, not hardcoded in shell scripts. Shell code assembles and templates prompts but should not contain instructional prose.
 
 # Beads / bd
 - Never hardcode bd commands in prompts or scripts. All bd knowledge comes from `bd prime` — Claude learns the workflow at runtime. Prompts should refer to tasks generically (e.g. "add a new task", "close the task") and let `bd prime` teach the specifics.

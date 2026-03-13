@@ -408,6 +408,12 @@ read_signal_summary() {
 _rename_worktree_from_theme() {
   local theme
   theme=$(read_state "theme")
+
+  # Fallback: derive theme from plan file heading if Claude didn't write one
+  if [[ -z "$theme" && -f "$PLAN_FILE" ]]; then
+    theme=$(head -1 "$PLAN_FILE" | sed 's/^#* *//')
+  fi
+
   if [[ -n "$theme" ]]; then
     rename_worktree_for_theme "$theme"
   fi
@@ -652,6 +658,7 @@ build_refactor_prompt() {
   result="${result//\{\{RECENT_FILES\}\}/$recent_files}"
   result="${result//\{\{SIGNAL_FILE\}\}/$SIGNAL_FILE}"
   result="${result//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
+  result="${result//\{\{CURRENT_TASK_TOKEN\}\}/$CURRENT_TASK_TOKEN}"
   result="${result//\{\{ALL_COMPLETE_TOKEN\}\}/$ALL_COMPLETE_TOKEN}"
 
   printf '%s' "$result"
