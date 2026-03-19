@@ -262,6 +262,144 @@ func (m *Manager) RotateBranch() {
 	}
 }
 
+// RebaseOntoDefaultBranch rebases the worktree onto origin's default branch,
+// detecting and skipping squash-merged branches when a naive rebase conflicts.
+// Mirrors lib/git.sh rebase_onto_default_branch.
+func (m *Manager) RebaseOntoDefaultBranch() error {
+	defaultBranch := detectDefaultBranch(m.ProjectDir)
+	gitCmd(m.WorkDir, "fetch", "origin", defaultBranch)
+
+	// Skip if remote branch doesn't exist (e.g. repo never pushed)
+	if !refExists(m.WorkDir, "origin/"+defaultBranch) {
+		m.Logger.Log("No remote branch origin/%s — skipping rebase", defaultBranch)
+		return nil
+	}
+
+	// Already up to date
+	if gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "HEAD", "origin/"+defaultBranch) == nil {
+		m.Logger.Log("Already up to date with origin/%s", defaultBranch)
+		return nil
+	}
+
+	// Try simple rebase
+	if gitCmdErr(m.WorkDir, "rebase", "--update-refs", "origin/"+defaultBranch) == nil {
+		m.Logger.Log("Rebased onto origin/%s", defaultBranch)
+		return nil
+	}
+
+	gitCmd(m.WorkDir, "rebase", "--abort")
+	m.Logger.Warn("Rebase failed, checking for squash-merged branches...")
+
+	// Find squash-merged branches by checking if their changes are already
+	// absorbed into origin/default via reverse-apply detection.
+	lastMerged := m.findLastSquashMergedBranch(defaultBranch)
+
+	if lastMerged == "" {
+		m.Logger.Error("Rebase onto %s failed with real conflicts — halting", defaultBranch)
+		return fmt.Errorf("rebase onto %s failed with real conflicts", defaultBranch)
+	}
+
+	m.Logger.Log("Detected squash-merged branch: %s", lastMerged)
+
+	if err := gitCmdErr(m.WorkDir, "rebase", "--update-refs", "--onto", "origin/"+defaultBranch, lastMerged, "HEAD"); err != nil {
+		gitCmd(m.WorkDir, "rebase", "--abort")
+		m.Logger.Error("Rebase onto %s past squash-merged branches failed — halting", defaultBranch)
+		return fmt.Errorf("rebase onto %s past squash-merged branches failed", defaultBranch)
+	}
+
+	m.Logger.Log("Rebased onto origin/%s (skipped squash-merged branches)", defaultBranch)
+
+	// Update TaskSeq from remaining branches, then delete the merged branch
+	m.TaskSeq = ParseTaskSeqFromBranches(m.ProjectDir, m.ProjectName)
+	gitCmd(m.ProjectDir, "branch", "-D", lastMerged)
+
+	return nil
+}
+
+// findLastSquashMergedBranch iterates ralph/<project>/* branches (sorted by
+// refname, skipping */next) and returns the last one whose changes are already
+// absorbed into origin/defaultBranch. Detection uses a temporary git index:
+// read-tree origin/default, then reverse-apply the branch's diff. If that
+// succeeds, main already contains the branch's changes (squash-merged).
+func (m *Manager) findLastSquashMergedBranch(defaultBranch string) string {
+	branches := listProjectBranches(m.ProjectDir, m.ProjectName)
+	lastMerged := ""
+
+	for _, branch := range branches {
+		if strings.HasSuffix(branch, "/next") {
+			continue
+		}
+
+		mergeBase := gitOutput(m.WorkDir, "merge-base", "origin/"+defaultBranch, branch)
+		if mergeBase == "" {
+			continue
+		}
+
+		// Skip branches with no changes
+		branchFiles := gitOutput(m.WorkDir, "diff", "--name-only", mergeBase, branch)
+		if branchFiles == "" {
+			continue
+		}
+
+		if m.isSquashMerged(defaultBranch, mergeBase, branch) {
+			lastMerged = branch
+		}
+	}
+
+	return lastMerged
+}
+
+// isSquashMerged checks whether branch's changes (relative to mergeBase) are
+// already present in origin/defaultBranch by reverse-applying the diff against
+// a temporary index loaded with origin/default's tree.
+func (m *Manager) isSquashMerged(defaultBranch, mergeBase, branch string) bool {
+	tmpIndex, err := os.CreateTemp("", "ralph_squash_check.*")
+	if err != nil {
+		return false
+	}
+	tmpPath := tmpIndex.Name()
+	tmpIndex.Close()
+	defer os.Remove(tmpPath)
+
+	// Load origin/default's tree into the temp index
+	readTreeCmd := exec.Command("git", "-C", m.WorkDir, "read-tree", "origin/"+defaultBranch)
+	readTreeCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpPath)
+	if readTreeCmd.Run() != nil {
+		return false
+	}
+
+	// Generate the diff between merge-base and branch
+	diffCmd := exec.Command("git", "-C", m.WorkDir, "diff", mergeBase, branch)
+	diffOut, err := diffCmd.Output()
+	if err != nil || len(diffOut) == 0 {
+		return false
+	}
+
+	// Reverse-apply the diff against the temp index — if it succeeds,
+	// origin/default already contains these changes.
+	applyCmd := exec.Command("git", "-C", m.WorkDir, "apply", "--cached", "--reverse", "--check", "-C0")
+	applyCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpPath)
+	applyCmd.Stdin = strings.NewReader(string(diffOut))
+	return applyCmd.Run() == nil
+}
+
+// listProjectBranches returns ralph/<project>/* branches sorted by refname.
+func listProjectBranches(dir, projectName string) []string {
+	out := gitOutput(dir, "branch", "--list", "ralph/"+projectName+"/*", "--sort=refname")
+	if out == "" {
+		return nil
+	}
+	var branches []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "* ")
+		if line != "" {
+			branches = append(branches, line)
+		}
+	}
+	return branches
+}
+
 // --- Slugify ---
 
 var (
