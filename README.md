@@ -31,14 +31,14 @@ ralph.sh --plan-file AGENTS.md -d ~/myproject
 
 ### Signal protocol
 
-Claude communicates with ralph via a signal file (`.ralph/signal`):
+Claude communicates with ralph via signal tokens echoed to stdout (captured in the log):
 
 ```
 ###RALPH_CURRENT_TASK### <description>    # written when Claude picks a task
 ###RALPH_TASK_COMPLETE### <summary>        # written when done — triggers next iteration
 ```
 
-The signal instructions are appended to every prompt automatically. If Claude gets stuck, it still writes the completion signal so the loop can proceed.
+The signal instructions are appended to every prompt automatically. If Claude gets stuck, it still echoes the completion signal so the loop can proceed.
 
 ## Requirements
 
@@ -110,7 +110,7 @@ Ralph's prompts live in `prompts/` and are designed to be read and modified. The
 | `external.md` | `--plan-file` mode | Tells Claude to read the project's own agent instructions for task selection |
 | `signal.md` | Always (appended to all prompts) | Documents the signal protocol |
 
-Placeholders like `{{WORK_DIR}}`, `{{PLAN_FILE}}`, `{{SIGNAL_FILE}}` are substituted at runtime. Edit the prompts to change how Claude behaves in your loops.
+Placeholders like `{{WORK_DIR}}`, `{{PLAN_FILE}}`, `{{SIGNAL_TOKEN}}` are substituted at runtime. Edit the prompts to change how Claude behaves in your loops.
 
 ## Git worktrees
 

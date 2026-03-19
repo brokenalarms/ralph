@@ -27,9 +27,9 @@ teardown() {
   local prompt
   prompt=$(build_refactor_prompt "lib/tasks.sh")
   [[ "$prompt" == *"$WORK_DIR"* ]]
-  [[ "$prompt" == *"$SIGNAL_FILE"* ]]
+  [[ "$prompt" == *"$SIGNAL_TOKEN"* ]]
   [[ "$prompt" != *"{{WORK_DIR}}"* ]]
-  [[ "$prompt" != *"{{SIGNAL_FILE}}"* ]]
+  [[ "$prompt" != *"{{SIGNAL_TOKEN}}"* ]]
   [[ "$prompt" != *"{{RECENT_FILES}}"* ]]
 }
 

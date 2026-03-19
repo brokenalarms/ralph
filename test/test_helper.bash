@@ -26,7 +26,6 @@ setup_test_repo() {
 
   PLAN_FILE="$RALPH_DIR/plan.md"
   STATE_FILE="$RALPH_DIR/state.json"
-  SIGNAL_FILE="$RALPH_DIR/signal"
   STOP_FILE="$RALPH_DIR/stop"
   LOG_FILE="$RALPH_DIR/loop.log"
   touch "$LOG_FILE"
