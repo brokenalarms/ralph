@@ -209,13 +209,14 @@ fi
 STATE_FILE="$RALPH_DIR/state.json"
 STOP_FILE="$RALPH_DIR/stop"
 LOG_FILE="$RALPH_DIR/loop.log"
+RAW_LOG="$RALPH_DIR/raw.log"
 _SIGNAL_LOG_OFFSET=0
 RESUME_SCRIPT="$RALPH_DIR/resume.sh"
 
 # --- Init .ralph directory ---
 init_ralph_dir() {
   mkdir -p "$RALPH_DIR"
-  touch "$LOG_FILE"
+  touch "$LOG_FILE" "$RAW_LOG"
 
   # Bail if there are staged or unstaged changes — we commit .gitignore below
   # and must not sweep unrelated work into that commit.
@@ -254,7 +255,7 @@ init_ralph_dir() {
       if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
         rm -rf "$RALPH_DIR"
         mkdir -p "$RALPH_DIR"
-        touch "$LOG_FILE"
+        touch "$LOG_FILE" "$RAW_LOG"
       else
         exit 0
       fi
@@ -409,7 +410,7 @@ PLAN_SCRIPT
   tmux new-session -d -s "$TMUX_SESSION" -c "$PROJECT_DIR" \
     "export _RALPH_TMUX_SESSION=$TMUX_SESSION; $cmd; tmux kill-session -t '$TMUX_SESSION' 2>/dev/null"
   tmux split-window -h -t "$TMUX_SESSION" \
-    "bash '$RALPH_DIR/.stream-filter.sh' '$LOG_FILE'"
+    "bash '$RALPH_DIR/.stream-filter.sh' '$RAW_LOG'"
   tmux split-window -v -t "$TMUX_SESSION:.1" \
     "bash '$RALPH_DIR/.plan-watch.sh'"
 
@@ -462,9 +463,9 @@ write_state() {
   fi
 }
 
-# --- Signal detection (scan log from offset) ---
+# --- Signal detection (scan raw log from offset) ---
 clear_signal() {
-  _SIGNAL_LOG_OFFSET=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+  _SIGNAL_LOG_OFFSET=$(wc -l < "$RAW_LOG" 2>/dev/null || echo 0)
 }
 
 read_feedback() {
@@ -479,7 +480,7 @@ clear_feedback() {
 }
 
 _signal_log_tail() {
-  tail -n "+$((_SIGNAL_LOG_OFFSET + 1))" "$LOG_FILE" 2>/dev/null
+  tail -n "+$((_SIGNAL_LOG_OFFSET + 1))" "$RAW_LOG" 2>/dev/null
 }
 
 check_signal() {
@@ -627,26 +628,29 @@ run_claude() {
   fi
 
   # Launch claude in background
-  # Use stream-json output format so output flows to the log file in real-time
-  # (default text format batches all output until exit)
+  # Raw JSON goes to RAW_LOG (kept for analyzer + next-iteration context);
+  # a filter process writes human-readable output to LOG_FILE.
   cd "$WORK_DIR"
   claude --print --verbose --output-format stream-json \
     --add-dir "$WORK_DIR" \
     --add-dir "$RALPH_DIR" \
     --dangerously-skip-permissions \
-    -p "$full_prompt" < /dev/null >> "$LOG_FILE" 2>&1 &
+    -p "$full_prompt" < /dev/null >> "$RAW_LOG" 2>&1 &
   claude_pid=$!
   log "Claude started (PID: $claude_pid)"
   date +%s > "$RALPH_DIR/.stream-start" 2>/dev/null || true
 
-  # Stream parsed output to terminal unless --quiet
-  if [[ "$QUIET" == false ]]; then
-    if command -v jq &>/dev/null; then
-      write_stream_filter
-      bash "$RALPH_DIR/.stream-filter.sh" "$LOG_FILE" &
-    else
+  # Filter raw JSON → human-readable LOG_FILE + optional terminal display
+  write_stream_filter
+  if command -v jq &>/dev/null; then
+    bash "$RALPH_DIR/.stream-filter.sh" "$RAW_LOG" >> "$LOG_FILE" &
+    local filter_pid=$!
+    if [[ "$QUIET" == false ]]; then
       tail -f -n 0 "$LOG_FILE" &
+      tail_pid=$!
     fi
+  elif [[ "$QUIET" == false ]]; then
+    tail -f -n 0 "$RAW_LOG" &
     tail_pid=$!
   fi
 
@@ -682,6 +686,11 @@ run_claude() {
   wait "$claude_pid" 2>/dev/null || true
 
   # Clean up stream filter and its children (tail, jq)
+  if [[ -n "${filter_pid:-}" ]]; then
+    pkill -P "$filter_pid" 2>/dev/null || true
+    kill "$filter_pid" 2>/dev/null || true
+    wait "$filter_pid" 2>/dev/null || true
+  fi
   if [[ -n "$tail_pid" ]]; then
     pkill -P "$tail_pid" 2>/dev/null || true
     kill "$tail_pid" 2>/dev/null || true
@@ -868,9 +877,23 @@ analyze_iteration() {
     return
   fi
 
+  # Extract only assistant text from stream-json (excludes tool inputs/outputs
+  # to avoid false positives from code content like test fixtures).
+  local assistant_text=""
+  if command -v jq &>/dev/null; then
+    assistant_text=$(jq -r '
+        select(.type == "assistant") |
+        .message.content[]? |
+        select(.type == "text") |
+        .text
+      ' <<< "$iter_log" 2>/dev/null || true)
+  else
+    assistant_text="$iter_log"
+  fi
+
   # --- Permission denial detection (3+ in single iteration → halt) ---
   local perm_matches=""
-  perm_matches=$(grep -iE 'permission denied|cannot write|blocked by sandbox|not allowed' <<< "$iter_log" | head -5 || true)
+  perm_matches=$(grep -iE 'permission denied|cannot write|blocked by sandbox|not allowed' <<< "$assistant_text" | head -5 || true)
   local perm_count=0
   if [[ -n "$perm_matches" ]]; then
     perm_count=$(echo "$perm_matches" | wc -l | tr -d ' ')
@@ -884,7 +907,7 @@ analyze_iteration() {
   # --- Stuck loop detection ---
   local stuck_detected=false
 
-  if grep -qiE "I'm blocked|I cannot proceed|unable to complete" <<< "$iter_log"; then
+  if grep -qiE "I'm blocked|I cannot proceed|unable to complete" <<< "$assistant_text"; then
     stuck_detected=true
   fi
 
@@ -1116,7 +1139,7 @@ run_execution() {
 
     # Capture log offset and HEAD before running claude
     local log_start_line
-    log_start_line=$(( $(wc -l < "$LOG_FILE" 2>/dev/null || echo 0) + 1 ))
+    log_start_line=$(( $(wc -l < "$RAW_LOG" 2>/dev/null || echo 0) + 1 ))
     local head_before
     head_before=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
 
@@ -1153,7 +1176,7 @@ run_execution() {
     log_task "Iteration $run_iteration complete (${mins}m${secs}s). ${completed}/${total} tasks done."
 
     # Analyze iteration for problems
-    analyze_iteration "$LOG_FILE" "$log_start_line" "$head_before"
+    analyze_iteration "$RAW_LOG" "$log_start_line" "$head_before"
     case "$ANALYSIS_RESULT" in
       halt:*)
         log_error "Halting: ${ANALYSIS_RESULT#halt:}"
