@@ -54,6 +54,22 @@ teardown() {
   [[ "$result" == "Working on auth" ]]
 }
 
+# Proves: JSON artifacts are stripped from task description in stream-json logs
+@test "read_current_task strips JSON from stream-json output" {
+  clear_signal
+  echo '{"text":"echo \"###RALPH_CURRENT_TASK### Fix auth module\"","description":"Signal"}' >> "$LOG_FILE"
+  result=$(read_current_task)
+  [[ "$result" == "Fix auth module" ]]
+}
+
+# Proves: JSON artifacts are stripped from signal summary in stream-json logs
+@test "read_signal_summary strips JSON from stream-json output" {
+  clear_signal
+  echo '{"text":"echo \"###RALPH_TASK_COMPLETE### Auth fix done\"","description":"Signal"}' >> "$LOG_FILE"
+  result=$(read_signal_summary)
+  [[ "$result" == "Auth fix done" ]]
+}
+
 # Proves: ralph stops when Claude says everything is done.
 @test "ALL_COMPLETE signal detected" {
   clear_signal

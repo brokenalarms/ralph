@@ -219,7 +219,9 @@ init_ralph_dir() {
 
   # Bail if there are staged or unstaged changes — we commit .gitignore below
   # and must not sweep unrelated work into that commit.
-  if git -C "$PROJECT_DIR" rev-parse --git-dir &>/dev/null; then
+  # Skip this check on resume: the worktree isolates ralph's work from the
+  # main tree, so local changes here shouldn't block continuing.
+  if [[ ! -f "$STATE_FILE" ]] && git -C "$PROJECT_DIR" rev-parse --git-dir &>/dev/null; then
     if ! git -C "$PROJECT_DIR" diff --quiet 2>/dev/null || ! git -C "$PROJECT_DIR" diff --cached --quiet 2>/dev/null; then
       log_error "uncommitted changes in $PROJECT_DIR — please commit or stash before running ralph."
       exit 1
@@ -338,11 +340,39 @@ setup_tmux() {
   # Write plan watcher script — waits for signal file, then clears and re-renders
   cat > "$RALPH_DIR/.plan-watch.sh" <<PLAN_SCRIPT
 #!/usr/bin/env bash
+BOLD=$'\033[1m'
+CYAN=$'\033[0;36m'
+GREEN=$'\033[0;32m'
+DIM=$'\033[2m'
+NC=$'\033[0m'
 while true; do
   if [[ -f '$RALPH_DIR/.plan-refresh' ]]; then
     rm -f '$RALPH_DIR/.plan-refresh'
     printf '\033[2J\033[H'
-    cat '$PLAN_FILE' 2>/dev/null
+    if [[ '$TASK_BACKEND' == 'bd' ]]; then
+      # Show current task + description, then blocked list
+      current_json=\$(bd list --status in_progress --flat --json --limit 1 2>/dev/null)
+      current_title=\$(echo "\$current_json" | jq -r '.[0].title // empty' 2>/dev/null)
+      current_desc=\$(echo "\$current_json" | jq -r '.[0].description // empty' 2>/dev/null)
+      current_id=\$(echo "\$current_json" | jq -r '.[0].id // empty' 2>/dev/null)
+      if [[ -n "\$current_title" ]]; then
+        printf "\${BOLD}\${CYAN}▶ %s\${NC} \${DIM}(%s)\${NC}\n" "\$current_title" "\$current_id"
+        if [[ -n "\$current_desc" ]]; then
+          printf "\${DIM}%s\${NC}\n" "\$current_desc" | fold -s -w 72
+        fi
+        printf "\n"
+      fi
+      # Show remaining ready + open tasks
+      ready_list=\$(bd ready --limit 10 2>/dev/null || true)
+      if [[ -n "\$ready_list" ]]; then
+        printf "\${BOLD}Ready:\${NC}\n%s\n\n" "\$ready_list"
+      fi
+      closed=\$(bd count --status closed 2>/dev/null || echo 0)
+      total=\$(bd count 2>/dev/null || echo 0)
+      printf "\${GREEN}%s/%s done\${NC}\n" "\$closed" "\$total"
+    else
+      cat '$PLAN_FILE' 2>/dev/null
+    fi
   fi
   sleep 1
 done
@@ -448,11 +478,13 @@ check_current_task() {
 }
 
 read_current_task() {
-  _signal_log_tail | grep "$CURRENT_TASK_TOKEN" | sed "s/.*$CURRENT_TASK_TOKEN *//" | head -1
+  _signal_log_tail | grep "$CURRENT_TASK_TOKEN" | sed "s/.*$CURRENT_TASK_TOKEN *//" | head -1 \
+    | sed 's/\\".*//' | sed 's/",.*//'
 }
 
 read_signal_summary() {
-  _signal_log_tail | grep "$SIGNAL_TOKEN" | sed "s/.*$SIGNAL_TOKEN *//" | head -1
+  _signal_log_tail | grep "$SIGNAL_TOKEN" | sed "s/.*$SIGNAL_TOKEN *//" | head -1 \
+    | sed 's/\\".*//' | sed 's/",.*//'
 }
 
 # --- Worktree theme renaming ---

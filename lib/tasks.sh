@@ -68,16 +68,37 @@ bd_init() {
 }
 
 bd_has_remaining() {
-  local c
-  c=$(run_bd count --status open 2>/dev/null) || c=0
-  (( c > 0 ))
+  local open inp
+  open=$(run_bd count --status open 2>/dev/null) || open=0
+  inp=$(run_bd count --status in_progress 2>/dev/null) || inp=0
+  (( open + inp > 0 ))
 }
 
 bd_count_completed()   { run_bd count --status closed 2>/dev/null || echo 0; }
-bd_count_remaining()   { run_bd count --status open 2>/dev/null || echo 0; }
+bd_count_remaining() {
+  local open inp
+  open=$(run_bd count --status open 2>/dev/null) || open=0
+  inp=$(run_bd count --status in_progress 2>/dev/null) || inp=0
+  echo $(( open + inp ))
+}
 bd_count_total()       { run_bd count 2>/dev/null || echo 0; }
-bd_get_next_task()     { run_bd ready --limit 1 --json 2>/dev/null | jq -r '.[0].title // empty'; }
-bd_get_next_task_id()  { run_bd ready --limit 1 --json 2>/dev/null | jq -r '.[0].id // empty'; }
+bd_get_next_task() {
+  # Resume in-progress tasks first, then pick from ready queue
+  local title
+  title=$(run_bd list --status in_progress --flat --json --limit 1 2>/dev/null | jq -r '.[0].title // empty')
+  if [[ -z "$title" ]]; then
+    title=$(run_bd ready --limit 1 --json 2>/dev/null | jq -r '.[0].title // empty')
+  fi
+  echo "$title"
+}
+bd_get_next_task_id() {
+  local id
+  id=$(run_bd list --status in_progress --flat --json --limit 1 2>/dev/null | jq -r '.[0].id // empty')
+  if [[ -z "$id" ]]; then
+    id=$(run_bd ready --limit 1 --json 2>/dev/null | jq -r '.[0].id // empty')
+  fi
+  echo "$id"
+}
 
 bd_has_tasks() { (( $(bd_count_total) > 0 )); }
 bd_needs_planning()     { ! bd_has_tasks; }

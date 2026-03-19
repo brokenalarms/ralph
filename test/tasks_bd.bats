@@ -16,14 +16,21 @@ case "$1" in
     case "${2:-}" in
       --status)
         case "$3" in
-          open)   echo "3" ;;
-          closed) echo "2" ;;
+          open)        echo "3" ;;
+          closed)      echo "2" ;;
+          in_progress) echo "0" ;;
         esac
         ;;
       *)
         echo "5"
         ;;
     esac
+    ;;
+  list)
+    # Handle --status in_progress --flat --json
+    if [[ "$*" == *"--status"*"in_progress"*"--json"* ]]; then
+      echo '[]'
+    fi
     ;;
   ready)
     if [[ "${2:-}" == "--limit" && "${4:-}" == "--json" ]]; then
@@ -67,8 +74,8 @@ teardown() {
   [[ "$result" == "2" ]]
 }
 
-# Proves: bd backend returns correct remaining count
-@test "bd: count_remaining returns open count" {
+# Proves: bd backend counts both open and in-progress as remaining
+@test "bd: count_remaining returns open + in_progress count" {
   result=$(count_remaining)
   [[ "$result" == "3" ]]
 }
@@ -89,6 +96,55 @@ teardown() {
 @test "bd: get_next_task_id returns first ready task id" {
   result=$(get_next_task_id)
   [[ "$result" == "abc123" ]]
+}
+
+# Proves: in-progress tasks are resumed before picking new ready tasks
+@test "bd: get_next_task resumes in-progress task first" {
+  # Override mock to return an in-progress task
+  local mock_dir="$TEST_TMPDIR/mock_bin"
+  cat > "$mock_dir/bd" <<'MOCK'
+#!/usr/bin/env bash
+case "$1" in
+  list)
+    if [[ "$*" == *"--status"*"in_progress"*"--json"* ]]; then
+      echo '[{"id":"wip-42","title":"Half-done feature"}]'
+    fi
+    ;;
+  ready)
+    echo '[{"id":"abc123","title":"Fix the auth module"}]'
+    ;;
+esac
+MOCK
+  chmod +x "$mock_dir/bd"
+  result=$(get_next_task)
+  [[ "$result" == "Half-done feature" ]]
+}
+
+# Proves: in-progress task id is returned for prompt inclusion
+@test "bd: get_next_task_id resumes in-progress task id first" {
+  local mock_dir="$TEST_TMPDIR/mock_bin"
+  cat > "$mock_dir/bd" <<'MOCK'
+#!/usr/bin/env bash
+case "$1" in
+  list)
+    if [[ "$*" == *"--status"*"in_progress"*"--json"* ]]; then
+      echo '[{"id":"wip-42","title":"Half-done feature"}]'
+    fi
+    ;;
+  ready)
+    echo '[{"id":"abc123","title":"Fix the auth module"}]'
+    ;;
+esac
+MOCK
+  chmod +x "$mock_dir/bd"
+  result=$(get_next_task_id)
+  [[ "$result" == "wip-42" ]]
+}
+
+# Proves: falls back to ready queue when no in-progress tasks
+@test "bd: get_next_task falls back to ready when nothing in-progress" {
+  result=$(get_next_task)
+  [[ "$result" == "Fix the auth module" ]]
 }
 
 # Proves: checklist backend returns empty id (no bd integration)
