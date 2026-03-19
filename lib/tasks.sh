@@ -14,14 +14,17 @@ bd_is_healthy() {
 _fallback_to_checklist() {
   local reason="${1:-unknown}"
   log_warn "Beads/Dolt unavailable: $reason"
-  printf "${YELLOW}[ralph]${NC} Continue with checklist backend instead? (y/n) "
-  read -r answer
-  if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
-    TASK_BACKEND="checklist"
+  if [[ -t 0 ]]; then
+    printf "${YELLOW}[ralph]${NC} Continue with checklist backend instead? (y/n) "
+    read -r answer
+    if [[ "$answer" != "y" && "$answer" != "Y" ]]; then
+      log_error "Fix beads/dolt and retry. Run 'bd doctor' to diagnose."
+      exit 1
+    fi
   else
-    log_error "Fix beads/dolt and retry. Run 'bd doctor' to diagnose."
-    exit 1
+    log_warn "Non-interactive mode — falling back to checklist automatically."
   fi
+  TASK_BACKEND="checklist"
 }
 
 # --- bd backend ---

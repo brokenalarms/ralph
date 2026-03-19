@@ -738,7 +738,7 @@ run_planning() {
 
     cd "$WORK_DIR"
     claude --add-dir "$WORK_DIR" \
-      --permission-mode acceptEdits \
+      --permission-mode plan \
       --allowedTools "Bash" \
       --system-prompt "$interactive_prompt" || true
 
