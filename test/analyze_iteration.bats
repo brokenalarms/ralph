@@ -70,10 +70,6 @@ EOF
   local logfile="$RALPH_DIR/test_iter.log"
   echo "some output" > "$logfile"
 
-  # Commit .ralph files so they don't appear as changes in later diffs
-  git -C "$WORK_DIR" add -A
-  git -C "$WORK_DIR" commit -m "baseline" -q
-
   local head_before
   head_before=$(git -C "$WORK_DIR" rev-parse HEAD)
 
@@ -119,9 +115,6 @@ EOF
   local logfile="$RALPH_DIR/test_iter.log"
   echo "some output" > "$logfile"
 
-  git -C "$WORK_DIR" add -A
-  git -C "$WORK_DIR" commit -m "baseline" -q
-
   _test_only_count=2
 
   mkdir -p "$WORK_DIR/AppTests" "$WORK_DIR/src"
@@ -141,9 +134,6 @@ EOF
   local logfile="$RALPH_DIR/test_iter.log"
   echo "some output" > "$logfile"
 
-  git -C "$WORK_DIR" add -A
-  git -C "$WORK_DIR" commit -m "baseline" -q
-
   _test_only_count=0
 
   mkdir -p "$WORK_DIR/tests/helpers"
@@ -161,9 +151,6 @@ EOF
 @test "Files under suffixed test dirs (e.g. AppTests, AppUITests) count as test files" {
   local logfile="$RALPH_DIR/test_iter.log"
   echo "some output" > "$logfile"
-
-  git -C "$WORK_DIR" add -A
-  git -C "$WORK_DIR" commit -m "baseline" -q
 
   _test_only_count=0
 
