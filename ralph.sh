@@ -264,6 +264,18 @@ init_ralph_dir() {
     fi
   fi
 
+  # Check for leftover stop file before starting/resuming
+  if [[ -f "$STOP_FILE" ]]; then
+    printf "${YELLOW}[ralph]${NC} Stop file found from a previous run. Delete it to continue? (y/n) "
+    read -r answer
+    if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
+      rm -f "$STOP_FILE"
+    else
+      log_warn "Stop file still present — exiting"
+      exit 1
+    fi
+  fi
+
   if [[ ! -f "$STATE_FILE" ]]; then
     cat > "$STATE_FILE" <<'STATE'
 {
@@ -571,6 +583,7 @@ wait_for_rate_reset() {
   while (( seconds_left > 0 )); do
     if [[ -f "$STOP_FILE" ]]; then
       log_warn "Stop file detected during rate limit wait"
+      rm -f "$STOP_FILE"
       return 1
     fi
     local display_min=$(( seconds_left / 60 ))
@@ -1006,6 +1019,7 @@ run_execution() {
     # Check stop file
     if [[ -f "$STOP_FILE" ]]; then
       log_warn "Stop file detected - halting"
+      rm -f "$STOP_FILE"
       write_state "status" "stopped"
       break
     fi
