@@ -266,6 +266,7 @@ init_ralph_dir() {
     cat > "$STATE_FILE" <<'STATE'
 {
   "iteration": 0,
+  "max_iterations": null,
   "status": "initialized",
   "started_at": null,
   "last_task": null,
@@ -582,8 +583,7 @@ run_claude() {
   claude --print --verbose --output-format stream-json \
     --add-dir "$WORK_DIR" \
     --add-dir "$RALPH_DIR" \
-    --permission-mode acceptEdits \
-    --allowedTools "Bash" \
+    --dangerously-skip-permissions \
     -p "$full_prompt" < /dev/null >> "$LOG_FILE" 2>&1 &
   claude_pid=$!
   log "Claude started (PID: $claude_pid)"
@@ -965,7 +965,6 @@ run_execution() {
   write_state "max_iterations" "$MAX_ITERATIONS"
   while true; do
     MAX_ITERATIONS=$(read_state "max_iterations")
-    MAX_ITERATIONS=${MAX_ITERATIONS:-20}
     if (( run_iteration >= MAX_ITERATIONS )); then break; fi
     # Check stop file
     if [[ -f "$STOP_FILE" ]]; then

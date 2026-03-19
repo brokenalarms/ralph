@@ -10,3 +10,4 @@
 2. When complete, close the task in bd with a reason summarizing what you did.
 3. One task = one PR, if gh is available. Atomic commits.
 4. Do NOT work on other tasks — one task per iteration.
+5. Do NOT write bd prime output or bd workflow instructions to the project's AGENTS.md, CLAUDE.md, or any other project file. bd context is for your use in this iteration only.
