@@ -217,6 +217,15 @@ init_ralph_dir() {
   mkdir -p "$RALPH_DIR"
   touch "$LOG_FILE"
 
+  # Bail if there are staged or unstaged changes — we commit .gitignore below
+  # and must not sweep unrelated work into that commit.
+  if git -C "$PROJECT_DIR" rev-parse --git-dir &>/dev/null; then
+    if ! git -C "$PROJECT_DIR" diff --quiet 2>/dev/null || ! git -C "$PROJECT_DIR" diff --cached --quiet 2>/dev/null; then
+      log_error "uncommitted changes in $PROJECT_DIR — please commit or stash before running ralph."
+      exit 1
+    fi
+  fi
+
   # Ensure .ralph and .beads are gitignored and committed
   local gitignore="$PROJECT_DIR/.gitignore"
   local needs_commit=false
@@ -572,6 +581,7 @@ run_claude() {
   cd "$WORK_DIR"
   claude --print --verbose --output-format stream-json \
     --add-dir "$WORK_DIR" \
+    --add-dir "$RALPH_DIR" \
     --permission-mode acceptEdits \
     --allowedTools "Bash" \
     -p "$full_prompt" < /dev/null >> "$LOG_FILE" 2>&1 &
@@ -740,6 +750,7 @@ run_planning() {
 
     cd "$WORK_DIR"
     claude --add-dir "$WORK_DIR" \
+      --add-dir "$RALPH_DIR" \
       --permission-mode plan \
       --allowedTools "Bash" \
       --system-prompt "$interactive_prompt" || true

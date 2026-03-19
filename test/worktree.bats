@@ -383,6 +383,36 @@ EOF
   grep -q "test_alpha" "$WORK_DIR/tests.txt"
 }
 
+# Proves: .gitignore is committed to main so the worktree inherits it.
+@test "worktree inherits .gitignore from main" {
+  init_ralph_dir
+  setup_worktree
+  grep -q '^\.ralph$' "$WORK_DIR/.gitignore"
+}
+
+# Proves: existing .gitignore content is preserved when appending entries.
+@test "existing .gitignore content preserved" {
+  echo "node_modules" > "$PROJECT_DIR/.gitignore"
+  git -C "$PROJECT_DIR" add .gitignore
+  git -C "$PROJECT_DIR" commit -m "add gitignore" -q
+
+  init_ralph_dir
+  setup_worktree
+  grep -q '^node_modules$' "$WORK_DIR/.gitignore"
+  grep -q '^\.ralph$' "$WORK_DIR/.gitignore"
+}
+
+# Proves: ralph refuses to run with uncommitted changes so the .gitignore
+# commit to main doesn't sweep in unrelated staged work.
+@test "dirty working tree exits with error" {
+  echo "uncommitted" > "$PROJECT_DIR/dirty.txt"
+  git -C "$PROJECT_DIR" add dirty.txt
+
+  run init_ralph_dir
+  [[ "$status" -eq 1 ]]
+  [[ "$output" == *"uncommitted changes"* ]]
+}
+
 # Proves: real conflicts halt ralph instead of continuing on stale base.
 @test "rebase_onto_default_branch halts on real conflicts" {
   setup_rebase_env
