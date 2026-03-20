@@ -447,6 +447,9 @@ PLAN_SCRIPT
       sleep 1
     done ) &
 
+  # Trigger initial plan render so the pane isn't blank on startup
+  touch "$RALPH_DIR/.plan-refresh"
+
   _TMUX_OUTER=true
   tmux attach-session -t "$TMUX_SESSION"
   exit 0
