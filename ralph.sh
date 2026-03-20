@@ -800,6 +800,11 @@ _rename_worktree_from_theme() {
     theme=$(head -1 "$PLAN_FILE" | sed 's/^#* *//')
   fi
 
+  # Fallback: derive theme from first bd task title
+  if [[ -z "$theme" && "$TASK_BACKEND" == "bd" ]]; then
+    theme=$(run_bd list --status=open --flat --json --limit 1 2>/dev/null | jq -r '.[0].title // empty')
+  fi
+
   if [[ -n "$theme" ]]; then
     rename_worktree_for_theme "$theme"
   fi
@@ -1143,7 +1148,6 @@ run_planning() {
   if planning_succeeded; then
     write_state "status" "planned"
     log_task_success "Plan created with $(count_total) tasks"
-    _rename_worktree_from_theme
     return 0
   fi
 
@@ -1168,7 +1172,6 @@ run_planning() {
   if planning_succeeded; then
     write_state "status" "planned"
     log_task_success "Plan created with $(count_total) tasks"
-    _rename_worktree_from_theme
   else
     log_task_error "Planning failed — no tasks created"
     exit 1
@@ -1710,6 +1713,7 @@ main() {
 
   # Planning
   run_planning
+  _rename_worktree_from_theme
 
   if [[ "$PLAN_ONLY" == true ]]; then
     log "Plan-only mode, exiting"

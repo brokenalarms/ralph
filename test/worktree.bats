@@ -455,3 +455,39 @@ EOF
   [[ "$status" -eq 1 ]]
   [[ "$output" == *"real conflicts"* ]]
 }
+
+# Proves: worktree gets a thematic name from bd task titles when no
+# planning session ran (bd had pre-existing tasks, so theme was never written).
+@test "rename_worktree_from_theme falls back to bd task title" {
+  init_ralph_dir
+  setup_worktree
+
+  TASK_BACKEND="bd"
+  # Mock run_bd to return a JSON task list
+  run_bd() { echo '[{"title":"auth middleware rewrite"}]'; }
+  export -f run_bd
+
+  _rename_worktree_from_theme
+
+  local today
+  today=$(date +%Y%m%d)
+  [[ "$WORK_DIR" == *"/worktrees/ralph-${today}-auth-middleware-rewrite" ]]
+}
+
+# Proves: theme from state.json takes priority over bd fallback.
+@test "rename_worktree_from_theme prefers state theme over bd" {
+  init_ralph_dir
+  setup_worktree
+
+  TASK_BACKEND="bd"
+  write_state "theme" "go migration"
+  # Mock run_bd (should not be called)
+  run_bd() { echo '[{"title":"wrong answer"}]'; }
+  export -f run_bd
+
+  _rename_worktree_from_theme
+
+  local today
+  today=$(date +%Y%m%d)
+  [[ "$WORK_DIR" == *"/worktrees/ralph-${today}-go-migration" ]]
+}
