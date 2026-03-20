@@ -646,6 +646,78 @@ read_signal_summary() {
   fi
 }
 
+# --- Attempt history ---
+
+_attempts_dir() { echo "$RALPH_DIR/attempts"; }
+
+_attempt_key() {
+  local task_id="$1" task_name="$2"
+  if [[ -n "$task_id" ]]; then
+    echo "$task_id"
+  else
+    slugify "$task_name"
+  fi
+}
+
+record_attempt() {
+  local task_id="$1" task_name="$2" summary="$3" diff_stat="$4" analysis="$5"
+  local key
+  key=$(_attempt_key "$task_id" "$task_name")
+  [[ -z "$key" ]] && return 0
+
+  local dir
+  dir=$(_attempts_dir)
+  mkdir -p "$dir"
+
+  local attempt_file="$dir/${key}.log"
+  local attempt_num=1
+  if [[ -f "$attempt_file" ]]; then
+    local prev
+    prev=$(grep -c '^### Attempt ' "$attempt_file" 2>/dev/null || echo 0)
+    attempt_num=$((prev + 1))
+  fi
+
+  {
+    echo "### Attempt $attempt_num"
+    echo "Task: $task_name"
+    if [[ -n "$summary" ]]; then
+      echo "Summary: $summary"
+    fi
+    if [[ -n "$diff_stat" ]]; then
+      echo "Changes:"
+      echo "$diff_stat"
+    else
+      echo "Changes: none"
+    fi
+    echo "Analysis: $analysis"
+    echo ""
+  } >> "$attempt_file"
+}
+
+read_attempt_history() {
+  local task_id="$1" task_name="$2"
+  local key
+  key=$(_attempt_key "$task_id" "$task_name")
+  [[ -z "$key" ]] && return 0
+
+  local attempt_file
+  attempt_file="$(_attempts_dir)/${key}.log"
+  if [[ -f "$attempt_file" ]]; then
+    cat "$attempt_file"
+  fi
+}
+
+clear_attempt_history() {
+  local task_id="$1" task_name="$2"
+  local key
+  key=$(_attempt_key "$task_id" "$task_name")
+  [[ -z "$key" ]] && return 0
+
+  local attempt_file
+  attempt_file="$(_attempts_dir)/${key}.log"
+  rm -f "$attempt_file"
+}
+
 # --- Worktree theme renaming ---
 _rename_worktree_from_theme() {
   local theme
@@ -762,11 +834,13 @@ run_claude() {
 
   # Build the prompt that includes ralph loop context
   local raw="${3:-}"
+  local rc_task_id="${4:-}"
+  local rc_task_name="${5:-}"
   local full_prompt
   if [[ "$raw" == "raw" ]]; then
     full_prompt="$prompt"
   else
-    full_prompt=$(build_prompt "$prompt" "$feedback")
+    full_prompt=$(build_prompt "$prompt" "$feedback" "$rc_task_id" "$rc_task_name")
   fi
 
   # Start the stream filter BEFORE Claude so tail -f -n 0 is already
@@ -870,6 +944,8 @@ run_claude() {
 build_prompt() {
   local task_prompt="$1"
   local feedback="${2:-}"
+  local bp_task_id="${3:-}"
+  local bp_task_name="${4:-}"
   local template_file="$PROMPTS_DIR/internal.md"
 
   if [[ ! -f "$template_file" ]]; then
@@ -896,6 +972,19 @@ build_prompt() {
   local task_instructions
   task_instructions=$(task_execution_instructions)
   result="${result//\{\{TASK_INSTRUCTIONS\}\}/$task_instructions}"
+
+  # Inject attempt history if this task has been attempted before
+  local attempt_history=""
+  if [[ -n "$bp_task_id" || -n "$bp_task_name" ]]; then
+    local raw_history
+    raw_history=$(read_attempt_history "$bp_task_id" "$bp_task_name")
+    if [[ -n "$raw_history" ]]; then
+      attempt_history="## Previous attempts on this task"$'\n'
+      attempt_history+="This task has been attempted before without success. Review what was tried and avoid repeating the same approach."$'\n\n'
+      attempt_history+="$raw_history"
+    fi
+  fi
+  result="${result//\{\{ATTEMPT_HISTORY\}\}/$attempt_history}"
 
   result="${result//\{\{PROJECT_DIR\}\}/$PROJECT_DIR}"
   result="${result//\{\{WORK_DIR\}\}/$WORK_DIR}"
@@ -1312,7 +1401,7 @@ run_execution() {
 
     # Run claude for this task
     local task_start=$SECONDS
-    if ! run_claude "$task_prompt" "$feedback"; then
+    if ! run_claude "$task_prompt" "$feedback" "" "$task_id" "$next_task"; then
       log_warn "Claude failed on iteration $run_iteration, continuing..."
     fi
     local task_elapsed=$(( SECONDS - task_start ))
@@ -1337,6 +1426,24 @@ run_execution() {
 
     # Analyze iteration for problems
     analyze_iteration "$RAW_LOG" "$log_start_line" "$head_before"
+
+    # Record attempt history for this task
+    local head_after_attempt
+    head_after_attempt=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
+    local diff_stat=""
+    if [[ -n "$head_before" && "$head_before" != "$head_after_attempt" ]]; then
+      diff_stat=$(git -C "$WORK_DIR" diff --stat "${head_before}..${head_after_attempt}" 2>/dev/null || true)
+    fi
+    if [[ -z "$diff_stat" ]]; then
+      diff_stat=$(git -C "$WORK_DIR" diff --stat 2>/dev/null || true)
+    fi
+    record_attempt "$task_id" "$next_task" "$summary" "$diff_stat" "$ANALYSIS_RESULT"
+
+    # Clear attempt history when task resolved (completed via signal)
+    if check_signal || check_all_complete; then
+      clear_attempt_history "$task_id" "$next_task"
+    fi
+
     case "$ANALYSIS_RESULT" in
       halt:*)
         log_error "Halting: ${ANALYSIS_RESULT#halt:}"
