@@ -71,13 +71,10 @@ func Run(d Deps) error {
 		return nil
 	}
 
-	// Interactive planning session.
-	needs, err := d.Backend.NeedsPlanning()
-	if err != nil {
-		return fmt.Errorf("checking needs_planning: %w", err)
-	}
-
-	if needs && !d.SkipPlanning {
+	// Interactive planning session — always run on fresh start (status empty/initialized).
+	// NeedsPlanning checks if tasks exist, but even with existing beads the user
+	// should get a chance to review/modify the plan on a fresh run.
+	if !d.SkipPlanning {
 		if err := runInteractive(d); err != nil {
 			d.Logger.Warn("Interactive planning session ended: %v", err)
 		}
