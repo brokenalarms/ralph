@@ -415,18 +415,19 @@ PLAN_SCRIPT
 
   # Create tmux session with panes running commands directly (no send-keys)
   tmux new-session -d -s "$TMUX_SESSION" -c "$PROJECT_DIR" \
-    "export _RALPH_TMUX_SESSION=$TMUX_SESSION; $cmd; exec bash"
+    "export _RALPH_TMUX_SESSION=$TMUX_SESSION; $cmd"
   tmux split-window -h -t "$TMUX_SESSION" \
     "bash '$RALPH_DIR/.stream-filter.sh' '$RAW_LOG'"
   tmux split-window -v -t "$TMUX_SESSION:.1" \
     "bash '$RALPH_DIR/.plan-watch.sh'"
 
-  # Pane titles
+  # Pane titles and keep-alive (panes stay visible after process exits)
   tmux select-pane -t "$TMUX_SESSION:.0" -T "ralph"
   tmux select-pane -t "$TMUX_SESSION:.1" -T "stream"
   tmux select-pane -t "$TMUX_SESSION:.2" -T "plan"
   tmux set-option -t "$TMUX_SESSION" pane-border-status top
   tmux set-option -t "$TMUX_SESSION" pane-border-format " #{pane_title} "
+  tmux set-option -t "$TMUX_SESSION" remain-on-exit on
   tmux select-pane -t "$TMUX_SESSION:.0"
 
   # Background timer updates stream pane title every second
@@ -1307,8 +1308,11 @@ print_summary() {
 
 # --- Cleanup on exit ---
 cleanup() {
-  # Outer tmux wrapper — session stays alive for reattach
+  # Outer tmux wrapper — kill session on interrupt, keep alive on normal exit
   if [[ "$_TMUX_OUTER" == true ]]; then
+    if [[ "$_interrupted" == true ]]; then
+      [[ -n "$TMUX_SESSION" ]] && tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+    fi
     return
   fi
   # Kill any backgrounded processes and their children
@@ -1327,6 +1331,8 @@ cleanup() {
     print_summary
   fi
 }
+_interrupted=false
+trap '_interrupted=true' INT TERM
 trap cleanup EXIT
 
 # --- Main ---
