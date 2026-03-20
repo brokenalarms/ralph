@@ -111,6 +111,12 @@ bd_close_task() {
   fi
 }
 
+bd_skip_task() {
+  local id="$1" reason="${2:-skipped by ralph}"
+  [[ -z "$id" ]] && return 0
+  run_bd close "$id" --reason "blocked: $reason" 2>/dev/null || true
+}
+
 bd_has_tasks() { (( $(bd_count_total) > 0 )); }
 bd_needs_planning()     { ! bd_has_tasks; }
 bd_planning_succeeded() { bd_has_tasks; }
@@ -134,7 +140,7 @@ checklist_count_remaining() {
 }
 
 checklist_count_total() {
-  [[ -f "$PLAN_FILE" ]] && { grep -cE '^\s*- \[[ x]\]' "$PLAN_FILE" 2>/dev/null || true; } || echo 0
+  [[ -f "$PLAN_FILE" ]] && { grep -cE '^\s*- \[[ xs]\]' "$PLAN_FILE" 2>/dev/null || true; } || echo 0
 }
 
 checklist_get_next_task() {
@@ -152,12 +158,24 @@ checklist_planning_succeeded() { checklist_has_tasks; }
 
 checklist_close_task() { :; }
 
+checklist_skip_task() {
+  local _id="$1" reason="${2:-skipped}"
+  [[ ! -f "$PLAN_FILE" ]] && return 0
+  local task
+  task=$(checklist_get_next_task)
+  [[ -z "$task" ]] && return 0
+  local escaped
+  escaped=$(printf '%s' "$task" | sed 's/[\/&]/\\&/g')
+  sed -i '' "s/^\(\s*\)- \[ \] ${escaped}/\1- [s] ${escaped} (${reason})/" "$PLAN_FILE" 2>/dev/null || true
+}
+
 checklist_execution_instructions() { cat "$PROMPTS_DIR/execution-checklist.md"; }
 
 # --- Generic dispatch ---
 
 init_task_backend()          { "${TASK_BACKEND}_init" "$@"; }
 close_task()                 { "${TASK_BACKEND}_close_task" "$@"; }
+skip_task()                  { "${TASK_BACKEND}_skip_task" "$@"; }
 has_remaining_tasks()        { "${TASK_BACKEND}_has_remaining" "$@"; }
 count_completed()            { "${TASK_BACKEND}_count_completed" "$@"; }
 count_remaining()            { "${TASK_BACKEND}_count_remaining" "$@"; }
@@ -185,8 +203,8 @@ INST
 
 _validate_backend() {
   local fns=(init has_remaining count_completed count_remaining count_total
-             get_next_task get_next_task_id close_task has_tasks needs_planning
-             planning_succeeded execution_instructions)
+             get_next_task get_next_task_id close_task skip_task has_tasks
+             needs_planning planning_succeeded execution_instructions)
   for fn in "${fns[@]}"; do
     if ! declare -f "${TASK_BACKEND}_${fn}" &>/dev/null; then
       log_error "Task backend '$TASK_BACKEND' missing function: ${fn}"
