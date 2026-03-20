@@ -106,8 +106,10 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	_ = os.WriteFile(filepath.Join(cfg.RalphDir, ".stream-start"),
 		[]byte(fmt.Sprintf("%d", time.Now().Unix())), 0o644)
 
-	// Start stream filter goroutine (raw JSON → human-readable log).
-	filterDone := r.startStreamFilter(cfg)
+	// Start stream filter BEFORE Claude begins writing so it catches all
+	// output (mirrors the bash fix for the tail -f race).
+	filterStop := make(chan struct{})
+	filterDone := r.startStreamFilter(cfg, filterStop)
 
 	// Start optional terminal tail.
 	var tailCmd *exec.Cmd
@@ -121,7 +123,8 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	// Reap the Claude process.
 	_ = cmd.Wait()
 
-	// Stop the filter and tail.
+	// Signal the filter to drain remaining output and exit.
+	close(filterStop)
 	<-filterDone
 	stopProcess(tailCmd)
 
@@ -200,9 +203,10 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 }
 
 // startStreamFilter launches a goroutine that tails the raw log and writes
-// filtered human-readable output to LogFile. Returns a channel that closes
-// when the filter is done.
-func (r *Runner) startStreamFilter(cfg RunConfig) <-chan struct{} {
+// filtered human-readable output to LogFile. The goroutine keeps reading
+// until stop is closed, then drains any remaining content. Returns a channel
+// that closes when the filter is done.
+func (r *Runner) startStreamFilter(cfg RunConfig, stop <-chan struct{}) <-chan struct{} {
 	done := make(chan struct{})
 	if cfg.LogFile == "" {
 		close(done)
@@ -211,16 +215,16 @@ func (r *Runner) startStreamFilter(cfg RunConfig) <-chan struct{} {
 
 	go func() {
 		defer close(done)
-		filterStreamJSON(cfg.RawLog, cfg.LogFile)
+		filterStreamJSON(cfg.RawLog, cfg.LogFile, stop)
 	}()
 
 	return done
 }
 
-// filterStreamJSON reads the raw log file and extracts human-readable content
-// from Claude's stream-json format, writing results to logPath. This replaces
-// the bash jq-based stream filter.
-func filterStreamJSON(rawLogPath, logPath string) {
+// filterStreamJSON tails the raw log file from its current end, extracting
+// human-readable content from Claude's stream-json format into logPath.
+// It keeps reading until stop is closed, then drains any final output.
+func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
 	logOut, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
@@ -233,15 +237,49 @@ func filterStreamJSON(rawLogPath, logPath string) {
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	// stream-json lines can be large.
-	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+	// Start from end of file (like tail -f -n 0) so we only see new output.
+	if _, err := f.Seek(0, 2); err != nil {
+		return
+	}
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		text := extractStreamText(line)
-		if text != "" {
-			fmt.Fprintln(logOut, text)
+	var remainder string
+	buf := make([]byte, 64*1024)
+
+	processChunk := func(data string) string {
+		for {
+			idx := strings.IndexByte(data, '\n')
+			if idx < 0 {
+				return data
+			}
+			line := data[:idx]
+			data = data[idx+1:]
+			if text := extractStreamText(line); text != "" {
+				fmt.Fprintln(logOut, text)
+			}
+		}
+	}
+
+	for {
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			remainder = processChunk(remainder + string(buf[:n]))
+		}
+
+		if readErr != nil || n == 0 {
+			select {
+			case <-stop:
+				// Final drain — read any bytes written after the last Read.
+				for {
+					n2, _ := f.Read(buf)
+					if n2 == 0 {
+						break
+					}
+					remainder = processChunk(remainder + string(buf[:n2]))
+				}
+				return
+			default:
+				time.Sleep(100 * time.Millisecond)
+			}
 		}
 	}
 }
@@ -357,9 +395,23 @@ func readFirstLine(path string) string {
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
 	if scanner.Scan() {
-		return strings.TrimSpace(scanner.Text())
+		line := strings.TrimSpace(scanner.Text())
+		return stripJSONFragment(line)
 	}
 	return ""
+}
+
+// stripJSONFragment removes JSON bleed-through from signal file content.
+// Signal summaries are plain text; anything starting with '{' is garbage,
+// and trailing '{...' fragments are trimmed.
+func stripJSONFragment(s string) string {
+	if s == "" || s[0] == '{' {
+		return ""
+	}
+	if idx := strings.IndexByte(s, '{'); idx > 0 {
+		return strings.TrimSpace(s[:idx])
+	}
+	return s
 }
 
 func readSignalSummary(s SignalPaths) string {

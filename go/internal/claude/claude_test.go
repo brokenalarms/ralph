@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -178,6 +179,89 @@ func TestExtractJSONString_Escapes(t *testing.T) {
 	want := "line1\nline2\ttab\"quote\\back"
 	if got != want {
 		t.Errorf("extractJSONString = %q, want %q", got, want)
+	}
+}
+
+// --- JSON fragment stripping tests ---
+
+// Verifies that stripJSONFragment removes lines that are entirely JSON,
+// preventing raw stream-json events from appearing in log summaries.
+func TestStripJSONFragment_PureJSON(t *testing.T) {
+	got := stripJSONFragment(`{"type":"result","message":"done"}`)
+	if got != "" {
+		t.Errorf("stripJSONFragment(pure JSON) = %q, want empty", got)
+	}
+}
+
+// Verifies that trailing JSON fragments are trimmed from signal summaries,
+// which can occur when stream-json output races with signal file writes.
+func TestStripJSONFragment_TrailingJSON(t *testing.T) {
+	got := stripJSONFragment(`task completed{"type":"result"}`)
+	if got != "task completed" {
+		t.Errorf("stripJSONFragment(trailing) = %q, want %q", got, "task completed")
+	}
+}
+
+// Verifies that clean text passes through unchanged.
+func TestStripJSONFragment_CleanText(t *testing.T) {
+	got := stripJSONFragment("Fixed the login bug")
+	if got != "Fixed the login bug" {
+		t.Errorf("stripJSONFragment(clean) = %q, want %q", got, "Fixed the login bug")
+	}
+}
+
+// Verifies that readFirstLine strips JSON fragments from signal files,
+// so log messages like "Completed: <summary>" stay human-readable.
+func TestReadFirstLine_StripsJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "signal")
+
+	os.WriteFile(path, []byte(`summary text{"type":"result"}`+"\n"), 0o644)
+	got := readFirstLine(path)
+	if got != "summary text" {
+		t.Errorf("readFirstLine = %q, want %q", got, "summary text")
+	}
+}
+
+// --- Stream filter tailing tests ---
+
+// Verifies that filterStreamJSON follows new data appended to the raw log
+// (like tail -f), rather than reading to EOF and exiting.
+func TestFilterStreamJSON_TailsFile(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+
+	// Create the raw log so the filter can open it.
+	os.WriteFile(rawPath, nil, 0o644)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		filterStreamJSON(rawPath, logPath, stop)
+	}()
+
+	// Append a stream-json event after the filter has started.
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintln(f, `{"type":"assistant","content":"hello from claude"}`)
+	f.Close()
+
+	// Give the filter time to process, then stop it.
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "hello from claude") {
+		t.Errorf("loop.log should contain filtered text, got: %q", string(got))
 	}
 }
 
