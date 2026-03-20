@@ -862,6 +862,78 @@ clear_attempt_history() {
   rm -f "$attempt_file"
 }
 
+# --- Attempt history ---
+
+_attempts_dir() { echo "$RALPH_DIR/attempts"; }
+
+_attempt_key() {
+  local task_id="$1" task_name="$2"
+  if [[ -n "$task_id" ]]; then
+    echo "$task_id"
+  else
+    slugify "$task_name"
+  fi
+}
+
+record_attempt() {
+  local task_id="$1" task_name="$2" summary="$3" diff_stat="$4" analysis="$5"
+  local key
+  key=$(_attempt_key "$task_id" "$task_name")
+  [[ -z "$key" ]] && return 0
+
+  local dir
+  dir=$(_attempts_dir)
+  mkdir -p "$dir"
+
+  local attempt_file="$dir/${key}.log"
+  local attempt_num=1
+  if [[ -f "$attempt_file" ]]; then
+    local prev
+    prev=$(grep -c '^### Attempt ' "$attempt_file" 2>/dev/null || echo 0)
+    attempt_num=$((prev + 1))
+  fi
+
+  {
+    echo "### Attempt $attempt_num"
+    echo "Task: $task_name"
+    if [[ -n "$summary" ]]; then
+      echo "Summary: $summary"
+    fi
+    if [[ -n "$diff_stat" ]]; then
+      echo "Changes:"
+      echo "$diff_stat"
+    else
+      echo "Changes: none"
+    fi
+    echo "Analysis: $analysis"
+    echo ""
+  } >> "$attempt_file"
+}
+
+read_attempt_history() {
+  local task_id="$1" task_name="$2"
+  local key
+  key=$(_attempt_key "$task_id" "$task_name")
+  [[ -z "$key" ]] && return 0
+
+  local attempt_file
+  attempt_file="$(_attempts_dir)/${key}.log"
+  if [[ -f "$attempt_file" ]]; then
+    cat "$attempt_file"
+  fi
+}
+
+clear_attempt_history() {
+  local task_id="$1" task_name="$2"
+  local key
+  key=$(_attempt_key "$task_id" "$task_name")
+  [[ -z "$key" ]] && return 0
+
+  local attempt_file
+  attempt_file="$(_attempts_dir)/${key}.log"
+  rm -f "$attempt_file"
+}
+
 # --- Worktree theme renaming ---
 _rename_worktree_from_theme() {
   local theme
