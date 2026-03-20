@@ -134,7 +134,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		runIteration++
 		iteration++
 
-		if runIteration > 1 {
+		if runIteration > 1 && l.cfg.TaskBackend.Label() != "beads" {
 			l.git.RotateBranch()
 			if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
 				if err := l.git.RebaseOntoDefaultBranch(); err != nil {
