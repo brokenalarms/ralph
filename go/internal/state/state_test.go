@@ -223,6 +223,36 @@ func TestGetSet_UnknownKey(t *testing.T) {
 	}
 }
 
+// Verifies that ResetForExecution clears quality_score and re-applies config
+// values, preventing stale counters from carrying over between runs.
+func TestResetForExecution_ClearsCounters(t *testing.T) {
+	s := State{
+		Iteration:         10,
+		Status:            "stopped",
+		QualityScore:      42,
+		MaxIterations:     50,
+		RefactorThreshold: 30,
+	}
+
+	s.ResetForExecution(20, 15)
+
+	if s.QualityScore != 0 {
+		t.Errorf("QualityScore = %d, want 0 after reset", s.QualityScore)
+	}
+	if s.MaxIterations != 20 {
+		t.Errorf("MaxIterations = %d, want 20 after reset", s.MaxIterations)
+	}
+	if s.RefactorThreshold != 15 {
+		t.Errorf("RefactorThreshold = %d, want 15 after reset", s.RefactorThreshold)
+	}
+	if s.Iteration != 10 {
+		t.Errorf("Iteration = %d, want 10 (should be preserved)", s.Iteration)
+	}
+	if s.Status != "stopped" {
+		t.Errorf("Status = %q, want %q (should be preserved)", s.Status, "stopped")
+	}
+}
+
 // Verifies that Save uses atomic write — if we can read the file after
 // Save, it contains valid JSON (no partial writes).
 func TestSave_AtomicWrite(t *testing.T) {

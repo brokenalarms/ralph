@@ -94,6 +94,15 @@ func (s *State) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// ResetForExecution resets counters that must not carry over between runs.
+// Mirrors ralph.sh run_execution's "Reset counters on resume" block:
+// quality_score → 0, and config values are re-applied from the provided cfg.
+func (s *State) ResetForExecution(maxIterations, refactorThreshold int) {
+	s.QualityScore = 0
+	s.MaxIterations = maxIterations
+	s.RefactorThreshold = refactorThreshold
+}
+
 // Store manages reading and writing state.json in a ralph directory.
 type Store struct {
 	path string // full path to state.json
