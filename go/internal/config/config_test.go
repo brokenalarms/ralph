@@ -7,7 +7,11 @@ import (
 )
 
 // Verifies that Parse with no arguments returns ralph.sh-compatible defaults:
+<<<<<<< HEAD
 // cwd project dir, 50 iterations, worktree enabled, 80 calls/hr, refactor disabled.
+=======
+// cwd project dir, 20 iterations, worktree enabled, 80 calls/hr, refactor threshold 20.
+>>>>>>> 33a34a5 (Replace fixed refactor schedule with adaptive quality signals)
 func TestDefaultValues(t *testing.T) {
 	// Clear env vars so defaults are deterministic.
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
@@ -89,7 +93,7 @@ func TestAllFlags(t *testing.T) {
 		"-q",
 		"--no-worktree",
 		"--calls-per-hour", "40",
-		"--refactor-every", "3",
+		"--refactor-threshold", "30",
 		"--tmux",
 		"--auto-merge",
 	}
@@ -125,8 +129,8 @@ func TestAllFlags(t *testing.T) {
 	if cfg.CallsPerHour != 40 {
 		t.Errorf("CallsPerHour = %d, want 40", cfg.CallsPerHour)
 	}
-	if cfg.RefactorEvery != 3 {
-		t.Errorf("RefactorEvery = %d, want 3", cfg.RefactorEvery)
+	if cfg.RefactorThreshold != 30 {
+		t.Errorf("RefactorThreshold = %d, want 30", cfg.RefactorThreshold)
 	}
 	if !cfg.UseTmux {
 		t.Error("UseTmux should be true")
@@ -169,7 +173,7 @@ func TestUnknownFlag(t *testing.T) {
 
 // Verifies that flags requiring a value return an error when the value is missing.
 func TestMissingArgValue(t *testing.T) {
-	for _, flag := range []string{"-d", "-n", "-p", "--plan-file", "--calls-per-hour", "--refactor-every"} {
+	for _, flag := range []string{"-d", "-n", "-p", "--plan-file", "--calls-per-hour", "--refactor-threshold"} {
 		_, err := Parse([]string{flag})
 		if err == nil {
 			t.Errorf("Parse(%q) should error on missing value", flag)
@@ -179,7 +183,7 @@ func TestMissingArgValue(t *testing.T) {
 
 // Verifies that non-numeric values for integer flags produce an error.
 func TestInvalidNumericArg(t *testing.T) {
-	for _, flag := range []string{"-n", "--calls-per-hour", "--refactor-every"} {
+	for _, flag := range []string{"-n", "--calls-per-hour", "--refactor-threshold"} {
 		_, err := Parse([]string{flag, "abc"})
 		if err == nil {
 			t.Errorf("Parse(%q, \"abc\") should error on non-numeric value", flag)

@@ -46,7 +46,7 @@ setup_test_repo() {
   RESUME=false
   USE_WORKTREE=true
   CALLS_PER_HOUR=80
-  REFACTOR_EVERY=0
+  REFACTOR_THRESHOLD=0
   QUIET=false
   AUTO_MERGE=false
 

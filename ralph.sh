@@ -12,6 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "$_source")" && pwd)"
 PROMPTS_DIR="$SCRIPT_DIR/prompts"
 source "$SCRIPT_DIR/lib/tasks.sh"
 source "$SCRIPT_DIR/lib/git.sh"
+source "$SCRIPT_DIR/lib/quality.sh"
 
 # --- Defaults ---
 PROJECT_DIR="$(pwd)"
@@ -25,7 +26,7 @@ PLAN_FILE_ARG=""
 QUIET=false
 USE_WORKTREE=true
 CALLS_PER_HOUR=80
-REFACTOR_EVERY="${RALPH_REFACTOR_EVERY:-0}"
+REFACTOR_THRESHOLD="${RALPH_REFACTOR_THRESHOLD:-20}"
 USE_TMUX=false
 AUTO_MERGE=false
 TMUX_SESSION=""
@@ -83,7 +84,7 @@ ${BOLD}OPTIONS:${NC}
   -q, --quiet            Suppress Claude output streaming (log only)
   --no-worktree          Run directly in project dir (no git worktree isolation)
   --calls-per-hour <N>   Max Claude calls per hour (default: 80)
-  --refactor-every <N>   Inject a refactor iteration every N iterations (default: 5, 0 to disable)
+  --refactor-threshold <N> Quality pain score that triggers a refactor iteration (default: 20, 0 to disable)
   --tmux                 Run in tmux 3-pane layout (status / output / plan)
   --auto-merge           Squash-merge each PR into main after task completion
   -h, --help             Show this help
@@ -166,7 +167,7 @@ while [[ $# -gt 0 ]]; do
     -q|--quiet)     QUIET=true; shift ;;
     --no-worktree)  USE_WORKTREE=false; shift ;;
     --calls-per-hour) CALLS_PER_HOUR="$2"; shift 2 ;;
-    --refactor-every) REFACTOR_EVERY="$2"; shift 2 ;;
+    --refactor-threshold) REFACTOR_THRESHOLD="$2"; shift 2 ;;
     --tmux)         USE_TMUX=true; shift ;;
     --auto-merge)   AUTO_MERGE=true; shift ;;
     -h|--help)      usage; exit 0 ;;
@@ -289,7 +290,8 @@ init_ralph_dir() {
 {
   "iteration": 0,
   "max_iterations": null,
-  "refactor_every": null,
+  "refactor_threshold": null,
+  "quality_score": 0,
   "status": "initialized",
   "started_at": null,
   "last_task": null,
@@ -792,6 +794,7 @@ build_prompt() {
 
 build_refactor_prompt() {
   local recent_files="$1"
+  local quality_findings="${2:-}"
 
   local result
   result=$(<"$PROMPTS_DIR/shared.md")
@@ -806,6 +809,7 @@ build_refactor_prompt() {
   result="${result//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
   result="${result//\{\{RECENT_FILES\}\}/$recent_files}"
   result="${result//\{\{REFACTOR_STYLE\}\}/$refactor_style}"
+  result="${result//\{\{QUALITY_FINDINGS\}\}/$quality_findings}"
 
   printf '%s' "$result"
 }
@@ -1076,7 +1080,7 @@ run_execution() {
   _stagnant_count=0
   _test_only_count=0
   _stuck_count=0
-  write_state "iterations_since_refactor" "0"
+  local _refactor_pending=false
 
   local run_iteration=0
   local iteration
@@ -1084,11 +1088,12 @@ run_execution() {
   iteration=${iteration:-0}
 
   write_state "max_iterations" "$MAX_ITERATIONS"
-  write_state "refactor_every" "$REFACTOR_EVERY"
+  write_state "refactor_threshold" "$REFACTOR_THRESHOLD"
+  write_state "quality_score" "0"
   while true; do
     MAX_ITERATIONS=$(read_state "max_iterations")
-    REFACTOR_EVERY=$(read_state "refactor_every")
-    REFACTOR_EVERY=${REFACTOR_EVERY:-0}
+    REFACTOR_THRESHOLD=$(read_state "refactor_threshold")
+    REFACTOR_THRESHOLD=${REFACTOR_THRESHOLD:-0}
     if (( run_iteration >= MAX_ITERATIONS )); then break; fi
     # Check stop file
     if [[ -f "$STOP_FILE" ]]; then
@@ -1125,19 +1130,23 @@ run_execution() {
       fi
     fi
 
-    # Check if a refactor iteration is due
-    local since_refactor
-    since_refactor=$(read_state "iterations_since_refactor")
-    since_refactor=${since_refactor:-0}
-
-    if (( REFACTOR_EVERY > 0 && since_refactor >= REFACTOR_EVERY )); then
-      log_phase "--- Refactor iteration (every ${REFACTOR_EVERY} iterations) ---"
+    # Adaptive refactoring: if quality assessment flagged pain, run refactor
+    if [[ "$_refactor_pending" == true ]]; then
+      local quality_score
+      quality_score=$(read_state "quality_score")
+      log_phase "--- Refactor iteration (quality score: ${quality_score}, threshold: ${REFACTOR_THRESHOLD}) ---"
       local recent_files
-      recent_files=$(git -C "$WORK_DIR" diff --name-only "HEAD~${REFACTOR_EVERY}" HEAD 2>/dev/null || echo "")
+      recent_files=$(git -C "$WORK_DIR" diff --name-only HEAD~5 HEAD 2>/dev/null || echo "")
 
       if [[ -n "$recent_files" ]]; then
+        local quality_findings=""
+        local findings_file="$RALPH_DIR/.quality-findings"
+        if [[ -f "$findings_file" ]]; then
+          quality_findings=$(<"$findings_file")
+        fi
+
         local refactor_prompt
-        refactor_prompt=$(build_refactor_prompt "$recent_files")
+        refactor_prompt=$(build_refactor_prompt "$recent_files" "$quality_findings")
 
         if ! check_rate_limit; then
           if ! wait_for_rate_reset; then
@@ -1151,10 +1160,8 @@ run_execution() {
       else
         log "No recently changed files — skipping refactor"
       fi
-      write_state "iterations_since_refactor" "0"
-      # Don't count refactor as a task iteration — continue to the real task
-    else
-      write_state "iterations_since_refactor" "$((since_refactor + 1))"
+      _refactor_pending=false
+      write_state "quality_score" "0"
     fi
 
     local next_task completed remaining total
@@ -1250,6 +1257,31 @@ run_execution() {
         log_warn "Analysis: ${ANALYSIS_RESULT#warn:}"
         ;;
     esac
+
+    # Adaptive quality assessment: check changed files for code quality signals
+    if (( REFACTOR_THRESHOLD > 0 )); then
+      local head_after
+      head_after=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
+      if [[ "$head_after" != "$head_before" ]]; then
+        local changed_files
+        changed_files=$(git -C "$WORK_DIR" diff --name-only "$head_before" HEAD 2>/dev/null || echo "")
+        if [[ -n "$changed_files" ]]; then
+          local findings_file="$RALPH_DIR/.quality-findings"
+          local file_array=()
+          while IFS= read -r f; do
+            file_array+=("$f")
+          done <<< "$changed_files"
+          assess_quality "$WORK_DIR" "$findings_file" "${file_array[@]}"
+          write_state "quality_score" "$QUALITY_SCORE"
+          if (( QUALITY_SCORE >= REFACTOR_THRESHOLD )); then
+            log_warn "Quality score ${QUALITY_SCORE} >= threshold ${REFACTOR_THRESHOLD} — scheduling refactor"
+            _refactor_pending=true
+          elif (( QUALITY_SCORE > 0 )); then
+            log "Quality score: ${QUALITY_SCORE} (threshold: ${REFACTOR_THRESHOLD})"
+          fi
+        fi
+      fi
+    fi
 
     # Auto-merge: squash-merge the PR for this iteration's branch into main
     if [[ "$AUTO_MERGE" == true ]] && (check_signal || check_all_complete); then

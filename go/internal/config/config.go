@@ -19,7 +19,7 @@ type Config struct {
 	Quiet         bool
 	UseWorktree   bool
 	CallsPerHour  int
-	RefactorEvery int
+	RefactorThreshold int
 	UseTmux       bool
 	AutoMerge     bool
 }
@@ -33,7 +33,11 @@ func Defaults() Config {
 		MaxIterations: envInt("RALPH_MAX_ITERATIONS", 50),
 		UseWorktree:   true,
 		CallsPerHour:  80,
+<<<<<<< HEAD
 		RefactorEvery: envInt("RALPH_REFACTOR_EVERY", 0),
+=======
+		RefactorThreshold: 20,
+>>>>>>> 33a34a5 (Replace fixed refactor schedule with adaptive quality signals)
 	}
 }
 
@@ -163,7 +167,7 @@ func Parse(args []string) (Config, error) {
 			cfg.CallsPerHour = n
 			i += 2
 
-		case "--refactor-every":
+		case "--refactor-threshold":
 			v, err := requireArg(args, i)
 			if err != nil {
 				return cfg, err
@@ -172,7 +176,7 @@ func Parse(args []string) (Config, error) {
 			if err != nil {
 				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
 			}
-			cfg.RefactorEvery = n
+			cfg.RefactorThreshold = n
 			i += 2
 
 		case "--tmux":

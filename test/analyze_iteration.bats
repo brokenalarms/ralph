@@ -21,9 +21,7 @@ teardown() {
 @test "Permission denial (3+) triggers halt" {
   local logfile="$RALPH_DIR/test_iter.log"
   cat > "$logfile" <<'EOF'
-permission denied trying to write
-permission denied again
-permission denied third time
+{"type":"assistant","message":{"content":[{"type":"text","text":"permission denied trying to write\npermission denied again\npermission denied third time"}]}}
 EOF
   local head_before
   head_before=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null)
@@ -35,8 +33,7 @@ EOF
 @test "Stuck loop detection" {
   local logfile="$RALPH_DIR/test_iter.log"
   cat > "$logfile" <<'EOF'
-I'm blocked on this issue
-I cannot proceed without access
+{"type":"assistant","message":{"content":[{"type":"text","text":"I'm blocked on this issue\nI cannot proceed without access"}]}}
 EOF
   local head_before
   head_before=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null)

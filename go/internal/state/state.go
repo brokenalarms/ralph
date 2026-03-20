@@ -20,9 +20,9 @@ type State struct {
 	WorktreeDir            string `json:"worktree_dir,omitempty"`
 	WorktreeBranch         string `json:"worktree_branch,omitempty"`
 	TaskBackend            string `json:"task_backend,omitempty"`
-	MaxIterations          int    `json:"max_iterations"`
-	IterationsSinceRefactor int   `json:"iterations_since_refactor"`
-	RefactorEvery          int    `json:"refactor_every"`
+	MaxIterations      int `json:"max_iterations"`
+	QualityScore       int `json:"quality_score"`
+	RefactorThreshold  int `json:"refactor_threshold"`
 
 	// Overflow captures unknown keys so round-tripping preserves them.
 	Overflow map[string]json.RawMessage `json:"-"`
@@ -77,7 +77,7 @@ func (s *State) UnmarshalJSON(data []byte) error {
 		"iteration": true, "status": true, "started_at": true,
 		"last_task": true, "worktree_dir": true, "worktree_branch": true,
 		"task_backend": true, "max_iterations": true,
-		"iterations_since_refactor": true, "refactor_every": true,
+		"quality_score": true, "refactor_threshold": true,
 	}
 
 	alias.Overflow = nil
@@ -199,10 +199,10 @@ func getField(s State, key string) string {
 		return s.TaskBackend
 	case "max_iterations":
 		return strconv.Itoa(s.MaxIterations)
-	case "iterations_since_refactor":
-		return strconv.Itoa(s.IterationsSinceRefactor)
-	case "refactor_every":
-		return strconv.Itoa(s.RefactorEvery)
+	case "quality_score":
+		return strconv.Itoa(s.QualityScore)
+	case "refactor_threshold":
+		return strconv.Itoa(s.RefactorThreshold)
 	default:
 		if s.Overflow != nil {
 			if raw, ok := s.Overflow[key]; ok {
@@ -236,10 +236,10 @@ func setField(s *State, key, value string) {
 		s.TaskBackend = value
 	case "max_iterations":
 		s.MaxIterations, _ = strconv.Atoi(value)
-	case "iterations_since_refactor":
-		s.IterationsSinceRefactor, _ = strconv.Atoi(value)
-	case "refactor_every":
-		s.RefactorEvery, _ = strconv.Atoi(value)
+	case "quality_score":
+		s.QualityScore, _ = strconv.Atoi(value)
+	case "refactor_threshold":
+		s.RefactorThreshold, _ = strconv.Atoi(value)
 	default:
 		// Unknown key — store in overflow, converting numeric strings to numbers.
 		if s.Overflow == nil {

@@ -20,8 +20,8 @@ func TestLoad_BashCompatible(t *testing.T) {
   "worktree_branch": "ralph/test/01-state",
   "task_backend": "bd",
   "max_iterations": 50,
-  "iterations_since_refactor": 3,
-  "refactor_every": 0
+  "quality_score": 15,
+  "refactor_threshold": 20
 }`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(stateJSON), 0o644); err != nil {
 		t.Fatal(err)
@@ -42,8 +42,11 @@ func TestLoad_BashCompatible(t *testing.T) {
 	if s.MaxIterations != 50 {
 		t.Errorf("MaxIterations = %d, want 50", s.MaxIterations)
 	}
-	if s.RefactorEvery != 0 {
-		t.Errorf("RefactorEvery = %d, want 0", s.RefactorEvery)
+	if s.QualityScore != 15 {
+		t.Errorf("QualityScore = %d, want 15", s.QualityScore)
+	}
+	if s.RefactorThreshold != 20 {
+		t.Errorf("RefactorThreshold = %d, want 20", s.RefactorThreshold)
 	}
 	if s.TaskBackend != "bd" {
 		t.Errorf("TaskBackend = %q, want %q", s.TaskBackend, "bd")
@@ -73,14 +76,14 @@ func TestSaveAndLoad_Roundtrip(t *testing.T) {
 	st := NewStore(dir)
 
 	original := State{
-		Iteration:               10,
-		Status:                  "planned",
-		StartedAt:               "2026-03-20T00:00:00Z",
-		LastTask:                "test task",
-		TaskBackend:             "checklist",
-		MaxIterations:           20,
-		IterationsSinceRefactor: 2,
-		RefactorEvery:           5,
+		Iteration:         10,
+		Status:            "planned",
+		StartedAt:         "2026-03-20T00:00:00Z",
+		LastTask:          "test task",
+		TaskBackend:       "checklist",
+		MaxIterations:     20,
+		QualityScore:      12,
+		RefactorThreshold: 20,
 	}
 
 	if err := st.Save(original); err != nil {
@@ -96,7 +99,7 @@ func TestSaveAndLoad_Roundtrip(t *testing.T) {
 		loaded.Status != original.Status ||
 		loaded.MaxIterations != original.MaxIterations ||
 		loaded.LastTask != original.LastTask ||
-		loaded.RefactorEvery != original.RefactorEvery {
+		loaded.RefactorThreshold != original.RefactorThreshold {
 		t.Errorf("Roundtrip mismatch:\n  saved:  %+v\n  loaded: %+v", original, loaded)
 	}
 }

@@ -9,6 +9,12 @@ Claude doesn't feel the friction that forces human developers to refactor. You u
 {{RECENT_FILES}}
 ```
 
+## Quality signals detected
+The following issues triggered this refactor iteration. Focus on these first.
+```
+{{QUALITY_FINDINGS}}
+```
+
 ## Style guide
 {{REFACTOR_STYLE}}
 
