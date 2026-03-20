@@ -7,148 +7,241 @@ import (
 	"testing"
 )
 
-// Verifies that Init creates state.json with the provided max_iterations
-// and refactor_every values, matching the shell's initial state structure.
-func TestInitCreatesStateFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	s := NewStore(path)
-
-	if err := s.Init(50, 0); err != nil {
-		t.Fatalf("Init: %v", err)
+// Verifies that Load can parse a state.json written by bash ralph,
+// preserving all known fields and their types.
+func TestLoad_BashCompatible(t *testing.T) {
+	dir := t.TempDir()
+	stateJSON := `{
+  "iteration": 25,
+  "status": "running",
+  "started_at": "2026-03-20T03:09:21Z",
+  "last_task": "Go: State management",
+  "worktree_dir": "/tmp/worktrees/test-01",
+  "worktree_branch": "ralph/test/01-state",
+  "task_backend": "bd",
+  "max_iterations": 50,
+  "iterations_since_refactor": 3,
+  "refactor_every": 0
+}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(stateJSON), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
-	st, err := s.Load()
+	st := NewStore(dir)
+	s, err := st.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if st.Iteration != 0 {
-		t.Errorf("Iteration = %d, want 0", st.Iteration)
+	if s.Iteration != 25 {
+		t.Errorf("Iteration = %d, want 25", s.Iteration)
 	}
-	if st.MaxIterations == nil || *st.MaxIterations != 50 {
-		t.Errorf("MaxIterations = %v, want 50", st.MaxIterations)
+	if s.Status != "running" {
+		t.Errorf("Status = %q, want %q", s.Status, "running")
 	}
-	if st.RefactorEvery == nil || *st.RefactorEvery != 0 {
-		t.Errorf("RefactorEvery = %v, want 0", st.RefactorEvery)
+	if s.MaxIterations != 50 {
+		t.Errorf("MaxIterations = %d, want 50", s.MaxIterations)
 	}
-	if st.Status != "initialized" {
-		t.Errorf("Status = %q, want initialized", st.Status)
+	if s.RefactorEvery != 0 {
+		t.Errorf("RefactorEvery = %d, want 0", s.RefactorEvery)
 	}
-}
-
-// Verifies that Init is a no-op when state.json already exists (resume case).
-func TestInitSkipsExistingFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	s := NewStore(path)
-
-	s.Init(50, 0)
-	// Modify a value
-	s.Write("status", "running")
-
-	// Second Init should not reset the file
-	s.Init(99, 10)
-
-	st, _ := s.Load()
-	if st.Status != "running" {
-		t.Error("Init overwrote existing state.json")
+	if s.TaskBackend != "bd" {
+		t.Errorf("TaskBackend = %q, want %q", s.TaskBackend, "bd")
+	}
+	if s.WorktreeDir != "/tmp/worktrees/test-01" {
+		t.Errorf("WorktreeDir = %q, want %q", s.WorktreeDir, "/tmp/worktrees/test-01")
 	}
 }
 
-// Verifies that WriteConfig persists max_iterations and refactor_every,
-// and the per-iteration readers return the updated values.
-func TestWriteConfigAndReread(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	s := NewStore(path)
-	s.Init(50, 0)
-
-	if err := s.WriteConfig(30, 5); err != nil {
-		t.Fatalf("WriteConfig: %v", err)
+// Verifies that Load returns a zero state (not an error) when no
+// state file exists — matches bash behavior on first run.
+func TestLoad_MissingFile(t *testing.T) {
+	st := NewStore(t.TempDir())
+	s, err := st.Load()
+	if err != nil {
+		t.Fatalf("Load on missing file: %v", err)
 	}
-
-	if got := s.ReadMaxIterations(50); got != 30 {
-		t.Errorf("ReadMaxIterations = %d, want 30", got)
-	}
-	if got := s.ReadRefactorEvery(); got != 5 {
-		t.Errorf("ReadRefactorEvery = %d, want 5", got)
+	if s.Status != "" || s.Iteration != 0 {
+		t.Errorf("Expected zero State, got status=%q iteration=%d", s.Status, s.Iteration)
 	}
 }
 
-// Verifies that users can edit state.json mid-run and the readers pick up
-// the new values — the core dynamic reconfiguration feature.
-func TestMidRunEdit(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	s := NewStore(path)
-	s.Init(50, 0)
-	s.WriteConfig(50, 0)
+// Verifies that Save writes valid JSON via atomic rename and that the
+// result can be re-loaded identically.
+func TestSaveAndLoad_Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
 
-	// Simulate user editing state.json to change max_iterations
-	s.Write("max_iterations", "25")
+	original := State{
+		Iteration:               10,
+		Status:                  "planned",
+		StartedAt:               "2026-03-20T00:00:00Z",
+		LastTask:                "test task",
+		TaskBackend:             "checklist",
+		MaxIterations:           20,
+		IterationsSinceRefactor: 2,
+		RefactorEvery:           5,
+	}
 
-	if got := s.ReadMaxIterations(50); got != 25 {
-		t.Errorf("after mid-run edit, ReadMaxIterations = %d, want 25", got)
+	if err := st.Save(original); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := st.Load()
+	if err != nil {
+		t.Fatalf("Load after Save: %v", err)
+	}
+
+	if loaded.Iteration != original.Iteration ||
+		loaded.Status != original.Status ||
+		loaded.MaxIterations != original.MaxIterations ||
+		loaded.LastTask != original.LastTask ||
+		loaded.RefactorEvery != original.RefactorEvery {
+		t.Errorf("Roundtrip mismatch:\n  saved:  %+v\n  loaded: %+v", original, loaded)
 	}
 }
 
-// Verifies that ReadMaxIterations returns the fallback when the key is
-// missing or the file doesn't exist.
-func TestReadMaxIterationsFallback(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	s := NewStore(path)
+// Verifies that Save produces output with numbers as JSON numbers (not
+// quoted strings), matching bash jq's `try tonumber` behavior.
+func TestSave_NumericFieldsAreNumbers(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
 
-	// File doesn't exist
-	if got := s.ReadMaxIterations(50); got != 50 {
-		t.Errorf("missing file: ReadMaxIterations = %d, want 50", got)
+	if err := st.Save(State{Iteration: 5, MaxIterations: 20}); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(st.Path())
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+
+	// "iteration" should be 5 not "5"
+	if string(raw["iteration"]) != "5" {
+		t.Errorf("iteration = %s, want raw 5 (number)", string(raw["iteration"]))
+	}
+	if string(raw["max_iterations"]) != "20" {
+		t.Errorf("max_iterations = %s, want raw 20 (number)", string(raw["max_iterations"]))
 	}
 }
 
-// Verifies that Write auto-converts numeric strings to JSON numbers,
-// matching the shell's jq tonumber behavior.
-func TestWriteNumericConversion(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	s := NewStore(path)
-	s.Init(50, 0)
+// Verifies Get/Set work like bash read_state/write_state: Set a value,
+// then Get it back, with numeric values stored as JSON numbers.
+func TestGetSet_MatchesBashReadWriteState(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
 
-	s.Write("iteration", "5")
+	// Initialize with empty state
+	if err := st.Save(State{}); err != nil {
+		t.Fatal(err)
+	}
 
-	data, _ := os.ReadFile(path)
+	if err := st.Set("status", "running"); err != nil {
+		t.Fatalf("Set status: %v", err)
+	}
+	if err := st.Set("iteration", "7"); err != nil {
+		t.Fatalf("Set iteration: %v", err)
+	}
+
+	val, err := st.Get("status")
+	if err != nil {
+		t.Fatalf("Get status: %v", err)
+	}
+	if val != "running" {
+		t.Errorf("Get status = %q, want %q", val, "running")
+	}
+
+	val, err = st.Get("iteration")
+	if err != nil {
+		t.Fatalf("Get iteration: %v", err)
+	}
+	if val != "7" {
+		t.Errorf("Get iteration = %q, want %q", val, "7")
+	}
+}
+
+// Verifies that unknown keys from the bash side are preserved through
+// a load-modify-save cycle (forward compatibility).
+func TestOverflow_PreservesUnknownKeys(t *testing.T) {
+	dir := t.TempDir()
+	stateJSON := `{
+  "iteration": 1,
+  "status": "running",
+  "custom_flag": "hello",
+  "custom_num": 42
+}`
+	os.WriteFile(filepath.Join(dir, "state.json"), []byte(stateJSON), 0o644)
+
+	st := NewStore(dir)
+	s, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Modify a known field
+	s.Status = "completed"
+	if err := st.Save(s); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-read raw JSON and check overflow keys survived
+	data, _ := os.ReadFile(st.Path())
 	var raw map[string]json.RawMessage
 	json.Unmarshal(data, &raw)
 
-	// Should be stored as JSON number 5, not string "5"
-	if string(raw["iteration"]) != "5" {
-		t.Errorf("iteration stored as %s, want JSON number 5", string(raw["iteration"]))
+	if string(raw["custom_flag"]) != `"hello"` {
+		t.Errorf("custom_flag lost: %s", string(raw["custom_flag"]))
+	}
+	if string(raw["custom_num"]) != "42" {
+		t.Errorf("custom_num lost: %s", string(raw["custom_num"]))
+	}
+	if string(raw["status"]) != `"completed"` {
+		t.Errorf("status not updated: %s", string(raw["status"]))
 	}
 }
 
-// Verifies that Read/Write implement the git.StateStore interface contract:
-// string values round-trip correctly.
-func TestReadWriteStringValues(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	s := NewStore(path)
-	s.Init(50, 0)
+// Verifies that Set on an unknown key stores it in overflow and
+// Get retrieves it — matching bash behavior for arbitrary keys.
+func TestGetSet_UnknownKey(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Save(State{})
 
-	s.Write("worktree_dir", "/tmp/ralph-worktree")
-	got, err := s.Read("worktree_dir")
-	if err != nil {
-		t.Fatalf("Read: %v", err)
+	if err := st.Set("custom_thing", "abc"); err != nil {
+		t.Fatal(err)
 	}
-	if got != "/tmp/ralph-worktree" {
-		t.Errorf("Read(worktree_dir) = %q, want /tmp/ralph-worktree", got)
+	val, err := st.Get("custom_thing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val != "abc" {
+		t.Errorf("Get custom_thing = %q, want %q", val, "abc")
 	}
 }
 
-// Verifies that Read returns empty string for null JSON values,
-// matching the shell's jq `// empty` behavior.
-func TestReadNullValue(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	s := NewStore(path)
-	s.Init(50, 0)
+// Verifies that Save uses atomic write — if we can read the file after
+// Save, it contains valid JSON (no partial writes).
+func TestSave_AtomicWrite(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
 
-	got, err := s.Read("started_at")
+	// Write initial state
+	st.Save(State{Status: "initial"})
+
+	// Overwrite — should be atomic
+	st.Save(State{Status: "updated", Iteration: 99})
+
+	data, err := os.ReadFile(st.Path())
 	if err != nil {
-		t.Fatalf("Read: %v", err)
+		t.Fatal(err)
 	}
-	if got != "" {
-		t.Errorf("Read(started_at) = %q, want empty for null", got)
+
+	var s State
+	if err := json.Unmarshal(data, &s); err != nil {
+		t.Fatalf("JSON invalid after atomic write: %v", err)
+	}
+	if s.Status != "updated" || s.Iteration != 99 {
+		t.Errorf("State after atomic write: %+v", s)
 	}
 }
