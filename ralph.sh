@@ -27,6 +27,7 @@ QUIET=false
 USE_WORKTREE=true
 CALLS_PER_HOUR=80
 REFACTOR_THRESHOLD="${RALPH_REFACTOR_THRESHOLD:-20}"
+MAX_TASK_ATTEMPTS="${RALPH_MAX_TASK_ATTEMPTS:-5}"
 USE_TMUX=false
 AUTO_MERGE=false
 STUCK_THRESHOLD=5
@@ -127,6 +128,7 @@ ${BOLD}OPTIONS:${NC}
   --no-worktree          Run directly in project dir (no git worktree isolation)
   --calls-per-hour <N>   Max Claude calls per hour (default: 80)
   --refactor-threshold <N> Quality pain score that triggers a refactor iteration (default: 20, 0 to disable)
+  --max-task-attempts <N> Max attempts per task before skipping (default: 5)
   --tmux                 Run in tmux 3-pane layout (status / output / plan)
   --auto-merge           Squash-merge each PR into main after task completion
   -h, --help             Show this help
@@ -242,6 +244,7 @@ while [[ $# -gt 0 ]]; do
     --no-worktree)  USE_WORKTREE=false; shift ;;
     --calls-per-hour) CALLS_PER_HOUR="$2"; _CLI_CALLS_PER_HOUR="$2"; shift 2 ;;
     --refactor-threshold) REFACTOR_THRESHOLD="$2"; shift 2 ;;
+    --max-task-attempts) MAX_TASK_ATTEMPTS="$2"; shift 2 ;;
     --tmux)         USE_TMUX=true; shift ;;
     --auto-merge)   AUTO_MERGE=true; shift ;;
     -h|--help)      usage; exit 0 ;;
@@ -1507,6 +1510,8 @@ run_execution() {
   _test_only_count=0
   _stuck_count=0
   local _refactor_pending=false
+  local _current_task_id=""
+  local _task_attempt_count=0
 
   local run_iteration=0
   local iteration
@@ -1616,6 +1621,27 @@ run_execution() {
     local task_id
     task_id=$(get_next_task_id)
 
+    # Reset per-task counters when the task changes
+    local task_key="${task_id:-$next_task}"
+    if [[ "$task_key" != "$_current_task_id" ]]; then
+      _current_task_id="$task_key"
+      _task_attempt_count=0
+      _stagnant_count=0
+      _test_only_count=0
+      _stuck_count=0
+    fi
+    _task_attempt_count=$((_task_attempt_count + 1))
+
+    # Skip task if max attempts exceeded
+    if (( MAX_TASK_ATTEMPTS > 0 && _task_attempt_count > MAX_TASK_ATTEMPTS )); then
+      log_warn "Task '$next_task' exceeded $MAX_TASK_ATTEMPTS attempts — skipping"
+      skip_task "$task_id" "exceeded $MAX_TASK_ATTEMPTS attempts"
+      clear_attempt_history "$task_id" "$next_task"
+      _current_task_id=""
+      _task_attempt_count=0
+      continue
+    fi
+
     # Update stream pane title with task context
     if [[ -n "$task_id" ]]; then
       printf '%s: %s' "$task_id" "$next_task" > "$RALPH_DIR/.stream-task"
@@ -1694,21 +1720,34 @@ run_execution() {
     fi
     record_attempt "$task_id" "$next_task" "$summary" "$diff_stat" "$ANALYSIS_RESULT"
 
-    # Clear attempt history when task resolved (completed via signal)
+    # Clear attempt history and reset per-task state when task resolved
     if check_signal || check_all_complete; then
       clear_attempt_history "$task_id" "$next_task"
+      _current_task_id=""
+      _task_attempt_count=0
     fi
 
     case "$ANALYSIS_RESULT" in
-      halt:*)
-        log_error "Halting: ${ANALYSIS_RESULT#halt:}"
+      halt:permission_denied)
+        log_error "Halting: permission_denied"
         if [[ -n "$ANALYSIS_DETAIL" ]]; then
           echo "$ANALYSIS_DETAIL" | while IFS= read -r detail_line; do
             log_error "  $detail_line"
           done
         fi
-        write_state "status" "halted_${ANALYSIS_RESULT#halt:}"
+        write_state "status" "halted_permission_denied"
         break
+        ;;
+      halt:*)
+        local reason="${ANALYSIS_RESULT#halt:}"
+        log_warn "Task stuck ($reason) — skipping '$next_task'"
+        skip_task "$task_id" "$reason"
+        clear_attempt_history "$task_id" "$next_task"
+        _current_task_id=""
+        _task_attempt_count=0
+        _stagnant_count=0
+        _test_only_count=0
+        _stuck_count=0
         ;;
       warn:*)
         log_warn "Analysis: ${ANALYSIS_RESULT#warn:}"
@@ -1765,6 +1804,9 @@ generate_resume_script() {
   fi
   if [[ "$CALLS_PER_HOUR" != 80 ]]; then
     extra_args="$extra_args --calls-per-hour $CALLS_PER_HOUR"
+  fi
+  if [[ "$MAX_TASK_ATTEMPTS" != 5 ]]; then
+    extra_args="$extra_args --max-task-attempts $MAX_TASK_ATTEMPTS"
   fi
   if [[ "${_RALPH_TMUX_SESSION:-}" != "" ]]; then
     extra_args="$extra_args --tmux"

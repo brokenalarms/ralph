@@ -309,3 +309,31 @@ MOCK
   run _validate_backend
   [[ "$status" -eq 0 ]]
 }
+
+# Proves: bd skip_task closes the task with a blocked reason
+@test "bd: skip_task closes with blocked reason" {
+  local mock_dir="$TEST_TMPDIR/mock_bin"
+  local close_log="$TEST_TMPDIR/close_log"
+  cat > "$mock_dir/bd" <<MOCK
+#!/usr/bin/env bash
+case "\$1" in
+  close) echo "\$@" > "$close_log" ;;
+esac
+MOCK
+  chmod +x "$mock_dir/bd"
+  skip_task "abc123" "stuck_loop"
+  [[ -f "$close_log" ]]
+  grep -q "blocked: stuck_loop" "$close_log"
+}
+
+# Proves: checklist skip_task marks the current task as skipped
+@test "checklist: skip_task marks task with [s]" {
+  TASK_BACKEND="checklist"
+  cat > "$PLAN_FILE" <<'EOF'
+- [ ] Fix auth bug
+- [ ] Add tests
+EOF
+  skip_task "" "stagnation"
+  grep -q '\[s\] Fix auth bug (stagnation)' "$PLAN_FILE"
+  grep -q '\[ \] Add tests' "$PLAN_FILE"
+}
