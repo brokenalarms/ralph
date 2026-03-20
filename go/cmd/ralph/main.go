@@ -101,7 +101,7 @@ func printUsage() {
 
 %sOPTIONS:%s
   -d, --dir <path>       Project directory (default: cwd)
-  -n, --max <N>          Max iterations (default: 20)
+  -n, --max <N>          Max iterations (default: 50, env RALPH_MAX_ITERATIONS)
   -p, --prompt <text>    Prompt override (otherwise Claude reads repo context)
   --plan-file <path>     Pre-made plan in Ralph format (markdown checkboxes). Skips planning phase.
   --plan                 Run planning phase only
@@ -109,7 +109,7 @@ func printUsage() {
   -q, --quiet            Suppress Claude output streaming (log only)
   --no-worktree          Run directly in project dir (no git worktree isolation)
   --calls-per-hour <N>   Max Claude calls per hour (default: 80)
-  --refactor-every <N>   Inject a refactor iteration every N iterations (default: 5, 0 to disable)
+  --refactor-every <N>   Inject a refactor iteration every N iterations (default: 0/disabled, env RALPH_REFACTOR_EVERY)
   --tmux                 Run in tmux 3-pane layout (status / output / plan)
   -h, --help             Show this help
 

@@ -24,14 +24,30 @@ type Config struct {
 }
 
 // Defaults returns a Config with ralph.sh default values.
+// MaxIterations and RefactorEvery read from RALPH_MAX_ITERATIONS and
+// RALPH_REFACTOR_EVERY env vars, falling back to shell defaults (50 and 0).
 func Defaults() Config {
 	return Config{
 		ProjectDir:    ".",
-		MaxIterations: 20,
+		MaxIterations: envInt("RALPH_MAX_ITERATIONS", 50),
 		UseWorktree:   true,
 		CallsPerHour:  80,
-		RefactorEvery: 5,
+		RefactorEvery: envInt("RALPH_REFACTOR_EVERY", 0),
 	}
+}
+
+// envInt reads an integer from an environment variable, returning fallback
+// if unset or unparseable.
+func envInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 // Subcommand represents a ralph subcommand (stop, feedback) parsed before flags.
