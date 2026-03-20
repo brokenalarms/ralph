@@ -163,6 +163,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.state.Write("status", "running")
 		l.state.Write("last_task", nextTask)
 		l.git.RenameBranchForTask(nextTask)
+		l.git.TagTaskStart(taskID)
 
 		l.updateStreamTask(taskID, nextTask)
 
@@ -238,11 +239,13 @@ func (l *Loop) Run(ctx context.Context) error {
 				l.logger.Error("  %s", analysisResult.Detail)
 			}
 			l.state.Write("status", "halted_"+analysisResult.Reason)
+			l.git.TagTaskEnd(taskID)
 			return nil
 		case analyzer.Warn:
 			l.logger.Warn("Analysis: %s", analysisResult.Reason)
 		}
 
+		l.git.TagTaskEnd(taskID)
 		fmt.Println()
 	}
 

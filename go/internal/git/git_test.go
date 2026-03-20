@@ -736,6 +736,144 @@ func TestRebaseOntoDefaultBranch_HaltsOnRealConflicts(t *testing.T) {
 	}
 }
 
+// --- TagTaskStart / TagTaskEnd tests ---
+
+// TagTaskStart creates a git tag using the bd task ID when available
+func TestTagTaskStart_WithTaskID(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       newMemState(),
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.TagTaskStart("ralph-abc")
+
+	if !refExists(mgr.WorkDir, "ralph/task-ralph-abc/start") {
+		t.Error("expected tag ralph/task-ralph-abc/start to exist")
+	}
+}
+
+// TagTaskEnd creates an end tag at the current HEAD
+func TestTagTaskEnd_WithTaskID(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       newMemState(),
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.TagTaskEnd("ralph-abc")
+
+	if !refExists(mgr.WorkDir, "ralph/task-ralph-abc/end") {
+		t.Error("expected tag ralph/task-ralph-abc/end to exist")
+	}
+}
+
+// Tags fall back to the seq-slug from the branch name when no task ID is provided
+func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       newMemState(),
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("Add user auth")
+	mgr.TagTaskStart("")
+
+	if !refExists(mgr.WorkDir, "ralph/task-01-add-user-auth/start") {
+		t.Error("expected tag ralph/task-01-add-user-auth/start to exist")
+	}
+}
+
+// Tags are no-ops when running without a worktree (WorkDir == ProjectDir)
+func TestTagTaskStart_NoOpWithoutWorktree(t *testing.T) {
+	mgr := &Manager{
+		ProjectDir: "/some/dir",
+		WorkDir:    "/some/dir",
+		Logger:     &testLog{},
+	}
+	mgr.TagTaskStart("ralph-abc")
+	// No panic, no error — just a silent no-op
+}
+
+// Tags on the temp /next branch are skipped (no meaningful slug to extract)
+func TestTagTaskStart_SkipsNextBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       newMemState(),
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Branch is still ralph/project/next — no task ID → no tag
+	mgr.TagTaskStart("")
+
+	tags := gitOutput(mgr.WorkDir, "tag", "-l", "ralph/task-*")
+	if tags != "" {
+		t.Errorf("expected no tags on /next branch, got: %s", tags)
+	}
+}
+
+// Start and end tags point at different commits when work happens between them
+func TestTagStartEnd_DifferentCommits(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       newMemState(),
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.TagTaskStart("ralph-xyz")
+	startRev := gitOutput(mgr.WorkDir, "rev-parse", "ralph/task-ralph-xyz/start")
+
+	writeFile(t, mgr.WorkDir, "work.txt", "some work\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "do work")
+
+	mgr.TagTaskEnd("ralph-xyz")
+	endRev := gitOutput(mgr.WorkDir, "rev-parse", "ralph/task-ralph-xyz/end")
+
+	if startRev == endRev {
+		t.Error("start and end tags should point at different commits after work was done")
+	}
+}
+
 // Rebase is skipped when already up to date with origin
 func TestRebaseOntoDefaultBranch_AlreadyUpToDate(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
