@@ -29,6 +29,7 @@ setup_test_repo() {
   STOP_FILE="$RALPH_DIR/stop"
   LOG_FILE="$RALPH_DIR/loop.log"
   RAW_LOG="$RALPH_DIR/raw.log"
+  RESUME_SCRIPT="$RALPH_DIR/resume.sh"
   touch "$LOG_FILE" "$RAW_LOG"
 
   WORK_DIR="$PROJECT_DIR"

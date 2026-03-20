@@ -25,7 +25,13 @@ setup_worktree() {
       PROJECT_NAME=$(basename "$PROJECT_DIR")
       local named_branches
       named_branches=$(git -C "$PROJECT_DIR" branch --list "ralph/$PROJECT_NAME/*" 2>/dev/null | wc -l | tr -d ' ')
-      _TASK_SEQ=$((named_branches))
+      local stored_seq
+      stored_seq=$(read_state "task_seq")
+      if [[ -n "$stored_seq" && "$stored_seq" != "null" ]]; then
+        _TASK_SEQ=$((stored_seq))
+      else
+        _TASK_SEQ=$((named_branches))
+      fi
       log "Resuming in worktree: $WORK_DIR (branch: $WORKTREE_BRANCH)"
       return
     fi
@@ -164,6 +170,7 @@ rename_branch_for_task() {
   if git -C "$WORK_DIR" branch -m "$WORKTREE_BRANCH" "$new_branch" 2>/dev/null; then
     WORKTREE_BRANCH="$new_branch"
     write_state "worktree_branch" "$WORKTREE_BRANCH"
+    write_state "task_seq" "$_TASK_SEQ"
     _BRANCH_RENAMED=true
   fi
 }
@@ -306,5 +313,6 @@ rebase_onto_default_branch() {
 
   git -C "$PROJECT_DIR" branch -D "$last_merged" 2>/dev/null || true
   _TASK_SEQ=$remaining_seq
+  write_state "task_seq" "$_TASK_SEQ"
   return 0
 }

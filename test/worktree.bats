@@ -124,6 +124,31 @@ teardown() {
   [[ ! -d "$first_work_dir" ]]
 }
 
+# Proves: task_seq is restored from state.json on resume, not derived from branch count.
+# Prevents sequence skips when branches are deleted after squash-merge.
+@test "Resume restores task_seq from state.json" {
+  init_ralph_dir
+  setup_worktree
+
+  rename_branch_for_task "first task"
+  rotate_branch
+  rename_branch_for_task "second task"
+
+  # Verify task_seq was persisted
+  local stored_seq
+  stored_seq=$(read_state "task_seq")
+  [[ "$stored_seq" == "2" ]]
+
+  # Delete a branch to simulate squash-merge cleanup
+  git -C "$PROJECT_DIR" branch -D "ralph/project/01-first-task" 2>/dev/null
+
+  # Resume — should use persisted seq (2), not branch count (1)
+  RESUME=true
+  _TASK_SEQ=0
+  setup_worktree
+  [[ "$_TASK_SEQ" -eq 2 ]]
+}
+
 # Proves: ralph requires a git repo and fails fast without one.
 @test "Non-git directory exits with error" {
   local non_git_dir
