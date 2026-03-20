@@ -47,28 +47,12 @@ func TestBuildPrompt_VariablesSubstituted(t *testing.T) {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-<<<<<<< HEAD
-<<<<<<< HEAD
 	for _, want := range []string{v.WorkDir, v.RalphDir, v.PlanFile} {
-=======
-	for _, want := range []string{v.WorkDir, v.RalphDir, v.PlanFile, v.SignalToken} {
->>>>>>> e0c9eef (Add Go prompt assembly with template substitution)
-=======
-	for _, want := range []string{v.WorkDir, v.RalphDir, v.PlanFile} {
->>>>>>> 6a2ca6f (fix: update prompt tests for signal file-based protocol)
 		if !strings.Contains(result, want) {
 			t.Errorf("prompt missing %q", want)
 		}
 	}
-<<<<<<< HEAD
-<<<<<<< HEAD
 	for _, raw := range []string{"{{WORK_DIR}}", "{{RALPH_DIR}}", "{{PLAN_FILE}}"} {
-=======
-	for _, raw := range []string{"{{WORK_DIR}}", "{{RALPH_DIR}}", "{{PLAN_FILE}}", "{{SIGNAL_TOKEN}}"} {
->>>>>>> e0c9eef (Add Go prompt assembly with template substitution)
-=======
-	for _, raw := range []string{"{{WORK_DIR}}", "{{RALPH_DIR}}", "{{PLAN_FILE}}"} {
->>>>>>> 6a2ca6f (fix: update prompt tests for signal file-based protocol)
 		if strings.Contains(result, raw) {
 			t.Errorf("prompt still contains unsubstituted %s", raw)
 		}
@@ -169,18 +153,8 @@ func TestBuildRefactorPrompt(t *testing.T) {
 	if !strings.Contains(result, "main.go") {
 		t.Error("refactor prompt missing recent files")
 	}
-<<<<<<< HEAD
-<<<<<<< HEAD
 	if !strings.Contains(result, ".signal_complete") {
 		t.Error("refactor prompt missing signal protocol")
-=======
-	if !strings.Contains(result, v.SignalToken) {
-		t.Error("refactor prompt missing signal token")
->>>>>>> e0c9eef (Add Go prompt assembly with template substitution)
-=======
-	if !strings.Contains(result, ".signal_complete") {
-		t.Error("refactor prompt missing signal protocol")
->>>>>>> 6a2ca6f (fix: update prompt tests for signal file-based protocol)
 	}
 	if strings.Contains(result, "{{RECENT_FILES}}") {
 		t.Error("refactor prompt still contains unsubstituted {{RECENT_FILES}}")
@@ -227,3 +201,4 @@ func TestBuildPrompt_MissingTemplateErrors(t *testing.T) {
 		t.Errorf("error should mention template not found, got: %v", err)
 	}
 }
+

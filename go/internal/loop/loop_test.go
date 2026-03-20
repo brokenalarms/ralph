@@ -49,7 +49,7 @@ func setupTestDir(t *testing.T) (string, *state.Store) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(filepath.Join(ralphDir, "state.json"))
+	st := state.NewStore(ralphDir)
 	st.Init(5, 0)
 	return dir, st
 }

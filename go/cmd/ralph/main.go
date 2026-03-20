@@ -81,7 +81,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		return exitCode
 	}
 
-	st := state.NewStore(stateFile)
+	st := state.NewStore(ralphDir)
 	if err := st.Init(cfg.MaxIterations, cfg.RefactorEvery); err != nil {
 		log.Error("Failed to initialize state: %v", err)
 		return 1
@@ -130,20 +130,23 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 	st.Write("started_at", time.Now().UTC().Format("2006-01-02T15:04:05Z"))
 
 	// Planning phase.
-	planner := planning.New(planning.Config{
-		ProjectDir:   cfg.ProjectDir,
+	planDeps := planning.Deps{
+		Backend:      backend,
+		StateStore:   st,
+		Logger:       log,
+		PromptsDir:   promptsDir,
 		WorkDir:      gm.WorkDir,
 		RalphDir:     ralphDir,
-		PromptsDir:   promptsDir,
 		PlanFile:     planFile,
-		PlanFileArg:  cfg.PlanFile,
 		Prompt:       cfg.Prompt,
 		SkipPlanning: cfg.SkipPlanning,
-		Quiet:        cfg.Quiet,
-		TaskBackend:  backend,
-	}, st, gm, log)
+		RenameWorktree: func(theme string) error {
+			gm.RenameWorktreeForTheme(theme)
+			return nil
+		},
+	}
 
-	if err := planner.Run(); err != nil {
+	if err := planning.Run(planDeps); err != nil {
 		log.Error("Planning failed: %v", err)
 		cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, interrupted, log)
 		return 1
@@ -207,7 +210,7 @@ func initRalphDir(cfg config.Config, ralphDir, logFile, stateFile string, log *l
 
 	// Check for existing state (resume detection).
 	if fileExists(stateFile) {
-		st := state.NewStore(stateFile)
+		st := state.NewStore(ralphDir)
 		status, _ := st.Read("status")
 		if status == "completed" {
 			log.Task("All tasks completed from previous run.")

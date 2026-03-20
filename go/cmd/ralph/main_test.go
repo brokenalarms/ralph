@@ -101,7 +101,7 @@ func TestPrintSummary_TaskCounts(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
-	st := state.NewStore(filepath.Join(ralphDir, "state.json"))
+	st := state.NewStore(ralphDir)
 	st.Init(5, 0)
 	st.Write("iteration", "3")
 	st.Write("status", "completed")
@@ -159,7 +159,7 @@ func TestInitRalphDir_DetectsResume(t *testing.T) {
 	logFile := filepath.Join(ralphDir, "loop.log")
 	stateFile := filepath.Join(ralphDir, "state.json")
 
-	st := state.NewStore(stateFile)
+	st := state.NewStore(ralphDir)
 	st.Init(5, 0)
 	st.Write("status", "running")
 

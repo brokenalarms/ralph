@@ -189,6 +189,43 @@ func (st *Store) Set(key, value string) error {
 	return st.Save(s)
 }
 
+// Write is an alias for Set, matching the name used by loop and main packages.
+func (st *Store) Write(key, value string) error { return st.Set(key, value) }
+
+// Read is an alias for Get, matching the name used by loop and main packages.
+func (st *Store) Read(key string) (string, error) { return st.Get(key) }
+
+// Init initializes state with config values. Creates the file if missing.
+func (st *Store) Init(maxIterations, refactorEvery int) error {
+	s, _ := st.Load()
+	if s.MaxIterations == 0 {
+		s.MaxIterations = maxIterations
+	}
+	return st.Save(s)
+}
+
+// WriteConfig writes max_iterations and refactor_every to state.
+func (st *Store) WriteConfig(maxIterations, refactorEvery int) {
+	st.Set("max_iterations", strconv.Itoa(maxIterations))
+	st.Set("refactor_every", strconv.Itoa(refactorEvery))
+}
+
+// ReadMaxIterations returns max_iterations from state, falling back to the given default.
+func (st *Store) ReadMaxIterations(defaultVal int) int {
+	v, _ := st.Get("max_iterations")
+	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		return n
+	}
+	return defaultVal
+}
+
+// ReadRefactorEvery returns the refactor_every value from state.
+func (st *Store) ReadRefactorEvery() int {
+	v, _ := st.Get("refactor_every")
+	n, _ := strconv.Atoi(v)
+	return n
+}
+
 // getField extracts a named field from State as a string.
 func getField(s State, key string) string {
 	switch key {
