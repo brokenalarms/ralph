@@ -4,18 +4,18 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // Verifies that Parse with no arguments returns ralph.sh-compatible defaults:
-<<<<<<< HEAD
-// cwd project dir, 50 iterations, worktree enabled, 80 calls/hr, refactor disabled.
-=======
-// cwd project dir, 20 iterations, worktree enabled, 80 calls/hr, refactor threshold 20.
->>>>>>> 33a34a5 (Replace fixed refactor schedule with adaptive quality signals)
+// cwd project dir, 50 iterations, worktree enabled, 80 calls/hr, refactor disabled,
+// idle timeouts at 10m/30s.
 func TestDefaultValues(t *testing.T) {
 	// Clear env vars so defaults are deterministic.
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
 	t.Setenv("RALPH_REFACTOR_EVERY", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 
 	cfg, err := Parse(nil)
 	if err != nil {
@@ -37,6 +37,12 @@ func TestDefaultValues(t *testing.T) {
 	if cfg.CallsPerHour != 80 {
 		t.Errorf("CallsPerHour = %d, want 80", cfg.CallsPerHour)
 	}
+	if cfg.IdleTimeout != 10*time.Minute {
+		t.Errorf("IdleTimeout = %s, want 10m", cfg.IdleTimeout)
+	}
+	if cfg.IdleTimeoutProgress != 30*time.Second {
+		t.Errorf("IdleTimeoutProgress = %s, want 30s", cfg.IdleTimeoutProgress)
+	}
 }
 
 // Verifies that RALPH_MAX_ITERATIONS and RALPH_REFACTOR_EVERY env vars
@@ -44,6 +50,8 @@ func TestDefaultValues(t *testing.T) {
 func TestEnvVarDefaults(t *testing.T) {
 	t.Setenv("RALPH_MAX_ITERATIONS", "100")
 	t.Setenv("RALPH_REFACTOR_EVERY", "10")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 
 	cfg, err := Parse(nil)
 	if err != nil {
@@ -93,9 +101,8 @@ func TestAllFlags(t *testing.T) {
 		"-q",
 		"--no-worktree",
 		"--calls-per-hour", "40",
-		"--refactor-threshold", "30",
+		"--refactor-every", "3",
 		"--tmux",
-		"--auto-merge",
 	}
 	cfg, err := Parse(args)
 	if err != nil {
@@ -129,14 +136,11 @@ func TestAllFlags(t *testing.T) {
 	if cfg.CallsPerHour != 40 {
 		t.Errorf("CallsPerHour = %d, want 40", cfg.CallsPerHour)
 	}
-	if cfg.RefactorThreshold != 30 {
-		t.Errorf("RefactorThreshold = %d, want 30", cfg.RefactorThreshold)
+	if cfg.RefactorEvery != 3 {
+		t.Errorf("RefactorEvery = %d, want 3", cfg.RefactorEvery)
 	}
 	if !cfg.UseTmux {
 		t.Error("UseTmux should be true")
-	}
-	if !cfg.AutoMerge {
-		t.Error("AutoMerge should be true")
 	}
 }
 
@@ -162,6 +166,51 @@ func TestHelpFlag(t *testing.T) {
 	}
 }
 
+// Verifies that --idle-timeout and --idle-timeout-progress flags override
+// defaults, accepting both Go duration strings and bare seconds.
+func TestIdleTimeoutFlags(t *testing.T) {
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+
+	cfg, err := Parse([]string{"--idle-timeout", "5m", "--idle-timeout-progress", "15s"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.IdleTimeout != 5*time.Minute {
+		t.Errorf("IdleTimeout = %s, want 5m", cfg.IdleTimeout)
+	}
+	if cfg.IdleTimeoutProgress != 15*time.Second {
+		t.Errorf("IdleTimeoutProgress = %s, want 15s", cfg.IdleTimeoutProgress)
+	}
+
+	// Bare integer interpreted as seconds.
+	cfg, err = Parse([]string{"--idle-timeout", "120"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.IdleTimeout != 2*time.Minute {
+		t.Errorf("IdleTimeout = %s, want 2m0s for bare 120", cfg.IdleTimeout)
+	}
+}
+
+// Verifies that RALPH_IDLE_TIMEOUT and RALPH_IDLE_TIMEOUT_PROGRESS env vars
+// override the hardcoded defaults.
+func TestIdleTimeoutEnvVars(t *testing.T) {
+	t.Setenv("RALPH_IDLE_TIMEOUT", "3m")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "45")
+
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.IdleTimeout != 3*time.Minute {
+		t.Errorf("IdleTimeout = %s, want 3m from env", cfg.IdleTimeout)
+	}
+	if cfg.IdleTimeoutProgress != 45*time.Second {
+		t.Errorf("IdleTimeoutProgress = %s, want 45s from env", cfg.IdleTimeoutProgress)
+	}
+}
+
 // Verifies that unknown flags produce an error, matching ralph.sh's
 // `-*) log_error "Unknown option: $1"` case.
 func TestUnknownFlag(t *testing.T) {
@@ -173,7 +222,7 @@ func TestUnknownFlag(t *testing.T) {
 
 // Verifies that flags requiring a value return an error when the value is missing.
 func TestMissingArgValue(t *testing.T) {
-	for _, flag := range []string{"-d", "-n", "-p", "--plan-file", "--calls-per-hour", "--refactor-threshold"} {
+	for _, flag := range []string{"-d", "-n", "-p", "--plan-file", "--calls-per-hour", "--refactor-every", "--idle-timeout", "--idle-timeout-progress"} {
 		_, err := Parse([]string{flag})
 		if err == nil {
 			t.Errorf("Parse(%q) should error on missing value", flag)
@@ -183,7 +232,7 @@ func TestMissingArgValue(t *testing.T) {
 
 // Verifies that non-numeric values for integer flags produce an error.
 func TestInvalidNumericArg(t *testing.T) {
-	for _, flag := range []string{"-n", "--calls-per-hour", "--refactor-threshold"} {
+	for _, flag := range []string{"-n", "--calls-per-hour", "--refactor-every"} {
 		_, err := Parse([]string{flag, "abc"})
 		if err == nil {
 			t.Errorf("Parse(%q, \"abc\") should error on non-numeric value", flag)

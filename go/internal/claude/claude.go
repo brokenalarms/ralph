@@ -47,12 +47,27 @@ type RunConfig struct {
 	Quiet     bool   // suppress terminal streaming
 	Signals   SignalPaths
 	PollInterval time.Duration
+
+	// IdleTimeout kills the session if the raw log file hasn't been modified
+	// for this duration. Zero disables idle detection.
+	IdleTimeout time.Duration
+
+	// IdleTimeoutProgress is the shorter idle timeout used when the
+	// HasProgress callback reports that work was already done in this
+	// iteration (e.g. git diff exists). Zero falls back to IdleTimeout.
+	IdleTimeoutProgress time.Duration
+
+	// HasProgress returns true when the current iteration has already
+	// produced observable work (new commits, unstaged changes). Used to
+	// select the shorter IdleTimeoutProgress. May be nil.
+	HasProgress func() bool
 }
 
 // Result describes the outcome of a Claude run.
 type Result struct {
 	SignalDetected bool   // true if a completion signal was found
 	AllComplete    bool   // true if the all-complete signal was found
+	IdleTimeout    bool   // true if the session was killed due to idle timeout
 	TaskDesc       string // task description from the current-task signal
 	Summary        string // completion summary from signal file
 }
@@ -149,6 +164,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 	defer ticker.Stop()
 
 	taskLogged := false
+	lastActivity := time.Now()
 	processDone := make(chan struct{})
 
 	// Watch for process exit in a goroutine so we don't block on ticker.
@@ -167,6 +183,13 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 			// Check if process already exited (channel may not fire instantly).
 			if !processAlive(cmd) {
 				return Result{}
+			}
+
+			// Track raw log activity for idle detection.
+			if info, err := os.Stat(cfg.RawLog); err == nil {
+				if info.ModTime().After(lastActivity) {
+					lastActivity = info.ModTime()
+				}
 			}
 
 			// Detect task pickup.
@@ -196,6 +219,20 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 					AllComplete:    hasSignal(cfg.Signals.AllComplete),
 					TaskDesc:       readFirstLine(cfg.Signals.CurrentTask),
 					Summary:        summary,
+				}
+			}
+
+			// Check idle timeout.
+			if cfg.IdleTimeout > 0 {
+				timeout := cfg.IdleTimeout
+				if cfg.IdleTimeoutProgress > 0 && cfg.HasProgress != nil && cfg.HasProgress() {
+					timeout = cfg.IdleTimeoutProgress
+				}
+				idle := time.Since(lastActivity)
+				if idle >= timeout {
+					r.Logger.Warn("Idle timeout (%s with no output) — killing session", timeout)
+					gracefulKill(cmd)
+					return Result{IdleTimeout: true}
 				}
 			}
 		}

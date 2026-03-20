@@ -157,16 +157,18 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 
 	// Execution phase.
 	execLoop := loop.New(loop.Config{
-		ProjectDir:    cfg.ProjectDir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
-		PlanFile:      planFile,
-		MaxIterations: cfg.MaxIterations,
-		RefactorEvery: cfg.RefactorEvery,
-		Quiet:         cfg.Quiet,
-		CallsPerHour:  cfg.CallsPerHour,
-		TaskBackend:   backend,
+		ProjectDir:          cfg.ProjectDir,
+		WorkDir:             gm.WorkDir,
+		RalphDir:            ralphDir,
+		PromptsDir:          promptsDir,
+		PlanFile:            planFile,
+		MaxIterations:       cfg.MaxIterations,
+		RefactorEvery:       cfg.RefactorEvery,
+		Quiet:               cfg.Quiet,
+		CallsPerHour:        cfg.CallsPerHour,
+		TaskBackend:         backend,
+		IdleTimeout:         cfg.IdleTimeout,
+		IdleTimeoutProgress: cfg.IdleTimeoutProgress,
 	}, st, gm, log)
 
 	if err := execLoop.Run(ctx); err != nil {
@@ -469,6 +471,8 @@ func printUsage() {
   --no-worktree          Run directly in project dir (no git worktree isolation)
   --calls-per-hour <N>   Max Claude calls per hour (default: 80)
   --refactor-every <N>   Inject a refactor iteration every N iterations (default: 0/disabled, env RALPH_REFACTOR_EVERY)
+  --idle-timeout <dur>   Kill session after this idle duration (default: 10m, env RALPH_IDLE_TIMEOUT)
+  --idle-timeout-progress <dur>  Shorter idle timeout when progress detected (default: 30s, env RALPH_IDLE_TIMEOUT_PROGRESS)
   --tmux                 Run in tmux 3-pane layout (status / output / plan)
   --auto-merge           Squash-merge each PR into main after task completion
   -h, --help             Show this help

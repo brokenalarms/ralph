@@ -444,6 +444,164 @@ func TestRun_ClearsSignalsBeforeStart(t *testing.T) {
 	}
 }
 
+// --- Idle timeout tests ---
+
+// Verifies that poll kills the session and returns IdleTimeout=true when the
+// raw log has no new output for longer than the configured idle timeout.
+func TestPoll_IdleTimeoutKillsSession(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		IdleTimeout:  200 * time.Millisecond,
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+
+	if !result.IdleTimeout {
+		t.Error("expected IdleTimeout to be true")
+	}
+	if result.SignalDetected {
+		t.Error("expected SignalDetected to be false on idle timeout")
+	}
+}
+
+// Verifies that ongoing raw log activity prevents the idle timeout from
+// firing, so a busy Claude session is not killed prematurely.
+func TestPoll_ActivityResetsIdleTimer(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// Keep writing to raw log faster than the idle timeout.
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+				fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"working"}}`)
+				f.Close()
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+	}()
+
+	// Write completion signal after activity keeps it alive past the idle timeout.
+	go func() {
+		time.Sleep(400 * time.Millisecond)
+		os.WriteFile(signals.Complete, []byte("done"), 0o644)
+		close(stop)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		IdleTimeout:  200 * time.Millisecond,
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+
+	if result.IdleTimeout {
+		t.Error("expected IdleTimeout to be false when activity resets timer")
+	}
+	if !result.SignalDetected {
+		t.Error("expected SignalDetected to be true")
+	}
+}
+
+// Verifies that the shorter progress-aware timeout is used when HasProgress
+// returns true, catching sessions that did work then went idle.
+func TestPoll_ProgressTimeoutShorterThanDefault(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	cfg := RunConfig{
+		WorkDir:             dir,
+		RalphDir:            dir,
+		Prompt:              "echo test",
+		RawLog:              rawLog,
+		Quiet:               true,
+		Signals:             signals,
+		PollInterval:        50 * time.Millisecond,
+		IdleTimeout:         5 * time.Second,
+		IdleTimeoutProgress: 200 * time.Millisecond,
+		HasProgress:         func() bool { return true },
+	}
+
+	start := time.Now()
+	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+	elapsed := time.Since(start)
+
+	if !result.IdleTimeout {
+		t.Error("expected IdleTimeout to be true with progress timeout")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("progress timeout should fire quickly, took %s", elapsed)
+	}
+}
+
+// Verifies that idle timeout is disabled when IdleTimeout is zero.
+func TestPoll_ZeroIdleTimeoutDisablesDetection(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// Write completion quickly — with zero timeout, it should complete normally.
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		os.WriteFile(signals.Complete, []byte("done"), 0o644)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		IdleTimeout:  0,
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+
+	if result.IdleTimeout {
+		t.Error("expected no idle timeout when IdleTimeout is 0")
+	}
+	if !result.SignalDetected {
+		t.Error("expected SignalDetected to be true")
+	}
+}
+
 // --- Test helpers ---
 
 // runWithCommand replaces the claude command with an arbitrary command for
