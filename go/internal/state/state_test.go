@@ -21,7 +21,7 @@ func TestLoad_BashCompatible(t *testing.T) {
   "task_backend": "bd",
   "max_iterations": 50,
   "quality_score": 15,
-  "refactor_threshold": 20
+  "refactor_every": 20
 }`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(stateJSON), 0o644); err != nil {
 		t.Fatal(err)
@@ -45,8 +45,8 @@ func TestLoad_BashCompatible(t *testing.T) {
 	if s.QualityScore != 15 {
 		t.Errorf("QualityScore = %d, want 15", s.QualityScore)
 	}
-	if s.RefactorThreshold != 20 {
-		t.Errorf("RefactorThreshold = %d, want 20", s.RefactorThreshold)
+	if s.RefactorEvery != 20 {
+		t.Errorf("RefactorEvery = %d, want 20", s.RefactorEvery)
 	}
 	if s.TaskBackend != "bd" {
 		t.Errorf("TaskBackend = %q, want %q", s.TaskBackend, "bd")
@@ -83,7 +83,7 @@ func TestSaveAndLoad_Roundtrip(t *testing.T) {
 		TaskBackend:       "checklist",
 		MaxIterations:     20,
 		QualityScore:      12,
-		RefactorThreshold: 20,
+		RefactorEvery: 20,
 	}
 
 	if err := st.Save(original); err != nil {
@@ -99,7 +99,7 @@ func TestSaveAndLoad_Roundtrip(t *testing.T) {
 		loaded.Status != original.Status ||
 		loaded.MaxIterations != original.MaxIterations ||
 		loaded.LastTask != original.LastTask ||
-		loaded.RefactorThreshold != original.RefactorThreshold {
+		loaded.RefactorEvery != original.RefactorEvery {
 		t.Errorf("Roundtrip mismatch:\n  saved:  %+v\n  loaded: %+v", original, loaded)
 	}
 }
@@ -129,38 +129,37 @@ func TestSave_NumericFieldsAreNumbers(t *testing.T) {
 	}
 }
 
-// Verifies Get/Set work like bash read_state/write_state: Set a value,
-// then Get it back, with numeric values stored as JSON numbers.
-func TestGetSet_MatchesBashReadWriteState(t *testing.T) {
+// Verifies Read/Write work like bash read_state/write_state: Write a value,
+// then Read it back, with numeric values stored as JSON numbers.
+func TestReadWrite_MatchesBashReadWriteState(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 
-	// Initialize with empty state
 	if err := st.Save(State{}); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := st.Set("status", "running"); err != nil {
-		t.Fatalf("Set status: %v", err)
+	if err := st.Write("status", "running"); err != nil {
+		t.Fatalf("Write status: %v", err)
 	}
-	if err := st.Set("iteration", "7"); err != nil {
-		t.Fatalf("Set iteration: %v", err)
+	if err := st.Write("iteration", "7"); err != nil {
+		t.Fatalf("Write iteration: %v", err)
 	}
 
-	val, err := st.Get("status")
+	val, err := st.Read("status")
 	if err != nil {
-		t.Fatalf("Get status: %v", err)
+		t.Fatalf("Read status: %v", err)
 	}
 	if val != "running" {
-		t.Errorf("Get status = %q, want %q", val, "running")
+		t.Errorf("Read status = %q, want %q", val, "running")
 	}
 
-	val, err = st.Get("iteration")
+	val, err = st.Read("iteration")
 	if err != nil {
-		t.Fatalf("Get iteration: %v", err)
+		t.Fatalf("Read iteration: %v", err)
 	}
 	if val != "7" {
-		t.Errorf("Get iteration = %q, want %q", val, "7")
+		t.Errorf("Read iteration = %q, want %q", val, "7")
 	}
 }
 
@@ -204,52 +203,22 @@ func TestOverflow_PreservesUnknownKeys(t *testing.T) {
 	}
 }
 
-// Verifies that Set on an unknown key stores it in overflow and
-// Get retrieves it — matching bash behavior for arbitrary keys.
-func TestGetSet_UnknownKey(t *testing.T) {
+// Verifies that Write on an unknown key stores it in overflow and
+// Read retrieves it — matching bash behavior for arbitrary keys.
+func TestReadWrite_UnknownKey(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 	st.Save(State{})
 
-	if err := st.Set("custom_thing", "abc"); err != nil {
+	if err := st.Write("custom_thing", "abc"); err != nil {
 		t.Fatal(err)
 	}
-	val, err := st.Get("custom_thing")
+	val, err := st.Read("custom_thing")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if val != "abc" {
-		t.Errorf("Get custom_thing = %q, want %q", val, "abc")
-	}
-}
-
-// Verifies that ResetForExecution clears quality_score and re-applies config
-// values, preventing stale counters from carrying over between runs.
-func TestResetForExecution_ClearsCounters(t *testing.T) {
-	s := State{
-		Iteration:         10,
-		Status:            "stopped",
-		QualityScore:      42,
-		MaxIterations:     50,
-		RefactorThreshold: 30,
-	}
-
-	s.ResetForExecution(20, 15)
-
-	if s.QualityScore != 0 {
-		t.Errorf("QualityScore = %d, want 0 after reset", s.QualityScore)
-	}
-	if s.MaxIterations != 20 {
-		t.Errorf("MaxIterations = %d, want 20 after reset", s.MaxIterations)
-	}
-	if s.RefactorThreshold != 15 {
-		t.Errorf("RefactorThreshold = %d, want 15 after reset", s.RefactorThreshold)
-	}
-	if s.Iteration != 10 {
-		t.Errorf("Iteration = %d, want 10 (should be preserved)", s.Iteration)
-	}
-	if s.Status != "stopped" {
-		t.Errorf("Status = %q, want %q (should be preserved)", s.Status, "stopped")
+		t.Errorf("Read custom_thing = %q, want %q", val, "abc")
 	}
 }
 
