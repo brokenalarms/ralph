@@ -542,6 +542,62 @@ func RecentChangedFiles(dir string, n int) string {
 	return gitOutput(dir, "diff", "--name-only", fmt.Sprintf("HEAD~%d", n), "HEAD")
 }
 
+// TagTaskStart creates a lightweight git tag marking the start of a task iteration.
+// The tag name is ralph/task-{taskID}/start when a backend ID is available,
+// or ralph/task-{seq}-{slug}/start derived from the current branch name.
+func (m *Manager) TagTaskStart(taskID string) {
+	tag := m.taskTag(taskID, "start")
+	if tag == "" {
+		return
+	}
+	// Force-create to handle reruns of the same task
+	if err := gitCmdErr(m.WorkDir, "tag", "-f", tag); err == nil {
+		m.Logger.Log("Tag: %s", tag)
+	}
+}
+
+// TagTaskEnd creates a lightweight git tag marking the end of a task iteration.
+func (m *Manager) TagTaskEnd(taskID string) {
+	tag := m.taskTag(taskID, "end")
+	if tag == "" {
+		return
+	}
+	if err := gitCmdErr(m.WorkDir, "tag", "-f", tag); err == nil {
+		m.Logger.Log("Tag: %s", tag)
+	}
+}
+
+// taskTag builds a tag name like ralph/task-{id}/{suffix}. Returns empty
+// string if there's not enough info to build a meaningful tag.
+func (m *Manager) taskTag(taskID, suffix string) string {
+	if m.WorkDir == "" || m.WorkDir == m.ProjectDir {
+		return ""
+	}
+	if taskID != "" {
+		return fmt.Sprintf("ralph/task-%s/%s", taskID, suffix)
+	}
+	// Fall back to seq-slug extracted from the current branch name
+	seqSlug := extractSeqSlug(m.WorktreeBranch)
+	if seqSlug == "" {
+		return ""
+	}
+	return fmt.Sprintf("ralph/task-%s/%s", seqSlug, suffix)
+}
+
+// extractSeqSlug pulls the "NN-slug" portion from a branch like
+// "ralph/project/01-my-task".
+func extractSeqSlug(branch string) string {
+	parts := strings.SplitN(branch, "/", 3)
+	if len(parts) < 3 {
+		return ""
+	}
+	seg := parts[2]
+	if seg == "next" || seg == "" {
+		return ""
+	}
+	return seg
+}
+
 // ParseTaskSeqFromBranches scans ralph/<project>/* branches and returns the
 // highest sequence number found.
 func ParseTaskSeqFromBranches(dir, projectName string) int {
