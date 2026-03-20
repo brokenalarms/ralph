@@ -449,8 +449,15 @@ PLAN_SCRIPT
   tmux select-pane -t "$TMUX_SESSION:.1" -T "stream"
   tmux select-pane -t "$TMUX_SESSION:.2" -T "plan"
   tmux set-option -t "$TMUX_SESSION" pane-border-status top
-  tmux set-option -t "$TMUX_SESSION" pane-border-format " #{pane_title} "
+  tmux set-option -t "$TMUX_SESSION" pane-border-format \
+    "#{?pane_dead, #{pane_title} (dead) — press q to exit , #{pane_title} }"
   tmux set-option -t "$TMUX_SESSION" remain-on-exit on
+
+  # Bind q to kill session when the main (ralph) pane is dead
+  tmux bind-key -T root q if-shell \
+    "tmux display-message -t '$TMUX_SESSION:.0' -p '#{pane_dead}' | grep -q 1" \
+    "kill-session -t '$TMUX_SESSION'"
+
   tmux select-pane -t "$TMUX_SESSION:.0"
 
   # Background timer updates stream pane title every second
