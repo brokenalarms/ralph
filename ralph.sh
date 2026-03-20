@@ -948,7 +948,7 @@ analyze_iteration() {
         sort | uniq -c | sort -rn | head -1 | awk '{print $1+0}') || true
     fi
     max_repeats=${max_repeats:-0}
-    if (( max_repeats >= 3 )); then
+    if (( max_repeats >= 5 )); then
       stuck_detected=true
     fi
   fi
