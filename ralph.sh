@@ -472,16 +472,30 @@ setup_tmux() {
   cat > "$RALPH_DIR/.plan-watch.sh" <<PLAN_SCRIPT
 #!/usr/bin/env bash
 BOLD=$'\033[1m'
+DIM=$'\033[2m'
 CYAN=$'\033[0;36m'
 GREEN=$'\033[0;32m'
 YELLOW=$'\033[0;33m'
 NC=$'\033[0m'
+
+progress_bar() {
+  local closed=\$1 total=\$2 width=\${3:-30}
+  if (( total == 0 )); then return; fi
+  local filled=\$(( closed * width / total ))
+  local empty=\$(( width - filled ))
+  local pct=\$(( closed * 100 / total ))
+  printf "\${GREEN}"
+  printf '█%.0s' \$(seq 1 \$filled 2>/dev/null) || true
+  printf "\${NC}"
+  printf '░%.0s' \$(seq 1 \$empty 2>/dev/null) || true
+  printf " %d%%" "\$pct"
+}
+
 while true; do
   if [[ -f '$RALPH_DIR/.plan-refresh' ]]; then
     rm -f '$RALPH_DIR/.plan-refresh'
     printf '\033[2J\033[H'
     if [[ '$TASK_BACKEND' == 'bd' ]]; then
-      # Show current task + description, then blocked list
       current_json=\$(bd list --status in_progress --flat --json --limit 1 2>/dev/null)
       current_title=\$(echo "\$current_json" | jq -r '.[0].title // empty' 2>/dev/null)
       current_id=\$(echo "\$current_json" | jq -r '.[0].id // empty' 2>/dev/null)
@@ -489,7 +503,6 @@ while true; do
         printf "\${BOLD}\${CYAN}▶ %s\${NC} (%s)\n" "\$current_title" "\$current_id"
         printf "\n"
       fi
-      # Show ready queue (excluding current in-progress task)
       ready_list=\$(bd ready --limit 8 2>/dev/null || true)
       if [[ -n "\$ready_list" && "\$ready_list" != *"No ready work"* ]]; then
         if [[ -n "\$current_id" ]]; then
@@ -499,6 +512,10 @@ while true; do
           printf "\${BOLD}Ready:\${NC}\n%s\n\n" "\$ready_list"
         fi
       fi
+      completed_list=\$(bd list --status closed --flat --limit 8 2>/dev/null || true)
+      if [[ -n "\$completed_list" ]]; then
+        printf "\${DIM}Done:\n%s\${NC}\n\n" "\$completed_list"
+      fi
       if [[ -n "\$current_id" ]]; then
         unblocks=\$(bd show "\$current_id" --json 2>/dev/null | jq -r '.[0].dependents[]? | "  → \(.id): \(.title)"' 2>/dev/null || true)
         if [[ -n "\$unblocks" ]]; then
@@ -507,7 +524,10 @@ while true; do
       fi
       closed=\$(bd count --status closed 2>/dev/null || echo 0)
       total=\$(bd count 2>/dev/null || echo 0)
-      printf "\${GREEN}%s/%s done\${NC}\n" "\$closed" "\$total"
+      progress_bar "\$closed" "\$total"
+      printf "\n"
+      calls=\$(cat '$RALPH_DIR/.call_count' 2>/dev/null || echo 0)
+      printf "\${DIM}calls this hour: %s/$CALLS_PER_HOUR\${NC}\n" "\$calls"
     else
       cat '$PLAN_FILE' 2>/dev/null
     fi
@@ -550,17 +570,25 @@ PLAN_SCRIPT
 
   tmux select-pane -t "$TMUX_SESSION:.0"
 
-  # Background timer updates stream pane title every second
+  # Background timer updates pane titles every second
   date +%s > "$RALPH_DIR/.stream-start"
+  date +%s > "$RALPH_DIR/.run-start"
   ( while tmux has-session -t "$TMUX_SESSION" 2>/dev/null; do
+      _now=$(date +%s)
+      # Stream pane: task + per-task elapsed
       _st=$(cat "$RALPH_DIR/.stream-start" 2>/dev/null || echo 0)
-      _el=$(( $(date +%s) - _st ))
+      _el=$(( _now - _st ))
       _task=$(cat "$RALPH_DIR/.stream-task" 2>/dev/null || true)
       if [[ -n "$_task" ]]; then
         tmux select-pane -t "$TMUX_SESSION:.1" -T "$_task $(printf '%dm%02ds' $((_el/60)) $((_el%60)))" 2>/dev/null
       else
         tmux select-pane -t "$TMUX_SESSION:.1" -T "stream $(printf '%dm%02ds' $((_el/60)) $((_el%60)))" 2>/dev/null
       fi
+      # Ralph pane: branch + per-run elapsed
+      _rs=$(cat "$RALPH_DIR/.run-start" 2>/dev/null || echo "$_now")
+      _re=$(( _now - _rs ))
+      _branch=$(cat "$RALPH_DIR/.run-branch" 2>/dev/null || echo "ralph")
+      tmux select-pane -t "$TMUX_SESSION:.0" -T "$_branch $(printf '%dm%02ds' $((_re/60)) $((_re%60)))" 2>/dev/null
       sleep 1
     done ) &
 
@@ -597,6 +625,18 @@ write_state() {
       sed -i "s/\"$key\": *[^,}]*/\"$key\": \"$value\"/" "$STATE_FILE"
     fi
   fi
+}
+
+# --- Tmux flash helper ---
+flash_plan_pane() {
+  local sess="${_RALPH_TMUX_SESSION:-}"
+  [[ -z "$sess" ]] && return
+  tmux set-option -t "$sess" pane-border-style "fg=green" 2>/dev/null
+  tmux set-option -t "$sess" pane-active-border-style "fg=green" 2>/dev/null
+  ( sleep 2
+    tmux set-option -t "$sess" pane-border-style default 2>/dev/null
+    tmux set-option -t "$sess" pane-active-border-style default 2>/dev/null
+  ) &
 }
 
 # --- Signal detection (file-based) ---
@@ -887,6 +927,96 @@ normalize_error() {
   line=$(sed -E 's|/var/folders/[^ ]*|/tmp/TMPPATH|g' <<< "$line")
   line=$(echo "$line" | tr -s ' ')
   echo "$line"
+}
+
+fingerprint_error() {
+  local normalized="$1"
+  echo -n "$normalized" | md5sum 2>/dev/null | cut -d' ' -f1 || echo -n "$normalized" | md5 2>/dev/null | tr -d ' '
+}
+
+record_error_hash() {
+  local task_key="$1" hash="$2"
+  [[ -z "$task_key" || -z "$hash" ]] && return 0
+
+  local dir
+  dir=$(_error_hashes_dir)
+  mkdir -p "$dir"
+
+  local hash_file="$dir/${task_key}.hashes"
+  echo "$hash" >> "$hash_file"
+}
+
+count_error_hash() {
+  local task_key="$1" hash="$2"
+  [[ -z "$task_key" || -z "$hash" ]] && { echo 0; return; }
+
+  local hash_file
+  hash_file="$(_error_hashes_dir)/${task_key}.hashes"
+  if [[ -f "$hash_file" ]]; then
+    grep -cF "$hash" "$hash_file" 2>/dev/null || echo 0
+  else
+    echo 0
+  fi
+}
+
+clear_error_hashes() {
+  local task_key="$1"
+  [[ -z "$task_key" ]] && return 0
+  rm -f "$(_error_hashes_dir)/${task_key}.hashes"
+}
+
+check_repeated_errors() {
+  local text="$1" task_key="$2"
+  [[ -z "$task_key" ]] && return 1
+
+  local errors
+  errors=$(extract_errors "$text")
+  [[ -z "$errors" ]] && return 1
+
+  local dominated=false
+  while IFS= read -r err_line; do
+    [[ -z "$err_line" ]] && continue
+    local normalized
+    normalized=$(normalize_error "$err_line")
+    local hash
+    hash=$(fingerprint_error "$normalized")
+    record_error_hash "$task_key" "$hash"
+    local count
+    count=$(count_error_hash "$task_key" "$hash")
+    if (( count >= 3 )); then
+      dominated=true
+    fi
+  done <<< "$errors"
+
+  if [[ "$dominated" == true ]]; then
+    return 0
+  fi
+  return 1
+}
+
+# --- Error fingerprinting ---
+
+_error_hashes_dir() { echo "$RALPH_DIR/error_hashes"; }
+
+extract_errors() {
+  local text="$1"
+  grep -iE \
+    -e '^(Error|Failed|Exception|panic|FATAL|TypeError|SyntaxError|ReferenceError|RuntimeError|ImportError|ValueError):' \
+    -e 'exited with (code|status) [1-9]' \
+    -e 'non-zero exit code' \
+    -e 'command failed|build failed|compilation failed|test failed' \
+    <<< "$text" || true
+}
+
+normalize_error() {
+  echo "$1" | sed -E \
+    -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}[^ ]*/TIMESTAMP/g' \
+    -e 's/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/UUID/g' \
+    -e 's/\bline [0-9]+/line N/g' \
+    -e 's/:[0-9]+:[0-9]+/:N:N/g' \
+    -e 's|/tmp/[^ ]*|/tmp/TMPPATH|g' \
+    -e 's|/var/folders/[^ ]*|/tmp/TMPPATH|g' | \
+    tr -s ' '
 }
 
 fingerprint_error() {
@@ -1705,7 +1835,14 @@ run_execution() {
     remaining=$(count_remaining)
     total=$(count_total)
 
-    log_phase "--- Run iteration $run_iteration/$MAX_ITERATIONS | $iteration lifetime [${completed}/${total} done] ---"
+    local _health _hcolor
+    _health=$(cat "$RALPH_DIR/.health" 2>/dev/null || echo "ok")
+    case "$_health" in
+      halt) _hcolor="$RED" ;;
+      warn) _hcolor="$YELLOW" ;;
+      *)    _hcolor="$GREEN" ;;
+    esac
+    log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS ($iteration total) [${_hcolor}${completed}/${total} done${NC}${BOLD}] ---"
     log_task "Next task: $next_task"
     touch "$RALPH_DIR/.plan-refresh"
 
@@ -1714,6 +1851,7 @@ run_execution() {
     write_state "status" "running"
     write_state "last_task" "$next_task"
     rename_branch_for_task "$next_task"
+    printf '%s' "${WORKTREE_BRANCH:-ralph}" > "$RALPH_DIR/.run-branch"
 
     # Build task prompt
     local task_id
@@ -1807,6 +1945,13 @@ run_execution() {
     # Analyze iteration for problems
     analyze_iteration "$RAW_LOG" "$log_start_line" "$head_before" "$task_key"
 
+    # Write health status for pane title coloring
+    case "$ANALYSIS_RESULT" in
+      halt:*) printf 'halt' > "$RALPH_DIR/.health" ;;
+      warn:*) printf 'warn' > "$RALPH_DIR/.health" ;;
+      *)      printf 'ok'   > "$RALPH_DIR/.health" ;;
+    esac
+
     # Record attempt history for this task
     local head_after_attempt
     head_after_attempt=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
@@ -1821,6 +1966,7 @@ run_execution() {
 
     # Clear attempt history and reset per-task state when task resolved
     if check_signal || check_all_complete; then
+      flash_plan_pane
       clear_attempt_history "$task_id" "$next_task"
       clear_error_hashes "$task_key"
       _current_task_id=""
@@ -2029,6 +2175,7 @@ main() {
   write_state "task_backend" "$TASK_BACKEND"
 
   setup_worktree
+  printf '%s' "${WORKTREE_BRANCH:-ralph}" > "$RALPH_DIR/.run-branch"
 
   log_phase "Ralph Loop v${VERSION}"
   log "Project: $PROJECT_DIR"
