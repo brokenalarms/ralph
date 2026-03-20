@@ -498,6 +498,50 @@ func findWorktreeForBranch(dir, branch string) string {
 	return ""
 }
 
+// HeadRev returns the current HEAD commit hash, or empty string on error.
+func HeadRev(dir string) string {
+	return gitOutput(dir, "rev-parse", "HEAD")
+}
+
+// HasDiff returns true if the worktree has staged or unstaged changes.
+func HasDiff(dir string) bool {
+	if gitOutput(dir, "diff", "--stat") != "" {
+		return true
+	}
+	return gitOutput(dir, "diff", "--cached", "--stat") != ""
+}
+
+// ChangedFiles returns a deduplicated list of files changed in the worktree
+// (staged + unstaged), and optionally between two commits.
+func ChangedFiles(dir, headBefore, headAfter string) []string {
+	seen := make(map[string]bool)
+	var result []string
+
+	add := func(out string) {
+		for _, f := range strings.Split(out, "\n") {
+			f = strings.TrimSpace(f)
+			if f != "" && !seen[f] {
+				seen[f] = true
+				result = append(result, f)
+			}
+		}
+	}
+
+	add(gitOutput(dir, "diff", "--name-only"))
+	add(gitOutput(dir, "diff", "--cached", "--name-only"))
+
+	if headBefore != "" && headAfter != "" && headBefore != headAfter {
+		add(gitOutput(dir, "diff", "--name-only", headBefore+"..."+headAfter))
+	}
+
+	return result
+}
+
+// RecentChangedFiles returns files changed in the last N commits.
+func RecentChangedFiles(dir string, n int) string {
+	return gitOutput(dir, "diff", "--name-only", fmt.Sprintf("HEAD~%d", n), "HEAD")
+}
+
 // ParseTaskSeqFromBranches scans ralph/<project>/* branches and returns the
 // highest sequence number found.
 func ParseTaskSeqFromBranches(dir, projectName string) int {
