@@ -1,0 +1,255 @@
+package state
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+)
+
+// State represents the ralph loop state persisted in .ralph/state.json.
+// Fields use interface{} values for numeric/string flexibility — the bash
+// implementation stores numbers as JSON numbers and strings as JSON strings,
+// and we must preserve that behavior for compatibility.
+type State struct {
+	Iteration              int    `json:"iteration"`
+	Status                 string `json:"status"`
+	StartedAt              string `json:"started_at,omitempty"`
+	LastTask               string `json:"last_task,omitempty"`
+	WorktreeDir            string `json:"worktree_dir,omitempty"`
+	WorktreeBranch         string `json:"worktree_branch,omitempty"`
+	TaskBackend            string `json:"task_backend,omitempty"`
+	MaxIterations          int    `json:"max_iterations"`
+	IterationsSinceRefactor int   `json:"iterations_since_refactor"`
+	RefactorEvery          int    `json:"refactor_every"`
+
+	// Overflow captures unknown keys so round-tripping preserves them.
+	Overflow map[string]json.RawMessage `json:"-"`
+}
+
+// MarshalJSON produces JSON that merges known fields with overflow keys,
+// preserving any fields the bash side added that we don't model.
+func (s State) MarshalJSON() ([]byte, error) {
+	// Marshal known fields via an alias to avoid recursion.
+	type Alias State
+	known, err := json.Marshal(Alias(s))
+	if err != nil {
+		return nil, err
+	}
+
+	if len(s.Overflow) == 0 {
+		return known, nil
+	}
+
+	// Merge: start with overflow, then overlay known fields (known wins).
+	merged := make(map[string]json.RawMessage, len(s.Overflow)+10)
+	for k, v := range s.Overflow {
+		merged[k] = v
+	}
+
+	var knownMap map[string]json.RawMessage
+	if err := json.Unmarshal(known, &knownMap); err != nil {
+		return nil, err
+	}
+	for k, v := range knownMap {
+		merged[k] = v
+	}
+
+	return json.Marshal(merged)
+}
+
+// UnmarshalJSON parses known fields and stores the rest in Overflow.
+func (s *State) UnmarshalJSON(data []byte) error {
+	type Alias State
+	var alias Alias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+
+	// Collect all keys to find overflow.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	knownKeys := map[string]bool{
+		"iteration": true, "status": true, "started_at": true,
+		"last_task": true, "worktree_dir": true, "worktree_branch": true,
+		"task_backend": true, "max_iterations": true,
+		"iterations_since_refactor": true, "refactor_every": true,
+	}
+
+	alias.Overflow = nil
+	for k, v := range raw {
+		if !knownKeys[k] {
+			if alias.Overflow == nil {
+				alias.Overflow = make(map[string]json.RawMessage)
+			}
+			alias.Overflow[k] = v
+		}
+	}
+
+	*s = State(alias)
+	return nil
+}
+
+// Store manages reading and writing state.json in a ralph directory.
+type Store struct {
+	path string // full path to state.json
+}
+
+// NewStore creates a Store for the given .ralph directory.
+func NewStore(ralphDir string) *Store {
+	return &Store{path: filepath.Join(ralphDir, "state.json")}
+}
+
+// Path returns the full path to the state file.
+func (st *Store) Path() string {
+	return st.path
+}
+
+// Load reads and parses the state file. Returns a zero State if the
+// file does not exist.
+func (st *Store) Load() (State, error) {
+	data, err := os.ReadFile(st.path)
+	if os.IsNotExist(err) {
+		return State{}, nil
+	}
+	if err != nil {
+		return State{}, fmt.Errorf("reading state: %w", err)
+	}
+
+	var s State
+	if err := json.Unmarshal(data, &s); err != nil {
+		return State{}, fmt.Errorf("parsing state: %w", err)
+	}
+	return s, nil
+}
+
+// Save writes state to disk using atomic temp-file + rename.
+func (st *Store) Save(s State) error {
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling state: %w", err)
+	}
+	data = append(data, '\n')
+
+	dir := filepath.Dir(st.path)
+	tmp, err := os.CreateTemp(dir, ".state-*.json.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("writing temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("closing temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpName, st.path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("renaming temp file: %w", err)
+	}
+	return nil
+}
+
+// Get reads a single key from the state, matching bash read_state() behavior.
+// Returns the value as a string, or "" if the key doesn't exist.
+func (st *Store) Get(key string) (string, error) {
+	s, err := st.Load()
+	if err != nil {
+		return "", err
+	}
+	return getField(s, key), nil
+}
+
+// Set writes a single key to the state, matching bash write_state() behavior.
+// Numeric strings are stored as JSON numbers for compatibility.
+func (st *Store) Set(key, value string) error {
+	s, err := st.Load()
+	if err != nil {
+		return err
+	}
+	setField(&s, key, value)
+	return st.Save(s)
+}
+
+// getField extracts a named field from State as a string.
+func getField(s State, key string) string {
+	switch key {
+	case "iteration":
+		return strconv.Itoa(s.Iteration)
+	case "status":
+		return s.Status
+	case "started_at":
+		return s.StartedAt
+	case "last_task":
+		return s.LastTask
+	case "worktree_dir":
+		return s.WorktreeDir
+	case "worktree_branch":
+		return s.WorktreeBranch
+	case "task_backend":
+		return s.TaskBackend
+	case "max_iterations":
+		return strconv.Itoa(s.MaxIterations)
+	case "iterations_since_refactor":
+		return strconv.Itoa(s.IterationsSinceRefactor)
+	case "refactor_every":
+		return strconv.Itoa(s.RefactorEvery)
+	default:
+		if s.Overflow != nil {
+			if raw, ok := s.Overflow[key]; ok {
+				var v interface{}
+				if json.Unmarshal(raw, &v) == nil {
+					return fmt.Sprintf("%v", v)
+				}
+			}
+		}
+		return ""
+	}
+}
+
+// setField updates a named field on State. Numeric strings become ints
+// to match bash jq behavior: .$key = ($v | try tonumber catch $v).
+func setField(s *State, key, value string) {
+	switch key {
+	case "iteration":
+		s.Iteration, _ = strconv.Atoi(value)
+	case "status":
+		s.Status = value
+	case "started_at":
+		s.StartedAt = value
+	case "last_task":
+		s.LastTask = value
+	case "worktree_dir":
+		s.WorktreeDir = value
+	case "worktree_branch":
+		s.WorktreeBranch = value
+	case "task_backend":
+		s.TaskBackend = value
+	case "max_iterations":
+		s.MaxIterations, _ = strconv.Atoi(value)
+	case "iterations_since_refactor":
+		s.IterationsSinceRefactor, _ = strconv.Atoi(value)
+	case "refactor_every":
+		s.RefactorEvery, _ = strconv.Atoi(value)
+	default:
+		// Unknown key — store in overflow, converting numeric strings to numbers.
+		if s.Overflow == nil {
+			s.Overflow = make(map[string]json.RawMessage)
+		}
+		if n, err := strconv.Atoi(value); err == nil {
+			s.Overflow[key] = json.RawMessage(strconv.Itoa(n))
+		} else {
+			data, _ := json.Marshal(value)
+			s.Overflow[key] = json.RawMessage(data)
+		}
+	}
+}
