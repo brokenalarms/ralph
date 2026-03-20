@@ -19,7 +19,7 @@ teardown() {
   [[ "$prompt" == *"$WORK_DIR"* ]]
   [[ "$prompt" == *"$RALPH_DIR"* ]]
   [[ "$prompt" == *"$PLAN_FILE"* ]]
-  [[ "$prompt" == *"$SIGNAL_TOKEN"* ]]
+  [[ "$prompt" == *".signal_complete"* ]]
   [[ "$prompt" != *"{{WORK_DIR}}"* ]]
   [[ "$prompt" != *"{{RALPH_DIR}}"* ]]
 }

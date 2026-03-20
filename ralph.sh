@@ -15,19 +15,17 @@ source "$SCRIPT_DIR/lib/git.sh"
 
 # --- Defaults ---
 PROJECT_DIR="$(pwd)"
-MAX_ITERATIONS=20
+MAX_ITERATIONS="${RALPH_MAX_ITERATIONS:-50}"
 PROMPT_OVERRIDE=""
 RESUME=false
 PLAN_ONLY=false
 SKIP_PLANNING=false
-SIGNAL_TOKEN="###RALPH_TASK_COMPLETE###"
-CURRENT_TASK_TOKEN="###RALPH_CURRENT_TASK###"
 WATCHER_INTERVAL=2  # seconds between signal checks
 PLAN_FILE_ARG=""
 QUIET=false
 USE_WORKTREE=true
 CALLS_PER_HOUR=80
-REFACTOR_EVERY=5
+REFACTOR_EVERY="${RALPH_REFACTOR_EVERY:-0}"
 USE_TMUX=false
 TMUX_SESSION=""
 _TMUX_OUTER=false
@@ -35,7 +33,6 @@ WORK_DIR=""
 WORKTREE_BRANCH=""
 PROJECT_NAME=""
 _TASK_SEQ=0
-ALL_COMPLETE_TOKEN="###RALPH_ALL_COMPLETE###"
 LOG_FILE="/dev/null"  # real path set after dir resolution
 
 # --- Colors ---
@@ -210,8 +207,12 @@ STATE_FILE="$RALPH_DIR/state.json"
 STOP_FILE="$RALPH_DIR/stop"
 LOG_FILE="$RALPH_DIR/loop.log"
 RAW_LOG="$RALPH_DIR/raw.log"
-_SIGNAL_LOG_OFFSET=0
 RESUME_SCRIPT="$RALPH_DIR/resume.sh"
+
+# Signal file paths (must be set after RALPH_DIR is resolved)
+SIGNAL_COMPLETE_FILE="$RALPH_DIR/.signal_complete"
+SIGNAL_TASK_FILE="$RALPH_DIR/.signal_current_task"
+SIGNAL_ALL_COMPLETE_FILE="$RALPH_DIR/.signal_all_complete"
 
 # --- Init .ralph directory ---
 init_ralph_dir() {
@@ -265,6 +266,9 @@ init_ralph_dir() {
     fi
   fi
 
+  # Clear stale signal files from previous run
+  clear_signal
+
   # Check for leftover stop file before starting/resuming
   if [[ -f "$STOP_FILE" ]]; then
     printf "${YELLOW}[ralph]${NC} Stop file found from a previous run. Delete it to continue? (y/n) "
@@ -282,6 +286,7 @@ init_ralph_dir() {
 {
   "iteration": 0,
   "max_iterations": null,
+  "refactor_every": null,
   "status": "initialized",
   "started_at": null,
   "last_task": null,
@@ -463,9 +468,12 @@ write_state() {
   fi
 }
 
-# --- Signal detection (scan raw log from offset) ---
+# --- Signal detection (file-based) ---
+# Claude writes signal files instead of echoing tokens to stdout.
+# This avoids false positives when Claude reads source files containing tokens.
+
 clear_signal() {
-  _SIGNAL_LOG_OFFSET=$(wc -l < "$RAW_LOG" 2>/dev/null || echo 0)
+  rm -f "$SIGNAL_COMPLETE_FILE" "$SIGNAL_TASK_FILE" "$SIGNAL_ALL_COMPLETE_FILE"
 }
 
 read_feedback() {
@@ -479,30 +487,28 @@ clear_feedback() {
   rm -f "$RALPH_DIR/feedback"
 }
 
-_signal_log_tail() {
-  tail -n "+$((_SIGNAL_LOG_OFFSET + 1))" "$RAW_LOG" 2>/dev/null
-}
-
 check_signal() {
-  _signal_log_tail | grep -q "$SIGNAL_TOKEN"
+  [[ -f "$SIGNAL_COMPLETE_FILE" ]]
 }
 
 check_all_complete() {
-  _signal_log_tail | grep -q "$ALL_COMPLETE_TOKEN"
+  [[ -f "$SIGNAL_ALL_COMPLETE_FILE" ]]
 }
 
 check_current_task() {
-  _signal_log_tail | grep -q "$CURRENT_TASK_TOKEN"
+  [[ -f "$SIGNAL_TASK_FILE" ]]
 }
 
 read_current_task() {
-  _signal_log_tail | grep "$CURRENT_TASK_TOKEN" | sed "s/.*$CURRENT_TASK_TOKEN *//" | head -1 \
-    | sed 's/\\".*//' | sed 's/",.*//'
+  [[ -f "$SIGNAL_TASK_FILE" ]] && head -1 "$SIGNAL_TASK_FILE" 2>/dev/null || true
 }
 
 read_signal_summary() {
-  _signal_log_tail | grep "$SIGNAL_TOKEN" | sed "s/.*$SIGNAL_TOKEN *//" | head -1 \
-    | sed 's/\\".*//' | sed 's/",.*//'
+  if [[ -f "$SIGNAL_ALL_COMPLETE_FILE" ]]; then
+    head -1 "$SIGNAL_ALL_COMPLETE_FILE" 2>/dev/null || true
+  elif [[ -f "$SIGNAL_COMPLETE_FILE" ]]; then
+    head -1 "$SIGNAL_COMPLETE_FILE" 2>/dev/null || true
+  fi
 }
 
 # --- Worktree theme renaming ---
@@ -740,9 +746,6 @@ build_prompt() {
   result="${result//\{\{WORK_DIR\}\}/$WORK_DIR}"
   result="${result//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
   result="${result//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
-  result="${result//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
-  result="${result//\{\{CURRENT_TASK_TOKEN\}\}/$CURRENT_TASK_TOKEN}"
-  result="${result//\{\{ALL_COMPLETE_TOKEN\}\}/$ALL_COMPLETE_TOKEN}"
   result="${result//\{\{TASK_PROMPT\}\}/$task_prompt}"
 
   printf '%s' "$result"
@@ -759,10 +762,8 @@ build_refactor_prompt() {
   result+=$(<"$PROMPTS_DIR/signal.md")
 
   result="${result//\{\{WORK_DIR\}\}/$WORK_DIR}"
+  result="${result//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
   result="${result//\{\{RECENT_FILES\}\}/$recent_files}"
-  result="${result//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
-  result="${result//\{\{CURRENT_TASK_TOKEN\}\}/$CURRENT_TASK_TOKEN}"
-  result="${result//\{\{ALL_COMPLETE_TOKEN\}\}/$ALL_COMPLETE_TOKEN}"
 
   printf '%s' "$result"
 }
@@ -837,7 +838,7 @@ run_planning() {
   planning_prompt=$(<"$PROMPTS_DIR/planning.md")
   planning_prompt="${planning_prompt//\{\{PLANNING_CONTEXT\}\}/$planning_context}"
   planning_prompt="${planning_prompt//\{\{PLAN_FILE\}\}/$PLAN_FILE}"
-  planning_prompt="${planning_prompt//\{\{SIGNAL_TOKEN\}\}/$SIGNAL_TOKEN}"
+  planning_prompt="${planning_prompt//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
   planning_prompt="${planning_prompt//\{\{STATE_FILE\}\}/$STATE_FILE}"
   planning_prompt="${planning_prompt//\{\{TASK_INSTRUCTIONS\}\}/$(task_planning_instructions)}"
 
@@ -1036,8 +1037,11 @@ run_execution() {
   iteration=${iteration:-0}
 
   write_state "max_iterations" "$MAX_ITERATIONS"
+  write_state "refactor_every" "$REFACTOR_EVERY"
   while true; do
     MAX_ITERATIONS=$(read_state "max_iterations")
+    REFACTOR_EVERY=$(read_state "refactor_every")
+    REFACTOR_EVERY=${REFACTOR_EVERY:-0}
     if (( run_iteration >= MAX_ITERATIONS )); then break; fi
     # Check stop file
     if [[ -f "$STOP_FILE" ]]; then

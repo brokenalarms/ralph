@@ -27,9 +27,9 @@ teardown() {
   local prompt
   prompt=$(build_refactor_prompt "lib/tasks.sh")
   [[ "$prompt" == *"$WORK_DIR"* ]]
-  [[ "$prompt" == *"$SIGNAL_TOKEN"* ]]
+  [[ "$prompt" == *".signal_complete"* ]]
   [[ "$prompt" != *"{{WORK_DIR}}"* ]]
-  [[ "$prompt" != *"{{SIGNAL_TOKEN}}"* ]]
+  [[ "$prompt" != *"{{RALPH_DIR}}"* ]]
   [[ "$prompt" != *"{{RECENT_FILES}}"* ]]
 }
 
@@ -59,9 +59,9 @@ test/auth.bats")
   [[ "$val" == "3" ]]
 }
 
-# Proves: REFACTOR_EVERY default is 5, providing a reasonable cadence out of the box.
-@test "REFACTOR_EVERY defaults to 5" {
-  [[ "$REFACTOR_EVERY" == "5" ]]
+# Proves: REFACTOR_EVERY defaults to 0 (disabled) unless overridden via env.
+@test "REFACTOR_EVERY defaults to 0" {
+  [[ "$REFACTOR_EVERY" == "0" ]]
 }
 
 # Proves: planning prompt includes debt assessment with balanced guidance (not just a checklist).

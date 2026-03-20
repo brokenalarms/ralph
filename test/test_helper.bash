@@ -36,16 +36,16 @@ setup_test_repo() {
   _TASK_SEQ=0
   _BRANCH_RENAMED=false
 
-  SIGNAL_TOKEN="###RALPH_TASK_COMPLETE###"
-  CURRENT_TASK_TOKEN="###RALPH_CURRENT_TASK###"
-  ALL_COMPLETE_TOKEN="###RALPH_ALL_COMPLETE###"
+  SIGNAL_COMPLETE_FILE="$RALPH_DIR/.signal_complete"
+  SIGNAL_TASK_FILE="$RALPH_DIR/.signal_current_task"
+  SIGNAL_ALL_COMPLETE_FILE="$RALPH_DIR/.signal_all_complete"
 
   TASK_BACKEND="checklist"
   PLAN_FILE_ARG=""
   RESUME=false
   USE_WORKTREE=true
   CALLS_PER_HOUR=80
-  REFACTOR_EVERY=5
+  REFACTOR_EVERY=0
   QUIET=false
 
   PROMPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/prompts"

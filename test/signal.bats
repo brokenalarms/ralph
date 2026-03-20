@@ -11,69 +11,63 @@ teardown() {
   teardown_test_repo
 }
 
-# Proves: offset advances so old tokens are ignored.
-@test "clear_signal resets offset to current log length" {
-  echo "old line" >> "$LOG_FILE"
-  echo "$SIGNAL_TOKEN old task" >> "$LOG_FILE"
+# Proves: clear_signal removes all signal files so old signals are ignored.
+@test "clear_signal removes signal files" {
+  echo "old task" > "$SIGNAL_COMPLETE_FILE"
+  echo "old current" > "$SIGNAL_TASK_FILE"
   clear_signal
   run check_signal
   [[ "$status" -ne 0 ]]
+  run check_current_task
+  [[ "$status" -ne 0 ]]
 }
 
-# Proves: task-done detection.
-@test "check_signal detects completion token" {
+# Proves: task-done detection via file presence.
+@test "check_signal detects completion file" {
   clear_signal
-  echo "$SIGNAL_TOKEN done with auth fix" >> "$LOG_FILE"
+  echo "done with auth fix" > "$SIGNAL_COMPLETE_FILE"
   run check_signal
   [[ "$status" -eq 0 ]]
 }
 
-# Proves: no false positives.
-@test "check_signal false without token" {
+# Proves: no false positives when file doesn't exist.
+@test "check_signal false without file" {
   clear_signal
-  echo "some unrelated content" >> "$LOG_FILE"
   run check_signal
   [[ "$status" -ne 0 ]]
 }
 
-# Proves: summary capture from signal.
-@test "read_signal_summary extracts text" {
+# Proves: summary capture from signal file.
+@test "read_signal_summary extracts text from completion file" {
   clear_signal
-  echo "$SIGNAL_TOKEN Fixed the login bug" >> "$LOG_FILE"
+  echo "Fixed the login bug" > "$SIGNAL_COMPLETE_FILE"
   result=$(read_signal_summary)
   [[ "$result" == "Fixed the login bug" ]]
 }
 
-# Proves: mid-iteration task tracking.
+# Proves: all_complete summary takes precedence over regular completion.
+@test "read_signal_summary prefers all_complete file" {
+  clear_signal
+  echo "regular task done" > "$SIGNAL_COMPLETE_FILE"
+  echo "All tasks finished" > "$SIGNAL_ALL_COMPLETE_FILE"
+  result=$(read_signal_summary)
+  [[ "$result" == "All tasks finished" ]]
+}
+
+# Proves: mid-iteration task tracking via file.
 @test "check_current_task and read_current_task" {
   clear_signal
-  echo "$CURRENT_TASK_TOKEN Working on auth" >> "$LOG_FILE"
+  echo "Working on auth" > "$SIGNAL_TASK_FILE"
   run check_current_task
   [[ "$status" -eq 0 ]]
   result=$(read_current_task)
   [[ "$result" == "Working on auth" ]]
 }
 
-# Proves: JSON artifacts are stripped from task description in stream-json logs
-@test "read_current_task strips JSON from stream-json output" {
-  clear_signal
-  echo '{"text":"echo \"###RALPH_CURRENT_TASK### Fix auth module\"","description":"Signal"}' >> "$LOG_FILE"
-  result=$(read_current_task)
-  [[ "$result" == "Fix auth module" ]]
-}
-
-# Proves: JSON artifacts are stripped from signal summary in stream-json logs
-@test "read_signal_summary strips JSON from stream-json output" {
-  clear_signal
-  echo '{"text":"echo \"###RALPH_TASK_COMPLETE### Auth fix done\"","description":"Signal"}' >> "$LOG_FILE"
-  result=$(read_signal_summary)
-  [[ "$result" == "Auth fix done" ]]
-}
-
 # Proves: ralph stops when Claude says everything is done.
 @test "ALL_COMPLETE signal detected" {
   clear_signal
-  echo "$ALL_COMPLETE_TOKEN All tasks finished" >> "$LOG_FILE"
+  echo "All tasks finished" > "$SIGNAL_ALL_COMPLETE_FILE"
   run check_all_complete
   [[ "$status" -eq 0 ]]
 }
