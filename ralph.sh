@@ -16,12 +16,12 @@ source "$SCRIPT_DIR/lib/quality.sh"
 
 # --- Defaults ---
 PROJECT_DIR="$(pwd)"
-MAX_ITERATIONS="${RALPH_MAX_ITERATIONS:-50}"
+MAX_ITERATIONS=50
 PROMPT_OVERRIDE=""
 RESUME=false
 PLAN_ONLY=false
 SKIP_PLANNING=false
-WATCHER_INTERVAL=2  # seconds between signal checks
+WATCHER_INTERVAL=2
 PLAN_FILE_ARG=""
 QUIET=false
 USE_WORKTREE=true
@@ -29,6 +29,48 @@ CALLS_PER_HOUR=80
 REFACTOR_THRESHOLD="${RALPH_REFACTOR_THRESHOLD:-20}"
 USE_TMUX=false
 AUTO_MERGE=false
+STUCK_THRESHOLD=5
+STUCK_CONFIRMATION_THRESHOLD=2
+STAGNATION_THRESHOLD=3
+TEST_SATURATION_THRESHOLD=3
+PERMISSION_DENIAL_THRESHOLD=3
+
+# Track which settings were explicitly set via CLI (bash 3 compatible)
+_CLI_MAX_ITERATIONS=""
+_CLI_CALLS_PER_HOUR=""
+_CLI_REFACTOR_EVERY=""
+
+# --- Config file loader (simple TOML subset: key = value) ---
+load_config() {
+  local config_file="$1"
+  [[ -f "$config_file" ]] || return 0
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -z "$line" || "$line" == \[* ]] && continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    value="${value#\"}"
+    value="${value%\"}"
+    case "$key" in
+      max_iterations)              [[ -z "$_CLI_MAX_ITERATIONS" ]] && MAX_ITERATIONS="$value" ;;
+      calls_per_hour)              [[ -z "$_CLI_CALLS_PER_HOUR" ]] && CALLS_PER_HOUR="$value" ;;
+      refactor_every)              [[ -z "$_CLI_REFACTOR_EVERY" ]] && REFACTOR_EVERY="$value" ;;
+      watcher_interval)            WATCHER_INTERVAL="$value" ;;
+      stuck_threshold)             STUCK_THRESHOLD="$value" ;;
+      stuck_confirmation_threshold) STUCK_CONFIRMATION_THRESHOLD="$value" ;;
+      stagnation_threshold)        STAGNATION_THRESHOLD="$value" ;;
+      test_saturation_threshold)   TEST_SATURATION_THRESHOLD="$value" ;;
+      permission_denial_threshold) PERMISSION_DENIAL_THRESHOLD="$value" ;;
+    esac
+  done < "$config_file"
+}
 TMUX_SESSION=""
 _TMUX_OUTER=false
 WORK_DIR=""
@@ -94,6 +136,10 @@ ${BOLD}EXAMPLES:${NC}
   ralph.sh -p "Fix all failing tests"
   ralph.sh . --plan-file plan.md
 
+${BOLD}CONFIG FILE:${NC}
+  Place a ralph.toml in your project root to set defaults. CLI args override config values.
+  Run 'ralph.sh --init-config' to generate a starter config with all available settings.
+
 ${BOLD}HOW IT WORKS:${NC}
   1. Planning: Claude reads the repo and creates .ralph/plan.md with atomic tasks
   2. Execution: Each task runs in a fresh Claude context (~200k tokens)
@@ -152,6 +198,34 @@ if [[ "${1:-}" == "feedback" ]]; then
   exit 0
 fi
 
+# --- Generate starter config ---
+if [[ "${1:-}" == "--init-config" ]]; then
+  shift
+  local_dir="${1:-.}"
+  config_path="$local_dir/ralph.toml"
+  if [[ -f "$config_path" ]]; then
+    echo -e "${YELLOW}[ralph]${NC} Config already exists: $config_path"
+    exit 1
+  fi
+  cat > "$config_path" <<'TOML'
+# Ralph Loop configuration
+# CLI args override these values. Remove or comment out lines to use defaults.
+
+max_iterations = 50
+calls_per_hour = 80
+refactor_every = 0
+watcher_interval = 2
+
+stuck_threshold = 5
+stuck_confirmation_threshold = 2
+stagnation_threshold = 3
+test_saturation_threshold = 3
+permission_denial_threshold = 3
+TOML
+  echo -e "${GREEN}[ralph]${NC} Config written to $config_path"
+  exit 0
+fi
+
 # --- Save original args (for tmux re-exec) ---
 RALPH_ORIG_ARGS=("$@")
 
@@ -159,14 +233,14 @@ RALPH_ORIG_ARGS=("$@")
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -d|--dir)       PROJECT_DIR="$2"; shift 2 ;;
-    -n|--max)       MAX_ITERATIONS="$2"; shift 2 ;;
+    -n|--max)       MAX_ITERATIONS="$2"; _CLI_MAX_ITERATIONS="$2"; shift 2 ;;
     -p|--prompt)    PROMPT_OVERRIDE="$2"; shift 2 ;;
     --plan-file)    PLAN_FILE_ARG="$2"; shift 2 ;;
     --plan)         PLAN_ONLY=true; shift ;;
     --skip-planning) SKIP_PLANNING=true; shift ;;
     -q|--quiet)     QUIET=true; shift ;;
     --no-worktree)  USE_WORKTREE=false; shift ;;
-    --calls-per-hour) CALLS_PER_HOUR="$2"; shift 2 ;;
+    --calls-per-hour) CALLS_PER_HOUR="$2"; _CLI_CALLS_PER_HOUR="$2"; shift 2 ;;
     --refactor-threshold) REFACTOR_THRESHOLD="$2"; shift 2 ;;
     --tmux)         USE_TMUX=true; shift ;;
     --auto-merge)   AUTO_MERGE=true; shift ;;
@@ -188,6 +262,17 @@ fi
 # --- Resolve paths ---
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 RALPH_DIR="$PROJECT_DIR/.ralph"
+
+# --- Load config file (CLI args take precedence) ---
+load_config "$PROJECT_DIR/ralph.toml"
+
+# --- Apply env var overrides (between config and CLI in precedence) ---
+if [[ -z "$_CLI_MAX_ITERATIONS" && -n "${RALPH_MAX_ITERATIONS:-}" ]]; then
+  MAX_ITERATIONS="$RALPH_MAX_ITERATIONS"
+fi
+if [[ -z "$_CLI_REFACTOR_EVERY" && -n "${RALPH_REFACTOR_EVERY:-}" ]]; then
+  REFACTOR_EVERY="$RALPH_REFACTOR_EVERY"
+fi
 PLAN_FILE="$RALPH_DIR/plan.md"
 if [[ -n "$PLAN_FILE_ARG" ]]; then
   # Resolve plan-file to absolute path
@@ -970,7 +1055,7 @@ analyze_iteration() {
   if [[ -n "$perm_matches" ]]; then
     perm_count=$(echo "$perm_matches" | wc -l | tr -d ' ')
   fi
-  if (( perm_count >= 3 )); then
+  if (( perm_count >= PERMISSION_DENIAL_THRESHOLD )); then
     ANALYSIS_DETAIL="$perm_matches"
     ANALYSIS_RESULT="halt:permission_denied"
     return
@@ -989,7 +1074,7 @@ analyze_iteration() {
 
   if [[ "$stuck_detected" == true ]]; then
     _stuck_count=$((_stuck_count + 1))
-    if (( _stuck_count >= 2 )); then
+    if (( _stuck_count >= STUCK_CONFIRMATION_THRESHOLD )); then
       ANALYSIS_RESULT="halt:stuck_loop"
       return
     fi
@@ -1021,7 +1106,7 @@ analyze_iteration() {
   # --- Stagnation detection (3 consecutive no-change → halt) ---
   if [[ "$has_changes" == false && "$has_signal" == false && "$new_commits" == false ]]; then
     _stagnant_count=$((_stagnant_count + 1))
-    if (( _stagnant_count >= 3 )); then
+    if (( _stagnant_count >= STAGNATION_THRESHOLD )); then
       ANALYSIS_RESULT="halt:stagnation"
       return
     fi
@@ -1058,7 +1143,7 @@ analyze_iteration() {
 
       if [[ -z "$non_test_files" ]]; then
         _test_only_count=$((_test_only_count + 1))
-        if (( _test_only_count >= 3 )); then
+        if (( _test_only_count >= TEST_SATURATION_THRESHOLD )); then
           ANALYSIS_RESULT="halt:test_saturation"
           return
         fi
