@@ -306,6 +306,7 @@ SIGNAL_ALL_COMPLETE_FILE="$RALPH_DIR/.signal_all_complete"
 # --- Init .ralph directory ---
 init_ralph_dir() {
   mkdir -p "$RALPH_DIR"
+  mkdir -p "$RALPH_DIR/reflections"
   touch "$LOG_FILE" "$RAW_LOG"
 
   # Bail if there are staged or unstaged changes — we commit .gitignore below
@@ -880,6 +881,8 @@ build_prompt() {
   result=$(<"$PROMPTS_DIR/shared.md")
   result+=$'\n'
   result+=$(<"$template_file")
+  result+=$'\n'
+  result+=$(<"$PROMPTS_DIR/reflection.md")
   result+=$'\n'
   result+=$(<"$PROMPTS_DIR/signal.md")
 

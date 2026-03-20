@@ -187,6 +187,23 @@ func TestBuildRefactorPrompt(t *testing.T) {
 	}
 }
 
+// Proves: the assembled prompt includes post-task reflection instructions
+// so Claude writes a reflection file before signaling completion.
+func TestBuildPrompt_IncludesReflection(t *testing.T) {
+	v := testVars(t)
+	result, err := BuildPrompt(v)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	if !strings.Contains(result, "Post-task reflection") {
+		t.Error("prompt missing reflection instructions")
+	}
+	if !strings.Contains(result, "reflections/") {
+		t.Error("prompt missing reflections directory path")
+	}
+}
+
 // Proves: an unknown backend returns an error instead of producing
 // a malformed prompt.
 func TestBuildPrompt_UnknownBackendErrors(t *testing.T) {
