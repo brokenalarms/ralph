@@ -1,0 +1,293 @@
+package tasks
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+// ErrNeedsFallback signals that the bd backend is unavailable and the
+// caller should fall back to checklist.
+var ErrNeedsFallback = errors.New("bd unavailable, fall back to checklist")
+
+// CommandRunner executes a bd subcommand in a directory and returns
+// combined stdout. Stderr is captured separately so callers can
+// inspect it on failure.
+type CommandRunner func(dir string, args ...string) (stdout string, err error)
+
+// BD implements Backend by shelling out to the bd CLI.
+type BD struct {
+	ProjectDir string
+	PromptsDir string
+	RunBD      CommandRunner // injectable for testing; nil uses defaultRunBD
+}
+
+func (b *BD) runner() CommandRunner {
+	if b.RunBD != nil {
+		return b.RunBD
+	}
+	return defaultRunBD
+}
+
+func defaultRunBD(dir string, args ...string) (string, error) {
+	cmd := exec.Command("bd", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+// Init prepares the bd backend: runs bd init if needed, verifies
+// health, and manages .gitignore entries. Returns ErrNeedsFallback
+// when bd/Dolt is unreachable.
+func (b *BD) Init() error {
+	run := b.runner()
+
+	// If .beads doesn't exist, run bd init.
+	beadsDir := filepath.Join(b.ProjectDir, ".beads")
+	if _, err := os.Stat(beadsDir); os.IsNotExist(err) {
+		if _, initErr := run(b.ProjectDir, "init"); initErr != nil {
+			return fmt.Errorf("bd init failed: %w: %w", initErr, ErrNeedsFallback)
+		}
+	}
+
+	// Health check: bd count is lightweight and exercises the DB connection.
+	if !b.isHealthy() {
+		// Retry init to reconnect a stale server.
+		if _, initErr := run(b.ProjectDir, "init"); initErr != nil {
+			return fmt.Errorf("bd init retry failed: %w: %w", initErr, ErrNeedsFallback)
+		}
+		if !b.isHealthy() {
+			return fmt.Errorf("server unreachable after retry: %w", ErrNeedsFallback)
+		}
+	}
+
+	// Ensure .beads and .dolt are in .gitignore.
+	if err := b.ensureGitignore(); err != nil {
+		// Non-fatal: log but continue.
+		_ = err
+	}
+
+	return nil
+}
+
+func (b *BD) isHealthy() bool {
+	_, err := b.runner()(b.ProjectDir, "count")
+	return err == nil
+}
+
+func (b *BD) ensureGitignore() error {
+	gitignore := filepath.Join(b.ProjectDir, ".gitignore")
+
+	var existing string
+	if data, err := os.ReadFile(gitignore); err == nil {
+		existing = string(data)
+	}
+
+	changed := false
+	for _, entry := range []string{".beads", ".dolt"} {
+		if !gitignoreContains(existing, entry) {
+			existing += entry + "\n"
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+
+	if err := os.WriteFile(gitignore, []byte(existing), 0644); err != nil {
+		return err
+	}
+
+	// Auto-commit if inside a git repo.
+	gitDir := exec.Command("git", "-C", b.ProjectDir, "rev-parse", "--git-dir")
+	if gitDir.Run() == nil {
+		add := exec.Command("git", "-C", b.ProjectDir, "add", ".gitignore")
+		_ = add.Run()
+		commit := exec.Command("git", "-C", b.ProjectDir, "commit", "-m", "Add beads/dolt to .gitignore")
+		_ = commit.Run()
+	}
+
+	return nil
+}
+
+// gitignoreContains checks whether an entry already appears as its own
+// line (with optional trailing / or /*).
+func gitignoreContains(content, entry string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == entry || trimmed == entry+"/" || trimmed == entry+"/*" {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *BD) HasRemaining() (bool, error) {
+	n, err := b.CountRemaining()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func (b *BD) CountCompleted() (int, error) {
+	return b.countByStatus("closed")
+}
+
+func (b *BD) CountRemaining() (int, error) {
+	open, err := b.countByStatus("open")
+	if err != nil {
+		return 0, err
+	}
+	inp, err := b.countByStatus("in_progress")
+	if err != nil {
+		return 0, err
+	}
+	return open + inp, nil
+}
+
+func (b *BD) CountTotal() (int, error) {
+	out, err := b.runner()(b.ProjectDir, "count")
+	if err != nil {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0, nil
+	}
+	return n, nil
+}
+
+func (b *BD) countByStatus(status string) (int, error) {
+	out, err := b.runner()(b.ProjectDir, "count", "--status", status)
+	if err != nil {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0, nil
+	}
+	return n, nil
+}
+
+type bdIssue struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+// getNextIssue returns the next issue, preferring in-progress over ready.
+func (b *BD) getNextIssue() (bdIssue, error) {
+	run := b.runner()
+
+	// Try in-progress first.
+	out, err := run(b.ProjectDir, "list", "--status", "in_progress", "--flat", "--json", "--limit", "1")
+	if err == nil {
+		if issue, ok := parseFirstIssue(out); ok {
+			return issue, nil
+		}
+	}
+
+	// Fall back to ready queue.
+	out, err = run(b.ProjectDir, "ready", "--limit", "1", "--json")
+	if err == nil {
+		if issue, ok := parseFirstIssue(out); ok {
+			return issue, nil
+		}
+	}
+
+	return bdIssue{}, nil
+}
+
+func parseFirstIssue(jsonStr string) (bdIssue, bool) {
+	var issues []bdIssue
+	if err := json.Unmarshal([]byte(jsonStr), &issues); err != nil || len(issues) == 0 {
+		return bdIssue{}, false
+	}
+	if issues[0].ID == "" && issues[0].Title == "" {
+		return bdIssue{}, false
+	}
+	return issues[0], true
+}
+
+func (b *BD) GetNextTask() (string, error) {
+	issue, err := b.getNextIssue()
+	if err != nil {
+		return "", err
+	}
+	return issue.Title, nil
+}
+
+func (b *BD) GetNextTaskID() (string, error) {
+	issue, err := b.getNextIssue()
+	if err != nil {
+		return "", err
+	}
+	return issue.ID, nil
+}
+
+func (b *BD) HasTasks() (bool, error) {
+	total, err := b.CountTotal()
+	if err != nil {
+		return false, err
+	}
+	return total > 0, nil
+}
+
+func (b *BD) NeedsPlanning() (bool, error) {
+	has, err := b.HasTasks()
+	if err != nil {
+		return false, err
+	}
+	return !has, nil
+}
+
+func (b *BD) PlanningSucceeded() (bool, error) {
+	return b.HasTasks()
+}
+
+func (b *BD) CloseTask(id string, reason string) error {
+	if id == "" {
+		return nil
+	}
+	run := b.runner()
+
+	// Only close if still in_progress.
+	out, err := run(b.ProjectDir, "show", id, "--json")
+	if err == nil {
+		var issues []struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal([]byte(out), &issues) == nil && len(issues) > 0 {
+			if issues[0].Status != "in_progress" {
+				return nil
+			}
+		}
+	}
+
+	if reason == "" {
+		reason = "completed by ralph"
+	}
+	_, err = run(b.ProjectDir, "close", id, "--reason", reason)
+	return err
+}
+
+func (b *BD) ExecutionInstructions() (string, error) {
+	path := b.PromptsDir + "/execution-bd.md"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading execution instructions: %w", err)
+	}
+	return string(data), nil
+}
+
+func (b *BD) PlanningInstructions() string {
+	return "Run `bd prime` to learn the workflow, then create tasks directly in bd with dependencies. Do NOT write a plan.md file — tasks live exclusively in bd."
+}
+
+func (b *BD) Label() string { return "beads" }
