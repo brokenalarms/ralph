@@ -64,6 +64,23 @@ teardown() {
   [[ "$result" == "Working on auth" ]]
 }
 
+# Proves: JSON fragments bled from stream-json are stripped from summaries,
+# keeping "Completed: ..." log lines human-readable.
+@test "read_signal_summary strips trailing JSON fragment" {
+  clear_signal
+  printf 'Fixed auth bug{"type":"result"}\n' > "$SIGNAL_COMPLETE_FILE"
+  result=$(read_signal_summary)
+  [[ "$result" == "Fixed auth bug" ]]
+}
+
+# Proves: a signal file containing only JSON returns empty (not raw JSON).
+@test "read_signal_summary returns empty for pure JSON" {
+  clear_signal
+  printf '{"type":"result","message":"done"}\n' > "$SIGNAL_COMPLETE_FILE"
+  result=$(read_signal_summary)
+  [[ -z "$result" ]]
+}
+
 # Proves: ralph stops when Claude says everything is done.
 @test "ALL_COMPLETE signal detected" {
   clear_signal

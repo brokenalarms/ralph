@@ -512,10 +512,17 @@ read_current_task() {
 }
 
 read_signal_summary() {
+  local raw=""
   if [[ -f "$SIGNAL_ALL_COMPLETE_FILE" ]]; then
-    head -1 "$SIGNAL_ALL_COMPLETE_FILE" 2>/dev/null || true
+    raw=$(head -1 "$SIGNAL_ALL_COMPLETE_FILE" 2>/dev/null) || true
   elif [[ -f "$SIGNAL_COMPLETE_FILE" ]]; then
-    head -1 "$SIGNAL_COMPLETE_FILE" 2>/dev/null || true
+    raw=$(head -1 "$SIGNAL_COMPLETE_FILE" 2>/dev/null) || true
+  fi
+  # Strip any JSON fragments that may have bled into the signal file.
+  # Signal summaries are plain text — anything starting with { is garbage.
+  if [[ -n "$raw" && "${raw:0:1}" != "{" ]]; then
+    # Trim trailing JSON fragment (e.g. 'summary text{"type":...}')
+    echo "${raw%%\{*}"
   fi
 }
 
@@ -642,24 +649,15 @@ run_claude() {
     full_prompt=$(build_prompt "$prompt" "$feedback")
   fi
 
-  # Launch claude in background
-  # Raw JSON goes to RAW_LOG (kept for analyzer + next-iteration context);
-  # a filter process writes human-readable output to LOG_FILE.
+  # Start the stream filter BEFORE Claude so tail -f -n 0 is already
+  # watching the raw log when Claude begins writing. This eliminates
+  # the race where early JSON output lands in loop.log unfiltered.
   cd "$WORK_DIR"
-  claude --print --verbose --output-format stream-json \
-    --add-dir "$WORK_DIR" \
-    --add-dir "$RALPH_DIR" \
-    --dangerously-skip-permissions \
-    -p "$full_prompt" < /dev/null >> "$RAW_LOG" 2>&1 &
-  claude_pid=$!
-  log "Claude started (PID: $claude_pid)"
-  date +%s > "$RALPH_DIR/.stream-start" 2>/dev/null || true
-
-  # Filter raw JSON → human-readable LOG_FILE + optional terminal display
   write_stream_filter
+  local filter_pid=""
   if command -v jq &>/dev/null; then
     bash "$RALPH_DIR/.stream-filter.sh" "$RAW_LOG" >> "$LOG_FILE" &
-    local filter_pid=$!
+    filter_pid=$!
     if [[ "$QUIET" == false ]]; then
       tail -f -n 0 "$LOG_FILE" &
       tail_pid=$!
@@ -668,6 +666,17 @@ run_claude() {
     tail -f -n 0 "$RAW_LOG" &
     tail_pid=$!
   fi
+
+  # Launch claude in background — filter is already tailing RAW_LOG.
+  # Raw JSON goes to RAW_LOG (kept for analyzer + next-iteration context).
+  claude --print --verbose --output-format stream-json \
+    --add-dir "$WORK_DIR" \
+    --add-dir "$RALPH_DIR" \
+    --dangerously-skip-permissions \
+    -p "$full_prompt" < /dev/null >> "$RAW_LOG" 2>&1 &
+  claude_pid=$!
+  log "Claude started (PID: $claude_pid)"
+  date +%s > "$RALPH_DIR/.stream-start" 2>/dev/null || true
 
   # Poll for completion signal or Claude exit (inline, no subshell —
   # a background watcher subshell inherits set -e and can die silently
