@@ -619,10 +619,12 @@ write_state() {
     tmp=$(mktemp)
     jq --arg v "$value" ".$key = (\$v | try tonumber catch \$v)" "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
   else
+    local escaped_value
+    escaped_value=$(printf '%s' "$value" | sed 's/[&/\]/\\&/g')
     if echo "$value" | grep -qE '^[0-9]+$'; then
-      sed -i "s/\"$key\": *[^,}]*/\"$key\": $value/" "$STATE_FILE"
+      sed -i "s/\"$key\": *[^,}]*/\"$key\": $escaped_value/" "$STATE_FILE"
     else
-      sed -i "s/\"$key\": *[^,}]*/\"$key\": \"$value\"/" "$STATE_FILE"
+      sed -i "s/\"$key\": *[^,}]*/\"$key\": \"$escaped_value\"/" "$STATE_FILE"
     fi
   fi
 }

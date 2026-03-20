@@ -12,8 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install bats
+      - name: Install dependencies
         run: |
+          sudo apt-get update && sudo apt-get install -y jq
           git clone --depth 1 https://github.com/bats-core/bats-core.git
           sudo ./bats-core/install.sh /usr/local
 
