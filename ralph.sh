@@ -790,6 +790,78 @@ clear_attempt_history() {
   rm -f "$attempt_file"
 }
 
+# --- Attempt history ---
+
+_attempts_dir() { echo "$RALPH_DIR/attempts"; }
+
+_attempt_key() {
+  local task_id="$1" task_name="$2"
+  if [[ -n "$task_id" ]]; then
+    echo "$task_id"
+  else
+    slugify "$task_name"
+  fi
+}
+
+record_attempt() {
+  local task_id="$1" task_name="$2" summary="$3" diff_stat="$4" analysis="$5"
+  local key
+  key=$(_attempt_key "$task_id" "$task_name")
+  [[ -z "$key" ]] && return 0
+
+  local dir
+  dir=$(_attempts_dir)
+  mkdir -p "$dir"
+
+  local attempt_file="$dir/${key}.log"
+  local attempt_num=1
+  if [[ -f "$attempt_file" ]]; then
+    local prev
+    prev=$(grep -c '^### Attempt ' "$attempt_file" 2>/dev/null || echo 0)
+    attempt_num=$((prev + 1))
+  fi
+
+  {
+    echo "### Attempt $attempt_num"
+    echo "Task: $task_name"
+    if [[ -n "$summary" ]]; then
+      echo "Summary: $summary"
+    fi
+    if [[ -n "$diff_stat" ]]; then
+      echo "Changes:"
+      echo "$diff_stat"
+    else
+      echo "Changes: none"
+    fi
+    echo "Analysis: $analysis"
+    echo ""
+  } >> "$attempt_file"
+}
+
+read_attempt_history() {
+  local task_id="$1" task_name="$2"
+  local key
+  key=$(_attempt_key "$task_id" "$task_name")
+  [[ -z "$key" ]] && return 0
+
+  local attempt_file
+  attempt_file="$(_attempts_dir)/${key}.log"
+  if [[ -f "$attempt_file" ]]; then
+    cat "$attempt_file"
+  fi
+}
+
+clear_attempt_history() {
+  local task_id="$1" task_name="$2"
+  local key
+  key=$(_attempt_key "$task_id" "$task_name")
+  [[ -z "$key" ]] && return 0
+
+  local attempt_file
+  attempt_file="$(_attempts_dir)/${key}.log"
+  rm -f "$attempt_file"
+}
+
 # --- Worktree theme renaming ---
 _rename_worktree_from_theme() {
   local theme
@@ -954,6 +1026,10 @@ run_claude() {
   # on harmless races between check_current_task and read_current_task)
   local task_logged=false signal_detected=false
   while kill -0 "$claude_pid" 2>/dev/null; do
+    if [[ "$_interrupted" == true ]]; then
+      log_warn "Interrupted — stopping Claude..."
+      break
+    fi
     if [[ "$task_logged" == false ]] && check_current_task; then
       local task_desc
       task_desc=$(read_current_task) || true
@@ -983,7 +1059,21 @@ run_claude() {
     sleep "$WATCHER_INTERVAL"
   done
 
-  # Reap claude process
+  # Kill Claude and all child processes on interrupt or normal exit
+  _kill_children() {
+    local pid=$1
+    kill "$pid" 2>/dev/null || true
+    local waited=0
+    while kill -0 "$pid" 2>/dev/null && (( waited < 3 )); do
+      sleep 1
+      waited=$((waited + 1))
+    done
+    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+  }
+
+  if kill -0 "$claude_pid" 2>/dev/null; then
+    _kill_children "$claude_pid"
+  fi
   wait "$claude_pid" 2>/dev/null || true
 
   # Clean up stream filter and its children (tail, jq)
@@ -996,6 +1086,11 @@ run_claude() {
     pkill -P "$tail_pid" 2>/dev/null || true
     kill "$tail_pid" 2>/dev/null || true
     wait "$tail_pid" 2>/dev/null || true
+  fi
+
+  # On interrupt, skip signal checks and return immediately
+  if [[ "$_interrupted" == true ]]; then
+    return 1
   fi
 
   # Check if signal was written (claude may have exited after writing it)
@@ -1354,6 +1449,12 @@ run_execution() {
     REFACTOR_THRESHOLD=$(read_state "refactor_threshold")
     REFACTOR_THRESHOLD=${REFACTOR_THRESHOLD:-0}
     if (( run_iteration >= MAX_ITERATIONS )); then break; fi
+    # Check for Ctrl-C interrupt
+    if [[ "$_interrupted" == true ]]; then
+      log_warn "Interrupted — stopping execution"
+      write_state "status" "interrupted"
+      break
+    fi
     # Check stop file
     if [[ -f "$STOP_FILE" ]]; then
       log_warn "Stop file detected - halting"
@@ -1481,6 +1582,13 @@ run_execution() {
     fi
     local task_elapsed=$(( SECONDS - task_start ))
     increment_call_count
+
+    # Exit loop immediately if interrupted during run_claude
+    if [[ "$_interrupted" == true ]]; then
+      log_warn "Interrupted — stopping execution"
+      write_state "status" "interrupted"
+      break
+    fi
 
     # Clear feedback after Claude completes the iteration
     if [[ -n "$feedback" ]]; then
@@ -1652,6 +1760,10 @@ cleanup() {
       [[ -n "$TMUX_SESSION" ]] && tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
     fi
     return
+  fi
+  # Write interrupted status so resume knows what happened
+  if [[ "$_interrupted" == true && -d "${RALPH_DIR:-}" ]]; then
+    write_state "status" "interrupted"
   fi
   # Kill any backgrounded processes and their children
   for pid in $(jobs -p 2>/dev/null); do
