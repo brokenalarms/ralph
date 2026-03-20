@@ -785,9 +785,12 @@ build_refactor_prompt() {
   result+=$'\n'
   result+=$(<"$PROMPTS_DIR/signal.md")
 
+  local refactor_style
+  refactor_style=$(<"$PROMPTS_DIR/refactor-style.md")
   result="${result//\{\{WORK_DIR\}\}/$WORK_DIR}"
   result="${result//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
   result="${result//\{\{RECENT_FILES\}\}/$recent_files}"
+  result="${result//\{\{REFACTOR_STYLE\}\}/$refactor_style}"
 
   printf '%s' "$result"
 }
