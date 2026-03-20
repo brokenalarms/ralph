@@ -7,22 +7,78 @@ import (
 )
 
 // Verifies that Parse with no arguments returns ralph.sh-compatible defaults:
-// cwd project dir, 20 iterations, worktree enabled, 80 calls/hr, refactor every 5.
+// cwd project dir, 50 iterations, worktree enabled, 80 calls/hr, refactor disabled.
 func TestDefaultValues(t *testing.T) {
+	// Clear env vars so defaults are deterministic.
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+
 	cfg, err := Parse(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	want := Defaults()
-	if cfg != want {
-		t.Errorf("defaults mismatch:\ngot  %+v\nwant %+v", cfg, want)
+	if cfg.MaxIterations != 50 {
+		t.Errorf("MaxIterations = %d, want 50", cfg.MaxIterations)
+	}
+	if cfg.RefactorEvery != 0 {
+		t.Errorf("RefactorEvery = %d, want 0", cfg.RefactorEvery)
+	}
+	if cfg.ProjectDir != "." {
+		t.Errorf("ProjectDir = %q, want \".\"", cfg.ProjectDir)
+	}
+	if !cfg.UseWorktree {
+		t.Error("UseWorktree should default to true")
+	}
+	if cfg.CallsPerHour != 80 {
+		t.Errorf("CallsPerHour = %d, want 80", cfg.CallsPerHour)
+	}
+}
+
+// Verifies that RALPH_MAX_ITERATIONS and RALPH_REFACTOR_EVERY env vars
+// override the hardcoded defaults, matching ralph.sh's ${VAR:-default} pattern.
+func TestEnvVarDefaults(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "100")
+	t.Setenv("RALPH_REFACTOR_EVERY", "10")
+
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.MaxIterations != 100 {
+		t.Errorf("MaxIterations = %d, want 100 (from env)", cfg.MaxIterations)
+	}
+	if cfg.RefactorEvery != 10 {
+		t.Errorf("RefactorEvery = %d, want 10 (from env)", cfg.RefactorEvery)
+	}
+}
+
+// Verifies that CLI flags override env var defaults for max_iterations
+// and refactor_every, matching the shell's flag-then-env precedence.
+func TestCLIOverridesEnvVar(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "100")
+	t.Setenv("RALPH_REFACTOR_EVERY", "10")
+
+	cfg, err := Parse([]string{"-n", "25", "--refactor-every", "3"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.MaxIterations != 25 {
+		t.Errorf("MaxIterations = %d, want 25 (CLI override)", cfg.MaxIterations)
+	}
+	if cfg.RefactorEvery != 3 {
+		t.Errorf("RefactorEvery = %d, want 3 (CLI override)", cfg.RefactorEvery)
 	}
 }
 
 // Verifies that all short and long flag variants set their respective fields,
 // matching the ralph.sh flag interface.
 func TestAllFlags(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+
 	args := []string{
 		"-d", "/tmp/proj",
 		"-n", "10",
