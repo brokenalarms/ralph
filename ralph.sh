@@ -27,6 +27,7 @@ USE_WORKTREE=true
 CALLS_PER_HOUR=80
 REFACTOR_EVERY="${RALPH_REFACTOR_EVERY:-0}"
 USE_TMUX=false
+AUTO_MERGE=false
 TMUX_SESSION=""
 _TMUX_OUTER=false
 WORK_DIR=""
@@ -84,6 +85,7 @@ ${BOLD}OPTIONS:${NC}
   --calls-per-hour <N>   Max Claude calls per hour (default: 80)
   --refactor-every <N>   Inject a refactor iteration every N iterations (default: 5, 0 to disable)
   --tmux                 Run in tmux 3-pane layout (status / output / plan)
+  --auto-merge           Squash-merge each PR into main after task completion
   -h, --help             Show this help
 
 ${BOLD}EXAMPLES:${NC}
@@ -166,6 +168,7 @@ while [[ $# -gt 0 ]]; do
     --calls-per-hour) CALLS_PER_HOUR="$2"; shift 2 ;;
     --refactor-every) REFACTOR_EVERY="$2"; shift 2 ;;
     --tmux)         USE_TMUX=true; shift ;;
+    --auto-merge)   AUTO_MERGE=true; shift ;;
     -h|--help)      usage; exit 0 ;;
     -*)             log_error "Unknown option: $1"; usage; exit 1 ;;
     *)              PROJECT_DIR="$1"; shift ;;
@@ -1244,6 +1247,12 @@ run_execution() {
         log_warn "Analysis: ${ANALYSIS_RESULT#warn:}"
         ;;
     esac
+
+    # Auto-merge: squash-merge the PR for this iteration's branch into main
+    if [[ "$AUTO_MERGE" == true ]] && (check_signal || check_all_complete); then
+      auto_merge_current_branch || true
+    fi
+
     echo ""
   done
 
@@ -1267,6 +1276,9 @@ generate_resume_script() {
   fi
   if [[ "${_RALPH_TMUX_SESSION:-}" != "" ]]; then
     extra_args="$extra_args --tmux"
+  fi
+  if [[ "$AUTO_MERGE" == true ]]; then
+    extra_args="$extra_args --auto-merge"
   fi
   cat > "$RESUME_SCRIPT" <<RESUME
 #!/usr/bin/env bash
