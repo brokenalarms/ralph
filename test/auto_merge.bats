@@ -77,13 +77,8 @@ teardown() {
   output=$(bash -c '
     set -- --auto-merge --no-worktree
     RALPH_SOURCED=true
-
-    # Override main/init_ralph_dir and setup functions to prevent execution
-    main() { :; }
-
-    # Source ralph.sh which will parse args via the while loop
-    # We need to extract just the flag parsing
     source "'"$RALPH_SH"'"
+    trap - EXIT
     echo "$AUTO_MERGE"
   ')
   [[ "$output" == "true" ]]
