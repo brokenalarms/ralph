@@ -954,6 +954,95 @@ check_repeated_errors() {
   return 1
 }
 
+# --- Error fingerprinting ---
+
+_error_hashes_dir() { echo "$RALPH_DIR/error_hashes"; }
+
+extract_errors() {
+  local text="$1"
+  grep -iE '^(Error|Failed|Exception|panic|FATAL|TypeError|SyntaxError|ReferenceError|RuntimeError|ImportError|ValueError):' <<< "$text" || true
+  grep -iE 'exited with (code|status) [1-9]' <<< "$text" || true
+  grep -iE 'non-zero exit code' <<< "$text" || true
+  grep -iE 'command failed|build failed|compilation failed|test failed' <<< "$text" || true
+}
+
+normalize_error() {
+  local line="$1"
+  line=$(sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}[^ ]*/TIMESTAMP/g' <<< "$line")
+  line=$(sed -E 's/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/UUID/g' <<< "$line")
+  line=$(sed -E 's/\bline [0-9]+/line N/g' <<< "$line")
+  line=$(sed -E 's/:[0-9]+:[0-9]+/:N:N/g' <<< "$line")
+  line=$(sed -E 's|/tmp/[^ ]*|/tmp/TMPPATH|g' <<< "$line")
+  line=$(sed -E 's|/var/folders/[^ ]*|/tmp/TMPPATH|g' <<< "$line")
+  line=$(echo "$line" | tr -s ' ')
+  echo "$line"
+}
+
+fingerprint_error() {
+  local normalized="$1"
+  echo -n "$normalized" | md5sum 2>/dev/null | cut -d' ' -f1 || echo -n "$normalized" | md5 2>/dev/null | tr -d ' '
+}
+
+record_error_hash() {
+  local task_key="$1" hash="$2"
+  [[ -z "$task_key" || -z "$hash" ]] && return 0
+
+  local dir
+  dir=$(_error_hashes_dir)
+  mkdir -p "$dir"
+
+  local hash_file="$dir/${task_key}.hashes"
+  echo "$hash" >> "$hash_file"
+}
+
+count_error_hash() {
+  local task_key="$1" hash="$2"
+  [[ -z "$task_key" || -z "$hash" ]] && { echo 0; return; }
+
+  local hash_file
+  hash_file="$(_error_hashes_dir)/${task_key}.hashes"
+  if [[ -f "$hash_file" ]]; then
+    grep -cF "$hash" "$hash_file" 2>/dev/null || echo 0
+  else
+    echo 0
+  fi
+}
+
+clear_error_hashes() {
+  local task_key="$1"
+  [[ -z "$task_key" ]] && return 0
+  rm -f "$(_error_hashes_dir)/${task_key}.hashes"
+}
+
+check_repeated_errors() {
+  local text="$1" task_key="$2"
+  [[ -z "$task_key" ]] && return 1
+
+  local errors
+  errors=$(extract_errors "$text")
+  [[ -z "$errors" ]] && return 1
+
+  local dominated=false
+  while IFS= read -r err_line; do
+    [[ -z "$err_line" ]] && continue
+    local normalized
+    normalized=$(normalize_error "$err_line")
+    local hash
+    hash=$(fingerprint_error "$normalized")
+    record_error_hash "$task_key" "$hash"
+    local count
+    count=$(count_error_hash "$task_key" "$hash")
+    if (( count >= 3 )); then
+      dominated=true
+    fi
+  done <<< "$errors"
+
+  if [[ "$dominated" == true ]]; then
+    return 0
+  fi
+  return 1
+}
+
 # --- Attempt history ---
 
 _attempts_dir() { echo "$RALPH_DIR/attempts"; }
