@@ -631,6 +631,7 @@ run_claude() {
   tail_pid=""
 
   clear_signal
+  rm -f "$RALPH_DIR/.stream-task"
 
   # Build the prompt that includes ralph loop context
   local raw="${3:-}"
