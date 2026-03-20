@@ -13,3 +13,4 @@ to be merged before continuing with dependent tasks.
 - Run only scoped, relevant tests as you develop. Save the full test suite run for your final pre-commit verification.
 
 {{TASK_INSTRUCTIONS}}
+{{ATTEMPT_HISTORY}}
