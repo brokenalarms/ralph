@@ -47,12 +47,12 @@ func TestBuildPrompt_VariablesSubstituted(t *testing.T) {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-	for _, want := range []string{v.WorkDir, v.RalphDir, v.PlanFile, v.SignalToken} {
+	for _, want := range []string{v.WorkDir, v.RalphDir, v.PlanFile} {
 		if !strings.Contains(result, want) {
 			t.Errorf("prompt missing %q", want)
 		}
 	}
-	for _, raw := range []string{"{{WORK_DIR}}", "{{RALPH_DIR}}", "{{PLAN_FILE}}", "{{SIGNAL_TOKEN}}"} {
+	for _, raw := range []string{"{{WORK_DIR}}", "{{RALPH_DIR}}", "{{PLAN_FILE}}"} {
 		if strings.Contains(result, raw) {
 			t.Errorf("prompt still contains unsubstituted %s", raw)
 		}
@@ -153,8 +153,8 @@ func TestBuildRefactorPrompt(t *testing.T) {
 	if !strings.Contains(result, "main.go") {
 		t.Error("refactor prompt missing recent files")
 	}
-	if !strings.Contains(result, v.SignalToken) {
-		t.Error("refactor prompt missing signal token")
+	if !strings.Contains(result, ".signal_complete") {
+		t.Error("refactor prompt missing signal protocol")
 	}
 	if strings.Contains(result, "{{RECENT_FILES}}") {
 		t.Error("refactor prompt still contains unsubstituted {{RECENT_FILES}}")
