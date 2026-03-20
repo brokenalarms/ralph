@@ -4,24 +4,26 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 
 const Version = "0.1.0"
 
 // Config holds all CLI configuration matching ralph.sh's flag interface.
 type Config struct {
-	ProjectDir    string
-	MaxIterations int
-	Prompt        string
-	PlanFile      string
-	PlanOnly      bool
-	SkipPlanning  bool
-	Quiet         bool
-	UseWorktree   bool
-	CallsPerHour  int
-	RefactorThreshold int
-	UseTmux       bool
-	AutoMerge     bool
+	ProjectDir          string
+	MaxIterations       int
+	Prompt              string
+	PlanFile            string
+	PlanOnly            bool
+	SkipPlanning        bool
+	Quiet               bool
+	UseWorktree         bool
+	CallsPerHour        int
+	RefactorEvery       int
+	UseTmux             bool
+	IdleTimeout         time.Duration
+	IdleTimeoutProgress time.Duration
 }
 
 // Defaults returns a Config with ralph.sh default values.
@@ -29,15 +31,13 @@ type Config struct {
 // RALPH_REFACTOR_EVERY env vars, falling back to shell defaults (50 and 0).
 func Defaults() Config {
 	return Config{
-		ProjectDir:    ".",
-		MaxIterations: envInt("RALPH_MAX_ITERATIONS", 50),
-		UseWorktree:   true,
-		CallsPerHour:  80,
-<<<<<<< HEAD
-		RefactorEvery: envInt("RALPH_REFACTOR_EVERY", 0),
-=======
-		RefactorThreshold: 20,
->>>>>>> 33a34a5 (Replace fixed refactor schedule with adaptive quality signals)
+		ProjectDir:          ".",
+		MaxIterations:       envInt("RALPH_MAX_ITERATIONS", 50),
+		UseWorktree:         true,
+		CallsPerHour:        80,
+		RefactorEvery:       envInt("RALPH_REFACTOR_EVERY", 0),
+		IdleTimeout:         envDuration("RALPH_IDLE_TIMEOUT", 10*time.Minute),
+		IdleTimeoutProgress: envDuration("RALPH_IDLE_TIMEOUT_PROGRESS", 30*time.Second),
 	}
 }
 
@@ -53,6 +53,24 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// envDuration reads a duration from an environment variable, returning
+// fallback if unset or unparseable. Accepts Go duration strings (e.g. "5m",
+// "30s") or bare integers interpreted as seconds.
+func envDuration(key string, fallback time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		if n, err2 := strconv.Atoi(v); err2 == nil {
+			return time.Duration(n) * time.Second
+		}
+		return fallback
+	}
+	return d
 }
 
 // Subcommand represents a ralph subcommand (stop, feedback) parsed before flags.
@@ -167,7 +185,7 @@ func Parse(args []string) (Config, error) {
 			cfg.CallsPerHour = n
 			i += 2
 
-		case "--refactor-threshold":
+		case "--refactor-every":
 			v, err := requireArg(args, i)
 			if err != nil {
 				return cfg, err
@@ -176,16 +194,36 @@ func Parse(args []string) (Config, error) {
 			if err != nil {
 				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
 			}
-			cfg.RefactorThreshold = n
+			cfg.RefactorEvery = n
 			i += 2
 
 		case "--tmux":
 			cfg.UseTmux = true
 			i++
 
-		case "--auto-merge":
-			cfg.AutoMerge = true
-			i++
+		case "--idle-timeout":
+			v, err := requireArg(args, i)
+			if err != nil {
+				return cfg, err
+			}
+			d, err := parseDuration(v)
+			if err != nil {
+				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
+			}
+			cfg.IdleTimeout = d
+			i += 2
+
+		case "--idle-timeout-progress":
+			v, err := requireArg(args, i)
+			if err != nil {
+				return cfg, err
+			}
+			d, err := parseDuration(v)
+			if err != nil {
+				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
+			}
+			cfg.IdleTimeoutProgress = d
+			i += 2
 
 		case "-h", "--help":
 			return cfg, ErrHelp
@@ -211,4 +249,18 @@ func requireArg(args []string, i int) (string, error) {
 		return "", fmt.Errorf("option %s requires an argument", args[i])
 	}
 	return args[i+1], nil
+}
+
+// parseDuration parses a duration string. Accepts Go duration format (e.g.
+// "10m", "30s") or bare integers interpreted as seconds.
+func parseDuration(s string) (time.Duration, error) {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		n, err2 := strconv.Atoi(s)
+		if err2 != nil {
+			return 0, fmt.Errorf("must be a duration (e.g. 10m, 30s) or seconds: %s", s)
+		}
+		return time.Duration(n) * time.Second, nil
+	}
+	return d, nil
 }

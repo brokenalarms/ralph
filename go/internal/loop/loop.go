@@ -20,16 +20,18 @@ import (
 
 // Config holds all parameters needed by the execution loop.
 type Config struct {
-	ProjectDir    string
-	WorkDir       string
-	RalphDir      string
-	PromptsDir    string
-	PlanFile      string
-	MaxIterations int
-	RefactorEvery int
-	Quiet         bool
-	CallsPerHour  int
-	TaskBackend   tasks.Backend
+	ProjectDir          string
+	WorkDir             string
+	RalphDir            string
+	PromptsDir          string
+	PlanFile            string
+	MaxIterations       int
+	RefactorEvery       int
+	Quiet               bool
+	CallsPerHour        int
+	TaskBackend         tasks.Backend
+	IdleTimeout         time.Duration
+	IdleTimeoutProgress time.Duration
 }
 
 // Loop orchestrates the execution phase: task selection, prompt building,
@@ -185,19 +187,31 @@ func (l *Loop) Run(ctx context.Context) error {
 			break
 		}
 
+		workDir := l.git.WorkDir
 		taskStart := time.Now()
 		result, runErr := l.runner.Run(claude.RunConfig{
-			WorkDir:      l.git.WorkDir,
-			RalphDir:     l.cfg.RalphDir,
-			Prompt:       fullPrompt,
-			RawLog:       rawLogPath,
-			LogFile:      filepath.Join(l.cfg.RalphDir, "loop.log"),
-			Quiet:        l.cfg.Quiet,
-			Signals:      l.signals,
-			PollInterval: 2 * time.Second,
+			WorkDir:             workDir,
+			RalphDir:            l.cfg.RalphDir,
+			Prompt:              fullPrompt,
+			RawLog:              rawLogPath,
+			LogFile:             filepath.Join(l.cfg.RalphDir, "loop.log"),
+			Quiet:               l.cfg.Quiet,
+			Signals:             l.signals,
+			PollInterval:        2 * time.Second,
+			IdleTimeout:         l.cfg.IdleTimeout,
+			IdleTimeoutProgress: l.cfg.IdleTimeoutProgress,
+			HasProgress: func() bool {
+				return git.HasDiff(workDir) || git.HeadRev(workDir) != headBefore
+			},
 		})
 		if runErr != nil {
 			l.logger.Warn("Claude failed on iteration %d, continuing...", runIteration)
+		}
+		if result.IdleTimeout {
+			l.logger.Warn("Restarting iteration %d after idle timeout", runIteration)
+			runIteration--
+			iteration--
+			continue
 		}
 		elapsed := time.Since(taskStart)
 		l.limiter.Increment()
