@@ -1,0 +1,93 @@
+package logging
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"time"
+)
+
+// ANSI color codes matching ralph.sh.
+const (
+	Red    = "\033[0;31m"
+	Green  = "\033[0;32m"
+	Yellow = "\033[0;33m"
+	Blue   = "\033[0;34m"
+	Cyan   = "\033[0;36m"
+	Bold   = "\033[1m"
+	Reset  = "\033[0m"
+)
+
+// Logger provides colored, timestamped logging matching ralph.sh's output.
+type Logger struct {
+	out     io.Writer
+	logFile io.Writer
+	// TaskLabel returns the current task label (e.g. "beads" or "checklist").
+	TaskLabel func() string
+}
+
+// New creates a Logger that writes to stdout and the given log file writer.
+// If logFile is nil, file logging is disabled.
+func New(logFile io.Writer) *Logger {
+	if logFile == nil {
+		logFile = io.Discard
+	}
+	return &Logger{
+		out:       os.Stdout,
+		logFile:   logFile,
+		TaskLabel: func() string { return "ralph" },
+	}
+}
+
+func ts() string {
+	return time.Now().Format("15:04:05")
+}
+
+func (l *Logger) emit(color, prefix, msg string) {
+	line := fmt.Sprintf("%s %s[%s]%s %s\n", ts(), color, prefix, Reset, msg)
+	fmt.Fprint(l.out, line)
+	fmt.Fprint(l.logFile, line)
+}
+
+// Log writes an info-level message with cyan [ralph] prefix.
+func (l *Logger) Log(format string, args ...any) {
+	l.emit(Cyan, "ralph", fmt.Sprintf(format, args...))
+}
+
+// Success writes a success message with green [ralph] prefix.
+func (l *Logger) Success(format string, args ...any) {
+	l.emit(Green, "ralph", fmt.Sprintf(format, args...))
+}
+
+// Warn writes a warning with yellow [ralph] prefix.
+func (l *Logger) Warn(format string, args ...any) {
+	l.emit(Yellow, "ralph", fmt.Sprintf(format, args...))
+}
+
+// Error writes an error with red [ralph] prefix.
+func (l *Logger) Error(format string, args ...any) {
+	l.emit(Red, "ralph", fmt.Sprintf(format, args...))
+}
+
+// Phase writes a bold blue phase header.
+func (l *Logger) Phase(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	line := fmt.Sprintf("%s %s%s[ralph]%s %s%s%s\n", ts(), Bold, Blue, Reset, Bold, msg, Reset)
+	fmt.Fprint(l.out, line)
+	fmt.Fprint(l.logFile, line)
+}
+
+// Task writes an info message with the current task label prefix.
+func (l *Logger) Task(format string, args ...any) {
+	l.emit(Cyan, l.TaskLabel(), fmt.Sprintf(format, args...))
+}
+
+// TaskSuccess writes a success message with the task label prefix.
+func (l *Logger) TaskSuccess(format string, args ...any) {
+	l.emit(Green, l.TaskLabel(), fmt.Sprintf(format, args...))
+}
+
+// TaskError writes an error message with the task label prefix.
+func (l *Logger) TaskError(format string, args ...any) {
+	l.emit(Red, l.TaskLabel(), fmt.Sprintf(format, args...))
+}
