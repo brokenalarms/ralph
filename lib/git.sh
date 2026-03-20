@@ -121,8 +121,26 @@ rename_worktree_for_theme() {
     WORK_DIR="$new_dir"
     write_state "worktree_dir" "$WORK_DIR"
     log "Worktree renamed: $new_dir"
+
+    rename_tmux_session_for_worktree "$new_dir"
   else
     log_warn "Could not rename worktree (continuing with current name)"
+  fi
+}
+
+rename_tmux_session_for_worktree() {
+  local worktree_dir="$1"
+  local session="${_RALPH_TMUX_SESSION:-}"
+  if [[ -z "$session" ]]; then
+    return
+  fi
+
+  local new_name
+  new_name=$(basename "$worktree_dir")
+
+  if tmux rename-session -t "$session" "$new_name" 2>/dev/null; then
+    export _RALPH_TMUX_SESSION="$new_name"
+    log "Tmux session renamed: $new_name"
   fi
 }
 

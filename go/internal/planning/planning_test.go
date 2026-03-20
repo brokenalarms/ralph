@@ -311,6 +311,52 @@ func TestRenameWorktreeThemeFallbackFromPlanFile(t *testing.T) {
 	}
 }
 
+// Tmux session is renamed alongside the worktree when a theme exists.
+func TestTmuxSessionRenamedWithTheme(t *testing.T) {
+	d, _ := testDeps(t)
+	d.SkipPlanning = true
+
+	d.StateStore.Set("theme", "auth rewrite")
+
+	d.RenameWorktree = func(string) error { return nil }
+
+	var tmuxName string
+	d.RenameTmuxSession = func(name string) error {
+		tmuxName = name
+		return nil
+	}
+
+	if err := Run(d); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	if tmuxName != "auth rewrite" {
+		t.Errorf("tmux session name = %q, want %q", tmuxName, "auth rewrite")
+	}
+}
+
+// Tmux session rename is skipped when no theme exists.
+func TestTmuxSessionNotRenamedWithoutTheme(t *testing.T) {
+	d, _ := testDeps(t)
+	d.SkipPlanning = true
+
+	d.RenameWorktree = func(string) error { return nil }
+
+	tmuxCalled := false
+	d.RenameTmuxSession = func(string) error {
+		tmuxCalled = true
+		return nil
+	}
+
+	if err := Run(d); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	if tmuxCalled {
+		t.Error("tmux session rename should not be called when no theme exists")
+	}
+}
+
 // When no theme and no plan file heading exist, worktree rename is not called.
 func TestNoThemeNoRename(t *testing.T) {
 	d, _ := testDeps(t)
