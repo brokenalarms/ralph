@@ -119,7 +119,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		return 1
 	}
 
-	log.Phase("Ralph Loop v%s", config.Version)
+	log.Phase("Ralph Loop v%s (go)", config.Version)
 	log.Log("Project: %s", cfg.ProjectDir)
 	if gm.WorkDir != cfg.ProjectDir {
 		log.Log("Worktree: %s", gm.WorkDir)
@@ -214,7 +214,7 @@ func initRalphDir(cfg config.Config, ralphDir, logFile, stateFile string, log *l
 		status, _ := st.Read("status")
 		if status == "completed" {
 			log.Task("All tasks completed from previous run.")
-			fmt.Printf("%s[ralph]%s Run fresh? (y/n) ", logging.Yellow, logging.Reset)
+			fmt.Printf("%s[ralph v%s (go)]%s Run fresh? (y/n) ", logging.Yellow, config.Version, logging.Reset)
 			var answer string
 			fmt.Scanln(&answer)
 			if answer == "y" || answer == "Y" {
