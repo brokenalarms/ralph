@@ -1,0 +1,515 @@
+package server
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+var timeNow = time.Now
+
+type Server struct {
+	Host       string
+	Port       int
+	ScriptPath string
+
+	mu         sync.Mutex
+	process    *Process
+	projectDir string
+	planFile   string
+	httpServer *http.Server
+}
+
+type Process struct {
+	Cmd *exec.Cmd
+	PID int
+}
+
+func New(host string, port int, scriptPath string) *Server {
+	return &Server{
+		Host:       host,
+		Port:       port,
+		ScriptPath: scriptPath,
+	}
+}
+
+func (s *Server) ListenAndServe() error {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /", s.handleIndex)
+	mux.HandleFunc("POST /start", s.handleStart)
+	mux.HandleFunc("GET /status", s.handleStatus)
+	mux.HandleFunc("POST /stop", s.handleStop)
+	mux.HandleFunc("POST /feedback", s.handleFeedback)
+	mux.HandleFunc("POST /kill", s.handleKill)
+	mux.HandleFunc("GET /log", s.handleLog)
+	mux.HandleFunc("GET /plan", s.handlePlan)
+	mux.HandleFunc("DELETE /reset", s.handleReset)
+	mux.HandleFunc("OPTIONS /", s.handleCORS)
+
+	addr := fmt.Sprintf("%s:%d", s.Host, s.Port)
+	s.httpServer = &http.Server{
+		Addr:    addr,
+		Handler: corsMiddleware(mux),
+	}
+
+	log.Printf("[ralph-server] Listening on http://%s", addr)
+	log.Printf("[ralph-server] Ralph script: %s", s.ScriptPath)
+	return s.httpServer.ListenAndServe()
+}
+
+func (s *Server) Shutdown() {
+	s.mu.Lock()
+	proc := s.process
+	s.mu.Unlock()
+
+	if proc != nil && proc.Cmd.Process != nil {
+		proc.Cmd.Process.Signal(os.Interrupt)
+	}
+	if s.httpServer != nil {
+		s.httpServer.Close()
+	}
+}
+
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":    "ralph-server",
+		"version": "0.1.0",
+		"routes": []string{
+			"POST /start   - Start a ralph loop",
+			"GET  /status   - Get loop status",
+			"POST /stop     - Request graceful stop",
+			"POST /feedback - Queue feedback for next iteration",
+			"POST /kill     - Kill the running process",
+			"GET  /log      - Tail the loop log",
+			"GET  /plan     - View the plan file",
+			"DELETE /reset  - Clean .ralph state",
+		},
+	})
+}
+
+type startRequest struct {
+	Dir          string `json:"dir"`
+	Max          int    `json:"max"`
+	Prompt       string `json:"prompt"`
+	Resume       bool   `json:"resume"`
+	PlanFile     string `json:"plan_file"`
+	CallsPerHour int    `json:"calls_per_hour"`
+	Tmux         bool   `json:"tmux"`
+}
+
+func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.process != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":   "Loop already running",
+			"project": s.projectDir,
+		})
+		return
+	}
+
+	var body startRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		body = startRequest{}
+	}
+
+	projectDir := body.Dir
+	if projectDir == "" {
+		projectDir, _ = os.Getwd()
+	}
+	maxIterations := body.Max
+	if maxIterations == 0 {
+		maxIterations = 50
+	}
+
+	if _, err := os.Stat(projectDir); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": fmt.Sprintf("Directory not found: %s", projectDir),
+		})
+		return
+	}
+
+	args := []string{s.ScriptPath, "--dir", projectDir, "--max", strconv.Itoa(maxIterations)}
+	if body.Prompt != "" {
+		args = append(args, "--prompt", body.Prompt)
+	}
+	if body.PlanFile != "" {
+		args = append(args, "--plan-file", body.PlanFile)
+	}
+	if body.Resume {
+		args = append(args, "--resume")
+	}
+	if body.CallsPerHour > 0 {
+		args = append(args, "--calls-per-hour", strconv.Itoa(body.CallsPerHour))
+	}
+	if body.Tmux {
+		args = append(args, "--tmux")
+	}
+
+	cmd := exec.Command("bash", args...)
+	cmd.Dir = projectDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": fmt.Sprintf("Failed to start: %s", err),
+		})
+		return
+	}
+
+	s.projectDir = projectDir
+	s.planFile = body.PlanFile
+	s.process = &Process{Cmd: cmd, PID: cmd.Process.Pid}
+
+	go func() {
+		err := cmd.Wait()
+		code := 0
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				code = exitErr.ExitCode()
+			}
+		}
+		log.Printf("[ralph-server] Loop exited with code %d", code)
+		s.mu.Lock()
+		s.process = nil
+		s.planFile = ""
+		s.mu.Unlock()
+	}()
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":         "started",
+		"pid":            cmd.Process.Pid,
+		"project":        projectDir,
+		"max_iterations": maxIterations,
+	})
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	proc := s.process
+	projectDir := s.projectDir
+	planFile := s.planFile
+	s.mu.Unlock()
+
+	dir := projectDir
+	if dir == "" {
+		dir = r.Header.Get("X-Project-Dir")
+	}
+	if dir == "" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"running": false,
+			"message": "No active loop",
+		})
+		return
+	}
+
+	rd := ralphDir(dir)
+	state := readJSONFile(filepath.Join(rd, "state.json"))
+	logTail := tailFile(filepath.Join(rd, "loop.log"), 30)
+	planPath := resolvePlanPath(dir, rd, planFile)
+	planContent := readTextFile(planPath)
+
+	var planPreview *string
+	if planContent != nil {
+		s := *planContent
+		if len(s) > 2000 {
+			s = s[:2000]
+		}
+		planPreview = &s
+	}
+
+	var pid *int
+	running := proc != nil
+	if proc != nil {
+		pid = &proc.PID
+	}
+
+	_, stopErr := os.Stat(filepath.Join(rd, "stop"))
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"running":          running,
+		"pid":              pid,
+		"project":          dir,
+		"plan_file":        planFile,
+		"state":            state,
+		"log_tail":         logTail,
+		"plan_preview":     planPreview,
+		"stop_file_exists": stopErr == nil,
+	})
+}
+
+func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	projectDir := s.projectDir
+	s.mu.Unlock()
+
+	if projectDir == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "No active loop"})
+		return
+	}
+
+	rd := ralphDir(projectDir)
+	os.MkdirAll(rd, 0o755)
+	content := fmt.Sprintf("stopped at %s\n", timeNow().UTC().Format("2006-01-02T15:04:05Z"))
+	if err := os.WriteFile(filepath.Join(rd, "stop"), []byte(content), 0o644); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "stop_requested",
+		"message": "Stop file created. Loop will halt after current iteration.",
+	})
+}
+
+type feedbackRequest struct {
+	Message string `json:"message"`
+}
+
+func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	projectDir := s.projectDir
+	s.mu.Unlock()
+
+	if projectDir == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "No active loop"})
+		return
+	}
+
+	var body feedbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Message == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Missing 'message' field"})
+		return
+	}
+
+	rd := ralphDir(projectDir)
+	os.MkdirAll(rd, 0o755)
+
+	f, err := os.OpenFile(filepath.Join(rd, "feedback"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(body.Message + "\n"); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "feedback_queued",
+		"message": "Feedback will be injected into the next iteration.",
+	})
+}
+
+func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	proc := s.process
+	s.mu.Unlock()
+
+	if proc == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "No active process"})
+		return
+	}
+
+	proc.Cmd.Process.Signal(syscall.SIGTERM)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "killed",
+		"pid":    proc.PID,
+	})
+}
+
+func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	projectDir := s.projectDir
+	s.mu.Unlock()
+
+	dir := projectDir
+	if dir == "" {
+		dir = r.Header.Get("X-Project-Dir")
+	}
+	if dir == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "No project directory"})
+		return
+	}
+
+	logPath := filepath.Join(ralphDir(dir), "loop.log")
+	lines := 100
+	if q := r.URL.Query().Get("lines"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil {
+			lines = n
+		}
+	}
+
+	content := tailFile(logPath, lines)
+	if content == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "No log file found"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Write([]byte(*content))
+}
+
+func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	projectDir := s.projectDir
+	planFile := s.planFile
+	s.mu.Unlock()
+
+	dir := projectDir
+	if dir == "" {
+		dir = r.Header.Get("X-Project-Dir")
+	}
+	if dir == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "No project directory"})
+		return
+	}
+
+	planPath := resolvePlanPath(dir, ralphDir(dir), planFile)
+	content := readTextFile(planPath)
+	if content == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "No plan file found"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/markdown")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Write([]byte(*content))
+}
+
+func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	proc := s.process
+	projectDir := s.projectDir
+	s.mu.Unlock()
+
+	if proc != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "Cannot reset while loop is running. Stop or kill first.",
+		})
+		return
+	}
+
+	dir := projectDir
+	if dir == "" {
+		dir = r.Header.Get("X-Project-Dir")
+	}
+	if dir == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No project directory specified"})
+		return
+	}
+
+	rd := ralphDir(dir)
+	if _, err := os.Stat(rd); err == nil {
+		if err := os.RemoveAll(rd); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	s.mu.Lock()
+	s.projectDir = ""
+	s.planFile = ""
+	s.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "reset",
+		"message": ".ralph directory removed",
+	})
+}
+
+func (s *Server) handleCORS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Project-Dir")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Project-Dir")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func writeJSON(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(status)
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	enc.Encode(data)
+}
+
+func ralphDir(projectDir string) string {
+	return filepath.Join(projectDir, ".ralph")
+}
+
+func resolvePlanPath(projectDir, rd, planFile string) string {
+	if planFile == "" {
+		return filepath.Join(rd, "plan.md")
+	}
+	if filepath.IsAbs(planFile) {
+		return planFile
+	}
+	return filepath.Join(projectDir, planFile)
+}
+
+func readJSONFile(path string) any {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var result any
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil
+	}
+	return result
+}
+
+func readTextFile(path string) *string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	s := string(data)
+	return &s
+}
+
+func tailFile(path string, lines int) *string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	content := string(data)
+	allLines := strings.Split(content, "\n")
+	if len(allLines) > lines {
+		allLines = allLines[len(allLines)-lines:]
+	}
+	result := strings.Join(allLines, "\n")
+	return &result
+}
