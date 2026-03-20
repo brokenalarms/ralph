@@ -36,6 +36,10 @@ type Deps struct {
 	// RenameWorktree renames the worktree directory based on theme.
 	// If nil, renaming is skipped (useful in tests).
 	RenameWorktree func(theme string) error
+
+	// RenameTmuxSession renames the active tmux session to match the worktree.
+	// If nil, tmux renaming is skipped.
+	RenameTmuxSession func(name string) error
 }
 
 // Run executes the planning phase. It mirrors ralph.sh's run_planning():
@@ -276,6 +280,11 @@ func renameWorktreeFromTheme(d Deps) {
 	if theme != "" {
 		if err := d.RenameWorktree(theme); err != nil {
 			d.Logger.Warn("Failed to rename worktree: %v", err)
+		}
+		if d.RenameTmuxSession != nil {
+			if err := d.RenameTmuxSession(theme); err != nil {
+				d.Logger.Warn("Failed to rename tmux session: %v", err)
+			}
 		}
 	}
 }
