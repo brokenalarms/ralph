@@ -381,7 +381,8 @@ init_ralph_dir() {
   "started_at": null,
   "last_task": null,
   "worktree_dir": null,
-  "worktree_branch": null
+  "worktree_branch": null,
+  "task_seq": 0
 }
 STATE
   fi
