@@ -1054,10 +1054,11 @@ run_execution() {
 
   init_call_tracking
 
-  # Reset response analyzer counters
+  # Reset counters on resume
   _stagnant_count=0
   _test_only_count=0
   _stuck_count=0
+  write_state "iterations_since_refactor" "0"
 
   local run_iteration=0
   local iteration
