@@ -410,7 +410,7 @@ PLAN_SCRIPT
 
   # Create tmux session with panes running commands directly (no send-keys)
   tmux new-session -d -s "$TMUX_SESSION" -c "$PROJECT_DIR" \
-    "export _RALPH_TMUX_SESSION=$TMUX_SESSION; $cmd; tmux kill-session -t '$TMUX_SESSION' 2>/dev/null"
+    "export _RALPH_TMUX_SESSION=$TMUX_SESSION; $cmd; exec bash"
   tmux split-window -h -t "$TMUX_SESSION" \
     "bash '$RALPH_DIR/.stream-filter.sh' '$RAW_LOG'"
   tmux split-window -v -t "$TMUX_SESSION:.1" \
@@ -1283,9 +1283,8 @@ print_summary() {
 
 # --- Cleanup on exit ---
 cleanup() {
-  # If this is the outer tmux process, just kill the session
+  # Outer tmux wrapper — session stays alive for reattach
   if [[ "$_TMUX_OUTER" == true ]]; then
-    [[ -n "$TMUX_SESSION" ]] && tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
     return
   fi
   # Kill any backgrounded processes and their children
