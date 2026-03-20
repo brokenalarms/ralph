@@ -166,6 +166,44 @@ rotate_branch() {
   fi
 }
 
+# auto_merge_current_branch: squash-merge the PR for the current branch into main.
+# Returns 0 on success (or no PR found), 1 on merge failure.
+auto_merge_current_branch() {
+  if [[ -z "$WORKTREE_BRANCH" || "$WORK_DIR" == "$PROJECT_DIR" ]]; then
+    return 0
+  fi
+
+  if ! command -v gh &>/dev/null; then
+    log_warn "gh CLI not found — cannot auto-merge"
+    return 1
+  fi
+
+  # Find the PR for this branch
+  local pr_number
+  pr_number=$(gh pr list --head "$WORKTREE_BRANCH" --state open --json number --jq '.[0].number' -R "$(git -C "$WORK_DIR" remote get-url origin 2>/dev/null)" 2>/dev/null) || true
+
+  if [[ -z "$pr_number" ]]; then
+    log "No open PR found for $WORKTREE_BRANCH — skipping auto-merge"
+    return 0
+  fi
+
+  log "Auto-merging PR #${pr_number} (branch: $WORKTREE_BRANCH)..."
+  local repo_url
+  repo_url=$(git -C "$WORK_DIR" remote get-url origin 2>/dev/null)
+
+  if gh pr merge "$pr_number" --squash --delete-branch -R "$repo_url" 2>/dev/null; then
+    log_success "PR #${pr_number} squash-merged into main"
+
+    # Clean up the local branch ref since it was merged and deleted on remote
+    git -C "$PROJECT_DIR" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+
+    return 0
+  else
+    log_warn "Auto-merge failed for PR #${pr_number}"
+    return 1
+  fi
+}
+
 rebase_onto_default_branch() {
   local default_branch
   default_branch=$(git -C "$PROJECT_DIR" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||') || true

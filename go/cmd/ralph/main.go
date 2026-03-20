@@ -111,6 +111,7 @@ func printUsage() {
   --calls-per-hour <N>   Max Claude calls per hour (default: 80)
   --refactor-every <N>   Inject a refactor iteration every N iterations (default: 0/disabled, env RALPH_REFACTOR_EVERY)
   --tmux                 Run in tmux 3-pane layout (status / output / plan)
+  --auto-merge           Squash-merge each PR into main after task completion
   -h, --help             Show this help
 
 %sEXAMPLES:%s

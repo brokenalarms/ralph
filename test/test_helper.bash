@@ -28,7 +28,8 @@ setup_test_repo() {
   STATE_FILE="$RALPH_DIR/state.json"
   STOP_FILE="$RALPH_DIR/stop"
   LOG_FILE="$RALPH_DIR/loop.log"
-  touch "$LOG_FILE"
+  RAW_LOG="$RALPH_DIR/raw.log"
+  touch "$LOG_FILE" "$RAW_LOG"
 
   WORK_DIR="$PROJECT_DIR"
   WORKTREE_BRANCH=""
@@ -47,6 +48,7 @@ setup_test_repo() {
   CALLS_PER_HOUR=80
   REFACTOR_EVERY=0
   QUIET=false
+  AUTO_MERGE=false
 
   PROMPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/prompts"
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

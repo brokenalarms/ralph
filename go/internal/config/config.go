@@ -21,6 +21,7 @@ type Config struct {
 	CallsPerHour  int
 	RefactorEvery int
 	UseTmux       bool
+	AutoMerge     bool
 }
 
 // Defaults returns a Config with ralph.sh default values.
@@ -176,6 +177,10 @@ func Parse(args []string) (Config, error) {
 
 		case "--tmux":
 			cfg.UseTmux = true
+			i++
+
+		case "--auto-merge":
+			cfg.AutoMerge = true
 			i++
 
 		case "-h", "--help":

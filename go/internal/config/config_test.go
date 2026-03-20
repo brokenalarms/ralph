@@ -91,6 +91,7 @@ func TestAllFlags(t *testing.T) {
 		"--calls-per-hour", "40",
 		"--refactor-every", "3",
 		"--tmux",
+		"--auto-merge",
 	}
 	cfg, err := Parse(args)
 	if err != nil {
@@ -129,6 +130,9 @@ func TestAllFlags(t *testing.T) {
 	}
 	if !cfg.UseTmux {
 		t.Error("UseTmux should be true")
+	}
+	if !cfg.AutoMerge {
+		t.Error("AutoMerge should be true")
 	}
 }
 
