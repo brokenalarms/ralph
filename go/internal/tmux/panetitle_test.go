@@ -59,7 +59,6 @@ func TestTask_ReturnsCurrentLabel(t *testing.T) {
 // Verifies that ResetTimer affects the elapsed time shown in Title().
 func TestResetTimer_ResetsElapsed(t *testing.T) {
 	p := NewPaneTitle("test-session")
-	// Backdate the start time so elapsed > 0
 	p.mu.Lock()
 	p.started = time.Now().Add(-2 * time.Minute)
 	p.mu.Unlock()
