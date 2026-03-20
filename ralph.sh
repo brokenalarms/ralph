@@ -371,21 +371,18 @@ while true; do
       # Show current task + description, then blocked list
       current_json=\$(bd list --status in_progress --flat --json --limit 1 2>/dev/null)
       current_title=\$(echo "\$current_json" | jq -r '.[0].title // empty' 2>/dev/null)
-      current_desc=\$(echo "\$current_json" | jq -r '.[0].description // empty' 2>/dev/null)
       current_id=\$(echo "\$current_json" | jq -r '.[0].id // empty' 2>/dev/null)
       if [[ -n "\$current_title" ]]; then
         printf "\${BOLD}\${CYAN}▶ %s\${NC} (%s)\n" "\$current_title" "\$current_id"
-        if [[ -n "\$current_desc" ]]; then
-          printf "\${YELLOW}%s\${NC}\n" "\$current_desc" | fold -s -w 72
-        fi
         printf "\n"
       fi
-      # Show ready queue, or what the current task unblocks
-      ready_list=\$(bd ready --limit 10 2>/dev/null || true)
+      # Show ready queue and what the current task unblocks
+      ready_list=\$(bd ready --limit 8 2>/dev/null || true)
       if [[ -n "\$ready_list" && "\$ready_list" != *"No ready work"* ]]; then
         printf "\${BOLD}Ready:\${NC}\n%s\n\n" "\$ready_list"
-      elif [[ -n "\$current_id" ]]; then
-        unblocks=\$(bd show "\$current_id" --json 2>/dev/null | jq -r '.[0].dependents[]? | "  ○ \(.id): \(.title)"' 2>/dev/null || true)
+      fi
+      if [[ -n "\$current_id" ]]; then
+        unblocks=\$(bd show "\$current_id" --json 2>/dev/null | jq -r '.[0].dependents[]? | "  → \(.id): \(.title)"' 2>/dev/null || true)
         if [[ -n "\$unblocks" ]]; then
           printf "\${BOLD}Unblocks:\${NC}\n%s\n\n" "\$unblocks"
         fi
@@ -432,7 +429,12 @@ PLAN_SCRIPT
   ( while tmux has-session -t "$TMUX_SESSION" 2>/dev/null; do
       _st=$(cat "$RALPH_DIR/.stream-start" 2>/dev/null || echo 0)
       _el=$(( $(date +%s) - _st ))
-      tmux select-pane -t "$TMUX_SESSION:.1" -T "stream $(printf '%dm%02ds' $((_el/60)) $((_el%60)))" 2>/dev/null
+      _task=$(cat "$RALPH_DIR/.stream-task" 2>/dev/null || true)
+      if [[ -n "$_task" ]]; then
+        tmux select-pane -t "$TMUX_SESSION:.1" -T "$_task $(printf '%dm%02ds' $((_el/60)) $((_el%60)))" 2>/dev/null
+      else
+        tmux select-pane -t "$TMUX_SESSION:.1" -T "stream $(printf '%dm%02ds' $((_el/60)) $((_el%60)))" 2>/dev/null
+      fi
       sleep 1
     done ) &
 
@@ -1129,6 +1131,13 @@ run_execution() {
     # Build task prompt
     local task_id
     task_id=$(get_next_task_id)
+
+    # Update stream pane title with task context
+    if [[ -n "$task_id" ]]; then
+      printf '%s: %s' "$task_id" "$next_task" > "$RALPH_DIR/.stream-task"
+    else
+      printf '%s' "$next_task" > "$RALPH_DIR/.stream-task"
+    fi
     local task_prompt="Complete this task: $next_task"
     if [[ -n "$task_id" ]]; then
       task_prompt="Complete this task (bd id: $task_id): $next_task"
