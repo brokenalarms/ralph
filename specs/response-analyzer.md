@@ -33,10 +33,11 @@ Track consecutive test-only iterations. Threshold: 3 consecutive → halt.
 
 ### Stuck loops
 Claude's text output contains indicators of being stuck:
-- Repeated identical tool calls (same command/file 3+ times)
-- Text containing "I'm blocked", "I cannot proceed", "unable to"
+- Text containing "I'm blocked", "I cannot proceed", "unable to complete"
 
 Threshold: detected in a single iteration → warn. Detected in 2 consecutive → halt.
+
+Note: Repeated tool+target pair counting was removed — it produced false positives during normal development (reading the same file multiple times is expected). The stagnation detector (no git changes across iterations) reliably catches the real stuck case.
 
 ## Implementation
 

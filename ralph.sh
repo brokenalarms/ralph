@@ -985,25 +985,6 @@ analyze_iteration() {
     if grep -qiE "I'm blocked|I cannot proceed|unable to complete" <<< "$assistant_text"; then
       stuck_detected=true
     fi
-
-    if [[ "$stuck_detected" == false ]]; then
-      local max_repeats=0
-      if command -v jq &>/dev/null; then
-        max_repeats=$(jq -r '
-            select(.type == "assistant") |
-            .message.content[]? |
-            select(.type == "tool_use") |
-            (.name + ":" + (.input.command // .input.file_path // .input.pattern // ""))
-          ' <<< "$iter_log" 2>/dev/null | sort | uniq -c | sort -rn | head -1 | awk '{print $1+0}') || true
-      else
-        max_repeats=$(grep -oE '"(command|file_path)"\s*:\s*"[^"]*"' <<< "$iter_log" | \
-          sort | uniq -c | sort -rn | head -1 | awk '{print $1+0}') || true
-      fi
-      max_repeats=${max_repeats:-0}
-      if (( max_repeats >= 5 )); then
-        stuck_detected=true
-      fi
-    fi
   fi
 
   if [[ "$stuck_detected" == true ]]; then
