@@ -376,10 +376,15 @@ while true; do
         printf "\${BOLD}\${CYAN}▶ %s\${NC} (%s)\n" "\$current_title" "\$current_id"
         printf "\n"
       fi
-      # Show ready queue and what the current task unblocks
+      # Show ready queue (excluding current in-progress task)
       ready_list=\$(bd ready --limit 8 2>/dev/null || true)
       if [[ -n "\$ready_list" && "\$ready_list" != *"No ready work"* ]]; then
-        printf "\${BOLD}Ready:\${NC}\n%s\n\n" "\$ready_list"
+        if [[ -n "\$current_id" ]]; then
+          ready_list=\$(echo "\$ready_list" | grep -v "\$current_id" || true)
+        fi
+        if [[ -n "\$ready_list" ]]; then
+          printf "\${BOLD}Ready:\${NC}\n%s\n\n" "\$ready_list"
+        fi
       fi
       if [[ -n "\$current_id" ]]; then
         unblocks=\$(bd show "\$current_id" --json 2>/dev/null | jq -r '.[0].dependents[]? | "  → \(.id): \(.title)"' 2>/dev/null || true)
@@ -681,6 +686,12 @@ run_claude() {
       local summary
       summary=$(read_signal_summary) || true
       log_task_success "Completed: ${summary:-task done}"
+      # Close the bead before killing Claude
+      local completed_id
+      completed_id=$(get_next_task_id) || true
+      if [[ -n "$completed_id" ]]; then
+        close_task "$completed_id" "${summary:-task done}"
+      fi
       kill "$claude_pid" 2>/dev/null || true
       sleep 2
       kill -0 "$claude_pid" 2>/dev/null && kill -9 "$claude_pid" 2>/dev/null || true
@@ -707,7 +718,16 @@ run_claude() {
 
   # Check if signal was written (claude may have exited after writing it)
   if check_signal || check_all_complete; then
-    [[ "$signal_detected" == false ]] && log_task_success "Task completed via signal"
+    if [[ "$signal_detected" == false ]]; then
+      log_task_success "Task completed via signal"
+      local completed_id
+      completed_id=$(get_next_task_id) || true
+      if [[ -n "$completed_id" ]]; then
+        local summary
+        summary=$(read_signal_summary) || true
+        close_task "$completed_id" "${summary:-task done}"
+      fi
+    fi
     return 0
   fi
 

@@ -100,6 +100,17 @@ bd_get_next_task_id() {
   echo "$id"
 }
 
+bd_close_task() {
+  local id="$1" reason="${2:-completed by ralph}"
+  [[ -z "$id" ]] && return 0
+  # Only close if still in_progress
+  local status
+  status=$(run_bd show "$id" --json 2>/dev/null | jq -r '.[0].status // empty') || true
+  if [[ "$status" == "in_progress" ]]; then
+    run_bd close "$id" --reason "$reason" 2>/dev/null || true
+  fi
+}
+
 bd_has_tasks() { (( $(bd_count_total) > 0 )); }
 bd_needs_planning()     { ! bd_has_tasks; }
 bd_planning_succeeded() { bd_has_tasks; }
@@ -139,11 +150,14 @@ checklist_has_tasks() {
 checklist_needs_planning()     { [[ ! -f "$PLAN_FILE" ]]; }
 checklist_planning_succeeded() { checklist_has_tasks; }
 
+checklist_close_task() { :; }
+
 checklist_execution_instructions() { cat "$PROMPTS_DIR/execution-checklist.md"; }
 
 # --- Generic dispatch ---
 
 init_task_backend()          { "${TASK_BACKEND}_init" "$@"; }
+close_task()                 { "${TASK_BACKEND}_close_task" "$@"; }
 has_remaining_tasks()        { "${TASK_BACKEND}_has_remaining" "$@"; }
 count_completed()            { "${TASK_BACKEND}_count_completed" "$@"; }
 count_remaining()            { "${TASK_BACKEND}_count_remaining" "$@"; }
@@ -171,7 +185,7 @@ INST
 
 _validate_backend() {
   local fns=(init has_remaining count_completed count_remaining count_total
-             get_next_task get_next_task_id has_tasks needs_planning
+             get_next_task get_next_task_id close_task has_tasks needs_planning
              planning_succeeded execution_instructions)
   for fn in "${fns[@]}"; do
     if ! declare -f "${TASK_BACKEND}_${fn}" &>/dev/null; then
