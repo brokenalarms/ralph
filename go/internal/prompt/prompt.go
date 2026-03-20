@@ -41,12 +41,16 @@ func BuildPrompt(v Vars) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	reflection, err := readTemplate(v.PromptsDir, "reflection.md")
+	if err != nil {
+		return "", err
+	}
 	signal, err := readTemplate(v.PromptsDir, "signal.md")
 	if err != nil {
 		return "", err
 	}
 
-	result := shared + "\n" + internal + "\n" + signal
+	result := shared + "\n" + internal + "\n" + reflection + "\n" + signal
 
 	if v.Feedback != "" {
 		feedbackTmpl, err := readTemplate(v.PromptsDir, "feedback.md")

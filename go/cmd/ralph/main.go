@@ -191,6 +191,9 @@ func initRalphDir(cfg config.Config, ralphDir, logFile, stateFile string, log *l
 	touchFile(logFile)
 	touchFile(filepath.Join(ralphDir, "raw.log"))
 
+	// Ensure reflections directory exists for post-task reflections.
+	os.MkdirAll(filepath.Join(ralphDir, "reflections"), 0o755)
+
 	// Check for uncommitted changes (skip on resume).
 	if !fileExists(stateFile) {
 		if isGitRepo(cfg.ProjectDir) && hasUncommittedChanges(cfg.ProjectDir) {
