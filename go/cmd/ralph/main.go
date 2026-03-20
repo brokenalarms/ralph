@@ -218,7 +218,7 @@ func initRalphDir(cfg config.Config, ralphDir, logFile, stateFile string, log *l
 			var answer string
 			fmt.Scanln(&answer)
 			if answer == "y" || answer == "Y" {
-				os.RemoveAll(ralphDir)
+				safeRemoveRalphDir(ralphDir)
 				os.MkdirAll(ralphDir, 0o755)
 				touchFile(logFile)
 				touchFile(filepath.Join(ralphDir, "raw.log"))
@@ -509,6 +509,16 @@ func printUsage() {
 
 // --- Helpers ---
 
+
+// safeRemoveRalphDir removes the .ralph state directory but refuses to
+// remove .beads or .dolt, which contain permanent task history.
+func safeRemoveRalphDir(dir string) error {
+	base := filepath.Base(dir)
+	if base == ".beads" || base == ".dolt" {
+		return fmt.Errorf("refusing to remove %s: protected directory", base)
+	}
+	return os.RemoveAll(dir)
+}
 
 func touchFile(path string) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)

@@ -15,6 +15,7 @@
 # Beads / bd
 - We use 'beads' (`bd`) for dependency management and and issue tracking, with markdown planning as a fallback if not available.
 - Never hardcode bd commands in prompts or scripts. All bd knowledge comes from `bd prime` — Claude learns the workflow at runtime. Prompts should refer to tasks generically (e.g. "add a new task", "close the task") and let `bd prime` teach the specifics.
+- **Hard invariant**: `.beads` is the project's permanent task history and must never be deleted, cleared, or force-reinitialized. Only `.ralph` state is ephemeral. Cleanup and reset operations must skip `.beads`.
 
 # Testing
 - Tests should be put in place to lock in new features and prevent regressions.

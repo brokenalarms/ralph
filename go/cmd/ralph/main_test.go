@@ -176,3 +176,36 @@ func TestInitRalphDir_DetectsResume(t *testing.T) {
 	}
 }
 
+// Verifies that safeRemoveRalphDir refuses to delete .beads or .dolt,
+// which contain permanent task history that must survive resets.
+func TestSafeRemoveRalphDir_ProtectsBeads(t *testing.T) {
+	tmp := t.TempDir()
+
+	beadsDir := filepath.Join(tmp, ".beads")
+	os.MkdirAll(beadsDir, 0o755)
+	os.WriteFile(filepath.Join(beadsDir, "data.db"), []byte("tasks"), 0o644)
+
+	if err := safeRemoveRalphDir(beadsDir); err == nil {
+		t.Fatal("expected error when trying to remove .beads")
+	}
+	if _, err := os.Stat(beadsDir); os.IsNotExist(err) {
+		t.Fatal(".beads should still exist after refused removal")
+	}
+
+	doltDir := filepath.Join(tmp, ".dolt")
+	os.MkdirAll(doltDir, 0o755)
+
+	if err := safeRemoveRalphDir(doltDir); err == nil {
+		t.Fatal("expected error when trying to remove .dolt")
+	}
+
+	ralphDir := filepath.Join(tmp, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	if err := safeRemoveRalphDir(ralphDir); err != nil {
+		t.Fatalf("removing .ralph should succeed: %v", err)
+	}
+	if _, err := os.Stat(ralphDir); !os.IsNotExist(err) {
+		t.Fatal(".ralph should be removed")
+	}
+}

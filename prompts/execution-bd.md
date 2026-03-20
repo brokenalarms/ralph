@@ -5,6 +5,9 @@
 ## Your task this iteration
 {{TASK_PROMPT}}
 
+## Invariants
+- The `.beads` directory is the project's permanent task history. Never delete, clear, or reinitialize it. Do not remove it with shell commands or force-reinitialize the task backend. Only `.ralph` state is ephemeral — `.beads` persists across all runs.
+
 ## Rules
 1. Focus ONLY on the single task described above.
 2. When complete, close the task in bd with a reason summarizing what you did.
