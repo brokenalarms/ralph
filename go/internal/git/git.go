@@ -498,27 +498,6 @@ func findWorktreeForBranch(dir, branch string) string {
 	return ""
 }
 
-// CountNamedBranchesForSeq returns the count to seed TaskSeq from tests.
-func CountNamedBranchesForSeq(dir, projectName string) int {
-	out := gitOutput(dir, "branch", "--list", "ralph/"+projectName+"/*")
-	if out == "" {
-		return 0
-	}
-	count := 0
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			count++
-		}
-	}
-	return count
-}
-
-// DefaultBranch returns the detected default branch for tests.
-func DefaultBranch(dir string) string {
-	return detectDefaultBranch(dir)
-}
-
 // ParseTaskSeqFromBranches scans ralph/<project>/* branches and returns the
 // highest sequence number found.
 func ParseTaskSeqFromBranches(dir, projectName string) int {
