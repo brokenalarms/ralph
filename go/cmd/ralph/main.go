@@ -49,7 +49,7 @@ func run(args []string) int {
 
 	scriptPath, _ := os.Executable()
 	ralphDir := filepath.Join(cfg.ProjectDir, ".ralph")
-	promptsDir := findPromptsDir(scriptPath)
+	promptsDir := filepath.Join(cfg.ProjectDir, "prompts")
 
 	// Tmux outer wrapper: set up tmux session, then re-exec ralph inside pane 0.
 	if cfg.UseTmux {
@@ -509,33 +509,6 @@ func printUsage() {
 
 // --- Helpers ---
 
-// findPromptsDir locates the prompts directory relative to the binary.
-func findPromptsDir(scriptPath string) string {
-	// Try relative to the binary (go/cmd/ralph/../../.. -> project root).
-	if scriptPath != "" {
-		dir := filepath.Dir(scriptPath)
-		// The binary might be in go/cmd/ralph/ during dev, or installed elsewhere.
-		candidates := []string{
-			filepath.Join(dir, "..", "..", "..", "prompts"),
-			filepath.Join(dir, "..", "..", "prompts"),
-			filepath.Join(dir, "..", "prompts"),
-			filepath.Join(dir, "prompts"),
-		}
-		for _, c := range candidates {
-			abs, _ := filepath.Abs(c)
-			if fi, err := os.Stat(abs); err == nil && fi.IsDir() {
-				return abs
-			}
-		}
-	}
-	// Fall back to cwd-relative.
-	if abs, err := filepath.Abs("prompts"); err == nil {
-		if fi, err := os.Stat(abs); err == nil && fi.IsDir() {
-			return abs
-		}
-	}
-	return "prompts"
-}
 
 func touchFile(path string) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)

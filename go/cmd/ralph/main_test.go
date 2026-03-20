@@ -176,10 +176,3 @@ func TestInitRalphDir_DetectsResume(t *testing.T) {
 	}
 }
 
-// Verifies findPromptsDir locates the prompts directory relative to the binary.
-func TestFindPromptsDir_FallsBack(t *testing.T) {
-	dir := findPromptsDir("/nonexistent/path/ralph")
-	if dir == "" {
-		t.Error("findPromptsDir should return a non-empty path")
-	}
-}
