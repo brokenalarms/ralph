@@ -88,3 +88,26 @@ teardown() {
   run check_all_complete
   [[ "$status" -eq 0 ]]
 }
+
+# Proves: the _interrupted flag causes status to be written as "interrupted",
+# so resume scripts can detect unclean Ctrl-C shutdown.
+@test "interrupted flag triggers interrupted status on cleanup" {
+  set +eu
+  _interrupted=true
+  _TMUX_OUTER=false
+  RESUME_SCRIPT="$RALPH_DIR/resume.sh"
+  TASK_BACKEND="checklist"
+  MAX_ITERATIONS=5
+  USE_WORKTREE=true
+  CALLS_PER_HOUR=80
+  echo "- [ ] dummy task" > "$PLAN_FILE"
+
+  write_state "status" "running"
+  write_state "iteration" "1"
+
+  cleanup 2>/dev/null || true
+
+  local status_val
+  status_val=$(read_state "status")
+  [[ "$status_val" == "interrupted" ]]
+}
