@@ -1160,7 +1160,7 @@ run_execution() {
     remaining=$(count_remaining)
     total=$(count_total)
 
-    log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS ($iteration total) [${completed}/${total} done] ---"
+    log_phase "--- Run iteration $run_iteration/$MAX_ITERATIONS | $iteration lifetime [${completed}/${total} done] ---"
     log_task "Next task: $next_task"
     touch "$RALPH_DIR/.plan-refresh"
 
@@ -1228,7 +1228,7 @@ run_execution() {
     # Recount after claude ran
     completed=$(count_completed)
     local mins=$(( task_elapsed / 60 )) secs=$(( task_elapsed % 60 ))
-    log_task "Iteration $run_iteration complete (${mins}m${secs}s). ${completed}/${total} tasks done."
+    log_task "Run iteration $run_iteration complete (${mins}m${secs}s). ${completed}/${total} tasks done."
 
     # Analyze iteration for problems
     analyze_iteration "$RAW_LOG" "$log_start_line" "$head_before"
@@ -1299,7 +1299,7 @@ print_summary() {
   echo ""
   log_phase "=== SUMMARY ==="
   log "Status:     $status"
-  log "Iterations: $iteration total"
+  log "Iterations: $iteration lifetime"
 
   local completed remaining total
   completed=$(count_completed)
