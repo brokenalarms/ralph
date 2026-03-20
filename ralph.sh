@@ -960,22 +960,23 @@ _error_hashes_dir() { echo "$RALPH_DIR/error_hashes"; }
 
 extract_errors() {
   local text="$1"
-  grep -iE '^(Error|Failed|Exception|panic|FATAL|TypeError|SyntaxError|ReferenceError|RuntimeError|ImportError|ValueError):' <<< "$text" || true
-  grep -iE 'exited with (code|status) [1-9]' <<< "$text" || true
-  grep -iE 'non-zero exit code' <<< "$text" || true
-  grep -iE 'command failed|build failed|compilation failed|test failed' <<< "$text" || true
+  grep -iE \
+    -e '^(Error|Failed|Exception|panic|FATAL|TypeError|SyntaxError|ReferenceError|RuntimeError|ImportError|ValueError):' \
+    -e 'exited with (code|status) [1-9]' \
+    -e 'non-zero exit code' \
+    -e 'command failed|build failed|compilation failed|test failed' \
+    <<< "$text" || true
 }
 
 normalize_error() {
-  local line="$1"
-  line=$(sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}[^ ]*/TIMESTAMP/g' <<< "$line")
-  line=$(sed -E 's/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/UUID/g' <<< "$line")
-  line=$(sed -E 's/\bline [0-9]+/line N/g' <<< "$line")
-  line=$(sed -E 's/:[0-9]+:[0-9]+/:N:N/g' <<< "$line")
-  line=$(sed -E 's|/tmp/[^ ]*|/tmp/TMPPATH|g' <<< "$line")
-  line=$(sed -E 's|/var/folders/[^ ]*|/tmp/TMPPATH|g' <<< "$line")
-  line=$(echo "$line" | tr -s ' ')
-  echo "$line"
+  echo "$1" | sed -E \
+    -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}[^ ]*/TIMESTAMP/g' \
+    -e 's/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/UUID/g' \
+    -e 's/\bline [0-9]+/line N/g' \
+    -e 's/:[0-9]+:[0-9]+/:N:N/g' \
+    -e 's|/tmp/[^ ]*|/tmp/TMPPATH|g' \
+    -e 's|/var/folders/[^ ]*|/tmp/TMPPATH|g' | \
+    tr -s ' '
 }
 
 fingerprint_error() {
