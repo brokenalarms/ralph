@@ -181,6 +181,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		PlanFile:            planFile,
 		MaxIterations:       cfg.MaxIterations,
 		Quiet:               cfg.Quiet,
+		AutoMerge:           cfg.AutoMerge,
 		CallsPerHour:        cfg.CallsPerHour,
 		TaskBackend:         backend,
 		IdleTimeout:         cfg.IdleTimeout,
@@ -315,6 +316,9 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 	}
 	if cfg.CallsPerHour != 80 {
 		extraArgs = append(extraArgs, fmt.Sprintf("--calls-per-hour %d", cfg.CallsPerHour))
+	}
+	if cfg.AutoMerge {
+		extraArgs = append(extraArgs, "--auto-merge")
 	}
 	if cfg.UseTmux || os.Getenv("_RALPH_TMUX_SESSION") != "" {
 		extraArgs = append(extraArgs, "--tmux")
