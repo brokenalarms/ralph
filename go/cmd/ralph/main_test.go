@@ -59,6 +59,7 @@ func TestGenerateResumeScript(t *testing.T) {
 		MaxIterations: 20,
 		Quiet:         true,
 		UseWorktree:   true,
+		AutoMerge:     true,
 		CallsPerHour:  40,
 	}
 
@@ -80,6 +81,9 @@ func TestGenerateResumeScript(t *testing.T) {
 	}
 	if !strings.Contains(content, "--calls-per-hour 40") {
 		t.Error("resume script should contain --calls-per-hour 40")
+	}
+	if !strings.Contains(content, "--auto-merge") {
+		t.Error("resume script should contain --auto-merge")
 	}
 	if strings.Contains(content, "--no-worktree") {
 		t.Error("resume script should NOT contain --no-worktree when worktree is enabled")

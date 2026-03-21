@@ -29,6 +29,7 @@ type Config struct {
 	MaxIterations       int
 	RefactorEvery       int
 	Quiet               bool
+	AutoMerge           bool
 	CallsPerHour        int
 	TaskBackend         tasks.Backend
 	IdleTimeout         time.Duration
@@ -262,6 +263,12 @@ func (l *Loop) Run(ctx context.Context) error {
 			return nil
 		case analyzer.Warn:
 			l.logger.Warn("Analysis: %s", analysisResult.Reason)
+		}
+
+		if l.cfg.AutoMerge && result.SignalDetected {
+			if err := l.git.AutoMergeCurrentBranch(); err != nil {
+				l.logger.Warn("Auto-merge: %v", err)
+			}
 		}
 
 		l.git.TagTaskEnd(taskID)
