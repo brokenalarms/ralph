@@ -1124,6 +1124,7 @@ func TestLoop_AutoImproveRestartsAfterMerge(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
+	l.pushPRFunc = func(string) error { return nil }
 	l.mergeFunc = func() (bool, error) { return true, nil }
 
 	err := l.Run(context.Background())
@@ -1243,10 +1244,10 @@ func run(t *testing.T, name string, args ...string) {
 	}
 }
 
-// Verifies that auto-merge fires and calls PostMergeReset after a successful
-// merge, ensuring the next task starts from merged main — not stale commits.
-// This is the core fix: both branch strategies share the same PR/merge lifecycle.
-func TestLoop_AutoMergeCallsPostMergeReset(t *testing.T) {
+// Verifies that auto-merge fires once per task and calls PostMergeReset after
+// each successful merge, so the next task starts from merged main — not stale
+// commits. Both branch strategies share the same PR/merge lifecycle.
+func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 	for _, strategy := range []git.BranchStrategy{git.BranchStacked, git.BranchSingle} {
 		t.Run(string(strategy), func(t *testing.T) {
 			dir, st := setupTestDir(t)
@@ -1255,7 +1256,191 @@ func TestLoop_AutoMergeCallsPostMergeReset(t *testing.T) {
 			promptsDir := filepath.Join(dir, "prompts")
 			createPromptTemplates(t, promptsDir)
 
-			mergeCalled := false
+			mergeCount := 0
+			iterationCount := 0
+
+			backend := &mutableBackend{
+				remaining: 1,
+				completed: 0,
+				total:     3,
+				nextTask:  "task A",
+				nextID:    "ralph-aaa",
+			}
+
+			runner := &stubRunner{
+				onRun: func() {
+					iterationCount++
+					backend.mu.Lock()
+					defer backend.mu.Unlock()
+					backend.completed = iterationCount
+					switch iterationCount {
+					case 1:
+						backend.remaining = 1
+						backend.nextTask = "task B"
+						backend.nextID = "ralph-bbb"
+					case 2:
+						backend.remaining = 1
+						backend.nextTask = "task C"
+						backend.nextID = "ralph-ccc"
+					default:
+						backend.remaining = 0
+					}
+				},
+				result: claude.Result{SignalDetected: true},
+			}
+
+			gm := &git.Manager{
+				ProjectDir:     dir,
+				WorkDir:        dir,
+				BranchStrategy: strategy,
+				Logger:         logging.New(nil),
+			}
+
+			l := New(Config{
+				ProjectDir:    dir,
+				WorkDir:       dir,
+				RalphDir:      ralphDir,
+				PromptsDir:    promptsDir,
+				MaxIterations: 10,
+				CallsPerHour:  80,
+				AutoMerge:     true,
+				TaskBackend:   backend,
+			}, st, gm, logging.New(nil))
+			l.runner = runner
+			l.pushPRFunc = func(string) error { return nil }
+			l.mergeFunc = func() (bool, error) {
+				mergeCount++
+				return true, nil
+			}
+
+			err := l.Run(context.Background())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if iterationCount != 3 {
+				t.Errorf("expected 3 iterations, got %d", iterationCount)
+			}
+
+			if mergeCount != 3 {
+				t.Errorf("expected auto-merge to fire 3 times (once per task), got %d", mergeCount)
+			}
+		})
+	}
+}
+
+// Verifies that PostMergeReset actually resets the worktree branch to
+// origin/main between tasks using a real git worktree, proving each task
+// starts from merged main rather than building on stale commits.
+func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
+	for _, strategy := range []git.BranchStrategy{git.BranchStacked, git.BranchSingle} {
+		t.Run(string(strategy), func(t *testing.T) {
+			project, _ := initBareRepoWithOrigin(t)
+			ralphDir := filepath.Join(project, ".ralph")
+			st := state.NewStore(ralphDir)
+			st.Init(10, 0)
+
+			promptsDir := filepath.Join(project, "prompts")
+			createPromptTemplates(t, promptsDir)
+
+			gm := &git.Manager{
+				ProjectDir:     project,
+				RalphDir:       ralphDir,
+				UseWorktree:    true,
+				BranchStrategy: strategy,
+				State:          st,
+				Logger:         logging.New(nil),
+			}
+			if err := gm.SetupWorktree(); err != nil {
+				t.Fatalf("SetupWorktree: %v", err)
+			}
+
+			originMain := git.HeadRev(gm.WorkDir)
+			iterationCount := 0
+
+			backend := &mutableBackend{
+				remaining: 1,
+				completed: 0,
+				total:     2,
+				nextTask:  "task A",
+				nextID:    "ralph-aaa",
+			}
+
+			var headAfterMerge string
+			runner := &stubRunner{
+				onRun: func() {
+					iterationCount++
+					backend.mu.Lock()
+					defer backend.mu.Unlock()
+					if iterationCount == 1 {
+						backend.completed = 1
+						backend.remaining = 1
+						backend.nextTask = "task B"
+						backend.nextID = "ralph-bbb"
+					} else {
+						// On second iteration, record HEAD to verify
+						// PostMergeReset moved us back to origin/main.
+						headAfterMerge = git.HeadRev(gm.WorkDir)
+						backend.completed = 2
+						backend.remaining = 0
+					}
+				},
+				result: claude.Result{SignalDetected: true},
+			}
+
+			l := New(Config{
+				ProjectDir:    project,
+				WorkDir:       gm.WorkDir,
+				RalphDir:      ralphDir,
+				PromptsDir:    promptsDir,
+				MaxIterations: 10,
+				CallsPerHour:  80,
+				AutoMerge:     true,
+				TaskBackend:   backend,
+			}, st, gm, logging.New(nil))
+			l.runner = runner
+			l.mergeFunc = func() (bool, error) {
+				return true, nil
+			}
+
+			err := l.Run(context.Background())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if iterationCount != 2 {
+				t.Fatalf("expected 2 iterations, got %d", iterationCount)
+			}
+
+			// After PostMergeReset, the second iteration should start from
+			// origin/main — not from stale commits.
+			if headAfterMerge != originMain {
+				t.Errorf("second iteration should start from origin/main (%s), got %s", originMain, headAfterMerge)
+			}
+
+			// Branch should be back on temp branch after PostMergeReset
+			tempBranch := gm.TempBranch()
+			if gm.WorktreeBranch != tempBranch {
+				t.Errorf("expected branch %q after PostMergeReset, got %q", tempBranch, gm.WorktreeBranch)
+			}
+		})
+	}
+}
+
+// Verifies that pushAndCreatePR fires for every completed task when signal
+// is detected, regardless of whether auto-merge is enabled. This ensures the
+// Go code owns the push/PR lifecycle — Claude completing a task always results
+// in a pushed branch with a PR, for both branch strategies.
+func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
+	for _, strategy := range []git.BranchStrategy{git.BranchStacked, git.BranchSingle} {
+		t.Run(string(strategy), func(t *testing.T) {
+			dir, st := setupTestDir(t)
+			ralphDir := filepath.Join(dir, ".ralph")
+
+			promptsDir := filepath.Join(dir, "prompts")
+			createPromptTemplates(t, promptsDir)
+
+			pushPRCalls := 0
 			iterationCount := 0
 
 			backend := &mutableBackend{
@@ -1300,13 +1485,13 @@ func TestLoop_AutoMergeCallsPostMergeReset(t *testing.T) {
 				PromptsDir:    promptsDir,
 				MaxIterations: 10,
 				CallsPerHour:  80,
-				AutoMerge:     true,
+				AutoMerge:     false,
 				TaskBackend:   backend,
 			}, st, gm, logging.New(nil))
 			l.runner = runner
-			l.mergeFunc = func() (bool, error) {
-				mergeCalled = true
-				return true, nil
+			l.pushPRFunc = func(taskDesc string) error {
+				pushPRCalls++
+				return nil
 			}
 
 			err := l.Run(context.Background())
@@ -1314,14 +1499,67 @@ func TestLoop_AutoMergeCallsPostMergeReset(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			if !mergeCalled {
-				t.Error("auto-merge should have been called when signal detected and AutoMerge enabled")
-			}
-
-			if iterationCount != 2 {
-				t.Errorf("expected 2 iterations, got %d", iterationCount)
+			if pushPRCalls != 2 {
+				t.Errorf("expected pushAndCreatePR called 2 times (once per task), got %d", pushPRCalls)
 			}
 		})
+	}
+}
+
+// Verifies that pushAndCreatePR is NOT called when Claude exits without
+// signaling completion (e.g. idle timeout or crash), preventing half-done
+// work from being pushed.
+func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	pushPRCalls := 0
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "some task",
+		nextID:    "ralph-xyz",
+	}
+
+	runner := &stubRunner{
+		result: claude.Result{SignalDetected: false},
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		BranchStrategy: git.BranchSingle,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.pushPRFunc = func(taskDesc string) error {
+		pushPRCalls++
+		return nil
+	}
+	l.mergeFunc = func() (bool, error) {
+		t.Error("auto-merge should not be called without signal")
+		return false, nil
+	}
+
+	_ = l.Run(context.Background())
+
+	if pushPRCalls != 0 {
+		t.Errorf("pushAndCreatePR should not be called without signal, got %d calls", pushPRCalls)
 	}
 }
 
