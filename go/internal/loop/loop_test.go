@@ -1652,3 +1652,222 @@ func TestLoop_SingleBranchSkipsRotationOnResume(t *testing.T) {
 		t.Errorf("expected branch to stay as ralph/myproject/01-old-task in single mode, got %q", gm.WorktreeBranch)
 	}
 }
+
+// Verifies that when an iteration completes without a signal, the attempt
+// tracker records it so the next iteration knows what was tried.
+func TestLoop_RecordsAttemptAfterIteration(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Fix the auth bug",
+		nextID:    "ralph-auth",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{}
+
+	_ = l.Run(context.Background())
+
+	history := l.attempts.Read("ralph-auth", "Fix the auth bug")
+	if !strings.Contains(history, "### Attempt 1") {
+		t.Error("expected attempt 1 to be recorded after iteration")
+	}
+}
+
+// Verifies that when an idle timeout occurs, the attempt tracker records it
+// with timeout-specific guidance so the next iteration can adjust its approach.
+func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	callCount := 0
+	backend := &mutableBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Slow task",
+		nextID:    "ralph-slow",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 2,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		onRun: func() {
+			callCount++
+			if callCount >= 2 {
+				// Stop after the retry so we don't loop forever
+				backend.mu.Lock()
+				backend.remaining = 0
+				backend.completed = 1
+				backend.mu.Unlock()
+			}
+		},
+		result: claude.Result{IdleTimeout: true},
+	}
+
+	_ = l.Run(context.Background())
+
+	history := l.attempts.Read("ralph-slow", "Slow task")
+	if !strings.Contains(history, "idle_timeout") {
+		t.Errorf("expected idle_timeout in attempt history, got: %s", history)
+	}
+}
+
+// Verifies that when a task completes via signal, the attempt history is
+// cleared so re-attempts start fresh if the task reappears.
+func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Done task",
+		nextID:    "ralph-done",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	// Seed an existing attempt
+	l.attempts.Record("ralph-done", "Done task", "first try failed", "", "continue")
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true, Summary: "task completed"},
+	}
+	l.pushPRFunc = func(string) error { return nil }
+
+	_ = l.Run(context.Background())
+
+	history := l.attempts.Read("ralph-done", "Done task")
+	if history != "" {
+		t.Errorf("expected attempt history to be cleared after signal, got: %s", history)
+	}
+}
+
+// Verifies that reflections from previous iterations are included in the
+// attempt context fed to the prompt.
+func TestLoop_IncludesReflectionInAttemptContext(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:   dir,
+		WorkDir:      dir,
+		RalphDir:     ralphDir,
+		CallsPerHour: 80,
+		TaskBackend:  &stubBackend{label: "checklist"},
+	}, st, gm, logging.New(nil))
+
+	// Write a reflection file
+	reflDir := filepath.Join(ralphDir, "reflections")
+	os.MkdirAll(reflDir, 0o755)
+	os.WriteFile(filepath.Join(reflDir, "ralph-abc.md"),
+		[]byte("# Fix the bug\n## What was discovered\n- The root cause was X"), 0o644)
+
+	ctx := l.buildAttemptContext("ralph-abc", "Fix the bug")
+	if !strings.Contains(ctx, "root cause was X") {
+		t.Errorf("expected reflection content in attempt context, got: %s", ctx)
+	}
+	if !strings.Contains(ctx, "### Previous reflection") {
+		t.Error("expected '### Previous reflection' header in attempt context")
+	}
+}
+
+// Verifies that attempt history and reflections are combined when both exist.
+func TestLoop_CombinesAttemptsAndReflection(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:   dir,
+		WorkDir:      dir,
+		RalphDir:     ralphDir,
+		CallsPerHour: 80,
+		TaskBackend:  &stubBackend{label: "checklist"},
+	}, st, gm, logging.New(nil))
+
+	// Record an attempt
+	l.attempts.Record("ralph-combo", "Combo task", "tried approach A", "", "halted: stagnation")
+
+	// Write a reflection
+	reflDir := filepath.Join(ralphDir, "reflections")
+	os.MkdirAll(reflDir, 0o755)
+	os.WriteFile(filepath.Join(reflDir, "ralph-combo.md"),
+		[]byte("# Combo task\n## What was discovered\n- approach A doesn't work"), 0o644)
+
+	ctx := l.buildAttemptContext("ralph-combo", "Combo task")
+	if !strings.Contains(ctx, "### Attempt 1") {
+		t.Error("expected attempt history in combined context")
+	}
+	if !strings.Contains(ctx, "### Previous reflection") {
+		t.Error("expected reflection in combined context")
+	}
+}
+
+// Verifies that buildAttemptContext returns empty string when no prior
+// context exists, so the prompt doesn't get polluted with empty sections.
+func TestLoop_EmptyAttemptContextForNewTask(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:   dir,
+		WorkDir:      dir,
+		RalphDir:     ralphDir,
+		CallsPerHour: 80,
+		TaskBackend:  &stubBackend{label: "checklist"},
+	}, st, gm, logging.New(nil))
+
+	ctx := l.buildAttemptContext("ralph-new", "Brand new task")
+	if ctx != "" {
+		t.Errorf("expected empty attempt context for new task, got: %s", ctx)
+	}
+}

@@ -854,6 +854,15 @@ func ChangedFiles(dir, headBefore, headAfter string) []string {
 	return result
 }
 
+// DiffStatRange returns the --stat summary between two commits.
+// Returns empty string if the commits are equal or missing.
+func DiffStatRange(dir, from, to string) string {
+	if from == "" || to == "" || from == to {
+		return ""
+	}
+	return gitOutput(dir, "diff", "--stat", from, to)
+}
+
 // RecentChangedFiles returns files changed in the last N commits.
 func RecentChangedFiles(dir string, n int) string {
 	return gitOutput(dir, "diff", "--name-only", fmt.Sprintf("HEAD~%d", n), "HEAD")

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/analyzer"
+	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -53,6 +54,7 @@ type Loop struct {
 	limiter    *ratelimit.Limiter
 	runner     claudeRunner
 	analyzer   *analyzer.Analyzer
+	attempts   *attempts.Tracker
 	logger     *logging.Logger
 	signals    claude.SignalPaths
 	mergeFunc  func() (bool, error)
@@ -75,6 +77,7 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 		limiter:  limiter,
 		runner:   runner,
 		analyzer: analyzer.New(),
+		attempts: attempts.New(cfg.RalphDir),
 		logger:   logger,
 		signals:  signals,
 	}
@@ -212,7 +215,12 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.logger.Warn("[feedback] %s", feedback)
 		}
 
-		fullPrompt, err := l.buildPrompt(taskPrompt, feedback)
+		attemptContext := l.buildAttemptContext(taskID, nextTask)
+		if attemptContext != "" {
+			l.logger.Log("Including %d previous attempt(s) in prompt", strings.Count(attemptContext, "### Attempt "))
+		}
+
+		fullPrompt, err := l.buildPrompt(taskPrompt, feedback, attemptContext)
 		if err != nil {
 			l.logger.Error("Prompt build failed: %v", err)
 			break
@@ -241,6 +249,11 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 		if result.IdleTimeout {
 			l.logger.Warn("Restarting iteration %d after idle timeout", runIteration)
+			diffStat := git.DiffStatRange(l.git.WorkDir, headBefore, git.HeadRev(l.git.WorkDir))
+			l.attempts.Record(taskID, nextTask,
+				"Killed: idle timeout (no output for configured duration)",
+				diffStat,
+				"idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output")
 			runIteration--
 			iteration--
 			continue
@@ -262,7 +275,17 @@ func (l *Loop) Run(ctx context.Context) error {
 			runIteration, int(elapsed.Minutes()), int(elapsed.Seconds())%60, completed, total)
 
 		headAfter := git.HeadRev(l.git.WorkDir)
-		analysisResult := l.analyzeIteration(rawLogPath, logStart, headBefore, headAfter)
+		diffStat := git.DiffStatRange(l.git.WorkDir, headBefore, headAfter)
+		analysisResult := l.analyzeIteration(rawLogPath, logStart, headBefore, headAfter, taskID)
+
+		summary := result.Summary
+		if summary == "" {
+			summary = "no completion summary"
+		}
+		analysisDesc := analysisResult.Reason
+		if analysisDesc == "" {
+			analysisDesc = "continue"
+		}
 
 		switch analysisResult.Action {
 		case analyzer.Halt:
@@ -270,14 +293,22 @@ func (l *Loop) Run(ctx context.Context) error {
 			if analysisResult.Detail != "" {
 				l.logger.Error("  %s", analysisResult.Detail)
 			}
+			l.attempts.Record(taskID, nextTask, "Halted: "+analysisResult.Reason, diffStat, analysisResult.Detail)
 			l.state.Write("status", "halted_"+analysisResult.Reason)
 			l.git.TagTaskEnd(taskID)
 			return nil
 		case analyzer.Warn:
 			l.logger.Warn("Analysis: %s", analysisResult.Reason)
+			l.attempts.Record(taskID, nextTask, summary, diffStat, "warn: "+analysisDesc)
+		default:
+			if !result.SignalDetected {
+				l.attempts.Record(taskID, nextTask, summary, diffStat, analysisDesc)
+			}
 		}
 
 		if result.SignalDetected {
+			l.attempts.Clear(taskID, nextTask)
+
 			if err := l.pushAndCreatePR(nextTask); err != nil {
 				l.logger.Warn("Push/PR: %v", err)
 			}
@@ -441,7 +472,7 @@ func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 	return fmt.Sprintf("Complete this task: %s", nextTask)
 }
 
-func (l *Loop) buildPrompt(taskPrompt, feedback string) (string, error) {
+func (l *Loop) buildPrompt(taskPrompt, feedback, attemptHistory string) (string, error) {
 	backend := prompt.BackendChecklist
 	if l.cfg.TaskBackend.Label() == "beads" {
 		backend = prompt.BackendBD
@@ -458,6 +489,7 @@ func (l *Loop) buildPrompt(taskPrompt, feedback string) (string, error) {
 		AllCompleteToken: l.signals.AllComplete,
 		TaskPrompt:       taskPrompt,
 		Feedback:         feedback,
+		AttemptHistory:   attemptHistory,
 		TaskBackend:      backend,
 	})
 }
@@ -475,7 +507,7 @@ func (l *Loop) waitForRate(ctx context.Context) bool {
 	return err == nil
 }
 
-func (l *Loop) analyzeIteration(rawLogPath string, logStart int, headBefore, headAfter string) analyzer.Result {
+func (l *Loop) analyzeIteration(rawLogPath string, logStart int, headBefore, headAfter, taskKey string) analyzer.Result {
 	iterLog := readLogFrom(rawLogPath, logStart)
 	hasDiff := git.HasDiff(l.git.WorkDir)
 	newCommits := headBefore != "" && headAfter != "" && headBefore != headAfter
@@ -495,6 +527,7 @@ func (l *Loop) analyzeIteration(rawLogPath string, logStart int, headBefore, hea
 		HasSignal:    hasSignal,
 		ChangedFiles: changedFiles,
 		IterationLog: iterLog,
+		TaskKey:      taskKey,
 	})
 }
 
@@ -518,6 +551,37 @@ func (l *Loop) readFeedback() string {
 
 func (l *Loop) clearFeedback() {
 	os.Remove(filepath.Join(l.cfg.RalphDir, "feedback"))
+}
+
+// readReflection returns the content of a previous reflection file for a task.
+// Uses task ID if available, falls back to slugified task name.
+func (l *Loop) readReflection(taskID, taskName string) string {
+	key := taskID
+	if key == "" {
+		key = git.Slugify(taskName)
+	}
+	path := filepath.Join(l.cfg.RalphDir, "reflections", key+".md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// buildAttemptContext assembles attempt history and reflections into a single
+// block for the prompt. Returns empty string if no prior context exists.
+func (l *Loop) buildAttemptContext(taskID, taskName string) string {
+	var parts []string
+
+	if history := l.attempts.Read(taskID, taskName); history != "" {
+		parts = append(parts, history)
+	}
+
+	if reflection := l.readReflection(taskID, taskName); reflection != "" {
+		parts = append(parts, "### Previous reflection\n"+reflection)
+	}
+
+	return strings.Join(parts, "\n")
 }
 
 func touchFile(path string) {
