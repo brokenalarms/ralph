@@ -161,6 +161,192 @@ func TestBuildRefactorPrompt(t *testing.T) {
 	}
 }
 
+// Proves: refactor prompt includes shared standards (Boy Scout Rule)
+// and refactor-specific instructions.
+func TestBuildRefactorPrompt_IncludesSharedAndRefactorInstructions(t *testing.T) {
+	v := testVars(t)
+	result, err := BuildRefactorPrompt(v, "ralph.sh server.js")
+	if err != nil {
+		t.Fatalf("BuildRefactorPrompt: %v", err)
+	}
+	if !strings.Contains(result, "Boy Scout Rule") {
+		t.Error("refactor prompt missing Boy Scout Rule from shared")
+	}
+	if !strings.Contains(result, "refactor-only iteration") {
+		t.Error("refactor prompt missing 'refactor-only iteration'")
+	}
+	if !strings.Contains(result, "ralph.sh server.js") {
+		t.Error("refactor prompt missing recent files content")
+	}
+}
+
+// Proves: refactor prompt resolves all template variables and no
+// raw placeholders remain.
+func TestBuildRefactorPrompt_ResolvesTemplateVariables(t *testing.T) {
+	v := testVars(t)
+	result, err := BuildRefactorPrompt(v, "lib/tasks.sh")
+	if err != nil {
+		t.Fatalf("BuildRefactorPrompt: %v", err)
+	}
+	if !strings.Contains(result, v.WorkDir) {
+		t.Error("refactor prompt missing WORK_DIR value")
+	}
+	if !strings.Contains(result, ".signal_complete") {
+		t.Error("refactor prompt missing signal token")
+	}
+	for _, raw := range []string{"{{WORK_DIR}}", "{{RALPH_DIR}}", "{{RECENT_FILES}}"} {
+		if strings.Contains(result, raw) {
+			t.Errorf("refactor prompt still contains unsubstituted %s", raw)
+		}
+	}
+}
+
+// Proves: refactor prompt enforces behavior preservation.
+func TestBuildRefactorPrompt_EnforcesNoBehaviorChange(t *testing.T) {
+	v := testVars(t)
+	result, err := BuildRefactorPrompt(v, "file.sh")
+	if err != nil {
+		t.Fatalf("BuildRefactorPrompt: %v", err)
+	}
+	if !strings.Contains(result, "Do NOT add new features or change behavior") {
+		t.Error("refactor prompt missing behavior preservation rule")
+	}
+}
+
+// Proves: refactor prompt requires refactor: commit prefix.
+func TestBuildRefactorPrompt_RequiresRefactorCommitPrefix(t *testing.T) {
+	v := testVars(t)
+	result, err := BuildRefactorPrompt(v, "file.sh")
+	if err != nil {
+		t.Fatalf("BuildRefactorPrompt: %v", err)
+	}
+	if !strings.Contains(result, "refactor:") {
+		t.Error("refactor prompt missing 'refactor:' commit prefix requirement")
+	}
+}
+
+// Proves: refactor prompt allows skipping when no meaningful debt exists.
+func TestBuildRefactorPrompt_AllowsNoOp(t *testing.T) {
+	v := testVars(t)
+	result, err := BuildRefactorPrompt(v, "file.sh")
+	if err != nil {
+		t.Fatalf("BuildRefactorPrompt: %v", err)
+	}
+	if !strings.Contains(result, "signal completion without making changes") {
+		t.Error("refactor prompt missing no-op allowance")
+	}
+}
+
+// Proves: refactor prompt warns against premature abstractions.
+func TestBuildRefactorPrompt_DiscouragesPrematureAbstractions(t *testing.T) {
+	v := testVars(t)
+	result, err := BuildRefactorPrompt(v, "file.sh")
+	if err != nil {
+		t.Fatalf("BuildRefactorPrompt: %v", err)
+	}
+	hasUtility := strings.Contains(result, "utility functions")
+	hasOneTime := strings.Contains(result, "one-time operations")
+	if !hasUtility && !hasOneTime {
+		t.Error("refactor prompt missing premature abstraction warning")
+	}
+}
+
+// Proves: refactor prompt uses 500 lines as the split signal.
+func TestBuildRefactorPrompt_References500LineThreshold(t *testing.T) {
+	v := testVars(t)
+	result, err := BuildRefactorPrompt(v, "file.sh")
+	if err != nil {
+		t.Fatalf("BuildRefactorPrompt: %v", err)
+	}
+	if !strings.Contains(result, "500") {
+		t.Error("refactor prompt missing 500 line threshold")
+	}
+}
+
+// Proves: refactor prompt includes quality findings section header.
+func TestBuildRefactorPrompt_IncludesQualityFindings(t *testing.T) {
+	v := testVars(t)
+	result, err := BuildRefactorPrompt(v, "src/auth.ts")
+	if err != nil {
+		t.Fatalf("BuildRefactorPrompt: %v", err)
+	}
+	if !strings.Contains(result, "Quality signals detected") {
+		t.Error("refactor prompt missing 'Quality signals detected' section")
+	}
+}
+
+// Proves: planning prompt includes debt assessment section.
+func TestPlanningPrompt_IncludesDebtAssessment(t *testing.T) {
+	planningPrompt, err := os.ReadFile(filepath.Join(promptsDir(t), "planning.md"))
+	if err != nil {
+		t.Fatalf("reading planning.md: %v", err)
+	}
+	content := string(planningPrompt)
+	if !strings.Contains(content, "Debt assessment") {
+		t.Error("planning prompt missing 'Debt assessment'")
+	}
+	if !strings.Contains(content, "Dead code") {
+		t.Error("planning prompt missing 'Dead code'")
+	}
+	if !strings.Contains(content, "500 lines") {
+		t.Error("planning prompt missing '500 lines'")
+	}
+	if !strings.Contains(content, "don't add refactor tasks just because you can") {
+		t.Error("planning prompt missing refactor restraint guidance")
+	}
+}
+
+// Proves: shared prompt includes Boy Scout Rule as a reminder.
+func TestSharedPrompt_IncludesBoyScoutRule(t *testing.T) {
+	shared, err := os.ReadFile(filepath.Join(promptsDir(t), "shared.md"))
+	if err != nil {
+		t.Fatalf("reading shared.md: %v", err)
+	}
+	content := string(shared)
+	if !strings.Contains(content, "Boy Scout Rule") {
+		t.Error("shared prompt missing 'Boy Scout Rule'")
+	}
+	if !strings.Contains(content, "Dead code") {
+		t.Error("shared prompt missing 'Dead code'")
+	}
+	if !strings.Contains(content, "leave it alone") {
+		t.Error("shared prompt missing 'leave it alone'")
+	}
+}
+
+// Proves: attempt history is injected into the prompt when previous
+// attempts exist on the current task.
+func TestBuildPrompt_IncludesAttemptHistory(t *testing.T) {
+	v := testVars(t)
+	v.AttemptHistory = "### Attempt 1\nSummary: broke it\nChanges: none\nAnalysis: warn:stuck\n"
+	result, err := BuildPrompt(v)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+	if !strings.Contains(result, "Previous attempts on this task") {
+		t.Error("prompt missing attempt history section header")
+	}
+	if !strings.Contains(result, "broke it") {
+		t.Error("prompt missing attempt history content")
+	}
+}
+
+// Proves: no attempt history section in prompt for fresh tasks.
+func TestBuildPrompt_OmitsAttemptHistoryForFreshTask(t *testing.T) {
+	v := testVars(t)
+	v.AttemptHistory = ""
+	result, err := BuildPrompt(v)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+	if strings.Contains(result, "Previous attempts") {
+		t.Error("prompt should not contain attempt history section for fresh task")
+	}
+	if strings.Contains(result, "{{ATTEMPT_HISTORY}}") {
+		t.Error("prompt still contains unsubstituted {{ATTEMPT_HISTORY}}")
+	}
+}
+
 // Proves: the assembled prompt includes post-task reflection instructions
 // so Claude writes a reflection file before signaling completion.
 func TestBuildPrompt_IncludesReflection(t *testing.T) {
