@@ -347,6 +347,51 @@ func TestLoop_UpdateStreamTask(t *testing.T) {
 	}
 }
 
+// Verifies writeRunBranch persists the current branch name to .run-branch
+// so the shell pane-title updater displays the correct branch.
+func TestLoop_WriteRunBranch(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	l := &Loop{
+		cfg: Config{RalphDir: ralphDir},
+		git: &git.Manager{WorktreeBranch: "ralph/project/01-fix-bug"},
+	}
+
+	l.writeRunBranch()
+
+	data, err := os.ReadFile(filepath.Join(ralphDir, ".run-branch"))
+	if err != nil {
+		t.Fatalf("expected .run-branch file, got error: %v", err)
+	}
+	if string(data) != "ralph/project/01-fix-bug" {
+		t.Errorf("expected 'ralph/project/01-fix-bug', got %q", string(data))
+	}
+}
+
+// Verifies writeRunBranch defaults to "ralph" when no branch is set.
+func TestLoop_WriteRunBranch_Default(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	l := &Loop{
+		cfg: Config{RalphDir: ralphDir},
+		git: &git.Manager{},
+	}
+
+	l.writeRunBranch()
+
+	data, err := os.ReadFile(filepath.Join(ralphDir, ".run-branch"))
+	if err != nil {
+		t.Fatalf("expected .run-branch file, got error: %v", err)
+	}
+	if string(data) != "ralph" {
+		t.Errorf("expected 'ralph', got %q", string(data))
+	}
+}
+
 // Verifies feedback file is read and cleared after consumption.
 func TestLoop_FeedbackReadAndClear(t *testing.T) {
 	dir := t.TempDir()

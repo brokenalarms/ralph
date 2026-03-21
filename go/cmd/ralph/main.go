@@ -154,6 +154,20 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		return 1
 	}
 
+	// Write initial branch label for the pane title updater. On resume,
+	// the old task branch is still checked out until the loop renames it,
+	// so show a transitional label instead of the stale branch name.
+	runBranchFile := filepath.Join(ralphDir, ".run-branch")
+	if resume && gm.WorktreeBranch != "" && !strings.HasSuffix(gm.WorktreeBranch, "/next") {
+		os.WriteFile(runBranchFile, []byte("resuming…"), 0o644)
+	} else {
+		branch := gm.WorktreeBranch
+		if branch == "" {
+			branch = "ralph"
+		}
+		os.WriteFile(runBranchFile, []byte(branch), 0o644)
+	}
+
 	log.Phase("Ralph Loop v%s (go)", config.Version)
 	log.Log("Project: %s", cfg.ProjectDir)
 	if gm.WorkDir != cfg.ProjectDir {

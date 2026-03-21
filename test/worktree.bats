@@ -474,6 +474,46 @@ EOF
   [[ "$WORK_DIR" == *"/worktrees/ralph-${today}-auth-middleware-rewrite" ]]
 }
 
+# Proves: on resume from a task branch, the pane title shows a transitional
+# label instead of the stale old branch name, preventing confusion about
+# which task ralph is actually working on.
+@test "Resume writes transitional label to .run-branch" {
+  init_ralph_dir
+  setup_worktree
+  rename_branch_for_task "old task"
+
+  RESUME=true
+  setup_worktree
+
+  # Simulate what main() does after setup_worktree
+  if [[ "$RESUME" == true && "$WORKTREE_BRANCH" != *"/next" ]]; then
+    printf '%s' "resuming…" > "$RALPH_DIR/.run-branch"
+  else
+    printf '%s' "${WORKTREE_BRANCH:-ralph}" > "$RALPH_DIR/.run-branch"
+  fi
+
+  local branch_label
+  branch_label=$(cat "$RALPH_DIR/.run-branch")
+  [[ "$branch_label" == "resuming…" ]]
+}
+
+# Proves: fresh start writes the actual branch name to .run-branch.
+@test "Fresh start writes branch name to .run-branch" {
+  init_ralph_dir
+  setup_worktree
+
+  RESUME=false
+  if [[ "$RESUME" == true && "$WORKTREE_BRANCH" != *"/next" ]]; then
+    printf '%s' "resuming…" > "$RALPH_DIR/.run-branch"
+  else
+    printf '%s' "${WORKTREE_BRANCH:-ralph}" > "$RALPH_DIR/.run-branch"
+  fi
+
+  local branch_label
+  branch_label=$(cat "$RALPH_DIR/.run-branch")
+  [[ "$branch_label" == "ralph/project/next" ]]
+}
+
 # Proves: theme from state.json takes priority over bd fallback.
 @test "rename_worktree_from_theme prefers state theme over bd" {
   init_ralph_dir

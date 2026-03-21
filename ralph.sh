@@ -1912,7 +1912,11 @@ main() {
   write_state "task_backend" "$TASK_BACKEND"
 
   setup_worktree
-  printf '%s' "${WORKTREE_BRANCH:-ralph}" > "$RALPH_DIR/.run-branch"
+  if [[ "$RESUME" == true && "$WORKTREE_BRANCH" != *"/next" ]]; then
+    printf '%s' "resuming…" > "$RALPH_DIR/.run-branch"
+  else
+    printf '%s' "${WORKTREE_BRANCH:-ralph}" > "$RALPH_DIR/.run-branch"
+  fi
 
   log_phase "Ralph Loop v${VERSION} (sh)"
   log "Project: $PROJECT_DIR"

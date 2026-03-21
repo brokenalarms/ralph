@@ -108,6 +108,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		l.logger.Log("Branch: %s", l.git.WorktreeBranch)
+		l.writeRunBranch()
 	}
 
 	if err := l.limiter.Init(); err != nil {
@@ -206,6 +207,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		if taskChanged {
 			l.git.RenameBranchForTask(nextTask)
 		}
+		l.writeRunBranch()
 		l.git.TagTaskStart(taskID)
 
 		l.updateStreamTask(taskID, nextTask)
@@ -573,6 +575,14 @@ func (l *Loop) analyzeIteration(rawLogPath string, logStart int, headBefore, hea
 		IterationLog: iterLog,
 		TaskKey:      taskKey,
 	})
+}
+
+func (l *Loop) writeRunBranch() {
+	branch := l.git.WorktreeBranch
+	if branch == "" {
+		branch = "ralph"
+	}
+	os.WriteFile(filepath.Join(l.cfg.RalphDir, ".run-branch"), []byte(branch), 0o644)
 }
 
 func (l *Loop) updateStreamTask(taskID, nextTask string) {
