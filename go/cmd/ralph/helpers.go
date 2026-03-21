@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 func safeRemoveRalphDir(dir string) error {
@@ -53,6 +54,26 @@ func validatePlanFile(path string) error {
 	}
 
 	return nil
+}
+
+func promptRebaseRecovery(err error) git.RebaseRecovery {
+	fmt.Printf("\n%sRebase conflict:%s %v\n\n", logging.Red, logging.Reset, err)
+	fmt.Printf("  %s1)%s Create fresh worktree from main (recommended — completed work is already merged)\n", logging.Bold, logging.Reset)
+	fmt.Printf("  %s2)%s Abort — exit so you can resolve conflicts manually\n", logging.Bold, logging.Reset)
+	fmt.Printf("  %s3)%s Skip — continue without rebasing (may cause issues)\n\n", logging.Bold, logging.Reset)
+	fmt.Printf("%sChoice [1/2/3]:%s ", logging.Yellow, logging.Reset)
+
+	var answer string
+	fmt.Scanln(&answer)
+
+	switch strings.TrimSpace(answer) {
+	case "1", "":
+		return git.RebaseFreshWorktree
+	case "2":
+		return git.RebaseManualResolve
+	default:
+		return git.RebaseAbort
+	}
 }
 
 func ensureGitignored(projectDir, entry string) {

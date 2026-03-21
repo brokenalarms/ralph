@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -492,6 +493,202 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 	}
 }
 
+// Verifies that handleRebase with OnRebaseConflict set to RebaseFreshWorktree
+// recovers from a squash-merge rebase failure by recreating the worktree.
+func TestLoop_HandleRebase_FreshWorktreeRecovery(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5, 0)
+
+	writeFile(t, project, "shared.txt", "original\n")
+	run(t, "git", "-C", project, "commit", "-m", "add shared")
+	pushToOrigin(t, project)
+
+	gm := &git.Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       st,
+		Logger:      logging.New(nil),
+	}
+	if err := gm.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+	run(t, "git", "-C", gm.WorkDir, "remote", "set-url", "origin", bare)
+	run(t, "git", "-C", gm.WorkDir, "fetch", "origin")
+
+	// Create a conflicting situation (squash-merged branch)
+	gm.RenameBranchForTask("first task")
+	writeFile(t, gm.WorkDir, "shared.txt", "step one\n")
+	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "first step")
+	writeFile(t, gm.WorkDir, "shared.txt", "final\n")
+	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "final")
+
+	gm.RotateBranch()
+	gm.RenameBranchForTask("second task")
+	writeFile(t, gm.WorkDir, "second.txt", "second\n")
+	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "second")
+
+	// Create a real conflict on main (not a clean squash-merge)
+	writeFile(t, project, "shared.txt", "completely different main version\n")
+	run(t, "git", "-C", project, "commit", "-m", "divergent main change")
+	pushToOrigin(t, project)
+
+	backend := &stubBackend{
+		remaining: 0,
+		completed: 1,
+		total:     1,
+	}
+
+	handlerCalled := false
+	l := New(Config{
+		ProjectDir:    project,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		OnRebaseConflict: func(err error) git.RebaseRecovery {
+			handlerCalled = true
+			return git.RebaseFreshWorktree
+		},
+	}, st, gm, logging.New(nil))
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error after recovery, got %v", err)
+	}
+
+	if !handlerCalled {
+		t.Error("OnRebaseConflict handler should have been called")
+	}
+
+	// Worktree should have been recreated
+	if _, err := os.Stat(gm.WorkDir); err != nil {
+		t.Error("worktree should exist after recovery")
+	}
+}
+
+// Verifies that handleRebase with OnRebaseConflict returning RebaseAbort
+// propagates the error and halts the loop.
+func TestLoop_HandleRebase_AbortHaltsLoop(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5, 0)
+
+	gm := &git.Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       st,
+		Logger:      logging.New(nil),
+	}
+	if err := gm.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+	run(t, "git", "-C", gm.WorkDir, "remote", "set-url", "origin", bare)
+	run(t, "git", "-C", gm.WorkDir, "fetch", "origin")
+
+	// Create a real conflict
+	writeFile(t, gm.WorkDir, "conflict.txt", "worktree version\n")
+	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "worktree change")
+
+	writeFile(t, project, "conflict.txt", "main version\n")
+	run(t, "git", "-C", project, "commit", "-m", "main change")
+	pushToOrigin(t, project)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Some task",
+	}
+
+	handlerCalled := false
+	l := New(Config{
+		ProjectDir:    project,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		OnRebaseConflict: func(err error) git.RebaseRecovery {
+			handlerCalled = true
+			return git.RebaseAbort
+		},
+	}, st, gm, logging.New(nil))
+
+	err := l.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected error when rebase is aborted")
+	}
+
+	if !handlerCalled {
+		t.Error("OnRebaseConflict handler should have been called")
+	}
+
+	finalState, _ := st.Load()
+	if finalState.Status != "error" {
+		t.Errorf("expected status 'error', got %q", finalState.Status)
+	}
+}
+
+// Verifies that without an OnRebaseConflict handler, rebase failures still
+// propagate as errors (backward compatible).
+func TestLoop_HandleRebase_NoHandlerPropagatesError(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5, 0)
+
+	gm := &git.Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       st,
+		Logger:      logging.New(nil),
+	}
+	if err := gm.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+	run(t, "git", "-C", gm.WorkDir, "remote", "set-url", "origin", bare)
+	run(t, "git", "-C", gm.WorkDir, "fetch", "origin")
+
+	// Create a real conflict
+	writeFile(t, gm.WorkDir, "conflict.txt", "worktree version\n")
+	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "worktree change")
+
+	writeFile(t, project, "conflict.txt", "main version\n")
+	run(t, "git", "-C", project, "commit", "-m", "main change")
+	pushToOrigin(t, project)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Some task",
+	}
+
+	l := New(Config{
+		ProjectDir:    project,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	err := l.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected error when no handler and rebase fails")
+	}
+
+	finalState, _ := st.Load()
+	if finalState.Status != "error" {
+		t.Errorf("expected status 'error', got %q", finalState.Status)
+	}
+}
+
 // Verifies isNewTask compares by task ID when available, falling back to
 // description, so that task identity is stable even if descriptions change.
 func TestLoop_IsNewTask(t *testing.T) {
@@ -527,5 +724,47 @@ func TestLoop_IsNewTask(t *testing.T) {
 	}
 	if !l.isNewTask("", "Different task") {
 		t.Error("different description with no ID should be new")
+	}
+}
+
+// --- git test helpers (duplicated from git package since they're unexported) ---
+
+func initBareRepoWithOrigin(t *testing.T) (projectDir string, bareDir string) {
+	t.Helper()
+	tmp := t.TempDir()
+
+	bare := filepath.Join(tmp, "bare.git")
+	run(t, "git", "init", "--bare", bare)
+
+	project := filepath.Join(tmp, "project")
+	run(t, "git", "clone", bare, project)
+	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "init")
+	run(t, "git", "-C", project, "push", "-u", "origin", "main")
+	run(t, "git", "-C", project, "remote", "set-head", "origin", "main")
+
+	return project, bare
+}
+
+func pushToOrigin(t *testing.T, projectDir string) {
+	t.Helper()
+	run(t, "git", "-C", projectDir, "push", "origin", "main", "-q")
+}
+
+func writeFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	run(t, "git", "-C", dir, "add", name)
+}
+
+func run(t *testing.T, name string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %v failed: %v\n%s", name, args, err, out)
 	}
 }
