@@ -2,6 +2,7 @@ package claude
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -39,6 +40,7 @@ func DefaultSignalPaths(ralphDir string) SignalPaths {
 
 // RunConfig configures a single Claude invocation.
 type RunConfig struct {
+	Ctx       context.Context // cancelled on SIGINT to stop the run
 	WorkDir   string
 	RalphDir  string
 	Prompt    string
@@ -85,6 +87,9 @@ type Runner struct {
 // Run spawns a Claude process, polls for signal files, and returns when the
 // process exits or a completion signal is detected. Mirrors ralph.sh run_claude.
 func (r *Runner) Run(cfg RunConfig) (Result, error) {
+	if cfg.Ctx == nil {
+		cfg.Ctx = context.Background()
+	}
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = 2 * time.Second
 	}
@@ -160,6 +165,9 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 
 // poll checks for process exit and signal files on a ticker.
 func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
+	if cfg.Ctx == nil {
+		cfg.Ctx = context.Background()
+	}
 	ticker := time.NewTicker(cfg.PollInterval)
 	defer ticker.Stop()
 
@@ -177,6 +185,12 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 		select {
 		case <-processDone:
 			// Process exited on its own — return, let caller do final signal check.
+			return Result{}
+
+		case <-cfg.Ctx.Done():
+			// Context cancelled (Ctrl-C) — kill Claude and exit.
+			r.Logger.Log("Interrupted — killing Claude")
+			gracefulKill(cmd, processDone)
 			return Result{}
 
 		case <-ticker.C:

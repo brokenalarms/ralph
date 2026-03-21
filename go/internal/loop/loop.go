@@ -221,6 +221,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		workDir := l.git.WorkDir
 		taskStart := time.Now()
 		result, runErr := l.runner.Run(claude.RunConfig{
+			Ctx:                 ctx,
 			WorkDir:             workDir,
 			RalphDir:            l.cfg.RalphDir,
 			Prompt:              fullPrompt,

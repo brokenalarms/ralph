@@ -41,8 +41,8 @@ func TestDefaultValues(t *testing.T) {
 	if cfg.IdleTimeout != 10*time.Minute {
 		t.Errorf("IdleTimeout = %s, want 10m", cfg.IdleTimeout)
 	}
-	if cfg.IdleTimeoutProgress != 30*time.Second {
-		t.Errorf("IdleTimeoutProgress = %s, want 30s", cfg.IdleTimeoutProgress)
+	if cfg.IdleTimeoutProgress != 5*time.Minute {
+		t.Errorf("IdleTimeoutProgress = %s, want 5m", cfg.IdleTimeoutProgress)
 	}
 }
 
