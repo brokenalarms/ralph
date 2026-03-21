@@ -25,6 +25,27 @@ type Log interface {
 	Error(format string, args ...any)
 }
 
+// RebaseRecovery represents the user's chosen recovery action when rebase
+// fails due to squash-merged branches.
+type RebaseRecovery int
+
+const (
+	RebaseAbort          RebaseRecovery = iota
+	RebaseFreshWorktree
+	RebaseManualResolve
+)
+
+// RebaseConflictError signals that a rebase failed and can potentially be
+// recovered by recreating the worktree from main. Cause describes what
+// went wrong (squash-merge conflicts vs real conflicts).
+type RebaseConflictError struct {
+	Cause string
+}
+
+func (e *RebaseConflictError) Error() string {
+	return e.Cause
+}
+
 // Manager handles git worktree creation, branch rotation, and renaming.
 type Manager struct {
 	ProjectDir     string
@@ -306,6 +327,40 @@ func (m *Manager) AutoMergeCurrentBranch() error {
 	return nil
 }
 
+// RecreateFromMain removes the current worktree and creates a fresh one from
+// origin's default branch. State is preserved except for git-specific fields
+// (worktree_dir, worktree_branch). This is the recovery path when rebase fails
+// because base branches were squash-merged — the completed work is already on
+// main, so starting fresh is safe.
+func (m *Manager) RecreateFromMain() error {
+	if m.WorkDir == "" || m.WorkDir == m.ProjectDir {
+		return fmt.Errorf("cannot recreate: no worktree active")
+	}
+
+	m.Logger.Log("Removing old worktree: %s", m.WorkDir)
+	gitCmd(m.ProjectDir, "worktree", "remove", "--force", m.WorkDir)
+
+	// Delete all ralph project branches (squash-merged work is on main)
+	branches := ListProjectBranches(m.ProjectDir, m.ProjectName)
+	for _, b := range branches {
+		gitCmd(m.ProjectDir, "branch", "-D", b)
+	}
+
+	// Reset git-tracking fields
+	m.WorktreeBranch = ""
+	m.BranchRenamed = false
+	m.TaskSeq = 0
+
+	// Re-run SetupWorktree to create a fresh worktree from main
+	m.Resume = false
+	if err := m.SetupWorktree(); err != nil {
+		return fmt.Errorf("recreating worktree: %w", err)
+	}
+
+	m.Logger.Log("Fresh worktree created from main: %s", m.WorkDir)
+	return nil
+}
+
 // RemoveWorktree force-removes a worktree and deletes its branch.
 func (m *Manager) RemoveWorktree() {
 	gitCmd(m.ProjectDir, "worktree", "remove", "--force", m.WorkDir)
@@ -345,16 +400,16 @@ func (m *Manager) RebaseOntoDefaultBranch() error {
 	lastMerged := m.findLastSquashMergedBranch(defaultBranch)
 
 	if lastMerged == "" {
-		m.Logger.Error("Rebase onto %s failed with real conflicts — halting", defaultBranch)
-		return fmt.Errorf("rebase onto %s failed with real conflicts", defaultBranch)
+		m.Logger.Error("Rebase onto %s failed with real conflicts", defaultBranch)
+		return &RebaseConflictError{Cause: fmt.Sprintf("rebase onto %s failed with real conflicts", defaultBranch)}
 	}
 
 	m.Logger.Log("Detected squash-merged branch: %s", lastMerged)
 
 	if err := gitCmdErr(m.WorkDir, "rebase", "--update-refs", "--onto", "origin/"+defaultBranch, lastMerged, "HEAD"); err != nil {
 		gitCmd(m.WorkDir, "rebase", "--abort")
-		m.Logger.Error("Rebase onto %s past squash-merged branches failed — halting", defaultBranch)
-		return fmt.Errorf("rebase onto %s past squash-merged branches failed", defaultBranch)
+		m.Logger.Error("Rebase onto %s past squash-merged branches failed", defaultBranch)
+		return &RebaseConflictError{Cause: fmt.Sprintf("rebase onto %s past squash-merged branches failed", defaultBranch)}
 	}
 
 	m.Logger.Log("Rebased onto origin/%s (skipped squash-merged branches)", defaultBranch)

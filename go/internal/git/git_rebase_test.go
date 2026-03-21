@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -425,6 +426,107 @@ func TestTagStartEnd_DifferentCommits(t *testing.T) {
 
 	if startRev == endRev {
 		t.Error("start and end tags should point at different commits after work was done")
+	}
+}
+
+// --- RecreateFromMain tests ---
+
+// RecreateFromMain removes the old worktree and creates a fresh one from main,
+// recovering from squash-merge rebase conflicts where completed work is already on main.
+func TestRecreateFromMain_CreatesCleanWorktree(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+
+	writeFile(t, project, "base.txt", "base content\n")
+	run(t, "git", "-C", project, "commit", "-m", "add base file")
+	pushToOrigin(t, project)
+
+	mgr := setupRebaseMgr(t, project, bare)
+
+	// Add some work in the worktree
+	mgr.RenameBranchForTask("first task")
+	writeFile(t, mgr.WorkDir, "task.txt", "task work\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "task work")
+
+	oldBranch := mgr.WorktreeBranch
+
+	// Simulate squash-merge by adding the same content to main
+	writeFile(t, project, "task.txt", "task work\n")
+	run(t, "git", "-C", project, "commit", "-m", "squash: first task")
+	pushToOrigin(t, project)
+
+	if err := mgr.RecreateFromMain(); err != nil {
+		t.Fatalf("RecreateFromMain failed: %v", err)
+	}
+
+	// Worktree should exist
+	if _, err := os.Stat(mgr.WorkDir); err != nil {
+		t.Fatalf("worktree should exist after recreation: %v", err)
+	}
+
+	// Branch should be reset to /next
+	if !strings.HasSuffix(mgr.WorktreeBranch, "/next") {
+		t.Errorf("branch %q should end with /next after recreation", mgr.WorktreeBranch)
+	}
+
+	// Old task branches should be deleted
+	branches := ListProjectBranches(project, mgr.ProjectName)
+	for _, b := range branches {
+		if b == oldBranch {
+			t.Errorf("old branch %q should have been deleted", oldBranch)
+		}
+	}
+
+	// New worktree should contain base.txt and task.txt from main
+	if _, err := os.Stat(filepath.Join(mgr.WorkDir, "base.txt")); err != nil {
+		t.Error("base.txt should exist in fresh worktree (from main)")
+	}
+	if _, err := os.Stat(filepath.Join(mgr.WorkDir, "task.txt")); err != nil {
+		t.Error("task.txt should exist in fresh worktree (squash-merged to main)")
+	}
+
+	// TaskSeq and BranchRenamed should be reset
+	if mgr.TaskSeq != 0 {
+		t.Errorf("TaskSeq should be 0 after recreation, got %d", mgr.TaskSeq)
+	}
+	if mgr.BranchRenamed {
+		t.Error("BranchRenamed should be false after recreation")
+	}
+}
+
+// RecreateFromMain errors when no worktree is active (WorkDir == ProjectDir)
+func TestRecreateFromMain_ErrorsWithoutWorktree(t *testing.T) {
+	mgr := &Manager{
+		ProjectDir: "/some/dir",
+		WorkDir:    "/some/dir",
+		Logger:     &testLog{},
+	}
+	err := mgr.RecreateFromMain()
+	if err == nil {
+		t.Fatal("expected error when no worktree is active")
+	}
+}
+
+// RebaseOntoDefaultBranch returns a RebaseConflictError for real conflicts,
+// allowing callers to distinguish conflict types for recovery.
+func TestRebaseOntoDefaultBranch_ReturnsTypedError(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	writeFile(t, mgr.WorkDir, "conflict.txt", "worktree version\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "worktree change")
+
+	writeFile(t, project, "conflict.txt", "main version\n")
+	run(t, "git", "-C", project, "commit", "-m", "main change")
+	pushToOrigin(t, project)
+
+	err := mgr.RebaseOntoDefaultBranch()
+	if err == nil {
+		t.Fatal("expected error for real conflicts")
+	}
+
+	var conflictErr *RebaseConflictError
+	if !errors.As(err, &conflictErr) {
+		t.Errorf("expected RebaseConflictError, got %T: %v", err, err)
 	}
 }
 

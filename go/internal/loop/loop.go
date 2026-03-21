@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,7 @@ type Config struct {
 	TaskBackend         tasks.Backend
 	IdleTimeout         time.Duration
 	IdleTimeoutProgress time.Duration
+	OnRebaseConflict    func(err error) git.RebaseRecovery
 }
 
 // Loop orchestrates the execution phase: task selection, prompt building,
@@ -75,7 +77,7 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 // for unrecoverable failures.
 func (l *Loop) Run(ctx context.Context) error {
 	if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
-		if err := l.git.RebaseOntoDefaultBranch(); err != nil {
+		if err := l.handleRebase(); err != nil {
 			l.state.Write("status", "error")
 			return fmt.Errorf("initial rebase failed: %w", err)
 		}
@@ -156,7 +158,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		if runIteration > 1 && taskChanged {
 			l.git.RotateBranch()
 			if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
-				if err := l.git.RebaseOntoDefaultBranch(); err != nil {
+				if err := l.handleRebase(); err != nil {
 					l.state.Write("status", "error")
 					break
 				}
@@ -276,6 +278,38 @@ func (l *Loop) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// handleRebase attempts to rebase onto the default branch, and if a conflict
+// is detected, consults the OnRebaseConflict handler for recovery.
+func (l *Loop) handleRebase() error {
+	err := l.git.RebaseOntoDefaultBranch()
+	if err == nil {
+		return nil
+	}
+
+	var conflictErr *git.RebaseConflictError
+	if !errors.As(err, &conflictErr) {
+		return err
+	}
+
+	if l.cfg.OnRebaseConflict == nil {
+		return err
+	}
+
+	switch l.cfg.OnRebaseConflict(err) {
+	case git.RebaseFreshWorktree:
+		l.logger.Log("Recreating worktree from main...")
+		if recreateErr := l.git.RecreateFromMain(); recreateErr != nil {
+			return fmt.Errorf("worktree recreation failed: %w", recreateErr)
+		}
+		return nil
+	case git.RebaseManualResolve:
+		l.logger.Warn("Pausing for manual conflict resolution. Re-run ralph to resume.")
+		return fmt.Errorf("paused for manual resolution: %w", err)
+	default:
+		return err
+	}
 }
 
 // isNewTask returns true when the next task differs from the last one stored

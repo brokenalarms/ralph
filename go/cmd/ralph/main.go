@@ -186,6 +186,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		TaskBackend:         backend,
 		IdleTimeout:         cfg.IdleTimeout,
 		IdleTimeoutProgress: cfg.IdleTimeoutProgress,
+		OnRebaseConflict:    promptRebaseRecovery,
 	}, st, gm, log)
 
 	if err := execLoop.Run(ctx); err != nil {
