@@ -33,7 +33,8 @@ assess_quality() {
 
     # II. Error handling — silent catches
     local silent_catch_count
-    silent_catch_count=$(grep -cE 'catch\s*\([^)]*\)\s*\{\s*\}' "$full_path" 2>/dev/null || echo 0)
+    silent_catch_count=$(grep -cE 'catch\s*\([^)]*\)\s*\{\s*\}' "$full_path" 2>/dev/null || true)
+    silent_catch_count=${silent_catch_count:-0}; silent_catch_count=${silent_catch_count##*$'\n'}
     if (( silent_catch_count > 0 )); then
       QUALITY_SCORE=$(( QUALITY_SCORE + silent_catch_count * 5 ))
       file_findings+="  - ${silent_catch_count}x silent catch (swallowed error)"$'\n'
@@ -53,7 +54,8 @@ assess_quality() {
 
     # IX. Dead code — TODO/FIXME/HACK markers
     local todo_count
-    todo_count=$(grep -ciE '\b(TODO|FIXME|HACK|XXX)\b' "$full_path" 2>/dev/null || echo 0)
+    todo_count=$(grep -ciE '\b(TODO|FIXME|HACK|XXX)\b' "$full_path" 2>/dev/null || true)
+    todo_count=${todo_count:-0}; todo_count=${todo_count##*$'\n'}
     if (( todo_count > 2 )); then
       QUALITY_SCORE=$(( QUALITY_SCORE + (todo_count - 2) * 2 ))
       file_findings+="  - ${todo_count}x TODO/FIXME markers"$'\n'
