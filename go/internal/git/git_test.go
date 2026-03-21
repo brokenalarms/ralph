@@ -1078,3 +1078,38 @@ func TestBranchStrategy_StackedBehavesLikeDefault(t *testing.T) {
 		t.Errorf("rotated branch %q should end with /next", mgr.WorktreeBranch)
 	}
 }
+
+// IsBranchSquashMerged detects when a branch's changes have been squash-merged
+// into main, so the exit summary can show [MERGED] next to completed branches.
+func TestIsBranchSquashMerged_DetectsMergedBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+
+	// Create a file on a feature branch
+	run(t, "git", "-C", project, "checkout", "-b", "ralph/test/01-feature")
+	writeFile(t, project, "feature.txt", "feature content\n")
+	run(t, "git", "-C", project, "commit", "-m", "add feature")
+	run(t, "git", "-C", project, "checkout", "main")
+
+	// Simulate squash-merge: apply the same changes on main and push
+	writeFile(t, project, "feature.txt", "feature content\n")
+	run(t, "git", "-C", project, "commit", "-m", "squash: feature")
+	run(t, "git", "-C", project, "push", "origin", "main")
+
+	if !IsBranchSquashMerged(project, "ralph/test/01-feature") {
+		t.Error("expected branch to be detected as squash-merged")
+	}
+}
+
+// IsBranchSquashMerged returns false for branches with changes not yet on main.
+func TestIsBranchSquashMerged_UnmergedBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+
+	run(t, "git", "-C", project, "checkout", "-b", "ralph/test/01-pending")
+	writeFile(t, project, "pending.txt", "pending content\n")
+	run(t, "git", "-C", project, "commit", "-m", "add pending")
+	run(t, "git", "-C", project, "checkout", "main")
+
+	if IsBranchSquashMerged(project, "ralph/test/01-pending") {
+		t.Error("expected unmerged branch to not be detected as squash-merged")
+	}
+}

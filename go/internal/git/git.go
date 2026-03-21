@@ -510,6 +510,50 @@ func (m *Manager) isSquashMerged(defaultBranch, mergeBase, branch string) bool {
 	return applyCmd.Run() == nil
 }
 
+// IsBranchSquashMerged checks whether a branch's changes have been
+// squash-merged into origin's default branch.
+func IsBranchSquashMerged(dir, branch string) bool {
+	defaultBranch := detectDefaultBranch(dir)
+	if !refExists(dir, "origin/"+defaultBranch) {
+		return false
+	}
+
+	mergeBase := gitOutput(dir, "merge-base", "origin/"+defaultBranch, branch)
+	if mergeBase == "" {
+		return false
+	}
+
+	branchFiles := gitOutput(dir, "diff", "--name-only", mergeBase, branch)
+	if branchFiles == "" {
+		return false
+	}
+
+	tmpIndex, err := os.CreateTemp("", "ralph_squash_check.*")
+	if err != nil {
+		return false
+	}
+	tmpPath := tmpIndex.Name()
+	tmpIndex.Close()
+	defer os.Remove(tmpPath)
+
+	readTreeCmd := exec.Command("git", "-C", dir, "read-tree", "origin/"+defaultBranch)
+	readTreeCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpPath)
+	if readTreeCmd.Run() != nil {
+		return false
+	}
+
+	diffCmd := exec.Command("git", "-C", dir, "diff", mergeBase, branch)
+	diffOut, err := diffCmd.Output()
+	if err != nil || len(diffOut) == 0 {
+		return false
+	}
+
+	applyCmd := exec.Command("git", "-C", dir, "apply", "--cached", "--reverse", "--check", "-C0")
+	applyCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpPath)
+	applyCmd.Stdin = strings.NewReader(string(diffOut))
+	return applyCmd.Run() == nil
+}
+
 // ListProjectBranches returns ralph/<project>/* branches sorted by refname.
 func ListProjectBranches(dir, projectName string) []string {
 	out := gitOutput(dir, "branch", "--list", "ralph/"+projectName+"/*", "--sort=refname")
