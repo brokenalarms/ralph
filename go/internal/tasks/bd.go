@@ -25,17 +25,44 @@ type BD struct {
 	ProjectDir string
 	PromptsDir string
 	RunBD      CommandRunner // injectable for testing; nil uses defaultRunBD
+	bdPath     string        // resolved absolute path to the bd binary
 }
 
 func (b *BD) runner() CommandRunner {
 	if b.RunBD != nil {
 		return b.RunBD
 	}
-	return defaultRunBD
+	return b.defaultRunBD
 }
 
-func defaultRunBD(dir string, args ...string) (string, error) {
-	cmd := exec.Command("bd", args...)
+// resolveBD finds the bd binary on PATH, falling back to common install
+// locations (~/.local/bin) that may not be in PATH when invoked from
+// non-login shells (e.g. inside tmux).
+func (b *BD) resolveBD() error {
+	if b.bdPath != "" {
+		return nil
+	}
+
+	path, err := exec.LookPath("bd")
+	if err == nil {
+		b.bdPath = path
+		return nil
+	}
+
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		candidate := filepath.Join(home, ".local", "bin", "bd")
+		if _, statErr := os.Stat(candidate); statErr == nil {
+			b.bdPath = candidate
+			return nil
+		}
+	}
+
+	return fmt.Errorf("bd binary not found in PATH or ~/.local/bin: %w", err)
+}
+
+func (b *BD) defaultRunBD(dir string, args ...string) (string, error) {
+	cmd := exec.Command(b.bdPath, args...)
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	return strings.TrimSpace(string(out)), err
@@ -45,6 +72,13 @@ func defaultRunBD(dir string, args ...string) (string, error) {
 // health, and manages .gitignore entries. Returns ErrNeedsFallback
 // when bd/Dolt is unreachable.
 func (b *BD) Init() error {
+	// Resolve the bd binary path before any commands run.
+	if b.RunBD == nil {
+		if err := b.resolveBD(); err != nil {
+			return fmt.Errorf("%w: %w", err, ErrNeedsFallback)
+		}
+	}
+
 	run := b.runner()
 
 	// If .beads doesn't exist, run bd init.
