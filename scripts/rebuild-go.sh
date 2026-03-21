@@ -7,5 +7,5 @@ old="${1:-HEAD~1}"
 new="${2:-HEAD}"
 
 if git diff-tree --no-commit-id --name-only -r "$old" "$new" | grep -q '^go/'; then
-  cd "$root/go" && go install ./cmd/ralph/ 2>/dev/null &
+  cd "$root/go" && go build -o "$HOME/.local/bin/ralph" ./cmd/ralph/ 2>/dev/null &
 fi
