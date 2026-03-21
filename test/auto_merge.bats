@@ -78,7 +78,6 @@ teardown() {
     set -- --auto-merge --no-worktree
     RALPH_SOURCED=true
     source "'"$RALPH_SH"'"
-    trap - EXIT
     echo "$AUTO_MERGE"
   ')
   [[ "$output" == "true" ]]
