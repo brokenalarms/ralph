@@ -8,10 +8,11 @@ import (
 )
 
 // BumpPatchTag reads the latest vX.Y.Z tag from the repo, increments the
-// patch component, creates the new tag on HEAD, and pushes it. Returns the
-// new tag string (e.g. "v0.1.1") or an error. If no version tag exists,
-// starts from v0.1.0 and bumps to v0.1.1.
-func BumpPatchTag(projectDir string) (string, error) {
+// patch component, creates the new tag, and pushes it. The ref parameter
+// specifies which commit to tag (e.g. "origin/main"); empty string tags HEAD.
+// Returns the new tag string (e.g. "v0.1.1") or an error. If no version tag
+// exists, starts from v0.1.0 and bumps to v0.1.1.
+func BumpPatchTag(projectDir, ref string) (string, error) {
 	latest, err := LatestVersionTag(projectDir)
 	if err != nil {
 		return "", err
@@ -24,23 +25,28 @@ func BumpPatchTag(projectDir string) (string, error) {
 
 	newTag := fmt.Sprintf("v%d.%d.%d", major, minor, patch+1)
 
-	if err := createAndPushTag(newTag, projectDir); err != nil {
+	if err := createAndPushTag(newTag, projectDir, ref); err != nil {
 		return "", err
 	}
 
 	return newTag, nil
 }
 
-// LatestVersionTag returns the most recent vX.Y.Z tag reachable from HEAD.
-// If no version tags exist, returns "v0.1.0" as the baseline.
+// LatestVersionTag returns the most recent vX.Y.Z tag in the repository,
+// sorted by semantic version. If no version tags exist, returns "v0.1.0"
+// as the baseline.
 func LatestVersionTag(projectDir string) (string, error) {
-	cmd := exec.Command("git", "describe", "--tags", "--match", "v[0-9]*.[0-9]*.[0-9]*", "--abbrev=0")
+	cmd := exec.Command("git", "tag", "--list", "v[0-9]*.[0-9]*.[0-9]*", "--sort=-v:refname")
 	cmd.Dir = projectDir
 	out, err := cmd.Output()
 	if err != nil {
 		return "v0.1.0", nil
 	}
-	return strings.TrimSpace(string(out)), nil
+	first := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+	if first == "" {
+		return "v0.1.0", nil
+	}
+	return first, nil
 }
 
 // ParseVersion extracts major, minor, patch from a "vX.Y.Z" string.
@@ -67,8 +73,12 @@ func ParseVersion(tag string) (major, minor, patch int, err error) {
 	return major, minor, patch, nil
 }
 
-func createAndPushTag(tag, projectDir string) error {
-	cmd := exec.Command("git", "tag", tag)
+func createAndPushTag(tag, projectDir, ref string) error {
+	args := []string{"tag", tag}
+	if ref != "" {
+		args = append(args, ref)
+	}
+	cmd := exec.Command("git", args...)
 	cmd.Dir = projectDir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to create tag %s: %s", tag, strings.TrimSpace(string(out)))
