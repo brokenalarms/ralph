@@ -295,9 +295,16 @@ func (m *Manager) RotateBranch() {
 		return
 	}
 
-	m.WorktreeBranch = m.TempBranch()
-	gitCmd(m.WorkDir, "branch", "-D", m.WorktreeBranch)
-	if err := gitCmdErr(m.WorkDir, "checkout", "-b", m.WorktreeBranch); err == nil {
+	newBranch := m.TempBranch()
+
+	// Already on the temp branch (e.g. after PostMergeReset)
+	if m.WorktreeBranch == newBranch {
+		m.BranchRenamed = false
+		return
+	}
+
+	if err := gitCmdErr(m.WorkDir, "checkout", "-B", newBranch); err == nil {
+		m.WorktreeBranch = newBranch
 		if m.State != nil {
 			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
 		}
@@ -346,15 +353,43 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 
 	m.Logger.Log("PR #%s squash-merged into main", prNumber)
 
-	// Pull latest main so next iteration rebases on merged changes
+	// Pull latest main so next iteration starts from merged state
 	defaultBranch := detectDefaultBranch(m.ProjectDir)
 	gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
 	gitCmd(m.ProjectDir, "branch", "-f", defaultBranch, "origin/"+defaultBranch)
 	m.Logger.Log("Updated local %s to origin/%s", defaultBranch, defaultBranch)
 
-	// Clean up merged branch
-	exec.Command("git", "-C", m.ProjectDir, "branch", "-D", m.WorktreeBranch).Run()
 	return true, nil
+}
+
+// PostMergeReset resets the worktree to a fresh temp branch at origin/main.
+// Called after a successful auto-merge so the next task starts from the
+// merged state rather than building on stale commits. Works for both
+// single-branch and stacked strategies.
+func (m *Manager) PostMergeReset() {
+	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
+		return
+	}
+
+	defaultBranch := detectDefaultBranch(m.ProjectDir)
+	oldBranch := m.WorktreeBranch
+	newBranch := m.TempBranch()
+
+	if err := gitCmdErr(m.WorkDir, "checkout", "-B", newBranch, "origin/"+defaultBranch); err != nil {
+		m.Logger.Warn("Post-merge reset failed, continuing on %s", m.WorktreeBranch)
+		return
+	}
+
+	if oldBranch != newBranch {
+		gitCmd(m.WorkDir, "branch", "-D", oldBranch)
+	}
+
+	m.WorktreeBranch = newBranch
+	m.BranchRenamed = false
+	if m.State != nil {
+		_ = m.State.Write("worktree_branch", m.WorktreeBranch)
+	}
+	m.Logger.Log("Reset to %s from origin/%s", newBranch, defaultBranch)
 }
 
 // RecreateFromMain removes the current worktree and creates a fresh one from

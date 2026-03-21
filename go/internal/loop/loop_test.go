@@ -471,9 +471,16 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 		nextID:    "ralph-new",
 	}
 
+	// Set up a real git repo as the worktree so RotateBranch can checkout
+	wtDir := filepath.Join(dir, "worktree")
+	os.MkdirAll(wtDir, 0o755)
+	exec.Command("git", "init", wtDir).Run()
+	exec.Command("git", "-C", wtDir, "commit", "--allow-empty", "-m", "init").Run()
+	exec.Command("git", "-C", wtDir, "checkout", "-b", "ralph/myproject/01-previous-task").Run()
+
 	gm := &git.Manager{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        wtDir,
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/myproject/01-previous-task",
 		ProjectName:    "myproject",
@@ -483,7 +490,7 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 
 	l := New(Config{
 		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
+		WorkDir:       wtDir,
 		RalphDir:      ralphDir,
 		MaxIterations: 5,
 		CallsPerHour:  80,
@@ -1233,6 +1240,88 @@ func run(t *testing.T, name string, args ...string) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s %v failed: %v\n%s", name, args, err, out)
+	}
+}
+
+// Verifies that auto-merge fires and calls PostMergeReset after a successful
+// merge, ensuring the next task starts from merged main — not stale commits.
+// This is the core fix: both branch strategies share the same PR/merge lifecycle.
+func TestLoop_AutoMergeCallsPostMergeReset(t *testing.T) {
+	for _, strategy := range []git.BranchStrategy{git.BranchStacked, git.BranchSingle} {
+		t.Run(string(strategy), func(t *testing.T) {
+			dir, st := setupTestDir(t)
+			ralphDir := filepath.Join(dir, ".ralph")
+
+			promptsDir := filepath.Join(dir, "prompts")
+			createPromptTemplates(t, promptsDir)
+
+			mergeCalled := false
+			iterationCount := 0
+
+			backend := &mutableBackend{
+				remaining: 1,
+				completed: 0,
+				total:     2,
+				nextTask:  "task A",
+				nextID:    "ralph-aaa",
+			}
+
+			runner := &stubRunner{
+				onRun: func() {
+					iterationCount++
+					if iterationCount == 1 {
+						backend.mu.Lock()
+						backend.completed = 1
+						backend.remaining = 1
+						backend.nextTask = "task B"
+						backend.nextID = "ralph-bbb"
+						backend.mu.Unlock()
+					} else {
+						backend.mu.Lock()
+						backend.completed = 2
+						backend.remaining = 0
+						backend.mu.Unlock()
+					}
+				},
+				result: claude.Result{SignalDetected: true},
+			}
+
+			gm := &git.Manager{
+				ProjectDir:     dir,
+				WorkDir:        dir,
+				BranchStrategy: strategy,
+				Logger:         logging.New(nil),
+			}
+
+			l := New(Config{
+				ProjectDir:    dir,
+				WorkDir:       dir,
+				RalphDir:      ralphDir,
+				PromptsDir:    promptsDir,
+				MaxIterations: 10,
+				CallsPerHour:  80,
+				AutoMerge:     true,
+				TaskBackend:   backend,
+			}, st, gm, logging.New(nil))
+			l.runner = runner
+			l.mergeFunc = func() (bool, error) {
+				mergeCalled = true
+				return true, nil
+			}
+
+			err := l.Run(context.Background())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if !mergeCalled {
+				t.Error("auto-merge should have been called when signal detected and AutoMerge enabled")
+			}
+
+			if iterationCount != 2 {
+				t.Errorf("expected 2 iterations, got %d", iterationCount)
+			}
+		})
 	}
 }
 

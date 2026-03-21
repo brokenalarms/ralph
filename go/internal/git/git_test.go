@@ -1113,3 +1113,91 @@ func TestIsBranchSquashMerged_UnmergedBranch(t *testing.T) {
 		t.Error("expected unmerged branch to not be detected as squash-merged")
 	}
 }
+
+// PostMergeReset resets the worktree to a fresh branch at origin/main after
+// auto-merge, so the next task starts from merged state instead of stale commits.
+func TestPostMergeReset_ResetsToOriginMain(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchStacked,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Rename to a task branch (simulating a completed task)
+	mgr.RenameBranchForTask("completed task")
+	taskBranch := mgr.WorktreeBranch
+	if taskBranch == mgr.TempBranch() {
+		t.Fatal("expected task branch to differ from temp branch")
+	}
+
+	mgr.PostMergeReset()
+
+	if mgr.WorktreeBranch != mgr.TempBranch() {
+		t.Errorf("expected branch %q after reset, got %q", mgr.TempBranch(), mgr.WorktreeBranch)
+	}
+	if mgr.BranchRenamed {
+		t.Error("BranchRenamed should be false after PostMergeReset")
+	}
+
+	// Old task branch should be deleted
+	if refExists(mgr.WorkDir, taskBranch) {
+		t.Errorf("old task branch %q should have been deleted", taskBranch)
+	}
+}
+
+// PostMergeReset in single-branch mode resets to the same branch name (temp)
+// from origin/main, keeping the branch name stable.
+func TestPostMergeReset_SingleBranchKeepsSameName(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchSingle,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// In single-branch mode, branch stays as /next
+	origBranch := mgr.WorktreeBranch
+	if !strings.HasSuffix(origBranch, "/next") {
+		t.Fatalf("expected /next branch, got %q", origBranch)
+	}
+
+	// Add a commit so we can verify reset moves HEAD
+	writeFile(t, mgr.WorkDir, "task-work.txt", "some work\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "task commit")
+
+	headBefore := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
+	originMain := gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
+	if headBefore == originMain {
+		t.Fatal("HEAD should differ from origin/main before reset")
+	}
+
+	mgr.PostMergeReset()
+
+	if mgr.WorktreeBranch != origBranch {
+		t.Errorf("single-branch should keep name %q, got %q", origBranch, mgr.WorktreeBranch)
+	}
+
+	headAfter := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
+	if headAfter != originMain {
+		t.Errorf("HEAD should match origin/main after reset, got %s vs %s", headAfter, originMain)
+	}
+}

@@ -279,11 +279,14 @@ func (l *Loop) Run(ctx context.Context) error {
 			merged, err := l.autoMerge()
 			if err != nil {
 				l.logger.Warn("Auto-merge: %v", err)
-			} else if merged && l.cfg.AutoImprove {
-				l.git.TagTaskEnd(taskID)
-				l.logger.Phase("Auto-improve: restarting with latest main")
-				l.state.Write("status", "auto_improve_restart")
-				return nil
+			} else if merged {
+				l.git.PostMergeReset()
+				if l.cfg.AutoImprove {
+					l.git.TagTaskEnd(taskID)
+					l.logger.Phase("Auto-improve: restarting with latest main")
+					l.state.Write("status", "auto_improve_restart")
+					return nil
+				}
 			}
 		}
 
