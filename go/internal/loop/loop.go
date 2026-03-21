@@ -47,15 +47,16 @@ type claudeRunner interface {
 // Loop orchestrates the execution phase: task selection, prompt building,
 // rate limiting, branch rotation, Claude invocation, and response analysis.
 type Loop struct {
-	cfg       Config
-	state     *state.Store
-	git       *git.Manager
-	limiter   *ratelimit.Limiter
-	runner    claudeRunner
-	analyzer  *analyzer.Analyzer
-	logger    *logging.Logger
-	signals   claude.SignalPaths
-	mergeFunc func() (bool, error)
+	cfg        Config
+	state      *state.Store
+	git        *git.Manager
+	limiter    *ratelimit.Limiter
+	runner     claudeRunner
+	analyzer   *analyzer.Analyzer
+	logger     *logging.Logger
+	signals    claude.SignalPaths
+	mergeFunc  func() (bool, error)
+	pushPRFunc func(taskDesc string) error
 }
 
 // New creates an execution loop from the given configuration.
@@ -275,15 +276,24 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.logger.Warn("Analysis: %s", analysisResult.Reason)
 		}
 
-		if l.cfg.AutoMerge && result.SignalDetected {
-			merged, err := l.autoMerge()
-			if err != nil {
-				l.logger.Warn("Auto-merge: %v", err)
-			} else if merged && l.cfg.AutoImprove {
-				l.git.TagTaskEnd(taskID)
-				l.logger.Phase("Auto-improve: restarting with latest main")
-				l.state.Write("status", "auto_improve_restart")
-				return nil
+		if result.SignalDetected {
+			if err := l.pushAndCreatePR(nextTask); err != nil {
+				l.logger.Warn("Push/PR: %v", err)
+			}
+
+			if l.cfg.AutoMerge {
+				merged, err := l.autoMerge()
+				if err != nil {
+					l.logger.Warn("Auto-merge: %v", err)
+				} else if merged {
+					l.git.PostMergeReset()
+					if l.cfg.AutoImprove {
+						l.git.TagTaskEnd(taskID)
+						l.logger.Phase("Auto-improve: restarting with latest main")
+						l.state.Write("status", "auto_improve_restart")
+						return nil
+					}
+				}
 			}
 		}
 
@@ -336,6 +346,13 @@ func (l *Loop) isNewTask(taskID, taskDesc string) bool {
 	}
 	lastTask, _ := l.state.Read("last_task")
 	return lastTask != taskDesc
+}
+
+func (l *Loop) pushAndCreatePR(taskDesc string) error {
+	if l.pushPRFunc != nil {
+		return l.pushPRFunc(taskDesc)
+	}
+	return l.git.PushAndCreatePR(taskDesc)
 }
 
 func (l *Loop) autoMerge() (bool, error) {
