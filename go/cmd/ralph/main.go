@@ -270,6 +270,9 @@ func initRalphDir(cfg config.Config, ralphDir, logFile, stateFile string, log *l
 	// Ensure .ralph is gitignored.
 	ensureGitignored(cfg.ProjectDir, ".ralph")
 
+	// Clean up orphaned worktrees from previous runs.
+	git.PruneOrphanedWorktrees(cfg.ProjectDir, ralphDir, log)
+
 	// Check for existing state (resume detection).
 	if fileExists(stateFile) {
 		st := state.NewStore(ralphDir)

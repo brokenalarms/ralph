@@ -924,6 +924,56 @@ func extractSeqSlug(branch string) string {
 	return seg
 }
 
+// PruneOrphanedWorktrees removes worktree directories under ralphDir/worktrees
+// that are no longer tracked by git. It first runs `git worktree prune` to
+// clean up stale bookkeeping, then removes any leftover directories that git
+// no longer knows about.
+func PruneOrphanedWorktrees(projectDir, ralphDir string, logger Log) {
+	worktreeRoot := filepath.Join(ralphDir, "worktrees")
+	entries, err := os.ReadDir(worktreeRoot)
+	if err != nil {
+		return
+	}
+	if len(entries) == 0 {
+		return
+	}
+
+	gitCmd(projectDir, "worktree", "prune")
+
+	tracked := trackedWorktreePaths(projectDir)
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dirPath := filepath.Join(worktreeRoot, e.Name())
+		resolved, err := filepath.EvalSymlinks(dirPath)
+		if err != nil {
+			resolved = dirPath
+		}
+		if tracked[dirPath] || tracked[resolved] {
+			continue
+		}
+		if logger != nil {
+			logger.Log("Removing orphaned worktree directory: %s", dirPath)
+		}
+		os.RemoveAll(dirPath)
+	}
+}
+
+// trackedWorktreePaths returns the set of worktree paths that git currently
+// tracks, parsed from `git worktree list --porcelain`.
+func trackedWorktreePaths(projectDir string) map[string]bool {
+	out := gitOutput(projectDir, "worktree", "list", "--porcelain")
+	paths := make(map[string]bool)
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "worktree ") {
+			paths[strings.TrimPrefix(line, "worktree ")] = true
+		}
+	}
+	return paths
+}
+
 // ParseTaskSeqFromBranches scans ralph/<project>/* branches and returns the
 // highest sequence number found.
 func ParseTaskSeqFromBranches(dir, projectName string) int {
