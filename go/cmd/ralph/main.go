@@ -272,7 +272,7 @@ func initTaskBackend(cfg config.Config, resume bool, st *state.Store, ralphDir, 
 		}
 		if err := bd.Init(); err != nil {
 			if errors.Is(err, tasks.ErrNeedsFallback) {
-				log.Warn("bd unavailable, falling back to checklist")
+				log.Warn("bd unavailable (%v), falling back to checklist", err)
 				backendLabel = "checklist"
 			} else {
 				return nil, err
