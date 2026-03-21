@@ -91,6 +91,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
+		log.Warn("Ctrl-C received — exiting gracefully")
 		interrupted = true
 		cancel()
 	}()
