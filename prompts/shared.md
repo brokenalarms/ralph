@@ -30,9 +30,10 @@
 - Behavioral code changes should be backed by tests. Static content, markup, and config changes don't need tests — a passing build is verification enough.
 
 ### Github
-- Grouped commits for a task should end in a pull request, if the environment supports it (gh is available). Never push directly to main.
+- One task = one PR. All commits for a task go into a single pull request. Never push directly to main.
 - Before creating a PR, fetch and rebase onto the latest origin main to avoid merge conflicts.
-- If you end up pushing a commit to a pull request after creating the request, the pull request title and description need to be regenerated to capture all commits.
+- Before creating a PR, check if one already exists for the current branch: `gh pr list --head "$(git branch --show-current)" --state open --json number --jq '.[0].number'`. If a PR exists, push your commits and update its title and description to reflect all commits on the branch. Only create a new PR if none exists.
+- Do not create a PR after each commit. Finish all commits for the task, push once, then create or update the PR.
 
 ### Boy Scout Rule
 Before committing, glance at the files you touched. If you see something genuinely worth cleaning up, do it:
