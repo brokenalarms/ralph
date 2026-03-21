@@ -439,6 +439,59 @@ func TestChecklist_Init_IsNoOp(t *testing.T) {
 	}
 }
 
+// Proves: resolveBD finds bd via exec.LookPath when it's on PATH.
+func TestBD_ResolveBD_FindsOnPath(t *testing.T) {
+	b := &BD{}
+	err := b.resolveBD()
+	if err != nil {
+		t.Skipf("bd not installed on test host: %v", err)
+	}
+	if b.bdPath == "" {
+		t.Error("expected bdPath to be set after resolveBD")
+	}
+	if !filepath.IsAbs(b.bdPath) {
+		t.Errorf("expected absolute path, got %q", b.bdPath)
+	}
+}
+
+// Proves: resolveBD is idempotent — doesn't re-resolve when bdPath is set.
+func TestBD_ResolveBD_Idempotent(t *testing.T) {
+	b := &BD{bdPath: "/fake/bd"}
+	if err := b.resolveBD(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if b.bdPath != "/fake/bd" {
+		t.Errorf("expected bdPath to remain /fake/bd, got %q", b.bdPath)
+	}
+}
+
+// Proves: Init skips resolveBD when a mock runner is injected.
+func TestBD_Init_SkipsResolveWithMockRunner(t *testing.T) {
+	b := setupBD(t, defaultMock())
+	if err := b.Init(); err != nil {
+		t.Fatalf("Init with mock runner should not fail: %v", err)
+	}
+	if b.bdPath != "" {
+		t.Error("expected bdPath to remain empty with mock runner")
+	}
+}
+
+// Proves: Init returns ErrNeedsFallback when bd binary is not found.
+func TestBD_Init_FallbackWhenBinaryNotFound(t *testing.T) {
+	b := &BD{
+		ProjectDir: t.TempDir(),
+		PromptsDir: t.TempDir(),
+	}
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", "/nonexistent")
+	defer os.Setenv("PATH", origPath)
+
+	err := b.Init()
+	if !errors.Is(err, ErrNeedsFallback) {
+		t.Errorf("expected ErrNeedsFallback, got %v", err)
+	}
+}
+
 // Proves: counts return zero when bd commands fail.
 func TestBD_Counts_OnError(t *testing.T) {
 	failing := func(dir string, args ...string) (string, error) {
