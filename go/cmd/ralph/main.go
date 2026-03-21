@@ -394,7 +394,7 @@ func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir st
 	}
 
 	sess := &tmux.Session{
-		Name:        fmt.Sprintf("ralph-%d", os.Getpid()),
+		Name:        fmt.Sprintf("ralph-go-%d", os.Getpid()),
 		ProjectDir:  cfg.ProjectDir,
 		RalphDir:    ralphDir,
 		RawLogPath:  filepath.Join(ralphDir, "raw.log"),
