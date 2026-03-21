@@ -461,7 +461,7 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 }
 
 func printUsage() {
-	fmt.Printf(`%sRalph Loop v%s%s - Autonomous Claude Code task iteration
+	fmt.Printf(`%sRalph Loop v%s (go)%s - Autonomous Claude Code task iteration
 
 %sUSAGE:%s
   ralph [OPTIONS] [directory]
