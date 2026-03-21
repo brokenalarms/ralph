@@ -87,8 +87,11 @@ func TestWritePlanWatcher_BD(t *testing.T) {
 	if !strings.Contains(content, "bd list --status in_progress") {
 		t.Error("bd plan watcher missing in_progress query")
 	}
-	if !strings.Contains(content, "bd ready") {
-		t.Error("bd plan watcher missing ready queue")
+	if !strings.Contains(content, "bd ready --json") {
+		t.Error("bd plan watcher missing JSON-based ready queue")
+	}
+	if !strings.Contains(content, `select(.id != $cid)`) {
+		t.Error("bd plan watcher missing jq filter for current task ID")
 	}
 	if !strings.Contains(content, "bd count --status closed") {
 		t.Error("bd plan watcher missing progress counter")

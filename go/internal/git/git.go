@@ -419,10 +419,16 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 
 	m.Logger.Log("PR #%s squash-merged into main", prNumber)
 
-	// Pull latest main so next iteration starts from merged state
+	// Pull latest main so next iteration starts from merged state.
+	// Use update-ref instead of branch -f because the default branch is
+	// typically checked out in the project dir, and branch -f refuses to
+	// update the current branch.
 	defaultBranch := detectDefaultBranch(m.ProjectDir)
 	gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
-	gitCmd(m.ProjectDir, "branch", "-f", defaultBranch, "origin/"+defaultBranch)
+	originRef := gitOutput(m.ProjectDir, "rev-parse", "origin/"+defaultBranch)
+	if originRef != "" {
+		gitCmd(m.ProjectDir, "update-ref", "refs/heads/"+defaultBranch, originRef)
+	}
 	m.Logger.Log("Updated local %s to origin/%s", defaultBranch, defaultBranch)
 
 	return true, nil
