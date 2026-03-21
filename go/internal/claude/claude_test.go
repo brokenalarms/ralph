@@ -177,14 +177,34 @@ func TestAllCompleteSignalDetected(t *testing.T) {
 
 // --- Stream text extraction tests ---
 
-// Verifies that extractStreamText pulls text from assistant messages in
-// Claude's stream-json format, which is how we convert raw JSON to
-// human-readable log output.
+// Verifies that extractStreamText pulls text from assistant messages using
+// Claude's actual nested content array format: message.content[].text.
 func TestExtractStreamText_Assistant(t *testing.T) {
-	line := `{"type":"assistant","content":"Hello world"}`
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"Hello world"}]}}`
 	got := extractStreamText(line)
 	if got != "Hello world" {
 		t.Errorf("extractStreamText = %q, want %q", got, "Hello world")
+	}
+}
+
+// Verifies that tool_use content blocks produce a short summary with the
+// tool name and its primary target (file_path, command, etc.).
+func TestExtractStreamText_AssistantToolUse(t *testing.T) {
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/foo.go"}}]}}`
+	got := extractStreamText(line)
+	if got != "[Read] /tmp/foo.go" {
+		t.Errorf("extractStreamText = %q, want %q", got, "[Read] /tmp/foo.go")
+	}
+}
+
+// Verifies that messages with both text and tool_use content blocks are
+// concatenated with newlines.
+func TestExtractStreamText_AssistantMixed(t *testing.T) {
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"reading file"},{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}`
+	got := extractStreamText(line)
+	want := "reading file\n[Bash] ls"
+	if got != want {
+		t.Errorf("extractStreamText = %q, want %q", got, want)
 	}
 }
 
@@ -195,6 +215,16 @@ func TestExtractStreamText_ContentBlockDelta(t *testing.T) {
 	got := extractStreamText(line)
 	if got != "partial output" {
 		t.Errorf("extractStreamText = %q, want %q", got, "partial output")
+	}
+}
+
+// Verifies that error responses are extracted from result events so users
+// see API errors in the log.
+func TestExtractStreamText_ResultError(t *testing.T) {
+	line := `{"type":"result","subtype":"error_response","error":"rate limited"}`
+	got := extractStreamText(line)
+	if got != "rate limited" {
+		t.Errorf("extractStreamText = %q, want %q", got, "rate limited")
 	}
 }
 
@@ -210,17 +240,6 @@ func TestExtractStreamText_IgnoresNonTextEvents(t *testing.T) {
 		if got := extractStreamText(line); got != "" {
 			t.Errorf("extractStreamText(%q) = %q, want empty", line, got)
 		}
-	}
-}
-
-// Verifies that extractJSONString handles escape sequences in JSON values,
-// which appear when Claude outputs code with newlines or quotes.
-func TestExtractJSONString_Escapes(t *testing.T) {
-	line := `{"text":"line1\nline2\ttab\"quote\\back"}`
-	got := extractJSONString(line, "text")
-	want := "line1\nline2\ttab\"quote\\back"
-	if got != want {
-		t.Errorf("extractJSONString = %q, want %q", got, want)
 	}
 }
 
@@ -290,7 +309,7 @@ func TestFilterStreamJSON_TailsFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Fprintln(f, `{"type":"assistant","content":"hello from claude"}`)
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"hello from claude"}]}}`)
 	f.Close()
 
 	// Give the filter time to process, then stop it.
