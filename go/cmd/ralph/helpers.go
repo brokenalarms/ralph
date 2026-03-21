@@ -102,10 +102,7 @@ func autoImproveRestart(projectDir, scriptPath string, args []string, log *loggi
 		return fmt.Errorf("go build failed: %s", out)
 	}
 
-	// Clear signal files but preserve state so the new process resumes execution
-	for _, f := range []string{".signal_complete", ".signal_current_task", ".signal_all_complete", ".stream-task"} {
-		os.Remove(filepath.Join(ralphDir, f))
-	}
+	clearSignalFiles(ralphDir)
 
 	log.Log("Restarting ralph with new binary...")
 	execArgs := append([]string{scriptPath}, args...)
@@ -141,6 +138,12 @@ func extractEmbeddedPrompts() (string, error) {
 		return os.WriteFile(filepath.Join(tmpDir, name), data, 0o644)
 	})
 	return tmpDir, err
+}
+
+func clearSignalFiles(ralphDir string) {
+	for _, f := range []string{".signal_complete", ".signal_current_task", ".signal_all_complete", ".stream-task"} {
+		os.Remove(filepath.Join(ralphDir, f))
+	}
 }
 
 func ensureGitignored(projectDir, entry string) {

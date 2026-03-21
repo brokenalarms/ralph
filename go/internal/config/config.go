@@ -50,7 +50,7 @@ func Defaults() Config {
 		CallsPerHour:               80,
 		RefactorEvery:              envInt("RALPH_REFACTOR_EVERY", 0),
 		IdleTimeout:                envDuration("RALPH_IDLE_TIMEOUT", 10*time.Minute),
-		IdleTimeoutProgress:        envDuration("RALPH_IDLE_TIMEOUT_PROGRESS", 30*time.Second),
+		IdleTimeoutProgress:        envDuration("RALPH_IDLE_TIMEOUT_PROGRESS", 5*time.Minute),
 		WatcherInterval:            10,
 		StuckThreshold:             5,
 		StuckConfirmationThreshold: 2,

@@ -197,6 +197,36 @@ func TestInitRalphDir_CreatesDirectory(t *testing.T) {
 	}
 }
 
+// Verifies clearSignalFiles removes signal files but preserves state.json
+// and other .ralph contents, so evolve restart resumes instead of replanning.
+func TestClearSignalFiles_PreservesState(t *testing.T) {
+	ralphDir := t.TempDir()
+
+	// Create state and signal files
+	os.WriteFile(filepath.Join(ralphDir, "state.json"), []byte(`{"status":"running"}`), 0o644)
+	os.WriteFile(filepath.Join(ralphDir, "loop.log"), []byte("log data"), 0o644)
+	os.WriteFile(filepath.Join(ralphDir, ".signal_complete"), []byte("done"), 0o644)
+	os.WriteFile(filepath.Join(ralphDir, ".signal_current_task"), []byte("task"), 0o644)
+	os.WriteFile(filepath.Join(ralphDir, ".signal_all_complete"), []byte("all done"), 0o644)
+	os.WriteFile(filepath.Join(ralphDir, ".stream-task"), []byte("stream"), 0o644)
+
+	clearSignalFiles(ralphDir)
+
+	// Signal files should be gone
+	for _, f := range []string{".signal_complete", ".signal_current_task", ".signal_all_complete", ".stream-task"} {
+		if _, err := os.Stat(filepath.Join(ralphDir, f)); !os.IsNotExist(err) {
+			t.Errorf("signal file %s should be removed", f)
+		}
+	}
+
+	// State files should be preserved
+	for _, f := range []string{"state.json", "loop.log"} {
+		if _, err := os.Stat(filepath.Join(ralphDir, f)); os.IsNotExist(err) {
+			t.Errorf("state file %s should be preserved", f)
+		}
+	}
+}
+
 // Verifies initRalphDir exits with error when working tree has uncommitted changes,
 // preventing the .gitignore commit from sweeping in unrelated staged work.
 func TestInitRalphDir_DirtyWorkingTreeExitsWithError(t *testing.T) {
