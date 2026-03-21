@@ -7,6 +7,8 @@
 
 ## Invariants
 - The `.beads` directory is the project's permanent task history. Never delete, clear, or reinitialize it. Do not remove it with shell commands or force-reinitialize the task backend. Only `.ralph` state is ephemeral — `.beads` persists across all runs.
+- NEVER run `bd init` — ralph handles backend initialization. Running `bd init` from the wrong directory creates orphan databases.
+- NEVER create directories named after task IDs. Work only in the worktree at {{WORK_DIR}}.
 
 ## Rules
 1. Focus ONLY on the single task described above.
