@@ -118,7 +118,7 @@ func TestCopyPreMadePlanFile(t *testing.T) {
 // When resuming with status past "initialized", planning is skipped entirely.
 func TestResumeSkipsPlanning(t *testing.T) {
 	d, _ := testDeps(t)
-	d.StateStore.Set("status", "planned")
+	d.StateStore.Write("status", "planned")
 
 	claudeCalled := false
 	d.RunClaude = func(string) error {
@@ -266,7 +266,7 @@ func TestFinalizeUpdatesStateAndRenames(t *testing.T) {
 	d.SkipPlanning = true
 
 	// Write theme to state so rename picks it up.
-	d.StateStore.Set("theme", "auth rewrite")
+	d.StateStore.Write("theme", "auth rewrite")
 
 	var renamedTheme string
 	d.RenameWorktree = func(theme string) error {
@@ -316,7 +316,7 @@ func TestTmuxSessionRenamedWithTheme(t *testing.T) {
 	d, _ := testDeps(t)
 	d.SkipPlanning = true
 
-	d.StateStore.Set("theme", "auth rewrite")
+	d.StateStore.Write("theme", "auth rewrite")
 
 	d.RenameWorktree = func(string) error { return nil }
 

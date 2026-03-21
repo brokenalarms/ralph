@@ -261,7 +261,7 @@ func renameWorktreeFromTheme(d Deps) {
 		return
 	}
 
-	theme, _ := d.StateStore.Get("theme")
+	theme, _ := d.StateStore.Read("theme")
 
 	// Fallback: derive theme from plan file heading.
 	if theme == "" {
@@ -288,7 +288,7 @@ func renameWorktreeFromTheme(d Deps) {
 
 // setStatus writes "planned" (or other status) to state.json.
 func setStatus(d Deps, status string) error {
-	return d.StateStore.Set("status", status)
+	return d.StateStore.Write("status", status)
 }
 
 // planFilePath returns the plan file destination inside the worktree.
