@@ -177,6 +177,19 @@ func TestStreamFilter_NoKillZeroTrap(t *testing.T) {
 	}
 }
 
+// Verifies that touchFile creates the .plan-refresh sentinel so the plan
+// pane renders on startup without waiting for the first iteration.
+func TestTouchFile_CreatesPlanRefresh(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".plan-refresh")
+
+	touchFile(path)
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Error(".plan-refresh should exist after touchFile")
+	}
+}
+
 // Verifies that .plan-refresh signal path is correctly embedded in the
 // plan watcher script, so the pane redraws when signaled.
 func TestPlanWatcher_SignalPath(t *testing.T) {
