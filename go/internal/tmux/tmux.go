@@ -186,8 +186,15 @@ stty -echo 2>/dev/null
 BOLD=$'\033[1m'
 CYAN=$'\033[0;36m'
 GREEN=$'\033[0;32m'
+DIM=$'\033[2m'
 NC=$'\033[0m'
 while true; do
+  if [[ -f '%s/.plan-flash' ]]; then
+    rm -f '%s/.plan-flash'
+    (tmux set-option -p pane-border-style 'fg=green,bold' 2>/dev/null
+     sleep 3
+     tmux set-option -p -u pane-border-style 2>/dev/null) &
+  fi
   if [[ -f '%s/.plan-refresh' ]]; then
     rm -f '%s/.plan-refresh'
     printf '\033[2J\033[H'
@@ -195,7 +202,7 @@ while true; do
   fi
   sleep 1
 done
-`, s.RalphDir, s.RalphDir, renderBlock)
+`, s.RalphDir, s.RalphDir, s.RalphDir, s.RalphDir, renderBlock)
 
 	return writeScript(filepath.Join(s.RalphDir, ".plan-watch.sh"), script)
 }
@@ -224,12 +231,21 @@ func (s *Session) bdPlanRender() string {
     fi
     closed=$(bd count --status closed 2>/dev/null || echo 0)
     total=$(bd count 2>/dev/null || echo 0)
-    printf "${GREEN}%%s/%%s done${NC}\n" "$closed" "$total"
+    if [[ $total -gt 0 ]]; then
+      bar_w=20
+      filled=$((closed * bar_w / total))
+      empty=$((bar_w - filled))
+      bar=""
+      for ((i=0; i<filled; i++)); do bar+="█"; done
+      for ((i=0; i<empty; i++)); do bar+="░"; done
+      printf "${GREEN}[%%s] %%s/%%s done${NC}\n" "$bar" "$closed" "$total"
+    else
+      printf "${GREEN}0/0 done${NC}\n"
+    fi
     if [[ -f '%s/.completed-tasks' ]]; then
-      completed_list=$(paste -sd', ' '%s/.completed-tasks')
-      if [[ -n "$completed_list" ]]; then
-        printf "${GREEN}%%s${NC}\n" "$completed_list"
-      fi
+      while IFS= read -r ctask; do
+        [[ -n "$ctask" ]] && printf "${DIM}  ✓ %%s${NC}\n" "$ctask"
+      done < '%s/.completed-tasks'
     fi`, s.RalphDir, s.RalphDir)
 }
 

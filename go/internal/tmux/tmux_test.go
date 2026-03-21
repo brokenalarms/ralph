@@ -284,7 +284,7 @@ func TestSanitizeSessionName(t *testing.T) {
 }
 
 // Verifies that the bd plan watcher reads .completed-tasks and renders
-// completed task IDs on a single comma-separated line after the done count,
+// each completed task on its own line with dim styling and a checkmark,
 // so the user can see what was finished in the current run.
 func TestWritePlanWatcher_BD_ShowsCompletedTasks(t *testing.T) {
 	dir := t.TempDir()
@@ -303,8 +303,8 @@ func TestWritePlanWatcher_BD_ShowsCompletedTasks(t *testing.T) {
 	if !strings.Contains(content, ".completed-tasks") {
 		t.Error("bd plan watcher should reference .completed-tasks file")
 	}
-	if !strings.Contains(content, "paste -sd', '") {
-		t.Error("bd plan watcher should join completed tasks with comma separator")
+	if !strings.Contains(content, "DIM") {
+		t.Error("bd plan watcher should use dim styling for completed tasks")
 	}
 }
 
@@ -345,6 +345,54 @@ func TestDeadPaneExitHint(t *testing.T) {
 	}
 	if !strings.Contains(killCmd, sessionName) {
 		t.Error("kill command should target the session")
+	}
+}
+
+// Verifies that the bd plan watcher renders a visual progress bar showing
+// the ratio of completed to total tasks, so progress is visible at a glance.
+func TestWritePlanWatcher_BD_ProgressBar(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{
+		RalphDir:    dir,
+		TaskBackend: "bd",
+	}
+
+	if err := s.writePlanWatcher(); err != nil {
+		t.Fatalf("writePlanWatcher() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
+	content := string(data)
+
+	if !strings.Contains(content, "bar_w=20") {
+		t.Error("bd plan watcher should have a 20-character progress bar width")
+	}
+	if !strings.Contains(content, "█") || !strings.Contains(content, "░") {
+		t.Error("bd plan watcher should use filled/empty block characters for progress bar")
+	}
+}
+
+// Verifies that the plan watcher checks for a .plan-flash signal file and
+// briefly highlights the pane border green when a task completes.
+func TestWritePlanWatcher_FlashSignal(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{
+		RalphDir:    dir,
+		TaskBackend: "bd",
+	}
+
+	if err := s.writePlanWatcher(); err != nil {
+		t.Fatalf("writePlanWatcher() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
+	content := string(data)
+
+	if !strings.Contains(content, ".plan-flash") {
+		t.Error("plan watcher should check for .plan-flash signal file")
+	}
+	if !strings.Contains(content, "pane-border-style") {
+		t.Error("plan watcher should set pane-border-style for flash effect")
 	}
 }
 

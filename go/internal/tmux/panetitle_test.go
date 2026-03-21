@@ -214,6 +214,80 @@ func TestTitle_ShortTaskNotTruncated(t *testing.T) {
 	}
 }
 
+// Verifies that RalphTitle includes branch name and elapsed time when a branch
+// is set, so the user can see which branch the loop is on and how long it's been running.
+func TestRalphTitle_WithBranch(t *testing.T) {
+	p := NewPaneTitle("test-session", "")
+	p.mu.Lock()
+	p.branch = "ralph/task/fix-auth"
+	p.mu.Unlock()
+
+	title := p.RalphTitle()
+	if !strings.HasPrefix(title, "ralph/task/fix-auth ") {
+		t.Errorf("RalphTitle() = %q, want prefix %q", title, "ralph/task/fix-auth ")
+	}
+	if !strings.Contains(title, "m") {
+		t.Errorf("RalphTitle() = %q, want elapsed time format", title)
+	}
+}
+
+// Verifies that RalphTitle falls back to "(go) ralph" when no branch is set.
+func TestRalphTitle_Fallback(t *testing.T) {
+	p := NewPaneTitle("test-session", "")
+
+	title := p.RalphTitle()
+	if !strings.HasPrefix(title, "(go) ralph ") {
+		t.Errorf("RalphTitle() = %q, want prefix %q", title, "(go) ralph ")
+	}
+}
+
+// Verifies that syncBranch reads the .run-branch file and updates the branch
+// name shown in the ralph pane title.
+func TestSyncBranch_ReadsBranchFile(t *testing.T) {
+	dir := t.TempDir()
+	p := NewPaneTitle("test-session", dir)
+
+	os.WriteFile(filepath.Join(dir, ".run-branch"), []byte("ralph/task/deploy-fix"), 0o644)
+	p.syncBranch()
+
+	p.mu.RLock()
+	branch := p.branch
+	p.mu.RUnlock()
+
+	if branch != "ralph/task/deploy-fix" {
+		t.Errorf("branch = %q, want %q", branch, "ralph/task/deploy-fix")
+	}
+}
+
+// Verifies that syncBranch is a no-op when ralphDir is empty.
+func TestSyncBranch_NoOpWithoutRalphDir(t *testing.T) {
+	p := NewPaneTitle("test-session", "")
+	p.syncBranch()
+
+	p.mu.RLock()
+	branch := p.branch
+	p.mu.RUnlock()
+
+	if branch != "" {
+		t.Errorf("branch = %q, want empty after no-op sync", branch)
+	}
+}
+
+// Verifies that RalphTitle shows per-run elapsed time (not per-task),
+// so the user can see total loop duration.
+func TestRalphTitle_RunElapsed(t *testing.T) {
+	p := NewPaneTitle("test-session", "")
+	p.mu.Lock()
+	p.branch = "main"
+	p.runStarted = time.Now().Add(-5*time.Minute - 30*time.Second)
+	p.mu.Unlock()
+
+	title := p.RalphTitle()
+	if !strings.Contains(title, "5m30s") {
+		t.Errorf("RalphTitle() = %q, want elapsed containing %q", title, "5m30s")
+	}
+}
+
 // Verifies that Run exits when the stop channel is closed.
 func TestRun_StopsOnClose(t *testing.T) {
 	p := NewPaneTitle("nonexistent-session", "")

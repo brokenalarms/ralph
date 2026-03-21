@@ -64,6 +64,7 @@ type Loop struct {
 	signals    claude.SignalPaths
 	mergeFunc  func() (bool, error)
 	pushPRFunc func(taskDesc string) error
+	lastAction analyzer.Action
 }
 
 // New creates an execution loop from the given configuration.
@@ -201,7 +202,11 @@ func (l *Loop) Run(ctx context.Context) error {
 		completed, _ := l.cfg.TaskBackend.CountCompleted()
 		total, _ := l.cfg.TaskBackend.CountTotal()
 
-		l.logger.Phase("--- Run iteration %d/%d | %d lifetime [%d/%d done] ---",
+		phaseColor := logging.Green
+		if l.lastAction == analyzer.Warn {
+			phaseColor = logging.Yellow
+		}
+		l.logger.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done] ---",
 			runIteration, maxIter, iteration, completed, total)
 		l.logger.Task("Next task: %s", nextTask)
 
@@ -306,6 +311,8 @@ func (l *Loop) Run(ctx context.Context) error {
 			analysisDesc = "continue"
 		}
 
+		l.lastAction = analysisResult.Action
+
 		switch analysisResult.Action {
 		case analyzer.Halt:
 			l.logger.Error("Halting: %s", analysisResult.Reason)
@@ -328,6 +335,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		if result.SignalDetected {
 			l.attempts.Clear(taskID, nextTask)
 			l.recordCompletedTask(taskID, nextTask)
+			touchFile(filepath.Join(l.cfg.RalphDir, ".plan-flash"))
 
 			if err := l.pushAndCreatePR(nextTask); err != nil {
 				l.logger.Warn("Push/PR: %v", err)

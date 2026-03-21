@@ -10,28 +10,33 @@ import (
 	"time"
 )
 
-// PaneTitle manages the stream pane title in a tmux session. A background
-// ticker goroutine reads the .stream-task file (written by the loop process)
-// and updates the tmux pane with the current task and elapsed time.
+// PaneTitle manages pane titles in a tmux session. A background ticker
+// goroutine reads signal files written by the loop process and updates
+// both the stream pane (task + per-task elapsed) and the ralph pane
+// (branch name + per-run elapsed).
 type PaneTitle struct {
-	mu       sync.RWMutex
-	task     string
-	started  time.Time
-	session  string
-	ralphDir string
+	mu         sync.RWMutex
+	task       string
+	started    time.Time
+	runStarted time.Time
+	branch     string
+	session    string
+	ralphDir   string
 }
 
 // NewPaneTitle creates a PaneTitle bound to the given tmux session name.
-// ralphDir is the .ralph directory where .stream-task is written by the loop.
+// ralphDir is the .ralph directory where signal files are written by the loop.
 func NewPaneTitle(session, ralphDir string) *PaneTitle {
+	now := time.Now()
 	return &PaneTitle{
-		session:  session,
-		ralphDir: ralphDir,
-		started:  time.Now(),
+		session:    session,
+		ralphDir:   ralphDir,
+		started:    now,
+		runStarted: now,
 	}
 }
 
-// SetTask updates the current task label shown in the pane title.
+// SetTask updates the current task label shown in the stream pane title.
 // Pass an empty string to clear the task (title falls back to "stream").
 func (p *PaneTitle) SetTask(label string) {
 	p.mu.Lock()
@@ -56,7 +61,7 @@ func (p *PaneTitle) ResetTimer() {
 
 const maxTitleLen = 60
 
-// Title returns the formatted pane title: "<task> <elapsed>" or "stream <elapsed>".
+// Title returns the formatted stream pane title: "<task> <elapsed>" or "stream <elapsed>".
 // Long task labels are truncated so the elapsed time is always visible.
 func (p *PaneTitle) Title() string {
 	p.mu.RLock()
@@ -65,15 +70,36 @@ func (p *PaneTitle) Title() string {
 	p.mu.RUnlock()
 
 	elapsed := time.Since(started)
-	mins := int(elapsed.Minutes())
-	secs := int(elapsed.Seconds()) % 60
-	stamp := fmt.Sprintf("%dm%02ds", mins, secs)
+	stamp := formatElapsed(elapsed)
 
 	if task == "" {
 		return "stream " + stamp
 	}
 	task = truncateTask(task, maxTitleLen-1-len(stamp))
 	return task + " " + stamp
+}
+
+// RalphTitle returns the formatted ralph pane title showing the branch name
+// and total run elapsed time, e.g. "ralph/task/fix-auth 5m23s".
+func (p *PaneTitle) RalphTitle() string {
+	p.mu.RLock()
+	branch := p.branch
+	runStarted := p.runStarted
+	p.mu.RUnlock()
+
+	elapsed := time.Since(runStarted)
+	stamp := formatElapsed(elapsed)
+
+	if branch == "" {
+		return "(go) ralph " + stamp
+	}
+	return branch + " " + stamp
+}
+
+func formatElapsed(d time.Duration) string {
+	mins := int(d.Minutes())
+	secs := int(d.Seconds()) % 60
+	return fmt.Sprintf("%dm%02ds", mins, secs)
 }
 
 func truncateTask(s string, maxLen int) string {
@@ -86,10 +112,10 @@ func truncateTask(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// Run starts the background ticker that updates the tmux pane title every
-// second. On each tick it reads the .stream-task file written by the loop
-// process, resets the elapsed timer when the task changes, and updates the
-// tmux pane. It blocks until stop is closed. Intended to be called as a goroutine.
+// Run starts the background ticker that updates tmux pane titles every
+// second. On each tick it reads signal files written by the loop process,
+// resets timers when tasks change, and updates both pane 0 (ralph) and
+// pane 1 (stream). It blocks until stop is closed.
 func (p *PaneTitle) Run(stop <-chan struct{}) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -100,8 +126,13 @@ func (p *PaneTitle) Run(stop <-chan struct{}) {
 			return
 		case <-ticker.C:
 			p.syncFromFile()
+			p.syncBranch()
+
 			title := p.Title()
 			exec.Command("tmux", "select-pane", "-t", p.session+":.1", "-T", title).Run() //nolint:errcheck
+
+			ralphTitle := p.RalphTitle()
+			exec.Command("tmux", "select-pane", "-t", p.session+":.0", "-T", ralphTitle).Run() //nolint:errcheck
 		}
 	}
 }
@@ -124,4 +155,21 @@ func (p *PaneTitle) syncFromFile() {
 		p.task = label
 		p.started = time.Now()
 	}
+}
+
+// syncBranch reads the .run-branch file and updates the branch name
+// shown in the ralph pane title.
+func (p *PaneTitle) syncBranch() {
+	if p.ralphDir == "" {
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(p.ralphDir, ".run-branch"))
+	if err != nil {
+		return
+	}
+	branch := strings.TrimSpace(string(data))
+
+	p.mu.Lock()
+	p.branch = branch
+	p.mu.Unlock()
 }
