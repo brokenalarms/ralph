@@ -2,26 +2,32 @@ package tmux
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
 
-// PaneTitle manages the stream pane title in a tmux session. The main loop
-// goroutine sets the current task via SetTask, and a background ticker
-// goroutine reads it to update the tmux pane with elapsed time.
+// PaneTitle manages the stream pane title in a tmux session. A background
+// ticker goroutine reads the .stream-task file (written by the loop process)
+// and updates the tmux pane with the current task and elapsed time.
 type PaneTitle struct {
-	mu      sync.RWMutex
-	task    string
-	started time.Time
-	session string
+	mu       sync.RWMutex
+	task     string
+	started  time.Time
+	session  string
+	ralphDir string
 }
 
 // NewPaneTitle creates a PaneTitle bound to the given tmux session name.
-func NewPaneTitle(session string) *PaneTitle {
+// ralphDir is the .ralph directory where .stream-task is written by the loop.
+func NewPaneTitle(session, ralphDir string) *PaneTitle {
 	return &PaneTitle{
-		session: session,
-		started: time.Now(),
+		session:  session,
+		ralphDir: ralphDir,
+		started:  time.Now(),
 	}
 }
 
@@ -67,7 +73,9 @@ func (p *PaneTitle) Title() string {
 }
 
 // Run starts the background ticker that updates the tmux pane title every
-// second. It blocks until stop is closed. Intended to be called as a goroutine.
+// second. On each tick it reads the .stream-task file written by the loop
+// process, resets the elapsed timer when the task changes, and updates the
+// tmux pane. It blocks until stop is closed. Intended to be called as a goroutine.
 func (p *PaneTitle) Run(stop <-chan struct{}) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -77,8 +85,29 @@ func (p *PaneTitle) Run(stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-ticker.C:
+			p.syncFromFile()
 			title := p.Title()
 			exec.Command("tmux", "select-pane", "-t", p.session+":.1", "-T", title).Run() //nolint:errcheck
 		}
+	}
+}
+
+// syncFromFile reads the .stream-task file and updates the task label.
+// Resets the elapsed timer when the task changes.
+func (p *PaneTitle) syncFromFile() {
+	if p.ralphDir == "" {
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(p.ralphDir, ".stream-task"))
+	if err != nil {
+		return
+	}
+	label := strings.TrimSpace(string(data))
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if label != p.task {
+		p.task = label
+		p.started = time.Now()
 	}
 }

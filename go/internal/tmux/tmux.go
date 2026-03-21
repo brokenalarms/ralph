@@ -56,7 +56,7 @@ func (s *Session) Setup() error {
 		return fmt.Errorf("create tmux session: %w", err)
 	}
 
-	s.paneTitle = NewPaneTitle(s.Name)
+	s.paneTitle = NewPaneTitle(s.Name, s.RalphDir)
 
 	return nil
 }

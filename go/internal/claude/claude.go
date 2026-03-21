@@ -182,6 +182,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 		case <-ticker.C:
 			// Check if process already exited (channel may not fire instantly).
 			if !processAlive(cmd) {
+				<-processDone
 				return Result{}
 			}
 
@@ -212,7 +213,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 				r.Logger.TaskSuccess("Completed: %s", summary)
 
-				gracefulKill(cmd)
+				gracefulKill(cmd, processDone)
 
 				return Result{
 					SignalDetected: true,
@@ -231,7 +232,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				idle := time.Since(lastActivity)
 				if idle >= timeout {
 					r.Logger.Warn("Idle timeout (%s with no output) — killing session", timeout)
-					gracefulKill(cmd)
+					gracefulKill(cmd, processDone)
 					return Result{IdleTimeout: true}
 				}
 			}
@@ -474,19 +475,15 @@ func processAlive(cmd *exec.Cmd) bool {
 }
 
 // gracefulKill sends SIGTERM, waits briefly, then SIGKILL if needed.
-func gracefulKill(cmd *exec.Cmd) {
+// processDone should be a channel that closes when cmd.Wait() completes
+// (from the poll goroutine) to avoid concurrent Wait() calls.
+func gracefulKill(cmd *exec.Cmd, processDone <-chan struct{}) {
 	if cmd.Process == nil {
 		return
 	}
 	_ = cmd.Process.Signal(syscall.SIGTERM)
-	// Give Claude 2 seconds to clean up.
-	done := make(chan struct{})
-	go func() {
-		_ = cmd.Wait()
-		close(done)
-	}()
 	select {
-	case <-done:
+	case <-processDone:
 	case <-time.After(2 * time.Second):
 		_ = cmd.Process.Kill()
 	}
