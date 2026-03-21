@@ -58,6 +58,9 @@ func (s *Session) Setup() error {
 
 	s.paneTitle = NewPaneTitle(s.Name, s.RalphDir)
 
+	// Signal the plan pane to render immediately instead of waiting for the first iteration.
+	touchFile(filepath.Join(s.RalphDir, ".plan-refresh"))
+
 	return nil
 }
 
@@ -254,6 +257,13 @@ func tmuxCmd(args ...string) error {
 
 func writeScript(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o755)
+}
+
+func touchFile(path string) {
+	f, err := os.Create(path)
+	if err == nil {
+		f.Close()
+	}
 }
 
 func shellQuote(s string) string {
