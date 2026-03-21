@@ -505,14 +505,13 @@ while true; do
         printf "\${BOLD}\${CYAN}▶ %s\${NC} (%s)\n" "\$current_title" "\$current_id"
         printf "\n"
       fi
-      ready_list=\$(bd ready --limit 8 2>/dev/null || true)
-      if [[ -n "\$ready_list" && "\$ready_list" != *"No ready work"* ]]; then
-        if [[ -n "\$current_id" ]]; then
-          ready_list=\$(echo "\$ready_list" | grep -v "\$current_id" || true)
-        fi
-        if [[ -n "\$ready_list" ]]; then
-          printf "\${BOLD}Ready:\${NC}\n%s\n\n" "\$ready_list"
-        fi
+      if [[ -n "\$current_id" ]]; then
+        ready_list=\$(bd ready --json --limit 8 2>/dev/null | jq -r --arg cid "\$current_id" '[.[] | select(.id != \$cid)] | .[] | "  \(.id) · \(.title)"' 2>/dev/null || true)
+      else
+        ready_list=\$(bd ready --json --limit 8 2>/dev/null | jq -r '.[] | "  \(.id) · \(.title)"' 2>/dev/null || true)
+      fi
+      if [[ -n "\$ready_list" ]]; then
+        printf "\${BOLD}Ready:\${NC}\n%s\n\n" "\$ready_list"
       fi
       completed_list=\$(bd list --status closed --flat --limit 8 2>/dev/null || true)
       if [[ -n "\$completed_list" ]]; then
