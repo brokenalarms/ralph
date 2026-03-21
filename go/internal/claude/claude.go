@@ -188,8 +188,6 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 			return Result{}
 
 		case <-cfg.Ctx.Done():
-			// Context cancelled (Ctrl-C) — kill Claude and exit.
-			r.Logger.Warn("Ctrl-C received — exiting gracefully")
 			gracefulKill(cmd, processDone)
 			return Result{}
 
