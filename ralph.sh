@@ -1558,7 +1558,7 @@ run_execution() {
       warn) _hcolor="$YELLOW" ;;
       *)    _hcolor="$GREEN" ;;
     esac
-    log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS ($iteration total) [${_hcolor}${completed}/${total} done${NC}${BOLD}] ---"
+    log_phase "--- Run iteration $run_iteration/$MAX_ITERATIONS | $iteration lifetime [${_hcolor}${completed}/${total} done${NC}${BOLD}] ---"
     log_task "Next task: $next_task"
     touch "$RALPH_DIR/.plan-refresh"
 

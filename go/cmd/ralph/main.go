@@ -411,7 +411,7 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 	iteration, _ := st.Read("iteration")
 	status, _ := st.Read("status")
 	log.Log("Status:     %s", status)
-	log.Log("Iterations: %s total", iteration)
+	log.Log("Iterations: %s lifetime", iteration)
 
 	completed, _ := backend.CountCompleted()
 	remaining, _ := backend.CountRemaining()

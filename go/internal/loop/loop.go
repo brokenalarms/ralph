@@ -201,7 +201,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		completed, _ := l.cfg.TaskBackend.CountCompleted()
 		total, _ := l.cfg.TaskBackend.CountTotal()
 
-		l.logger.Phase("--- Iteration %d/%d (%d total) [%d/%d done] ---",
+		l.logger.Phase("--- Run iteration %d/%d | %d lifetime [%d/%d done] ---",
 			runIteration, maxIter, iteration, completed, total)
 		l.logger.Task("Next task: %s", nextTask)
 
@@ -290,7 +290,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		completed, _ = l.cfg.TaskBackend.CountCompleted()
 		total, _ = l.cfg.TaskBackend.CountTotal()
-		l.logger.Task("Iteration %d complete (%dm%ds). %d/%d tasks done.",
+		l.logger.Task("Run iteration %d complete (%dm%ds). %d/%d tasks done.",
 			runIteration, int(elapsed.Minutes()), int(elapsed.Seconds())%60, completed, total)
 
 		headAfter := git.HeadRev(l.git.WorkDir)
