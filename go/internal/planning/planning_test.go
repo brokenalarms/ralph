@@ -68,7 +68,7 @@ func testDeps(t *testing.T) (Deps, string) {
 
 	// Write minimal prompt templates so buildPrompt doesn't fail.
 	writeFile(t, filepath.Join(promptsDir, "interactive-planning.md"),
-		"Interactive: {{WORK_DIR}} {{RALPH_DIR}} {{STATE_FILE}} {{TASK_INSTRUCTIONS}} {{PLAN_FILE_LINE}}")
+		"Interactive: {{WORK_DIR}} {{RALPH_DIR}} {{STATE_FILE}} {{TASK_INSTRUCTIONS}} {{PLAN_FILE_LINE}} {{EXISTING_TASKS_CONTEXT}}")
 	writeFile(t, filepath.Join(promptsDir, "planning.md"),
 		"Auto: {{PLANNING_CONTEXT}} {{PLAN_FILE}} {{RALPH_DIR}} {{STATE_FILE}} {{TASK_INSTRUCTIONS}}")
 
@@ -134,6 +134,82 @@ func TestResumeSkipsPlanning(t *testing.T) {
 
 	if claudeCalled {
 		t.Error("RunClaude should not be called when resuming past initialized")
+	}
+}
+
+// --plan forces re-entry into planning even when resuming past "initialized",
+// allowing the user to review and modify existing tasks.
+func TestForcePlanBypassesResume(t *testing.T) {
+	d, _ := testDeps(t)
+	d.StateStore.Write("status", "planned")
+	d.ForcePlan = true
+	d.SkipPlanning = true
+
+	// Backend has existing tasks; autonomous planning "succeeds".
+	d.Backend = &mockBackend{
+		label:             "checklist",
+		needsPlanning:     false,
+		planningSucceeded: true,
+		totalTasks:        3,
+		planningInstr:     "write tasks",
+	}
+
+	d.RunClaude = func(string) error { return nil }
+
+	if err := Run(d); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	// With ForcePlan, planning should NOT be skipped on resume.
+	// Since SkipPlanning is set, interactive is skipped but the resume
+	// bypass should not trigger — we should reach finalize.
+	s, _ := d.StateStore.Load()
+	if s.Status != "planned" {
+		t.Errorf("status = %q, want %q", s.Status, "planned")
+	}
+}
+
+// --plan includes existing task context in the interactive planning prompt
+// so Claude can modify rather than start from scratch.
+func TestForcePlanIncludesExistingTasksContext(t *testing.T) {
+	d, _ := testDeps(t)
+	d.ForcePlan = true
+	d.Backend = &mockBackend{
+		label:             "beads",
+		needsPlanning:     false,
+		planningSucceeded: true,
+		totalTasks:        5,
+		planningInstr:     "use bd create",
+	}
+
+	prompt, err := buildInteractivePrompt(d)
+	if err != nil {
+		t.Fatalf("buildInteractivePrompt() error: %v", err)
+	}
+
+	if !strings.Contains(prompt, "Existing tasks") {
+		t.Error("force-plan prompt should mention existing tasks")
+	}
+	if !strings.Contains(prompt, "5 total") {
+		t.Error("force-plan prompt should show task count")
+	}
+	if !strings.Contains(prompt, "bd list") {
+		t.Error("force-plan prompt for BD should mention bd list")
+	}
+}
+
+// When not force-planning, no existing tasks context is injected.
+func TestNoExistingTasksContextOnFreshStart(t *testing.T) {
+	d, _ := testDeps(t)
+	d.ForcePlan = false
+
+	prompt, err := buildInteractivePrompt(d)
+	if err != nil {
+		t.Fatalf("buildInteractivePrompt() error: %v", err)
+	}
+
+	if strings.Contains(prompt, "Existing tasks") {
+		t.Error("fresh-start prompt should not mention existing tasks")
 	}
 }
 

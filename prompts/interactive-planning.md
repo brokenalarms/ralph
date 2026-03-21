@@ -27,3 +27,4 @@ Specs are NOT task lists or collections of small fixes. If you find yourself wri
 - Working directory: {{WORK_DIR}}
 - Ralph state dir: {{RALPH_DIR}}
 {{PLAN_FILE_LINE}}
+{{EXISTING_TASKS_CONTEXT}}

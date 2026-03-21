@@ -28,6 +28,10 @@ type Deps struct {
 	// SkipPlanning mirrors --skip-planning: suppresses the interactive session.
 	SkipPlanning bool
 
+	// ForcePlan mirrors --plan: forces re-entry into interactive planning even
+	// when resuming a session that already has tasks.
+	ForcePlan bool
+
 	// RunClaude launches claude in non-interactive (autonomous) mode with the
 	// given system prompt. The caller is responsible for signal polling.
 	// If nil, defaultRunClaude is used.
@@ -61,12 +65,12 @@ func Run(d Deps) error {
 		}
 	}
 
-	// Resume: skip planning if already past initialized.
+	// Resume: skip planning if already past initialized (unless --plan forces it).
 	s, err := d.StateStore.Load()
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
 	}
-	if s.Status != "" && s.Status != "initialized" {
+	if s.Status != "" && s.Status != "initialized" && !d.ForcePlan {
 		d.Logger.Task("Resuming execution (status: %s)", s.Status)
 		return nil
 	}
@@ -213,7 +217,36 @@ func buildInteractivePrompt(d Deps) (string, error) {
 		prompt = strings.ReplaceAll(prompt, "{{PLAN_FILE_LINE}}", "- Plan file: "+planFilePath(d))
 	}
 
+	// When re-planning (--plan), tell Claude that tasks already exist so it
+	// can modify the plan rather than starting from scratch.
+	prompt = strings.ReplaceAll(prompt, "{{EXISTING_TASKS_CONTEXT}}", existingTasksContext(d))
+
 	return prompt, nil
+}
+
+// existingTasksContext returns a prompt section describing existing tasks when
+// re-planning, or empty string on a fresh start.
+func existingTasksContext(d Deps) string {
+	if !d.ForcePlan {
+		return ""
+	}
+	hasTasks, _ := d.Backend.HasTasks()
+	if !hasTasks {
+		return ""
+	}
+	total, _ := d.Backend.CountTotal()
+	completed, _ := d.Backend.CountCompleted()
+	remaining, _ := d.Backend.CountRemaining()
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("\n## Existing tasks (%d total, %d completed, %d remaining)\n", total, completed, remaining))
+	sb.WriteString("Tasks already exist from a previous planning session. Review and modify the existing plan rather than starting from scratch.\n")
+	if d.Backend.Label() == "beads" {
+		sb.WriteString("Run `bd list` to see all current tasks and their status.\n")
+	} else {
+		sb.WriteString(fmt.Sprintf("Read the existing plan at `%s` to see current tasks.\n", planFilePath(d)))
+	}
+	return sb.String()
 }
 
 // buildAutonomousPrompt assembles the autonomous planning prompt from the
