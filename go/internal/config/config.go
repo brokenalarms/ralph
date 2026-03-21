@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -22,6 +23,7 @@ type Config struct {
 	CallsPerHour        int
 	RefactorEvery       int
 	UseTmux             bool
+	AutoMerge           bool
 	IdleTimeout         time.Duration
 	IdleTimeoutProgress time.Duration
 }
@@ -201,6 +203,10 @@ func Parse(args []string) (Config, error) {
 			cfg.UseTmux = true
 			i++
 
+		case "--auto-merge":
+			cfg.AutoMerge = true
+			i++
+
 		case "--idle-timeout":
 			v, err := requireArg(args, i)
 			if err != nil {
@@ -243,6 +249,29 @@ func Parse(args []string) (Config, error) {
 
 // ErrHelp is returned when -h/--help is passed.
 var ErrHelp = fmt.Errorf("help requested")
+
+// ValidatePlanFile checks that a --plan-file argument points to an
+// existing file containing markdown checkboxes. Returns nil if valid,
+// or a descriptive error suitable for display.
+func ValidatePlanFile(path string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return fmt.Errorf("plan file not found: %s", path)
+	} else if err != nil {
+		return fmt.Errorf("checking plan file: %w", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("reading plan file: %w", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "- [ ]") && !strings.Contains(content, "- [x]") {
+		return fmt.Errorf("plan file is not in Ralph format (needs markdown checkboxes: - [ ] task)")
+	}
+
+	return nil
+}
 
 func requireArg(args []string, i int) (string, error) {
 	if i+1 >= len(args) {

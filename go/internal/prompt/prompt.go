@@ -27,6 +27,7 @@ type Vars struct {
 	AllCompleteToken string
 	TaskPrompt       string
 	Feedback         string
+	AttemptHistory   string
 	TaskBackend      TaskBackend
 }
 
@@ -67,6 +68,11 @@ func BuildPrompt(v Vars) (string, error) {
 	}
 	result = strings.ReplaceAll(result, "{{TASK_INSTRUCTIONS}}", taskInstructions)
 
+	attemptSection := ""
+	if v.AttemptHistory != "" {
+		attemptSection = "\n## Previous attempts on this task\n" + v.AttemptHistory
+	}
+
 	r := strings.NewReplacer(
 		"{{PROJECT_DIR}}", v.ProjectDir,
 		"{{WORK_DIR}}", v.WorkDir,
@@ -76,6 +82,7 @@ func BuildPrompt(v Vars) (string, error) {
 		"{{CURRENT_TASK_TOKEN}}", v.CurrentTaskToken,
 		"{{ALL_COMPLETE_TOKEN}}", v.AllCompleteToken,
 		"{{TASK_PROMPT}}", v.TaskPrompt,
+		"{{ATTEMPT_HISTORY}}", attemptSection,
 	)
 	return r.Replace(result), nil
 }
@@ -100,6 +107,7 @@ func BuildRefactorPrompt(v Vars, recentFiles string) (string, error) {
 
 	r := strings.NewReplacer(
 		"{{WORK_DIR}}", v.WorkDir,
+		"{{RALPH_DIR}}", v.RalphDir,
 		"{{RECENT_FILES}}", recentFiles,
 		"{{SIGNAL_TOKEN}}", v.SignalToken,
 		"{{CURRENT_TASK_TOKEN}}", v.CurrentTaskToken,

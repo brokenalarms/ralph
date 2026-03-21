@@ -286,6 +286,38 @@ func TestTaskBackend_WrittenToState(t *testing.T) {
 	}
 }
 
+// Proves: quality_score defaults to 0 in initial state.
+func TestQualityScore_DefaultsToZero(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5, 0)
+	st.Write("quality_score", "0")
+
+	val, err := st.Read("quality_score")
+	if err != nil {
+		t.Fatalf("Read quality_score: %v", err)
+	}
+	if val != "0" {
+		t.Errorf("quality_score = %q, want %q", val, "0")
+	}
+}
+
+// Proves: quality_score tracks across writes.
+func TestQualityScore_TracksAcrossWrites(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5, 0)
+	st.Write("quality_score", "25")
+
+	val, err := st.Read("quality_score")
+	if err != nil {
+		t.Fatalf("Read quality_score: %v", err)
+	}
+	if val != "25" {
+		t.Errorf("quality_score = %q, want %q", val, "25")
+	}
+}
+
 // Verifies that Save uses atomic write — if we can read the file after
 // Save, it contains valid JSON (no partial writes).
 func TestSave_AtomicWrite(t *testing.T) {

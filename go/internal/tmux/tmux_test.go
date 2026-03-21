@@ -138,6 +138,22 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
+// Verifies that the stream filter script does not contain a 'kill 0'
+// trap, which would terminate the parent ralph process.
+func TestStreamFilter_NoKillZeroTrap(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{RalphDir: dir}
+
+	if err := s.writeStreamFilter(); err != nil {
+		t.Fatalf("writeStreamFilter() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, ".stream-filter.sh"))
+	if strings.Contains(string(data), "kill 0") {
+		t.Error("stream filter should not contain 'kill 0' trap")
+	}
+}
+
 // Verifies that .plan-refresh signal path is correctly embedded in the
 // plan watcher script, so the pane redraws when signaled.
 func TestPlanWatcher_SignalPath(t *testing.T) {

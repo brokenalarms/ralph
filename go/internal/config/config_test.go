@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -305,6 +306,88 @@ func TestParseSubcommandEmpty(t *testing.T) {
 	_, ok := ParseSubcommand(nil)
 	if ok {
 		t.Error("expected no subcommand for empty args")
+	}
+}
+
+// Proves: --plan-file flag stores the plan file path in config
+// for validation by the planning phase.
+func TestPlanFileFlag(t *testing.T) {
+	cfg, err := Parse([]string{"--plan-file", "/some/plan.md"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.PlanFile != "/some/plan.md" {
+		t.Errorf("PlanFile = %q, want /some/plan.md", cfg.PlanFile)
+	}
+}
+
+// Proves: --auto-merge flag defaults to false and is set to true
+// when passed on the CLI.
+func TestAutoMergeFlag(t *testing.T) {
+	cfg, err := Parse([]string{"-d", "/tmp"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.AutoMerge {
+		t.Error("AutoMerge should default to false")
+	}
+
+	cfg, err = Parse([]string{"--auto-merge", "--no-worktree"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.AutoMerge {
+		t.Error("AutoMerge should be true after --auto-merge flag")
+	}
+}
+
+// Proves: ValidatePlanFile with nonexistent file returns "not found" error.
+func TestValidatePlanFile_NonexistentFile(t *testing.T) {
+	err := ValidatePlanFile("/nonexistent/plan.md")
+	if err == nil {
+		t.Fatal("expected error for nonexistent file")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should contain 'not found', got: %v", err)
+	}
+}
+
+// Proves: ValidatePlanFile without checkboxes returns format error.
+func TestValidatePlanFile_NoCheckboxes(t *testing.T) {
+	dir := t.TempDir()
+	planFile := filepath.Join(dir, "bad-plan.md")
+	os.WriteFile(planFile, []byte("Just some text without checkboxes"), 0o644)
+
+	err := ValidatePlanFile(planFile)
+	if err == nil {
+		t.Fatal("expected error for plan without checkboxes")
+	}
+	if !strings.Contains(err.Error(), "Ralph format") {
+		t.Errorf("error should contain 'Ralph format', got: %v", err)
+	}
+}
+
+// Proves: ValidatePlanFile with valid checkboxes returns nil.
+func TestValidatePlanFile_ValidFile(t *testing.T) {
+	dir := t.TempDir()
+	planFile := filepath.Join(dir, "plan.md")
+	os.WriteFile(planFile, []byte("- [ ] Test task\n- [ ] Another task\n"), 0o644)
+
+	err := ValidatePlanFile(planFile)
+	if err != nil {
+		t.Fatalf("expected no error for valid plan, got: %v", err)
+	}
+}
+
+// Proves: ValidatePlanFile accepts files with completed checkboxes.
+func TestValidatePlanFile_CompletedCheckboxes(t *testing.T) {
+	dir := t.TempDir()
+	planFile := filepath.Join(dir, "plan.md")
+	os.WriteFile(planFile, []byte("- [x] Done task\n"), 0o644)
+
+	err := ValidatePlanFile(planFile)
+	if err != nil {
+		t.Fatalf("expected no error for plan with completed checkboxes, got: %v", err)
 	}
 }
 
