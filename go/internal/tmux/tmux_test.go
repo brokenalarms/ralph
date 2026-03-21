@@ -247,6 +247,51 @@ func TestSanitizeSessionName(t *testing.T) {
 	}
 }
 
+// Verifies that the bd plan watcher reads .completed-tasks and renders
+// completed task IDs on a single comma-separated line after the done count,
+// so the user can see what was finished in the current run.
+func TestWritePlanWatcher_BD_ShowsCompletedTasks(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{
+		RalphDir:    dir,
+		TaskBackend: "bd",
+	}
+
+	if err := s.writePlanWatcher(); err != nil {
+		t.Fatalf("writePlanWatcher() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
+	content := string(data)
+
+	if !strings.Contains(content, ".completed-tasks") {
+		t.Error("bd plan watcher should reference .completed-tasks file")
+	}
+	if !strings.Contains(content, "paste -sd', '") {
+		t.Error("bd plan watcher should join completed tasks with comma separator")
+	}
+}
+
+// Verifies that Setup clears stale .completed-tasks from a previous run
+// so the plan pane doesn't show old completions.
+func TestSetup_ClearsStaleCompletedTasks(t *testing.T) {
+	dir := t.TempDir()
+	staleFile := filepath.Join(dir, ".completed-tasks")
+	os.WriteFile(staleFile, []byte("ralph-old\n"), 0o644)
+
+	s := &Session{
+		Name:        "test-session",
+		RalphDir:    dir,
+		TaskBackend: "bd",
+	}
+
+	_ = s.Setup()
+
+	if _, err := os.Stat(staleFile); !os.IsNotExist(err) {
+		t.Error(".completed-tasks should be removed on Setup to prevent showing stale completions")
+	}
+}
+
 // Verifies that .plan-refresh signal path is correctly embedded in the
 // plan watcher script, so the pane redraws when signaled.
 func TestPlanWatcher_SignalPath(t *testing.T) {

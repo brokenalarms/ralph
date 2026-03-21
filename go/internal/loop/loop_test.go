@@ -2139,3 +2139,172 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 		t.Errorf("expected status 'completed', got %q", finalState.Status)
 	}
 }
+
+// Verifies that completed task IDs are written to .completed-tasks when
+// tasks finish with a signal, so the plan pane can show which tasks were
+// completed in the current run.
+func TestLoop_RecordsCompletedTasks(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	iterationCount := 0
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "first task",
+		nextID:    "ralph-aaa",
+		label:     "checklist",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			if iterationCount == 1 {
+				backend.mu.Lock()
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "second task"
+				backend.nextID = "ralph-bbb"
+				backend.mu.Unlock()
+			} else if iterationCount == 2 {
+				backend.mu.Lock()
+				backend.completed = 2
+				backend.remaining = 0
+				backend.mu.Unlock()
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(ralphDir, ".completed-tasks"))
+	if err != nil {
+		t.Fatalf("expected .completed-tasks file, got error: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 completed tasks, got %d: %v", len(lines), lines)
+	}
+	if lines[0] != "ralph-aaa" {
+		t.Errorf("first completed task = %q, want %q", lines[0], "ralph-aaa")
+	}
+	if lines[1] != "ralph-bbb" {
+		t.Errorf("second completed task = %q, want %q", lines[1], "ralph-bbb")
+	}
+}
+
+// Verifies that .completed-tasks is cleared at the start of each run so
+// only tasks from the current run appear, not historical completions.
+func TestLoop_ClearsCompletedTasksOnStart(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	os.WriteFile(filepath.Join(ralphDir, ".completed-tasks"), []byte("ralph-old\n"), 0o644)
+
+	backend := &stubBackend{
+		remaining: 0,
+		completed: 1,
+		total:     1,
+	}
+
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	_ = l.Run(context.Background())
+
+	if _, err := os.Stat(filepath.Join(ralphDir, ".completed-tasks")); !os.IsNotExist(err) {
+		t.Error(".completed-tasks should be removed at run start when no tasks complete")
+	}
+}
+
+// Verifies that when a task has no ID (checklist backend), the task title
+// is recorded instead, so the plan pane can still show completed items.
+func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "Add dark mode",
+		nextID:    "",
+		label:     "checklist",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(ralphDir, ".completed-tasks"))
+	if err != nil {
+		t.Fatalf("expected .completed-tasks file: %v", err)
+	}
+
+	got := strings.TrimSpace(string(data))
+	if got != "Add dark mode" {
+		t.Errorf("completed task = %q, want %q", got, "Add dark mode")
+	}
+}

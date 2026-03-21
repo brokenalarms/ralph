@@ -45,9 +45,10 @@ func Available() bool {
 // This function blocks until the session ends (tmux attach-session).
 // It returns nil on normal exit or an error if setup fails.
 func (s *Session) Setup() error {
-	// Clear stale .stream-task from a previous run so the stream pane
-	// doesn't briefly show the old task before the loop writes the new one.
+	// Clear stale files from a previous run so panes don't briefly show
+	// old data before the loop writes current values.
 	os.Remove(filepath.Join(s.RalphDir, ".stream-task"))
+	os.Remove(filepath.Join(s.RalphDir, ".completed-tasks"))
 
 	if err := s.writeStreamFilter(); err != nil {
 		return fmt.Errorf("write stream filter: %w", err)
@@ -214,11 +215,11 @@ done
 }
 
 func (s *Session) bdPlanRender() string {
-	return `    current_json=$(bd list --status in_progress --flat --json --limit 1 2>/dev/null)
+	return fmt.Sprintf(`    current_json=$(bd list --status in_progress --flat --json --limit 1 2>/dev/null)
     current_title=$(echo "$current_json" | jq -r '.[0].title // empty' 2>/dev/null)
     current_id=$(echo "$current_json" | jq -r '.[0].id // empty' 2>/dev/null)
     if [[ -n "$current_title" ]]; then
-      printf "${BOLD}${CYAN}▶ %s${NC} (%s)\n" "$current_title" "$current_id"
+      printf "${BOLD}${CYAN}▶ %%s${NC} (%%s)\n" "$current_title" "$current_id"
       printf "\n"
     fi
     if [[ -n "$current_id" ]]; then
@@ -227,17 +228,23 @@ func (s *Session) bdPlanRender() string {
       ready_list=$(bd ready --json --limit 8 2>/dev/null | jq -r '.[] | "  \(.id) · \(.title)"' 2>/dev/null || true)
     fi
     if [[ -n "$ready_list" ]]; then
-      printf "${BOLD}Ready:${NC}\n%s\n\n" "$ready_list"
+      printf "${BOLD}Ready:${NC}\n%%s\n\n" "$ready_list"
     fi
     if [[ -n "$current_id" ]]; then
       unblocks=$(bd show "$current_id" --json 2>/dev/null | jq -r '.[0].dependents[]? | "  → \(.id): \(.title)"' 2>/dev/null || true)
       if [[ -n "$unblocks" ]]; then
-        printf "${BOLD}Unblocks:${NC}\n%s\n\n" "$unblocks"
+        printf "${BOLD}Unblocks:${NC}\n%%s\n\n" "$unblocks"
       fi
     fi
     closed=$(bd count --status closed 2>/dev/null || echo 0)
     total=$(bd count 2>/dev/null || echo 0)
-    printf "${GREEN}%s/%s done${NC}\n" "$closed" "$total"`
+    printf "${GREEN}%%s/%%s done${NC}\n" "$closed" "$total"
+    if [[ -f '%s/.completed-tasks' ]]; then
+      completed_list=$(paste -sd', ' '%s/.completed-tasks')
+      if [[ -n "$completed_list" ]]; then
+        printf "${GREEN}%%s${NC}\n" "$completed_list"
+      fi
+    fi`, s.RalphDir, s.RalphDir)
 }
 
 // BuildRalphCmd constructs the ralph re-exec command from the original args,

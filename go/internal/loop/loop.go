@@ -124,6 +124,10 @@ func (l *Loop) Run(ctx context.Context) error {
 
 	l.logger.Phase("=== PHASE 2: EXECUTION ===")
 
+	// Clear completed-tasks tracker for this run so the plan pane only
+	// shows tasks completed in the current run, not historical closures.
+	os.Remove(filepath.Join(l.cfg.RalphDir, ".completed-tasks"))
+
 	for {
 		maxIter := l.state.ReadMaxIterations(l.cfg.MaxIterations)
 		refactorEvery := l.state.ReadRefactorEvery()
@@ -320,6 +324,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		if result.SignalDetected {
 			l.attempts.Clear(taskID, nextTask)
+			l.recordCompletedTask(taskID, nextTask)
 
 			if err := l.pushAndCreatePR(nextTask); err != nil {
 				l.logger.Warn("Push/PR: %v", err)
@@ -636,6 +641,25 @@ func (l *Loop) buildAttemptContext(taskID, taskName string) string {
 	}
 
 	return strings.Join(parts, "\n")
+}
+
+// recordCompletedTask appends a completed task label to .completed-tasks
+// so the plan pane can show which tasks were finished in this run.
+func (l *Loop) recordCompletedTask(taskID, taskTitle string) {
+	label := taskID
+	if label == "" {
+		label = taskTitle
+	}
+	if label == "" {
+		return
+	}
+	path := filepath.Join(l.cfg.RalphDir, ".completed-tasks")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.WriteString(label + "\n")
 }
 
 func touchFile(path string) {
