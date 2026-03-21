@@ -869,8 +869,8 @@ func RecentChangedFiles(dir string, n int) string {
 }
 
 // TagTaskStart creates a lightweight git tag marking the start of a task iteration.
-// The tag name is ralph/task-{taskID}/start when a backend ID is available,
-// or ralph/task-{seq}-{slug}/start derived from the current branch name.
+// The tag name is task/{taskID}/start when a backend ID is available,
+// or task/{seq}-{slug}/start derived from the current branch name.
 func (m *Manager) TagTaskStart(taskID string) {
 	tag := m.taskTag(taskID, "start")
 	if tag == "" {
@@ -893,21 +893,21 @@ func (m *Manager) TagTaskEnd(taskID string) {
 	}
 }
 
-// taskTag builds a tag name like ralph/task-{id}/{suffix}. Returns empty
+// taskTag builds a tag name like task/{id}/{suffix}. Returns empty
 // string if there's not enough info to build a meaningful tag.
 func (m *Manager) taskTag(taskID, suffix string) string {
 	if m.WorkDir == "" || m.WorkDir == m.ProjectDir {
 		return ""
 	}
 	if taskID != "" {
-		return fmt.Sprintf("ralph/task-%s/%s", taskID, suffix)
+		return fmt.Sprintf("task/%s/%s", taskID, suffix)
 	}
 	// Fall back to seq-slug extracted from the current branch name
 	seqSlug := extractSeqSlug(m.WorktreeBranch)
 	if seqSlug == "" {
 		return ""
 	}
-	return fmt.Sprintf("ralph/task-%s/%s", seqSlug, suffix)
+	return fmt.Sprintf("task/%s/%s", seqSlug, suffix)
 }
 
 // extractSeqSlug pulls the "NN-slug" portion from a branch like

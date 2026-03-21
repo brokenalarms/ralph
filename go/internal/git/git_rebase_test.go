@@ -361,8 +361,8 @@ func TestTagTaskStart_WithTaskID(t *testing.T) {
 
 	mgr.TagTaskStart("ralph-abc")
 
-	if !refExists(mgr.WorkDir, "ralph/task-ralph-abc/start") {
-		t.Error("expected tag ralph/task-ralph-abc/start to exist")
+	if !refExists(mgr.WorkDir, "task/ralph-abc/start") {
+		t.Error("expected tag task/ralph-abc/start to exist")
 	}
 }
 
@@ -384,8 +384,8 @@ func TestTagTaskEnd_WithTaskID(t *testing.T) {
 
 	mgr.TagTaskEnd("ralph-abc")
 
-	if !refExists(mgr.WorkDir, "ralph/task-ralph-abc/end") {
-		t.Error("expected tag ralph/task-ralph-abc/end to exist")
+	if !refExists(mgr.WorkDir, "task/ralph-abc/end") {
+		t.Error("expected tag task/ralph-abc/end to exist")
 	}
 }
 
@@ -408,8 +408,8 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 	mgr.RenameBranchForTask("Add user auth")
 	mgr.TagTaskStart("")
 
-	if !refExists(mgr.WorkDir, "ralph/task-01-add-user-auth/start") {
-		t.Error("expected tag ralph/task-01-add-user-auth/start to exist")
+	if !refExists(mgr.WorkDir, "task/01-add-user-auth/start") {
+		t.Error("expected tag task/01-add-user-auth/start to exist")
 	}
 }
 
@@ -442,7 +442,7 @@ func TestTagTaskStart_SkipsNextBranch(t *testing.T) {
 	// Branch is still ralph/project/next — no task ID → no tag
 	mgr.TagTaskStart("")
 
-	tags := gitOutput(mgr.WorkDir, "tag", "-l", "ralph/task-*")
+	tags := gitOutput(mgr.WorkDir, "tag", "-l", "task/*")
 	if tags != "" {
 		t.Errorf("expected no tags on /next branch, got: %s", tags)
 	}
@@ -465,13 +465,13 @@ func TestTagStartEnd_DifferentCommits(t *testing.T) {
 	}
 
 	mgr.TagTaskStart("ralph-xyz")
-	startRev := gitOutput(mgr.WorkDir, "rev-parse", "ralph/task-ralph-xyz/start")
+	startRev := gitOutput(mgr.WorkDir, "rev-parse", "task/ralph-xyz/start")
 
 	writeFile(t, mgr.WorkDir, "work.txt", "some work\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "do work")
 
 	mgr.TagTaskEnd("ralph-xyz")
-	endRev := gitOutput(mgr.WorkDir, "rev-parse", "ralph/task-ralph-xyz/end")
+	endRev := gitOutput(mgr.WorkDir, "rev-parse", "task/ralph-xyz/end")
 
 	if startRev == endRev {
 		t.Error("start and end tags should point at different commits after work was done")
