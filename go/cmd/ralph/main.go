@@ -43,6 +43,10 @@ func run(args []string) int {
 		printUsage()
 		return 1
 	}
+	if err := cfg.Validate(); err != nil {
+		log.Error("%v", err)
+		return 1
+	}
 
 	// Resolve project directory to absolute path.
 	cfg.ProjectDir, _ = filepath.Abs(cfg.ProjectDir)
@@ -185,6 +189,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		RefactorEvery:       cfg.RefactorEvery,
 		Quiet:               cfg.Quiet,
 		AutoMerge:           cfg.AutoMerge,
+		AutoImprove:         cfg.AutoImprove,
 		CallsPerHour:        cfg.CallsPerHour,
 		TaskBackend:         backend,
 		IdleTimeout:         cfg.IdleTimeout,
@@ -194,6 +199,13 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 
 	if err := execLoop.Run(ctx); err != nil {
 		log.Error("Execution failed: %v", err)
+	}
+
+	if status, _ := st.Read("status"); status == "auto_improve_restart" {
+		gm.RemoveWorktree()
+		if err := autoImproveRestart(cfg.ProjectDir, scriptPath, args, log); err != nil {
+			log.Error("Auto-improve restart failed: %v", err)
+		}
 	}
 
 	cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, interrupted, log)
@@ -324,6 +336,9 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 	if cfg.AutoMerge {
 		extraArgs = append(extraArgs, "--auto-merge")
 	}
+	if cfg.AutoImprove {
+		extraArgs = append(extraArgs, "--auto-improve")
+	}
 	if cfg.BranchStrategy != "single" {
 		extraArgs = append(extraArgs, fmt.Sprintf("--branch-strategy %s", cfg.BranchStrategy))
 	}
@@ -374,7 +389,11 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 		if len(branches) > 1 {
 			log.Log("Branches:")
 			for _, b := range branches {
-				log.Log("  %s", b)
+				if git.IsBranchSquashMerged(cfg.ProjectDir, b) {
+					log.Log("  %s [MERGED]", b)
+				} else {
+					log.Log("  %s", b)
+				}
 			}
 		} else {
 			log.Log("Branch:     %s", gm.WorktreeBranch)

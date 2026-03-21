@@ -105,6 +105,7 @@ func TestAllFlags(t *testing.T) {
 		"--refactor-every", "3",
 		"--tmux",
 		"--auto-merge",
+		"--auto-improve",
 	}
 	cfg, err := Parse(args)
 	if err != nil {
@@ -146,6 +147,9 @@ func TestAllFlags(t *testing.T) {
 	}
 	if !cfg.AutoMerge {
 		t.Error("AutoMerge should be true")
+	}
+	if !cfg.AutoImprove {
+		t.Error("AutoImprove should be true")
 	}
 	if cfg.BranchStrategy != "single" {
 		t.Errorf("BranchStrategy = %q, want \"single\" (default)", cfg.BranchStrategy)
@@ -604,6 +608,44 @@ func TestInitConfigRefusesToOverwrite(t *testing.T) {
 	data, _ := os.ReadFile(tomlPath)
 	if string(data) != "existing" {
 		t.Errorf("file was modified: got %q, want %q", string(data), "existing")
+	}
+}
+
+// Verifies that --auto-improve flag is parsed and requires --auto-merge.
+func TestAutoImproveFlag(t *testing.T) {
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.AutoImprove {
+		t.Error("AutoImprove should default to false")
+	}
+
+	cfg, err = Parse([]string{"--auto-improve", "--auto-merge"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.AutoImprove {
+		t.Error("AutoImprove should be true after --auto-improve")
+	}
+}
+
+// Verifies that --auto-improve validation rejects missing --auto-merge
+// and incompatible --tmux.
+func TestAutoImproveValidation(t *testing.T) {
+	cfg, _ := Parse([]string{"--auto-improve"})
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error: --auto-improve without --auto-merge")
+	}
+
+	cfg, _ = Parse([]string{"--auto-improve", "--auto-merge", "--tmux"})
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error: --auto-improve with --tmux")
+	}
+
+	cfg, _ = Parse([]string{"--auto-improve", "--auto-merge"})
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid --auto-improve combo should pass: %v", err)
 	}
 }
 

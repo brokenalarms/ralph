@@ -25,6 +25,7 @@ type Config struct {
 	RefactorEvery              int
 	UseTmux                    bool
 	AutoMerge                  bool
+	AutoImprove                bool
 	IdleTimeout                time.Duration
 	IdleTimeoutProgress        time.Duration
 	WatcherInterval            int
@@ -228,6 +229,10 @@ func Parse(args []string) (Config, error) {
 			cfg.AutoMerge = true
 			i++
 
+		case "--auto-improve":
+			cfg.AutoImprove = true
+			i++
+
 		case "--branch-strategy":
 			v, err := requireArg(args, i)
 			if err != nil {
@@ -277,6 +282,19 @@ func Parse(args []string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// Validate checks for invalid flag combinations.
+func (c *Config) Validate() error {
+	if c.AutoImprove {
+		if !c.AutoMerge {
+			return fmt.Errorf("--auto-improve requires --auto-merge")
+		}
+		if c.UseTmux {
+			return fmt.Errorf("--auto-improve is incompatible with --tmux")
+		}
+	}
+	return nil
 }
 
 // CLISet reports whether a config key was explicitly set via CLI flags.

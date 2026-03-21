@@ -45,6 +45,10 @@ func Available() bool {
 // This function blocks until the session ends (tmux attach-session).
 // It returns nil on normal exit or an error if setup fails.
 func (s *Session) Setup() error {
+	// Clear stale .stream-task from a previous run so the stream pane
+	// doesn't briefly show the old task before the loop writes the new one.
+	os.Remove(filepath.Join(s.RalphDir, ".stream-task"))
+
 	if err := s.writeStreamFilter(); err != nil {
 		return fmt.Errorf("write stream filter: %w", err)
 	}

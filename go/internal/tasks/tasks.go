@@ -28,6 +28,11 @@ type Backend interface {
 	// Returns empty string for backends without IDs (e.g. checklist).
 	GetNextTaskID() (string, error)
 
+	// GetNextTaskInfo returns both the ID and description of the next task
+	// in a single backend query, avoiding the race condition where separate
+	// GetNextTask/GetNextTaskID calls could return data from different tasks.
+	GetNextTaskInfo() (id string, title string, err error)
+
 	// HasTasks reports whether any tasks exist at all.
 	HasTasks() (bool, error)
 

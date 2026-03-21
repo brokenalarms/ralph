@@ -320,10 +320,14 @@ func TestRun_DetectsCompletionSignal(t *testing.T) {
 	log := &testLogger{}
 	runner := Runner{Logger: log}
 
-	// Write the completion signal after a short delay.
+	// Write the completion signal after a short delay. Use write+rename for
+	// atomicity — os.WriteFile truncates then writes, creating a window where
+	// the file exists but is empty.
 	go func() {
 		time.Sleep(300 * time.Millisecond)
-		os.WriteFile(signals.Complete, []byte("task finished"), 0o644)
+		tmp := signals.Complete + ".tmp"
+		os.WriteFile(tmp, []byte("task finished"), 0o644)
+		os.Rename(tmp, signals.Complete)
 	}()
 
 	cfg := RunConfig{

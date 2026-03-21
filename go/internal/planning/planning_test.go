@@ -31,6 +31,7 @@ func (m *mockBackend) CountRemaining() (int, error)           { return 0, nil }
 func (m *mockBackend) CountTotal() (int, error)               { return m.totalTasks, nil }
 func (m *mockBackend) GetNextTask() (string, error)           { return m.nextTask, nil }
 func (m *mockBackend) GetNextTaskID() (string, error)         { return "", nil }
+func (m *mockBackend) GetNextTaskInfo() (string, string, error) { return "", m.nextTask, nil }
 func (m *mockBackend) HasTasks() (bool, error)                { return m.totalTasks > 0, nil }
 func (m *mockBackend) CloseTask(string, string) error         { return nil }
 func (m *mockBackend) SkipTask(string, string) error          { return nil }

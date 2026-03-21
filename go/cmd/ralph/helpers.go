@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -74,6 +75,50 @@ func promptRebaseRecovery(err error) git.RebaseRecovery {
 	default:
 		return git.RebaseAbort
 	}
+}
+
+func autoImproveRestart(projectDir, scriptPath string, args []string, log *logging.Logger) error {
+	ralphDir := filepath.Join(projectDir, ".ralph")
+
+	log.Log("Pulling latest main...")
+	fetchCmd := exec.Command("git", "-C", projectDir, "fetch", "origin", "main")
+	if out, err := fetchCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git fetch failed: %s", out)
+	}
+
+	resetCmd := exec.Command("git", "-C", projectDir, "reset", "--hard", "origin/main")
+	if out, err := resetCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git reset failed: %s", out)
+	}
+
+	log.Log("Rebuilding ralph binary...")
+	goDir := filepath.Join(projectDir, "go")
+	version := gitVersion(projectDir)
+	ldflags := fmt.Sprintf("-X github.com/brokenalarms/ralph/internal/config.Version=%s", version)
+	buildCmd := exec.Command("go", "build", "-ldflags", ldflags, "-o", scriptPath, "./cmd/ralph")
+	buildCmd.Dir = goDir
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("go build failed: %s", out)
+	}
+
+	if err := safeRemoveRalphDir(ralphDir); err != nil {
+		return fmt.Errorf("cleanup failed: %w", err)
+	}
+
+	log.Log("Restarting ralph with new binary...")
+	execArgs := append([]string{scriptPath}, args...)
+	return syscall.Exec(scriptPath, execArgs, os.Environ())
+}
+
+func gitVersion(projectDir string) string {
+	cmd := exec.Command("git", "-C", projectDir, "describe", "--tags",
+		"--match", "v[0-9]*.[0-9]*.[0-9]*", "--abbrev=0")
+	out, err := cmd.Output()
+	if err != nil {
+		return "0.1.0-dev"
+	}
+	v := strings.TrimSpace(string(out))
+	return strings.TrimPrefix(v, "v")
 }
 
 func ensureGitignored(projectDir, entry string) {

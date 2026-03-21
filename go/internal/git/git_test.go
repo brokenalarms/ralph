@@ -234,6 +234,49 @@ func TestSetupWorktree_Resume(t *testing.T) {
 	}
 }
 
+// Resume log must not leak the old branch name to avoid confusion with the
+// current task — the branch gets rebased and renamed shortly after resume.
+func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+	log := &testLog{}
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("old task name")
+	oldBranch := mgr.WorktreeBranch
+
+	log.messages = nil
+
+	mgr2 := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		Resume:      true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr2.SetupWorktree(); err != nil {
+		t.Fatalf("resume SetupWorktree: %v", err)
+	}
+
+	for _, msg := range log.messages {
+		if strings.Contains(msg, oldBranch) {
+			t.Errorf("resume log should not contain old branch name %q, got %q", oldBranch, msg)
+		}
+	}
+}
+
 // Resume restores task_seq from state.json, not branch count.
 // Prevents sequence skips when branches are deleted after squash-merge.
 func TestSetupWorktree_ResumeRestoresTaskSeqFromState(t *testing.T) {
@@ -1033,5 +1076,40 @@ func TestBranchStrategy_StackedBehavesLikeDefault(t *testing.T) {
 	}
 	if !strings.HasSuffix(mgr.WorktreeBranch, "/next") {
 		t.Errorf("rotated branch %q should end with /next", mgr.WorktreeBranch)
+	}
+}
+
+// IsBranchSquashMerged detects when a branch's changes have been squash-merged
+// into main, so the exit summary can show [MERGED] next to completed branches.
+func TestIsBranchSquashMerged_DetectsMergedBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+
+	// Create a file on a feature branch
+	run(t, "git", "-C", project, "checkout", "-b", "ralph/test/01-feature")
+	writeFile(t, project, "feature.txt", "feature content\n")
+	run(t, "git", "-C", project, "commit", "-m", "add feature")
+	run(t, "git", "-C", project, "checkout", "main")
+
+	// Simulate squash-merge: apply the same changes on main and push
+	writeFile(t, project, "feature.txt", "feature content\n")
+	run(t, "git", "-C", project, "commit", "-m", "squash: feature")
+	run(t, "git", "-C", project, "push", "origin", "main")
+
+	if !IsBranchSquashMerged(project, "ralph/test/01-feature") {
+		t.Error("expected branch to be detected as squash-merged")
+	}
+}
+
+// IsBranchSquashMerged returns false for branches with changes not yet on main.
+func TestIsBranchSquashMerged_UnmergedBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+
+	run(t, "git", "-C", project, "checkout", "-b", "ralph/test/01-pending")
+	writeFile(t, project, "pending.txt", "pending content\n")
+	run(t, "git", "-C", project, "commit", "-m", "add pending")
+	run(t, "git", "-C", project, "checkout", "main")
+
+	if IsBranchSquashMerged(project, "ralph/test/01-pending") {
+		t.Error("expected unmerged branch to not be detected as squash-merged")
 	}
 }

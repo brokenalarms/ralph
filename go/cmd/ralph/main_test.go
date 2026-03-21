@@ -38,6 +38,7 @@ func (s *stubBackend) CountRemaining() (int, error)               { return s.rem
 func (s *stubBackend) CountTotal() (int, error)                   { return s.total, nil }
 func (s *stubBackend) GetNextTask() (string, error)               { return "", nil }
 func (s *stubBackend) GetNextTaskID() (string, error)             { return "", nil }
+func (s *stubBackend) GetNextTaskInfo() (string, string, error)   { return "", "", nil }
 func (s *stubBackend) HasTasks() (bool, error)                    { return s.total > 0, nil }
 func (s *stubBackend) NeedsPlanning() (bool, error)               { return false, nil }
 func (s *stubBackend) PlanningSucceeded() (bool, error)           { return true, nil }
@@ -87,6 +88,34 @@ func TestGenerateResumeScript(t *testing.T) {
 	}
 	if strings.Contains(content, "--no-worktree") {
 		t.Error("resume script should NOT contain --no-worktree when worktree is enabled")
+	}
+}
+
+// Verifies the resume script includes --auto-improve when enabled.
+func TestGenerateResumeScript_AutoImprove(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	cfg := config.Config{
+		ProjectDir:    dir,
+		MaxIterations: 50,
+		UseWorktree:   true,
+		AutoMerge:     true,
+		AutoImprove:   true,
+		CallsPerHour:  80,
+	}
+
+	log := logging.New(nil)
+	generateResumeScript(cfg, ralphDir, "/usr/local/bin/ralph", nil, log)
+
+	data, _ := os.ReadFile(filepath.Join(ralphDir, "resume.sh"))
+	content := string(data)
+	if !strings.Contains(content, "--auto-improve") {
+		t.Error("resume script should contain --auto-improve")
+	}
+	if !strings.Contains(content, "--auto-merge") {
+		t.Error("resume script should contain --auto-merge")
 	}
 }
 

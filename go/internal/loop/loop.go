@@ -31,6 +31,7 @@ type Config struct {
 	RefactorEvery       int
 	Quiet               bool
 	AutoMerge           bool
+	AutoImprove         bool
 	CallsPerHour        int
 	TaskBackend         tasks.Backend
 	IdleTimeout         time.Duration
@@ -46,14 +47,15 @@ type claudeRunner interface {
 // Loop orchestrates the execution phase: task selection, prompt building,
 // rate limiting, branch rotation, Claude invocation, and response analysis.
 type Loop struct {
-	cfg      Config
-	state    *state.Store
-	git      *git.Manager
-	limiter  *ratelimit.Limiter
-	runner   claudeRunner
-	analyzer *analyzer.Analyzer
-	logger   *logging.Logger
-	signals  claude.SignalPaths
+	cfg       Config
+	state     *state.Store
+	git       *git.Manager
+	limiter   *ratelimit.Limiter
+	runner    claudeRunner
+	analyzer  *analyzer.Analyzer
+	logger    *logging.Logger
+	signals   claude.SignalPaths
+	mergeFunc func() (bool, error)
 }
 
 // New creates an execution loop from the given configuration.
@@ -91,14 +93,15 @@ func (l *Loop) Run(ctx context.Context) error {
 		// differs from the last one. If it's the same task, stay on
 		// the existing task branch so additional commits land there.
 		if !strings.HasSuffix(l.git.WorktreeBranch, "/next") {
-			nextTask, _ := l.cfg.TaskBackend.GetNextTask()
-			nextTaskID, _ := l.cfg.TaskBackend.GetNextTaskID()
+			nextTaskID, nextTask, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 			if l.isNewTask(nextTaskID, nextTask) {
 				l.git.RotateBranch()
 			} else {
 				l.git.BranchRenamed = true
 			}
 		}
+
+		l.logger.Log("Branch: %s", l.git.WorktreeBranch)
 	}
 
 	if err := l.limiter.Init(); err != nil {
@@ -156,8 +159,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		runIteration++
 		iteration++
 
-		nextTask, _ := l.cfg.TaskBackend.GetNextTask()
-		taskID, _ := l.cfg.TaskBackend.GetNextTaskID()
+		taskID, nextTask, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 		taskChanged := l.isNewTask(taskID, nextTask)
 
 		if runIteration > 1 && taskChanged {
@@ -253,6 +255,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		completed, _ = l.cfg.TaskBackend.CountCompleted()
+		total, _ = l.cfg.TaskBackend.CountTotal()
 		l.logger.Task("Iteration %d complete (%dm%ds). %d/%d tasks done.",
 			runIteration, int(elapsed.Minutes()), int(elapsed.Seconds())%60, completed, total)
 
@@ -273,8 +276,14 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		if l.cfg.AutoMerge && result.SignalDetected && l.git.BranchStrategy != git.BranchSingle {
-			if err := l.git.AutoMergeCurrentBranch(); err != nil {
+			merged, err := l.autoMerge()
+			if err != nil {
 				l.logger.Warn("Auto-merge: %v", err)
+			} else if merged && l.cfg.AutoImprove {
+				l.git.TagTaskEnd(taskID)
+				l.logger.Phase("Auto-improve: restarting with latest main")
+				l.state.Write("status", "auto_improve_restart")
+				return nil
 			}
 		}
 
@@ -327,6 +336,13 @@ func (l *Loop) isNewTask(taskID, taskDesc string) bool {
 	}
 	lastTask, _ := l.state.Read("last_task")
 	return lastTask != taskDesc
+}
+
+func (l *Loop) autoMerge() (bool, error) {
+	if l.mergeFunc != nil {
+		return l.mergeFunc()
+	}
+	return l.git.AutoMergeCurrentBranch()
 }
 
 func (l *Loop) checkStopFile() bool {
