@@ -102,8 +102,9 @@ func autoImproveRestart(projectDir, scriptPath string, args []string, log *loggi
 		return fmt.Errorf("go build failed: %s", out)
 	}
 
-	if err := safeRemoveRalphDir(ralphDir); err != nil {
-		return fmt.Errorf("cleanup failed: %w", err)
+	// Clear signal files but preserve state so the new process resumes execution
+	for _, f := range []string{".signal_complete", ".signal_current_task", ".signal_all_complete", ".stream-task"} {
+		os.Remove(filepath.Join(ralphDir, f))
 	}
 
 	log.Log("Restarting ralph with new binary...")
