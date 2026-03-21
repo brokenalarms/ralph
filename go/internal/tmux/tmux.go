@@ -269,6 +269,33 @@ func touchFile(path string) {
 	}
 }
 
+// SessionName builds a tmux-safe session name from a project directory path.
+// The base name is "{basename}-loop". Characters invalid in tmux session names
+// (dots and colons) are replaced with hyphens. If a session with that name
+// already exists, a numeric suffix is appended (e.g. "ralph-loop-2").
+func SessionName(projectDir string) string {
+	base := sanitizeSessionName(filepath.Base(projectDir)) + "-loop"
+	if !sessionExists(base) {
+		return base
+	}
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s-%d", base, i)
+		if !sessionExists(candidate) {
+			return candidate
+		}
+	}
+}
+
+func sanitizeSessionName(name string) string {
+	name = strings.ReplaceAll(name, ".", "-")
+	name = strings.ReplaceAll(name, ":", "-")
+	return name
+}
+
+func sessionExists(name string) bool {
+	return exec.Command("tmux", "has-session", "-t", name).Run() == nil
+}
+
 func shellQuote(s string) string {
 	if s == "" {
 		return "''"

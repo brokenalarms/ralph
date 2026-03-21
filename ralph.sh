@@ -467,7 +467,17 @@ setup_tmux() {
     return
   fi
 
-  TMUX_SESSION="ralph-sh-$$"
+  local base
+  base="$(basename "$PROJECT_DIR" | tr './:' '---')-loop"
+  if ! tmux has-session -t "$base" 2>/dev/null; then
+    TMUX_SESSION="$base"
+  else
+    local i=2
+    while tmux has-session -t "${base}-${i}" 2>/dev/null; do
+      i=$((i + 1))
+    done
+    TMUX_SESSION="${base}-${i}"
+  fi
 
   write_stream_filter
 

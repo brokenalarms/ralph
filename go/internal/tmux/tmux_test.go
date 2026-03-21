@@ -216,6 +216,37 @@ func TestSetup_ClearsStaleStreamTask(t *testing.T) {
 	}
 }
 
+// Verifies that SessionName derives the session name from the project
+// directory basename with "-loop" suffix, making concurrent ralph
+// sessions distinguishable in tmux ls.
+func TestSessionName_BasenameLoop(t *testing.T) {
+	got := SessionName("/home/user/projects/tabi")
+	if got != "tabi-loop" {
+		t.Errorf("SessionName(/home/user/projects/tabi) = %q, want %q", got, "tabi-loop")
+	}
+}
+
+// Verifies that sanitizeSessionName replaces dots and colons (which are
+// invalid in tmux session names) with hyphens.
+func TestSanitizeSessionName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"my.project", "my-project"},
+		{"host:path", "host-path"},
+		{"normal", "normal"},
+		{"dots.and:colons", "dots-and-colons"},
+	}
+
+	for _, tt := range tests {
+		got := sanitizeSessionName(tt.input)
+		if got != tt.want {
+			t.Errorf("sanitizeSessionName(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
 // Verifies that .plan-refresh signal path is correctly embedded in the
 // plan watcher script, so the pane redraws when signaled.
 func TestPlanWatcher_SignalPath(t *testing.T) {
