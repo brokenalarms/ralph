@@ -183,7 +183,7 @@ func (m *Manager) tryResumeWorktree() error {
 		}
 	}
 
-	m.Logger.Log("Resuming in worktree: %s (branch: %s)", m.WorkDir, m.WorktreeBranch)
+	m.Logger.Log("Resuming worktree: %s", m.WorkDir)
 	return nil
 }
 

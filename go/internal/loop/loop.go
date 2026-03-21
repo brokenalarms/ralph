@@ -99,6 +99,8 @@ func (l *Loop) Run(ctx context.Context) error {
 				l.git.BranchRenamed = true
 			}
 		}
+
+		l.logger.Log("Branch: %s", l.git.WorktreeBranch)
 	}
 
 	if err := l.limiter.Init(); err != nil {

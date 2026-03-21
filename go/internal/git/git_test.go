@@ -234,6 +234,49 @@ func TestSetupWorktree_Resume(t *testing.T) {
 	}
 }
 
+// Resume log must not leak the old branch name to avoid confusion with the
+// current task — the branch gets rebased and renamed shortly after resume.
+func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+	log := &testLog{}
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("old task name")
+	oldBranch := mgr.WorktreeBranch
+
+	log.messages = nil
+
+	mgr2 := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		Resume:      true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr2.SetupWorktree(); err != nil {
+		t.Fatalf("resume SetupWorktree: %v", err)
+	}
+
+	for _, msg := range log.messages {
+		if strings.Contains(msg, oldBranch) {
+			t.Errorf("resume log should not contain old branch name %q, got %q", oldBranch, msg)
+		}
+	}
+}
+
 // Resume restores task_seq from state.json, not branch count.
 // Prevents sequence skips when branches are deleted after squash-merge.
 func TestSetupWorktree_ResumeRestoresTaskSeqFromState(t *testing.T) {

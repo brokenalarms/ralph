@@ -190,6 +190,29 @@ func TestTouchFile_CreatesPlanRefresh(t *testing.T) {
 	}
 }
 
+// Verifies that Setup removes a stale .stream-task file from a previous run,
+// so the stream pane doesn't briefly show the old task before the loop writes
+// the current one.
+func TestSetup_ClearsStaleStreamTask(t *testing.T) {
+	dir := t.TempDir()
+	staleFile := filepath.Join(dir, ".stream-task")
+	os.WriteFile(staleFile, []byte("ralph-old: Previous task"), 0o644)
+
+	s := &Session{
+		Name:        "test-session",
+		RalphDir:    dir,
+		TaskBackend: "bd",
+	}
+
+	// Setup will fail on createSession (no tmux), but the stale file
+	// cleanup happens before that.
+	_ = s.Setup()
+
+	if _, err := os.Stat(staleFile); !os.IsNotExist(err) {
+		t.Error(".stream-task should be removed on Setup to prevent showing stale task")
+	}
+}
+
 // Verifies that .plan-refresh signal path is correctly embedded in the
 // plan watcher script, so the pane redraws when signaled.
 func TestPlanWatcher_SignalPath(t *testing.T) {
