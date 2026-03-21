@@ -399,20 +399,24 @@ func TestLoop_MaybeRefactor_CounterIncrement(t *testing.T) {
 	}
 }
 
-// Verifies the loop rotates the branch on resume when the current branch is
-// already named for a task, preventing RenameBranchForTask from overwriting
-// the previous task's branch ref.
-func TestLoop_ResumeRotatesBranchWhenAlreadyNamed(t *testing.T) {
+// Verifies the loop rotates the branch on resume when the next task differs
+// from the last one, so each task gets its own branch.
+func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
+
+	// Last run worked on a different task
+	st.Write("last_task", "previous task")
+	st.Write("last_task_id", "ralph-old")
 
 	backend := &stubBackend{
 		remaining: 0,
 		completed: 1,
 		total:     1,
+		nextTask:  "new task",
+		nextID:    "ralph-new",
 	}
 
-	// Simulate a resumed worktree where the branch is already a task branch
 	gm := &git.Manager{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
@@ -432,12 +436,96 @@ func TestLoop_ResumeRotatesBranchWhenAlreadyNamed(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	// Run exits immediately (no remaining tasks) but should have rotated first
 	_ = l.Run(context.Background())
 
-	// After rotation, the branch should be the /next temp branch (rotation
-	// happens before task selection, and since there are no tasks, no rename)
+	// Task changed, so the branch should have been rotated to /next
 	if gm.WorktreeBranch != "ralph/myproject/next" {
-		t.Errorf("expected branch to be rotated to ralph/myproject/next, got %q", gm.WorktreeBranch)
+		t.Errorf("expected branch rotated to ralph/myproject/next, got %q", gm.WorktreeBranch)
+	}
+}
+
+// Verifies the loop keeps the existing task branch on resume when the next
+// task is the same as the last one, so multiple iterations of the same task
+// commit to a single branch.
+func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	st.Write("last_task", "ongoing task")
+	st.Write("last_task_id", "ralph-same")
+
+	backend := &stubBackend{
+		remaining: 0,
+		completed: 1,
+		total:     1,
+		nextTask:  "ongoing task",
+		nextID:    "ralph-same",
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/myproject/01-ongoing-task",
+		ProjectName:    "myproject",
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	_ = l.Run(context.Background())
+
+	// Same task — branch should NOT have been rotated
+	if gm.WorktreeBranch != "ralph/myproject/01-ongoing-task" {
+		t.Errorf("expected branch to stay as ralph/myproject/01-ongoing-task, got %q", gm.WorktreeBranch)
+	}
+	if !gm.BranchRenamed {
+		t.Error("BranchRenamed should be true to prevent re-renaming")
+	}
+}
+
+// Verifies isNewTask compares by task ID when available, falling back to
+// description, so that task identity is stable even if descriptions change.
+func TestLoop_IsNewTask(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	l := &Loop{
+		cfg:   Config{RalphDir: ralphDir},
+		state: st,
+	}
+
+	// No previous task in state — any task is new
+	if !l.isNewTask("ralph-abc", "Fix bug") {
+		t.Error("expected new task when no last_task_id in state")
+	}
+
+	// Store a task, then compare same ID
+	st.Write("last_task_id", "ralph-abc")
+	st.Write("last_task", "Fix bug")
+
+	if l.isNewTask("ralph-abc", "Fix bug") {
+		t.Error("same task ID should not be considered new")
+	}
+
+	// Different ID → new task
+	if !l.isNewTask("ralph-xyz", "Fix bug") {
+		t.Error("different task ID should be considered new")
+	}
+
+	// No ID — falls back to description comparison
+	if l.isNewTask("", "Fix bug") {
+		t.Error("same description with no ID should not be new")
+	}
+	if !l.isNewTask("", "Different task") {
+		t.Error("different description with no ID should be new")
 	}
 }
