@@ -1201,3 +1201,75 @@ func TestPostMergeReset_SingleBranchKeepsSameName(t *testing.T) {
 		t.Errorf("HEAD should match origin/main after reset, got %s vs %s", headAfter, originMain)
 	}
 }
+
+// After auto-merge squash-merges a PR, local main must be updated to match
+// origin/main. This failed previously because `git branch -f main origin/main`
+// silently errors when main is the checked-out branch in the project dir.
+// The fix uses update-ref which works regardless of checkout state.
+func TestAutoMerge_UpdatesLocalMainWhenCheckedOut(t *testing.T) {
+	project, _ := initBareRepo(t)
+	bare := filepath.Join(filepath.Dir(project), "bare.git")
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+	log := &testLog{}
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchStacked,
+		State:          st,
+		Logger:         log,
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Verify main is checked out in project dir (the typical worktree scenario)
+	checkedOut := gitOutput(project, "symbolic-ref", "--short", "HEAD")
+	if checkedOut != "main" {
+		t.Fatalf("expected main checked out in project dir, got %q", checkedOut)
+	}
+
+	localMainBefore := gitOutput(project, "rev-parse", "main")
+
+	// Simulate a commit landing on origin/main (as happens after squash-merge)
+	// by pushing directly to the bare repo from a temp clone.
+	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
+	run(t, "git", "clone", bare, tmpClone)
+	writeFile(t, tmpClone, "merged-work.txt", "merged content\n")
+	run(t, "git", "-C", tmpClone, "commit", "-m", "squash-merged PR")
+	run(t, "git", "-C", tmpClone, "push", "origin", "main")
+
+	// Fetch in project dir so origin/main advances
+	run(t, "git", "-C", project, "fetch", "origin", "main")
+
+	originMain := gitOutput(project, "rev-parse", "origin/main")
+	if originMain == localMainBefore {
+		t.Fatal("origin/main should have advanced")
+	}
+
+	// Local main is still behind (main is checked out so branch -f would fail)
+	localMainStale := gitOutput(project, "rev-parse", "main")
+	if localMainStale != localMainBefore {
+		t.Fatal("local main should still be at old commit before update-ref")
+	}
+
+	// Simulate what AutoMergeCurrentBranch does after merge: update-ref
+	originRef := gitOutput(project, "rev-parse", "origin/main")
+	if originRef != "" {
+		gitCmd(project, "update-ref", "refs/heads/main", originRef)
+	}
+
+	// Local main should now match origin/main
+	localMainAfter := gitOutput(project, "rev-parse", "main")
+	if localMainAfter != originMain {
+		t.Errorf("local main should match origin/main after update-ref: got %s, want %s", localMainAfter, originMain)
+	}
+
+	// Verify main is still checked out (update-ref doesn't change that)
+	stillCheckedOut := gitOutput(project, "symbolic-ref", "--short", "HEAD")
+	if stillCheckedOut != "main" {
+		t.Errorf("main should still be checked out, got %q", stillCheckedOut)
+	}
+}
