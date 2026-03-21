@@ -119,7 +119,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		return 1
 	}
 
-	log.Phase("Ralph Loop v%s (go)", config.Version)
+	log.Phase("Ralph Loop (go)")
 	log.Log("Project: %s", cfg.ProjectDir)
 	if gm.WorkDir != cfg.ProjectDir {
 		log.Log("Worktree: %s", gm.WorkDir)
