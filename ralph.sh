@@ -2145,9 +2145,11 @@ cleanup() {
     print_summary
   fi
 }
-_interrupted=false
-trap '_interrupted=true' INT TERM
-trap cleanup EXIT
+if [[ "${RALPH_SOURCED:-}" != true ]]; then
+  _interrupted=false
+  trap '_interrupted=true' INT TERM
+  trap cleanup EXIT
+fi
 
 # --- Main ---
 main() {

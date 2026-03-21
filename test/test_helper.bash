@@ -7,8 +7,6 @@ RALPH_SH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ralph.sh"
 source_ralph_functions() {
   RALPH_SOURCED=true
   source "$RALPH_SH"
-  # Remove the cleanup trap that ralph.sh installs
-  trap - EXIT
 }
 
 # --- Setup temp git repo (call after source_ralph_functions) ---
