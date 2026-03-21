@@ -41,7 +41,7 @@ type Config struct {
 
 // claudeRunner abstracts the Claude execution interface for testability.
 type claudeRunner interface {
-	Run(cfg claude.RunConfig) (claude.Result, error)
+	Run(ctx context.Context, cfg claude.RunConfig) (claude.Result, error)
 }
 
 // Loop orchestrates the execution phase: task selection, prompt building,
@@ -173,7 +173,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			}
 		}
 
-		if err := l.maybeRefactor(refactorEvery); err != nil {
+		if err := l.maybeRefactor(ctx, refactorEvery); err != nil {
 			l.logger.Warn("Refactor iteration error: %v", err)
 		}
 
@@ -220,7 +220,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		workDir := l.git.WorkDir
 		taskStart := time.Now()
-		result, runErr := l.runner.Run(claude.RunConfig{
+		result, runErr := l.runner.Run(ctx, claude.RunConfig{
 			WorkDir:             workDir,
 			RalphDir:            l.cfg.RalphDir,
 			Prompt:              fullPrompt,
@@ -371,7 +371,7 @@ func (l *Loop) checkStopFile() bool {
 	return false
 }
 
-func (l *Loop) maybeRefactor(refactorEvery int) error {
+func (l *Loop) maybeRefactor(ctx context.Context, refactorEvery int) error {
 	if refactorEvery <= 0 {
 		return nil
 	}
@@ -415,7 +415,7 @@ func (l *Loop) maybeRefactor(refactorEvery int) error {
 	}
 
 	rawLogPath := filepath.Join(l.cfg.RalphDir, "raw.log")
-	_, err = l.runner.Run(claude.RunConfig{
+	_, err = l.runner.Run(ctx, claude.RunConfig{
 		WorkDir:      l.git.WorkDir,
 		RalphDir:     l.cfg.RalphDir,
 		Prompt:       refactorPrompt,

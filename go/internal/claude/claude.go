@@ -2,6 +2,7 @@ package claude
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -83,8 +84,8 @@ type Runner struct {
 }
 
 // Run spawns a Claude process, polls for signal files, and returns when the
-// process exits or a completion signal is detected. Mirrors ralph.sh run_claude.
-func (r *Runner) Run(cfg RunConfig) (Result, error) {
+// process exits, a completion signal is detected, or the context is cancelled.
+func (r *Runner) Run(ctx context.Context, cfg RunConfig) (Result, error) {
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = 2 * time.Second
 	}
@@ -132,8 +133,8 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 		tailCmd = r.startTail(cfg.LogFile)
 	}
 
-	// Poll for signals or process exit.
-	result := r.poll(cmd, cfg)
+	// Poll for signals, process exit, or context cancellation.
+	result := r.poll(ctx, cmd, cfg)
 
 	// Reap the Claude process.
 	_ = cmd.Wait()
@@ -158,8 +159,8 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	return result, nil
 }
 
-// poll checks for process exit and signal files on a ticker.
-func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
+// poll checks for process exit, signal files, and context cancellation.
+func (r *Runner) poll(ctx context.Context, cmd *exec.Cmd, cfg RunConfig) Result {
 	ticker := time.NewTicker(cfg.PollInterval)
 	defer ticker.Stop()
 
@@ -175,6 +176,11 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 
 	for {
 		select {
+		case <-ctx.Done():
+			r.Logger.Log("Context cancelled — killing Claude")
+			gracefulKill(cmd, processDone)
+			return Result{}
+
 		case <-processDone:
 			// Process exited on its own — return, let caller do final signal check.
 			return Result{}

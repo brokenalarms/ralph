@@ -24,7 +24,7 @@ type stubRunner struct {
 	result claude.Result
 }
 
-func (s *stubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
+func (s *stubRunner) Run(_ context.Context, cfg claude.RunConfig) (claude.Result, error) {
 	if s.onRun != nil {
 		s.onRun()
 	}
@@ -434,14 +434,14 @@ func TestLoop_MaybeRefactor_CounterIncrement(t *testing.T) {
 	st.Write("iterations_since_refactor", "0")
 
 	// refactorEvery=0 should do nothing.
-	err := l.maybeRefactor(0)
+	err := l.maybeRefactor(context.Background(), 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// refactorEvery=5, counter at 2 should just increment.
 	st.Write("iterations_since_refactor", "2")
-	err = l.maybeRefactor(5)
+	err = l.maybeRefactor(context.Background(), 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

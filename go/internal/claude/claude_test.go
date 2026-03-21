@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -648,6 +649,64 @@ func TestPoll_ZeroIdleTimeoutDisablesDetection(t *testing.T) {
 	}
 }
 
+// Verifies that cancelling the context kills the Claude process promptly,
+// which is how Ctrl-C in tmux mode propagates through to stop execution.
+func TestPoll_ContextCancellationKillsProcess(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	clearSignals(signals)
+
+	rawLogFile, err := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawLogFile.Close()
+
+	cmd := exec.Command("sleep", "30")
+	cmd.Dir = dir
+	cmd.Stdin = nil
+	cmd.Stdout = rawLogFile
+	cmd.Stderr = rawLogFile
+
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Cancel after a short delay, simulating Ctrl-C.
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	result := runner.poll(ctx, cmd, RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+	})
+	elapsed := time.Since(start)
+
+	_ = cmd.Wait()
+
+	if result.SignalDetected {
+		t.Error("expected SignalDetected=false on context cancellation")
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("process should be killed promptly, took %s", elapsed)
+	}
+}
+
 // --- Test helpers ---
 
 // runWithCommand replaces the claude command with an arbitrary command for
@@ -678,7 +737,7 @@ func runWithCommand(t *testing.T, r *Runner, cfg RunConfig, name string, args ..
 		t.Fatal(err)
 	}
 
-	result := r.poll(cmd, cfg)
+	result := r.poll(context.Background(), cmd, cfg)
 
 	_ = cmd.Wait()
 

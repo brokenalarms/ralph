@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -80,7 +81,15 @@ func run(args []string) int {
 		return handleTmux(cfg, scriptPath, args, ralphDir, log)
 	}
 
-	return runMain(cfg, ralphDir, promptsDir, scriptPath, args, log)
+	exitCode := runMain(cfg, ralphDir, promptsDir, scriptPath, args, log)
+
+	// When running inside a tmux pane, kill the session so the outer
+	// process's tmux attach-session returns and the whole process tree exits.
+	if sess := os.Getenv("_RALPH_TMUX_SESSION"); sess != "" {
+		exec.Command("tmux", "kill-session", "-t", sess).Run()
+	}
+
+	return exitCode
 }
 
 func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []string, log *logging.Logger) int {
