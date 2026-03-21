@@ -3,6 +3,7 @@ package tasks
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -216,6 +217,44 @@ func TestCounts_IndentedCheckboxes(t *testing.T) {
 	}
 	if total != 3 {
 		t.Errorf("CountTotal = %d, want 3", total)
+	}
+}
+
+// Proves: SkipTask marks the first unchecked task with [s] and appends the reason.
+func TestChecklist_SkipTask(t *testing.T) {
+	plan := "- [ ] Fix auth bug\n- [ ] Add tests\n"
+	c := setupChecklist(t, plan)
+	if err := c.SkipTask("", "stagnation"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(c.PlanFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "[s] Fix auth bug (stagnation)") {
+		t.Errorf("expected skipped marker, got:\n%s", content)
+	}
+	if !strings.Contains(content, "[ ] Add tests") {
+		t.Errorf("expected second task unchanged, got:\n%s", content)
+	}
+}
+
+// Proves: ExecutionInstructions reads from the prompts directory and contains
+// plan file and checkbox references.
+func TestChecklist_ExecutionInstructions(t *testing.T) {
+	c := setupChecklist(t, "")
+	content := "Read the plan at {{PLAN_FILE}} and mark done with [x].\n"
+	os.WriteFile(filepath.Join(c.PromptsDir, "execution-checklist.md"), []byte(content), 0644)
+	got, err := c.ExecutionInstructions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "{{PLAN_FILE}}") {
+		t.Error("expected execution instructions to reference {{PLAN_FILE}}")
+	}
+	if !strings.Contains(got, "[x]") {
+		t.Error("expected execution instructions to reference [x]")
 	}
 }
 

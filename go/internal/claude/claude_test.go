@@ -133,6 +133,48 @@ func TestReadSignalSummary_FallsBackToComplete(t *testing.T) {
 	}
 }
 
+// Verifies that check_current_task (hasSignal) detects the current-task file,
+// and read_current_task (readFirstLine) extracts its content.
+func TestCheckAndReadCurrentTask(t *testing.T) {
+	dir := t.TempDir()
+	s := DefaultSignalPaths(dir)
+
+	ClearSignals(s)
+
+	if hasSignal(s.CurrentTask) {
+		t.Error("hasSignal should be false after clear")
+	}
+
+	os.WriteFile(s.CurrentTask, []byte("Working on auth\n"), 0o644)
+
+	if !hasSignal(s.CurrentTask) {
+		t.Error("hasSignal should be true after writing current task")
+	}
+	got := readFirstLine(s.CurrentTask)
+	if got != "Working on auth" {
+		t.Errorf("readFirstLine = %q, want %q", got, "Working on auth")
+	}
+}
+
+// Verifies that the ALL_COMPLETE signal is detected via hasSignal on the
+// AllComplete path.
+func TestAllCompleteSignalDetected(t *testing.T) {
+	dir := t.TempDir()
+	s := DefaultSignalPaths(dir)
+
+	ClearSignals(s)
+
+	if hasSignal(s.AllComplete) {
+		t.Error("hasSignal should be false for all_complete after clear")
+	}
+
+	os.WriteFile(s.AllComplete, []byte("All tasks finished\n"), 0o644)
+
+	if !hasSignal(s.AllComplete) {
+		t.Error("hasSignal should be true after writing all_complete")
+	}
+}
+
 // --- Stream text extraction tests ---
 
 // Verifies that extractStreamText pulls text from assistant messages in

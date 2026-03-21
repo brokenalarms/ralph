@@ -222,6 +222,70 @@ func TestReadWrite_UnknownKey(t *testing.T) {
 	}
 }
 
+// Verifies that Init creates a fresh state with "initialized" status when no
+// state file exists, matching bash init_ralph_dir behavior.
+func TestInit_CreatesFreshState(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+
+	if err := st.Init(50, 20); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(st.Path()); err != nil {
+		t.Fatal("expected state file to exist after Init")
+	}
+
+	s, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.MaxIterations != 50 {
+		t.Errorf("MaxIterations = %d, want 50", s.MaxIterations)
+	}
+}
+
+// Verifies that Init preserves existing state on resume — iteration and
+// status are not overwritten.
+func TestInit_PreservesStateOnResume(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+
+	st.Save(State{Iteration: 3, Status: "running", MaxIterations: 50})
+
+	if err := st.Init(50, 20); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Iteration != 3 {
+		t.Errorf("Iteration = %d, want 3 (preserved)", s.Iteration)
+	}
+	if s.Status != "running" {
+		t.Errorf("Status = %q, want %q (preserved)", s.Status, "running")
+	}
+	if s.MaxIterations != 50 {
+		t.Errorf("MaxIterations = %d, want 50 (preserved)", s.MaxIterations)
+	}
+}
+
+// Verifies that task_backend is persisted and read back correctly.
+func TestTaskBackend_WrittenToState(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Save(State{})
+	if err := st.Write("task_backend", "checklist"); err != nil {
+		t.Fatal(err)
+	}
+	val, _ := st.Read("task_backend")
+	if val != "checklist" {
+		t.Errorf("task_backend = %q, want %q", val, "checklist")
+	}
+}
+
 // Verifies that Save uses atomic write — if we can read the file after
 // Save, it contains valid JSON (no partial writes).
 func TestSave_AtomicWrite(t *testing.T) {

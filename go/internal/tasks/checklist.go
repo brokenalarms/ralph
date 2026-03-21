@@ -94,6 +94,25 @@ func (c *Checklist) CloseTask(_ string, _ string) error {
 	return nil
 }
 
+func (c *Checklist) SkipTask(_ string, reason string) error {
+	if reason == "" {
+		reason = "skipped"
+	}
+	content, err := c.readPlan()
+	if err != nil {
+		return nil
+	}
+	task, err := c.GetNextTask()
+	if err != nil || task == "" {
+		return nil
+	}
+	// Replace the first matching unchecked task with [s] marker and reason
+	old := "- [ ] " + task
+	replacement := "- [s] " + task + " (" + reason + ")"
+	content = strings.Replace(content, old, replacement, 1)
+	return os.WriteFile(c.PlanFile, []byte(content), 0644)
+}
+
 func (c *Checklist) ExecutionInstructions() (string, error) {
 	path := c.PromptsDir + "/execution-checklist.md"
 	data, err := os.ReadFile(path)

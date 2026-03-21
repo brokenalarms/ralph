@@ -41,6 +41,11 @@ type Backend interface {
 	// (empty for checklist, a bd issue ID for the bd backend).
 	CloseTask(id string, reason string) error
 
+	// SkipTask marks a task as blocked/skipped. For bd, this closes with
+	// "blocked: reason". For checklist, it replaces [ ] with [s] and appends
+	// the reason.
+	SkipTask(id string, reason string) error
+
 	// ExecutionInstructions returns the prompt text for the execution phase.
 	ExecutionInstructions() (string, error)
 
