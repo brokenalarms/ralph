@@ -345,6 +345,14 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 	}
 
 	m.Logger.Log("PR #%s squash-merged into main", prNumber)
+
+	// Pull latest main so next iteration rebases on merged changes
+	defaultBranch := detectDefaultBranch(m.ProjectDir)
+	gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
+	gitCmd(m.ProjectDir, "branch", "-f", defaultBranch, "origin/"+defaultBranch)
+	m.Logger.Log("Updated local %s to origin/%s", defaultBranch, defaultBranch)
+
+	// Clean up merged branch
 	exec.Command("git", "-C", m.ProjectDir, "branch", "-D", m.WorktreeBranch).Run()
 	return true, nil
 }

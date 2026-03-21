@@ -275,7 +275,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.logger.Warn("Analysis: %s", analysisResult.Reason)
 		}
 
-		if l.cfg.AutoMerge && result.SignalDetected && l.git.BranchStrategy != git.BranchSingle {
+		if l.cfg.AutoMerge && result.SignalDetected {
 			merged, err := l.autoMerge()
 			if err != nil {
 				l.logger.Warn("Auto-merge: %v", err)
