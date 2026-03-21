@@ -79,12 +79,17 @@ func (l *Loop) Run(ctx context.Context) error {
 			return fmt.Errorf("initial rebase failed: %w", err)
 		}
 
-		// On resume, if the current branch is already named for a task
-		// (not /next), rotate to create a fresh branch stacked on top.
-		// Without this, RenameBranchForTask would rename the existing
-		// task branch instead of creating a new one in the chain.
+		// On resume, only rotate to a fresh branch if the next task
+		// differs from the last one. If it's the same task, stay on
+		// the existing task branch so additional commits land there.
 		if !strings.HasSuffix(l.git.WorktreeBranch, "/next") {
-			l.git.RotateBranch()
+			nextTask, _ := l.cfg.TaskBackend.GetNextTask()
+			nextTaskID, _ := l.cfg.TaskBackend.GetNextTaskID()
+			if l.isNewTask(nextTaskID, nextTask) {
+				l.git.RotateBranch()
+			} else {
+				l.git.BranchRenamed = true
+			}
 		}
 	}
 
@@ -143,7 +148,11 @@ func (l *Loop) Run(ctx context.Context) error {
 		runIteration++
 		iteration++
 
-		if runIteration > 1 {
+		nextTask, _ := l.cfg.TaskBackend.GetNextTask()
+		taskID, _ := l.cfg.TaskBackend.GetNextTaskID()
+		taskChanged := l.isNewTask(taskID, nextTask)
+
+		if runIteration > 1 && taskChanged {
 			l.git.RotateBranch()
 			if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
 				if err := l.git.RebaseOntoDefaultBranch(); err != nil {
@@ -157,8 +166,6 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.logger.Warn("Refactor iteration error: %v", err)
 		}
 
-		nextTask, _ := l.cfg.TaskBackend.GetNextTask()
-		taskID, _ := l.cfg.TaskBackend.GetNextTaskID()
 		completed, _ := l.cfg.TaskBackend.CountCompleted()
 		total, _ := l.cfg.TaskBackend.CountTotal()
 
@@ -171,7 +178,10 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.state.Write("iteration", strconv.Itoa(iteration))
 		l.state.Write("status", "running")
 		l.state.Write("last_task", nextTask)
-		l.git.RenameBranchForTask(nextTask)
+		l.state.Write("last_task_id", taskID)
+		if taskChanged {
+			l.git.RenameBranchForTask(nextTask)
+		}
 		l.git.TagTaskStart(taskID)
 
 		l.updateStreamTask(taskID, nextTask)
@@ -259,6 +269,18 @@ func (l *Loop) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// isNewTask returns true when the next task differs from the last one stored
+// in state. Prefers task ID comparison (stable across description edits);
+// falls back to description when no ID is available.
+func (l *Loop) isNewTask(taskID, taskDesc string) bool {
+	if taskID != "" {
+		lastID, _ := l.state.Read("last_task_id")
+		return lastID != taskID
+	}
+	lastTask, _ := l.state.Read("last_task")
+	return lastTask != taskDesc
 }
 
 func (l *Loop) checkStopFile() bool {
