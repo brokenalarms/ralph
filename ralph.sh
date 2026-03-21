@@ -400,6 +400,7 @@ write_stream_filter() {
   cat > "$RALPH_DIR/.stream-filter.sh" <<'STREAM'
 #!/usr/bin/env bash
 set +m
+stty -echo 2>/dev/null
 # stream-json: each event has 1 content block. Filter and format.
 exec 2>"$(dirname "$0")/.stream-filter.err"
 tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
@@ -463,6 +464,7 @@ setup_tmux() {
   # Write plan watcher script — waits for signal file, then clears and re-renders
   cat > "$RALPH_DIR/.plan-watch.sh" <<PLAN_SCRIPT
 #!/usr/bin/env bash
+stty -echo 2>/dev/null
 BOLD=$'\033[1m'
 DIM=$'\033[2m'
 CYAN=$'\033[0;36m'

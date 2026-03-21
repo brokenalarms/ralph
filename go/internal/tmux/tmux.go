@@ -135,6 +135,7 @@ func (s *Session) createSession() error {
 func (s *Session) writeStreamFilter() error {
 	script := `#!/usr/bin/env bash
 set +m
+stty -echo 2>/dev/null
 exec 2>"$(dirname "$0")/.stream-filter.err"
 tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   fromjson? // empty |
@@ -181,6 +182,7 @@ func (s *Session) writePlanWatcher() error {
 	}
 
 	script := fmt.Sprintf(`#!/usr/bin/env bash
+stty -echo 2>/dev/null
 BOLD=$'\033[1m'
 CYAN=$'\033[0;36m'
 GREEN=$'\033[0;32m'

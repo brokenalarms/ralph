@@ -165,6 +165,41 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
+// Verifies that the stream filter disables terminal echo so arrow key
+// presses and other escape sequences don't clutter the display-only pane.
+func TestWriteStreamFilter_DisablesEcho(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{RalphDir: dir}
+
+	if err := s.writeStreamFilter(); err != nil {
+		t.Fatalf("writeStreamFilter() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, ".stream-filter.sh"))
+	if !strings.Contains(string(data), "stty -echo") {
+		t.Error("stream filter should disable terminal echo to suppress escape sequences")
+	}
+}
+
+// Verifies that the plan watcher disables terminal echo so arrow key
+// presses and other escape sequences don't clutter the display-only pane.
+func TestWritePlanWatcher_DisablesEcho(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{
+		RalphDir:    dir,
+		TaskBackend: "bd",
+	}
+
+	if err := s.writePlanWatcher(); err != nil {
+		t.Fatalf("writePlanWatcher() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
+	if !strings.Contains(string(data), "stty -echo") {
+		t.Error("plan watcher should disable terminal echo to suppress escape sequences")
+	}
+}
+
 // Verifies that the stream filter script does not contain a 'kill 0'
 // trap, which would terminate the parent ralph process.
 func TestStreamFilter_NoKillZeroTrap(t *testing.T) {
