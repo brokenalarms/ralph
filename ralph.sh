@@ -385,6 +385,7 @@ init_ralph_dir() {
   "status": "initialized",
   "started_at": null,
   "last_task": null,
+  "last_task_id": null,
   "worktree_dir": null,
   "worktree_branch": null,
   "task_seq": 0
@@ -1427,6 +1428,23 @@ run_execution() {
       write_state "status" "error"
       return 1
     fi
+
+    # On resume, if we're on a task branch (not /next), check whether
+    # the next task is the same. If so, keep the branch; otherwise let
+    # the loop rotate on the first iteration.
+    if [[ "$WORKTREE_BRANCH" != *"/next" ]]; then
+      local _resume_task _resume_id _resume_key
+      _resume_task=$(get_next_task)
+      _resume_id=$(get_next_task_id)
+      _resume_key="${_resume_id:-$_resume_task}"
+      local _last_id _last_task
+      _last_id=$(read_state "last_task_id")
+      _last_task=$(read_state "last_task")
+      if [[ -n "$_resume_id" && "$_resume_id" == "$_last_id" ]] \
+         || [[ -z "$_resume_id" && "$_resume_task" == "$_last_task" ]]; then
+        _BRANCH_RENAMED=true
+      fi
+    fi
   fi
 
   init_call_tracking
@@ -1481,10 +1499,26 @@ run_execution() {
     run_iteration=$((run_iteration + 1))
     iteration=$((iteration + 1))
 
-    # Each iteration gets its own branch, stacked on the previous
-    if (( run_iteration > 1 )); then
+    # Get next task info early so we can detect task changes before rotation
+    local next_task completed remaining total
+    next_task=$(get_next_task)
+    completed=$(count_completed)
+    remaining=$(count_remaining)
+    total=$(count_total)
+
+    local task_id
+    task_id=$(get_next_task_id)
+
+    # Detect whether the task changed from the previous iteration
+    local task_key="${task_id:-$next_task}"
+    local _task_changed=false
+    if [[ "$task_key" != "$_current_task_id" ]]; then
+      _task_changed=true
+    fi
+
+    # Only rotate branch when the task changes (one branch per task)
+    if (( run_iteration > 1 )) && [[ "$_task_changed" == true ]]; then
       rotate_branch
-      # Rebase onto latest main between tasks to pick up squash-merged PRs
       if [[ -n "$WORKTREE_BRANCH" && "$WORK_DIR" != "$PROJECT_DIR" ]]; then
         if ! rebase_onto_default_branch; then
           write_state "status" "error"
@@ -1493,7 +1527,8 @@ run_execution() {
       fi
     fi
 
-    # Adaptive refactoring: if quality assessment flagged pain, run refactor
+    # Adaptive refactoring: if quality assessment flagged pain, run refactor.
+    # Runs on the current task branch — no branch rotation needed.
     if [[ "$_refactor_pending" == true ]]; then
       local quality_score
       quality_score=$(read_state "quality_score")
@@ -1527,12 +1562,6 @@ run_execution() {
       write_state "quality_score" "0"
     fi
 
-    local next_task completed remaining total
-    next_task=$(get_next_task)
-    completed=$(count_completed)
-    remaining=$(count_remaining)
-    total=$(count_total)
-
     local _health _hcolor
     _health=$(cat "$RALPH_DIR/.health" 2>/dev/null || echo "ok")
     case "$_health" in
@@ -1548,15 +1577,13 @@ run_execution() {
     write_state "iteration" "$iteration"
     write_state "status" "running"
     write_state "last_task" "$next_task"
-    rename_branch_for_task "$next_task"
+    write_state "last_task_id" "$task_id"
+    if [[ "$_task_changed" == true ]]; then
+      rename_branch_for_task "$next_task"
+    fi
     printf '%s' "${WORKTREE_BRANCH:-ralph}" > "$RALPH_DIR/.run-branch"
 
-    # Build task prompt
-    local task_id
-    task_id=$(get_next_task_id)
-
     # Reset per-task counters when the task changes
-    local task_key="${task_id:-$next_task}"
     if [[ "$task_key" != "$_current_task_id" ]]; then
       _current_task_id="$task_key"
       _task_attempt_count=0

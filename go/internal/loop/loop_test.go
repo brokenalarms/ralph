@@ -6,12 +6,29 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 
+	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 )
+
+// stubRunner replaces claude.Runner for tests that need to run the loop
+// without actually invoking Claude. The onRun callback is called for each
+// Claude invocation (both task iterations and refactor passes).
+type stubRunner struct {
+	onRun func()
+}
+
+func (s *stubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
+	if s.onRun != nil {
+		s.onRun()
+	}
+	return claude.Result{}, nil
+}
 
 // stubBackend implements tasks.Backend for testing without shelling out to
 // bd or reading plan files. Lets us control exactly how many tasks remain
@@ -23,6 +40,39 @@ type stubBackend struct {
 	nextTask  string
 	nextID    string
 	label     string
+}
+
+// mutableBackend is like stubBackend but allows changing the next task
+// mid-run to simulate task transitions.
+type mutableBackend struct {
+	mu        sync.Mutex
+	remaining int
+	completed int
+	total     int
+	nextTask  string
+	nextID    string
+	label     string
+}
+
+func (m *mutableBackend) Init() error                          { return nil }
+func (m *mutableBackend) HasRemaining() (bool, error)          { m.mu.Lock(); defer m.mu.Unlock(); return m.remaining > 0, nil }
+func (m *mutableBackend) CountCompleted() (int, error)         { m.mu.Lock(); defer m.mu.Unlock(); return m.completed, nil }
+func (m *mutableBackend) CountRemaining() (int, error)         { m.mu.Lock(); defer m.mu.Unlock(); return m.remaining, nil }
+func (m *mutableBackend) CountTotal() (int, error)             { m.mu.Lock(); defer m.mu.Unlock(); return m.total, nil }
+func (m *mutableBackend) GetNextTask() (string, error)         { m.mu.Lock(); defer m.mu.Unlock(); return m.nextTask, nil }
+func (m *mutableBackend) GetNextTaskID() (string, error)       { m.mu.Lock(); defer m.mu.Unlock(); return m.nextID, nil }
+func (m *mutableBackend) HasTasks() (bool, error)              { m.mu.Lock(); defer m.mu.Unlock(); return m.total > 0, nil }
+func (m *mutableBackend) NeedsPlanning() (bool, error)         { return false, nil }
+func (m *mutableBackend) PlanningSucceeded() (bool, error)     { return true, nil }
+func (m *mutableBackend) CloseTask(string, string) error       { return nil }
+func (m *mutableBackend) SkipTask(string, string) error        { return nil }
+func (m *mutableBackend) ExecutionInstructions() (string, error) { return "", nil }
+func (m *mutableBackend) PlanningInstructions() string         { return "" }
+func (m *mutableBackend) Label() string {
+	if m.label != "" {
+		return m.label
+	}
+	return "checklist"
 }
 
 func (s *stubBackend) Init() error                          { return nil }
@@ -727,7 +777,241 @@ func TestLoop_IsNewTask(t *testing.T) {
 	}
 }
 
-// --- git test helpers (duplicated from git package since they're unexported) ---
+// Verifies that multiple iterations of the same task stay on one branch,
+// proving the one-branch-per-task model works within a single run.
+func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5, 0)
+
+	gm := &git.Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       st,
+		Logger:      logging.New(nil),
+	}
+	if err := gm.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	// Simulate two iterations of the same task.
+	// After iteration 1, the branch should be renamed for the task.
+	// After iteration 2, it should still be the SAME branch.
+	callCount := 0
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Fix the login bug",
+		nextID:    "ralph-abc",
+	}
+
+	l := New(Config{
+		ProjectDir:    project,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 2,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	// Stub out Claude runner to avoid actually running claude.
+	// Just create a stop file after 2 iterations.
+	l.runner = &stubRunner{
+		onRun: func() {
+			callCount++
+			if callCount >= 2 {
+				os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
+			}
+		},
+	}
+
+	_ = l.Run(context.Background())
+
+	// Branch should be the task branch, NOT rotated to /next
+	if !strings.Contains(gm.WorktreeBranch, "fix-the-login-bug") {
+		t.Errorf("expected branch to contain 'fix-the-login-bug', got %q", gm.WorktreeBranch)
+	}
+
+	// TaskSeq should be 1 (only one task rename)
+	if gm.TaskSeq != 1 {
+		t.Errorf("expected TaskSeq=1 (one rename), got %d", gm.TaskSeq)
+	}
+}
+
+// Verifies that when the task changes between iterations, the branch rotates,
+// creating a new branch for the new task while preserving the old one.
+func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5, 0)
+
+	gm := &git.Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       st,
+		Logger:      logging.New(nil),
+	}
+	if err := gm.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	callCount := 0
+	backend := &mutableBackend{
+		remaining: 1,
+		total:     2,
+		nextTask:  "First task",
+		nextID:    "ralph-1",
+	}
+
+	l := New(Config{
+		ProjectDir:    project,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 3,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		onRun: func() {
+			callCount++
+			if callCount == 1 {
+				// After first iteration, switch to a different task
+				backend.mu.Lock()
+				backend.nextTask = "Second task"
+				backend.nextID = "ralph-2"
+				backend.mu.Unlock()
+			}
+			if callCount >= 2 {
+				os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
+			}
+		},
+	}
+
+	_ = l.Run(context.Background())
+
+	// Branch should now be the second task
+	if !strings.Contains(gm.WorktreeBranch, "second-task") {
+		t.Errorf("expected branch for second task, got %q", gm.WorktreeBranch)
+	}
+
+	// TaskSeq should be 2 (two different tasks = two renames)
+	if gm.TaskSeq != 2 {
+		t.Errorf("expected TaskSeq=2, got %d", gm.TaskSeq)
+	}
+
+	// The first task's branch should still exist
+	branches := git.ListProjectBranches(project, gm.ProjectName)
+	hasFirst := false
+	for _, b := range branches {
+		if strings.Contains(b, "first-task") {
+			hasFirst = true
+		}
+	}
+	if !hasFirst {
+		t.Errorf("expected first task branch to be preserved, branches: %v", branches)
+	}
+}
+
+// Verifies that refactor iterations commit to the current task branch
+// without creating a separate branch, proving refactors are internal
+// housekeeping on the task's branch.
+func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5, 0)
+
+	gm := &git.Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       st,
+		Logger:      logging.New(nil),
+	}
+	if err := gm.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	callCount := 0
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Build feature X",
+		nextID:    "ralph-feat",
+	}
+
+	l := New(Config{
+		ProjectDir:    project,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 3,
+		RefactorEvery: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		onRun: func() {
+			callCount++
+			if callCount >= 2 {
+				os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
+			}
+		},
+	}
+
+	_ = l.Run(context.Background())
+
+	// Branch should be the task branch — refactor didn't create a new one
+	if !strings.Contains(gm.WorktreeBranch, "build-feature-x") {
+		t.Errorf("expected task branch after refactor, got %q", gm.WorktreeBranch)
+	}
+
+	// Only one branch rename should have happened (for the task, not refactor)
+	if gm.TaskSeq != 1 {
+		t.Errorf("expected TaskSeq=1, got %d", gm.TaskSeq)
+	}
+
+	// Only one ralph branch should exist (the task branch)
+	branches := git.ListProjectBranches(project, gm.ProjectName)
+	nonNextBranches := 0
+	for _, b := range branches {
+		if !strings.HasSuffix(b, "/next") {
+			nonNextBranches++
+		}
+	}
+	if nonNextBranches != 1 {
+		t.Errorf("expected exactly 1 task branch, got %d: %v", nonNextBranches, branches)
+	}
+}
+
+// --- test helpers ---
+
+// createPromptTemplates creates minimal prompt template files so the loop
+// can build prompts without errors.
+func createPromptTemplates(t *testing.T, dir string) {
+	t.Helper()
+	os.MkdirAll(dir, 0o755)
+	for _, name := range []string{"shared.md", "internal.md", "reflection.md", "signal.md", "refactor.md", "refactor-style.md", "execution-checklist.md", "execution-bd.md"} {
+		os.WriteFile(filepath.Join(dir, name), []byte("test"), 0o644)
+	}
+}
 
 func initBareRepoWithOrigin(t *testing.T) (projectDir string, bareDir string) {
 	t.Helper()
