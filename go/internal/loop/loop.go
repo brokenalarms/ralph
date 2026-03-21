@@ -38,6 +38,11 @@ type Config struct {
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 }
 
+// claudeRunner abstracts the Claude execution interface for testability.
+type claudeRunner interface {
+	Run(cfg claude.RunConfig) (claude.Result, error)
+}
+
 // Loop orchestrates the execution phase: task selection, prompt building,
 // rate limiting, branch rotation, Claude invocation, and response analysis.
 type Loop struct {
@@ -45,7 +50,7 @@ type Loop struct {
 	state    *state.Store
 	git      *git.Manager
 	limiter  *ratelimit.Limiter
-	runner   *claude.Runner
+	runner   claudeRunner
 	analyzer *analyzer.Analyzer
 	logger   *logging.Logger
 	signals  claude.SignalPaths

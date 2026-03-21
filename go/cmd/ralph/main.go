@@ -180,6 +180,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		PromptsDir:          promptsDir,
 		PlanFile:            planFile,
 		MaxIterations:       cfg.MaxIterations,
+		RefactorEvery:       cfg.RefactorEvery,
 		Quiet:               cfg.Quiet,
 		AutoMerge:           cfg.AutoMerge,
 		CallsPerHour:        cfg.CallsPerHour,
