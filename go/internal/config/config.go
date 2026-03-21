@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strconv"
@@ -12,20 +13,27 @@ const Version = "0.1.0"
 
 // Config holds all CLI configuration matching ralph.sh's flag interface.
 type Config struct {
-	ProjectDir          string
-	MaxIterations       int
-	Prompt              string
-	PlanFile            string
-	PlanOnly            bool
-	SkipPlanning        bool
-	Quiet               bool
-	UseWorktree         bool
-	CallsPerHour        int
-	RefactorEvery       int
-	UseTmux             bool
-	AutoMerge           bool
-	IdleTimeout         time.Duration
-	IdleTimeoutProgress time.Duration
+	ProjectDir                 string
+	MaxIterations              int
+	Prompt                     string
+	PlanFile                   string
+	PlanOnly                   bool
+	SkipPlanning               bool
+	Quiet                      bool
+	UseWorktree                bool
+	CallsPerHour               int
+	RefactorEvery              int
+	UseTmux                    bool
+	IdleTimeout                time.Duration
+	IdleTimeoutProgress        time.Duration
+	WatcherInterval            int
+	StuckThreshold             int
+	StuckConfirmationThreshold int
+	StagnationThreshold        int
+	TestSaturationThreshold    int
+	PermissionDenialThreshold  int
+
+	cliSet map[string]bool
 }
 
 // Defaults returns a Config with ralph.sh default values.
@@ -33,13 +41,19 @@ type Config struct {
 // RALPH_REFACTOR_EVERY env vars, falling back to shell defaults (50 and 0).
 func Defaults() Config {
 	return Config{
-		ProjectDir:          ".",
-		MaxIterations:       envInt("RALPH_MAX_ITERATIONS", 50),
-		UseWorktree:         true,
-		CallsPerHour:        80,
-		RefactorEvery:       envInt("RALPH_REFACTOR_EVERY", 0),
-		IdleTimeout:         envDuration("RALPH_IDLE_TIMEOUT", 10*time.Minute),
-		IdleTimeoutProgress: envDuration("RALPH_IDLE_TIMEOUT_PROGRESS", 30*time.Second),
+		ProjectDir:                 ".",
+		MaxIterations:              envInt("RALPH_MAX_ITERATIONS", 50),
+		UseWorktree:                true,
+		CallsPerHour:               80,
+		RefactorEvery:              envInt("RALPH_REFACTOR_EVERY", 0),
+		IdleTimeout:                envDuration("RALPH_IDLE_TIMEOUT", 10*time.Minute),
+		IdleTimeoutProgress:        envDuration("RALPH_IDLE_TIMEOUT_PROGRESS", 30*time.Second),
+		WatcherInterval:            10,
+		StuckThreshold:             5,
+		StuckConfirmationThreshold: 2,
+		StagnationThreshold:        3,
+		TestSaturationThreshold:    3,
+		PermissionDenialThreshold:  3,
 	}
 }
 
@@ -119,6 +133,7 @@ func parseSubcommandWithDir(args []string, name string) Subcommand {
 // flags or missing values.
 func Parse(args []string) (Config, error) {
 	cfg := Defaults()
+	cfg.cliSet = make(map[string]bool)
 	i := 0
 
 	for i < len(args) {
@@ -141,6 +156,7 @@ func Parse(args []string) (Config, error) {
 				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
 			}
 			cfg.MaxIterations = n
+			cfg.cliSet["max_iterations"] = true
 			i += 2
 
 		case "-p", "--prompt":
@@ -185,6 +201,7 @@ func Parse(args []string) (Config, error) {
 				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
 			}
 			cfg.CallsPerHour = n
+			cfg.cliSet["calls_per_hour"] = true
 			i += 2
 
 		case "--refactor-every":
@@ -197,14 +214,11 @@ func Parse(args []string) (Config, error) {
 				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
 			}
 			cfg.RefactorEvery = n
+			cfg.cliSet["refactor_every"] = true
 			i += 2
 
 		case "--tmux":
 			cfg.UseTmux = true
-			i++
-
-		case "--auto-merge":
-			cfg.AutoMerge = true
 			i++
 
 		case "--idle-timeout":
@@ -238,7 +252,6 @@ func Parse(args []string) (Config, error) {
 			if len(args[i]) > 0 && args[i][0] == '-' {
 				return cfg, fmt.Errorf("unknown option: %s", args[i])
 			}
-			// Positional argument = project directory
 			cfg.ProjectDir = args[i]
 			i++
 		}
@@ -247,31 +260,16 @@ func Parse(args []string) (Config, error) {
 	return cfg, nil
 }
 
+// CLISet reports whether a config key was explicitly set via CLI flags.
+func (c *Config) CLISet(key string) bool {
+	if c.cliSet == nil {
+		return false
+	}
+	return c.cliSet[key]
+}
+
 // ErrHelp is returned when -h/--help is passed.
 var ErrHelp = fmt.Errorf("help requested")
-
-// ValidatePlanFile checks that a --plan-file argument points to an
-// existing file containing markdown checkboxes. Returns nil if valid,
-// or a descriptive error suitable for display.
-func ValidatePlanFile(path string) error {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return fmt.Errorf("plan file not found: %s", path)
-	} else if err != nil {
-		return fmt.Errorf("checking plan file: %w", err)
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("reading plan file: %w", err)
-	}
-
-	content := string(data)
-	if !strings.Contains(content, "- [ ]") && !strings.Contains(content, "- [x]") {
-		return fmt.Errorf("plan file is not in Ralph format (needs markdown checkboxes: - [ ] task)")
-	}
-
-	return nil
-}
 
 func requireArg(args []string, i int) (string, error) {
 	if i+1 >= len(args) {
@@ -292,4 +290,101 @@ func parseDuration(s string) (time.Duration, error) {
 		return time.Duration(n) * time.Second, nil
 	}
 	return d, nil
+}
+
+// LoadConfigFile reads a TOML-like config file (key = value per line) and
+// applies values to the Config. CLI-set values (tracked via cliSet) take
+// precedence and are not overwritten.
+func (c *Config) LoadConfigFile(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		eqIdx := strings.Index(line, "=")
+		if eqIdx < 0 {
+			continue
+		}
+
+		key := strings.TrimSpace(line[:eqIdx])
+		value := strings.TrimSpace(line[eqIdx+1:])
+
+		if commentIdx := strings.Index(value, "#"); commentIdx >= 0 {
+			value = strings.TrimSpace(value[:commentIdx])
+		}
+
+		value = strings.Trim(value, `"'`)
+
+		if c.cliSet != nil && c.cliSet[key] {
+			continue
+		}
+
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			continue
+		}
+
+		switch key {
+		case "max_iterations":
+			c.MaxIterations = n
+		case "calls_per_hour":
+			c.CallsPerHour = n
+		case "refactor_every":
+			c.RefactorEvery = n
+		case "watcher_interval":
+			c.WatcherInterval = n
+		case "stuck_threshold":
+			c.StuckThreshold = n
+		case "stuck_confirmation_threshold":
+			c.StuckConfirmationThreshold = n
+		case "stagnation_threshold":
+			c.StagnationThreshold = n
+		case "test_saturation_threshold":
+			c.TestSaturationThreshold = n
+		case "permission_denial_threshold":
+			c.PermissionDenialThreshold = n
+		}
+	}
+	return scanner.Err()
+}
+
+// configKeys lists all supported ralph.toml keys in display order.
+var configKeys = []struct {
+	Key     string
+	Default int
+}{
+	{"max_iterations", 50},
+	{"calls_per_hour", 80},
+	{"refactor_every", 0},
+	{"watcher_interval", 10},
+	{"stuck_threshold", 5},
+	{"stuck_confirmation_threshold", 2},
+	{"stagnation_threshold", 3},
+	{"test_saturation_threshold", 3},
+	{"permission_denial_threshold", 3},
+}
+
+// InitConfig generates a ralph.toml file at the given path with default values.
+// Returns an error if the file already exists.
+func InitConfig(path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("config file already exists: %s", path)
+	}
+
+	var b strings.Builder
+	for _, k := range configKeys {
+		fmt.Fprintf(&b, "%s = %d\n", k.Key, k.Default)
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
