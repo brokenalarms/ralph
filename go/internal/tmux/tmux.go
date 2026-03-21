@@ -106,7 +106,7 @@ func (s *Session) createSession() error {
 		return err
 	}
 
-	tmuxCmd("select-pane", "-t", s.Name+":.0", "-T", "ralph")  //nolint:errcheck
+	tmuxCmd("select-pane", "-t", s.Name+":.0", "-T", "(go) ralph") //nolint:errcheck
 	tmuxCmd("select-pane", "-t", s.Name+":.1", "-T", "stream") //nolint:errcheck
 	tmuxCmd("select-pane", "-t", s.Name+":.2", "-T", "plan")   //nolint:errcheck
 

@@ -555,7 +555,7 @@ PLAN_SCRIPT
     "bash '$RALPH_DIR/.plan-watch.sh'"
 
   # Pane titles and keep-alive (panes stay visible after process exits)
-  tmux select-pane -t "$TMUX_SESSION:.0" -T "ralph"
+  tmux select-pane -t "$TMUX_SESSION:.0" -T "(sh) ralph"
   tmux select-pane -t "$TMUX_SESSION:.1" -T "stream"
   tmux select-pane -t "$TMUX_SESSION:.2" -T "plan"
   tmux set-option -t "$TMUX_SESSION" pane-border-status top

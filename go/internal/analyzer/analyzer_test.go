@@ -56,7 +56,7 @@ func TestPermissionDenialIgnoresToolResults(t *testing.T) {
 // on the first occurrence, giving the loop a chance to recover before halting.
 func TestStuckPhraseWarnsFirst(t *testing.T) {
 	a := New()
-	log := "I tried but I'm blocked on this task\n"
+	log := assistantTextMsg("I tried but I'm blocked on this task")
 	r := a.Analyze(IterationState{IterationLog: log})
 	if r.Action != Warn || r.Reason != "stuck_indicators_detected" {
 		t.Errorf("first stuck: got %+v, want Warn/stuck_indicators_detected", r)
@@ -67,7 +67,7 @@ func TestStuckPhraseWarnsFirst(t *testing.T) {
 // matching the 2-strike threshold from ralph.sh.
 func TestStuckLoopHaltsAfterTwoConsecutive(t *testing.T) {
 	a := New()
-	stuckLog := "I cannot proceed with this task\n"
+	stuckLog := assistantTextMsg("I cannot proceed with this task")
 
 	r := a.Analyze(IterationState{IterationLog: stuckLog})
 	if r.Action != Warn {
@@ -84,8 +84,8 @@ func TestStuckLoopHaltsAfterTwoConsecutive(t *testing.T) {
 // counter, so occasional hiccups don't accumulate into a false halt.
 func TestStuckCounterResetsOnCleanIteration(t *testing.T) {
 	a := New()
-	stuckLog := "unable to complete this step\n"
-	cleanLog := "making progress on the task\n"
+	stuckLog := assistantTextMsg("unable to complete this step")
+	cleanLog := assistantTextMsg("making progress on the task")
 
 	a.Analyze(IterationState{IterationLog: stuckLog})
 	a.Analyze(IterationState{IterationLog: cleanLog, HasDiff: true, ChangedFiles: []string{"main.go"}})
@@ -100,10 +100,9 @@ func TestStuckCounterResetsOnCleanIteration(t *testing.T) {
 // as a stuck loop, catching agents that retry the same failing command.
 func TestRepeatedToolCallsDetectedAsStuck(t *testing.T) {
 	a := New()
-	// Simulate 3 identical tool call patterns in the log JSON
-	log := `"command": "/usr/bin/test"` + "\n" +
-		`"command": "/usr/bin/test"` + "\n" +
-		`"command": "/usr/bin/test"` + "\n"
+	log := assistantToolUseMsg("Bash", "/usr/bin/test") + "\n" +
+		assistantToolUseMsg("Bash", "/usr/bin/test") + "\n" +
+		assistantToolUseMsg("Bash", "/usr/bin/test") + "\n"
 
 	r := a.Analyze(IterationState{IterationLog: log})
 	if r.Action != Warn || r.Reason != "stuck_indicators_detected" {
@@ -272,6 +271,10 @@ func TestPermissionDenialDetailCapped(t *testing.T) {
 
 func assistantTextMsg(text string) string {
 	return fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"text","text":%q}]}}`, text)
+}
+
+func assistantToolUseMsg(name, command string) string {
+	return fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":%q,"input":{"command":%q}}]}}`, name, command)
 }
 
 func toolResultMsg(content string) string {
