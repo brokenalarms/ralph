@@ -1085,10 +1085,10 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	}
 }
 
-// Verifies that when AutoImprove is enabled and auto-merge succeeds,
-// the loop exits with "auto_improve_restart" status, signaling that the
+// Verifies that when Evolve is enabled and auto-merge succeeds,
+// the loop exits with "evolve_restart" status, signaling that the
 // binary should be rebuilt and re-executed with latest main.
-func TestLoop_AutoImproveRestartsAfterMerge(t *testing.T) {
+func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
@@ -1117,7 +1117,7 @@ func TestLoop_AutoImproveRestartsAfterMerge(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-		AutoImprove:   true,
+		Evolve:   true,
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
@@ -1133,14 +1133,14 @@ func TestLoop_AutoImproveRestartsAfterMerge(t *testing.T) {
 	}
 
 	finalState, _ := st.Load()
-	if finalState.Status != "auto_improve_restart" {
-		t.Errorf("expected status 'auto_improve_restart', got %q", finalState.Status)
+	if finalState.Status != "evolve_restart" {
+		t.Errorf("expected status 'evolve_restart', got %q", finalState.Status)
 	}
 }
 
-// Verifies that AutoImprove does NOT trigger restart when auto-merge fails,
+// Verifies that Evolve does NOT trigger restart when auto-merge fails,
 // allowing the loop to continue normally.
-func TestLoop_AutoImproveNoRestartOnMergeFailure(t *testing.T) {
+func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 	project, _ := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := state.NewStore(ralphDir)
@@ -1176,7 +1176,7 @@ func TestLoop_AutoImproveNoRestartOnMergeFailure(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-		AutoImprove:   true,
+		Evolve:   true,
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
@@ -1187,8 +1187,8 @@ func TestLoop_AutoImproveNoRestartOnMergeFailure(t *testing.T) {
 	_ = l.Run(context.Background())
 
 	finalState, _ := st.Load()
-	if finalState.Status == "auto_improve_restart" {
-		t.Error("should NOT set auto_improve_restart when auto-merge fails (no PR to merge)")
+	if finalState.Status == "evolve_restart" {
+		t.Error("should NOT set evolve_restart when auto-merge fails (no PR to merge)")
 	}
 }
 

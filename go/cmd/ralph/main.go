@@ -56,6 +56,14 @@ func run(args []string) int {
 	// Resolve project directory to absolute path.
 	cfg.ProjectDir, _ = filepath.Abs(cfg.ProjectDir)
 
+	if cfg.Evolve {
+		ralphMarker := filepath.Join(cfg.ProjectDir, "go", "cmd", "ralph")
+		if _, err := os.Stat(ralphMarker); os.IsNotExist(err) {
+			log.Error("--evolve can only be used on the ralph repo itself (go/cmd/ralph/ not found)")
+			return 1
+		}
+	}
+
 	scriptPath, _ := os.Executable()
 	ralphDir := filepath.Join(cfg.ProjectDir, ".ralph")
 
@@ -213,7 +221,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		RefactorEvery:       cfg.RefactorEvery,
 		Quiet:               cfg.Quiet,
 		AutoMerge:           cfg.AutoMerge,
-		AutoImprove:         cfg.AutoImprove,
+		Evolve:              cfg.Evolve,
 		CallsPerHour:        cfg.CallsPerHour,
 		TaskBackend:         backend,
 		IdleTimeout:         cfg.IdleTimeout,
@@ -225,10 +233,10 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		log.Error("Execution failed: %v", err)
 	}
 
-	if status, _ := st.Read("status"); status == "auto_improve_restart" {
+	if status, _ := st.Read("status"); status == "evolve_restart" {
 		gm.RemoveWorktree()
-		if err := autoImproveRestart(cfg.ProjectDir, scriptPath, args, log); err != nil {
-			log.Error("Auto-improve restart failed: %v", err)
+		if err := evolveRestart(cfg.ProjectDir, scriptPath, args, log); err != nil {
+			log.Error("Evolve restart failed: %v", err)
 		}
 	}
 
@@ -360,8 +368,8 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 	if cfg.AutoMerge {
 		extraArgs = append(extraArgs, "--auto-merge")
 	}
-	if cfg.AutoImprove {
-		extraArgs = append(extraArgs, "--auto-improve")
+	if cfg.Evolve {
+		extraArgs = append(extraArgs, "--evolve")
 	}
 	if cfg.BranchStrategy != "single" {
 		extraArgs = append(extraArgs, fmt.Sprintf("--branch-strategy %s", cfg.BranchStrategy))

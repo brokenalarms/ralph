@@ -78,7 +78,7 @@ func promptRebaseRecovery(err error) git.RebaseRecovery {
 	}
 }
 
-func autoImproveRestart(projectDir, scriptPath string, args []string, log *logging.Logger) error {
+func evolveRestart(projectDir, scriptPath string, args []string, log *logging.Logger) error {
 	ralphDir := filepath.Join(projectDir, ".ralph")
 
 	log.Log("Pulling latest main...")

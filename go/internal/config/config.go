@@ -25,7 +25,7 @@ type Config struct {
 	RefactorEvery              int
 	UseTmux                    bool
 	AutoMerge                  bool
-	AutoImprove                bool
+	Evolve                     bool
 	IdleTimeout                time.Duration
 	IdleTimeoutProgress        time.Duration
 	WatcherInterval            int
@@ -229,8 +229,8 @@ func Parse(args []string) (Config, error) {
 			cfg.AutoMerge = true
 			i++
 
-		case "--auto-improve":
-			cfg.AutoImprove = true
+		case "--evolve":
+			cfg.Evolve = true
 			i++
 
 		case "--branch-strategy":
@@ -286,12 +286,12 @@ func Parse(args []string) (Config, error) {
 
 // Validate checks for invalid flag combinations.
 func (c *Config) Validate() error {
-	if c.AutoImprove {
+	if c.Evolve {
 		if !c.AutoMerge {
-			return fmt.Errorf("--auto-improve requires --auto-merge")
+			return fmt.Errorf("--evolve requires --auto-merge")
 		}
 		if c.UseTmux {
-			return fmt.Errorf("--auto-improve is incompatible with --tmux")
+			return fmt.Errorf("--evolve is incompatible with --tmux")
 		}
 	}
 	return nil
