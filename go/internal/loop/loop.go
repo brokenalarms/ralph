@@ -35,7 +35,7 @@ type Config struct {
 	DisabledChecks      []string
 	Quiet               bool
 	AutoMerge           bool
-	AutoImprove         bool
+	Evolve              bool
 	CallsPerHour        int
 	TaskBackend         tasks.Backend
 	IdleTimeout         time.Duration
@@ -339,10 +339,10 @@ func (l *Loop) Run(ctx context.Context) error {
 					l.logger.Warn("Auto-merge: %v", err)
 				} else if merged {
 					l.git.PostMergeReset()
-					if l.cfg.AutoImprove {
+					if l.cfg.Evolve {
 						l.git.TagTaskEnd(taskID)
-						l.logger.Phase("Auto-improve: restarting with latest main")
-						l.state.Write("status", "auto_improve_restart")
+						l.logger.Phase("Evolve: restarting with latest main")
+						l.state.Write("status", "evolve_restart")
 						return nil
 					}
 				}

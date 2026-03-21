@@ -222,7 +222,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		DisabledChecks:      cfg.DisabledChecks,
 		Quiet:               cfg.Quiet,
 		AutoMerge:           cfg.AutoMerge,
-		AutoImprove:         cfg.AutoImprove,
+		Evolve:              cfg.Evolve,
 		CallsPerHour:        cfg.CallsPerHour,
 		TaskBackend:         backend,
 		IdleTimeout:         cfg.IdleTimeout,
@@ -236,10 +236,10 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		log.Error("Execution failed: %v", err)
 	}
 
-	if status, _ := st.Read("status"); status == "auto_improve_restart" {
+	if status, _ := st.Read("status"); status == "evolve_restart" {
 		gm.RemoveWorktree()
-		if err := autoImproveRestart(cfg.ProjectDir, scriptPath, args, log); err != nil {
-			log.Error("Auto-improve restart failed: %v", err)
+		if err := evolveRestart(cfg.ProjectDir, scriptPath, args, log); err != nil {
+			log.Error("Evolve restart failed: %v", err)
 		}
 	}
 
@@ -374,8 +374,8 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 	if cfg.AutoMerge {
 		extraArgs = append(extraArgs, "--auto-merge")
 	}
-	if cfg.AutoImprove {
-		extraArgs = append(extraArgs, "--auto-improve")
+	if cfg.Evolve {
+		extraArgs = append(extraArgs, "--evolve")
 	}
 	if cfg.Wait {
 		extraArgs = append(extraArgs, "--wait")

@@ -108,7 +108,7 @@ func TestAllFlags(t *testing.T) {
 		"--disable-check", "any-type",
 		"--tmux",
 		"--auto-merge",
-		"--auto-improve",
+		"--evolve",
 		"--wait",
 	}
 	cfg, err := Parse(args)
@@ -161,8 +161,8 @@ func TestAllFlags(t *testing.T) {
 	if !cfg.AutoMerge {
 		t.Error("AutoMerge should be true")
 	}
-	if !cfg.AutoImprove {
-		t.Error("AutoImprove should be true")
+	if !cfg.Evolve {
+		t.Error("Evolve should be true")
 	}
 	if cfg.BranchStrategy != "single" {
 		t.Errorf("BranchStrategy = %q, want \"single\" (default)", cfg.BranchStrategy)
@@ -627,41 +627,41 @@ func TestInitConfigRefusesToOverwrite(t *testing.T) {
 	}
 }
 
-// Verifies that --auto-improve flag is parsed and requires --auto-merge.
-func TestAutoImproveFlag(t *testing.T) {
+// Verifies that --evolve flag is parsed and requires --auto-merge.
+func TestEvolveFlag(t *testing.T) {
 	cfg, err := Parse(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.AutoImprove {
-		t.Error("AutoImprove should default to false")
+	if cfg.Evolve {
+		t.Error("Evolve should default to false")
 	}
 
-	cfg, err = Parse([]string{"--auto-improve", "--auto-merge"})
+	cfg, err = Parse([]string{"--evolve", "--auto-merge"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !cfg.AutoImprove {
-		t.Error("AutoImprove should be true after --auto-improve")
+	if !cfg.Evolve {
+		t.Error("Evolve should be true after --evolve")
 	}
 }
 
-// Verifies that --auto-improve validation rejects missing --auto-merge
+// Verifies that --evolve validation rejects missing --auto-merge
 // and incompatible --tmux.
-func TestAutoImproveValidation(t *testing.T) {
-	cfg, _ := Parse([]string{"--auto-improve"})
+func TestEvolveValidation(t *testing.T) {
+	cfg, _ := Parse([]string{"--evolve"})
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error: --auto-improve without --auto-merge")
+		t.Fatal("expected error: --evolve without --auto-merge")
 	}
 
-	cfg, _ = Parse([]string{"--auto-improve", "--auto-merge", "--tmux"})
+	cfg, _ = Parse([]string{"--evolve", "--auto-merge", "--tmux"})
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error: --auto-improve with --tmux")
+		t.Fatal("expected error: --evolve with --tmux")
 	}
 
-	cfg, _ = Parse([]string{"--auto-improve", "--auto-merge"})
+	cfg, _ = Parse([]string{"--evolve", "--auto-merge"})
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("valid --auto-improve combo should pass: %v", err)
+		t.Fatalf("valid --evolve combo should pass: %v", err)
 	}
 }
 
