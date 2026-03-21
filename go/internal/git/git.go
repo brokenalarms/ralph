@@ -54,7 +54,7 @@ func (m *Manager) SetupWorktree() error {
 		return nil
 	}
 
-	if !isGitRepo(m.ProjectDir) {
+	if !IsGitRepo(m.ProjectDir) {
 		return fmt.Errorf("not a git repo — ralph requires git. Use --no-worktree to run without git isolation")
 	}
 
@@ -306,6 +306,12 @@ func (m *Manager) AutoMergeCurrentBranch() error {
 	return nil
 }
 
+// RemoveWorktree force-removes a worktree and deletes its branch.
+func (m *Manager) RemoveWorktree() {
+	gitCmd(m.ProjectDir, "worktree", "remove", "--force", m.WorkDir)
+	gitCmd(m.ProjectDir, "branch", "-D", m.WorktreeBranch)
+}
+
 // RebaseOntoDefaultBranch rebases the worktree onto origin's default branch,
 // detecting and skipping squash-merged branches when a naive rebase conflicts.
 // Mirrors lib/git.sh rebase_onto_default_branch.
@@ -366,7 +372,7 @@ func (m *Manager) RebaseOntoDefaultBranch() error {
 // read-tree origin/default, then reverse-apply the branch's diff. If that
 // succeeds, main already contains the branch's changes (squash-merged).
 func (m *Manager) findLastSquashMergedBranch(defaultBranch string) string {
-	branches := listProjectBranches(m.ProjectDir, m.ProjectName)
+	branches := ListProjectBranches(m.ProjectDir, m.ProjectName)
 	lastMerged := ""
 
 	for _, branch := range branches {
@@ -427,8 +433,8 @@ func (m *Manager) isSquashMerged(defaultBranch, mergeBase, branch string) bool {
 	return applyCmd.Run() == nil
 }
 
-// listProjectBranches returns ralph/<project>/* branches sorted by refname.
-func listProjectBranches(dir, projectName string) []string {
+// ListProjectBranches returns ralph/<project>/* branches sorted by refname.
+func ListProjectBranches(dir, projectName string) []string {
 	out := gitOutput(dir, "branch", "--list", "ralph/"+projectName+"/*", "--sort=refname")
 	if out == "" {
 		return nil
@@ -490,7 +496,8 @@ func gitOutput(dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func isGitRepo(dir string) bool {
+// IsGitRepo returns true if dir is inside a git repository.
+func IsGitRepo(dir string) bool {
 	return gitCmdErr(dir, "rev-parse", "--git-dir") == nil
 }
 
@@ -508,15 +515,6 @@ func detectDefaultBranch(dir string) string {
 		return strings.TrimPrefix(ref, "refs/remotes/origin/")
 	}
 	return "main"
-}
-
-// countNamedBranches counts ralph/<project>/* branches (used for task seq on resume).
-func countNamedBranches(dir, projectName string) int {
-	out := gitOutput(dir, "branch", "--list", "ralph/"+projectName+"/*")
-	if out == "" {
-		return 0
-	}
-	return len(strings.Split(out, "\n"))
 }
 
 // findWorktreeForBranch finds the worktree path that has the given branch
@@ -566,7 +564,7 @@ func EnsureGitignored(projectDir, entry string) {
 	existing += entry + "\n"
 	os.WriteFile(gitignorePath, []byte(existing), 0o644)
 
-	if isGitRepo(projectDir) {
+	if IsGitRepo(projectDir) {
 		gitCmd(projectDir, "add", ".gitignore")
 		gitCmd(projectDir, "commit", "-m", "Add "+entry+" to .gitignore")
 	}

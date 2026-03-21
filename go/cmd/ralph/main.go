@@ -52,7 +52,12 @@ func run(args []string) int {
 	promptsDir := filepath.Join(cfg.ProjectDir, "prompts")
 
 	// Tmux outer wrapper: set up tmux session, then re-exec ralph inside pane 0.
+	// Ensure .ralph dir exists before tmux setup writes scripts into it.
 	if cfg.UseTmux {
+		if err := os.MkdirAll(ralphDir, 0o755); err != nil {
+			log.Error("Failed to create .ralph dir: %v", err)
+			return 1
+		}
 		return handleTmux(cfg, scriptPath, args, ralphDir, log)
 	}
 
@@ -208,7 +213,7 @@ func initRalphDir(cfg config.Config, ralphDir, logFile, stateFile string, log *l
 
 	// Check for uncommitted changes (skip on resume).
 	if !fileExists(stateFile) {
-		if isGitRepo(cfg.ProjectDir) && hasUncommittedChanges(cfg.ProjectDir) {
+		if git.IsGitRepo(cfg.ProjectDir) && hasUncommittedChanges(cfg.ProjectDir) {
 			log.Error("uncommitted changes in %s — please commit or stash before running ralph.", cfg.ProjectDir)
 			return false, 1
 		}
@@ -289,7 +294,7 @@ func cleanup(cfg config.Config, gm *git.Manager, st *state.Store, backend tasks.
 		strings.HasSuffix(gm.WorktreeBranch, "/next") &&
 		gm.WorkDir != cfg.ProjectDir {
 		if interrupted {
-			removeWorktree(cfg.ProjectDir, gm.WorkDir, gm.WorktreeBranch)
+			gm.RemoveWorktree()
 		}
 	}
 
@@ -355,7 +360,7 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 	if gm.WorktreeBranch != "" && gm.ProjectName != "" {
 		log.Log("Worktree:   %s", gm.WorkDir)
 
-		branches := listProjectBranches(cfg.ProjectDir, gm.ProjectName)
+		branches := git.ListProjectBranches(cfg.ProjectDir, gm.ProjectName)
 		if len(branches) > 1 {
 			log.Log("Branches:")
 			for _, b := range branches {
@@ -541,11 +546,6 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func isGitRepo(dir string) bool {
-	cmd := exec.Command("git", "-C", dir, "rev-parse", "--git-dir")
-	return cmd.Run() == nil
-}
-
 func hasUncommittedChanges(dir string) bool {
 	cmd1 := exec.Command("git", "-C", dir, "diff", "--quiet")
 	cmd2 := exec.Command("git", "-C", dir, "diff", "--cached", "--quiet")
@@ -595,30 +595,9 @@ func ensureGitignored(projectDir, entry string) {
 	existing += entry + "\n"
 	os.WriteFile(gitignorePath, []byte(existing), 0o644)
 
-	if isGitRepo(projectDir) {
+	if git.IsGitRepo(projectDir) {
 		exec.Command("git", "-C", projectDir, "add", ".gitignore").Run()
 		exec.Command("git", "-C", projectDir, "commit", "-m", "Add "+entry+" to .gitignore").Run()
 	}
 }
 
-func removeWorktree(projectDir, worktreeDir, branch string) {
-	exec.Command("git", "-C", projectDir, "worktree", "remove", "--force", worktreeDir).Run()
-	exec.Command("git", "-C", projectDir, "branch", "-D", branch).Run()
-}
-
-func listProjectBranches(dir, projectName string) []string {
-	cmd := exec.Command("git", "-C", dir, "branch", "--list", "ralph/"+projectName+"/*", "--sort=refname")
-	out, err := cmd.Output()
-	if err != nil || len(out) == 0 {
-		return nil
-	}
-	var branches []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		line = strings.TrimSpace(line)
-		line = strings.TrimPrefix(line, "* ")
-		if line != "" {
-			branches = append(branches, line)
-		}
-	}
-	return branches
-}
