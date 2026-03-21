@@ -87,6 +87,7 @@ func TestSlugify_BasicConversion(t *testing.T) {
 		{"Hello World", "hello-world"},
 		{"  Fix bug #42  ", "fix-bug-42"},
 		{"UPPER CASE", "upper-case"},
+		{"Fix auth bug!", "fix-auth-bug"},
 		{"special!@#chars", "special-chars"},
 		{"already-good", "already-good"},
 		{"", ""},

@@ -362,6 +362,83 @@ func TestBD_PlanningInstructions(t *testing.T) {
 	}
 }
 
+// Proves: GetNextTask falls back to ready queue when no in-progress tasks.
+func TestBD_GetNextTask_FallsBackToReady(t *testing.T) {
+	b := setupBD(t, defaultMock())
+	got, _ := b.GetNextTask()
+	if got != "Fix the auth module" {
+		t.Errorf("GetNextTask = %q, want %q", got, "Fix the auth module")
+	}
+}
+
+// Proves: bd skip_task closes the task with a blocked reason.
+func TestBD_SkipTask_ClosesWithBlockedReason(t *testing.T) {
+	var closeArgs []string
+	runner := func(dir string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "close" {
+			closeArgs = args
+			return "closed", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SkipTask("abc123", "stuck_loop"); err != nil {
+		t.Fatal(err)
+	}
+	if len(closeArgs) == 0 {
+		t.Fatal("expected close to be called")
+	}
+	joined := strings.Join(closeArgs, " ")
+	if !strings.Contains(joined, "blocked: stuck_loop") {
+		t.Errorf("expected blocked reason in close args, got: %v", closeArgs)
+	}
+}
+
+// Proves: bd SkipTask is a no-op with empty id.
+func TestBD_SkipTask_EmptyID(t *testing.T) {
+	called := false
+	runner := func(dir string, args ...string) (string, error) {
+		called = true
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SkipTask("", "reason"); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Error("expected no bd calls with empty id")
+	}
+}
+
+// Proves: bd execution instructions contain "bd prime" and "close the task".
+func TestBD_ExecutionInstructions_Content(t *testing.T) {
+	b := setupBD(t, defaultMock())
+	content := "Run `bd prime` for workflow context.\nWhen complete, close the task in bd.\n"
+	os.WriteFile(filepath.Join(b.PromptsDir, "execution-bd.md"), []byte(content), 0644)
+	got, err := b.ExecutionInstructions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "bd prime") {
+		t.Error("expected execution instructions to contain 'bd prime'")
+	}
+	if !strings.Contains(got, "close the task") {
+		t.Error("expected execution instructions to contain 'close the task'")
+	}
+}
+
+// Proves: Checklist Init is a no-op (does not create .beads).
+func TestChecklist_Init_IsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	c := &Checklist{PlanFile: filepath.Join(dir, "plan.md")}
+	if err := c.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".beads")); !os.IsNotExist(err) {
+		t.Error("expected .beads to not exist after checklist Init")
+	}
+}
+
 // Proves: counts return zero when bd commands fail.
 func TestBD_Counts_OnError(t *testing.T) {
 	failing := func(dir string, args ...string) (string, error) {

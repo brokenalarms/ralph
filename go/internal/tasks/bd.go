@@ -277,6 +277,17 @@ func (b *BD) CloseTask(id string, reason string) error {
 	return err
 }
 
+func (b *BD) SkipTask(id string, reason string) error {
+	if id == "" {
+		return nil
+	}
+	if reason == "" {
+		reason = "skipped by ralph"
+	}
+	_, err := b.runner()(b.ProjectDir, "close", id, "--reason", "blocked: "+reason)
+	return err
+}
+
 func (b *BD) ExecutionInstructions() (string, error) {
 	path := b.PromptsDir + "/execution-bd.md"
 	data, err := os.ReadFile(path)

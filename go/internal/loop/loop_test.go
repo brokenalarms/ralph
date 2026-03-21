@@ -35,6 +35,7 @@ func (s *stubBackend) HasTasks() (bool, error)              { return s.total > 0
 func (s *stubBackend) NeedsPlanning() (bool, error)         { return false, nil }
 func (s *stubBackend) PlanningSucceeded() (bool, error)     { return true, nil }
 func (s *stubBackend) CloseTask(string, string) error       { return nil }
+func (s *stubBackend) SkipTask(string, string) error        { return nil }
 func (s *stubBackend) ExecutionInstructions() (string, error) { return "", nil }
 func (s *stubBackend) PlanningInstructions() string         { return "" }
 func (s *stubBackend) Label() string {
