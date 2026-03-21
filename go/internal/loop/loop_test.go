@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -1869,5 +1870,227 @@ func TestLoop_EmptyAttemptContextForNewTask(t *testing.T) {
 	ctx := l.buildAttemptContext("ralph-new", "Brand new task")
 	if ctx != "" {
 		t.Errorf("expected empty attempt context for new task, got: %s", ctx)
+	}
+}
+
+// Verifies that --wait keeps the loop alive when tasks complete, then resumes
+// when new tasks appear. Without --wait, the loop would exit immediately.
+func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(filepath.Join(dir, ".git"), 0o755)
+
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 0,
+		completed: 1,
+		total:     1,
+		nextTask:  "first task",
+		nextID:    "t-1",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	var (
+		callsMu sync.Mutex
+		calls   int
+	)
+	runner := &stubRunner{
+		onRun: func() {
+			callsMu.Lock()
+			calls++
+			callsMu.Unlock()
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed++
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Wait:          true,
+		WaitInterval:  50 * time.Millisecond,
+	}, st, gm, logger)
+	l.runner = runner
+	l.pushPRFunc = func(string) error { return nil }
+
+	// After the loop enters wait mode, inject a new task. After the Claude
+	// call completes, the loop will re-enter wait mode; cancel the context
+	// so the test doesn't hang.
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		backend.mu.Lock()
+		backend.remaining = 1
+		backend.total++
+		backend.nextTask = "second task"
+		backend.nextID = "t-2"
+		backend.mu.Unlock()
+
+		for {
+			time.Sleep(50 * time.Millisecond)
+			callsMu.Lock()
+			c := calls
+			callsMu.Unlock()
+			if c >= 1 {
+				time.Sleep(100 * time.Millisecond)
+				cancel()
+				return
+			}
+		}
+	}()
+
+	err := l.Run(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	callsMu.Lock()
+	finalCalls := calls
+	callsMu.Unlock()
+	if finalCalls != 1 {
+		t.Errorf("expected 1 Claude call (for second task), got %d", finalCalls)
+	}
+}
+
+// Verifies that --wait exits cleanly when cancelled via context (Ctrl-C).
+func TestLoop_WaitExitOnCancel(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	backend := &stubBackend{
+		remaining: 0,
+		completed: 1,
+		total:     1,
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Wait:          true,
+		WaitInterval:  50 * time.Millisecond,
+	}, st, gm, logger)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		cancel()
+	}()
+
+	err := l.Run(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	finalState, _ := st.Load()
+	if finalState.Status != "stopped" {
+		t.Errorf("expected status 'stopped' after cancel, got %q", finalState.Status)
+	}
+}
+
+// Verifies that --wait exits cleanly when stop file is detected during polling.
+func TestLoop_WaitExitOnStopFile(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	backend := &stubBackend{
+		remaining: 0,
+		completed: 1,
+		total:     1,
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Wait:          true,
+		WaitInterval:  50 * time.Millisecond,
+	}, st, gm, logger)
+
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
+	}()
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	finalState, _ := st.Load()
+	if finalState.Status != "stopped" {
+		t.Errorf("expected status 'stopped' after stop file, got %q", finalState.Status)
+	}
+}
+
+// Verifies that without --wait, the loop exits immediately when no tasks remain,
+// confirming the default behavior is unchanged.
+func TestLoop_NoWaitExitsImmediately(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	backend := &stubBackend{
+		remaining: 0,
+		completed: 2,
+		total:     2,
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Wait:          false,
+	}, st, gm, logger)
+
+	start := time.Now()
+	err := l.Run(context.Background())
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if elapsed > 1*time.Second {
+		t.Errorf("loop took %s without --wait, expected immediate exit", elapsed)
+	}
+
+	finalState, _ := st.Load()
+	if finalState.Status != "completed" {
+		t.Errorf("expected status 'completed', got %q", finalState.Status)
 	}
 }

@@ -35,6 +35,8 @@ type Config struct {
 	TestSaturationThreshold    int
 	PermissionDenialThreshold  int
 	BranchStrategy             string
+	Wait                       bool
+	WaitInterval               time.Duration
 
 	cliSet map[string]bool
 }
@@ -58,6 +60,7 @@ func Defaults() Config {
 		TestSaturationThreshold:    3,
 		PermissionDenialThreshold:  3,
 		BranchStrategy:             "single",
+		WaitInterval:               envDuration("RALPH_WAIT_INTERVAL", 30*time.Second),
 	}
 }
 
@@ -224,6 +227,23 @@ func Parse(args []string) (Config, error) {
 		case "--tmux":
 			cfg.UseTmux = true
 			i++
+
+		case "--wait":
+			cfg.Wait = true
+			i++
+
+		case "--wait-interval":
+			v, err := requireArg(args, i)
+			if err != nil {
+				return cfg, err
+			}
+			d, err := parseDuration(v)
+			if err != nil {
+				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
+			}
+			cfg.WaitInterval = d
+			cfg.cliSet["wait_interval"] = true
+			i += 2
 
 		case "--auto-merge":
 			cfg.AutoMerge = true

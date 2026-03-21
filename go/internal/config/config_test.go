@@ -106,6 +106,7 @@ func TestAllFlags(t *testing.T) {
 		"--tmux",
 		"--auto-merge",
 		"--auto-improve",
+		"--wait",
 	}
 	cfg, err := Parse(args)
 	if err != nil {
@@ -153,6 +154,9 @@ func TestAllFlags(t *testing.T) {
 	}
 	if cfg.BranchStrategy != "single" {
 		t.Errorf("BranchStrategy = %q, want \"single\" (default)", cfg.BranchStrategy)
+	}
+	if !cfg.Wait {
+		t.Error("Wait should be true")
 	}
 }
 
@@ -711,5 +715,63 @@ func TestBranchStrategyConfigFile(t *testing.T) {
 
 	if cfg.BranchStrategy != "single" {
 		t.Errorf("BranchStrategy = %q, want \"single\" (CLI should override config file)", cfg.BranchStrategy)
+	}
+}
+
+// Verifies --wait defaults to false and is set when the flag is present.
+func TestWaitFlag(t *testing.T) {
+	t.Setenv("RALPH_WAIT_INTERVAL", "")
+
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Wait {
+		t.Error("Wait should default to false")
+	}
+	if cfg.WaitInterval != 30*time.Second {
+		t.Errorf("WaitInterval = %s, want 30s", cfg.WaitInterval)
+	}
+
+	cfg, err = Parse([]string{"--wait"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Wait {
+		t.Error("Wait should be true after --wait")
+	}
+}
+
+// Verifies --wait-interval overrides the default polling interval.
+func TestWaitIntervalFlag(t *testing.T) {
+	t.Setenv("RALPH_WAIT_INTERVAL", "")
+
+	cfg, err := Parse([]string{"--wait", "--wait-interval", "1m"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.WaitInterval != 1*time.Minute {
+		t.Errorf("WaitInterval = %s, want 1m", cfg.WaitInterval)
+	}
+
+	cfg, err = Parse([]string{"--wait-interval", "45"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.WaitInterval != 45*time.Second {
+		t.Errorf("WaitInterval = %s, want 45s for bare 45", cfg.WaitInterval)
+	}
+}
+
+// Verifies RALPH_WAIT_INTERVAL env var overrides the hardcoded default.
+func TestWaitIntervalEnvVar(t *testing.T) {
+	t.Setenv("RALPH_WAIT_INTERVAL", "2m")
+
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.WaitInterval != 2*time.Minute {
+		t.Errorf("WaitInterval = %s, want 2m from env", cfg.WaitInterval)
 	}
 }

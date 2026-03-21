@@ -37,6 +37,8 @@ type Config struct {
 	TaskBackend         tasks.Backend
 	IdleTimeout         time.Duration
 	IdleTimeoutProgress time.Duration
+	Wait                bool
+	WaitInterval        time.Duration
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 }
 
@@ -150,14 +152,22 @@ func (l *Loop) Run(ctx context.Context) error {
 			if runIteration == 0 {
 				hasTasks, _ := l.cfg.TaskBackend.HasTasks()
 				if !hasTasks {
-					l.logger.TaskError("No tasks found")
-					l.state.Write("status", "error")
-					break
+					if !l.cfg.Wait {
+						l.logger.TaskError("No tasks found")
+						l.state.Write("status", "error")
+						break
+					}
 				}
 			}
-			l.logger.TaskSuccess("All tasks complete!")
-			l.state.Write("status", "completed")
-			break
+			if !l.cfg.Wait {
+				l.logger.TaskSuccess("All tasks complete!")
+				l.state.Write("status", "completed")
+				break
+			}
+			if resumed := l.waitForTasks(ctx); !resumed {
+				break
+			}
+			continue
 		}
 
 		runIteration++
@@ -392,6 +402,40 @@ func (l *Loop) autoMerge() (bool, error) {
 		return l.mergeFunc()
 	}
 	return l.git.AutoMergeCurrentBranch()
+}
+
+func (l *Loop) waitForTasks(ctx context.Context) bool {
+	l.logger.Log("Waiting for new tasks (polling every %s)...", l.cfg.WaitInterval)
+	l.state.Write("status", "waiting")
+	l.updateStreamTask("", "Waiting for tasks...")
+	touchFile(filepath.Join(l.cfg.RalphDir, ".plan-refresh"))
+
+	ticker := time.NewTicker(l.cfg.WaitInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			l.state.Write("status", "stopped")
+			return false
+		case <-ticker.C:
+			if l.checkStopFile() {
+				l.logger.Warn("Stop file detected - halting")
+				l.state.Write("status", "stopped")
+				return false
+			}
+			hasRemaining, err := l.cfg.TaskBackend.HasRemaining()
+			if err != nil {
+				l.logger.Warn("Task check error during wait: %v", err)
+				continue
+			}
+			if hasRemaining {
+				l.logger.TaskSuccess("New tasks detected!")
+				touchFile(filepath.Join(l.cfg.RalphDir, ".plan-refresh"))
+				return true
+			}
+		}
+	}
 }
 
 func (l *Loop) checkStopFile() bool {

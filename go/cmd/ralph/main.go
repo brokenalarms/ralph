@@ -210,6 +210,8 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		TaskBackend:         backend,
 		IdleTimeout:         cfg.IdleTimeout,
 		IdleTimeoutProgress: cfg.IdleTimeoutProgress,
+		Wait:                cfg.Wait,
+		WaitInterval:        cfg.WaitInterval,
 		OnRebaseConflict:    promptRebaseRecovery,
 	}, st, gm, log)
 
@@ -354,6 +356,9 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 	}
 	if cfg.AutoImprove {
 		extraArgs = append(extraArgs, "--auto-improve")
+	}
+	if cfg.Wait {
+		extraArgs = append(extraArgs, "--wait")
 	}
 	if cfg.BranchStrategy != "single" {
 		extraArgs = append(extraArgs, fmt.Sprintf("--branch-strategy %s", cfg.BranchStrategy))
