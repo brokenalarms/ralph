@@ -79,6 +79,26 @@ type Result struct {
 // The callback receives the task description read from the signal file.
 type OnTaskDetected func(taskDesc string)
 
+// IterationAllowedTools lists the Claude Code tools pre-approved for
+// iteration mode. This replaces --dangerously-skip-permissions with
+// explicit scoping — only these tools are available, and --add-dir
+// restricts which directories they can access.
+var IterationAllowedTools = []string{
+	"Bash(*)",
+	"Read",
+	"Edit",
+	"Write",
+	"Glob",
+	"Grep",
+	"Agent",
+	"Skill",
+	"TodoWrite",
+	"NotebookEdit",
+	"WebFetch",
+	"WebSearch",
+	"ToolSearch",
+}
+
 // Runner manages Claude process lifecycle: spawning, signal polling, and cleanup.
 type Runner struct {
 	Logger         Log
@@ -103,14 +123,15 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	}
 	defer rawLog.Close()
 
-	cmd := exec.Command("claude",
+	args := []string{
 		"--print", "--verbose",
 		"--output-format", "stream-json",
 		"--add-dir", cfg.WorkDir,
 		"--add-dir", cfg.RalphDir,
-		"--dangerously-skip-permissions",
+		"--allowedTools", strings.Join(IterationAllowedTools, ","),
 		"-p", cfg.Prompt,
-	)
+	}
+	cmd := exec.Command("claude", args...)
 	cmd.Dir = cfg.WorkDir
 	cmd.Stdin = nil
 	cmd.Stdout = rawLog

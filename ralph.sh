@@ -32,6 +32,7 @@ USE_TMUX=false
 AUTO_MERGE=false
 STUCK_THRESHOLD=5
 STUCK_CONFIRMATION_THRESHOLD=2
+ITERATION_ALLOWED_TOOLS="Bash(*),Read,Edit,Write,Glob,Grep,Agent,Skill,TodoWrite,NotebookEdit,WebFetch,WebSearch,ToolSearch"
 STAGNATION_THRESHOLD=3
 TEST_SATURATION_THRESHOLD=3
 PERMISSION_DENIAL_THRESHOLD=3
@@ -1007,7 +1008,7 @@ run_claude() {
   claude --print --verbose --output-format stream-json \
     --add-dir "$WORK_DIR" \
     --add-dir "$RALPH_DIR" \
-    --dangerously-skip-permissions \
+    --allowedTools "$ITERATION_ALLOWED_TOOLS" \
     -p "$full_prompt" < /dev/null >> "$RAW_LOG" 2>&1 &
   claude_pid=$!
   log "Claude started (PID: $claude_pid)"

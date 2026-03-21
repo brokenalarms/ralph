@@ -175,6 +175,52 @@ func TestAllCompleteSignalDetected(t *testing.T) {
 	}
 }
 
+// --- Allowed tools tests ---
+
+// Verifies that IterationAllowedTools contains the core tools Claude needs
+// for iteration mode, preventing accidental removal of required tools.
+func TestIterationAllowedTools_ContainsCoreTools(t *testing.T) {
+	required := []string{
+		"Bash(*)", "Read", "Edit", "Write",
+		"Glob", "Grep", "Agent",
+	}
+	toolSet := make(map[string]bool)
+	for _, tool := range IterationAllowedTools {
+		toolSet[tool] = true
+	}
+	for _, tool := range required {
+		if !toolSet[tool] {
+			t.Errorf("IterationAllowedTools missing required tool: %s", tool)
+		}
+	}
+}
+
+// Verifies that IterationAllowedTools does not include --dangerously-skip-permissions
+// or any blanket bypass — each tool must be explicitly listed.
+func TestIterationAllowedTools_NoBlanketBypass(t *testing.T) {
+	for _, tool := range IterationAllowedTools {
+		if strings.Contains(strings.ToLower(tool), "dangerously") ||
+			strings.Contains(strings.ToLower(tool), "bypass") {
+			t.Errorf("IterationAllowedTools should not contain bypass entries: %s", tool)
+		}
+	}
+}
+
+// Verifies that the joined format produces a valid comma-separated list
+// suitable for --allowedTools flag.
+func TestIterationAllowedTools_JoinFormat(t *testing.T) {
+	joined := strings.Join(IterationAllowedTools, ",")
+	parts := strings.Split(joined, ",")
+	if len(parts) != len(IterationAllowedTools) {
+		t.Errorf("joined tools split into %d parts, want %d", len(parts), len(IterationAllowedTools))
+	}
+	for _, part := range parts {
+		if strings.TrimSpace(part) == "" {
+			t.Error("joined tools contain empty entry")
+		}
+	}
+}
+
 // --- Stream text extraction tests ---
 
 // Verifies that extractStreamText pulls text from assistant messages using
