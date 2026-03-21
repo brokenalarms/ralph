@@ -182,6 +182,38 @@ func TestSyncFromFile_NoOpWithoutRalphDir(t *testing.T) {
 	}
 }
 
+// Verifies that long task labels are truncated with ellipsis so elapsed time stays visible.
+func TestTitle_TruncatesLongTask(t *testing.T) {
+	p := NewPaneTitle("test-session", "")
+	long := "ralph-9uu: [bug] Go: Auto-merge not firing — multiple tasks stacking on single branch"
+	p.SetTask(long)
+
+	title := p.Title()
+	if len(title) > maxTitleLen {
+		t.Errorf("Title() length = %d, want <= %d; title = %q", len(title), maxTitleLen, title)
+	}
+	if !strings.Contains(title, "...") {
+		t.Errorf("Title() = %q, want ellipsis for truncated task", title)
+	}
+	if !strings.HasPrefix(title, "ralph-9uu:") {
+		t.Errorf("Title() = %q, want to preserve bead ID prefix", title)
+	}
+}
+
+// Verifies that short task labels are not truncated.
+func TestTitle_ShortTaskNotTruncated(t *testing.T) {
+	p := NewPaneTitle("test-session", "")
+	p.SetTask("ralph-abc: Fix auth bug")
+
+	title := p.Title()
+	if strings.Contains(title, "...") {
+		t.Errorf("Title() = %q, short task should not be truncated", title)
+	}
+	if !strings.HasPrefix(title, "ralph-abc: Fix auth bug ") {
+		t.Errorf("Title() = %q, want prefix %q", title, "ralph-abc: Fix auth bug ")
+	}
+}
+
 // Verifies that Run exits when the stop channel is closed.
 func TestRun_StopsOnClose(t *testing.T) {
 	p := NewPaneTitle("nonexistent-session", "")

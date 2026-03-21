@@ -54,7 +54,10 @@ func (p *PaneTitle) ResetTimer() {
 	p.mu.Unlock()
 }
 
+const maxTitleLen = 60
+
 // Title returns the formatted pane title: "<task> <elapsed>" or "stream <elapsed>".
+// Long task labels are truncated so the elapsed time is always visible.
 func (p *PaneTitle) Title() string {
 	p.mu.RLock()
 	task := p.task
@@ -69,7 +72,18 @@ func (p *PaneTitle) Title() string {
 	if task == "" {
 		return "stream " + stamp
 	}
+	task = truncateTask(task, maxTitleLen-1-len(stamp))
 	return task + " " + stamp
+}
+
+func truncateTask(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
 }
 
 // Run starts the background ticker that updates the tmux pane title every
