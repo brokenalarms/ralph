@@ -285,10 +285,36 @@ func (r *Runner) startStreamFilter(cfg RunConfig, stop <-chan struct{}) <-chan s
 		return done
 	}
 
-	go func() {
-		defer close(done)
-		filterStreamJSON(cfg.RawLog, cfg.LogFile, stop)
-	}()
+	// Use the bash stream filter script (it handles nested JSON correctly
+	// via jq). Write it if it doesn't exist (inline mode without tmux).
+	filterScript := filepath.Join(cfg.RalphDir, ".stream-filter.sh")
+	if _, err := os.Stat(filterScript); os.IsNotExist(err) {
+		writeStreamFilterScript(filterScript)
+	}
+	if _, err := os.Stat(filterScript); err == nil {
+		go func() {
+			defer close(done)
+			cmd := exec.Command("bash", filterScript, cfg.RawLog)
+			logOut, err := os.OpenFile(cfg.LogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+			if err != nil {
+				return
+			}
+			defer logOut.Close()
+			cmd.Stdout = logOut
+			cmd.Stderr = os.Stderr
+			if err := cmd.Start(); err != nil {
+				return
+			}
+			<-stop
+			cmd.Process.Kill()
+			cmd.Wait()
+		}()
+	} else {
+		go func() {
+			defer close(done)
+			filterStreamJSON(cfg.RawLog, cfg.LogFile, stop)
+		}()
+	}
 
 	return done
 }
@@ -542,6 +568,43 @@ func gracefulKill(cmd *exec.Cmd, processDone <-chan struct{}) {
 	case <-time.After(2 * time.Second):
 		_ = cmd.Process.Kill()
 	}
+}
+
+func writeStreamFilterScript(path string) {
+	script := `#!/usr/bin/env bash
+set +m
+exec 2>"$(dirname "$0")/.stream-filter.err"
+tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
+  fromjson? // empty |
+  if .type == "assistant" then
+    .message.content[0]? //empty |
+    if .type == "text" then "\n[claude] " + .text + "\n"
+    elif .type == "tool_use" then
+      (.input.file_path // .input.command // .input.pattern //
+        .input.query // .input.url // .input.description //
+        .input.task_id // .input.skill // .input.prompt //
+        null) as $target |
+      if $target then "\n[" + .name + "] " + $target + "\n"
+      else "\n[" + .name + "]\n"
+      end
+    else empty end
+  elif .type == "result" then
+    "\n[done]\n"
+  else empty end
+' | perl -e '
+  use POSIX; $|=1;
+  while(<STDIN>) {
+    chomp;
+    next if $_ eq "";
+    my $ts = strftime("%H:%M:%S", localtime());
+    print "$ts $_\n";
+  }
+' | sed -u -E \
+  -e $'s/\\[done\\]/\033[0;32m[done]\033[0m/g' \
+  -e $'s/\\[claude\\]/\033[0;36m[claude]\033[0m/g' \
+  -e $'s/\\[([A-Z][A-Za-z]*)\\]/\033[0;34m[\\1]\033[0m/g'
+`
+	os.WriteFile(path, []byte(script), 0o755)
 }
 
 func stopProcess(cmd *exec.Cmd) {
