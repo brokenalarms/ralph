@@ -36,7 +36,17 @@ func AutoMerge(worktreeBranch, workDir, projectDir string) (string, error) {
 		return "", fmt.Errorf("merge failed: %s", strings.TrimSpace(string(out)))
 	}
 
-	return fmt.Sprintf("Merged PR #%s", prNum), nil
+	// Fetch merged main so the new tag lands on the merge commit.
+	fetch := exec.Command("git", "fetch", "origin", "main")
+	fetch.Dir = projectDir
+	fetch.CombinedOutput()
+
+	tag, tagErr := BumpPatchTag(projectDir)
+	if tagErr != nil {
+		return fmt.Sprintf("Merged PR #%s (tag bump failed: %v)", prNum, tagErr), nil
+	}
+
+	return fmt.Sprintf("Merged PR #%s → %s", prNum, tag), nil
 }
 
 func findPR(branch, projectDir string) (string, error) {

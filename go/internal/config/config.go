@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const Version = "0.1.0"
+var Version = "0.1.0-dev"
 
 // Config holds all CLI configuration matching ralph.sh's flag interface.
 type Config struct {

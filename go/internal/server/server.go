@@ -13,6 +13,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/brokenalarms/ralph/internal/config"
 )
 
 var timeNow = time.Now
@@ -86,7 +88,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":    "ralph-server",
-		"version": "0.1.0",
+		"version": config.Version,
 		"routes": []string{
 			"POST /start   - Start a ralph loop",
 			"GET  /status   - Get loop status",
