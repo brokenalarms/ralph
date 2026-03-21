@@ -499,6 +499,31 @@ func TestLoop_MaybeRefactor_CounterIncrement(t *testing.T) {
 	}
 }
 
+// Verifies that NoRefactor=true prevents maybeRefactor from running even
+// when refactorEvery is set, allowing users to disable refactoring entirely.
+func TestLoop_MaybeRefactor_NoRefactorDisables(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	l := &Loop{
+		cfg:    Config{RalphDir: ralphDir, NoRefactor: true},
+		state:  st,
+		logger: logging.New(nil),
+	}
+
+	st.Write("iterations_since_refactor", "10")
+
+	err := l.maybeRefactor(5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	val, _ := st.Read("iterations_since_refactor")
+	if val != "10" {
+		t.Errorf("counter should not change when NoRefactor=true, got %s", val)
+	}
+}
+
 // Verifies the loop rotates the branch on resume when the next task differs
 // from the last one, so each task gets its own branch.
 func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {

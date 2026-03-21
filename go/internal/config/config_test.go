@@ -103,6 +103,9 @@ func TestAllFlags(t *testing.T) {
 		"--no-worktree",
 		"--calls-per-hour", "40",
 		"--refactor-every", "3",
+		"--no-refactor",
+		"--refactor-threshold", "30",
+		"--disable-check", "any-type",
 		"--tmux",
 		"--auto-merge",
 		"--auto-improve",
@@ -142,6 +145,15 @@ func TestAllFlags(t *testing.T) {
 	}
 	if cfg.RefactorEvery != 3 {
 		t.Errorf("RefactorEvery = %d, want 3", cfg.RefactorEvery)
+	}
+	if !cfg.NoRefactor {
+		t.Error("NoRefactor should be true")
+	}
+	if cfg.RefactorThreshold != 30 {
+		t.Errorf("RefactorThreshold = %d, want 30", cfg.RefactorThreshold)
+	}
+	if len(cfg.DisabledChecks) != 1 || cfg.DisabledChecks[0] != "any-type" {
+		t.Errorf("DisabledChecks = %v, want [any-type]", cfg.DisabledChecks)
 	}
 	if !cfg.UseTmux {
 		t.Error("UseTmux should be true")
@@ -258,7 +270,7 @@ func TestUnknownFlag(t *testing.T) {
 
 // Verifies that flags requiring a value return an error when the value is missing.
 func TestMissingArgValue(t *testing.T) {
-	for _, flag := range []string{"-d", "-n", "-p", "--plan-file", "--calls-per-hour", "--refactor-every", "--idle-timeout", "--idle-timeout-progress"} {
+	for _, flag := range []string{"-d", "-n", "-p", "--plan-file", "--calls-per-hour", "--refactor-every", "--refactor-threshold", "--disable-check", "--idle-timeout", "--idle-timeout-progress"} {
 		_, err := Parse([]string{flag})
 		if err == nil {
 			t.Errorf("Parse(%q) should error on missing value", flag)
@@ -268,7 +280,7 @@ func TestMissingArgValue(t *testing.T) {
 
 // Verifies that non-numeric values for integer flags produce an error.
 func TestInvalidNumericArg(t *testing.T) {
-	for _, flag := range []string{"-n", "--calls-per-hour", "--refactor-every"} {
+	for _, flag := range []string{"-n", "--calls-per-hour", "--refactor-every", "--refactor-threshold"} {
 		_, err := Parse([]string{flag, "abc"})
 		if err == nil {
 			t.Errorf("Parse(%q, \"abc\") should error on non-numeric value", flag)
@@ -773,5 +785,168 @@ func TestWaitIntervalEnvVar(t *testing.T) {
 	}
 	if cfg.WaitInterval != 2*time.Minute {
 		t.Errorf("WaitInterval = %s, want 2m from env", cfg.WaitInterval)
+	}
+}
+
+// Verifies --no-refactor defaults to false and is set when the flag is present,
+// allowing users to disable refactoring entirely.
+func TestNoRefactorFlag(t *testing.T) {
+	t.Setenv("RALPH_NO_REFACTOR", "")
+
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.NoRefactor {
+		t.Error("NoRefactor should default to false")
+	}
+
+	cfg, err = Parse([]string{"--no-refactor"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.NoRefactor {
+		t.Error("NoRefactor should be true after --no-refactor")
+	}
+}
+
+// Verifies RALPH_NO_REFACTOR env var sets NoRefactor.
+func TestNoRefactorEnvVar(t *testing.T) {
+	t.Setenv("RALPH_NO_REFACTOR", "true")
+
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.NoRefactor {
+		t.Error("NoRefactor should be true from env var")
+	}
+}
+
+// Verifies --refactor-threshold sets the quality score threshold and
+// defaults to 20 (matching DefaultRefactorThreshold).
+func TestRefactorThresholdFlag(t *testing.T) {
+	t.Setenv("RALPH_REFACTOR_THRESHOLD", "")
+
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RefactorThreshold != 20 {
+		t.Errorf("RefactorThreshold = %d, want 20 (default)", cfg.RefactorThreshold)
+	}
+
+	cfg, err = Parse([]string{"--refactor-threshold", "30"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RefactorThreshold != 30 {
+		t.Errorf("RefactorThreshold = %d, want 30", cfg.RefactorThreshold)
+	}
+}
+
+// Verifies RALPH_REFACTOR_THRESHOLD env var overrides the default.
+func TestRefactorThresholdEnvVar(t *testing.T) {
+	t.Setenv("RALPH_REFACTOR_THRESHOLD", "15")
+
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RefactorThreshold != 15 {
+		t.Errorf("RefactorThreshold = %d, want 15 from env", cfg.RefactorThreshold)
+	}
+}
+
+// Verifies --disable-check parses comma-separated check names into
+// DisabledChecks, allowing users to suppress specific quality checks.
+func TestDisableCheckFlag(t *testing.T) {
+	cfg, err := Parse([]string{"--disable-check", "any-type,console-log"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.DisabledChecks) != 2 {
+		t.Fatalf("DisabledChecks = %v, want 2 entries", cfg.DisabledChecks)
+	}
+	if cfg.DisabledChecks[0] != "any-type" || cfg.DisabledChecks[1] != "console-log" {
+		t.Errorf("DisabledChecks = %v, want [any-type console-log]", cfg.DisabledChecks)
+	}
+}
+
+// Verifies that --disable-check with a missing value returns an error.
+func TestDisableCheckFlagMissingValue(t *testing.T) {
+	_, err := Parse([]string{"--disable-check"})
+	if err == nil {
+		t.Fatal("expected error for --disable-check without value")
+	}
+}
+
+// Verifies no_refactor, refactor_threshold, and disabled_checks from config file.
+func TestRefactorConfigFromFile(t *testing.T) {
+	t.Setenv("RALPH_NO_REFACTOR", "")
+	t.Setenv("RALPH_REFACTOR_THRESHOLD", "")
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+	content := "no_refactor = true\nrefactor_threshold = 35\ndisabled_checks = any-type, silent-catch\n"
+	os.WriteFile(tomlPath, []byte(content), 0o644)
+
+	cfg, _ := Parse(nil)
+	cfg.LoadConfigFile(tomlPath)
+
+	if !cfg.NoRefactor {
+		t.Error("NoRefactor should be true from config file")
+	}
+	if cfg.RefactorThreshold != 35 {
+		t.Errorf("RefactorThreshold = %d, want 35", cfg.RefactorThreshold)
+	}
+	if len(cfg.DisabledChecks) != 2 {
+		t.Fatalf("DisabledChecks = %v, want 2 entries", cfg.DisabledChecks)
+	}
+	if cfg.DisabledChecks[0] != "any-type" || cfg.DisabledChecks[1] != "silent-catch" {
+		t.Errorf("DisabledChecks = %v, want [any-type silent-catch]", cfg.DisabledChecks)
+	}
+}
+
+// Verifies CLI --no-refactor overrides config file no_refactor = false.
+func TestNoRefactorCLIOverridesConfigFile(t *testing.T) {
+	t.Setenv("RALPH_NO_REFACTOR", "")
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+	os.WriteFile(tomlPath, []byte("no_refactor = false\n"), 0o644)
+
+	cfg, _ := Parse([]string{"--no-refactor"})
+	cfg.LoadConfigFile(tomlPath)
+
+	if !cfg.NoRefactor {
+		t.Error("NoRefactor should be true (CLI override)")
+	}
+}
+
+// Verifies InitConfig includes the new refactor config keys.
+func TestInitConfigIncludesRefactorKeys(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+
+	err := InitConfig(tomlPath)
+	if err != nil {
+		t.Fatalf("InitConfig failed: %v", err)
+	}
+
+	data, _ := os.ReadFile(tomlPath)
+	content := string(data)
+	for _, key := range []string{"no_refactor", "refactor_threshold", "disabled_checks"} {
+		if !strings.Contains(content, key) {
+			t.Errorf("generated config missing key %q", key)
+		}
 	}
 }

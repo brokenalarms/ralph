@@ -30,6 +30,9 @@ type Config struct {
 	PlanFile            string
 	MaxIterations       int
 	RefactorEvery       int
+	NoRefactor          bool
+	RefactorThreshold   int
+	DisabledChecks      []string
 	Quiet               bool
 	AutoMerge           bool
 	AutoImprove         bool
@@ -455,7 +458,7 @@ func (l *Loop) checkStopFile() bool {
 }
 
 func (l *Loop) maybeRefactor(refactorEvery int) error {
-	if refactorEvery <= 0 {
+	if l.cfg.NoRefactor || refactorEvery <= 0 {
 		return nil
 	}
 

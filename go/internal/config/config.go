@@ -23,6 +23,9 @@ type Config struct {
 	UseWorktree                bool
 	CallsPerHour               int
 	RefactorEvery              int
+	NoRefactor                 bool
+	RefactorThreshold          int
+	DisabledChecks             []string
 	UseTmux                    bool
 	AutoMerge                  bool
 	AutoImprove                bool
@@ -51,6 +54,8 @@ func Defaults() Config {
 		UseWorktree:                true,
 		CallsPerHour:               80,
 		RefactorEvery:              envInt("RALPH_REFACTOR_EVERY", 0),
+		NoRefactor:                 envBool("RALPH_NO_REFACTOR", false),
+		RefactorThreshold:          envInt("RALPH_REFACTOR_THRESHOLD", 20),
 		IdleTimeout:                envDuration("RALPH_IDLE_TIMEOUT", 10*time.Minute),
 		IdleTimeoutProgress:        envDuration("RALPH_IDLE_TIMEOUT_PROGRESS", 5*time.Minute),
 		WatcherInterval:            10,
@@ -76,6 +81,21 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// envBool reads a boolean from an environment variable, returning fallback
+// if unset. Accepts "1", "true", "yes" as true; anything else is false.
+func envBool(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	switch strings.ToLower(v) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 // envDuration reads a duration from an environment variable, returning
@@ -222,6 +242,38 @@ func Parse(args []string) (Config, error) {
 			}
 			cfg.RefactorEvery = n
 			cfg.cliSet["refactor_every"] = true
+			i += 2
+
+		case "--no-refactor":
+			cfg.NoRefactor = true
+			cfg.cliSet["no_refactor"] = true
+			i++
+
+		case "--refactor-threshold":
+			v, err := requireArg(args, i)
+			if err != nil {
+				return cfg, err
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
+			}
+			cfg.RefactorThreshold = n
+			cfg.cliSet["refactor_threshold"] = true
+			i += 2
+
+		case "--disable-check":
+			v, err := requireArg(args, i)
+			if err != nil {
+				return cfg, err
+			}
+			for _, name := range strings.Split(v, ",") {
+				name = strings.TrimSpace(name)
+				if name != "" {
+					cfg.DisabledChecks = append(cfg.DisabledChecks, name)
+				}
+			}
+			cfg.cliSet["disabled_checks"] = true
 			i += 2
 
 		case "--tmux":
@@ -393,6 +445,20 @@ func (c *Config) LoadConfigFile(path string) error {
 				c.BranchStrategy = value
 			}
 			continue
+		case "no_refactor":
+			switch strings.ToLower(value) {
+			case "1", "true", "yes":
+				c.NoRefactor = true
+			}
+			continue
+		case "disabled_checks":
+			for _, name := range strings.Split(value, ",") {
+				name = strings.TrimSpace(name)
+				if name != "" {
+					c.DisabledChecks = append(c.DisabledChecks, name)
+				}
+			}
+			continue
 		}
 
 		n, err := strconv.Atoi(value)
@@ -407,6 +473,8 @@ func (c *Config) LoadConfigFile(path string) error {
 			c.CallsPerHour = n
 		case "refactor_every":
 			c.RefactorEvery = n
+		case "refactor_threshold":
+			c.RefactorThreshold = n
 		case "watcher_interval":
 			c.WatcherInterval = n
 		case "stuck_threshold":
@@ -432,6 +500,7 @@ var configKeys = []struct {
 	{"max_iterations", 50},
 	{"calls_per_hour", 80},
 	{"refactor_every", 0},
+	{"refactor_threshold", 20},
 	{"watcher_interval", 10},
 	{"stuck_threshold", 5},
 	{"stuck_confirmation_threshold", 2},
@@ -449,8 +518,10 @@ func InitConfig(path string) error {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "branch_strategy = single\n")
+	fmt.Fprintf(&b, "no_refactor = false\n")
 	for _, k := range configKeys {
 		fmt.Fprintf(&b, "%s = %d\n", k.Key, k.Default)
 	}
+	fmt.Fprintf(&b, "disabled_checks =\n")
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }

@@ -30,7 +30,7 @@ func TestAssess_DetectsAnyTypeUsageInTypeScript(t *testing.T) {
 }
 `)
 	findingsFile := filepath.Join(workDir, ".quality-findings")
-	score, err := Assess(workDir, findingsFile, "src/test.ts")
+	score, err := Assess(workDir, findingsFile, nil, "src/test.ts")
 	if err != nil {
 		t.Fatalf("Assess: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestAssess_DetectsOversizedFiles(t *testing.T) {
 	writeFile(t, workDir, "big.sh", strings.Join(lines, "\n"))
 
 	findingsFile := filepath.Join(workDir, ".quality-findings")
-	score, err := Assess(workDir, findingsFile, "big.sh")
+	score, err := Assess(workDir, findingsFile, nil, "big.sh")
 	if err != nil {
 		t.Fatalf("Assess: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestAssess_DetectsSilentCatches(t *testing.T) {
 } catch (e) {}
 `)
 	findingsFile := filepath.Join(workDir, ".quality-findings")
-	score, err := Assess(workDir, findingsFile, "src/handler.ts")
+	score, err := Assess(workDir, findingsFile, nil, "src/handler.ts")
 	if err != nil {
 		t.Fatalf("Assess: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestAssess_ReturnsZeroForCleanFiles(t *testing.T) {
 	writeFile(t, workDir, "clean.sh", "#!/bin/bash\necho \"hello\"\n")
 
 	findingsFile := filepath.Join(workDir, ".quality-findings")
-	score, err := Assess(workDir, findingsFile, "clean.sh")
+	score, err := Assess(workDir, findingsFile, nil, "clean.sh")
 	if err != nil {
 		t.Fatalf("Assess: %v", err)
 	}
@@ -119,7 +119,7 @@ console.debug('test');
 console.warn('????');
 `)
 	findingsFile := filepath.Join(workDir, ".quality-findings")
-	score, err := Assess(workDir, findingsFile, "src/debug.js")
+	score, err := Assess(workDir, findingsFile, nil, "src/debug.js")
 	if err != nil {
 		t.Fatalf("Assess: %v", err)
 	}
@@ -136,5 +136,68 @@ console.warn('????');
 func TestDefaultRefactorThreshold(t *testing.T) {
 	if DefaultRefactorThreshold != 20 {
 		t.Errorf("expected 20, got %d", DefaultRefactorThreshold)
+	}
+}
+
+// Proves: disabling a check via Options.DisabledChecks prevents it from
+// contributing to the score, allowing users to suppress noisy checks.
+func TestAssess_DisabledCheckSkipped(t *testing.T) {
+	workDir := setupWorkDir(t)
+	writeFile(t, workDir, "src/test.ts", `function parse(data: any): any {
+  return data as any;
+}
+`)
+	findingsFile := filepath.Join(workDir, ".quality-findings")
+
+	opts := &Options{DisabledChecks: map[string]bool{CheckAnyType: true}}
+	score, err := Assess(workDir, findingsFile, opts, "src/test.ts")
+	if err != nil {
+		t.Fatalf("Assess: %v", err)
+	}
+	if score != 0 {
+		t.Errorf("expected score 0 with any-type disabled, got %d", score)
+	}
+}
+
+// Proves: disabling multiple checks suppresses all of them while leaving
+// other checks active.
+func TestAssess_MultipleDisabledChecks(t *testing.T) {
+	workDir := setupWorkDir(t)
+	writeFile(t, workDir, "src/messy.ts", `console.log('debug');
+try { x(); } catch (e) {}
+const v: any = 1;
+`)
+	findingsFile := filepath.Join(workDir, ".quality-findings")
+
+	opts := &Options{DisabledChecks: map[string]bool{
+		CheckConsoleLog:  true,
+		CheckSilentCatch: true,
+	}}
+	score, err := Assess(workDir, findingsFile, opts, "src/messy.ts")
+	if err != nil {
+		t.Fatalf("Assess: %v", err)
+	}
+	// Only any-type check should fire (1 occurrence * 3 = 3).
+	if score != 3 {
+		t.Errorf("expected score 3 (only any-type), got %d", score)
+	}
+}
+
+// Proves: AllChecks contains every defined check name so users can
+// enumerate valid check names for --disable-check.
+func TestAllChecksContainsEveryCheck(t *testing.T) {
+	expected := map[string]bool{
+		CheckAnyType:       true,
+		CheckOversizedFile: true,
+		CheckSilentCatch:   true,
+		CheckConsoleLog:    true,
+	}
+	if len(AllChecks) != len(expected) {
+		t.Fatalf("AllChecks has %d entries, want %d", len(AllChecks), len(expected))
+	}
+	for _, name := range AllChecks {
+		if !expected[name] {
+			t.Errorf("unexpected check name in AllChecks: %q", name)
+		}
 	}
 }

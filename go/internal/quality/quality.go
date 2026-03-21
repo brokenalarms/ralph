@@ -16,18 +16,45 @@ type Finding struct {
 }
 
 // DefaultRefactorThreshold is the quality score threshold that triggers
-// a refactor iteration, matching REFACTOR_THRESHOLD=20 in ralph.sh.
+// a refactor iteration.
 const DefaultRefactorThreshold = 20
 
+const (
+	CheckAnyType      = "any-type"
+	CheckOversizedFile = "oversized-file"
+	CheckSilentCatch  = "silent-catch"
+	CheckConsoleLog   = "console-log"
+)
+
+// AllChecks lists every quality check name.
+var AllChecks = []string{
+	CheckAnyType,
+	CheckOversizedFile,
+	CheckSilentCatch,
+	CheckConsoleLog,
+}
+
+// Options controls which quality checks run during Assess.
+type Options struct {
+	DisabledChecks map[string]bool
+}
+
+func (o *Options) enabled(name string) bool {
+	if o == nil || o.DisabledChecks == nil {
+		return true
+	}
+	return !o.DisabledChecks[name]
+}
+
 var (
-	anyTypeRe    = regexp.MustCompile(`\bany\b`)
+	anyTypeRe     = regexp.MustCompile(`\bany\b`)
 	silentCatchRe = regexp.MustCompile(`catch\s*\([^)]*\)\s*\{\s*\}`)
 	consoleLogRe  = regexp.MustCompile(`console\.(log|debug|warn|error)\s*\(`)
 )
 
 // Assess scans changed files for quality issues and returns the total
-// score and a findings report. Matches ralph.sh's assess_quality.
-func Assess(workDir, findingsFile string, files ...string) (int, error) {
+// score and a findings report. Pass nil opts to run all checks.
+func Assess(workDir, findingsFile string, opts *Options, files ...string) (int, error) {
 	totalScore := 0
 	var allFindings []string
 
@@ -42,8 +69,7 @@ func Assess(workDir, findingsFile string, files ...string) (int, error) {
 
 		var fileFindings []string
 
-		// Check for `any` type usage in TypeScript/JavaScript files.
-		if isJSOrTS(relPath) {
+		if opts.enabled(CheckAnyType) && isJSOrTS(relPath) {
 			count := len(anyTypeRe.FindAllString(content, -1))
 			if count > 0 {
 				score := count * 3
@@ -53,8 +79,7 @@ func Assess(workDir, findingsFile string, files ...string) (int, error) {
 			}
 		}
 
-		// Check for oversized files (over 500 lines).
-		if len(lines) > 500 {
+		if opts.enabled(CheckOversizedFile) && len(lines) > 500 {
 			over := len(lines) - 500
 			score := over / 10
 			if score < 1 {
@@ -65,8 +90,7 @@ func Assess(workDir, findingsFile string, files ...string) (int, error) {
 				fmt.Sprintf("  - %d lines (%d over 500-line threshold)", len(lines), over))
 		}
 
-		// Check for silent catches.
-		if isJSOrTS(relPath) {
+		if opts.enabled(CheckSilentCatch) && isJSOrTS(relPath) {
 			matches := silentCatchRe.FindAllString(content, -1)
 			if len(matches) > 0 {
 				score := len(matches) * 5
@@ -76,8 +100,7 @@ func Assess(workDir, findingsFile string, files ...string) (int, error) {
 			}
 		}
 
-		// Check for console.log in JS/TS files.
-		if isJSOrTS(relPath) {
+		if opts.enabled(CheckConsoleLog) && isJSOrTS(relPath) {
 			matches := consoleLogRe.FindAllString(content, -1)
 			if len(matches) > 0 {
 				score := len(matches) * 2
