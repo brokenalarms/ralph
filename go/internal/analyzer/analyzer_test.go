@@ -96,11 +96,13 @@ func TestStuckCounterResetsOnCleanIteration(t *testing.T) {
 	}
 }
 
-// Verifies that 3+ identical tool calls in a single iteration are detected
+// Verifies that 5+ identical tool calls in a single iteration are detected
 // as a stuck loop, catching agents that retry the same failing command.
 func TestRepeatedToolCallsDetectedAsStuck(t *testing.T) {
 	a := New()
 	log := assistantToolUseMsg("Bash", "/usr/bin/test") + "\n" +
+		assistantToolUseMsg("Bash", "/usr/bin/test") + "\n" +
+		assistantToolUseMsg("Bash", "/usr/bin/test") + "\n" +
 		assistantToolUseMsg("Bash", "/usr/bin/test") + "\n" +
 		assistantToolUseMsg("Bash", "/usr/bin/test") + "\n"
 

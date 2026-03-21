@@ -76,13 +76,20 @@ func (a *Analyzer) Analyze(state IterationState) Result {
 		}
 	}
 
-	// --- Stuck loop: explicit phrases or repeated tool calls ---
-	stuckDetected := stuckPhraseRe.MatchString(parsed.AssistantText)
+	// --- Stuck loop: skip if task completed via signal ---
+	if state.HasSignal {
+		a.stuckCount = 0
+	}
 
-	if !stuckDetected {
-		maxRepeats := maxToolCallRepeats(parsed.ToolCalls)
-		if maxRepeats >= 3 {
-			stuckDetected = true
+	stuckDetected := false
+	if !state.HasSignal {
+		stuckDetected = stuckPhraseRe.MatchString(parsed.AssistantText)
+
+		if !stuckDetected {
+			maxRepeats := maxToolCallRepeats(parsed.ToolCalls)
+			if maxRepeats >= 5 {
+				stuckDetected = true
+			}
 		}
 	}
 
