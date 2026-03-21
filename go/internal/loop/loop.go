@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/analyzer"
@@ -77,6 +78,14 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.state.Write("status", "error")
 			return fmt.Errorf("initial rebase failed: %w", err)
 		}
+
+		// On resume, if the current branch is already named for a task
+		// (not /next), rotate to create a fresh branch stacked on top.
+		// Without this, RenameBranchForTask would rename the existing
+		// task branch instead of creating a new one in the chain.
+		if !strings.HasSuffix(l.git.WorktreeBranch, "/next") {
+			l.git.RotateBranch()
+		}
 	}
 
 	if err := l.limiter.Init(); err != nil {
@@ -134,7 +143,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		runIteration++
 		iteration++
 
-		if runIteration > 1 && l.cfg.TaskBackend.Label() != "beads" {
+		if runIteration > 1 {
 			l.git.RotateBranch()
 			if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
 				if err := l.git.RebaseOntoDefaultBranch(); err != nil {
