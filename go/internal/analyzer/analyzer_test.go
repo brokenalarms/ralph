@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -15,12 +16,12 @@ func TestEmptyLogContinues(t *testing.T) {
 	}
 }
 
-// Verifies that 3+ permission-denial phrases in a single iteration cause an
+// Verifies that 3+ permission-denial phrases in assistant messages cause an
 // immediate halt, protecting the loop from burning iterations against a
 // sandbox or filesystem restriction.
 func TestPermissionDenialHaltsAt3(t *testing.T) {
 	a := New()
-	log := "Error: permission denied\nFailed: cannot write to /foo\nblocked by sandbox rule\n"
+	log := assistantTextMsg("Error: permission denied. Failed: cannot write to /foo. blocked by sandbox rule.")
 	r := a.Analyze(IterationState{IterationLog: log})
 	if r.Action != Halt || r.Reason != "permission_denied" {
 		t.Errorf("3 permission lines: got %+v, want Halt/permission_denied", r)
@@ -31,10 +32,23 @@ func TestPermissionDenialHaltsAt3(t *testing.T) {
 // permission errors may be transient and shouldn't abort the whole loop.
 func TestPermissionDenialBelowThreshold(t *testing.T) {
 	a := New()
-	log := "permission denied\ncannot write\nsome other line\n"
+	log := assistantTextMsg("permission denied. cannot write.")
 	r := a.Analyze(IterationState{IterationLog: log})
 	if r.Action == Halt && r.Reason == "permission_denied" {
 		t.Errorf("2 permission lines should not halt, got %+v", r)
+	}
+}
+
+// Verifies that permission phrases inside tool results (file contents, command
+// output) do NOT trigger the permission denial detector. This prevents false
+// positives when Claude reads/writes code containing these phrases as data.
+func TestPermissionDenialIgnoresToolResults(t *testing.T) {
+	a := New()
+	log := toolResultMsg(`PERMISSION_DENIAL_THRESHOLD=3\npermission denied error handling\ncannot write guard\nblocked by sandbox check\nnot allowed to delete`) +
+		"\n" + assistantTextMsg("I've updated the permission checks.")
+	r := a.Analyze(IterationState{IterationLog: log})
+	if r.Action == Halt && r.Reason == "permission_denied" {
+		t.Errorf("permission phrases in tool results should not halt, got %+v", r)
 	}
 }
 
@@ -229,7 +243,7 @@ func TestIsTestFile(t *testing.T) {
 // matching ralph.sh's grep -i flag.
 func TestPermissionDenialCaseInsensitive(t *testing.T) {
 	a := New()
-	log := "PERMISSION DENIED\nCannot Write to disk\nBLOCKED BY SANDBOX\n"
+	log := assistantTextMsg("PERMISSION DENIED. Cannot Write to disk. BLOCKED BY SANDBOX.")
 	r := a.Analyze(IterationState{IterationLog: log})
 	if r.Action != Halt || r.Reason != "permission_denied" {
 		t.Errorf("case-insensitive permission: got %+v, want Halt/permission_denied", r)
@@ -240,11 +254,11 @@ func TestPermissionDenialCaseInsensitive(t *testing.T) {
 // matching ralph.sh's `head -5` on the matches.
 func TestPermissionDenialDetailCapped(t *testing.T) {
 	a := New()
-	lines := make([]string, 10)
-	for i := range lines {
-		lines[i] = "permission denied"
+	phrases := make([]string, 10)
+	for i := range phrases {
+		phrases[i] = "permission denied"
 	}
-	log := strings.Join(lines, "\n") + "\n"
+	log := assistantTextMsg(strings.Join(phrases, ". "))
 
 	r := a.Analyze(IterationState{IterationLog: log})
 	if r.Action != Halt {
@@ -254,4 +268,12 @@ func TestPermissionDenialDetailCapped(t *testing.T) {
 	if len(detailLines) > 5 {
 		t.Errorf("detail has %d lines, want <= 5", len(detailLines))
 	}
+}
+
+func assistantTextMsg(text string) string {
+	return fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"text","text":%q}]}}`, text)
+}
+
+func toolResultMsg(content string) string {
+	return fmt.Sprintf(`{"type":"user","message":{"content":[{"type":"tool_result","content":%q}]}}`, content)
 }

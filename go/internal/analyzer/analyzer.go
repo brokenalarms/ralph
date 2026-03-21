@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 )
@@ -57,8 +58,12 @@ func (a *Analyzer) Analyze(state IterationState) Result {
 		return Result{Action: Continue}
 	}
 
-	// --- Permission denial: 3+ matches in a single iteration → halt ---
-	permMatches := permissionRe.FindAllString(state.IterationLog, -1)
+	// --- Permission denial: 3+ matches in assistant messages only → halt ---
+	// Only scan assistant messages to avoid false positives from file contents
+	// and tool results that Claude reads/writes (which may contain these phrases
+	// as data, not as actual errors).
+	assistantText := extractAssistantText(state.IterationLog)
+	permMatches := permissionRe.FindAllString(assistantText, -1)
 	if len(permMatches) >= 3 {
 		return Result{
 			Action: Halt,
@@ -165,6 +170,47 @@ func isTestFile(path string) bool {
 	}
 
 	return false
+}
+
+// extractAssistantText returns only the text content from assistant messages
+// in a JSON-lines log. This filters out tool_result content (which contains
+// file contents, command output, etc.) that would cause false positive matches.
+func extractAssistantText(log string) string {
+	var buf strings.Builder
+	for _, line := range strings.Split(log, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var msg struct {
+			Type    string `json:"type"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &msg) != nil || msg.Type != "assistant" {
+			continue
+		}
+		var blocks []struct {
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Thinking string `json:"thinking"`
+		}
+		if json.Unmarshal(msg.Message.Content, &blocks) != nil {
+			continue
+		}
+		for _, b := range blocks {
+			if b.Type == "text" && b.Text != "" {
+				buf.WriteString(b.Text)
+				buf.WriteByte('\n')
+			}
+			if b.Type == "thinking" && b.Thinking != "" {
+				buf.WriteString(b.Thinking)
+				buf.WriteByte('\n')
+			}
+		}
+	}
+	return buf.String()
 }
 
 func firstN(s []string, n int) []string {
