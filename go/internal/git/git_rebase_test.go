@@ -292,6 +292,55 @@ func TestRebaseOntoDefaultBranch_AlreadyUpToDate(t *testing.T) {
 	}
 }
 
+// When HEAD is behind origin/main (e.g., after PostMergeReset followed by
+// main advancing via another squash merge), rebase must fast-forward to
+// include the new main commits rather than skipping with "already up to date".
+func TestRebaseOntoDefaultBranch_FastForwardsWhenBehind(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	// Simulate PostMergeReset: worktree is at origin/main.
+	// Then main advances (another PR squash-merged on GitHub).
+	writeFile(t, project, "newfeature.txt", "merged by someone else\n")
+	run(t, "git", "-C", project, "commit", "-m", "squash: another PR")
+	pushToOrigin(t, project)
+
+	// Worktree HEAD is now behind origin/main
+	if err := mgr.RebaseOntoDefaultBranch(); err != nil {
+		t.Fatalf("RebaseOntoDefaultBranch failed: %v", err)
+	}
+
+	// The new file from main should be present after rebase
+	if _, err := os.Stat(filepath.Join(mgr.WorkDir, "newfeature.txt")); err != nil {
+		t.Error("newfeature.txt should exist after rebasing onto advanced main")
+	}
+
+	log := mgr.Logger.(*testLog)
+	if log.contains("Already up to date") {
+		t.Error("should NOT say 'Already up to date' when HEAD is behind origin/main")
+	}
+}
+
+// When HEAD is ahead of origin/main (has local commits), rebase correctly
+// identifies the branch as up-to-date since it already includes main.
+func TestRebaseOntoDefaultBranch_SkipsWhenAhead(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	// Add a local commit — HEAD is ahead of origin/main
+	writeFile(t, mgr.WorkDir, "local.txt", "local work\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "local commit")
+
+	if err := mgr.RebaseOntoDefaultBranch(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	log := mgr.Logger.(*testLog)
+	if !log.contains("Already up to date") {
+		t.Error("expected 'Already up to date' when HEAD is ahead of origin/main")
+	}
+}
+
 // --- TagTaskStart / TagTaskEnd tests ---
 
 // TagTaskStart creates a git tag using the bd task ID when available

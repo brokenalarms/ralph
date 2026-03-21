@@ -517,8 +517,10 @@ func (m *Manager) RebaseOntoDefaultBranch() error {
 		return nil
 	}
 
-	// Already up to date
-	if gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "HEAD", "origin/"+defaultBranch) == nil {
+	// Already up to date: origin/main is ancestor of HEAD means HEAD
+	// includes everything from main. The reverse (HEAD ancestor of
+	// origin/main) would incorrectly skip rebase when HEAD is behind.
+	if gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, "HEAD") == nil {
 		m.Logger.Log("Already up to date with origin/%s", defaultBranch)
 		return nil
 	}
