@@ -21,6 +21,7 @@ type mockBackend struct {
 	planningInstr      string
 	planningSucceedSeq []bool // if set, PlanningSucceeded returns these in order
 	callIdx            int
+	nextTask           string
 }
 
 func (m *mockBackend) Init() error                            { return nil }
@@ -28,7 +29,7 @@ func (m *mockBackend) HasRemaining() (bool, error)            { return false, ni
 func (m *mockBackend) CountCompleted() (int, error)           { return 0, nil }
 func (m *mockBackend) CountRemaining() (int, error)           { return 0, nil }
 func (m *mockBackend) CountTotal() (int, error)               { return m.totalTasks, nil }
-func (m *mockBackend) GetNextTask() (string, error)           { return "", nil }
+func (m *mockBackend) GetNextTask() (string, error)           { return m.nextTask, nil }
 func (m *mockBackend) GetNextTaskID() (string, error)         { return "", nil }
 func (m *mockBackend) HasTasks() (bool, error)                { return m.totalTasks > 0, nil }
 func (m *mockBackend) CloseTask(string, string) error         { return nil }
@@ -355,6 +356,64 @@ func TestTmuxSessionNotRenamedWithoutTheme(t *testing.T) {
 
 	if tmuxCalled {
 		t.Error("tmux session rename should not be called when no theme exists")
+	}
+}
+
+// BD backend fallback: when no theme in state, derive from first task title.
+func TestRenameWorktreeThemeFallbackToBDTaskTitle(t *testing.T) {
+	d, _ := testDeps(t)
+	d.SkipPlanning = true
+
+	d.Backend = &mockBackend{
+		label:             "beads",
+		needsPlanning:     false,
+		planningSucceeded: true,
+		totalTasks:        1,
+		nextTask:          "auth middleware rewrite",
+	}
+
+	var renamedTheme string
+	d.RenameWorktree = func(theme string) error {
+		renamedTheme = theme
+		return nil
+	}
+
+	if err := Run(d); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	if renamedTheme != "auth middleware rewrite" {
+		t.Errorf("renamed theme = %q, want %q", renamedTheme, "auth middleware rewrite")
+	}
+}
+
+// State theme takes priority over bd task title.
+func TestRenameWorktreeThemePrefersStateOverBD(t *testing.T) {
+	d, _ := testDeps(t)
+	d.SkipPlanning = true
+
+	d.StateStore.Write("theme", "go migration")
+
+	d.Backend = &mockBackend{
+		label:             "beads",
+		needsPlanning:     false,
+		planningSucceeded: true,
+		totalTasks:        1,
+		nextTask:          "wrong answer",
+	}
+
+	var renamedTheme string
+	d.RenameWorktree = func(theme string) error {
+		renamedTheme = theme
+		return nil
+	}
+
+	if err := Run(d); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	if renamedTheme != "go migration" {
+		t.Errorf("renamed theme = %q, want %q", renamedTheme, "go migration")
 	}
 }
 

@@ -45,6 +45,29 @@ func TestWriteStreamFilter(t *testing.T) {
 	}
 }
 
+// Verifies that the stream filter's perl deduplication stage collapses
+// consecutive identical tool calls into a single line with an "x3" counter,
+// saving vertical space in the tmux output pane.
+func TestWriteStreamFilter_Deduplication(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{RalphDir: dir}
+
+	if err := s.writeStreamFilter(); err != nil {
+		t.Fatalf("writeStreamFilter() error: %v", err)
+	}
+
+	path := filepath.Join(dir, ".stream-filter.sh")
+	data, _ := os.ReadFile(path)
+	content := string(data)
+
+	if !strings.Contains(content, "x$count") {
+		t.Error("stream filter missing deduplication counter (x$count)")
+	}
+	if !strings.Contains(content, "flush_prev") {
+		t.Error("stream filter missing flush_prev function for deduplication")
+	}
+}
+
 // Verifies that writePlanWatcher generates a bd-style plan script when
 // TaskBackend is "bd", showing current task, ready queue, and progress.
 func TestWritePlanWatcher_BD(t *testing.T) {

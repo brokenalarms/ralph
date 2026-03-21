@@ -24,6 +24,7 @@ type Config struct {
 	CallsPerHour               int
 	RefactorEvery              int
 	UseTmux                    bool
+	AutoMerge                  bool
 	IdleTimeout                time.Duration
 	IdleTimeoutProgress        time.Duration
 	WatcherInterval            int
@@ -219,6 +220,10 @@ func Parse(args []string) (Config, error) {
 
 		case "--tmux":
 			cfg.UseTmux = true
+			i++
+
+		case "--auto-merge":
+			cfg.AutoMerge = true
 			i++
 
 		case "--idle-timeout":

@@ -104,6 +104,7 @@ func TestAllFlags(t *testing.T) {
 		"--calls-per-hour", "40",
 		"--refactor-every", "3",
 		"--tmux",
+		"--auto-merge",
 	}
 	cfg, err := Parse(args)
 	if err != nil {
@@ -142,6 +143,29 @@ func TestAllFlags(t *testing.T) {
 	}
 	if !cfg.UseTmux {
 		t.Error("UseTmux should be true")
+	}
+	if !cfg.AutoMerge {
+		t.Error("AutoMerge should be true")
+	}
+}
+
+// Verifies that --auto-merge flag defaults to false and is set to true when
+// the flag is present, matching ralph.sh's AUTO_MERGE variable.
+func TestAutoMergeFlag(t *testing.T) {
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.AutoMerge {
+		t.Error("AutoMerge should default to false")
+	}
+
+	cfg, err = Parse([]string{"--auto-merge", "--no-worktree"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.AutoMerge {
+		t.Error("AutoMerge should be true after --auto-merge")
 	}
 }
 
