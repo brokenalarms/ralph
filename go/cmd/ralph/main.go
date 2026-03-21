@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"os"
@@ -21,6 +22,9 @@ import (
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/tmux"
 )
+
+//go:embed prompts/*
+var embeddedPrompts embed.FS
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -53,7 +57,18 @@ func run(args []string) int {
 
 	scriptPath, _ := os.Executable()
 	ralphDir := filepath.Join(cfg.ProjectDir, ".ralph")
+
+	// Use on-disk prompts if available (running ralph on itself), otherwise
+	// extract embedded prompts to a temp dir.
 	promptsDir := filepath.Join(cfg.ProjectDir, "prompts")
+	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
+		tmpDir, err := extractEmbeddedPrompts()
+		if err != nil {
+			log.Error("Failed to extract embedded prompts: %v", err)
+			return 1
+		}
+		promptsDir = tmpDir
+	}
 
 	// Tmux outer wrapper: set up tmux session, then re-exec ralph inside pane 0.
 	// Ensure .ralph dir exists before tmux setup writes scripts into it.

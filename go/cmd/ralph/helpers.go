@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -119,6 +120,26 @@ func gitVersion(projectDir string) string {
 	}
 	v := strings.TrimSpace(string(out))
 	return strings.TrimPrefix(v, "v")
+}
+
+func extractEmbeddedPrompts() (string, error) {
+	tmpDir, err := os.MkdirTemp("", "ralph-prompts-*")
+	if err != nil {
+		return "", err
+	}
+	err = fs.WalkDir(embeddedPrompts, "prompts", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := embeddedPrompts.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		// Strip "prompts/" prefix — write directly to tmpDir
+		name := strings.TrimPrefix(path, "prompts/")
+		return os.WriteFile(filepath.Join(tmpDir, name), data, 0o644)
+	})
+	return tmpDir, err
 }
 
 func ensureGitignored(projectDir, entry string) {
