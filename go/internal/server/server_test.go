@@ -395,6 +395,35 @@ func TestResetWhileRunning(t *testing.T) {
 	}
 }
 
+// Verify /reset only removes .ralph state, leaving .beads (permanent
+// task history) intact.
+func TestResetPreservesBeads(t *testing.T) {
+	s, dir := newTestServer(t)
+	s.projectDir = dir
+
+	rd := filepath.Join(dir, ".ralph")
+	os.MkdirAll(rd, 0o755)
+	os.WriteFile(filepath.Join(rd, "state.json"), []byte("{}"), 0o644)
+
+	beadsDir := filepath.Join(dir, ".beads")
+	os.MkdirAll(beadsDir, 0o755)
+	os.WriteFile(filepath.Join(beadsDir, "data.db"), []byte("tasks"), 0o644)
+
+	req := httptest.NewRequest("DELETE", "/reset", nil)
+	w := httptest.NewRecorder()
+	s.handleReset(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if _, err := os.Stat(rd); !os.IsNotExist(err) {
+		t.Fatal("expected .ralph to be removed")
+	}
+	if _, err := os.Stat(beadsDir); os.IsNotExist(err) {
+		t.Fatal(".beads must survive a reset")
+	}
+}
+
 // Verify CORS preflight returns proper headers so browser-based
 // clients (dashboard) can make cross-origin requests.
 func TestCORSPreflight(t *testing.T) {

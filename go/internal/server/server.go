@@ -418,6 +418,12 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rd := ralphDir(dir)
+	if base := filepath.Base(rd); base == ".beads" || base == ".dolt" {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": fmt.Sprintf("refusing to remove %s: protected directory", base),
+		})
+		return
+	}
 	if _, err := os.Stat(rd); err == nil {
 		if err := os.RemoveAll(rd); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

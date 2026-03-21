@@ -347,6 +347,7 @@ init_ralph_dir() {
       printf "${YELLOW}[ralph]${NC} Run fresh? (y/n) "
       read -r answer
       if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
+        # Only remove .ralph state — .beads and .dolt are permanent and must never be deleted.
         rm -rf "$RALPH_DIR"
         mkdir -p "$RALPH_DIR"
         touch "$LOG_FILE" "$RAW_LOG"
