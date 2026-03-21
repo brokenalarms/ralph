@@ -222,7 +222,7 @@ func TestInit_CreatesFreshState(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 
-	if err := st.Init(50, 20); err != nil {
+	if err := st.Init(50); err != nil {
 		t.Fatal(err)
 	}
 
@@ -247,7 +247,7 @@ func TestInit_PreservesStateOnResume(t *testing.T) {
 
 	st.Save(State{Iteration: 3, Status: "running", MaxIterations: 50})
 
-	if err := st.Init(50, 20); err != nil {
+	if err := st.Init(50); err != nil {
 		t.Fatal(err)
 	}
 
@@ -284,7 +284,7 @@ func TestTaskBackend_WrittenToState(t *testing.T) {
 func TestQualityScore_DefaultsToZero(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
-	st.Init(5, 0)
+	st.Init(5)
 	st.Write("quality_score", "0")
 
 	val, err := st.Read("quality_score")
@@ -300,7 +300,7 @@ func TestQualityScore_DefaultsToZero(t *testing.T) {
 func TestQualityScore_TracksAcrossWrites(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
-	st.Init(5, 0)
+	st.Init(5)
 	st.Write("quality_score", "25")
 
 	val, err := st.Read("quality_score")

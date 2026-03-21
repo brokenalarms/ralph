@@ -487,7 +487,6 @@ func TestLoadConfigHandlesAllKeys(t *testing.T) {
 	tomlPath := filepath.Join(dir, "ralph.toml")
 	content := `max_iterations = 10
 calls_per_hour = 20
-refactor_every = 3
 watcher_interval = 5
 stuck_threshold = 8
 stuck_confirmation_threshold = 4
@@ -507,7 +506,6 @@ permission_denial_threshold = 9
 	}{
 		{"MaxIterations", cfg.MaxIterations, 10},
 		{"CallsPerHour", cfg.CallsPerHour, 20},
-		{"RefactorEvery", cfg.RefactorEvery, 3},
 		{"WatcherInterval", cfg.WatcherInterval, 5},
 		{"StuckThreshold", cfg.StuckThreshold, 8},
 		{"StuckConfirmationThreshold", cfg.StuckConfirmationThreshold, 4},

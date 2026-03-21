@@ -330,7 +330,7 @@ func (c *Config) LoadConfigFile(path string) error {
 		case "calls_per_hour":
 			c.CallsPerHour = n
 		case "refactor_every":
-			c.RefactorEvery = n
+			// Refactor scheduling is now adaptive; ignore legacy state value.
 		case "watcher_interval":
 			c.WatcherInterval = n
 		case "stuck_threshold":
