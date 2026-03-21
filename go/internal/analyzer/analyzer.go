@@ -83,14 +83,9 @@ func (a *Analyzer) Analyze(state IterationState) Result {
 
 	stuckDetected := false
 	if !state.HasSignal {
+		// Only check for explicit stuck phrases — repeated tool call counting
+		// removed as it produces false positives during normal development.
 		stuckDetected = stuckPhraseRe.MatchString(parsed.AssistantText)
-
-		if !stuckDetected {
-			maxRepeats := maxToolCallRepeats(parsed.ToolCalls)
-			if maxRepeats >= 5 {
-				stuckDetected = true
-			}
-		}
 	}
 
 	if stuckDetected {

@@ -96,9 +96,9 @@ func TestStuckCounterResetsOnCleanIteration(t *testing.T) {
 	}
 }
 
-// Verifies that 5+ identical tool calls in a single iteration are detected
-// as a stuck loop, catching agents that retry the same failing command.
-func TestRepeatedToolCallsDetectedAsStuck(t *testing.T) {
+// Verifies that repeated tool calls alone do NOT trigger stuck detection.
+// This heuristic was removed — only explicit stuck phrases trigger it now.
+func TestRepeatedToolCallsNotStuck(t *testing.T) {
 	a := New()
 	log := assistantToolUseMsg("Bash", "/usr/bin/test") + "\n" +
 		assistantToolUseMsg("Bash", "/usr/bin/test") + "\n" +
@@ -107,8 +107,8 @@ func TestRepeatedToolCallsDetectedAsStuck(t *testing.T) {
 		assistantToolUseMsg("Bash", "/usr/bin/test") + "\n"
 
 	r := a.Analyze(IterationState{IterationLog: log})
-	if r.Action != Warn || r.Reason != "stuck_indicators_detected" {
-		t.Errorf("repeated tool calls: got %+v, want Warn/stuck_indicators_detected", r)
+	if r.Action != Continue {
+		t.Errorf("repeated tool calls should not trigger stuck: got %+v, want Continue", r)
 	}
 }
 
