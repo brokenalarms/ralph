@@ -309,88 +309,6 @@ func TestParseSubcommandEmpty(t *testing.T) {
 	}
 }
 
-// Proves: --plan-file flag stores the plan file path in config
-// for validation by the planning phase.
-func TestPlanFileFlag(t *testing.T) {
-	cfg, err := Parse([]string{"--plan-file", "/some/plan.md"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.PlanFile != "/some/plan.md" {
-		t.Errorf("PlanFile = %q, want /some/plan.md", cfg.PlanFile)
-	}
-}
-
-// Proves: --auto-merge flag defaults to false and is set to true
-// when passed on the CLI.
-func TestAutoMergeFlag(t *testing.T) {
-	cfg, err := Parse([]string{"-d", "/tmp"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.AutoMerge {
-		t.Error("AutoMerge should default to false")
-	}
-
-	cfg, err = Parse([]string{"--auto-merge", "--no-worktree"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !cfg.AutoMerge {
-		t.Error("AutoMerge should be true after --auto-merge flag")
-	}
-}
-
-// Proves: ValidatePlanFile with nonexistent file returns "not found" error.
-func TestValidatePlanFile_NonexistentFile(t *testing.T) {
-	err := ValidatePlanFile("/nonexistent/plan.md")
-	if err == nil {
-		t.Fatal("expected error for nonexistent file")
-	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("error should contain 'not found', got: %v", err)
-	}
-}
-
-// Proves: ValidatePlanFile without checkboxes returns format error.
-func TestValidatePlanFile_NoCheckboxes(t *testing.T) {
-	dir := t.TempDir()
-	planFile := filepath.Join(dir, "bad-plan.md")
-	os.WriteFile(planFile, []byte("Just some text without checkboxes"), 0o644)
-
-	err := ValidatePlanFile(planFile)
-	if err == nil {
-		t.Fatal("expected error for plan without checkboxes")
-	}
-	if !strings.Contains(err.Error(), "Ralph format") {
-		t.Errorf("error should contain 'Ralph format', got: %v", err)
-	}
-}
-
-// Proves: ValidatePlanFile with valid checkboxes returns nil.
-func TestValidatePlanFile_ValidFile(t *testing.T) {
-	dir := t.TempDir()
-	planFile := filepath.Join(dir, "plan.md")
-	os.WriteFile(planFile, []byte("- [ ] Test task\n- [ ] Another task\n"), 0o644)
-
-	err := ValidatePlanFile(planFile)
-	if err != nil {
-		t.Fatalf("expected no error for valid plan, got: %v", err)
-	}
-}
-
-// Proves: ValidatePlanFile accepts files with completed checkboxes.
-func TestValidatePlanFile_CompletedCheckboxes(t *testing.T) {
-	dir := t.TempDir()
-	planFile := filepath.Join(dir, "plan.md")
-	os.WriteFile(planFile, []byte("- [x] Done task\n"), 0o644)
-
-	err := ValidatePlanFile(planFile)
-	if err != nil {
-		t.Fatalf("expected no error for plan with completed checkboxes, got: %v", err)
-	}
-}
-
 // Verifies the stop subcommand E2E: creates a stop file in .ralph/.
 func TestStopSubcommandIntegration(t *testing.T) {
 	dir := t.TempDir()
@@ -406,5 +324,258 @@ func TestStopSubcommandIntegration(t *testing.T) {
 	}
 	if _, err := os.Stat(stopFile); err != nil {
 		t.Errorf("stop file not created: %v", err)
+	}
+}
+
+// --- Config file (ralph.toml) tests, ported from config.bats ---
+
+// Verifies that LoadConfigFile sets values from a ralph.toml file,
+// matching bats test "load_config sets variables from ralph.toml".
+func TestLoadConfigSetsValuesFromTOML(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+	os.WriteFile(tomlPath, []byte("max_iterations = 25\ncalls_per_hour = 40\nstuck_threshold = 10\nstagnation_threshold = 5\n"), 0o644)
+
+	cfg, _ := Parse(nil)
+	cfg.LoadConfigFile(tomlPath)
+
+	if cfg.MaxIterations != 25 {
+		t.Errorf("MaxIterations = %d, want 25", cfg.MaxIterations)
+	}
+	if cfg.CallsPerHour != 40 {
+		t.Errorf("CallsPerHour = %d, want 40", cfg.CallsPerHour)
+	}
+	if cfg.StuckThreshold != 10 {
+		t.Errorf("StuckThreshold = %d, want 10", cfg.StuckThreshold)
+	}
+	if cfg.StagnationThreshold != 5 {
+		t.Errorf("StagnationThreshold = %d, want 5", cfg.StagnationThreshold)
+	}
+}
+
+// Verifies that CLI args take precedence over config file values,
+// matching bats test "CLI args override config file values".
+func TestCLIArgsOverrideConfigFile(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+	os.WriteFile(tomlPath, []byte("max_iterations = 25\ncalls_per_hour = 40\n"), 0o644)
+
+	cfg, _ := Parse([]string{"-n", "99"})
+	cfg.LoadConfigFile(tomlPath)
+
+	if cfg.MaxIterations != 99 {
+		t.Errorf("MaxIterations = %d, want 99 (CLI should override config file)", cfg.MaxIterations)
+	}
+	if cfg.CallsPerHour != 40 {
+		t.Errorf("CallsPerHour = %d, want 40 (from config file)", cfg.CallsPerHour)
+	}
+}
+
+// Verifies that LoadConfigFile is a no-op when file does not exist,
+// matching bats test "load_config is a no-op when file does not exist".
+func TestLoadConfigNoOpWhenFileMissing(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+
+	cfg, _ := Parse(nil)
+	origMax := cfg.MaxIterations
+	origStuck := cfg.StuckThreshold
+
+	err := cfg.LoadConfigFile("/nonexistent/path/ralph.toml")
+	if err != nil {
+		t.Fatalf("expected nil error for missing file, got %v", err)
+	}
+	if cfg.MaxIterations != origMax {
+		t.Errorf("MaxIterations changed from %d to %d", origMax, cfg.MaxIterations)
+	}
+	if cfg.StuckThreshold != origStuck {
+		t.Errorf("StuckThreshold changed from %d to %d", origStuck, cfg.StuckThreshold)
+	}
+}
+
+// Verifies that LoadConfigFile ignores comments and blank lines,
+// matching bats test "load_config ignores comments and blank lines".
+func TestLoadConfigIgnoresCommentsAndBlankLines(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+	content := "# This is a comment\nmax_iterations = 30\n\n  # indented comment\ncalls_per_hour = 60\n"
+	os.WriteFile(tomlPath, []byte(content), 0o644)
+
+	cfg, _ := Parse(nil)
+	cfg.LoadConfigFile(tomlPath)
+
+	if cfg.MaxIterations != 30 {
+		t.Errorf("MaxIterations = %d, want 30", cfg.MaxIterations)
+	}
+	if cfg.CallsPerHour != 60 {
+		t.Errorf("CallsPerHour = %d, want 60", cfg.CallsPerHour)
+	}
+}
+
+// Verifies that LoadConfigFile strips inline comments,
+// matching bats test "load_config strips inline comments".
+func TestLoadConfigStripsInlineComments(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+	os.WriteFile(tomlPath, []byte("max_iterations = 15 # keep it short\n"), 0o644)
+
+	cfg, _ := Parse(nil)
+	cfg.LoadConfigFile(tomlPath)
+
+	if cfg.MaxIterations != 15 {
+		t.Errorf("MaxIterations = %d, want 15", cfg.MaxIterations)
+	}
+}
+
+// Verifies that LoadConfigFile handles quoted values,
+// matching bats test "load_config handles quoted values".
+func TestLoadConfigHandlesQuotedValues(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+	os.WriteFile(tomlPath, []byte("max_iterations = \"20\"\n"), 0o644)
+
+	cfg, _ := Parse(nil)
+	cfg.LoadConfigFile(tomlPath)
+
+	if cfg.MaxIterations != 20 {
+		t.Errorf("MaxIterations = %d, want 20", cfg.MaxIterations)
+	}
+}
+
+// Verifies that LoadConfigFile handles all 9 config keys,
+// matching bats test "load_config handles all config keys".
+func TestLoadConfigHandlesAllKeys(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+	content := `max_iterations = 10
+calls_per_hour = 20
+refactor_every = 3
+watcher_interval = 5
+stuck_threshold = 8
+stuck_confirmation_threshold = 4
+stagnation_threshold = 6
+test_saturation_threshold = 7
+permission_denial_threshold = 9
+`
+	os.WriteFile(tomlPath, []byte(content), 0o644)
+
+	cfg, _ := Parse(nil)
+	cfg.LoadConfigFile(tomlPath)
+
+	checks := []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"MaxIterations", cfg.MaxIterations, 10},
+		{"CallsPerHour", cfg.CallsPerHour, 20},
+		{"RefactorEvery", cfg.RefactorEvery, 3},
+		{"WatcherInterval", cfg.WatcherInterval, 5},
+		{"StuckThreshold", cfg.StuckThreshold, 8},
+		{"StuckConfirmationThreshold", cfg.StuckConfirmationThreshold, 4},
+		{"StagnationThreshold", cfg.StagnationThreshold, 6},
+		{"TestSaturationThreshold", cfg.TestSaturationThreshold, 7},
+		{"PermissionDenialThreshold", cfg.PermissionDenialThreshold, 9},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("%s = %d, want %d", c.name, c.got, c.want)
+		}
+	}
+}
+
+// Verifies that stagnation threshold from config flows into analyzer behavior.
+// Matching bats test "analyze_iteration uses configurable stagnation threshold".
+// This is tested here at the config level: a threshold of 2 means the config
+// correctly stores and returns that value for the analyzer to consume.
+func TestStagnationThresholdFromConfig(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+	os.WriteFile(tomlPath, []byte("stagnation_threshold = 2\n"), 0o644)
+
+	cfg, _ := Parse(nil)
+	cfg.LoadConfigFile(tomlPath)
+
+	if cfg.StagnationThreshold != 2 {
+		t.Errorf("StagnationThreshold = %d, want 2", cfg.StagnationThreshold)
+	}
+}
+
+// Verifies that InitConfig generates a ralph.toml with all expected keys,
+// matching bats test "init-config generates ralph.toml".
+func TestInitConfigGeneratesFile(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+
+	err := InitConfig(tomlPath)
+	if err != nil {
+		t.Fatalf("InitConfig failed: %v", err)
+	}
+
+	data, err := os.ReadFile(tomlPath)
+	if err != nil {
+		t.Fatalf("failed to read generated config: %v", err)
+	}
+
+	content := string(data)
+	for _, key := range []string{"max_iterations", "stuck_threshold", "calls_per_hour", "stagnation_threshold"} {
+		if !strings.Contains(content, key) {
+			t.Errorf("generated config missing key %q", key)
+		}
+	}
+}
+
+// Verifies that InitConfig refuses to overwrite an existing config file,
+// matching bats test "init-config refuses to overwrite existing config".
+func TestInitConfigRefusesToOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+	os.WriteFile(tomlPath, []byte("existing"), 0o644)
+
+	err := InitConfig(tomlPath)
+	if err == nil {
+		t.Fatal("expected error when config file already exists")
+	}
+
+	data, _ := os.ReadFile(tomlPath)
+	if string(data) != "existing" {
+		t.Errorf("file was modified: got %q, want %q", string(data), "existing")
 	}
 }

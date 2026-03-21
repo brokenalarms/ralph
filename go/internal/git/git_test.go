@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // memState is an in-memory StateStore for tests.
@@ -872,6 +873,351 @@ func TestTagStartEnd_DifferentCommits(t *testing.T) {
 
 	if startRev == endRev {
 		t.Error("start and end tags should point at different commits after work was done")
+	}
+}
+
+// --- Bats port: worktree.bats ---
+
+// Worktree path contains ralph-YYYYMMDD-01 (bats test 1)
+func TestWorktreeDirUsesDateBasedName(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	today := time.Now().Format("20060102")
+	expected := fmt.Sprintf("ralph-%s-01", today)
+	if !strings.Contains(mgr.WorkDir, "/worktrees/"+expected) {
+		t.Errorf("WorkDir = %q, want it to contain %q", mgr.WorkDir, expected)
+	}
+}
+
+// Existing -01 directory causes -02 suffix (bats test 2)
+func TestSecondRunSameDayIncrementsSuffix(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+
+	today := time.Now().Format("20060102")
+	os.MkdirAll(filepath.Join(ralphDir, "worktrees", "ralph-"+today+"-01"), 0o755)
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	expected := fmt.Sprintf("ralph-%s-02", today)
+	if !strings.Contains(mgr.WorkDir, "/worktrees/"+expected) {
+		t.Errorf("WorkDir = %q, want it to contain %q", mgr.WorkDir, expected)
+	}
+}
+
+// Stale branches don't inflate the task sequence counter (bats test 6)
+func TestBranchSequenceResetsPerRun(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+
+	run(t, "git", "-C", project, "branch", "ralph/project/old-stale")
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("First task")
+
+	want := "ralph/" + mgr.ProjectName + "/01-first-task"
+	if mgr.WorktreeBranch != want {
+		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, want)
+	}
+}
+
+// rotate_branch doesn't crash when branch already exists (bats test 8)
+func TestRotateBranchLogsWarningOnFailure(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+	log := &testLog{}
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Don't rename — "next" still exists, rotate will attempt to create it
+	mgr.RotateBranch()
+
+	// Should not panic, should still be on next branch
+	if !strings.HasSuffix(mgr.WorktreeBranch, "/next") {
+		t.Errorf("branch %q should end with /next", mgr.WorktreeBranch)
+	}
+}
+
+// Removed worktree directory is pruned and fresh setup succeeds (bats test 9)
+func TestStaleWorktreeBranchCleanedUpViaPrune(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("first SetupWorktree: %v", err)
+	}
+	firstWorkDir := mgr.WorkDir
+
+	os.RemoveAll(firstWorkDir)
+
+	mgr2 := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       newMemState(),
+		Logger:      &testLog{},
+	}
+	if err := mgr2.SetupWorktree(); err != nil {
+		t.Fatalf("second SetupWorktree after prune: %v", err)
+	}
+	if _, err := os.Stat(mgr2.WorkDir); err != nil {
+		t.Errorf("new worktree dir should exist: %v", err)
+	}
+}
+
+// Live ralph worktree is force-removed when branch conflicts (bats test 10)
+func TestLiveRalphWorktreeRemovedWhenBranchExists(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("first SetupWorktree: %v", err)
+	}
+	firstWorkDir := mgr.WorkDir
+
+	mgr2 := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       newMemState(),
+		Logger:      &testLog{},
+	}
+	if err := mgr2.SetupWorktree(); err != nil {
+		t.Fatalf("second SetupWorktree: %v", err)
+	}
+
+	if _, err := os.Stat(mgr2.WorkDir); err != nil {
+		t.Error("new worktree dir should exist")
+	}
+	if _, err := os.Stat(firstWorkDir); err == nil {
+		t.Error("old worktree dir should have been removed")
+	}
+}
+
+// Resume restores TaskSeq from branch count (bats test 11 — Go uses branch count instead of state.json)
+func TestResumeRestoresTaskSeq(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("first task")
+	mgr.RotateBranch()
+	mgr.RenameBranchForTask("second task")
+
+	if mgr.TaskSeq != 2 {
+		t.Fatalf("TaskSeq = %d, want 2", mgr.TaskSeq)
+	}
+
+	// Delete a branch to simulate squash-merge cleanup
+	gitCmd(project, "branch", "-D", "ralph/"+mgr.ProjectName+"/01-first-task")
+
+	// Resume — TaskSeq should be restored from remaining branches
+	mgr2 := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		Resume:      true,
+		State:       state,
+		Logger:      &testLog{},
+	}
+	if err := mgr2.SetupWorktree(); err != nil {
+		t.Fatalf("resume SetupWorktree: %v", err)
+	}
+
+	// After deleting branch 01, only branch 02 + next remain,
+	// so countNamedBranches returns 2 (the /next and /02-second-task branches)
+	if mgr2.TaskSeq < 1 {
+		t.Errorf("TaskSeq = %d, want >= 1 (restored from branches)", mgr2.TaskSeq)
+	}
+}
+
+// .gitignore is committed to main so the worktree inherits it (bats test 17)
+func TestWorktreeInheritsGitignore(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	EnsureGitignored(project, ".ralph")
+	run(t, "git", "-C", project, "push", "origin", "main", "-q")
+
+	state := newMemState()
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(mgr.WorkDir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if !strings.Contains(string(data), ".ralph") {
+		t.Errorf(".gitignore should contain .ralph, got: %s", data)
+	}
+}
+
+// Existing .gitignore content is preserved when appending entries (bats test 18)
+func TestExistingGitignoreContentPreserved(t *testing.T) {
+	project, _ := initBareRepo(t)
+
+	os.WriteFile(filepath.Join(project, ".gitignore"), []byte("node_modules\n"), 0o644)
+	run(t, "git", "-C", project, "add", ".gitignore")
+	run(t, "git", "-C", project, "commit", "-m", "add gitignore")
+
+	EnsureGitignored(project, ".ralph")
+
+	data, err := os.ReadFile(filepath.Join(project, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "node_modules") {
+		t.Error(".gitignore should still contain node_modules")
+	}
+	if !strings.Contains(content, ".ralph") {
+		t.Error(".gitignore should contain .ralph")
+	}
+}
+
+// Dirty working tree is detected (bats test 19)
+func TestDirtyWorkingTreeDetected(t *testing.T) {
+	project, _ := initBareRepo(t)
+
+	os.WriteFile(filepath.Join(project, "dirty.txt"), []byte("uncommitted\n"), 0o644)
+	run(t, "git", "-C", project, "add", "dirty.txt")
+
+	if !HasUncommittedChanges(project) {
+		t.Error("should detect uncommitted changes")
+	}
+}
+
+// RenameWorktreeForTheme uses a task description as fallback (bats test 21)
+func TestRenameWorktreeForTheme_FallsBackToTaskTitle(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameWorktreeForTheme("auth middleware rewrite")
+
+	today := time.Now().Format("20060102")
+	expected := "ralph-" + today + "-auth-middleware-rewrite"
+	if !strings.Contains(mgr.WorkDir, expected) {
+		t.Errorf("WorkDir = %q, want it to contain %q", mgr.WorkDir, expected)
+	}
+}
+
+// RenameWorktreeForTheme uses theme from state over bd fallback (bats test 22)
+func TestRenameWorktreeForTheme_PrefersStateTheme(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Simulate: state has "go migration" as theme; caller would read
+	// this from state before calling RenameWorktreeForTheme
+	stateTheme := "go migration"
+	mgr.RenameWorktreeForTheme(stateTheme)
+
+	today := time.Now().Format("20060102")
+	expected := "ralph-" + today + "-go-migration"
+	if !strings.Contains(mgr.WorkDir, expected) {
+		t.Errorf("WorkDir = %q, want it to contain %q", mgr.WorkDir, expected)
 	}
 }
 

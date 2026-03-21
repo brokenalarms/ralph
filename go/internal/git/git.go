@@ -498,6 +498,43 @@ func findWorktreeForBranch(dir, branch string) string {
 	return ""
 }
 
+// EnsureGitignored adds an entry to .gitignore if it's not already present,
+// then commits the change. Preserves existing content.
+func EnsureGitignored(projectDir, entry string) {
+	gitignorePath := filepath.Join(projectDir, ".gitignore")
+	existing := ""
+	if data, err := os.ReadFile(gitignorePath); err == nil {
+		existing = string(data)
+	}
+
+	found := false
+	for _, line := range strings.Split(existing, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == entry || trimmed == entry+"/" || trimmed == entry+"/*" {
+			found = true
+			break
+		}
+	}
+	if found {
+		return
+	}
+
+	existing += entry + "\n"
+	os.WriteFile(gitignorePath, []byte(existing), 0o644)
+
+	if isGitRepo(projectDir) {
+		gitCmd(projectDir, "add", ".gitignore")
+		gitCmd(projectDir, "commit", "-m", "Add "+entry+" to .gitignore")
+	}
+}
+
+// HasUncommittedChanges returns true if the working tree has staged or
+// unstaged changes (git diff --quiet fails).
+func HasUncommittedChanges(dir string) bool {
+	return gitCmdErr(dir, "diff", "--quiet") != nil ||
+		gitCmdErr(dir, "diff", "--cached", "--quiet") != nil
+}
+
 // HeadRev returns the current HEAD commit hash, or empty string on error.
 func HeadRev(dir string) string {
 	return gitOutput(dir, "rev-parse", "HEAD")
