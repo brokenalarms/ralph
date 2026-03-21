@@ -93,8 +93,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		// differs from the last one. If it's the same task, stay on
 		// the existing task branch so additional commits land there.
 		if !strings.HasSuffix(l.git.WorktreeBranch, "/next") {
-			nextTask, _ := l.cfg.TaskBackend.GetNextTask()
-			nextTaskID, _ := l.cfg.TaskBackend.GetNextTaskID()
+			nextTaskID, nextTask, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 			if l.isNewTask(nextTaskID, nextTask) {
 				l.git.RotateBranch()
 			} else {
@@ -160,8 +159,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		runIteration++
 		iteration++
 
-		nextTask, _ := l.cfg.TaskBackend.GetNextTask()
-		taskID, _ := l.cfg.TaskBackend.GetNextTaskID()
+		taskID, nextTask, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 		taskChanged := l.isNewTask(taskID, nextTask)
 
 		if runIteration > 1 && taskChanged {
@@ -257,6 +255,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		completed, _ = l.cfg.TaskBackend.CountCompleted()
+		total, _ = l.cfg.TaskBackend.CountTotal()
 		l.logger.Task("Iteration %d complete (%dm%ds). %d/%d tasks done.",
 			runIteration, int(elapsed.Minutes()), int(elapsed.Seconds())%60, completed, total)
 

@@ -249,20 +249,22 @@ func parseFirstIssue(jsonStr string) (bdIssue, bool) {
 	return issues[0], true
 }
 
-func (b *BD) GetNextTask() (string, error) {
+func (b *BD) GetNextTaskInfo() (string, string, error) {
 	issue, err := b.getNextIssue()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return issue.Title, nil
+	return issue.ID, issue.Title, nil
+}
+
+func (b *BD) GetNextTask() (string, error) {
+	_, title, err := b.GetNextTaskInfo()
+	return title, err
 }
 
 func (b *BD) GetNextTaskID() (string, error) {
-	issue, err := b.getNextIssue()
-	if err != nil {
-		return "", err
-	}
-	return issue.ID, nil
+	id, _, err := b.GetNextTaskInfo()
+	return id, err
 }
 
 func (b *BD) HasTasks() (bool, error) {

@@ -73,6 +73,11 @@ func (c *Checklist) GetNextTaskID() (string, error) {
 	return "", nil
 }
 
+func (c *Checklist) GetNextTaskInfo() (string, string, error) {
+	title, err := c.GetNextTask()
+	return "", title, err
+}
+
 func (c *Checklist) HasTasks() (bool, error) {
 	total, err := c.CountTotal()
 	if err != nil {

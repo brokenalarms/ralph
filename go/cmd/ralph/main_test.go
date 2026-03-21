@@ -38,6 +38,7 @@ func (s *stubBackend) CountRemaining() (int, error)               { return s.rem
 func (s *stubBackend) CountTotal() (int, error)                   { return s.total, nil }
 func (s *stubBackend) GetNextTask() (string, error)               { return "", nil }
 func (s *stubBackend) GetNextTaskID() (string, error)             { return "", nil }
+func (s *stubBackend) GetNextTaskInfo() (string, string, error)   { return "", "", nil }
 func (s *stubBackend) HasTasks() (bool, error)                    { return s.total > 0, nil }
 func (s *stubBackend) NeedsPlanning() (bool, error)               { return false, nil }
 func (s *stubBackend) PlanningSucceeded() (bool, error)           { return true, nil }

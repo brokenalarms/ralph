@@ -492,6 +492,65 @@ func TestBD_Init_FallbackWhenBinaryNotFound(t *testing.T) {
 	}
 }
 
+// Proves: GetNextTaskInfo returns both id and title from a single bd query,
+// ensuring the loop gets a consistent task identity without race conditions.
+func TestBD_GetNextTaskInfo_ReturnsConsistentPair(t *testing.T) {
+	callCount := 0
+	runner := func(dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		switch args[0] {
+		case "list":
+			callCount++
+			joined := strings.Join(args, " ")
+			if strings.Contains(joined, "in_progress") && strings.Contains(joined, "--json") {
+				return "[]", nil
+			}
+			return "[]", nil
+		case "ready":
+			callCount++
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[{"id":"task-42","title":"Implement login"}]`, nil
+			}
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	id, title, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "task-42" {
+		t.Errorf("id = %q, want %q", id, "task-42")
+	}
+	if title != "Implement login" {
+		t.Errorf("title = %q, want %q", title, "Implement login")
+	}
+	if callCount != 2 {
+		t.Errorf("expected 2 bd calls (list + ready), got %d", callCount)
+	}
+}
+
+// Proves: GetNextTaskInfo prefers in-progress tasks over ready ones.
+func TestBD_GetNextTaskInfo_PrefersInProgress(t *testing.T) {
+	runner := mockBD(
+		"3",
+		map[string]string{"open": "1", "closed": "1", "in_progress": "1"},
+		`[{"id":"wip-99","title":"Resume this"}]`,
+		`[{"id":"new-1","title":"Start fresh"}]`,
+	)
+	b := setupBD(t, runner)
+	id, title, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "wip-99" || title != "Resume this" {
+		t.Errorf("expected wip-99/Resume this, got %s/%s", id, title)
+	}
+}
+
 // Proves: counts return zero when bd commands fail.
 func TestBD_Counts_OnError(t *testing.T) {
 	failing := func(dir string, args ...string) (string, error) {

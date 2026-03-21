@@ -62,6 +62,7 @@ func (m *mutableBackend) CountRemaining() (int, error)         { m.mu.Lock(); de
 func (m *mutableBackend) CountTotal() (int, error)             { m.mu.Lock(); defer m.mu.Unlock(); return m.total, nil }
 func (m *mutableBackend) GetNextTask() (string, error)         { m.mu.Lock(); defer m.mu.Unlock(); return m.nextTask, nil }
 func (m *mutableBackend) GetNextTaskID() (string, error)       { m.mu.Lock(); defer m.mu.Unlock(); return m.nextID, nil }
+func (m *mutableBackend) GetNextTaskInfo() (string, string, error) { m.mu.Lock(); defer m.mu.Unlock(); return m.nextID, m.nextTask, nil }
 func (m *mutableBackend) HasTasks() (bool, error)              { m.mu.Lock(); defer m.mu.Unlock(); return m.total > 0, nil }
 func (m *mutableBackend) NeedsPlanning() (bool, error)         { return false, nil }
 func (m *mutableBackend) PlanningSucceeded() (bool, error)     { return true, nil }
@@ -83,6 +84,7 @@ func (s *stubBackend) CountRemaining() (int, error)         { return s.remaining
 func (s *stubBackend) CountTotal() (int, error)             { return s.total, nil }
 func (s *stubBackend) GetNextTask() (string, error)         { return s.nextTask, nil }
 func (s *stubBackend) GetNextTaskID() (string, error)       { return s.nextID, nil }
+func (s *stubBackend) GetNextTaskInfo() (string, string, error) { return s.nextID, s.nextTask, nil }
 func (s *stubBackend) HasTasks() (bool, error)              { return s.total > 0, nil }
 func (s *stubBackend) NeedsPlanning() (bool, error)         { return false, nil }
 func (s *stubBackend) PlanningSucceeded() (bool, error)     { return true, nil }
@@ -541,6 +543,80 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 	}
 	if !gm.BranchRenamed {
 		t.Error("BranchRenamed should be true to prevent re-renaming")
+	}
+}
+
+// Verifies that tasks added mid-run are picked up by the loop on the next
+// iteration: the task backend is queried fresh, so new tasks appear in counts
+// and get selected for execution.
+func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	iterationCount := 0
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+		label:     "checklist",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			if iterationCount == 1 {
+				// Simulate: task A completes and a new task B is added externally
+				backend.mu.Lock()
+				backend.completed = 1
+				backend.remaining = 1
+				backend.total = 2
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+				backend.mu.Unlock()
+			} else if iterationCount == 2 {
+				// Task B completes, no more tasks
+				backend.mu.Lock()
+				backend.completed = 2
+				backend.remaining = 0
+				backend.total = 2
+				backend.mu.Unlock()
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if iterationCount != 2 {
+		t.Errorf("expected 2 iterations (A then B), got %d", iterationCount)
+	}
+
+	finalState, _ := st.Load()
+	if finalState.Status != "completed" {
+		t.Errorf("expected status 'completed', got %q", finalState.Status)
 	}
 }
 
