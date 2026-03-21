@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -413,16 +414,24 @@ func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir st
 		return 1
 	}
 
+	stopTitle := make(chan struct{})
+	var stopOnce sync.Once
+	closeTitle := func() { stopOnce.Do(func() { close(stopTitle) }) }
+	go sess.PaneTitle().Run(stopTitle)
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
+		closeTitle()
 		sess.Kill()
 	}()
 
 	if err := sess.Attach(); err != nil {
+		closeTitle()
 		return 1
 	}
+	closeTitle()
 	return 0
 }
 
