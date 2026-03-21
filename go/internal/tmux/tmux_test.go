@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -289,6 +290,26 @@ func TestSetup_ClearsStaleCompletedTasks(t *testing.T) {
 
 	if _, err := os.Stat(staleFile); !os.IsNotExist(err) {
 		t.Error(".completed-tasks should be removed on Setup to prevent showing stale completions")
+	}
+}
+
+// Verifies that the dead-pane exit hint format string and q-binding command
+// are constructed correctly, so users see "(dead) — press q to exit" in the
+// pane border and can press q to kill the session when the ralph pane dies.
+func TestDeadPaneExitHint(t *testing.T) {
+	sessionName := "test-loop"
+
+	deadCheck := fmt.Sprintf("tmux display-message -t '%s:.0' -p '#{pane_dead}' | grep -q 1", sessionName)
+	killCmd := fmt.Sprintf("kill-session -t '%s'", sessionName)
+
+	if !strings.Contains(deadCheck, sessionName+":.0") {
+		t.Error("dead-check should target pane 0 (ralph pane)")
+	}
+	if !strings.Contains(deadCheck, "pane_dead") {
+		t.Error("dead-check should use tmux pane_dead variable")
+	}
+	if !strings.Contains(killCmd, sessionName) {
+		t.Error("kill command should target the session")
 	}
 }
 

@@ -118,9 +118,14 @@ func (s *Session) createSession() error {
 	tmuxCmd("select-pane", "-t", s.Name+":.1", "-T", "stream") //nolint:errcheck
 	tmuxCmd("select-pane", "-t", s.Name+":.2", "-T", "plan")   //nolint:errcheck
 
-	tmuxCmd("set-option", "-t", s.Name, "pane-border-status", "top")            //nolint:errcheck
-	tmuxCmd("set-option", "-t", s.Name, "pane-border-format", " #{pane_title} ") //nolint:errcheck
-	tmuxCmd("set-option", "-t", s.Name, "remain-on-exit", "on")                 //nolint:errcheck
+	tmuxCmd("set-option", "-t", s.Name, "pane-border-status", "top")                                                          //nolint:errcheck
+	tmuxCmd("set-option", "-t", s.Name, "pane-border-format", "#{?pane_dead, #{pane_title} (dead) — press q to exit , #{pane_title} }") //nolint:errcheck
+	tmuxCmd("set-option", "-t", s.Name, "remain-on-exit", "on")                                                            //nolint:errcheck
+
+	// Bind q to kill the session when the main ralph pane is dead.
+	deadCheck := fmt.Sprintf("tmux display-message -t '%s:.0' -p '#{pane_dead}' | grep -q 1", s.Name)
+	killCmd := fmt.Sprintf("kill-session -t '%s'", s.Name)
+	tmuxCmd("bind-key", "-T", "root", "q", "if-shell", deadCheck, killCmd) //nolint:errcheck
 
 	tmuxCmd("select-pane", "-t", s.Name+":.0") //nolint:errcheck
 
