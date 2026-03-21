@@ -1052,3 +1052,93 @@ func run(t *testing.T, name string, args ...string) {
 		t.Fatalf("%s %v failed: %v\n%s", name, args, err, out)
 	}
 }
+
+// Verifies that single-branch mode skips branch rotation on task change,
+// keeping all task commits on the initial worktree branch.
+func TestLoop_SingleBranchSkipsRotation(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	st.Write("last_task", "previous task")
+	st.Write("last_task_id", "ralph-old")
+
+	backend := &stubBackend{
+		remaining: 0,
+		completed: 1,
+		total:     1,
+		nextTask:  "new task",
+		nextID:    "ralph-new",
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/myproject/next",
+		ProjectName:    "myproject",
+		BranchStrategy: git.BranchSingle,
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	_ = l.Run(context.Background())
+
+	// Single mode — branch should NOT have been rotated even though task changed
+	if gm.WorktreeBranch != "ralph/myproject/next" {
+		t.Errorf("expected branch to stay as ralph/myproject/next in single mode, got %q", gm.WorktreeBranch)
+	}
+}
+
+// Verifies that single-branch mode skips branch rotation on resume even when
+// a different task is next, keeping the existing branch.
+func TestLoop_SingleBranchSkipsRotationOnResume(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	st.Write("last_task", "old task")
+	st.Write("last_task_id", "ralph-old")
+
+	backend := &stubBackend{
+		remaining: 0,
+		completed: 1,
+		total:     1,
+		nextTask:  "different task",
+		nextID:    "ralph-new",
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/myproject/01-old-task",
+		ProjectName:    "myproject",
+		BranchStrategy: git.BranchSingle,
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	_ = l.Run(context.Background())
+
+	// Single mode on resume — branch stays put
+	if gm.WorktreeBranch != "ralph/myproject/01-old-task" {
+		t.Errorf("expected branch to stay as ralph/myproject/01-old-task in single mode, got %q", gm.WorktreeBranch)
+	}
+}

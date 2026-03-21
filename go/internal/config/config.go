@@ -33,6 +33,7 @@ type Config struct {
 	StagnationThreshold        int
 	TestSaturationThreshold    int
 	PermissionDenialThreshold  int
+	BranchStrategy             string
 
 	cliSet map[string]bool
 }
@@ -55,6 +56,7 @@ func Defaults() Config {
 		StagnationThreshold:        3,
 		TestSaturationThreshold:    3,
 		PermissionDenialThreshold:  3,
+		BranchStrategy:             "single",
 	}
 }
 
@@ -226,6 +228,18 @@ func Parse(args []string) (Config, error) {
 			cfg.AutoMerge = true
 			i++
 
+		case "--branch-strategy":
+			v, err := requireArg(args, i)
+			if err != nil {
+				return cfg, err
+			}
+			if v != "single" && v != "stacked" {
+				return cfg, fmt.Errorf("invalid value for %s: %q (must be \"single\" or \"stacked\")", args[i], v)
+			}
+			cfg.BranchStrategy = v
+			cfg.cliSet["branch_strategy"] = true
+			i += 2
+
 		case "--idle-timeout":
 			v, err := requireArg(args, i)
 			if err != nil {
@@ -335,6 +349,14 @@ func (c *Config) LoadConfigFile(path string) error {
 			continue
 		}
 
+		switch key {
+		case "branch_strategy":
+			if value == "single" || value == "stacked" {
+				c.BranchStrategy = value
+			}
+			continue
+		}
+
 		n, err := strconv.Atoi(value)
 		if err != nil {
 			continue
@@ -388,6 +410,7 @@ func InitConfig(path string) error {
 	}
 
 	var b strings.Builder
+	fmt.Fprintf(&b, "branch_strategy = single\n")
 	for _, k := range configKeys {
 		fmt.Fprintf(&b, "%s = %d\n", k.Key, k.Default)
 	}

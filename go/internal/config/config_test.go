@@ -147,6 +147,9 @@ func TestAllFlags(t *testing.T) {
 	if !cfg.AutoMerge {
 		t.Error("AutoMerge should be true")
 	}
+	if cfg.BranchStrategy != "single" {
+		t.Errorf("BranchStrategy = %q, want \"single\" (default)", cfg.BranchStrategy)
+	}
 }
 
 // Verifies that --auto-merge flag defaults to false and is set to true when
@@ -601,5 +604,70 @@ func TestInitConfigRefusesToOverwrite(t *testing.T) {
 	data, _ := os.ReadFile(tomlPath)
 	if string(data) != "existing" {
 		t.Errorf("file was modified: got %q, want %q", string(data), "existing")
+	}
+}
+
+// Verifies that --branch-strategy defaults to "single" and accepts both
+// valid values, rejecting anything else.
+func TestBranchStrategyFlag(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.BranchStrategy != "single" {
+		t.Errorf("BranchStrategy default = %q, want \"single\"", cfg.BranchStrategy)
+	}
+
+	cfg, err = Parse([]string{"--branch-strategy", "stacked"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.BranchStrategy != "stacked" {
+		t.Errorf("BranchStrategy = %q, want \"stacked\"", cfg.BranchStrategy)
+	}
+
+	cfg, err = Parse([]string{"--branch-strategy", "single"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.BranchStrategy != "single" {
+		t.Errorf("BranchStrategy = %q, want \"single\"", cfg.BranchStrategy)
+	}
+
+	_, err = Parse([]string{"--branch-strategy", "invalid"})
+	if err == nil {
+		t.Fatal("expected error for invalid branch strategy")
+	}
+
+	_, err = Parse([]string{"--branch-strategy"})
+	if err == nil {
+		t.Fatal("expected error for missing branch strategy value")
+	}
+}
+
+// Verifies that branch_strategy in ralph.toml is loaded and CLI overrides it.
+func TestBranchStrategyConfigFile(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+	os.WriteFile(tomlPath, []byte("branch_strategy = stacked\n"), 0o644)
+
+	cfg, _ := Parse(nil)
+	cfg.LoadConfigFile(tomlPath)
+
+	if cfg.BranchStrategy != "stacked" {
+		t.Errorf("BranchStrategy = %q, want \"stacked\" from config file", cfg.BranchStrategy)
+	}
+
+	cfg, _ = Parse([]string{"--branch-strategy", "single"})
+	cfg.LoadConfigFile(tomlPath)
+
+	if cfg.BranchStrategy != "single" {
+		t.Errorf("BranchStrategy = %q, want \"single\" (CLI should override config file)", cfg.BranchStrategy)
 	}
 }

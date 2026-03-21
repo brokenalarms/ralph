@@ -931,3 +931,107 @@ func TestRenameWorktreeForTheme_PrefersStateTheme(t *testing.T) {
 		t.Errorf("WorkDir = %q, want it to contain %q", mgr.WorkDir, expected)
 	}
 }
+
+// --- BranchStrategy tests ---
+
+// Single-branch mode skips RenameBranchForTask entirely, keeping the initial
+// worktree branch name unchanged across all tasks.
+func TestRenameBranchForTask_SkippedInSingleMode(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchSingle,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	origBranch := mgr.WorktreeBranch
+	mgr.RenameBranchForTask("Some task")
+
+	if mgr.WorktreeBranch != origBranch {
+		t.Errorf("branch should stay as %q in single mode, got %q", origBranch, mgr.WorktreeBranch)
+	}
+	if mgr.BranchRenamed {
+		t.Error("BranchRenamed should be false in single mode")
+	}
+	if mgr.TaskSeq != 0 {
+		t.Errorf("TaskSeq should stay 0 in single mode, got %d", mgr.TaskSeq)
+	}
+}
+
+// Single-branch mode skips RotateBranch entirely, keeping the same branch
+// across task transitions instead of creating per-task branches.
+func TestRotateBranch_SkippedInSingleMode(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchSingle,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	origBranch := mgr.WorktreeBranch
+	mgr.RotateBranch()
+
+	if mgr.WorktreeBranch != origBranch {
+		t.Errorf("branch should stay as %q in single mode, got %q", origBranch, mgr.WorktreeBranch)
+	}
+}
+
+// Stacked mode (explicit) still rotates and renames branches per task.
+func TestBranchStrategy_StackedBehavesLikeDefault(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchStacked,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	origBranch := mgr.WorktreeBranch
+	mgr.RenameBranchForTask("First task")
+
+	if mgr.WorktreeBranch == origBranch {
+		t.Error("stacked mode should rename the branch")
+	}
+	if !mgr.BranchRenamed {
+		t.Error("BranchRenamed should be true after rename in stacked mode")
+	}
+	if mgr.TaskSeq != 1 {
+		t.Errorf("TaskSeq should be 1, got %d", mgr.TaskSeq)
+	}
+
+	taskBranch := mgr.WorktreeBranch
+	mgr.RotateBranch()
+
+	if mgr.WorktreeBranch == taskBranch {
+		t.Error("stacked mode should rotate the branch")
+	}
+	if !strings.HasSuffix(mgr.WorktreeBranch, "/next") {
+		t.Errorf("rotated branch %q should end with /next", mgr.WorktreeBranch)
+	}
+}

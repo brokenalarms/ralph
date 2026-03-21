@@ -25,6 +25,14 @@ type Log interface {
 	Error(format string, args ...any)
 }
 
+// BranchStrategy controls how branches are managed across tasks.
+type BranchStrategy string
+
+const (
+	BranchSingle  BranchStrategy = "single"
+	BranchStacked BranchStrategy = "stacked"
+)
+
 // RebaseRecovery represents the user's chosen recovery action when rebase
 // fails due to squash-merged branches.
 type RebaseRecovery int
@@ -57,6 +65,7 @@ type Manager struct {
 	Resume         bool
 	TaskSeq        int
 	BranchRenamed  bool
+	BranchStrategy BranchStrategy
 	State          StateStore
 	Logger         Log
 }
@@ -247,8 +256,11 @@ func (m *Manager) RenameWorktreeForTheme(themeDesc string) {
 
 // RenameBranchForTask renames the current branch to include a task slug.
 // Each call increments TaskSeq. Only renames once per iteration (tracked by
-// BranchRenamed). Mirrors lib/git.sh rename_branch_for_task.
+// BranchRenamed). Skipped in single-branch mode. Mirrors lib/git.sh rename_branch_for_task.
 func (m *Manager) RenameBranchForTask(taskDesc string) {
+	if m.BranchStrategy == BranchSingle {
+		return
+	}
 	if m.BranchRenamed || m.WorktreeBranch == "" || taskDesc == "" {
 		return
 	}
@@ -274,8 +286,11 @@ func (m *Manager) RenameBranchForTask(taskDesc string) {
 }
 
 // RotateBranch creates a fresh temp branch from the current HEAD, ready for
-// the next iteration. Mirrors lib/git.sh rotate_branch.
+// the next iteration. Skipped in single-branch mode. Mirrors lib/git.sh rotate_branch.
 func (m *Manager) RotateBranch() {
+	if m.BranchStrategy == BranchSingle {
+		return
+	}
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
 		return
 	}

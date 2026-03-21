@@ -80,7 +80,8 @@ func printUsage() {
   --idle-timeout <dur>   Kill session after this idle duration (default: 10m, env RALPH_IDLE_TIMEOUT)
   --idle-timeout-progress <dur>  Shorter idle timeout when progress detected (default: 30s, env RALPH_IDLE_TIMEOUT_PROGRESS)
   --tmux                 Run in tmux 3-pane layout (status / output / plan)
-  --auto-merge           Squash-merge each PR into main after task completion
+  --branch-strategy <s>  Branch strategy: "single" (default) or "stacked" (one branch per task)
+  --auto-merge           Squash-merge each PR into main after task completion (stacked only)
   -h, --help             Show this help
 
 %sEXAMPLES:%s
