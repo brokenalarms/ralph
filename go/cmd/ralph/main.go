@@ -121,12 +121,13 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 
 	// Set up git manager.
 	gm := &git.Manager{
-		ProjectDir:  cfg.ProjectDir,
-		RalphDir:    ralphDir,
-		UseWorktree: cfg.UseWorktree,
-		Resume:      resume,
-		State:       st,
-		Logger:      log,
+		ProjectDir:     cfg.ProjectDir,
+		RalphDir:       ralphDir,
+		UseWorktree:    cfg.UseWorktree,
+		Resume:         resume,
+		BranchStrategy: git.BranchStrategy(cfg.BranchStrategy),
+		State:          st,
+		Logger:         log,
 	}
 	if err := gm.SetupWorktree(); err != nil {
 		log.Error("Worktree setup failed: %v", err)
@@ -322,6 +323,9 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 	}
 	if cfg.AutoMerge {
 		extraArgs = append(extraArgs, "--auto-merge")
+	}
+	if cfg.BranchStrategy != "single" {
+		extraArgs = append(extraArgs, fmt.Sprintf("--branch-strategy %s", cfg.BranchStrategy))
 	}
 	if cfg.UseTmux || os.Getenv("_RALPH_TMUX_SESSION") != "" {
 		extraArgs = append(extraArgs, "--tmux")
