@@ -3,10 +3,12 @@
 ### Testing
 - You MUST run the full test suite before final commit and push and confirm they pass. Never push broken code, even if unrelated to your changes.
 - You MUST NOT run the full test suite on first startup - assume this is correct from the previous run, and don't waste context.
+- Every new feature, behavior, or bug fix requires a test that proves it works. Code without a test is not finished. If you can't test it, rethink the design until you can.
 - Test behavioral logic — code with branching, state, algorithms, or business rules. Don't write tests for static content, markup, configuration, or simple data changes where a build check is sufficient.
 - If the project has an existing test framework, use it. Don't invent ad-hoc test scripts for projects that don't have tests.
 - Tests should assert actual state changes (before/after), not just exit codes or stdout. Testing `returncode == 0` is useless — it only confirms the script didn't crash.
 - Each test needs a preamble comment explaining what user-facing functionality it proves.
+- When porting or rewriting functionality to a new language or framework, the existing test suite is the acceptance criteria. Port every existing test — it must fail against stubs, then pass against the new implementation. New code without equivalent test coverage for the behavior it replaces is not complete.
 - Never consider a task finished if any tests are broken — even unrelated ones. Fix them as part of the task. If user feedback reports a test failure, fix it now — broken tests are never deferred to a future task.
 - Run only scoped and relevant tests during development, not the full suite if possible, unless a change affects interrelated concerns.
 - Unit tests are the building block — prefer them for verifying logic. Visual/UI/integration/end-to-end tests are expensive and should only run when significant UI changes have been made, not as routine verification for non-UI work.

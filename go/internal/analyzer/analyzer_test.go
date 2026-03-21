@@ -228,6 +228,9 @@ func TestIsTestFile(t *testing.T) {
 		{"README.md", false},
 		{"test_helpers.py", true},
 		{"", false},
+		{"tests/helpers/setup.js", true},
+		{"musicXmusicTests/SetupHelper.swift", true},
+		{"musicXmusicUITests/UIFixture.swift", true},
 	}
 
 	for _, tc := range tests {
@@ -266,6 +269,179 @@ func TestPermissionDenialDetailCapped(t *testing.T) {
 	detailLines := strings.Split(r.Detail, "\n")
 	if len(detailLines) > 5 {
 		t.Errorf("detail has %d lines, want <= 5", len(detailLines))
+	}
+}
+
+// Proves: no false positives on normal progress — real source file changes
+// reset both the stagnant and test-only counters to 0.
+func TestNormalProgressResetsCounters(t *testing.T) {
+	a := New()
+	a.stagnantCount = 2
+	a.testOnlyCount = 2
+
+	realChange := IterationState{
+		IterationLog: assistantTextMsg("implementing feature"),
+		HasDiff:      true,
+		ChangedFiles: []string{"src.js"},
+	}
+	r := a.Analyze(realChange)
+	if r.Action != Continue {
+		t.Errorf("real change: got %+v, want Continue", r)
+	}
+	if a.stagnantCount != 0 {
+		t.Errorf("stagnantCount = %d, want 0", a.stagnantCount)
+	}
+	if a.testOnlyCount != 0 {
+		t.Errorf("testOnlyCount = %d, want 0", a.testOnlyCount)
+	}
+}
+
+// Proves: a source file among test files resets the test-only counter,
+// since the agent is making substantive code changes alongside tests.
+func TestMixedTestAndSourceResetsTestOnlyCount(t *testing.T) {
+	a := New()
+	a.testOnlyCount = 2
+
+	mixed := IterationState{
+		IterationLog: assistantTextMsg("add source and tests"),
+		HasDiff:      true,
+		ChangedFiles: []string{"AppTests/HTTPClientTests.swift", "src/HTTPClient.swift"},
+	}
+	r := a.Analyze(mixed)
+	if r.Action != Continue {
+		t.Errorf("mixed change: got %+v, want Continue", r)
+	}
+	if a.testOnlyCount != 0 {
+		t.Errorf("testOnlyCount = %d, want 0", a.testOnlyCount)
+	}
+}
+
+// Proves: files under a top-level test directory (tests/helpers/setup.js)
+// are counted as test files, incrementing the test-only counter.
+func TestFilesUnderTopLevelTestDirCountAsTestFiles(t *testing.T) {
+	a := New()
+
+	testHelper := IterationState{
+		IterationLog: assistantTextMsg("adding test helper"),
+		HasDiff:      true,
+		ChangedFiles: []string{"tests/helpers/setup.js"},
+	}
+	r := a.Analyze(testHelper)
+	if r.Action != Continue {
+		t.Errorf("test helper: got %+v, want Continue", r)
+	}
+	if a.testOnlyCount != 1 {
+		t.Errorf("testOnlyCount = %d, want 1", a.testOnlyCount)
+	}
+}
+
+// Proves: files under suffixed test directories (e.g. musicXmusicTests,
+// musicXmusicUITests) are counted as test files.
+func TestFilesUnderSuffixedTestDirsCountAsTestFiles(t *testing.T) {
+	a := New()
+
+	suffixedTests := IterationState{
+		IterationLog: assistantTextMsg("adding test helpers"),
+		HasDiff:      true,
+		ChangedFiles: []string{"musicXmusicTests/SetupHelper.swift", "musicXmusicUITests/UIFixture.swift"},
+	}
+	r := a.Analyze(suffixedTests)
+	if r.Action != Continue {
+		t.Errorf("suffixed test dirs: got %+v, want Continue", r)
+	}
+	if a.testOnlyCount != 1 {
+		t.Errorf("testOnlyCount = %d, want 1", a.testOnlyCount)
+	}
+}
+
+// Proves: ralph detects repeated identical errors across iterations and
+// halts after 3 occurrences of the same error for the same task key.
+func TestRepeatedErrorFingerprintTriggersHalt(t *testing.T) {
+	a := New()
+	log := assistantTextMsg("Error: cannot find module 'foo'\nsome other output")
+
+	state := IterationState{IterationLog: log, TaskKey: "test-task-1"}
+
+	r := a.Analyze(state)
+	if r.Action == Halt && r.Reason == "repeated_error" {
+		t.Fatal("first call should not trigger repeated_error")
+	}
+
+	r = a.Analyze(state)
+	if r.Action == Halt && r.Reason == "repeated_error" {
+		t.Fatal("second call should not trigger repeated_error")
+	}
+
+	r = a.Analyze(state)
+	if r.Action != Halt || r.Reason != "repeated_error" {
+		t.Errorf("third call: got %+v, want Halt/repeated_error", r)
+	}
+}
+
+// Proves: errors with different volatile parts (timestamps, UUIDs) are
+// treated as the same error after normalization.
+func TestErrorNormalizationCollapsesTimestampsAndUUIDs(t *testing.T) {
+	a := New()
+
+	text1 := assistantTextMsg("Error: 2026-03-20T10:00:00Z request a1b2c3d4-e5f6-7890-abcd-ef1234567890 failed")
+	text2 := assistantTextMsg("Error: 2026-03-21T15:30:00Z request 11111111-2222-3333-4444-555555555555 failed")
+	text3 := assistantTextMsg("Error: 2026-03-22T09:15:00Z request deadbeef-cafe-babe-dead-beefcafebabe failed")
+
+	a.Analyze(IterationState{IterationLog: text1, TaskKey: "test-task-2"})
+	a.Analyze(IterationState{IterationLog: text2, TaskKey: "test-task-2"})
+	r := a.Analyze(IterationState{IterationLog: text3, TaskKey: "test-task-2"})
+
+	if r.Action != Halt || r.Reason != "repeated_error" {
+		t.Errorf("normalized errors: got %+v, want Halt/repeated_error", r)
+	}
+}
+
+// Proves: different errors don't accumulate toward the repeated error
+// threshold, even across many iterations.
+func TestDifferentErrorsDoNotTriggerRepeatedErrorHalt(t *testing.T) {
+	a := New()
+
+	text1 := assistantTextMsg("Error: module 'foo' not found")
+	text2 := assistantTextMsg("Error: syntax error in bar.js")
+	text3 := assistantTextMsg("Error: timeout connecting to database")
+
+	a.Analyze(IterationState{IterationLog: text1, TaskKey: "test-task-3"})
+	a.Analyze(IterationState{IterationLog: text2, TaskKey: "test-task-3"})
+	r := a.Analyze(IterationState{IterationLog: text3, TaskKey: "test-task-3"})
+
+	if r.Action == Halt && r.Reason == "repeated_error" {
+		t.Error("different errors should not trigger repeated_error halt")
+	}
+}
+
+// Proves: clearing error hashes for a task resets the counter, so a new
+// attempt starts fresh without inheriting previous error history.
+func TestErrorHashesClearedOnTaskChange(t *testing.T) {
+	a := New()
+	log := assistantTextMsg("Error: cannot find module 'foo'")
+
+	a.Analyze(IterationState{IterationLog: log, TaskKey: "task-a"})
+	a.Analyze(IterationState{IterationLog: log, TaskKey: "task-a"})
+	a.ClearErrorHashes("task-a")
+
+	r := a.Analyze(IterationState{IterationLog: log, TaskKey: "task-a"})
+	if r.Action == Halt && r.Reason == "repeated_error" {
+		t.Error("error hashes should have been cleared, but repeated_error still triggered")
+	}
+}
+
+// Proves: an empty task key means error fingerprinting is skipped entirely,
+// so repeated errors without a task context don't cause halts.
+func TestNoTaskKeySkipsErrorFingerprinting(t *testing.T) {
+	a := New()
+	log := assistantTextMsg("Error: something broke")
+
+	a.Analyze(IterationState{IterationLog: log, TaskKey: ""})
+	a.Analyze(IterationState{IterationLog: log, TaskKey: ""})
+	r := a.Analyze(IterationState{IterationLog: log, TaskKey: ""})
+
+	if r.Action == Halt && r.Reason == "repeated_error" {
+		t.Error("empty task key should skip error fingerprinting")
 	}
 }
 

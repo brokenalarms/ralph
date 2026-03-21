@@ -1,7 +1,9 @@
 package analyzer
 
 import (
+	"crypto/md5"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -30,6 +32,7 @@ type IterationState struct {
 	HasSignal     bool     // task-complete or all-complete signal detected
 	ChangedFiles  []string // paths of all changed files (diff + commits combined)
 	IterationLog  string   // raw log output from this iteration
+	TaskKey       string   // task identifier for error fingerprinting (empty = skip)
 }
 
 // Analyzer tracks multi-iteration patterns and decides whether to continue,
@@ -38,6 +41,7 @@ type Analyzer struct {
 	stagnantCount int
 	testOnlyCount int
 	stuckCount    int
+	errorHashes   map[string]map[string]int // task_key → error_hash → count
 }
 
 // New creates an Analyzer with zeroed counters, matching ralph.sh's
@@ -90,6 +94,13 @@ func (a *Analyzer) Analyze(state IterationState) Result {
 		return Result{Action: Warn, Reason: "stuck_indicators_detected"}
 	}
 	a.stuckCount = 0
+
+	// --- Repeated error detection: same error fingerprint 3x → halt ---
+	if state.TaskKey != "" {
+		if a.checkRepeatedErrors(parsed.AssistantText, state.TaskKey) {
+			return Result{Action: Halt, Reason: "repeated_error"}
+		}
+	}
 
 	// --- Stagnation: 3 consecutive no-change iterations → halt ---
 	hasChanges := state.HasDiff || state.NewCommits
@@ -144,7 +155,7 @@ func maxToolCallRepeats(toolCalls []string) int {
 }
 
 var testFileBaseRe = regexp.MustCompile(`(?i)(test|spec|_test\.|test_)`)
-var testDirRe = regexp.MustCompile(`(?i)^(tests?|specs?|__tests__)(/|$)`)
+var testDirRe = regexp.MustCompile(`(?i)(tests?|specs?|__tests__)$`)
 
 // isTestFile returns true if a file path looks like a test file, matching
 // ralph.sh's basename and top-directory checks.
@@ -251,4 +262,70 @@ func firstN(s []string, n int) []string {
 		return s
 	}
 	return s[:n]
+}
+
+// --- Error fingerprinting ---
+
+var errorLineRe = regexp.MustCompile(`(?im)(^(Error|Failed|Exception|panic|FATAL|TypeError|SyntaxError|ReferenceError|RuntimeError|ImportError|ValueError):.*|exited with (code|status) [1-9].*|non-zero exit code.*|command failed.*|build failed.*|compilation failed.*|test failed.*)`)
+
+var (
+	timestampRe = regexp.MustCompile(`\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^ ]*`)
+	uuidRe      = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+	lineNumRe   = regexp.MustCompile(`\bline \d+`)
+	colNumRe    = regexp.MustCompile(`:\d+:\d+`)
+	tmpPathRe   = regexp.MustCompile(`/tmp/[^ ]*`)
+	varFolderRe = regexp.MustCompile(`/var/folders/[^ ]*`)
+	multiSpace  = regexp.MustCompile(`\s+`)
+)
+
+func extractErrors(text string) []string {
+	return errorLineRe.FindAllString(text, -1)
+}
+
+func normalizeError(line string) string {
+	line = timestampRe.ReplaceAllString(line, "TIMESTAMP")
+	line = uuidRe.ReplaceAllString(line, "UUID")
+	line = lineNumRe.ReplaceAllString(line, "line N")
+	line = colNumRe.ReplaceAllString(line, ":N:N")
+	line = tmpPathRe.ReplaceAllString(line, "/tmp/TMPPATH")
+	line = varFolderRe.ReplaceAllString(line, "/tmp/TMPPATH")
+	line = multiSpace.ReplaceAllString(line, " ")
+	return strings.TrimSpace(line)
+}
+
+func fingerprintError(normalized string) string {
+	return fmt.Sprintf("%x", md5.Sum([]byte(normalized)))
+}
+
+func (a *Analyzer) checkRepeatedErrors(text, taskKey string) bool {
+	if taskKey == "" {
+		return false
+	}
+	errors := extractErrors(text)
+	if len(errors) == 0 {
+		return false
+	}
+	if a.errorHashes == nil {
+		a.errorHashes = make(map[string]map[string]int)
+	}
+	if a.errorHashes[taskKey] == nil {
+		a.errorHashes[taskKey] = make(map[string]int)
+	}
+	for _, errLine := range errors {
+		normalized := normalizeError(errLine)
+		hash := fingerprintError(normalized)
+		a.errorHashes[taskKey][hash]++
+		if a.errorHashes[taskKey][hash] >= 3 {
+			return true
+		}
+	}
+	return false
+}
+
+// ClearErrorHashes removes all recorded error hashes for a given task key,
+// resetting the repeated-error counter for that task.
+func (a *Analyzer) ClearErrorHashes(taskKey string) {
+	if a.errorHashes != nil {
+		delete(a.errorHashes, taskKey)
+	}
 }
