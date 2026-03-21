@@ -285,6 +285,71 @@ func TestSetupWorktree_ResumeRestoresTaskSeqFromState(t *testing.T) {
 	}
 }
 
+// Resume followed by RotateBranch preserves the previous task branch as a
+// separate ref, so the next task creates a new stacked branch instead of
+// renaming the existing one.
+func TestResumeRotate_PreservesPreviousBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+	log := &testLog{}
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("first task")
+	writeFile(t, mgr.WorkDir, "first.txt", "work\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "first task work")
+	firstBranch := mgr.WorktreeBranch
+
+	// Simulate resume: new Manager with Resume=true
+	mgr2 := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		Resume:      true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr2.SetupWorktree(); err != nil {
+		t.Fatalf("resume SetupWorktree: %v", err)
+	}
+
+	// Rotate to create a stacked branch (simulates what Loop.Run does on resume)
+	mgr2.RotateBranch()
+	mgr2.RenameBranchForTask("second task")
+
+	secondBranch := mgr2.WorktreeBranch
+
+	if firstBranch == secondBranch {
+		t.Errorf("branches should differ: first=%q, second=%q", firstBranch, secondBranch)
+	}
+
+	// Previous task branch should still exist as a separate ref
+	if !refExists(project, firstBranch) {
+		t.Errorf("first task branch %q should still exist after rotation", firstBranch)
+	}
+
+	if !refExists(project, secondBranch) {
+		t.Errorf("second task branch %q should exist", secondBranch)
+	}
+
+	// Both branches should share the same base commit (stacked)
+	firstHead := gitOutput(mgr2.WorkDir, "rev-parse", firstBranch)
+	secondBase := gitOutput(mgr2.WorkDir, "merge-base", firstBranch, secondBranch)
+	if firstHead != secondBase {
+		t.Error("second branch should be stacked on top of first branch's HEAD")
+	}
+}
+
 // --- RenameBranchForTask tests ---
 
 // RenameBranchForTask gives the temp branch a descriptive name for the current task

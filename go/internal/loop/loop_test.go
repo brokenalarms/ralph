@@ -398,3 +398,46 @@ func TestLoop_MaybeRefactor_CounterIncrement(t *testing.T) {
 		t.Errorf("expected counter=3, got %d", n)
 	}
 }
+
+// Verifies the loop rotates the branch on resume when the current branch is
+// already named for a task, preventing RenameBranchForTask from overwriting
+// the previous task's branch ref.
+func TestLoop_ResumeRotatesBranchWhenAlreadyNamed(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	backend := &stubBackend{
+		remaining: 0,
+		completed: 1,
+		total:     1,
+	}
+
+	// Simulate a resumed worktree where the branch is already a task branch
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/myproject/01-previous-task",
+		ProjectName:    "myproject",
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	// Run exits immediately (no remaining tasks) but should have rotated first
+	_ = l.Run(context.Background())
+
+	// After rotation, the branch should be the /next temp branch (rotation
+	// happens before task selection, and since there are no tasks, no rename)
+	if gm.WorktreeBranch != "ralph/myproject/next" {
+		t.Errorf("expected branch to be rotated to ralph/myproject/next, got %q", gm.WorktreeBranch)
+	}
+}
