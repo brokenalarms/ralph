@@ -564,7 +564,7 @@ func EnsureGitignored(projectDir, entry string) {
 	existing += entry + "\n"
 	os.WriteFile(gitignorePath, []byte(existing), 0o644)
 
-	if isGitRepo(projectDir) {
+	if IsGitRepo(projectDir) {
 		gitCmd(projectDir, "add", ".gitignore")
 		gitCmd(projectDir, "commit", "-m", "Add "+entry+" to .gitignore")
 	}

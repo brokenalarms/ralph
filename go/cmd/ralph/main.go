@@ -52,7 +52,12 @@ func run(args []string) int {
 	promptsDir := filepath.Join(cfg.ProjectDir, "prompts")
 
 	// Tmux outer wrapper: set up tmux session, then re-exec ralph inside pane 0.
+	// Ensure .ralph dir exists before tmux setup writes scripts into it.
 	if cfg.UseTmux {
+		if err := os.MkdirAll(ralphDir, 0o755); err != nil {
+			log.Error("Failed to create .ralph dir: %v", err)
+			return 1
+		}
 		return handleTmux(cfg, scriptPath, args, ralphDir, log)
 	}
 
