@@ -154,6 +154,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		PlanFile:     planFile,
 		Prompt:       cfg.Prompt,
 		SkipPlanning: cfg.SkipPlanning,
+		ForcePlan:    cfg.PlanOnly,
 		RenameWorktree: func(theme string) error {
 			gm.RenameWorktreeForTheme(theme)
 			return nil
@@ -485,7 +486,7 @@ func printUsage() {
   -n, --max <N>          Max iterations (default: 50, env RALPH_MAX_ITERATIONS)
   -p, --prompt <text>    Prompt override (otherwise Claude reads repo context)
   --plan-file <path>     Pre-made plan in Ralph format (markdown checkboxes). Skips planning phase.
-  --plan                 Run planning phase only
+  --plan                 Force (re-)entry into planning mode, then exit
   --skip-planning        Skip interactive planning, go straight to autonomous execution
   -q, --quiet            Suppress Claude output streaming (log only)
   --no-worktree          Run directly in project dir (no git worktree isolation)
