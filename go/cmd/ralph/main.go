@@ -75,6 +75,15 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 	stateFile := filepath.Join(ralphDir, "state.json")
 	logFile := filepath.Join(ralphDir, "loop.log")
 
+	// Validate --plan-file early: file must exist and contain checkboxes.
+	if cfg.PlanFile != "" {
+		if err := validatePlanFile(cfg.PlanFile); err != nil {
+			log.Error("%v", err)
+			return 1
+		}
+		planFile = cfg.PlanFile
+	}
+
 	// Initialize .ralph directory and check for resume.
 	resume, exitCode := initRalphDir(cfg, ralphDir, logFile, stateFile, log)
 	if exitCode >= 0 {
@@ -541,6 +550,27 @@ func hasUncommittedChanges(dir string) bool {
 	cmd1 := exec.Command("git", "-C", dir, "diff", "--quiet")
 	cmd2 := exec.Command("git", "-C", dir, "diff", "--cached", "--quiet")
 	return cmd1.Run() != nil || cmd2.Run() != nil
+}
+
+// validatePlanFile checks that a --plan-file exists and contains at least one
+// markdown checkbox. Matches ralph.sh's early validation.
+func validatePlanFile(path string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return fmt.Errorf("plan file not found: %s", path)
+	} else if err != nil {
+		return fmt.Errorf("plan file error: %w", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("reading plan file: %w", err)
+	}
+
+	if !strings.Contains(string(data), "- [") {
+		return fmt.Errorf("plan file is not in Ralph format (must contain markdown checkboxes): %s", path)
+	}
+
+	return nil
 }
 
 func ensureGitignored(projectDir, entry string) {

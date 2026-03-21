@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,17 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 )
+
+func runCmd(t *testing.T, name string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %v failed: %v\n%s", name, args, err, out)
+	}
+}
 
 // stubBackend implements tasks.Backend for main integration tests.
 type stubBackend struct {
@@ -152,6 +164,33 @@ func TestInitRalphDir_CreatesDirectory(t *testing.T) {
 	}
 }
 
+// Verifies initRalphDir exits with error when working tree has uncommitted changes,
+// preventing the .gitignore commit from sweeping in unrelated staged work.
+func TestInitRalphDir_DirtyWorkingTreeExitsWithError(t *testing.T) {
+	dir := t.TempDir()
+
+	// Init a git repo so isGitRepo returns true
+	runCmd(t, "git", "init", dir)
+	runCmd(t, "git", "-C", dir, "commit", "--allow-empty", "-m", "init")
+
+	// Create uncommitted changes
+	os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("uncommitted"), 0o644)
+	runCmd(t, "git", "-C", dir, "add", "dirty.txt")
+
+	ralphDir := filepath.Join(dir, ".ralph")
+	logFile := filepath.Join(ralphDir, "loop.log")
+	stateFile := filepath.Join(ralphDir, "state.json")
+
+	cfg := config.Config{ProjectDir: dir}
+	log := logging.New(nil)
+
+	_, exitCode := initRalphDir(cfg, ralphDir, logFile, stateFile, log)
+
+	if exitCode != 1 {
+		t.Errorf("expected exit code 1, got %d", exitCode)
+	}
+}
+
 // Verifies initRalphDir detects an existing state file and enables resume.
 func TestInitRalphDir_DetectsResume(t *testing.T) {
 	dir := t.TempDir()
@@ -208,5 +247,41 @@ func TestSafeRemoveRalphDir_ProtectsBeads(t *testing.T) {
 	}
 	if _, err := os.Stat(ralphDir); !os.IsNotExist(err) {
 		t.Fatal(".ralph should be removed")
+	}
+}
+
+// Verifies that validatePlanFile rejects a nonexistent file with "not found".
+func TestValidatePlanFile_NonexistentExitsWithError(t *testing.T) {
+	err := validatePlanFile("/nonexistent/plan.md")
+	if err == nil {
+		t.Fatal("expected error for nonexistent plan file")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' in error, got %q", err)
+	}
+}
+
+// Verifies that validatePlanFile rejects a file without checkboxes.
+func TestValidatePlanFile_NoCheckboxesRejected(t *testing.T) {
+	badPlan := filepath.Join(t.TempDir(), "bad-plan.md")
+	os.WriteFile(badPlan, []byte("Just some text without checkboxes"), 0o644)
+
+	err := validatePlanFile(badPlan)
+	if err == nil {
+		t.Fatal("expected error for plan without checkboxes")
+	}
+	if !strings.Contains(err.Error(), "Ralph format") {
+		t.Errorf("expected 'Ralph format' in error, got %q", err)
+	}
+}
+
+// Verifies that validatePlanFile accepts a valid plan with checkboxes.
+func TestValidatePlanFile_ValidPlanAccepted(t *testing.T) {
+	plan := filepath.Join(t.TempDir(), "plan.md")
+	os.WriteFile(plan, []byte("- [ ] Test task\n- [ ] Another task"), 0o644)
+
+	err := validatePlanFile(plan)
+	if err != nil {
+		t.Errorf("expected no error for valid plan, got %v", err)
 	}
 }

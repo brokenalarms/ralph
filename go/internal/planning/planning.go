@@ -263,6 +263,13 @@ func renameWorktreeFromTheme(d Deps) {
 
 	theme, _ := d.StateStore.Read("theme")
 
+	// Fallback: for bd backend, derive theme from first task title.
+	if theme == "" && d.Backend.Label() == "beads" {
+		if task, err := d.Backend.GetNextTask(); err == nil && task != "" {
+			theme = task
+		}
+	}
+
 	// Fallback: derive theme from plan file heading.
 	if theme == "" {
 		dst := planFilePath(d)

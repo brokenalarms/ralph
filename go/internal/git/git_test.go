@@ -149,9 +149,10 @@ func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 		t.Errorf("state worktree_branch = %q, want %q", got, mgr.WorktreeBranch)
 	}
 
-	// Branch name follows temp_branch convention
-	if !strings.HasSuffix(mgr.WorktreeBranch, "/next") {
-		t.Errorf("branch %q should end with /next", mgr.WorktreeBranch)
+	// Branch name must be exactly ralph/<projectName>/next
+	wantBranch := "ralph/" + mgr.ProjectName + "/next"
+	if mgr.WorktreeBranch != wantBranch {
+		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, wantBranch)
 	}
 }
 
@@ -234,6 +235,56 @@ func TestSetupWorktree_Resume(t *testing.T) {
 	}
 }
 
+// Resume restores task_seq from state.json, not branch count.
+// Prevents sequence skips when branches are deleted after squash-merge.
+func TestSetupWorktree_ResumeRestoresTaskSeqFromState(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+	log := &testLog{}
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("first task")
+	mgr.RotateBranch()
+	mgr.RenameBranchForTask("second task")
+
+	// Verify task_seq was persisted
+	storedSeq, _ := state.Read("task_seq")
+	if storedSeq != "2" {
+		t.Fatalf("stored task_seq = %q, want \"2\"", storedSeq)
+	}
+
+	// Delete a branch to simulate squash-merge cleanup
+	exec.Command("git", "-C", project, "branch", "-D", "ralph/"+mgr.ProjectName+"/01-first-task").Run()
+
+	// Resume — should use persisted seq (2), not branch count (1)
+	mgr2 := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		Resume:      true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr2.SetupWorktree(); err != nil {
+		t.Fatalf("resume SetupWorktree: %v", err)
+	}
+
+	if mgr2.TaskSeq != 2 {
+		t.Errorf("TaskSeq = %d, want 2 (from state.json, not branch count)", mgr2.TaskSeq)
+	}
+}
+
 // --- RenameBranchForTask tests ---
 
 // RenameBranchForTask gives the temp branch a descriptive name for the current task
@@ -253,19 +304,19 @@ func TestRenameBranchForTask_RenamesBranch(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.RenameBranchForTask("Add user authentication")
+	mgr.RenameBranchForTask("Fix auth bug")
 
-	wantPrefix := "ralph/" + mgr.ProjectName + "/01-add-user-authentication"
-	if mgr.WorktreeBranch != wantPrefix {
-		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, wantPrefix)
+	wantBranch := "ralph/" + mgr.ProjectName + "/01-fix-auth-bug"
+	if mgr.WorktreeBranch != wantBranch {
+		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, wantBranch)
 	}
 	if !mgr.BranchRenamed {
 		t.Error("BranchRenamed should be true")
 	}
 
 	// State should be updated
-	if got, _ := state.Read("worktree_branch"); got != wantPrefix {
-		t.Errorf("state worktree_branch = %q, want %q", got, wantPrefix)
+	if got, _ := state.Read("worktree_branch"); got != wantBranch {
+		t.Errorf("state worktree_branch = %q, want %q", got, wantBranch)
 	}
 }
 
@@ -1166,6 +1217,72 @@ func TestDirtyWorkingTreeDetected(t *testing.T) {
 	}
 }
 
+// --- AutoMergeCurrentBranch tests ---
+
+// AutoMergeCurrentBranch returns nil when no worktree branch is set,
+// so --auto-merge is a safe no-op without worktree isolation.
+func TestAutoMergeCurrentBranch_SkipsWhenNoWorktreeBranch(t *testing.T) {
+	mgr := &Manager{
+		WorkDir:    "/some/dir",
+		ProjectDir: "/some/dir",
+		Logger:     &testLog{},
+	}
+	err := mgr.AutoMergeCurrentBranch()
+	if err != nil {
+		t.Errorf("expected nil error, got %v", err)
+	}
+}
+
+// AutoMergeCurrentBranch returns nil when WorkDir equals ProjectDir,
+// avoiding merging from the project dir itself.
+func TestAutoMergeCurrentBranch_SkipsWhenWorkDirIsProjectDir(t *testing.T) {
+	mgr := &Manager{
+		WorktreeBranch: "ralph/project/01-some-task",
+		WorkDir:        "/some/dir",
+		ProjectDir:     "/some/dir",
+		Logger:         &testLog{},
+	}
+	err := mgr.AutoMergeCurrentBranch()
+	if err != nil {
+		t.Errorf("expected nil error, got %v", err)
+	}
+}
+
+// AutoMergeCurrentBranch returns 0 and logs "No open PR found" when no PR
+// exists for the branch, so an unpushed branch doesn't cause a failure.
+func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
+	if _, err := exec.LookPath("gh"); err != nil {
+		t.Skip("gh CLI not available")
+	}
+
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("unpushed task")
+
+	err := mgr.AutoMergeCurrentBranch()
+	if err != nil {
+		t.Errorf("expected nil error (skip), got %v", err)
+	}
+
+	log := mgr.Logger.(*testLog)
+	if !log.contains("No open PR found") {
+		t.Error("expected 'No open PR found' log message")
+	}
+}
+
 // RenameWorktreeForTheme uses a task description as fallback (bats test 21)
 func TestRenameWorktreeForTheme_FallsBackToTaskTitle(t *testing.T) {
 	project, _ := initBareRepo(t)
@@ -1209,8 +1326,6 @@ func TestRenameWorktreeForTheme_PrefersStateTheme(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	// Simulate: state has "go migration" as theme; caller would read
-	// this from state before calling RenameWorktreeForTheme
 	stateTheme := "go migration"
 	mgr.RenameWorktreeForTheme(stateTheme)
 
