@@ -21,7 +21,7 @@ stagnation_threshold = 5
 EOF
   _CLI_MAX_ITERATIONS=""
   _CLI_CALLS_PER_HOUR=""
-  _CLI_REFACTOR_EVERY=""
+
   load_config "$PROJECT_DIR/ralph.toml"
   [[ "$MAX_ITERATIONS" -eq 25 ]]
   [[ "$CALLS_PER_HOUR" -eq 40 ]]
@@ -38,7 +38,7 @@ EOF
   MAX_ITERATIONS=99
   _CLI_MAX_ITERATIONS="99"
   _CLI_CALLS_PER_HOUR=""
-  _CLI_REFACTOR_EVERY=""
+
   load_config "$PROJECT_DIR/ralph.toml"
   [[ "$MAX_ITERATIONS" -eq 99 ]]
   [[ "$CALLS_PER_HOUR" -eq 40 ]]
@@ -50,7 +50,7 @@ EOF
   STUCK_THRESHOLD=5
   _CLI_MAX_ITERATIONS=""
   _CLI_CALLS_PER_HOUR=""
-  _CLI_REFACTOR_EVERY=""
+
   load_config "$PROJECT_DIR/nonexistent.toml"
   [[ "$MAX_ITERATIONS" -eq 50 ]]
   [[ "$STUCK_THRESHOLD" -eq 5 ]]
@@ -67,7 +67,7 @@ calls_per_hour = 60
 EOF
   _CLI_MAX_ITERATIONS=""
   _CLI_CALLS_PER_HOUR=""
-  _CLI_REFACTOR_EVERY=""
+
   load_config "$PROJECT_DIR/ralph.toml"
   [[ "$MAX_ITERATIONS" -eq 30 ]]
   [[ "$CALLS_PER_HOUR" -eq 60 ]]
@@ -80,7 +80,7 @@ max_iterations = 15 # keep it short
 EOF
   _CLI_MAX_ITERATIONS=""
   _CLI_CALLS_PER_HOUR=""
-  _CLI_REFACTOR_EVERY=""
+
   load_config "$PROJECT_DIR/ralph.toml"
   [[ "$MAX_ITERATIONS" -eq 15 ]]
 }
@@ -92,7 +92,7 @@ max_iterations = "20"
 EOF
   _CLI_MAX_ITERATIONS=""
   _CLI_CALLS_PER_HOUR=""
-  _CLI_REFACTOR_EVERY=""
+
   load_config "$PROJECT_DIR/ralph.toml"
   [[ "$MAX_ITERATIONS" -eq 20 ]]
 }
@@ -102,7 +102,6 @@ EOF
   cat > "$PROJECT_DIR/ralph.toml" <<'EOF'
 max_iterations = 10
 calls_per_hour = 20
-refactor_every = 3
 watcher_interval = 5
 stuck_threshold = 8
 stuck_confirmation_threshold = 4
@@ -112,11 +111,10 @@ permission_denial_threshold = 9
 EOF
   _CLI_MAX_ITERATIONS=""
   _CLI_CALLS_PER_HOUR=""
-  _CLI_REFACTOR_EVERY=""
+
   load_config "$PROJECT_DIR/ralph.toml"
   [[ "$MAX_ITERATIONS" -eq 10 ]]
   [[ "$CALLS_PER_HOUR" -eq 20 ]]
-  [[ "$REFACTOR_EVERY" -eq 3 ]]
   [[ "$WATCHER_INTERVAL" -eq 5 ]]
   [[ "$STUCK_THRESHOLD" -eq 8 ]]
   [[ "$STUCK_CONFIRMATION_THRESHOLD" -eq 4 ]]

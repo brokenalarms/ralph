@@ -115,7 +115,7 @@ func TestPrintSummary_TaskCounts(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 	st.Write("iteration", "3")
 	st.Write("status", "completed")
 
@@ -200,7 +200,7 @@ func TestInitRalphDir_DetectsResume(t *testing.T) {
 	stateFile := filepath.Join(ralphDir, "state.json")
 
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 	st.Write("status", "running")
 
 	cfg := config.Config{ProjectDir: dir}

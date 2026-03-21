@@ -27,7 +27,6 @@ type Config struct {
 	PromptsDir          string
 	PlanFile            string
 	MaxIterations       int
-	RefactorEvery       int
 	Quiet               bool
 	CallsPerHour        int
 	TaskBackend         tasks.Backend
@@ -97,8 +96,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		return fmt.Errorf("rate limiter init: %w", err)
 	}
 
-	l.state.WriteConfig(l.cfg.MaxIterations, l.cfg.RefactorEvery)
-	l.state.Write("iterations_since_refactor", "0")
+	l.state.WriteMaxIterations(l.cfg.MaxIterations)
 
 	var runIteration int
 	st, _ := l.state.Load()
@@ -108,7 +106,6 @@ func (l *Loop) Run(ctx context.Context) error {
 
 	for {
 		maxIter := l.state.ReadMaxIterations(l.cfg.MaxIterations)
-		refactorEvery := l.state.ReadRefactorEvery()
 
 		if runIteration >= maxIter {
 			l.logger.Warn("Max iterations (%d) reached", maxIter)
@@ -162,9 +159,6 @@ func (l *Loop) Run(ctx context.Context) error {
 			}
 		}
 
-		if err := l.maybeRefactor(refactorEvery); err != nil {
-			l.logger.Warn("Refactor iteration error: %v", err)
-		}
 
 		completed, _ := l.cfg.TaskBackend.CountCompleted()
 		total, _ := l.cfg.TaskBackend.CountTotal()
@@ -290,68 +284,6 @@ func (l *Loop) checkStopFile() bool {
 		return true
 	}
 	return false
-}
-
-func (l *Loop) maybeRefactor(refactorEvery int) error {
-	if refactorEvery <= 0 {
-		return nil
-	}
-
-	sinceRefactorStr, _ := l.state.Read("iterations_since_refactor")
-	sinceRefactor, _ := strconv.Atoi(sinceRefactorStr)
-
-	if sinceRefactor < refactorEvery {
-		l.state.Write("iterations_since_refactor", strconv.Itoa(sinceRefactor+1))
-		return nil
-	}
-
-	l.logger.Phase("--- Refactor iteration (every %d iterations) ---", refactorEvery)
-
-	recentFiles := git.RecentChangedFiles(l.git.WorkDir, refactorEvery)
-	if recentFiles == "" {
-		l.logger.Log("No recently changed files — skipping refactor")
-		l.state.Write("iterations_since_refactor", "0")
-		return nil
-	}
-
-	refactorPrompt, err := prompt.BuildRefactorPrompt(prompt.Vars{
-		PromptsDir:       l.cfg.PromptsDir,
-		WorkDir:          l.git.WorkDir,
-		SignalToken:      l.signals.Complete,
-		CurrentTaskToken: l.signals.CurrentTask,
-		AllCompleteToken: l.signals.AllComplete,
-	}, recentFiles)
-	if err != nil {
-		l.state.Write("iterations_since_refactor", "0")
-		return fmt.Errorf("building refactor prompt: %w", err)
-	}
-
-	if !l.limiter.Allowed() {
-		l.logger.Warn("Rate limit hit before refactor — waiting for reset")
-		if err := l.limiter.WaitForReset(context.Background(), func(secs int) {
-			l.logger.Log("Rate limit: %ds until reset", secs)
-		}); err != nil {
-			return err
-		}
-	}
-
-	rawLogPath := filepath.Join(l.cfg.RalphDir, "raw.log")
-	_, err = l.runner.Run(claude.RunConfig{
-		WorkDir:      l.git.WorkDir,
-		RalphDir:     l.cfg.RalphDir,
-		Prompt:       refactorPrompt,
-		RawLog:       rawLogPath,
-		LogFile:      filepath.Join(l.cfg.RalphDir, "loop.log"),
-		Quiet:        l.cfg.Quiet,
-		Signals:      l.signals,
-		PollInterval: 2 * time.Second,
-	})
-	l.limiter.Increment()
-
-	l.logger.TaskSuccess("Refactor iteration complete")
-	l.state.Write("iterations_since_refactor", "0")
-
-	return err
 }
 
 func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {

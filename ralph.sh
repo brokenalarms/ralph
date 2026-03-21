@@ -39,7 +39,6 @@ PERMISSION_DENIAL_THRESHOLD=3
 # Track which settings were explicitly set via CLI (bash 3 compatible)
 _CLI_MAX_ITERATIONS=""
 _CLI_CALLS_PER_HOUR=""
-_CLI_REFACTOR_EVERY=""
 
 # --- Config file loader (simple TOML subset: key = value) ---
 load_config() {
@@ -62,7 +61,6 @@ load_config() {
     case "$key" in
       max_iterations)              [[ -z "$_CLI_MAX_ITERATIONS" ]] && MAX_ITERATIONS="$value" ;;
       calls_per_hour)              [[ -z "$_CLI_CALLS_PER_HOUR" ]] && CALLS_PER_HOUR="$value" ;;
-      refactor_every)              [[ -z "$_CLI_REFACTOR_EVERY" ]] && REFACTOR_EVERY="$value" ;;
       watcher_interval)            WATCHER_INTERVAL="$value" ;;
       stuck_threshold)             STUCK_THRESHOLD="$value" ;;
       stuck_confirmation_threshold) STUCK_CONFIRMATION_THRESHOLD="$value" ;;
@@ -215,7 +213,6 @@ if [[ "${1:-}" == "--init-config" ]]; then
 
 max_iterations = 50
 calls_per_hour = 80
-refactor_every = 0
 watcher_interval = 2
 
 stuck_threshold = 5
@@ -272,9 +269,6 @@ load_config "$PROJECT_DIR/ralph.toml"
 # --- Apply env var overrides (between config and CLI in precedence) ---
 if [[ -z "$_CLI_MAX_ITERATIONS" && -n "${RALPH_MAX_ITERATIONS:-}" ]]; then
   MAX_ITERATIONS="$RALPH_MAX_ITERATIONS"
-fi
-if [[ -z "$_CLI_REFACTOR_EVERY" && -n "${RALPH_REFACTOR_EVERY:-}" ]]; then
-  REFACTOR_EVERY="$RALPH_REFACTOR_EVERY"
 fi
 PLAN_FILE="$RALPH_DIR/plan.md"
 if [[ -n "$PLAN_FILE_ARG" ]]; then

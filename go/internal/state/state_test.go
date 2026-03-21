@@ -20,8 +20,7 @@ func TestLoad_BashCompatible(t *testing.T) {
   "worktree_branch": "ralph/test/01-state",
   "task_backend": "bd",
   "max_iterations": 50,
-  "quality_score": 15,
-  "refactor_every": 20
+  "quality_score": 15
 }`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(stateJSON), 0o644); err != nil {
 		t.Fatal(err)
@@ -44,9 +43,6 @@ func TestLoad_BashCompatible(t *testing.T) {
 	}
 	if s.QualityScore != 15 {
 		t.Errorf("QualityScore = %d, want 15", s.QualityScore)
-	}
-	if s.RefactorEvery != 20 {
-		t.Errorf("RefactorEvery = %d, want 20", s.RefactorEvery)
 	}
 	if s.TaskBackend != "bd" {
 		t.Errorf("TaskBackend = %q, want %q", s.TaskBackend, "bd")
@@ -83,7 +79,6 @@ func TestSaveAndLoad_Roundtrip(t *testing.T) {
 		TaskBackend:       "checklist",
 		MaxIterations:     20,
 		QualityScore:      12,
-		RefactorEvery: 20,
 	}
 
 	if err := st.Save(original); err != nil {
@@ -98,8 +93,7 @@ func TestSaveAndLoad_Roundtrip(t *testing.T) {
 	if loaded.Iteration != original.Iteration ||
 		loaded.Status != original.Status ||
 		loaded.MaxIterations != original.MaxIterations ||
-		loaded.LastTask != original.LastTask ||
-		loaded.RefactorEvery != original.RefactorEvery {
+		loaded.LastTask != original.LastTask {
 		t.Errorf("Roundtrip mismatch:\n  saved:  %+v\n  loaded: %+v", original, loaded)
 	}
 }

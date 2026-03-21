@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/git"
@@ -51,7 +50,7 @@ func setupTestDir(t *testing.T) (string, *state.Store) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 	return dir, st
 }
 
@@ -246,7 +245,6 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
 		MaxIterations: 10,
-		RefactorEvery: 3,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 	}, st, gm, logger)
@@ -256,11 +254,6 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 	maxIter := st.ReadMaxIterations(0)
 	if maxIter != 10 {
 		t.Errorf("expected max_iterations=10 in state, got %d", maxIter)
-	}
-
-	refEvery := st.ReadRefactorEvery()
-	if refEvery != 3 {
-		t.Errorf("expected refactor_every=3 in state, got %d", refEvery)
 	}
 }
 
@@ -362,40 +355,6 @@ func TestReadLogFrom(t *testing.T) {
 	got := readLogFrom(path, 2)
 	if got != "line3\nline4\n" {
 		t.Errorf("expected 'line3\\nline4\\n', got %q", got)
-	}
-}
-
-// Verifies the refactor iteration counter increments correctly and only
-// triggers a refactor when the threshold is reached.
-func TestLoop_MaybeRefactor_CounterIncrement(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-
-	l := &Loop{
-		cfg:   Config{RalphDir: ralphDir},
-		state: st,
-		logger: logging.New(nil),
-	}
-
-	st.Write("iterations_since_refactor", "0")
-
-	// refactorEvery=0 should do nothing.
-	err := l.maybeRefactor(0)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// refactorEvery=5, counter at 2 should just increment.
-	st.Write("iterations_since_refactor", "2")
-	err = l.maybeRefactor(5)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	val, _ := st.Read("iterations_since_refactor")
-	n, _ := strconv.Atoi(val)
-	if n != 3 {
-		t.Errorf("expected counter=3, got %d", n)
 	}
 }
 

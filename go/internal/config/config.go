@@ -22,7 +22,6 @@ type Config struct {
 	Quiet                      bool
 	UseWorktree                bool
 	CallsPerHour               int
-	RefactorEvery              int
 	UseTmux                    bool
 	AutoMerge                  bool
 	IdleTimeout                time.Duration
@@ -38,15 +37,13 @@ type Config struct {
 }
 
 // Defaults returns a Config with ralph.sh default values.
-// MaxIterations and RefactorEvery read from RALPH_MAX_ITERATIONS and
-// RALPH_REFACTOR_EVERY env vars, falling back to shell defaults (50 and 0).
+// MaxIterations reads from RALPH_MAX_ITERATIONS env var, falling back to 50.
 func Defaults() Config {
 	return Config{
 		ProjectDir:                 ".",
 		MaxIterations:              envInt("RALPH_MAX_ITERATIONS", 50),
 		UseWorktree:                true,
 		CallsPerHour:               80,
-		RefactorEvery:              envInt("RALPH_REFACTOR_EVERY", 0),
 		IdleTimeout:                envDuration("RALPH_IDLE_TIMEOUT", 10*time.Minute),
 		IdleTimeoutProgress:        envDuration("RALPH_IDLE_TIMEOUT_PROGRESS", 30*time.Second),
 		WatcherInterval:            10,
@@ -203,19 +200,6 @@ func Parse(args []string) (Config, error) {
 			}
 			cfg.CallsPerHour = n
 			cfg.cliSet["calls_per_hour"] = true
-			i += 2
-
-		case "--refactor-every":
-			v, err := requireArg(args, i)
-			if err != nil {
-				return cfg, err
-			}
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
-			}
-			cfg.RefactorEvery = n
-			cfg.cliSet["refactor_every"] = true
 			i += 2
 
 		case "--tmux":

@@ -88,6 +88,12 @@ func (m *Manager) SetupWorktree() error {
 	// Prune stale worktree bookkeeping
 	gitCmd(m.ProjectDir, "worktree", "prune")
 
+	// Remove leftover worktree directory from a previous run (git prune
+	// cleans the bookkeeping but leaves the directory on disk).
+	if _, err := os.Stat(m.WorkDir); err == nil {
+		os.RemoveAll(m.WorkDir)
+	}
+
 	// Clean up temp branch if it already exists
 	if err := m.cleanTempBranch(); err != nil {
 		return err

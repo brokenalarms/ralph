@@ -22,7 +22,6 @@ type State struct {
 	TaskBackend            string `json:"task_backend,omitempty"`
 	MaxIterations      int `json:"max_iterations"`
 	QualityScore       int `json:"quality_score"`
-	RefactorEvery  int `json:"refactor_every"`
 
 	// Overflow captures unknown keys so round-tripping preserves them.
 	Overflow map[string]json.RawMessage `json:"-"`
@@ -77,7 +76,7 @@ func (s *State) UnmarshalJSON(data []byte) error {
 		"iteration": true, "status": true, "started_at": true,
 		"last_task": true, "worktree_dir": true, "worktree_branch": true,
 		"task_backend": true, "max_iterations": true,
-		"quality_score": true, "refactor_every": true,
+		"quality_score": true,
 	}
 
 	alias.Overflow = nil
@@ -181,7 +180,7 @@ func (st *Store) Write(key, value string) error {
 }
 
 // Init initializes state with config values. Creates the file if missing.
-func (st *Store) Init(maxIterations, refactorEvery int) error {
+func (st *Store) Init(maxIterations int) error {
 	s, _ := st.Load()
 	if s.MaxIterations == 0 {
 		s.MaxIterations = maxIterations
@@ -189,10 +188,9 @@ func (st *Store) Init(maxIterations, refactorEvery int) error {
 	return st.Save(s)
 }
 
-// WriteConfig writes max_iterations and refactor_every to state.
-func (st *Store) WriteConfig(maxIterations, refactorEvery int) {
+// WriteMaxIterations writes max_iterations to state.
+func (st *Store) WriteMaxIterations(maxIterations int) {
 	st.Write("max_iterations", strconv.Itoa(maxIterations))
-	st.Write("refactor_every", strconv.Itoa(refactorEvery))
 }
 
 // ReadMaxIterations returns max_iterations from state, falling back to the given default.
@@ -202,13 +200,6 @@ func (st *Store) ReadMaxIterations(defaultVal int) int {
 		return n
 	}
 	return defaultVal
-}
-
-// ReadRefactorEvery returns the refactor_every value from state.
-func (st *Store) ReadRefactorEvery() int {
-	v, _ := st.Read("refactor_every")
-	n, _ := strconv.Atoi(v)
-	return n
 }
 
 // getField extracts a named field from State as a string.
@@ -232,8 +223,6 @@ func getField(s State, key string) string {
 		return strconv.Itoa(s.MaxIterations)
 	case "quality_score":
 		return strconv.Itoa(s.QualityScore)
-	case "refactor_every":
-		return strconv.Itoa(s.RefactorEvery)
 	default:
 		if s.Overflow != nil {
 			if raw, ok := s.Overflow[key]; ok {
@@ -269,8 +258,6 @@ func setField(s *State, key, value string) {
 		s.MaxIterations, _ = strconv.Atoi(value)
 	case "quality_score":
 		s.QualityScore, _ = strconv.Atoi(value)
-	case "refactor_every":
-		s.RefactorEvery, _ = strconv.Atoi(value)
 	default:
 		// Unknown key — store in overflow, converting numeric strings to numbers.
 		if s.Overflow == nil {

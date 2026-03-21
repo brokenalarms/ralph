@@ -96,7 +96,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 	}
 
 	st := state.NewStore(ralphDir)
-	if err := st.Init(cfg.MaxIterations, cfg.RefactorEvery); err != nil {
+	if err := st.Init(cfg.MaxIterations); err != nil {
 		log.Error("Failed to initialize state: %v", err)
 		return 1
 	}
@@ -181,7 +181,6 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		PromptsDir:          promptsDir,
 		PlanFile:            planFile,
 		MaxIterations:       cfg.MaxIterations,
-		RefactorEvery:       cfg.RefactorEvery,
 		Quiet:               cfg.Quiet,
 		CallsPerHour:        cfg.CallsPerHour,
 		TaskBackend:         backend,
@@ -272,7 +271,7 @@ func initTaskBackend(cfg config.Config, resume bool, st *state.Store, ralphDir, 
 		}
 		if err := bd.Init(); err != nil {
 			if errors.Is(err, tasks.ErrNeedsFallback) {
-				log.Warn("bd unavailable, falling back to checklist")
+				log.Warn("bd unavailable (%v), falling back to checklist", err)
 				backendLabel = "checklist"
 			} else {
 				return nil, err
@@ -491,7 +490,6 @@ func printUsage() {
   -q, --quiet            Suppress Claude output streaming (log only)
   --no-worktree          Run directly in project dir (no git worktree isolation)
   --calls-per-hour <N>   Max Claude calls per hour (default: 80)
-  --refactor-every <N>   Inject a refactor iteration every N iterations (default: 0/disabled, env RALPH_REFACTOR_EVERY)
   --idle-timeout <dur>   Kill session after this idle duration (default: 10m, env RALPH_IDLE_TIMEOUT)
   --idle-timeout-progress <dur>  Shorter idle timeout when progress detected (default: 30s, env RALPH_IDLE_TIMEOUT_PROGRESS)
   --tmux                 Run in tmux 3-pane layout (status / output / plan)
