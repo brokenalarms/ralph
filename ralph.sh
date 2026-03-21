@@ -112,7 +112,7 @@ _BRANCH_RENAMED=false
 # --- Usage ---
 usage() {
   cat <<EOF
-${BOLD}Ralph Loop v${VERSION}${NC} - Autonomous Claude Code task iteration
+${BOLD}Ralph Loop v${VERSION} (sh)${NC} - Autonomous Claude Code task iteration
 
 ${BOLD}USAGE:${NC}
   ralph.sh [OPTIONS] [directory]
@@ -465,7 +465,7 @@ setup_tmux() {
     return
   fi
 
-  TMUX_SESSION="ralph-$$"
+  TMUX_SESSION="ralph-sh-$$"
 
   write_stream_filter
 
@@ -2180,7 +2180,7 @@ main() {
   setup_worktree
   printf '%s' "${WORKTREE_BRANCH:-ralph}" > "$RALPH_DIR/.run-branch"
 
-  log_phase "Ralph Loop v${VERSION}"
+  log_phase "Ralph Loop v${VERSION} (sh)"
   log "Project: $PROJECT_DIR"
   [[ "$WORK_DIR" != "$PROJECT_DIR" ]] && log "Worktree: $WORK_DIR"
   log "Task backend: $(task_label)"
