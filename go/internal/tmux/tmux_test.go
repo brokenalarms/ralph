@@ -45,10 +45,10 @@ func TestWriteStreamFilter(t *testing.T) {
 	}
 }
 
-// Verifies that the stream filter's perl deduplication stage collapses
-// consecutive identical tool calls into a single line with an "x3" counter,
-// saving vertical space in the tmux output pane.
-func TestWriteStreamFilter_Deduplication(t *testing.T) {
+// Verifies that the stream filter's perl stage adds HH:MM:SS timestamps
+// to each line without deduplicating, so the reader can see the source
+// and count of each event.
+func TestWriteStreamFilter_Timestamps(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{RalphDir: dir}
 
@@ -60,11 +60,11 @@ func TestWriteStreamFilter_Deduplication(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	content := string(data)
 
-	if !strings.Contains(content, "x$count") {
-		t.Error("stream filter missing deduplication counter (x$count)")
+	if !strings.Contains(content, "strftime") {
+		t.Error("stream filter missing timestamp formatting (strftime)")
 	}
-	if !strings.Contains(content, "flush_prev") {
-		t.Error("stream filter missing flush_prev function for deduplication")
+	if strings.Contains(content, "flush_prev") {
+		t.Error("stream filter should not deduplicate (flush_prev removed)")
 	}
 }
 

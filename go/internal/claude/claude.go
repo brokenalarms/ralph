@@ -326,7 +326,11 @@ func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
 			line := data[:idx]
 			data = data[idx+1:]
 			if text := extractStreamText(line); text != "" {
-				fmt.Fprintln(logOut, text)
+				for _, tl := range strings.Split(text, "\n") {
+					if tl != "" {
+						fmt.Fprintf(logOut, "[claude] %s\n", tl)
+					}
+				}
 			}
 		}
 	}

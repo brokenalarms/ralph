@@ -367,8 +367,51 @@ func TestFilterStreamJSON_TailsFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(got), "hello from claude") {
-		t.Errorf("loop.log should contain filtered text, got: %q", string(got))
+	if !strings.Contains(string(got), "[claude] hello from claude") {
+		t.Errorf("loop.log should contain [claude]-prefixed filtered text, got: %q", string(got))
+	}
+}
+
+// Verifies that filterStreamJSON prefixes each output line with [claude]
+// so loop.log clearly distinguishes Claude's output from ralph's logger output.
+func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+
+	os.WriteFile(rawPath, nil, 0o644)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		filterStreamJSON(rawPath, logPath, stop)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write a tool-use event and a text event.
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/foo.go"}}]}}`)
+	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"some delta text"}}`)
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(got)
+	if !strings.Contains(content, "[claude] [Read] /tmp/foo.go") {
+		t.Errorf("tool-use line should have [claude] prefix, got: %q", content)
+	}
+	if !strings.Contains(content, "[claude] some delta text") {
+		t.Errorf("delta text should have [claude] prefix, got: %q", content)
 	}
 }
 

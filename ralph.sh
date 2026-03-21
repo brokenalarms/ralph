@@ -425,32 +425,11 @@ tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   elif .type == "result" then
     "\n[done]\n"
   else empty end
-' | perl -e '
+' | perl -ne '
   use POSIX; $|=1;
-  my ($prev, $count, $prev_ts);
-  sub flush_prev {
-    return unless defined $prev;
-    if ($count > 1) {
-      print "$prev_ts $prev x$count\n";
-    } else {
-      print "$prev_ts $prev\n";
-    }
-  }
-  while(<STDIN>) {
-    chomp;
-    next if $_ eq "";
-    my $ts = strftime("%H:%M:%S", localtime());
-    if (defined $prev && $_ eq $prev) {
-      $count++;
-      $prev_ts = $ts;
-    } else {
-      flush_prev();
-      $prev = $_;
-      $count = 1;
-      $prev_ts = $ts;
-    }
-  }
-  flush_prev();
+  chomp;
+  next if $_ eq "";
+  print strftime("%H:%M:%S", localtime()) . " " . $_ . "\n";
 ' | sed -u -E \
   -e $'s/\\[done\\]/\033[0;32m[done]\033[0m/g' \
   -e $'s/\\[claude\\]/\033[0;36m[claude]\033[0m/g' \
