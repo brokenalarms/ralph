@@ -20,14 +20,15 @@ import (
 // without actually invoking Claude. The onRun callback is called for each
 // Claude invocation (both task iterations and refactor passes).
 type stubRunner struct {
-	onRun func()
+	onRun  func()
+	result claude.Result
 }
 
 func (s *stubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
 	if s.onRun != nil {
 		s.onRun()
 	}
-	return claude.Result{}, nil
+	return s.result, nil
 }
 
 // stubBackend implements tasks.Backend for testing without shelling out to
@@ -998,6 +999,112 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	}
 	if nonNextBranches != 1 {
 		t.Errorf("expected exactly 1 task branch, got %d: %v", nonNextBranches, branches)
+	}
+}
+
+// Verifies that when AutoImprove is enabled and auto-merge succeeds,
+// the loop exits with "auto_improve_restart" status, signaling that the
+// binary should be rebuilt and re-executed with latest main.
+func TestLoop_AutoImproveRestartsAfterMerge(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Improve feature X",
+		nextID:    "ralph-imp",
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		BranchStrategy: git.BranchStacked,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		AutoImprove:   true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+	l.mergeFunc = func() (bool, error) { return true, nil }
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	finalState, _ := st.Load()
+	if finalState.Status != "auto_improve_restart" {
+		t.Errorf("expected status 'auto_improve_restart', got %q", finalState.Status)
+	}
+}
+
+// Verifies that AutoImprove does NOT trigger restart when auto-merge fails,
+// allowing the loop to continue normally.
+func TestLoop_AutoImproveNoRestartOnMergeFailure(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5, 0)
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	gm := &git.Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: git.BranchStacked,
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+	if err := gm.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Improve feature Y",
+		nextID:    "ralph-imp2",
+	}
+
+	l := New(Config{
+		ProjectDir:    project,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		AutoImprove:   true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+
+	_ = l.Run(context.Background())
+
+	finalState, _ := st.Load()
+	if finalState.Status == "auto_improve_restart" {
+		t.Error("should NOT set auto_improve_restart when auto-merge fails (no PR to merge)")
 	}
 }
 

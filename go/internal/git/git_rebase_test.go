@@ -540,9 +540,12 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoWorktreeBranch(t *testing.T) {
 		ProjectDir: "/some/dir",
 		Logger:     &testLog{},
 	}
-	err := mgr.AutoMergeCurrentBranch()
+	merged, err := mgr.AutoMergeCurrentBranch()
 	if err != nil {
 		t.Errorf("expected nil error, got %v", err)
+	}
+	if merged {
+		t.Error("expected merged=false when no worktree branch")
 	}
 }
 
@@ -555,9 +558,12 @@ func TestAutoMergeCurrentBranch_SkipsWhenWorkDirIsProjectDir(t *testing.T) {
 		ProjectDir:     "/some/dir",
 		Logger:         &testLog{},
 	}
-	err := mgr.AutoMergeCurrentBranch()
+	merged, err := mgr.AutoMergeCurrentBranch()
 	if err != nil {
 		t.Errorf("expected nil error, got %v", err)
+	}
+	if merged {
+		t.Error("expected merged=false when WorkDir == ProjectDir")
 	}
 }
 
@@ -585,9 +591,12 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 
 	mgr.RenameBranchForTask("unpushed task")
 
-	err := mgr.AutoMergeCurrentBranch()
+	merged, err := mgr.AutoMergeCurrentBranch()
 	if err != nil {
 		t.Errorf("expected nil error (skip), got %v", err)
+	}
+	if merged {
+		t.Error("expected merged=false when no PR exists")
 	}
 
 	log := mgr.Logger.(*testLog)

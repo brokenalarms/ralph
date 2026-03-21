@@ -31,6 +31,7 @@ type Config struct {
 	RefactorEvery       int
 	Quiet               bool
 	AutoMerge           bool
+	AutoImprove         bool
 	CallsPerHour        int
 	TaskBackend         tasks.Backend
 	IdleTimeout         time.Duration
@@ -46,14 +47,15 @@ type claudeRunner interface {
 // Loop orchestrates the execution phase: task selection, prompt building,
 // rate limiting, branch rotation, Claude invocation, and response analysis.
 type Loop struct {
-	cfg      Config
-	state    *state.Store
-	git      *git.Manager
-	limiter  *ratelimit.Limiter
-	runner   claudeRunner
-	analyzer *analyzer.Analyzer
-	logger   *logging.Logger
-	signals  claude.SignalPaths
+	cfg       Config
+	state     *state.Store
+	git       *git.Manager
+	limiter   *ratelimit.Limiter
+	runner    claudeRunner
+	analyzer  *analyzer.Analyzer
+	logger    *logging.Logger
+	signals   claude.SignalPaths
+	mergeFunc func() (bool, error)
 }
 
 // New creates an execution loop from the given configuration.
@@ -275,8 +277,14 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		if l.cfg.AutoMerge && result.SignalDetected && l.git.BranchStrategy != git.BranchSingle {
-			if err := l.git.AutoMergeCurrentBranch(); err != nil {
+			merged, err := l.autoMerge()
+			if err != nil {
 				l.logger.Warn("Auto-merge: %v", err)
+			} else if merged && l.cfg.AutoImprove {
+				l.git.TagTaskEnd(taskID)
+				l.logger.Phase("Auto-improve: restarting with latest main")
+				l.state.Write("status", "auto_improve_restart")
+				return nil
 			}
 		}
 
@@ -329,6 +337,13 @@ func (l *Loop) isNewTask(taskID, taskDesc string) bool {
 	}
 	lastTask, _ := l.state.Read("last_task")
 	return lastTask != taskDesc
+}
+
+func (l *Loop) autoMerge() (bool, error) {
+	if l.mergeFunc != nil {
+		return l.mergeFunc()
+	}
+	return l.git.AutoMergeCurrentBranch()
 }
 
 func (l *Loop) checkStopFile() bool {

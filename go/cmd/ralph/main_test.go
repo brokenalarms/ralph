@@ -90,6 +90,34 @@ func TestGenerateResumeScript(t *testing.T) {
 	}
 }
 
+// Verifies the resume script includes --auto-improve when enabled.
+func TestGenerateResumeScript_AutoImprove(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	cfg := config.Config{
+		ProjectDir:    dir,
+		MaxIterations: 50,
+		UseWorktree:   true,
+		AutoMerge:     true,
+		AutoImprove:   true,
+		CallsPerHour:  80,
+	}
+
+	log := logging.New(nil)
+	generateResumeScript(cfg, ralphDir, "/usr/local/bin/ralph", nil, log)
+
+	data, _ := os.ReadFile(filepath.Join(ralphDir, "resume.sh"))
+	content := string(data)
+	if !strings.Contains(content, "--auto-improve") {
+		t.Error("resume script should contain --auto-improve")
+	}
+	if !strings.Contains(content, "--auto-merge") {
+		t.Error("resume script should contain --auto-merge")
+	}
+}
+
 // Verifies the resume script includes --no-worktree when worktree is disabled.
 func TestGenerateResumeScript_NoWorktree(t *testing.T) {
 	dir := t.TempDir()

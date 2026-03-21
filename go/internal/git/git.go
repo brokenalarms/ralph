@@ -309,21 +309,22 @@ func (m *Manager) RotateBranch() {
 }
 
 // AutoMergeCurrentBranch squash-merges the PR for the current branch into main.
-// Returns nil on success or when no PR exists. Mirrors lib/git.sh auto_merge_current_branch.
-func (m *Manager) AutoMergeCurrentBranch() error {
+// Returns (true, nil) when a PR was merged, (false, nil) when no PR exists or
+// no action was needed, and (false, err) on failure.
+func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
-		return nil
+		return false, nil
 	}
 
 	ghPath, err := exec.LookPath("gh")
 	if err != nil || ghPath == "" {
-		return fmt.Errorf("gh CLI not found — cannot auto-merge")
+		return false, fmt.Errorf("gh CLI not found — cannot auto-merge")
 	}
 
 	repoURL := gitOutput(m.WorkDir, "remote", "get-url", "origin")
 	if repoURL == "" {
 		m.Logger.Log("No remote URL — skipping auto-merge")
-		return nil
+		return false, nil
 	}
 
 	cmd := exec.Command("gh", "pr", "list", "--head", m.WorktreeBranch, "--state", "open",
@@ -332,7 +333,7 @@ func (m *Manager) AutoMergeCurrentBranch() error {
 	prNumber := strings.TrimSpace(string(out))
 	if err != nil || prNumber == "" {
 		m.Logger.Log("No open PR found for %s — skipping auto-merge", m.WorktreeBranch)
-		return nil
+		return false, nil
 	}
 
 	m.Logger.Log("Auto-merging PR #%s (branch: %s)...", prNumber, m.WorktreeBranch)
@@ -340,12 +341,12 @@ func (m *Manager) AutoMergeCurrentBranch() error {
 	mergeCmd := exec.Command("gh", "pr", "merge", prNumber, "--squash", "--delete-branch", "-R", repoURL)
 	if mergeOut, err := mergeCmd.CombinedOutput(); err != nil {
 		m.Logger.Warn("Auto-merge failed for PR #%s: %s", prNumber, string(mergeOut))
-		return fmt.Errorf("auto-merge failed for PR #%s", prNumber)
+		return false, fmt.Errorf("auto-merge failed for PR #%s", prNumber)
 	}
 
 	m.Logger.Log("PR #%s squash-merged into main", prNumber)
 	exec.Command("git", "-C", m.ProjectDir, "branch", "-D", m.WorktreeBranch).Run()
-	return nil
+	return true, nil
 }
 
 // RecreateFromMain removes the current worktree and creates a fresh one from
