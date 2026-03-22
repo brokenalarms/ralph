@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -529,9 +530,12 @@ func (m *Manager) RemoveWorktree() {
 // RebaseOntoDefaultBranch rebases the worktree onto origin's default branch,
 // detecting and skipping squash-merged branches when a naive rebase conflicts.
 // Mirrors lib/git.sh rebase_onto_default_branch.
-func (m *Manager) RebaseOntoDefaultBranch() error {
+func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
 	defaultBranch := detectDefaultBranch(m.ProjectDir)
-	if err := gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
+	if err := gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		m.Logger.Warn("Failed to fetch origin/%s: %v", defaultBranch, err)
 	}
 
@@ -550,16 +554,19 @@ func (m *Manager) RebaseOntoDefaultBranch() error {
 	}
 
 	// Try simple rebase
-	if gitCmdErr(m.WorkDir, "rebase", "--update-refs", "origin/"+defaultBranch) == nil {
+	if gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "origin/"+defaultBranch) == nil {
 		m.Logger.Log("Rebased onto origin/%s", defaultBranch)
 		return nil
 	}
 
 	gitCmd(m.WorkDir, "rebase", "--abort")
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	m.Logger.Warn("Rebase failed, checking for squash-merged branches...")
 
-	// Find squash-merged branches by checking if their changes are already
-	// absorbed into origin/default via reverse-apply detection.
 	lastMerged := m.findLastSquashMergedBranch(defaultBranch)
 
 	if lastMerged == "" {
@@ -569,15 +576,17 @@ func (m *Manager) RebaseOntoDefaultBranch() error {
 
 	m.Logger.Log("Detected squash-merged branch: %s", lastMerged)
 
-	if err := gitCmdErr(m.WorkDir, "rebase", "--update-refs", "--onto", "origin/"+defaultBranch, lastMerged, "HEAD"); err != nil {
+	if err := gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "--onto", "origin/"+defaultBranch, lastMerged, "HEAD"); err != nil {
 		gitCmd(m.WorkDir, "rebase", "--abort")
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		m.Logger.Error("Rebase onto %s past squash-merged branches failed", defaultBranch)
 		return &RebaseConflictError{Cause: fmt.Sprintf("rebase onto %s past squash-merged branches failed", defaultBranch)}
 	}
 
 	m.Logger.Log("Rebased onto origin/%s (skipped squash-merged branches)", defaultBranch)
 
-	// Update TaskSeq from remaining branches, then delete the merged branch
 	m.TaskSeq = ParseTaskSeqFromBranches(m.ProjectDir, m.ProjectName)
 	gitCmd(m.ProjectDir, "branch", "-D", lastMerged)
 
@@ -745,6 +754,13 @@ func gitCmd(dir string, args ...string) {
 
 func gitCmdErr(dir string, args ...string) error {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	return cmd.Run()
+}
+
+func gitCmdErrCtx(ctx context.Context, dir string, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	return cmd.Run()

@@ -563,7 +563,7 @@ func (l *Loop) Run(ctx context.Context) error {
 // handleRebase attempts to rebase onto the default branch, and if a conflict
 // is detected, consults the OnRebaseConflict handler for recovery.
 func (l *Loop) handleRebase(ctx context.Context) error {
-	err := l.git.RebaseOntoDefaultBranch()
+	err := l.git.RebaseOntoDefaultBranch(ctx)
 	if err == nil {
 		return nil
 	}

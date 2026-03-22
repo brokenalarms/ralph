@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -83,7 +84,7 @@ func TestRebaseOntoDefaultBranch_CleanRebase(t *testing.T) {
 	writeFile(t, mgr.WorkDir, "workfile.txt", "worktree file\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add workfile")
 
-	if err := mgr.RebaseOntoDefaultBranch(); err != nil {
+	if err := mgr.RebaseOntoDefaultBranch(context.Background()); err != nil {
 		t.Fatalf("RebaseOntoDefaultBranch failed: %v", err)
 	}
 
@@ -128,7 +129,7 @@ func TestRebaseOntoDefaultBranch_SkipsSquashMergedBranches(t *testing.T) {
 	run(t, "git", "-C", project, "commit", "-m", "squash: first task")
 	pushToOrigin(t, project)
 
-	if err := mgr.RebaseOntoDefaultBranch(); err != nil {
+	if err := mgr.RebaseOntoDefaultBranch(context.Background()); err != nil {
 		t.Fatalf("RebaseOntoDefaultBranch failed: %v", err)
 	}
 
@@ -175,7 +176,7 @@ func TestRebaseOntoDefaultBranch_DetectsSquashMergeWithExtraMainCommits(t *testi
 	run(t, "git", "-C", project, "commit", "-m", "other: unrelated PR")
 	pushToOrigin(t, project)
 
-	if err := mgr.RebaseOntoDefaultBranch(); err != nil {
+	if err := mgr.RebaseOntoDefaultBranch(context.Background()); err != nil {
 		t.Fatalf("RebaseOntoDefaultBranch failed: %v", err)
 	}
 
@@ -227,7 +228,7 @@ func TestRebaseOntoDefaultBranch_StackedBranchesSameFile(t *testing.T) {
 	run(t, "git", "-C", project, "commit", "-m", "squash: add more tests")
 	pushToOrigin(t, project)
 
-	if err := mgr.RebaseOntoDefaultBranch(); err != nil {
+	if err := mgr.RebaseOntoDefaultBranch(context.Background()); err != nil {
 		t.Fatalf("RebaseOntoDefaultBranch failed: %v", err)
 	}
 
@@ -267,7 +268,7 @@ func TestRebaseOntoDefaultBranch_HaltsOnRealConflicts(t *testing.T) {
 	run(t, "git", "-C", project, "commit", "-m", "main change")
 	pushToOrigin(t, project)
 
-	err := mgr.RebaseOntoDefaultBranch()
+	err := mgr.RebaseOntoDefaultBranch(context.Background())
 	if err == nil {
 		t.Fatal("expected error for real conflicts")
 	}
@@ -282,7 +283,7 @@ func TestRebaseOntoDefaultBranch_AlreadyUpToDate(t *testing.T) {
 	mgr := setupRebaseMgr(t, project, bare)
 
 	// No divergence — worktree is at same point as origin/main
-	if err := mgr.RebaseOntoDefaultBranch(); err != nil {
+	if err := mgr.RebaseOntoDefaultBranch(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -306,7 +307,7 @@ func TestRebaseOntoDefaultBranch_FastForwardsWhenBehind(t *testing.T) {
 	pushToOrigin(t, project)
 
 	// Worktree HEAD is now behind origin/main
-	if err := mgr.RebaseOntoDefaultBranch(); err != nil {
+	if err := mgr.RebaseOntoDefaultBranch(context.Background()); err != nil {
 		t.Fatalf("RebaseOntoDefaultBranch failed: %v", err)
 	}
 
@@ -331,7 +332,7 @@ func TestRebaseOntoDefaultBranch_SkipsWhenAhead(t *testing.T) {
 	writeFile(t, mgr.WorkDir, "local.txt", "local work\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "local commit")
 
-	if err := mgr.RebaseOntoDefaultBranch(); err != nil {
+	if err := mgr.RebaseOntoDefaultBranch(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -650,7 +651,7 @@ func TestRebaseOntoDefaultBranch_ReturnsTypedError(t *testing.T) {
 	run(t, "git", "-C", project, "commit", "-m", "main change")
 	pushToOrigin(t, project)
 
-	err := mgr.RebaseOntoDefaultBranch()
+	err := mgr.RebaseOntoDefaultBranch(context.Background())
 	if err == nil {
 		t.Fatal("expected error for real conflicts")
 	}
@@ -658,6 +659,34 @@ func TestRebaseOntoDefaultBranch_ReturnsTypedError(t *testing.T) {
 	var conflictErr *RebaseConflictError
 	if !errors.As(err, &conflictErr) {
 		t.Errorf("expected RebaseConflictError, got %T: %v", err, err)
+	}
+}
+
+func TestRebaseOntoDefaultBranch_CancelledContextReturnsContextError(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	writeFile(t, project, "mainfile.txt", "main content\n")
+	run(t, "git", "-C", project, "commit", "-m", "advance main")
+	pushToOrigin(t, project)
+
+	writeFile(t, mgr.WorkDir, "workfile.txt", "worktree content\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "worktree commit")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := mgr.RebaseOntoDefaultBranch(ctx)
+	if err == nil {
+		t.Fatal("expected error from cancelled context")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %T: %v", err, err)
+	}
+
+	var conflictErr *RebaseConflictError
+	if errors.As(err, &conflictErr) {
+		t.Error("cancelled context must not be misinterpreted as RebaseConflictError")
 	}
 }
 
