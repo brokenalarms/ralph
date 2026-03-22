@@ -177,7 +177,7 @@ func TestLastNLines_ShortInput(t *testing.T) {
 func setupGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	exec.Command("git", "-C", dir, "init", "-b", "main").Run()
+	exec.Command("git", "-C", dir, "init").Run()
 	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
 	exec.Command("git", "-C", dir, "config", "user.name", "test").Run()
 	os.WriteFile(filepath.Join(dir, "README.md"), []byte("init"), 0o644)

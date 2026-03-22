@@ -12,6 +12,9 @@
 # Implementation
 - **Go only by default.** The bash implementation (ralph.sh, lib/*.sh) is deprecated. All changes, fixes, and new features go in `go/` unless explicitly told otherwise.
 
+# Build
+- `go/cmd/ralph/prompts/` is a gitignored build artifact — copied from `prompts/` by `scripts/rebuild-go.sh`. The source of truth is `prompts/`. Edit there, not the copy. Run `scripts/rebuild-go.sh` to sync and rebuild.
+
 # Prompts
 - User-facing text strings and instructions for Claude belong in `.md` files under `prompts/`, not hardcoded in shell scripts. Shell code assembles and templates prompts but should not contain instructional prose.
 

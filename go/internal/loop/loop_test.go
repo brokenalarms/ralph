@@ -132,7 +132,6 @@ func TestLoop_AllTasksComplete(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -172,7 +171,6 @@ func TestLoop_NoTasksError(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -215,7 +213,6 @@ func TestLoop_StopFileDetection(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -263,7 +260,6 @@ func TestLoop_ContextCancellation(t *testing.T) {
 	cancel()
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -303,7 +299,6 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -552,7 +547,7 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 	// Set up a real git repo as the worktree so RotateBranch can checkout
 	wtDir := filepath.Join(dir, "worktree")
 	os.MkdirAll(wtDir, 0o755)
-	exec.Command("git", "init", "-b", "main", wtDir).Run()
+	exec.Command("git", "init", wtDir).Run()
 	exec.Command("git", "-C", wtDir, "commit", "--allow-empty", "-m", "init").Run()
 	exec.Command("git", "-C", wtDir, "checkout", "-b", "ralph/myproject/01-previous-task").Run()
 
@@ -567,7 +562,6 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 	}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       wtDir,
 		RalphDir:      ralphDir,
@@ -613,7 +607,6 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 	}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       gm.WorkDir,
 		RalphDir:      ralphDir,
@@ -682,7 +675,6 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 	}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -758,7 +750,6 @@ func TestLoop_HandleRebase_FreshWorktreeRecovery(t *testing.T) {
 
 	handlerCalled := false
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    project,
 		WorkDir:       gm.WorkDir,
 		RalphDir:      ralphDir,
@@ -823,7 +814,6 @@ func TestLoop_HandleRebase_AbortHaltsLoop(t *testing.T) {
 
 	handlerCalled := false
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    project,
 		WorkDir:       gm.WorkDir,
 		RalphDir:      ralphDir,
@@ -887,7 +877,6 @@ func TestLoop_HandleRebase_NoHandlerPropagatesError(t *testing.T) {
 	}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    project,
 		WorkDir:       gm.WorkDir,
 		RalphDir:      ralphDir,
@@ -979,7 +968,6 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 	}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    project,
 		WorkDir:       gm.WorkDir,
 		RalphDir:      ralphDir,
@@ -1044,7 +1032,6 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 	}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    project,
 		WorkDir:       gm.WorkDir,
 		RalphDir:      ralphDir,
@@ -1127,7 +1114,6 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    project,
 		WorkDir:       gm.WorkDir,
 		RalphDir:      ralphDir,
@@ -1197,7 +1183,6 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -1257,7 +1242,6 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 	}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    project,
 		WorkDir:       gm.WorkDir,
 		RalphDir:      ralphDir,
@@ -1298,7 +1282,7 @@ func initBareRepoWithOrigin(t *testing.T) (projectDir string, bareDir string) {
 	tmp := t.TempDir()
 
 	bare := filepath.Join(tmp, "bare.git")
-	run(t, "git", "init", "--bare", "-b", "main", bare)
+	run(t, "git", "init", "--bare", bare)
 
 	project := filepath.Join(tmp, "project")
 	run(t, "git", "clone", bare, project)
@@ -1386,7 +1370,6 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 			}
 
 			l := New(Config{
-				Runner:        &stubRunner{},
 				ProjectDir:    dir,
 				WorkDir:       dir,
 				RalphDir:      ralphDir,
@@ -1479,7 +1462,6 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 			}
 
 			l := New(Config{
-				Runner:        &stubRunner{},
 				ProjectDir:    project,
 				WorkDir:       gm.WorkDir,
 				RalphDir:      ralphDir,
@@ -1570,7 +1552,6 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 			}
 
 			l := New(Config{
-				Runner:        &stubRunner{},
 				ProjectDir:    dir,
 				WorkDir:       dir,
 				RalphDir:      ralphDir,
@@ -1629,7 +1610,6 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 	}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -1685,7 +1665,6 @@ func TestLoop_SingleBranchSkipsRotation(t *testing.T) {
 	}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       gm.WorkDir,
 		RalphDir:      ralphDir,
@@ -1731,7 +1710,6 @@ func TestLoop_SingleBranchSkipsRotationOnResume(t *testing.T) {
 	}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       gm.WorkDir,
 		RalphDir:      ralphDir,
@@ -1767,7 +1745,6 @@ func TestLoop_RecordsAttemptAfterIteration(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -1807,7 +1784,6 @@ func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -1858,7 +1834,6 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -1893,7 +1868,6 @@ func TestLoop_IncludesReflectionInAttemptContext(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:   dir,
 		WorkDir:      dir,
 		RalphDir:     ralphDir,
@@ -1924,7 +1898,6 @@ func TestLoop_CombinesAttemptsAndReflection(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:   dir,
 		WorkDir:      dir,
 		RalphDir:     ralphDir,
@@ -1959,7 +1932,6 @@ func TestLoop_EmptyAttemptContextForNewTask(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:   dir,
 		WorkDir:      dir,
 		RalphDir:     ralphDir,
@@ -2015,7 +1987,6 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -2083,7 +2054,6 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -2127,7 +2097,6 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -2171,7 +2140,6 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -2244,7 +2212,6 @@ func TestLoop_RecordsCompletedTasks(t *testing.T) {
 	}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -2296,7 +2263,6 @@ func TestLoop_ClearsCompletedTasksOnStart(t *testing.T) {
 	}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -2345,7 +2311,6 @@ func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 	}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -2395,7 +2360,6 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -2462,7 +2426,6 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,
@@ -2528,7 +2491,6 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		Runner:        &stubRunner{},
 		ProjectDir:    dir,
 		WorkDir:       dir,
 		RalphDir:      ralphDir,

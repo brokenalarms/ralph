@@ -16,7 +16,7 @@ func initBareRepoWithOrigin(t *testing.T) (projectDir string, bareDir string) {
 	tmp := t.TempDir()
 
 	bare := filepath.Join(tmp, "bare.git")
-	run(t, "git", "init", "--bare", "-b", "main", bare)
+	run(t, "git", "init", "--bare", bare)
 
 	project := filepath.Join(tmp, "project")
 	run(t, "git", "clone", bare, project)

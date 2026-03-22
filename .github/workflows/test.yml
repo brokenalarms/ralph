@@ -17,9 +17,6 @@ jobs:
         with:
           go-version: '1.23'
 
-      - name: Copy prompts for Go embed
-        run: cp -r prompts go/cmd/ralph/prompts
-
       - name: Run Go tests
         run: cd go && go test ./...
 
