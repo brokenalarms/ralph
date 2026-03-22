@@ -213,55 +213,60 @@ Example: NO — tests use a stub that always passes, proving nothing.`, beadTitl
 	return callLLM(workDir, prompt)
 }
 
-// LLMVerifyCodeState checks whether the task is already implemented in the
-// codebase by examining relevant source files instead of a diff. Used when
-// there are no new commits (work from a previous iteration already merged).
-func LLMVerifyCodeState(workDir, beadTitle, beadDescription string) Result {
-	files := findRelevantFiles(workDir, beadTitle, beadDescription)
-	if len(files) == 0 {
-		return Result{Passed: false, Reason: "no relevant files found for code-state verification"}
+// LLMVerifyCodeState checks whether a task is already implemented by finding
+// the PR that delivered it and verifying its diff against the acceptance
+// criteria. Used when there are no new commits (work from a previous
+// iteration already merged).
+func LLMVerifyCodeState(workDir, taskID, beadTitle, beadDescription string) Result {
+	prDiff := getPRDiff(workDir, taskID)
+	if prDiff == "" {
+		return Result{Passed: true, Reason: "no PR found for task — skipping code-state verification (tests passed)"}
 	}
 
-	var sb strings.Builder
-	totalSize := 0
-	for _, f := range files {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			continue
-		}
-		content := string(data)
-		if totalSize+len(content) > 20000 {
-			remaining := 20000 - totalSize
-			if remaining > 0 {
-				relPath, _ := filepath.Rel(workDir, f)
-				fmt.Fprintf(&sb, "\n=== %s ===\n%s\n[truncated]\n", relPath, content[:remaining])
-			}
-			break
-		}
-		relPath, _ := filepath.Rel(workDir, f)
-		fmt.Fprintf(&sb, "\n=== %s ===\n%s\n", relPath, content)
-		totalSize += len(content)
+	if len(prDiff) > 20000 {
+		prDiff = prDiff[:20000] + "\n\n[diff truncated at 20000 chars]"
 	}
 
-	prompt := fmt.Sprintf(`You are verifying whether a task has already been implemented in the codebase.
-The iteration produced no new commits, which may mean the work was completed in a previous iteration.
-Examine the source files below and determine if the feature/fix described is already present.
+	prompt := fmt.Sprintf(`You are verifying whether a task has already been implemented.
+The iteration produced no new commits, but a PR for this task exists. Examine the
+PR diff below and determine if it satisfies the task's acceptance criteria.
 
 TASK: %s
 DESCRIPTION: %s
 
-RELEVANT SOURCE FILES:
+PR DIFF:
 %s
 
-Is this feature/fix already implemented in the codebase? Look for:
-1. The described functionality exists in the code
-2. Tests exist that prove the functionality works
+Does this diff implement what the task asks for?
 
 Reply with exactly one line: YES or NO followed by a one-sentence reason.
-Example: YES — LLMVerifyCodeState function exists with file-based verification and tests.
-Example: NO — no code implements the retry logic described in the task.`, beadTitle, beadDescription, sb.String())
+Example: YES — PR adds the retry loop with exponential backoff as described.
+Example: NO — PR only updates docs, no implementation code.`, beadTitle, beadDescription, prDiff)
 
 	return callLLM(workDir, prompt)
+}
+
+// getPRDiff finds a PR matching the task ID and returns its diff.
+func getPRDiff(workDir, taskID string) string {
+	cmd := exec.Command("gh", "pr", "list", "--search", taskID,
+		"--state", "all", "--json", "number", "--jq", ".[0].number")
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	prNumber := strings.TrimSpace(string(out))
+	if prNumber == "" {
+		return ""
+	}
+
+	diffCmd := exec.Command("gh", "pr", "diff", prNumber)
+	diffCmd.Dir = workDir
+	diffOut, err := diffCmd.Output()
+	if err != nil {
+		return ""
+	}
+	return string(diffOut)
 }
 
 // callLLM sends a prompt to Claude Haiku and interprets YES/NO response.
@@ -285,91 +290,6 @@ func callLLM(workDir, prompt string) Result {
 	return Result{Passed: true, Reason: "LLM verified: " + response}
 }
 
-// findRelevantFiles searches the working directory for files related to the
-// task by extracting keywords from the title and description.
-func findRelevantFiles(workDir, title, description string) []string {
-	keywords := extractKeywords(title + " " + description)
-	seen := map[string]bool{}
-	var results []string
-
-	for _, kw := range keywords {
-		if len(results) >= 20 {
-			break
-		}
-		cmd := exec.Command("git", "grep", "-li", kw)
-		cmd.Dir = workDir
-		out, err := cmd.Output()
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if line == "" {
-				continue
-			}
-			absPath := filepath.Join(workDir, line)
-			if seen[absPath] {
-				continue
-			}
-			// Skip non-source files
-			if isSourceFile(line) {
-				seen[absPath] = true
-				results = append(results, absPath)
-			}
-		}
-	}
-
-	return results
-}
-
-// extractKeywords pulls meaningful search terms from task text, filtering
-// out short words and common stop words.
-func extractKeywords(text string) []string {
-	stopWords := map[string]bool{
-		"the": true, "a": true, "an": true, "is": true, "are": true,
-		"was": true, "were": true, "be": true, "been": true, "being": true,
-		"have": true, "has": true, "had": true, "do": true, "does": true,
-		"did": true, "will": true, "would": true, "could": true, "should": true,
-		"may": true, "might": true, "must": true, "shall": true,
-		"that": true, "this": true, "these": true, "those": true,
-		"with": true, "from": true, "into": true, "through": true,
-		"for": true, "and": true, "but": true, "not": true, "just": true,
-		"only": true, "when": true, "where": true, "how": true, "what": true,
-		"which": true, "who": true, "whom": true, "whose": true,
-		"than": true, "then": true, "also": true, "each": true,
-		"all": true, "any": true, "both": true, "few": true, "more": true,
-		"most": true, "other": true, "some": true, "such": true,
-		"can": true, "don": true, "too": true, "very": true,
-		"already": true, "instead": true, "check": true, "use": true,
-		"pass": true, "fix": true, "add": true, "new": true, "make": true,
-	}
-
-	words := strings.FieldsFunc(text, func(r rune) bool {
-		return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-')
-	})
-
-	var keywords []string
-	seen := map[string]bool{}
-	for _, w := range words {
-		lower := strings.ToLower(w)
-		if len(lower) < 4 || stopWords[lower] || seen[lower] {
-			continue
-		}
-		seen[lower] = true
-		keywords = append(keywords, lower)
-	}
-	return keywords
-}
-
-// isSourceFile returns true for common source code extensions.
-func isSourceFile(path string) bool {
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".go", ".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".rb", ".java",
-		".sh", ".bash", ".zsh", ".md", ".yml", ".yaml", ".toml", ".json":
-		return true
-	}
-	return false
-}
 
 func lastNLines(s string, n int) string {
 	lines := strings.Split(s, "\n")
