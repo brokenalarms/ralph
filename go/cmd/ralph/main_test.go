@@ -350,6 +350,47 @@ func TestEmbeddedPrompts_MatchSourcePrompts(t *testing.T) {
 	}
 }
 
+// Verifies evolveRestart skips the pull/rebuild/exec sequence when a stop
+// file exists, so that "ralph stop" issued during an iteration is honored
+// before restarting with a new binary.
+func TestEvolveRestart_StopFileSkipsRestart(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	stopFile := filepath.Join(ralphDir, "stop")
+	os.WriteFile(stopFile, []byte{}, 0o644)
+
+	log := logging.New(nil)
+
+	// evolveRestart would fail on git fetch in a non-git temp dir,
+	// so if it returns nil, the stop file short-circuited before any git ops.
+	err := evolveRestart(dir, "/nonexistent/ralph", nil, log)
+	if err != nil {
+		t.Fatalf("expected nil error when stop file present, got: %v", err)
+	}
+
+	if _, statErr := os.Stat(stopFile); !os.IsNotExist(statErr) {
+		t.Error("stop file should be removed after being honored")
+	}
+}
+
+// Verifies evolveRestart proceeds (and fails on git) when no stop file exists,
+// confirming the stop-file check only fires when the file is present.
+func TestEvolveRestart_NoStopFileProceeds(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	log := logging.New(nil)
+
+	// No stop file → should attempt git fetch, which fails in a temp dir.
+	err := evolveRestart(dir, "/nonexistent/ralph", nil, log)
+	if err == nil {
+		t.Fatal("expected error from git fetch in temp dir, got nil")
+	}
+}
+
 // Verifies that validatePlanFile rejects a nonexistent file with "not found".
 func TestValidatePlanFile_NonexistentExitsWithError(t *testing.T) {
 	err := validatePlanFile("/nonexistent/plan.md")
