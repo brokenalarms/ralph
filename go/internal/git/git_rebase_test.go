@@ -341,6 +341,37 @@ func TestRebaseOntoDefaultBranch_SkipsWhenAhead(t *testing.T) {
 	}
 }
 
+// --- tryResumeWorktree fetch tests ---
+
+// Resuming a worktree fetches origin/main so subsequent rebase uses fresh refs,
+// not stale local copies from the previous run.
+func TestTryResumeWorktree_FetchesOriginOnResume(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	// Record origin/main before any new commits
+	oldRef := gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
+
+	// Push a new commit to origin (simulates main advancing while ralph was idle)
+	writeFile(t, project, "newfile.txt", "pushed while idle\n")
+	run(t, "git", "-C", project, "commit", "-m", "advance main")
+	pushToOrigin(t, project)
+
+	// Simulate resume: store worktree state, then call tryResumeWorktree
+	_ = mgr.State.Write("worktree_dir", mgr.WorkDir)
+	_ = mgr.State.Write("worktree_branch", mgr.WorktreeBranch)
+
+	if err := mgr.tryResumeWorktree(); err != nil {
+		t.Fatalf("tryResumeWorktree: %v", err)
+	}
+
+	// After resume, origin/main should point at the new commit
+	newRef := gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
+	if newRef == oldRef {
+		t.Error("origin/main was not updated on resume — fetch did not run or failed silently")
+	}
+}
+
 // --- TagTaskStart / TagTaskEnd tests ---
 
 // TagTaskStart creates a git tag using the bd task ID when available
