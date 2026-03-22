@@ -1,6 +1,7 @@
 package attempts
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,6 +115,40 @@ func TestRead_ReturnsEmptyForNewTask(t *testing.T) {
 	history := tr.Read("new-task", "Brand new task")
 	if history != "" {
 		t.Errorf("expected empty, got %q", history)
+	}
+}
+
+// Proves: when more than 3 attempts are recorded, Read returns only
+// the last 3 so the prompt doesn't bloat with stale history.
+func TestRead_CapsAtLastThreeAttempts(t *testing.T) {
+	tr := newTestTracker(t)
+	for i := 1; i <= 5; i++ {
+		tr.Record("t6", "Capped task", fmt.Sprintf("try %d", i), "", "continue")
+	}
+
+	history := tr.Read("t6", "Capped task")
+	if strings.Contains(history, "try 1") || strings.Contains(history, "try 2") {
+		t.Error("expected attempts 1 and 2 to be excluded from prompt")
+	}
+	for _, want := range []string{"### Attempt 3", "### Attempt 4", "### Attempt 5"} {
+		if !strings.Contains(history, want) {
+			t.Errorf("missing %s in capped output", want)
+		}
+	}
+}
+
+// Proves: when 3 or fewer attempts exist, Read returns all of them.
+func TestRead_ReturnsAllWhenUnderCap(t *testing.T) {
+	tr := newTestTracker(t)
+	for i := 1; i <= 3; i++ {
+		tr.Record("t7", "Under cap", fmt.Sprintf("try %d", i), "", "continue")
+	}
+
+	history := tr.Read("t7", "Under cap")
+	for _, want := range []string{"### Attempt 1", "### Attempt 2", "### Attempt 3"} {
+		if !strings.Contains(history, want) {
+			t.Errorf("missing %s — should return all when at or under cap", want)
+		}
 	}
 }
 
