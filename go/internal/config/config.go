@@ -28,6 +28,8 @@ type Config struct {
 	DisabledChecks             []string
 	UseTmux                    bool
 	AutoMerge                  bool
+	MergeAdmin                 bool
+	CIWaitTimeout              time.Duration
 	Evolve                     bool
 	IdleTimeout                time.Duration
 	IdleTimeoutProgress        time.Duration
@@ -66,6 +68,7 @@ func Defaults() Config {
 		PermissionDenialThreshold:  3,
 		BranchStrategy:             "single",
 		WaitInterval:               envDuration("RALPH_WAIT_INTERVAL", 30*time.Second),
+		CIWaitTimeout:              envDuration("RALPH_CI_WAIT_TIMEOUT", 10*time.Minute),
 	}
 }
 
@@ -301,6 +304,23 @@ func Parse(args []string) (Config, error) {
 			cfg.AutoMerge = true
 			i++
 
+		case "--merge-admin":
+			cfg.MergeAdmin = true
+			i++
+
+		case "--ci-wait-timeout":
+			v, err := requireArg(args, i)
+			if err != nil {
+				return cfg, err
+			}
+			d, err := parseDuration(v)
+			if err != nil {
+				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
+			}
+			cfg.CIWaitTimeout = d
+			cfg.cliSet["ci_wait_timeout"] = true
+			i += 2
+
 		case "--evolve":
 			cfg.Evolve = true
 			i++
@@ -461,7 +481,13 @@ func (c *Config) LoadConfigFile(path string) error {
 				}
 			}
 			continue
-		case "idle_timeout", "idle_timeout_progress", "wait_interval":
+		case "merge_admin":
+			switch strings.ToLower(value) {
+			case "1", "true", "yes":
+				c.MergeAdmin = true
+			}
+			continue
+		case "idle_timeout", "idle_timeout_progress", "wait_interval", "ci_wait_timeout":
 			d, err := parseDuration(value)
 			if err != nil {
 				continue
@@ -473,6 +499,8 @@ func (c *Config) LoadConfigFile(path string) error {
 				c.IdleTimeoutProgress = d
 			case "wait_interval":
 				c.WaitInterval = d
+			case "ci_wait_timeout":
+				c.CIWaitTimeout = d
 			}
 			continue
 		}
@@ -547,6 +575,8 @@ func writeDefaultConfig(path string) error {
 	fmt.Fprintf(&b, "stagnation_threshold = %d\n", d.StagnationThreshold)
 	fmt.Fprintf(&b, "test_saturation_threshold = %d\n", d.TestSaturationThreshold)
 	fmt.Fprintf(&b, "permission_denial_threshold = %d\n", d.PermissionDenialThreshold)
+	fmt.Fprintf(&b, "merge_admin = %v\n", d.MergeAdmin)
+	fmt.Fprintf(&b, "ci_wait_timeout = %s\n", formatDuration(d.CIWaitTimeout))
 	fmt.Fprintf(&b, "disabled_checks =\n")
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }

@@ -35,6 +35,8 @@ type Config struct {
 	DisabledChecks      []string
 	Quiet               bool
 	AutoMerge           bool
+	MergeAdmin          bool
+	CIWaitTimeout       time.Duration
 	Evolve              bool
 	CallsPerHour        int
 	TaskBackend         tasks.Backend
@@ -348,6 +350,7 @@ func (l *Loop) Run(ctx context.Context) error {
 				merged, err := l.autoMerge()
 				if err != nil {
 					l.logger.Warn("Auto-merge: %v", err)
+					l.writeMergeFailureFeedback(err)
 					l.git.PostMergeFailReset()
 				} else if merged {
 					l.git.PostMergeReset()
@@ -444,7 +447,10 @@ func (l *Loop) autoMerge() (bool, error) {
 	if l.mergeFunc != nil {
 		return l.mergeFunc()
 	}
-	return l.git.AutoMergeCurrentBranch()
+	return l.git.AutoMergeWithOpts(git.MergeOpts{
+		CIWaitTimeout: l.cfg.CIWaitTimeout,
+		Admin:         l.cfg.MergeAdmin,
+	})
 }
 
 func (l *Loop) waitForTasks(ctx context.Context) bool {
@@ -646,6 +652,27 @@ func (l *Loop) readFeedback() string {
 
 func (l *Loop) clearFeedback() {
 	os.Remove(filepath.Join(l.cfg.RalphDir, "feedback"))
+}
+
+// writeMergeFailureFeedback extracts actionable details from a merge error
+// and writes them to the feedback file so the next iteration can address the
+// root cause (e.g. fix failing CI tests).
+func (l *Loop) writeMergeFailureFeedback(err error) {
+	var mergeErr *git.MergeError
+	if !errors.As(err, &mergeErr) {
+		return
+	}
+
+	var msg strings.Builder
+	fmt.Fprintf(&msg, "Auto-merge failed for PR #%s: %s\n", mergeErr.PR, mergeErr.Reason)
+
+	if detail := git.FormatCheckFailures(mergeErr.Checks); detail != "" {
+		fmt.Fprintf(&msg, "\n%s\n", detail)
+		msg.WriteString("\nThe next iteration should fix these CI failures before signaling completion.")
+	}
+
+	feedbackFile := filepath.Join(l.cfg.RalphDir, "feedback")
+	os.WriteFile(feedbackFile, []byte(msg.String()), 0o644)
 }
 
 // readReflection returns the content of a previous reflection file for a task.

@@ -409,10 +409,22 @@ func (m *Manager) PRNumberForBranch() string {
 	return strings.TrimSpace(string(out))
 }
 
+// MergeOpts controls auto-merge behavior for CI-gated repositories.
+type MergeOpts struct {
+	CIWaitTimeout time.Duration
+	Admin         bool
+}
+
 // AutoMergeCurrentBranch squash-merges the PR for the current branch into main.
 // Returns (true, nil) when a PR was merged, (false, nil) when no PR exists or
 // no action was needed, and (false, err) on failure.
 func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
+	return m.AutoMergeWithOpts(MergeOpts{})
+}
+
+// AutoMergeWithOpts squash-merges the PR for the current branch, optionally
+// waiting for CI checks and/or using admin privileges to bypass branch protection.
+func (m *Manager) AutoMergeWithOpts(opts MergeOpts) (bool, error) {
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
 		return false, nil
 	}
@@ -439,18 +451,45 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 
 	m.Logger.Log("Auto-merging PR #%s (branch: %s)...", prNumber, m.WorktreeBranch)
 
-	mergeCmd := exec.Command("gh", "pr", "merge", prNumber, "--squash", "--delete-branch", "-R", repoURL)
-	if mergeOut, err := mergeCmd.CombinedOutput(); err != nil {
-		m.Logger.Warn("Auto-merge failed for PR #%s: %s", prNumber, string(mergeOut))
-		return false, fmt.Errorf("auto-merge failed for PR #%s", prNumber)
+	if opts.CIWaitTimeout > 0 {
+		m.Logger.Log("Waiting for CI checks on PR #%s (timeout: %s)...", prNumber, opts.CIWaitTimeout)
+		result, err := m.WaitForPRChecks(prNumber, repoURL, opts.CIWaitTimeout)
+		if err != nil {
+			return false, &MergeError{
+				PR:     prNumber,
+				Reason: fmt.Sprintf("CI timed out: %v", err),
+				Checks: result.Checks,
+			}
+		}
+		if !result.Passed {
+			return false, &MergeError{
+				PR:     prNumber,
+				Reason: "CI checks failed",
+				Checks: result.Checks,
+			}
+		}
+		m.Logger.Log("All CI checks passed for PR #%s", prNumber)
+	}
+
+	mergeArgs := []string{"pr", "merge", prNumber, "--squash", "--delete-branch", "-R", repoURL}
+	if opts.Admin {
+		mergeArgs = append(mergeArgs, "--admin")
+	}
+	mergeCmd := exec.Command("gh", mergeArgs...)
+	if mergeOut, mergeErr := mergeCmd.CombinedOutput(); mergeErr != nil {
+		rawOutput := strings.TrimSpace(string(mergeOut))
+		m.Logger.Warn("Auto-merge failed for PR #%s: %s", prNumber, rawOutput)
+
+		reason := diagnoseMergeFailure(rawOutput)
+		return false, &MergeError{
+			PR:      prNumber,
+			Reason:  reason,
+			RawText: rawOutput,
+		}
 	}
 
 	m.Logger.Log("PR #%s squash-merged into main", prNumber)
 
-	// Pull latest main so next iteration starts from merged state.
-	// Use update-ref instead of branch -f because the default branch is
-	// typically checked out in the project dir, and branch -f refuses to
-	// update the current branch.
 	defaultBranch := detectDefaultBranch(m.ProjectDir)
 	gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
 	originRef := gitOutput(m.ProjectDir, "rev-parse", "origin/"+defaultBranch)
@@ -460,6 +499,29 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 	m.Logger.Log("Updated local %s to origin/%s", defaultBranch, defaultBranch)
 
 	return true, nil
+}
+
+// diagnoseMergeFailure inspects gh pr merge output to produce a specific
+// human-readable reason for the failure.
+func diagnoseMergeFailure(output string) string {
+	lower := strings.ToLower(output)
+	switch {
+	case strings.Contains(lower, "status check"):
+		return "branch protection requires status checks to pass"
+	case strings.Contains(lower, "review") && strings.Contains(lower, "required"):
+		return "branch protection requires reviews"
+	case strings.Contains(lower, "base branch policy"):
+		return "branch protection policy prohibits merge"
+	case strings.Contains(lower, "merge conflict"):
+		return "merge conflict with base branch"
+	case strings.Contains(lower, "not mergeable"):
+		return "PR is not in a mergeable state"
+	default:
+		if len(output) > 200 {
+			output = output[:200] + "..."
+		}
+		return output
+	}
 }
 
 // PostMergeReset resets the worktree to a fresh temp branch at origin/main.

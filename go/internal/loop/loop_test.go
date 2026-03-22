@@ -2554,3 +2554,149 @@ func TestLoop_CloseTaskWithoutPR(t *testing.T) {
 		t.Errorf("close reason = %q, want %q", got, expected)
 	}
 }
+
+// Verifies that when auto-merge fails with a MergeError containing CI check
+// details, the loop writes those details to the feedback file so the next
+// iteration can address the failures.
+func TestLoop_CIFailureWritesFeedback(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "add feature",
+		nextID:    "ralph-ci1",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			backend.completed = 1
+			backend.remaining = 0
+		},
+		result: claude.Result{
+			SignalDetected: true,
+			Summary:        "added the feature",
+		},
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		BranchStrategy: git.BranchSingle,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.pushPRFunc = func(string) error { return nil }
+	l.mergeFunc = func() (bool, error) {
+		return false, &git.MergeError{
+			PR:     "245",
+			Reason: "CI checks failed",
+			Checks: []git.CheckStatus{
+				{Name: "test", Status: "COMPLETED", Conclusion: "FAILURE"},
+				{Name: "build", Status: "COMPLETED", Conclusion: "SUCCESS"},
+			},
+		}
+	}
+
+	_ = l.Run(context.Background())
+
+	feedbackFile := filepath.Join(ralphDir, "feedback")
+	data, err := os.ReadFile(feedbackFile)
+	if err != nil {
+		t.Fatalf("expected feedback file to be written, got error: %v", err)
+	}
+	feedback := string(data)
+
+	if !strings.Contains(feedback, "PR #245") {
+		t.Errorf("feedback should mention PR number, got: %s", feedback)
+	}
+	if !strings.Contains(feedback, "test: FAILURE") {
+		t.Errorf("feedback should list failed check details, got: %s", feedback)
+	}
+	if strings.Contains(feedback, "build: SUCCESS") {
+		t.Errorf("feedback should not list successful checks, got: %s", feedback)
+	}
+	if !strings.Contains(feedback, "fix these CI failures") {
+		t.Errorf("feedback should instruct next iteration to fix failures, got: %s", feedback)
+	}
+}
+
+// Verifies that when auto-merge fails with a non-MergeError (e.g. a plain
+// error from the merge stub), no feedback file is written — feedback is only
+// for structured CI failures.
+func TestLoop_PlainMergeErrorNoFeedback(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "add feature",
+		nextID:    "ralph-ci2",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			backend.completed = 1
+			backend.remaining = 0
+		},
+		result: claude.Result{
+			SignalDetected: true,
+			Summary:        "done",
+		},
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		BranchStrategy: git.BranchSingle,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.pushPRFunc = func(string) error { return nil }
+	l.mergeFunc = func() (bool, error) {
+		return false, fmt.Errorf("merge failed: network error")
+	}
+
+	_ = l.Run(context.Background())
+
+	feedbackFile := filepath.Join(ralphDir, "feedback")
+	if _, err := os.Stat(feedbackFile); err == nil {
+		t.Error("plain merge error should not write feedback file")
+	}
+}

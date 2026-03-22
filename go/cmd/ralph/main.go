@@ -234,6 +234,8 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		DisabledChecks:      cfg.DisabledChecks,
 		Quiet:               cfg.Quiet,
 		AutoMerge:           cfg.AutoMerge,
+		MergeAdmin:          cfg.MergeAdmin,
+		CIWaitTimeout:       cfg.CIWaitTimeout,
 		Evolve:              cfg.Evolve,
 		CallsPerHour:        cfg.CallsPerHour,
 		TaskBackend:         backend,
