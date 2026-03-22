@@ -79,12 +79,14 @@ type RunConfig struct {
 
 // Result describes the outcome of a Claude run.
 type Result struct {
-	SignalDetected bool   // true if a completion signal was found
-	AllComplete    bool   // true if the all-complete signal was found
-	IdleTimeout    bool   // true if the session was killed due to idle timeout
-	OnSignalUsed   bool   // true if OnSignal callback was used for verification
-	TaskDesc       string // task description from the current-task signal
-	Summary        string // completion summary from signal file
+	SignalDetected     bool   // true if a completion signal was found
+	AllComplete        bool   // true if the all-complete signal was found
+	IdleTimeout        bool   // true if the session was killed due to idle timeout
+	OnSignalUsed       bool   // true if OnSignal callback was used for verification
+	VerificationFailed bool   // true if signal was detected but OnSignal rejected it
+	VerificationReason string // reason OnSignal rejected the signal
+	TaskDesc           string // task description from the current-task signal
+	Summary            string // completion summary from signal file
 }
 
 // OnTaskDetected is called when a current-task signal file appears.

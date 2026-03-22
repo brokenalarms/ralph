@@ -343,19 +343,10 @@ func TestInteractivePromptChecklistIncludesPlanFile(t *testing.T) {
 	}
 }
 
-// After successful planning, state status is "planned" and worktree rename is called.
-func TestFinalizeUpdatesStateAndRenames(t *testing.T) {
+// After successful planning, state status is set to "planned".
+func TestFinalizeUpdatesState(t *testing.T) {
 	d, _ := testDeps(t)
 	d.SkipPlanning = true
-
-	// Write theme to state so rename picks it up.
-	d.StateStore.Write("theme", "auth rewrite")
-
-	var renamedTheme string
-	d.RenameWorktree = func(theme string) error {
-		renamedTheme = theme
-		return nil
-	}
 
 	if err := Run(d); err != nil {
 		t.Fatalf("Run() error: %v", err)
@@ -364,157 +355,6 @@ func TestFinalizeUpdatesStateAndRenames(t *testing.T) {
 	s, _ := d.StateStore.Load()
 	if s.Status != "planned" {
 		t.Errorf("status = %q, want %q", s.Status, "planned")
-	}
-	if renamedTheme != "auth rewrite" {
-		t.Errorf("renamed theme = %q, want %q", renamedTheme, "auth rewrite")
-	}
-}
-
-// Theme fallback reads first line of plan file when state has no theme.
-func TestRenameWorktreeThemeFallbackFromPlanFile(t *testing.T) {
-	d, _ := testDeps(t)
-	d.SkipPlanning = true
-
-	// No theme in state, but plan file has a heading.
-	planPath := planFilePath(d)
-	writeFile(t, planPath, "# Database migration\n- [ ] Task 1\n")
-
-	var renamedTheme string
-	d.RenameWorktree = func(theme string) error {
-		renamedTheme = theme
-		return nil
-	}
-
-	if err := Run(d); err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
-
-	if renamedTheme != "Database migration" {
-		t.Errorf("renamed theme = %q, want %q", renamedTheme, "Database migration")
-	}
-}
-
-// Tmux session is renamed alongside the worktree when a theme exists.
-func TestTmuxSessionRenamedWithTheme(t *testing.T) {
-	d, _ := testDeps(t)
-	d.SkipPlanning = true
-
-	d.StateStore.Write("theme", "auth rewrite")
-
-	d.RenameWorktree = func(string) error { return nil }
-
-	var tmuxName string
-	d.RenameTmuxSession = func(name string) error {
-		tmuxName = name
-		return nil
-	}
-
-	if err := Run(d); err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
-
-	if tmuxName != "auth rewrite" {
-		t.Errorf("tmux session name = %q, want %q", tmuxName, "auth rewrite")
-	}
-}
-
-// Tmux session rename is skipped when no theme exists.
-func TestTmuxSessionNotRenamedWithoutTheme(t *testing.T) {
-	d, _ := testDeps(t)
-	d.SkipPlanning = true
-
-	d.RenameWorktree = func(string) error { return nil }
-
-	tmuxCalled := false
-	d.RenameTmuxSession = func(string) error {
-		tmuxCalled = true
-		return nil
-	}
-
-	if err := Run(d); err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
-
-	if tmuxCalled {
-		t.Error("tmux session rename should not be called when no theme exists")
-	}
-}
-
-// BD backend fallback: when no theme in state, derive from first task title.
-func TestRenameWorktreeThemeFallbackToBDTaskTitle(t *testing.T) {
-	d, _ := testDeps(t)
-	d.SkipPlanning = true
-
-	d.Backend = &mockBackend{
-		label:             "beads",
-		needsPlanning:     false,
-		planningSucceeded: true,
-		totalTasks:        1,
-		nextTask:          "auth middleware rewrite",
-	}
-
-	var renamedTheme string
-	d.RenameWorktree = func(theme string) error {
-		renamedTheme = theme
-		return nil
-	}
-
-	if err := Run(d); err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
-
-	if renamedTheme != "auth middleware rewrite" {
-		t.Errorf("renamed theme = %q, want %q", renamedTheme, "auth middleware rewrite")
-	}
-}
-
-// State theme takes priority over bd task title.
-func TestRenameWorktreeThemePrefersStateOverBD(t *testing.T) {
-	d, _ := testDeps(t)
-	d.SkipPlanning = true
-
-	d.StateStore.Write("theme", "go migration")
-
-	d.Backend = &mockBackend{
-		label:             "beads",
-		needsPlanning:     false,
-		planningSucceeded: true,
-		totalTasks:        1,
-		nextTask:          "wrong answer",
-	}
-
-	var renamedTheme string
-	d.RenameWorktree = func(theme string) error {
-		renamedTheme = theme
-		return nil
-	}
-
-	if err := Run(d); err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
-
-	if renamedTheme != "go migration" {
-		t.Errorf("renamed theme = %q, want %q", renamedTheme, "go migration")
-	}
-}
-
-// When no theme and no plan file heading exist, worktree rename is not called.
-func TestNoThemeNoRename(t *testing.T) {
-	d, _ := testDeps(t)
-	d.SkipPlanning = true
-
-	renameCalled := false
-	d.RenameWorktree = func(string) error {
-		renameCalled = true
-		return nil
-	}
-
-	if err := Run(d); err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
-
-	if renameCalled {
-		t.Error("worktree rename should not be called when no theme exists")
 	}
 }
 

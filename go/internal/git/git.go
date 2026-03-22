@@ -217,50 +217,6 @@ func (m *Manager) cleanTempBranch() error {
 		m.WorktreeBranch, existingWt)
 }
 
-// RenameWorktreeForTheme renames the worktree directory to include a
-// slugified theme description. Mirrors lib/git.sh rename_worktree_for_theme.
-func (m *Manager) RenameWorktreeForTheme(themeDesc string) {
-	if themeDesc == "" || m.WorkDir == m.ProjectDir {
-		return
-	}
-
-	slug := Slugify(themeDesc)
-	if slug == "" {
-		return
-	}
-
-	today := time.Now().Format("20060102")
-	newDir := filepath.Join(m.RalphDir, "worktrees", "ralph-"+today+"-"+slug)
-
-	if m.WorkDir == newDir {
-		return
-	}
-
-	// Avoid collision
-	if _, err := os.Stat(newDir); err == nil {
-		i := 2
-		for {
-			candidate := fmt.Sprintf("%s-%d", newDir, i)
-			if _, err := os.Stat(candidate); err != nil {
-				newDir = candidate
-				break
-			}
-			i++
-		}
-	}
-
-	if err := gitCmdErr(m.ProjectDir, "worktree", "move", m.WorkDir, newDir); err != nil {
-		m.Logger.Warn("Could not rename worktree (continuing with current name)")
-		return
-	}
-
-	m.WorkDir = newDir
-	if m.State != nil {
-		_ = m.State.Write("worktree_dir", m.WorkDir)
-	}
-	m.Logger.Log("Worktree renamed: %s", newDir)
-}
-
 // RenameBranchForTask renames the current branch to include a task slug.
 // Each call increments TaskSeq. Only renames once per iteration (tracked by
 // BranchRenamed). Skipped in single-branch mode. Mirrors lib/git.sh rename_branch_for_task.

@@ -191,10 +191,6 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		Prompt:       cfg.Prompt,
 		SkipPlanning: cfg.SkipPlanning,
 		ForcePlan:    cfg.PlanOnly,
-		RenameWorktree: func(theme string) error {
-			gm.RenameWorktreeForTheme(theme)
-			return nil
-		},
 	}
 
 	if err := planning.Run(planDeps); err != nil {

@@ -37,14 +37,6 @@ type Deps struct {
 	// given system prompt. The caller is responsible for signal polling.
 	// If nil, defaultRunClaude is used.
 	RunClaude func(prompt string) error
-
-	// RenameWorktree renames the worktree directory based on theme.
-	// If nil, renaming is skipped (useful in tests).
-	RenameWorktree func(theme string) error
-
-	// RenameTmuxSession renames the active tmux session to match the worktree.
-	// If nil, tmux renaming is skipped.
-	RenameTmuxSession func(name string) error
 }
 
 // Run executes the planning phase. It mirrors ralph.sh's run_planning():
@@ -272,7 +264,7 @@ func buildAutonomousPrompt(d Deps) (string, error) {
 	return prompt, nil
 }
 
-// finalize writes "planned" status, logs success, and renames the worktree.
+// finalize writes "planned" status and logs success.
 func finalize(d Deps) error {
 	if err := setStatus(d, "planned"); err != nil {
 		return err
@@ -284,47 +276,7 @@ func finalize(d Deps) error {
 	}
 	d.Logger.TaskSuccess("Plan created with %d tasks", total)
 
-	renameWorktreeFromTheme(d)
-
 	return nil
-}
-
-// renameWorktreeFromTheme reads the theme from state and renames the worktree.
-func renameWorktreeFromTheme(d Deps) {
-	if d.RenameWorktree == nil {
-		return
-	}
-
-	theme, _ := d.StateStore.Read("theme")
-
-	// Fallback: for bd backend, derive theme from first task title.
-	if theme == "" && d.Backend.Label() == "beads" {
-		if task, err := d.Backend.GetNextTask(); err == nil && task != "" {
-			theme = task
-		}
-	}
-
-	// Fallback: derive theme from plan file heading.
-	if theme == "" {
-		dst := planFilePath(d)
-		if data, err := os.ReadFile(dst); err == nil {
-			lines := strings.SplitN(string(data), "\n", 2)
-			if len(lines) > 0 {
-				theme = strings.TrimLeft(lines[0], "# ")
-			}
-		}
-	}
-
-	if theme != "" {
-		if err := d.RenameWorktree(theme); err != nil {
-			d.Logger.Warn("Failed to rename worktree: %v", err)
-		}
-		if d.RenameTmuxSession != nil {
-			if err := d.RenameTmuxSession(theme); err != nil {
-				d.Logger.Warn("Failed to rename tmux session: %v", err)
-			}
-		}
-	}
 }
 
 // setStatus writes "planned" (or other status) to state.json.
