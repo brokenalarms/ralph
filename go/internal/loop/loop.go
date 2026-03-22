@@ -303,9 +303,16 @@ func (l *Loop) Run(ctx context.Context) error {
 				passed, reason := l.verifyCompletion(headBefore)
 				if !passed {
 					l.logger.Warn("Verification failed: %s", reason)
-					// Write feedback for agent to read
+					// Write full test output as feedback for agent
 					feedbackPath := filepath.Join(l.cfg.RalphDir, "feedback")
-					os.WriteFile(feedbackPath, []byte("VERIFICATION FAILED: "+reason+"\nFix the failing tests and signal completion again."), 0o644)
+					testOutput, _ := l.state.Read("last_test_output")
+					feedback := "ORCHESTRATOR VERIFICATION FAILED.\n\n"
+					feedback += "Reason: " + reason + "\n\n"
+					if testOutput != "" {
+						feedback += "Test output:\n" + testOutput + "\n\n"
+					}
+					feedback += "Fix the failing tests and signal completion again. Do NOT signal until tests pass."
+					os.WriteFile(feedbackPath, []byte(feedback), 0o644)
 				}
 				return passed
 			},
