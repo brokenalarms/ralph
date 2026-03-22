@@ -1140,7 +1140,9 @@ func TestPostMergeReset_ResetsToOriginMain(t *testing.T) {
 		t.Fatal("expected task branch to differ from temp branch")
 	}
 
-	mgr.PostMergeReset()
+	if err := mgr.PostMergeReset(); err != nil {
+		t.Fatalf("PostMergeReset: %v", err)
+	}
 
 	if mgr.WorktreeBranch != mgr.TempBranch() {
 		t.Errorf("expected branch %q after reset, got %q", mgr.TempBranch(), mgr.WorktreeBranch)
@@ -1190,7 +1192,9 @@ func TestPostMergeReset_SingleBranchKeepsSameName(t *testing.T) {
 		t.Fatal("HEAD should differ from origin/main before reset")
 	}
 
-	mgr.PostMergeReset()
+	if err := mgr.PostMergeReset(); err != nil {
+		t.Fatalf("PostMergeReset: %v", err)
+	}
 
 	if mgr.WorktreeBranch != origBranch {
 		t.Errorf("single-branch should keep name %q, got %q", origBranch, mgr.WorktreeBranch)
@@ -1199,6 +1203,62 @@ func TestPostMergeReset_SingleBranchKeepsSameName(t *testing.T) {
 	headAfter := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
 	if headAfter != originMain {
 		t.Errorf("HEAD should match origin/main after reset, got %s vs %s", headAfter, originMain)
+	}
+}
+
+// Force-reset must clean both dirty tracked files and untracked files left
+// by the previous task, so the next task starts with a pristine worktree
+// matching origin/main exactly.
+func TestPostMergeReset_CleansUntrackedAndDirtyFiles(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchStacked,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("dirty task")
+
+	// Create an untracked file (simulating build artifacts or generated files)
+	untrackedPath := filepath.Join(mgr.WorkDir, "leftover-artifact.txt")
+	if err := os.WriteFile(untrackedPath, []byte("stale artifact\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Modify a tracked file without committing (dirty working tree)
+	trackedPath := filepath.Join(mgr.WorkDir, "dirty-edit.txt")
+	writeFile(t, mgr.WorkDir, "dirty-edit.txt", "original\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add tracked file")
+	if err := os.WriteFile(trackedPath, []byte("modified\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mgr.PostMergeReset(); err != nil {
+		t.Fatalf("PostMergeReset: %v", err)
+	}
+
+	if _, err := os.Stat(untrackedPath); !os.IsNotExist(err) {
+		t.Error("untracked file should have been removed by force-reset")
+	}
+
+	// Tracked file from the task branch should no longer exist (it wasn't on origin/main)
+	if _, err := os.Stat(trackedPath); !os.IsNotExist(err) {
+		t.Error("tracked file from task branch should not exist after reset to origin/main")
+	}
+
+	headAfter := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
+	originMain := gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
+	if headAfter != originMain {
+		t.Errorf("HEAD should match origin/main, got %s vs %s", headAfter, originMain)
 	}
 }
 

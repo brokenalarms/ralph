@@ -450,22 +450,26 @@ func (m *Manager) ghMergeArgs(prNumber, repoURL string) []string {
 	return args
 }
 
-// PostMergeReset resets the worktree to a fresh temp branch at origin/main.
-// Called after a successful auto-merge so the next task starts from the
-// merged state rather than building on stale commits. Works for both
-// single-branch and stacked strategies.
-func (m *Manager) PostMergeReset() {
+// PostMergeReset force-resets the worktree to origin/main after a successful
+// squash-merge. The old branch is disposable — all its work is already on
+// main. Uses --force checkout and git clean to guarantee a pristine working
+// tree with no leftover files from the previous task.
+func (m *Manager) PostMergeReset() error {
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
-		return
+		return nil
 	}
 
 	defaultBranch := detectDefaultBranch(m.ProjectDir)
 	oldBranch := m.WorktreeBranch
 	newBranch := m.TempBranch()
 
-	if err := gitCmdErr(m.WorkDir, "checkout", "-B", newBranch, "origin/"+defaultBranch); err != nil {
-		m.Logger.Warn("Post-merge reset failed, continuing on %s", m.WorktreeBranch)
-		return
+	if err := gitCmdErr(m.WorkDir, "checkout", "--force", "-B", newBranch, "origin/"+defaultBranch); err != nil {
+		return fmt.Errorf("post-merge reset: checkout failed: %w", err)
+	}
+
+	// Remove untracked files and directories left by the previous task.
+	if err := gitCmdErr(m.WorkDir, "clean", "-fd"); err != nil {
+		m.Logger.Warn("git clean failed (non-fatal): %v", err)
 	}
 
 	if oldBranch != newBranch {
@@ -477,7 +481,8 @@ func (m *Manager) PostMergeReset() {
 	if m.State != nil {
 		_ = m.State.Write("worktree_branch", m.WorktreeBranch)
 	}
-	m.Logger.Log("Reset to %s from origin/%s", newBranch, defaultBranch)
+	m.Logger.Log("Force-reset to %s from origin/%s", newBranch, defaultBranch)
+	return nil
 }
 
 // RecreateFromMain removes the current worktree and creates a fresh one from
