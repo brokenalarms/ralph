@@ -292,16 +292,13 @@ func TestBD_PlanningSucceeded_WithTasks(t *testing.T) {
 	}
 }
 
-// Proves: CloseTask calls bd close only for in_progress, verified tasks.
+// Proves: CloseTask calls bd close for verified tasks.
 func TestBD_CloseTask(t *testing.T) {
 	closed := false
 	runner := func(dir string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "close" {
 			closed = true
 			return "closed", nil
-		}
-		if len(args) > 0 && args[0] == "show" {
-			return `[{"status":"in_progress"}]`, nil
 		}
 		if len(args) > 0 && args[0] == "state" {
 			return "verified", nil
@@ -313,7 +310,7 @@ func TestBD_CloseTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !closed {
-		t.Error("expected close to be called for in_progress verified task")
+		t.Error("expected close to be called for verified task")
 	}
 }
 
@@ -699,9 +696,6 @@ func TestBD_GetState_EmptyID(t *testing.T) {
 // Proves: CloseTask is rejected when phase is not "verified".
 func TestBD_CloseTask_RejectsUnverified(t *testing.T) {
 	runner := func(dir string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] == "show" {
-			return `[{"status":"in_progress"}]`, nil
-		}
 		if len(args) > 0 && args[0] == "state" {
 			return "implementing", nil
 		}
@@ -725,9 +719,6 @@ func TestBD_CloseTask_RejectsUnverified(t *testing.T) {
 func TestBD_CloseTask_AllowsVerified(t *testing.T) {
 	closed := false
 	runner := func(dir string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] == "show" {
-			return `[{"status":"in_progress"}]`, nil
-		}
 		if len(args) > 0 && args[0] == "state" {
 			return "verified", nil
 		}
@@ -749,9 +740,6 @@ func TestBD_CloseTask_AllowsVerified(t *testing.T) {
 // Proves: CloseTask with empty phase (state not set) is rejected.
 func TestBD_CloseTask_RejectsEmptyPhase(t *testing.T) {
 	runner := func(dir string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] == "show" {
-			return `[{"status":"in_progress"}]`, nil
-		}
 		if len(args) > 0 && args[0] == "state" {
 			return "", fmt.Errorf("no state set")
 		}

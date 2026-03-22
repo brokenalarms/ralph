@@ -342,19 +342,6 @@ func (b *BD) CloseTask(id string, reason string) error {
 	}
 	run := b.runner()
 
-	// Only close if still in_progress.
-	out, err := run(b.ProjectDir, "show", id, "--json")
-	if err == nil {
-		var issues []struct {
-			Status string `json:"status"`
-		}
-		if json.Unmarshal([]byte(out), &issues) == nil && len(issues) > 0 {
-			if issues[0].Status != "in_progress" {
-				return nil
-			}
-		}
-	}
-
 	// Prevent closing unless the task has reached phase:verified.
 	phase, _ := b.GetState(id, "phase")
 	if phase != "verified" {
@@ -364,7 +351,7 @@ func (b *BD) CloseTask(id string, reason string) error {
 	if reason == "" {
 		reason = "completed by ralph"
 	}
-	_, err = run(b.ProjectDir, "close", id, "--reason", reason)
+	_, err := run(b.ProjectDir, "close", id, "--reason", reason)
 	return err
 }
 

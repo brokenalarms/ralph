@@ -537,7 +537,9 @@ func (l *Loop) Run(ctx context.Context) error {
 
 			if taskID != "" {
 				if err := l.cfg.TaskBackend.CloseTask(taskID, "completed by ralph"); err != nil {
-					l.logger.Warn("CloseTask: %v", err)
+					l.logger.Warn("CloseTask failed: %v", err)
+				} else {
+					l.logger.Log("Closed task %s", taskID)
 				}
 			}
 
