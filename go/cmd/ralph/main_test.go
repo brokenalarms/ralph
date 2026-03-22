@@ -393,7 +393,7 @@ func TestEvolveRestart_StopFileSkipsRestart(t *testing.T) {
 
 	// evolveRestart would fail on git fetch in a non-git temp dir,
 	// so if it returns nil, the stop file short-circuited before any git ops.
-	err := evolveRestart(dir, "/nonexistent/ralph", nil, log)
+	err := evolveRestart(dir, "/nonexistent/ralph", "develop", nil, log)
 	if err != nil {
 		t.Fatalf("expected nil error when stop file present, got: %v", err)
 	}
@@ -413,7 +413,7 @@ func TestEvolveRestart_NoStopFileProceeds(t *testing.T) {
 	log := logging.New(nil)
 
 	// No stop file → should attempt git fetch, which fails in a temp dir.
-	err := evolveRestart(dir, "/nonexistent/ralph", nil, log)
+	err := evolveRestart(dir, "/nonexistent/ralph", "develop", nil, log)
 	if err == nil {
 		t.Fatal("expected error from git fetch in temp dir, got nil")
 	}

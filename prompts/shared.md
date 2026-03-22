@@ -30,8 +30,8 @@
 - Behavioral code changes should be backed by tests. Static content, markup, and config changes don't need tests — a passing build is verification enough.
 
 ### Github
-- One task = one PR. All commits for a task go into a single pull request. Never push directly to main.
-- Before creating a PR, fetch and rebase onto the latest origin main to avoid merge conflicts.
+- One task = one PR. All commits for a task go into a single pull request. Never push directly to the base branch.
+- Before creating a PR, fetch and rebase onto the latest origin base branch to avoid merge conflicts.
 - Before creating a PR, check if one already exists for the current branch: `gh pr list --head "$(git branch --show-current)" --state open --json number --jq '.[0].number'`. If a PR exists, push your commits and update its title and description to reflect all commits on the branch. Only create a new PR if none exists.
 - Do not create a PR after each commit. Finish all commits for the task, push once, then create or update the PR.
 

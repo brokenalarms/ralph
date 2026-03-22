@@ -1126,7 +1126,7 @@ func TestIsBranchSquashMerged_DetectsMergedBranch(t *testing.T) {
 	run(t, "git", "-C", project, "commit", "-m", "squash: feature")
 	run(t, "git", "-C", project, "push", "origin", "main")
 
-	if !IsBranchSquashMerged(project, "ralph/test/01-feature") {
+	if !IsBranchSquashMerged(project, "ralph/test/01-feature", "") {
 		t.Error("expected branch to be detected as squash-merged")
 	}
 }
@@ -1140,7 +1140,7 @@ func TestIsBranchSquashMerged_UnmergedBranch(t *testing.T) {
 	run(t, "git", "-C", project, "commit", "-m", "add pending")
 	run(t, "git", "-C", project, "checkout", "main")
 
-	if IsBranchSquashMerged(project, "ralph/test/01-pending") {
+	if IsBranchSquashMerged(project, "ralph/test/01-pending", "") {
 		t.Error("expected unmerged branch to not be detected as squash-merged")
 	}
 }

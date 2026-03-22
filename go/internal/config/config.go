@@ -38,6 +38,7 @@ type Config struct {
 	StagnationThreshold        int
 	TestSaturationThreshold    int
 	PermissionDenialThreshold  int
+	BaseBranch                 string
 	BranchStrategy             string
 	Wait                       bool
 	WaitInterval               time.Duration
@@ -65,6 +66,7 @@ func Defaults() Config {
 		StagnationThreshold:        3,
 		TestSaturationThreshold:    3,
 		PermissionDenialThreshold:  3,
+		BaseBranch:                 envString("RALPH_BASE_BRANCH", "develop"),
 		BranchStrategy:             "single",
 		WaitInterval:               envDuration("RALPH_WAIT_INTERVAL", 5*time.Second),
 	}
@@ -82,6 +84,16 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// envString reads a string from an environment variable, returning fallback
+// if unset or empty.
+func envString(key, fallback string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	return v
 }
 
 // envBool reads a boolean from an environment variable, returning fallback
@@ -314,6 +326,15 @@ func Parse(args []string) (Config, error) {
 			cfg.Evolve = true
 			i++
 
+		case "--base-branch":
+			v, err := requireArg(args, i)
+			if err != nil {
+				return cfg, err
+			}
+			cfg.BaseBranch = v
+			cfg.cliSet["base_branch"] = true
+			i += 2
+
 		case "--branch-strategy":
 			v, err := requireArg(args, i)
 			if err != nil {
@@ -452,6 +473,11 @@ func (c *Config) LoadConfigFile(path string) error {
 		}
 
 		switch key {
+		case "base_branch":
+			if value != "" {
+				c.BaseBranch = value
+			}
+			continue
 		case "branch_strategy":
 			if value == "single" || value == "stacked" {
 				c.BranchStrategy = value
@@ -529,6 +555,7 @@ func InitConfig(path string) error {
 	}
 
 	var b strings.Builder
+	fmt.Fprintf(&b, "base_branch = develop\n")
 	fmt.Fprintf(&b, "branch_strategy = single\n")
 	fmt.Fprintf(&b, "no_refactor = false\n")
 	for _, k := range configKeys {
