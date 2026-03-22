@@ -322,7 +322,7 @@ func (l *Loop) Run(ctx context.Context) error {
 					// shared raw.log/loop.log files.
 					l.runner.StopStreaming()
 
-					l.logger.Log("Spawning verification agent...")
+					l.logger.Log("Spawning fix agent for test failures...")
 					beadDesc := l.getBeadDescription(taskID)
 					diffCmd := exec.Command("git", "-C", workDir, "diff", headBefore+"..HEAD")
 					diffOut, _ := diffCmd.Output()
@@ -353,7 +353,7 @@ func (l *Loop) Run(ctx context.Context) error {
 					})
 
 					if !verifyResult.SignalDetected {
-						l.logger.Warn("Verification agent exited without completion signal")
+						l.logger.Warn("Test fix agent exited without signal")
 						return false
 					}
 
@@ -386,7 +386,7 @@ func (l *Loop) Run(ctx context.Context) error {
 						// Stop streaming before LLM fix agent (same rationale as test verification).
 						l.runner.StopStreaming()
 
-						l.logger.Log("Spawning verification agent for LLM feedback...")
+						l.logger.Log("Spawning fix agent to address LLM feedback...")
 						signalPath := filepath.Join(l.cfg.RalphDir, ".signal_complete")
 						fixPrompt := l.loadVerifyPrompt("verify-llm.md", map[string]string{
 							"{{TASK_TITLE}}":       nextTask,
@@ -409,7 +409,7 @@ func (l *Loop) Run(ctx context.Context) error {
 						})
 
 						if !fixResult.SignalDetected {
-							l.logger.Warn("Verification agent exited without signal")
+							l.logger.Warn("LLM fix agent exited without signal")
 							return false
 						}
 
