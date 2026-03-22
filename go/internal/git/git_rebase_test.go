@@ -653,3 +653,31 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 		t.Error("expected 'No open PR found' log message")
 	}
 }
+
+// Single-branch mode omits --delete-branch from gh pr merge so the remote
+// branch survives for the next task's push.
+func TestGhMergeArgs_SingleBranchOmitsDeleteBranch(t *testing.T) {
+	mgr := &Manager{BranchStrategy: BranchSingle}
+	args := mgr.ghMergeArgs("42", "https://github.com/org/repo")
+	for _, a := range args {
+		if a == "--delete-branch" {
+			t.Fatal("single-branch mode must not include --delete-branch")
+		}
+	}
+}
+
+// Stacked mode includes --delete-branch since each task gets its own branch.
+func TestGhMergeArgs_StackedIncludesDeleteBranch(t *testing.T) {
+	mgr := &Manager{BranchStrategy: BranchStacked}
+	args := mgr.ghMergeArgs("42", "https://github.com/org/repo")
+	found := false
+	for _, a := range args {
+		if a == "--delete-branch" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("stacked mode should include --delete-branch")
+	}
+}
