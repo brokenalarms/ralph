@@ -235,6 +235,11 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		taskPrompt := l.buildTaskPrompt(nextTask, taskID)
 
+		// Run full test suite before handing off to agent. The agent only
+		// runs scoped tests during development; the orchestrator owns the
+		// full suite both here (pre-iteration) and after signal (gate).
+		testStatus := l.runPreIterationTests()
+
 		if !l.waitForRate(ctx) {
 			break
 		}
@@ -253,7 +258,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.logger.Log("Including %d previous attempt(s) in prompt", strings.Count(attemptContext, "### Attempt "))
 		}
 
-		fullPrompt, err := l.buildPrompt(taskPrompt, feedback, attemptContext)
+		fullPrompt, err := l.buildPrompt(taskPrompt, feedback, attemptContext, testStatus)
 		if err != nil {
 			l.logger.Error("Prompt build failed: %v", err)
 			break
@@ -342,6 +347,14 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		if result.SignalDetected {
+			// Preflight: check bead wasn't prematurely closed by the agent.
+			if taskID != "" {
+				phase, _ := l.cfg.TaskBackend.GetState(taskID, "phase")
+				if phase != "implementing" {
+					l.logger.Warn("Task %s phase is %q (expected implementing) — agent may have tampered with task state", taskID, phase)
+				}
+			}
+
 			if passed, reason := l.verifyCompletion(headBefore); !passed {
 				l.logger.Warn("Verification failed: %s", reason)
 				l.attempts.Record(taskID, nextTask,
@@ -461,13 +474,20 @@ func (l *Loop) verifyCompletion(headBefore string) (bool, string) {
 	}
 
 	testResult := verify.RunTests(l.cfg.VerifyDir)
+	now := time.Now().Format(time.RFC3339)
 	if !testResult.Passed {
+		l.state.Write("last_test_result", "fail")
+		l.state.Write("last_test_output", testResult.Details)
+		l.state.Write("last_test_time", now)
 		if testResult.Details != "" {
 			l.logger.Error("Test output:\n%s", testResult.Details)
 		}
 		return false, testResult.Reason
 	}
 
+	l.state.Write("last_test_result", "pass")
+	l.state.Write("last_test_output", "")
+	l.state.Write("last_test_time", now)
 	return true, ""
 }
 
@@ -597,7 +617,7 @@ func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 	return fmt.Sprintf("Complete this task: %s", nextTask)
 }
 
-func (l *Loop) buildPrompt(taskPrompt, feedback, attemptHistory string) (string, error) {
+func (l *Loop) buildPrompt(taskPrompt, feedback, attemptHistory, testStatus string) (string, error) {
 	backend := prompt.BackendChecklist
 	if l.cfg.TaskBackend.Label() == "beads" {
 		backend = prompt.BackendBD
@@ -615,6 +635,7 @@ func (l *Loop) buildPrompt(taskPrompt, feedback, attemptHistory string) (string,
 		TaskPrompt:       taskPrompt,
 		Feedback:         feedback,
 		AttemptHistory:   attemptHistory,
+		TestStatus:       testStatus,
 		TaskBackend:      backend,
 	})
 }
@@ -746,6 +767,44 @@ func (l *Loop) recordCompletedTask(taskID, taskTitle string) {
 	defer f.Close()
 	f.WriteString(label + "\n")
 }
+
+// runPreIterationTests runs the full test suite before handing off to the
+// agent. Stores results in state.json so they persist across restarts.
+// Returns a human-readable status string for the agent prompt.
+func (l *Loop) runPreIterationTests() string {
+	if l.cfg.VerifyDir == "" {
+		return ""
+	}
+
+	l.logger.Log("Running pre-iteration test suite...")
+	result := verify.RunTests(l.cfg.VerifyDir)
+	now := time.Now().Format(time.RFC3339)
+
+	if result.Passed {
+		l.state.Write("last_test_result", "pass")
+		l.state.Write("last_test_output", "")
+		l.state.Write("last_test_time", now)
+		l.logger.TaskSuccess("Pre-iteration tests: all passing")
+		return "\n- Test suite status: all tests passing as of start."
+	}
+
+	l.state.Write("last_test_result", "fail")
+	l.state.Write("last_test_output", result.Details)
+	l.state.Write("last_test_time", now)
+	l.logger.Warn("Pre-iteration tests: failures detected")
+	msg := "\n- Test suite status: some tests are FAILING. Fix them before your task."
+	if result.Details != "" {
+		// Truncate to avoid bloating the prompt.
+		details := result.Details
+		lines := strings.Split(details, "\n")
+		if len(lines) > 20 {
+			details = strings.Join(lines[len(lines)-20:], "\n")
+		}
+		msg += "\n  Failure output:\n  " + strings.ReplaceAll(details, "\n", "\n  ")
+	}
+	return msg
+}
+
 
 func touchFile(path string) {
 	f, err := os.Create(path)

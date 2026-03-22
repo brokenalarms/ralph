@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -341,5 +342,52 @@ func TestSave_AtomicWrite(t *testing.T) {
 	}
 	if s.Status != "updated" || s.Iteration != 99 {
 		t.Errorf("State after atomic write: %+v", s)
+	}
+}
+
+// Verifies that test result fields round-trip through state.json,
+// proving the orchestrator can persist pre-iteration and post-signal
+// test results across restarts.
+func TestState_TestResultFieldsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+
+	st.Write("last_test_result", "pass")
+	st.Write("last_test_output", "all 42 tests passed")
+	st.Write("last_test_time", "2026-03-22T10:00:00Z")
+
+	s, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.LastTestResult != "pass" {
+		t.Errorf("LastTestResult = %q, want %q", s.LastTestResult, "pass")
+	}
+	if s.LastTestOutput != "all 42 tests passed" {
+		t.Errorf("LastTestOutput = %q, want %q", s.LastTestOutput, "all 42 tests passed")
+	}
+	if s.LastTestTime != "2026-03-22T10:00:00Z" {
+		t.Errorf("LastTestTime = %q, want %q", s.LastTestTime, "2026-03-22T10:00:00Z")
+	}
+}
+
+// Verifies that test result fields are preserved as known keys
+// (not overflow) when serialized to JSON.
+func TestState_TestResultFieldsInJSON(t *testing.T) {
+	s := State{
+		Status:         "running",
+		LastTestResult: "fail",
+		LastTestOutput: "FAIL: TestFoo",
+		LastTestTime:   "2026-03-22T11:00:00Z",
+	}
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(data)
+	for _, field := range []string{"last_test_result", "last_test_output", "last_test_time"} {
+		if !strings.Contains(raw, field) {
+			t.Errorf("expected %q in JSON output: %s", field, raw)
+		}
 	}
 }

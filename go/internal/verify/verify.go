@@ -147,6 +147,37 @@ func gitHeadRev(dir string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// PreflightResult describes the outcome of pre-verification checks.
+type PreflightResult struct {
+	FilesChanged bool
+	HasCommits   bool
+	BeadOpen     bool // true if bead is still in_progress (not prematurely closed)
+}
+
+// PreflightChecks runs lightweight shell checks before the full test suite.
+// These are cheap and catch obvious failures: no files changed, no commits,
+// or bead prematurely closed by the agent.
+func PreflightChecks(workDir, headBefore string, beadStatus string) PreflightResult {
+	result := PreflightResult{}
+
+	// (1) git diff --stat — did files actually change?
+	diffCmd := exec.Command("git", "diff", "--stat", headBefore+"..HEAD")
+	diffCmd.Dir = workDir
+	diffOut, _ := diffCmd.Output()
+	result.FilesChanged = len(strings.TrimSpace(string(diffOut))) > 0
+
+	// (2) git log — are there new commits?
+	logCmd := exec.Command("git", "log", "--oneline", headBefore+"..HEAD")
+	logCmd.Dir = workDir
+	logOut, _ := logCmd.Output()
+	result.HasCommits = len(strings.TrimSpace(string(logOut))) > 0
+
+	// (3) check bead is still in_progress, not prematurely closed by agent
+	result.BeadOpen = beadStatus == "in_progress"
+
+	return result
+}
+
 func lastNLines(s string, n int) string {
 	lines := strings.Split(s, "\n")
 	if len(lines) <= n {

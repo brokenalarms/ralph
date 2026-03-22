@@ -10,7 +10,8 @@ to be merged before continuing with dependent tasks.
 
 ## Assumptions
 - Previous iterations left the codebase in a working state with all tests passing. Do not run the full test suite at the start of your task to verify this — trust it and get straight to work.
-- Run only scoped, relevant tests as you develop. Save the full test suite run for your final pre-commit verification.
+- Run only scoped, relevant tests as you develop. The orchestrator runs the full test suite as the verification gate after you signal completion.
+{{TEST_STATUS}}
 
 {{TASK_INSTRUCTIONS}}
 {{ATTEMPT_HISTORY}}
