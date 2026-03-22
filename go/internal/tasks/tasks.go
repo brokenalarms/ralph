@@ -62,6 +62,14 @@ type Backend interface {
 	// PlanningInstructions returns the prompt text for the planning phase.
 	PlanningInstructions() string
 
+	// SetState sets an operational state dimension on a task (e.g. phase=implementing).
+	// Backends without state support (checklist) treat this as a no-op.
+	SetState(id, dimension, value, reason string) error
+
+	// GetState returns the current value of a state dimension on a task.
+	// Returns empty string when unset or unsupported.
+	GetState(id, dimension string) (string, error)
+
 	// Label returns a human-readable name for the backend ("checklist" or "beads").
 	Label() string
 }

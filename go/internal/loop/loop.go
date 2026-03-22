@@ -227,6 +227,12 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		l.updateStreamTask(taskID, nextTask)
 
+		if taskID != "" {
+			if err := l.cfg.TaskBackend.SetState(taskID, "phase", "implementing", "ralph: starting task"); err != nil {
+				l.logger.Warn("SetState phase=implementing: %v", err)
+			}
+		}
+
 		taskPrompt := l.buildTaskPrompt(nextTask, taskID)
 
 		if !l.waitForRate(ctx) {
@@ -343,6 +349,12 @@ func (l *Loop) Run(ctx context.Context) error {
 					diffStat,
 					"verification_failed: fix must pass tests and produce commits before closing")
 				continue
+			}
+
+			if taskID != "" {
+				if err := l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: tests passed, commits present"); err != nil {
+					l.logger.Warn("SetState phase=verified: %v", err)
+				}
 			}
 
 			l.attempts.Clear(taskID, nextTask)
