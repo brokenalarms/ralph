@@ -39,7 +39,7 @@ func DetectTestCommand(dir string) *TestCommand {
 	}
 
 	if hasGoMod(dir) {
-		return &TestCommand{Cmd: "go", Args: []string{"test", "./..."}}
+		return &TestCommand{Cmd: "go", Args: []string{"test", "-count=1", "./..."}}
 	}
 
 	if fileExists(filepath.Join(dir, "pyproject.toml")) || fileExists(filepath.Join(dir, "setup.py")) {
