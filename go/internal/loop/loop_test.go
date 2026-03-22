@@ -900,6 +900,75 @@ func TestLoop_HandleRebase_NoHandlerPropagatesError(t *testing.T) {
 	}
 }
 
+// Verifies that when context is cancelled (Ctrl-C) during a rebase that
+// would normally trigger OnRebaseConflict, the handler is NOT called and
+// the loop exits cleanly with "stopped" status instead of showing the
+// interactive recovery prompt.
+func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5, 0)
+
+	gm := &git.Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       st,
+		Logger:      logging.New(nil),
+	}
+	if err := gm.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+	run(t, "git", "-C", gm.WorkDir, "remote", "set-url", "origin", bare)
+	run(t, "git", "-C", gm.WorkDir, "fetch", "origin")
+
+	// Create a real conflict so rebase would normally fail and trigger the prompt
+	writeFile(t, gm.WorkDir, "conflict.txt", "worktree version\n")
+	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "worktree change")
+
+	writeFile(t, project, "conflict.txt", "main version\n")
+	run(t, "git", "-C", project, "commit", "-m", "main change")
+	pushToOrigin(t, project)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Some task",
+	}
+
+	handlerCalled := false
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // simulate Ctrl-C already received
+
+	l := New(Config{
+		ProjectDir:    project,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		OnRebaseConflict: func(err error) git.RebaseRecovery {
+			handlerCalled = true
+			return git.RebaseAbort
+		},
+	}, st, gm, logging.New(nil))
+
+	err := l.Run(ctx)
+	if err != nil {
+		t.Fatalf("expected nil error (clean exit), got %v", err)
+	}
+
+	if handlerCalled {
+		t.Error("OnRebaseConflict should NOT be called when context is cancelled")
+	}
+
+	finalState, _ := st.Load()
+	if finalState.Status != "stopped" {
+		t.Errorf("expected status 'stopped', got %q", finalState.Status)
+	}
+}
+
 // Verifies isNewTask compares by task ID when available, falling back to
 // description, so that task identity is stable even if descriptions change.
 func TestLoop_IsNewTask(t *testing.T) {

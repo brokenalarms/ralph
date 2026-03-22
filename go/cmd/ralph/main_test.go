@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -183,7 +185,7 @@ func TestInitRalphDir_CreatesDirectory(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir}
 
 	log := logging.New(nil)
-	resume, exitCode := initRalphDir(cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue (exitCode < 0), got %d", exitCode)
@@ -250,7 +252,7 @@ func TestInitRalphDir_DirtyWorkingTreeExitsWithError(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir}
 	log := logging.New(nil)
 
-	_, exitCode := initRalphDir(cfg, ralphDir, logFile, stateFile, log)
+	_, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
 
 	if exitCode != 1 {
 		t.Errorf("expected exit code 1, got %d", exitCode)
@@ -272,7 +274,7 @@ func TestInitRalphDir_DetectsResume(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir}
 	log := logging.New(nil)
 
-	resume, exitCode := initRalphDir(cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue, got exit code %d", exitCode)
@@ -313,6 +315,29 @@ func TestSafeRemoveRalphDir_ProtectsBeads(t *testing.T) {
 	}
 	if _, err := os.Stat(ralphDir); !os.IsNotExist(err) {
 		t.Fatal(".ralph should be removed")
+	}
+}
+
+// Verifies that readLineCtx returns immediately with context.Canceled when
+// the context is already cancelled, instead of blocking on stdin. This
+// prevents Ctrl-C from leaving the user trapped at interactive prompts.
+func TestReadLineCtx_CancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		_, err := readLineCtx(ctx)
+		if err != context.Canceled {
+			t.Errorf("expected context.Canceled, got %v", err)
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readLineCtx should return immediately on cancelled context")
 	}
 }
 
