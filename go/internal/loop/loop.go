@@ -290,6 +290,26 @@ func (l *Loop) Run(ctx context.Context) error {
 			HasProgress: func() bool {
 				return git.HasDiff(workDir) || git.HeadRev(workDir) != headBefore
 			},
+			OnSignal: func(summary string) bool {
+				// Orchestrator verification: sync prompts and run tests.
+				srcPrompts := filepath.Join(workDir, "prompts")
+				dstPrompts := filepath.Join(workDir, "go", "cmd", "ralph", "prompts")
+				if _, err := os.Stat(srcPrompts); err == nil {
+					if _, err := os.Stat(filepath.Dir(dstPrompts)); err == nil {
+						exec.Command("cp", "-r", srcPrompts+"/", dstPrompts+"/").Run()
+					}
+				}
+
+				passed, reason := l.verifyCompletion(headBefore)
+				if !passed {
+					l.logger.Warn("Verification failed: %s", reason)
+					// Write feedback for agent to read
+					feedbackPath := filepath.Join(l.cfg.RalphDir, "feedback")
+					os.WriteFile(feedbackPath, []byte("VERIFICATION FAILED: "+reason+"\nFix the failing tests and signal completion again."), 0o644)
+				}
+				return passed
+			},
+			FeedbackFile: filepath.Join(l.cfg.RalphDir, "feedback"),
 		})
 		if runErr != nil {
 			l.logger.Warn("Claude failed on iteration %d, continuing...", runIteration)
@@ -364,13 +384,17 @@ func (l *Loop) Run(ctx context.Context) error {
 				}
 			}
 
-			if passed, reason := l.verifyCompletion(headBefore); !passed {
-				l.logger.Warn("Verification failed: %s", reason)
-				l.attempts.Record(taskID, nextTask,
-					"Signal received but verification failed: "+reason,
-					diffStat,
-					"verification_failed: fix must pass tests and produce commits before closing")
-				continue
+			// If OnSignal was set, verification already passed in the runner.
+			// If not (legacy/test path), run verification here as fallback.
+			if result.OnSignalUsed == false {
+				if passed, reason := l.verifyCompletion(headBefore); !passed {
+					l.logger.Warn("Verification failed: %s", reason)
+					l.attempts.Record(taskID, nextTask,
+						"Signal received but verification failed: "+reason,
+						diffStat,
+						"verification_failed: fix must pass tests and produce commits before closing")
+					continue
+				}
 			}
 
 			if taskID != "" {
@@ -484,17 +508,6 @@ func (l *Loop) verifyCompletion(headBefore string) (bool, string) {
 	commitResult := verify.CheckCommits(l.git.WorkDir, headBefore)
 	if !commitResult.Passed {
 		return false, commitResult.Reason
-	}
-
-	// Sync prompts before tests — the agent may have modified prompts/ files
-	// and the embedded copy at go/cmd/ralph/prompts/ needs to match.
-	workDir := l.git.WorkDir
-	srcPrompts := filepath.Join(workDir, "prompts")
-	dstPrompts := filepath.Join(workDir, "go", "cmd", "ralph", "prompts")
-	if _, err := os.Stat(srcPrompts); err == nil {
-		if _, err := os.Stat(filepath.Dir(dstPrompts)); err == nil {
-			exec.Command("cp", "-r", srcPrompts+"/", dstPrompts+"/").Run()
-		}
 	}
 
 	testResult := verify.RunTests(l.cfg.VerifyDir)

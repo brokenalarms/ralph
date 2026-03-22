@@ -64,6 +64,17 @@ type RunConfig struct {
 	// produced observable work (new commits, unstaged changes). Used to
 	// select the shorter IdleTimeoutProgress. May be nil.
 	HasProgress func() bool
+
+	// OnSignal is called when the agent writes a completion signal.
+	// If it returns true, the signal is accepted (agent killed, result returned).
+	// If false, the signal is rejected (signal file cleared, agent continues).
+	// Used by the orchestrator to verify tests before accepting completion.
+	// If nil, signals are always accepted (legacy behavior).
+	OnSignal func(summary string) bool
+
+	// FeedbackFile is the path where the orchestrator writes feedback for
+	// the agent to read. Used to send test failure output back to the agent.
+	FeedbackFile string
 }
 
 // Result describes the outcome of a Claude run.
@@ -71,6 +82,7 @@ type Result struct {
 	SignalDetected bool   // true if a completion signal was found
 	AllComplete    bool   // true if the all-complete signal was found
 	IdleTimeout    bool   // true if the session was killed due to idle timeout
+	OnSignalUsed   bool   // true if OnSignal callback was used for verification
 	TaskDesc       string // task description from the current-task signal
 	Summary        string // completion summary from signal file
 }
@@ -254,11 +266,22 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 				r.Logger.TaskSuccess("Completed: %s", summary)
 
+				// If OnSignal is set, let the orchestrator verify before accepting.
+				if cfg.OnSignal != nil {
+					if !cfg.OnSignal(summary) {
+						// Verification failed — clear signal, let agent continue.
+						r.Logger.Warn("Verification rejected signal — agent continues")
+						clearSignals(cfg.Signals)
+						continue
+					}
+				}
+
 				gracefulKill(cmd, processDone)
 
 				return Result{
 					SignalDetected: true,
 					AllComplete:    hasSignal(cfg.Signals.AllComplete),
+					OnSignalUsed:   cfg.OnSignal != nil,
 					TaskDesc:       readFirstLine(cfg.Signals.CurrentTask),
 					Summary:        summary,
 				}
