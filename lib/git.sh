@@ -252,6 +252,57 @@ auto_merge_current_branch() {
   fi
 }
 
+# Lightweight sync: fetch origin/main and rebase if it has advanced.
+# Uses git-rebase-continue --auto for mechanical conflict resolution.
+# Returns 0 on success or if already up to date, 1 on unresolvable conflicts.
+sync_onto_default_branch() {
+  if [[ -z "$WORKTREE_BRANCH" || "$WORK_DIR" == "$PROJECT_DIR" ]]; then
+    return 0
+  fi
+
+  local default_branch
+  default_branch=$(git -C "$PROJECT_DIR" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||') || true
+  default_branch=${default_branch:-main}
+  git -C "$WORK_DIR" fetch origin "$default_branch" 2>/dev/null || true
+
+  if ! git -C "$WORK_DIR" rev-parse --verify "origin/$default_branch" &>/dev/null; then
+    return 0
+  fi
+
+  local local_base remote_head
+  local_base=$(git -C "$WORK_DIR" merge-base HEAD "origin/$default_branch" 2>/dev/null) || return 0
+  remote_head=$(git -C "$WORK_DIR" rev-parse "origin/$default_branch" 2>/dev/null) || return 0
+
+  if [[ "$local_base" == "$remote_head" ]]; then
+    return 0
+  fi
+
+  log "origin/$default_branch has advanced — rebasing"
+
+  if git -C "$WORK_DIR" rebase --update-refs "origin/$default_branch" 2>/dev/null; then
+    log "Rebased onto origin/$default_branch"
+    return 0
+  fi
+
+  git -C "$WORK_DIR" rebase --abort 2>/dev/null || true
+
+  if command -v git-rebase-continue &>/dev/null; then
+    log "Retrying rebase with git-rebase-continue --auto"
+    pushd "$WORK_DIR" > /dev/null
+    git rebase --update-refs "origin/$default_branch" 2>/dev/null || true
+    if git-rebase-continue --auto 2>/dev/null; then
+      popd > /dev/null
+      log "Rebased onto origin/$default_branch (auto-resolved conflicts)"
+      return 0
+    fi
+    git rebase --abort 2>/dev/null || true
+    popd > /dev/null
+  fi
+
+  log_warn "Inter-task rebase failed — falling back to full rebase_onto_default_branch"
+  rebase_onto_default_branch
+}
+
 rebase_onto_default_branch() {
   local default_branch
   default_branch=$(git -C "$PROJECT_DIR" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||') || true

@@ -1492,6 +1492,16 @@ run_execution() {
     run_iteration=$((run_iteration + 1))
     iteration=$((iteration + 1))
 
+    # Sync with latest main between iterations so subsequent tasks
+    # never work on stale code (handles user pushes, external merges,
+    # and failed auto-merges from previous iterations).
+    if (( run_iteration > 1 )); then
+      if ! sync_onto_default_branch; then
+        write_state "status" "error"
+        break
+      fi
+    fi
+
     # Get next task info early so we can detect task changes before rotation
     local next_task completed remaining total
     next_task=$(get_next_task)
@@ -1512,12 +1522,6 @@ run_execution() {
     # Only rotate branch when the task changes (one branch per task)
     if (( run_iteration > 1 )) && [[ "$_task_changed" == true ]]; then
       rotate_branch
-      if [[ -n "$WORKTREE_BRANCH" && "$WORK_DIR" != "$PROJECT_DIR" ]]; then
-        if ! rebase_onto_default_branch; then
-          write_state "status" "error"
-          break
-        fi
-      fi
     fi
 
     # Adaptive refactoring: if quality assessment flagged pain, run refactor.

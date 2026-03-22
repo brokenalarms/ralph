@@ -531,3 +531,85 @@ EOF
   today=$(date +%Y%m%d)
   [[ "$WORK_DIR" == *"/worktrees/ralph-${today}-go-migration" ]]
 }
+
+# Proves: sync_onto_default_branch is a no-op when main hasn't advanced,
+# so the fast-path avoids unnecessary rebase churn between iterations.
+@test "sync_onto_default_branch skips when already up to date" {
+  setup_rebase_env
+
+  echo "worktree file" > "$WORK_DIR/workfile.txt"
+  git -C "$WORK_DIR" add workfile.txt
+  git -C "$WORK_DIR" commit -m "add workfile" -q
+
+  run sync_onto_default_branch
+  [[ "$status" -eq 0 ]]
+  [[ "$output" != *"has advanced"* ]]
+}
+
+# Proves: when main advances (user push, external merge, or failed auto-merge),
+# sync_onto_default_branch rebases so the next task starts on fresh code.
+@test "sync_onto_default_branch rebases when main advances" {
+  setup_rebase_env
+
+  echo "worktree file" > "$WORK_DIR/workfile.txt"
+  git -C "$WORK_DIR" add workfile.txt
+  git -C "$WORK_DIR" commit -m "add workfile" -q
+
+  echo "new main commit" > "$PROJECT_DIR/mainfile.txt"
+  git -C "$PROJECT_DIR" add mainfile.txt
+  git -C "$PROJECT_DIR" commit -m "advance main" -q
+  push_to_origin
+
+  run sync_onto_default_branch
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"has advanced"* ]]
+  [[ -f "$WORK_DIR/mainfile.txt" ]]
+  [[ -f "$WORK_DIR/workfile.txt" ]]
+}
+
+# Proves: sync falls back to rebase_onto_default_branch for squash-merge
+# conflicts, so the squash-detection logic still kicks in.
+@test "sync_onto_default_branch falls back on squash-merge conflict" {
+  echo "original" > "$PROJECT_DIR/shared.txt"
+  git -C "$PROJECT_DIR" add shared.txt
+  git -C "$PROJECT_DIR" commit -m "add shared" -q
+
+  setup_rebase_env
+
+  rename_branch_for_task "first task"
+  echo "step one" > "$WORK_DIR/shared.txt"
+  git -C "$WORK_DIR" add shared.txt
+  git -C "$WORK_DIR" commit -m "first task step one" -q
+  echo "final" > "$WORK_DIR/shared.txt"
+  echo "first" > "$WORK_DIR/first.txt"
+  git -C "$WORK_DIR" add shared.txt first.txt
+  git -C "$WORK_DIR" commit -m "first task final" -q
+
+  rotate_branch
+  rename_branch_for_task "second task"
+  echo "second" > "$WORK_DIR/second.txt"
+  git -C "$WORK_DIR" add second.txt
+  git -C "$WORK_DIR" commit -m "second task" -q
+
+  echo "final" > "$PROJECT_DIR/shared.txt"
+  echo "first" > "$PROJECT_DIR/first.txt"
+  git -C "$PROJECT_DIR" add shared.txt first.txt
+  git -C "$PROJECT_DIR" commit -m "squash: first task" -q
+  push_to_origin
+
+  run sync_onto_default_branch
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"squash-merged"* ]]
+  [[ -f "$WORK_DIR/second.txt" ]]
+}
+
+# Proves: sync is a safe no-op when running without worktree isolation,
+# so --no-worktree mode doesn't break.
+@test "sync_onto_default_branch skips when not using worktree" {
+  WORKTREE_BRANCH=""
+  WORK_DIR="$PROJECT_DIR"
+
+  run sync_onto_default_branch
+  [[ "$status" -eq 0 ]]
+  [[ -z "$output" ]]
+}
