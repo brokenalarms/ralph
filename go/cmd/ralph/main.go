@@ -239,7 +239,6 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 	}
 
 	if status, _ := st.Read("status"); status == "evolve_restart" {
-		gm.RemoveWorktree()
 		if err := evolveRestart(cfg.ProjectDir, scriptPath, args, log); err != nil {
 			log.Error("Evolve restart failed: %v", err)
 		}
