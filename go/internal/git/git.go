@@ -403,8 +403,8 @@ func (m *Manager) PushAndCreatePR(taskDesc string) error {
 
 // AutoMergeCurrentBranch squash-merges the PR for the current branch into main.
 // Returns (true, nil) when a PR was merged, (false, nil) when no PR exists or
-// no action was needed, and (false, err) on failure. When CI checks are required
-// by branch protection, polls until checks complete and retries the merge.
+// no action was needed, and (false, err) on failure. Proactively polls CI
+// checks before attempting merge so CI is treated as the final gate.
 func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
 		return false, nil
@@ -432,6 +432,33 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 
 	m.Logger.Log("Auto-merging PR #%s (branch: %s)...", prNumber, m.WorktreeBranch)
 
+	// Proactively check CI status before attempting merge.
+	checks, fetchErr := fetchPRChecks(prNumber, repoURL)
+	if fetchErr != nil {
+		m.Logger.Warn("Could not fetch CI checks for PR #%s: %v", prNumber, fetchErr)
+	}
+
+	if fetchErr == nil && len(checks) > 0 {
+		status := evaluateChecks(checks)
+
+		if status == CIPending {
+			m.Logger.Log("CI checks pending on PR #%s — waiting for completion...", prNumber)
+			checks, status, err = waitForCI(prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+			if err != nil {
+				return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, err)
+			}
+		}
+
+		if status == CIFailed {
+			return false, &CIFailureError{
+				PRNumber: prNumber,
+				Failures: failedChecks(checks),
+			}
+		}
+
+		m.Logger.Log("CI passed for PR #%s — merging", prNumber)
+	}
+
 	mergeCmd := exec.Command("gh", m.ghMergeArgs(prNumber, repoURL)...)
 	mergeOut, mergeErr := mergeCmd.CombinedOutput()
 	if mergeErr == nil {
@@ -445,33 +472,8 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 		return false, &MergeConflictError{PRNumber: prNumber}
 	}
 
-	if !isCIGatedError(mergeOutput) {
-		m.Logger.Warn("Auto-merge failed for PR #%s: %s", prNumber, mergeOutput)
-		return false, fmt.Errorf("auto-merge failed for PR #%s", prNumber)
-	}
-
-	m.Logger.Log("Merge blocked by branch protection — waiting for CI checks on PR #%s", prNumber)
-
-	checks, status, pollErr := waitForCI(prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
-	if pollErr != nil {
-		return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, pollErr)
-	}
-
-	if status == CIFailed {
-		return false, &CIFailureError{
-			PRNumber: prNumber,
-			Failures: failedChecks(checks),
-		}
-	}
-
-	m.Logger.Log("CI passed — retrying merge for PR #%s", prNumber)
-	retryCmd := exec.Command("gh", m.ghMergeArgs(prNumber, repoURL)...)
-	if retryOut, retryErr := retryCmd.CombinedOutput(); retryErr != nil {
-		m.Logger.Warn("Auto-merge retry failed for PR #%s: %s", prNumber, string(retryOut))
-		return false, fmt.Errorf("auto-merge retry failed for PR #%s", prNumber)
-	}
-
-	return m.postMergeUpdate(prNumber)
+	m.Logger.Warn("Auto-merge failed for PR #%s: %s", prNumber, mergeOutput)
+	return false, fmt.Errorf("auto-merge failed for PR #%s", prNumber)
 }
 
 // postMergeUpdate fetches the latest default branch after a successful merge
