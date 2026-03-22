@@ -191,6 +191,7 @@ func (m *Manager) tryResumeWorktree() error {
 		m.Logger.Warn("Failed to fetch origin/%s on resume: %v", defaultBranch, err)
 	}
 
+	m.CleanProjectIndex()
 	return nil
 }
 
@@ -456,16 +457,24 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 }
 
 // postMergeUpdate fetches the latest default branch after a successful merge
-// so the next iteration starts from merged state.
+// so the next iteration starts from merged state. Uses error-aware git
+// calls — a silent reset failure would leave stale staged changes on main.
 func (m *Manager) postMergeUpdate(prNumber string) (bool, error) {
 	m.Logger.Log("PR #%s squash-merged into main", prNumber)
 
 	defaultBranch := detectDefaultBranch(m.ProjectDir)
-	gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
+	if err := gitCmdErr(m.ProjectDir, "fetch", "origin", defaultBranch); err != nil {
+		return false, fmt.Errorf("post-merge fetch: %w", err)
+	}
 	originRef := gitOutput(m.ProjectDir, "rev-parse", "origin/"+defaultBranch)
 	if originRef != "" {
-		gitCmd(m.ProjectDir, "update-ref", "refs/heads/"+defaultBranch, originRef)
-		gitCmd(m.ProjectDir, "reset", "--hard", "HEAD")
+		if err := gitCmdErr(m.ProjectDir, "update-ref", "refs/heads/"+defaultBranch, originRef); err != nil {
+			return false, fmt.Errorf("post-merge update-ref: %w", err)
+		}
+		if err := gitCmdErr(m.ProjectDir, "reset", "--hard", "HEAD"); err != nil {
+			m.Logger.Warn("reset --hard failed: %v — running CleanProjectIndex", err)
+			m.CleanProjectIndex()
+		}
 	}
 	m.Logger.Log("Updated local %s to origin/%s", defaultBranch, defaultBranch)
 
@@ -484,6 +493,22 @@ func (m *Manager) ghMergeArgs(prNumber, repoURL string) []string {
 		args = append(args, "--admin")
 	}
 	return args
+}
+
+// CleanProjectIndex ensures the project dir's index matches HEAD. This is
+// a defensive measure against any operation that advances HEAD (via update-ref)
+// without resetting the index — the stale index would show staged reversions
+// of merged PR changes. Safe to call unconditionally since the project dir
+// is only an anchor for the worktree, not an active working directory.
+func (m *Manager) CleanProjectIndex() {
+	diffIndex := gitOutput(m.ProjectDir, "diff", "--cached", "--name-only")
+	if strings.TrimSpace(diffIndex) == "" {
+		return
+	}
+	m.Logger.Warn("Project dir has staged changes — resetting index to HEAD")
+	if err := gitCmdErr(m.ProjectDir, "reset", "--hard", "HEAD"); err != nil {
+		m.Logger.Error("Failed to clean project index: %v", err)
+	}
 }
 
 // PostMergeReset force-resets the worktree to origin/main after a successful
@@ -518,6 +543,8 @@ func (m *Manager) PostMergeReset() error {
 		_ = m.State.Write("worktree_branch", m.WorktreeBranch)
 	}
 	m.Logger.Log("Force-reset to %s from origin/%s", newBranch, defaultBranch)
+
+	m.CleanProjectIndex()
 	return nil
 }
 

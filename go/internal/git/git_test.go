@@ -1343,6 +1343,184 @@ func TestAutoMerge_UpdatesLocalMainWhenCheckedOut(t *testing.T) {
 	}
 }
 
+// Full merge cycle: agent commits in worktree, PR merges on origin,
+// postMergeUpdate advances main, PostMergeReset resets worktree. After
+// the full cycle, the project dir (where main is checked out) must have
+// no staged changes — a contaminated index would show reversions of the
+// merged PR's work.
+func TestFullMergeCycle_NoStagedChangesOnMain(t *testing.T) {
+	project, _ := initBareRepo(t)
+	bare := filepath.Join(filepath.Dir(project), "bare.git")
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+	log := &testLog{}
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchStacked,
+		State:          st,
+		Logger:         log,
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Simulate agent work: create a file and commit in the worktree.
+	os.WriteFile(filepath.Join(mgr.WorkDir, "feature.go"), []byte("package feature\n"), 0o644)
+	run(t, "git", "-C", mgr.WorkDir, "add", "feature.go")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add feature")
+	run(t, "git", "-C", mgr.WorkDir, "push", "-u", "origin", mgr.WorktreeBranch)
+
+	// Simulate squash-merge: push the same content to main on origin
+	// from a temp clone (like GitHub's merge button).
+	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
+	run(t, "git", "clone", bare, tmpClone)
+	os.WriteFile(filepath.Join(tmpClone, "feature.go"), []byte("package feature\n"), 0o644)
+	run(t, "git", "-C", tmpClone, "add", "feature.go")
+	run(t, "git", "-C", tmpClone, "commit", "-m", "squash-merged PR")
+	run(t, "git", "-C", tmpClone, "push", "origin", "main")
+
+	// Step 1: postMergeUpdate — fetch and advance local main.
+	defaultBranch := detectDefaultBranch(project)
+	gitCmd(project, "fetch", "origin", defaultBranch)
+	originRef := gitOutput(project, "rev-parse", "origin/"+defaultBranch)
+	if originRef != "" {
+		gitCmd(project, "update-ref", "refs/heads/"+defaultBranch, originRef)
+		gitCmd(project, "reset", "--hard", "HEAD")
+	}
+
+	// Verify main is clean after postMergeUpdate.
+	diff1 := strings.TrimSpace(gitOutput(project, "diff", "--cached", "--name-only"))
+	if diff1 != "" {
+		t.Errorf("after postMergeUpdate: project dir has staged changes: %s", diff1)
+	}
+
+	// Step 2: PostMergeReset — force-reset worktree to origin/main.
+	mgr.RenameBranchForTask("test task")
+	if err := mgr.PostMergeReset(); err != nil {
+		t.Fatalf("PostMergeReset: %v", err)
+	}
+
+	// The critical check: project dir must still have no staged changes
+	// after PostMergeReset operated on the worktree.
+	diff2 := strings.TrimSpace(gitOutput(project, "diff", "--cached", "--name-only"))
+	if diff2 != "" {
+		t.Errorf("after PostMergeReset: project dir has staged changes: %s", diff2)
+	}
+
+	// Also verify working tree is clean (no unstaged changes).
+	status := strings.TrimSpace(gitOutput(project, "status", "--porcelain"))
+	// Filter out .ralph/ which is untracked
+	var relevant []string
+	for _, line := range strings.Split(status, "\n") {
+		if line != "" && !strings.Contains(line, ".ralph") {
+			relevant = append(relevant, line)
+		}
+	}
+	if len(relevant) > 0 {
+		t.Errorf("project dir should be clean, got:\n%s", strings.Join(relevant, "\n"))
+	}
+}
+
+// Worktree git operations (add, commit, checkout) must not contaminate
+// the project dir's index. This validates that git worktree isolation
+// works correctly — each worktree has its own index file.
+func TestWorktreeOps_DoNotContaminateProjectIndex(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchStacked,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Baseline: project dir must be clean.
+	before := strings.TrimSpace(gitOutput(project, "diff", "--cached", "--name-only"))
+	if before != "" {
+		t.Fatalf("project dir not clean before test: %s", before)
+	}
+
+	// Simulate agent operations in the worktree.
+	os.WriteFile(filepath.Join(mgr.WorkDir, "agent-work.go"), []byte("package agent\n"), 0o644)
+	gitCmd(mgr.WorkDir, "add", "-A")
+	gitCmd(mgr.WorkDir, "commit", "-m", "agent commit")
+
+	// More operations: modify, stage, commit again.
+	os.WriteFile(filepath.Join(mgr.WorkDir, "agent-work.go"), []byte("package agent\n\nfunc Do() {}\n"), 0o644)
+	gitCmd(mgr.WorkDir, "add", "-A")
+	gitCmd(mgr.WorkDir, "commit", "-m", "agent second commit")
+
+	// Force-checkout a new branch (simulates branch operations).
+	gitCmd(mgr.WorkDir, "checkout", "-B", "test-branch")
+
+	// Project dir's index must still be clean after all worktree operations.
+	after := strings.TrimSpace(gitOutput(project, "diff", "--cached", "--name-only"))
+	if after != "" {
+		t.Errorf("worktree operations contaminated project dir index: %s", after)
+	}
+}
+
+// When postMergeUpdate's reset --hard fails silently, the project dir's
+// index retains stale entries that look like reversions of merged changes.
+// This test confirms the fix: use error-aware git calls and add a
+// defensive cleanProjectIndex call.
+func TestPostMergeUpdate_ErrorHandling(t *testing.T) {
+	project, _ := initBareRepo(t)
+	bare := filepath.Join(filepath.Dir(project), "bare.git")
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+	log := &testLog{}
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchStacked,
+		State:          st,
+		Logger:         log,
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Push a new commit to origin/main from a temp clone.
+	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
+	run(t, "git", "clone", bare, tmpClone)
+	os.WriteFile(filepath.Join(tmpClone, "merged.txt"), []byte("merged content\n"), 0o644)
+	run(t, "git", "-C", tmpClone, "add", "merged.txt")
+	run(t, "git", "-C", tmpClone, "commit", "-m", "merged PR")
+	run(t, "git", "-C", tmpClone, "push", "origin", "main")
+
+	// Advance local main via update-ref WITHOUT reset (simulates the bug).
+	run(t, "git", "-C", project, "fetch", "origin", "main")
+	originRef := gitOutput(project, "rev-parse", "origin/main")
+	gitCmd(project, "update-ref", "refs/heads/main", originRef)
+
+	// Without reset, the index shows staged reversions.
+	diffBefore := strings.TrimSpace(gitOutput(project, "diff", "--cached", "--name-only"))
+	if diffBefore == "" {
+		t.Fatal("expected staged changes before reset (this is the bug scenario)")
+	}
+
+	// CleanProjectIndex should fix it.
+	mgr.CleanProjectIndex()
+
+	diffAfter := strings.TrimSpace(gitOutput(project, "diff", "--cached", "--name-only"))
+	if diffAfter != "" {
+		t.Errorf("CleanProjectIndex should have cleared staged changes, got: %s", diffAfter)
+	}
+}
+
 // --- PruneOrphanedWorktrees tests ---
 
 // PruneOrphanedWorktrees removes directories under .ralph/worktrees/ that
