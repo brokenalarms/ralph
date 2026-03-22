@@ -168,7 +168,7 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	// Signal the filter to drain remaining output and exit.
 	close(filterStop)
 	<-filterDone
-	stopProcess(tailCmd)
+	stopProcessGroup(tailCmd)
 
 	// Final signal check — Claude may have written a signal just before exiting.
 	if !result.SignalDetected {
@@ -295,6 +295,7 @@ func (r *Runner) startStreamFilter(cfg RunConfig, stop <-chan struct{}) <-chan s
 		go func() {
 			defer close(done)
 			cmd := exec.Command("bash", filterScript, cfg.RawLog)
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			logOut, err := os.OpenFile(cfg.LogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 			if err != nil {
 				return
@@ -306,8 +307,7 @@ func (r *Runner) startStreamFilter(cfg RunConfig, stop <-chan struct{}) <-chan s
 				return
 			}
 			<-stop
-			cmd.Process.Kill()
-			cmd.Wait()
+			stopProcessGroup(cmd)
 		}()
 	} else {
 		go func() {
@@ -479,6 +479,7 @@ func formatToolUse(c streamContent) string {
 // startTail launches tail -f on the given file for terminal display.
 func (r *Runner) startTail(path string) *exec.Cmd {
 	cmd := exec.Command("tail", "-f", "-n", "0", path)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -607,10 +608,18 @@ tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
 	os.WriteFile(path, []byte(script), 0o755)
 }
 
-func stopProcess(cmd *exec.Cmd) {
+// stopProcessGroup kills the entire process group rooted at cmd. The command
+// must have been started with SysProcAttr.Setpgid = true so it leads its own
+// group. Falls back to killing just the process if the group kill fails.
+func stopProcessGroup(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	_ = cmd.Process.Kill()
+	// Kill the whole process group (negative PID). This reaches child
+	// processes spawned by pipelines inside bash scripts — equivalent to
+	// bash's pkill -P + kill pattern.
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		_ = cmd.Process.Kill()
+	}
 	_ = cmd.Wait()
 }

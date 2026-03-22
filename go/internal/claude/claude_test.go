@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -754,6 +755,55 @@ func TestPoll_ZeroIdleTimeoutDisablesDetection(t *testing.T) {
 	if !result.SignalDetected {
 		t.Error("expected SignalDetected to be true")
 	}
+}
+
+// --- Process group cleanup tests ---
+
+// Verifies that stopProcessGroup kills child processes spawned by a bash
+// pipeline, not just the top-level bash process. This is the fix for orphaned
+// tail/jq/perl/sed processes that accumulated across iterations.
+func TestStopProcessGroup_KillsChildProcesses(t *testing.T) {
+	// Spawn a bash script that starts a background sleep child, then waits.
+	// The child's PID is written to a file so we can check if it's still alive.
+	dir := t.TempDir()
+	childPidFile := filepath.Join(dir, "child.pid")
+
+	script := fmt.Sprintf(`sleep 60 & echo $! > %s; wait`, childPidFile)
+	cmd := exec.Command("bash", "-c", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for the child PID file to appear.
+	var childPid string
+	for i := 0; i < 50; i++ {
+		time.Sleep(50 * time.Millisecond)
+		data, err := os.ReadFile(childPidFile)
+		if err == nil && len(data) > 0 {
+			childPid = strings.TrimSpace(string(data))
+			break
+		}
+	}
+	if childPid == "" {
+		t.Fatal("child PID file never appeared")
+	}
+
+	// Kill the process group.
+	stopProcessGroup(cmd)
+
+	// Verify the child process is dead. Signal 0 checks existence.
+	checkCmd := exec.Command("kill", "-0", childPid)
+	if err := checkCmd.Run(); err == nil {
+		t.Errorf("child process %s should be dead after stopProcessGroup, but it's still alive", childPid)
+	}
+}
+
+// Verifies that stopProcessGroup handles a nil command without panicking.
+func TestStopProcessGroup_NilCmd(t *testing.T) {
+	stopProcessGroup(nil)
+	stopProcessGroup(&exec.Cmd{})
 }
 
 // --- Test helpers ---
