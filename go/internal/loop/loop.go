@@ -248,6 +248,8 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		taskPrompt := l.buildTaskPrompt(nextTask, taskID)
 
+		l.syncEmbeddedPrompts()
+
 		// Run full test suite before handing off to agent. The agent only
 		// runs scoped tests during development; the orchestrator owns the
 		// full suite both here (pre-iteration) and after signal (gate).
@@ -295,17 +297,7 @@ func (l *Loop) Run(ctx context.Context) error {
 				return git.HasDiff(workDir) || git.HeadRev(workDir) != headBefore
 			},
 			OnSignal: func(summary string) bool {
-				// Orchestrator verification: sync prompts and run tests.
-				srcPrompts := filepath.Join(workDir, "prompts")
-				dstPrompts := filepath.Join(workDir, "go", "cmd", "ralph", "prompts")
-				syncPrompts := func() {
-					if _, err := os.Stat(srcPrompts); err == nil {
-						if _, err := os.Stat(filepath.Dir(dstPrompts)); err == nil {
-							exec.Command("cp", "-r", srcPrompts+"/", dstPrompts+"/").Run()
-						}
-					}
-				}
-				syncPrompts()
+				l.syncEmbeddedPrompts()
 
 				// Step 1: Run tests (commit check is a warning, not a gate)
 				commitResult := verify.CheckCommits(l.git.WorkDir, headBefore)
@@ -341,7 +333,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 					// Re-check tests after fix agent (skip commit check — fix agent
 					// may not have new commits if it determined work was correct)
-					syncPrompts()
+					l.syncEmbeddedPrompts()
 					testResult := verify.RunTests(l.cfg.VerifyDir)
 					if !testResult.Passed {
 						l.logger.Error("Tests still failing after verification agent: %s", testResult.Reason)
@@ -374,7 +366,7 @@ func (l *Loop) Run(ctx context.Context) error {
 						}
 
 						// Re-verify tests after fix (skip commit check)
-						syncPrompts()
+						l.syncEmbeddedPrompts()
 						testResult := verify.RunTests(l.cfg.VerifyDir)
 						if !testResult.Passed {
 							l.logger.Error("Tests failed after LLM fix agent: %s", testResult.Reason)
@@ -839,6 +831,16 @@ func (l *Loop) autoMerge() (bool, error) {
 		return l.mergeFunc()
 	}
 	return l.git.AutoMergeCurrentBranch()
+}
+
+func (l *Loop) syncEmbeddedPrompts() {
+	src := filepath.Join(l.git.WorkDir, "prompts")
+	dst := filepath.Join(l.git.WorkDir, "go", "cmd", "ralph", "prompts")
+	if _, err := os.Stat(src); err == nil {
+		if _, err := os.Stat(filepath.Dir(dst)); err == nil {
+			exec.Command("cp", "-r", src+"/", dst+"/").Run()
+		}
+	}
 }
 
 func (l *Loop) findPRNumber(workDir string) string {
