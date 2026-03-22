@@ -12,8 +12,14 @@
 
 ## Rules
 1. Focus ONLY on the single task described above.
-2. When complete, close the task in bd with a reason summarizing what you did.
-3. One task = one PR, if gh is available. Multiple atomic commits are fine, but they all go in one PR — do not create a PR per commit.
-4. Do NOT work on other tasks — one task per iteration.
-5. Do NOT write bd prime output or bd workflow instructions to the project's AGENTS.md, CLAUDE.md, or any other project file. bd context is for your use in this iteration only.
-6. Run the full test suite at the START of your iteration. If any tests are failing, fix them before starting your task. ALL tests must pass before you signal completion. No exceptions. If tests fail — including tests you did not write — you must fix them. Do not categorize failures as "pre-existing" or "out of scope" to justify skipping them. A green test suite is a prerequisite for signaling done.
+2. Do NOT work on other tasks — one task per iteration.
+3. Do NOT write bd prime output or bd workflow instructions to the project's AGENTS.md, CLAUDE.md, or any other project file. bd context is for your use in this iteration only.
+4. One task = one PR, if gh is available. Multiple atomic commits are fine, but they all go in one PR — do not create a PR per commit.
+5. Run the full test suite at the START of your iteration. If any tests are failing, fix them before starting your task.
+6. ALL tests must pass before you close the task or signal completion. No exceptions. If tests fail — including tests you did not write — you must fix them. Do not categorize failures as "pre-existing" or "out of scope" to justify skipping them.
+
+## Completion — this order is mandatory
+1. Run the full test suite. ALL tests must pass. If any fail, fix them and re-run. Do NOT proceed until green.
+2. Close the task: `bd close <id> --reason "what you did. PR #N."`
+3. Signal completion by writing to the signal file.
+Never close the task before tests pass. Never signal before closing.
