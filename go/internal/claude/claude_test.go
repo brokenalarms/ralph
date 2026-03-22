@@ -800,6 +800,60 @@ func TestStopProcessGroup_KillsChildProcesses(t *testing.T) {
 	}
 }
 
+// Verifies that stopProcessGroup kills all processes in a bash pipeline,
+// which is the actual pattern used by the stream filter script
+// (tail -f | cat | cat). Each pipeline process must be killed, not just bash.
+func TestStopProcessGroup_KillsPipelineProcesses(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pids")
+
+	// Simulate the stream filter: a bash pipeline where each stage writes
+	// its PID to a file, then blocks on read so it stays alive.
+	script := fmt.Sprintf(`set +m
+(echo $$ >> %s; sleep 60) | (echo $$ >> %s; sleep 60) | (echo $$ >> %s; sleep 60)
+`, pidFile, pidFile, pidFile)
+
+	cmd := exec.Command("bash", "-c", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for all 3 pipeline PIDs to appear.
+	var pids []string
+	for i := 0; i < 100; i++ {
+		time.Sleep(50 * time.Millisecond)
+		data, _ := os.ReadFile(pidFile)
+		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+		if len(lines) >= 3 && lines[0] != "" {
+			pids = lines[:3]
+			break
+		}
+	}
+	if len(pids) < 3 {
+		// Kill what we can and skip.
+		stopProcessGroup(cmd)
+		t.Fatal("pipeline PIDs never appeared")
+	}
+
+	stopProcessGroup(cmd)
+
+	// Brief pause to let the kernel fully clean up.
+	time.Sleep(100 * time.Millisecond)
+
+	for _, pid := range pids {
+		pid = strings.TrimSpace(pid)
+		if pid == "" {
+			continue
+		}
+		check := exec.Command("kill", "-0", pid)
+		if err := check.Run(); err == nil {
+			t.Errorf("pipeline process %s should be dead after stopProcessGroup", pid)
+		}
+	}
+}
+
 // Verifies that stopProcessGroup handles a nil command without panicking.
 func TestStopProcessGroup_NilCmd(t *testing.T) {
 	stopProcessGroup(nil)
