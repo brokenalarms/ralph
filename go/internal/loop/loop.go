@@ -319,22 +319,13 @@ func (l *Loop) Run(ctx context.Context) error {
 						diff = diff[:15000] + "\n[truncated]"
 					}
 
-					verifyPrompt := fmt.Sprintf(`You are a verification agent. The previous agent completed a task but tests are failing.
-
-TASK: %s
-DESCRIPTION: %s
-
-FAILING TESTS:
-%s
-
-YOUR JOB:
-1. Fix ALL failing tests. Run the full test suite to confirm green.
-2. Then verify: does the diff actually implement what the task asks for? Are the tests meaningful (not just assert true)?
-3. If the implementation is wrong or tests are superficial, fix that too.
-4. Commit all fixes.
-5. Signal completion ONLY when all tests pass and the implementation is correct.
-
-Do NOT add new features. Only fix failures and verify correctness.`, nextTask, beadDesc, testOutput)
+					signalPath := filepath.Join(l.cfg.RalphDir, ".signal_complete")
+					verifyPrompt := l.loadVerifyPrompt("verify-tests.md", map[string]string{
+						"{{TASK_TITLE}}":       nextTask,
+						"{{TASK_DESCRIPTION}}": beadDesc,
+						"{{TEST_OUTPUT}}":      testOutput,
+						"{{SIGNAL_COMPLETE}}":  signalPath,
+					})
 
 					verifyRunner := &claude.Runner{Logger: l.logger}
 					verifyResult, _ := verifyRunner.Run(claude.RunConfig{
@@ -375,21 +366,13 @@ Do NOT add new features. Only fix failures and verify correctness.`, nextTask, b
 
 						// Spawn verification agent to address LLM feedback
 						l.logger.Log("Spawning verification agent for LLM feedback...")
-						fixPrompt := fmt.Sprintf(`You are a verification agent. The previous agent's work was rejected by a reviewer.
-
-TASK: %s
-DESCRIPTION: %s
-
-REVIEWER FEEDBACK:
-%s
-
-YOUR JOB:
-1. Address the reviewer's feedback — add missing tests, fix the implementation, etc.
-2. Run scoped tests to confirm your changes work.
-3. Commit all fixes.
-4. Signal completion when done.
-
-Do NOT add unrelated features. Only address the reviewer's specific feedback.`, nextTask, beadDesc, llmResult.Details)
+						signalPath := filepath.Join(l.cfg.RalphDir, ".signal_complete")
+						fixPrompt := l.loadVerifyPrompt("verify-llm.md", map[string]string{
+							"{{TASK_TITLE}}":       nextTask,
+							"{{TASK_DESCRIPTION}}": beadDesc,
+							"{{LLM_FEEDBACK}}":     llmResult.Details,
+							"{{SIGNAL_COMPLETE}}":  signalPath,
+						})
 
 						fixRunner := &claude.Runner{Logger: l.logger}
 						fixResult, _ := fixRunner.Run(claude.RunConfig{
@@ -606,6 +589,26 @@ func (l *Loop) handleRebase(ctx context.Context) error {
 
 // isNewTask returns true when the next task differs from the last one stored
 // in state. Prefers task ID comparison (stable across description edits);
+// loadVerifyPrompt reads a prompt template from the prompts directory and
+// replaces placeholders with the given values.
+func (l *Loop) loadVerifyPrompt(filename string, vars map[string]string) string {
+	path := filepath.Join(l.cfg.PromptsDir, filename)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// Fallback: return a minimal prompt
+		result := ""
+		for k, v := range vars {
+			result += k + ": " + v + "\n"
+		}
+		return result
+	}
+	s := string(data)
+	for k, v := range vars {
+		s = strings.ReplaceAll(s, k, v)
+	}
+	return s
+}
+
 // getBeadDescription retrieves the bead description for LLM verification.
 func (l *Loop) getBeadDescription(taskID string) string {
 	if taskID == "" {
