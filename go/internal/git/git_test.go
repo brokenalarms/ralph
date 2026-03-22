@@ -55,7 +55,7 @@ func initBareRepo(t *testing.T) (string, func()) {
 	tmp := t.TempDir()
 
 	bare := filepath.Join(tmp, "bare.git")
-	run(t, "git", "init", "--bare", bare)
+	run(t, "git", "init", "--bare", "-b", "main", bare)
 
 	project := filepath.Join(tmp, "project")
 	run(t, "git", "clone", bare, project)

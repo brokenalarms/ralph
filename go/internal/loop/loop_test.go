@@ -552,7 +552,7 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 	// Set up a real git repo as the worktree so RotateBranch can checkout
 	wtDir := filepath.Join(dir, "worktree")
 	os.MkdirAll(wtDir, 0o755)
-	exec.Command("git", "init", wtDir).Run()
+	exec.Command("git", "init", "-b", "main", wtDir).Run()
 	exec.Command("git", "-C", wtDir, "commit", "--allow-empty", "-m", "init").Run()
 	exec.Command("git", "-C", wtDir, "checkout", "-b", "ralph/myproject/01-previous-task").Run()
 
@@ -1298,7 +1298,7 @@ func initBareRepoWithOrigin(t *testing.T) (projectDir string, bareDir string) {
 	tmp := t.TempDir()
 
 	bare := filepath.Join(tmp, "bare.git")
-	run(t, "git", "init", "--bare", bare)
+	run(t, "git", "init", "--bare", "-b", "main", bare)
 
 	project := filepath.Join(tmp, "project")
 	run(t, "git", "clone", bare, project)
