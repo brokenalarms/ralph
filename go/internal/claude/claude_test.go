@@ -920,3 +920,24 @@ func TestDisallowedTools_ContainsBdClose(t *testing.T) {
 		t.Error("IterationDisallowedTools must contain 'bd close' — orchestrator owns bead close")
 	}
 }
+
+// Verifies that git checkout and git branch are disallowed so sub-agents
+// can't check out ralph's branches, which would block RecreateFromMain.
+func TestDisallowedTools_BlocksGitCheckoutAndBranch(t *testing.T) {
+	required := map[string]bool{
+		"git checkout": false,
+		"git branch":   false,
+	}
+	for _, tool := range IterationDisallowedTools {
+		for key := range required {
+			if strings.Contains(tool, key) {
+				required[key] = true
+			}
+		}
+	}
+	for key, found := range required {
+		if !found {
+			t.Errorf("IterationDisallowedTools must block %q to prevent sub-agents from interfering with ralph's branches", key)
+		}
+	}
+}
