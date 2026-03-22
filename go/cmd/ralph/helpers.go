@@ -209,7 +209,7 @@ func killChildProcesses() {
 }
 
 func clearSignalFiles(ralphDir string) {
-	for _, f := range []string{".signal_complete", ".signal_current_task", ".signal_all_complete", ".stream-task"} {
+	for _, f := range []string{".signal_complete", ".signal_current_task", ".signal_all_complete", ".stream-task", "stop"} {
 		os.Remove(filepath.Join(ralphDir, f))
 	}
 }
