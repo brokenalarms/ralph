@@ -465,6 +465,7 @@ func (m *Manager) postMergeUpdate(prNumber string) (bool, error) {
 	originRef := gitOutput(m.ProjectDir, "rev-parse", "origin/"+defaultBranch)
 	if originRef != "" {
 		gitCmd(m.ProjectDir, "update-ref", "refs/heads/"+defaultBranch, originRef)
+		gitCmd(m.ProjectDir, "reset", "--hard", "HEAD")
 	}
 	m.Logger.Log("Updated local %s to origin/%s", defaultBranch, defaultBranch)
 
