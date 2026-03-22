@@ -28,6 +28,7 @@ type Config struct {
 	DisabledChecks             []string
 	UseTmux                    bool
 	AutoMerge                  bool
+	MergeAdmin                 bool
 	Evolve                     bool
 	IdleTimeout                time.Duration
 	IdleTimeoutProgress        time.Duration
@@ -305,6 +306,10 @@ func Parse(args []string) (Config, error) {
 			cfg.AutoMerge = true
 			i++
 
+		case "--merge-admin":
+			cfg.MergeAdmin = true
+			i++
+
 		case "--evolve":
 			cfg.Evolve = true
 			i++
@@ -369,6 +374,9 @@ func (c *Config) Validate() error {
 		if c.UseTmux {
 			return fmt.Errorf("--evolve is incompatible with --tmux")
 		}
+	}
+	if c.MergeAdmin && !c.AutoMerge {
+		return fmt.Errorf("--merge-admin requires --auto-merge")
 	}
 	return nil
 }

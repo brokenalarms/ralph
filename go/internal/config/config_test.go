@@ -192,6 +192,41 @@ func TestAutoMergeFlag(t *testing.T) {
 	}
 }
 
+// Verifies --merge-admin flag defaults to false, is set to true when present,
+// and requires --auto-merge to pass validation.
+func TestMergeAdminFlag(t *testing.T) {
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MergeAdmin {
+		t.Error("MergeAdmin should default to false")
+	}
+
+	cfg, err = Parse([]string{"--auto-merge", "--merge-admin", "--no-worktree"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.MergeAdmin {
+		t.Error("MergeAdmin should be true after --merge-admin")
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("--merge-admin with --auto-merge should be valid, got: %v", err)
+	}
+}
+
+// --merge-admin without --auto-merge is invalid since admin merge bypass
+// only makes sense when auto-merge is enabled.
+func TestMergeAdminRequiresAutoMerge(t *testing.T) {
+	cfg, err := Parse([]string{"--merge-admin", "--no-worktree"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for --merge-admin without --auto-merge")
+	}
+}
+
 // Verifies that a bare positional argument is treated as the project directory,
 // matching ralph.sh's `*) PROJECT_DIR="$1"` case.
 func TestPositionalProjectDir(t *testing.T) {
