@@ -509,6 +509,82 @@ func TestStartStreamFilter_NoExternalProcesses(t *testing.T) {
 	}
 }
 
+// Proves that StopStreaming drains active goroutines so a subsequent Run()
+// on the same Runner cannot accumulate duplicate filter/tail writers on the
+// same log files. Simulates the OnSignal verification pattern where
+// StopStreaming is called before spawning a verification agent.
+func TestStopStreaming_PreventsGoroutineAccumulation(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+	os.WriteFile(rawPath, nil, 0o644)
+
+	runner := &Runner{Logger: &testLogger{}}
+
+	// Start streaming goroutines via startStreamFilter.
+	filterStop := make(chan struct{})
+	filterDone := runner.startStreamFilter(RunConfig{
+		RalphDir: dir,
+		RawLog:   rawPath,
+		LogFile:  logPath,
+	}, filterStop)
+
+	tailStop := make(chan struct{})
+	tailDone := startTailGoroutine(logPath, tailStop)
+
+	runner.mu.Lock()
+	runner.filterStop = filterStop
+	runner.filterDone = filterDone
+	runner.tailStop = tailStop
+	runner.tailDone = tailDone
+	runner.mu.Unlock()
+
+	// Give goroutines time to start reading.
+	time.Sleep(100 * time.Millisecond)
+
+	// StopStreaming should drain both goroutines.
+	runner.StopStreaming()
+
+	// After StopStreaming, channels should be nil — no active goroutines.
+	runner.mu.Lock()
+	if runner.filterStop != nil || runner.tailStop != nil {
+		t.Error("StopStreaming should nil out channels after draining")
+	}
+	runner.mu.Unlock()
+
+	// Write data AFTER StopStreaming — old goroutines must not process it.
+	f, _ := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"after stop"}}`)
+	f.Close()
+	time.Sleep(200 * time.Millisecond)
+
+	got, _ := os.ReadFile(logPath)
+	if strings.Contains(string(got), "after stop") {
+		t.Error("stopped filter should not process data written after StopStreaming")
+	}
+
+	// Calling StopStreaming again should be safe (no-op).
+	runner.StopStreaming()
+}
+
+// Proves that StopStreaming is idempotent — calling it when no goroutines
+// are active does not panic or block.
+func TestStopStreaming_Idempotent(t *testing.T) {
+	runner := &Runner{Logger: &testLogger{}}
+	done := make(chan struct{})
+	go func() {
+		runner.StopStreaming()
+		runner.StopStreaming()
+		runner.StopStreaming()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopStreaming should not block when no goroutines are active")
+	}
+}
+
 // --- Process lifecycle tests ---
 
 // Verifies that Run detects a completion signal written by an external

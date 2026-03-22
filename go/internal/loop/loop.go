@@ -51,6 +51,7 @@ type Config struct {
 // claudeRunner abstracts the Claude execution interface for testability.
 type claudeRunner interface {
 	Run(cfg claude.RunConfig) (claude.Result, error)
+	StopStreaming()
 }
 
 // Loop orchestrates the execution phase: task selection, prompt building,
@@ -316,7 +317,11 @@ func (l *Loop) Run(ctx context.Context) error {
 					l.logger.Warn("Tests failed: %s", reason)
 					testOutput := testResult.Details
 
-					// Spawn a verification agent that fixes tests AND verifies the diff
+					// Stop the main agent's streaming goroutines before spawning
+					// a verification agent to prevent goroutine accumulation on
+					// shared raw.log/loop.log files.
+					l.runner.StopStreaming()
+
 					l.logger.Log("Spawning verification agent...")
 					beadDesc := l.getBeadDescription(taskID)
 					diffCmd := exec.Command("git", "-C", workDir, "diff", headBefore+"..HEAD")
@@ -371,7 +376,9 @@ func (l *Loop) Run(ctx context.Context) error {
 					if !llmResult.Passed {
 						l.logger.Warn("LLM verification rejected: %s", llmResult.Details)
 
-						// Spawn verification agent to address LLM feedback
+						// Stop streaming before LLM fix agent (same rationale as test verification).
+						l.runner.StopStreaming()
+
 						l.logger.Log("Spawning verification agent for LLM feedback...")
 						signalPath := filepath.Join(l.cfg.RalphDir, ".signal_complete")
 						fixPrompt := l.loadVerifyPrompt("verify-llm.md", map[string]string{
