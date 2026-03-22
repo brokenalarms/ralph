@@ -384,7 +384,7 @@ func sanitizeSessionName(name string) string {
 	return name
 }
 
-func sessionExists(name string) bool {
+var sessionExists = func(name string) bool {
 	return exec.Command("tmux", "has-session", "-t", name).Run() == nil
 }
 
