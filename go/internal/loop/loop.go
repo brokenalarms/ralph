@@ -358,7 +358,9 @@ func (l *Loop) Run(ctx context.Context) error {
 				if err != nil {
 					l.logger.Warn("Auto-merge: %v", err)
 				} else if merged {
-					l.git.PostMergeReset()
+					if err := l.git.PostMergeReset(); err != nil {
+						l.logger.Warn("Post-merge reset: %v", err)
+					}
 					if l.cfg.Evolve {
 						l.git.TagTaskEnd(taskID)
 						l.logger.Phase("Evolve: restarting with latest main")
