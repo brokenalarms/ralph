@@ -342,6 +342,10 @@ func initTaskBackend(cfg config.Config, resume bool, st *state.Store, ralphDir, 
 
 // cleanup generates resume script, prints summary, and removes unused worktrees.
 func cleanup(cfg config.Config, gm *git.Manager, st *state.Store, backend tasks.Backend, ralphDir, planFile, scriptPath string, args []string, interrupted bool, log *logging.Logger) {
+	if interrupted {
+		st.Write("status", "stopped")
+	}
+
 	// Remove unused worktree (branch still named /next = no work committed).
 	if gm.WorktreeBranch != "" &&
 		strings.HasSuffix(gm.WorktreeBranch, "/next") &&

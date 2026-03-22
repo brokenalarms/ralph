@@ -419,6 +419,54 @@ func TestEvolveRestart_NoStopFileProceeds(t *testing.T) {
 	}
 }
 
+// Verifies that cleanup writes status="stopped" when interrupted, overriding
+// any stale status (e.g., "halted_stagnation") from a previous analyzer run.
+func TestCleanup_InterruptedWritesStopped(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	st := state.NewStore(ralphDir)
+	st.Init(5, 0)
+	st.Write("status", "halted_stagnation")
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	backend := &stubBackend{total: 1, remaining: 1}
+	log := logging.New(nil)
+	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, UseWorktree: true, CallsPerHour: 80}
+
+	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, true, log)
+
+	status, _ := st.Read("status")
+	if status != "stopped" {
+		t.Errorf("expected status 'stopped' after interrupted cleanup, got %q", status)
+	}
+}
+
+// Verifies that cleanup preserves the existing status when NOT interrupted,
+// so normal exits don't overwrite meaningful statuses like "completed".
+func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	st := state.NewStore(ralphDir)
+	st.Init(5, 0)
+	st.Write("status", "completed")
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	backend := &stubBackend{total: 3, completed: 3}
+	log := logging.New(nil)
+	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, UseWorktree: true, CallsPerHour: 80}
+
+	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, false, log)
+
+	status, _ := st.Read("status")
+	if status != "completed" {
+		t.Errorf("expected status 'completed' preserved, got %q", status)
+	}
+}
+
 // Verifies that validatePlanFile rejects a nonexistent file with "not found".
 func TestValidatePlanFile_NonexistentExitsWithError(t *testing.T) {
 	err := validatePlanFile("/nonexistent/plan.md")
