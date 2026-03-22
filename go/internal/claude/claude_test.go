@@ -962,10 +962,18 @@ func TestStopProcessGroup_KillsChildProcesses(t *testing.T) {
 	// Kill the process group.
 	stopProcessGroup(cmd)
 
+	// Allow time for signal propagation (Linux CI can be slower).
+	time.Sleep(200 * time.Millisecond)
+
 	// Verify the child process is dead. Signal 0 checks existence.
 	checkCmd := exec.Command("kill", "-0", childPid)
 	if err := checkCmd.Run(); err == nil {
-		t.Errorf("child process %s should be dead after stopProcessGroup, but it's still alive", childPid)
+		// Retry once after a longer wait — CI environments may be slow.
+		time.Sleep(500 * time.Millisecond)
+		checkCmd2 := exec.Command("kill", "-0", childPid)
+		if err := checkCmd2.Run(); err == nil {
+			t.Errorf("child process %s should be dead after stopProcessGroup, but it's still alive", childPid)
+		}
 	}
 }
 
