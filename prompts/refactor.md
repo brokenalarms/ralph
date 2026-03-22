@@ -26,6 +26,8 @@ The following issues triggered this refactor iteration. Focus on these first.
 4. If you do find cleanup worth doing, start with the highest-impact issue. But if a better pattern emerges as you work — a coherent set of related changes that only becomes visible once you've started — follow it. Don't artificially limit yourself to one change if several form a natural unit of cleanup.
 5. Run tests. All tests must pass after your change.
 6. Commit with a `refactor:` subject prefix explaining what you cleaned and why.
+7. Push your branch and create or update the PR.
+8. Signal completion. This MUST be the very last thing you do — Ralph will kill your process immediately when it detects the signal.
 
 ## Rules
 - Do NOT add new features or change behavior. Refactoring preserves external behavior.
