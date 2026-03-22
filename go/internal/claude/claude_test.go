@@ -756,6 +756,150 @@ func TestPoll_ZeroIdleTimeoutDisablesDetection(t *testing.T) {
 	}
 }
 
+// --- Permission block detection tests ---
+
+// Verifies that lastToolFromLog returns the name of the most recent tool_use
+// event from the raw log, which is used to diagnose permission-blocked sessions.
+func TestLastToolFromLog_FindsLastToolUse(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+
+	lines := strings.Join([]string{
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/foo.go"}}]}}`,
+		`{"type":"content_block_delta","delta":{"text":"some output"}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"CronCreate","input":{"schedule":"* * * * *"}}]}}`,
+	}, "\n")
+	os.WriteFile(rawLog, []byte(lines), 0o644)
+
+	got := lastToolFromLog(rawLog)
+	if got != "CronCreate" {
+		t.Errorf("lastToolFromLog = %q, want %q", got, "CronCreate")
+	}
+}
+
+// Verifies that lastToolFromLog returns empty string when the log has no
+// tool_use events.
+func TestLastToolFromLog_EmptyWhenNoToolUse(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+
+	os.WriteFile(rawLog, []byte(`{"type":"content_block_delta","delta":{"text":"hello"}}`+"\n"), 0o644)
+
+	got := lastToolFromLog(rawLog)
+	if got != "" {
+		t.Errorf("lastToolFromLog = %q, want empty", got)
+	}
+}
+
+// Verifies that lastToolFromLog returns empty string for a missing log file.
+func TestLastToolFromLog_MissingFile(t *testing.T) {
+	got := lastToolFromLog("/nonexistent/raw.log")
+	if got != "" {
+		t.Errorf("lastToolFromLog = %q, want empty", got)
+	}
+}
+
+// Verifies that isAllowedTool correctly identifies tools in the allowed list.
+func TestIsAllowedTool_AllowedTools(t *testing.T) {
+	for _, tool := range []string{"Read", "Edit", "Write", "Glob", "Grep", "Agent", "TodoWrite", "TaskOutput"} {
+		if !isAllowedTool(tool) {
+			t.Errorf("isAllowedTool(%q) = false, want true", tool)
+		}
+	}
+}
+
+// Verifies that isAllowedTool matches Bash variants via the Bash(*) wildcard.
+func TestIsAllowedTool_BashWildcard(t *testing.T) {
+	for _, tool := range []string{"Bash", "Bash(git:*)"} {
+		if !isAllowedTool(tool) {
+			t.Errorf("isAllowedTool(%q) = false, want true (Bash wildcard)", tool)
+		}
+	}
+}
+
+// Verifies that isAllowedTool rejects tools not in the allowed list.
+func TestIsAllowedTool_RejectsUnlisted(t *testing.T) {
+	for _, tool := range []string{"CronCreate", "AskUserQuestion", "EnterPlanMode", "SomeNewTool"} {
+		if isAllowedTool(tool) {
+			t.Errorf("isAllowedTool(%q) = true, want false", tool)
+		}
+	}
+}
+
+// Verifies that when idle timeout fires and the last tool_use is not in
+// allowedTools, the result has PermissionBlock=true and the blocked tool name.
+func TestPoll_PermissionBlockDetected(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	// Pre-write a tool_use event for a non-allowed tool before starting.
+	os.WriteFile(rawLog, []byte(
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"CronCreate","input":{"schedule":"daily"}}]}}`+"\n",
+	), 0o644)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		IdleTimeout:  200 * time.Millisecond,
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+
+	if !result.IdleTimeout {
+		t.Error("expected IdleTimeout to be true")
+	}
+	if !result.PermissionBlock {
+		t.Error("expected PermissionBlock to be true")
+	}
+	if result.BlockedTool != "CronCreate" {
+		t.Errorf("BlockedTool = %q, want %q", result.BlockedTool, "CronCreate")
+	}
+}
+
+// Verifies that when idle timeout fires but the last tool_use IS in
+// allowedTools, PermissionBlock remains false (normal idle timeout).
+func TestPoll_NoPermissionBlockForAllowedTool(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	os.WriteFile(rawLog, []byte(
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/foo"}}]}}`+"\n",
+	), 0o644)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		IdleTimeout:  200 * time.Millisecond,
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+
+	if !result.IdleTimeout {
+		t.Error("expected IdleTimeout to be true")
+	}
+	if result.PermissionBlock {
+		t.Error("expected PermissionBlock to be false for allowed tool")
+	}
+}
+
 // --- Test helpers ---
 
 // runWithCommand replaces the claude command with an arbitrary command for

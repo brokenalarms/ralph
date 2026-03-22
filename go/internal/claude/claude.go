@@ -68,11 +68,13 @@ type RunConfig struct {
 
 // Result describes the outcome of a Claude run.
 type Result struct {
-	SignalDetected bool   // true if a completion signal was found
-	AllComplete    bool   // true if the all-complete signal was found
-	IdleTimeout    bool   // true if the session was killed due to idle timeout
-	TaskDesc       string // task description from the current-task signal
-	Summary        string // completion summary from signal file
+	SignalDetected  bool   // true if a completion signal was found
+	AllComplete     bool   // true if the all-complete signal was found
+	IdleTimeout     bool   // true if the session was killed due to idle timeout
+	PermissionBlock bool   // true if idle timeout was caused by a non-allowed tool
+	BlockedTool     string // name of the tool that caused a permission block
+	TaskDesc        string // task description from the current-task signal
+	Summary         string // completion summary from signal file
 }
 
 // OnTaskDetected is called when a current-task signal file appears.
@@ -97,6 +99,8 @@ var IterationAllowedTools = []string{
 	"WebFetch",
 	"WebSearch",
 	"ToolSearch",
+	"TaskOutput",
+	"TaskStop",
 }
 
 // Runner manages Claude process lifecycle: spawning, signal polling, and cleanup.
@@ -265,9 +269,16 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 				idle := time.Since(lastActivity)
 				if idle >= timeout {
-					r.Logger.Warn("Idle timeout (%s with no output) — killing session", timeout)
+					result := Result{IdleTimeout: true}
+					if tool := lastToolFromLog(cfg.RawLog); tool != "" && !isAllowedTool(tool) {
+						result.PermissionBlock = true
+						result.BlockedTool = tool
+						r.Logger.Warn("Idle timeout (%s) — session stuck on permission prompt for tool %q (not in allowedTools)", timeout, tool)
+					} else {
+						r.Logger.Warn("Idle timeout (%s with no output) — killing session", timeout)
+					}
 					gracefulKill(cmd, processDone)
-					return Result{IdleTimeout: true}
+					return result
 				}
 			}
 		}
@@ -486,6 +497,60 @@ func (r *Runner) startTail(path string) *exec.Cmd {
 		return nil
 	}
 	return cmd
+}
+
+// --- Permission block detection ---
+
+// lastToolFromLog reads the tail of the raw log and returns the name of the
+// last tool_use event. Returns empty string if no tool_use is found.
+func lastToolFromLog(rawLogPath string) string {
+	data, err := os.ReadFile(rawLogPath)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+
+	// Scan from the end for the last tool_use event. Read at most the
+	// last 64KB to avoid loading huge logs.
+	start := 0
+	if len(data) > 64*1024 {
+		start = len(data) - 64*1024
+	}
+	tail := string(data[start:])
+
+	var lastTool string
+	for _, line := range strings.Split(tail, "\n") {
+		if len(line) == 0 || line[0] != '{' {
+			continue
+		}
+		var ev streamEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		if ev.Type == "assistant" && ev.Message != nil {
+			for _, c := range ev.Message.Content {
+				if c.Type == "tool_use" && c.Name != "" {
+					lastTool = c.Name
+				}
+			}
+		}
+	}
+	return lastTool
+}
+
+// isAllowedTool checks whether a tool name matches any entry in
+// IterationAllowedTools. Handles the "Bash(*)" wildcard pattern by
+// matching any tool name starting with "Bash".
+func isAllowedTool(name string) bool {
+	for _, allowed := range IterationAllowedTools {
+		if allowed == name {
+			return true
+		}
+		// "Bash(*)" matches any Bash variant (Bash, Bash(git:*), etc.)
+		if strings.HasPrefix(allowed, "Bash(") && strings.HasPrefix(name, "Bash") {
+			return true
+		}
+	}
+	return false
 }
 
 // --- Signal file helpers ---

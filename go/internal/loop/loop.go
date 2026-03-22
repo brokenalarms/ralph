@@ -275,12 +275,20 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.logger.Warn("Claude failed on iteration %d, continuing...", runIteration)
 		}
 		if result.IdleTimeout {
-			l.logger.Warn("Restarting iteration %d after idle timeout", runIteration)
 			diffStat := git.DiffStatRange(l.git.WorkDir, headBefore, git.HeadRev(l.git.WorkDir))
-			l.attempts.Record(taskID, nextTask,
-				"Killed: idle timeout (no output for configured duration)",
-				diffStat,
-				"idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output")
+			if result.PermissionBlock {
+				l.logger.Warn("Restarting iteration %d — blocked on permission prompt for tool %q", runIteration, result.BlockedTool)
+				l.attempts.Record(taskID, nextTask,
+					fmt.Sprintf("Killed: permission block on tool %q (not in allowedTools)", result.BlockedTool),
+					diffStat,
+					fmt.Sprintf("permission_block: tool %q is not pre-approved — avoid using it, or use an allowed alternative", result.BlockedTool))
+			} else {
+				l.logger.Warn("Restarting iteration %d after idle timeout", runIteration)
+				l.attempts.Record(taskID, nextTask,
+					"Killed: idle timeout (no output for configured duration)",
+					diffStat,
+					"idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output")
+			}
 			runIteration--
 			iteration--
 			continue
