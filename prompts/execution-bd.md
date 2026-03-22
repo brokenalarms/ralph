@@ -10,6 +10,14 @@
 - NEVER run `bd init` — ralph handles backend initialization. Running `bd init` from the wrong directory creates orphan databases.
 - NEVER create directories named after task IDs. Work only in the worktree at {{WORK_DIR}}.
 
+## Diagnosis format
+When you identify the root cause, state it clearly in the log:
+```
+ISSUE: <what is wrong and why>
+FIX: <what you will do to fix it>
+```
+Include this in your reflection as well, before the learnings section.
+
 ## Rules
 1. Focus ONLY on the single task described above.
 2. Do NOT work on other tasks — one task per iteration.
