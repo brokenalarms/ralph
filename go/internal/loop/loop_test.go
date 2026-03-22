@@ -1395,8 +1395,8 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 				t.Errorf("expected 3 iterations, got %d", iterationCount)
 			}
 
-			if mergeCount != 3 {
-				t.Errorf("expected auto-merge to fire 3 times (once per task), got %d", mergeCount)
+			if mergeCount != 4 {
+				t.Errorf("expected auto-merge to fire 4 times (3 per-task + 1 flush), got %d", mergeCount)
 			}
 		})
 	}
@@ -1572,8 +1572,8 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			if pushPRCalls != 2 {
-				t.Errorf("expected pushAndCreatePR called 2 times (once per task), got %d", pushPRCalls)
+			if pushPRCalls != 3 {
+				t.Errorf("expected pushAndCreatePR called 3 times (2 per-task + 1 flush), got %d", pushPRCalls)
 			}
 		})
 	}
@@ -1633,6 +1633,148 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 
 	if pushPRCalls != 0 {
 		t.Errorf("pushAndCreatePR should not be called without signal, got %d calls", pushPRCalls)
+	}
+}
+
+// Verifies that when the last task is closed without a signal (e.g. Claude
+// called bd close but exited before writing .signal_complete), the loop
+// still pushes the work via flushUnpushedWork before entering wait/break.
+func TestLoop_FlushUnpushedWorkOnAllComplete(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	var pushPRCalls int
+	var mergeCalls int
+
+	backend := &mutableBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "checklist",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			// Simulate Claude closing the task via bd close but not
+			// writing a signal file.
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: false},
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		BranchStrategy: git.BranchSingle,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.pushPRFunc = func(taskDesc string) error {
+		pushPRCalls++
+		if taskDesc != "last task" {
+			t.Errorf("expected push for 'last task', got %q", taskDesc)
+		}
+		return nil
+	}
+	l.mergeFunc = func() (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	_ = l.Run(context.Background())
+
+	if pushPRCalls != 1 {
+		t.Errorf("expected flushUnpushedWork to call pushAndCreatePR once, got %d", pushPRCalls)
+	}
+	if mergeCalls != 1 {
+		t.Errorf("expected flushUnpushedWork to call autoMerge once, got %d", mergeCalls)
+	}
+
+	finalState, _ := st.Load()
+	if finalState.Status != "completed" {
+		t.Errorf("expected status 'completed', got %q", finalState.Status)
+	}
+}
+
+// Verifies that flushUnpushedWork also runs when --wait is set, before
+// entering the wait polling loop (not just on break).
+func TestLoop_FlushUnpushedWorkBeforeWait(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	var pushPRCalls int
+
+	backend := &mutableBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "the task",
+		nextID:    "ralph-w",
+		label:     "checklist",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: false},
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		BranchStrategy: git.BranchSingle,
+		Logger:         logging.New(nil),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Wait:          true,
+		WaitInterval:  50 * time.Millisecond,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.pushPRFunc = func(taskDesc string) error {
+		pushPRCalls++
+		// Cancel after flush so we don't hang in wait loop.
+		cancel()
+		return nil
+	}
+
+	_ = l.Run(ctx)
+
+	if pushPRCalls != 1 {
+		t.Errorf("expected flushUnpushedWork before wait, got %d push calls", pushPRCalls)
 	}
 }
 

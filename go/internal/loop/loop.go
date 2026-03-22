@@ -171,6 +171,9 @@ func (l *Loop) Run(ctx context.Context) error {
 					}
 				}
 			}
+
+			l.flushUnpushedWork()
+
 			if !l.cfg.Wait {
 				l.logger.TaskSuccess("All tasks complete!")
 				l.state.Write("status", "completed")
@@ -428,6 +431,28 @@ func (l *Loop) pushAndCreatePR(taskDesc string) error {
 		return l.pushPRFunc(taskDesc)
 	}
 	return l.git.PushAndCreatePR(taskDesc)
+}
+
+// flushUnpushedWork pushes any commits sitting on the worktree branch and
+// optionally auto-merges. Called when all tasks are complete so that work
+// from the last iteration is never left unpushed.
+func (l *Loop) flushUnpushedWork() {
+	lastTask, _ := l.state.Read("last_task")
+	if err := l.pushAndCreatePR(lastTask); err != nil {
+		l.logger.Warn("Push/PR: %v", err)
+		return
+	}
+
+	if l.cfg.AutoMerge {
+		merged, err := l.autoMerge()
+		if err != nil {
+			l.logger.Warn("Auto-merge: %v", err)
+			l.writeMergeFailureFeedback(err)
+			l.git.PostMergeFailReset()
+		} else if merged {
+			l.git.PostMergeReset()
+		}
+	}
 }
 
 func (l *Loop) closeTaskWithPR(taskID, summary string) {
