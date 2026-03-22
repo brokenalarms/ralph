@@ -225,7 +225,7 @@ MOCK
 @test "bd: task_execution_instructions references bd" {
   result=$(task_execution_instructions)
   [[ "$result" == *"bd prime"* ]]
-  [[ "$result" == *"close the task"* ]]
+  [[ "$result" == *"bd close"* ]]
 }
 
 # Proves: on resume, stored task_backend=checklist is honored even when bd is available

@@ -489,9 +489,19 @@ func (m *Manager) RecreateFromMain() error {
 	m.Logger.Log("Removing old worktree: %s", m.WorkDir)
 	gitCmd(m.ProjectDir, "worktree", "remove", "--force", m.WorkDir)
 
-	// Delete all ralph project branches (squash-merged work is on main)
+	// Prune stale worktree references before listing branches — a worktree
+	// whose directory was deleted still marks its branch as checked-out.
+	gitCmd(m.ProjectDir, "worktree", "prune")
+
+	// Delete all ralph project branches (squash-merged work is on main).
+	// A branch may be checked out in an external worktree (e.g. a Claude
+	// sub-agent in .claude/worktrees/). Force-remove such worktrees first.
 	branches := ListProjectBranches(m.ProjectDir, m.ProjectName)
 	for _, b := range branches {
+		if wt := findWorktreeForBranch(m.ProjectDir, b); wt != "" {
+			m.Logger.Log("Removing worktree holding branch %s: %s", b, wt)
+			gitCmd(m.ProjectDir, "worktree", "remove", "--force", wt)
+		}
 		gitCmd(m.ProjectDir, "branch", "-D", b)
 	}
 
@@ -695,6 +705,7 @@ func ListProjectBranches(dir, projectName string) []string {
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		line = strings.TrimPrefix(line, "* ")
+		line = strings.TrimPrefix(line, "+ ")
 		if line != "" {
 			branches = append(branches, line)
 		}
@@ -1000,6 +1011,7 @@ func ParseTaskSeqFromBranches(dir, projectName string) int {
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		line = strings.TrimPrefix(line, "* ")
+		line = strings.TrimPrefix(line, "+ ")
 		if m := seqRe.FindStringSubmatch(line); len(m) > 1 {
 			if n, err := strconv.Atoi(m[1]); err == nil && n > maxSeq {
 				maxSeq = n

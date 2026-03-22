@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -179,11 +180,29 @@ func extractEmbeddedPrompts() (string, error) {
 	return tmpDir, err
 }
 
-// killChildProcesses kills orphan-prone child processes (tail, stream-filter)
-// before exec to prevent accumulation across evolve restarts.
+// killChildProcesses kills all descendant processes before exec to prevent
+// orphan accumulation across evolve restarts. Kills grandchildren first
+// (bash pipeline processes like tail, jq, perl, sed), then direct children.
 func killChildProcesses() {
-	// pkill by parent PID — kills direct children of this process
-	exec.Command("pkill", "-P", fmt.Sprintf("%d", os.Getpid())).Run()
+	pidStr := fmt.Sprintf("%d", os.Getpid())
+
+	// Find direct children so we can kill their children (grandchildren) first.
+	out, _ := exec.Command("pgrep", "-P", pidStr).Output()
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		// Kill grandchildren (pipeline processes inside bash stream filter).
+		exec.Command("pkill", "-9", "-P", line).Run()
+		// Kill the process group rooted at this child (catches any
+		// processes that setpgid into the child's group).
+		if childPid, err := strconv.Atoi(line); err == nil {
+			syscall.Kill(-childPid, syscall.SIGKILL)
+		}
+	}
+
+	// Kill remaining direct children with SIGKILL.
+	exec.Command("pkill", "-9", "-P", pidStr).Run()
 }
 
 func clearSignalFiles(ralphDir string) {

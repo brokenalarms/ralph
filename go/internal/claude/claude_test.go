@@ -333,6 +333,51 @@ func TestReadFirstLine_StripsJSON(t *testing.T) {
 
 // --- Stream filter tailing tests ---
 
+// Verifies that startTailGoroutine follows new data appended to a file and
+// stops cleanly when the stop channel is closed, with no external processes
+// left behind. This replaced the external tail -f process that caused orphan
+// accumulation.
+func TestStartTailGoroutine_FollowsAndStops(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "loop.log")
+	os.WriteFile(logPath, []byte("existing\n"), 0o644)
+
+	stop := make(chan struct{})
+	done := startTailGoroutine(logPath, stop)
+
+	// Append new data after the goroutine starts.
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintln(f, "new line")
+	f.Close()
+
+	time.Sleep(200 * time.Millisecond)
+	close(stop)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("startTailGoroutine did not stop within 2 seconds")
+	}
+}
+
+// Verifies that startTailGoroutine returns immediately for nonexistent files,
+// without leaving any goroutines running.
+func TestStartTailGoroutine_NonexistentFile(t *testing.T) {
+	stop := make(chan struct{})
+	done := startTailGoroutine("/nonexistent/path/log", stop)
+
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		close(stop)
+		t.Fatal("startTailGoroutine should exit immediately for missing file")
+	}
+}
+
 // Verifies that filterStreamJSON follows new data appended to the raw log
 // (like tail -f), rather than reading to EOF and exiting.
 func TestFilterStreamJSON_TailsFile(t *testing.T) {
@@ -413,6 +458,54 @@ func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
 	}
 	if !strings.Contains(content, "[claude] some delta text") {
 		t.Errorf("delta text should have [claude] prefix, got: %q", content)
+	}
+}
+
+// Verifies that startStreamFilter uses the pure Go filter (no bash/tail/jq
+// child processes), which eliminates the orphaned process accumulation bug.
+func TestStartStreamFilter_NoExternalProcesses(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+	os.WriteFile(rawPath, nil, 0o644)
+
+	runner := &Runner{Logger: &testLogger{}}
+	stop := make(chan struct{})
+	done := runner.startStreamFilter(RunConfig{
+		RalphDir: dir,
+		RawLog:   rawPath,
+		LogFile:  logPath,
+	}, stop)
+
+	// Append a stream event and verify it's filtered.
+	time.Sleep(200 * time.Millisecond)
+	f, _ := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"go filter works"}}`)
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, _ := os.ReadFile(logPath)
+	if !strings.Contains(string(got), "[claude] go filter works") {
+		t.Errorf("expected Go filter output, got: %q", string(got))
+	}
+
+	// Verify no bash/tail child processes were spawned. If any child
+	// processes exist, the old external filter codepath was used.
+	out, _ := exec.Command("pgrep", "-P", fmt.Sprintf("%d", os.Getpid())).Output()
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		// Check if it's a test-related process (go test runner) — ignore those.
+		nameOut, _ := exec.Command("ps", "-p", line, "-o", "comm=").Output()
+		name := strings.TrimSpace(string(nameOut))
+		if strings.Contains(name, "tail") || strings.Contains(name, "jq") ||
+			strings.Contains(name, "perl") || strings.Contains(name, "sed") {
+			t.Errorf("found orphaned %s process (PID %s) — stream filter should use pure Go", name, line)
+		}
 	}
 }
 
@@ -918,5 +1011,26 @@ func TestDisallowedTools_ContainsBdClose(t *testing.T) {
 	}
 	if !found {
 		t.Error("IterationDisallowedTools must contain 'bd close' — orchestrator owns bead close")
+	}
+}
+
+// Verifies that git checkout and git branch are disallowed so sub-agents
+// can't check out ralph's branches, which would block RecreateFromMain.
+func TestDisallowedTools_BlocksGitCheckoutAndBranch(t *testing.T) {
+	required := map[string]bool{
+		"git checkout": false,
+		"git branch":   false,
+	}
+	for _, tool := range IterationDisallowedTools {
+		for key := range required {
+			if strings.Contains(tool, key) {
+				required[key] = true
+			}
+		}
+	}
+	for key, found := range required {
+		if !found {
+			t.Errorf("IterationDisallowedTools must block %q to prevent sub-agents from interfering with ralph's branches", key)
+		}
 	}
 }

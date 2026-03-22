@@ -586,6 +586,57 @@ func TestRecreateFromMain_ErrorsWithoutWorktree(t *testing.T) {
 	}
 }
 
+// RecreateFromMain succeeds even when an external worktree (e.g. a Claude
+// sub-agent in .claude/worktrees/) has one of ralph's branches checked out.
+// Without the fix, `git branch -D` would fail because the branch is in use.
+func TestRecreateFromMain_PrunesExternalWorktreeHoldingBranch(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+
+	writeFile(t, project, "base.txt", "base\n")
+	run(t, "git", "-C", project, "commit", "-m", "base")
+	pushToOrigin(t, project)
+
+	mgr := setupRebaseMgr(t, project, bare)
+	mgr.RenameBranchForTask("some task")
+
+	writeFile(t, mgr.WorkDir, "work.txt", "work\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "work")
+
+	taskBranch := mgr.WorktreeBranch
+
+	// Rotate ralph's worktree to /next so the task branch is free for the
+	// external worktree to check out (mirrors real scenario: ralph continues
+	// on /next while a Claude sub-agent holds the old task branch).
+	mgr.TaskSeq = 1
+	mgr.RotateBranch()
+
+	// Simulate an external worktree (like a Claude sub-agent) checking out
+	// the old task branch, making `git branch -D` fail.
+	externalWt := filepath.Join(t.TempDir(), "agent-worktree")
+	run(t, "git", "-C", project, "worktree", "add", externalWt, taskBranch)
+
+	// Squash-merge the work onto main so RecreateFromMain is valid
+	writeFile(t, project, "work.txt", "work\n")
+	run(t, "git", "-C", project, "commit", "-m", "squash: some task")
+	pushToOrigin(t, project)
+
+	if err := mgr.RecreateFromMain(); err != nil {
+		t.Fatalf("RecreateFromMain should handle external worktrees, got: %v", err)
+	}
+
+	// The external worktree directory should have been removed
+	if _, err := os.Stat(externalWt); !os.IsNotExist(err) {
+		t.Error("external worktree directory should have been removed")
+	}
+
+	// The old task branch should be gone
+	for _, b := range ListProjectBranches(project, mgr.ProjectName) {
+		if b == taskBranch {
+			t.Errorf("branch %q should have been deleted", taskBranch)
+		}
+	}
+}
+
 // RebaseOntoDefaultBranch returns a RebaseConflictError for real conflicts,
 // allowing callers to distinguish conflict types for recovery.
 func TestRebaseOntoDefaultBranch_ReturnsTypedError(t *testing.T) {

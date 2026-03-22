@@ -115,8 +115,12 @@ var IterationAllowedTools = []string{
 
 // IterationDisallowedTools lists tools the agent must not use.
 // The orchestrator owns bead close — the agent must not close tasks.
+// Git checkout/branch are blocked so sub-agents can't check out ralph's
+// branches, which would prevent RecreateFromMain from deleting them.
 var IterationDisallowedTools = []string{
 	"Bash(bd close*)",
+	"Bash(git checkout*)",
+	"Bash(git branch*)",
 }
 
 // Runner manages Claude process lifecycle: spawning, signal polling, and cleanup.
@@ -174,10 +178,11 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	filterStop := make(chan struct{})
 	filterDone := r.startStreamFilter(cfg, filterStop)
 
-	// Start optional terminal tail.
-	var tailCmd *exec.Cmd
+	// Start optional terminal tail (pure Go — no external process to orphan).
+	tailStop := make(chan struct{})
+	var tailDone <-chan struct{}
 	if !cfg.Quiet && cfg.LogFile != "" {
-		tailCmd = r.startTail(cfg.LogFile)
+		tailDone = startTailGoroutine(cfg.LogFile, tailStop)
 	}
 
 	// Poll for signals or process exit.
@@ -189,7 +194,10 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	// Signal the filter to drain remaining output and exit.
 	close(filterStop)
 	<-filterDone
-	stopProcessGroup(tailCmd)
+	close(tailStop)
+	if tailDone != nil {
+		<-tailDone
+	}
 
 	// Final signal check — Claude may have written a signal just before exiting.
 	if !result.SignalDetected {
@@ -307,9 +315,11 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 }
 
 // startStreamFilter launches a goroutine that tails the raw log and writes
-// filtered human-readable output to LogFile. The goroutine keeps reading
-// until stop is closed, then drains any remaining content. Returns a channel
-// that closes when the filter is done.
+// filtered human-readable output to LogFile. Uses a pure Go implementation
+// (no external processes) to avoid orphaned tail/jq/perl/sed processes that
+// accumulated across iterations. The goroutine keeps reading until stop is
+// closed, then drains any remaining content. Returns a channel that closes
+// when the filter is done.
 func (r *Runner) startStreamFilter(cfg RunConfig, stop <-chan struct{}) <-chan struct{} {
 	done := make(chan struct{})
 	if cfg.LogFile == "" {
@@ -317,36 +327,18 @@ func (r *Runner) startStreamFilter(cfg RunConfig, stop <-chan struct{}) <-chan s
 		return done
 	}
 
-	// Use the bash stream filter script (it handles nested JSON correctly
-	// via jq). Write it if it doesn't exist (inline mode without tmux).
+	// Write the bash filter script for tmux (which manages its own
+	// processes via tmux pane lifecycle). The Go filter below handles
+	// the in-process streaming path.
 	filterScript := filepath.Join(cfg.RalphDir, ".stream-filter.sh")
 	if _, err := os.Stat(filterScript); os.IsNotExist(err) {
 		writeStreamFilterScript(filterScript)
 	}
-	if _, err := os.Stat(filterScript); err == nil {
-		go func() {
-			defer close(done)
-			cmd := exec.Command("bash", filterScript, cfg.RawLog)
-			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-			logOut, err := os.OpenFile(cfg.LogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-			if err != nil {
-				return
-			}
-			defer logOut.Close()
-			cmd.Stdout = logOut
-			cmd.Stderr = os.Stderr
-			if err := cmd.Start(); err != nil {
-				return
-			}
-			<-stop
-			stopProcessGroup(cmd)
-		}()
-	} else {
-		go func() {
-			defer close(done)
-			filterStreamJSON(cfg.RawLog, cfg.LogFile, stop)
-		}()
-	}
+
+	go func() {
+		defer close(done)
+		filterStreamJSON(cfg.RawLog, cfg.LogFile, stop)
+	}()
 
 	return done
 }
@@ -508,17 +500,49 @@ func formatToolUse(c streamContent) string {
 	return "[" + c.Name + "]"
 }
 
-// startTail launches tail -f on the given file for terminal display.
-func (r *Runner) startTail(path string) *exec.Cmd {
-	cmd := exec.Command("tail", "-f", "-n", "0", path)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		r.Logger.Warn("Could not start tail: %v", err)
-		return nil
-	}
-	return cmd
+// startTailGoroutine follows new data appended to path and writes it to
+// stdout, similar to tail -f -n 0. Runs entirely in-process so there are no
+// child processes to orphan. Returns a channel that closes when the goroutine
+// exits.
+func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f, err := os.Open(path)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+
+		// Start from end of file (like tail -f -n 0).
+		if _, err := f.Seek(0, 2); err != nil {
+			return
+		}
+
+		buf := make([]byte, 64*1024)
+		for {
+			n, _ := f.Read(buf)
+			if n > 0 {
+				os.Stdout.Write(buf[:n])
+			}
+			if n == 0 {
+				select {
+				case <-stop:
+					// Final drain.
+					for {
+						n2, _ := f.Read(buf)
+						if n2 == 0 {
+							return
+						}
+						os.Stdout.Write(buf[:n2])
+					}
+				default:
+					time.Sleep(100 * time.Millisecond)
+				}
+			}
+		}
+	}()
+	return done
 }
 
 // --- Signal file helpers ---
