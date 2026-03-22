@@ -368,12 +368,65 @@ Do NOT add new features. Only fix failures and verify correctness.`, nextTask, b
 				// (Skip if verification agent already ran — it verified the diff too)
 				if passed {
 					l.logger.Log("Running LLM verification...")
-					llmResult := verify.LLMVerifyDiff(workDir, headBefore, nextTask, l.getBeadDescription(taskID))
+					beadDesc := l.getBeadDescription(taskID)
+					llmResult := verify.LLMVerifyDiff(workDir, headBefore, nextTask, beadDesc)
 					if !llmResult.Passed {
 						l.logger.Warn("LLM verification rejected: %s", llmResult.Details)
-						return false
+
+						// Spawn verification agent to address LLM feedback
+						l.logger.Log("Spawning verification agent for LLM feedback...")
+						fixPrompt := fmt.Sprintf(`You are a verification agent. The previous agent's work was rejected by a reviewer.
+
+TASK: %s
+DESCRIPTION: %s
+
+REVIEWER FEEDBACK:
+%s
+
+YOUR JOB:
+1. Address the reviewer's feedback — add missing tests, fix the implementation, etc.
+2. Run scoped tests to confirm your changes work.
+3. Commit all fixes.
+4. Signal completion when done.
+
+Do NOT add unrelated features. Only address the reviewer's specific feedback.`, nextTask, beadDesc, llmResult.Details)
+
+						fixRunner := &claude.Runner{Logger: l.logger}
+						fixResult, _ := fixRunner.Run(claude.RunConfig{
+							Ctx:          ctx,
+							WorkDir:      workDir,
+							RalphDir:     l.cfg.RalphDir,
+							Prompt:       fixPrompt,
+							RawLog:       rawLogPath,
+							LogFile:      filepath.Join(l.cfg.RalphDir, "loop.log"),
+							Quiet:        l.cfg.Quiet,
+							Signals:      l.signals,
+							PollInterval: 2 * time.Second,
+							IdleTimeout:  l.cfg.IdleTimeout,
+						})
+
+						if !fixResult.SignalDetected {
+							l.logger.Warn("Verification agent exited without signal")
+							return false
+						}
+
+						// Re-verify after fix
+						syncPrompts()
+						if p, _ := l.verifyCompletion(headBefore); !p {
+							l.logger.Error("Tests failed after LLM fix agent")
+							return false
+						}
+
+						// Re-run LLM check
+						llmResult2 := verify.LLMVerifyDiff(workDir, headBefore, nextTask, beadDesc)
+						if !llmResult2.Passed {
+							l.logger.Error("LLM still rejects after fix agent: %s", llmResult2.Details)
+							return false
+						}
+						l.logger.Log("LLM verified after fix: %s", llmResult2.Reason)
+					} else {
+						l.logger.Log("LLM verified: %s", llmResult.Reason)
 					}
-					l.logger.Log("LLM verified: %s", llmResult.Reason)
 				}
 
 				return true
