@@ -327,6 +327,7 @@ func Parse(args []string) (Config, error) {
 				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
 			}
 			cfg.IdleTimeout = d
+			cfg.cliSet["idle_timeout"] = true
 			i += 2
 
 		case "--idle-timeout-progress":
@@ -339,6 +340,7 @@ func Parse(args []string) (Config, error) {
 				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
 			}
 			cfg.IdleTimeoutProgress = d
+			cfg.cliSet["idle_timeout_progress"] = true
 			i += 2
 
 		case "-h", "--help":
@@ -459,6 +461,20 @@ func (c *Config) LoadConfigFile(path string) error {
 				}
 			}
 			continue
+		case "idle_timeout", "idle_timeout_progress", "wait_interval":
+			d, err := parseDuration(value)
+			if err != nil {
+				continue
+			}
+			switch key {
+			case "idle_timeout":
+				c.IdleTimeout = d
+			case "idle_timeout_progress":
+				c.IdleTimeoutProgress = d
+			case "wait_interval":
+				c.WaitInterval = d
+			}
+			continue
 		}
 
 		n, err := strconv.Atoi(value)
@@ -492,36 +508,56 @@ func (c *Config) LoadConfigFile(path string) error {
 	return scanner.Err()
 }
 
-// configKeys lists all supported ralph.toml keys in display order.
-var configKeys = []struct {
-	Key     string
-	Default int
-}{
-	{"max_iterations", 50},
-	{"calls_per_hour", 80},
-	{"refactor_every", 0},
-	{"refactor_threshold", 20},
-	{"watcher_interval", 10},
-	{"stuck_threshold", 5},
-	{"stuck_confirmation_threshold", 2},
-	{"stagnation_threshold", 3},
-	{"test_saturation_threshold", 3},
-	{"permission_denial_threshold", 3},
-}
-
 // InitConfig generates a ralph.toml file at the given path with default values.
 // Returns an error if the file already exists.
 func InitConfig(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("config file already exists: %s", path)
 	}
+	return writeDefaultConfig(path)
+}
 
-	var b strings.Builder
-	fmt.Fprintf(&b, "branch_strategy = single\n")
-	fmt.Fprintf(&b, "no_refactor = false\n")
-	for _, k := range configKeys {
-		fmt.Fprintf(&b, "%s = %d\n", k.Key, k.Default)
+// EnsureConfigFile creates a ralph.toml at the given path with defaults if it
+// does not already exist. Returns true if a new file was created.
+func EnsureConfigFile(path string) (bool, error) {
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
 	}
+	if err := writeDefaultConfig(path); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func writeDefaultConfig(path string) error {
+	d := Defaults()
+	var b strings.Builder
+	fmt.Fprintf(&b, "branch_strategy = %s\n", d.BranchStrategy)
+	fmt.Fprintf(&b, "no_refactor = %v\n", d.NoRefactor)
+	fmt.Fprintf(&b, "max_iterations = %d\n", d.MaxIterations)
+	fmt.Fprintf(&b, "calls_per_hour = %d\n", d.CallsPerHour)
+	fmt.Fprintf(&b, "refactor_every = %d\n", d.RefactorEvery)
+	fmt.Fprintf(&b, "refactor_threshold = %d\n", d.RefactorThreshold)
+	fmt.Fprintf(&b, "idle_timeout = %s\n", formatDuration(d.IdleTimeout))
+	fmt.Fprintf(&b, "idle_timeout_progress = %s\n", formatDuration(d.IdleTimeoutProgress))
+	fmt.Fprintf(&b, "wait_interval = %s\n", formatDuration(d.WaitInterval))
+	fmt.Fprintf(&b, "watcher_interval = %d\n", d.WatcherInterval)
+	fmt.Fprintf(&b, "stuck_threshold = %d\n", d.StuckThreshold)
+	fmt.Fprintf(&b, "stuck_confirmation_threshold = %d\n", d.StuckConfirmationThreshold)
+	fmt.Fprintf(&b, "stagnation_threshold = %d\n", d.StagnationThreshold)
+	fmt.Fprintf(&b, "test_saturation_threshold = %d\n", d.TestSaturationThreshold)
+	fmt.Fprintf(&b, "permission_denial_threshold = %d\n", d.PermissionDenialThreshold)
 	fmt.Fprintf(&b, "disabled_checks =\n")
 	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// formatDuration renders a duration as a human-friendly string for config files.
+func formatDuration(d time.Duration) string {
+	if d == 0 {
+		return "0s"
+	}
+	if d%time.Minute == 0 {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%ds", int(d.Seconds()))
 }

@@ -55,6 +55,18 @@ func run(args []string) int {
 	// Resolve project directory to absolute path.
 	cfg.ProjectDir, _ = filepath.Abs(cfg.ProjectDir)
 
+	// Auto-create ralph.toml with defaults if missing, then load it.
+	// CLI flags take precedence over config file values.
+	configPath := filepath.Join(cfg.ProjectDir, "ralph.toml")
+	if created, err := config.EnsureConfigFile(configPath); err != nil {
+		log.Warn("Could not create ralph.toml: %v", err)
+	} else if created {
+		log.Log("Created %s with defaults", configPath)
+	}
+	if err := cfg.LoadConfigFile(configPath); err != nil {
+		log.Warn("Could not load ralph.toml: %v", err)
+	}
+
 	scriptPath, _ := os.Executable()
 	ralphDir := filepath.Join(cfg.ProjectDir, ".ralph")
 

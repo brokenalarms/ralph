@@ -950,3 +950,142 @@ func TestInitConfigIncludesRefactorKeys(t *testing.T) {
 		}
 	}
 }
+
+// Verifies InitConfig includes duration-based keys (idle_timeout,
+// idle_timeout_progress, wait_interval) so the generated file covers all
+// tweakable settings.
+func TestInitConfigIncludesDurationKeys(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+
+	err := InitConfig(tomlPath)
+	if err != nil {
+		t.Fatalf("InitConfig failed: %v", err)
+	}
+
+	data, _ := os.ReadFile(tomlPath)
+	content := string(data)
+	for _, key := range []string{"idle_timeout", "idle_timeout_progress", "wait_interval"} {
+		if !strings.Contains(content, key) {
+			t.Errorf("generated config missing duration key %q", key)
+		}
+	}
+}
+
+// Verifies EnsureConfigFile creates a new file when none exists, and returns
+// false without error when one already exists.
+func TestEnsureConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+
+	created, err := EnsureConfigFile(tomlPath)
+	if err != nil {
+		t.Fatalf("EnsureConfigFile failed: %v", err)
+	}
+	if !created {
+		t.Error("expected created=true for new file")
+	}
+
+	data, _ := os.ReadFile(tomlPath)
+	if !strings.Contains(string(data), "max_iterations") {
+		t.Error("created file should contain max_iterations")
+	}
+
+	created, err = EnsureConfigFile(tomlPath)
+	if err != nil {
+		t.Fatalf("EnsureConfigFile second call failed: %v", err)
+	}
+	if created {
+		t.Error("expected created=false when file already exists")
+	}
+}
+
+// Verifies LoadConfigFile reads duration keys (idle_timeout,
+// idle_timeout_progress, wait_interval) from a config file.
+func TestLoadConfigFileDurations(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+	t.Setenv("RALPH_WAIT_INTERVAL", "")
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+	content := "idle_timeout = 15m\nidle_timeout_progress = 2m\nwait_interval = 45s\n"
+	os.WriteFile(tomlPath, []byte(content), 0o644)
+
+	cfg, _ := Parse(nil)
+	cfg.LoadConfigFile(tomlPath)
+
+	if cfg.IdleTimeout != 15*time.Minute {
+		t.Errorf("IdleTimeout = %s, want 15m", cfg.IdleTimeout)
+	}
+	if cfg.IdleTimeoutProgress != 2*time.Minute {
+		t.Errorf("IdleTimeoutProgress = %s, want 2m", cfg.IdleTimeoutProgress)
+	}
+	if cfg.WaitInterval != 45*time.Second {
+		t.Errorf("WaitInterval = %s, want 45s", cfg.WaitInterval)
+	}
+}
+
+// Verifies that CLI flags for durations override config file duration values.
+func TestDurationCLIOverridesConfigFile(t *testing.T) {
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+	t.Setenv("RALPH_WAIT_INTERVAL", "")
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+	os.WriteFile(tomlPath, []byte("wait_interval = 60s\n"), 0o644)
+
+	cfg, _ := Parse([]string{"--wait-interval", "10s"})
+	cfg.LoadConfigFile(tomlPath)
+
+	if cfg.WaitInterval != 10*time.Second {
+		t.Errorf("WaitInterval = %s, want 10s (CLI override)", cfg.WaitInterval)
+	}
+}
+
+// Verifies that a round-trip through InitConfig + LoadConfigFile produces
+// a config equivalent to Defaults(), proving the generated file is complete.
+func TestInitConfigRoundTrip(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+	t.Setenv("RALPH_NO_REFACTOR", "")
+	t.Setenv("RALPH_REFACTOR_THRESHOLD", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+	t.Setenv("RALPH_WAIT_INTERVAL", "")
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+
+	if err := InitConfig(tomlPath); err != nil {
+		t.Fatalf("InitConfig failed: %v", err)
+	}
+
+	cfg, _ := Parse(nil)
+	if err := cfg.LoadConfigFile(tomlPath); err != nil {
+		t.Fatalf("LoadConfigFile failed: %v", err)
+	}
+
+	defaults := Defaults()
+	if cfg.MaxIterations != defaults.MaxIterations {
+		t.Errorf("MaxIterations = %d, want %d", cfg.MaxIterations, defaults.MaxIterations)
+	}
+	if cfg.IdleTimeout != defaults.IdleTimeout {
+		t.Errorf("IdleTimeout = %s, want %s", cfg.IdleTimeout, defaults.IdleTimeout)
+	}
+	if cfg.IdleTimeoutProgress != defaults.IdleTimeoutProgress {
+		t.Errorf("IdleTimeoutProgress = %s, want %s", cfg.IdleTimeoutProgress, defaults.IdleTimeoutProgress)
+	}
+	if cfg.WaitInterval != defaults.WaitInterval {
+		t.Errorf("WaitInterval = %s, want %s", cfg.WaitInterval, defaults.WaitInterval)
+	}
+	if cfg.BranchStrategy != defaults.BranchStrategy {
+		t.Errorf("BranchStrategy = %q, want %q", cfg.BranchStrategy, defaults.BranchStrategy)
+	}
+	if cfg.StuckThreshold != defaults.StuckThreshold {
+		t.Errorf("StuckThreshold = %d, want %d", cfg.StuckThreshold, defaults.StuckThreshold)
+	}
+}
