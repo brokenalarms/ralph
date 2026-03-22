@@ -346,11 +346,12 @@ func (l *Loop) Run(ctx context.Context) error {
 						return false
 					}
 
-					// Re-check tests after fix agent
+					// Re-check tests after fix agent (skip commit check — fix agent
+					// may not have new commits if it determined work was correct)
 					syncPrompts()
-					passed, reason = l.verifyCompletion(headBefore)
-					if !passed {
-						l.logger.Error("Tests still failing after verification agent: %s", reason)
+					testResult := verify.RunTests(l.cfg.VerifyDir)
+					if !testResult.Passed {
+						l.logger.Error("Tests still failing after verification agent: %s", testResult.Reason)
 						return false
 					}
 				}
@@ -393,10 +394,11 @@ func (l *Loop) Run(ctx context.Context) error {
 							return false
 						}
 
-						// Re-verify after fix
+						// Re-verify tests after fix (skip commit check)
 						syncPrompts()
-						if p, _ := l.verifyCompletion(headBefore); !p {
-							l.logger.Error("Tests failed after LLM fix agent")
+						testResult := verify.RunTests(l.cfg.VerifyDir)
+						if !testResult.Passed {
+							l.logger.Error("Tests failed after LLM fix agent: %s", testResult.Reason)
 							return false
 						}
 
