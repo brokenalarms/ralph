@@ -457,8 +457,10 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 }
 
 // postMergeUpdate fetches the latest default branch after a successful merge
-// so the next iteration starts from merged state. Uses error-aware git
-// calls — a silent reset failure would leave stale staged changes on main.
+// so the next iteration starts from merged state. Uses a single
+// `reset --hard origin/<branch>` to atomically advance the ref, index, and
+// working tree — the previous two-step update-ref + reset left a window
+// where the index was stale, causing merged-PR reversions to appear staged.
 func (m *Manager) postMergeUpdate(prNumber string) (bool, error) {
 	m.Logger.Log("PR #%s squash-merged into main", prNumber)
 
@@ -466,15 +468,8 @@ func (m *Manager) postMergeUpdate(prNumber string) (bool, error) {
 	if err := gitCmdErr(m.ProjectDir, "fetch", "origin", defaultBranch); err != nil {
 		return false, fmt.Errorf("post-merge fetch: %w", err)
 	}
-	originRef := gitOutput(m.ProjectDir, "rev-parse", "origin/"+defaultBranch)
-	if originRef != "" {
-		if err := gitCmdErr(m.ProjectDir, "update-ref", "refs/heads/"+defaultBranch, originRef); err != nil {
-			return false, fmt.Errorf("post-merge update-ref: %w", err)
-		}
-		if err := gitCmdErr(m.ProjectDir, "reset", "--hard", "HEAD"); err != nil {
-			m.Logger.Warn("reset --hard failed: %v — running CleanProjectIndex", err)
-			m.CleanProjectIndex()
-		}
+	if err := gitCmdErr(m.ProjectDir, "reset", "--hard", "origin/"+defaultBranch); err != nil {
+		return false, fmt.Errorf("post-merge reset to origin/%s: %w", defaultBranch, err)
 	}
 	m.Logger.Log("Updated local %s to origin/%s", defaultBranch, defaultBranch)
 

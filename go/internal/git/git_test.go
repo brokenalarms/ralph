@@ -1315,31 +1315,27 @@ func TestAutoMerge_UpdatesLocalMainWhenCheckedOut(t *testing.T) {
 		t.Fatal("local main should still be at old commit before update-ref")
 	}
 
-	// Simulate what postMergeUpdate does after merge: update-ref + reset
-	originRef := gitOutput(project, "rev-parse", "origin/main")
-	if originRef != "" {
-		gitCmd(project, "update-ref", "refs/heads/main", originRef)
-		gitCmd(project, "reset", "--hard", "HEAD")
-	}
+	// Simulate what postMergeUpdate does after merge: atomic reset to origin.
+	run(t, "git", "-C", project, "reset", "--hard", "origin/main")
 
 	// Local main should now match origin/main
 	localMainAfter := gitOutput(project, "rev-parse", "main")
 	if localMainAfter != originMain {
-		t.Errorf("local main should match origin/main after update-ref: got %s, want %s", localMainAfter, originMain)
+		t.Errorf("local main should match origin/main after reset: got %s, want %s", localMainAfter, originMain)
 	}
 
-	// Verify main is still checked out (update-ref doesn't change that)
+	// Verify main is still checked out (reset doesn't detach HEAD)
 	stillCheckedOut := gitOutput(project, "symbolic-ref", "--short", "HEAD")
 	if stillCheckedOut != "main" {
 		t.Errorf("main should still be checked out, got %q", stillCheckedOut)
 	}
 
-	// The index must have no staged changes. Without reset --hard,
-	// update-ref advances HEAD but leaves the old index, causing git
-	// diff --cached to show staged reversions of the merged PR's changes.
+	// The index must have no staged changes. The atomic reset --hard
+	// origin/main advances the ref, index, and working tree in one step
+	// — no window for stale index entries.
 	diffIndex := strings.TrimSpace(gitOutput(project, "diff", "--cached", "--name-only"))
 	if diffIndex != "" {
-		t.Errorf("project dir should have no staged changes after update-ref + reset, got:\n%s", diffIndex)
+		t.Errorf("project dir should have no staged changes after reset, got:\n%s", diffIndex)
 	}
 }
 
@@ -1382,14 +1378,10 @@ func TestFullMergeCycle_NoStagedChangesOnMain(t *testing.T) {
 	run(t, "git", "-C", tmpClone, "commit", "-m", "squash-merged PR")
 	run(t, "git", "-C", tmpClone, "push", "origin", "main")
 
-	// Step 1: postMergeUpdate — fetch and advance local main.
+	// Step 1: postMergeUpdate — fetch and atomically reset to origin/main.
 	defaultBranch := detectDefaultBranch(project)
 	gitCmd(project, "fetch", "origin", defaultBranch)
-	originRef := gitOutput(project, "rev-parse", "origin/"+defaultBranch)
-	if originRef != "" {
-		gitCmd(project, "update-ref", "refs/heads/"+defaultBranch, originRef)
-		gitCmd(project, "reset", "--hard", "HEAD")
-	}
+	run(t, "git", "-C", project, "reset", "--hard", "origin/"+defaultBranch)
 
 	// Verify main is clean after postMergeUpdate.
 	diff1 := strings.TrimSpace(gitOutput(project, "diff", "--cached", "--name-only"))
@@ -1470,10 +1462,60 @@ func TestWorktreeOps_DoNotContaminateProjectIndex(t *testing.T) {
 	}
 }
 
-// When postMergeUpdate's reset --hard fails silently, the project dir's
-// index retains stale entries that look like reversions of merged changes.
-// This test confirms the fix: use error-aware git calls and add a
-// defensive cleanProjectIndex call.
+// Atomic reset --hard origin/main eliminates the stale index window
+// that existed with the old two-step update-ref + reset approach.
+// Proves that the single-step reset advances ref + index + working tree
+// together, while the old approach leaves a window where the index is stale.
+func TestPostMergeUpdate_AtomicResetVsTwoStep(t *testing.T) {
+	project, _ := initBareRepo(t)
+	bare := filepath.Join(filepath.Dir(project), "bare.git")
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchStacked,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Push a new commit to origin/main from a temp clone.
+	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
+	run(t, "git", "clone", bare, tmpClone)
+	os.WriteFile(filepath.Join(tmpClone, "merged.txt"), []byte("merged content\n"), 0o644)
+	run(t, "git", "-C", tmpClone, "add", "merged.txt")
+	run(t, "git", "-C", tmpClone, "commit", "-m", "merged PR")
+	run(t, "git", "-C", tmpClone, "push", "origin", "main")
+	run(t, "git", "-C", project, "fetch", "origin", "main")
+
+	// Old approach: update-ref alone leaves stale index (the bug).
+	originRef := gitOutput(project, "rev-parse", "origin/main")
+	gitCmd(project, "update-ref", "refs/heads/main", originRef)
+	staleIndex := strings.TrimSpace(gitOutput(project, "diff", "--cached", "--name-only"))
+	if staleIndex == "" {
+		t.Fatal("update-ref without reset should leave stale index (proves the bug exists)")
+	}
+
+	// Undo the update-ref so we can test the new approach from the same state.
+	localMainBefore := gitOutput(project, "rev-parse", "main~1")
+	gitCmd(project, "update-ref", "refs/heads/main", localMainBefore)
+	gitCmd(project, "reset", "--hard", "HEAD")
+
+	// New approach: atomic reset --hard origin/main — no stale index.
+	run(t, "git", "-C", project, "reset", "--hard", "origin/main")
+	cleanIndex := strings.TrimSpace(gitOutput(project, "diff", "--cached", "--name-only"))
+	if cleanIndex != "" {
+		t.Errorf("atomic reset --hard origin/main should leave clean index, got: %s", cleanIndex)
+	}
+}
+
+// CleanProjectIndex is defense-in-depth: even if something unexpected
+// contaminates the index, it detects and clears stale staged changes.
 func TestPostMergeUpdate_ErrorHandling(t *testing.T) {
 	project, _ := initBareRepo(t)
 	bare := filepath.Join(filepath.Dir(project), "bare.git")
