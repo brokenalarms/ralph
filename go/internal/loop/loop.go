@@ -370,9 +370,20 @@ func (l *Loop) Run(ctx context.Context) error {
 				// LLM verification — does the diff match the bead?
 				// (Skip if verification agent already ran — it verified the diff too)
 				if passed {
-					l.logger.Log("Running LLM verification...")
 					beadDesc := l.getBeadDescription(taskID)
-					llmResult := verify.LLMVerifyDiff(workDir, headBefore, nextTask, beadDesc)
+
+					// Choose verification strategy: code-state when no new commits
+					// (work may already be merged from a previous iteration),
+					// diff-based when there are new commits.
+					var llmResult verify.Result
+					if !commitResult.Passed {
+						l.logger.Log("Running code-state verification (no new commits)...")
+						llmResult = verify.LLMVerifyCodeState(workDir, nextTask, beadDesc)
+					} else {
+						l.logger.Log("Running LLM diff verification...")
+						llmResult = verify.LLMVerifyDiff(workDir, headBefore, nextTask, beadDesc)
+					}
+
 					if !llmResult.Passed {
 						l.logger.Warn("LLM verification rejected: %s", llmResult.Details)
 
@@ -414,7 +425,7 @@ func (l *Loop) Run(ctx context.Context) error {
 							return false
 						}
 
-						// Re-run LLM check
+						// Re-run LLM check (always diff-based after fix agent commits)
 						llmResult2 := verify.LLMVerifyDiff(workDir, headBefore, nextTask, beadDesc)
 						if !llmResult2.Passed {
 							l.logger.Error("LLM still rejects after fix agent: %s", llmResult2.Details)
