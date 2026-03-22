@@ -2893,7 +2893,7 @@ func TestLoop_CIFailureWritesFeedback(t *testing.T) {
 		return false, &git.CIFailureError{
 			PRNumber: "99",
 			Failures: []git.CICheckResult{
-				{Name: "test", Conclusion: "FAILURE"},
+				{Name: "test", State: "FAILURE", Bucket: "fail"},
 			},
 		}
 	}
@@ -3040,7 +3040,7 @@ func TestLoop_CIFailureFixAgentRetriesMerge(t *testing.T) {
 			return false, &git.CIFailureError{
 				PRNumber: "99",
 				Failures: []git.CICheckResult{
-					{Name: "test", Conclusion: "FAILURE"},
+					{Name: "test", State: "FAILURE", Bucket: "fail"},
 				},
 			}
 		}
@@ -3112,7 +3112,7 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 		return false, &git.CIFailureError{
 			PRNumber: "99",
 			Failures: []git.CICheckResult{
-				{Name: "test", Conclusion: "FAILURE"},
+				{Name: "test", State: "FAILURE", Bucket: "fail"},
 			},
 		}
 	}

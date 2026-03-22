@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -9,10 +10,12 @@ import (
 )
 
 // CICheckResult represents the status of a single CI check from gh pr checks.
+// gh pr checks --json returns: name, state (SUCCESS/FAILURE/PENDING/CANCELLED),
+// bucket (pass/fail/pending).
 type CICheckResult struct {
-	Name       string `json:"name"`
-	State      string `json:"state"`
-	Conclusion string `json:"conclusion"`
+	Name   string `json:"name"`
+	State  string `json:"state"`
+	Bucket string `json:"bucket"`
 }
 
 // CIStatus summarizes the overall state of all CI checks on a PR.
@@ -46,7 +49,7 @@ const DefaultCIPollTimeout = 10 * time.Minute
 
 // fetchPRChecks queries gh for the current CI check status of a PR.
 func fetchPRChecks(prNumber, repoURL string) ([]CICheckResult, error) {
-	args := []string{"pr", "checks", prNumber, "--json", "name,state,conclusion"}
+	args := []string{"pr", "checks", prNumber, "--json", "name,state,bucket"}
 	if repoURL != "" {
 		args = append(args, "-R", repoURL)
 	}
@@ -69,13 +72,13 @@ func evaluateChecks(checks []CICheckResult) CIStatus {
 		return CIPending
 	}
 	for _, c := range checks {
-		if c.State != "COMPLETED" {
-			return CIPending
+		if c.Bucket == "fail" || c.State == "FAILURE" || c.State == "CANCELLED" {
+			return CIFailed
 		}
 	}
 	for _, c := range checks {
-		if c.Conclusion == "FAILURE" || c.Conclusion == "CANCELLED" || c.Conclusion == "TIMED_OUT" {
-			return CIFailed
+		if c.Bucket == "pending" || c.State == "PENDING" {
+			return CIPending
 		}
 	}
 	return CIPassed
@@ -85,7 +88,7 @@ func evaluateChecks(checks []CICheckResult) CIStatus {
 func failedChecks(checks []CICheckResult) []CICheckResult {
 	var failed []CICheckResult
 	for _, c := range checks {
-		if c.Conclusion != "SUCCESS" && c.Conclusion != "NEUTRAL" && c.Conclusion != "SKIPPED" {
+		if c.Bucket == "fail" || c.State == "FAILURE" || c.State == "CANCELLED" {
 			failed = append(failed, c)
 		}
 	}
@@ -143,8 +146,14 @@ type CIFetchFunc func(prNumber, repoURL string) ([]CICheckResult, error)
 // waitForCI polls PR checks until they complete or timeout is reached.
 // The fetch parameter controls how checks are retrieved — production code
 // passes fetchPRChecks; tests can inject a stub.
-func waitForCI(fetch CIFetchFunc, prNumber, repoURL string, interval, timeout time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
+func waitForCI(fetch CIFetchFunc, prNumber, repoURL string, interval, timeout time.Duration, log Log, ctx ...context.Context) ([]CICheckResult, CIStatus, error) {
 	deadline := time.Now().Add(timeout)
+
+	// Optional context for cancellation.
+	var done <-chan struct{}
+	if len(ctx) > 0 && ctx[0] != nil {
+		done = ctx[0].Done()
+	}
 
 	for {
 		checks, err := fetch(prNumber, repoURL)
@@ -153,7 +162,11 @@ func waitForCI(fetch CIFetchFunc, prNumber, repoURL string, interval, timeout ti
 				return nil, CIPending, fmt.Errorf("CI checks not available within %v: %w", timeout, err)
 			}
 			log.Log("CI checks not available yet for PR #%s, polling in %v...", prNumber, interval)
-			time.Sleep(interval)
+			select {
+			case <-done:
+				return nil, CIPending, fmt.Errorf("interrupted")
+			case <-time.After(interval):
+			}
 			continue
 		}
 
@@ -173,6 +186,10 @@ func waitForCI(fetch CIFetchFunc, prNumber, repoURL string, interval, timeout ti
 		}
 
 		log.Log("CI checks pending for PR #%s, polling in %v...", prNumber, interval)
-		time.Sleep(interval)
+		select {
+		case <-done:
+			return nil, CIPending, fmt.Errorf("interrupted")
+		case <-time.After(interval):
+		}
 	}
 }

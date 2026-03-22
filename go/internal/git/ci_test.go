@@ -16,8 +16,8 @@ func (discardLog) Error(string, ...any) {}
 // verifying the happy path for CI-gated merges.
 func TestEvaluateChecks_AllPassed(t *testing.T) {
 	checks := []CICheckResult{
-		{Name: "test", State: "COMPLETED", Conclusion: "SUCCESS"},
-		{Name: "lint", State: "COMPLETED", Conclusion: "SUCCESS"},
+		{Name: "test", State: "SUCCESS", Bucket: "pass"},
+		{Name: "lint", State: "SUCCESS", Bucket: "pass"},
 	}
 	if got := evaluateChecks(checks); got != CIPassed {
 		t.Errorf("expected CIPassed, got %v", got)
@@ -28,8 +28,8 @@ func TestEvaluateChecks_AllPassed(t *testing.T) {
 // so the polling loop continues waiting.
 func TestEvaluateChecks_StillPending(t *testing.T) {
 	checks := []CICheckResult{
-		{Name: "test", State: "COMPLETED", Conclusion: "SUCCESS"},
-		{Name: "deploy", State: "IN_PROGRESS", Conclusion: ""},
+		{Name: "test", State: "SUCCESS", Bucket: "pass"},
+		{Name: "deploy", State: "PENDING", Bucket: "pending"},
 	}
 	if got := evaluateChecks(checks); got != CIPending {
 		t.Errorf("expected CIPending, got %v", got)
@@ -40,8 +40,8 @@ func TestEvaluateChecks_StillPending(t *testing.T) {
 // so the merge is aborted and failure feedback is provided.
 func TestEvaluateChecks_HasFailure(t *testing.T) {
 	checks := []CICheckResult{
-		{Name: "test", State: "COMPLETED", Conclusion: "FAILURE"},
-		{Name: "lint", State: "COMPLETED", Conclusion: "SUCCESS"},
+		{Name: "test", State: "FAILURE", Bucket: "fail"},
+		{Name: "lint", State: "SUCCESS", Bucket: "pass"},
 	}
 	if got := evaluateChecks(checks); got != CIFailed {
 		t.Errorf("expected CIFailed, got %v", got)
@@ -52,7 +52,7 @@ func TestEvaluateChecks_HasFailure(t *testing.T) {
 // the same as failure for merge gating purposes.
 func TestEvaluateChecks_Cancelled(t *testing.T) {
 	checks := []CICheckResult{
-		{Name: "test", State: "COMPLETED", Conclusion: "CANCELLED"},
+		{Name: "test", State: "CANCELLED", Bucket: "fail"},
 	}
 	if got := evaluateChecks(checks); got != CIFailed {
 		t.Errorf("expected CIFailed for cancelled check, got %v", got)
@@ -62,7 +62,7 @@ func TestEvaluateChecks_Cancelled(t *testing.T) {
 // evaluateChecks returns CIFailed for timed-out checks.
 func TestEvaluateChecks_TimedOut(t *testing.T) {
 	checks := []CICheckResult{
-		{Name: "test", State: "COMPLETED", Conclusion: "TIMED_OUT"},
+		{Name: "test", State: "TIMED_OUT", Bucket: "fail"},
 	}
 	if got := evaluateChecks(checks); got != CIFailed {
 		t.Errorf("expected CIFailed for timed out check, got %v", got)
@@ -81,8 +81,8 @@ func TestEvaluateChecks_Empty(t *testing.T) {
 // since these indicate checks that opted out rather than failed.
 func TestEvaluateChecks_NeutralAndSkipped(t *testing.T) {
 	checks := []CICheckResult{
-		{Name: "optional", State: "COMPLETED", Conclusion: "NEUTRAL"},
-		{Name: "skipped", State: "COMPLETED", Conclusion: "SKIPPED"},
+		{Name: "optional", State: "SUCCESS", Bucket: "pass"},
+		{Name: "skipped", State: "SKIPPED", Bucket: "pass"},
 	}
 	if got := evaluateChecks(checks); got != CIPassed {
 		t.Errorf("expected CIPassed for neutral/skipped checks, got %v", got)
@@ -93,10 +93,10 @@ func TestEvaluateChecks_NeutralAndSkipped(t *testing.T) {
 // SUCCESS, NEUTRAL, and SKIPPED conclusions.
 func TestFailedChecks_FiltersCorrectly(t *testing.T) {
 	checks := []CICheckResult{
-		{Name: "test", State: "COMPLETED", Conclusion: "FAILURE"},
-		{Name: "lint", State: "COMPLETED", Conclusion: "SUCCESS"},
-		{Name: "optional", State: "COMPLETED", Conclusion: "NEUTRAL"},
-		{Name: "deploy", State: "COMPLETED", Conclusion: "CANCELLED"},
+		{Name: "test", State: "FAILURE", Bucket: "fail"},
+		{Name: "lint", State: "SUCCESS", Bucket: "pass"},
+		{Name: "optional", State: "SUCCESS", Bucket: "pass"},
+		{Name: "deploy", State: "CANCELLED", Bucket: "fail"},
 	}
 	failed := failedChecks(checks)
 	if len(failed) != 2 {
@@ -134,8 +134,8 @@ func TestCIFailureError_Message(t *testing.T) {
 	err := &CIFailureError{
 		PRNumber: "42",
 		Failures: []CICheckResult{
-			{Name: "test", Conclusion: "FAILURE"},
-			{Name: "lint", Conclusion: "FAILURE"},
+			{Name: "test", Bucket: "fail"},
+			{Name: "lint", Bucket: "fail"},
 		},
 	}
 	msg := err.Error()
@@ -214,9 +214,9 @@ func TestWaitForCI_PollsUntilPassed(t *testing.T) {
 	fetch := func(pr, repo string) ([]CICheckResult, error) {
 		n := calls.Add(1)
 		if n < 3 {
-			return []CICheckResult{{Name: "test", State: "IN_PROGRESS", Conclusion: ""}}, nil
+			return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
 		}
-		return []CICheckResult{{Name: "test", State: "COMPLETED", Conclusion: "SUCCESS"}}, nil
+		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
 
 	checks, status, err := waitForCI(fetch, "1", "", 1*time.Millisecond, 5*time.Second, discardLog{})
@@ -226,7 +226,7 @@ func TestWaitForCI_PollsUntilPassed(t *testing.T) {
 	if status != CIPassed {
 		t.Errorf("expected CIPassed, got %v", status)
 	}
-	if len(checks) != 1 || checks[0].Conclusion != "SUCCESS" {
+	if len(checks) != 1 || checks[0].State != "SUCCESS" {
 		t.Errorf("unexpected checks: %v", checks)
 	}
 	if calls.Load() < 3 {
@@ -237,7 +237,7 @@ func TestWaitForCI_PollsUntilPassed(t *testing.T) {
 func TestWaitForCI_ReturnsFailedImmediately(t *testing.T) {
 	fetch := func(pr, repo string) ([]CICheckResult, error) {
 		return []CICheckResult{
-			{Name: "test", State: "COMPLETED", Conclusion: "FAILURE"},
+			{Name: "test", State: "FAILURE", Bucket: "fail"},
 		}, nil
 	}
 
@@ -252,7 +252,7 @@ func TestWaitForCI_ReturnsFailedImmediately(t *testing.T) {
 
 func TestWaitForCI_TimesOut(t *testing.T) {
 	fetch := func(pr, repo string) ([]CICheckResult, error) {
-		return []CICheckResult{{Name: "test", State: "IN_PROGRESS", Conclusion: ""}}, nil
+		return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
 	}
 
 	_, status, err := waitForCI(fetch, "1", "", 1*time.Millisecond, 5*time.Millisecond, discardLog{})
