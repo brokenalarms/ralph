@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -12,6 +13,24 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 )
+
+// readLineCtx reads a line from stdin, returning early if ctx is cancelled.
+// On cancellation it returns ("", ctx.Err()). The goroutine reading stdin
+// may outlive the call but is harmless since the process is exiting.
+func readLineCtx(ctx context.Context) (string, error) {
+	ch := make(chan string, 1)
+	go func() {
+		var s string
+		fmt.Scanln(&s)
+		ch <- s
+	}()
+	select {
+	case s := <-ch:
+		return s, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
 
 func safeRemoveRalphDir(dir string) error {
 	base := filepath.Base(dir)
@@ -58,23 +77,27 @@ func validatePlanFile(path string) error {
 	return nil
 }
 
-func promptRebaseRecovery(err error) git.RebaseRecovery {
-	fmt.Printf("\n%sRebase conflict:%s %v\n\n", logging.Red, logging.Reset, err)
-	fmt.Printf("  %s1)%s Create fresh worktree from main (recommended — completed work is already merged)\n", logging.Bold, logging.Reset)
-	fmt.Printf("  %s2)%s Abort — exit so you can resolve conflicts manually\n", logging.Bold, logging.Reset)
-	fmt.Printf("  %s3)%s Skip — continue without rebasing (may cause issues)\n\n", logging.Bold, logging.Reset)
-	fmt.Printf("%sChoice [1/2/3]:%s ", logging.Yellow, logging.Reset)
+func promptRebaseRecovery(ctx context.Context) func(err error) git.RebaseRecovery {
+	return func(err error) git.RebaseRecovery {
+		fmt.Printf("\n%sRebase conflict:%s %v\n\n", logging.Red, logging.Reset, err)
+		fmt.Printf("  %s1)%s Create fresh worktree from main (recommended — completed work is already merged)\n", logging.Bold, logging.Reset)
+		fmt.Printf("  %s2)%s Abort — exit so you can resolve conflicts manually\n", logging.Bold, logging.Reset)
+		fmt.Printf("  %s3)%s Skip — continue without rebasing (may cause issues)\n\n", logging.Bold, logging.Reset)
+		fmt.Printf("%sChoice [1/2/3]:%s ", logging.Yellow, logging.Reset)
 
-	var answer string
-	fmt.Scanln(&answer)
+		answer, readErr := readLineCtx(ctx)
+		if readErr != nil {
+			return git.RebaseManualResolve
+		}
 
-	switch strings.TrimSpace(answer) {
-	case "1", "":
-		return git.RebaseFreshWorktree
-	case "2":
-		return git.RebaseManualResolve
-	default:
-		return git.RebaseAbort
+		switch strings.TrimSpace(answer) {
+		case "1", "":
+			return git.RebaseFreshWorktree
+		case "2":
+			return git.RebaseManualResolve
+		default:
+			return git.RebaseAbort
+		}
 	}
 }
 

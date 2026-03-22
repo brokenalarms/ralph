@@ -110,7 +110,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 	}
 
 	// Initialize .ralph directory and check for resume.
-	resume, exitCode := initRalphDir(cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(ctx, cfg, ralphDir, logFile, stateFile, log)
 	if exitCode >= 0 {
 		return exitCode
 	}
@@ -230,7 +230,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		IdleTimeoutProgress: cfg.IdleTimeoutProgress,
 		Wait:                cfg.Wait,
 		WaitInterval:        cfg.WaitInterval,
-		OnRebaseConflict:    promptRebaseRecovery,
+		OnRebaseConflict:    promptRebaseRecovery(ctx),
 		VerifyDir:           cfg.ProjectDir,
 	}, st, gm, log)
 
@@ -250,7 +250,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 
 // initRalphDir creates .ralph, checks for dirty working tree, handles resume
 // detection. Returns (resume, exitCode). exitCode < 0 means continue.
-func initRalphDir(cfg config.Config, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
+func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
 	if err := os.MkdirAll(ralphDir, 0o755); err != nil {
 		log.Error("Failed to create .ralph dir: %v", err)
 		return false, 1
@@ -284,8 +284,10 @@ func initRalphDir(cfg config.Config, ralphDir, logFile, stateFile string, log *l
 		if status == "completed" {
 			log.Task("All tasks completed from previous run.")
 			fmt.Printf("%s[ralph v%s (go)]%s Run fresh? (y/n) ", logging.Yellow, config.Version, logging.Reset)
-			var answer string
-			fmt.Scanln(&answer)
+			answer, err := readLineCtx(ctx)
+			if err != nil {
+				return false, 0
+			}
 			if answer == "y" || answer == "Y" {
 				os.RemoveAll(ralphDir)
 				os.MkdirAll(ralphDir, 0o755)
