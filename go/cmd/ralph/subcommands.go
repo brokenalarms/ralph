@@ -3,10 +3,13 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/prompt"
 )
 
 func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
@@ -56,9 +59,84 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 		}
 		log.Success("Feedback queued for next iteration.")
 		return 0
+
+	case "commander":
+		return handleCommander(sub, log)
+
+	case "task":
+		return handleTask(sub, log)
 	}
 
 	return 1
+}
+
+// handleCommander launches the 4-pane tmux layout with both the ralph loop
+// and an interactive task manager. Remaining args are passed through to the loop.
+func handleCommander(sub config.Subcommand, log *logging.Logger) int {
+	projectDir, _ := filepath.Abs(sub.Dir)
+	ralphDir := filepath.Join(projectDir, ".ralph")
+
+	if err := os.MkdirAll(ralphDir, 0o755); err != nil {
+		log.Error("Failed to create .ralph dir: %v", err)
+		return 1
+	}
+
+	// Re-parse remaining args as loop flags (everything after "commander [dir]").
+	cfg, err := config.Parse(sub.Args)
+	if err != nil {
+		log.Error("%v", err)
+		return 1
+	}
+	cfg.ProjectDir = projectDir
+	cfg.UseTmux = true
+
+	scriptPath, _ := os.Executable()
+
+	// Build the two commands for the tmux panes.
+	allArgs := append([]string{"commander"}, sub.Args...)
+	if sub.Dir != "." {
+		allArgs = append([]string{"commander", sub.Dir}, sub.Args...)
+	}
+
+	return handleTmuxCommander(cfg, scriptPath, allArgs, ralphDir, log)
+}
+
+// handleTask launches an interactive Claude session with the task manager prompt.
+// Runs standalone — no tmux required.
+func handleTask(sub config.Subcommand, log *logging.Logger) int {
+	projectDir, _ := filepath.Abs(sub.Dir)
+	ralphDir := filepath.Join(projectDir, ".ralph")
+
+	promptsDir := filepath.Join(projectDir, "prompts")
+	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
+		tmpDir, extractErr := extractEmbeddedPrompts()
+		if extractErr != nil {
+			log.Error("Failed to extract embedded prompts: %v", extractErr)
+			return 1
+		}
+		promptsDir = tmpDir
+	}
+
+	systemPrompt, err := prompt.BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir)
+	if err != nil {
+		log.Error("Failed to build task manager prompt: %v", err)
+		return 1
+	}
+
+	cmd := exec.Command("claude", "--system-prompt", systemPrompt)
+	cmd.Dir = projectDir
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode()
+		}
+		log.Error("Task manager failed: %v", err)
+		return 1
+	}
+	return 0
 }
 
 func printUsage() {
@@ -93,6 +171,8 @@ func printUsage() {
   ralph . --plan-file plan.md
 
 %sSUBCOMMANDS:%s
+  ralph commander [directory]  Full 4-pane tmux layout (loop + task manager + stream + plan)
+  ralph task [directory]       Interactive task manager (standalone, no tmux)
   ralph stop [directory]       Halt after the current iteration
   ralph feedback [message]     Show queued feedback, or queue a new message
 

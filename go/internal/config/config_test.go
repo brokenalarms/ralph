@@ -312,6 +312,24 @@ func TestParseSubcommand(t *testing.T) {
 		t.Errorf("Args = %v, want [hello world]", sub.Args)
 	}
 
+	// "commander" is a subcommand
+	sub, ok = ParseSubcommand([]string{"commander"})
+	if !ok {
+		t.Fatal("expected subcommand for 'commander'")
+	}
+	if sub.Name != "commander" || sub.Dir != "." {
+		t.Errorf("got %+v, want Name=commander Dir=.", sub)
+	}
+
+	// "task" is a subcommand
+	sub, ok = ParseSubcommand([]string{"task"})
+	if !ok {
+		t.Fatal("expected subcommand for 'task'")
+	}
+	if sub.Name != "task" || sub.Dir != "." {
+		t.Errorf("got %+v, want Name=task Dir=.", sub)
+	}
+
 	// Non-subcommand
 	_, ok = ParseSubcommand([]string{"/some/path"})
 	if ok {

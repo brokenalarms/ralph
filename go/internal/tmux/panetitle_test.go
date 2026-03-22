@@ -12,7 +12,7 @@ import (
 // Verifies that SetTask updates the task label visible in Title(),
 // proving the main loop can communicate task context to the timer.
 func TestSetTask_UpdatesTitle(t *testing.T) {
-	p := NewPaneTitle("test-session", "")
+	p := NewPaneTitle("test-session", "", PaneStream)
 	p.SetTask("ralph-abc: Fix auth bug")
 
 	title := p.Title()
@@ -24,7 +24,7 @@ func TestSetTask_UpdatesTitle(t *testing.T) {
 // Verifies that an empty task produces a "stream" fallback title,
 // matching bash behavior when no .stream-task file exists.
 func TestTitle_FallbackWhenNoTask(t *testing.T) {
-	p := NewPaneTitle("test-session", "")
+	p := NewPaneTitle("test-session", "", PaneStream)
 
 	title := p.Title()
 	if !strings.HasPrefix(title, "stream ") {
@@ -34,7 +34,7 @@ func TestTitle_FallbackWhenNoTask(t *testing.T) {
 
 // Verifies that clearing the task reverts to the fallback title.
 func TestSetTask_ClearReverts(t *testing.T) {
-	p := NewPaneTitle("test-session", "")
+	p := NewPaneTitle("test-session", "", PaneStream)
 	p.SetTask("some task")
 	p.SetTask("")
 
@@ -46,7 +46,7 @@ func TestSetTask_ClearReverts(t *testing.T) {
 
 // Verifies that Task() returns the current label set by SetTask.
 func TestTask_ReturnsCurrentLabel(t *testing.T) {
-	p := NewPaneTitle("test-session", "")
+	p := NewPaneTitle("test-session", "", PaneStream)
 
 	if got := p.Task(); got != "" {
 		t.Errorf("Task() before SetTask = %q, want empty", got)
@@ -60,7 +60,7 @@ func TestTask_ReturnsCurrentLabel(t *testing.T) {
 
 // Verifies that ResetTimer affects the elapsed time shown in Title().
 func TestResetTimer_ResetsElapsed(t *testing.T) {
-	p := NewPaneTitle("test-session", "")
+	p := NewPaneTitle("test-session", "", PaneStream)
 	p.mu.Lock()
 	p.started = time.Now().Add(-2 * time.Minute)
 	p.mu.Unlock()
@@ -79,7 +79,7 @@ func TestResetTimer_ResetsElapsed(t *testing.T) {
 
 // Verifies that Title() includes elapsed time in the expected format.
 func TestTitle_ElapsedFormat(t *testing.T) {
-	p := NewPaneTitle("test-session", "")
+	p := NewPaneTitle("test-session", "", PaneStream)
 	p.mu.Lock()
 	p.started = time.Now().Add(-3*time.Minute - 7*time.Second)
 	p.mu.Unlock()
@@ -92,7 +92,7 @@ func TestTitle_ElapsedFormat(t *testing.T) {
 
 // Verifies concurrent reads and writes don't race. Run with -race.
 func TestConcurrentAccess(t *testing.T) {
-	p := NewPaneTitle("test-session", "")
+	p := NewPaneTitle("test-session", "", PaneStream)
 	var wg sync.WaitGroup
 
 	for i := range 10 {
@@ -116,7 +116,7 @@ func TestConcurrentAccess(t *testing.T) {
 // proving the cross-process communication between the loop and tmux outer process.
 func TestSyncFromFile_UpdatesTask(t *testing.T) {
 	dir := t.TempDir()
-	p := NewPaneTitle("test-session", dir)
+	p := NewPaneTitle("test-session", dir, PaneStream)
 
 	os.WriteFile(filepath.Join(dir, ".stream-task"), []byte("ralph-abc: Fix auth bug"), 0o644)
 	p.syncFromFile()
@@ -134,7 +134,7 @@ func TestSyncFromFile_UpdatesTask(t *testing.T) {
 // so each task shows its own elapsed time rather than cumulative.
 func TestSyncFromFile_ResetsTimerOnTaskChange(t *testing.T) {
 	dir := t.TempDir()
-	p := NewPaneTitle("test-session", dir)
+	p := NewPaneTitle("test-session", dir, PaneStream)
 
 	os.WriteFile(filepath.Join(dir, ".stream-task"), []byte("task-1"), 0o644)
 	p.syncFromFile()
@@ -155,7 +155,7 @@ func TestSyncFromFile_ResetsTimerOnTaskChange(t *testing.T) {
 // Verifies that syncFromFile does not reset the timer when the task is unchanged.
 func TestSyncFromFile_NoResetWhenTaskUnchanged(t *testing.T) {
 	dir := t.TempDir()
-	p := NewPaneTitle("test-session", dir)
+	p := NewPaneTitle("test-session", dir, PaneStream)
 
 	os.WriteFile(filepath.Join(dir, ".stream-task"), []byte("task-1"), 0o644)
 	p.syncFromFile()
@@ -174,7 +174,7 @@ func TestSyncFromFile_NoResetWhenTaskUnchanged(t *testing.T) {
 
 // Verifies that syncFromFile is a no-op when ralphDir is empty.
 func TestSyncFromFile_NoOpWithoutRalphDir(t *testing.T) {
-	p := NewPaneTitle("test-session", "")
+	p := NewPaneTitle("test-session", "", PaneStream)
 	p.syncFromFile()
 
 	if got := p.Task(); got != "" {
@@ -184,7 +184,7 @@ func TestSyncFromFile_NoOpWithoutRalphDir(t *testing.T) {
 
 // Verifies that long task labels are truncated with ellipsis so elapsed time stays visible.
 func TestTitle_TruncatesLongTask(t *testing.T) {
-	p := NewPaneTitle("test-session", "")
+	p := NewPaneTitle("test-session", "", PaneStream)
 	long := "ralph-9uu: [bug] Go: Auto-merge not firing — multiple tasks stacking on single branch"
 	p.SetTask(long)
 
@@ -202,7 +202,7 @@ func TestTitle_TruncatesLongTask(t *testing.T) {
 
 // Verifies that short task labels are not truncated.
 func TestTitle_ShortTaskNotTruncated(t *testing.T) {
-	p := NewPaneTitle("test-session", "")
+	p := NewPaneTitle("test-session", "", PaneStream)
 	p.SetTask("ralph-abc: Fix auth bug")
 
 	title := p.Title()
@@ -217,7 +217,7 @@ func TestTitle_ShortTaskNotTruncated(t *testing.T) {
 // Verifies that RalphTitle includes branch name and elapsed time when a branch
 // is set, so the user can see which branch the loop is on and how long it's been running.
 func TestRalphTitle_WithBranch(t *testing.T) {
-	p := NewPaneTitle("test-session", "")
+	p := NewPaneTitle("test-session", "", PaneStream)
 	p.mu.Lock()
 	p.branch = "ralph/task/fix-auth"
 	p.mu.Unlock()
@@ -233,7 +233,7 @@ func TestRalphTitle_WithBranch(t *testing.T) {
 
 // Verifies that RalphTitle falls back to "(go) ralph" when no branch is set.
 func TestRalphTitle_Fallback(t *testing.T) {
-	p := NewPaneTitle("test-session", "")
+	p := NewPaneTitle("test-session", "", PaneStream)
 
 	title := p.RalphTitle()
 	if !strings.HasPrefix(title, "(go) ralph ") {
@@ -245,7 +245,7 @@ func TestRalphTitle_Fallback(t *testing.T) {
 // name shown in the ralph pane title.
 func TestSyncBranch_ReadsBranchFile(t *testing.T) {
 	dir := t.TempDir()
-	p := NewPaneTitle("test-session", dir)
+	p := NewPaneTitle("test-session", dir, PaneStream)
 
 	os.WriteFile(filepath.Join(dir, ".run-branch"), []byte("ralph/task/deploy-fix"), 0o644)
 	p.syncBranch()
@@ -261,7 +261,7 @@ func TestSyncBranch_ReadsBranchFile(t *testing.T) {
 
 // Verifies that syncBranch is a no-op when ralphDir is empty.
 func TestSyncBranch_NoOpWithoutRalphDir(t *testing.T) {
-	p := NewPaneTitle("test-session", "")
+	p := NewPaneTitle("test-session", "", PaneStream)
 	p.syncBranch()
 
 	p.mu.RLock()
@@ -276,7 +276,7 @@ func TestSyncBranch_NoOpWithoutRalphDir(t *testing.T) {
 // Verifies that RalphTitle shows per-run elapsed time (not per-task),
 // so the user can see total loop duration.
 func TestRalphTitle_RunElapsed(t *testing.T) {
-	p := NewPaneTitle("test-session", "")
+	p := NewPaneTitle("test-session", "", PaneStream)
 	p.mu.Lock()
 	p.branch = "main"
 	p.runStarted = time.Now().Add(-5*time.Minute - 30*time.Second)
@@ -290,7 +290,7 @@ func TestRalphTitle_RunElapsed(t *testing.T) {
 
 // Verifies that Run exits when the stop channel is closed.
 func TestRun_StopsOnClose(t *testing.T) {
-	p := NewPaneTitle("nonexistent-session", "")
+	p := NewPaneTitle("nonexistent-session", "", PaneStream)
 	stop := make(chan struct{})
 
 	done := make(chan struct{})
