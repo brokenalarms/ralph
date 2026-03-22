@@ -10,9 +10,16 @@ cat > "$hooks_dir/post-merge" <<'HOOK'
 "$(git rev-parse --show-toplevel)/scripts/rebuild-go.sh"
 HOOK
 
-chmod +x "$hooks_dir/post-merge"
+cat > "$hooks_dir/pre-commit" <<'HOOK'
+#!/usr/bin/env bash
+# If any prompts/ files are staged, sync them to go/cmd/ralph/prompts/
+root="$(git rev-parse --show-toplevel)"
+if git diff --cached --name-only | grep -q '^prompts/'; then
+  cp -r "$root/prompts/"* "$root/go/cmd/ralph/prompts/" 2>/dev/null || true
+  git add "$root/go/cmd/ralph/prompts/" 2>/dev/null || true
+fi
+HOOK
 
-# Remove post-commit hook if it exists (shouldn't rebuild on every commit)
-rm -f "$hooks_dir/post-commit"
+chmod +x "$hooks_dir/post-merge" "$hooks_dir/pre-commit"
 
-echo "Git hooks installed (post-merge only)."
+echo "Git hooks installed (post-merge + pre-commit prompt sync)."
