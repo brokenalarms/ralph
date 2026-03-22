@@ -224,14 +224,14 @@ func TestPreflightChecks_NoChanges(t *testing.T) {
 }
 
 
-// LLMVerifyPR passes when no PR and no diff exist (tests already passed).
+// LLMVerifyPR passes when no PR and no diff exist — agent confirmed task complete.
 func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
 	dir := setupGitRepo(t)
 	head := gitHeadRev(dir)
 
 	result := LLMVerifyPR(dir, t.TempDir(), "nonexistent-task", head, "some task", "some description")
 	if !result.Passed {
-		t.Errorf("expected pass when no PR and no diff (tests passed), got: %s", result.Reason)
+		t.Errorf("expected pass when agent confirms complete with no new work needed, got: %s", result.Reason)
 	}
 }
 

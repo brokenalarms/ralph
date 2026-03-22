@@ -191,7 +191,7 @@ func LLMVerifyPR(workDir, promptsDir, taskID, headBefore, beadTitle, beadDescrip
 		diffCmd.Dir = workDir
 		diffOut, err := diffCmd.Output()
 		if err != nil || len(diffOut) == 0 {
-			return Result{Passed: true, Reason: "no diff to verify (tests passed)"}
+			return Result{Passed: true, Reason: "no PR found and no new commits — agent confirms task complete"}
 		}
 		diff = string(diffOut)
 		source = "iteration"
