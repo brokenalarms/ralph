@@ -81,6 +81,13 @@ func promptRebaseRecovery(err error) git.RebaseRecovery {
 func evolveRestart(projectDir, scriptPath string, args []string, log *logging.Logger) error {
 	ralphDir := filepath.Join(projectDir, ".ralph")
 
+	stopFile := filepath.Join(ralphDir, "stop")
+	if _, err := os.Stat(stopFile); err == nil {
+		os.Remove(stopFile)
+		log.Log("Stop signal detected — skipping evolve restart")
+		return nil
+	}
+
 	log.Log("Pulling latest main...")
 	fetchCmd := exec.Command("git", "-C", projectDir, "fetch", "origin", "main")
 	if out, err := fetchCmd.CombinedOutput(); err != nil {
