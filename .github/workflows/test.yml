@@ -18,7 +18,10 @@ jobs:
           go-version: '1.23'
 
       - name: Configure git defaults
-        run: git config --global init.defaultBranch main
+        run: |
+          git config --global init.defaultBranch main
+          git config --global user.name "CI"
+          git config --global user.email "ci@test"
 
       - name: Copy prompts for embedding
         run: cp -r prompts go/cmd/ralph/prompts
