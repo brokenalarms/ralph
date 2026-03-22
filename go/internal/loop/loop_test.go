@@ -70,6 +70,8 @@ func (m *mutableBackend) PlanningSucceeded() (bool, error)     { return true, ni
 func (m *mutableBackend) CloseTask(string, string) error       { return nil }
 func (m *mutableBackend) SkipTask(string, string) error        { return nil }
 func (m *mutableBackend) ReopenTask(string) error              { return nil }
+func (m *mutableBackend) SetState(_, _, _, _ string) error     { return nil }
+func (m *mutableBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (m *mutableBackend) ExecutionInstructions() (string, error) { return "", nil }
 func (m *mutableBackend) PlanningInstructions() string         { return "" }
 func (m *mutableBackend) Label() string {
@@ -93,6 +95,8 @@ func (s *stubBackend) PlanningSucceeded() (bool, error)     { return true, nil }
 func (s *stubBackend) CloseTask(string, string) error       { return nil }
 func (s *stubBackend) SkipTask(string, string) error        { return nil }
 func (s *stubBackend) ReopenTask(string) error              { return nil }
+func (s *stubBackend) SetState(_, _, _, _ string) error     { return nil }
+func (s *stubBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (s *stubBackend) ExecutionInstructions() (string, error) { return "", nil }
 func (s *stubBackend) PlanningInstructions() string         { return "" }
 func (s *stubBackend) Label() string {
@@ -2510,5 +2514,143 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 
 	if !pushCalled {
 		t.Error("push should be called when no verification is configured")
+	}
+}
+
+// stateTrackingBackend records SetState calls so tests can verify the
+// lifecycle phase transitions (implementing → verified) happen in order.
+type stateTrackingBackend struct {
+	mutableBackend
+	stateCalls []stateCall
+}
+
+type stateCall struct {
+	id, dimension, value string
+}
+
+func (s *stateTrackingBackend) SetState(id, dimension, value, reason string) error {
+	s.stateCalls = append(s.stateCalls, stateCall{id, dimension, value})
+	return nil
+}
+
+// Verifies that the loop sets phase=implementing when starting a task and
+// phase=verified after verification passes, ensuring the bd close guard
+// will allow the task to be closed.
+func TestLoop_LifecycleStates(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stateTrackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			completed: 0,
+			total:     1,
+			nextTask:  "add lifecycle tracking",
+			nextID:    "ralph-lc1",
+			label:     "beads",
+		},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.verifyFunc = func(workDir, headBefore string) (bool, string) {
+		return true, ""
+	}
+	l.pushPRFunc = func(string) error { return nil }
+
+	_ = l.Run(context.Background())
+
+	if len(backend.stateCalls) < 2 {
+		t.Fatalf("expected at least 2 SetState calls, got %d", len(backend.stateCalls))
+	}
+
+	first := backend.stateCalls[0]
+	if first.id != "ralph-lc1" || first.dimension != "phase" || first.value != "implementing" {
+		t.Errorf("first SetState = %+v, want phase=implementing for ralph-lc1", first)
+	}
+
+	last := backend.stateCalls[len(backend.stateCalls)-1]
+	if last.id != "ralph-lc1" || last.dimension != "phase" || last.value != "verified" {
+		t.Errorf("last SetState = %+v, want phase=verified for ralph-lc1", last)
+	}
+}
+
+// Verifies that phase=verified is NOT set when verification fails,
+// ensuring the close guard will reject a premature close.
+func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stateTrackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			completed: 0,
+			total:     1,
+			nextTask:  "broken task",
+			nextID:    "ralph-brk",
+			label:     "beads",
+		},
+	}
+
+	runner := &stubRunner{
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.verifyFunc = func(workDir, headBefore string) (bool, string) {
+		return false, "tests failed"
+	}
+
+	_ = l.Run(context.Background())
+
+	for _, call := range backend.stateCalls {
+		if call.dimension == "phase" && call.value == "verified" {
+			t.Error("phase=verified should not be set when verification fails")
+		}
+	}
+
+	hasImplementing := false
+	for _, call := range backend.stateCalls {
+		if call.dimension == "phase" && call.value == "implementing" {
+			hasImplementing = true
+		}
+	}
+	if !hasImplementing {
+		t.Error("phase=implementing should still be set at task start")
 	}
 }

@@ -292,7 +292,7 @@ func TestBD_PlanningSucceeded_WithTasks(t *testing.T) {
 	}
 }
 
-// Proves: CloseTask calls bd close only for in_progress tasks.
+// Proves: CloseTask calls bd close only for in_progress, verified tasks.
 func TestBD_CloseTask(t *testing.T) {
 	closed := false
 	runner := func(dir string, args ...string) (string, error) {
@@ -303,6 +303,9 @@ func TestBD_CloseTask(t *testing.T) {
 		if len(args) > 0 && args[0] == "show" {
 			return `[{"status":"in_progress"}]`, nil
 		}
+		if len(args) > 0 && args[0] == "state" {
+			return "verified", nil
+		}
 		return "", nil
 	}
 	b := setupBD(t, runner)
@@ -310,7 +313,7 @@ func TestBD_CloseTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !closed {
-		t.Error("expected close to be called for in_progress task")
+		t.Error("expected close to be called for in_progress verified task")
 	}
 }
 
@@ -618,6 +621,146 @@ func TestBD_GetNextTask_DefaultPriorityComparison(t *testing.T) {
 	got, _ := b.GetNextTask()
 	if got != "P0 urgent" {
 		t.Errorf("GetNextTask = %q, want %q", got, "P0 urgent")
+	}
+}
+
+// Proves: SetState calls bd set-state with the correct dimension=value format.
+func TestBD_SetState(t *testing.T) {
+	var capturedArgs []string
+	runner := func(dir string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "set-state" {
+			capturedArgs = args
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SetState("task-1", "phase", "implementing", "starting work"); err != nil {
+		t.Fatal(err)
+	}
+	if len(capturedArgs) == 0 {
+		t.Fatal("expected set-state to be called")
+	}
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "phase=implementing") {
+		t.Errorf("expected phase=implementing in args, got: %v", capturedArgs)
+	}
+	if !strings.Contains(joined, "--reason") {
+		t.Errorf("expected --reason flag in args, got: %v", capturedArgs)
+	}
+}
+
+// Proves: SetState is a no-op with empty id.
+func TestBD_SetState_EmptyID(t *testing.T) {
+	called := false
+	runner := func(dir string, args ...string) (string, error) {
+		called = true
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SetState("", "phase", "implementing", ""); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Error("expected no bd calls with empty id")
+	}
+}
+
+// Proves: GetState queries bd state and returns the dimension value.
+func TestBD_GetState(t *testing.T) {
+	runner := func(dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "state" && args[2] == "phase" {
+			return "implementing", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	got, err := b.GetState("task-1", "phase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "implementing" {
+		t.Errorf("GetState = %q, want %q", got, "implementing")
+	}
+}
+
+// Proves: GetState returns empty string with empty id.
+func TestBD_GetState_EmptyID(t *testing.T) {
+	b := setupBD(t, defaultMock())
+	got, err := b.GetState("", "phase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Errorf("GetState = %q, want empty string", got)
+	}
+}
+
+// Proves: CloseTask is rejected when phase is not "verified".
+func TestBD_CloseTask_RejectsUnverified(t *testing.T) {
+	runner := func(dir string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "show" {
+			return `[{"status":"in_progress"}]`, nil
+		}
+		if len(args) > 0 && args[0] == "state" {
+			return "implementing", nil
+		}
+		if len(args) > 0 && args[0] == "close" {
+			t.Error("close should not be called when phase is not verified")
+			return "closed", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	err := b.CloseTask("task-1", "done")
+	if err == nil {
+		t.Error("expected error when closing unverified task")
+	}
+	if !strings.Contains(err.Error(), "phase") {
+		t.Errorf("expected phase-related error, got: %v", err)
+	}
+}
+
+// Proves: CloseTask succeeds when phase is "verified".
+func TestBD_CloseTask_AllowsVerified(t *testing.T) {
+	closed := false
+	runner := func(dir string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "show" {
+			return `[{"status":"in_progress"}]`, nil
+		}
+		if len(args) > 0 && args[0] == "state" {
+			return "verified", nil
+		}
+		if len(args) > 0 && args[0] == "close" {
+			closed = true
+			return "closed", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.CloseTask("task-1", "done"); err != nil {
+		t.Fatalf("expected close to succeed for verified task, got: %v", err)
+	}
+	if !closed {
+		t.Error("expected close to be called for verified task")
+	}
+}
+
+// Proves: CloseTask with empty phase (state not set) is rejected.
+func TestBD_CloseTask_RejectsEmptyPhase(t *testing.T) {
+	runner := func(dir string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "show" {
+			return `[{"status":"in_progress"}]`, nil
+		}
+		if len(args) > 0 && args[0] == "state" {
+			return "", fmt.Errorf("no state set")
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	err := b.CloseTask("task-1", "done")
+	if err == nil {
+		t.Error("expected error when phase state is not set")
 	}
 }
 
