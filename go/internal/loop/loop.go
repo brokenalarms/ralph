@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -483,6 +484,17 @@ func (l *Loop) verifyCompletion(headBefore string) (bool, string) {
 	commitResult := verify.CheckCommits(l.git.WorkDir, headBefore)
 	if !commitResult.Passed {
 		return false, commitResult.Reason
+	}
+
+	// Sync prompts before tests — the agent may have modified prompts/ files
+	// and the embedded copy at go/cmd/ralph/prompts/ needs to match.
+	workDir := l.git.WorkDir
+	srcPrompts := filepath.Join(workDir, "prompts")
+	dstPrompts := filepath.Join(workDir, "go", "cmd", "ralph", "prompts")
+	if _, err := os.Stat(srcPrompts); err == nil {
+		if _, err := os.Stat(filepath.Dir(dstPrompts)); err == nil {
+			exec.Command("cp", "-r", srcPrompts+"/", dstPrompts+"/").Run()
+		}
 	}
 
 	testResult := verify.RunTests(l.cfg.VerifyDir)
