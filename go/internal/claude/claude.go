@@ -99,6 +99,12 @@ var IterationAllowedTools = []string{
 	"ToolSearch",
 }
 
+// IterationDisallowedTools lists tools the agent must not use.
+// The orchestrator owns bead close — the agent must not close tasks.
+var IterationDisallowedTools = []string{
+	"Bash(bd close*)",
+}
+
 // Runner manages Claude process lifecycle: spawning, signal polling, and cleanup.
 type Runner struct {
 	Logger         Log
@@ -129,6 +135,7 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 		"--add-dir", cfg.WorkDir,
 		"--add-dir", cfg.RalphDir,
 		"--allowedTools", strings.Join(IterationAllowedTools, ","),
+		"--disallowedTools", strings.Join(IterationDisallowedTools, ","),
 		"-p", cfg.Prompt,
 	}
 	cmd := exec.Command("claude", args...)
