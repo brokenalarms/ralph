@@ -20,6 +20,5 @@
 
 ## Completion — this order is mandatory
 1. Run the full test suite. ALL tests must pass. If any fail, fix them and re-run. Do NOT proceed until green.
-2. Close the task: `bd close <id> --reason "what you did. PR #N."`
-3. Signal completion by writing to the signal file.
-Never close the task before tests pass. Never signal before closing.
+2. Signal completion by writing to the signal file.
+Do NOT run `bd close` — the orchestrator closes your assigned task automatically after verifying your work. Never signal before tests pass.

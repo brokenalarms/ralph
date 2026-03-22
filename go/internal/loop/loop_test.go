@@ -1269,6 +1269,127 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 	}
 }
 
+// trackingBackend extends mutableBackend to record CloseTask calls,
+// proving the orchestrator closes tasks rather than the agent.
+type trackingBackend struct {
+	mutableBackend
+	closedIDs []string
+	closeMu   sync.Mutex
+}
+
+func (t *trackingBackend) CloseTask(id string, reason string) error {
+	t.closeMu.Lock()
+	t.closedIDs = append(t.closedIDs, id)
+	t.closeMu.Unlock()
+	return nil
+}
+
+// Verifies the orchestrator closes the assigned task after signal detection
+// and verification pass, preventing agents from needing to call bd close
+// directly (which could close tasks they aren't assigned to).
+func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			completed: 0,
+			total:     1,
+			nextTask:  "Fix auth bug",
+			nextID:    "ralph-xyz",
+			label:     "beads",
+		},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = runner
+	l.pushPRFunc = func(string) error { return nil }
+	l.verifyFunc = func(dir, headBefore string) (bool, string) { return true, "" }
+
+	_ = l.Run(context.Background())
+
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) != 1 {
+		t.Fatalf("expected exactly 1 CloseTask call, got %d", len(backend.closedIDs))
+	}
+	if backend.closedIDs[0] != "ralph-xyz" {
+		t.Errorf("expected CloseTask for ralph-xyz, got %q", backend.closedIDs[0])
+	}
+}
+
+// Verifies the orchestrator does NOT call CloseTask when verification fails,
+// ensuring tasks aren't closed prematurely.
+func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			completed: 0,
+			total:     1,
+			nextTask:  "Fix auth bug",
+			nextID:    "ralph-xyz",
+			label:     "beads",
+		},
+	}
+
+	runner := &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = runner
+	l.pushPRFunc = func(string) error { return nil }
+	l.verifyFunc = func(dir, headBefore string) (bool, string) { return false, "no commits" }
+
+	_ = l.Run(context.Background())
+
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) != 0 {
+		t.Errorf("expected no CloseTask calls on verification failure, got %d: %v", len(backend.closedIDs), backend.closedIDs)
+	}
+}
+
 // --- test helpers ---
 
 // createPromptTemplates creates minimal prompt template files so the loop
