@@ -96,6 +96,9 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		cancel()
 	}()
 
+	// Clear stale stop file from a previous run so we don't halt immediately.
+	os.Remove(filepath.Join(ralphDir, "stop"))
+
 	planFile := filepath.Join(ralphDir, "plan.md")
 	stateFile := filepath.Join(ralphDir, "state.json")
 	logFile := filepath.Join(ralphDir, "loop.log")
