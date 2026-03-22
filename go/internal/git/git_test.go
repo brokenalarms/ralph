@@ -1315,10 +1315,11 @@ func TestAutoMerge_UpdatesLocalMainWhenCheckedOut(t *testing.T) {
 		t.Fatal("local main should still be at old commit before update-ref")
 	}
 
-	// Simulate what AutoMergeCurrentBranch does after merge: update-ref
+	// Simulate what postMergeUpdate does after merge: update-ref + reset
 	originRef := gitOutput(project, "rev-parse", "origin/main")
 	if originRef != "" {
 		gitCmd(project, "update-ref", "refs/heads/main", originRef)
+		gitCmd(project, "reset", "--hard", "HEAD")
 	}
 
 	// Local main should now match origin/main
@@ -1331,6 +1332,14 @@ func TestAutoMerge_UpdatesLocalMainWhenCheckedOut(t *testing.T) {
 	stillCheckedOut := gitOutput(project, "symbolic-ref", "--short", "HEAD")
 	if stillCheckedOut != "main" {
 		t.Errorf("main should still be checked out, got %q", stillCheckedOut)
+	}
+
+	// The index must have no staged changes. Without reset --hard,
+	// update-ref advances HEAD but leaves the old index, causing git
+	// diff --cached to show staged reversions of the merged PR's changes.
+	diffIndex := strings.TrimSpace(gitOutput(project, "diff", "--cached", "--name-only"))
+	if diffIndex != "" {
+		t.Errorf("project dir should have no staged changes after update-ref + reset, got:\n%s", diffIndex)
 	}
 }
 
