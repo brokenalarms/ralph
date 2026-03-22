@@ -136,6 +136,38 @@ func TestCIFailureError_Message(t *testing.T) {
 	}
 }
 
+// isMergeConflictError recognizes GitHub merge conflict messages that
+// indicate a PR cannot be merged due to conflicts with the base branch.
+func TestIsMergeConflictError_Matches(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want bool
+	}{
+		{"Pull request is not mergeable", true},
+		{"Merge conflict in the base branch", true},
+		{"There is a merge conflict", true},
+		{"not mergeable: the head branch was out of date", true},
+		{"Head branch was behind the base branch", true},
+		{"required status check \"test\" is expected", false},
+		{"some other error", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := isMergeConflictError(tc.msg); got != tc.want {
+			t.Errorf("isMergeConflictError(%q) = %v, want %v", tc.msg, got, tc.want)
+		}
+	}
+}
+
+// MergeConflictError produces a message identifying the PR with conflicts.
+func TestMergeConflictError_Message(t *testing.T) {
+	err := &MergeConflictError{PRNumber: "55"}
+	msg := err.Error()
+	if msg != "PR #55 has merge conflicts with the base branch" {
+		t.Errorf("unexpected error message: %s", msg)
+	}
+}
+
 // ghMergeArgs includes --admin when MergeAdmin is set, allowing admin
 // users to bypass branch protection when desired.
 func TestGhMergeArgs_IncludesAdmin(t *testing.T) {

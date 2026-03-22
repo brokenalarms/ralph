@@ -92,6 +92,15 @@ func failedChecks(checks []CICheckResult) []CICheckResult {
 	return failed
 }
 
+// MergeConflictError is returned when a PR cannot be merged due to conflicts.
+type MergeConflictError struct {
+	PRNumber string
+}
+
+func (e *MergeConflictError) Error() string {
+	return fmt.Sprintf("PR #%s has merge conflicts with the base branch", e.PRNumber)
+}
+
 // isCIGatedError returns true if the merge error indicates branch protection
 // is blocking the merge (typically because CI checks haven't passed yet).
 func isCIGatedError(mergeOutput string) bool {
@@ -101,6 +110,24 @@ func isCIGatedError(mergeOutput string) bool {
 		"required status check",
 		"merge requirements were not satisfied",
 		"pull request review is required",
+	}
+	for _, p := range patterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// isMergeConflictError returns true if the merge error indicates the PR
+// has conflicts with the base branch that prevent merging.
+func isMergeConflictError(mergeOutput string) bool {
+	lower := strings.ToLower(mergeOutput)
+	patterns := []string{
+		"merge conflict",
+		"not mergeable",
+		"pull request is not mergeable",
+		"head branch was behind the base branch",
 	}
 	for _, p := range patterns {
 		if strings.Contains(lower, p) {

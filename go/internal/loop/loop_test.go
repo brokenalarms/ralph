@@ -2907,6 +2907,73 @@ func TestLoop_CIFailureWritesFeedback(t *testing.T) {
 	// returns without signal, so the loop gives up — which is correct.
 }
 
+// When auto-merge returns a MergeConflictError, the loop rebases onto main,
+// force-pushes, and retries the merge — resolving PR conflicts automatically.
+func TestLoop_MergeConflictTriggersRebaseAndRetry(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Add feature",
+		nextID:    "ralph-mc1",
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/project/01-conflict-test",
+		BranchStrategy: git.BranchStacked,
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+	l.pushPRFunc = func(string) error { return nil }
+
+	// First call returns MergeConflictError, second call succeeds.
+	mergeCalls := 0
+	l.mergeFunc = func() (bool, error) {
+		mergeCalls++
+		if mergeCalls == 1 {
+			return false, &git.MergeConflictError{PRNumber: "77"}
+		}
+		return true, nil
+	}
+
+	forcePushed := false
+	l.forcePushFunc = func() error {
+		forcePushed = true
+		return nil
+	}
+
+	_ = l.Run(context.Background())
+
+	if mergeCalls < 2 {
+		t.Errorf("expected merge to be retried after conflict resolution, got %d calls", mergeCalls)
+	}
+	if !forcePushed {
+		t.Error("expected force-push after rebase to resolve conflicts")
+	}
+}
+
 // Verifies that pre-iteration test results are stored in state.json
 // so they persist across restarts and evolve cycles.
 func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {

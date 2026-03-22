@@ -439,6 +439,12 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 	}
 
 	mergeOutput := string(mergeOut)
+
+	if isMergeConflictError(mergeOutput) {
+		m.Logger.Warn("PR #%s has merge conflicts — attempting rebase", prNumber)
+		return false, &MergeConflictError{PRNumber: prNumber}
+	}
+
 	if !isCIGatedError(mergeOutput) {
 		m.Logger.Warn("Auto-merge failed for PR #%s: %s", prNumber, mergeOutput)
 		return false, fmt.Errorf("auto-merge failed for PR #%s", prNumber)
@@ -496,6 +502,16 @@ func (m *Manager) ghMergeArgs(prNumber, repoURL string) []string {
 		args = append(args, "--admin")
 	}
 	return args
+}
+
+// ForcePush pushes the current branch to the remote with --force-with-lease,
+// which is needed after rebasing to resolve merge conflicts on a PR.
+func (m *Manager) ForcePush() error {
+	if m.WorktreeBranch == "" {
+		return nil
+	}
+	m.Logger.Log("Force-pushing %s...", m.WorktreeBranch)
+	return gitCmdErr(m.WorkDir, "push", "--force-with-lease", "origin", m.WorktreeBranch)
 }
 
 // PostMergeReset force-resets the worktree to origin/main after a successful
