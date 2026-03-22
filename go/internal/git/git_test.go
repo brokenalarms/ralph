@@ -986,6 +986,33 @@ func TestDirtyWorkingTreeDetected(t *testing.T) {
 	}
 }
 
+// --- PRNumberForBranch tests ---
+
+// Proves: PRNumberForBranch returns "" when no worktree branch is set.
+func TestPRNumberForBranch_EmptyWhenNoWorktreeBranch(t *testing.T) {
+	mgr := &Manager{
+		ProjectDir: "/tmp/project",
+		WorkDir:    "/tmp/worktree",
+		Logger:     &testLog{},
+	}
+	if got := mgr.PRNumberForBranch(); got != "" {
+		t.Errorf("expected empty, got %q", got)
+	}
+}
+
+// Proves: PRNumberForBranch returns "" when WorkDir equals ProjectDir.
+func TestPRNumberForBranch_EmptyWhenWorkDirIsProjectDir(t *testing.T) {
+	mgr := &Manager{
+		ProjectDir:      "/tmp/project",
+		WorkDir:         "/tmp/project",
+		WorktreeBranch:  "ralph/test/01-task",
+		Logger:          &testLog{},
+	}
+	if got := mgr.PRNumberForBranch(); got != "" {
+		t.Errorf("expected empty, got %q", got)
+	}
+}
+
 // --- AutoMergeCurrentBranch tests ---
 
 // AutoMergeCurrentBranch returns nil when no worktree branch is set,

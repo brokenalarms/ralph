@@ -62,9 +62,10 @@ type Loop struct {
 	attempts   *attempts.Tracker
 	logger     *logging.Logger
 	signals    claude.SignalPaths
-	mergeFunc  func() (bool, error)
-	pushPRFunc func(taskDesc string) error
-	lastAction analyzer.Action
+	mergeFunc    func() (bool, error)
+	pushPRFunc   func(taskDesc string) error
+	prNumberFunc func() string
+	lastAction   analyzer.Action
 }
 
 // New creates an execution loop from the given configuration.
@@ -341,6 +342,8 @@ func (l *Loop) Run(ctx context.Context) error {
 				l.logger.Warn("Push/PR: %v", err)
 			}
 
+			l.closeTaskWithPR(taskID, summary)
+
 			if l.cfg.AutoMerge {
 				merged, err := l.autoMerge()
 				if err != nil {
@@ -414,6 +417,27 @@ func (l *Loop) pushAndCreatePR(taskDesc string) error {
 		return l.pushPRFunc(taskDesc)
 	}
 	return l.git.PushAndCreatePR(taskDesc)
+}
+
+func (l *Loop) closeTaskWithPR(taskID, summary string) {
+	if taskID == "" {
+		return
+	}
+	reason := summary
+	prNum := l.prNumber()
+	if prNum != "" {
+		reason = fmt.Sprintf("Fixed in PR #%s: %s", prNum, summary)
+	}
+	if err := l.cfg.TaskBackend.CloseTask(taskID, reason); err != nil {
+		l.logger.Warn("Close task: %v", err)
+	}
+}
+
+func (l *Loop) prNumber() string {
+	if l.prNumberFunc != nil {
+		return l.prNumberFunc()
+	}
+	return l.git.PRNumberForBranch()
 }
 
 func (l *Loop) autoMerge() (bool, error) {

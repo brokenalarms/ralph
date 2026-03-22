@@ -209,7 +209,7 @@ MOCK
 @test "bd: task_execution_instructions references bd" {
   result=$(task_execution_instructions)
   [[ "$result" == *"bd prime"* ]]
-  [[ "$result" == *"close the task"* ]]
+  [[ "$result" == *"Do NOT close the task"* ]]
 }
 
 # Proves: on resume, stored task_backend=checklist is honored even when bd is available
@@ -352,6 +352,73 @@ MOCK
   skip_task "abc123" "stuck_loop"
   [[ -f "$close_log" ]]
   grep -q "blocked: stuck_loop" "$close_log"
+}
+
+# Proves: close_task_with_pr includes PR number in the close reason
+@test "bd: close_task_with_pr includes PR number in reason" {
+  local mock_dir="$TEST_TMPDIR/mock_bin"
+  local close_log="$TEST_TMPDIR/close_log"
+
+  # Mock gh to return PR number
+  cat > "$mock_dir/gh" <<'MOCK'
+#!/usr/bin/env bash
+echo "99"
+MOCK
+  chmod +x "$mock_dir/gh"
+
+  # Mock bd to log close calls
+  cat > "$mock_dir/bd" <<MOCK
+#!/usr/bin/env bash
+case "\$1" in
+  show) echo '[{"status":"in_progress"}]' ;;
+  close) echo "\$@" > "$close_log" ;;
+esac
+MOCK
+  chmod +x "$mock_dir/bd"
+
+  WORKTREE_BRANCH="fix/some-branch"
+  WORK_DIR="$TEST_TMPDIR/worktree"
+  mkdir -p "$WORK_DIR"
+  git -C "$WORK_DIR" init -q
+  git -C "$WORK_DIR" remote add origin "https://github.com/test/repo"
+
+  close_task_with_pr "abc123" "fixed the bug"
+  [[ -f "$close_log" ]]
+  grep -q "Fixed in PR #99: fixed the bug" "$close_log"
+}
+
+# Proves: close_task_with_pr falls back to plain reason when no PR exists
+@test "bd: close_task_with_pr falls back without PR" {
+  local mock_dir="$TEST_TMPDIR/mock_bin"
+  local close_log="$TEST_TMPDIR/close_log"
+
+  # Mock gh to return empty (no PR)
+  cat > "$mock_dir/gh" <<'MOCK'
+#!/usr/bin/env bash
+echo ""
+MOCK
+  chmod +x "$mock_dir/gh"
+
+  # Mock bd to log close calls
+  cat > "$mock_dir/bd" <<MOCK
+#!/usr/bin/env bash
+case "\$1" in
+  show) echo '[{"status":"in_progress"}]' ;;
+  close) echo "\$@" > "$close_log" ;;
+esac
+MOCK
+  chmod +x "$mock_dir/bd"
+
+  WORKTREE_BRANCH="fix/some-branch"
+  WORK_DIR="$TEST_TMPDIR/worktree"
+  mkdir -p "$WORK_DIR"
+  git -C "$WORK_DIR" init -q
+  git -C "$WORK_DIR" remote add origin "https://github.com/test/repo"
+
+  close_task_with_pr "abc123" "fixed the bug"
+  [[ -f "$close_log" ]]
+  grep -q "fixed the bug" "$close_log"
+  ! grep -q "Fixed in PR" "$close_log"
 }
 
 # Proves: checklist skip_task marks the current task as skipped

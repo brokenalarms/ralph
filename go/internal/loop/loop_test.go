@@ -48,13 +48,14 @@ type stubBackend struct {
 // mutableBackend is like stubBackend but allows changing the next task
 // mid-run to simulate task transitions.
 type mutableBackend struct {
-	mu        sync.Mutex
-	remaining int
-	completed int
-	total     int
-	nextTask  string
-	nextID    string
-	label     string
+	mu          sync.Mutex
+	remaining   int
+	completed   int
+	total       int
+	nextTask    string
+	nextID      string
+	label       string
+	closeReason string
 }
 
 func (m *mutableBackend) Init() error                          { return nil }
@@ -68,7 +69,7 @@ func (m *mutableBackend) GetNextTaskInfo() (string, string, error) { m.mu.Lock()
 func (m *mutableBackend) HasTasks() (bool, error)              { m.mu.Lock(); defer m.mu.Unlock(); return m.total > 0, nil }
 func (m *mutableBackend) NeedsPlanning() (bool, error)         { return false, nil }
 func (m *mutableBackend) PlanningSucceeded() (bool, error)     { return true, nil }
-func (m *mutableBackend) CloseTask(string, string) error       { return nil }
+func (m *mutableBackend) CloseTask(_ string, reason string) error { m.mu.Lock(); defer m.mu.Unlock(); m.closeReason = reason; return nil }
 func (m *mutableBackend) SkipTask(string, string) error        { return nil }
 func (m *mutableBackend) ExecutionInstructions() (string, error) { return "", nil }
 func (m *mutableBackend) PlanningInstructions() string         { return "" }
@@ -2425,5 +2426,131 @@ func TestLoop_MergeFailIsolatesNextTask(t *testing.T) {
 	cmd := exec.Command("git", "-C", gm.WorkDir, "rev-parse", "--verify", initialBranch)
 	if err := cmd.Run(); err != nil {
 		t.Errorf("initial branch %q should still exist (has open PR)", initialBranch)
+	}
+}
+
+// Proves: when a PR number is available, CloseTask receives a reason
+// formatted as "Fixed in PR #N: <summary>".
+func TestLoop_CloseTaskIncludesPRNumber(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "fix the bug",
+		nextID:    "ralph-pr1",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			backend.remaining = 0
+			backend.completed = 1
+		},
+		result: claude.Result{
+			SignalDetected: true,
+			Summary:        "patched the widget",
+		},
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		BranchStrategy: git.BranchSingle,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.pushPRFunc = func(string) error { return nil }
+	l.prNumberFunc = func() string { return "42" }
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	expected := "Fixed in PR #42: patched the widget"
+	backend.mu.Lock()
+	got := backend.closeReason
+	backend.mu.Unlock()
+	if got != expected {
+		t.Errorf("close reason = %q, want %q", got, expected)
+	}
+}
+
+// Proves: when no PR exists, CloseTask receives the plain summary
+// without the "Fixed in PR" prefix.
+func TestLoop_CloseTaskWithoutPR(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "fix the bug",
+		nextID:    "ralph-np1",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			backend.remaining = 0
+			backend.completed = 1
+		},
+		result: claude.Result{
+			SignalDetected: true,
+			Summary:        "patched the widget",
+		},
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		BranchStrategy: git.BranchSingle,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.pushPRFunc = func(string) error { return nil }
+	l.prNumberFunc = func() string { return "" }
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	expected := "patched the widget"
+	backend.mu.Lock()
+	got := backend.closeReason
+	backend.mu.Unlock()
+	if got != expected {
+		t.Errorf("close reason = %q, want %q", got, expected)
 	}
 }

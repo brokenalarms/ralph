@@ -388,6 +388,27 @@ func (m *Manager) PushAndCreatePR(taskDesc string) error {
 	return nil
 }
 
+// PRNumberForBranch returns the open PR number for the current worktree
+// branch, or "" if no PR exists.
+func (m *Manager) PRNumberForBranch() string {
+	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
+		return ""
+	}
+
+	repoURL := gitOutput(m.WorkDir, "remote", "get-url", "origin")
+	if repoURL == "" {
+		return ""
+	}
+
+	cmd := exec.Command("gh", "pr", "list", "--head", m.WorktreeBranch, "--state", "all",
+		"--json", "number", "--jq", ".[0].number", "-R", repoURL)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // AutoMergeCurrentBranch squash-merges the PR for the current branch into main.
 // Returns (true, nil) when a PR was merged, (false, nil) when no PR exists or
 // no action was needed, and (false, err) on failure.

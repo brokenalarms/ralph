@@ -191,6 +191,29 @@ rotate_branch() {
   fi
 }
 
+pr_number_for_branch() {
+  if [[ -z "$WORKTREE_BRANCH" || "$WORK_DIR" == "$PROJECT_DIR" ]]; then
+    return 0
+  fi
+  command -v gh &>/dev/null || return 0
+  local repo_url
+  repo_url=$(git -C "$WORK_DIR" remote get-url origin 2>/dev/null) || return 0
+  gh pr list --head "$WORKTREE_BRANCH" --state all --json number --jq '.[0].number' -R "$repo_url" 2>/dev/null || true
+}
+
+close_task_with_pr() {
+  local id="$1" summary="$2"
+  [[ -z "$id" ]] && return 0
+  local pr_num reason
+  pr_num=$(pr_number_for_branch) || true
+  if [[ -n "$pr_num" ]]; then
+    reason="Fixed in PR #${pr_num}: ${summary}"
+  else
+    reason="$summary"
+  fi
+  close_task "$id" "$reason"
+}
+
 # auto_merge_current_branch: squash-merge the PR for the current branch into main.
 # Returns 0 on success (or no PR found), 1 on merge failure.
 auto_merge_current_branch() {

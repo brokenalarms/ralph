@@ -1034,7 +1034,7 @@ run_claude() {
       local completed_id
       completed_id=$(get_next_task_id) || true
       if [[ -n "$completed_id" ]]; then
-        close_task "$completed_id" "${summary:-task done}"
+        close_task_with_pr "$completed_id" "${summary:-task done}"
       fi
       kill "$claude_pid" 2>/dev/null || true
       sleep 2
@@ -1088,7 +1088,7 @@ run_claude() {
       if [[ -n "$completed_id" ]]; then
         local summary
         summary=$(read_signal_summary) || true
-        close_task "$completed_id" "${summary:-task done}"
+        close_task_with_pr "$completed_id" "${summary:-task done}"
       fi
     fi
     return 0
