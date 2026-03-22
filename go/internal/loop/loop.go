@@ -232,7 +232,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.state.Write("last_task", nextTask)
 		l.state.Write("last_task_id", taskID)
 		if taskChanged {
-			l.git.RenameBranchForTask(nextTask)
+			l.git.RenameBranchForTask(nextTask, taskID)
 		}
 		l.writeRunBranch()
 		l.git.TagTaskStart(taskID)

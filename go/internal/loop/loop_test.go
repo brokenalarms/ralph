@@ -734,14 +734,14 @@ func TestLoop_HandleRebase_FreshWorktreeRecovery(t *testing.T) {
 	run(t, "git", "-C", gm.WorkDir, "fetch", "origin")
 
 	// Create a conflicting situation (squash-merged branch)
-	gm.RenameBranchForTask("first task")
+	gm.RenameBranchForTask("first task", "")
 	writeFile(t, gm.WorkDir, "shared.txt", "step one\n")
 	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "first step")
 	writeFile(t, gm.WorkDir, "shared.txt", "final\n")
 	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "final")
 
 	gm.RotateBranch()
-	gm.RenameBranchForTask("second task")
+	gm.RenameBranchForTask("second task", "")
 	writeFile(t, gm.WorkDir, "second.txt", "second\n")
 	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "second")
 

@@ -284,8 +284,9 @@ func (m *Manager) cleanTempBranch() error {
 
 // RenameBranchForTask renames the current branch to include a task slug.
 // Each call increments TaskSeq. Only renames once per iteration (tracked by
-// BranchRenamed). Skipped in single-branch mode. Mirrors lib/git.sh rename_branch_for_task.
-func (m *Manager) RenameBranchForTask(taskDesc string) {
+// BranchRenamed). Skipped in single-branch mode. When taskID is provided,
+// it is included in the branch name for traceability.
+func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 	if m.BranchStrategy == BranchSingle {
 		return
 	}
@@ -302,7 +303,12 @@ func (m *Manager) RenameBranchForTask(taskDesc string) {
 	}
 
 	m.TaskSeq++
-	newBranch := fmt.Sprintf("ralph/%s/%02d-%s", m.ProjectName, m.TaskSeq, slug)
+	var newBranch string
+	if taskID != "" {
+		newBranch = fmt.Sprintf("ralph/%s/%02d-%s-%s", m.ProjectName, m.TaskSeq, taskID, slug)
+	} else {
+		newBranch = fmt.Sprintf("ralph/%s/%02d-%s", m.ProjectName, m.TaskSeq, slug)
+	}
 	if err := gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); err == nil {
 		m.WorktreeBranch = newBranch
 		if m.State != nil {

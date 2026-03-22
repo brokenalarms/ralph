@@ -110,7 +110,7 @@ func TestRebaseOntoDefaultBranch_SkipsSquashMergedBranches(t *testing.T) {
 
 	// Branch 01: modify shared.txt in multiple commits (creates intermediate
 	// history that will conflict with a squash on rebase)
-	mgr.RenameBranchForTask("first task")
+	mgr.RenameBranchForTask("first task", "")
 	writeFile(t, mgr.WorkDir, "shared.txt", "step one\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "first task step one")
 	writeFile(t, mgr.WorkDir, "shared.txt", "final\n")
@@ -119,7 +119,7 @@ func TestRebaseOntoDefaultBranch_SkipsSquashMergedBranches(t *testing.T) {
 
 	// Branch 02: new file
 	mgr.RotateBranch()
-	mgr.RenameBranchForTask("second task")
+	mgr.RenameBranchForTask("second task", "")
 	writeFile(t, mgr.WorkDir, "second.txt", "second\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "second task")
 
@@ -153,7 +153,7 @@ func TestRebaseOntoDefaultBranch_DetectsSquashMergeWithExtraMainCommits(t *testi
 	mgr := setupRebaseMgr(t, project, bare)
 
 	// Branch 01
-	mgr.RenameBranchForTask("first task")
+	mgr.RenameBranchForTask("first task", "")
 	writeFile(t, mgr.WorkDir, "shared.txt", "step one\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "first task step one")
 	writeFile(t, mgr.WorkDir, "shared.txt", "final\n")
@@ -162,7 +162,7 @@ func TestRebaseOntoDefaultBranch_DetectsSquashMergeWithExtraMainCommits(t *testi
 
 	// Branch 02
 	mgr.RotateBranch()
-	mgr.RenameBranchForTask("second task")
+	mgr.RenameBranchForTask("second task", "")
 	writeFile(t, mgr.WorkDir, "second.txt", "second\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "second task")
 
@@ -205,7 +205,7 @@ func TestRebaseOntoDefaultBranch_StackedBranchesSameFile(t *testing.T) {
 	mgr := setupRebaseMgr(t, project, bare)
 
 	// Branch 03: add tests in multiple commits
-	mgr.RenameBranchForTask("add more tests")
+	mgr.RenameBranchForTask("add more tests", "")
 	writeFile(t, mgr.WorkDir, "tests.txt", "test_alpha() { run alpha; }\ntest_beta() { run beta; }\ntest_gamma() { run gamma; }\n\n// new tests\ntest_delta() {\n  setup();\n  run delta;\n}\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add delta test")
 
@@ -214,7 +214,7 @@ func TestRebaseOntoDefaultBranch_StackedBranchesSameFile(t *testing.T) {
 
 	// Branch 04: move layout tests to separate file
 	mgr.RotateBranch()
-	mgr.RenameBranchForTask("move layout tests")
+	mgr.RenameBranchForTask("move layout tests", "")
 	writeFile(t, mgr.WorkDir, "tests.txt", "test_alpha() { run alpha; }\ntest_beta() { run beta; }\ntest_gamma() { run gamma; }\n\n// new tests\ntest_delta() {\n  setup();\n  run delta;\n}\ntest_epsilon() {\n  setup();\n  run epsilon;\n}\n")
 	writeFile(t, mgr.WorkDir, "layout_tests.txt", "// layout-dependent tests (moved from tests.txt)\ntest_overlay() {\n  const el = makeElement(\"DIV\", { top: 10 });\n  assert.ok(el.style.top === \"10px\");\n}\ntest_clipping() {\n  const el = makeElement(\"DIV\", { overflow: \"hidden\" });\n  assert.ok(!isVisible(el));\n}\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "move layout tests to separate file")
@@ -437,7 +437,7 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.RenameBranchForTask("Add user auth")
+	mgr.RenameBranchForTask("Add user auth", "")
 	mgr.TagTaskStart("")
 
 	if !refExists(mgr.WorkDir, "task/01-add-user-auth/start") {
@@ -524,7 +524,7 @@ func TestRecreateFromMain_CreatesCleanWorktree(t *testing.T) {
 	mgr := setupRebaseMgr(t, project, bare)
 
 	// Add some work in the worktree
-	mgr.RenameBranchForTask("first task")
+	mgr.RenameBranchForTask("first task", "")
 	writeFile(t, mgr.WorkDir, "task.txt", "task work\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "task work")
 
@@ -598,7 +598,7 @@ func TestRecreateFromMain_PrunesExternalWorktreeHoldingBranch(t *testing.T) {
 	pushToOrigin(t, project)
 
 	mgr := setupRebaseMgr(t, project, bare)
-	mgr.RenameBranchForTask("some task")
+	mgr.RenameBranchForTask("some task", "")
 
 	writeFile(t, mgr.WorkDir, "work.txt", "work\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "work")
@@ -749,7 +749,7 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.RenameBranchForTask("unpushed task")
+	mgr.RenameBranchForTask("unpushed task", "")
 
 	merged, err := mgr.AutoMergeCurrentBranch()
 	if err != nil {
