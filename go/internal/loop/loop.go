@@ -370,17 +370,12 @@ func (l *Loop) Run(ctx context.Context) error {
 				}
 
 				// LLM verification — does the diff match the bead?
+				// Prefer PR diff (covers prior iterations) over iteration diff.
 				if passed {
 					beadDesc := l.getBeadDescription(taskID)
 
-					var llmResult verify.Result
-					if !commitResult.Passed {
-						l.logger.Log("Running code-state verification (no new commits)...")
-						llmResult = verify.LLMVerifyCodeState(workDir, taskID, nextTask, beadDesc)
-					} else {
-						l.logger.Log("Running LLM diff verification...")
-						llmResult = verify.LLMVerifyDiff(workDir, headBefore, nextTask, beadDesc)
-					}
+					l.logger.Log("Running LLM verification...")
+					llmResult := verify.LLMVerifyPR(workDir, taskID, headBefore, nextTask, beadDesc)
 
 					if !llmResult.Passed {
 						l.logger.Warn("LLM verification rejected: %s", llmResult.Details)
@@ -423,8 +418,8 @@ func (l *Loop) Run(ctx context.Context) error {
 							return false
 						}
 
-						// Re-run LLM check (always diff-based after fix agent commits)
-						llmResult2 := verify.LLMVerifyDiff(workDir, headBefore, nextTask, beadDesc)
+						// Re-run LLM check using PR diff
+						llmResult2 := verify.LLMVerifyPR(workDir, taskID, headBefore, nextTask, beadDesc)
 						if !llmResult2.Passed {
 							l.logger.Warn("LLM still rejects after fix agent: %s — accepting anyway (tests passed)", llmResult2.Details)
 						} else {
@@ -536,10 +531,14 @@ func (l *Loop) Run(ctx context.Context) error {
 			touchFile(filepath.Join(l.cfg.RalphDir, ".plan-flash"))
 
 			if taskID != "" {
-				if err := l.cfg.TaskBackend.CloseTask(taskID, "completed by ralph"); err != nil {
+				closeReason := "completed by ralph"
+				if prNum := l.findPRNumber(workDir); prNum != "" {
+					closeReason = fmt.Sprintf("completed by ralph — PR #%s", prNum)
+				}
+				if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
 					l.logger.Warn("CloseTask failed: %v", err)
 				} else {
-					l.logger.Log("Closed task %s", taskID)
+					l.logger.Log("Closed task %s (%s)", taskID, closeReason)
 				}
 			}
 
@@ -862,6 +861,18 @@ func (l *Loop) autoMerge() (bool, error) {
 		return l.mergeFunc()
 	}
 	return l.git.AutoMergeCurrentBranch()
+}
+
+func (l *Loop) findPRNumber(workDir string) string {
+	cmd := exec.Command("gh", "pr", "list",
+		"--head", l.git.WorktreeBranch,
+		"--state", "all", "--json", "number", "--jq", ".[0].number")
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func (l *Loop) waitForTasks(ctx context.Context) bool {

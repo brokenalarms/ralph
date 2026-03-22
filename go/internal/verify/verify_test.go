@@ -224,15 +224,14 @@ func TestPreflightChecks_NoChanges(t *testing.T) {
 }
 
 
-// LLMVerifyDiff rejects when the diff is empty, signaling that code-state
-// verification should be used instead (prevents silent auto-pass on no-op iterations).
-func TestLLMVerifyDiff_EmptyDiff(t *testing.T) {
+// LLMVerifyPR passes when no PR and no diff exist (tests already passed).
+func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
 	dir := setupGitRepo(t)
 	head := gitHeadRev(dir)
 
-	result := LLMVerifyDiff(dir, head, "some task", "some description")
-	if result.Passed {
-		t.Error("expected failure on empty diff — should direct to code-state verification")
+	result := LLMVerifyPR(dir, "nonexistent-task", head, "some task", "some description")
+	if !result.Passed {
+		t.Errorf("expected pass when no PR and no diff (tests passed), got: %s", result.Reason)
 	}
 }
 

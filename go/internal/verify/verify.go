@@ -178,18 +178,24 @@ func PreflightChecks(workDir, headBefore string, beadStatus string) PreflightRes
 	return result
 }
 
-// LLMVerifyDiff calls Claude Haiku to check if the diff matches the bead's
-// acceptance criteria and that tests prove the functionality. Returns a Result.
-// Uses claude CLI with --model haiku for speed/cost.
-func LLMVerifyDiff(workDir, headBefore, beadTitle, beadDescription string) Result {
-	diffCmd := exec.Command("git", "diff", headBefore+"..HEAD")
-	diffCmd.Dir = workDir
-	diffOut, err := diffCmd.Output()
-	if err != nil || len(diffOut) == 0 {
-		return Result{Passed: false, Reason: "no diff to verify — use code-state verification instead"}
+
+// LLMVerifyPR verifies that a task's acceptance criteria are satisfied.
+// Prefers the PR diff (which covers work from prior iterations) over the
+// current iteration's diff. Falls back to iteration diff when no PR exists.
+func LLMVerifyPR(workDir, taskID, headBefore, beadTitle, beadDescription string) Result {
+	diff := getPRDiff(workDir, taskID)
+	source := "PR"
+	if diff == "" {
+		diffCmd := exec.Command("git", "diff", headBefore+"..HEAD")
+		diffCmd.Dir = workDir
+		diffOut, err := diffCmd.Output()
+		if err != nil || len(diffOut) == 0 {
+			return Result{Passed: true, Reason: "no diff to verify (tests passed)"}
+		}
+		diff = string(diffOut)
+		source = "iteration"
 	}
 
-	diff := string(diffOut)
 	if len(diff) > 20000 {
 		diff = diff[:20000] + "\n\n[diff truncated at 20000 chars]"
 	}
@@ -199,49 +205,16 @@ func LLMVerifyDiff(workDir, headBefore, beadTitle, beadDescription string) Resul
 TASK: %s
 DESCRIPTION: %s
 
-DIFF:
+%s DIFF:
 %s
 
 Answer these two questions:
 1. Does this diff implement what the task asks for?
-2. Do the test changes (if any) actually prove the functionality, or are they superficial (e.g. assert true, always-pass stubs)?
+2. Do the test changes (if any) actually prove the functionality, or are they superficial?
 
 Reply with exactly one line: YES or NO followed by a one-sentence reason.
 Example: YES — adds retry loop with test that verifies 3 retries on failure.
-Example: NO — tests use a stub that always passes, proving nothing.`, beadTitle, beadDescription, diff)
-
-	return callLLM(workDir, prompt)
-}
-
-// LLMVerifyCodeState checks whether a task is already implemented by finding
-// the PR that delivered it and verifying its diff against the acceptance
-// criteria. Used when there are no new commits (work from a previous
-// iteration already merged).
-func LLMVerifyCodeState(workDir, taskID, beadTitle, beadDescription string) Result {
-	prDiff := getPRDiff(workDir, taskID)
-	if prDiff == "" {
-		return Result{Passed: true, Reason: "no PR found for task — skipping code-state verification (tests passed)"}
-	}
-
-	if len(prDiff) > 20000 {
-		prDiff = prDiff[:20000] + "\n\n[diff truncated at 20000 chars]"
-	}
-
-	prompt := fmt.Sprintf(`You are verifying whether a task has already been implemented.
-The iteration produced no new commits, but a PR for this task exists. Examine the
-PR diff below and determine if it satisfies the task's acceptance criteria.
-
-TASK: %s
-DESCRIPTION: %s
-
-PR DIFF:
-%s
-
-Does this diff implement what the task asks for?
-
-Reply with exactly one line: YES or NO followed by a one-sentence reason.
-Example: YES — PR adds the retry loop with exponential backoff as described.
-Example: NO — PR only updates docs, no implementation code.`, beadTitle, beadDescription, prDiff)
+Example: NO — tests use a stub that always passes, proving nothing.`, beadTitle, beadDescription, source, diff)
 
 	return callLLM(workDir, prompt)
 }
