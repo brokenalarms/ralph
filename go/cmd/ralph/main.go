@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -232,7 +231,6 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		WaitInterval:        cfg.WaitInterval,
 		OnRebaseConflict:    promptRebaseRecovery,
 		VerifyDir:           cfg.ProjectDir,
-		Runner:              &claude.Runner{Logger: log},
 	}, st, gm, log)
 
 	if err := execLoop.Run(ctx); err != nil {

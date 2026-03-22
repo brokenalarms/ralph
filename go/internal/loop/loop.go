@@ -45,7 +45,6 @@ type Config struct {
 	WaitInterval        time.Duration
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 	VerifyDir           string // project root where tests are run; empty disables verification
-	Runner              claudeRunner
 }
 
 // claudeRunner abstracts the Claude execution interface for testability.
@@ -78,16 +77,14 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 	limiter := ratelimit.New(cfg.RalphDir, cfg.CallsPerHour)
 	limiter.StopFile = filepath.Join(cfg.RalphDir, "stop")
 
-	if cfg.Runner == nil {
-		panic("loop.New: Config.Runner must not be nil — inject a claude.Runner in production or a stub in tests")
-	}
+	runner := &claude.Runner{Logger: logger}
 
 	return &Loop{
 		cfg:      cfg,
 		state:    st,
 		git:      gm,
 		limiter:  limiter,
-		runner:   cfg.Runner,
+		runner:   runner,
 		analyzer: analyzer.New(),
 		attempts: attempts.New(cfg.RalphDir),
 		logger:   logger,
