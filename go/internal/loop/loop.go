@@ -96,24 +96,25 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 // (all tasks done, max iterations reached, or stopped). Returns an error
 // for unrecoverable failures.
 func (l *Loop) Run(ctx context.Context) error {
-	if l.git.WorkDir != l.git.ProjectDir {
-		// On resume with an existing task branch, rebase onto latest main.
-		// If the next task is the same, keep the branch so additional
-		// commits land there. If different, the branch will be replaced
-		// by CreateBranchForTask when the new task starts.
-		if l.git.WorktreeBranch != "" {
-			if err := l.handleRebase(); err != nil {
-				l.state.Write("status", "error")
-				return fmt.Errorf("initial rebase failed: %w", err)
-			}
+	if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
+		if err := l.handleRebase(); err != nil {
+			l.state.Write("status", "error")
+			return fmt.Errorf("initial rebase failed: %w", err)
+		}
 
+		// On resume, only rotate to a fresh branch if the next task
+		// differs from the last one. If it's the same task, stay on
+		// the existing task branch so additional commits land there.
+		if !strings.HasSuffix(l.git.WorktreeBranch, "/next") {
 			nextTaskID, nextTask, _ := l.cfg.TaskBackend.GetNextTaskInfo()
-			if !l.isNewTask(nextTaskID, nextTask) {
+			if l.isNewTask(nextTaskID, nextTask) {
+				l.git.RotateBranch()
+			} else {
 				l.git.BranchRenamed = true
 			}
-
-			l.logger.Log("Branch: %s", l.git.WorktreeBranch)
 		}
+
+		l.logger.Log("Branch: %s", l.git.WorktreeBranch)
 		l.writeRunBranch()
 	}
 
@@ -188,9 +189,13 @@ func (l *Loop) Run(ctx context.Context) error {
 		taskChanged := l.isNewTask(taskID, nextTask)
 
 		if runIteration > 1 && taskChanged {
-			// Reset guard so CreateBranchForTask below can create a
-			// fresh branch from origin/main for the new task.
-			l.git.BranchRenamed = false
+			l.git.RotateBranch()
+			if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
+				if err := l.handleRebase(); err != nil {
+					l.state.Write("status", "error")
+					break
+				}
+			}
 		}
 
 		if err := l.maybeRefactor(refactorEvery); err != nil {
@@ -215,7 +220,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.state.Write("last_task", nextTask)
 		l.state.Write("last_task_id", taskID)
 		if taskChanged {
-			l.git.CreateBranchForTask(nextTask)
+			l.git.RenameBranchForTask(nextTask)
 		}
 		l.writeRunBranch()
 		l.git.TagTaskStart(taskID)

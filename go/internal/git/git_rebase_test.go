@@ -106,23 +106,19 @@ func TestRebaseOntoDefaultBranch_SkipsSquashMergedBranches(t *testing.T) {
 	pushToOrigin(t, project)
 
 	mgr := setupRebaseMgr(t, project, bare)
-	run(t, "git", "-C", mgr.WorkDir, "fetch", "origin")
 
-	// Manually create stacked branches to test squash-merge rebase.
-	// Branch 01: modify shared.txt in multiple commits
-	branchName01 := "ralph/" + mgr.ProjectName + "/01-first-task"
-	run(t, "git", "-C", mgr.WorkDir, "checkout", "-b", branchName01, "origin/main")
-	mgr.WorktreeBranch = branchName01
+	// Branch 01: modify shared.txt in multiple commits (creates intermediate
+	// history that will conflict with a squash on rebase)
+	mgr.RenameBranchForTask("first task")
 	writeFile(t, mgr.WorkDir, "shared.txt", "step one\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "first task step one")
 	writeFile(t, mgr.WorkDir, "shared.txt", "final\n")
 	writeFile(t, mgr.WorkDir, "first.txt", "first\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "first task final")
 
-	// Branch 02: stacked on branch 01 (simulates legacy stacking scenario)
-	branchName02 := "ralph/" + mgr.ProjectName + "/02-second-task"
-	run(t, "git", "-C", mgr.WorkDir, "checkout", "-b", branchName02)
-	mgr.WorktreeBranch = branchName02
+	// Branch 02: new file
+	mgr.RotateBranch()
+	mgr.RenameBranchForTask("second task")
 	writeFile(t, mgr.WorkDir, "second.txt", "second\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "second task")
 
@@ -154,20 +150,18 @@ func TestRebaseOntoDefaultBranch_DetectsSquashMergeWithExtraMainCommits(t *testi
 	pushToOrigin(t, project)
 
 	mgr := setupRebaseMgr(t, project, bare)
-	run(t, "git", "-C", mgr.WorkDir, "fetch", "origin")
 
-	// Manually create stacked branches for rebase testing
-	branchName01 := "ralph/" + mgr.ProjectName + "/01-first-task"
-	run(t, "git", "-C", mgr.WorkDir, "checkout", "-b", branchName01, "origin/main")
+	// Branch 01
+	mgr.RenameBranchForTask("first task")
 	writeFile(t, mgr.WorkDir, "shared.txt", "step one\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "first task step one")
 	writeFile(t, mgr.WorkDir, "shared.txt", "final\n")
 	writeFile(t, mgr.WorkDir, "first.txt", "first\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "first task final")
 
-	branchName02 := "ralph/" + mgr.ProjectName + "/02-second-task"
-	run(t, "git", "-C", mgr.WorkDir, "checkout", "-b", branchName02)
-	mgr.WorktreeBranch = branchName02
+	// Branch 02
+	mgr.RotateBranch()
+	mgr.RenameBranchForTask("second task")
 	writeFile(t, mgr.WorkDir, "second.txt", "second\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "second task")
 
@@ -208,21 +202,18 @@ func TestRebaseOntoDefaultBranch_StackedBranchesSameFile(t *testing.T) {
 	pushToOrigin(t, project)
 
 	mgr := setupRebaseMgr(t, project, bare)
-	run(t, "git", "-C", mgr.WorkDir, "fetch", "origin")
 
-	// Manually create stacked branches for rebase testing
-	branchName03 := "ralph/" + mgr.ProjectName + "/03-add-more-tests"
-	run(t, "git", "-C", mgr.WorkDir, "checkout", "-b", branchName03, "origin/main")
+	// Branch 03: add tests in multiple commits
+	mgr.RenameBranchForTask("add more tests")
 	writeFile(t, mgr.WorkDir, "tests.txt", "test_alpha() { run alpha; }\ntest_beta() { run beta; }\ntest_gamma() { run gamma; }\n\n// new tests\ntest_delta() {\n  setup();\n  run delta;\n}\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add delta test")
 
 	writeFile(t, mgr.WorkDir, "tests.txt", "test_alpha() { run alpha; }\ntest_beta() { run beta; }\ntest_gamma() { run gamma; }\n\n// new tests\ntest_delta() {\n  setup();\n  run delta;\n}\ntest_epsilon() {\n  setup();\n  run epsilon;\n}\n\n// layout-dependent tests\ntest_overlay() {\n  const el = makeElement(\"DIV\", { top: 10 });\n  assert.ok(el.style.top === \"10px\");\n}\ntest_clipping() {\n  const el = makeElement(\"DIV\", { overflow: \"hidden\" });\n  assert.ok(!isVisible(el));\n}\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add epsilon, overlay, clipping tests")
 
-	// Branch 04: stacked on branch 03
-	branchName04 := "ralph/" + mgr.ProjectName + "/04-move-layout-tests"
-	run(t, "git", "-C", mgr.WorkDir, "checkout", "-b", branchName04)
-	mgr.WorktreeBranch = branchName04
+	// Branch 04: move layout tests to separate file
+	mgr.RotateBranch()
+	mgr.RenameBranchForTask("move layout tests")
 	writeFile(t, mgr.WorkDir, "tests.txt", "test_alpha() { run alpha; }\ntest_beta() { run beta; }\ntest_gamma() { run gamma; }\n\n// new tests\ntest_delta() {\n  setup();\n  run delta;\n}\ntest_epsilon() {\n  setup();\n  run epsilon;\n}\n")
 	writeFile(t, mgr.WorkDir, "layout_tests.txt", "// layout-dependent tests (moved from tests.txt)\ntest_overlay() {\n  const el = makeElement(\"DIV\", { top: 10 });\n  assert.ok(el.style.top === \"10px\");\n}\ntest_clipping() {\n  const el = makeElement(\"DIV\", { overflow: \"hidden\" });\n  assert.ok(!isVisible(el));\n}\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "move layout tests to separate file")
@@ -445,7 +436,7 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.CreateBranchForTask("Add user auth")
+	mgr.RenameBranchForTask("Add user auth")
 	mgr.TagTaskStart("")
 
 	if !refExists(mgr.WorkDir, "task/01-add-user-auth/start") {
@@ -463,8 +454,8 @@ func TestTagTaskStart_NoOpWithoutWorktree(t *testing.T) {
 	mgr.TagTaskStart("ralph-abc")
 }
 
-// Tags on detached HEAD (no task branch) are skipped — no slug to extract
-func TestTagTaskStart_SkipsDetachedHead(t *testing.T) {
+// Tags on the temp /next branch are skipped (no meaningful slug to extract)
+func TestTagTaskStart_SkipsNextBranch(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
@@ -479,12 +470,12 @@ func TestTagTaskStart_SkipsDetachedHead(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	// WorktreeBranch is "" (detached HEAD) — no task ID → no tag
+	// Branch is still ralph/project/next — no task ID → no tag
 	mgr.TagTaskStart("")
 
 	tags := gitOutput(mgr.WorkDir, "tag", "-l", "task/*")
 	if tags != "" {
-		t.Errorf("expected no tags on detached HEAD, got: %s", tags)
+		t.Errorf("expected no tags on /next branch, got: %s", tags)
 	}
 }
 
@@ -532,7 +523,7 @@ func TestRecreateFromMain_CreatesCleanWorktree(t *testing.T) {
 	mgr := setupRebaseMgr(t, project, bare)
 
 	// Add some work in the worktree
-	mgr.CreateBranchForTask("first task")
+	mgr.RenameBranchForTask("first task")
 	writeFile(t, mgr.WorkDir, "task.txt", "task work\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "task work")
 
@@ -552,9 +543,9 @@ func TestRecreateFromMain_CreatesCleanWorktree(t *testing.T) {
 		t.Fatalf("worktree should exist after recreation: %v", err)
 	}
 
-	// Branch should be empty (detached HEAD)
-	if mgr.WorktreeBranch != "" {
-		t.Errorf("branch should be empty (detached HEAD) after recreation, got %q", mgr.WorktreeBranch)
+	// Branch should be reset to /next
+	if !strings.HasSuffix(mgr.WorktreeBranch, "/next") {
+		t.Errorf("branch %q should end with /next after recreation", mgr.WorktreeBranch)
 	}
 
 	// Old task branches should be deleted
@@ -678,7 +669,7 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.CreateBranchForTask("unpushed task")
+	mgr.RenameBranchForTask("unpushed task")
 
 	merged, err := mgr.AutoMergeCurrentBranch()
 	if err != nil {
@@ -694,8 +685,20 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 	}
 }
 
-// Every task gets its own branch, so --delete-branch is always included.
-func TestGhMergeArgs_AlwaysIncludesDeleteBranch(t *testing.T) {
+// Single-branch mode omits --delete-branch from gh pr merge so the remote
+// branch survives for the next task's push.
+func TestGhMergeArgs_SingleBranchOmitsDeleteBranch(t *testing.T) {
+	mgr := &Manager{BranchStrategy: BranchSingle}
+	args := mgr.ghMergeArgs("42", "https://github.com/org/repo")
+	for _, a := range args {
+		if a == "--delete-branch" {
+			t.Fatal("single-branch mode must not include --delete-branch")
+		}
+	}
+}
+
+// Stacked mode includes --delete-branch since each task gets its own branch.
+func TestGhMergeArgs_StackedIncludesDeleteBranch(t *testing.T) {
 	mgr := &Manager{BranchStrategy: BranchStacked}
 	args := mgr.ghMergeArgs("42", "https://github.com/org/repo")
 	found := false

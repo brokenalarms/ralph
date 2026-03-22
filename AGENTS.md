@@ -12,6 +12,10 @@
 # Implementation
 - **Go only by default.** The bash implementation (ralph.sh, lib/*.sh) is deprecated. All changes, fixes, and new features go in `go/` unless explicitly told otherwise.
 
+# Architecture: files vs state
+- **Signal files** (.signal_complete, .signal_current_task, feedback, stop): for communication between agent and orchestrator outside of stdout, and for user commands into the system via `ralph stop`, `ralph feedback`, etc.
+- **state.json**: for all orchestrator-internal state that persists across iterations (iteration count, last task, test results, config overrides). If it's not agent↔orchestrator communication or user input, it goes in state.json.
+
 # Build
 - `go/cmd/ralph/prompts/` is a gitignored build artifact — copied from `prompts/` by `scripts/rebuild-go.sh`. The source of truth is `prompts/`. Edit there, not the copy. Run `scripts/rebuild-go.sh` to sync and rebuild.
 
