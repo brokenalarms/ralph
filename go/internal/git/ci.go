@@ -149,7 +149,12 @@ func waitForCI(fetch CIFetchFunc, prNumber, repoURL string, interval, timeout ti
 	for {
 		checks, err := fetch(prNumber, repoURL)
 		if err != nil {
-			return nil, CIPending, err
+			if time.Now().After(deadline) {
+				return nil, CIPending, fmt.Errorf("CI checks not available within %v: %w", timeout, err)
+			}
+			log.Log("CI checks not available yet for PR #%s, polling in %v...", prNumber, interval)
+			time.Sleep(interval)
+			continue
 		}
 
 		status := evaluateChecks(checks)

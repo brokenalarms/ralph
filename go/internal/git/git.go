@@ -448,15 +448,18 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 
 	fetch := m.ciFetcher()
 
-	// Proactively poll CI status before attempting merge.
+	// Poll CI status before attempting merge. If checks aren't available
+	// yet (e.g. CI hasn't started), waitForCI retries until they appear.
 	checks, fetchErr := fetch(prNumber, repoURL)
-	if fetchErr != nil {
-		m.Logger.Warn("Could not fetch CI checks for PR #%s: %v", prNumber, fetchErr)
-	}
-
-	if fetchErr == nil && len(checks) > 0 {
-		status := evaluateChecks(checks)
-
+	var status CIStatus
+	if fetchErr != nil || len(checks) == 0 {
+		m.Logger.Log("CI checks not available yet for PR #%s — waiting...", prNumber)
+		checks, status, err = waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+		if err != nil {
+			m.Logger.Warn("CI polling failed for PR #%s: %v — attempting merge anyway", prNumber, err)
+		}
+	} else {
+		status = evaluateChecks(checks)
 		if status == CIPending {
 			m.Logger.Log("CI checks pending on PR #%s — waiting for completion...", prNumber)
 			checks, status, err = waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
@@ -464,14 +467,16 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 				return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, err)
 			}
 		}
+	}
 
-		if status == CIFailed {
-			return false, &CIFailureError{
-				PRNumber: prNumber,
-				Failures: failedChecks(checks),
-			}
+	if status == CIFailed {
+		return false, &CIFailureError{
+			PRNumber: prNumber,
+			Failures: failedChecks(checks),
 		}
+	}
 
+	if status == CIPassed {
 		m.Logger.Log("CI passed for PR #%s — merging", prNumber)
 	}
 
