@@ -530,13 +530,13 @@ func TestLoop_MaybeRefactor_NoRefactorDisables(t *testing.T) {
 	}
 }
 
-// Verifies the loop rotates the branch on resume when the next task differs
-// from the last one, so each task gets its own branch.
-func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
+// When the next task differs from the last, resume does not set
+// BranchRenamed — CreateBranchForTask in the loop body will create
+// a fresh branch from origin/main when the new task runs.
+func TestLoop_ResumeDoesNotSetBranchRenamedWhenTaskChanged(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	// Last run worked on a different task
 	st.Write("last_task", "previous task")
 	st.Write("last_task_id", "ralph-old")
 
@@ -548,7 +548,6 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 		nextID:    "ralph-new",
 	}
 
-	// Set up a real git repo as the worktree so RotateBranch can checkout
 	wtDir := filepath.Join(dir, "worktree")
 	os.MkdirAll(wtDir, 0o755)
 	exec.Command("git", "init", wtDir).Run()
@@ -576,9 +575,10 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Task changed, so the branch should have been rotated to /next
-	if gm.WorktreeBranch != "ralph/myproject/next" {
-		t.Errorf("expected branch rotated to ralph/myproject/next, got %q", gm.WorktreeBranch)
+	// BranchRenamed should be false — the task changed, so a new branch
+	// would be created when the loop picks up the new task.
+	if gm.BranchRenamed {
+		t.Error("BranchRenamed should be false when task changed on resume")
 	}
 }
 
@@ -729,15 +729,17 @@ func TestLoop_HandleRebase_FreshWorktreeRecovery(t *testing.T) {
 	run(t, "git", "-C", gm.WorkDir, "remote", "set-url", "origin", bare)
 	run(t, "git", "-C", gm.WorkDir, "fetch", "origin")
 
-	// Create a conflicting situation (squash-merged branch)
-	gm.RenameBranchForTask("first task")
+	// Manually create stacked branches to test rebase conflict recovery
+	branchName01 := "ralph/" + gm.ProjectName + "/01-first-task"
+	run(t, "git", "-C", gm.WorkDir, "checkout", "-b", branchName01, "origin/main")
 	writeFile(t, gm.WorkDir, "shared.txt", "step one\n")
 	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "first step")
 	writeFile(t, gm.WorkDir, "shared.txt", "final\n")
 	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "final")
 
-	gm.RotateBranch()
-	gm.RenameBranchForTask("second task")
+	branchName02 := "ralph/" + gm.ProjectName + "/02-second-task"
+	run(t, "git", "-C", gm.WorkDir, "checkout", "-b", branchName02)
+	gm.WorktreeBranch = branchName02
 	writeFile(t, gm.WorkDir, "second.txt", "second\n")
 	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "second")
 
@@ -802,7 +804,10 @@ func TestLoop_HandleRebase_AbortHaltsLoop(t *testing.T) {
 	run(t, "git", "-C", gm.WorkDir, "remote", "set-url", "origin", bare)
 	run(t, "git", "-C", gm.WorkDir, "fetch", "origin")
 
-	// Create a real conflict
+	// Create a task branch with conflicting changes
+	branchName := "ralph/" + gm.ProjectName + "/01-some-task"
+	run(t, "git", "-C", gm.WorkDir, "checkout", "-b", branchName, "origin/main")
+	gm.WorktreeBranch = branchName
 	writeFile(t, gm.WorkDir, "conflict.txt", "worktree version\n")
 	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "worktree change")
 
@@ -866,7 +871,10 @@ func TestLoop_HandleRebase_NoHandlerPropagatesError(t *testing.T) {
 	run(t, "git", "-C", gm.WorkDir, "remote", "set-url", "origin", bare)
 	run(t, "git", "-C", gm.WorkDir, "fetch", "origin")
 
-	// Create a real conflict
+	// Create a task branch with conflicting changes
+	branchName := "ralph/" + gm.ProjectName + "/01-some-task"
+	run(t, "git", "-C", gm.WorkDir, "checkout", "-b", branchName, "origin/main")
+	gm.WorktreeBranch = branchName
 	writeFile(t, gm.WorkDir, "conflict.txt", "worktree version\n")
 	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "worktree change")
 
@@ -994,14 +1002,14 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Branch should be the task branch, NOT rotated to /next
+	// Branch should be the named task branch
 	if !strings.Contains(gm.WorktreeBranch, "fix-the-login-bug") {
 		t.Errorf("expected branch to contain 'fix-the-login-bug', got %q", gm.WorktreeBranch)
 	}
 
-	// TaskSeq should be 1 (only one task rename)
+	// TaskSeq should be 1 (one branch creation)
 	if gm.TaskSeq != 1 {
-		t.Errorf("expected TaskSeq=1 (one rename), got %d", gm.TaskSeq)
+		t.Errorf("expected TaskSeq=1 (one branch creation), got %d", gm.TaskSeq)
 	}
 }
 
@@ -1073,16 +1081,10 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 		t.Errorf("expected TaskSeq=2, got %d", gm.TaskSeq)
 	}
 
-	// The first task's branch should still exist
+	// Only the current task's branch should exist (old branch is cleaned up)
 	branches := git.ListProjectBranches(project, gm.ProjectName)
-	hasFirst := false
-	for _, b := range branches {
-		if strings.Contains(b, "first-task") {
-			hasFirst = true
-		}
-	}
-	if !hasFirst {
-		t.Errorf("expected first task branch to be preserved, branches: %v", branches)
+	if len(branches) != 1 {
+		t.Errorf("expected exactly 1 branch (current task), got %d: %v", len(branches), branches)
 	}
 }
 
@@ -1151,14 +1153,8 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 
 	// Only one ralph branch should exist (the task branch)
 	branches := git.ListProjectBranches(project, gm.ProjectName)
-	nonNextBranches := 0
-	for _, b := range branches {
-		if !strings.HasSuffix(b, "/next") {
-			nonNextBranches++
-		}
-	}
-	if nonNextBranches != 1 {
-		t.Errorf("expected exactly 1 task branch, got %d: %v", nonNextBranches, branches)
+	if len(branches) != 1 {
+		t.Errorf("expected exactly 1 task branch, got %d: %v", len(branches), branches)
 	}
 }
 
@@ -1495,10 +1491,9 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 				t.Errorf("second iteration should start from origin/main (%s), got %s", originMain, headAfterMerge)
 			}
 
-			// Branch should be back on temp branch after PostMergeReset
-			tempBranch := gm.TempBranch()
-			if gm.WorktreeBranch != tempBranch {
-				t.Errorf("expected branch %q after PostMergeReset, got %q", tempBranch, gm.WorktreeBranch)
+			// Branch should be empty (detached HEAD) after PostMergeReset
+			if gm.WorktreeBranch != "" {
+				t.Errorf("expected empty branch (detached HEAD) after PostMergeReset, got %q", gm.WorktreeBranch)
 			}
 		})
 	}
@@ -1640,54 +1635,9 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 	}
 }
 
-// Verifies that single-branch mode skips branch rotation on task change,
-// keeping all task commits on the initial worktree branch.
-func TestLoop_SingleBranchSkipsRotation(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-
-	st.Write("last_task", "previous task")
-	st.Write("last_task_id", "ralph-old")
-
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 1,
-		total:     1,
-		nextTask:  "new task",
-		nextID:    "ralph-new",
-	}
-
-	gm := &git.Manager{
-		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
-		RalphDir:       ralphDir,
-		WorktreeBranch: "ralph/myproject/next",
-		ProjectName:    "myproject",
-		BranchStrategy: git.BranchSingle,
-		State:          st,
-		Logger:         logging.New(nil),
-	}
-
-	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		MaxIterations: 5,
-		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
-
-	_ = l.Run(context.Background())
-
-	// Single mode — branch should NOT have been rotated even though task changed
-	if gm.WorktreeBranch != "ralph/myproject/next" {
-		t.Errorf("expected branch to stay as ralph/myproject/next in single mode, got %q", gm.WorktreeBranch)
-	}
-}
-
-// Verifies that single-branch mode skips branch rotation on resume even when
-// a different task is next, keeping the existing branch.
-func TestLoop_SingleBranchSkipsRotationOnResume(t *testing.T) {
+// Verifies that single-branch mode keeps the branch unchanged on resume,
+// since CreateBranchForTask is a no-op in single mode.
+func TestLoop_SingleBranchKeepsBranchOnResume(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
