@@ -465,6 +465,10 @@ func (m *Manager) postMergeUpdate(prNumber string) (bool, error) {
 	originRef := gitOutput(m.ProjectDir, "rev-parse", "origin/"+defaultBranch)
 	if originRef != "" {
 		gitCmd(m.ProjectDir, "update-ref", "refs/heads/"+defaultBranch, originRef)
+		// Reset main's working tree and index to match the updated ref.
+		// Without this, the index stays at the old ref, causing git status
+		// to show staged reversions of the merged PR.
+		gitCmd(m.ProjectDir, "reset", "--hard", "HEAD")
 	}
 	m.Logger.Log("Updated local %s to origin/%s", defaultBranch, defaultBranch)
 

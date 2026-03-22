@@ -1262,11 +1262,11 @@ func TestPostMergeReset_CleansUntrackedAndDirtyFiles(t *testing.T) {
 	}
 }
 
-// After auto-merge squash-merges a PR, local main must be updated to match
-// origin/main. This failed previously because `git branch -f main origin/main`
-// silently errors when main is the checked-out branch in the project dir.
-// The fix uses update-ref which works regardless of checkout state.
-func TestAutoMerge_UpdatesLocalMainWhenCheckedOut(t *testing.T) {
+// After auto-merge squash-merges a PR, postMergeUpdate must advance local
+// main AND reset the working tree/index so that main has no staged changes.
+// Without the reset, update-ref moves the ref but leaves the index at the
+// old commit, causing git status to show staged reversions of the merged PR.
+func TestPostMergeUpdate_ResetsMainIndex(t *testing.T) {
 	project, _ := initBareRepo(t)
 	bare := filepath.Join(filepath.Dir(project), "bare.git")
 	ralphDir := filepath.Join(project, ".ralph")
@@ -1285,7 +1285,6 @@ func TestAutoMerge_UpdatesLocalMainWhenCheckedOut(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	// Verify main is checked out in project dir (the typical worktree scenario)
 	checkedOut := gitOutput(project, "symbolic-ref", "--short", "HEAD")
 	if checkedOut != "main" {
 		t.Fatalf("expected main checked out in project dir, got %q", checkedOut)
@@ -1293,15 +1292,13 @@ func TestAutoMerge_UpdatesLocalMainWhenCheckedOut(t *testing.T) {
 
 	localMainBefore := gitOutput(project, "rev-parse", "main")
 
-	// Simulate a commit landing on origin/main (as happens after squash-merge)
-	// by pushing directly to the bare repo from a temp clone.
+	// Simulate a commit landing on origin/main (as happens after squash-merge).
 	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
 	run(t, "git", "clone", bare, tmpClone)
 	writeFile(t, tmpClone, "merged-work.txt", "merged content\n")
 	run(t, "git", "-C", tmpClone, "commit", "-m", "squash-merged PR")
 	run(t, "git", "-C", tmpClone, "push", "origin", "main")
 
-	// Fetch in project dir so origin/main advances
 	run(t, "git", "-C", project, "fetch", "origin", "main")
 
 	originMain := gitOutput(project, "rev-parse", "origin/main")
@@ -1309,28 +1306,37 @@ func TestAutoMerge_UpdatesLocalMainWhenCheckedOut(t *testing.T) {
 		t.Fatal("origin/main should have advanced")
 	}
 
-	// Local main is still behind (main is checked out so branch -f would fail)
-	localMainStale := gitOutput(project, "rev-parse", "main")
-	if localMainStale != localMainBefore {
-		t.Fatal("local main should still be at old commit before update-ref")
+	// postMergeUpdate should advance local main and leave the index clean.
+	merged, err := mgr.postMergeUpdate("999")
+	if err != nil {
+		t.Fatalf("postMergeUpdate: %v", err)
+	}
+	if !merged {
+		t.Error("postMergeUpdate should return true")
 	}
 
-	// Simulate what AutoMergeCurrentBranch does after merge: update-ref
-	originRef := gitOutput(project, "rev-parse", "origin/main")
-	if originRef != "" {
-		gitCmd(project, "update-ref", "refs/heads/main", originRef)
-	}
-
-	// Local main should now match origin/main
+	// Local main ref should match origin/main.
 	localMainAfter := gitOutput(project, "rev-parse", "main")
 	if localMainAfter != originMain {
-		t.Errorf("local main should match origin/main after update-ref: got %s, want %s", localMainAfter, originMain)
+		t.Errorf("local main should match origin/main: got %s, want %s", localMainAfter, originMain)
 	}
 
-	// Verify main is still checked out (update-ref doesn't change that)
+	// Main should still be checked out.
 	stillCheckedOut := gitOutput(project, "symbolic-ref", "--short", "HEAD")
 	if stillCheckedOut != "main" {
 		t.Errorf("main should still be checked out, got %q", stillCheckedOut)
+	}
+
+	// The merged file should exist in the working tree.
+	if _, err := os.Stat(filepath.Join(project, "merged-work.txt")); err != nil {
+		t.Errorf("merged file should exist in working tree: %v", err)
+	}
+
+	// No staged changes should exist — the bug was that update-ref without
+	// reset left the index at the old commit, showing staged reversions.
+	staged := gitOutput(project, "diff", "--cached", "--name-only")
+	if staged != "" {
+		t.Errorf("main should have no staged changes after postMergeUpdate, got:\n%s", staged)
 	}
 }
 
