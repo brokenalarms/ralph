@@ -154,6 +154,20 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		return 1
 	}
 
+	// Write initial branch label for the pane title updater. On resume,
+	// the old task branch is still checked out until the loop renames it,
+	// so show a transitional label instead of the stale branch name.
+	runBranchFile := filepath.Join(ralphDir, ".run-branch")
+	if resume && gm.WorktreeBranch != "" && !strings.HasSuffix(gm.WorktreeBranch, "/next") {
+		os.WriteFile(runBranchFile, []byte("resuming…"), 0o644)
+	} else {
+		branch := gm.WorktreeBranch
+		if branch == "" {
+			branch = "ralph"
+		}
+		os.WriteFile(runBranchFile, []byte(branch), 0o644)
+	}
+
 	log.Phase("Ralph Loop v%s (go)", config.Version)
 	log.Log("Project: %s", cfg.ProjectDir)
 	if gm.WorkDir != cfg.ProjectDir {
@@ -203,13 +217,18 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		PlanFile:            planFile,
 		MaxIterations:       cfg.MaxIterations,
 		RefactorEvery:       cfg.RefactorEvery,
+		NoRefactor:          cfg.NoRefactor,
+		RefactorThreshold:   cfg.RefactorThreshold,
+		DisabledChecks:      cfg.DisabledChecks,
 		Quiet:               cfg.Quiet,
 		AutoMerge:           cfg.AutoMerge,
-		AutoImprove:         cfg.AutoImprove,
+		Evolve:              cfg.Evolve,
 		CallsPerHour:        cfg.CallsPerHour,
 		TaskBackend:         backend,
 		IdleTimeout:         cfg.IdleTimeout,
 		IdleTimeoutProgress: cfg.IdleTimeoutProgress,
+		Wait:                cfg.Wait,
+		WaitInterval:        cfg.WaitInterval,
 		OnRebaseConflict:    promptRebaseRecovery,
 	}, st, gm, log)
 
@@ -217,10 +236,10 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		log.Error("Execution failed: %v", err)
 	}
 
-	if status, _ := st.Read("status"); status == "auto_improve_restart" {
+	if status, _ := st.Read("status"); status == "evolve_restart" {
 		gm.RemoveWorktree()
-		if err := autoImproveRestart(cfg.ProjectDir, scriptPath, args, log); err != nil {
-			log.Error("Auto-improve restart failed: %v", err)
+		if err := evolveRestart(cfg.ProjectDir, scriptPath, args, log); err != nil {
+			log.Error("Evolve restart failed: %v", err)
 		}
 	}
 
@@ -253,6 +272,9 @@ func initRalphDir(cfg config.Config, ralphDir, logFile, stateFile string, log *l
 
 	// Ensure .ralph is gitignored.
 	ensureGitignored(cfg.ProjectDir, ".ralph")
+
+	// Clean up orphaned worktrees from previous runs.
+	git.PruneOrphanedWorktrees(cfg.ProjectDir, ralphDir, log)
 
 	// Check for existing state (resume detection).
 	if fileExists(stateFile) {
@@ -352,8 +374,11 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 	if cfg.AutoMerge {
 		extraArgs = append(extraArgs, "--auto-merge")
 	}
-	if cfg.AutoImprove {
-		extraArgs = append(extraArgs, "--auto-improve")
+	if cfg.Evolve {
+		extraArgs = append(extraArgs, "--evolve")
+	}
+	if cfg.Wait {
+		extraArgs = append(extraArgs, "--wait")
 	}
 	if cfg.BranchStrategy != "single" {
 		extraArgs = append(extraArgs, fmt.Sprintf("--branch-strategy %s", cfg.BranchStrategy))
@@ -386,7 +411,7 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 	iteration, _ := st.Read("iteration")
 	status, _ := st.Read("status")
 	log.Log("Status:     %s", status)
-	log.Log("Iterations: %s total", iteration)
+	log.Log("Iterations: %s lifetime", iteration)
 
 	completed, _ := backend.CountCompleted()
 	remaining, _ := backend.CountRemaining()
@@ -439,7 +464,7 @@ func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir st
 	}
 
 	sess := &tmux.Session{
-		Name:        fmt.Sprintf("ralph-go-%d", os.Getpid()),
+		Name:        tmux.SessionName(cfg.ProjectDir),
 		ProjectDir:  cfg.ProjectDir,
 		RalphDir:    ralphDir,
 		RawLogPath:  filepath.Join(ralphDir, "raw.log"),

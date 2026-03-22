@@ -292,6 +292,55 @@ func TestRebaseOntoDefaultBranch_AlreadyUpToDate(t *testing.T) {
 	}
 }
 
+// When HEAD is behind origin/main (e.g., after PostMergeReset followed by
+// main advancing via another squash merge), rebase must fast-forward to
+// include the new main commits rather than skipping with "already up to date".
+func TestRebaseOntoDefaultBranch_FastForwardsWhenBehind(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	// Simulate PostMergeReset: worktree is at origin/main.
+	// Then main advances (another PR squash-merged on GitHub).
+	writeFile(t, project, "newfeature.txt", "merged by someone else\n")
+	run(t, "git", "-C", project, "commit", "-m", "squash: another PR")
+	pushToOrigin(t, project)
+
+	// Worktree HEAD is now behind origin/main
+	if err := mgr.RebaseOntoDefaultBranch(); err != nil {
+		t.Fatalf("RebaseOntoDefaultBranch failed: %v", err)
+	}
+
+	// The new file from main should be present after rebase
+	if _, err := os.Stat(filepath.Join(mgr.WorkDir, "newfeature.txt")); err != nil {
+		t.Error("newfeature.txt should exist after rebasing onto advanced main")
+	}
+
+	log := mgr.Logger.(*testLog)
+	if log.contains("Already up to date") {
+		t.Error("should NOT say 'Already up to date' when HEAD is behind origin/main")
+	}
+}
+
+// When HEAD is ahead of origin/main (has local commits), rebase correctly
+// identifies the branch as up-to-date since it already includes main.
+func TestRebaseOntoDefaultBranch_SkipsWhenAhead(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	// Add a local commit — HEAD is ahead of origin/main
+	writeFile(t, mgr.WorkDir, "local.txt", "local work\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "local commit")
+
+	if err := mgr.RebaseOntoDefaultBranch(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	log := mgr.Logger.(*testLog)
+	if !log.contains("Already up to date") {
+		t.Error("expected 'Already up to date' when HEAD is ahead of origin/main")
+	}
+}
+
 // --- TagTaskStart / TagTaskEnd tests ---
 
 // TagTaskStart creates a git tag using the bd task ID when available
@@ -312,8 +361,8 @@ func TestTagTaskStart_WithTaskID(t *testing.T) {
 
 	mgr.TagTaskStart("ralph-abc")
 
-	if !refExists(mgr.WorkDir, "ralph/task-ralph-abc/start") {
-		t.Error("expected tag ralph/task-ralph-abc/start to exist")
+	if !refExists(mgr.WorkDir, "task/ralph-abc/start") {
+		t.Error("expected tag task/ralph-abc/start to exist")
 	}
 }
 
@@ -335,8 +384,8 @@ func TestTagTaskEnd_WithTaskID(t *testing.T) {
 
 	mgr.TagTaskEnd("ralph-abc")
 
-	if !refExists(mgr.WorkDir, "ralph/task-ralph-abc/end") {
-		t.Error("expected tag ralph/task-ralph-abc/end to exist")
+	if !refExists(mgr.WorkDir, "task/ralph-abc/end") {
+		t.Error("expected tag task/ralph-abc/end to exist")
 	}
 }
 
@@ -359,8 +408,8 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 	mgr.RenameBranchForTask("Add user auth")
 	mgr.TagTaskStart("")
 
-	if !refExists(mgr.WorkDir, "ralph/task-01-add-user-auth/start") {
-		t.Error("expected tag ralph/task-01-add-user-auth/start to exist")
+	if !refExists(mgr.WorkDir, "task/01-add-user-auth/start") {
+		t.Error("expected tag task/01-add-user-auth/start to exist")
 	}
 }
 
@@ -393,7 +442,7 @@ func TestTagTaskStart_SkipsNextBranch(t *testing.T) {
 	// Branch is still ralph/project/next — no task ID → no tag
 	mgr.TagTaskStart("")
 
-	tags := gitOutput(mgr.WorkDir, "tag", "-l", "ralph/task-*")
+	tags := gitOutput(mgr.WorkDir, "tag", "-l", "task/*")
 	if tags != "" {
 		t.Errorf("expected no tags on /next branch, got: %s", tags)
 	}
@@ -416,13 +465,13 @@ func TestTagStartEnd_DifferentCommits(t *testing.T) {
 	}
 
 	mgr.TagTaskStart("ralph-xyz")
-	startRev := gitOutput(mgr.WorkDir, "rev-parse", "ralph/task-ralph-xyz/start")
+	startRev := gitOutput(mgr.WorkDir, "rev-parse", "task/ralph-xyz/start")
 
 	writeFile(t, mgr.WorkDir, "work.txt", "some work\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "do work")
 
 	mgr.TagTaskEnd("ralph-xyz")
-	endRev := gitOutput(mgr.WorkDir, "rev-parse", "ralph/task-ralph-xyz/end")
+	endRev := gitOutput(mgr.WorkDir, "rev-parse", "task/ralph-xyz/end")
 
 	if startRev == endRev {
 		t.Error("start and end tags should point at different commits after work was done")

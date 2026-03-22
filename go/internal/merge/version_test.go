@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -93,7 +94,7 @@ func TestBumpPatchTag_IncrementsFromExistingTag(t *testing.T) {
 	runGit(t, dir, "push", "origin", "main")
 	runGit(t, dir, "push", "origin", "v0.2.5")
 
-	newTag, err := BumpPatchTag(dir)
+	newTag, err := BumpPatchTag(dir, "")
 	if err != nil {
 		t.Fatalf("BumpPatchTag error: %v", err)
 	}
@@ -118,12 +119,53 @@ func TestBumpPatchTag_DefaultsWhenNoTags(t *testing.T) {
 	runGit(t, dir, "remote", "add", "origin", remote)
 	runGit(t, dir, "push", "origin", "main")
 
-	newTag, err := BumpPatchTag(dir)
+	newTag, err := BumpPatchTag(dir, "")
 	if err != nil {
 		t.Fatalf("BumpPatchTag error: %v", err)
 	}
 	if newTag != "v0.1.1" {
 		t.Errorf("expected v0.1.1, got %q", newTag)
+	}
+}
+
+// Proves: BumpPatchTag tags a specific ref instead of HEAD when a ref is
+// provided — used after auto-merge to tag origin/main rather than the
+// local worktree branch.
+func TestBumpPatchTag_TagsSpecificRef(t *testing.T) {
+	dir := initTestRepo(t)
+	runGit(t, dir, "tag", "v0.3.0")
+
+	// Create a second commit on a feature branch.
+	runGit(t, dir, "checkout", "-b", "feature")
+	os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("f"), 0o644)
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "feature commit")
+
+	// Create a bare remote so push succeeds.
+	remote := t.TempDir()
+	runGit(t, remote, "init", "--bare")
+	runGit(t, dir, "remote", "add", "origin", remote)
+	runGit(t, dir, "push", "origin", "main")
+	runGit(t, dir, "push", "origin", "feature")
+	runGit(t, dir, "push", "origin", "v0.3.0")
+
+	// Get the SHA of main (first commit) — HEAD is on feature.
+	mainSHA, _ := exec.Command("git", "-C", dir, "rev-parse", "main").Output()
+
+	newTag, err := BumpPatchTag(dir, "main")
+	if err != nil {
+		t.Fatalf("BumpPatchTag error: %v", err)
+	}
+	if newTag != "v0.3.1" {
+		t.Errorf("expected v0.3.1, got %q", newTag)
+	}
+
+	// Verify the tag points at main, not at feature (HEAD).
+	tagSHA, _ := exec.Command("git", "-C", dir, "rev-parse", "v0.3.1").Output()
+	if string(tagSHA) != string(mainSHA) {
+		t.Errorf("tag should point at main (%s), got %s",
+			strings.TrimSpace(string(mainSHA)),
+			strings.TrimSpace(string(tagSHA)))
 	}
 }
 

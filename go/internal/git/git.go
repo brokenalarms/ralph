@@ -517,8 +517,10 @@ func (m *Manager) RebaseOntoDefaultBranch() error {
 		return nil
 	}
 
-	// Already up to date
-	if gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "HEAD", "origin/"+defaultBranch) == nil {
+	// Already up to date: origin/main is ancestor of HEAD means HEAD
+	// includes everything from main. The reverse (HEAD ancestor of
+	// origin/main) would incorrectly skip rebase when HEAD is behind.
+	if gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, "HEAD") == nil {
 		m.Logger.Log("Already up to date with origin/%s", defaultBranch)
 		return nil
 	}
@@ -852,14 +854,23 @@ func ChangedFiles(dir, headBefore, headAfter string) []string {
 	return result
 }
 
+// DiffStatRange returns the --stat summary between two commits.
+// Returns empty string if the commits are equal or missing.
+func DiffStatRange(dir, from, to string) string {
+	if from == "" || to == "" || from == to {
+		return ""
+	}
+	return gitOutput(dir, "diff", "--stat", from, to)
+}
+
 // RecentChangedFiles returns files changed in the last N commits.
 func RecentChangedFiles(dir string, n int) string {
 	return gitOutput(dir, "diff", "--name-only", fmt.Sprintf("HEAD~%d", n), "HEAD")
 }
 
 // TagTaskStart creates a lightweight git tag marking the start of a task iteration.
-// The tag name is ralph/task-{taskID}/start when a backend ID is available,
-// or ralph/task-{seq}-{slug}/start derived from the current branch name.
+// The tag name is task/{taskID}/start when a backend ID is available,
+// or task/{seq}-{slug}/start derived from the current branch name.
 func (m *Manager) TagTaskStart(taskID string) {
 	tag := m.taskTag(taskID, "start")
 	if tag == "" {
@@ -882,21 +893,21 @@ func (m *Manager) TagTaskEnd(taskID string) {
 	}
 }
 
-// taskTag builds a tag name like ralph/task-{id}/{suffix}. Returns empty
+// taskTag builds a tag name like task/{id}/{suffix}. Returns empty
 // string if there's not enough info to build a meaningful tag.
 func (m *Manager) taskTag(taskID, suffix string) string {
 	if m.WorkDir == "" || m.WorkDir == m.ProjectDir {
 		return ""
 	}
 	if taskID != "" {
-		return fmt.Sprintf("ralph/task-%s/%s", taskID, suffix)
+		return fmt.Sprintf("task/%s/%s", taskID, suffix)
 	}
 	// Fall back to seq-slug extracted from the current branch name
 	seqSlug := extractSeqSlug(m.WorktreeBranch)
 	if seqSlug == "" {
 		return ""
 	}
-	return fmt.Sprintf("ralph/task-%s/%s", seqSlug, suffix)
+	return fmt.Sprintf("task/%s/%s", seqSlug, suffix)
 }
 
 // extractSeqSlug pulls the "NN-slug" portion from a branch like
@@ -911,6 +922,56 @@ func extractSeqSlug(branch string) string {
 		return ""
 	}
 	return seg
+}
+
+// PruneOrphanedWorktrees removes worktree directories under ralphDir/worktrees
+// that are no longer tracked by git. It first runs `git worktree prune` to
+// clean up stale bookkeeping, then removes any leftover directories that git
+// no longer knows about.
+func PruneOrphanedWorktrees(projectDir, ralphDir string, logger Log) {
+	worktreeRoot := filepath.Join(ralphDir, "worktrees")
+	entries, err := os.ReadDir(worktreeRoot)
+	if err != nil {
+		return
+	}
+	if len(entries) == 0 {
+		return
+	}
+
+	gitCmd(projectDir, "worktree", "prune")
+
+	tracked := trackedWorktreePaths(projectDir)
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dirPath := filepath.Join(worktreeRoot, e.Name())
+		resolved, err := filepath.EvalSymlinks(dirPath)
+		if err != nil {
+			resolved = dirPath
+		}
+		if tracked[dirPath] || tracked[resolved] {
+			continue
+		}
+		if logger != nil {
+			logger.Log("Removing orphaned worktree directory: %s", dirPath)
+		}
+		os.RemoveAll(dirPath)
+	}
+}
+
+// trackedWorktreePaths returns the set of worktree paths that git currently
+// tracks, parsed from `git worktree list --porcelain`.
+func trackedWorktreePaths(projectDir string) map[string]bool {
+	out := gitOutput(projectDir, "worktree", "list", "--porcelain")
+	paths := make(map[string]bool)
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "worktree ") {
+			paths[strings.TrimPrefix(line, "worktree ")] = true
+		}
+	}
+	return paths
 }
 
 // ParseTaskSeqFromBranches scans ralph/<project>/* branches and returns the

@@ -91,8 +91,8 @@ func TestGenerateResumeScript(t *testing.T) {
 	}
 }
 
-// Verifies the resume script includes --auto-improve when enabled.
-func TestGenerateResumeScript_AutoImprove(t *testing.T) {
+// Verifies the resume script includes --evolve when enabled.
+func TestGenerateResumeScript_Evolve(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
@@ -102,7 +102,7 @@ func TestGenerateResumeScript_AutoImprove(t *testing.T) {
 		MaxIterations: 50,
 		UseWorktree:   true,
 		AutoMerge:     true,
-		AutoImprove:   true,
+		Evolve:        true,
 		CallsPerHour:  80,
 	}
 
@@ -111,8 +111,8 @@ func TestGenerateResumeScript_AutoImprove(t *testing.T) {
 
 	data, _ := os.ReadFile(filepath.Join(ralphDir, "resume.sh"))
 	content := string(data)
-	if !strings.Contains(content, "--auto-improve") {
-		t.Error("resume script should contain --auto-improve")
+	if !strings.Contains(content, "--evolve") {
+		t.Error("resume script should contain --evolve")
 	}
 	if !strings.Contains(content, "--auto-merge") {
 		t.Error("resume script should contain --auto-merge")

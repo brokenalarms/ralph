@@ -71,8 +71,13 @@ func (l *Logger) Error(format string, args ...any) {
 
 // Phase writes a bold blue phase header.
 func (l *Logger) Phase(format string, args ...any) {
+	l.PhaseColor(Blue, format, args...)
+}
+
+// PhaseColor writes a bold phase header in the given ANSI color.
+func (l *Logger) PhaseColor(color string, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	line := fmt.Sprintf("%s %s%s[ralph]%s %s%s%s\n", ts(), Bold, Blue, Reset, Bold, msg, Reset)
+	line := fmt.Sprintf("%s %s%s[ralph]%s %s%s%s\n", ts(), Bold, color, Reset, Bold, msg, Reset)
 	fmt.Fprint(l.out, line)
 	fmt.Fprint(l.logFile, line)
 }

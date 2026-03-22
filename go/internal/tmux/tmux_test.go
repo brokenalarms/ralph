@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,10 +46,10 @@ func TestWriteStreamFilter(t *testing.T) {
 	}
 }
 
-// Verifies that the stream filter's perl deduplication stage collapses
-// consecutive identical tool calls into a single line with an "x3" counter,
-// saving vertical space in the tmux output pane.
-func TestWriteStreamFilter_Deduplication(t *testing.T) {
+// Verifies that the stream filter's perl stage adds HH:MM:SS timestamps
+// to each line without deduplicating, so the reader can see the source
+// and count of each event.
+func TestWriteStreamFilter_Timestamps(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{RalphDir: dir}
 
@@ -60,11 +61,11 @@ func TestWriteStreamFilter_Deduplication(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	content := string(data)
 
-	if !strings.Contains(content, "x$count") {
-		t.Error("stream filter missing deduplication counter (x$count)")
+	if !strings.Contains(content, "strftime") {
+		t.Error("stream filter missing timestamp formatting (strftime)")
 	}
-	if !strings.Contains(content, "flush_prev") {
-		t.Error("stream filter missing flush_prev function for deduplication")
+	if strings.Contains(content, "flush_prev") {
+		t.Error("stream filter should not deduplicate (flush_prev removed)")
 	}
 }
 
@@ -164,6 +165,41 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
+// Verifies that the stream filter disables terminal echo so arrow key
+// presses and other escape sequences don't clutter the display-only pane.
+func TestWriteStreamFilter_DisablesEcho(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{RalphDir: dir}
+
+	if err := s.writeStreamFilter(); err != nil {
+		t.Fatalf("writeStreamFilter() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, ".stream-filter.sh"))
+	if !strings.Contains(string(data), "stty -echo") {
+		t.Error("stream filter should disable terminal echo to suppress escape sequences")
+	}
+}
+
+// Verifies that the plan watcher disables terminal echo so arrow key
+// presses and other escape sequences don't clutter the display-only pane.
+func TestWritePlanWatcher_DisablesEcho(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{
+		RalphDir:    dir,
+		TaskBackend: "bd",
+	}
+
+	if err := s.writePlanWatcher(); err != nil {
+		t.Fatalf("writePlanWatcher() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
+	if !strings.Contains(string(data), "stty -echo") {
+		t.Error("plan watcher should disable terminal echo to suppress escape sequences")
+	}
+}
+
 // Verifies that the stream filter script does not contain a 'kill 0'
 // trap, which would terminate the parent ralph process.
 func TestStreamFilter_NoKillZeroTrap(t *testing.T) {
@@ -213,6 +249,150 @@ func TestSetup_ClearsStaleStreamTask(t *testing.T) {
 
 	if _, err := os.Stat(staleFile); !os.IsNotExist(err) {
 		t.Error(".stream-task should be removed on Setup to prevent showing stale task")
+	}
+}
+
+// Verifies that SessionName derives the session name from the project
+// directory basename with "-loop" suffix, making concurrent ralph
+// sessions distinguishable in tmux ls.
+func TestSessionName_BasenameLoop(t *testing.T) {
+	got := SessionName("/home/user/projects/tabi")
+	if got != "tabi-loop" {
+		t.Errorf("SessionName(/home/user/projects/tabi) = %q, want %q", got, "tabi-loop")
+	}
+}
+
+// Verifies that sanitizeSessionName replaces dots and colons (which are
+// invalid in tmux session names) with hyphens.
+func TestSanitizeSessionName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"my.project", "my-project"},
+		{"host:path", "host-path"},
+		{"normal", "normal"},
+		{"dots.and:colons", "dots-and-colons"},
+	}
+
+	for _, tt := range tests {
+		got := sanitizeSessionName(tt.input)
+		if got != tt.want {
+			t.Errorf("sanitizeSessionName(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// Verifies that the bd plan watcher reads .completed-tasks and renders
+// each completed task on its own line with dim styling and a checkmark,
+// so the user can see what was finished in the current run.
+func TestWritePlanWatcher_BD_ShowsCompletedTasks(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{
+		RalphDir:    dir,
+		TaskBackend: "bd",
+	}
+
+	if err := s.writePlanWatcher(); err != nil {
+		t.Fatalf("writePlanWatcher() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
+	content := string(data)
+
+	if !strings.Contains(content, ".completed-tasks") {
+		t.Error("bd plan watcher should reference .completed-tasks file")
+	}
+	if !strings.Contains(content, "DIM") {
+		t.Error("bd plan watcher should use dim styling for completed tasks")
+	}
+}
+
+// Verifies that Setup clears stale .completed-tasks from a previous run
+// so the plan pane doesn't show old completions.
+func TestSetup_ClearsStaleCompletedTasks(t *testing.T) {
+	dir := t.TempDir()
+	staleFile := filepath.Join(dir, ".completed-tasks")
+	os.WriteFile(staleFile, []byte("ralph-old\n"), 0o644)
+
+	s := &Session{
+		Name:        "test-session",
+		RalphDir:    dir,
+		TaskBackend: "bd",
+	}
+
+	_ = s.Setup()
+
+	if _, err := os.Stat(staleFile); !os.IsNotExist(err) {
+		t.Error(".completed-tasks should be removed on Setup to prevent showing stale completions")
+	}
+}
+
+// Verifies that the dead-pane exit hint format string and q-binding command
+// are constructed correctly, so users see "(dead) — press q to exit" in the
+// pane border and can press q to kill the session when the ralph pane dies.
+func TestDeadPaneExitHint(t *testing.T) {
+	sessionName := "test-loop"
+
+	deadCheck := fmt.Sprintf("tmux display-message -t '%s:.0' -p '#{pane_dead}' | grep -q 1", sessionName)
+	killCmd := fmt.Sprintf("kill-session -t '%s'", sessionName)
+
+	if !strings.Contains(deadCheck, sessionName+":.0") {
+		t.Error("dead-check should target pane 0 (ralph pane)")
+	}
+	if !strings.Contains(deadCheck, "pane_dead") {
+		t.Error("dead-check should use tmux pane_dead variable")
+	}
+	if !strings.Contains(killCmd, sessionName) {
+		t.Error("kill command should target the session")
+	}
+}
+
+// Verifies that the bd plan watcher renders a visual progress bar showing
+// the ratio of completed to total tasks, so progress is visible at a glance.
+func TestWritePlanWatcher_BD_ProgressBar(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{
+		RalphDir:    dir,
+		TaskBackend: "bd",
+	}
+
+	if err := s.writePlanWatcher(); err != nil {
+		t.Fatalf("writePlanWatcher() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
+	content := string(data)
+
+	if !strings.Contains(content, "bar_w=20") {
+		t.Error("bd plan watcher should have a 20-character progress bar width")
+	}
+	if !strings.Contains(content, "█") || !strings.Contains(content, "░") {
+		t.Error("bd plan watcher should use filled/empty block characters for progress bar")
+	}
+}
+
+// Verifies that the plan watcher checks for a .plan-flash signal file and
+// briefly highlights the pane border green when a task completes.
+func TestWritePlanWatcher_FlashSignal(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{
+		RalphDir:    dir,
+		TaskBackend: "bd",
+	}
+
+	if err := s.writePlanWatcher(); err != nil {
+		t.Fatalf("writePlanWatcher() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
+	content := string(data)
+
+	if !strings.Contains(content, ".plan-flash") {
+		t.Error("plan watcher should check for .plan-flash signal file")
+	}
+	if !strings.Contains(content, "pane-border-style") {
+		t.Error("plan watcher should set pane-border-style for flash effect")
 	}
 }
 

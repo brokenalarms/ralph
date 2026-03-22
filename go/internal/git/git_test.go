@@ -1273,3 +1273,71 @@ func TestAutoMerge_UpdatesLocalMainWhenCheckedOut(t *testing.T) {
 		t.Errorf("main should still be checked out, got %q", stillCheckedOut)
 	}
 }
+
+// --- PruneOrphanedWorktrees tests ---
+
+// PruneOrphanedWorktrees removes directories under .ralph/worktrees/ that
+// git no longer tracks, while preserving active worktrees.
+func TestPruneOrphanedWorktrees_RemovesOrphaned(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := filepath.Join(ralphDir, "worktrees")
+	os.MkdirAll(worktreeRoot, 0o755)
+	log := &testLog{}
+
+	// Create an orphaned directory (not tracked by git)
+	orphanDir := filepath.Join(worktreeRoot, "ralph-20260101-orphan")
+	os.MkdirAll(orphanDir, 0o755)
+	os.WriteFile(filepath.Join(orphanDir, "file.txt"), []byte("stale"), 0o644)
+
+	// Create an active worktree via git
+	activeDir := filepath.Join(worktreeRoot, "ralph-20260322-active")
+	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/next", activeDir, "HEAD")
+
+	PruneOrphanedWorktrees(project, ralphDir, log)
+
+	// Orphaned directory should be removed
+	if _, err := os.Stat(orphanDir); !os.IsNotExist(err) {
+		t.Errorf("orphaned worktree directory should be removed")
+	}
+
+	// Active worktree directory should still exist
+	if _, err := os.Stat(activeDir); err != nil {
+		t.Errorf("active worktree directory should be preserved: %v", err)
+	}
+
+	if !log.contains("Removing orphaned worktree directory") {
+		t.Errorf("expected log about removing orphaned worktree")
+	}
+}
+
+// PruneOrphanedWorktrees is a no-op when worktrees/ doesn't exist
+func TestPruneOrphanedWorktrees_NoWorktreeDir(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	log := &testLog{}
+
+	PruneOrphanedWorktrees(project, ralphDir, log)
+
+	if len(log.messages) > 0 {
+		t.Errorf("expected no log messages, got %v", log.messages)
+	}
+}
+
+// PruneOrphanedWorktrees leaves non-directory files alone
+func TestPruneOrphanedWorktrees_IgnoresFiles(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := filepath.Join(ralphDir, "worktrees")
+	os.MkdirAll(worktreeRoot, 0o755)
+	log := &testLog{}
+
+	filePath := filepath.Join(worktreeRoot, "some-file.txt")
+	os.WriteFile(filePath, []byte("keep"), 0o644)
+
+	PruneOrphanedWorktrees(project, ralphDir, log)
+
+	if _, err := os.Stat(filePath); err != nil {
+		t.Errorf("regular file should not be removed: %v", err)
+	}
+}

@@ -175,16 +175,82 @@ func TestAllCompleteSignalDetected(t *testing.T) {
 	}
 }
 
+// --- Allowed tools tests ---
+
+// Verifies that IterationAllowedTools contains the core tools Claude needs
+// for iteration mode, preventing accidental removal of required tools.
+func TestIterationAllowedTools_ContainsCoreTools(t *testing.T) {
+	required := []string{
+		"Bash(*)", "Read", "Edit", "Write",
+		"Glob", "Grep", "Agent",
+	}
+	toolSet := make(map[string]bool)
+	for _, tool := range IterationAllowedTools {
+		toolSet[tool] = true
+	}
+	for _, tool := range required {
+		if !toolSet[tool] {
+			t.Errorf("IterationAllowedTools missing required tool: %s", tool)
+		}
+	}
+}
+
+// Verifies that IterationAllowedTools does not include --dangerously-skip-permissions
+// or any blanket bypass — each tool must be explicitly listed.
+func TestIterationAllowedTools_NoBlanketBypass(t *testing.T) {
+	for _, tool := range IterationAllowedTools {
+		if strings.Contains(strings.ToLower(tool), "dangerously") ||
+			strings.Contains(strings.ToLower(tool), "bypass") {
+			t.Errorf("IterationAllowedTools should not contain bypass entries: %s", tool)
+		}
+	}
+}
+
+// Verifies that the joined format produces a valid comma-separated list
+// suitable for --allowedTools flag.
+func TestIterationAllowedTools_JoinFormat(t *testing.T) {
+	joined := strings.Join(IterationAllowedTools, ",")
+	parts := strings.Split(joined, ",")
+	if len(parts) != len(IterationAllowedTools) {
+		t.Errorf("joined tools split into %d parts, want %d", len(parts), len(IterationAllowedTools))
+	}
+	for _, part := range parts {
+		if strings.TrimSpace(part) == "" {
+			t.Error("joined tools contain empty entry")
+		}
+	}
+}
+
 // --- Stream text extraction tests ---
 
-// Verifies that extractStreamText pulls text from assistant messages in
-// Claude's stream-json format, which is how we convert raw JSON to
-// human-readable log output.
+// Verifies that extractStreamText pulls text from assistant messages using
+// Claude's actual nested content array format: message.content[].text.
 func TestExtractStreamText_Assistant(t *testing.T) {
-	line := `{"type":"assistant","content":"Hello world"}`
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"Hello world"}]}}`
 	got := extractStreamText(line)
 	if got != "Hello world" {
 		t.Errorf("extractStreamText = %q, want %q", got, "Hello world")
+	}
+}
+
+// Verifies that tool_use content blocks produce a short summary with the
+// tool name and its primary target (file_path, command, etc.).
+func TestExtractStreamText_AssistantToolUse(t *testing.T) {
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/foo.go"}}]}}`
+	got := extractStreamText(line)
+	if got != "[Read] /tmp/foo.go" {
+		t.Errorf("extractStreamText = %q, want %q", got, "[Read] /tmp/foo.go")
+	}
+}
+
+// Verifies that messages with both text and tool_use content blocks are
+// concatenated with newlines.
+func TestExtractStreamText_AssistantMixed(t *testing.T) {
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"reading file"},{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}`
+	got := extractStreamText(line)
+	want := "reading file\n[Bash] ls"
+	if got != want {
+		t.Errorf("extractStreamText = %q, want %q", got, want)
 	}
 }
 
@@ -195,6 +261,16 @@ func TestExtractStreamText_ContentBlockDelta(t *testing.T) {
 	got := extractStreamText(line)
 	if got != "partial output" {
 		t.Errorf("extractStreamText = %q, want %q", got, "partial output")
+	}
+}
+
+// Verifies that error responses are extracted from result events so users
+// see API errors in the log.
+func TestExtractStreamText_ResultError(t *testing.T) {
+	line := `{"type":"result","subtype":"error_response","error":"rate limited"}`
+	got := extractStreamText(line)
+	if got != "rate limited" {
+		t.Errorf("extractStreamText = %q, want %q", got, "rate limited")
 	}
 }
 
@@ -210,17 +286,6 @@ func TestExtractStreamText_IgnoresNonTextEvents(t *testing.T) {
 		if got := extractStreamText(line); got != "" {
 			t.Errorf("extractStreamText(%q) = %q, want empty", line, got)
 		}
-	}
-}
-
-// Verifies that extractJSONString handles escape sequences in JSON values,
-// which appear when Claude outputs code with newlines or quotes.
-func TestExtractJSONString_Escapes(t *testing.T) {
-	line := `{"text":"line1\nline2\ttab\"quote\\back"}`
-	got := extractJSONString(line, "text")
-	want := "line1\nline2\ttab\"quote\\back"
-	if got != want {
-		t.Errorf("extractJSONString = %q, want %q", got, want)
 	}
 }
 
@@ -290,7 +355,7 @@ func TestFilterStreamJSON_TailsFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Fprintln(f, `{"type":"assistant","content":"hello from claude"}`)
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"hello from claude"}]}}`)
 	f.Close()
 
 	// Give the filter time to process, then stop it.
@@ -302,8 +367,51 @@ func TestFilterStreamJSON_TailsFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(got), "hello from claude") {
-		t.Errorf("loop.log should contain filtered text, got: %q", string(got))
+	if !strings.Contains(string(got), "[claude] hello from claude") {
+		t.Errorf("loop.log should contain [claude]-prefixed filtered text, got: %q", string(got))
+	}
+}
+
+// Verifies that filterStreamJSON prefixes each output line with [claude]
+// so loop.log clearly distinguishes Claude's output from ralph's logger output.
+func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+
+	os.WriteFile(rawPath, nil, 0o644)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		filterStreamJSON(rawPath, logPath, stop)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write a tool-use event and a text event.
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/foo.go"}}]}}`)
+	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"some delta text"}}`)
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(got)
+	if !strings.Contains(content, "[claude] [Read] /tmp/foo.go") {
+		t.Errorf("tool-use line should have [claude] prefix, got: %q", content)
+	}
+	if !strings.Contains(content, "[claude] some delta text") {
+		t.Errorf("delta text should have [claude] prefix, got: %q", content)
 	}
 }
 

@@ -32,6 +32,7 @@ USE_TMUX=false
 AUTO_MERGE=false
 STUCK_THRESHOLD=5
 STUCK_CONFIRMATION_THRESHOLD=2
+ITERATION_ALLOWED_TOOLS="Bash(*),Read,Edit,Write,Glob,Grep,Agent,Skill,TodoWrite,NotebookEdit,WebFetch,WebSearch,ToolSearch"
 STAGNATION_THRESHOLD=3
 TEST_SATURATION_THRESHOLD=3
 PERMISSION_DENIAL_THRESHOLD=3
@@ -399,6 +400,7 @@ write_stream_filter() {
   cat > "$RALPH_DIR/.stream-filter.sh" <<'STREAM'
 #!/usr/bin/env bash
 set +m
+stty -echo 2>/dev/null
 # stream-json: each event has 1 content block. Filter and format.
 exec 2>"$(dirname "$0")/.stream-filter.err"
 tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
@@ -424,32 +426,11 @@ tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   elif .type == "result" then
     "\n[done]\n"
   else empty end
-' | perl -e '
+' | perl -ne '
   use POSIX; $|=1;
-  my ($prev, $count, $prev_ts);
-  sub flush_prev {
-    return unless defined $prev;
-    if ($count > 1) {
-      print "$prev_ts $prev x$count\n";
-    } else {
-      print "$prev_ts $prev\n";
-    }
-  }
-  while(<STDIN>) {
-    chomp;
-    next if $_ eq "";
-    my $ts = strftime("%H:%M:%S", localtime());
-    if (defined $prev && $_ eq $prev) {
-      $count++;
-      $prev_ts = $ts;
-    } else {
-      flush_prev();
-      $prev = $_;
-      $count = 1;
-      $prev_ts = $ts;
-    }
-  }
-  flush_prev();
+  chomp;
+  next if $_ eq "";
+  print strftime("%H:%M:%S", localtime()) . " " . $_ . "\n";
 ' | sed -u -E \
   -e $'s/\\[done\\]/\033[0;32m[done]\033[0m/g' \
   -e $'s/\\[claude\\]/\033[0;36m[claude]\033[0m/g' \
@@ -466,13 +447,24 @@ setup_tmux() {
     return
   fi
 
-  TMUX_SESSION="ralph-sh-$$"
+  local base
+  base="$(basename "$PROJECT_DIR" | tr './:' '---')-loop"
+  if ! tmux has-session -t "$base" 2>/dev/null; then
+    TMUX_SESSION="$base"
+  else
+    local i=2
+    while tmux has-session -t "${base}-${i}" 2>/dev/null; do
+      i=$((i + 1))
+    done
+    TMUX_SESSION="${base}-${i}"
+  fi
 
   write_stream_filter
 
   # Write plan watcher script — waits for signal file, then clears and re-renders
   cat > "$RALPH_DIR/.plan-watch.sh" <<PLAN_SCRIPT
 #!/usr/bin/env bash
+stty -echo 2>/dev/null
 BOLD=$'\033[1m'
 DIM=$'\033[2m'
 CYAN=$'\033[0;36m'
@@ -1007,7 +999,7 @@ run_claude() {
   claude --print --verbose --output-format stream-json \
     --add-dir "$WORK_DIR" \
     --add-dir "$RALPH_DIR" \
-    --dangerously-skip-permissions \
+    --allowedTools "$ITERATION_ALLOWED_TOOLS" \
     -p "$full_prompt" < /dev/null >> "$RAW_LOG" 2>&1 &
   claude_pid=$!
   log "Claude started (PID: $claude_pid)"
@@ -1568,7 +1560,7 @@ run_execution() {
       warn) _hcolor="$YELLOW" ;;
       *)    _hcolor="$GREEN" ;;
     esac
-    log_phase "--- Iteration $run_iteration/$MAX_ITERATIONS ($iteration total) [${_hcolor}${completed}/${total} done${NC}${BOLD}] ---"
+    log_phase "--- Run iteration $run_iteration/$MAX_ITERATIONS | $iteration lifetime [${_hcolor}${completed}/${total} done${NC}${BOLD}] ---"
     log_task "Next task: $next_task"
     touch "$RALPH_DIR/.plan-refresh"
 
@@ -1901,7 +1893,11 @@ main() {
   write_state "task_backend" "$TASK_BACKEND"
 
   setup_worktree
-  printf '%s' "${WORKTREE_BRANCH:-ralph}" > "$RALPH_DIR/.run-branch"
+  if [[ "$RESUME" == true && "$WORKTREE_BRANCH" != *"/next" ]]; then
+    printf '%s' "resuming…" > "$RALPH_DIR/.run-branch"
+  else
+    printf '%s' "${WORKTREE_BRANCH:-ralph}" > "$RALPH_DIR/.run-branch"
+  fi
 
   log_phase "Ralph Loop v${VERSION} (sh)"
   log "Project: $PROJECT_DIR"

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
@@ -350,7 +351,7 @@ func defaultRunClaude(d Deps) func(string) error {
 			"--output-format", "stream-json",
 			"--add-dir", d.WorkDir,
 			"--add-dir", d.RalphDir,
-			"--dangerously-skip-permissions",
+			"--allowedTools", strings.Join(claude.IterationAllowedTools, ","),
 			"-p", prompt,
 		}
 

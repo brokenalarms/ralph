@@ -41,7 +41,7 @@ func AutoMerge(worktreeBranch, workDir, projectDir string) (string, error) {
 	fetch.Dir = projectDir
 	fetch.CombinedOutput()
 
-	tag, tagErr := BumpPatchTag(projectDir)
+	tag, tagErr := BumpPatchTag(projectDir, "origin/main")
 	if tagErr != nil {
 		return fmt.Sprintf("Merged PR #%s (tag bump failed: %v)", prNum, tagErr), nil
 	}

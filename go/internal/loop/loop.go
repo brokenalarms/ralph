@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/analyzer"
+	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -29,13 +30,18 @@ type Config struct {
 	PlanFile            string
 	MaxIterations       int
 	RefactorEvery       int
+	NoRefactor          bool
+	RefactorThreshold   int
+	DisabledChecks      []string
 	Quiet               bool
 	AutoMerge           bool
-	AutoImprove         bool
+	Evolve              bool
 	CallsPerHour        int
 	TaskBackend         tasks.Backend
 	IdleTimeout         time.Duration
 	IdleTimeoutProgress time.Duration
+	Wait                bool
+	WaitInterval        time.Duration
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 }
 
@@ -53,10 +59,12 @@ type Loop struct {
 	limiter    *ratelimit.Limiter
 	runner     claudeRunner
 	analyzer   *analyzer.Analyzer
+	attempts   *attempts.Tracker
 	logger     *logging.Logger
 	signals    claude.SignalPaths
 	mergeFunc  func() (bool, error)
 	pushPRFunc func(taskDesc string) error
+	lastAction analyzer.Action
 }
 
 // New creates an execution loop from the given configuration.
@@ -75,6 +83,7 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 		limiter:  limiter,
 		runner:   runner,
 		analyzer: analyzer.New(),
+		attempts: attempts.New(cfg.RalphDir),
 		logger:   logger,
 		signals:  signals,
 	}
@@ -103,6 +112,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		l.logger.Log("Branch: %s", l.git.WorktreeBranch)
+		l.writeRunBranch()
 	}
 
 	if err := l.limiter.Init(); err != nil {
@@ -117,6 +127,10 @@ func (l *Loop) Run(ctx context.Context) error {
 	iteration := st.Iteration
 
 	l.logger.Phase("=== PHASE 2: EXECUTION ===")
+
+	// Clear completed-tasks tracker for this run so the plan pane only
+	// shows tasks completed in the current run, not historical closures.
+	os.Remove(filepath.Join(l.cfg.RalphDir, ".completed-tasks"))
 
 	for {
 		maxIter := l.state.ReadMaxIterations(l.cfg.MaxIterations)
@@ -147,14 +161,22 @@ func (l *Loop) Run(ctx context.Context) error {
 			if runIteration == 0 {
 				hasTasks, _ := l.cfg.TaskBackend.HasTasks()
 				if !hasTasks {
-					l.logger.TaskError("No tasks found")
-					l.state.Write("status", "error")
-					break
+					if !l.cfg.Wait {
+						l.logger.TaskError("No tasks found")
+						l.state.Write("status", "error")
+						break
+					}
 				}
 			}
-			l.logger.TaskSuccess("All tasks complete!")
-			l.state.Write("status", "completed")
-			break
+			if !l.cfg.Wait {
+				l.logger.TaskSuccess("All tasks complete!")
+				l.state.Write("status", "completed")
+				break
+			}
+			if resumed := l.waitForTasks(ctx); !resumed {
+				break
+			}
+			continue
 		}
 
 		runIteration++
@@ -180,7 +202,11 @@ func (l *Loop) Run(ctx context.Context) error {
 		completed, _ := l.cfg.TaskBackend.CountCompleted()
 		total, _ := l.cfg.TaskBackend.CountTotal()
 
-		l.logger.Phase("--- Iteration %d/%d (%d total) [%d/%d done] ---",
+		phaseColor := logging.Green
+		if l.lastAction == analyzer.Warn {
+			phaseColor = logging.Yellow
+		}
+		l.logger.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done] ---",
 			runIteration, maxIter, iteration, completed, total)
 		l.logger.Task("Next task: %s", nextTask)
 
@@ -193,6 +219,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		if taskChanged {
 			l.git.RenameBranchForTask(nextTask)
 		}
+		l.writeRunBranch()
 		l.git.TagTaskStart(taskID)
 
 		l.updateStreamTask(taskID, nextTask)
@@ -212,7 +239,12 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.logger.Warn("[feedback] %s", feedback)
 		}
 
-		fullPrompt, err := l.buildPrompt(taskPrompt, feedback)
+		attemptContext := l.buildAttemptContext(taskID, nextTask)
+		if attemptContext != "" {
+			l.logger.Log("Including %d previous attempt(s) in prompt", strings.Count(attemptContext, "### Attempt "))
+		}
+
+		fullPrompt, err := l.buildPrompt(taskPrompt, feedback, attemptContext)
 		if err != nil {
 			l.logger.Error("Prompt build failed: %v", err)
 			break
@@ -241,6 +273,11 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 		if result.IdleTimeout {
 			l.logger.Warn("Restarting iteration %d after idle timeout", runIteration)
+			diffStat := git.DiffStatRange(l.git.WorkDir, headBefore, git.HeadRev(l.git.WorkDir))
+			l.attempts.Record(taskID, nextTask,
+				"Killed: idle timeout (no output for configured duration)",
+				diffStat,
+				"idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output")
 			runIteration--
 			iteration--
 			continue
@@ -258,11 +295,23 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		completed, _ = l.cfg.TaskBackend.CountCompleted()
 		total, _ = l.cfg.TaskBackend.CountTotal()
-		l.logger.Task("Iteration %d complete (%dm%ds). %d/%d tasks done.",
+		l.logger.Task("Run iteration %d complete (%dm%ds). %d/%d tasks done.",
 			runIteration, int(elapsed.Minutes()), int(elapsed.Seconds())%60, completed, total)
 
 		headAfter := git.HeadRev(l.git.WorkDir)
-		analysisResult := l.analyzeIteration(rawLogPath, logStart, headBefore, headAfter)
+		diffStat := git.DiffStatRange(l.git.WorkDir, headBefore, headAfter)
+		analysisResult := l.analyzeIteration(rawLogPath, logStart, headBefore, headAfter, taskID)
+
+		summary := result.Summary
+		if summary == "" {
+			summary = "no completion summary"
+		}
+		analysisDesc := analysisResult.Reason
+		if analysisDesc == "" {
+			analysisDesc = "continue"
+		}
+
+		l.lastAction = analysisResult.Action
 
 		switch analysisResult.Action {
 		case analyzer.Halt:
@@ -270,14 +319,24 @@ func (l *Loop) Run(ctx context.Context) error {
 			if analysisResult.Detail != "" {
 				l.logger.Error("  %s", analysisResult.Detail)
 			}
+			l.attempts.Record(taskID, nextTask, "Halted: "+analysisResult.Reason, diffStat, analysisResult.Detail)
 			l.state.Write("status", "halted_"+analysisResult.Reason)
 			l.git.TagTaskEnd(taskID)
 			return nil
 		case analyzer.Warn:
 			l.logger.Warn("Analysis: %s", analysisResult.Reason)
+			l.attempts.Record(taskID, nextTask, summary, diffStat, "warn: "+analysisDesc)
+		default:
+			if !result.SignalDetected {
+				l.attempts.Record(taskID, nextTask, summary, diffStat, analysisDesc)
+			}
 		}
 
 		if result.SignalDetected {
+			l.attempts.Clear(taskID, nextTask)
+			l.recordCompletedTask(taskID, nextTask)
+			touchFile(filepath.Join(l.cfg.RalphDir, ".plan-flash"))
+
 			if err := l.pushAndCreatePR(nextTask); err != nil {
 				l.logger.Warn("Push/PR: %v", err)
 			}
@@ -288,10 +347,10 @@ func (l *Loop) Run(ctx context.Context) error {
 					l.logger.Warn("Auto-merge: %v", err)
 				} else if merged {
 					l.git.PostMergeReset()
-					if l.cfg.AutoImprove {
+					if l.cfg.Evolve {
 						l.git.TagTaskEnd(taskID)
-						l.logger.Phase("Auto-improve: restarting with latest main")
-						l.state.Write("status", "auto_improve_restart")
+						l.logger.Phase("Evolve: restarting with latest main")
+						l.state.Write("status", "evolve_restart")
 						return nil
 					}
 				}
@@ -363,6 +422,40 @@ func (l *Loop) autoMerge() (bool, error) {
 	return l.git.AutoMergeCurrentBranch()
 }
 
+func (l *Loop) waitForTasks(ctx context.Context) bool {
+	l.logger.Log("Waiting for new tasks (polling every %s)...", l.cfg.WaitInterval)
+	l.state.Write("status", "waiting")
+	l.updateStreamTask("", "Waiting for tasks...")
+	touchFile(filepath.Join(l.cfg.RalphDir, ".plan-refresh"))
+
+	ticker := time.NewTicker(l.cfg.WaitInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			l.state.Write("status", "stopped")
+			return false
+		case <-ticker.C:
+			if l.checkStopFile() {
+				l.logger.Warn("Stop file detected - halting")
+				l.state.Write("status", "stopped")
+				return false
+			}
+			hasRemaining, err := l.cfg.TaskBackend.HasRemaining()
+			if err != nil {
+				l.logger.Warn("Task check error during wait: %v", err)
+				continue
+			}
+			if hasRemaining {
+				l.logger.TaskSuccess("New tasks detected!")
+				touchFile(filepath.Join(l.cfg.RalphDir, ".plan-refresh"))
+				return true
+			}
+		}
+	}
+}
+
 func (l *Loop) checkStopFile() bool {
 	stopFile := filepath.Join(l.cfg.RalphDir, "stop")
 	if _, err := os.Stat(stopFile); err == nil {
@@ -373,7 +466,7 @@ func (l *Loop) checkStopFile() bool {
 }
 
 func (l *Loop) maybeRefactor(refactorEvery int) error {
-	if refactorEvery <= 0 {
+	if l.cfg.NoRefactor || refactorEvery <= 0 {
 		return nil
 	}
 
@@ -441,7 +534,7 @@ func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 	return fmt.Sprintf("Complete this task: %s", nextTask)
 }
 
-func (l *Loop) buildPrompt(taskPrompt, feedback string) (string, error) {
+func (l *Loop) buildPrompt(taskPrompt, feedback, attemptHistory string) (string, error) {
 	backend := prompt.BackendChecklist
 	if l.cfg.TaskBackend.Label() == "beads" {
 		backend = prompt.BackendBD
@@ -458,6 +551,7 @@ func (l *Loop) buildPrompt(taskPrompt, feedback string) (string, error) {
 		AllCompleteToken: l.signals.AllComplete,
 		TaskPrompt:       taskPrompt,
 		Feedback:         feedback,
+		AttemptHistory:   attemptHistory,
 		TaskBackend:      backend,
 	})
 }
@@ -475,7 +569,7 @@ func (l *Loop) waitForRate(ctx context.Context) bool {
 	return err == nil
 }
 
-func (l *Loop) analyzeIteration(rawLogPath string, logStart int, headBefore, headAfter string) analyzer.Result {
+func (l *Loop) analyzeIteration(rawLogPath string, logStart int, headBefore, headAfter, taskKey string) analyzer.Result {
 	iterLog := readLogFrom(rawLogPath, logStart)
 	hasDiff := git.HasDiff(l.git.WorkDir)
 	newCommits := headBefore != "" && headAfter != "" && headBefore != headAfter
@@ -495,7 +589,16 @@ func (l *Loop) analyzeIteration(rawLogPath string, logStart int, headBefore, hea
 		HasSignal:    hasSignal,
 		ChangedFiles: changedFiles,
 		IterationLog: iterLog,
+		TaskKey:      taskKey,
 	})
+}
+
+func (l *Loop) writeRunBranch() {
+	branch := l.git.WorktreeBranch
+	if branch == "" {
+		branch = "ralph"
+	}
+	os.WriteFile(filepath.Join(l.cfg.RalphDir, ".run-branch"), []byte(branch), 0o644)
 }
 
 func (l *Loop) updateStreamTask(taskID, nextTask string) {
@@ -518,6 +621,56 @@ func (l *Loop) readFeedback() string {
 
 func (l *Loop) clearFeedback() {
 	os.Remove(filepath.Join(l.cfg.RalphDir, "feedback"))
+}
+
+// readReflection returns the content of a previous reflection file for a task.
+// Uses task ID if available, falls back to slugified task name.
+func (l *Loop) readReflection(taskID, taskName string) string {
+	key := taskID
+	if key == "" {
+		key = git.Slugify(taskName)
+	}
+	path := filepath.Join(l.cfg.RalphDir, "reflections", key+".md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// buildAttemptContext assembles attempt history and reflections into a single
+// block for the prompt. Returns empty string if no prior context exists.
+func (l *Loop) buildAttemptContext(taskID, taskName string) string {
+	var parts []string
+
+	if history := l.attempts.Read(taskID, taskName); history != "" {
+		parts = append(parts, history)
+	}
+
+	if reflection := l.readReflection(taskID, taskName); reflection != "" {
+		parts = append(parts, "### Previous reflection\n"+reflection)
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+// recordCompletedTask appends a completed task label to .completed-tasks
+// so the plan pane can show which tasks were finished in this run.
+func (l *Loop) recordCompletedTask(taskID, taskTitle string) {
+	label := taskID
+	if label == "" {
+		label = taskTitle
+	}
+	if label == "" {
+		return
+	}
+	path := filepath.Join(l.cfg.RalphDir, ".completed-tasks")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.WriteString(label + "\n")
 }
 
 func touchFile(path string) {

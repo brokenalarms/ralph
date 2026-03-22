@@ -51,11 +51,10 @@ teardown() {
   [[ "$result" == *":after=0" ]]
 }
 
-# Proves: stream filter does not contain process-group-killing traps
-# that would terminate the parent ralph process.
-# Proves: consecutive identical tool calls are collapsed into a single line
-# with a counter (e.g. "[Read] foo.sh x3"), saving vertical space.
-@test "stream filter deduplicates consecutive identical lines" {
+# Proves: stream filter shows each line individually with timestamps
+# instead of deduplicating, so the reader can see the source and count
+# of each event.
+@test "stream filter timestamps each line without deduplication" {
   write_stream_filter
 
   # Build stream-json events: 3 identical Read calls, then 1 different one
@@ -67,9 +66,6 @@ teardown() {
   input+='{"type":"result"}'$'\n'
 
   # Run the jq+perl stages only (skip tail -f and sed colorization)
-  local filter_script="$RALPH_DIR/.stream-filter.sh"
-
-  # Extract jq and perl stages from the filter script and run them
   local output
   output=$(echo "$input" | jq --raw-input --join-output --unbuffered '
     fromjson? // empty |
@@ -94,50 +90,30 @@ teardown() {
     elif .type == "result" then
       "\n[done]\n"
     else empty end
-  ' | perl -e '
+  ' | perl -ne '
     use POSIX; $|=1;
-    my ($prev, $count, $prev_ts);
-    sub flush_prev {
-      return unless defined $prev;
-      if ($count > 1) {
-        print "$prev_ts $prev x$count\n";
-      } else {
-        print "$prev_ts $prev\n";
-      }
-    }
-    while(<STDIN>) {
-      chomp;
-      next if $_ eq "";
-      my $ts = strftime("%H:%M:%S", localtime());
-      if (defined $prev && $_ eq $prev) {
-        $count++;
-        $prev_ts = $ts;
-      } else {
-        flush_prev();
-        $prev = $_;
-        $count = 1;
-        $prev_ts = $ts;
-      }
-    }
-    flush_prev();
+    chomp;
+    next if $_ eq "";
+    print strftime("%H:%M:%S", localtime()) . " " . $_ . "\n";
   ')
 
-  # Should have exactly 3 output lines: deduplicated Read x3, Read bar.sh, [done]
+  # Should have 5 lines: 3x foo.sh, 1x bar.sh, 1x [done] (no dedup)
   local line_count
   line_count=$(echo "$output" | wc -l | tr -d ' ')
-  [[ "$line_count" -eq 3 ]]
+  [[ "$line_count" -eq 5 ]]
 
-  # First line should contain the x3 counter
-  echo "$output" | head -1 | grep -q 'x3'
+  # All three foo.sh lines should be present individually
+  local foo_count
+  foo_count=$(echo "$output" | grep -c 'foo.sh')
+  [[ "$foo_count" -eq 3 ]]
 
-  # First line should reference foo.sh
-  echo "$output" | head -1 | grep -q 'foo.sh'
+  # Each line should have a HH:MM:SS timestamp prefix
+  echo "$output" | head -1 | grep -qE '^[0-9]{2}:[0-9]{2}:[0-9]{2} '
 
-  # Second line should be bar.sh without counter
-  echo "$output" | sed -n '2p' | grep -q 'bar.sh'
-  ! echo "$output" | sed -n '2p' | grep -q 'x[0-9]'
+  # bar.sh should appear once
+  echo "$output" | grep -c 'bar.sh' | grep -q '1'
 
-  # Third line should be [done]
+  # Last line should be [done]
   echo "$output" | tail -1 | grep -q '\[done\]'
 }
 

@@ -3,6 +3,7 @@ package claude
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -78,6 +79,26 @@ type Result struct {
 // The callback receives the task description read from the signal file.
 type OnTaskDetected func(taskDesc string)
 
+// IterationAllowedTools lists the Claude Code tools pre-approved for
+// iteration mode. This replaces --dangerously-skip-permissions with
+// explicit scoping — only these tools are available, and --add-dir
+// restricts which directories they can access.
+var IterationAllowedTools = []string{
+	"Bash(*)",
+	"Read",
+	"Edit",
+	"Write",
+	"Glob",
+	"Grep",
+	"Agent",
+	"Skill",
+	"TodoWrite",
+	"NotebookEdit",
+	"WebFetch",
+	"WebSearch",
+	"ToolSearch",
+}
+
 // Runner manages Claude process lifecycle: spawning, signal polling, and cleanup.
 type Runner struct {
 	Logger         Log
@@ -102,14 +123,15 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	}
 	defer rawLog.Close()
 
-	cmd := exec.Command("claude",
+	args := []string{
 		"--print", "--verbose",
 		"--output-format", "stream-json",
 		"--add-dir", cfg.WorkDir,
 		"--add-dir", cfg.RalphDir,
-		"--dangerously-skip-permissions",
+		"--allowedTools", strings.Join(IterationAllowedTools, ","),
 		"-p", cfg.Prompt,
-	)
+	}
+	cmd := exec.Command("claude", args...)
 	cmd.Dir = cfg.WorkDir
 	cmd.Stdin = nil
 	cmd.Stdout = rawLog
@@ -304,7 +326,11 @@ func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
 			line := data[:idx]
 			data = data[idx+1:]
 			if text := extractStreamText(line); text != "" {
-				fmt.Fprintln(logOut, text)
+				for _, tl := range strings.Split(text, "\n") {
+					if tl != "" {
+						fmt.Fprintf(logOut, "[claude] %s\n", tl)
+					}
+				}
 			}
 		}
 	}
@@ -334,77 +360,94 @@ func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
 	}
 }
 
+// streamEvent is the top-level envelope for Claude's stream-json output.
+type streamEvent struct {
+	Type    string       `json:"type"`
+	Subtype string       `json:"subtype"`
+	Message *streamMsg   `json:"message"`
+	Delta   *streamDelta `json:"delta"`
+	Error   string       `json:"error"`
+}
+
+type streamMsg struct {
+	Content []streamContent `json:"content"`
+}
+
+type streamContent struct {
+	Type  string                 `json:"type"`
+	Text  string                 `json:"text"`
+	Name  string                 `json:"name"`
+	Input map[string]interface{} `json:"input"`
+}
+
+type streamDelta struct {
+	Text string `json:"text"`
+}
+
 // extractStreamText pulls human-readable text from a stream-json line.
-// Rather than pulling in a JSON library, we do minimal string extraction
-// for the content_block_delta and result message types that contain text.
+// Uses encoding/json to properly parse Claude's nested message format.
 func extractStreamText(line string) string {
-	// Quick rejection: must look like JSON.
 	if len(line) == 0 || line[0] != '{' {
 		return ""
 	}
 
-	// assistant message with content text
-	if strings.Contains(line, `"type":"assistant"`) || strings.Contains(line, `"type": "assistant"`) {
-		return extractJSONString(line, "content")
+	var ev streamEvent
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		return ""
 	}
 
-	// content_block_delta with text delta
-	if strings.Contains(line, `"content_block_delta"`) {
-		return extractJSONString(line, "text")
-	}
+	switch ev.Type {
+	case "assistant":
+		return extractAssistantText(ev.Message)
 
-	// result message
-	if strings.Contains(line, `"type":"result"`) || strings.Contains(line, `"type": "result"`) {
-		if strings.Contains(line, `"subtype":"error_response"`) || strings.Contains(line, `"subtype": "error_response"`) {
-			return extractJSONString(line, "error")
+	case "content_block_delta":
+		if ev.Delta != nil {
+			return ev.Delta.Text
+		}
+
+	case "result":
+		if ev.Subtype == "error_response" && ev.Error != "" {
+			return ev.Error
 		}
 	}
 
 	return ""
 }
 
-// extractJSONString does a best-effort extraction of a string value for the
-// given key from a JSON line. This avoids importing encoding/json for this
-// hot path. Returns empty string if not found.
-func extractJSONString(line, key string) string {
-	needle := `"` + key + `"`
-	idx := strings.Index(line, needle)
-	if idx < 0 {
+// extractAssistantText extracts text and tool-use summaries from the
+// content array in an assistant message.
+func extractAssistantText(msg *streamMsg) string {
+	if msg == nil || len(msg.Content) == 0 {
 		return ""
 	}
-	// Skip past key, colon, optional whitespace, and opening quote.
-	rest := line[idx+len(needle):]
-	rest = strings.TrimLeft(rest, " \t:")
-	if len(rest) == 0 || rest[0] != '"' {
-		return ""
-	}
-	rest = rest[1:]
 
-	// Read until unescaped closing quote.
-	var b strings.Builder
-	for i := 0; i < len(rest); i++ {
-		if rest[i] == '\\' && i+1 < len(rest) {
-			switch rest[i+1] {
-			case 'n':
-				b.WriteByte('\n')
-			case 't':
-				b.WriteByte('\t')
-			case '"':
-				b.WriteByte('"')
-			case '\\':
-				b.WriteByte('\\')
-			default:
-				b.WriteByte(rest[i+1])
+	var parts []string
+	for _, c := range msg.Content {
+		switch c.Type {
+		case "text":
+			if c.Text != "" {
+				parts = append(parts, c.Text)
 			}
-			i++
-			continue
+		case "tool_use":
+			parts = append(parts, formatToolUse(c))
 		}
-		if rest[i] == '"' {
-			break
-		}
-		b.WriteByte(rest[i])
 	}
-	return b.String()
+	return strings.Join(parts, "\n")
+}
+
+// formatToolUse returns a short summary of a tool invocation.
+func formatToolUse(c streamContent) string {
+	for _, key := range []string{
+		"file_path", "command", "pattern", "query", "url",
+		"description", "task_id", "skill", "prompt",
+	} {
+		if v, ok := c.Input[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return "[" + c.Name + "] " + s
+			}
+		}
+	}
+	return "[" + c.Name + "]"
 }
 
 // startTail launches tail -f on the given file for terminal display.

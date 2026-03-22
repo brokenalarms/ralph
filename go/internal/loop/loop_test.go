@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -346,6 +347,51 @@ func TestLoop_UpdateStreamTask(t *testing.T) {
 	}
 }
 
+// Verifies writeRunBranch persists the current branch name to .run-branch
+// so the shell pane-title updater displays the correct branch.
+func TestLoop_WriteRunBranch(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	l := &Loop{
+		cfg: Config{RalphDir: ralphDir},
+		git: &git.Manager{WorktreeBranch: "ralph/project/01-fix-bug"},
+	}
+
+	l.writeRunBranch()
+
+	data, err := os.ReadFile(filepath.Join(ralphDir, ".run-branch"))
+	if err != nil {
+		t.Fatalf("expected .run-branch file, got error: %v", err)
+	}
+	if string(data) != "ralph/project/01-fix-bug" {
+		t.Errorf("expected 'ralph/project/01-fix-bug', got %q", string(data))
+	}
+}
+
+// Verifies writeRunBranch defaults to "ralph" when no branch is set.
+func TestLoop_WriteRunBranch_Default(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	l := &Loop{
+		cfg: Config{RalphDir: ralphDir},
+		git: &git.Manager{},
+	}
+
+	l.writeRunBranch()
+
+	data, err := os.ReadFile(filepath.Join(ralphDir, ".run-branch"))
+	if err != nil {
+		t.Fatalf("expected .run-branch file, got error: %v", err)
+	}
+	if string(data) != "ralph" {
+		t.Errorf("expected 'ralph', got %q", string(data))
+	}
+}
+
 // Verifies feedback file is read and cleared after consumption.
 func TestLoop_FeedbackReadAndClear(t *testing.T) {
 	dir := t.TempDir()
@@ -450,6 +496,31 @@ func TestLoop_MaybeRefactor_CounterIncrement(t *testing.T) {
 	n, _ := strconv.Atoi(val)
 	if n != 3 {
 		t.Errorf("expected counter=3, got %d", n)
+	}
+}
+
+// Verifies that NoRefactor=true prevents maybeRefactor from running even
+// when refactorEvery is set, allowing users to disable refactoring entirely.
+func TestLoop_MaybeRefactor_NoRefactorDisables(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	l := &Loop{
+		cfg:    Config{RalphDir: ralphDir, NoRefactor: true},
+		state:  st,
+		logger: logging.New(nil),
+	}
+
+	st.Write("iterations_since_refactor", "10")
+
+	err := l.maybeRefactor(5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	val, _ := st.Read("iterations_since_refactor")
+	if val != "10" {
+		t.Errorf("counter should not change when NoRefactor=true, got %s", val)
 	}
 }
 
@@ -1085,10 +1156,10 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	}
 }
 
-// Verifies that when AutoImprove is enabled and auto-merge succeeds,
-// the loop exits with "auto_improve_restart" status, signaling that the
+// Verifies that when Evolve is enabled and auto-merge succeeds,
+// the loop exits with "evolve_restart" status, signaling that the
 // binary should be rebuilt and re-executed with latest main.
-func TestLoop_AutoImproveRestartsAfterMerge(t *testing.T) {
+func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
@@ -1117,7 +1188,7 @@ func TestLoop_AutoImproveRestartsAfterMerge(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-		AutoImprove:   true,
+		Evolve:        true,
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
@@ -1133,14 +1204,14 @@ func TestLoop_AutoImproveRestartsAfterMerge(t *testing.T) {
 	}
 
 	finalState, _ := st.Load()
-	if finalState.Status != "auto_improve_restart" {
-		t.Errorf("expected status 'auto_improve_restart', got %q", finalState.Status)
+	if finalState.Status != "evolve_restart" {
+		t.Errorf("expected status 'evolve_restart', got %q", finalState.Status)
 	}
 }
 
-// Verifies that AutoImprove does NOT trigger restart when auto-merge fails,
+// Verifies that Evolve does NOT trigger restart when auto-merge fails,
 // allowing the loop to continue normally.
-func TestLoop_AutoImproveNoRestartOnMergeFailure(t *testing.T) {
+func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 	project, _ := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := state.NewStore(ralphDir)
@@ -1176,7 +1247,7 @@ func TestLoop_AutoImproveNoRestartOnMergeFailure(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-		AutoImprove:   true,
+		Evolve:        true,
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
@@ -1187,8 +1258,8 @@ func TestLoop_AutoImproveNoRestartOnMergeFailure(t *testing.T) {
 	_ = l.Run(context.Background())
 
 	finalState, _ := st.Load()
-	if finalState.Status == "auto_improve_restart" {
-		t.Error("should NOT set auto_improve_restart when auto-merge fails (no PR to merge)")
+	if finalState.Status == "evolve_restart" {
+		t.Error("should NOT set evolve_restart when auto-merge fails (no PR to merge)")
 	}
 }
 
@@ -1650,5 +1721,615 @@ func TestLoop_SingleBranchSkipsRotationOnResume(t *testing.T) {
 	// Single mode on resume — branch stays put
 	if gm.WorktreeBranch != "ralph/myproject/01-old-task" {
 		t.Errorf("expected branch to stay as ralph/myproject/01-old-task in single mode, got %q", gm.WorktreeBranch)
+	}
+}
+
+// Verifies that when an iteration completes without a signal, the attempt
+// tracker records it so the next iteration knows what was tried.
+func TestLoop_RecordsAttemptAfterIteration(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Fix the auth bug",
+		nextID:    "ralph-auth",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{}
+
+	_ = l.Run(context.Background())
+
+	history := l.attempts.Read("ralph-auth", "Fix the auth bug")
+	if !strings.Contains(history, "### Attempt 1") {
+		t.Error("expected attempt 1 to be recorded after iteration")
+	}
+}
+
+// Verifies that when an idle timeout occurs, the attempt tracker records it
+// with timeout-specific guidance so the next iteration can adjust its approach.
+func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	callCount := 0
+	backend := &mutableBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Slow task",
+		nextID:    "ralph-slow",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 2,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		onRun: func() {
+			callCount++
+			if callCount >= 2 {
+				// Stop after the retry so we don't loop forever
+				backend.mu.Lock()
+				backend.remaining = 0
+				backend.completed = 1
+				backend.mu.Unlock()
+			}
+		},
+		result: claude.Result{IdleTimeout: true},
+	}
+
+	_ = l.Run(context.Background())
+
+	history := l.attempts.Read("ralph-slow", "Slow task")
+	if !strings.Contains(history, "idle_timeout") {
+		t.Errorf("expected idle_timeout in attempt history, got: %s", history)
+	}
+}
+
+// Verifies that when a task completes via signal, the attempt history is
+// cleared so re-attempts start fresh if the task reappears.
+func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Done task",
+		nextID:    "ralph-done",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	// Seed an existing attempt
+	l.attempts.Record("ralph-done", "Done task", "first try failed", "", "continue")
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true, Summary: "task completed"},
+	}
+	l.pushPRFunc = func(string) error { return nil }
+
+	_ = l.Run(context.Background())
+
+	history := l.attempts.Read("ralph-done", "Done task")
+	if history != "" {
+		t.Errorf("expected attempt history to be cleared after signal, got: %s", history)
+	}
+}
+
+// Verifies that reflections from previous iterations are included in the
+// attempt context fed to the prompt.
+func TestLoop_IncludesReflectionInAttemptContext(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:   dir,
+		WorkDir:      dir,
+		RalphDir:     ralphDir,
+		CallsPerHour: 80,
+		TaskBackend:  &stubBackend{label: "checklist"},
+	}, st, gm, logging.New(nil))
+
+	// Write a reflection file
+	reflDir := filepath.Join(ralphDir, "reflections")
+	os.MkdirAll(reflDir, 0o755)
+	os.WriteFile(filepath.Join(reflDir, "ralph-abc.md"),
+		[]byte("# Fix the bug\n## What was discovered\n- The root cause was X"), 0o644)
+
+	ctx := l.buildAttemptContext("ralph-abc", "Fix the bug")
+	if !strings.Contains(ctx, "root cause was X") {
+		t.Errorf("expected reflection content in attempt context, got: %s", ctx)
+	}
+	if !strings.Contains(ctx, "### Previous reflection") {
+		t.Error("expected '### Previous reflection' header in attempt context")
+	}
+}
+
+// Verifies that attempt history and reflections are combined when both exist.
+func TestLoop_CombinesAttemptsAndReflection(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:   dir,
+		WorkDir:      dir,
+		RalphDir:     ralphDir,
+		CallsPerHour: 80,
+		TaskBackend:  &stubBackend{label: "checklist"},
+	}, st, gm, logging.New(nil))
+
+	// Record an attempt
+	l.attempts.Record("ralph-combo", "Combo task", "tried approach A", "", "halted: stagnation")
+
+	// Write a reflection
+	reflDir := filepath.Join(ralphDir, "reflections")
+	os.MkdirAll(reflDir, 0o755)
+	os.WriteFile(filepath.Join(reflDir, "ralph-combo.md"),
+		[]byte("# Combo task\n## What was discovered\n- approach A doesn't work"), 0o644)
+
+	ctx := l.buildAttemptContext("ralph-combo", "Combo task")
+	if !strings.Contains(ctx, "### Attempt 1") {
+		t.Error("expected attempt history in combined context")
+	}
+	if !strings.Contains(ctx, "### Previous reflection") {
+		t.Error("expected reflection in combined context")
+	}
+}
+
+// Verifies that buildAttemptContext returns empty string when no prior
+// context exists, so the prompt doesn't get polluted with empty sections.
+func TestLoop_EmptyAttemptContextForNewTask(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:   dir,
+		WorkDir:      dir,
+		RalphDir:     ralphDir,
+		CallsPerHour: 80,
+		TaskBackend:  &stubBackend{label: "checklist"},
+	}, st, gm, logging.New(nil))
+
+	ctx := l.buildAttemptContext("ralph-new", "Brand new task")
+	if ctx != "" {
+		t.Errorf("expected empty attempt context for new task, got: %s", ctx)
+	}
+}
+
+// Verifies that --wait keeps the loop alive when tasks complete, then resumes
+// when new tasks appear. Without --wait, the loop would exit immediately.
+func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(filepath.Join(dir, ".git"), 0o755)
+
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 0,
+		completed: 1,
+		total:     1,
+		nextTask:  "first task",
+		nextID:    "t-1",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	var (
+		callsMu sync.Mutex
+		calls   int
+	)
+	runner := &stubRunner{
+		onRun: func() {
+			callsMu.Lock()
+			calls++
+			callsMu.Unlock()
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed++
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Wait:          true,
+		WaitInterval:  50 * time.Millisecond,
+	}, st, gm, logger)
+	l.runner = runner
+	l.pushPRFunc = func(string) error { return nil }
+
+	// After the loop enters wait mode, inject a new task. After the Claude
+	// call completes, the loop will re-enter wait mode; cancel the context
+	// so the test doesn't hang.
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		backend.mu.Lock()
+		backend.remaining = 1
+		backend.total++
+		backend.nextTask = "second task"
+		backend.nextID = "t-2"
+		backend.mu.Unlock()
+
+		for {
+			time.Sleep(50 * time.Millisecond)
+			callsMu.Lock()
+			c := calls
+			callsMu.Unlock()
+			if c >= 1 {
+				time.Sleep(100 * time.Millisecond)
+				cancel()
+				return
+			}
+		}
+	}()
+
+	err := l.Run(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	callsMu.Lock()
+	finalCalls := calls
+	callsMu.Unlock()
+	if finalCalls != 1 {
+		t.Errorf("expected 1 Claude call (for second task), got %d", finalCalls)
+	}
+}
+
+// Verifies that --wait exits cleanly when cancelled via context (Ctrl-C).
+func TestLoop_WaitExitOnCancel(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	backend := &stubBackend{
+		remaining: 0,
+		completed: 1,
+		total:     1,
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Wait:          true,
+		WaitInterval:  50 * time.Millisecond,
+	}, st, gm, logger)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		cancel()
+	}()
+
+	err := l.Run(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	finalState, _ := st.Load()
+	if finalState.Status != "stopped" {
+		t.Errorf("expected status 'stopped' after cancel, got %q", finalState.Status)
+	}
+}
+
+// Verifies that --wait exits cleanly when stop file is detected during polling.
+func TestLoop_WaitExitOnStopFile(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	backend := &stubBackend{
+		remaining: 0,
+		completed: 1,
+		total:     1,
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Wait:          true,
+		WaitInterval:  50 * time.Millisecond,
+	}, st, gm, logger)
+
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
+	}()
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	finalState, _ := st.Load()
+	if finalState.Status != "stopped" {
+		t.Errorf("expected status 'stopped' after stop file, got %q", finalState.Status)
+	}
+}
+
+// Verifies that without --wait, the loop exits immediately when no tasks remain,
+// confirming the default behavior is unchanged.
+func TestLoop_NoWaitExitsImmediately(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	backend := &stubBackend{
+		remaining: 0,
+		completed: 2,
+		total:     2,
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Wait:          false,
+	}, st, gm, logger)
+
+	start := time.Now()
+	err := l.Run(context.Background())
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if elapsed > 1*time.Second {
+		t.Errorf("loop took %s without --wait, expected immediate exit", elapsed)
+	}
+
+	finalState, _ := st.Load()
+	if finalState.Status != "completed" {
+		t.Errorf("expected status 'completed', got %q", finalState.Status)
+	}
+}
+
+// Verifies that completed task IDs are written to .completed-tasks when
+// tasks finish with a signal, so the plan pane can show which tasks were
+// completed in the current run.
+func TestLoop_RecordsCompletedTasks(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	iterationCount := 0
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "first task",
+		nextID:    "ralph-aaa",
+		label:     "checklist",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			if iterationCount == 1 {
+				backend.mu.Lock()
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "second task"
+				backend.nextID = "ralph-bbb"
+				backend.mu.Unlock()
+			} else if iterationCount == 2 {
+				backend.mu.Lock()
+				backend.completed = 2
+				backend.remaining = 0
+				backend.mu.Unlock()
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(ralphDir, ".completed-tasks"))
+	if err != nil {
+		t.Fatalf("expected .completed-tasks file, got error: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 completed tasks, got %d: %v", len(lines), lines)
+	}
+	if lines[0] != "ralph-aaa" {
+		t.Errorf("first completed task = %q, want %q", lines[0], "ralph-aaa")
+	}
+	if lines[1] != "ralph-bbb" {
+		t.Errorf("second completed task = %q, want %q", lines[1], "ralph-bbb")
+	}
+}
+
+// Verifies that .completed-tasks is cleared at the start of each run so
+// only tasks from the current run appear, not historical completions.
+func TestLoop_ClearsCompletedTasksOnStart(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	os.WriteFile(filepath.Join(ralphDir, ".completed-tasks"), []byte("ralph-old\n"), 0o644)
+
+	backend := &stubBackend{
+		remaining: 0,
+		completed: 1,
+		total:     1,
+	}
+
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	_ = l.Run(context.Background())
+
+	if _, err := os.Stat(filepath.Join(ralphDir, ".completed-tasks")); !os.IsNotExist(err) {
+		t.Error(".completed-tasks should be removed at run start when no tasks complete")
+	}
+}
+
+// Verifies that when a task has no ID (checklist backend), the task title
+// is recorded instead, so the plan pane can still show completed items.
+func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "Add dark mode",
+		nextID:    "",
+		label:     "checklist",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(ralphDir, ".completed-tasks"))
+	if err != nil {
+		t.Fatalf("expected .completed-tasks file: %v", err)
+	}
+
+	got := strings.TrimSpace(string(data))
+	if got != "Add dark mode" {
+		t.Errorf("completed task = %q, want %q", got, "Add dark mode")
 	}
 }
