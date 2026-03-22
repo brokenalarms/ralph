@@ -1262,11 +1262,12 @@ func TestPostMergeReset_CleansUntrackedAndDirtyFiles(t *testing.T) {
 	}
 }
 
-// After auto-merge squash-merges a PR, local main must be updated to match
-// origin/main. This failed previously because `git branch -f main origin/main`
-// silently errors when main is the checked-out branch in the project dir.
-// The fix uses update-ref which works regardless of checkout state.
-func TestAutoMerge_UpdatesLocalMainWhenCheckedOut(t *testing.T) {
+// After auto-merge squash-merges a PR, postMergeUpdate must advance local
+// main to match origin/main without leaving stale staged changes. The old
+// two-step approach (update-ref + reset --hard HEAD) left the index pointing
+// at the old tree between steps, staging reversions of merged PR work. The
+// fix uses a single atomic `git reset --hard origin/main`.
+func TestPostMergeUpdate_AtomicResetNoStagedChanges(t *testing.T) {
 	project, _ := initBareRepo(t)
 	bare := filepath.Join(filepath.Dir(project), "bare.git")
 	ralphDir := filepath.Join(project, ".ralph")
@@ -1309,37 +1310,71 @@ func TestAutoMerge_UpdatesLocalMainWhenCheckedOut(t *testing.T) {
 		t.Fatal("origin/main should have advanced")
 	}
 
-	// Local main is still behind (main is checked out so branch -f would fail)
-	localMainStale := gitOutput(project, "rev-parse", "main")
-	if localMainStale != localMainBefore {
-		t.Fatal("local main should still be at old commit before update-ref")
+	// Call postMergeUpdate (the method under test)
+	merged, err := mgr.postMergeUpdate("42")
+	if err != nil {
+		t.Fatalf("postMergeUpdate failed: %v", err)
 	}
-
-	// Simulate what postMergeUpdate does after merge: update-ref + reset
-	originRef := gitOutput(project, "rev-parse", "origin/main")
-	if originRef != "" {
-		gitCmd(project, "update-ref", "refs/heads/main", originRef)
-		gitCmd(project, "reset", "--hard", "HEAD")
+	if !merged {
+		t.Fatal("postMergeUpdate should return true")
 	}
 
 	// Local main should now match origin/main
 	localMainAfter := gitOutput(project, "rev-parse", "main")
 	if localMainAfter != originMain {
-		t.Errorf("local main should match origin/main after update-ref: got %s, want %s", localMainAfter, originMain)
+		t.Errorf("local main should match origin/main: got %s, want %s", localMainAfter, originMain)
 	}
 
-	// Verify main is still checked out (update-ref doesn't change that)
+	// Main must still be checked out
 	stillCheckedOut := gitOutput(project, "symbolic-ref", "--short", "HEAD")
 	if stillCheckedOut != "main" {
 		t.Errorf("main should still be checked out, got %q", stillCheckedOut)
 	}
 
-	// The index must have no staged changes. Without reset --hard,
-	// update-ref advances HEAD but leaves the old index, causing git
-	// diff --cached to show staged reversions of the merged PR's changes.
+	// The index must have no staged changes — this is the critical assertion.
+	// The old update-ref approach left the index stale, causing `git diff --cached`
+	// to show staged reversions of the merged PR's files.
 	diffIndex := strings.TrimSpace(gitOutput(project, "diff", "--cached", "--name-only"))
 	if diffIndex != "" {
-		t.Errorf("project dir should have no staged changes after update-ref + reset, got:\n%s", diffIndex)
+		t.Errorf("project dir should have no staged changes after postMergeUpdate, got:\n%s", diffIndex)
+	}
+}
+
+// Proves the old two-step approach (update-ref + reset --hard HEAD) leaves
+// stale staged changes, demonstrating why atomic reset is necessary.
+func TestPostMergeUpdate_TwoStepLeavesStaleIndex(t *testing.T) {
+	project, _ := initBareRepo(t)
+	bare := filepath.Join(filepath.Dir(project), "bare.git")
+
+	localMainBefore := gitOutput(project, "rev-parse", "main")
+
+	// Push a new commit to origin/main via a temp clone.
+	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
+	run(t, "git", "clone", bare, tmpClone)
+	writeFile(t, tmpClone, "merged-work.txt", "merged content\n")
+	run(t, "git", "-C", tmpClone, "commit", "-m", "squash-merged PR")
+	run(t, "git", "-C", tmpClone, "push", "origin", "main")
+
+	run(t, "git", "-C", project, "fetch", "origin", "main")
+
+	originMain := gitOutput(project, "rev-parse", "origin/main")
+	if originMain == localMainBefore {
+		t.Fatal("origin/main should have advanced")
+	}
+
+	// Reproduce the old buggy two-step: update-ref advances the ref but
+	// the index still reflects the old commit's tree.
+	gitCmd(project, "update-ref", "refs/heads/main", originMain)
+	// At this point git diff --cached will show staged reversions because
+	// the index doesn't match the new HEAD.
+	diffAfterUpdateRef := strings.TrimSpace(gitOutput(project, "diff", "--cached", "--name-only"))
+	if diffAfterUpdateRef == "" {
+		t.Skip("git version doesn't exhibit the stale-index behavior after update-ref")
+	}
+
+	// Confirm the stale index shows the merged file as a staged deletion
+	if !strings.Contains(diffAfterUpdateRef, "merged-work.txt") {
+		t.Errorf("expected stale index to show merged-work.txt as staged change, got:\n%s", diffAfterUpdateRef)
 	}
 }
 
