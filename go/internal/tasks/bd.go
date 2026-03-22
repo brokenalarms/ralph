@@ -313,6 +313,29 @@ func (b *BD) PlanningSucceeded() (bool, error) {
 	return b.HasTasks()
 }
 
+func (b *BD) SetState(id, dimension, value, reason string) error {
+	if id == "" {
+		return nil
+	}
+	args := []string{"set-state", id, dimension + "=" + value}
+	if reason != "" {
+		args = append(args, "--reason", reason)
+	}
+	_, err := b.runner()(b.ProjectDir, args...)
+	return err
+}
+
+func (b *BD) GetState(id, dimension string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	out, err := b.runner()(b.ProjectDir, "state", id, dimension)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
 func (b *BD) CloseTask(id string, reason string) error {
 	if id == "" {
 		return nil
@@ -330,6 +353,12 @@ func (b *BD) CloseTask(id string, reason string) error {
 				return nil
 			}
 		}
+	}
+
+	// Prevent closing unless the task has reached phase:verified.
+	phase, _ := b.GetState(id, "phase")
+	if phase != "verified" {
+		return fmt.Errorf("cannot close %s: phase is %q, must be \"verified\"", id, phase)
 	}
 
 	if reason == "" {

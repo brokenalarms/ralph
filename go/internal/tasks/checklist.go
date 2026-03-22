@@ -136,6 +136,9 @@ func (c *Checklist) PlanningInstructions() string {
 IMPORTANT: beads/bd is NOT installed in this environment. Do NOT attempt to use bd commands — they will fail. You MUST write the plan file directly. If the user asks to use beads, explain that bd is not installed and they need to install it and restart ralph.`, c.PlanFile)
 }
 
+func (c *Checklist) SetState(_, _, _, _ string) error  { return nil }
+func (c *Checklist) GetState(_, _ string) (string, error) { return "", nil }
+
 func (c *Checklist) Label() string { return "checklist" }
 
 func (c *Checklist) readPlan() (string, error) {
