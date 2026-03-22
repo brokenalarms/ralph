@@ -32,6 +32,8 @@ func (s *stubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
 	return s.result, nil
 }
 
+func (s *stubRunner) StopStreaming() {}
+
 // stubBackend implements tasks.Backend for testing without shelling out to
 // bd or reading plan files. Lets us control exactly how many tasks remain
 // and what the next task is.
@@ -3055,4 +3057,8 @@ type promptCapturingRunner struct {
 func (p *promptCapturingRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
 	*p.captured = cfg.Prompt
 	return p.inner.Run(cfg)
+}
+
+func (p *promptCapturingRunner) StopStreaming() {
+	p.inner.StopStreaming()
 }

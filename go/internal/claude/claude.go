@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -124,9 +125,40 @@ var IterationDisallowedTools = []string{
 }
 
 // Runner manages Claude process lifecycle: spawning, signal polling, and cleanup.
+// It tracks active streaming goroutines (filter and tail) so they can be
+// explicitly stopped before a new Run() call to prevent goroutine accumulation.
 type Runner struct {
 	Logger         Log
 	OnTaskDetected OnTaskDetected
+
+	mu         sync.Mutex
+	filterStop chan struct{}
+	filterDone <-chan struct{}
+	tailStop   chan struct{}
+	tailDone   <-chan struct{}
+}
+
+// StopStreaming stops and drains any active filter/tail goroutines. Safe to
+// call multiple times or when no goroutines are active. Must be called before
+// spawning a new Run() that shares the same raw log or log file to prevent
+// duplicate writers.
+func (r *Runner) StopStreaming() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.filterStop != nil {
+		close(r.filterStop)
+		<-r.filterDone
+		r.filterStop = nil
+		r.filterDone = nil
+	}
+	if r.tailStop != nil {
+		close(r.tailStop)
+		if r.tailDone != nil {
+			<-r.tailDone
+		}
+		r.tailStop = nil
+		r.tailDone = nil
+	}
 }
 
 // Run spawns a Claude process, polls for signal files, and returns when the
@@ -173,6 +205,9 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	_ = os.WriteFile(filepath.Join(cfg.RalphDir, ".stream-start"),
 		[]byte(fmt.Sprintf("%d", time.Now().Unix())), 0o644)
 
+	// Stop any goroutines left from a previous Run() to prevent accumulation.
+	r.StopStreaming()
+
 	// Start stream filter BEFORE Claude begins writing so it catches all
 	// output (mirrors the bash fix for the tail -f race).
 	filterStop := make(chan struct{})
@@ -185,19 +220,21 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 		tailDone = startTailGoroutine(cfg.LogFile, tailStop)
 	}
 
+	// Track goroutines at the Runner level so StopStreaming() can drain them
+	// if a nested Run() (e.g. verification agent inside OnSignal) needs to
+	// start before this Run() returns.
+	r.mu.Lock()
+	r.filterStop = filterStop
+	r.filterDone = filterDone
+	r.tailStop = tailStop
+	r.tailDone = tailDone
+	r.mu.Unlock()
+
 	// Poll for signals or process exit.
 	result := r.poll(cmd, cfg)
 
-	// Reap the Claude process.
-	_ = cmd.Wait()
-
-	// Signal the filter to drain remaining output and exit.
-	close(filterStop)
-	<-filterDone
-	close(tailStop)
-	if tailDone != nil {
-		<-tailDone
-	}
+	// Stop streaming goroutines and drain remaining output.
+	r.StopStreaming()
 
 	// Final signal check — Claude may have written a signal just before exiting.
 	if !result.SignalDetected {
