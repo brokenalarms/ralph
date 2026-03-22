@@ -553,9 +553,70 @@ func (l *Loop) Run(ctx context.Context) error {
 					l.logger.Warn("Auto-merge: %v", err)
 					var ciErr *git.CIFailureError
 					if errors.As(err, &ciErr) {
-						l.writeFeedback(fmt.Sprintf("CI checks failed on PR #%s. Failed checks: %s. Fix the failures and push again.", ciErr.PRNumber, ciErr.Error()))
+						// Spawn a fix agent to address CI failures.
+						l.logger.Log("CI failed on PR #%s — spawning fix agent...", ciErr.PRNumber)
+
+						// Get CI failure details.
+						ciDetails := ciErr.Error()
+						ciLog := l.getCIFailureLog(ciErr.PRNumber)
+
+						signalPath := filepath.Join(l.cfg.RalphDir, ".signal_complete")
+						fixPrompt := l.loadVerifyPrompt("verify-tests.md", map[string]string{
+							"{{TASK_TITLE}}":       nextTask,
+							"{{TASK_DESCRIPTION}}": "CI checks failed after push. Fix the failures so CI passes.",
+							"{{TEST_OUTPUT}}":      ciDetails + "\n\n" + ciLog,
+							"{{SIGNAL_COMPLETE}}":  signalPath,
+						})
+
+						for ciAttempt := 0; ciAttempt < 2; ciAttempt++ {
+							fixRunner := &claude.Runner{Logger: l.logger}
+							fixResult, _ := fixRunner.Run(claude.RunConfig{
+								Ctx:          ctx,
+								WorkDir:      workDir,
+								RalphDir:     l.cfg.RalphDir,
+								Prompt:       fixPrompt,
+								RawLog:       rawLogPath,
+								Quiet:        true,
+								Signals:      l.signals,
+								PollInterval: 2 * time.Second,
+								IdleTimeout:  l.cfg.IdleTimeout,
+							})
+							if !fixResult.SignalDetected {
+								l.logger.Warn("CI fix agent exited without signal")
+								break
+							}
+
+							// Push the fix.
+							if pushErr := l.pushAndCreatePR(nextTask); pushErr != nil {
+								l.logger.Warn("Push after CI fix failed: %v", pushErr)
+								break
+							}
+
+							// Retry merge.
+							merged, err = l.autoMerge()
+							if err == nil && merged {
+								break
+							}
+							if err != nil {
+								if errors.As(err, &ciErr) {
+									l.logger.Warn("CI still failing after fix attempt %d: %s", ciAttempt+1, ciErr.Error())
+									ciDetails = ciErr.Error()
+									ciLog = l.getCIFailureLog(ciErr.PRNumber)
+									fixPrompt = l.loadVerifyPrompt("verify-tests.md", map[string]string{
+										"{{TASK_TITLE}}":       nextTask,
+										"{{TASK_DESCRIPTION}}": "CI checks still failing. Fix the remaining failures.",
+										"{{TEST_OUTPUT}}":      ciDetails + "\n\n" + ciLog,
+										"{{SIGNAL_COMPLETE}}":  signalPath,
+									})
+								} else {
+									l.logger.Warn("Auto-merge retry failed: %v", err)
+									break
+								}
+							}
+						}
 					}
-				} else if merged {
+				}
+				if merged {
 					if err := l.git.PostMergeReset(); err != nil {
 						l.logger.Warn("Post-merge reset: %v", err)
 					}
@@ -614,6 +675,49 @@ func (l *Loop) handleRebase(ctx context.Context) error {
 
 // isNewTask returns true when the next task differs from the last one stored
 // in state. Prefers task ID comparison (stable across description edits);
+// getCIFailureLog retrieves the failed CI run's log output for the given PR.
+func (l *Loop) getCIFailureLog(prNumber string) string {
+	// Get the latest failed run ID
+	cmd := exec.Command("gh", "pr", "checks", prNumber, "--json", "name,state,link", "--jq",
+		`.[] | select(.state == "FAILURE") | .link`)
+	cmd.Dir = l.git.WorkDir
+	out, err := cmd.Output()
+	if err != nil || len(out) == 0 {
+		return ""
+	}
+
+	// Get the run ID from the first failed check URL
+	link := strings.TrimSpace(strings.Split(string(out), "\n")[0])
+	parts := strings.Split(link, "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	runID := ""
+	for i, p := range parts {
+		if p == "runs" && i+1 < len(parts) {
+			runID = parts[i+1]
+			break
+		}
+	}
+	if runID == "" {
+		return ""
+	}
+
+	logCmd := exec.Command("gh", "run", "view", runID, "--log-failed")
+	logCmd.Dir = l.git.WorkDir
+	logOut, err := logCmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	// Truncate to last 50 lines
+	lines := strings.Split(string(logOut), "\n")
+	if len(lines) > 50 {
+		lines = lines[len(lines)-50:]
+	}
+	return strings.Join(lines, "\n")
+}
+
 // loadVerifyPrompt reads a prompt template from the prompts directory and
 // replaces placeholders with the given values.
 func (l *Loop) loadVerifyPrompt(filename string, vars map[string]string) string {
