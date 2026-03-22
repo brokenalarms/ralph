@@ -66,10 +66,12 @@ type Loop struct {
 	attempts   *attempts.Tracker
 	logger     *logging.Logger
 	signals    claude.SignalPaths
-	mergeFunc  func() (bool, error)
-	pushPRFunc func(taskDesc string) error
-	verifyFunc func(dir, headBefore string) (passed bool, reason string)
-	lastAction analyzer.Action
+	mergeFunc      func() (bool, error)
+	pushPRFunc     func(taskDesc string) error
+	forcePushFunc  func() error
+	verifyFunc     func(dir, headBefore string) (passed bool, reason string)
+	newRunnerFunc  func() claudeRunner
+	lastAction     analyzer.Action
 }
 
 // New creates an execution loop from the given configuration.
@@ -547,70 +549,7 @@ func (l *Loop) Run(ctx context.Context) error {
 				merged, err := l.autoMerge()
 				if err != nil {
 					l.logger.Warn("Auto-merge: %v", err)
-					var ciErr *git.CIFailureError
-					if errors.As(err, &ciErr) {
-						// Spawn a fix agent to address CI failures.
-						l.logger.Log("CI failed on PR #%s — spawning fix agent...", ciErr.PRNumber)
-
-						// Get CI failure details.
-						ciDetails := ciErr.Error()
-						ciLog := l.getCIFailureLog(ciErr.PRNumber)
-
-						signalPath := filepath.Join(l.cfg.RalphDir, ".signal_complete")
-						fixPrompt := l.loadVerifyPrompt("verify-tests.md", map[string]string{
-							"{{TASK_TITLE}}":       nextTask,
-							"{{TASK_DESCRIPTION}}": "CI checks failed after push. Fix the failures so CI passes.",
-							"{{TEST_OUTPUT}}":      ciDetails + "\n\n" + ciLog,
-							"{{SIGNAL_COMPLETE}}":  signalPath,
-						})
-
-						for ciAttempt := 0; ciAttempt < 2; ciAttempt++ {
-							fixRunner := &claude.Runner{Logger: l.logger}
-							fixResult, _ := fixRunner.Run(claude.RunConfig{
-								Ctx:          ctx,
-								WorkDir:      workDir,
-								RalphDir:     l.cfg.RalphDir,
-								Prompt:       fixPrompt,
-								RawLog:       rawLogPath,
-								Quiet:        true,
-								Signals:      l.signals,
-								PollInterval: 2 * time.Second,
-								IdleTimeout:  l.cfg.IdleTimeout,
-							})
-							if !fixResult.SignalDetected {
-								l.logger.Warn("CI fix agent exited without signal")
-								break
-							}
-
-							// Push the fix.
-							if pushErr := l.pushAndCreatePR(nextTask); pushErr != nil {
-								l.logger.Warn("Push after CI fix failed: %v", pushErr)
-								break
-							}
-
-							// Retry merge.
-							merged, err = l.autoMerge()
-							if err == nil && merged {
-								break
-							}
-							if err != nil {
-								if errors.As(err, &ciErr) {
-									l.logger.Warn("CI still failing after fix attempt %d: %s", ciAttempt+1, ciErr.Error())
-									ciDetails = ciErr.Error()
-									ciLog = l.getCIFailureLog(ciErr.PRNumber)
-									fixPrompt = l.loadVerifyPrompt("verify-tests.md", map[string]string{
-										"{{TASK_TITLE}}":       nextTask,
-										"{{TASK_DESCRIPTION}}": "CI checks still failing. Fix the remaining failures.",
-										"{{TEST_OUTPUT}}":      ciDetails + "\n\n" + ciLog,
-										"{{SIGNAL_COMPLETE}}":  signalPath,
-									})
-								} else {
-									l.logger.Warn("Auto-merge retry failed: %v", err)
-									break
-								}
-							}
-						}
-					}
+					merged, err = l.handleAutoMergeError(ctx, err, nextTask, workDir, rawLogPath)
 				}
 				if merged {
 					if err := l.git.PostMergeReset(); err != nil {
@@ -667,6 +606,125 @@ func (l *Loop) handleRebase(ctx context.Context) error {
 	default:
 		return err
 	}
+}
+
+// handleAutoMergeError handles recoverable auto-merge errors: CI failures
+// and merge conflicts. Returns the final merge state.
+func (l *Loop) handleAutoMergeError(ctx context.Context, err error, nextTask, workDir, rawLogPath string) (bool, error) {
+	var conflictErr *git.MergeConflictError
+	if errors.As(err, &conflictErr) {
+		return l.handleMergeConflict(ctx, nextTask)
+	}
+
+	var ciErr *git.CIFailureError
+	if errors.As(err, &ciErr) {
+		return l.handleCIFailure(ctx, ciErr, nextTask, workDir, rawLogPath)
+	}
+
+	return false, err
+}
+
+// handleMergeConflict rebases the working branch onto main and force-pushes
+// to resolve PR merge conflicts, then retries the merge.
+func (l *Loop) handleMergeConflict(ctx context.Context, nextTask string) (bool, error) {
+	l.logger.Log("Rebasing onto main to resolve merge conflicts...")
+
+	if err := l.git.RebaseOntoDefaultBranch(ctx); err != nil {
+		l.logger.Warn("Rebase failed: %v", err)
+		return false, fmt.Errorf("conflict resolution rebase failed: %w", err)
+	}
+
+	l.logger.Log("Force-pushing rebased branch...")
+	if err := l.forcePush(); err != nil {
+		l.logger.Warn("Force-push after rebase failed: %v", err)
+		return false, fmt.Errorf("force-push after conflict rebase failed: %w", err)
+	}
+
+	l.logger.Log("Retrying merge after conflict resolution...")
+	return l.autoMerge()
+}
+
+// handleCIFailure spawns fix agents to address CI failures and retries
+// the merge after each fix attempt.
+func (l *Loop) handleCIFailure(ctx context.Context, ciErr *git.CIFailureError, nextTask, workDir, rawLogPath string) (bool, error) {
+	l.logger.Log("CI failed on PR #%s — spawning fix agent...", ciErr.PRNumber)
+
+	ciDetails := ciErr.Error()
+	ciLog := l.getCIFailureLog(ciErr.PRNumber)
+
+	signalPath := filepath.Join(l.cfg.RalphDir, ".signal_complete")
+	fixPrompt := l.loadVerifyPrompt("verify-tests.md", map[string]string{
+		"{{TASK_TITLE}}":       nextTask,
+		"{{TASK_DESCRIPTION}}": "CI checks failed after push. Fix the failures so CI passes.",
+		"{{TEST_OUTPUT}}":      ciDetails + "\n\n" + ciLog,
+		"{{SIGNAL_COMPLETE}}":  signalPath,
+	})
+
+	var merged bool
+	for ciAttempt := 0; ciAttempt < 2; ciAttempt++ {
+		fixRunner := l.newRunner()
+		fixResult, _ := fixRunner.Run(claude.RunConfig{
+			Ctx:          ctx,
+			WorkDir:      workDir,
+			RalphDir:     l.cfg.RalphDir,
+			Prompt:       fixPrompt,
+			RawLog:       rawLogPath,
+			Quiet:        true,
+			Signals:      l.signals,
+			PollInterval: 2 * time.Second,
+			IdleTimeout:  l.cfg.IdleTimeout,
+		})
+		if !fixResult.SignalDetected {
+			l.logger.Warn("CI fix agent exited without signal")
+			break
+		}
+
+		if pushErr := l.pushAndCreatePR(nextTask); pushErr != nil {
+			l.logger.Warn("Push after CI fix failed: %v", pushErr)
+			break
+		}
+
+		var mergeErr error
+		merged, mergeErr = l.autoMerge()
+		if mergeErr == nil && merged {
+			return true, nil
+		}
+		if mergeErr != nil {
+			if errors.As(mergeErr, &ciErr) {
+				l.logger.Warn("CI still failing after fix attempt %d: %s", ciAttempt+1, ciErr.Error())
+				ciDetails = ciErr.Error()
+				ciLog = l.getCIFailureLog(ciErr.PRNumber)
+				fixPrompt = l.loadVerifyPrompt("verify-tests.md", map[string]string{
+					"{{TASK_TITLE}}":       nextTask,
+					"{{TASK_DESCRIPTION}}": "CI checks still failing. Fix the remaining failures.",
+					"{{TEST_OUTPUT}}":      ciDetails + "\n\n" + ciLog,
+					"{{SIGNAL_COMPLETE}}":  signalPath,
+				})
+			} else {
+				l.logger.Warn("Auto-merge retry failed: %v", mergeErr)
+				return false, mergeErr
+			}
+		}
+	}
+
+	return merged, nil
+}
+
+// newRunner returns a claudeRunner for spawning sub-agents. Uses newRunnerFunc
+// if set (for testing), otherwise creates a default claude.Runner.
+func (l *Loop) newRunner() claudeRunner {
+	if l.newRunnerFunc != nil {
+		return l.newRunnerFunc()
+	}
+	return &claude.Runner{Logger: l.logger}
+}
+
+// forcePush force-pushes the current branch to the remote.
+func (l *Loop) forcePush() error {
+	if l.forcePushFunc != nil {
+		return l.forcePushFunc()
+	}
+	return l.git.ForcePush()
 }
 
 // isNewTask returns true when the next task differs from the last one stored

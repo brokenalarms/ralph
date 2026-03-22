@@ -68,8 +68,16 @@ type Manager struct {
 	BranchRenamed  bool
 	BranchStrategy BranchStrategy
 	MergeAdmin     bool
+	FetchPRChecks  CIFetchFunc
 	State          StateStore
 	Logger         Log
+}
+
+func (m *Manager) ciFetcher() CIFetchFunc {
+	if m.FetchPRChecks != nil {
+		return m.FetchPRChecks
+	}
+	return fetchPRChecks
 }
 
 // TempBranch returns the temporary branch name for the current project.
@@ -192,6 +200,62 @@ func (m *Manager) tryResumeWorktree() error {
 		m.Logger.Warn("Failed to fetch origin/%s on resume: %v", defaultBranch, err)
 	}
 
+	if m.resumedBranchIsStale(defaultBranch) {
+		m.Logger.Log("Stale branch detected on resume — resetting to origin/%s", defaultBranch)
+		return m.resetResumedWorktree(defaultBranch)
+	}
+
+	return nil
+}
+
+// resumedBranchIsStale returns true when the stored branch no longer exists
+// or its changes have already been squash-merged into origin/defaultBranch.
+func (m *Manager) resumedBranchIsStale(defaultBranch string) bool {
+	if m.WorktreeBranch == "" {
+		return false
+	}
+
+	if !refExists(m.WorkDir, m.WorktreeBranch) {
+		return true
+	}
+
+	if !refExists(m.WorkDir, "origin/"+defaultBranch) {
+		return false
+	}
+
+	// If HEAD has no unique commits beyond origin/main, it's already up to date or empty.
+	revCount := gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+"..HEAD")
+	if revCount == "" || revCount == "0" {
+		return false
+	}
+
+	return IsBranchSquashMerged(m.WorkDir, m.WorktreeBranch)
+}
+
+// resetResumedWorktree force-resets the worktree to origin/defaultBranch,
+// equivalent to PostMergeReset but from a resume context. The old branch's
+// work is already on main (squash-merged), so starting fresh is safe.
+func (m *Manager) resetResumedWorktree(defaultBranch string) error {
+	oldBranch := m.WorktreeBranch
+	newBranch := m.TempBranch()
+
+	if err := gitCmdErr(m.WorkDir, "checkout", "--force", "-B", newBranch, "origin/"+defaultBranch); err != nil {
+		return fmt.Errorf("resume reset: checkout failed: %w", err)
+	}
+
+	if err := gitCmdErr(m.WorkDir, "clean", "-fd"); err != nil {
+		m.Logger.Warn("git clean failed (non-fatal): %v", err)
+	}
+
+	if oldBranch != newBranch {
+		gitCmd(m.WorkDir, "branch", "-D", oldBranch)
+	}
+
+	m.WorktreeBranch = newBranch
+	m.BranchRenamed = false
+	if m.State != nil {
+		_ = m.State.Write("worktree_branch", m.WorktreeBranch)
+	}
 	return nil
 }
 
@@ -347,8 +411,8 @@ func (m *Manager) PushAndCreatePR(taskDesc string) error {
 
 // AutoMergeCurrentBranch squash-merges the PR for the current branch into main.
 // Returns (true, nil) when a PR was merged, (false, nil) when no PR exists or
-// no action was needed, and (false, err) on failure. When CI checks are required
-// by branch protection, polls until checks complete and retries the merge.
+// no action was needed, and (false, err) on failure. Proactively polls CI
+// checks before attempting merge so CI is treated as the final gate.
 func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
 		return false, nil
@@ -376,6 +440,35 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 
 	m.Logger.Log("Auto-merging PR #%s (branch: %s)...", prNumber, m.WorktreeBranch)
 
+	fetch := m.ciFetcher()
+
+	// Proactively poll CI status before attempting merge.
+	checks, fetchErr := fetch(prNumber, repoURL)
+	if fetchErr != nil {
+		m.Logger.Warn("Could not fetch CI checks for PR #%s: %v", prNumber, fetchErr)
+	}
+
+	if fetchErr == nil && len(checks) > 0 {
+		status := evaluateChecks(checks)
+
+		if status == CIPending {
+			m.Logger.Log("CI checks pending on PR #%s — waiting for completion...", prNumber)
+			checks, status, err = waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+			if err != nil {
+				return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, err)
+			}
+		}
+
+		if status == CIFailed {
+			return false, &CIFailureError{
+				PRNumber: prNumber,
+				Failures: failedChecks(checks),
+			}
+		}
+
+		m.Logger.Log("CI passed for PR #%s — merging", prNumber)
+	}
+
 	mergeCmd := exec.Command("gh", m.ghMergeArgs(prNumber, repoURL)...)
 	mergeOut, mergeErr := mergeCmd.CombinedOutput()
 	if mergeErr == nil {
@@ -383,33 +476,38 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 	}
 
 	mergeOutput := string(mergeOut)
-	if !isCIGatedError(mergeOutput) {
-		m.Logger.Warn("Auto-merge failed for PR #%s: %s", prNumber, mergeOutput)
-		return false, fmt.Errorf("auto-merge failed for PR #%s", prNumber)
+
+	if isMergeConflictError(mergeOutput) {
+		m.Logger.Warn("PR #%s has merge conflicts — attempting rebase", prNumber)
+		return false, &MergeConflictError{PRNumber: prNumber}
 	}
 
-	m.Logger.Log("Merge blocked by branch protection — waiting for CI checks on PR #%s", prNumber)
-
-	checks, status, pollErr := waitForCI(prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
-	if pollErr != nil {
-		return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, pollErr)
-	}
-
-	if status == CIFailed {
-		return false, &CIFailureError{
-			PRNumber: prNumber,
-			Failures: failedChecks(checks),
+	if isCIGatedError(mergeOutput) {
+		m.Logger.Log("PR #%s blocked by branch protection — waiting for CI...", prNumber)
+		checks, status, waitErr := waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+		if waitErr != nil {
+			return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, waitErr)
+		}
+		if status == CIFailed {
+			return false, &CIFailureError{
+				PRNumber: prNumber,
+				Failures: failedChecks(checks),
+			}
+		}
+		if status == CIPassed {
+			m.Logger.Log("CI passed for PR #%s — retrying merge", prNumber)
+			retryCmd := exec.Command("gh", m.ghMergeArgs(prNumber, repoURL)...)
+			retryOut, retryErr := retryCmd.CombinedOutput()
+			if retryErr == nil {
+				return m.postMergeUpdate(prNumber)
+			}
+			m.Logger.Warn("Merge retry failed for PR #%s: %s", prNumber, string(retryOut))
+			return false, fmt.Errorf("merge retry failed for PR #%s after CI passed", prNumber)
 		}
 	}
 
-	m.Logger.Log("CI passed — retrying merge for PR #%s", prNumber)
-	retryCmd := exec.Command("gh", m.ghMergeArgs(prNumber, repoURL)...)
-	if retryOut, retryErr := retryCmd.CombinedOutput(); retryErr != nil {
-		m.Logger.Warn("Auto-merge retry failed for PR #%s: %s", prNumber, string(retryOut))
-		return false, fmt.Errorf("auto-merge retry failed for PR #%s", prNumber)
-	}
-
-	return m.postMergeUpdate(prNumber)
+	m.Logger.Warn("Auto-merge failed for PR #%s: %s", prNumber, mergeOutput)
+	return false, fmt.Errorf("auto-merge failed for PR #%s", prNumber)
 }
 
 // postMergeUpdate fetches the latest default branch after a successful merge
@@ -440,6 +538,16 @@ func (m *Manager) ghMergeArgs(prNumber, repoURL string) []string {
 		args = append(args, "--admin")
 	}
 	return args
+}
+
+// ForcePush pushes the current branch to the remote with --force-with-lease,
+// which is needed after rebasing to resolve merge conflicts on a PR.
+func (m *Manager) ForcePush() error {
+	if m.WorktreeBranch == "" {
+		return nil
+	}
+	m.Logger.Log("Force-pushing %s...", m.WorktreeBranch)
+	return gitCmdErr(m.WorkDir, "push", "--force-with-lease", "origin", m.WorktreeBranch)
 }
 
 // PostMergeReset force-resets the worktree to origin/main after a successful
