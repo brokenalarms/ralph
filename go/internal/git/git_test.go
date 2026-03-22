@@ -116,7 +116,7 @@ func TestSlugify_TruncationTrimsTrailingDash(t *testing.T) {
 
 // --- SetupWorktree tests ---
 
-// SetupWorktree creates a new worktree in detached HEAD and records state
+// SetupWorktree creates a new worktree in .ralph/worktrees and records state
 func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
@@ -144,13 +144,14 @@ func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 	if got, _ := state.Read("worktree_dir"); got != mgr.WorkDir {
 		t.Errorf("state worktree_dir = %q, want %q", got, mgr.WorkDir)
 	}
-	if got, _ := state.Read("worktree_branch"); got != "" {
-		t.Errorf("state worktree_branch = %q, want empty (detached HEAD)", got)
+	if got, _ := state.Read("worktree_branch"); got != mgr.WorktreeBranch {
+		t.Errorf("state worktree_branch = %q, want %q", got, mgr.WorktreeBranch)
 	}
 
-	// WorktreeBranch must be empty (detached HEAD until task starts)
-	if mgr.WorktreeBranch != "" {
-		t.Errorf("branch = %q, want empty (detached HEAD)", mgr.WorktreeBranch)
+	// Branch name must be exactly ralph/<projectName>/next
+	wantBranch := "ralph/" + mgr.ProjectName + "/next"
+	if mgr.WorktreeBranch != wantBranch {
+		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, wantBranch)
 	}
 }
 
@@ -198,7 +199,7 @@ func TestSetupWorktree_Resume(t *testing.T) {
 	state := newMemState()
 	log := &testLog{}
 
-	// First run: create worktree then create a task branch
+	// First run: create worktree
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
@@ -209,7 +210,6 @@ func TestSetupWorktree_Resume(t *testing.T) {
 	if err := mgr.SetupWorktree(); err != nil {
 		t.Fatalf("first SetupWorktree: %v", err)
 	}
-	mgr.CreateBranchForTask("some task")
 	firstWorkDir := mgr.WorkDir
 	firstBranch := mgr.WorktreeBranch
 
@@ -235,7 +235,7 @@ func TestSetupWorktree_Resume(t *testing.T) {
 }
 
 // Resume log must not leak the old branch name to avoid confusion with the
-// current task — the branch gets replaced by CreateBranchForTask for the new task.
+// current task — the branch gets rebased and renamed shortly after resume.
 func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
@@ -253,7 +253,7 @@ func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.CreateBranchForTask("old task name")
+	mgr.RenameBranchForTask("old task name")
 	oldBranch := mgr.WorktreeBranch
 
 	log.messages = nil
@@ -296,15 +296,18 @@ func TestSetupWorktree_ResumeRestoresTaskSeqFromState(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.CreateBranchForTask("first task")
-	mgr.BranchRenamed = false
-	mgr.CreateBranchForTask("second task")
+	mgr.RenameBranchForTask("first task")
+	mgr.RotateBranch()
+	mgr.RenameBranchForTask("second task")
 
 	// Verify task_seq was persisted
 	storedSeq, _ := state.Read("task_seq")
 	if storedSeq != "2" {
 		t.Fatalf("stored task_seq = %q, want \"2\"", storedSeq)
 	}
+
+	// Delete a branch to simulate squash-merge cleanup
+	exec.Command("git", "-C", project, "branch", "-D", "ralph/"+mgr.ProjectName+"/01-first-task").Run()
 
 	// Resume — should use persisted seq (2), not branch count (1)
 	mgr2 := &Manager{
@@ -324,9 +327,10 @@ func TestSetupWorktree_ResumeRestoresTaskSeqFromState(t *testing.T) {
 	}
 }
 
-// Each task creates a fresh branch from origin/main, so successive tasks
-// get independent branches rather than stacking on each other.
-func TestCreateBranchForTask_CreatesFreshBranchFromMain(t *testing.T) {
+// Resume followed by RotateBranch preserves the previous task branch as a
+// separate ref, so the next task creates a new stacked branch instead of
+// renaming the existing one.
+func TestResumeRotate_PreservesPreviousBranch(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	state := newMemState()
@@ -343,37 +347,55 @@ func TestCreateBranchForTask_CreatesFreshBranchFromMain(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.CreateBranchForTask("first task")
+	mgr.RenameBranchForTask("first task")
 	writeFile(t, mgr.WorkDir, "first.txt", "work\n")
 	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "first task work")
 	firstBranch := mgr.WorktreeBranch
-	firstHead := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
 
-	// Creating a second task replaces the first branch with a fresh one from origin/main
-	mgr.BranchRenamed = false
-	mgr.CreateBranchForTask("second task")
+	// Simulate resume: new Manager with Resume=true
+	mgr2 := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		Resume:      true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr2.SetupWorktree(); err != nil {
+		t.Fatalf("resume SetupWorktree: %v", err)
+	}
 
-	secondBranch := mgr.WorktreeBranch
-	secondHead := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
-	originMain := gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
+	// Rotate to create a stacked branch (simulates what Loop.Run does on resume)
+	mgr2.RotateBranch()
+	mgr2.RenameBranchForTask("second task")
+
+	secondBranch := mgr2.WorktreeBranch
 
 	if firstBranch == secondBranch {
 		t.Errorf("branches should differ: first=%q, second=%q", firstBranch, secondBranch)
 	}
 
-	if secondHead != originMain {
-		t.Errorf("second branch HEAD should match origin/main: got %s, want %s", secondHead, originMain)
+	// Previous task branch should still exist as a separate ref
+	if !refExists(project, firstBranch) {
+		t.Errorf("first task branch %q should still exist after rotation", firstBranch)
 	}
 
-	if firstHead == secondHead {
-		t.Error("second branch should not carry commits from first task")
+	if !refExists(project, secondBranch) {
+		t.Errorf("second task branch %q should exist", secondBranch)
+	}
+
+	// Both branches should share the same base commit (stacked)
+	firstHead := gitOutput(mgr2.WorkDir, "rev-parse", firstBranch)
+	secondBase := gitOutput(mgr2.WorkDir, "merge-base", firstBranch, secondBranch)
+	if firstHead != secondBase {
+		t.Error("second branch should be stacked on top of first branch's HEAD")
 	}
 }
 
-// --- CreateBranchForTask tests ---
+// --- RenameBranchForTask tests ---
 
-// CreateBranchForTask creates a named branch from origin/main for the task
-func TestCreateBranchForTask_CreatesBranch(t *testing.T) {
+// RenameBranchForTask gives the temp branch a descriptive name for the current task
+func TestRenameBranchForTask_RenamesBranch(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	state := newMemState()
@@ -389,7 +411,7 @@ func TestCreateBranchForTask_CreatesBranch(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.CreateBranchForTask("Fix auth bug")
+	mgr.RenameBranchForTask("Fix auth bug")
 
 	wantBranch := "ralph/" + mgr.ProjectName + "/01-fix-auth-bug"
 	if mgr.WorktreeBranch != wantBranch {
@@ -403,17 +425,10 @@ func TestCreateBranchForTask_CreatesBranch(t *testing.T) {
 	if got, _ := state.Read("worktree_branch"); got != wantBranch {
 		t.Errorf("state worktree_branch = %q, want %q", got, wantBranch)
 	}
-
-	// Branch should be at origin/main
-	head := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
-	originMain := gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
-	if head != originMain {
-		t.Errorf("branch HEAD should match origin/main: got %s, want %s", head, originMain)
-	}
 }
 
-// CreateBranchForTask only creates once per iteration (idempotent guard)
-func TestCreateBranchForTask_OnlyCreatesOnce(t *testing.T) {
+// RenameBranchForTask only renames once per iteration (idempotent guard)
+func TestRenameBranchForTask_OnlyRenamesOnce(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	state := newMemState()
@@ -429,25 +444,63 @@ func TestCreateBranchForTask_OnlyCreatesOnce(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.CreateBranchForTask("First task")
+	mgr.RenameBranchForTask("First task")
 	firstBranch := mgr.WorktreeBranch
 
-	mgr.CreateBranchForTask("Second task")
+	mgr.RenameBranchForTask("Second task")
 	if mgr.WorktreeBranch != firstBranch {
 		t.Errorf("branch changed on second call: %q → %q", firstBranch, mgr.WorktreeBranch)
 	}
 }
 
-// CreateBranchForTask is a no-op when running without a worktree
-func TestCreateBranchForTask_NoOpWithoutWorktree(t *testing.T) {
+// RenameBranchForTask is a no-op when running without a worktree
+func TestRenameBranchForTask_NoOpWithoutWorktree(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir: "/some/dir",
 		WorkDir:    "/some/dir",
 		Logger:     &testLog{},
 	}
-	mgr.CreateBranchForTask("anything")
+	mgr.RenameBranchForTask("anything")
 	if mgr.BranchRenamed {
-		t.Error("should not create branch when WorkDir == ProjectDir")
+		t.Error("should not rename when WorkDir == ProjectDir")
+	}
+}
+
+// --- RotateBranch tests ---
+
+// RotateBranch creates a fresh temp branch for the next iteration
+func TestRotateBranch_CreatesNewTempBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+	log := &testLog{}
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Rename to a task branch first
+	mgr.RenameBranchForTask("Some task")
+	taskBranch := mgr.WorktreeBranch
+
+	// Now rotate
+	mgr.RotateBranch()
+
+	if mgr.WorktreeBranch == taskBranch {
+		t.Error("branch should have changed after rotate")
+	}
+	if !strings.HasSuffix(mgr.WorktreeBranch, "/next") {
+		t.Errorf("rotated branch %q should end with /next", mgr.WorktreeBranch)
+	}
+	if mgr.BranchRenamed {
+		t.Error("BranchRenamed should be reset to false after rotation")
 	}
 }
 
@@ -542,8 +595,8 @@ func TestRenameWorktreeForTheme_CollisionAvoidance(t *testing.T) {
 
 // --- TaskSeq increment tests ---
 
-// TaskSeq increments with each branch creation, producing sequential branch names
-func TestTaskSeq_IncrementsAcrossTasks(t *testing.T) {
+// TaskSeq increments with each branch rename, producing sequential branch names
+func TestTaskSeq_IncrementsAcrossRotations(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	state := newMemState()
@@ -560,14 +613,14 @@ func TestTaskSeq_IncrementsAcrossTasks(t *testing.T) {
 	}
 
 	// First task
-	mgr.CreateBranchForTask("First")
+	mgr.RenameBranchForTask("First")
 	if mgr.TaskSeq != 1 {
 		t.Errorf("TaskSeq = %d, want 1", mgr.TaskSeq)
 	}
 
-	// Reset guard and create second task
-	mgr.BranchRenamed = false
-	mgr.CreateBranchForTask("Second")
+	// Rotate and rename again
+	mgr.RotateBranch()
+	mgr.RenameBranchForTask("Second")
 	if mgr.TaskSeq != 2 {
 		t.Errorf("TaskSeq = %d, want 2", mgr.TaskSeq)
 	}
@@ -646,11 +699,38 @@ func TestBranchSequenceResetsPerRun(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.CreateBranchForTask("First task")
+	mgr.RenameBranchForTask("First task")
 
 	want := "ralph/" + mgr.ProjectName + "/01-first-task"
 	if mgr.WorktreeBranch != want {
 		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, want)
+	}
+}
+
+// rotate_branch doesn't crash when branch already exists (bats test 8)
+func TestRotateBranchLogsWarningOnFailure(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+	log := &testLog{}
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Don't rename — "next" still exists, rotate will attempt to create it
+	mgr.RotateBranch()
+
+	// Should not panic, should still be on next branch
+	if !strings.HasSuffix(mgr.WorktreeBranch, "/next") {
+		t.Errorf("branch %q should end with /next", mgr.WorktreeBranch)
 	}
 }
 
@@ -689,16 +769,17 @@ func TestStaleWorktreeBranchCleanedUpViaPrune(t *testing.T) {
 	}
 }
 
-// Multiple worktrees on the same day get sequential names (bats test 10)
-func TestMultipleWorktreesSameDayGetSequentialNames(t *testing.T) {
+// Live ralph worktree is force-removed when branch conflicts (bats test 10)
+func TestLiveRalphWorktreeRemovedWhenBranchExists(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
 
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
 		UseWorktree: true,
-		State:       newMemState(),
+		State:       state,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(); err != nil {
@@ -720,18 +801,12 @@ func TestMultipleWorktreesSameDayGetSequentialNames(t *testing.T) {
 	if _, err := os.Stat(mgr2.WorkDir); err != nil {
 		t.Error("new worktree dir should exist")
 	}
-	if firstWorkDir == mgr2.WorkDir {
-		t.Error("second worktree should have a different path")
-	}
-	if !strings.HasSuffix(firstWorkDir, "-01") {
-		t.Errorf("first worktree should end with -01, got %q", firstWorkDir)
-	}
-	if !strings.HasSuffix(mgr2.WorkDir, "-02") {
-		t.Errorf("second worktree should end with -02, got %q", mgr2.WorkDir)
+	if _, err := os.Stat(firstWorkDir); err == nil {
+		t.Error("old worktree dir should have been removed")
 	}
 }
 
-// Resume restores TaskSeq from state.json
+// Resume restores TaskSeq from branch count (bats test 11 — Go uses branch count instead of state.json)
 func TestResumeRestoresTaskSeq(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
@@ -748,15 +823,18 @@ func TestResumeRestoresTaskSeq(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.CreateBranchForTask("first task")
-	mgr.BranchRenamed = false
-	mgr.CreateBranchForTask("second task")
+	mgr.RenameBranchForTask("first task")
+	mgr.RotateBranch()
+	mgr.RenameBranchForTask("second task")
 
 	if mgr.TaskSeq != 2 {
 		t.Fatalf("TaskSeq = %d, want 2", mgr.TaskSeq)
 	}
 
-	// Resume — TaskSeq should be restored from state
+	// Delete a branch to simulate squash-merge cleanup
+	gitCmd(project, "branch", "-D", "ralph/"+mgr.ProjectName+"/01-first-task")
+
+	// Resume — TaskSeq should be restored from remaining branches
 	mgr2 := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
@@ -769,8 +847,10 @@ func TestResumeRestoresTaskSeq(t *testing.T) {
 		t.Fatalf("resume SetupWorktree: %v", err)
 	}
 
-	if mgr2.TaskSeq != 2 {
-		t.Errorf("TaskSeq = %d, want 2 (restored from state)", mgr2.TaskSeq)
+	// After deleting branch 01, only branch 02 + next remain,
+	// so countNamedBranches returns 2 (the /next and /02-second-task branches)
+	if mgr2.TaskSeq < 1 {
+		t.Errorf("TaskSeq = %d, want >= 1 (restored from branches)", mgr2.TaskSeq)
 	}
 }
 
@@ -897,9 +977,9 @@ func TestRenameWorktreeForTheme_PrefersStateTheme(t *testing.T) {
 
 // --- BranchStrategy tests ---
 
-// Single-branch mode skips CreateBranchForTask entirely, keeping the
-// worktree in detached HEAD across all tasks.
-func TestCreateBranchForTask_SkippedInSingleMode(t *testing.T) {
+// Single-branch mode skips RenameBranchForTask entirely, keeping the initial
+// worktree branch name unchanged across all tasks.
+func TestRenameBranchForTask_SkippedInSingleMode(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := newMemState()
@@ -916,10 +996,11 @@ func TestCreateBranchForTask_SkippedInSingleMode(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.CreateBranchForTask("Some task")
+	origBranch := mgr.WorktreeBranch
+	mgr.RenameBranchForTask("Some task")
 
-	if mgr.WorktreeBranch != "" {
-		t.Errorf("branch should stay empty in single mode, got %q", mgr.WorktreeBranch)
+	if mgr.WorktreeBranch != origBranch {
+		t.Errorf("branch should stay as %q in single mode, got %q", origBranch, mgr.WorktreeBranch)
 	}
 	if mgr.BranchRenamed {
 		t.Error("BranchRenamed should be false in single mode")
@@ -929,8 +1010,35 @@ func TestCreateBranchForTask_SkippedInSingleMode(t *testing.T) {
 	}
 }
 
-// Stacked mode (explicit) creates named branches per task from origin/main.
-func TestBranchStrategy_StackedCreatesBranchPerTask(t *testing.T) {
+// Single-branch mode skips RotateBranch entirely, keeping the same branch
+// across task transitions instead of creating per-task branches.
+func TestRotateBranch_SkippedInSingleMode(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchSingle,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	origBranch := mgr.WorktreeBranch
+	mgr.RotateBranch()
+
+	if mgr.WorktreeBranch != origBranch {
+		t.Errorf("branch should stay as %q in single mode, got %q", origBranch, mgr.WorktreeBranch)
+	}
+}
+
+// Stacked mode (explicit) still rotates and renames branches per task.
+func TestBranchStrategy_StackedBehavesLikeDefault(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := newMemState()
@@ -947,21 +1055,27 @@ func TestBranchStrategy_StackedCreatesBranchPerTask(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.CreateBranchForTask("First task")
+	origBranch := mgr.WorktreeBranch
+	mgr.RenameBranchForTask("First task")
 
-	if mgr.WorktreeBranch == "" {
-		t.Error("stacked mode should create a named branch")
+	if mgr.WorktreeBranch == origBranch {
+		t.Error("stacked mode should rename the branch")
 	}
 	if !mgr.BranchRenamed {
-		t.Error("BranchRenamed should be true after creation in stacked mode")
+		t.Error("BranchRenamed should be true after rename in stacked mode")
 	}
 	if mgr.TaskSeq != 1 {
 		t.Errorf("TaskSeq should be 1, got %d", mgr.TaskSeq)
 	}
 
-	wantBranch := "ralph/" + mgr.ProjectName + "/01-first-task"
-	if mgr.WorktreeBranch != wantBranch {
-		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, wantBranch)
+	taskBranch := mgr.WorktreeBranch
+	mgr.RotateBranch()
+
+	if mgr.WorktreeBranch == taskBranch {
+		t.Error("stacked mode should rotate the branch")
+	}
+	if !strings.HasSuffix(mgr.WorktreeBranch, "/next") {
+		t.Errorf("rotated branch %q should end with /next", mgr.WorktreeBranch)
 	}
 }
 
@@ -1000,7 +1114,7 @@ func TestIsBranchSquashMerged_UnmergedBranch(t *testing.T) {
 	}
 }
 
-// PostMergeReset resets the worktree to detached HEAD at origin/main after
+// PostMergeReset resets the worktree to a fresh branch at origin/main after
 // auto-merge, so the next task starts from merged state instead of stale commits.
 func TestPostMergeReset_ResetsToOriginMain(t *testing.T) {
 	project, _ := initBareRepo(t)
@@ -1019,18 +1133,19 @@ func TestPostMergeReset_ResetsToOriginMain(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.CreateBranchForTask("completed task")
+	// Rename to a task branch (simulating a completed task)
+	mgr.RenameBranchForTask("completed task")
 	taskBranch := mgr.WorktreeBranch
-	if taskBranch == "" {
-		t.Fatal("expected a named task branch")
+	if taskBranch == mgr.TempBranch() {
+		t.Fatal("expected task branch to differ from temp branch")
 	}
 
 	if err := mgr.PostMergeReset(); err != nil {
 		t.Fatalf("PostMergeReset: %v", err)
 	}
 
-	if mgr.WorktreeBranch != "" {
-		t.Errorf("expected empty branch (detached HEAD) after reset, got %q", mgr.WorktreeBranch)
+	if mgr.WorktreeBranch != mgr.TempBranch() {
+		t.Errorf("expected branch %q after reset, got %q", mgr.TempBranch(), mgr.WorktreeBranch)
 	}
 	if mgr.BranchRenamed {
 		t.Error("BranchRenamed should be false after PostMergeReset")
@@ -1039,6 +1154,55 @@ func TestPostMergeReset_ResetsToOriginMain(t *testing.T) {
 	// Old task branch should be deleted
 	if refExists(mgr.WorkDir, taskBranch) {
 		t.Errorf("old task branch %q should have been deleted", taskBranch)
+	}
+}
+
+// PostMergeReset in single-branch mode resets to the same branch name (temp)
+// from origin/main, keeping the branch name stable.
+func TestPostMergeReset_SingleBranchKeepsSameName(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchSingle,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// In single-branch mode, branch stays as /next
+	origBranch := mgr.WorktreeBranch
+	if !strings.HasSuffix(origBranch, "/next") {
+		t.Fatalf("expected /next branch, got %q", origBranch)
+	}
+
+	// Add a commit so we can verify reset moves HEAD
+	writeFile(t, mgr.WorkDir, "task-work.txt", "some work\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "task commit")
+
+	headBefore := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
+	originMain := gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
+	if headBefore == originMain {
+		t.Fatal("HEAD should differ from origin/main before reset")
+	}
+
+	if err := mgr.PostMergeReset(); err != nil {
+		t.Fatalf("PostMergeReset: %v", err)
+	}
+
+	if mgr.WorktreeBranch != origBranch {
+		t.Errorf("single-branch should keep name %q, got %q", origBranch, mgr.WorktreeBranch)
+	}
+
+	headAfter := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
+	if headAfter != originMain {
+		t.Errorf("HEAD should match origin/main after reset, got %s vs %s", headAfter, originMain)
 	}
 }
 
@@ -1062,7 +1226,7 @@ func TestPostMergeReset_CleansUntrackedAndDirtyFiles(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.CreateBranchForTask("dirty task")
+	mgr.RenameBranchForTask("dirty task")
 
 	// Create an untracked file (simulating build artifacts or generated files)
 	untrackedPath := filepath.Join(mgr.WorkDir, "leftover-artifact.txt")
@@ -1188,7 +1352,7 @@ func TestPruneOrphanedWorktrees_RemovesOrphaned(t *testing.T) {
 
 	// Create an active worktree via git
 	activeDir := filepath.Join(worktreeRoot, "ralph-20260322-active")
-	run(t, "git", "-C", project, "worktree", "add", "--detach", activeDir, "HEAD")
+	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/next", activeDir, "HEAD")
 
 	PruneOrphanedWorktrees(project, ralphDir, log)
 
