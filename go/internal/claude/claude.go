@@ -615,18 +615,26 @@ tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
 	os.WriteFile(path, []byte(script), 0o755)
 }
 
-// stopProcessGroup kills the entire process group rooted at cmd. The command
-// must have been started with SysProcAttr.Setpgid = true so it leads its own
-// group. Falls back to killing just the process if the group kill fails.
+// stopProcessGroup kills cmd and all its descendants. Uses multiple
+// mechanisms for reliability: pkill -P (by parent PID, matching bash
+// ralph's cleanup pattern), process group kill, and direct kill.
 func stopProcessGroup(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	// Kill the whole process group (negative PID). This reaches child
-	// processes spawned by pipelines inside bash scripts — equivalent to
-	// bash's pkill -P + kill pattern.
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-		_ = cmd.Process.Kill()
-	}
+	pid := cmd.Process.Pid
+
+	// Kill children by parent PID first (matches bash ralph's pkill -P
+	// pattern). This is more reliable on macOS than process group killing
+	// alone for bash pipeline children (tail, jq, perl, sed).
+	_ = exec.Command("pkill", "-9", "-P", fmt.Sprintf("%d", pid)).Run()
+
+	// Kill the entire process group (negative PID). Catches any processes
+	// still in the group that pkill -P may have missed.
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+
+	// Direct kill as final fallback.
+	_ = cmd.Process.Kill()
+
 	_ = cmd.Wait()
 }
