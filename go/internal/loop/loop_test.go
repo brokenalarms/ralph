@@ -2333,3 +2333,180 @@ func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 		t.Errorf("completed task = %q, want %q", got, "Add dark mode")
 	}
 }
+
+// Verifies that when verification fails (e.g. tests don't pass), the task
+// is NOT closed — it's recorded as a failed attempt so the next iteration
+// can retry, preventing ralph from falsely closing beads.
+func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "fix the bug",
+		nextID:    "ralph-bug",
+		label:     "checklist",
+	}
+
+	runner := &stubRunner{
+		result: claude.Result{SignalDetected: true, Summary: "fixed it"},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.verifyFunc = func(workDir, headBefore string) (bool, string) {
+		return false, "test suite failed"
+	}
+	l.pushPRFunc = func(string) error {
+		t.Error("push should not be called when verification fails")
+		return nil
+	}
+
+	_ = l.Run(context.Background())
+
+	// Task should NOT be recorded as completed
+	if _, err := os.Stat(filepath.Join(ralphDir, ".completed-tasks")); !os.IsNotExist(err) {
+		t.Error("task should not be recorded as completed when verification fails")
+	}
+
+	// Attempt should be recorded
+	history := l.attempts.Read("ralph-bug", "fix the bug")
+	if history == "" {
+		t.Error("expected a failed attempt to be recorded")
+	}
+	if !strings.Contains(history, "verification failed") {
+		t.Errorf("attempt should mention verification failure, got: %s", history)
+	}
+}
+
+// Verifies that when verification passes, the normal completion flow
+// proceeds — task is closed, PR is pushed, and completed-tasks is recorded.
+func TestLoop_VerificationPassAllowsClose(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	pushCalled := false
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "add feature",
+		nextID:    "ralph-feat",
+		label:     "checklist",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.verifyFunc = func(workDir, headBefore string) (bool, string) {
+		return true, ""
+	}
+	l.pushPRFunc = func(string) error {
+		pushCalled = true
+		return nil
+	}
+
+	_ = l.Run(context.Background())
+
+	if !pushCalled {
+		t.Error("push should be called when verification passes")
+	}
+
+	data, err := os.ReadFile(filepath.Join(ralphDir, ".completed-tasks"))
+	if err != nil {
+		t.Fatalf("expected .completed-tasks file: %v", err)
+	}
+	if !strings.Contains(string(data), "ralph-feat") {
+		t.Errorf("expected ralph-feat in completed tasks, got: %s", string(data))
+	}
+}
+
+// Verifies that the default behavior (no VerifyDir set, no verifyFunc)
+// allows tasks to close without verification, preserving backwards
+// compatibility for projects that opt out.
+func TestLoop_NoVerificationByDefault(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	pushCalled := false
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "simple task",
+		nextID:    "ralph-simple",
+		label:     "checklist",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		// VerifyDir deliberately not set
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.pushPRFunc = func(string) error {
+		pushCalled = true
+		return nil
+	}
+
+	_ = l.Run(context.Background())
+
+	if !pushCalled {
+		t.Error("push should be called when no verification is configured")
+	}
+}
