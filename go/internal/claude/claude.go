@@ -115,8 +115,12 @@ var IterationAllowedTools = []string{
 
 // IterationDisallowedTools lists tools the agent must not use.
 // The orchestrator owns bead close — the agent must not close tasks.
+// Git checkout/branch are blocked so sub-agents can't check out ralph's
+// branches, which would prevent RecreateFromMain from deleting them.
 var IterationDisallowedTools = []string{
 	"Bash(bd close*)",
+	"Bash(git checkout*)",
+	"Bash(git branch*)",
 }
 
 // Runner manages Claude process lifecycle: spawning, signal polling, and cleanup.
