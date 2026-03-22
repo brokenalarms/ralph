@@ -61,14 +61,36 @@ func (t *Tracker) Record(taskID, taskName, summary, diffStat, analysis string) e
 	return err
 }
 
-// Read returns the full attempt history for a task. Returns empty string
-// if no attempts have been recorded.
+const maxPromptAttempts = 3
+
+// Read returns the most recent attempts for a task (capped at
+// maxPromptAttempts). All attempts remain on disk; only the tail
+// is returned to keep prompt context small.
 func (t *Tracker) Read(taskID, taskName string) string {
 	data, err := os.ReadFile(t.attemptFile(taskID, taskName))
 	if err != nil {
 		return ""
 	}
-	return string(data)
+	return lastNAttempts(string(data), maxPromptAttempts)
+}
+
+func lastNAttempts(content string, n int) string {
+	parts := strings.Split(content, "### Attempt ")
+	// First element is empty or preamble before the first attempt header.
+	if len(parts) <= 1 {
+		return content
+	}
+	attempts := parts[1:] // each starts with "N\n..."
+	if len(attempts) <= n {
+		return content
+	}
+	tail := attempts[len(attempts)-n:]
+	var b strings.Builder
+	for _, a := range tail {
+		b.WriteString("### Attempt ")
+		b.WriteString(a)
+	}
+	return b.String()
 }
 
 // Clear removes the attempt file for a task, used when a task is
