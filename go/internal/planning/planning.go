@@ -45,15 +45,20 @@ type Deps struct {
 	// RenameTmuxSession renames the active tmux session to match the worktree.
 	// If nil, tmux renaming is skipped.
 	RenameTmuxSession func(name string) error
+
+	// PromptUser displays a yes/no question and returns true if the user
+	// answers affirmatively. If nil, defaults to fmt.Scanln from stdin.
+	PromptUser func(message string) bool
 }
 
 // Run executes the planning phase. It mirrors ralph.sh's run_planning():
 //
 //  1. If a pre-made plan file was supplied (--plan-file), copy it and return.
 //  2. If resuming and status is past "initialized", skip planning.
-//  3. Launch interactive planning (user chats with Claude).
-//  4. If interactive didn't produce tasks, fall back to autonomous planning.
-//  5. Validate that planning succeeded, update state, rename worktree.
+//  3. If open tasks exist, prompt user to skip planning and go to execution.
+//  4. Launch interactive planning (user chats with Claude).
+//  5. If interactive didn't produce tasks, fall back to autonomous planning.
+//  6. Validate that planning succeeded, update state, rename worktree.
 func Run(d Deps) error {
 	d.Logger.Phase("=== PHASE 1: PLANNING ===")
 
@@ -76,9 +81,23 @@ func Run(d Deps) error {
 		return nil
 	}
 
-	// Interactive planning session — always run on fresh start (status empty/initialized).
-	// NeedsPlanning checks if tasks exist, but even with existing beads the user
-	// should get a chance to review/modify the plan on a fresh run.
+	// If open tasks already exist, offer to skip planning and go straight to execution.
+	if !d.ForcePlan {
+		remaining, _ := d.Backend.CountRemaining()
+		if remaining > 0 {
+			prompt := d.PromptUser
+			if prompt == nil {
+				prompt = defaultPromptUser
+			}
+			msg := fmt.Sprintf("%d open tasks found. Skip planning and start execution?", remaining)
+			if prompt(msg) {
+				d.Logger.Task("Skipping planning — %d open tasks ready", remaining)
+				return finalize(d)
+			}
+		}
+	}
+
+	// Interactive planning session.
 	if !d.SkipPlanning {
 		if err := runInteractive(d); err != nil {
 			d.Logger.Warn("Interactive planning session ended: %v", err)
@@ -340,6 +359,14 @@ func planFilePath(d Deps) string {
 		return d.PlanFile
 	}
 	return filepath.Join(d.RalphDir, "plan.md")
+}
+
+// defaultPromptUser prints a yes/no prompt and reads from stdin.
+func defaultPromptUser(message string) bool {
+	fmt.Printf("%s[ralph]%s %s (y/n) ", logging.Yellow, logging.Reset, message)
+	var answer string
+	fmt.Scanln(&answer)
+	return answer == "y" || answer == "Y"
 }
 
 // defaultRunClaude returns a RunClaude function that spawns claude in

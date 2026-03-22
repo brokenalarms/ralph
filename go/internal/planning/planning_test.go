@@ -18,6 +18,7 @@ type mockBackend struct {
 	needsPlanning      bool
 	planningSucceeded  bool
 	totalTasks         int
+	remainingTasks     int
 	planningInstr      string
 	planningSucceedSeq []bool // if set, PlanningSucceeded returns these in order
 	callIdx            int
@@ -25,9 +26,9 @@ type mockBackend struct {
 }
 
 func (m *mockBackend) Init() error                            { return nil }
-func (m *mockBackend) HasRemaining() (bool, error)            { return false, nil }
+func (m *mockBackend) HasRemaining() (bool, error)            { return m.remainingTasks > 0, nil }
 func (m *mockBackend) CountCompleted() (int, error)           { return 0, nil }
-func (m *mockBackend) CountRemaining() (int, error)           { return 0, nil }
+func (m *mockBackend) CountRemaining() (int, error)           { return m.remainingTasks, nil }
 func (m *mockBackend) CountTotal() (int, error)               { return m.totalTasks, nil }
 func (m *mockBackend) GetNextTask() (string, error)           { return m.nextTask, nil }
 func (m *mockBackend) GetNextTaskID() (string, error)         { return "", nil }
@@ -656,5 +657,132 @@ func TestAutonomousRunClaudeError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "claude crashed") {
 		t.Errorf("error = %q, want it to contain 'claude crashed'", err)
+	}
+}
+
+// When open tasks exist on a fresh start and user confirms, planning is
+// skipped and execution proceeds directly with existing tasks.
+func TestOpenTasksSkipPlanningOnConfirm(t *testing.T) {
+	d, _ := testDeps(t)
+	d.Backend = &mockBackend{
+		label:             "beads",
+		remainingTasks:    5,
+		totalTasks:        8,
+		planningSucceeded: true,
+		planningInstr:     "use bd create",
+	}
+
+	d.PromptUser = func(msg string) bool {
+		if !strings.Contains(msg, "5 open tasks") {
+			t.Errorf("prompt should mention 5 open tasks, got: %q", msg)
+		}
+		return true
+	}
+
+	interactiveCalled := false
+	d.RunClaude = func(string) error {
+		interactiveCalled = true
+		return nil
+	}
+
+	if err := Run(d); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	if interactiveCalled {
+		t.Error("RunClaude should not be called when user skips planning")
+	}
+
+	s, _ := d.StateStore.Load()
+	if s.Status != "planned" {
+		t.Errorf("status = %q, want %q", s.Status, "planned")
+	}
+}
+
+// When open tasks exist but user declines to skip, interactive planning runs.
+func TestOpenTasksContinueToPlanningOnDecline(t *testing.T) {
+	d, _ := testDeps(t)
+	d.SkipPlanning = true // skip interactive to test the flow reaches autonomous
+	d.Backend = &mockBackend{
+		label:              "beads",
+		remainingTasks:     3,
+		totalTasks:         3,
+		planningInstr:      "use bd create",
+		planningSucceedSeq: []bool{false, true},
+	}
+
+	d.PromptUser = func(string) bool { return false }
+
+	autonomousCalled := false
+	d.RunClaude = func(string) error {
+		autonomousCalled = true
+		return nil
+	}
+
+	if err := Run(d); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	if !autonomousCalled {
+		t.Error("autonomous planning should run when user declines to skip")
+	}
+}
+
+// When no open tasks exist, the prompt is never shown and planning proceeds normally.
+func TestNoOpenTasksNoPrompt(t *testing.T) {
+	d, _ := testDeps(t)
+	d.SkipPlanning = true
+	d.Backend = &mockBackend{
+		label:              "checklist",
+		remainingTasks:     0,
+		totalTasks:         0,
+		planningInstr:      "write tasks",
+		planningSucceedSeq: []bool{false, true},
+	}
+
+	promptCalled := false
+	d.PromptUser = func(string) bool {
+		promptCalled = true
+		return true
+	}
+
+	d.RunClaude = func(string) error { return nil }
+
+	if err := Run(d); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	if promptCalled {
+		t.Error("user should not be prompted when no open tasks exist")
+	}
+}
+
+// --plan flag bypasses the open-tasks prompt, forcing re-entry into planning.
+func TestForcePlanBypassesOpenTasksPrompt(t *testing.T) {
+	d, _ := testDeps(t)
+	d.ForcePlan = true
+	d.SkipPlanning = true
+	d.Backend = &mockBackend{
+		label:             "beads",
+		remainingTasks:    10,
+		totalTasks:        10,
+		planningSucceeded: true,
+		planningInstr:     "use bd create",
+	}
+
+	promptCalled := false
+	d.PromptUser = func(string) bool {
+		promptCalled = true
+		return true
+	}
+
+	d.RunClaude = func(string) error { return nil }
+
+	if err := Run(d); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	if promptCalled {
+		t.Error("--plan should bypass the open-tasks prompt")
 	}
 }
