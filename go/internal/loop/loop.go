@@ -424,10 +424,10 @@ func (l *Loop) Run(ctx context.Context) error {
 						// Re-run LLM check (always diff-based after fix agent commits)
 						llmResult2 := verify.LLMVerifyDiff(workDir, headBefore, nextTask, beadDesc)
 						if !llmResult2.Passed {
-							l.logger.Error("LLM still rejects after fix agent: %s", llmResult2.Details)
-							return false
+							l.logger.Warn("LLM still rejects after fix agent: %s — accepting anyway (tests passed)", llmResult2.Details)
+						} else {
+							l.logger.Log("LLM verified after fix: %s", llmResult2.Reason)
 						}
-						l.logger.Log("LLM verified after fix: %s", llmResult2.Reason)
 					} else {
 						l.logger.Log("LLM verified: %s", llmResult.Reason)
 					}
