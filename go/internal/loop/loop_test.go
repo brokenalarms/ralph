@@ -2654,3 +2654,68 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 		t.Error("phase=implementing should still be set at task start")
 	}
 }
+
+// When auto-merge returns a CIFailureError, the loop writes the failure
+// details to the feedback file so the next iteration can address them.
+func TestLoop_CIFailureWritesFeedback(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Fix CI failure",
+		nextID:    "ralph-ci1",
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/project/01-ci-test",
+		BranchStrategy: git.BranchStacked,
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+	l.pushPRFunc = func(string) error { return nil }
+	l.mergeFunc = func() (bool, error) {
+		return false, &git.CIFailureError{
+			PRNumber: "99",
+			Failures: []git.CICheckResult{
+				{Name: "test", Conclusion: "FAILURE"},
+			},
+		}
+	}
+
+	_ = l.Run(context.Background())
+
+	feedbackFile := filepath.Join(ralphDir, "feedback")
+	data, err := os.ReadFile(feedbackFile)
+	if err != nil {
+		t.Fatalf("expected feedback file to exist: %v", err)
+	}
+	feedback := string(data)
+	if !strings.Contains(feedback, "CI checks failed") {
+		t.Errorf("feedback should mention CI failure, got: %s", feedback)
+	}
+	if !strings.Contains(feedback, "PR #99") {
+		t.Errorf("feedback should reference PR number, got: %s", feedback)
+	}
+}

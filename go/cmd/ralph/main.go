@@ -146,6 +146,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		UseWorktree:    cfg.UseWorktree,
 		Resume:         resume,
 		BranchStrategy: git.BranchStrategy(cfg.BranchStrategy),
+		MergeAdmin:     cfg.MergeAdmin,
 		State:          st,
 		Logger:         log,
 	}
@@ -374,6 +375,9 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 	}
 	if cfg.AutoMerge {
 		extraArgs = append(extraArgs, "--auto-merge")
+	}
+	if cfg.MergeAdmin {
+		extraArgs = append(extraArgs, "--merge-admin")
 	}
 	if cfg.Evolve {
 		extraArgs = append(extraArgs, "--evolve")
