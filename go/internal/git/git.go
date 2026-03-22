@@ -768,6 +768,41 @@ func Slugify(s string) string {
 	return s
 }
 
+// StageAll stages all changes including untracked files.
+func StageAll(dir string) error {
+	return gitCmdErr(dir, "add", "-A")
+}
+
+// Unstage resets the index without touching the working tree.
+func Unstage(dir string) {
+	gitCmd(dir, "reset", "HEAD")
+}
+
+// CommitStaged commits all staged changes with the given message.
+// Returns an error if nothing is staged or the commit fails.
+func CommitStaged(dir, message string) error {
+	return gitCmdErr(dir, "commit", "-m", message)
+}
+
+// HasWorkingChanges returns true if the working tree has any modifications,
+// staged changes, or untracked files.
+func HasWorkingChanges(dir string) bool {
+	out := gitOutput(dir, "status", "--porcelain")
+	return out != ""
+}
+
+// WorkingDiff returns the combined diff of all changes (staged + unstaged)
+// against the given baseline revision, including new files. Stages all
+// changes temporarily, captures the diff, then unstages.
+func WorkingDiff(dir, baseline string) string {
+	if err := StageAll(dir); err != nil {
+		return ""
+	}
+	diff := gitOutput(dir, "diff", "--cached", baseline)
+	Unstage(dir)
+	return diff
+}
+
 // --- Git helpers ---
 
 func gitCmd(dir string, args ...string) {

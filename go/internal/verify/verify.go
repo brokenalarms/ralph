@@ -96,6 +96,25 @@ func CheckCommits(dir, headBefore string) Result {
 	return Result{Passed: true, Reason: "new commits detected"}
 }
 
+// CheckChanges returns a Result indicating whether the working tree has
+// any modifications, staged changes, or untracked files. Used when the
+// orchestrator owns commits — the agent leaves changes uncommitted.
+func CheckChanges(dir string) Result {
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return Result{Passed: true, Reason: "could not check working tree"}
+	}
+	if len(strings.TrimSpace(string(out))) == 0 {
+		return Result{
+			Passed: false,
+			Reason: "no changes — task signaled completion without code changes",
+		}
+	}
+	return Result{Passed: true, Reason: "working tree has changes"}
+}
+
 func hasMakeTarget(dir, target string) bool {
 	if !fileExists(filepath.Join(dir, "Makefile")) {
 		return false
@@ -182,15 +201,37 @@ func PreflightChecks(workDir, headBefore string, beadStatus string) PreflightRes
 // acceptance criteria and that tests prove the functionality. Returns a Result.
 // Uses claude CLI with --model haiku for speed/cost.
 func LLMVerifyDiff(workDir, headBefore, beadTitle, beadDescription string) Result {
-	// Get the diff
-	diffCmd := exec.Command("git", "diff", headBefore+"..HEAD")
-	diffCmd.Dir = workDir
-	diffOut, err := diffCmd.Output()
-	if err != nil || len(diffOut) == 0 {
+	// Get the diff — try committed changes first, fall back to working tree.
+	var diff string
+	headAfter := gitHeadRev(workDir)
+	if headBefore != "" && headAfter != "" && headBefore != headAfter {
+		diffCmd := exec.Command("git", "diff", headBefore+"..HEAD")
+		diffCmd.Dir = workDir
+		diffOut, _ := diffCmd.Output()
+		diff = string(diffOut)
+	}
+	if diff == "" {
+		// No committed changes — agent left work uncommitted.
+		// Stage temporarily to capture full diff including new files.
+		stageCmd := exec.Command("git", "add", "-A")
+		stageCmd.Dir = workDir
+		_ = stageCmd.Run()
+		baseline := headBefore
+		if baseline == "" {
+			baseline = "HEAD"
+		}
+		diffCmd := exec.Command("git", "diff", "--cached", baseline)
+		diffCmd.Dir = workDir
+		diffOut, _ := diffCmd.Output()
+		diff = string(diffOut)
+		// Unstage so the working tree stays clean for subsequent operations.
+		unstageCmd := exec.Command("git", "reset", "HEAD")
+		unstageCmd.Dir = workDir
+		_ = unstageCmd.Run()
+	}
+	if len(diff) == 0 {
 		return Result{Passed: true, Reason: "no diff to verify"}
 	}
-
-	diff := string(diffOut)
 	// Truncate large diffs to avoid token limits
 	if len(diff) > 20000 {
 		diff = diff[:20000] + "\n\n[diff truncated at 20000 chars]"

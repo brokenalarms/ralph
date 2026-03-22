@@ -223,6 +223,34 @@ func TestPreflightChecks_NoChanges(t *testing.T) {
 	}
 }
 
+// CheckChanges detects uncommitted modifications in the working tree,
+// confirming the orchestrator can verify the agent produced changes
+// even without committing.
+func TestCheckChanges_WithUncommittedChanges(t *testing.T) {
+	dir := setupGitRepo(t)
+
+	os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main"), 0o644)
+
+	result := CheckChanges(dir)
+	if !result.Passed {
+		t.Errorf("expected pass with uncommitted changes, got: %s", result.Reason)
+	}
+}
+
+// CheckChanges fails when no files are modified, catching the case where
+// the agent signals completion without producing any code.
+func TestCheckChanges_NoChanges(t *testing.T) {
+	dir := setupGitRepo(t)
+
+	result := CheckChanges(dir)
+	if result.Passed {
+		t.Error("expected failure when working tree is clean")
+	}
+	if !strings.Contains(result.Reason, "no changes") {
+		t.Errorf("unexpected reason: %s", result.Reason)
+	}
+}
+
 func setupGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

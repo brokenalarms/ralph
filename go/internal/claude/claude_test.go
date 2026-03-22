@@ -906,17 +906,14 @@ func runWithCommand(t *testing.T, r *Runner, cfg RunConfig, name string, args ..
 	return result
 }
 
-// Verifies that IterationDisallowedTools contains bd close so the agent
-// cannot close beads — the orchestrator owns that lifecycle.
-func TestDisallowedTools_ContainsBdClose(t *testing.T) {
-	found := false
-	for _, tool := range IterationDisallowedTools {
-		if strings.Contains(tool, "bd close") {
-			found = true
-			break
+// Verifies that IterationDisallowedTools blocks git, gh, and bd close
+// so the agent cannot perform git workflow — the orchestrator owns it.
+func TestDisallowedTools_BlocksGitWorkflow(t *testing.T) {
+	tools := strings.Join(IterationDisallowedTools, ",")
+
+	for _, required := range []string{"git commit", "git push", "gh pr", "bd close"} {
+		if !strings.Contains(tools, required) {
+			t.Errorf("IterationDisallowedTools must block %q — orchestrator owns git workflow", required)
 		}
-	}
-	if !found {
-		t.Error("IterationDisallowedTools must contain 'bd close' — orchestrator owns bead close")
 	}
 }

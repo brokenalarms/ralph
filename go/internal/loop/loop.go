@@ -302,7 +302,8 @@ func (l *Loop) Run(ctx context.Context) error {
 
 				feedbackPath := filepath.Join(l.cfg.RalphDir, "feedback")
 
-				// Step 1: Tests must pass
+				// Step 1: Check for changes and run tests.
+				// The agent no longer commits — check working-tree changes instead.
 				passed, reason := l.verifyCompletion(headBefore)
 				if !passed {
 					l.logger.Warn("Verification failed: %s", reason)
@@ -436,6 +437,20 @@ func (l *Loop) Run(ctx context.Context) error {
 				}
 			}
 
+			// Orchestrator owns git workflow: stage, commit, then push/PR.
+			if git.HasWorkingChanges(l.git.WorkDir) {
+				if err := git.StageAll(l.git.WorkDir); err != nil {
+					l.logger.Warn("Stage: %v", err)
+				} else {
+					commitMsg := fmt.Sprintf("feat: %s", nextTask)
+					if err := git.CommitStaged(l.git.WorkDir, commitMsg); err != nil {
+						l.logger.Warn("Commit: %v", err)
+					} else {
+						l.logger.Log("Committed: %s", nextTask)
+					}
+				}
+			}
+
 			if err := l.pushAndCreatePR(nextTask); err != nil {
 				l.logger.Warn("Push/PR: %v", err)
 			}
@@ -529,8 +544,8 @@ func (l *Loop) isNewTask(taskID, taskDesc string) bool {
 	return lastTask != taskDesc
 }
 
-// verifyCompletion runs post-signal checks: commit presence and test suite.
-// Returns (true, "") on success or (false, reason) on failure.
+// verifyCompletion runs post-signal checks: working-tree changes (or commits)
+// and test suite. Returns (true, "") on success or (false, reason) on failure.
 func (l *Loop) verifyCompletion(headBefore string) (bool, string) {
 	if l.verifyFunc != nil {
 		return l.verifyFunc(l.git.WorkDir, headBefore)
@@ -540,9 +555,13 @@ func (l *Loop) verifyCompletion(headBefore string) (bool, string) {
 		return true, ""
 	}
 
-	commitResult := verify.CheckCommits(l.git.WorkDir, headBefore)
-	if !commitResult.Passed {
-		return false, commitResult.Reason
+	// Accept either working-tree changes (new flow) or commits (legacy).
+	changesResult := verify.CheckChanges(l.git.WorkDir)
+	if !changesResult.Passed {
+		commitResult := verify.CheckCommits(l.git.WorkDir, headBefore)
+		if !commitResult.Passed {
+			return false, changesResult.Reason
+		}
 	}
 
 	testResult := verify.RunTests(l.cfg.VerifyDir)

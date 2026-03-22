@@ -14,12 +14,10 @@
 1. Focus ONLY on the single task described above.
 2. Do NOT work on other tasks — one task per iteration.
 3. Do NOT write bd prime output or bd workflow instructions to the project's AGENTS.md, CLAUDE.md, or any other project file. bd context is for your use in this iteration only.
-4. One task = one PR, if gh is available. Multiple atomic commits are fine, but they all go in one PR — do not create a PR per commit.
-5. Run only scoped, relevant tests during development — not the full suite. The orchestrator runs the full test suite as the completion gate.
+4. Run only scoped, relevant tests during development — not the full suite. The orchestrator runs the full test suite as the completion gate.
+5. Do NOT run git commit, git push, gh pr, or bd close. The orchestrator handles all git workflow and task lifecycle after verifying your work.
 
 ## Completion — this order is mandatory
-1. Commit your changes and ensure scoped tests pass for the code you touched.
-2. Push your branch and create or update the PR.
-3. Write your post-task reflection.
-4. Signal completion by writing to the signal file. This MUST be the very last thing you do — Ralph will kill your process immediately when it detects the signal.
-Do NOT run `bd close` — the orchestrator closes your assigned task automatically after verifying your work.
+1. Ensure scoped tests pass for the code you touched. Leave your changes uncommitted — the orchestrator commits, pushes, and creates the PR.
+2. Write your post-task reflection.
+3. Signal completion by writing to the signal file. This MUST be the very last thing you do — Ralph will kill your process immediately when it detects the signal.

@@ -378,9 +378,9 @@ func TestBuildPrompt_SignalWarnsAboutTermination(t *testing.T) {
 	}
 }
 
-// Proves: the bd execution template specifies that pushing and PR creation
-// must happen before signaling completion.
-func TestBuildPrompt_BDCompletionOrderIncludesPush(t *testing.T) {
+// Proves: the bd execution template tells the agent to leave changes
+// uncommitted and not run git/gh commands — the orchestrator owns git workflow.
+func TestBuildPrompt_BDAgentBlockedFromGit(t *testing.T) {
 	v := testVars(t)
 	v.TaskBackend = BackendBD
 	result, err := BuildPrompt(v)
@@ -388,22 +388,20 @@ func TestBuildPrompt_BDCompletionOrderIncludesPush(t *testing.T) {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-	pushIdx := strings.Index(result, "Push your branch")
-	signalIdx := strings.Index(result, "Signal completion by writing to the signal file")
-	if pushIdx < 0 {
-		t.Fatal("bd completion section missing push step")
+	if !strings.Contains(result, "Do NOT run git commit") {
+		t.Error("bd template must tell agent not to run git commit")
 	}
-	if signalIdx < 0 {
-		t.Fatal("bd completion section missing signal step")
+	if !strings.Contains(result, "Leave your changes uncommitted") {
+		t.Error("bd template must tell agent to leave changes uncommitted")
 	}
-	if pushIdx >= signalIdx {
-		t.Error("push step must come before signal step in completion order")
+	if !strings.Contains(result, "Signal completion by writing to the signal file") {
+		t.Error("bd template must include signal step")
 	}
 }
 
-// Proves: the checklist execution template specifies completion ordering
-// with push before signal.
-func TestBuildPrompt_ChecklistCompletionOrderIncludesPush(t *testing.T) {
+// Proves: the checklist execution template tells the agent to leave changes
+// uncommitted and not run git/gh commands.
+func TestBuildPrompt_ChecklistAgentBlockedFromGit(t *testing.T) {
 	v := testVars(t)
 	v.TaskBackend = BackendChecklist
 	result, err := BuildPrompt(v)
@@ -411,16 +409,14 @@ func TestBuildPrompt_ChecklistCompletionOrderIncludesPush(t *testing.T) {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-	pushIdx := strings.Index(result, "Push your branch")
-	signalIdx := strings.Index(result, "Signal completion by writing to the signal file")
-	if pushIdx < 0 {
-		t.Fatal("checklist completion section missing push step")
+	if !strings.Contains(result, "Do NOT run git commit") {
+		t.Error("checklist template must tell agent not to run git commit")
 	}
-	if signalIdx < 0 {
-		t.Fatal("checklist completion section missing signal step")
+	if !strings.Contains(result, "Leave your changes uncommitted") {
+		t.Error("checklist template must tell agent to leave changes uncommitted")
 	}
-	if pushIdx >= signalIdx {
-		t.Error("push step must come before signal step in completion order")
+	if !strings.Contains(result, "Signal completion by writing to the signal file") {
+		t.Error("checklist template must include signal step")
 	}
 }
 

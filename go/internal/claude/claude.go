@@ -112,8 +112,18 @@ var IterationAllowedTools = []string{
 }
 
 // IterationDisallowedTools lists tools the agent must not use.
-// The orchestrator owns bead close — the agent must not close tasks.
+// The orchestrator owns all git workflow (commit, push, PR, merge) and
+// bead lifecycle — the agent only writes code and signals completion.
 var IterationDisallowedTools = []string{
+	"Bash(git commit*)",
+	"Bash(git push*)",
+	"Bash(git merge*)",
+	"Bash(git rebase*)",
+	"Bash(git reset*)",
+	"Bash(git checkout*)",
+	"Bash(git stash*)",
+	"Bash(gh pr *)",
+	"Bash(gh issue *)",
 	"Bash(bd close*)",
 }
 

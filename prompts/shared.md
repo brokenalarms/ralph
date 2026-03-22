@@ -24,16 +24,9 @@
 - If adding code to an existing untyped project, introduce typing incrementally — add types to new files and functions you touch, don't rewrite the whole codebase.
 - Prefer strict type-checking settings where the ecosystem supports it (e.g., `"strict": true` in tsconfig).
 
-### Commits
-- Atomic commits: one feature or fix per commit. Multiple grouped commits with an overarching theme may together constitute a single PR if their relation is clear.
-- Every commit message needs a subject line + blank line + body. Body: concise bullets covering why, how, and test coverage.
+### Git
+- The orchestrator handles all git operations (commit, push, PR creation, merge). Do not run git commit, git push, or gh commands.
 - Behavioral code changes should be backed by tests. Static content, markup, and config changes don't need tests — a passing build is verification enough.
-
-### Github
-- One task = one PR. All commits for a task go into a single pull request. Never push directly to main.
-- Before creating a PR, fetch and rebase onto the latest origin main to avoid merge conflicts.
-- Before creating a PR, check if one already exists for the current branch: `gh pr list --head "$(git branch --show-current)" --state open --json number --jq '.[0].number'`. If a PR exists, push your commits and update its title and description to reflect all commits on the branch. Only create a new PR if none exists.
-- Do not create a PR after each commit. Finish all commits for the task, push once, then create or update the PR.
 
 ### Boy Scout Rule
 Before committing, glance at the files you touched. If you see something genuinely worth cleaning up, do it:

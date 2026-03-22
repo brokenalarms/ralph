@@ -7,4 +7,4 @@
    echo "<one-line summary>" > {{RALPH_DIR}}/.signal_all_complete
 If blocked, still write the completion signal so the loop can proceed to the next iteration.
 
-**WARNING: Writing the signal file is your FINAL action. Ralph polls for signal files and will kill your process immediately upon detection. Complete ALL work before writing — commits, pushes, PR creation, bd commands, everything. Once the signal file exists, you will be terminated.**
+**WARNING: Writing the signal file is your FINAL action. Ralph polls for signal files and will kill your process immediately upon detection. Leave your code changes uncommitted — the orchestrator handles git commit, push, and PR creation after verification. Once the signal file exists, you will be terminated.**
