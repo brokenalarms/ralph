@@ -369,6 +369,10 @@ func (l *Loop) Run(ctx context.Context) error {
 				merged, err := l.autoMerge()
 				if err != nil {
 					l.logger.Warn("Auto-merge: %v", err)
+					var ciErr *git.CIFailureError
+					if errors.As(err, &ciErr) {
+						l.writeFeedback(fmt.Sprintf("CI checks failed on PR #%s. Failed checks: %s. Fix the failures and push again.", ciErr.PRNumber, ciErr.Error()))
+					}
 				} else if merged {
 					if err := l.git.PostMergeReset(); err != nil {
 						l.logger.Warn("Post-merge reset: %v", err)
@@ -670,6 +674,17 @@ func (l *Loop) readFeedback() string {
 		return ""
 	}
 	return string(data)
+}
+
+func (l *Loop) writeFeedback(msg string) {
+	feedbackFile := filepath.Join(l.cfg.RalphDir, "feedback")
+	f, err := os.OpenFile(feedbackFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		l.logger.Warn("Failed to write feedback: %v", err)
+		return
+	}
+	defer f.Close()
+	f.WriteString(msg + "\n")
 }
 
 func (l *Loop) clearFeedback() {

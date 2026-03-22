@@ -66,6 +66,7 @@ type Manager struct {
 	TaskSeq        int
 	BranchRenamed  bool
 	BranchStrategy BranchStrategy
+	MergeAdmin     bool
 	State          StateStore
 	Logger         Log
 }
@@ -389,7 +390,8 @@ func (m *Manager) PushAndCreatePR(taskDesc string) error {
 
 // AutoMergeCurrentBranch squash-merges the PR for the current branch into main.
 // Returns (true, nil) when a PR was merged, (false, nil) when no PR exists or
-// no action was needed, and (false, err) on failure.
+// no action was needed, and (false, err) on failure. When CI checks are required
+// by branch protection, polls until checks complete and retries the merge.
 func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
 		return false, nil
@@ -418,17 +420,46 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 	m.Logger.Log("Auto-merging PR #%s (branch: %s)...", prNumber, m.WorktreeBranch)
 
 	mergeCmd := exec.Command("gh", m.ghMergeArgs(prNumber, repoURL)...)
-	if mergeOut, err := mergeCmd.CombinedOutput(); err != nil {
-		m.Logger.Warn("Auto-merge failed for PR #%s: %s", prNumber, string(mergeOut))
+	mergeOut, mergeErr := mergeCmd.CombinedOutput()
+	if mergeErr == nil {
+		return m.postMergeUpdate(prNumber)
+	}
+
+	mergeOutput := string(mergeOut)
+	if !isCIGatedError(mergeOutput) {
+		m.Logger.Warn("Auto-merge failed for PR #%s: %s", prNumber, mergeOutput)
 		return false, fmt.Errorf("auto-merge failed for PR #%s", prNumber)
 	}
 
+	m.Logger.Log("Merge blocked by branch protection — waiting for CI checks on PR #%s", prNumber)
+
+	checks, status, pollErr := waitForCI(prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+	if pollErr != nil {
+		return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, pollErr)
+	}
+
+	if status == CIFailed {
+		return false, &CIFailureError{
+			PRNumber: prNumber,
+			Failures: failedChecks(checks),
+		}
+	}
+
+	m.Logger.Log("CI passed — retrying merge for PR #%s", prNumber)
+	retryCmd := exec.Command("gh", m.ghMergeArgs(prNumber, repoURL)...)
+	if retryOut, retryErr := retryCmd.CombinedOutput(); retryErr != nil {
+		m.Logger.Warn("Auto-merge retry failed for PR #%s: %s", prNumber, string(retryOut))
+		return false, fmt.Errorf("auto-merge retry failed for PR #%s", prNumber)
+	}
+
+	return m.postMergeUpdate(prNumber)
+}
+
+// postMergeUpdate fetches the latest default branch after a successful merge
+// so the next iteration starts from merged state.
+func (m *Manager) postMergeUpdate(prNumber string) (bool, error) {
 	m.Logger.Log("PR #%s squash-merged into main", prNumber)
 
-	// Pull latest main so next iteration starts from merged state.
-	// Use update-ref instead of branch -f because the default branch is
-	// typically checked out in the project dir, and branch -f refuses to
-	// update the current branch.
 	defaultBranch := detectDefaultBranch(m.ProjectDir)
 	gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
 	originRef := gitOutput(m.ProjectDir, "rev-parse", "origin/"+defaultBranch)
@@ -442,10 +473,14 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 
 // ghMergeArgs builds the argument list for `gh pr merge`. In single-branch
 // mode --delete-branch is omitted because the branch is reused across tasks.
+// When MergeAdmin is set, --admin bypasses branch protection requirements.
 func (m *Manager) ghMergeArgs(prNumber, repoURL string) []string {
 	args := []string{"pr", "merge", prNumber, "--squash", "-R", repoURL}
 	if m.BranchStrategy != BranchSingle {
 		args = append(args, "--delete-branch")
+	}
+	if m.MergeAdmin {
+		args = append(args, "--admin")
 	}
 	return args
 }

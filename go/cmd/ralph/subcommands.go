@@ -160,6 +160,7 @@ func printUsage() {
   --tmux                 Run in tmux 3-pane layout (status / output / plan)
   --branch-strategy <s>  Branch strategy: "single" (default) or "stacked" (one branch per task)
   --auto-merge           Squash-merge each PR into main after task completion (stacked only)
+  --merge-admin          Use --admin flag on gh pr merge to bypass branch protection (requires --auto-merge)
   --evolve               Self-improving mode: after each merged task, pull main, rebuild, restart (requires --auto-merge)
   --wait                 Keep running after all tasks complete, polling for new tasks
   --wait-interval <dur>  Polling interval for --wait (default: 30s, env RALPH_WAIT_INTERVAL)
