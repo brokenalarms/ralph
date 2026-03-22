@@ -294,41 +294,87 @@ func (l *Loop) Run(ctx context.Context) error {
 				// Orchestrator verification: sync prompts and run tests.
 				srcPrompts := filepath.Join(workDir, "prompts")
 				dstPrompts := filepath.Join(workDir, "go", "cmd", "ralph", "prompts")
-				if _, err := os.Stat(srcPrompts); err == nil {
-					if _, err := os.Stat(filepath.Dir(dstPrompts)); err == nil {
-						exec.Command("cp", "-r", srcPrompts+"/", dstPrompts+"/").Run()
+				syncPrompts := func() {
+					if _, err := os.Stat(srcPrompts); err == nil {
+						if _, err := os.Stat(filepath.Dir(dstPrompts)); err == nil {
+							exec.Command("cp", "-r", srcPrompts+"/", dstPrompts+"/").Run()
+						}
 					}
 				}
+				syncPrompts()
 
-				feedbackPath := filepath.Join(l.cfg.RalphDir, "feedback")
-
-				// Step 1: Tests must pass
+				// Step 1: Quick test check by orchestrator
 				passed, reason := l.verifyCompletion(headBefore)
 				if !passed {
 					l.logger.Warn("Verification failed: %s", reason)
 					testOutput, _ := l.state.Read("last_test_output")
-					feedback := "ORCHESTRATOR VERIFICATION FAILED.\n\n"
-					feedback += "Reason: " + reason + "\n\n"
-					if testOutput != "" {
-						feedback += "Test output:\n" + testOutput + "\n\n"
+
+					// Spawn a verification agent that fixes tests AND verifies the diff
+					l.logger.Log("Spawning verification agent...")
+					beadDesc := l.getBeadDescription(taskID)
+					diffCmd := exec.Command("git", "-C", workDir, "diff", headBefore+"..HEAD")
+					diffOut, _ := diffCmd.Output()
+					diff := string(diffOut)
+					if len(diff) > 15000 {
+						diff = diff[:15000] + "\n[truncated]"
 					}
-					feedback += "Fix the failing tests and signal completion again. Do NOT signal until tests pass."
-					os.WriteFile(feedbackPath, []byte(feedback), 0o644)
-					return false
+
+					verifyPrompt := fmt.Sprintf(`You are a verification agent. The previous agent completed a task but tests are failing.
+
+TASK: %s
+DESCRIPTION: %s
+
+FAILING TESTS:
+%s
+
+YOUR JOB:
+1. Fix ALL failing tests. Run the full test suite to confirm green.
+2. Then verify: does the diff actually implement what the task asks for? Are the tests meaningful (not just assert true)?
+3. If the implementation is wrong or tests are superficial, fix that too.
+4. Commit all fixes.
+5. Signal completion ONLY when all tests pass and the implementation is correct.
+
+Do NOT add new features. Only fix failures and verify correctness.`, nextTask, beadDesc, testOutput)
+
+					verifyRunner := &claude.Runner{Logger: l.logger}
+					verifyResult, _ := verifyRunner.Run(claude.RunConfig{
+						Ctx:          ctx,
+						WorkDir:      workDir,
+						RalphDir:     l.cfg.RalphDir,
+						Prompt:       verifyPrompt,
+						RawLog:       rawLogPath,
+						LogFile:      filepath.Join(l.cfg.RalphDir, "loop.log"),
+						Quiet:        l.cfg.Quiet,
+						Signals:      l.signals,
+						PollInterval: 2 * time.Second,
+						IdleTimeout:  l.cfg.IdleTimeout,
+					})
+
+					if !verifyResult.SignalDetected {
+						l.logger.Warn("Verification agent exited without completion signal")
+						return false
+					}
+
+					// Re-check tests after fix agent
+					syncPrompts()
+					passed, reason = l.verifyCompletion(headBefore)
+					if !passed {
+						l.logger.Error("Tests still failing after verification agent: %s", reason)
+						return false
+					}
 				}
 
-				// Step 2: LLM verification — does the diff match the bead?
-				l.logger.Log("Running LLM verification...")
-				llmResult := verify.LLMVerifyDiff(workDir, headBefore, nextTask, l.getBeadDescription(taskID))
-				if !llmResult.Passed {
-					l.logger.Warn("LLM verification rejected: %s", llmResult.Details)
-					feedback := "ORCHESTRATOR LLM VERIFICATION FAILED.\n\n"
-					feedback += llmResult.Details + "\n\n"
-					feedback += "The diff does not match the task requirements or the tests don't prove the functionality. Fix and signal again."
-					os.WriteFile(feedbackPath, []byte(feedback), 0o644)
-					return false
+				// LLM verification — does the diff match the bead?
+				// (Skip if verification agent already ran — it verified the diff too)
+				if passed {
+					l.logger.Log("Running LLM verification...")
+					llmResult := verify.LLMVerifyDiff(workDir, headBefore, nextTask, l.getBeadDescription(taskID))
+					if !llmResult.Passed {
+						l.logger.Warn("LLM verification rejected: %s", llmResult.Details)
+						return false
+					}
+					l.logger.Log("LLM verified: %s", llmResult.Reason)
 				}
-				l.logger.Log("LLM verified: %s", llmResult.Reason)
 
 				return true
 			},
