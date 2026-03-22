@@ -361,6 +361,12 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.recordCompletedTask(taskID, nextTask)
 			touchFile(filepath.Join(l.cfg.RalphDir, ".plan-flash"))
 
+			if taskID != "" {
+				if err := l.cfg.TaskBackend.CloseTask(taskID, "completed by ralph"); err != nil {
+					l.logger.Warn("CloseTask: %v", err)
+				}
+			}
+
 			if err := l.pushAndCreatePR(nextTask); err != nil {
 				l.logger.Warn("Push/PR: %v", err)
 			}
