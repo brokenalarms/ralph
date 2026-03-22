@@ -313,9 +313,13 @@ func (l *Loop) Run(ctx context.Context) error {
 					l.logger.Warn("No new commits — will verify via LLM if work is already on main")
 				}
 
+				l.logger.Log("Running post-signal test suite...")
 				testResult := verify.RunTests(l.cfg.VerifyDir)
 				passed := testResult.Passed
 				reason := testResult.Reason
+				if passed {
+					l.logger.Log("Tests passed")
+				}
 				if !passed {
 					l.logger.Warn("Tests failed: %s", reason)
 					testOutput := testResult.Details
