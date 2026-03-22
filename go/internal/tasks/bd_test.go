@@ -415,10 +415,10 @@ func TestBD_SkipTask_EmptyID(t *testing.T) {
 	}
 }
 
-// Proves: bd execution instructions contain "bd prime" and "close the task".
+// Proves: bd execution instructions contain "bd prime" and prohibit agent close.
 func TestBD_ExecutionInstructions_Content(t *testing.T) {
 	b := setupBD(t, defaultMock())
-	content := "Run `bd prime` for workflow context.\nWhen complete, close the task in bd.\n"
+	content := "Run `bd prime` for workflow context.\nDo NOT run `bd close` — the orchestrator closes your assigned task automatically.\n"
 	os.WriteFile(filepath.Join(b.PromptsDir, "execution-bd.md"), []byte(content), 0644)
 	got, err := b.ExecutionInstructions()
 	if err != nil {
@@ -427,8 +427,8 @@ func TestBD_ExecutionInstructions_Content(t *testing.T) {
 	if !strings.Contains(got, "bd prime") {
 		t.Error("expected execution instructions to contain 'bd prime'")
 	}
-	if !strings.Contains(got, "close the task") {
-		t.Error("expected execution instructions to contain 'close the task'")
+	if !strings.Contains(got, "orchestrator closes") {
+		t.Error("expected execution instructions to tell agent that orchestrator closes tasks")
 	}
 }
 

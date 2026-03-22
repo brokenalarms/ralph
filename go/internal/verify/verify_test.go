@@ -174,6 +174,55 @@ func TestLastNLines_ShortInput(t *testing.T) {
 	}
 }
 
+// PreflightChecks detects when files changed and new commits exist,
+// confirming the orchestrator can verify work was done before running
+// the full test suite.
+func TestPreflightChecks_WithChanges(t *testing.T) {
+	dir := setupGitRepo(t)
+	headBefore := gitHeadRev(dir)
+
+	os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main"), 0o644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "add feature").Run()
+
+	result := PreflightChecks(dir, headBefore, "in_progress")
+	if !result.FilesChanged {
+		t.Error("expected FilesChanged=true after adding a file")
+	}
+	if !result.HasCommits {
+		t.Error("expected HasCommits=true after committing")
+	}
+	if !result.BeadOpen {
+		t.Error("expected BeadOpen=true when status is in_progress")
+	}
+}
+
+// PreflightChecks detects premature bead close when the agent
+// closes the task before the orchestrator verifies it.
+func TestPreflightChecks_PrematureClose(t *testing.T) {
+	dir := setupGitRepo(t)
+	headBefore := gitHeadRev(dir)
+
+	result := PreflightChecks(dir, headBefore, "closed")
+	if result.BeadOpen {
+		t.Error("expected BeadOpen=false when status is closed (premature close)")
+	}
+}
+
+// PreflightChecks correctly reports no changes when HEAD hasn't moved.
+func TestPreflightChecks_NoChanges(t *testing.T) {
+	dir := setupGitRepo(t)
+	headBefore := gitHeadRev(dir)
+
+	result := PreflightChecks(dir, headBefore, "in_progress")
+	if result.FilesChanged {
+		t.Error("expected FilesChanged=false when no files changed")
+	}
+	if result.HasCommits {
+		t.Error("expected HasCommits=false when HEAD hasn't moved")
+	}
+}
+
 func setupGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

@@ -2840,3 +2840,148 @@ func TestLoop_CIFailureWritesFeedback(t *testing.T) {
 		t.Errorf("feedback should reference PR number, got: %s", feedback)
 	}
 }
+
+// Verifies that pre-iteration test results are stored in state.json
+// so they persist across restarts and evolve cycles.
+func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	// Create a Makefile with passing tests so VerifyDir detects a runner
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\ttrue\n"), 0o644)
+
+	backend := &stubBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "Add feature",
+		nextID:    "ralph-pre",
+		label:     "beads",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.remaining = 0
+			backend.completed = 1
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.verifyFunc = func(d, h string) (bool, string) { return true, "" }
+	l.pushPRFunc = func(string) error { return nil }
+
+	_ = l.Run(context.Background())
+
+	s, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.LastTestResult == "" {
+		t.Error("expected last_test_result to be set in state after pre-iteration tests")
+	}
+	if s.LastTestTime == "" {
+		t.Error("expected last_test_time to be set in state")
+	}
+}
+
+// Verifies that {{TEST_STATUS}} placeholder in internal.md gets
+// substituted with the orchestrator's pre-iteration test results,
+// so the agent knows the test status without running the suite itself.
+func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	// Write templates with {{TEST_STATUS}} in internal.md
+	for _, name := range []string{"shared.md", "reflection.md", "signal.md", "execution-bd.md"} {
+		os.WriteFile(filepath.Join(promptsDir, name), []byte("test"), 0o644)
+	}
+	os.WriteFile(filepath.Join(promptsDir, "internal.md"),
+		[]byte("Assumptions\n{{TEST_STATUS}}\n{{TASK_INSTRUCTIONS}}\n{{ATTEMPT_HISTORY}}"), 0o644)
+
+	// Create Makefile with passing tests
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\ttrue\n"), 0o644)
+
+	var capturedPrompt string
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Do task",
+		nextID:    "ralph-ts",
+		label:     "beads",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.remaining = 0
+			backend.completed = 1
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logging.New(nil))
+
+	// Capture the prompt passed to Claude
+	l.runner = &stubRunner{
+		onRun: func() {
+			backend.remaining = 0
+			backend.completed = 1
+		},
+		result: runner.result,
+	}
+	origRunner := l.runner
+	l.runner = &promptCapturingRunner{
+		inner: origRunner,
+		captured: &capturedPrompt,
+	}
+	l.verifyFunc = func(d, h string) (bool, string) { return true, "" }
+	l.pushPRFunc = func(string) error { return nil }
+
+	_ = l.Run(context.Background())
+
+	if !strings.Contains(capturedPrompt, "tests passing") {
+		t.Errorf("prompt should include test status, got: %s", capturedPrompt[:min(200, len(capturedPrompt))])
+	}
+	// Should not contain the unsubstituted placeholder
+	if strings.Contains(capturedPrompt, "{{TEST_STATUS}}") {
+		t.Error("prompt should not contain unsubstituted {{TEST_STATUS}} placeholder")
+	}
+}
+
+// promptCapturingRunner wraps a claude runner to capture the prompt.
+type promptCapturingRunner struct {
+	inner    claudeRunner
+	captured *string
+}
+
+func (p *promptCapturingRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
+	*p.captured = cfg.Prompt
+	return p.inner.Run(cfg)
+}

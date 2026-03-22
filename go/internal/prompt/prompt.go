@@ -28,6 +28,7 @@ type Vars struct {
 	TaskPrompt       string
 	Feedback         string
 	AttemptHistory   string
+	TestStatus       string
 	TaskBackend      TaskBackend
 }
 
@@ -83,6 +84,7 @@ func BuildPrompt(v Vars) (string, error) {
 		"{{ALL_COMPLETE_TOKEN}}", v.AllCompleteToken,
 		"{{TASK_PROMPT}}", v.TaskPrompt,
 		"{{ATTEMPT_HISTORY}}", attemptSection,
+		"{{TEST_STATUS}}", v.TestStatus,
 	)
 	return r.Replace(result), nil
 }
