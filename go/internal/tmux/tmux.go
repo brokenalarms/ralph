@@ -384,7 +384,9 @@ func sanitizeSessionName(name string) string {
 	return name
 }
 
-func sessionExists(name string) bool {
+// sessionExists is a package-level var so tests can stub it to avoid
+// depending on live tmux state.
+var sessionExists = func(name string) bool {
 	return exec.Command("tmux", "has-session", "-t", name).Run() == nil
 }
 

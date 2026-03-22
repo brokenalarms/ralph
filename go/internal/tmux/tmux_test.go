@@ -256,6 +256,11 @@ func TestSetup_ClearsStaleStreamTask(t *testing.T) {
 // directory basename with "-loop" suffix, making concurrent ralph
 // sessions distinguishable in tmux ls.
 func TestSessionName_BasenameLoop(t *testing.T) {
+	// Stub sessionExists so test doesn't depend on live tmux state.
+	orig := sessionExists
+	sessionExists = func(string) bool { return false }
+	defer func() { sessionExists = orig }()
+
 	got := SessionName("/home/user/projects/tabi")
 	if got != "tabi-loop" {
 		t.Errorf("SessionName(/home/user/projects/tabi) = %q, want %q", got, "tabi-loop")
