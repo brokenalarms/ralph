@@ -65,7 +65,7 @@ func Defaults() Config {
 		TestSaturationThreshold:    3,
 		PermissionDenialThreshold:  3,
 		BranchStrategy:             "single",
-		WaitInterval:               envDuration("RALPH_WAIT_INTERVAL", 30*time.Second),
+		WaitInterval:               envDuration("RALPH_WAIT_INTERVAL", 5*time.Second),
 	}
 }
 
