@@ -392,6 +392,154 @@ func TestResumeRotate_PreservesPreviousBranch(t *testing.T) {
 	}
 }
 
+// Resume detects a squash-merged branch and silently resets the worktree to
+// origin/main instead of leaving stale commits that will conflict on rebase.
+func TestSetupWorktree_ResumeResetsSquashMergedBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+	log := &testLog{}
+
+	// Create worktree with a task branch and a commit
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+	mgr.RenameBranchForTask("feature work")
+	writeFile(t, mgr.WorkDir, "feature.txt", "feature content\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add feature")
+	oldBranch := mgr.WorktreeBranch
+
+	// Simulate squash-merge: apply the same changes on main and push
+	run(t, "git", "-C", project, "checkout", "main")
+	writeFile(t, project, "feature.txt", "feature content\n")
+	run(t, "git", "-C", project, "commit", "-m", "squash: feature work")
+	run(t, "git", "-C", project, "push", "origin", "main")
+	run(t, "git", "-C", project, "checkout", "-")
+
+	// Resume — should detect squash-merged branch and reset to main
+	mgr2 := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		Resume:      true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr2.SetupWorktree(); err != nil {
+		t.Fatalf("resume SetupWorktree: %v", err)
+	}
+
+	tempBranch := mgr2.TempBranch()
+	if mgr2.WorktreeBranch != tempBranch {
+		t.Errorf("branch = %q, want temp branch %q after squash-merge reset", mgr2.WorktreeBranch, tempBranch)
+	}
+	if refExists(mgr2.WorkDir, oldBranch) {
+		t.Errorf("old branch %q should be deleted after squash-merge reset", oldBranch)
+	}
+	if !log.contains("Stale branch detected") {
+		t.Error("expected log message about stale branch detection")
+	}
+}
+
+// Resume with a deleted branch ref (e.g. killed between merge and reset)
+// silently recreates from main instead of failing.
+func TestSetupWorktree_ResumeResetsDeletedBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+	log := &testLog{}
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+	mgr.RenameBranchForTask("doomed task")
+
+	// Force the worktree onto a different branch so the old one can be deleted
+	run(t, "git", "-C", mgr.WorkDir, "checkout", "-B", "ralph/"+mgr.ProjectName+"/next", "HEAD")
+	run(t, "git", "-C", mgr.WorkDir, "branch", "-D", mgr.WorktreeBranch)
+
+	// But state still references the deleted branch
+	state.Write("worktree_branch", mgr.WorktreeBranch)
+
+	mgr2 := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		Resume:      true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr2.SetupWorktree(); err != nil {
+		t.Fatalf("resume SetupWorktree: %v", err)
+	}
+
+	tempBranch := mgr2.TempBranch()
+	if mgr2.WorktreeBranch != tempBranch {
+		t.Errorf("branch = %q, want temp branch %q after deleted-branch reset", mgr2.WorktreeBranch, tempBranch)
+	}
+	if !log.contains("Stale branch detected") {
+		t.Error("expected log message about stale branch detection")
+	}
+}
+
+// Resume with a valid, non-squash-merged branch should NOT reset — the
+// branch has work that still needs to be rebased normally.
+func TestSetupWorktree_ResumeKeepsValidBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+	log := &testLog{}
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+	mgr.RenameBranchForTask("in progress work")
+	writeFile(t, mgr.WorkDir, "wip.txt", "work in progress\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "wip commit")
+	branchBefore := mgr.WorktreeBranch
+
+	// Resume without squash-merging — branch should be preserved
+	mgr2 := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		Resume:      true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr2.SetupWorktree(); err != nil {
+		t.Fatalf("resume SetupWorktree: %v", err)
+	}
+
+	if mgr2.WorktreeBranch != branchBefore {
+		t.Errorf("branch = %q, want %q (valid branch should be preserved)", mgr2.WorktreeBranch, branchBefore)
+	}
+	if log.contains("Stale branch detected") {
+		t.Error("should not detect stale branch for valid in-progress work")
+	}
+}
+
 // --- RenameBranchForTask tests ---
 
 // RenameBranchForTask gives the temp branch a descriptive name for the current task

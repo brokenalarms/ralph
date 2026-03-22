@@ -192,6 +192,62 @@ func (m *Manager) tryResumeWorktree() error {
 		m.Logger.Warn("Failed to fetch origin/%s on resume: %v", defaultBranch, err)
 	}
 
+	if m.resumedBranchIsStale(defaultBranch) {
+		m.Logger.Log("Stale branch detected on resume — resetting to origin/%s", defaultBranch)
+		return m.resetResumedWorktree(defaultBranch)
+	}
+
+	return nil
+}
+
+// resumedBranchIsStale returns true when the stored branch no longer exists
+// or its changes have already been squash-merged into origin/defaultBranch.
+func (m *Manager) resumedBranchIsStale(defaultBranch string) bool {
+	if m.WorktreeBranch == "" {
+		return false
+	}
+
+	if !refExists(m.WorkDir, m.WorktreeBranch) {
+		return true
+	}
+
+	if !refExists(m.WorkDir, "origin/"+defaultBranch) {
+		return false
+	}
+
+	// If HEAD has no unique commits beyond origin/main, it's already up to date or empty.
+	revCount := gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+"..HEAD")
+	if revCount == "" || revCount == "0" {
+		return false
+	}
+
+	return IsBranchSquashMerged(m.WorkDir, m.WorktreeBranch)
+}
+
+// resetResumedWorktree force-resets the worktree to origin/defaultBranch,
+// equivalent to PostMergeReset but from a resume context. The old branch's
+// work is already on main (squash-merged), so starting fresh is safe.
+func (m *Manager) resetResumedWorktree(defaultBranch string) error {
+	oldBranch := m.WorktreeBranch
+	newBranch := m.TempBranch()
+
+	if err := gitCmdErr(m.WorkDir, "checkout", "--force", "-B", newBranch, "origin/"+defaultBranch); err != nil {
+		return fmt.Errorf("resume reset: checkout failed: %w", err)
+	}
+
+	if err := gitCmdErr(m.WorkDir, "clean", "-fd"); err != nil {
+		m.Logger.Warn("git clean failed (non-fatal): %v", err)
+	}
+
+	if oldBranch != newBranch {
+		gitCmd(m.WorkDir, "branch", "-D", oldBranch)
+	}
+
+	m.WorktreeBranch = newBranch
+	m.BranchRenamed = false
+	if m.State != nil {
+		_ = m.State.Write("worktree_branch", m.WorktreeBranch)
+	}
 	return nil
 }
 
