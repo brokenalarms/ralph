@@ -94,9 +94,14 @@ func evolveRestart(projectDir, scriptPath string, args []string, log *logging.Lo
 		return fmt.Errorf("git fetch failed: %s", out)
 	}
 
-	resetCmd := exec.Command("git", "-C", projectDir, "reset", "--hard", "origin/main")
-	if out, err := resetCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git reset failed: %s", out)
+	// Use checkout + pull instead of reset --hard to avoid contaminating
+	// the shared index when a worktree exists.
+	checkoutCmd := exec.Command("git", "-C", projectDir, "checkout", "main")
+	checkoutCmd.CombinedOutput() // ignore error if already on main
+
+	pullCmd := exec.Command("git", "-C", projectDir, "merge", "--ff-only", "origin/main")
+	if out, err := pullCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git merge --ff-only failed: %s", out)
 	}
 
 	log.Log("Rebuilding ralph binary...")
