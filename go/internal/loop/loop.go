@@ -97,7 +97,11 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 // for unrecoverable failures.
 func (l *Loop) Run(ctx context.Context) error {
 	if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
-		if err := l.handleRebase(); err != nil {
+		if err := l.handleRebase(ctx); err != nil {
+			if ctx.Err() != nil {
+				l.state.Write("status", "stopped")
+				return nil
+			}
 			l.state.Write("status", "error")
 			return fmt.Errorf("initial rebase failed: %w", err)
 		}
@@ -191,8 +195,12 @@ func (l *Loop) Run(ctx context.Context) error {
 		if runIteration > 1 && taskChanged {
 			l.git.RotateBranch()
 			if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
-				if err := l.handleRebase(); err != nil {
-					l.state.Write("status", "error")
+				if err := l.handleRebase(ctx); err != nil {
+					if ctx.Err() != nil {
+						l.state.Write("status", "stopped")
+					} else {
+						l.state.Write("status", "error")
+					}
 					break
 				}
 			}
@@ -415,10 +423,14 @@ func (l *Loop) Run(ctx context.Context) error {
 
 // handleRebase attempts to rebase onto the default branch, and if a conflict
 // is detected, consults the OnRebaseConflict handler for recovery.
-func (l *Loop) handleRebase() error {
+func (l *Loop) handleRebase(ctx context.Context) error {
 	err := l.git.RebaseOntoDefaultBranch()
 	if err == nil {
 		return nil
+	}
+
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 
 	var conflictErr *git.RebaseConflictError
