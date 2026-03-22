@@ -99,6 +99,8 @@ func (c *Checklist) CloseTask(_ string, _ string) error {
 	return nil
 }
 
+func (c *Checklist) ReopenTask(_ string) error { return nil }
+
 func (c *Checklist) SkipTask(_ string, reason string) error {
 	if reason == "" {
 		reason = "skipped"

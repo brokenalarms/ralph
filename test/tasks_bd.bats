@@ -98,20 +98,19 @@ teardown() {
   [[ "$result" == "abc123" ]]
 }
 
-# Proves: in-progress tasks are resumed before picking new ready tasks
-@test "bd: get_next_task resumes in-progress task first" {
-  # Override mock to return an in-progress task
+# Proves: in-progress tasks are resumed when priority is equal to ready tasks
+@test "bd: get_next_task resumes in-progress at same priority" {
   local mock_dir="$TEST_TMPDIR/mock_bin"
   cat > "$mock_dir/bd" <<'MOCK'
 #!/usr/bin/env bash
 case "$1" in
   list)
     if [[ "$*" == *"--status"*"in_progress"*"--json"* ]]; then
-      echo '[{"id":"wip-42","title":"Half-done feature"}]'
+      echo '[{"id":"wip-42","title":"Half-done feature","priority":2}]'
     fi
     ;;
   ready)
-    echo '[{"id":"abc123","title":"Fix the auth module"}]'
+    echo '[{"id":"abc123","title":"Fix the auth module","priority":2}]'
     ;;
 esac
 MOCK
@@ -120,25 +119,70 @@ MOCK
   [[ "$result" == "Half-done feature" ]]
 }
 
-# Proves: in-progress task id is returned for prompt inclusion
-@test "bd: get_next_task_id resumes in-progress task id first" {
+# Proves: in-progress task id is returned when priorities are equal
+@test "bd: get_next_task_id resumes in-progress at same priority" {
   local mock_dir="$TEST_TMPDIR/mock_bin"
   cat > "$mock_dir/bd" <<'MOCK'
 #!/usr/bin/env bash
 case "$1" in
   list)
     if [[ "$*" == *"--status"*"in_progress"*"--json"* ]]; then
-      echo '[{"id":"wip-42","title":"Half-done feature"}]'
+      echo '[{"id":"wip-42","title":"Half-done feature","priority":2}]'
     fi
     ;;
   ready)
-    echo '[{"id":"abc123","title":"Fix the auth module"}]'
+    echo '[{"id":"abc123","title":"Fix the auth module","priority":2}]'
     ;;
 esac
 MOCK
   chmod +x "$mock_dir/bd"
   result=$(get_next_task_id)
   [[ "$result" == "wip-42" ]]
+}
+
+# Proves: higher-priority ready task preempts lower-priority in-progress task
+@test "bd: get_next_task preempts lower-priority in-progress" {
+  local mock_dir="$TEST_TMPDIR/mock_bin"
+  cat > "$mock_dir/bd" <<'MOCK'
+#!/usr/bin/env bash
+case "$1" in
+  list)
+    if [[ "$*" == *"--status"*"in_progress"*"--json"* ]]; then
+      echo '[{"id":"wip-1","title":"P3 feature","priority":3}]'
+    fi
+    ;;
+  ready)
+    echo '[{"id":"hot-1","title":"P0 critical bug","priority":0}]'
+    ;;
+  update)
+    echo "$2" > "$TEST_TMPDIR/reopened_id"
+    ;;
+esac
+MOCK
+  chmod +x "$mock_dir/bd"
+  result=$(get_next_task)
+  [[ "$result" == "P0 critical bug" ]]
+}
+
+# Proves: lower-priority ready task does not preempt in-progress task
+@test "bd: get_next_task keeps higher-priority in-progress" {
+  local mock_dir="$TEST_TMPDIR/mock_bin"
+  cat > "$mock_dir/bd" <<'MOCK'
+#!/usr/bin/env bash
+case "$1" in
+  list)
+    if [[ "$*" == *"--status"*"in_progress"*"--json"* ]]; then
+      echo '[{"id":"wip-1","title":"P1 important","priority":1}]'
+    fi
+    ;;
+  ready)
+    echo '[{"id":"new-1","title":"P3 backlog","priority":3}]'
+    ;;
+esac
+MOCK
+  chmod +x "$mock_dir/bd"
+  result=$(get_next_task)
+  [[ "$result" == "P1 important" ]]
 }
 
 # Proves: falls back to ready queue when no in-progress tasks

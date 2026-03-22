@@ -44,6 +44,8 @@ func mockBD(total string, counts map[string]string, inProgress, ready string) Co
 			return `[{"status":"in_progress"}]`, nil
 		case "close":
 			return "closed", nil
+		case "update":
+			return "", nil
 		}
 		return "", fmt.Errorf("unknown command: %s", args[0])
 	}
@@ -134,13 +136,13 @@ func TestBD_GetNextTaskID_FromReady(t *testing.T) {
 	}
 }
 
-// Proves: in-progress tasks are resumed before picking new ready tasks.
-func TestBD_GetNextTask_PrefersInProgress(t *testing.T) {
+// Proves: in-progress tasks are resumed when priority is equal to ready tasks.
+func TestBD_GetNextTask_PrefersInProgressAtSamePriority(t *testing.T) {
 	runner := mockBD(
 		"5",
 		map[string]string{"open": "3", "closed": "2", "in_progress": "1"},
-		`[{"id":"wip-42","title":"Half-done feature"}]`,
-		`[{"id":"abc123","title":"Fix the auth module"}]`,
+		`[{"id":"wip-42","title":"Half-done feature","priority":2}]`,
+		`[{"id":"abc123","title":"Fix the auth module","priority":2}]`,
 	)
 	b := setupBD(t, runner)
 	got, _ := b.GetNextTask()
@@ -149,13 +151,13 @@ func TestBD_GetNextTask_PrefersInProgress(t *testing.T) {
 	}
 }
 
-// Proves: in-progress task id is returned for prompt inclusion.
-func TestBD_GetNextTaskID_PrefersInProgress(t *testing.T) {
+// Proves: in-progress task id is returned when priorities are equal.
+func TestBD_GetNextTaskID_PrefersInProgressAtSamePriority(t *testing.T) {
 	runner := mockBD(
 		"5",
 		map[string]string{"open": "3", "closed": "2", "in_progress": "1"},
-		`[{"id":"wip-42","title":"Half-done feature"}]`,
-		`[{"id":"abc123","title":"Fix the auth module"}]`,
+		`[{"id":"wip-42","title":"Half-done feature","priority":2}]`,
+		`[{"id":"abc123","title":"Fix the auth module","priority":2}]`,
 	)
 	b := setupBD(t, runner)
 	got, _ := b.GetNextTaskID()
@@ -533,13 +535,13 @@ func TestBD_GetNextTaskInfo_ReturnsConsistentPair(t *testing.T) {
 	}
 }
 
-// Proves: GetNextTaskInfo prefers in-progress tasks over ready ones.
-func TestBD_GetNextTaskInfo_PrefersInProgress(t *testing.T) {
+// Proves: GetNextTaskInfo prefers in-progress when priorities are equal.
+func TestBD_GetNextTaskInfo_PrefersInProgressAtSamePriority(t *testing.T) {
 	runner := mockBD(
 		"3",
 		map[string]string{"open": "1", "closed": "1", "in_progress": "1"},
-		`[{"id":"wip-99","title":"Resume this"}]`,
-		`[{"id":"new-1","title":"Start fresh"}]`,
+		`[{"id":"wip-99","title":"Resume this","priority":2}]`,
+		`[{"id":"new-1","title":"Start fresh","priority":2}]`,
 	)
 	b := setupBD(t, runner)
 	id, title, err := b.GetNextTaskInfo()
@@ -548,6 +550,74 @@ func TestBD_GetNextTaskInfo_PrefersInProgress(t *testing.T) {
 	}
 	if id != "wip-99" || title != "Resume this" {
 		t.Errorf("expected wip-99/Resume this, got %s/%s", id, title)
+	}
+}
+
+// Proves: a higher-priority ready task preempts a lower-priority in-progress
+// task, and the in-progress task is reopened via bd update.
+func TestBD_GetNextTask_HigherPriorityReadyPreempts(t *testing.T) {
+	var reopenedID string
+	runner := func(dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		switch args[0] {
+		case "list":
+			joined := strings.Join(args, " ")
+			if strings.Contains(joined, "in_progress") && strings.Contains(joined, "--json") {
+				return `[{"id":"wip-1","title":"P3 feature","priority":3}]`, nil
+			}
+			return "[]", nil
+		case "ready":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[{"id":"hot-1","title":"P0 critical bug","priority":0}]`, nil
+			}
+			return "", nil
+		case "update":
+			reopenedID = args[1]
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	got, _ := b.GetNextTask()
+	if got != "P0 critical bug" {
+		t.Errorf("GetNextTask = %q, want %q", got, "P0 critical bug")
+	}
+	if reopenedID != "wip-1" {
+		t.Errorf("expected in-progress task wip-1 to be reopened, got %q", reopenedID)
+	}
+}
+
+// Proves: a lower-priority ready task does not preempt a higher-priority
+// in-progress task.
+func TestBD_GetNextTask_LowerPriorityReadyDoesNotPreempt(t *testing.T) {
+	runner := mockBD(
+		"5",
+		map[string]string{"open": "1", "closed": "2", "in_progress": "1"},
+		`[{"id":"wip-1","title":"P1 important","priority":1}]`,
+		`[{"id":"new-1","title":"P3 backlog","priority":3}]`,
+	)
+	b := setupBD(t, runner)
+	got, _ := b.GetNextTask()
+	if got != "P1 important" {
+		t.Errorf("GetNextTask = %q, want %q", got, "P1 important")
+	}
+}
+
+// Proves: when in-progress task has no explicit priority, default (2) is used
+// for comparison.
+func TestBD_GetNextTask_DefaultPriorityComparison(t *testing.T) {
+	runner := mockBD(
+		"5",
+		map[string]string{"open": "1", "closed": "2", "in_progress": "1"},
+		`[{"id":"wip-1","title":"No priority set"}]`,
+		`[{"id":"hot-1","title":"P0 urgent","priority":0}]`,
+	)
+	b := setupBD(t, runner)
+	got, _ := b.GetNextTask()
+	if got != "P0 urgent" {
+		t.Errorf("GetNextTask = %q, want %q", got, "P0 urgent")
 	}
 }
 

@@ -51,6 +51,11 @@ type Backend interface {
 	// the reason.
 	SkipTask(id string, reason string) error
 
+	// ReopenTask sets an in-progress task back to open status so it
+	// returns to the ready queue. Used when a higher-priority task
+	// preempts the current in-progress task.
+	ReopenTask(id string) error
+
 	// ExecutionInstructions returns the prompt text for the execution phase.
 	ExecutionInstructions() (string, error)
 
