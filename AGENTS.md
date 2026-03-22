@@ -10,7 +10,7 @@
 - It is up to the user to work through these stacks and merge them. Never merge a PR to main without asking first.
 
 # Implementation
-- **Go only.** The bash implementation (ralph.sh, lib/*.sh) is deprecated. All changes, fixes, and new features go in `go/`. Do not modify bash files. Do not add bash tests. If a bead references bash code, implement the fix in Go instead.
+- **Go only by default.** The bash implementation (ralph.sh, lib/*.sh) is deprecated. All changes, fixes, and new features go in `go/` unless explicitly told otherwise.
 
 # Prompts
 - User-facing text strings and instructions for Claude belong in `.md` files under `prompts/`, not hardcoded in shell scripts. Shell code assembles and templates prompts but should not contain instructional prose.
