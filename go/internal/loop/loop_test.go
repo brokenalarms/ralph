@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2331,5 +2332,98 @@ func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 	got := strings.TrimSpace(string(data))
 	if got != "Add dark mode" {
 		t.Errorf("completed task = %q, want %q", got, "Add dark mode")
+	}
+}
+
+// Verifies that when auto-merge fails, PostMergeFailReset isolates the next
+// task on a new branch so it doesn't pile commits onto the failed PR.
+func TestLoop_MergeFailIsolatesNextTask(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(10, 0)
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	gm := &git.Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: git.BranchSingle,
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+	if err := gm.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	initialBranch := gm.WorktreeBranch
+	iterationCount := 0
+	var branchAtSecondIteration string
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			if iterationCount == 1 {
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+			} else {
+				branchAtSecondIteration = gm.WorktreeBranch
+				backend.completed = 2
+				backend.remaining = 0
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	mergeFailCount := 0
+	l := New(Config{
+		ProjectDir:    project,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.pushPRFunc = func(string) error { return nil }
+	l.mergeFunc = func() (bool, error) {
+		mergeFailCount++
+		return false, fmt.Errorf("merge failed: CI checks pending")
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if iterationCount != 2 {
+		t.Fatalf("expected 2 iterations, got %d", iterationCount)
+	}
+
+	// After merge failure, the second task should be on a different branch
+	if branchAtSecondIteration == initialBranch {
+		t.Errorf("second task should be on a different branch after merge failure, both on %q", initialBranch)
+	}
+
+	// The initial branch (with task A's PR) should still exist
+	cmd := exec.Command("git", "-C", gm.WorkDir, "rev-parse", "--verify", initialBranch)
+	if err := cmd.Run(); err != nil {
+		t.Errorf("initial branch %q should still exist (has open PR)", initialBranch)
 	}
 }

@@ -1379,6 +1379,121 @@ func TestPruneOrphanedWorktrees_RemovesOrphaned(t *testing.T) {
 	}
 }
 
+// PostMergeFailReset creates a new numbered branch from origin/main after a
+// failed auto-merge, leaving the old branch intact so its PR stays open.
+func TestPostMergeFailReset_CreatesNewBranchFromMain(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchSingle,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	origBranch := mgr.WorktreeBranch
+	if !strings.HasSuffix(origBranch, "/next") {
+		t.Fatalf("expected /next branch, got %q", origBranch)
+	}
+
+	// Add a commit so the old branch differs from origin/main
+	writeFile(t, mgr.WorkDir, "task-a.txt", "task A work\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "task A")
+	headBefore := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
+
+	mgr.PostMergeFailReset()
+
+	// New branch should be numbered and different from the original
+	if mgr.WorktreeBranch == origBranch {
+		t.Errorf("expected new branch, still on %q", origBranch)
+	}
+	if !strings.Contains(mgr.WorktreeBranch, "/01-next") {
+		t.Errorf("expected numbered branch like */01-next, got %q", mgr.WorktreeBranch)
+	}
+
+	// HEAD should now be at origin/main, not at the task commit
+	headAfter := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
+	originMain := gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
+	if headAfter != originMain {
+		t.Errorf("HEAD should match origin/main, got %s vs %s", headAfter, originMain)
+	}
+	if headAfter == headBefore {
+		t.Error("HEAD should differ from pre-reset commit")
+	}
+
+	// Old branch should still exist (its PR is open)
+	if !refExists(mgr.WorkDir, origBranch) {
+		t.Errorf("old branch %q should still exist", origBranch)
+	}
+
+	// TaskSeq should have incremented
+	if mgr.TaskSeq != 1 {
+		t.Errorf("expected TaskSeq=1, got %d", mgr.TaskSeq)
+	}
+	if mgr.BranchRenamed {
+		t.Error("BranchRenamed should be false after PostMergeFailReset")
+	}
+
+	// State should be updated
+	storedBranch, _ := st.Read("worktree_branch")
+	if storedBranch != mgr.WorktreeBranch {
+		t.Errorf("state worktree_branch should be %q, got %q", mgr.WorktreeBranch, storedBranch)
+	}
+	storedSeq, _ := st.Read("task_seq")
+	if storedSeq != "1" {
+		t.Errorf("state task_seq should be '1', got %q", storedSeq)
+	}
+}
+
+// PostMergeFailReset increments TaskSeq on repeated calls, producing unique
+// branch names when multiple merges fail in succession.
+func TestPostMergeFailReset_IncrementsSeqOnRepeatedCalls(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchSingle,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Add a commit so branches diverge
+	writeFile(t, mgr.WorkDir, "task-a.txt", "work\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "task A")
+
+	mgr.PostMergeFailReset()
+	firstBranch := mgr.WorktreeBranch
+
+	// Simulate another task's work and failed merge
+	writeFile(t, mgr.WorkDir, "task-b.txt", "work\n")
+	run(t, "git", "-C", mgr.WorkDir, "add", "task-b.txt")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "task B")
+
+	mgr.PostMergeFailReset()
+	secondBranch := mgr.WorktreeBranch
+
+	if firstBranch == secondBranch {
+		t.Errorf("repeated calls should produce different branches, both %q", firstBranch)
+	}
+	if mgr.TaskSeq != 2 {
+		t.Errorf("expected TaskSeq=2 after two resets, got %d", mgr.TaskSeq)
+	}
+}
+
 // PruneOrphanedWorktrees is a no-op when worktrees/ doesn't exist
 func TestPruneOrphanedWorktrees_NoWorktreeDir(t *testing.T) {
 	project, _ := initBareRepo(t)

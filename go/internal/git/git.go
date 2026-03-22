@@ -471,6 +471,34 @@ func (m *Manager) PostMergeReset() {
 	m.Logger.Log("Reset to %s from origin/%s", newBranch, defaultBranch)
 }
 
+// PostMergeFailReset creates a fresh branch from origin/main after a failed
+// auto-merge, isolating the next task's work from the current branch's open PR.
+// Unlike PostMergeReset, the old branch is NOT deleted since its PR is still open.
+func (m *Manager) PostMergeFailReset() {
+	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
+		return
+	}
+
+	defaultBranch := detectDefaultBranch(m.ProjectDir)
+	oldBranch := m.WorktreeBranch
+
+	m.TaskSeq++
+	newBranch := fmt.Sprintf("ralph/%s/%02d-next", m.ProjectName, m.TaskSeq)
+
+	if err := gitCmdErr(m.WorkDir, "checkout", "-b", newBranch, "origin/"+defaultBranch); err != nil {
+		m.Logger.Warn("Post-merge-fail reset failed, continuing on %s", m.WorktreeBranch)
+		return
+	}
+
+	m.WorktreeBranch = newBranch
+	m.BranchRenamed = false
+	if m.State != nil {
+		_ = m.State.Write("worktree_branch", m.WorktreeBranch)
+		_ = m.State.Write("task_seq", fmt.Sprintf("%d", m.TaskSeq))
+	}
+	m.Logger.Log("Reset to %s from origin/%s (branch %s has open PR)", newBranch, defaultBranch, oldBranch)
+}
+
 // RecreateFromMain removes the current worktree and creates a fresh one from
 // origin's default branch. State is preserved except for git-specific fields
 // (worktree_dir, worktree_branch). This is the recovery path when rebase fails
