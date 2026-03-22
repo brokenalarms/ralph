@@ -101,12 +101,29 @@ func TestBD_CountRemaining(t *testing.T) {
 	}
 }
 
-// Proves: bd backend returns correct total count.
+// Proves: bd backend returns total as sum of open+in_progress+closed,
+// not bare "bd count" which may include historical beads from other statuses.
 func TestBD_CountTotal(t *testing.T) {
 	b := setupBD(t, defaultMock())
 	got, _ := b.CountTotal()
 	if got != 5 {
 		t.Errorf("CountTotal = %d, want 5", got)
+	}
+}
+
+// Proves: CountTotal ignores beads in unknown statuses (e.g. archived)
+// that bare "bd count" would include, only summing open+in_progress+closed.
+func TestBD_CountTotal_IgnoresHistorical(t *testing.T) {
+	runner := mockBD(
+		"100",
+		map[string]string{"open": "2", "closed": "3", "in_progress": "1"},
+		"[]",
+		`[{"id":"x","title":"task"}]`,
+	)
+	b := setupBD(t, runner)
+	got, _ := b.CountTotal()
+	if got != 6 {
+		t.Errorf("CountTotal = %d, want 6 (2 open + 1 in_progress + 3 closed), not 100 from bare bd count", got)
 	}
 }
 

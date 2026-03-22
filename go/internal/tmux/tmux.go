@@ -230,7 +230,9 @@ func (s *Session) bdPlanRender() string {
       fi
     fi
     closed=$(bd count --status closed 2>/dev/null || echo 0)
-    total=$(bd count 2>/dev/null || echo 0)
+    open=$(bd count --status open 2>/dev/null || echo 0)
+    inp=$(bd count --status in_progress 2>/dev/null || echo 0)
+    total=$((closed + open + inp))
     if [[ $total -gt 0 ]]; then
       bar_w=20
       filled=$((closed * bar_w / total))

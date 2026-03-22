@@ -81,7 +81,12 @@ bd_count_remaining() {
   inp=$(run_bd count --status in_progress 2>/dev/null) || inp=0
   echo $(( open + inp ))
 }
-bd_count_total()       { run_bd count 2>/dev/null || echo 0; }
+bd_count_total() {
+  local completed remaining
+  completed=$(bd_count_completed)
+  remaining=$(bd_count_remaining)
+  echo $(( completed + remaining ))
+}
 bd_get_next_task() {
   # Resume in-progress tasks first, then pick from ready queue
   local title

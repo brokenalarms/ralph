@@ -80,10 +80,38 @@ teardown() {
   [[ "$result" == "3" ]]
 }
 
-# Proves: bd backend returns correct total count
-@test "bd: count_total returns all tasks" {
+# Proves: bd backend returns total as sum of open+in_progress+closed,
+# not bare "bd count" which may include historical beads
+@test "bd: count_total sums open + in_progress + closed" {
   result=$(count_total)
   [[ "$result" == "5" ]]
+}
+
+# Proves: count_total ignores beads in unknown statuses that bare
+# "bd count" would include (e.g. when historical total is higher)
+@test "bd: count_total ignores historical beads from bare bd count" {
+  # Override mock: bare bd count returns 100, but per-status sums to 6
+  local mock_dir="$TEST_TMPDIR/mock_bin"
+  cat > "$mock_dir/bd" <<'MOCK'
+#!/usr/bin/env bash
+case "$1" in
+  count)
+    case "${2:-}" in
+      --status)
+        case "$3" in
+          open)        echo "2" ;;
+          closed)      echo "3" ;;
+          in_progress) echo "1" ;;
+        esac
+        ;;
+      *) echo "100" ;;
+    esac
+    ;;
+esac
+MOCK
+  chmod +x "$mock_dir/bd"
+  result=$(count_total)
+  [[ "$result" == "6" ]]
 }
 
 # Proves: bd backend picks the next ready task by title
