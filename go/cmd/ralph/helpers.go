@@ -139,6 +139,10 @@ func evolveRestart(projectDir, scriptPath string, args []string, log *logging.Lo
 
 	clearSignalFiles(ralphDir)
 
+	// Kill child processes (tail, stream-filter) before exec — otherwise
+	// they become orphans that accumulate across evolve restarts.
+	killChildProcesses()
+
 	log.Log("Restarting ralph with new binary...")
 	execArgs := append([]string{scriptPath}, args...)
 	return syscall.Exec(scriptPath, execArgs, os.Environ())
@@ -173,6 +177,13 @@ func extractEmbeddedPrompts() (string, error) {
 		return os.WriteFile(filepath.Join(tmpDir, name), data, 0o644)
 	})
 	return tmpDir, err
+}
+
+// killChildProcesses kills orphan-prone child processes (tail, stream-filter)
+// before exec to prevent accumulation across evolve restarts.
+func killChildProcesses() {
+	// pkill by parent PID — kills direct children of this process
+	exec.Command("pkill", "-P", fmt.Sprintf("%d", os.Getpid())).Run()
 }
 
 func clearSignalFiles(ralphDir string) {
