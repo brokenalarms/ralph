@@ -26,6 +26,9 @@ Include this in your reflection as well, before the learnings section.
 5. Run only scoped, relevant tests during development — not the full suite. The orchestrator runs the full test suite as the completion gate.
 6. When using the Agent tool, ALWAYS set `isolation: "worktree"` so sub-agents work in their own git worktree. Sub-agents that share the main worktree can check out ralph's branches, breaking branch cleanup during recreation.
 
+## Test-driven development
+Write a test that proves the bead's requirement. Run it — it must FAIL. Then implement the fix. Run the test again — it must PASS. This is the minimum proof that your change does what the bead asks.
+
 ## Completion — this order is mandatory
 1. Commit your changes and ensure scoped tests pass for the code you touched.
 2. Push your branch and create or update the PR.
