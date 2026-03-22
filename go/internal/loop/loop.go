@@ -303,11 +303,18 @@ func (l *Loop) Run(ctx context.Context) error {
 				}
 				syncPrompts()
 
-				// Step 1: Quick test check by orchestrator
-				passed, reason := l.verifyCompletion(headBefore)
+				// Step 1: Run tests (commit check is a warning, not a gate)
+				commitResult := verify.CheckCommits(l.git.WorkDir, headBefore)
+				if !commitResult.Passed {
+					l.logger.Warn("No new commits — will verify via LLM if work is already on main")
+				}
+
+				testResult := verify.RunTests(l.cfg.VerifyDir)
+				passed := testResult.Passed
+				reason := testResult.Reason
 				if !passed {
-					l.logger.Warn("Verification failed: %s", reason)
-					testOutput, _ := l.state.Read("last_test_output")
+					l.logger.Warn("Tests failed: %s", reason)
+					testOutput := testResult.Details
 
 					// Spawn a verification agent that fixes tests AND verifies the diff
 					l.logger.Log("Spawning verification agent...")
