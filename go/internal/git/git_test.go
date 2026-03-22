@@ -1297,6 +1297,82 @@ func TestPostMergeReset_SingleBranchKeepsSameName(t *testing.T) {
 	}
 }
 
+// PostMergeReset clears upstream tracking so the next push -u can set the
+// correct remote ref. Without this, the branch tracks origin/main (from
+// checkout -B ... origin/main) which can cause push failures.
+func TestPostMergeReset_ClearsUpstreamTracking(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchStacked,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("completed task")
+
+	mgr.PostMergeReset()
+
+	// The new branch should have no upstream tracking configured.
+	upstream := gitOutput(mgr.WorkDir, "config", "--get", "branch."+mgr.WorktreeBranch+".merge")
+	if upstream != "" {
+		t.Errorf("expected no upstream tracking after PostMergeReset, got %q", upstream)
+	}
+}
+
+// PostMergeReset prunes stale remote-tracking refs so that deleted remote
+// branches don't leave behind refs that can interfere with subsequent pushes.
+func TestPostMergeReset_PrunesStaleRemoteRefs(t *testing.T) {
+	project, _ := initBareRepo(t)
+	bare := filepath.Join(filepath.Dir(project), "bare.git")
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchStacked,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Push a branch to remote, then delete it from the bare repo to simulate
+	// --delete-branch behavior.
+	branchName := "ralph/test-project/01-some-task"
+	run(t, "git", "-C", mgr.WorkDir, "checkout", "-b", branchName)
+	writeFile(t, mgr.WorkDir, "task.txt", "work\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "task commit")
+	run(t, "git", "-C", mgr.WorkDir, "push", "-u", "origin", branchName)
+	mgr.WorktreeBranch = branchName
+
+	// Delete the branch from the bare repo (simulates GitHub --delete-branch)
+	run(t, "git", "-C", bare, "branch", "-D", branchName)
+
+	// Before PostMergeReset, the stale remote-tracking ref should still exist
+	if !refExists(mgr.WorkDir, "refs/remotes/origin/"+branchName) {
+		t.Fatal("expected stale remote-tracking ref to exist before PostMergeReset")
+	}
+
+	mgr.PostMergeReset()
+
+	// After PostMergeReset, the stale remote-tracking ref should be pruned
+	if refExists(mgr.WorkDir, "refs/remotes/origin/"+branchName) {
+		t.Error("stale remote-tracking ref should have been pruned by PostMergeReset")
+	}
+}
+
 // After auto-merge squash-merges a PR, local main must be updated to match
 // origin/main. This failed previously because `git branch -f main origin/main`
 // silently errors when main is the checked-out branch in the project dir.

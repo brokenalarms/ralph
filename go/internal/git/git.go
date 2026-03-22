@@ -345,10 +345,16 @@ func (m *Manager) PushAndCreatePR(taskDesc string) error {
 		return nil
 	}
 
-	// Push branch to remote.
+	// Push branch to remote. If the remote branch was deleted by a previous
+	// auto-merge, stale tracking refs can cause the push to fail. Prune and
+	// clear upstream tracking before retrying.
 	m.Logger.Log("Pushing %s...", m.WorktreeBranch)
 	if err := gitCmdErr(m.WorkDir, "push", "-u", "origin", m.WorktreeBranch); err != nil {
-		return fmt.Errorf("push failed for %s", m.WorktreeBranch)
+		gitCmd(m.WorkDir, "fetch", "--prune", "origin")
+		gitCmd(m.WorkDir, "branch", "--unset-upstream", m.WorktreeBranch)
+		if retryErr := gitCmdErr(m.WorkDir, "push", "-u", "origin", m.WorktreeBranch); retryErr != nil {
+			return fmt.Errorf("push failed for %s", m.WorktreeBranch)
+		}
 	}
 
 	ghPath, err := exec.LookPath("gh")
@@ -537,10 +543,18 @@ func (m *Manager) PostMergeReset() {
 	oldBranch := m.WorktreeBranch
 	newBranch := m.TempBranch()
 
+	// Prune stale remote-tracking refs left by --delete-branch during merge.
+	gitCmd(m.WorkDir, "fetch", "--prune", "origin")
+
 	if err := gitCmdErr(m.WorkDir, "checkout", "-B", newBranch, "origin/"+defaultBranch); err != nil {
 		m.Logger.Warn("Post-merge reset failed, continuing on %s", m.WorktreeBranch)
 		return
 	}
+
+	// checkout -B from a remote ref auto-sets upstream to origin/<default>,
+	// which conflicts with pushing to origin/<newBranch>. Clear it so the
+	// next push -u can set the correct tracking ref.
+	gitCmd(m.WorkDir, "branch", "--unset-upstream", newBranch)
 
 	if oldBranch != newBranch {
 		gitCmd(m.WorkDir, "branch", "-D", oldBranch)
@@ -572,6 +586,8 @@ func (m *Manager) PostMergeFailReset() {
 		m.Logger.Warn("Post-merge-fail reset failed, continuing on %s", m.WorktreeBranch)
 		return
 	}
+
+	gitCmd(m.WorkDir, "branch", "--unset-upstream", newBranch)
 
 	m.WorktreeBranch = newBranch
 	m.BranchRenamed = false
