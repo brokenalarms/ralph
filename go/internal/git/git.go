@@ -462,11 +462,10 @@ func (m *Manager) postMergeUpdate(prNumber string) (bool, error) {
 
 	defaultBranch := detectDefaultBranch(m.ProjectDir)
 	gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
-	originRef := gitOutput(m.ProjectDir, "rev-parse", "origin/"+defaultBranch)
-	if originRef != "" {
-		gitCmd(m.ProjectDir, "update-ref", "refs/heads/"+defaultBranch, originRef)
-		gitCmd(m.ProjectDir, "reset", "--hard", "HEAD")
-	}
+	// Single atomic reset: advances ref, index, and working tree together.
+	// The previous two-step approach (update-ref + reset --hard HEAD) left
+	// the index stale between steps, staging reversions of merged PR changes.
+	gitCmd(m.ProjectDir, "reset", "--hard", "origin/"+defaultBranch)
 	m.Logger.Log("Updated local %s to origin/%s", defaultBranch, defaultBranch)
 
 	return true, nil
