@@ -24,6 +24,7 @@ Include this in your reflection as well, before the learnings section.
 3. Do NOT write bd prime output or bd workflow instructions to the project's AGENTS.md, CLAUDE.md, or any other project file. bd context is for your use in this iteration only.
 4. One task = one PR, if gh is available. Multiple atomic commits are fine, but they all go in one PR — do not create a PR per commit.
 5. Run only scoped, relevant tests during development — not the full suite. The orchestrator runs the full test suite as the completion gate.
+6. When using the Agent tool, ALWAYS set `isolation: "worktree"` so sub-agents work in their own git worktree. Sub-agents that share the main worktree can check out ralph's branches, breaking branch cleanup during recreation.
 
 ## Completion — this order is mandatory
 1. Commit your changes and ensure scoped tests pass for the code you touched.

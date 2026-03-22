@@ -489,6 +489,10 @@ func (m *Manager) RecreateFromMain() error {
 	m.Logger.Log("Removing old worktree: %s", m.WorkDir)
 	gitCmd(m.ProjectDir, "worktree", "remove", "--force", m.WorkDir)
 
+	// Prune stale worktree references before listing branches — a worktree
+	// whose directory was deleted still marks its branch as checked-out.
+	gitCmd(m.ProjectDir, "worktree", "prune")
+
 	// Delete all ralph project branches (squash-merged work is on main).
 	// A branch may be checked out in an external worktree (e.g. a Claude
 	// sub-agent in .claude/worktrees/). Force-remove such worktrees first.
