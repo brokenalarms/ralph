@@ -851,3 +851,18 @@ func runWithCommand(t *testing.T, r *Runner, cfg RunConfig, name string, args ..
 
 	return result
 }
+
+// Verifies that IterationDisallowedTools contains bd close so the agent
+// cannot close beads — the orchestrator owns that lifecycle.
+func TestDisallowedTools_ContainsBdClose(t *testing.T) {
+	found := false
+	for _, tool := range IterationDisallowedTools {
+		if strings.Contains(tool, "bd close") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("IterationDisallowedTools must contain 'bd close' — orchestrator owns bead close")
+	}
+}
