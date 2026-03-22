@@ -23,6 +23,9 @@ type State struct {
 	MaxIterations      int `json:"max_iterations"`
 	QualityScore       int `json:"quality_score"`
 	RefactorEvery  int `json:"refactor_every"`
+	LastTestResult     string `json:"last_test_result,omitempty"`
+	LastTestOutput     string `json:"last_test_output,omitempty"`
+	LastTestTime       string `json:"last_test_time,omitempty"`
 
 	// Overflow captures unknown keys so round-tripping preserves them.
 	Overflow map[string]json.RawMessage `json:"-"`
@@ -78,6 +81,7 @@ func (s *State) UnmarshalJSON(data []byte) error {
 		"last_task": true, "worktree_dir": true, "worktree_branch": true,
 		"task_backend": true, "max_iterations": true,
 		"quality_score": true, "refactor_every": true,
+		"last_test_result": true, "last_test_output": true, "last_test_time": true,
 	}
 
 	alias.Overflow = nil
@@ -234,6 +238,12 @@ func getField(s State, key string) string {
 		return strconv.Itoa(s.QualityScore)
 	case "refactor_every":
 		return strconv.Itoa(s.RefactorEvery)
+	case "last_test_result":
+		return s.LastTestResult
+	case "last_test_output":
+		return s.LastTestOutput
+	case "last_test_time":
+		return s.LastTestTime
 	default:
 		if s.Overflow != nil {
 			if raw, ok := s.Overflow[key]; ok {
@@ -271,6 +281,12 @@ func setField(s *State, key, value string) {
 		s.QualityScore, _ = strconv.Atoi(value)
 	case "refactor_every":
 		s.RefactorEvery, _ = strconv.Atoi(value)
+	case "last_test_result":
+		s.LastTestResult = value
+	case "last_test_output":
+		s.LastTestOutput = value
+	case "last_test_time":
+		s.LastTestTime = value
 	default:
 		// Unknown key — store in overflow, converting numeric strings to numbers.
 		if s.Overflow == nil {

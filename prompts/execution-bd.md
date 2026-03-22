@@ -15,10 +15,9 @@
 2. Do NOT work on other tasks — one task per iteration.
 3. Do NOT write bd prime output or bd workflow instructions to the project's AGENTS.md, CLAUDE.md, or any other project file. bd context is for your use in this iteration only.
 4. One task = one PR, if gh is available. Multiple atomic commits are fine, but they all go in one PR — do not create a PR per commit.
-5. Run the full test suite at the START of your iteration. If any tests are failing, fix them before starting your task.
-6. ALL tests must pass before you close the task or signal completion. No exceptions. If tests fail — including tests you did not write — you must fix them. Do not categorize failures as "pre-existing" or "out of scope" to justify skipping them.
+5. Run only scoped, relevant tests during development — not the full suite. The orchestrator runs the full test suite as the completion gate.
 
 ## Completion — this order is mandatory
-1. Run the full test suite. ALL tests must pass. If any fail, fix them and re-run. Do NOT proceed until green.
+1. Commit your changes and ensure scoped tests pass for the code you touched.
 2. Signal completion by writing to the signal file.
-Do NOT run `bd close` — the orchestrator closes your assigned task automatically after verifying your work. Never signal before tests pass.
+Do NOT run `bd close` — the orchestrator closes your assigned task automatically after verifying your work.
