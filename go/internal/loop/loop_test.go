@@ -2898,13 +2898,18 @@ func TestLoop_CIFailureWritesFeedback(t *testing.T) {
 		}
 	}
 
+	// Fix agent returns without signal — the loop should give up gracefully.
+	fixAgentSpawned := false
+	l.newRunnerFunc = func() claudeRunner {
+		fixAgentSpawned = true
+		return &stubRunner{result: claude.Result{SignalDetected: false}}
+	}
+
 	_ = l.Run(context.Background())
 
-	// The loop should spawn a CI fix agent (via the runner) rather than
-	// just writing a feedback file. Verify it attempted to run the fix
-	// agent by checking the runner was called more than once (main + fix).
-	// With a stub runner that returns immediately, the fix agent also
-	// returns without signal, so the loop gives up — which is correct.
+	if !fixAgentSpawned {
+		t.Error("expected CI fix agent to be spawned when merge fails due to CI")
+	}
 }
 
 // When auto-merge returns a MergeConflictError, the loop rebases onto main,
@@ -2971,6 +2976,152 @@ func TestLoop_MergeConflictTriggersRebaseAndRetry(t *testing.T) {
 	}
 	if !forcePushed {
 		t.Error("expected force-push after rebase to resolve conflicts")
+	}
+}
+
+// When CI fails after merge, the loop spawns a fix agent via newRunnerFunc,
+// re-pushes the fix, and retries the merge — verifying the full CI fix loop.
+func TestLoop_CIFailureFixAgentRetriesMerge(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Fix CI failure",
+		nextID:    "ralph-ci2",
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/project/01-ci-fix",
+		BranchStrategy: git.BranchStacked,
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+
+	// Track fix agent invocations via newRunnerFunc.
+	fixAgentCalls := 0
+	l.newRunnerFunc = func() claudeRunner {
+		fixAgentCalls++
+		return &stubRunner{result: claude.Result{SignalDetected: true}}
+	}
+
+	pushCalls := 0
+	l.pushPRFunc = func(string) error {
+		pushCalls++
+		return nil
+	}
+
+	// First merge returns CI failure, second merge (after fix) succeeds.
+	mergeCalls := 0
+	l.mergeFunc = func() (bool, error) {
+		mergeCalls++
+		if mergeCalls == 1 {
+			return false, &git.CIFailureError{
+				PRNumber: "99",
+				Failures: []git.CICheckResult{
+					{Name: "test", Conclusion: "FAILURE"},
+				},
+			}
+		}
+		return true, nil
+	}
+
+	_ = l.Run(context.Background())
+
+	if fixAgentCalls == 0 {
+		t.Error("expected CI fix agent to be spawned via newRunnerFunc")
+	}
+	if mergeCalls < 2 {
+		t.Errorf("expected merge to be retried after CI fix, got %d calls", mergeCalls)
+	}
+	// pushCalls: 1 for initial push, 1 for post-fix push
+	if pushCalls < 2 {
+		t.Errorf("expected push after CI fix, got %d push calls", pushCalls)
+	}
+}
+
+// When the CI fix agent fails twice (CI keeps failing), the loop gives up
+// after the maximum retry count rather than looping forever.
+func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Retry exhaustion",
+		nextID:    "ralph-ci3",
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/project/01-ci-exhaust",
+		BranchStrategy: git.BranchStacked,
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+	l.newRunnerFunc = func() claudeRunner {
+		return &stubRunner{result: claude.Result{SignalDetected: true}}
+	}
+	l.pushPRFunc = func(string) error { return nil }
+
+	// Every merge attempt returns CI failure.
+	mergeCalls := 0
+	l.mergeFunc = func() (bool, error) {
+		mergeCalls++
+		return false, &git.CIFailureError{
+			PRNumber: "99",
+			Failures: []git.CICheckResult{
+				{Name: "test", Conclusion: "FAILURE"},
+			},
+		}
+	}
+
+	_ = l.Run(context.Background())
+
+	// Initial merge + 2 retries = 3 total merge calls.
+	if mergeCalls != 3 {
+		t.Errorf("expected 3 merge calls (1 initial + 2 retries), got %d", mergeCalls)
 	}
 }
 

@@ -66,11 +66,12 @@ type Loop struct {
 	attempts   *attempts.Tracker
 	logger     *logging.Logger
 	signals    claude.SignalPaths
-	mergeFunc     func() (bool, error)
-	pushPRFunc    func(taskDesc string) error
-	forcePushFunc func() error
-	verifyFunc func(dir, headBefore string) (passed bool, reason string)
-	lastAction analyzer.Action
+	mergeFunc      func() (bool, error)
+	pushPRFunc     func(taskDesc string) error
+	forcePushFunc  func() error
+	verifyFunc     func(dir, headBefore string) (passed bool, reason string)
+	newRunnerFunc  func() claudeRunner
+	lastAction     analyzer.Action
 }
 
 // New creates an execution loop from the given configuration.
@@ -661,7 +662,7 @@ func (l *Loop) handleCIFailure(ctx context.Context, ciErr *git.CIFailureError, n
 
 	var merged bool
 	for ciAttempt := 0; ciAttempt < 2; ciAttempt++ {
-		fixRunner := &claude.Runner{Logger: l.logger}
+		fixRunner := l.newRunner()
 		fixResult, _ := fixRunner.Run(claude.RunConfig{
 			Ctx:          ctx,
 			WorkDir:      workDir,
@@ -707,6 +708,15 @@ func (l *Loop) handleCIFailure(ctx context.Context, ciErr *git.CIFailureError, n
 	}
 
 	return merged, nil
+}
+
+// newRunner returns a claudeRunner for spawning sub-agents. Uses newRunnerFunc
+// if set (for testing), otherwise creates a default claude.Runner.
+func (l *Loop) newRunner() claudeRunner {
+	if l.newRunnerFunc != nil {
+		return l.newRunnerFunc()
+	}
+	return &claude.Runner{Logger: l.logger}
 }
 
 // forcePush force-pushes the current branch to the remote.
