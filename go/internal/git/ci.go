@@ -137,13 +137,17 @@ func isMergeConflictError(mergeOutput string) bool {
 	return false
 }
 
+// CIFetchFunc is the signature for fetching PR check status.
+type CIFetchFunc func(prNumber, repoURL string) ([]CICheckResult, error)
+
 // waitForCI polls PR checks until they complete or timeout is reached.
-// Returns the final check results and overall status.
-func waitForCI(prNumber, repoURL string, interval, timeout time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
+// The fetch parameter controls how checks are retrieved — production code
+// passes fetchPRChecks; tests can inject a stub.
+func waitForCI(fetch CIFetchFunc, prNumber, repoURL string, interval, timeout time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
 	deadline := time.Now().Add(timeout)
 
 	for {
-		checks, err := fetchPRChecks(prNumber, repoURL)
+		checks, err := fetch(prNumber, repoURL)
 		if err != nil {
 			return nil, CIPending, err
 		}

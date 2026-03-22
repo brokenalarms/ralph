@@ -68,8 +68,16 @@ type Manager struct {
 	BranchRenamed  bool
 	BranchStrategy BranchStrategy
 	MergeAdmin     bool
+	FetchPRChecks  CIFetchFunc
 	State          StateStore
 	Logger         Log
+}
+
+func (m *Manager) ciFetcher() CIFetchFunc {
+	if m.FetchPRChecks != nil {
+		return m.FetchPRChecks
+	}
+	return fetchPRChecks
 }
 
 // TempBranch returns the temporary branch name for the current project.
@@ -432,8 +440,10 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 
 	m.Logger.Log("Auto-merging PR #%s (branch: %s)...", prNumber, m.WorktreeBranch)
 
-	// Proactively check CI status before attempting merge.
-	checks, fetchErr := fetchPRChecks(prNumber, repoURL)
+	fetch := m.ciFetcher()
+
+	// Proactively poll CI status before attempting merge.
+	checks, fetchErr := fetch(prNumber, repoURL)
 	if fetchErr != nil {
 		m.Logger.Warn("Could not fetch CI checks for PR #%s: %v", prNumber, fetchErr)
 	}
@@ -443,7 +453,7 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 
 		if status == CIPending {
 			m.Logger.Log("CI checks pending on PR #%s — waiting for completion...", prNumber)
-			checks, status, err = waitForCI(prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+			checks, status, err = waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
 			if err != nil {
 				return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, err)
 			}
@@ -474,7 +484,7 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 
 	if isCIGatedError(mergeOutput) {
 		m.Logger.Log("PR #%s blocked by branch protection — waiting for CI...", prNumber)
-		checks, status, waitErr := waitForCI(prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+		checks, status, waitErr := waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
 		if waitErr != nil {
 			return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, waitErr)
 		}

@@ -1,8 +1,16 @@
 package git
 
 import (
+	"sync/atomic"
 	"testing"
+	"time"
 )
+
+type discardLog struct{}
+
+func (discardLog) Log(string, ...any)  {}
+func (discardLog) Warn(string, ...any) {}
+func (discardLog) Error(string, ...any) {}
 
 // evaluateChecks returns CIPassed when all checks have completed successfully,
 // verifying the happy path for CI-gated merges.
@@ -198,5 +206,83 @@ func TestGhMergeArgs_OmitsAdminByDefault(t *testing.T) {
 		if a == "--admin" {
 			t.Errorf("--admin should not be present by default: %v", args)
 		}
+	}
+}
+
+func TestWaitForCI_PollsUntilPassed(t *testing.T) {
+	var calls atomic.Int32
+	fetch := func(pr, repo string) ([]CICheckResult, error) {
+		n := calls.Add(1)
+		if n < 3 {
+			return []CICheckResult{{Name: "test", State: "IN_PROGRESS", Conclusion: ""}}, nil
+		}
+		return []CICheckResult{{Name: "test", State: "COMPLETED", Conclusion: "SUCCESS"}}, nil
+	}
+
+	checks, status, err := waitForCI(fetch, "1", "", 1*time.Millisecond, 5*time.Second, discardLog{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+	if len(checks) != 1 || checks[0].Conclusion != "SUCCESS" {
+		t.Errorf("unexpected checks: %v", checks)
+	}
+	if calls.Load() < 3 {
+		t.Errorf("expected at least 3 polls, got %d", calls.Load())
+	}
+}
+
+func TestWaitForCI_ReturnsFailedImmediately(t *testing.T) {
+	fetch := func(pr, repo string) ([]CICheckResult, error) {
+		return []CICheckResult{
+			{Name: "test", State: "COMPLETED", Conclusion: "FAILURE"},
+		}, nil
+	}
+
+	_, status, err := waitForCI(fetch, "1", "", 1*time.Millisecond, 5*time.Second, discardLog{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIFailed {
+		t.Errorf("expected CIFailed, got %v", status)
+	}
+}
+
+func TestWaitForCI_TimesOut(t *testing.T) {
+	fetch := func(pr, repo string) ([]CICheckResult, error) {
+		return []CICheckResult{{Name: "test", State: "IN_PROGRESS", Conclusion: ""}}, nil
+	}
+
+	_, status, err := waitForCI(fetch, "1", "", 1*time.Millisecond, 5*time.Millisecond, discardLog{})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if status != CIPending {
+		t.Errorf("expected CIPending on timeout, got %v", status)
+	}
+}
+
+func TestCIFetcher_DefaultsToFetchPRChecks(t *testing.T) {
+	mgr := &Manager{}
+	f := mgr.ciFetcher()
+	if f == nil {
+		t.Fatal("ciFetcher returned nil")
+	}
+}
+
+func TestCIFetcher_UsesInjectedFunc(t *testing.T) {
+	called := false
+	mgr := &Manager{
+		FetchPRChecks: func(pr, repo string) ([]CICheckResult, error) {
+			called = true
+			return nil, nil
+		},
+	}
+	f := mgr.ciFetcher()
+	f("1", "")
+	if !called {
+		t.Error("injected FetchPRChecks was not called")
 	}
 }
