@@ -260,9 +260,9 @@ func TestSessionName_BasenameLoop(t *testing.T) {
 	sessionExists = func(string) bool { return false }
 	defer func() { sessionExists = orig }()
 
-	got := SessionName("/home/user/projects/tabi")
-	if got != "tabi-loop" {
-		t.Errorf("SessionName(/home/user/projects/tabi) = %q, want %q", got, "tabi-loop")
+	got := SessionName("/home/user/projects/fakerepo")
+	if got != "fakerepo-loop" {
+		t.Errorf("SessionName(/home/user/projects/fakerepo) = %q, want %q", got, "fakerepo-loop")
 	}
 }
 
