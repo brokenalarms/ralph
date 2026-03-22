@@ -728,8 +728,6 @@ func (l *Loop) forcePush() error {
 	return l.git.ForcePush()
 }
 
-// isNewTask returns true when the next task differs from the last one stored
-// in state. Prefers task ID comparison (stable across description edits);
 // getCIFailureLog retrieves the failed CI run's log output for the given PR.
 func (l *Loop) getCIFailureLog(prNumber string) string {
 	// Get the latest failed run ID
@@ -805,6 +803,8 @@ func (l *Loop) getBeadDescription(taskID string) string {
 	return desc
 }
 
+// isNewTask returns true when the next task differs from the last one stored
+// in state. Prefers task ID comparison (stable across description edits);
 // falls back to description when no ID is available.
 func (l *Loop) isNewTask(taskID, taskDesc string) bool {
 	if taskID != "" {
