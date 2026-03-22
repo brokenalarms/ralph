@@ -9,7 +9,7 @@ import (
 // AutoMerge attempts to squash-merge the current worktree branch's PR
 // into main. It skips gracefully when conditions aren't met (no branch,
 // no worktree, no gh CLI, no PR).
-func AutoMerge(worktreeBranch, workDir, projectDir string) (string, error) {
+func AutoMerge(worktreeBranch, workDir, projectDir string, deleteBranch bool) (string, error) {
 	if worktreeBranch == "" {
 		return "", nil
 	}
@@ -29,7 +29,11 @@ func AutoMerge(worktreeBranch, workDir, projectDir string) (string, error) {
 		return "No open PR found", nil
 	}
 
-	cmd := exec.Command("gh", "pr", "merge", prNum, "--squash", "--delete-branch")
+	mergeArgs := []string{"pr", "merge", prNum, "--squash"}
+	if deleteBranch {
+		mergeArgs = append(mergeArgs, "--delete-branch")
+	}
+	cmd := exec.Command("gh", mergeArgs...)
 	cmd.Dir = projectDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

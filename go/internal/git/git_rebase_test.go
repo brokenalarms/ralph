@@ -341,6 +341,37 @@ func TestRebaseOntoDefaultBranch_SkipsWhenAhead(t *testing.T) {
 	}
 }
 
+// --- tryResumeWorktree fetch tests ---
+
+// Resuming a worktree fetches origin/main so subsequent rebase uses fresh refs,
+// not stale local copies from the previous run.
+func TestTryResumeWorktree_FetchesOriginOnResume(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	// Record origin/main before any new commits
+	oldRef := gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
+
+	// Push a new commit to origin (simulates main advancing while ralph was idle)
+	writeFile(t, project, "newfile.txt", "pushed while idle\n")
+	run(t, "git", "-C", project, "commit", "-m", "advance main")
+	pushToOrigin(t, project)
+
+	// Simulate resume: store worktree state, then call tryResumeWorktree
+	_ = mgr.State.Write("worktree_dir", mgr.WorkDir)
+	_ = mgr.State.Write("worktree_branch", mgr.WorktreeBranch)
+
+	if err := mgr.tryResumeWorktree(); err != nil {
+		t.Fatalf("tryResumeWorktree: %v", err)
+	}
+
+	// After resume, origin/main should point at the new commit
+	newRef := gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
+	if newRef == oldRef {
+		t.Error("origin/main was not updated on resume — fetch did not run or failed silently")
+	}
+}
+
 // --- TagTaskStart / TagTaskEnd tests ---
 
 // TagTaskStart creates a git tag using the bd task ID when available
@@ -651,5 +682,33 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 	log := mgr.Logger.(*testLog)
 	if !log.contains("No open PR found") {
 		t.Error("expected 'No open PR found' log message")
+	}
+}
+
+// Single-branch mode omits --delete-branch from gh pr merge so the remote
+// branch survives for the next task's push.
+func TestGhMergeArgs_SingleBranchOmitsDeleteBranch(t *testing.T) {
+	mgr := &Manager{BranchStrategy: BranchSingle}
+	args := mgr.ghMergeArgs("42", "https://github.com/org/repo")
+	for _, a := range args {
+		if a == "--delete-branch" {
+			t.Fatal("single-branch mode must not include --delete-branch")
+		}
+	}
+}
+
+// Stacked mode includes --delete-branch since each task gets its own branch.
+func TestGhMergeArgs_StackedIncludesDeleteBranch(t *testing.T) {
+	mgr := &Manager{BranchStrategy: BranchStacked}
+	args := mgr.ghMergeArgs("42", "https://github.com/org/repo")
+	found := false
+	for _, a := range args {
+		if a == "--delete-branch" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("stacked mode should include --delete-branch")
 	}
 }

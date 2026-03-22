@@ -131,6 +131,20 @@ func executionInstructions(v Vars) (string, error) {
 	return readTemplate(v.PromptsDir, filename)
 }
 
+// BuildTaskManagerPrompt assembles the system prompt for the interactive
+// task manager pane, substituting project and ralph directory paths.
+func BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir string) (string, error) {
+	tmpl, err := readTemplate(promptsDir, "task-manager.md")
+	if err != nil {
+		return "", err
+	}
+	r := strings.NewReplacer(
+		"{{PROJECT_DIR}}", projectDir,
+		"{{RALPH_DIR}}", ralphDir,
+	)
+	return r.Replace(tmpl), nil
+}
+
 func readTemplate(dir, name string) (string, error) {
 	path := filepath.Join(dir, name)
 	data, err := os.ReadFile(path)

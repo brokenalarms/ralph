@@ -22,17 +22,22 @@ type PaneTitle struct {
 	branch     string
 	session    string
 	ralphDir   string
+	streamPane int
 }
 
 // NewPaneTitle creates a PaneTitle bound to the given tmux session name.
 // ralphDir is the .ralph directory where signal files are written by the loop.
-func NewPaneTitle(session, ralphDir string) *PaneTitle {
+// NewPaneTitle creates a PaneTitle bound to the given tmux session name.
+// ralphDir is the .ralph directory where signal files are written by the loop.
+// streamPane is the tmux pane index for the stream pane (1 in standard, 2 in commander).
+func NewPaneTitle(session, ralphDir string, streamPane int) *PaneTitle {
 	now := time.Now()
 	return &PaneTitle{
 		session:    session,
 		ralphDir:   ralphDir,
 		started:    now,
 		runStarted: now,
+		streamPane: streamPane,
 	}
 }
 
@@ -129,7 +134,8 @@ func (p *PaneTitle) Run(stop <-chan struct{}) {
 			p.syncBranch()
 
 			title := p.Title()
-			exec.Command("tmux", "select-pane", "-t", p.session+":.1", "-T", title).Run() //nolint:errcheck
+			streamTarget := fmt.Sprintf("%s:.%d", p.session, p.streamPane)
+			exec.Command("tmux", "select-pane", "-t", streamTarget, "-T", title).Run() //nolint:errcheck
 
 			ralphTitle := p.RalphTitle()
 			exec.Command("tmux", "select-pane", "-t", p.session+":.0", "-T", ralphTitle).Run() //nolint:errcheck

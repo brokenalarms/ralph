@@ -211,31 +211,57 @@ func (b *BD) countByStatus(status string) (int, error) {
 }
 
 type bdIssue struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Priority *int   `json:"priority,omitempty"`
 }
 
-// getNextIssue returns the next issue, preferring in-progress over ready.
+// getNextIssue returns the highest-priority issue across in-progress and
+// ready queues. If a ready task has strictly higher priority (lower number)
+// than the in-progress task, the in-progress task is reopened and the ready
+// task is returned instead.
 func (b *BD) getNextIssue() (bdIssue, error) {
 	run := b.runner()
 
-	// Try in-progress first.
+	var inProgress, ready bdIssue
+	var hasIP, hasReady bool
+
 	out, err := run(b.ProjectDir, "list", "--status", "in_progress", "--flat", "--json", "--limit", "1")
 	if err == nil {
-		if issue, ok := parseFirstIssue(out); ok {
-			return issue, nil
-		}
+		inProgress, hasIP = parseFirstIssue(out)
 	}
 
-	// Fall back to ready queue.
 	out, err = run(b.ProjectDir, "ready", "--limit", "1", "--json")
 	if err == nil {
-		if issue, ok := parseFirstIssue(out); ok {
-			return issue, nil
-		}
+		ready, hasReady = parseFirstIssue(out)
 	}
 
+	if hasIP && hasReady {
+		ipPri := issuePriority(inProgress)
+		rdPri := issuePriority(ready)
+		if rdPri < ipPri {
+			// Higher-priority ready task preempts; reopen the in-progress task.
+			_, _ = run(b.ProjectDir, "update", inProgress.ID, "--status=open")
+			return ready, nil
+		}
+		return inProgress, nil
+	}
+	if hasIP {
+		return inProgress, nil
+	}
+	if hasReady {
+		return ready, nil
+	}
 	return bdIssue{}, nil
+}
+
+// issuePriority returns the numeric priority, defaulting to 2 (medium)
+// when unset so that comparisons work for issues without explicit priority.
+func issuePriority(issue bdIssue) int {
+	if issue.Priority != nil {
+		return *issue.Priority
+	}
+	return 2
 }
 
 func parseFirstIssue(jsonStr string) (bdIssue, bool) {
@@ -310,6 +336,14 @@ func (b *BD) CloseTask(id string, reason string) error {
 		reason = "completed by ralph"
 	}
 	_, err = run(b.ProjectDir, "close", id, "--reason", reason)
+	return err
+}
+
+func (b *BD) ReopenTask(id string) error {
+	if id == "" {
+		return nil
+	}
+	_, err := b.runner()(b.ProjectDir, "update", id, "--status=open")
 	return err
 }
 

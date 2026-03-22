@@ -184,6 +184,12 @@ func (m *Manager) tryResumeWorktree() error {
 	}
 
 	m.Logger.Log("Resuming worktree: %s", m.WorkDir)
+
+	defaultBranch := detectDefaultBranch(m.ProjectDir)
+	if err := gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
+		m.Logger.Warn("Failed to fetch origin/%s on resume: %v", defaultBranch, err)
+	}
+
 	return nil
 }
 
@@ -411,7 +417,7 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 
 	m.Logger.Log("Auto-merging PR #%s (branch: %s)...", prNumber, m.WorktreeBranch)
 
-	mergeCmd := exec.Command("gh", "pr", "merge", prNumber, "--squash", "--delete-branch", "-R", repoURL)
+	mergeCmd := exec.Command("gh", m.ghMergeArgs(prNumber, repoURL)...)
 	if mergeOut, err := mergeCmd.CombinedOutput(); err != nil {
 		m.Logger.Warn("Auto-merge failed for PR #%s: %s", prNumber, string(mergeOut))
 		return false, fmt.Errorf("auto-merge failed for PR #%s", prNumber)
@@ -432,6 +438,16 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 	m.Logger.Log("Updated local %s to origin/%s", defaultBranch, defaultBranch)
 
 	return true, nil
+}
+
+// ghMergeArgs builds the argument list for `gh pr merge`. In single-branch
+// mode --delete-branch is omitted because the branch is reused across tasks.
+func (m *Manager) ghMergeArgs(prNumber, repoURL string) []string {
+	args := []string{"pr", "merge", prNumber, "--squash", "-R", repoURL}
+	if m.BranchStrategy != BranchSingle {
+		args = append(args, "--delete-branch")
+	}
+	return args
 }
 
 // PostMergeReset resets the worktree to a fresh temp branch at origin/main.
@@ -509,7 +525,9 @@ func (m *Manager) RemoveWorktree() {
 // Mirrors lib/git.sh rebase_onto_default_branch.
 func (m *Manager) RebaseOntoDefaultBranch() error {
 	defaultBranch := detectDefaultBranch(m.ProjectDir)
-	gitCmd(m.WorkDir, "fetch", "origin", defaultBranch)
+	if err := gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
+		m.Logger.Warn("Failed to fetch origin/%s: %v", defaultBranch, err)
+	}
 
 	// Skip if remote branch doesn't exist (e.g. repo never pushed)
 	if !refExists(m.WorkDir, "origin/"+defaultBranch) {

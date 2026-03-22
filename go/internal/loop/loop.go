@@ -19,6 +19,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/ratelimit"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
+	"github.com/brokenalarms/ralph/internal/verify"
 )
 
 // Config holds all parameters needed by the execution loop.
@@ -43,6 +44,7 @@ type Config struct {
 	Wait                bool
 	WaitInterval        time.Duration
 	OnRebaseConflict    func(err error) git.RebaseRecovery
+	VerifyDir           string // project root where tests are run; empty disables verification
 }
 
 // claudeRunner abstracts the Claude execution interface for testability.
@@ -64,6 +66,7 @@ type Loop struct {
 	signals    claude.SignalPaths
 	mergeFunc  func() (bool, error)
 	pushPRFunc func(taskDesc string) error
+	verifyFunc func(dir, headBefore string) (passed bool, reason string)
 	lastAction analyzer.Action
 }
 
@@ -333,6 +336,15 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		if result.SignalDetected {
+			if passed, reason := l.verifyCompletion(headBefore); !passed {
+				l.logger.Warn("Verification failed: %s", reason)
+				l.attempts.Record(taskID, nextTask,
+					"Signal received but verification failed: "+reason,
+					diffStat,
+					"verification_failed: fix must pass tests and produce commits before closing")
+				continue
+			}
+
 			l.attempts.Clear(taskID, nextTask)
 			l.recordCompletedTask(taskID, nextTask)
 			touchFile(filepath.Join(l.cfg.RalphDir, ".plan-flash"))
@@ -406,6 +418,33 @@ func (l *Loop) isNewTask(taskID, taskDesc string) bool {
 	}
 	lastTask, _ := l.state.Read("last_task")
 	return lastTask != taskDesc
+}
+
+// verifyCompletion runs post-signal checks: commit presence and test suite.
+// Returns (true, "") on success or (false, reason) on failure.
+func (l *Loop) verifyCompletion(headBefore string) (bool, string) {
+	if l.verifyFunc != nil {
+		return l.verifyFunc(l.git.WorkDir, headBefore)
+	}
+
+	if l.cfg.VerifyDir == "" {
+		return true, ""
+	}
+
+	commitResult := verify.CheckCommits(l.git.WorkDir, headBefore)
+	if !commitResult.Passed {
+		return false, commitResult.Reason
+	}
+
+	testResult := verify.RunTests(l.cfg.VerifyDir)
+	if !testResult.Passed {
+		if testResult.Details != "" {
+			l.logger.Error("Test output:\n%s", testResult.Details)
+		}
+		return false, testResult.Reason
+	}
+
+	return true, ""
 }
 
 func (l *Loop) pushAndCreatePR(taskDesc string) error {

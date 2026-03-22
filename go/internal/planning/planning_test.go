@@ -35,6 +35,7 @@ func (m *mockBackend) GetNextTaskInfo() (string, string, error) { return "", m.n
 func (m *mockBackend) HasTasks() (bool, error)                { return m.totalTasks > 0, nil }
 func (m *mockBackend) CloseTask(string, string) error         { return nil }
 func (m *mockBackend) SkipTask(string, string) error          { return nil }
+func (m *mockBackend) ReopenTask(string) error                { return nil }
 func (m *mockBackend) ExecutionInstructions() (string, error) { return "", nil }
 func (m *mockBackend) Label() string                          { return m.label }
 func (m *mockBackend) PlanningInstructions() string           { return m.planningInstr }

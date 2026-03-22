@@ -230,6 +230,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		Wait:                cfg.Wait,
 		WaitInterval:        cfg.WaitInterval,
 		OnRebaseConflict:    promptRebaseRecovery,
+		VerifyDir:           cfg.ProjectDir,
 	}, st, gm, log)
 
 	if err := execLoop.Run(ctx); err != nil {
@@ -446,6 +447,59 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 	if hasRemaining {
 		log.Log("Resume:     %s", filepath.Join(ralphDir, "resume.sh"))
 	}
+}
+
+func handleTmuxCommander(cfg config.Config, scriptPath string, args []string, ralphDir string, log *logging.Logger) int {
+	if !tmux.Available() {
+		log.Error("tmux not found on PATH")
+		return 1
+	}
+
+	ralphCmd := tmux.BuildRalphCmd(scriptPath, args)
+	taskCmd := tmux.BuildTaskCmd(scriptPath, cfg.ProjectDir)
+	planFile := filepath.Join(ralphDir, "plan.md")
+
+	backendLabel := "bd"
+	if fileExists(planFile) {
+		backendLabel = "checklist"
+	}
+
+	sess := &tmux.Session{
+		Name:        tmux.SessionName(cfg.ProjectDir),
+		ProjectDir:  cfg.ProjectDir,
+		RalphDir:    ralphDir,
+		RawLogPath:  filepath.Join(ralphDir, "raw.log"),
+		RalphCmd:    ralphCmd,
+		TaskCmd:     taskCmd,
+		Commander:   true,
+		TaskBackend: backendLabel,
+		PlanFile:    planFile,
+	}
+
+	if err := sess.Setup(); err != nil {
+		log.Error("Tmux setup failed: %v", err)
+		return 1
+	}
+
+	stopTitle := make(chan struct{})
+	var stopOnce sync.Once
+	closeTitle := func() { stopOnce.Do(func() { close(stopTitle) }) }
+	go sess.PaneTitle().Run(stopTitle)
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		closeTitle()
+		sess.Kill()
+	}()
+
+	if err := sess.Attach(); err != nil {
+		closeTitle()
+		return 1
+	}
+	closeTitle()
+	return 0
 }
 
 func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir string, log *logging.Logger) int {

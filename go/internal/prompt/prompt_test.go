@@ -388,3 +388,34 @@ func TestBuildPrompt_MissingTemplateErrors(t *testing.T) {
 	}
 }
 
+// Proves: BuildTaskManagerPrompt reads the task-manager.md template and
+// substitutes PROJECT_DIR and RALPH_DIR placeholders, so the task manager
+// pane gets project-specific instructions.
+func TestBuildTaskManagerPrompt(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/home/user/proj", "/home/user/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+	if !strings.Contains(result, "/home/user/proj") {
+		t.Error("result should contain substituted PROJECT_DIR")
+	}
+	if !strings.Contains(result, "/home/user/proj/.ralph") {
+		t.Error("result should contain substituted RALPH_DIR")
+	}
+	if strings.Contains(result, "{{PROJECT_DIR}}") {
+		t.Error("result should not contain raw {{PROJECT_DIR}} placeholder")
+	}
+	if strings.Contains(result, "{{RALPH_DIR}}") {
+		t.Error("result should not contain raw {{RALPH_DIR}} placeholder")
+	}
+}
+
+// Proves: BuildTaskManagerPrompt returns an error when the template is missing.
+func TestBuildTaskManagerPrompt_MissingTemplate(t *testing.T) {
+	_, err := BuildTaskManagerPrompt("/nonexistent/path", "/proj", "/proj/.ralph")
+	if err == nil {
+		t.Fatal("expected error for missing task-manager.md template")
+	}
+}
+

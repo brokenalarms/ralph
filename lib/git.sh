@@ -33,6 +33,12 @@ setup_worktree() {
         _TASK_SEQ=$((named_branches))
       fi
       log "Resuming in worktree: $WORK_DIR (branch: $WORKTREE_BRANCH)"
+
+      local default_branch
+      default_branch=$(git -C "$PROJECT_DIR" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||') || true
+      default_branch=${default_branch:-main}
+      git -C "$WORK_DIR" fetch origin "$default_branch" 2>/dev/null || log_warn "Failed to fetch origin/$default_branch on resume"
+
       return
     fi
   fi
@@ -216,12 +222,8 @@ auto_merge_current_branch() {
   local repo_url
   repo_url=$(git -C "$WORK_DIR" remote get-url origin 2>/dev/null)
 
-  if gh pr merge "$pr_number" --squash --delete-branch -R "$repo_url" 2>/dev/null; then
+  if gh pr merge "$pr_number" --squash -R "$repo_url" 2>/dev/null; then
     log_success "PR #${pr_number} squash-merged into main"
-
-    # Clean up the local branch ref since it was merged and deleted on remote
-    git -C "$PROJECT_DIR" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
-
     return 0
   else
     log_warn "Auto-merge failed for PR #${pr_number}"

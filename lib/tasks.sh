@@ -83,21 +83,46 @@ bd_count_remaining() {
 }
 bd_count_total()       { run_bd count 2>/dev/null || echo 0; }
 bd_get_next_task() {
-  # Resume in-progress tasks first, then pick from ready queue
-  local title
-  title=$(run_bd list --status in_progress --flat --json --limit 1 2>/dev/null | jq -r '.[0].title // empty')
-  if [[ -z "$title" ]]; then
-    title=$(run_bd ready --limit 1 --json 2>/dev/null | jq -r '.[0].title // empty')
+  local ip_json ready_json ip_title ready_title ip_pri ready_pri
+  ip_json=$(run_bd list --status in_progress --flat --json --limit 1 2>/dev/null) || ip_json="[]"
+  ready_json=$(run_bd ready --limit 1 --json 2>/dev/null) || ready_json="[]"
+  ip_title=$(echo "$ip_json" | jq -r '.[0].title // empty')
+  ready_title=$(echo "$ready_json" | jq -r '.[0].title // empty')
+  if [[ -n "$ip_title" && -n "$ready_title" ]]; then
+    ip_pri=$(echo "$ip_json" | jq -r '.[0].priority // 2')
+    ready_pri=$(echo "$ready_json" | jq -r '.[0].priority // 2')
+    if (( ready_pri < ip_pri )); then
+      local ip_id
+      ip_id=$(echo "$ip_json" | jq -r '.[0].id // empty')
+      [[ -n "$ip_id" ]] && run_bd update "$ip_id" --status=open 2>/dev/null || true
+      echo "$ready_title"
+      return
+    fi
+    echo "$ip_title"
+    return
   fi
-  echo "$title"
+  [[ -n "$ip_title" ]] && echo "$ip_title" && return
+  echo "$ready_title"
 }
 bd_get_next_task_id() {
-  local id
-  id=$(run_bd list --status in_progress --flat --json --limit 1 2>/dev/null | jq -r '.[0].id // empty')
-  if [[ -z "$id" ]]; then
-    id=$(run_bd ready --limit 1 --json 2>/dev/null | jq -r '.[0].id // empty')
+  local ip_json ready_json ip_id ready_id ip_pri ready_pri
+  ip_json=$(run_bd list --status in_progress --flat --json --limit 1 2>/dev/null) || ip_json="[]"
+  ready_json=$(run_bd ready --limit 1 --json 2>/dev/null) || ready_json="[]"
+  ip_id=$(echo "$ip_json" | jq -r '.[0].id // empty')
+  ready_id=$(echo "$ready_json" | jq -r '.[0].id // empty')
+  if [[ -n "$ip_id" && -n "$ready_id" ]]; then
+    ip_pri=$(echo "$ip_json" | jq -r '.[0].priority // 2')
+    ready_pri=$(echo "$ready_json" | jq -r '.[0].priority // 2')
+    if (( ready_pri < ip_pri )); then
+      run_bd update "$ip_id" --status=open 2>/dev/null || true
+      echo "$ready_id"
+      return
+    fi
+    echo "$ip_id"
+    return
   fi
-  echo "$id"
+  [[ -n "$ip_id" ]] && echo "$ip_id" && return
+  echo "$ready_id"
 }
 
 bd_close_task() {

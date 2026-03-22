@@ -135,6 +135,10 @@ func ParseSubcommand(args []string) (Subcommand, bool) {
 		return parseSubcommandWithDir(args, "stop"), true
 	case "feedback":
 		return parseSubcommandWithDir(args, "feedback"), true
+	case "commander":
+		return parseSubcommandWithDir(args, "commander"), true
+	case "task":
+		return parseSubcommandWithDir(args, "task"), true
 	default:
 		return Subcommand{}, false
 	}
