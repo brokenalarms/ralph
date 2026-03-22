@@ -364,6 +364,66 @@ func TestBuildPrompt_IncludesReflection(t *testing.T) {
 	}
 }
 
+// Proves: the signal protocol warns the agent that writing the signal file
+// triggers immediate process termination, preventing premature signaling.
+func TestBuildPrompt_SignalWarnsAboutTermination(t *testing.T) {
+	v := testVars(t)
+	result, err := BuildPrompt(v)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	if !strings.Contains(result, "kill") || !strings.Contains(result, "immediately") {
+		t.Error("signal protocol should warn that the process will be killed immediately after signal")
+	}
+}
+
+// Proves: the bd execution template specifies that pushing and PR creation
+// must happen before signaling completion.
+func TestBuildPrompt_BDCompletionOrderIncludesPush(t *testing.T) {
+	v := testVars(t)
+	v.TaskBackend = BackendBD
+	result, err := BuildPrompt(v)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	pushIdx := strings.Index(result, "Push your branch")
+	signalIdx := strings.Index(result, "Signal completion by writing to the signal file")
+	if pushIdx < 0 {
+		t.Fatal("bd completion section missing push step")
+	}
+	if signalIdx < 0 {
+		t.Fatal("bd completion section missing signal step")
+	}
+	if pushIdx >= signalIdx {
+		t.Error("push step must come before signal step in completion order")
+	}
+}
+
+// Proves: the checklist execution template specifies completion ordering
+// with push before signal.
+func TestBuildPrompt_ChecklistCompletionOrderIncludesPush(t *testing.T) {
+	v := testVars(t)
+	v.TaskBackend = BackendChecklist
+	result, err := BuildPrompt(v)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	pushIdx := strings.Index(result, "Push your branch")
+	signalIdx := strings.Index(result, "Signal completion by writing to the signal file")
+	if pushIdx < 0 {
+		t.Fatal("checklist completion section missing push step")
+	}
+	if signalIdx < 0 {
+		t.Fatal("checklist completion section missing signal step")
+	}
+	if pushIdx >= signalIdx {
+		t.Error("push step must come before signal step in completion order")
+	}
+}
+
 // Proves: an unknown backend returns an error instead of producing
 // a malformed prompt.
 func TestBuildPrompt_UnknownBackendErrors(t *testing.T) {
