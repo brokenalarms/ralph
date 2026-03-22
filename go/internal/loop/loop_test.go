@@ -3259,6 +3259,73 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	}
 }
 
+// runFixAgent stops the main runner's streaming, creates a new runner via
+// newRunnerFunc, passes the standard RunConfig, and returns the result.
+// This test verifies all three behaviors in isolation.
+func TestLoop_runFixAgent(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	mainRunner := &stubRunner{}
+	var capturedCfg claude.RunConfig
+	fixRunner := &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
+
+	signals := claude.DefaultSignalPaths(ralphDir)
+	l := &Loop{
+		cfg: Config{
+			RalphDir:    ralphDir,
+			IdleTimeout: 30 * time.Second,
+		},
+		state:   st,
+		runner:  mainRunner,
+		logger:  logging.New(nil),
+		signals: signals,
+		newRunnerFunc: func() claudeRunner {
+			return &configCapturingRunner{inner: fixRunner, captured: &capturedCfg}
+		},
+	}
+
+	ctx := context.Background()
+	result := l.runFixAgent(ctx, "test failures", "fix the tests", "/work", "/logs/raw.log")
+
+	if !result.SignalDetected {
+		t.Error("expected SignalDetected from fix agent result")
+	}
+	if capturedCfg.Prompt != "fix the tests" {
+		t.Errorf("expected prompt %q, got %q", "fix the tests", capturedCfg.Prompt)
+	}
+	if capturedCfg.WorkDir != "/work" {
+		t.Errorf("expected WorkDir %q, got %q", "/work", capturedCfg.WorkDir)
+	}
+	if capturedCfg.RawLog != "/logs/raw.log" {
+		t.Errorf("expected RawLog %q, got %q", "/logs/raw.log", capturedCfg.RawLog)
+	}
+	if capturedCfg.RalphDir != ralphDir {
+		t.Errorf("expected RalphDir %q, got %q", ralphDir, capturedCfg.RalphDir)
+	}
+	if !capturedCfg.Quiet {
+		t.Error("expected Quiet=true for fix agent")
+	}
+	if capturedCfg.IdleTimeout != 30*time.Second {
+		t.Errorf("expected IdleTimeout 30s, got %v", capturedCfg.IdleTimeout)
+	}
+}
+
+// configCapturingRunner captures the RunConfig for assertions.
+type configCapturingRunner struct {
+	inner    claudeRunner
+	captured *claude.RunConfig
+}
+
+func (c *configCapturingRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
+	*c.captured = cfg
+	return c.inner.Run(cfg)
+}
+
+func (c *configCapturingRunner) StopStreaming() {
+	c.inner.StopStreaming()
+}
+
 // promptCapturingRunner wraps a claude runner to capture the prompt.
 type promptCapturingRunner struct {
 	inner    claudeRunner

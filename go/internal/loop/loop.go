@@ -319,19 +319,7 @@ func (l *Loop) Run(ctx context.Context) error {
 					l.logger.Warn("Tests failed: %s", reason)
 					testOutput := testResult.Details
 
-					// Stop the main agent's streaming goroutines before spawning
-					// a verification agent to prevent goroutine accumulation on
-					// shared raw.log/loop.log files.
-					l.runner.StopStreaming()
-
-					l.logger.Log("Spawning fix agent for test failures...")
 					beadDesc := l.getBeadDescription(taskID)
-					diffCmd := exec.Command("git", "-C", workDir, "diff", headBefore+"..HEAD")
-					diffOut, _ := diffCmd.Output()
-					diff := string(diffOut)
-					if len(diff) > 15000 {
-						diff = diff[:15000] + "\n[truncated]"
-					}
 
 					signalPath := filepath.Join(l.cfg.RalphDir, ".signal_complete")
 					verifyPrompt := l.loadVerifyPrompt("verify-tests.md", map[string]string{
@@ -341,21 +329,8 @@ func (l *Loop) Run(ctx context.Context) error {
 						"{{SIGNAL_COMPLETE}}":  signalPath,
 					})
 
-					verifyRunner := &claude.Runner{Logger: l.logger}
-					verifyResult, _ := verifyRunner.Run(claude.RunConfig{
-						Ctx:          ctx,
-						WorkDir:      workDir,
-						RalphDir:     l.cfg.RalphDir,
-						Prompt:       verifyPrompt,
-						RawLog:       rawLogPath,
-						Quiet:        true,
-						Signals:      l.signals,
-						PollInterval: 2 * time.Second,
-						IdleTimeout:  l.cfg.IdleTimeout,
-					})
-
+					verifyResult := l.runFixAgent(ctx, "test failures", verifyPrompt, workDir, rawLogPath)
 					if !verifyResult.SignalDetected {
-						l.logger.Warn("Test fix agent exited without signal")
 						return false
 					}
 
@@ -380,10 +355,6 @@ func (l *Loop) Run(ctx context.Context) error {
 					if !llmResult.Passed {
 						l.logger.Warn("LLM verification rejected: %s", llmResult.Details)
 
-						// Stop streaming before LLM fix agent (same rationale as test verification).
-						l.runner.StopStreaming()
-
-						l.logger.Log("Spawning fix agent to address LLM feedback...")
 						signalPath := filepath.Join(l.cfg.RalphDir, ".signal_complete")
 						fixPrompt := l.loadVerifyPrompt("verify-llm.md", map[string]string{
 							"{{TASK_TITLE}}":       nextTask,
@@ -392,21 +363,8 @@ func (l *Loop) Run(ctx context.Context) error {
 							"{{SIGNAL_COMPLETE}}":  signalPath,
 						})
 
-						fixRunner := &claude.Runner{Logger: l.logger}
-						fixResult, _ := fixRunner.Run(claude.RunConfig{
-							Ctx:          ctx,
-							WorkDir:      workDir,
-							RalphDir:     l.cfg.RalphDir,
-							Prompt:       fixPrompt,
-							RawLog:       rawLogPath,
-							Quiet:        true,
-							Signals:      l.signals,
-							PollInterval: 2 * time.Second,
-							IdleTimeout:  l.cfg.IdleTimeout,
-						})
-
+						fixResult := l.runFixAgent(ctx, "LLM feedback", fixPrompt, workDir, rawLogPath)
 						if !fixResult.SignalDetected {
-							l.logger.Warn("LLM fix agent exited without signal")
 							return false
 						}
 
@@ -648,7 +606,7 @@ func (l *Loop) handleMergeConflict(ctx context.Context, nextTask string) (bool, 
 // handleCIFailure spawns fix agents to address CI failures and retries
 // the merge after each fix attempt.
 func (l *Loop) handleCIFailure(ctx context.Context, ciErr *git.CIFailureError, nextTask, workDir, rawLogPath string) (bool, error) {
-	l.logger.Log("CI failed on PR #%s — spawning fix agent...", ciErr.PRNumber)
+	l.logger.Log("CI failed on PR #%s", ciErr.PRNumber)
 
 	ciDetails := ciErr.Error()
 	ciLog := l.getCIFailureLog(ciErr.PRNumber)
@@ -663,20 +621,8 @@ func (l *Loop) handleCIFailure(ctx context.Context, ciErr *git.CIFailureError, n
 
 	var merged bool
 	for ciAttempt := 0; ciAttempt < 2; ciAttempt++ {
-		fixRunner := l.newRunner()
-		fixResult, _ := fixRunner.Run(claude.RunConfig{
-			Ctx:          ctx,
-			WorkDir:      workDir,
-			RalphDir:     l.cfg.RalphDir,
-			Prompt:       fixPrompt,
-			RawLog:       rawLogPath,
-			Quiet:        true,
-			Signals:      l.signals,
-			PollInterval: 2 * time.Second,
-			IdleTimeout:  l.cfg.IdleTimeout,
-		})
+		fixResult := l.runFixAgent(ctx, "CI failures", fixPrompt, workDir, rawLogPath)
 		if !fixResult.SignalDetected {
-			l.logger.Warn("CI fix agent exited without signal")
 			break
 		}
 
@@ -709,6 +655,33 @@ func (l *Loop) handleCIFailure(ctx context.Context, ciErr *git.CIFailureError, n
 	}
 
 	return merged, nil
+}
+
+// runFixAgent stops the main agent's streaming, spawns a fix agent with the
+// given prompt, and returns the result. All fix agent invocations share the
+// same RunConfig shape — this method is the single place that wires it up.
+func (l *Loop) runFixAgent(ctx context.Context, description, prompt, workDir, rawLogPath string) claude.Result {
+	l.runner.StopStreaming()
+	l.logger.Log("Spawning fix agent: %s", description)
+
+	runner := l.newRunner()
+	result, _ := runner.Run(claude.RunConfig{
+		Ctx:          ctx,
+		WorkDir:      workDir,
+		RalphDir:     l.cfg.RalphDir,
+		Prompt:       prompt,
+		RawLog:       rawLogPath,
+		Quiet:        true,
+		Signals:      l.signals,
+		PollInterval: 2 * time.Second,
+		IdleTimeout:  l.cfg.IdleTimeout,
+	})
+
+	if !result.SignalDetected {
+		l.logger.Warn("Fix agent exited without signal (%s)", description)
+	}
+
+	return result
 }
 
 // newRunner returns a claudeRunner for spawning sub-agents. Uses newRunnerFunc
