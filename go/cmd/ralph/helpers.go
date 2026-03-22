@@ -102,7 +102,7 @@ func promptRebaseRecovery(ctx context.Context) func(err error) git.RebaseRecover
 	}
 }
 
-func evolveRestart(projectDir, scriptPath string, args []string, log *logging.Logger) error {
+func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log *logging.Logger) error {
 	ralphDir := filepath.Join(projectDir, ".ralph")
 
 	stopFile := filepath.Join(ralphDir, "stop")
@@ -112,18 +112,16 @@ func evolveRestart(projectDir, scriptPath string, args []string, log *logging.Lo
 		return nil
 	}
 
-	log.Log("Pulling latest main...")
-	fetchCmd := exec.Command("git", "-C", projectDir, "fetch", "origin", "main")
+	log.Log("Pulling latest %s...", baseBranch)
+	fetchCmd := exec.Command("git", "-C", projectDir, "fetch", "origin", baseBranch)
 	if out, err := fetchCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git fetch failed: %s", out)
 	}
 
-	// Use checkout + pull instead of reset --hard to avoid contaminating
-	// the shared index when a worktree exists.
-	checkoutCmd := exec.Command("git", "-C", projectDir, "checkout", "main")
-	checkoutCmd.CombinedOutput() // ignore error if already on main
+	checkoutCmd := exec.Command("git", "-C", projectDir, "checkout", baseBranch)
+	checkoutCmd.CombinedOutput()
 
-	pullCmd := exec.Command("git", "-C", projectDir, "merge", "--ff-only", "origin/main")
+	pullCmd := exec.Command("git", "-C", projectDir, "merge", "--ff-only", "origin/"+baseBranch)
 	if out, err := pullCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git merge --ff-only failed: %s", out)
 	}

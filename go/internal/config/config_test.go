@@ -783,6 +783,48 @@ func TestBranchStrategyConfigFile(t *testing.T) {
 	}
 }
 
+// Verifies base_branch defaults to "develop", can be set via --base-branch CLI
+// flag, via ralph.toml, and that CLI takes precedence over config file.
+func TestBaseBranch(t *testing.T) {
+	t.Setenv("RALPH_BASE_BRANCH", "")
+
+	cfg, _ := Parse(nil)
+	if cfg.BaseBranch != "develop" {
+		t.Errorf("BaseBranch = %q, want \"develop\" as default", cfg.BaseBranch)
+	}
+
+	cfg, _ = Parse([]string{"--base-branch", "main"})
+	if cfg.BaseBranch != "main" {
+		t.Errorf("BaseBranch = %q, want \"main\" from CLI flag", cfg.BaseBranch)
+	}
+
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "ralph.toml")
+	os.WriteFile(tomlPath, []byte("base_branch = staging\n"), 0o644)
+
+	cfg, _ = Parse(nil)
+	cfg.LoadConfigFile(tomlPath)
+	if cfg.BaseBranch != "staging" {
+		t.Errorf("BaseBranch = %q, want \"staging\" from config file", cfg.BaseBranch)
+	}
+
+	cfg, _ = Parse([]string{"--base-branch", "main"})
+	cfg.LoadConfigFile(tomlPath)
+	if cfg.BaseBranch != "main" {
+		t.Errorf("BaseBranch = %q, want \"main\" (CLI should override config file)", cfg.BaseBranch)
+	}
+}
+
+// Verifies RALPH_BASE_BRANCH env var overrides the hardcoded default.
+func TestBaseBranchEnvVar(t *testing.T) {
+	t.Setenv("RALPH_BASE_BRANCH", "staging")
+
+	cfg, _ := Parse(nil)
+	if cfg.BaseBranch != "staging" {
+		t.Errorf("BaseBranch = %q, want \"staging\" from env var", cfg.BaseBranch)
+	}
+}
+
 // Verifies --wait defaults to false and is set when the flag is present.
 func TestWaitFlag(t *testing.T) {
 	t.Setenv("RALPH_WAIT_INTERVAL", "")

@@ -580,10 +580,10 @@ func (l *Loop) handleAutoMergeError(ctx context.Context, err error, nextTask, wo
 	return false, err
 }
 
-// handleMergeConflict rebases the working branch onto main and force-pushes
-// to resolve PR merge conflicts, then retries the merge.
+// handleMergeConflict rebases the working branch onto the default branch and
+// force-pushes to resolve PR merge conflicts, then retries the merge.
 func (l *Loop) handleMergeConflict(ctx context.Context, nextTask string) (bool, error) {
-	l.logger.Log("Rebasing onto main to resolve merge conflicts...")
+	l.logger.Log("Rebasing onto default branch to resolve merge conflicts...")
 
 	if err := l.git.RebaseOntoDefaultBranch(ctx); err != nil {
 		l.logger.Warn("Rebase failed: %v", err)

@@ -66,6 +66,7 @@ type Manager struct {
 	Resume         bool
 	TaskSeq        int
 	BranchRenamed  bool
+	BaseBranch     string
 	BranchStrategy BranchStrategy
 	MergeAdmin     bool
 	FetchPRChecks  CIFetchFunc
@@ -139,7 +140,7 @@ func (m *Manager) SetupWorktree() error {
 		return err
 	}
 
-	defaultBranch := detectDefaultBranch(m.ProjectDir)
+	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
 	gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
 
 	// Push main if remote is empty
@@ -195,7 +196,7 @@ func (m *Manager) tryResumeWorktree() error {
 
 	m.Logger.Log("Resuming worktree: %s", m.WorkDir)
 
-	defaultBranch := detectDefaultBranch(m.ProjectDir)
+	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
 	if err := gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
 		m.Logger.Warn("Failed to fetch origin/%s on resume: %v", defaultBranch, err)
 	}
@@ -229,7 +230,7 @@ func (m *Manager) resumedBranchIsStale(defaultBranch string) bool {
 		return false
 	}
 
-	return IsBranchSquashMerged(m.WorkDir, m.WorktreeBranch)
+	return IsBranchSquashMerged(m.WorkDir, m.WorktreeBranch, m.BaseBranch)
 }
 
 // resetResumedWorktree force-resets the worktree to origin/defaultBranch,
@@ -364,7 +365,7 @@ func (m *Manager) PushAndCreatePR(taskDesc string) error {
 	}
 
 	// Check if branch has commits beyond the default branch.
-	defaultBranch := detectDefaultBranch(m.ProjectDir)
+	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
 	gitCmd(m.WorkDir, "fetch", "origin", defaultBranch)
 	revCount := gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+"..HEAD")
 	if revCount == "" || revCount == "0" {
@@ -526,7 +527,7 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 func (m *Manager) postMergeUpdate(prNumber string) (bool, error) {
 	m.Logger.Log("PR #%s squash-merged into main", prNumber)
 
-	defaultBranch := detectDefaultBranch(m.ProjectDir)
+	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
 	gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
 	// Single atomic reset: advances ref, index, and working tree together.
 	// The previous two-step approach (update-ref + reset --hard HEAD) left
@@ -570,7 +571,7 @@ func (m *Manager) PostMergeReset() error {
 		return nil
 	}
 
-	defaultBranch := detectDefaultBranch(m.ProjectDir)
+	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
 	oldBranch := m.WorktreeBranch
 	newBranch := m.TempBranch()
 
@@ -650,7 +651,7 @@ func (m *Manager) RemoveWorktree() {
 // detecting and skipping squash-merged branches when a naive rebase conflicts.
 // Mirrors lib/git.sh rebase_onto_default_branch.
 func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
-	defaultBranch := detectDefaultBranch(m.ProjectDir)
+	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
 	if err := gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -781,8 +782,8 @@ func (m *Manager) isSquashMerged(defaultBranch, mergeBase, branch string) bool {
 
 // IsBranchSquashMerged checks whether a branch's changes have been
 // squash-merged into origin's default branch.
-func IsBranchSquashMerged(dir, branch string) bool {
-	defaultBranch := detectDefaultBranch(dir)
+func IsBranchSquashMerged(dir, branch, baseBranch string) bool {
+	defaultBranch := detectDefaultBranch(dir, baseBranch)
 	if !refExists(dir, "origin/"+defaultBranch) {
 		return false
 	}
@@ -907,12 +908,15 @@ func remoteExists(dir string) bool {
 	return gitOutput(dir, "remote", "get-url", "origin") != ""
 }
 
-func detectDefaultBranch(dir string) string {
+func detectDefaultBranch(dir, override string) string {
+	if override != "" {
+		return override
+	}
 	ref := gitOutput(dir, "symbolic-ref", "refs/remotes/origin/HEAD")
 	if ref != "" {
 		return strings.TrimPrefix(ref, "refs/remotes/origin/")
 	}
-	return "main"
+	return "develop"
 }
 
 // findWorktreeForBranch finds the worktree path that has the given branch

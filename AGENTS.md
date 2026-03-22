@@ -1,13 +1,13 @@
 # Git usage
 - ralph requires a git repository. Running in a non-git directory exits with an error. Use `--no-worktree` to skip git isolation, but a git repo is still required.
-- never push to main - atomic commits comprising a feature should be pushed as a PR from the branch you're working on, this should be part of considering a task finished.
+- never push to the base branch (default: develop) - atomic commits comprising a feature should be pushed as a PR from the branch you're working on, this should be part of considering a task finished.
 - The final stage of a piece of work is always commiting and pushing to a branched PR- I shouldn't have to ask.
-- Before you push, you must rebase onto the latest main:
-  1. `git fetch origin main`
-  2. `git rebase --update-refs origin/main`
-  3. If step 2 conflicts because a base branch was squash-merged, abort and use: `git rebase --update-refs --onto origin/main <squash-merged-branch> HEAD` where `<squash-merged-branch>` is the ralph branch ref that was already merged (e.g. `ralph/project/01-task-slug`). This skips the duplicate commits. Then delete the merged branch ref.
+- Before you push, you must rebase onto the latest base branch:
+  1. `git fetch origin develop`
+  2. `git rebase --update-refs origin/develop`
+  3. If step 2 conflicts because a base branch was squash-merged, abort and use: `git rebase --update-refs --onto origin/develop <squash-merged-branch> HEAD` where `<squash-merged-branch>` is the ralph branch ref that was already merged (e.g. `ralph/project/01-task-slug`). This skips the duplicate commits. Then delete the merged branch ref.
   Always use `--update-refs` to keep stacked branch pointers correct.
-- It is up to the user to work through these stacks and merge them. Never merge a PR to main without asking first.
+- It is up to the user to work through these stacks and merge them. Never merge a PR to the base branch without asking first.
 
 # Implementation
 - **Go only by default.** The bash implementation (ralph.sh, lib/*.sh) is deprecated. All changes, fixes, and new features go in `go/` unless explicitly told otherwise.

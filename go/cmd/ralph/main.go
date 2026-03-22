@@ -148,6 +148,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		RalphDir:       ralphDir,
 		UseWorktree:    cfg.UseWorktree,
 		Resume:         resume,
+		BaseBranch:     cfg.BaseBranch,
 		BranchStrategy: git.BranchStrategy(cfg.BranchStrategy),
 		MergeAdmin:     cfg.MergeAdmin,
 		State:          st,
@@ -238,7 +239,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 	}
 
 	if status, _ := st.Read("status"); status == "evolve_restart" {
-		if err := evolveRestart(cfg.ProjectDir, scriptPath, args, log); err != nil {
+		if err := evolveRestart(cfg.ProjectDir, scriptPath, cfg.BaseBranch, args, log); err != nil {
 			log.Error("Evolve restart failed: %v", err)
 		}
 	}
@@ -441,7 +442,7 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 		if len(branches) > 1 {
 			log.Log("Branches:")
 			for _, b := range branches {
-				if git.IsBranchSquashMerged(cfg.ProjectDir, b) {
+				if git.IsBranchSquashMerged(cfg.ProjectDir, b, cfg.BaseBranch) {
 					log.Log("  %s [MERGED]", b)
 				} else {
 					log.Log("  %s", b)
