@@ -19,7 +19,7 @@ FIX: <what you will do to fix it>
 Include this in your reflection as well, before the learnings section.
 
 ## Rules
-1. Focus ONLY on the single task described above.
+1. Focus ONLY on the single task described above. The Boy Scout Rule still applies to files you touch — clean up dead code, unclear names, and other issues you discover in those files as part of your work.
 2. Do NOT work on other tasks — one task per iteration.
 3. Do NOT write bd prime output or bd workflow instructions to the project's AGENTS.md, CLAUDE.md, or any other project file. bd context is for your use in this iteration only.
 4. One task = one PR, if gh is available. Multiple atomic commits are fine, but they all go in one PR — do not create a PR per commit.

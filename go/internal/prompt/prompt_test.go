@@ -314,6 +314,17 @@ func TestSharedPrompt_IncludesBoyScoutRule(t *testing.T) {
 	}
 }
 
+// Proves: execution-bd.md reinforces that the Boy Scout Rule applies despite single-task focus.
+func TestExecutionBD_ReinforcesBoyScoutRule(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
+	if err != nil {
+		t.Fatalf("reading execution-bd.md: %v", err)
+	}
+	if !strings.Contains(string(content), "Boy Scout Rule") {
+		t.Error("execution-bd.md should reinforce the Boy Scout Rule in its single-task focus rule")
+	}
+}
+
 // Proves: attempt history is injected into the prompt when previous
 // attempts exist on the current task.
 func TestBuildPrompt_IncludesAttemptHistory(t *testing.T) {
