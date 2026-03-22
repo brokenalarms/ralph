@@ -154,6 +154,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		if err := ctx.Err(); err != nil {
+			l.logger.Warn("Interrupted — stopping")
 			l.state.Write("status", "stopped")
 			return nil
 		}
