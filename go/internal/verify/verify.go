@@ -178,6 +178,60 @@ func PreflightChecks(workDir, headBefore string, beadStatus string) PreflightRes
 	return result
 }
 
+// LLMVerifyDiff calls Claude Haiku to check if the diff matches the bead's
+// acceptance criteria and that tests prove the functionality. Returns a Result.
+// Uses claude CLI with --model haiku for speed/cost.
+func LLMVerifyDiff(workDir, headBefore, beadTitle, beadDescription string) Result {
+	// Get the diff
+	diffCmd := exec.Command("git", "diff", headBefore+"..HEAD")
+	diffCmd.Dir = workDir
+	diffOut, err := diffCmd.Output()
+	if err != nil || len(diffOut) == 0 {
+		return Result{Passed: true, Reason: "no diff to verify"}
+	}
+
+	diff := string(diffOut)
+	// Truncate large diffs to avoid token limits
+	if len(diff) > 20000 {
+		diff = diff[:20000] + "\n\n[diff truncated at 20000 chars]"
+	}
+
+	prompt := fmt.Sprintf(`You are a code reviewer verifying that a diff matches its task description.
+
+TASK: %s
+DESCRIPTION: %s
+
+DIFF:
+%s
+
+Answer these two questions:
+1. Does this diff implement what the task asks for?
+2. Do the test changes (if any) actually prove the functionality, or are they superficial (e.g. assert true, always-pass stubs)?
+
+Reply with exactly one line: YES or NO followed by a one-sentence reason.
+Example: YES — adds retry loop with test that verifies 3 retries on failure.
+Example: NO — tests use a stub that always passes, proving nothing.`, beadTitle, beadDescription, diff)
+
+	cmd := exec.Command("claude", "--print", "--model", "claude-haiku-4-5-20251001", "-p", prompt)
+	cmd.Dir = workDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// If claude CLI fails, don't block — pass with warning
+		return Result{Passed: true, Reason: "LLM verification skipped: " + err.Error()}
+	}
+
+	response := strings.TrimSpace(string(out))
+	if strings.HasPrefix(strings.ToUpper(response), "NO") {
+		return Result{
+			Passed:  false,
+			Reason:  "LLM verification rejected: " + response,
+			Details: response,
+		}
+	}
+
+	return Result{Passed: true, Reason: "LLM verified: " + response}
+}
+
 func lastNLines(s string, n int) string {
 	lines := strings.Split(s, "\n")
 	if len(lines) <= n {

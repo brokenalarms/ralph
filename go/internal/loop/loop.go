@@ -300,11 +300,12 @@ func (l *Loop) Run(ctx context.Context) error {
 					}
 				}
 
+				feedbackPath := filepath.Join(l.cfg.RalphDir, "feedback")
+
+				// Step 1: Tests must pass
 				passed, reason := l.verifyCompletion(headBefore)
 				if !passed {
 					l.logger.Warn("Verification failed: %s", reason)
-					// Write full test output as feedback for agent
-					feedbackPath := filepath.Join(l.cfg.RalphDir, "feedback")
 					testOutput, _ := l.state.Read("last_test_output")
 					feedback := "ORCHESTRATOR VERIFICATION FAILED.\n\n"
 					feedback += "Reason: " + reason + "\n\n"
@@ -313,8 +314,23 @@ func (l *Loop) Run(ctx context.Context) error {
 					}
 					feedback += "Fix the failing tests and signal completion again. Do NOT signal until tests pass."
 					os.WriteFile(feedbackPath, []byte(feedback), 0o644)
+					return false
 				}
-				return passed
+
+				// Step 2: LLM verification — does the diff match the bead?
+				l.logger.Log("Running LLM verification...")
+				llmResult := verify.LLMVerifyDiff(workDir, headBefore, nextTask, l.getBeadDescription(taskID))
+				if !llmResult.Passed {
+					l.logger.Warn("LLM verification rejected: %s", llmResult.Details)
+					feedback := "ORCHESTRATOR LLM VERIFICATION FAILED.\n\n"
+					feedback += llmResult.Details + "\n\n"
+					feedback += "The diff does not match the task requirements or the tests don't prove the functionality. Fix and signal again."
+					os.WriteFile(feedbackPath, []byte(feedback), 0o644)
+					return false
+				}
+				l.logger.Log("LLM verified: %s", llmResult.Reason)
+
+				return true
 			},
 			FeedbackFile: filepath.Join(l.cfg.RalphDir, "feedback"),
 		})
@@ -491,6 +507,18 @@ func (l *Loop) handleRebase(ctx context.Context) error {
 
 // isNewTask returns true when the next task differs from the last one stored
 // in state. Prefers task ID comparison (stable across description edits);
+// getBeadDescription retrieves the bead description for LLM verification.
+func (l *Loop) getBeadDescription(taskID string) string {
+	if taskID == "" {
+		return ""
+	}
+	desc, err := l.cfg.TaskBackend.GetDescription(taskID)
+	if err != nil {
+		return ""
+	}
+	return desc
+}
+
 // falls back to description when no ID is available.
 func (l *Loop) isNewTask(taskID, taskDesc string) bool {
 	if taskID != "" {

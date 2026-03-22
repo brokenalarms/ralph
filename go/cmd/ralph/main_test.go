@@ -51,6 +51,7 @@ func (s *stubBackend) SetState(_, _, _, _ string) error           { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error)       { return "", nil }
 func (s *stubBackend) ExecutionInstructions() (string, error)     { return "", nil }
 func (s *stubBackend) PlanningInstructions() string               { return "" }
+func (s *stubBackend) GetDescription(_ string) (string, error)    { return "", nil }
 func (s *stubBackend) Label() string                              { return "checklist" }
 
 // Verifies the resume script contains the correct flags from the config,

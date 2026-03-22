@@ -400,4 +400,22 @@ func (b *BD) PlanningInstructions() string {
 	return "Run `bd prime` to learn the workflow, then create tasks directly in bd with dependencies. Do NOT write a plan.md file — tasks live exclusively in bd."
 }
 
+func (b *BD) GetDescription(id string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	run := b.runner()
+	out, err := run(b.ProjectDir, "show", id, "--json")
+	if err != nil {
+		return "", err
+	}
+	var items []struct {
+		Description string `json:"description"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil || len(items) == 0 {
+		return "", nil
+	}
+	return items[0].Description, nil
+}
+
 func (b *BD) Label() string { return "beads" }

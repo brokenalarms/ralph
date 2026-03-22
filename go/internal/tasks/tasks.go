@@ -70,6 +70,10 @@ type Backend interface {
 	// Returns empty string when unset or unsupported.
 	GetState(id, dimension string) (string, error)
 
+	// GetDescription returns the description/body of a task by ID.
+	// Returns empty string for backends without descriptions.
+	GetDescription(id string) (string, error)
+
 	// Label returns a human-readable name for the backend ("checklist" or "beads").
 	Label() string
 }
