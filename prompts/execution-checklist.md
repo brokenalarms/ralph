@@ -13,6 +13,7 @@
 5. One task = one PR, if gh is available. Multiple atomic commits are fine, but they all go in one PR — do not create a PR per commit.
 6. If you cannot complete the task, leave it unchecked and add notes in {{PLAN_FILE}}.
 7. Do NOT work on other tasks — one task per iteration.
+8. Run only scoped, relevant tests during development — not the full suite. The orchestrator runs the full test suite as the completion gate.
 
 ## Completion — this order is mandatory
 1. Commit your changes and ensure scoped tests pass for the code you touched.
