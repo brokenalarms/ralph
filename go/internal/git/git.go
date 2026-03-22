@@ -472,6 +472,30 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 		return false, &MergeConflictError{PRNumber: prNumber}
 	}
 
+	if isCIGatedError(mergeOutput) {
+		m.Logger.Log("PR #%s blocked by branch protection — waiting for CI...", prNumber)
+		checks, status, waitErr := waitForCI(prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+		if waitErr != nil {
+			return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, waitErr)
+		}
+		if status == CIFailed {
+			return false, &CIFailureError{
+				PRNumber: prNumber,
+				Failures: failedChecks(checks),
+			}
+		}
+		if status == CIPassed {
+			m.Logger.Log("CI passed for PR #%s — retrying merge", prNumber)
+			retryCmd := exec.Command("gh", m.ghMergeArgs(prNumber, repoURL)...)
+			retryOut, retryErr := retryCmd.CombinedOutput()
+			if retryErr == nil {
+				return m.postMergeUpdate(prNumber)
+			}
+			m.Logger.Warn("Merge retry failed for PR #%s: %s", prNumber, string(retryOut))
+			return false, fmt.Errorf("merge retry failed for PR #%s after CI passed", prNumber)
+		}
+	}
+
 	m.Logger.Warn("Auto-merge failed for PR #%s: %s", prNumber, mergeOutput)
 	return false, fmt.Errorf("auto-merge failed for PR #%s", prNumber)
 }
