@@ -71,13 +71,9 @@ type Manager struct {
 	Logger         Log
 }
 
-// TempBranch returns the temporary branch name for the current project.
-func (m *Manager) TempBranch() string {
-	return "ralph/" + m.ProjectName + "/next"
-}
-
 // SetupWorktree creates (or resumes) a git worktree for isolated work.
-// Mirrors lib/git.sh setup_worktree.
+// The worktree starts in detached HEAD at origin/main. A named branch is
+// created later by CreateBranchForTask when the first task is picked.
 func (m *Manager) SetupWorktree() error {
 	m.WorkDir = m.ProjectDir
 
@@ -109,7 +105,7 @@ func (m *Manager) SetupWorktree() error {
 		}
 	}
 
-	m.WorktreeBranch = m.TempBranch()
+	m.WorktreeBranch = ""
 	m.WorkDir = filepath.Join(m.RalphDir, "worktrees", fmt.Sprintf("ralph-%s-%02d", today, runSeq))
 
 	if err := os.MkdirAll(filepath.Join(m.RalphDir, "worktrees"), 0o755); err != nil {
@@ -125,11 +121,6 @@ func (m *Manager) SetupWorktree() error {
 		os.RemoveAll(m.WorkDir)
 	}
 
-	// Clean up temp branch if it already exists
-	if err := m.cleanTempBranch(); err != nil {
-		return err
-	}
-
 	defaultBranch := detectDefaultBranch(m.ProjectDir)
 	gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
 
@@ -141,19 +132,19 @@ func (m *Manager) SetupWorktree() error {
 		gitCmd(m.ProjectDir, "push", "-u", "origin", defaultBranch)
 	}
 
-	// Create worktree, preferring origin/default, falling back to HEAD
-	if err := gitCmdErr(m.ProjectDir, "worktree", "add", "-b", m.WorktreeBranch, m.WorkDir, "origin/"+defaultBranch); err != nil {
-		if err := gitCmdErr(m.ProjectDir, "worktree", "add", "-b", m.WorktreeBranch, m.WorkDir, "HEAD"); err != nil {
+	// Create worktree in detached HEAD — a named branch is created per task
+	if err := gitCmdErr(m.ProjectDir, "worktree", "add", "--detach", m.WorkDir, "origin/"+defaultBranch); err != nil {
+		if err := gitCmdErr(m.ProjectDir, "worktree", "add", "--detach", m.WorkDir, "HEAD"); err != nil {
 			return fmt.Errorf("failed to create worktree: %w", err)
 		}
 	}
 
 	gitCmd(m.WorkDir, "config", "rebase.updateRefs", "true")
-	m.Logger.Log("Worktree: %s (branch: %s)", m.WorkDir, m.WorktreeBranch)
+	m.Logger.Log("Worktree: %s (detached at origin/%s)", m.WorkDir, defaultBranch)
 
 	if m.State != nil {
 		_ = m.State.Write("worktree_dir", m.WorkDir)
-		_ = m.State.Write("worktree_branch", m.WorktreeBranch)
+		_ = m.State.Write("worktree_branch", "")
 	}
 
 	return nil
@@ -192,29 +183,6 @@ func (m *Manager) tryResumeWorktree() error {
 	}
 
 	return nil
-}
-
-// cleanTempBranch removes the temp branch, force-removing a stale worktree
-// if necessary. Returns an error only if the branch is checked out in a
-// non-ralph worktree.
-func (m *Manager) cleanTempBranch() error {
-	if !refExists(m.ProjectDir, m.WorktreeBranch) {
-		return nil
-	}
-	if err := gitCmdErr(m.ProjectDir, "branch", "-D", m.WorktreeBranch); err == nil {
-		return nil
-	}
-
-	existingWt := findWorktreeForBranch(m.ProjectDir, m.WorktreeBranch)
-	if existingWt != "" && strings.Contains(existingWt, "/.ralph/worktrees/") {
-		m.Logger.Warn("Removing stale ralph worktree: %s", existingWt)
-		gitCmd(m.ProjectDir, "worktree", "remove", "--force", existingWt)
-		gitCmd(m.ProjectDir, "branch", "-D", m.WorktreeBranch)
-		return nil
-	}
-
-	return fmt.Errorf("cannot delete branch '%s' — it is checked out in a non-ralph worktree: %s",
-		m.WorktreeBranch, existingWt)
 }
 
 // RenameWorktreeForTheme renames the worktree directory to include a
@@ -261,14 +229,14 @@ func (m *Manager) RenameWorktreeForTheme(themeDesc string) {
 	m.Logger.Log("Worktree renamed: %s", newDir)
 }
 
-// RenameBranchForTask renames the current branch to include a task slug.
-// Each call increments TaskSeq. Only renames once per iteration (tracked by
-// BranchRenamed). Skipped in single-branch mode. Mirrors lib/git.sh rename_branch_for_task.
-func (m *Manager) RenameBranchForTask(taskDesc string) {
+// CreateBranchForTask creates a fresh named branch from origin/main for the
+// current task. Each call increments TaskSeq. Only creates once per iteration
+// (tracked by BranchRenamed). Skipped in single-branch mode.
+func (m *Manager) CreateBranchForTask(taskDesc string) {
 	if m.BranchStrategy == BranchSingle {
 		return
 	}
-	if m.BranchRenamed || m.WorktreeBranch == "" || taskDesc == "" {
+	if m.BranchRenamed || taskDesc == "" {
 		return
 	}
 	if m.WorkDir == m.ProjectDir {
@@ -280,46 +248,30 @@ func (m *Manager) RenameBranchForTask(taskDesc string) {
 		return
 	}
 
+	defaultBranch := detectDefaultBranch(m.ProjectDir)
+	gitCmd(m.WorkDir, "fetch", "origin", defaultBranch)
+
 	m.TaskSeq++
+	oldBranch := m.WorktreeBranch
 	newBranch := fmt.Sprintf("ralph/%s/%02d-%s", m.ProjectName, m.TaskSeq, slug)
-	if err := gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); err == nil {
-		m.WorktreeBranch = newBranch
-		if m.State != nil {
-			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
-			_ = m.State.Write("task_seq", fmt.Sprintf("%d", m.TaskSeq))
-		}
-		m.BranchRenamed = true
-	}
-}
 
-// RotateBranch creates a fresh temp branch from the current HEAD, ready for
-// the next iteration. Skipped in single-branch mode. Mirrors lib/git.sh rotate_branch.
-func (m *Manager) RotateBranch() {
-	if m.BranchStrategy == BranchSingle {
-		return
-	}
-	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
+	if err := gitCmdErr(m.WorkDir, "checkout", "-B", newBranch, "origin/"+defaultBranch); err != nil {
+		m.TaskSeq--
+		m.Logger.Warn("Failed to create branch %s: continuing on current branch", newBranch)
 		return
 	}
 
-	newBranch := m.TempBranch()
-
-	// Already on the temp branch (e.g. after PostMergeReset)
-	if m.WorktreeBranch == newBranch {
-		m.BranchRenamed = false
-		return
+	if oldBranch != "" && oldBranch != newBranch {
+		gitCmd(m.WorkDir, "branch", "-D", oldBranch)
 	}
 
-	if err := gitCmdErr(m.WorkDir, "checkout", "-B", newBranch); err == nil {
-		m.WorktreeBranch = newBranch
-		if m.State != nil {
-			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
-		}
-		m.BranchRenamed = false
-		m.Logger.Log("Branch: %s (from previous iteration)", m.WorktreeBranch)
-	} else {
-		m.Logger.Warn("Branch rotation failed, continuing on %s", m.WorktreeBranch)
+	m.WorktreeBranch = newBranch
+	if m.State != nil {
+		_ = m.State.Write("worktree_branch", m.WorktreeBranch)
+		_ = m.State.Write("task_seq", fmt.Sprintf("%d", m.TaskSeq))
 	}
+	m.BranchRenamed = true
+	m.Logger.Log("Branch: %s (from origin/%s)", newBranch, defaultBranch)
 }
 
 // PushAndCreatePR pushes the current branch to remote and creates a PR if
@@ -471,14 +423,11 @@ func (m *Manager) postMergeUpdate(prNumber string) (bool, error) {
 	return true, nil
 }
 
-// ghMergeArgs builds the argument list for `gh pr merge`. In single-branch
-// mode --delete-branch is omitted because the branch is reused across tasks.
+// ghMergeArgs builds the argument list for `gh pr merge`. Each task has its
+// own branch so --delete-branch is always included.
 // When MergeAdmin is set, --admin bypasses branch protection requirements.
 func (m *Manager) ghMergeArgs(prNumber, repoURL string) []string {
-	args := []string{"pr", "merge", prNumber, "--squash", "-R", repoURL}
-	if m.BranchStrategy != BranchSingle {
-		args = append(args, "--delete-branch")
-	}
+	args := []string{"pr", "merge", prNumber, "--squash", "-R", repoURL, "--delete-branch"}
 	if m.MergeAdmin {
 		args = append(args, "--admin")
 	}
@@ -488,17 +437,17 @@ func (m *Manager) ghMergeArgs(prNumber, repoURL string) []string {
 // PostMergeReset force-resets the worktree to origin/main after a successful
 // squash-merge. The old branch is disposable — all its work is already on
 // main. Uses --force checkout and git clean to guarantee a pristine working
-// tree with no leftover files from the previous task.
+// tree with no leftover files from the previous task. Leaves the worktree in
+// detached HEAD — the next task creates its own named branch.
 func (m *Manager) PostMergeReset() error {
-	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
+	if m.WorkDir == m.ProjectDir {
 		return nil
 	}
 
 	defaultBranch := detectDefaultBranch(m.ProjectDir)
 	oldBranch := m.WorktreeBranch
-	newBranch := m.TempBranch()
 
-	if err := gitCmdErr(m.WorkDir, "checkout", "--force", "-B", newBranch, "origin/"+defaultBranch); err != nil {
+	if err := gitCmdErr(m.WorkDir, "checkout", "--force", "--detach", "origin/"+defaultBranch); err != nil {
 		return fmt.Errorf("post-merge reset: checkout failed: %w", err)
 	}
 
@@ -507,16 +456,16 @@ func (m *Manager) PostMergeReset() error {
 		m.Logger.Warn("git clean failed (non-fatal): %v", err)
 	}
 
-	if oldBranch != newBranch {
+	if oldBranch != "" {
 		gitCmd(m.WorkDir, "branch", "-D", oldBranch)
 	}
 
-	m.WorktreeBranch = newBranch
+	m.WorktreeBranch = ""
 	m.BranchRenamed = false
 	if m.State != nil {
-		_ = m.State.Write("worktree_branch", m.WorktreeBranch)
+		_ = m.State.Write("worktree_branch", "")
 	}
-	m.Logger.Log("Force-reset to %s from origin/%s", newBranch, defaultBranch)
+	m.Logger.Log("Force-reset to detached HEAD at origin/%s", defaultBranch)
 	return nil
 }
 
@@ -619,19 +568,15 @@ func (m *Manager) RebaseOntoDefaultBranch() error {
 }
 
 // findLastSquashMergedBranch iterates ralph/<project>/* branches (sorted by
-// refname, skipping */next) and returns the last one whose changes are already
-// absorbed into origin/defaultBranch. Detection uses a temporary git index:
-// read-tree origin/default, then reverse-apply the branch's diff. If that
-// succeeds, main already contains the branch's changes (squash-merged).
+// refname) and returns the last one whose changes are already absorbed into
+// origin/defaultBranch. Detection uses a temporary git index: read-tree
+// origin/default, then reverse-apply the branch's diff. If that succeeds,
+// main already contains the branch's changes (squash-merged).
 func (m *Manager) findLastSquashMergedBranch(defaultBranch string) string {
 	branches := ListProjectBranches(m.ProjectDir, m.ProjectName)
 	lastMerged := ""
 
 	for _, branch := range branches {
-		if strings.HasSuffix(branch, "/next") {
-			continue
-		}
-
 		mergeBase := gitOutput(m.WorkDir, "merge-base", "origin/"+defaultBranch, branch)
 		if mergeBase == "" {
 			continue
@@ -976,7 +921,7 @@ func extractSeqSlug(branch string) string {
 		return ""
 	}
 	seg := parts[2]
-	if seg == "next" || seg == "" {
+	if seg == "" {
 		return ""
 	}
 	return seg
