@@ -223,6 +223,124 @@ func TestPreflightChecks_NoChanges(t *testing.T) {
 	}
 }
 
+// extractKeywords filters stop words and short tokens from task text,
+// producing meaningful search terms for code-state verification.
+func TestExtractKeywords(t *testing.T) {
+	keywords := extractKeywords("LLM verification should check code state, not just iteration diff")
+	if len(keywords) == 0 {
+		t.Fatal("expected keywords, got none")
+	}
+	// Should include meaningful words, not stop words
+	kwMap := map[string]bool{}
+	for _, kw := range keywords {
+		kwMap[kw] = true
+	}
+	if !kwMap["verification"] {
+		t.Error("expected 'verification' in keywords")
+	}
+	if !kwMap["iteration"] {
+		t.Error("expected 'iteration' in keywords")
+	}
+	// Stop words should be filtered
+	if kwMap["should"] {
+		t.Error("stop word 'should' should be filtered")
+	}
+	if kwMap["not"] {
+		t.Error("stop word 'not' should be filtered")
+	}
+	if kwMap["just"] {
+		t.Error("stop word 'just' should be filtered")
+	}
+}
+
+// extractKeywords deduplicates and lowercases, ensuring the same word
+// doesn't produce redundant grep calls.
+func TestExtractKeywords_Dedup(t *testing.T) {
+	keywords := extractKeywords("verify Verify VERIFY verification")
+	seen := map[string]int{}
+	for _, kw := range keywords {
+		seen[kw]++
+	}
+	for kw, count := range seen {
+		if count > 1 {
+			t.Errorf("keyword %q appeared %d times, expected 1", kw, count)
+		}
+	}
+}
+
+// isSourceFile accepts common source extensions and rejects binary/non-source
+// files so code-state verification doesn't include irrelevant content.
+func TestIsSourceFile(t *testing.T) {
+	cases := []struct {
+		path   string
+		expect bool
+	}{
+		{"main.go", true},
+		{"verify_test.go", true},
+		{"package.json", true},
+		{"config.yaml", true},
+		{"script.sh", true},
+		{"image.png", false},
+		{"binary.exe", false},
+		{"data.csv", false},
+	}
+	for _, tc := range cases {
+		got := isSourceFile(tc.path)
+		if got != tc.expect {
+			t.Errorf("isSourceFile(%q) = %v, want %v", tc.path, got, tc.expect)
+		}
+	}
+}
+
+// findRelevantFiles locates source files matching task keywords, proving
+// that code-state verification can find implementation files in a repo.
+func TestFindRelevantFiles(t *testing.T) {
+	dir := setupGitRepo(t)
+
+	// Add a Go source file with identifiable content
+	os.WriteFile(filepath.Join(dir, "verify.go"), []byte("package verify\nfunc LLMVerifyCodeState() {}\n"), 0o644)
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "add verify").Run()
+
+	files := findRelevantFiles(dir, "LLMVerifyCodeState verification", "verify code state")
+	if len(files) == 0 {
+		t.Fatal("expected to find relevant files")
+	}
+	found := false
+	for _, f := range files {
+		if strings.HasSuffix(f, "verify.go") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected verify.go in results, got: %v", files)
+	}
+}
+
+// findRelevantFiles returns empty when no files match the task keywords,
+// ensuring code-state verification reports failure instead of false positives.
+func TestFindRelevantFiles_NoMatch(t *testing.T) {
+	dir := setupGitRepo(t)
+
+	files := findRelevantFiles(dir, "xyznonexistent", "completely unrelated task about xyznonexistent")
+	if len(files) != 0 {
+		t.Errorf("expected no files for nonsense keywords, got %d", len(files))
+	}
+}
+
+// LLMVerifyDiff rejects when the diff is empty, signaling that code-state
+// verification should be used instead (prevents silent auto-pass on no-op iterations).
+func TestLLMVerifyDiff_EmptyDiff(t *testing.T) {
+	dir := setupGitRepo(t)
+	head := gitHeadRev(dir)
+
+	result := LLMVerifyDiff(dir, head, "some task", "some description")
+	if result.Passed {
+		t.Error("expected failure on empty diff — should direct to code-state verification")
+	}
+}
+
 func setupGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
