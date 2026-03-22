@@ -229,7 +229,7 @@ func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
 	dir := setupGitRepo(t)
 	head := gitHeadRev(dir)
 
-	result := LLMVerifyPR(dir, "nonexistent-task", head, "some task", "some description")
+	result := LLMVerifyPR(dir, t.TempDir(), "nonexistent-task", head, "some task", "some description")
 	if !result.Passed {
 		t.Errorf("expected pass when no PR and no diff (tests passed), got: %s", result.Reason)
 	}

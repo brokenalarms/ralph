@@ -182,7 +182,8 @@ func PreflightChecks(workDir, headBefore string, beadStatus string) PreflightRes
 // LLMVerifyPR verifies that a task's acceptance criteria are satisfied.
 // Prefers the PR diff (which covers work from prior iterations) over the
 // current iteration's diff. Falls back to iteration diff when no PR exists.
-func LLMVerifyPR(workDir, taskID, headBefore, beadTitle, beadDescription string) Result {
+// Uses prompts/verify-review.md as the review template when available.
+func LLMVerifyPR(workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string) Result {
 	diff := getPRDiff(workDir, taskID)
 	source := "PR"
 	if diff == "" {
@@ -200,7 +201,24 @@ func LLMVerifyPR(workDir, taskID, headBefore, beadTitle, beadDescription string)
 		diff = diff[:20000] + "\n\n[diff truncated at 20000 chars]"
 	}
 
-	prompt := fmt.Sprintf(`You are a code reviewer verifying that a diff matches its task description.
+	prompt := loadReviewPrompt(promptsDir, beadTitle, beadDescription, source, diff)
+	return callLLM(workDir, prompt)
+}
+
+func loadReviewPrompt(promptsDir, beadTitle, beadDescription, source, diff string) string {
+	tmplPath := filepath.Join(promptsDir, "verify-review.md")
+	data, err := os.ReadFile(tmplPath)
+	if err == nil {
+		prompt := string(data)
+		prompt = strings.ReplaceAll(prompt, "{{TASK_TITLE}}", beadTitle)
+		prompt = strings.ReplaceAll(prompt, "{{TASK_DESCRIPTION}}", beadDescription)
+		prompt = strings.ReplaceAll(prompt, "{{DIFF_SOURCE}}", source)
+		prompt = strings.ReplaceAll(prompt, "{{DIFF}}", diff)
+		return prompt
+	}
+
+	// Fallback if template not found.
+	return fmt.Sprintf(`You are a code reviewer verifying that a diff matches its task description.
 
 TASK: %s
 DESCRIPTION: %s
@@ -211,12 +229,9 @@ DESCRIPTION: %s
 Answer these two questions:
 1. Does this diff implement what the task asks for?
 2. Do the test changes (if any) actually prove the functionality, or are they superficial?
+3. Are error paths and edge cases handled, or does the code fail silently?
 
-Reply with exactly one line: YES or NO followed by a one-sentence reason.
-Example: YES — adds retry loop with test that verifies 3 retries on failure.
-Example: NO — tests use a stub that always passes, proving nothing.`, beadTitle, beadDescription, source, diff)
-
-	return callLLM(workDir, prompt)
+Reply with exactly one line: YES or NO followed by a one-sentence reason.`, beadTitle, beadDescription, source, diff)
 }
 
 // getPRDiff finds a PR matching the task ID and returns its diff.

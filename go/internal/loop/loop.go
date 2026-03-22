@@ -375,7 +375,7 @@ func (l *Loop) Run(ctx context.Context) error {
 					beadDesc := l.getBeadDescription(taskID)
 
 					l.logger.Log("Running LLM verification...")
-					llmResult := verify.LLMVerifyPR(workDir, taskID, headBefore, nextTask, beadDesc)
+					llmResult := verify.LLMVerifyPR(workDir, l.cfg.PromptsDir, taskID, headBefore, nextTask, beadDesc)
 
 					if !llmResult.Passed {
 						l.logger.Warn("LLM verification rejected: %s", llmResult.Details)
@@ -419,7 +419,7 @@ func (l *Loop) Run(ctx context.Context) error {
 						}
 
 						// Re-run LLM check using PR diff
-						llmResult2 := verify.LLMVerifyPR(workDir, taskID, headBefore, nextTask, beadDesc)
+						llmResult2 := verify.LLMVerifyPR(workDir, l.cfg.PromptsDir, taskID, headBefore, nextTask, beadDesc)
 						if !llmResult2.Passed {
 							l.logger.Warn("LLM still rejects after fix agent: %s — accepting anyway (tests passed)", llmResult2.Details)
 						} else {
