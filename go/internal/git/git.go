@@ -183,6 +183,13 @@ func (m *Manager) tryResumeWorktree() error {
 		}
 	}
 
+	// Fetch latest origin/main so the subsequent rebase uses fresh refs
+	// rather than whatever was cached when the previous run ended.
+	defaultBranch := detectDefaultBranch(m.ProjectDir)
+	if err := gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
+		m.Logger.Warn("fetch origin %s failed during resume: %v", defaultBranch, err)
+	}
+
 	m.Logger.Log("Resuming worktree: %s", m.WorkDir)
 	return nil
 }
@@ -509,7 +516,9 @@ func (m *Manager) RemoveWorktree() {
 // Mirrors lib/git.sh rebase_onto_default_branch.
 func (m *Manager) RebaseOntoDefaultBranch() error {
 	defaultBranch := detectDefaultBranch(m.ProjectDir)
-	gitCmd(m.WorkDir, "fetch", "origin", defaultBranch)
+	if err := gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
+		m.Logger.Warn("fetch origin %s failed: %v", defaultBranch, err)
+	}
 
 	// Skip if remote branch doesn't exist (e.g. repo never pushed)
 	if !refExists(m.WorkDir, "origin/"+defaultBranch) {

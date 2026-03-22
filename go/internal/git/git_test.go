@@ -392,6 +392,74 @@ func TestResumeRotate_PreservesPreviousBranch(t *testing.T) {
 	}
 }
 
+// Resume fetches latest origin/main so the subsequent rebase uses fresh refs.
+// Without this fetch, the worktree would rebase onto a stale origin/main,
+// causing "merge commit cannot be cleanly created" failures on GitHub.
+func TestSetupWorktree_ResumeFetchesLatestMain(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+	log := &testLog{}
+
+	// First run: create worktree
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr.SetupWorktree(); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Do some work in the worktree
+	writeFile(t, mgr.WorkDir, "task.txt", "worktree work\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "worktree commit")
+
+	// Record origin/main before simulating new remote activity
+	originMainBefore := gitOutput(project, "rev-parse", "origin/main")
+
+	// Simulate time passing: push a new commit to origin/main via a
+	// separate clone (as if another PR was merged on GitHub)
+	tmpClone := filepath.Join(t.TempDir(), "clone")
+	run(t, "git", "clone", bare, tmpClone)
+	writeFile(t, tmpClone, "new-on-main.txt", "landed while ralph was stopped\n")
+	run(t, "git", "-C", tmpClone, "commit", "-m", "new commit on main")
+	run(t, "git", "-C", tmpClone, "push", "origin", "main")
+
+	// Resume: create a new Manager with Resume=true
+	mgr2 := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		Resume:      true,
+		State:       state,
+		Logger:      log,
+	}
+	if err := mgr2.SetupWorktree(); err != nil {
+		t.Fatalf("resume SetupWorktree: %v", err)
+	}
+
+	// After resume, origin/main should have advanced
+	originMainAfter := gitOutput(project, "rev-parse", "origin/main")
+	if originMainAfter == originMainBefore {
+		t.Error("origin/main should have advanced after resume fetch")
+	}
+
+	// The subsequent rebase should include the new commit
+	if err := mgr2.RebaseOntoDefaultBranch(); err != nil {
+		t.Fatalf("RebaseOntoDefaultBranch failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(mgr2.WorkDir, "new-on-main.txt")); err != nil {
+		t.Error("new-on-main.txt should exist after resume + rebase onto latest origin/main")
+	}
+	if _, err := os.Stat(filepath.Join(mgr2.WorkDir, "task.txt")); err != nil {
+		t.Error("task.txt should still exist from worktree work")
+	}
+}
+
 // --- RenameBranchForTask tests ---
 
 // RenameBranchForTask gives the temp branch a descriptive name for the current task
