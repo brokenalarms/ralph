@@ -759,8 +759,8 @@ func TestWaitFlag(t *testing.T) {
 	if cfg.Wait {
 		t.Error("Wait should default to false")
 	}
-	if cfg.WaitInterval != 30*time.Second {
-		t.Errorf("WaitInterval = %s, want 30s", cfg.WaitInterval)
+	if cfg.WaitInterval != 5*time.Second {
+		t.Errorf("WaitInterval = %s, want 5s", cfg.WaitInterval)
 	}
 
 	cfg, err = Parse([]string{"--wait"})
