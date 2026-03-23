@@ -291,7 +291,7 @@ func (b *BD) GetNextTaskInfo() (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	return issue.ID, issue.Title, nil
+	return issue.ID, EnsureComponentPrefix(issue.Title, ""), nil
 }
 
 func (b *BD) GetNextTask() (string, error) {

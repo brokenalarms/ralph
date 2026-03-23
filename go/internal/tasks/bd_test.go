@@ -862,3 +862,37 @@ func TestBD_Counts_OnError(t *testing.T) {
 			completed, remaining, total)
 	}
 }
+
+// Proves: GetNextTaskInfo auto-prefixes titles with the detected component
+// so the orchestrator always sees properly-prefixed task names.
+func TestBD_GetNextTaskInfo_AutoPrefixesTitle(t *testing.T) {
+	ready := `[{"id":"ralph-abc","title":"force-reset worktree after merge","priority":1}]`
+	runner := mockBD("1", map[string]string{"open": "1"}, "[]", ready)
+	b := setupBD(t, runner)
+
+	id, title, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "ralph-abc" {
+		t.Errorf("id = %q, want ralph-abc", id)
+	}
+	if title != "ralph loop: force-reset worktree after merge" {
+		t.Errorf("title = %q, want %q", title, "ralph loop: force-reset worktree after merge")
+	}
+}
+
+// Proves: GetNextTaskInfo does not double-prefix titles that already have a component prefix.
+func TestBD_GetNextTaskInfo_NoDoublePrefixing(t *testing.T) {
+	ready := `[{"id":"ralph-xyz","title":"ralph task: echo back beads","priority":2}]`
+	runner := mockBD("1", map[string]string{"open": "1"}, "[]", ready)
+	b := setupBD(t, runner)
+
+	_, title, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if title != "ralph task: echo back beads" {
+		t.Errorf("title = %q, should be unchanged", title)
+	}
+}
