@@ -487,8 +487,6 @@ func (c *Config) LoadConfigFile(path string) error {
 				c.BaseBranch = value
 			}
 			continue
-		case "branch_strategy":
-			continue
 		case "no_refactor":
 			switch strings.ToLower(value) {
 			case "1", "true", "yes":
