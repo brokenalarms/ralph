@@ -550,18 +550,6 @@ func (l *Loop) Run(ctx context.Context) error {
 				l.logger.Warn("Push/PR: %v", err)
 			}
 
-			if taskID != "" {
-				closeReason := "completed by ralph"
-				if prNum, _ := l.findPRInfo(workDir); prNum != "" {
-					closeReason = fmt.Sprintf("Fixed in PR #%s", prNum)
-				}
-				if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
-					l.logger.Warn("CloseTask failed: %v", err)
-				} else {
-					l.logger.Log("Closed task %s (%s)", taskID, closeReason)
-				}
-			}
-
 			ct := CompletedTask{
 				ID:      taskID,
 				Title:   nextTask,
@@ -571,24 +559,43 @@ func (l *Loop) Run(ctx context.Context) error {
 				ct.PRNum = prNum
 				ct.PRTitle = prTitle
 			}
+
+			merged := false
+			if l.cfg.AutoMerge {
+				var mergeErr error
+				merged, mergeErr = l.mergeWithRetry(ctx, taskID, nextTask, workDir, rawLogPath)
+				if mergeErr != nil {
+					l.logger.Warn("Auto-merge: %v", mergeErr)
+				}
+			}
+
+			// Close bead only after successful merge (or if auto-merge is off).
+			if taskID != "" && (merged || !l.cfg.AutoMerge) {
+				closeReason := "completed by ralph"
+				if ct.PRNum != "" {
+					closeReason = fmt.Sprintf("Fixed in PR #%s", ct.PRNum)
+				}
+				if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
+					l.logger.Warn("CloseTask failed: %v", err)
+				} else {
+					l.logger.Log("Closed task %s (%s)", taskID, closeReason)
+				}
+			} else if taskID != "" && l.cfg.AutoMerge && !merged {
+				l.logger.Warn("Merge failed — task %s left open for retry", taskID)
+			}
+
 			l.sessionTasks = append(l.sessionTasks, ct)
 
-			if l.cfg.AutoMerge {
-				merged, err := l.mergeWithRetry(ctx, taskID, nextTask, workDir, rawLogPath)
-				if err != nil {
-					l.logger.Warn("Auto-merge: %v", err)
+			if merged {
+				l.lastTaskMerged = true
+				if err := l.git.PostMergeReset(); err != nil {
+					l.logger.Warn("Post-merge reset: %v", err)
 				}
-				if merged {
-					l.lastTaskMerged = true
-					if err := l.git.PostMergeReset(); err != nil {
-						l.logger.Warn("Post-merge reset: %v", err)
-					}
-					if l.cfg.Evolve {
-						l.git.TagTaskEnd(taskID)
-						l.logger.Phase("Evolve: restarting with latest main")
-						l.state.Write("status", "evolve_restart")
-						return nil
-					}
+				if l.cfg.Evolve {
+					l.git.TagTaskEnd(taskID)
+					l.logger.Phase("Evolve: restarting with latest main")
+					l.state.Write("status", "evolve_restart")
+					return nil
 				}
 			}
 		}
