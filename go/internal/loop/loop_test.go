@@ -1257,8 +1257,7 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	gm := &git.Manager{
 		ProjectDir:     dir,
 		WorkDir:        dir,
-		BranchStrategy: git.BranchStacked,
-		Logger:         logging.New(nil),
+		Logger: logging.New(nil),
 	}
 
 	l := New(Config{
@@ -1305,9 +1304,8 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 		ProjectDir:     project,
 		RalphDir:       ralphDir,
 		UseWorktree:    true,
-		BranchStrategy: git.BranchStacked,
-		State:          st,
-		Logger:         logging.New(nil),
+		State:  st,
+		Logger: logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -1519,86 +1517,81 @@ func run(t *testing.T, name string, args ...string) {
 
 // Verifies that auto-merge fires once per task and calls PostMergeReset after
 // each successful merge, so the next task starts from merged main — not stale
-// commits. Both branch strategies share the same PR/merge lifecycle.
+// commits.
 func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
-	for _, strategy := range []git.BranchStrategy{git.BranchStacked, git.BranchSingle} {
-		t.Run(string(strategy), func(t *testing.T) {
-			dir, st := setupTestDir(t)
-			ralphDir := filepath.Join(dir, ".ralph")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
 
-			promptsDir := filepath.Join(dir, "prompts")
-			createPromptTemplates(t, promptsDir)
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
 
-			mergeCount := 0
-			iterationCount := 0
+	mergeCount := 0
+	iterationCount := 0
 
-			backend := &mutableBackend{
-				remaining: 1,
-				completed: 0,
-				total:     3,
-				nextTask:  "task A",
-				nextID:    "ralph-aaa",
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     3,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			backend.completed = iterationCount
+			switch iterationCount {
+			case 1:
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+			case 2:
+				backend.remaining = 1
+				backend.nextTask = "task C"
+				backend.nextID = "ralph-ccc"
+			default:
+				backend.remaining = 0
 			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
 
-			runner := &stubRunner{
-				onRun: func() {
-					iterationCount++
-					backend.mu.Lock()
-					defer backend.mu.Unlock()
-					backend.completed = iterationCount
-					switch iterationCount {
-					case 1:
-						backend.remaining = 1
-						backend.nextTask = "task B"
-						backend.nextID = "ralph-bbb"
-					case 2:
-						backend.remaining = 1
-						backend.nextTask = "task C"
-						backend.nextID = "ralph-ccc"
-					default:
-						backend.remaining = 0
-					}
-				},
-				result: claude.Result{SignalDetected: true},
-			}
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		Logger:     logging.New(nil),
+	}
 
-			gm := &git.Manager{
-				ProjectDir:     dir,
-				WorkDir:        dir,
-				BranchStrategy: strategy,
-				Logger:         logging.New(nil),
-			}
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.pushPRFunc = func(context.Context, string, string) error { return nil }
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCount++
+		return true, nil
+	}
 
-			l := New(Config{
-				ProjectDir:    dir,
-				WorkDir:       dir,
-				RalphDir:      ralphDir,
-				PromptsDir:    promptsDir,
-				MaxIterations: 10,
-				CallsPerHour:  80,
-				AutoMerge:     true,
-				TaskBackend:   backend,
-			}, st, gm, logging.New(nil))
-			l.runner = runner
-			l.pushPRFunc = func(context.Context, string, string) error { return nil }
-			l.mergeFunc = func(context.Context) (bool, error) {
-				mergeCount++
-				return true, nil
-			}
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-			err := l.Run(context.Background())
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+	if iterationCount != 3 {
+		t.Errorf("expected 3 iterations, got %d", iterationCount)
+	}
 
-			if iterationCount != 3 {
-				t.Errorf("expected 3 iterations, got %d", iterationCount)
-			}
-
-			if mergeCount != 3 {
-				t.Errorf("expected auto-merge to fire 3 times (once per task), got %d", mergeCount)
-			}
-		})
+	if mergeCount != 3 {
+		t.Errorf("expected auto-merge to fire 3 times (once per task), got %d", mergeCount)
 	}
 }
 
@@ -1606,176 +1599,160 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 // origin/main between tasks using a real git worktree, proving each task
 // starts from merged main rather than building on stale commits.
 func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
-	for _, strategy := range []git.BranchStrategy{git.BranchStacked, git.BranchSingle} {
-		t.Run(string(strategy), func(t *testing.T) {
-			project, _ := initBareRepoWithOrigin(t)
-			ralphDir := filepath.Join(project, ".ralph")
-			st := state.NewStore(ralphDir)
-			st.Init(10, 0)
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(10, 0)
 
-			promptsDir := filepath.Join(project, "prompts")
-			createPromptTemplates(t, promptsDir)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
 
-			gm := &git.Manager{
-				ProjectDir:     project,
-				RalphDir:       ralphDir,
-				UseWorktree:    true,
-				BranchStrategy: strategy,
-				State:          st,
-				Logger:         logging.New(nil),
+	gm := &git.Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       st,
+		Logger:      logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	originMain := git.HeadRev(gm.WorkDir)
+	iterationCount := 0
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+	}
+
+	var headAfterMerge string
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			if iterationCount == 1 {
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+			} else {
+				headAfterMerge = git.HeadRev(gm.WorkDir)
+				backend.completed = 2
+				backend.remaining = 0
 			}
-			if err := gm.SetupWorktree(context.Background()); err != nil {
-				t.Fatalf("SetupWorktree: %v", err)
-			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
 
-			originMain := git.HeadRev(gm.WorkDir)
-			iterationCount := 0
+	l := New(Config{
+		ProjectDir:    project,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return true, nil
+	}
 
-			backend := &mutableBackend{
-				remaining: 1,
-				completed: 0,
-				total:     2,
-				nextTask:  "task A",
-				nextID:    "ralph-aaa",
-			}
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-			var headAfterMerge string
-			runner := &stubRunner{
-				onRun: func() {
-					iterationCount++
-					backend.mu.Lock()
-					defer backend.mu.Unlock()
-					if iterationCount == 1 {
-						backend.completed = 1
-						backend.remaining = 1
-						backend.nextTask = "task B"
-						backend.nextID = "ralph-bbb"
-					} else {
-						// On second iteration, record HEAD to verify
-						// PostMergeReset moved us back to origin/main.
-						headAfterMerge = git.HeadRev(gm.WorkDir)
-						backend.completed = 2
-						backend.remaining = 0
-					}
-				},
-				result: claude.Result{SignalDetected: true},
-			}
+	if iterationCount != 2 {
+		t.Fatalf("expected 2 iterations, got %d", iterationCount)
+	}
 
-			l := New(Config{
-				ProjectDir:    project,
-				WorkDir:       gm.WorkDir,
-				RalphDir:      ralphDir,
-				PromptsDir:    promptsDir,
-				MaxIterations: 10,
-				CallsPerHour:  80,
-				AutoMerge:     true,
-				TaskBackend:   backend,
-			}, st, gm, logging.New(nil))
-			l.runner = runner
-			l.mergeFunc = func(context.Context) (bool, error) {
-				return true, nil
-			}
+	if headAfterMerge != originMain {
+		t.Errorf("second iteration should start from origin/main (%s), got %s", originMain, headAfterMerge)
+	}
 
-			err := l.Run(context.Background())
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if iterationCount != 2 {
-				t.Fatalf("expected 2 iterations, got %d", iterationCount)
-			}
-
-			// After PostMergeReset, the second iteration should start from
-			// origin/main — not from stale commits.
-			if headAfterMerge != originMain {
-				t.Errorf("second iteration should start from origin/main (%s), got %s", originMain, headAfterMerge)
-			}
-
-			// Branch should be back on temp branch after PostMergeReset
-			tempBranch := gm.TempBranch()
-			if gm.WorktreeBranch != tempBranch {
-				t.Errorf("expected branch %q after PostMergeReset, got %q", tempBranch, gm.WorktreeBranch)
-			}
-		})
+	tempBranch := gm.TempBranch()
+	if gm.WorktreeBranch != tempBranch {
+		t.Errorf("expected branch %q after PostMergeReset, got %q", tempBranch, gm.WorktreeBranch)
 	}
 }
 
 // Verifies that pushAndCreatePR fires for every completed task when signal
 // is detected, regardless of whether auto-merge is enabled. This ensures the
-// Go code owns the push/PR lifecycle — Claude completing a task always results
-// in a pushed branch with a PR, for both branch strategies.
+// Go code owns the push/PR lifecycle.
 func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
-	for _, strategy := range []git.BranchStrategy{git.BranchStacked, git.BranchSingle} {
-		t.Run(string(strategy), func(t *testing.T) {
-			dir, st := setupTestDir(t)
-			ralphDir := filepath.Join(dir, ".ralph")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
 
-			promptsDir := filepath.Join(dir, "prompts")
-			createPromptTemplates(t, promptsDir)
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
 
-			pushPRCalls := 0
-			iterationCount := 0
+	pushPRCalls := 0
+	iterationCount := 0
 
-			backend := &mutableBackend{
-				remaining: 1,
-				completed: 0,
-				total:     2,
-				nextTask:  "task A",
-				nextID:    "ralph-aaa",
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			if iterationCount == 1 {
+				backend.mu.Lock()
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+				backend.mu.Unlock()
+			} else {
+				backend.mu.Lock()
+				backend.completed = 2
+				backend.remaining = 0
+				backend.mu.Unlock()
 			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
 
-			runner := &stubRunner{
-				onRun: func() {
-					iterationCount++
-					if iterationCount == 1 {
-						backend.mu.Lock()
-						backend.completed = 1
-						backend.remaining = 1
-						backend.nextTask = "task B"
-						backend.nextID = "ralph-bbb"
-						backend.mu.Unlock()
-					} else {
-						backend.mu.Lock()
-						backend.completed = 2
-						backend.remaining = 0
-						backend.mu.Unlock()
-					}
-				},
-				result: claude.Result{SignalDetected: true},
-			}
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		Logger:     logging.New(nil),
+	}
 
-			gm := &git.Manager{
-				ProjectDir:     dir,
-				WorkDir:        dir,
-				BranchStrategy: strategy,
-				Logger:         logging.New(nil),
-			}
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       dir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     false,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.pushPRFunc = func(_ context.Context, _, taskDesc string) error {
+		pushPRCalls++
+		return nil
+	}
 
-			l := New(Config{
-				ProjectDir:    dir,
-				WorkDir:       dir,
-				RalphDir:      ralphDir,
-				PromptsDir:    promptsDir,
-				MaxIterations: 10,
-				CallsPerHour:  80,
-				AutoMerge:     false,
-				TaskBackend:   backend,
-			}, st, gm, logging.New(nil))
-			l.runner = runner
-			l.pushPRFunc = func(_ context.Context, _, taskDesc string) error {
-				pushPRCalls++
-				return nil
-			}
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-			err := l.Run(context.Background())
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if pushPRCalls != 2 {
-				t.Errorf("expected pushAndCreatePR called 2 times (once per task), got %d", pushPRCalls)
-			}
-		})
+	if pushPRCalls != 2 {
+		t.Errorf("expected pushAndCreatePR called 2 times (once per task), got %d", pushPRCalls)
 	}
 }
 
@@ -1803,10 +1780,9 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 	}
 
 	gm := &git.Manager{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		BranchStrategy: git.BranchSingle,
-		Logger:         logging.New(nil),
+		ProjectDir: dir,
+		WorkDir:    dir,
+		Logger:     logging.New(nil),
 	}
 
 	l := New(Config{
@@ -1833,96 +1809,6 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 
 	if pushPRCalls != 0 {
 		t.Errorf("pushAndCreatePR should not be called without signal, got %d calls", pushPRCalls)
-	}
-}
-
-// Verifies that single-branch mode skips branch rotation on task change,
-// keeping all task commits on the initial worktree branch.
-func TestLoop_SingleBranchSkipsRotation(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-
-	st.Write("last_task", "previous task")
-	st.Write("last_task_id", "ralph-old")
-
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 1,
-		total:     1,
-		nextTask:  "new task",
-		nextID:    "ralph-new",
-	}
-
-	gm := &git.Manager{
-		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
-		RalphDir:       ralphDir,
-		WorktreeBranch: "ralph/myproject/next",
-		ProjectName:    "myproject",
-		BranchStrategy: git.BranchSingle,
-		State:          st,
-		Logger:         logging.New(nil),
-	}
-
-	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		MaxIterations: 5,
-		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
-
-	_ = l.Run(context.Background())
-
-	// Single mode — branch should NOT have been rotated even though task changed
-	if gm.WorktreeBranch != "ralph/myproject/next" {
-		t.Errorf("expected branch to stay as ralph/myproject/next in single mode, got %q", gm.WorktreeBranch)
-	}
-}
-
-// Verifies that single-branch mode skips branch rotation on resume even when
-// a different task is next, keeping the existing branch.
-func TestLoop_SingleBranchSkipsRotationOnResume(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-
-	st.Write("last_task", "old task")
-	st.Write("last_task_id", "ralph-old")
-
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 1,
-		total:     1,
-		nextTask:  "different task",
-		nextID:    "ralph-new",
-	}
-
-	gm := &git.Manager{
-		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
-		RalphDir:       ralphDir,
-		WorktreeBranch: "ralph/myproject/01-old-task",
-		ProjectName:    "myproject",
-		BranchStrategy: git.BranchSingle,
-		State:          st,
-		Logger:         logging.New(nil),
-	}
-
-	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		MaxIterations: 5,
-		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
-
-	_ = l.Run(context.Background())
-
-	// Single mode on resume — branch stays put
-	if gm.WorktreeBranch != "ralph/myproject/01-old-task" {
-		t.Errorf("expected branch to stay as ralph/myproject/01-old-task in single mode, got %q", gm.WorktreeBranch)
 	}
 }
 
@@ -2871,9 +2757,8 @@ func TestLoop_CIFailureWritesFeedback(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-ci-test",
-		BranchStrategy: git.BranchStacked,
-		State:          st,
-		Logger:         logging.New(nil),
+		State:  st,
+		Logger: logging.New(nil),
 	}
 
 	l := New(Config{
@@ -2934,9 +2819,8 @@ func TestLoop_MergeConflictTriggersRebaseAndRetry(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-conflict-test",
-		BranchStrategy: git.BranchStacked,
-		State:          st,
-		Logger:         logging.New(nil),
+		State:  st,
+		Logger: logging.New(nil),
 	}
 
 	l := New(Config{
@@ -3001,9 +2885,8 @@ func TestLoop_CIFailureFixAgentRetriesMerge(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-ci-fix",
-		BranchStrategy: git.BranchStacked,
-		State:          st,
-		Logger:         logging.New(nil),
+		State:  st,
+		Logger: logging.New(nil),
 	}
 
 	l := New(Config{
@@ -3083,9 +2966,8 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-ci-exhaust",
-		BranchStrategy: git.BranchStacked,
-		State:          st,
-		Logger:         logging.New(nil),
+		State:  st,
+		Logger: logging.New(nil),
 	}
 
 	l := New(Config{
@@ -3148,9 +3030,8 @@ func TestLoop_MergeWithRetryHandlesConflictThenCIFailure(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-mixed",
-		BranchStrategy: git.BranchStacked,
-		State:          st,
-		Logger:         logging.New(nil),
+		State:  st,
+		Logger: logging.New(nil),
 	}
 
 	l := New(Config{
@@ -3438,9 +3319,8 @@ func TestLoop_PrePushRebaseBeforePush(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/test/01-task",
 		UseWorktree:    true,
-		BranchStrategy: git.BranchStacked,
-		State:          st,
-		Logger:         logging.New(nil),
+		State:  st,
+		Logger: logging.New(nil),
 	}
 
 	backend := &stubBackend{

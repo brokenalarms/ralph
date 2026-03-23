@@ -160,8 +160,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		UseWorktree:    cfg.UseWorktree,
 		Resume:         resume,
 		BaseBranch:     cfg.BaseBranch,
-		BranchStrategy: git.BranchStrategy(cfg.BranchStrategy),
-		MergeAdmin:     cfg.MergeAdmin,
+		MergeAdmin: cfg.MergeAdmin,
 		State:          st,
 		Logger:         log,
 	}
@@ -403,9 +402,6 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 	}
 	if cfg.Wait {
 		extraArgs = append(extraArgs, "--wait")
-	}
-	if cfg.BranchStrategy != "single" {
-		extraArgs = append(extraArgs, fmt.Sprintf("--branch-strategy %s", cfg.BranchStrategy))
 	}
 	if cfg.UseTmux || os.Getenv("_RALPH_TMUX_SESSION") != "" {
 		extraArgs = append(extraArgs, "--tmux")

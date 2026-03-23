@@ -26,14 +26,6 @@ type Log interface {
 	Error(format string, args ...any)
 }
 
-// BranchStrategy controls how branches are managed across tasks.
-type BranchStrategy string
-
-const (
-	BranchSingle  BranchStrategy = "single"
-	BranchStacked BranchStrategy = "stacked"
-)
-
 // RebaseRecovery represents the user's chosen recovery action when rebase
 // fails due to squash-merged branches.
 type RebaseRecovery int
@@ -65,10 +57,9 @@ type Manager struct {
 	UseWorktree    bool
 	Resume         bool
 	TaskSeq        int
-	BranchRenamed  bool
-	BaseBranch     string
-	BranchStrategy BranchStrategy
-	MergeAdmin     bool
+	BranchRenamed bool
+	BaseBranch    string
+	MergeAdmin    bool
 	GitHub         GitHub
 	State          StateStore
 	Logger         Log
@@ -297,12 +288,9 @@ func (m *Manager) cleanTempBranch() error {
 
 // RenameBranchForTask renames the current branch to include a task slug.
 // Each call increments TaskSeq. Only renames once per iteration (tracked by
-// BranchRenamed). Skipped in single-branch mode. When taskID is provided,
-// it is included in the branch name for traceability.
+// BranchRenamed). When taskID is provided, it is included in the branch name
+// for traceability.
 func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
-	if m.BranchStrategy == BranchSingle {
-		return
-	}
 	if m.BranchRenamed || m.WorktreeBranch == "" || taskDesc == "" {
 		return
 	}
@@ -333,11 +321,8 @@ func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 }
 
 // RotateBranch creates a fresh temp branch from the current HEAD, ready for
-// the next iteration. Skipped in single-branch mode. Mirrors lib/git.sh rotate_branch.
+// the next iteration.
 func (m *Manager) RotateBranch() {
-	if m.BranchStrategy == BranchSingle {
-		return
-	}
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
 		return
 	}
@@ -364,8 +349,7 @@ func (m *Manager) RotateBranch() {
 
 // PushAndCreatePR pushes the current branch to remote and creates a PR if
 // none exists. This ensures the Go code owns the push/PR lifecycle rather
-// than relying on Claude to do it — critical for single-branch mode where
-// the branch name doesn't change between tasks.
+// than relying on Claude to do it.
 func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) error {
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
 		return nil
@@ -564,7 +548,7 @@ func (m *Manager) postMergeUpdate(prNumber string) (bool, error) {
 // mergeOpts returns the merge options for the current Manager configuration.
 func (m *Manager) mergeOpts() MergeOpts {
 	return MergeOpts{
-		DeleteBranch: m.BranchStrategy != BranchSingle,
+		DeleteBranch: true,
 		Admin:        m.MergeAdmin,
 	}
 }

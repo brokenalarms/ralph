@@ -1023,81 +1023,18 @@ func TestDirtyWorkingTreeDetected(t *testing.T) {
 	}
 }
 
-// --- BranchStrategy tests ---
-
-// Single-branch mode skips RenameBranchForTask entirely, keeping the initial
-// worktree branch name unchanged across all tasks.
-func TestRenameBranchForTask_SkippedInSingleMode(t *testing.T) {
+// RenameBranchForTask renames and RotateBranch rotates branches per task.
+func TestRenameBranchForTask_AndRotateBranch(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := newMemState()
 
 	mgr := &Manager{
-		ProjectDir:     project,
-		RalphDir:       ralphDir,
-		UseWorktree:    true,
-		BranchStrategy: BranchSingle,
-		State:          st,
-		Logger:         &testLog{},
-	}
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	origBranch := mgr.WorktreeBranch
-	mgr.RenameBranchForTask("Some task", "")
-
-	if mgr.WorktreeBranch != origBranch {
-		t.Errorf("branch should stay as %q in single mode, got %q", origBranch, mgr.WorktreeBranch)
-	}
-	if mgr.BranchRenamed {
-		t.Error("BranchRenamed should be false in single mode")
-	}
-	if mgr.TaskSeq != 0 {
-		t.Errorf("TaskSeq should stay 0 in single mode, got %d", mgr.TaskSeq)
-	}
-}
-
-// Single-branch mode skips RotateBranch entirely, keeping the same branch
-// across task transitions instead of creating per-task branches.
-func TestRotateBranch_SkippedInSingleMode(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := newMemState()
-
-	mgr := &Manager{
-		ProjectDir:     project,
-		RalphDir:       ralphDir,
-		UseWorktree:    true,
-		BranchStrategy: BranchSingle,
-		State:          st,
-		Logger:         &testLog{},
-	}
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	origBranch := mgr.WorktreeBranch
-	mgr.RotateBranch()
-
-	if mgr.WorktreeBranch != origBranch {
-		t.Errorf("branch should stay as %q in single mode, got %q", origBranch, mgr.WorktreeBranch)
-	}
-}
-
-// Stacked mode (explicit) still rotates and renames branches per task.
-func TestBranchStrategy_StackedBehavesLikeDefault(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := newMemState()
-
-	mgr := &Manager{
-		ProjectDir:     project,
-		RalphDir:       ralphDir,
-		UseWorktree:    true,
-		BranchStrategy: BranchStacked,
-		State:          st,
-		Logger:         &testLog{},
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       st,
+		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -1107,10 +1044,10 @@ func TestBranchStrategy_StackedBehavesLikeDefault(t *testing.T) {
 	mgr.RenameBranchForTask("First task", "")
 
 	if mgr.WorktreeBranch == origBranch {
-		t.Error("stacked mode should rename the branch")
+		t.Error("should rename the branch")
 	}
 	if !mgr.BranchRenamed {
-		t.Error("BranchRenamed should be true after rename in stacked mode")
+		t.Error("BranchRenamed should be true after rename")
 	}
 	if mgr.TaskSeq != 1 {
 		t.Errorf("TaskSeq should be 1, got %d", mgr.TaskSeq)
@@ -1120,7 +1057,7 @@ func TestBranchStrategy_StackedBehavesLikeDefault(t *testing.T) {
 	mgr.RotateBranch()
 
 	if mgr.WorktreeBranch == taskBranch {
-		t.Error("stacked mode should rotate the branch")
+		t.Error("should rotate the branch")
 	}
 	if !strings.HasSuffix(mgr.WorktreeBranch, "/next") {
 		t.Errorf("rotated branch %q should end with /next", mgr.WorktreeBranch)
@@ -1173,9 +1110,8 @@ func TestPostMergeReset_ResetsToOriginMain(t *testing.T) {
 		ProjectDir:     project,
 		RalphDir:       ralphDir,
 		UseWorktree:    true,
-		BranchStrategy: BranchStacked,
-		State:          st,
-		Logger:         &testLog{},
+		State:  st,
+		Logger: &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -1205,55 +1141,6 @@ func TestPostMergeReset_ResetsToOriginMain(t *testing.T) {
 	}
 }
 
-// PostMergeReset in single-branch mode resets to the same branch name (temp)
-// from origin/main, keeping the branch name stable.
-func TestPostMergeReset_SingleBranchKeepsSameName(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := newMemState()
-
-	mgr := &Manager{
-		ProjectDir:     project,
-		RalphDir:       ralphDir,
-		UseWorktree:    true,
-		BranchStrategy: BranchSingle,
-		State:          st,
-		Logger:         &testLog{},
-	}
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	// In single-branch mode, branch stays as /next
-	origBranch := mgr.WorktreeBranch
-	if !strings.HasSuffix(origBranch, "/next") {
-		t.Fatalf("expected /next branch, got %q", origBranch)
-	}
-
-	// Add a commit so we can verify reset moves HEAD
-	writeFile(t, mgr.WorkDir, "task-work.txt", "some work\n")
-	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "task commit")
-
-	headBefore := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
-	originMain := gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
-	if headBefore == originMain {
-		t.Fatal("HEAD should differ from origin/main before reset")
-	}
-
-	if err := mgr.PostMergeReset(); err != nil {
-		t.Fatalf("PostMergeReset: %v", err)
-	}
-
-	if mgr.WorktreeBranch != origBranch {
-		t.Errorf("single-branch should keep name %q, got %q", origBranch, mgr.WorktreeBranch)
-	}
-
-	headAfter := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
-	if headAfter != originMain {
-		t.Errorf("HEAD should match origin/main after reset, got %s vs %s", headAfter, originMain)
-	}
-}
-
 // Force-reset must clean both dirty tracked files and untracked files left
 // by the previous task, so the next task starts with a pristine worktree
 // matching origin/main exactly.
@@ -1263,12 +1150,11 @@ func TestPostMergeReset_CleansUntrackedAndDirtyFiles(t *testing.T) {
 	st := newMemState()
 
 	mgr := &Manager{
-		ProjectDir:     project,
-		RalphDir:       ralphDir,
-		UseWorktree:    true,
-		BranchStrategy: BranchStacked,
-		State:          st,
-		Logger:         &testLog{},
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       st,
+		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -1323,12 +1209,11 @@ func TestPostMergeUpdate_AtomicResetNoStagedChanges(t *testing.T) {
 	log := &testLog{}
 
 	mgr := &Manager{
-		ProjectDir:     project,
-		RalphDir:       ralphDir,
-		UseWorktree:    true,
-		BranchStrategy: BranchStacked,
-		State:          st,
-		Logger:         log,
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       st,
+		Logger:      log,
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)

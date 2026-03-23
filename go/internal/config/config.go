@@ -38,9 +38,8 @@ type Config struct {
 	StagnationThreshold        int
 	TestSaturationThreshold    int
 	PermissionDenialThreshold  int
-	BaseBranch                 string
-	BranchStrategy             string
-	Wait                       bool
+	BaseBranch string
+	Wait       bool
 	WaitInterval               time.Duration
 
 	cliSet map[string]bool
@@ -66,9 +65,8 @@ func Defaults() Config {
 		StagnationThreshold:        3,
 		TestSaturationThreshold:    3,
 		PermissionDenialThreshold:  3,
-		BaseBranch:                 envString("RALPH_BASE_BRANCH", "develop"),
-		BranchStrategy:             "single",
-		WaitInterval:               envDuration("RALPH_WAIT_INTERVAL", 5*time.Second),
+		BaseBranch:   envString("RALPH_BASE_BRANCH", "develop"),
+		WaitInterval: envDuration("RALPH_WAIT_INTERVAL", 5*time.Second),
 	}
 }
 
@@ -348,15 +346,10 @@ func Parse(args []string) (Config, error) {
 			i += 2
 
 		case "--branch-strategy":
-			v, err := requireArg(args, i)
-			if err != nil {
+			// Deprecated flag — silently consumed for evolve compatibility.
+			if _, err := requireArg(args, i); err != nil {
 				return cfg, err
 			}
-			if v != "single" && v != "stacked" {
-				return cfg, fmt.Errorf("invalid value for %s: %q (must be \"single\" or \"stacked\")", args[i], v)
-			}
-			cfg.BranchStrategy = v
-			cfg.cliSet["branch_strategy"] = true
 			i += 2
 
 		case "--idle-timeout":
@@ -495,9 +488,6 @@ func (c *Config) LoadConfigFile(path string) error {
 			}
 			continue
 		case "branch_strategy":
-			if value == "single" || value == "stacked" {
-				c.BranchStrategy = value
-			}
 			continue
 		case "no_refactor":
 			switch strings.ToLower(value) {
@@ -572,7 +562,6 @@ func InitConfig(path string) error {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "base_branch = develop\n")
-	fmt.Fprintf(&b, "branch_strategy = single\n")
 	fmt.Fprintf(&b, "no_refactor = false\n")
 	for _, k := range configKeys {
 		fmt.Fprintf(&b, "%s = %d\n", k.Key, k.Default)
