@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -433,6 +434,74 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	}
 }
 
+
+// Verifies that --wait auto-resets when a previous run completed, skipping
+// the interactive "Run fresh?" prompt so unattended operation isn't blocked.
+func TestInitRalphDir_WaitAutoResetsOnCompleted(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	logFile := filepath.Join(ralphDir, "loop.log")
+	stateFile := filepath.Join(ralphDir, "state.json")
+
+	st := state.NewStore(ralphDir)
+	st.Init(5, 0)
+	st.Write("status", "completed")
+
+	cfg := config.Config{ProjectDir: dir, Wait: true}
+	log := logging.New(nil)
+
+	resume, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
+
+	if exitCode >= 0 {
+		t.Fatalf("expected continue (exitCode < 0), got %d — --wait should auto-reset", exitCode)
+	}
+	if resume {
+		t.Error("expected fresh start after auto-reset, not resume")
+	}
+
+	// State should be wiped (fresh .ralph dir).
+	if fileExists(stateFile) {
+		t.Error("state.json should not exist after auto-reset")
+	}
+}
+
+// Verifies that without --wait, initRalphDir blocks on the interactive prompt
+// and exits 0 when context is cancelled (simulating no user input).
+func TestInitRalphDir_NoWaitCompletedBlocksOnPrompt(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	logFile := filepath.Join(ralphDir, "loop.log")
+	stateFile := filepath.Join(ralphDir, "state.json")
+
+	st := state.NewStore(ralphDir)
+	st.Init(5, 0)
+	st.Write("status", "completed")
+
+	cfg := config.Config{ProjectDir: dir, Wait: false}
+	log := logging.New(nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, exitCode := initRalphDir(ctx, cfg, ralphDir, logFile, stateFile, log)
+
+	if exitCode != 0 {
+		t.Errorf("expected exit code 0 (prompt cancelled), got %d", exitCode)
+	}
+}
+
+// Verifies that --wait auto-chooses fresh worktree on rebase conflict,
+// skipping the interactive recovery prompt.
+func TestPromptRebaseRecovery_WaitAutoChoosesFreshWorktree(t *testing.T) {
+	handler := promptRebaseRecovery(context.Background(), true)
+	result := handler(fmt.Errorf("test conflict"))
+
+	if result != git.RebaseFreshWorktree {
+		t.Errorf("expected RebaseFreshWorktree with --wait, got %v", result)
+	}
+}
 
 // Verifies printSessionSummary displays bead ID, title, agent summary, and PR
 // reference for each completed task, giving the operator a clear picture of

@@ -60,8 +60,14 @@ func hasUncommittedChanges(dir string) bool {
 }
 
 
-func promptRebaseRecovery(ctx context.Context) func(err error) git.RebaseRecovery {
+func promptRebaseRecovery(ctx context.Context, wait bool) func(err error) git.RebaseRecovery {
 	return func(err error) git.RebaseRecovery {
+		if wait {
+			fmt.Printf("\n%sRebase conflict:%s %v\n", logging.Red, logging.Reset, err)
+			fmt.Printf("--wait: auto-choosing fresh worktree\n")
+			return git.RebaseFreshWorktree
+		}
+
 		fmt.Printf("\n%sRebase conflict:%s %v\n\n", logging.Red, logging.Reset, err)
 		fmt.Printf("  %s1)%s Create fresh worktree from main (recommended — completed work is already merged)\n", logging.Bold, logging.Reset)
 		fmt.Printf("  %s2)%s Abort — exit so you can resolve conflicts manually\n", logging.Bold, logging.Reset)
