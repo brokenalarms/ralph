@@ -281,7 +281,9 @@ func (s *Session) bdPlanRender() string {
       fi
     fi
     closed=$(bd count --status closed 2>/dev/null || echo 0)
-    total=$(bd count 2>/dev/null || echo 0)
+    open=$(bd count --status open 2>/dev/null || echo 0)
+    inp=$(bd count --status in_progress 2>/dev/null || echo 0)
+    total=$(( open + inp + closed ))
     printf "${GREEN}%%s/%%s done${NC}\n" "$closed" "$total"
     if [[ -f '%s/.completed-tasks' ]]; then
       completed=$(grep -v '^$' '%s/.completed-tasks' | paste -sd ',' - | sed 's/,/, /g')

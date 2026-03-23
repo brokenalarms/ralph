@@ -17,7 +17,8 @@ type Backend interface {
 	// CountRemaining returns the number of unfinished tasks.
 	CountRemaining() (int, error)
 
-	// CountTotal returns the total number of tasks.
+	// CountTotal returns the number of actionable tasks (remaining + completed),
+	// excluding deferred or otherwise non-actionable items.
 	CountTotal() (int, error)
 
 	// GetNextTask returns the description of the next task to work on.

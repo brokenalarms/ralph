@@ -64,6 +64,9 @@ func TestWritePlanWatcher_BD(t *testing.T) {
 	if !strings.Contains(content, "bd count --status closed") {
 		t.Error("bd plan watcher missing progress counter")
 	}
+	if !strings.Contains(content, "bd count --status open") {
+		t.Error("bd plan watcher should compute total from status-filtered counts")
+	}
 }
 
 // Verifies that writePlanWatcher generates a checklist-style plan script
