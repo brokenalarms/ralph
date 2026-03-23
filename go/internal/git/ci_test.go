@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -219,7 +220,7 @@ func TestWaitForCI_PollsUntilPassed(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
 
-	checks, status, err := waitForCI(fetch, "1", "", 1*time.Millisecond, 5*time.Second, discardLog{})
+	checks, status, err := waitForCI(context.Background(), fetch, "1", "", 1*time.Millisecond, 5*time.Second, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -241,7 +242,7 @@ func TestWaitForCI_ReturnsFailedImmediately(t *testing.T) {
 		}, nil
 	}
 
-	_, status, err := waitForCI(fetch, "1", "", 1*time.Millisecond, 5*time.Second, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, "1", "", 1*time.Millisecond, 5*time.Second, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -255,12 +256,31 @@ func TestWaitForCI_TimesOut(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
 	}
 
-	_, status, err := waitForCI(fetch, "1", "", 1*time.Millisecond, 5*time.Millisecond, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, "1", "", 1*time.Millisecond, 5*time.Millisecond, discardLog{})
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
 	if status != CIPending {
 		t.Errorf("expected CIPending on timeout, got %v", status)
+	}
+}
+
+// waitForCI returns immediately when the context is cancelled, proving
+// that Ctrl-C interrupts CI polling instead of blocking until timeout.
+func TestWaitForCI_CancelledContext(t *testing.T) {
+	fetch := func(pr, repo string) ([]CICheckResult, error) {
+		return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, status, err := waitForCI(ctx, fetch, "1", "", 1*time.Second, 10*time.Second, discardLog{})
+	if err == nil {
+		t.Fatal("expected error from cancelled context")
+	}
+	if status != CIPending {
+		t.Errorf("expected CIPending, got %v", status)
 	}
 }
 

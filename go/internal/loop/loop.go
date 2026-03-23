@@ -66,11 +66,11 @@ type Loop struct {
 	attempts   *attempts.Tracker
 	logger     *logging.Logger
 	signals    claude.SignalPaths
-	mergeFunc          func() (bool, error)
-	pushPRFunc         func(taskDesc string) error
-	forcePushFunc      func() error
-	prePushRebaseFunc  func() error
-	verifyFunc     func(dir, headBefore string) (passed bool, reason string)
+	mergeFunc          func(ctx context.Context) (bool, error)
+	pushPRFunc         func(ctx context.Context, taskDesc string) error
+	forcePushFunc      func(ctx context.Context) error
+	prePushRebaseFunc  func(ctx context.Context) error
+	verifyFunc     func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
 	newRunnerFunc  func() claudeRunner
 	lastAction     analyzer.Action
 }
@@ -254,7 +254,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		// Run full test suite before handing off to agent. The agent only
 		// runs scoped tests during development; the orchestrator owns the
 		// full suite both here (pre-iteration) and after signal (gate).
-		testStatus := l.runPreIterationTests()
+		testStatus := l.runPreIterationTests(ctx)
 
 		if !l.waitForRate(ctx) {
 			break
@@ -307,7 +307,7 @@ func (l *Loop) Run(ctx context.Context) error {
 				}
 
 				l.logger.Log("Running post-signal test suite...")
-				testResult := verify.RunTests(l.cfg.VerifyDir)
+				testResult := verify.RunTests(ctx, l.cfg.VerifyDir)
 				passed := testResult.Passed
 				reason := testResult.Reason
 				if passed {
@@ -335,7 +335,7 @@ func (l *Loop) Run(ctx context.Context) error {
 					// Re-check tests after fix agent (skip commit check — fix agent
 					// may not have new commits if it determined work was correct)
 					l.syncEmbeddedPrompts()
-					testResult := verify.RunTests(l.cfg.VerifyDir)
+					testResult := verify.RunTests(ctx, l.cfg.VerifyDir)
 					if !testResult.Passed {
 						l.logger.Error("Tests still failing after verification agent: %s", testResult.Reason)
 						return false
@@ -348,7 +348,7 @@ func (l *Loop) Run(ctx context.Context) error {
 					beadDesc := l.getBeadDescription(taskID)
 
 					l.logger.Log("Running LLM verification...")
-					llmResult := verify.LLMVerifyPR(workDir, l.cfg.PromptsDir, taskID, headBefore, nextTask, beadDesc)
+					llmResult := verify.LLMVerifyPR(ctx, workDir, l.cfg.PromptsDir, taskID, headBefore, nextTask, beadDesc)
 
 					if !llmResult.Passed {
 						l.logger.Warn("LLM verification rejected: %s", llmResult.Details)
@@ -368,14 +368,14 @@ func (l *Loop) Run(ctx context.Context) error {
 
 						// Re-verify tests after fix (skip commit check)
 						l.syncEmbeddedPrompts()
-						testResult := verify.RunTests(l.cfg.VerifyDir)
+						testResult := verify.RunTests(ctx, l.cfg.VerifyDir)
 						if !testResult.Passed {
 							l.logger.Error("Tests failed after LLM fix agent: %s", testResult.Reason)
 							return false
 						}
 
 						// Re-run LLM check using PR diff
-						llmResult2 := verify.LLMVerifyPR(workDir, l.cfg.PromptsDir, taskID, headBefore, nextTask, beadDesc)
+						llmResult2 := verify.LLMVerifyPR(ctx, workDir, l.cfg.PromptsDir, taskID, headBefore, nextTask, beadDesc)
 						if !llmResult2.Passed {
 							l.logger.Warn("LLM still rejects after fix agent: %s — accepting anyway (tests passed)", llmResult2.Details)
 						} else {
@@ -466,7 +466,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			// If OnSignal was set, verification already passed in the runner.
 			// If not (legacy/test path), run verification here as fallback.
 			if result.OnSignalUsed == false {
-				if passed, reason := l.verifyCompletion(headBefore); !passed {
+				if passed, reason := l.verifyCompletion(ctx, headBefore); !passed {
 					l.logger.Warn("Verification failed: %s", reason)
 					l.attempts.Record(taskID, nextTask,
 						"Signal received but verification failed: "+reason,
@@ -507,7 +507,7 @@ func (l *Loop) Run(ctx context.Context) error {
 				}
 			}
 
-			if err := l.pushAndCreatePR(nextTask); err != nil {
+			if err := l.pushAndCreatePR(ctx, nextTask); err != nil {
 				l.logger.Warn("Push/PR: %v", err)
 			}
 
@@ -562,7 +562,7 @@ func (l *Loop) handleRebase(ctx context.Context) error {
 	switch l.cfg.OnRebaseConflict(err) {
 	case git.RebaseFreshWorktree:
 		l.logger.Log("Recreating worktree from main...")
-		if recreateErr := l.git.RecreateFromMain(); recreateErr != nil {
+		if recreateErr := l.git.RecreateFromMain(ctx); recreateErr != nil {
 			return fmt.Errorf("worktree recreation failed: %w", recreateErr)
 		}
 		return nil
@@ -601,7 +601,7 @@ func (l *Loop) handleMergeConflict(ctx context.Context, nextTask, workDir, rawLo
 	}
 
 	l.logger.Log("Force-pushing rebased branch...")
-	if err := l.forcePush(); err != nil {
+	if err := l.forcePush(ctx); err != nil {
 		l.logger.Warn("Force-push after rebase failed: %v", err)
 		return false, fmt.Errorf("force-push after conflict rebase failed: %w", err)
 	}
@@ -640,7 +640,7 @@ func (l *Loop) handleCIFailure(ctx context.Context, ciErr *git.CIFailureError, n
 			break
 		}
 
-		if pushErr := l.pushAndCreatePR(nextTask); pushErr != nil {
+		if pushErr := l.pushAndCreatePR(ctx, nextTask); pushErr != nil {
 			l.logger.Warn("Push after CI fix failed: %v", pushErr)
 			break
 		}
@@ -708,11 +708,11 @@ func (l *Loop) newRunner() claudeRunner {
 }
 
 // forcePush force-pushes the current branch to the remote.
-func (l *Loop) forcePush() error {
+func (l *Loop) forcePush(ctx context.Context) error {
 	if l.forcePushFunc != nil {
-		return l.forcePushFunc()
+		return l.forcePushFunc(ctx)
 	}
-	return l.git.ForcePush()
+	return l.git.ForcePush(ctx)
 }
 
 // getCIFailureLog retrieves the failed CI run's log output for the given PR.
@@ -804,9 +804,9 @@ func (l *Loop) isNewTask(taskID, taskDesc string) bool {
 
 // verifyCompletion runs post-signal checks: commit presence and test suite.
 // Returns (true, "") on success or (false, reason) on failure.
-func (l *Loop) verifyCompletion(headBefore string) (bool, string) {
+func (l *Loop) verifyCompletion(ctx context.Context, headBefore string) (bool, string) {
 	if l.verifyFunc != nil {
-		return l.verifyFunc(l.git.WorkDir, headBefore)
+		return l.verifyFunc(ctx, l.git.WorkDir, headBefore)
 	}
 
 	if l.cfg.VerifyDir == "" {
@@ -818,7 +818,7 @@ func (l *Loop) verifyCompletion(headBefore string) (bool, string) {
 		return false, commitResult.Reason
 	}
 
-	testResult := verify.RunTests(l.cfg.VerifyDir)
+	testResult := verify.RunTests(ctx, l.cfg.VerifyDir)
 	now := time.Now().Format(time.RFC3339)
 	if !testResult.Passed {
 		l.state.Write("last_test_result", "fail")
@@ -838,23 +838,23 @@ func (l *Loop) verifyCompletion(headBefore string) (bool, string) {
 
 func (l *Loop) prePushRebase(ctx context.Context) error {
 	if l.prePushRebaseFunc != nil {
-		return l.prePushRebaseFunc()
+		return l.prePushRebaseFunc(ctx)
 	}
 	return l.handleRebase(ctx)
 }
 
-func (l *Loop) pushAndCreatePR(taskDesc string) error {
+func (l *Loop) pushAndCreatePR(ctx context.Context, taskDesc string) error {
 	if l.pushPRFunc != nil {
-		return l.pushPRFunc(taskDesc)
+		return l.pushPRFunc(ctx, taskDesc)
 	}
-	return l.git.PushAndCreatePR(taskDesc)
+	return l.git.PushAndCreatePR(ctx, taskDesc)
 }
 
-func (l *Loop) autoMerge(ctx ...context.Context) (bool, error) {
+func (l *Loop) autoMerge(ctx context.Context) (bool, error) {
 	if l.mergeFunc != nil {
-		return l.mergeFunc()
+		return l.mergeFunc(ctx)
 	}
-	return l.git.AutoMergeCurrentBranch(ctx...)
+	return l.git.AutoMergeCurrentBranch(ctx)
 }
 
 func (l *Loop) syncEmbeddedPrompts() {
@@ -1145,13 +1145,13 @@ func (l *Loop) recordCompletedTask(taskID, taskTitle string) {
 // runPreIterationTests runs the full test suite before handing off to the
 // agent. Stores results in state.json so they persist across restarts.
 // Returns a human-readable status string for the agent prompt.
-func (l *Loop) runPreIterationTests() string {
+func (l *Loop) runPreIterationTests(ctx context.Context) string {
 	if l.cfg.VerifyDir == "" {
 		return ""
 	}
 
 	l.logger.Log("Running pre-iteration test suite...")
-	result := verify.RunTests(l.cfg.VerifyDir)
+	result := verify.RunTests(ctx, l.cfg.VerifyDir)
 	now := time.Now().Format(time.RFC3339)
 
 	if result.Passed {

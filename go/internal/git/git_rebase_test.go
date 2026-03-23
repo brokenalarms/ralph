@@ -44,7 +44,7 @@ func setupRebaseMgr(t *testing.T, project, bare string) *Manager {
 		State:       state,
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -393,7 +393,7 @@ func TestTagTaskStart_WithTaskID(t *testing.T) {
 		State:       newMemState(),
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -416,7 +416,7 @@ func TestTagTaskEnd_WithTaskID(t *testing.T) {
 		State:       newMemState(),
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -439,7 +439,7 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 		State:       newMemState(),
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -473,7 +473,7 @@ func TestTagTaskStart_SkipsNextBranch(t *testing.T) {
 		State:       newMemState(),
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -498,7 +498,7 @@ func TestTagStartEnd_DifferentCommits(t *testing.T) {
 		State:       newMemState(),
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -541,7 +541,7 @@ func TestRecreateFromMain_CreatesCleanWorktree(t *testing.T) {
 	run(t, "git", "-C", project, "commit", "-m", "squash: first task")
 	pushToOrigin(t, project)
 
-	if err := mgr.RecreateFromMain(); err != nil {
+	if err := mgr.RecreateFromMain(context.Background()); err != nil {
 		t.Fatalf("RecreateFromMain failed: %v", err)
 	}
 
@@ -587,7 +587,7 @@ func TestRecreateFromMain_ErrorsWithoutWorktree(t *testing.T) {
 		WorkDir:    "/some/dir",
 		Logger:     &testLog{},
 	}
-	err := mgr.RecreateFromMain()
+	err := mgr.RecreateFromMain(context.Background())
 	if err == nil {
 		t.Fatal("expected error when no worktree is active")
 	}
@@ -627,7 +627,7 @@ func TestRecreateFromMain_PrunesExternalWorktreeHoldingBranch(t *testing.T) {
 	run(t, "git", "-C", project, "commit", "-m", "squash: some task")
 	pushToOrigin(t, project)
 
-	if err := mgr.RecreateFromMain(); err != nil {
+	if err := mgr.RecreateFromMain(context.Background()); err != nil {
 		t.Fatalf("RecreateFromMain should handle external worktrees, got: %v", err)
 	}
 
@@ -706,7 +706,7 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoWorktreeBranch(t *testing.T) {
 		ProjectDir: "/some/dir",
 		Logger:     &testLog{},
 	}
-	merged, err := mgr.AutoMergeCurrentBranch()
+	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
 	if err != nil {
 		t.Errorf("expected nil error, got %v", err)
 	}
@@ -724,7 +724,7 @@ func TestAutoMergeCurrentBranch_SkipsWhenWorkDirIsProjectDir(t *testing.T) {
 		ProjectDir:     "/some/dir",
 		Logger:         &testLog{},
 	}
-	merged, err := mgr.AutoMergeCurrentBranch()
+	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
 	if err != nil {
 		t.Errorf("expected nil error, got %v", err)
 	}
@@ -751,13 +751,13 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 		State:       state,
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
 	mgr.RenameBranchForTask("unpushed task", "")
 
-	merged, err := mgr.AutoMergeCurrentBranch()
+	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
 	if err != nil {
 		t.Errorf("expected nil error (skip), got %v", err)
 	}

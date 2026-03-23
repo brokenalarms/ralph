@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,14 +19,22 @@ var ErrNeedsFallback = errors.New("bd unavailable, fall back to checklist")
 // CommandRunner executes a bd subcommand in a directory and returns
 // combined stdout. Stderr is captured separately so callers can
 // inspect it on failure.
-type CommandRunner func(dir string, args ...string) (stdout string, err error)
+type CommandRunner func(ctx context.Context, dir string, args ...string) (stdout string, err error)
 
 // BD implements Backend by shelling out to the bd CLI.
 type BD struct {
+	Ctx        context.Context
 	ProjectDir string
 	PromptsDir string
 	RunBD      CommandRunner // injectable for testing; nil uses defaultRunBD
 	bdPath     string        // resolved absolute path to the bd binary
+}
+
+func (b *BD) ctx() context.Context {
+	if b.Ctx != nil {
+		return b.Ctx
+	}
+	return context.Background()
 }
 
 func (b *BD) runner() CommandRunner {
@@ -61,8 +70,8 @@ func (b *BD) resolveBD() error {
 	return fmt.Errorf("bd binary not found in PATH or ~/.local/bin: %w", err)
 }
 
-func (b *BD) defaultRunBD(dir string, args ...string) (string, error) {
-	cmd := exec.Command(b.bdPath, args...)
+func (b *BD) defaultRunBD(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, b.bdPath, args...)
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	return strings.TrimSpace(string(out)), err
@@ -79,12 +88,13 @@ func (b *BD) Init() error {
 		}
 	}
 
+	ctx := b.ctx()
 	run := b.runner()
 
 	// If .beads doesn't exist, run bd init.
 	beadsDir := filepath.Join(b.ProjectDir, ".beads")
 	if _, err := os.Stat(beadsDir); os.IsNotExist(err) {
-		if _, initErr := run(b.ProjectDir, "init"); initErr != nil {
+		if _, initErr := run(ctx, b.ProjectDir, "init"); initErr != nil {
 			return fmt.Errorf("bd init failed: %w: %w", initErr, ErrNeedsFallback)
 		}
 	}
@@ -92,7 +102,7 @@ func (b *BD) Init() error {
 	// Health check: bd count is lightweight and exercises the DB connection.
 	if !b.isHealthy() {
 		// Retry init to reconnect a stale server.
-		if _, initErr := run(b.ProjectDir, "init"); initErr != nil {
+		if _, initErr := run(ctx, b.ProjectDir, "init"); initErr != nil {
 			return fmt.Errorf("bd init retry failed: %w: %w", initErr, ErrNeedsFallback)
 		}
 		if !b.isHealthy() {
@@ -110,7 +120,7 @@ func (b *BD) Init() error {
 }
 
 func (b *BD) isHealthy() bool {
-	_, err := b.runner()(b.ProjectDir, "count")
+	_, err := b.runner()(b.ctx(), b.ProjectDir, "count")
 	return err == nil
 }
 
@@ -187,7 +197,7 @@ func (b *BD) CountRemaining() (int, error) {
 }
 
 func (b *BD) CountTotal() (int, error) {
-	out, err := b.runner()(b.ProjectDir, "count")
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "count")
 	if err != nil {
 		return 0, nil
 	}
@@ -199,7 +209,7 @@ func (b *BD) CountTotal() (int, error) {
 }
 
 func (b *BD) countByStatus(status string) (int, error) {
-	out, err := b.runner()(b.ProjectDir, "count", "--status", status)
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "count", "--status", status)
 	if err != nil {
 		return 0, nil
 	}
@@ -221,17 +231,18 @@ type bdIssue struct {
 // than the in-progress task, the in-progress task is reopened and the ready
 // task is returned instead.
 func (b *BD) getNextIssue() (bdIssue, error) {
+	ctx := b.ctx()
 	run := b.runner()
 
 	var inProgress, ready bdIssue
 	var hasIP, hasReady bool
 
-	out, err := run(b.ProjectDir, "list", "--status", "in_progress", "--flat", "--json", "--limit", "1")
+	out, err := run(ctx, b.ProjectDir, "list", "--status", "in_progress", "--flat", "--json", "--limit", "1")
 	if err == nil {
 		inProgress, hasIP = parseFirstIssue(out)
 	}
 
-	out, err = run(b.ProjectDir, "ready", "--limit", "1", "--json")
+	out, err = run(ctx, b.ProjectDir, "ready", "--limit", "1", "--json")
 	if err == nil {
 		ready, hasReady = parseFirstIssue(out)
 	}
@@ -241,7 +252,7 @@ func (b *BD) getNextIssue() (bdIssue, error) {
 		rdPri := issuePriority(ready)
 		if rdPri < ipPri {
 			// Higher-priority ready task preempts; reopen the in-progress task.
-			_, _ = run(b.ProjectDir, "update", inProgress.ID, "--status=open")
+			_, _ = run(ctx, b.ProjectDir, "update", inProgress.ID, "--status=open")
 			return ready, nil
 		}
 		return inProgress, nil
@@ -321,7 +332,7 @@ func (b *BD) SetState(id, dimension, value, reason string) error {
 	if reason != "" {
 		args = append(args, "--reason", reason)
 	}
-	_, err := b.runner()(b.ProjectDir, args...)
+	_, err := b.runner()(b.ctx(), b.ProjectDir, args...)
 	return err
 }
 
@@ -329,7 +340,7 @@ func (b *BD) GetState(id, dimension string) (string, error) {
 	if id == "" {
 		return "", nil
 	}
-	out, err := b.runner()(b.ProjectDir, "state", id, dimension)
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "state", id, dimension)
 	if err != nil {
 		return "", err
 	}
@@ -351,7 +362,7 @@ func (b *BD) CloseTask(id string, reason string) error {
 	if reason == "" {
 		reason = "completed by ralph"
 	}
-	_, err := run(b.ProjectDir, "close", id, "--reason", reason)
+	_, err := run(b.ctx(), b.ProjectDir, "close", id, "--reason", reason)
 	return err
 }
 
@@ -359,7 +370,7 @@ func (b *BD) ReopenTask(id string) error {
 	if id == "" {
 		return nil
 	}
-	_, err := b.runner()(b.ProjectDir, "update", id, "--status=open")
+	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status=open")
 	return err
 }
 
@@ -370,7 +381,7 @@ func (b *BD) SkipTask(id string, reason string) error {
 	if reason == "" {
 		reason = "skipped by ralph"
 	}
-	_, err := b.runner()(b.ProjectDir, "close", id, "--reason", "blocked: "+reason)
+	_, err := b.runner()(b.ctx(), b.ProjectDir, "close", id, "--reason", "blocked: "+reason)
 	return err
 }
 
@@ -392,7 +403,7 @@ func (b *BD) GetDescription(id string) (string, error) {
 		return "", nil
 	}
 	run := b.runner()
-	out, err := run(b.ProjectDir, "show", id, "--json")
+	out, err := run(b.ctx(), b.ProjectDir, "show", id, "--json")
 	if err != nil {
 		return "", err
 	}

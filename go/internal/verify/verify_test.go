@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,9 +83,24 @@ func TestRunTests_PassingTests(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\ttrue\n"), 0o644)
 
-	result := RunTests(dir)
+	result := RunTests(context.Background(), dir)
 	if !result.Passed {
 		t.Errorf("expected tests to pass, got: %s", result.Reason)
+	}
+}
+
+// RunTests fails when context is cancelled, proving that Ctrl-C
+// stops a long-running test suite instead of blocking indefinitely.
+func TestRunTests_CancelledContext(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\tsleep 60\n"), 0o644)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := RunTests(ctx, dir)
+	if result.Passed {
+		t.Error("expected tests to fail with cancelled context")
 	}
 }
 
@@ -94,7 +110,7 @@ func TestRunTests_FailingTests(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\tfalse\n"), 0o644)
 
-	result := RunTests(dir)
+	result := RunTests(context.Background(), dir)
 	if result.Passed {
 		t.Error("expected tests to fail")
 	}
@@ -108,7 +124,7 @@ func TestRunTests_FailingTests(t *testing.T) {
 func TestRunTests_NoTestRunner(t *testing.T) {
 	dir := t.TempDir()
 
-	result := RunTests(dir)
+	result := RunTests(context.Background(), dir)
 	if !result.Passed {
 		t.Errorf("expected pass when no test runner detected, got: %s", result.Reason)
 	}
@@ -229,7 +245,7 @@ func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
 	dir := setupGitRepo(t)
 	head := gitHeadRev(dir)
 
-	result := LLMVerifyPR(dir, t.TempDir(), "nonexistent-task", head, "some task", "some description")
+	result := LLMVerifyPR(context.Background(), dir, t.TempDir(), "nonexistent-task", head, "some task", "some description")
 	if !result.Passed {
 		t.Errorf("expected pass when agent confirms complete with no new work needed, got: %s", result.Reason)
 	}
