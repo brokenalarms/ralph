@@ -569,7 +569,7 @@ func (l *Loop) handleRebase(ctx context.Context) error {
 func (l *Loop) handleAutoMergeError(ctx context.Context, err error, nextTask, workDir, rawLogPath string) (bool, error) {
 	var conflictErr *git.MergeConflictError
 	if errors.As(err, &conflictErr) {
-		return l.handleMergeConflict(ctx, nextTask)
+		return l.handleMergeConflict(ctx, nextTask, workDir, rawLogPath)
 	}
 
 	var ciErr *git.CIFailureError
@@ -582,7 +582,7 @@ func (l *Loop) handleAutoMergeError(ctx context.Context, err error, nextTask, wo
 
 // handleMergeConflict rebases the working branch onto the default branch and
 // force-pushes to resolve PR merge conflicts, then retries the merge.
-func (l *Loop) handleMergeConflict(ctx context.Context, nextTask string) (bool, error) {
+func (l *Loop) handleMergeConflict(ctx context.Context, nextTask, workDir, rawLogPath string) (bool, error) {
 	l.logger.Log("Rebasing onto default branch to resolve merge conflicts...")
 
 	if err := l.git.RebaseOntoDefaultBranch(ctx); err != nil {
@@ -597,7 +597,14 @@ func (l *Loop) handleMergeConflict(ctx context.Context, nextTask string) (bool, 
 	}
 
 	l.logger.Log("Retrying merge after conflict resolution...")
-	return l.autoMerge()
+	merged, err := l.autoMerge()
+	if err != nil {
+		var ciErr *git.CIFailureError
+		if errors.As(err, &ciErr) {
+			return l.handleCIFailure(ctx, ciErr, nextTask, workDir, rawLogPath)
+		}
+	}
+	return merged, err
 }
 
 // handleCIFailure spawns fix agents to address CI failures and retries
