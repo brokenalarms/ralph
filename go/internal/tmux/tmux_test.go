@@ -223,9 +223,8 @@ func TestSanitizeSessionName(t *testing.T) {
 	}
 }
 
-// Verifies that the bd plan watcher reads .completed-tasks and renders
-// each completed task on its own line with dim styling and a checkmark,
-// so the user can see what was finished in the current run.
+// Verifies that completed tasks are rendered as a comma-separated inline
+// list in dim dark blue, so the user sees a compact summary of finished work.
 func TestWritePlanWatcher_BD_ShowsCompletedTasks(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
@@ -243,8 +242,11 @@ func TestWritePlanWatcher_BD_ShowsCompletedTasks(t *testing.T) {
 	if !strings.Contains(content, ".completed-tasks") {
 		t.Error("bd plan watcher should reference .completed-tasks file")
 	}
-	if !strings.Contains(content, "DIM") {
-		t.Error("bd plan watcher should use dim styling for completed tasks")
+	if !strings.Contains(content, "DIM_BLUE") {
+		t.Error("bd plan watcher should use dim dark blue styling for completed tasks")
+	}
+	if strings.Contains(content, "while IFS= read") {
+		t.Error("completed tasks should be comma-separated inline, not one-per-line")
 	}
 }
 
@@ -288,9 +290,9 @@ func TestDeadPaneExitHint(t *testing.T) {
 	}
 }
 
-// Verifies that the bd plan watcher renders a visual progress bar showing
-// the ratio of completed to total tasks, so progress is visible at a glance.
-func TestWritePlanWatcher_BD_ProgressBar(t *testing.T) {
+// Verifies that the bd plan watcher renders a simple "X/Y done" counter
+// in green, so progress is visible at a glance without visual noise.
+func TestWritePlanWatcher_BD_DoneCounter(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
 		RalphDir:    dir,
@@ -304,11 +306,11 @@ func TestWritePlanWatcher_BD_ProgressBar(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
 	content := string(data)
 
-	if !strings.Contains(content, "bar_w=20") {
-		t.Error("bd plan watcher should have a 20-character progress bar width")
+	if !strings.Contains(content, "done${NC}") {
+		t.Error("bd plan watcher should show done counter with green color reset")
 	}
-	if !strings.Contains(content, "█") || !strings.Contains(content, "░") {
-		t.Error("bd plan watcher should use filled/empty block characters for progress bar")
+	if strings.Contains(content, "bar_w=") {
+		t.Error("bd plan watcher should use simple counter, not progress bar")
 	}
 }
 
