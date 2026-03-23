@@ -734,6 +734,8 @@ func (l *Loop) runFixAgent(ctx context.Context, description, prompt, workDir, ra
 
 	if !result.SignalDetected {
 		l.logger.Warn("Fix agent exited without signal (%s)", description)
+	} else if result.Summary != "" {
+		l.logger.Log("Fix agent (%s): %s", description, result.Summary)
 	}
 
 	return result

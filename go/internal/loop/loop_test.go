@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -3440,6 +3441,42 @@ func TestLoop_runFixAgent(t *testing.T) {
 	}
 	if capturedCfg.IdleTimeout != 30*time.Second {
 		t.Errorf("expected IdleTimeout 30s, got %v", capturedCfg.IdleTimeout)
+	}
+}
+
+// Verifies that a fix agent's summary is logged when the signal includes
+// a descriptive message (not just "done").
+func TestLoop_runFixAgent_logsSummary(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	var logBuf bytes.Buffer
+	fixRunner := &stubRunner{result: claude.Result{
+		SignalDetected: true,
+		Summary:        "added missing nil check in parseConfig",
+	}}
+
+	signals := claude.DefaultSignalPaths(ralphDir)
+	l := &Loop{
+		cfg: Config{
+			Dirs:        workctx.WorkContext{RalphDir: ralphDir},
+			IdleTimeout: 30 * time.Second,
+		},
+		state:   st,
+		runner:  &stubRunner{},
+		logger:  logging.NewWithWriter(&logBuf),
+		signals: signals,
+		newRunnerFunc: func() claudeRunner {
+			return fixRunner
+		},
+	}
+
+	ctx := context.Background()
+	l.runFixAgent(ctx, "test failures", "fix the tests", "/work", "/logs/raw.log")
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Fix agent (test failures): added missing nil check in parseConfig") {
+		t.Errorf("expected fix agent summary in log output, got: %s", output)
 	}
 }
 
