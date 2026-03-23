@@ -158,9 +158,6 @@ func printUsage() {
   -d, --dir <path>       Project directory (default: cwd)
   -n, --max <N>          Max iterations (default: 50, env RALPH_MAX_ITERATIONS)
   -p, --prompt <text>    Prompt override (otherwise Claude reads repo context)
-  --plan-file <path>     Pre-made plan in Ralph format (markdown checkboxes). Skips planning phase.
-  --plan                 Force (re-)entry into planning mode, then exit
-  --skip-planning        Skip interactive planning, go straight to autonomous execution
   -q, --quiet            Suppress Claude output streaming (log only)
   --no-worktree          Run directly in project dir (no git worktree isolation)
   --calls-per-hour <N>   Max Claude calls per hour (default: 80)
@@ -178,7 +175,6 @@ func printUsage() {
 %sEXAMPLES:%s
   ralph --dir ~/myproject -n 20
   ralph -p "Fix all failing tests"
-  ralph --dir . --plan-file plan.md
 
 %sSUBCOMMANDS:%s
   ralph commander [directory]  Full 4-pane tmux layout (loop + task manager + stream + plan)
@@ -188,9 +184,9 @@ func printUsage() {
   ralph filter-stream <rawlog> Stream filter for tmux panes (colored, timestamped)
 
 %sHOW IT WORKS:%s
-  1. Planning: Claude reads the repo and creates .ralph/plan.md with atomic tasks
+  1. Tasks: Create tasks with ralph task (or bd directly)
   2. Execution: Each task runs in a fresh Claude context (~200k tokens)
-  3. Completion: Claude echoes a signal token when each task is done
+  3. Completion: Claude signals when each task is done
   4. Repeat: Loop continues until all tasks complete or iteration cap is hit
 `,
 		logging.Bold, config.Version, logging.Reset,

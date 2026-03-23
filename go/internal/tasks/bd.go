@@ -312,18 +312,6 @@ func (b *BD) HasTasks() (bool, error) {
 	return total > 0, nil
 }
 
-func (b *BD) NeedsPlanning() (bool, error) {
-	has, err := b.HasTasks()
-	if err != nil {
-		return false, err
-	}
-	return !has, nil
-}
-
-func (b *BD) PlanningSucceeded() (bool, error) {
-	return b.HasTasks()
-}
-
 func (b *BD) SetState(id, dimension, value, reason string) error {
 	if id == "" {
 		return nil
@@ -392,10 +380,6 @@ func (b *BD) ExecutionInstructions() (string, error) {
 		return "", fmt.Errorf("reading execution instructions: %w", err)
 	}
 	return string(data), nil
-}
-
-func (b *BD) PlanningInstructions() string {
-	return "Run `bd prime` to learn the workflow, then create tasks directly in bd with dependencies. Do NOT write a plan.md file — tasks live exclusively in bd."
 }
 
 func (b *BD) GetDescription(id string) (string, error) {

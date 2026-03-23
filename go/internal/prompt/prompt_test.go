@@ -275,27 +275,6 @@ func TestBuildRefactorPrompt_IncludesQualityFindings(t *testing.T) {
 	}
 }
 
-// Proves: planning prompt includes debt assessment section.
-func TestPlanningPrompt_IncludesDebtAssessment(t *testing.T) {
-	planningPrompt, err := os.ReadFile(filepath.Join(promptsDir(t), "planning.md"))
-	if err != nil {
-		t.Fatalf("reading planning.md: %v", err)
-	}
-	content := string(planningPrompt)
-	if !strings.Contains(content, "Debt assessment") {
-		t.Error("planning prompt missing 'Debt assessment'")
-	}
-	if !strings.Contains(content, "Dead code") {
-		t.Error("planning prompt missing 'Dead code'")
-	}
-	if !strings.Contains(content, "500 lines") {
-		t.Error("planning prompt missing '500 lines'")
-	}
-	if !strings.Contains(content, "don't add refactor tasks just because you can") {
-		t.Error("planning prompt missing refactor restraint guidance")
-	}
-}
-
 // Proves: shared prompt includes Boy Scout Rule as a reminder.
 func TestSharedPrompt_IncludesBoyScoutRule(t *testing.T) {
 	shared, err := os.ReadFile(filepath.Join(promptsDir(t), "shared.md"))

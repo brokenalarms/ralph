@@ -17,7 +17,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/loop"
-	"github.com/brokenalarms/ralph/internal/planning"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/tmux"
@@ -112,15 +111,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	stateFile := filepath.Join(ralphDir, "state.json")
 	logFile := filepath.Join(ralphDir, "loop.log")
 
-	// Validate --plan-file early: file must exist and contain checkboxes.
-	if cfg.PlanFile != "" {
-		if err := validatePlanFile(cfg.PlanFile); err != nil {
-			log.Error("%v", err)
-			return 1
-		}
-		planFile = cfg.PlanFile
-	}
-
 	// Validate base branch before initializing state — a failed validation
 	// must not leave state that causes a false resume on retry.
 	if err := git.ValidateRemoteBranch(ctx, cfg.ProjectDir, cfg.BaseBranch); err != nil {
@@ -197,31 +187,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	log.Log("Max iterations: %d", cfg.MaxIterations)
 
 	st.Write("started_at", time.Now().UTC().Format("2006-01-02T15:04:05Z"))
-
-	// Planning phase.
-	planDeps := planning.Deps{
-		Ctx:          ctx,
-		Backend:      backend,
-		StateStore:   st,
-		Logger:       log,
-		Dirs:         dirs,
-		PlanFile:     planFile,
-		Prompt:       cfg.Prompt,
-		SkipPlanning: cfg.SkipPlanning,
-		ForcePlan:    cfg.PlanOnly,
-	}
-
-	if err := planning.Run(planDeps); err != nil {
-		log.Error("Planning failed: %v", err)
-		cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, nil, interrupted, log)
-		return 1
-	}
-
-	if cfg.PlanOnly {
-		log.Log("Plan-only mode, exiting")
-		cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, nil, interrupted, log)
-		return 0
-	}
 
 	// Execution phase.
 	execLoop := loop.New(loop.Config{

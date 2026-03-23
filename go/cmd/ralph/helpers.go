@@ -59,24 +59,6 @@ func hasUncommittedChanges(dir string) bool {
 	return cmd1.Run() != nil || cmd2.Run() != nil
 }
 
-func validatePlanFile(path string) error {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return fmt.Errorf("plan file not found: %s", path)
-	} else if err != nil {
-		return fmt.Errorf("plan file error: %w", err)
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("reading plan file: %w", err)
-	}
-
-	if !strings.Contains(string(data), "- [") {
-		return fmt.Errorf("plan file is not in Ralph format (must contain markdown checkboxes): %s", path)
-	}
-
-	return nil
-}
 
 func promptRebaseRecovery(ctx context.Context) func(err error) git.RebaseRecovery {
 	return func(err error) git.RebaseRecovery {

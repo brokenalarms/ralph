@@ -275,24 +275,6 @@ func TestBD_HasTasks(t *testing.T) {
 	}
 }
 
-// Proves: NeedsPlanning is false when tasks exist.
-func TestBD_NeedsPlanning_WithTasks(t *testing.T) {
-	b := setupBD(t, defaultMock())
-	got, _ := b.NeedsPlanning()
-	if got {
-		t.Error("expected NeedsPlanning=false when tasks exist")
-	}
-}
-
-// Proves: PlanningSucceeded is true when tasks exist.
-func TestBD_PlanningSucceeded_WithTasks(t *testing.T) {
-	b := setupBD(t, defaultMock())
-	got, _ := b.PlanningSucceeded()
-	if !got {
-		t.Error("expected PlanningSucceeded=true when tasks exist")
-	}
-}
-
 // Proves: CloseTask calls bd close for verified tasks.
 func TestBD_CloseTask(t *testing.T) {
 	closed := false
@@ -350,18 +332,6 @@ func TestBD_Label(t *testing.T) {
 	b := &BD{}
 	if b.Label() != "beads" {
 		t.Errorf("Label = %q, want %q", b.Label(), "beads")
-	}
-}
-
-// Proves: PlanningInstructions directs to bd for task creation.
-func TestBD_PlanningInstructions(t *testing.T) {
-	b := &BD{}
-	got := b.PlanningInstructions()
-	if !strings.Contains(got, "bd") {
-		t.Error("expected planning instructions to mention bd")
-	}
-	if !strings.Contains(got, "create tasks directly in bd") {
-		t.Error("expected planning instructions to direct task creation to bd")
 	}
 }
 

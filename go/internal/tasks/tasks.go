@@ -36,12 +36,6 @@ type Backend interface {
 	// HasTasks reports whether any tasks exist at all.
 	HasTasks() (bool, error)
 
-	// NeedsPlanning reports whether the planning phase should run.
-	NeedsPlanning() (bool, error)
-
-	// PlanningSucceeded checks that planning produced valid tasks.
-	PlanningSucceeded() (bool, error)
-
 	// CloseTask marks a task as complete. The id parameter is backend-specific
 	// (empty for checklist, a bd issue ID for the bd backend).
 	CloseTask(id string, reason string) error
@@ -58,9 +52,6 @@ type Backend interface {
 
 	// ExecutionInstructions returns the prompt text for the execution phase.
 	ExecutionInstructions() (string, error)
-
-	// PlanningInstructions returns the prompt text for the planning phase.
-	PlanningInstructions() string
 
 	// SetState sets an operational state dimension on a task (e.g. phase=implementing).
 	// Backends without state support (checklist) treat this as a no-op.
