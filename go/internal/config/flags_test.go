@@ -20,6 +20,22 @@ func TestFlagUsageContainsAllFlags(t *testing.T) {
 	}
 }
 
+// Verifies that help text includes the default value from each FlagDef,
+// catching stale hardcoded defaults (e.g. --wait-interval showing "30s"
+// when the registry says "5s").
+func TestFlagUsageContainsDefaults(t *testing.T) {
+	usage := FlagUsage()
+	for _, f := range Flags {
+		if f.Default == "" || f.Long == "" {
+			continue
+		}
+		expected := "default: " + f.Default
+		if !strings.Contains(usage, expected) {
+			t.Errorf("FlagUsage() for %s missing %q", f.Long, expected)
+		}
+	}
+}
+
 // Verifies that help text includes env var names for flags that define them,
 // preventing env var documentation from drifting out of sync.
 func TestFlagUsageContainsEnvVars(t *testing.T) {
