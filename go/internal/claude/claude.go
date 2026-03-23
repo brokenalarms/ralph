@@ -23,6 +23,13 @@ type Log interface {
 	Error(format string, args ...any)
 }
 
+// StreamingLogger is implemented by loggers that support streaming mode.
+// When streaming is enabled, the logger suppresses stdout writes so the
+// tail goroutine is the sole stdout writer — preventing duplicate lines.
+type StreamingLogger interface {
+	SetStreaming(bool)
+}
+
 // SignalPaths holds the file paths used for inter-process signaling between
 // the ralph loop and the Claude process.
 type SignalPaths struct {
@@ -214,9 +221,14 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	filterDone := r.startStreamFilter(cfg, filterStop)
 
 	// Start optional terminal tail (pure Go — no external process to orphan).
+	// In streaming mode the logger suppresses its own stdout writes so the
+	// tail goroutine is the sole stdout writer, preventing duplicate lines.
 	tailStop := make(chan struct{})
 	var tailDone <-chan struct{}
 	if !cfg.Quiet && cfg.LogFile != "" {
+		if sl, ok := r.Logger.(StreamingLogger); ok {
+			sl.SetStreaming(true)
+		}
 		tailDone = startTailGoroutine(cfg.LogFile, tailStop)
 	}
 
@@ -235,6 +247,11 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 
 	// Stop streaming goroutines and drain remaining output.
 	r.StopStreaming()
+
+	// Restore direct stdout writes now that the tail goroutine is gone.
+	if sl, ok := r.Logger.(StreamingLogger); ok {
+		sl.SetStreaming(false)
+	}
 
 	// Final signal check — Claude may have written a signal just before exiting.
 	if !result.SignalDetected {
@@ -538,9 +555,11 @@ func formatToolUse(c streamContent) string {
 }
 
 // startTailGoroutine follows new data appended to path and writes it to
-// stdout, similar to tail -f -n 0. Runs entirely in-process so there are no
-// child processes to orphan. Returns a channel that closes when the goroutine
-// exits.
+// stdout, similar to tail -f -n 0. During a Run() the logger suppresses
+// its own stdout writes, so this goroutine is the sole stdout writer —
+// it forwards all lines without filtering.
+// Runs entirely in-process so there are no child processes to orphan.
+// Returns a channel that closes when the goroutine exits.
 func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -557,6 +576,7 @@ func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
 		}
 
 		buf := make([]byte, 64*1024)
+
 		for {
 			n, _ := f.Read(buf)
 			if n > 0 {

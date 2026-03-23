@@ -24,6 +24,7 @@ type Logger struct {
 	logFile io.Writer
 	// TaskLabel returns the current task label (e.g. "beads" or "checklist").
 	TaskLabel func() string
+	streaming bool
 }
 
 // New creates a Logger that writes to stdout and the given log file writer.
@@ -43,9 +44,18 @@ func ts() string {
 	return time.Now().Format("15:04:05")
 }
 
+// SetStreaming enables or disables streaming mode. In streaming mode, the
+// logger writes only to the log file — stdout is handled by a single tail
+// goroutine to prevent duplicate output.
+func (l *Logger) SetStreaming(on bool) {
+	l.streaming = on
+}
+
 func (l *Logger) emit(color, prefix, msg string) {
 	line := fmt.Sprintf("%s %s[%s]%s %s\n", ts(), color, prefix, Reset, msg)
-	fmt.Fprint(l.out, line)
+	if !l.streaming {
+		fmt.Fprint(l.out, line)
+	}
 	fmt.Fprint(l.logFile, line)
 }
 
@@ -78,7 +88,9 @@ func (l *Logger) Phase(format string, args ...any) {
 func (l *Logger) PhaseColor(color string, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	line := fmt.Sprintf("%s %s%s[ralph]%s %s%s%s\n", ts(), Bold, color, Reset, Bold, msg, Reset)
-	fmt.Fprint(l.out, line)
+	if !l.streaming {
+		fmt.Fprint(l.out, line)
+	}
 	fmt.Fprint(l.logFile, line)
 }
 
