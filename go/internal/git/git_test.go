@@ -59,6 +59,8 @@ func initBareRepo(t *testing.T) (string, func()) {
 
 	project := filepath.Join(tmp, "project")
 	run(t, "git", "clone", bare, project)
+	run(t, "git", "-C", project, "config", "user.name", "test")
+	run(t, "git", "-C", project, "config", "user.email", "test@test")
 	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "init")
 	run(t, "git", "-C", project, "push", "-u", "origin", "main")
 	// Set origin/HEAD so detectDefaultBranch works
