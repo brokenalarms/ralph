@@ -66,7 +66,7 @@ func Run(d Deps) error {
 		return fmt.Errorf("loading state: %w", err)
 	}
 	if s.Status != "" && s.Status != "initialized" && !d.ForcePlan {
-		d.Logger.Task("Resuming execution (status: %s)", s.Status)
+		d.Logger.Log("Resuming execution (status: %s)", s.Status)
 		return nil
 	}
 
@@ -98,7 +98,7 @@ func Run(d Deps) error {
 		return fmt.Errorf("checking planning_succeeded: %w", err)
 	}
 	if !ok {
-		d.Logger.TaskError("Planning failed — no tasks created")
+		d.Logger.Error("Planning failed — no tasks created")
 		return fmt.Errorf("planning failed: no tasks created")
 	}
 
@@ -135,7 +135,7 @@ func tryCopyPlanFile(d Deps) (bool, error) {
 		return true, err
 	}
 
-	d.Logger.Task("Copied plan from %s (%d tasks)", src, total)
+	d.Logger.Log("Copied plan from %s (%d tasks)", src, total)
 	return true, nil
 }
 
@@ -276,7 +276,7 @@ func finalize(d Deps) error {
 	if err != nil {
 		total = 0
 	}
-	d.Logger.TaskSuccess("Plan created with %d tasks", total)
+	d.Logger.Success("Plan created with %d tasks", total)
 
 	return nil
 }

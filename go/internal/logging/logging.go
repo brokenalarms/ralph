@@ -20,10 +20,8 @@ const (
 
 // Logger provides colored, timestamped logging matching ralph.sh's output.
 type Logger struct {
-	out     io.Writer
-	logFile io.Writer
-	// TaskLabel returns the current task label (e.g. "beads" or "checklist").
-	TaskLabel func() string
+	out       io.Writer
+	logFile   io.Writer
 	streaming bool
 }
 
@@ -34,9 +32,8 @@ func New(logFile io.Writer) *Logger {
 		logFile = io.Discard
 	}
 	return &Logger{
-		out:       os.Stdout,
-		logFile:   logFile,
-		TaskLabel: func() string { return "ralph" },
+		out:     os.Stdout,
+		logFile: logFile,
 	}
 }
 
@@ -94,17 +91,3 @@ func (l *Logger) PhaseColor(color string, format string, args ...any) {
 	fmt.Fprint(l.logFile, line)
 }
 
-// Task writes an info message with the current task label prefix.
-func (l *Logger) Task(format string, args ...any) {
-	l.emit(Cyan, l.TaskLabel(), fmt.Sprintf(format, args...))
-}
-
-// TaskSuccess writes a success message with the task label prefix.
-func (l *Logger) TaskSuccess(format string, args ...any) {
-	l.emit(Green, l.TaskLabel(), fmt.Sprintf(format, args...))
-}
-
-// TaskError writes an error message with the task label prefix.
-func (l *Logger) TaskError(format string, args ...any) {
-	l.emit(Red, l.TaskLabel(), fmt.Sprintf(format, args...))
-}

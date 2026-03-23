@@ -17,15 +17,14 @@ var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 // testLogger discards all output but records calls for verification.
 type testLogger struct {
-	tasks    []string
+	logs      []string
 	successes []string
 }
 
-func (l *testLogger) Log(format string, args ...any)         {}
-func (l *testLogger) Warn(format string, args ...any)        {}
-func (l *testLogger) Error(format string, args ...any)       {}
-func (l *testLogger) Task(format string, args ...any)        { l.tasks = append(l.tasks, fmt.Sprintf(format, args...)) }
-func (l *testLogger) TaskSuccess(format string, args ...any) { l.successes = append(l.successes, fmt.Sprintf(format, args...)) }
+func (l *testLogger) Log(format string, args ...any)     { l.logs = append(l.logs, fmt.Sprintf(format, args...)) }
+func (l *testLogger) Warn(format string, args ...any)    {}
+func (l *testLogger) Error(format string, args ...any)   {}
+func (l *testLogger) Success(format string, args ...any) { l.successes = append(l.successes, fmt.Sprintf(format, args...)) }
 
 // --- Signal file tests ---
 
@@ -741,7 +740,7 @@ func TestRun_DetectsCompletionSignal(t *testing.T) {
 		t.Errorf("Summary = %q, want %q", result.Summary, "task finished")
 	}
 	if len(log.successes) == 0 {
-		t.Error("expected TaskSuccess to be called")
+		t.Error("expected Success to be called")
 	}
 }
 
@@ -815,8 +814,8 @@ func TestRun_CallsOnTaskDetected(t *testing.T) {
 	if detectedTask != "implement feature X" {
 		t.Errorf("OnTaskDetected got %q, want %q", detectedTask, "implement feature X")
 	}
-	if len(log.tasks) == 0 {
-		t.Error("expected Task log to be called")
+	if len(log.logs) == 0 {
+		t.Error("expected Log to be called for task status")
 	}
 }
 

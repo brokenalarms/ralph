@@ -20,8 +20,7 @@ import (
 // Log is the logging interface used by Runner.
 type Log interface {
 	Log(format string, args ...any)
-	Task(format string, args ...any)
-	TaskSuccess(format string, args ...any)
+	Success(format string, args ...any)
 	Warn(format string, args ...any)
 	Error(format string, args ...any)
 }
@@ -245,7 +244,7 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 			result.SignalDetected = true
 			result.AllComplete = hasSignal(cfg.Signals.AllComplete)
 			result.Summary = readSignalSummary(cfg.Signals)
-			r.Logger.TaskSuccess("Task completed via signal")
+			r.Logger.Success("Task completed via signal")
 		} else {
 			r.Logger.Log("Claude exited (no completion signal)")
 		}
@@ -300,7 +299,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 			if !taskLogged && hasSignal(cfg.Signals.CurrentTask) {
 				desc := readFirstLine(cfg.Signals.CurrentTask)
 				if desc != "" {
-					r.Logger.Task("Working on: %s", desc)
+					r.Logger.Log("Working on: %s", desc)
 					taskLogged = true
 					if r.OnTaskDetected != nil {
 						r.OnTaskDetected(desc)
@@ -314,7 +313,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				if summary == "" {
 					summary = "task done"
 				}
-				r.Logger.TaskSuccess("Completed: %s", summary)
+				r.Logger.Success("Completed: %s", summary)
 
 				// If OnSignal is set, let the orchestrator verify before accepting.
 				if cfg.OnSignal != nil {
