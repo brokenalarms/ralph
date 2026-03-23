@@ -512,10 +512,9 @@ func (l *Loop) Run(ctx context.Context) error {
 			}
 
 			if l.cfg.AutoMerge {
-				merged, err := l.autoMerge(ctx)
+				merged, err := l.mergeWithRetry(ctx, nextTask, workDir, rawLogPath)
 				if err != nil {
 					l.logger.Warn("Auto-merge: %v", err)
-					merged, err = l.handleAutoMergeError(ctx, err, nextTask, workDir, rawLogPath)
 				}
 				if merged {
 					if err := l.git.PostMergeReset(); err != nil {
@@ -574,101 +573,87 @@ func (l *Loop) handleRebase(ctx context.Context) error {
 	}
 }
 
-// handleAutoMergeError handles recoverable auto-merge errors: CI failures
-// and merge conflicts. Returns the final merge state.
-func (l *Loop) handleAutoMergeError(ctx context.Context, err error, nextTask, workDir, rawLogPath string) (bool, error) {
-	var conflictErr *git.MergeConflictError
-	if errors.As(err, &conflictErr) {
-		return l.handleMergeConflict(ctx, nextTask, workDir, rawLogPath)
-	}
+// maxMergeAttempts is the total number of merge attempts including retries
+// after conflict resolution and CI fixes.
+const maxMergeAttempts = 4
 
-	var ciErr *git.CIFailureError
-	if errors.As(err, &ciErr) {
-		return l.handleCIFailure(ctx, ciErr, nextTask, workDir, rawLogPath)
-	}
+// mergeWithRetry is the single merge pipeline: try merge, detect error type,
+// handle it, retry. Replaces the former handleAutoMergeError / handleMergeConflict /
+// handleCIFailure chain with a linear retry loop.
+func (l *Loop) mergeWithRetry(ctx context.Context, nextTask, workDir, rawLogPath string) (bool, error) {
+	for attempt := 0; attempt < maxMergeAttempts; attempt++ {
+		merged, err := l.autoMerge(ctx)
+		if err == nil {
+			return merged, nil
+		}
 
-	return false, err
+		if attempt > 0 {
+			l.logger.Warn("Merge attempt %d failed: %v", attempt+1, err)
+		}
+
+		var conflictErr *git.MergeConflictError
+		if errors.As(err, &conflictErr) {
+			if resolveErr := l.resolveConflict(ctx); resolveErr != nil {
+				return false, resolveErr
+			}
+			continue
+		}
+
+		var ciErr *git.CIFailureError
+		if errors.As(err, &ciErr) {
+			if !l.tryFixCI(ctx, ciErr, nextTask, workDir, rawLogPath) {
+				return false, err
+			}
+			continue
+		}
+
+		return false, err
+	}
+	return false, fmt.Errorf("merge failed after %d attempts", maxMergeAttempts)
 }
 
-// handleMergeConflict rebases the working branch onto the default branch and
-// force-pushes to resolve PR merge conflicts, then retries the merge.
-func (l *Loop) handleMergeConflict(ctx context.Context, nextTask, workDir, rawLogPath string) (bool, error) {
+// resolveConflict rebases onto the default branch and force-pushes to
+// resolve PR merge conflicts before the next merge attempt.
+func (l *Loop) resolveConflict(ctx context.Context) error {
 	l.logger.Log("Rebasing onto default branch to resolve merge conflicts...")
-
 	if err := l.git.RebaseOntoDefaultBranch(ctx); err != nil {
 		l.logger.Warn("Rebase failed: %v", err)
-		return false, fmt.Errorf("conflict resolution rebase failed: %w", err)
+		return fmt.Errorf("conflict resolution rebase failed: %w", err)
 	}
 
 	l.logger.Log("Force-pushing rebased branch...")
 	if err := l.forcePush(ctx); err != nil {
 		l.logger.Warn("Force-push after rebase failed: %v", err)
-		return false, fmt.Errorf("force-push after conflict rebase failed: %w", err)
+		return fmt.Errorf("force-push after conflict rebase failed: %w", err)
 	}
-
-	l.logger.Log("Retrying merge after conflict resolution...")
-	merged, err := l.autoMerge(ctx)
-	if err != nil {
-		var ciErr *git.CIFailureError
-		if errors.As(err, &ciErr) {
-			return l.handleCIFailure(ctx, ciErr, nextTask, workDir, rawLogPath)
-		}
-	}
-	return merged, err
+	return nil
 }
 
-// handleCIFailure spawns fix agents to address CI failures and retries
-// the merge after each fix attempt.
-func (l *Loop) handleCIFailure(ctx context.Context, ciErr *git.CIFailureError, nextTask, workDir, rawLogPath string) (bool, error) {
-	l.logger.Log("CI failed on PR #%s", ciErr.PRNumber)
+// tryFixCI spawns a fix agent to address CI failures, pushes the fix,
+// and returns true if the fix was applied (ready for merge retry).
+func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask, workDir, rawLogPath string) bool {
+	l.logger.Log("CI failed on PR #%s — spawning fix agent", ciErr.PRNumber)
 
-	ciDetails := ciErr.Error()
 	ciLog := l.getCIFailureLog(ciErr.PRNumber)
-
 	signalPath := filepath.Join(l.cfg.RalphDir, ".signal_complete")
 	fixPrompt := l.loadVerifyPrompt("verify-tests.md", map[string]string{
 		"{{TASK_TITLE}}":       nextTask,
 		"{{TASK_DESCRIPTION}}": "CI checks failed after push. Fix the failures so CI passes.",
-		"{{TEST_OUTPUT}}":      ciDetails + "\n\n" + ciLog,
+		"{{TEST_OUTPUT}}":      ciErr.Error() + "\n\n" + ciLog,
 		"{{SIGNAL_COMPLETE}}":  signalPath,
 	})
 
-	var merged bool
-	for ciAttempt := 0; ciAttempt < 2; ciAttempt++ {
-		fixResult := l.runFixAgent(ctx, "CI failures", fixPrompt, workDir, rawLogPath)
-		if !fixResult.SignalDetected {
-			break
-		}
-
-		if pushErr := l.pushAndCreatePR(ctx, nextTask); pushErr != nil {
-			l.logger.Warn("Push after CI fix failed: %v", pushErr)
-			break
-		}
-
-		var mergeErr error
-		merged, mergeErr = l.autoMerge(ctx)
-		if mergeErr == nil && merged {
-			return true, nil
-		}
-		if mergeErr != nil {
-			if errors.As(mergeErr, &ciErr) {
-				l.logger.Warn("CI still failing after fix attempt %d: %s", ciAttempt+1, ciErr.Error())
-				ciDetails = ciErr.Error()
-				ciLog = l.getCIFailureLog(ciErr.PRNumber)
-				fixPrompt = l.loadVerifyPrompt("verify-tests.md", map[string]string{
-					"{{TASK_TITLE}}":       nextTask,
-					"{{TASK_DESCRIPTION}}": "CI checks still failing. Fix the remaining failures.",
-					"{{TEST_OUTPUT}}":      ciDetails + "\n\n" + ciLog,
-					"{{SIGNAL_COMPLETE}}":  signalPath,
-				})
-			} else {
-				l.logger.Warn("Auto-merge retry failed: %v", mergeErr)
-				return false, mergeErr
-			}
-		}
+	fixResult := l.runFixAgent(ctx, "CI failures", fixPrompt, workDir, rawLogPath)
+	if !fixResult.SignalDetected {
+		return false
 	}
 
-	return merged, nil
+	if pushErr := l.pushAndCreatePR(ctx, nextTask); pushErr != nil {
+		l.logger.Warn("Push after CI fix failed: %v", pushErr)
+		return false
+	}
+
+	return true
 }
 
 // runFixAgent stops the main agent's streaming, spawns a fix agent with the

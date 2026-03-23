@@ -2,6 +2,9 @@ package git
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -177,36 +180,31 @@ func TestMergeConflictError_Message(t *testing.T) {
 	}
 }
 
-// ghMergeArgs includes --admin when MergeAdmin is set, allowing admin
+// mergeOpts includes Admin when MergeAdmin is set, allowing admin
 // users to bypass branch protection when desired.
-func TestGhMergeArgs_IncludesAdmin(t *testing.T) {
+func TestMergeOpts_IncludesAdmin(t *testing.T) {
 	mgr := &Manager{
 		BranchStrategy: BranchStacked,
 		MergeAdmin:     true,
 	}
-	args := mgr.ghMergeArgs("123", "https://github.com/org/repo")
-	found := false
-	for _, a := range args {
-		if a == "--admin" {
-			found = true
-		}
+	opts := mgr.mergeOpts()
+	if !opts.Admin {
+		t.Error("expected Admin=true when MergeAdmin is set")
 	}
-	if !found {
-		t.Errorf("expected --admin in args: %v", args)
+	if !opts.DeleteBranch {
+		t.Error("expected DeleteBranch=true in stacked mode")
 	}
 }
 
-// ghMergeArgs omits --admin when MergeAdmin is false, preserving
+// mergeOpts omits Admin when MergeAdmin is false, preserving
 // the default behavior of respecting branch protection.
-func TestGhMergeArgs_OmitsAdminByDefault(t *testing.T) {
+func TestMergeOpts_OmitsAdminByDefault(t *testing.T) {
 	mgr := &Manager{
 		BranchStrategy: BranchStacked,
 	}
-	args := mgr.ghMergeArgs("123", "https://github.com/org/repo")
-	for _, a := range args {
-		if a == "--admin" {
-			t.Errorf("--admin should not be present by default: %v", args)
-		}
+	opts := mgr.mergeOpts()
+	if opts.Admin {
+		t.Error("expected Admin=false by default")
 	}
 }
 
@@ -284,25 +282,162 @@ func TestWaitForCI_CancelledContext(t *testing.T) {
 	}
 }
 
-func TestCIFetcher_DefaultsToFetchPRChecks(t *testing.T) {
+// gh() returns the default ghCLI when no GitHub interface is injected.
+func TestGh_DefaultsToGhCLI(t *testing.T) {
 	mgr := &Manager{}
-	f := mgr.ciFetcher()
-	if f == nil {
-		t.Fatal("ciFetcher returned nil")
+	gh := mgr.gh()
+	if gh == nil {
+		t.Fatal("gh() returned nil")
 	}
 }
 
-func TestCIFetcher_UsesInjectedFunc(t *testing.T) {
-	called := false
+// gh() returns the injected GitHub interface when one is set.
+func TestGh_UsesInjectedGitHub(t *testing.T) {
+	stub := &stubGitHub{}
+	mgr := &Manager{GitHub: stub}
+	if mgr.gh() != stub {
+		t.Error("gh() should return the injected GitHub interface")
+	}
+}
+
+// stubGitHub is a test double for the GitHub interface.
+type stubGitHub struct {
+	available    bool
+	openPR       string
+	findPRErr    error
+	createPRErr  error
+	mergeOutput  string
+	mergeErr     error
+	updateResult bool
+	updateErr    error
+	checks       []CICheckResult
+	checksErr    error
+	mergeCalls   int
+	mergeOpts    MergeOpts
+}
+
+func (s *stubGitHub) Available() bool { return s.available }
+func (s *stubGitHub) FindOpenPR(branch, repoURL string) (string, error) {
+	return s.openPR, s.findPRErr
+}
+func (s *stubGitHub) CreatePR(dir, branch, baseBranch, title, body, repoURL string) error {
+	return s.createPRErr
+}
+func (s *stubGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error) {
+	s.mergeCalls++
+	s.mergeOpts = opts
+	return s.mergeOutput, s.mergeErr
+}
+func (s *stubGitHub) UpdateBranch(dir, nwo, prNumber string) (bool, error) {
+	return s.updateResult, s.updateErr
+}
+func (s *stubGitHub) FetchChecks(prNumber, repoURL string) ([]CICheckResult, error) {
+	return s.checks, s.checksErr
+}
+
+// setupAutoMergeManager creates a Manager with a stubGitHub and real git repos
+// so AutoMergeCurrentBranch can run without a real gh CLI.
+func setupAutoMergeManager(t *testing.T, gh *stubGitHub) *Manager {
+	t.Helper()
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
 	mgr := &Manager{
-		FetchPRChecks: func(pr, repo string) ([]CICheckResult, error) {
-			called = true
-			return nil, nil
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchStacked,
+		GitHub:         gh,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+	mgr.RenameBranchForTask("test feature", "")
+	return mgr
+}
+
+// AutoMergeCurrentBranch returns a MergeConflictError when the gh merge
+// command reports merge conflicts, so the caller can rebase and retry.
+func TestAutoMerge_MergeConflictReturnsTypedError(t *testing.T) {
+	gh := &stubGitHub{
+		available:   true,
+		openPR:      "42",
+		checks:      []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
+		mergeOutput: "Pull request is not mergeable",
+		mergeErr:    fmt.Errorf("exit status 1"),
+	}
+	mgr := setupAutoMergeManager(t, gh)
+
+	_, err := mgr.AutoMergeCurrentBranch(context.Background())
+	if err == nil {
+		t.Fatal("expected error from merge conflict")
+	}
+
+	var conflictErr *MergeConflictError
+	if !errors.As(err, &conflictErr) {
+		t.Errorf("expected MergeConflictError, got %T: %v", err, err)
+	}
+}
+
+// AutoMergeCurrentBranch returns a CIFailureError when CI checks fail,
+// so the caller can spawn a fix agent and retry.
+func TestAutoMerge_CIFailureReturnsTypedError(t *testing.T) {
+	gh := &stubGitHub{
+		available: true,
+		openPR:    "42",
+		checks: []CICheckResult{
+			{Name: "test", State: "FAILURE", Bucket: "fail"},
 		},
 	}
-	f := mgr.ciFetcher()
-	f("1", "")
-	if !called {
-		t.Error("injected FetchPRChecks was not called")
+	mgr := setupAutoMergeManager(t, gh)
+
+	_, err := mgr.AutoMergeCurrentBranch(context.Background())
+	if err == nil {
+		t.Fatal("expected error from CI failure")
+	}
+
+	var ciErr *CIFailureError
+	if !errors.As(err, &ciErr) {
+		t.Errorf("expected CIFailureError, got %T: %v", err, err)
+	}
+}
+
+// AutoMergeCurrentBranch passes MergeOpts from Manager config to the
+// GitHub interface, so single-branch and admin settings are respected.
+func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
+	gh := &stubGitHub{
+		available: true,
+		openPR:    "42",
+		checks:    []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
+	}
+
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		RalphDir:       ralphDir,
+		UseWorktree:    true,
+		BranchStrategy: BranchSingle,
+		MergeAdmin:     true,
+		GitHub:         gh,
+		State:          st,
+		Logger:         &testLog{},
+	}
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.AutoMergeCurrentBranch(context.Background())
+
+	if gh.mergeOpts.DeleteBranch {
+		t.Error("single-branch mode should not set DeleteBranch")
+	}
+	if !gh.mergeOpts.Admin {
+		t.Error("MergeAdmin=true should set Admin in merge opts")
 	}
 }

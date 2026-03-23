@@ -2,9 +2,7 @@ package git
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 )
@@ -46,25 +44,6 @@ const DefaultCIPollInterval = 15 * time.Second
 
 // DefaultCIPollTimeout is the maximum time to wait for CI checks to complete.
 const DefaultCIPollTimeout = 10 * time.Minute
-
-// fetchPRChecks queries gh for the current CI check status of a PR.
-func fetchPRChecks(prNumber, repoURL string) ([]CICheckResult, error) {
-	args := []string{"pr", "checks", prNumber, "--json", "name,state,bucket"}
-	if repoURL != "" {
-		args = append(args, "-R", repoURL)
-	}
-	cmd := exec.Command("gh", args...)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("gh pr checks failed: %w", err)
-	}
-
-	var checks []CICheckResult
-	if err := json.Unmarshal(out, &checks); err != nil {
-		return nil, fmt.Errorf("parsing check results: %w", err)
-	}
-	return checks, nil
-}
 
 // evaluateChecks determines the overall CI status from individual check results.
 func evaluateChecks(checks []CICheckResult) CIStatus {

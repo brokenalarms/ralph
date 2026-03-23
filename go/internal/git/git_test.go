@@ -1023,10 +1023,6 @@ func TestDirtyWorkingTreeDetected(t *testing.T) {
 	}
 }
 
-// --- AutoMergeCurrentBranch tests ---
-
-// AutoMergeCurrentBranch returns nil when no worktree branch is set,
-
 // --- BranchStrategy tests ---
 
 // Single-branch mode skips RenameBranchForTask entirely, keeping the initial
