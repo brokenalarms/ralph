@@ -209,19 +209,45 @@ func (m *Manager) tryResumeWorktree() error {
 		return m.resetResumedWorktree(defaultBranch)
 	}
 
-	// Stash uncommitted changes, rebase onto latest, then reapply.
+	m.EnsureUpToDate(context.Background())
+	return nil
+}
+
+// EnsureUpToDate fetches the latest base branch, stashes any uncommitted
+// changes, rebases onto origin, and reapplies the stash. This is the single
+// sync point that all git operations (push, merge, resume) go through to
+// guarantee the worktree has the latest upstream changes.
+func (m *Manager) EnsureUpToDate(ctx context.Context) {
+	if m.WorkDir == "" || m.WorkDir == m.ProjectDir {
+		return
+	}
+
+	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
+
+	if err := gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
+		m.Logger.Warn("Failed to fetch origin/%s: %v", defaultBranch, err)
+		return
+	}
+
+	if !refExists(m.WorkDir, "origin/"+defaultBranch) {
+		return
+	}
+
+	// Already up to date?
+	if gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, "HEAD") == nil {
+		return
+	}
+
 	dirty := gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
 		gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
 	if dirty {
 		m.Logger.Log("Stashing uncommitted changes before rebase...")
-		gitCmd(m.WorkDir, "stash", "push", "-m", "ralph-resume-autostash")
+		gitCmd(m.WorkDir, "stash", "push", "-m", "ralph-autostash")
 	}
 
-	if refExists(m.WorkDir, "origin/"+defaultBranch) {
-		if err := gitCmdErr(m.WorkDir, "rebase", "origin/"+defaultBranch); err != nil {
-			m.Logger.Warn("Rebase failed on resume: %v — aborting rebase", err)
-			gitCmd(m.WorkDir, "rebase", "--abort")
-		}
+	if err := gitCmdErrCtx(ctx, m.WorkDir, "rebase", "origin/"+defaultBranch); err != nil {
+		m.Logger.Warn("Rebase onto %s failed: %v — aborting", defaultBranch, err)
+		gitCmd(m.WorkDir, "rebase", "--abort")
 	}
 
 	if dirty {
@@ -232,8 +258,6 @@ func (m *Manager) tryResumeWorktree() error {
 			gitCmd(m.WorkDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
 		}
 	}
-
-	return nil
 }
 
 // resumedBranchIsStale returns true when the stored branch no longer exists
@@ -379,6 +403,8 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 		return nil
 	}
 
+	m.EnsureUpToDate(ctx)
+
 	repoURL := gitOutput(m.WorkDir, "remote", "get-url", "origin")
 	if repoURL == "" {
 		return nil
@@ -386,7 +412,6 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 
 	// Check if branch has commits beyond the default branch.
 	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
-	gitCmdCtx(ctx, m.WorkDir, "fetch", "origin", defaultBranch)
 	revCount := gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+"..HEAD")
 	if revCount == "" || revCount == "0" {
 		m.Logger.Log("No new commits to push")
@@ -441,6 +466,8 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
 		return false, nil
 	}
+
+	m.EnsureUpToDate(ctx)
 
 	gh := m.gh()
 	if !gh.Available() {
