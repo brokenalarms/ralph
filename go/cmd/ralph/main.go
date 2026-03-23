@@ -159,6 +159,11 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 			log.Error("%v", err)
 			return 1
 		}
+		if cfg.AutoMerge {
+			if err := gm.EnforceAdmins(); err != nil {
+				log.Warn("enforce_admins: %v", err)
+			}
+		}
 	}
 	if err := gm.SetupWorktree(); err != nil {
 		log.Error("Worktree setup failed: %v", err)
