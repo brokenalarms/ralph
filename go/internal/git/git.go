@@ -719,6 +719,24 @@ func (m *Manager) RemoveWorktree() {
 // detecting and skipping squash-merged branches when a naive rebase conflicts.
 // Mirrors lib/git.sh rebase_onto_default_branch.
 func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
+	// Stash dirty state so rebase can proceed cleanly.
+	dirty := gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
+		gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
+	if dirty {
+		m.Logger.Log("Stashing uncommitted changes before rebase...")
+		gitCmd(m.WorkDir, "stash", "push", "-m", "ralph-rebase-autostash")
+	}
+	defer func() {
+		if dirty {
+			if err := gitCmdErr(m.WorkDir, "stash", "pop"); err != nil {
+				m.Logger.Warn("Stash pop conflict — committing stash as WIP")
+				gitCmd(m.WorkDir, "checkout", "--theirs", ".")
+				gitCmd(m.WorkDir, "add", "-A")
+				gitCmd(m.WorkDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
+			}
+		}
+	}()
+
 	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
 	if err := gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
 		if ctx.Err() != nil {
