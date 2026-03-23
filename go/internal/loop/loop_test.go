@@ -16,6 +16,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -4302,6 +4303,151 @@ func TestLoop_SessionTasksEmptyOnVerificationFailure(t *testing.T) {
 
 // Verifies that a dashed separator line appears between iterations in the
 // log output, giving a clear visual boundary between each run.
+// signalCallingRunner invokes OnSignal during Run to exercise the
+// in-runner verification path (LLM verification, test re-runs).
+type signalCallingRunner struct {
+	onRun  func()
+	result claude.Result
+}
+
+func (s *signalCallingRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
+	if s.onRun != nil {
+		s.onRun()
+	}
+	if cfg.OnSignal != nil {
+		cfg.OnSignal("")
+		return claude.Result{
+			SignalDetected: true,
+			OnSignalUsed:   true,
+			Summary:        s.result.Summary,
+		}, nil
+	}
+	return s.result, nil
+}
+
+func (s *signalCallingRunner) StopStreaming() {}
+
+// Verifies that LLM verification pass logs with green (Success) color
+// and LLM verification reject logs with red (Error) color.
+func TestLoop_LLMVerificationLogColors(t *testing.T) {
+	tests := []struct {
+		name      string
+		passed    bool
+		reason    string
+		details   string
+		wantColor string
+		wantMsg   string
+	}{
+		{
+			name:      "LLM pass logs green",
+			passed:    true,
+			reason:    "diff matches requirements",
+			wantColor: logging.Green,
+			wantMsg:   "LLM verified: diff matches requirements",
+		},
+		{
+			name:      "LLM reject logs red",
+			passed:    false,
+			details:   "missing error handling",
+			wantColor: logging.Red,
+			wantMsg:   "LLM verification rejected: missing error handling",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, st := setupTestDir(t)
+			ralphDir := filepath.Join(dir, ".ralph")
+			promptsDir := filepath.Join(dir, "prompts")
+			createPromptTemplates(t, promptsDir)
+			// verify-llm.md is needed when LLM rejects (fix agent prompt)
+			os.WriteFile(filepath.Join(promptsDir, "verify-llm.md"), []byte("fix: {{LLM_FEEDBACK}}"), 0o644)
+
+			backend := &mutableBackend{
+				remaining: 1,
+				completed: 0,
+				total:     1,
+				nextTask:  "add colored logs",
+				nextID:    "ralph-color",
+				label:     "beads",
+			}
+
+			runner := &signalCallingRunner{
+				onRun: func() {
+					backend.mu.Lock()
+					backend.completed = 1
+					backend.remaining = 0
+					backend.mu.Unlock()
+				},
+				result: claude.Result{Summary: "done"},
+			}
+
+			var logBuf bytes.Buffer
+			logger := logging.NewWithWriter(&logBuf)
+
+			gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+			llmResult := verify.Result{
+				Passed:  tt.passed,
+				Reason:  tt.reason,
+				Details: tt.details,
+			}
+
+			l := New(Config{
+				Dirs: workctx.WorkContext{
+					ProjectDir: dir,
+					WorkDir:    dir,
+					RalphDir:   ralphDir,
+					PromptsDir: promptsDir,
+				},
+				MaxIterations: 1,
+				CallsPerHour:  80,
+				TaskBackend:   backend,
+				VerifyDir:     dir,
+			}, st, gm, logger)
+			l.runner = runner
+			l.llmVerifyFunc = func(context.Context, string, string, string, string, string, string, ...string) verify.Result {
+				return llmResult
+			}
+			l.pushPRFunc = func(context.Context, string, string) error { return nil }
+
+			// For rejection, stub out newRunnerFunc so fix agent doesn't launch real Claude
+			if !tt.passed {
+				l.newRunnerFunc = func() claudeRunner {
+					return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
+				}
+				// After fix agent, re-verification will call llmVerifyFunc again;
+				// make it pass on second call to avoid skip-task path
+				callCount := 0
+				l.llmVerifyFunc = func(context.Context, string, string, string, string, string, string, ...string) verify.Result {
+					callCount++
+					if callCount == 1 {
+						return llmResult
+					}
+					return verify.Result{Passed: true, Reason: "fixed"}
+				}
+			}
+
+			_ = l.Run(context.Background())
+
+			output := logBuf.String()
+			if !strings.Contains(output, tt.wantMsg) {
+				t.Errorf("expected %q in output, got:\n%s", tt.wantMsg, output)
+			}
+			// Verify the message line uses the expected color by checking that
+			// the line containing the message also contains the expected ANSI code.
+			for _, line := range strings.Split(output, "\n") {
+				if strings.Contains(line, tt.wantMsg) {
+					if !strings.Contains(line, tt.wantColor) {
+						t.Errorf("line with %q should use color %q, got:\n%s", tt.wantMsg, tt.name, line)
+					}
+					break
+				}
+			}
+		})
+	}
+}
+
 func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
