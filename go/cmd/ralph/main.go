@@ -213,13 +213,13 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 	if err := planning.Run(planDeps); err != nil {
 		log.Error("Planning failed: %v", err)
-		cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, interrupted, log)
+		cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, nil, interrupted, log)
 		return 1
 	}
 
 	if cfg.PlanOnly {
 		log.Log("Plan-only mode, exiting")
-		cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, interrupted, log)
+		cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, nil, interrupted, log)
 		return 0
 	}
 
@@ -249,13 +249,16 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		log.Error("Execution failed: %v", err)
 	}
 
+	sessionTasks := execLoop.SessionTasks()
+
 	if status, _ := st.Read("status"); status == "evolve_restart" {
+		printSessionSummary(sessionTasks, log)
 		if err := evolveRestart(cfg.ProjectDir, scriptPath, cfg.BaseBranch, args, log); err != nil {
 			log.Error("Evolve restart failed: %v", err)
 		}
 	}
 
-	cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, interrupted, log)
+	cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, sessionTasks, interrupted, log)
 	return 0
 }
 
@@ -356,7 +359,7 @@ func initTaskBackend(cfg config.Config, resume bool, st *state.Store, ralphDir, 
 }
 
 // cleanup generates resume script, prints summary, and removes unused worktrees.
-func cleanup(cfg config.Config, gm *git.Manager, st *state.Store, backend tasks.Backend, ralphDir, planFile, scriptPath string, args []string, interrupted bool, log *logging.Logger) {
+func cleanup(cfg config.Config, gm *git.Manager, st *state.Store, backend tasks.Backend, ralphDir, planFile, scriptPath string, args []string, sessionTasks []loop.CompletedTask, interrupted bool, log *logging.Logger) {
 	clearSignalFiles(ralphDir)
 
 	if interrupted {
@@ -373,6 +376,7 @@ func cleanup(cfg config.Config, gm *git.Manager, st *state.Store, backend tasks.
 	}
 
 	generateResumeScript(cfg, ralphDir, scriptPath, args, log)
+	printSessionSummary(sessionTasks, log)
 	printSummary(cfg, gm, st, backend, ralphDir, planFile, log)
 }
 
@@ -421,6 +425,37 @@ exec "%s" --dir "%s" --max %d%s
 
 	os.WriteFile(resumePath, []byte(content), 0o755)
 	log.Log("Resume script: %s", resumePath)
+}
+
+// printSessionSummary shows what was accomplished this session: each completed
+// task with its bead ID, title, agent summary, and PR reference.
+func printSessionSummary(tasks []loop.CompletedTask, log *logging.Logger) {
+	if len(tasks) == 0 {
+		return
+	}
+	fmt.Println()
+	log.Phase("=== SESSION WORK ===")
+	for _, t := range tasks {
+		label := t.ID
+		if label == "" {
+			label = t.Title
+		}
+		if t.Title != "" && t.ID != "" {
+			log.Log("%s: %s", t.ID, t.Title)
+		} else {
+			log.Log("%s", label)
+		}
+		if t.Summary != "" {
+			log.Log("  Fix: %s", t.Summary)
+		}
+		if t.PRNum != "" {
+			if t.PRTitle != "" {
+				log.Log("  PR #%s: %s", t.PRNum, t.PRTitle)
+			} else {
+				log.Log("  PR #%s", t.PRNum)
+			}
+		}
+	}
 }
 
 // printSummary displays the end-of-run summary.

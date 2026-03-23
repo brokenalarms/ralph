@@ -52,6 +52,15 @@ type claudeRunner interface {
 	StopStreaming()
 }
 
+// CompletedTask holds summary info for a task completed during this session.
+type CompletedTask struct {
+	ID      string
+	Title   string
+	Summary string
+	PRNum   string
+	PRTitle string
+}
+
 // Loop orchestrates the execution phase: task selection, prompt building,
 // rate limiting, branch rotation, Claude invocation, and response analysis.
 type Loop struct {
@@ -72,6 +81,7 @@ type Loop struct {
 	newRunnerFunc  func() claudeRunner
 	lastAction      analyzer.Action
 	lastTaskMerged  bool
+	sessionTasks    []CompletedTask
 }
 
 // New creates an execution loop from the given configuration.
@@ -94,6 +104,11 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 		logger:   logger,
 		signals:  signals,
 	}
+}
+
+// SessionTasks returns the tasks completed during this session.
+func (l *Loop) SessionTasks() []CompletedTask {
+	return l.sessionTasks
 }
 
 // Run executes the full iteration loop. Returns nil on normal completion
@@ -505,7 +520,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 			if taskID != "" {
 				closeReason := "completed by ralph"
-				if prNum := l.findPRNumber(workDir); prNum != "" {
+				if prNum, _ := l.findPRInfo(workDir); prNum != "" {
 					closeReason = fmt.Sprintf("completed by ralph — PR #%s", prNum)
 				}
 				if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
@@ -527,6 +542,17 @@ func (l *Loop) Run(ctx context.Context) error {
 			if err := l.pushAndCreatePR(ctx, taskID, nextTask); err != nil {
 				l.logger.Warn("Push/PR: %v", err)
 			}
+
+			ct := CompletedTask{
+				ID:      taskID,
+				Title:   nextTask,
+				Summary: result.Summary,
+			}
+			if prNum, prTitle := l.findPRInfo(workDir); prNum != "" {
+				ct.PRNum = prNum
+				ct.PRTitle = prTitle
+			}
+			l.sessionTasks = append(l.sessionTasks, ct)
 
 			if l.cfg.AutoMerge {
 				merged, err := l.mergeWithRetry(ctx, taskID, nextTask, workDir, rawLogPath)
@@ -843,16 +869,20 @@ func (l *Loop) autoMerge(ctx context.Context) (bool, error) {
 }
 
 
-func (l *Loop) findPRNumber(workDir string) string {
+func (l *Loop) findPRInfo(workDir string) (number, title string) {
 	cmd := exec.Command("gh", "pr", "list",
 		"--head", l.git.WorktreeBranch,
-		"--state", "all", "--json", "number", "--jq", ".[0].number")
+		"--state", "all", "--json", "number,title", "--jq", ".[0] | \"\\(.number)\\t\\(.title)\"")
 	cmd.Dir = workDir
 	out, err := cmd.Output()
 	if err != nil {
-		return ""
+		return "", ""
 	}
-	return strings.TrimSpace(string(out))
+	parts := strings.SplitN(strings.TrimSpace(string(out)), "\t", 2)
+	if len(parts) < 2 {
+		return strings.TrimSpace(string(out)), ""
+	}
+	return parts[0], parts[1]
 }
 
 func (l *Loop) waitForTasks(ctx context.Context) bool {
