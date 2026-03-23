@@ -17,10 +17,12 @@ func initBareRepoWithOrigin(t *testing.T) (projectDir string, bareDir string) {
 	tmp := t.TempDir()
 
 	bare := filepath.Join(tmp, "bare.git")
-	run(t, "git", "init", "--bare", bare)
+	run(t, "git", "init", "--bare", "-b", "main", bare)
 
 	project := filepath.Join(tmp, "project")
 	run(t, "git", "clone", bare, project)
+	run(t, "git", "-C", project, "config", "user.name", "test")
+	run(t, "git", "-C", project, "config", "user.email", "test@test")
 	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "init")
 	run(t, "git", "-C", project, "push", "-u", "origin", "main")
 	run(t, "git", "-C", project, "remote", "set-head", "origin", "main")
@@ -49,6 +51,10 @@ func setupRebaseMgr(t *testing.T, project, bare string) *Manager {
 	// Point worktree's origin at the bare repo
 	run(t, "git", "-C", mgr.WorkDir, "remote", "set-url", "origin", bare)
 	run(t, "git", "-C", mgr.WorkDir, "fetch", "origin")
+	// Ensure git identity is configured (worktrees share config with parent,
+	// but set explicitly so tests don't depend on global git config in CI)
+	run(t, "git", "-C", mgr.WorkDir, "config", "user.name", "test")
+	run(t, "git", "-C", mgr.WorkDir, "config", "user.email", "test@test")
 
 	return mgr
 }

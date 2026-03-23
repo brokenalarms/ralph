@@ -239,7 +239,7 @@ func TestInitRalphDir_DirtyWorkingTreeExitsWithError(t *testing.T) {
 	dir := t.TempDir()
 
 	// Init a git repo so isGitRepo returns true
-	runCmd(t, "git", "init", dir)
+	runCmd(t, "git", "init", "-b", "main", dir)
 	runCmd(t, "git", "-C", dir, "commit", "--allow-empty", "-m", "init")
 
 	// Create uncommitted changes
