@@ -282,8 +282,6 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		taskPrompt := l.buildTaskPrompt(nextTask, taskID)
 
-
-
 		// Run full test suite before handing off to agent. The agent only
 		// runs scoped tests during development; the orchestrator owns the
 		// full suite both here (pre-iteration) and after signal (gate).
@@ -336,101 +334,14 @@ func (l *Loop) Run(ctx context.Context) error {
 				return git.HasDiff(workDir) || git.HeadRev(workDir) != headBefore
 			},
 			OnSignal: func(summary string) bool {
-		
-
-				// Step 1: Run tests (commit check is a warning, not a gate)
-				commitResult := verify.CheckCommits(l.git.WorkDir, headBefore)
-				if !commitResult.Passed {
-					l.logger.Warn("No new commits — will verify via LLM if work is already on main")
-				}
-
-				l.logger.Log("Running post-signal test suite...")
-				testResult := verify.RunTests(ctx, l.cfg.VerifyDir)
-				passed := testResult.Passed
-				reason := testResult.Reason
-				if passed {
-					l.logger.Log("Tests passed")
-				}
-				if !passed {
-					l.logger.Warn("Tests failed: %s", reason)
-					testOutput := testResult.Details
-
-					beadDesc := l.getBeadDescription(taskID)
-
-					signalPath := filepath.Join(l.cfg.Dirs.RalphDir, ".signal_complete")
-					verifyPrompt := l.loadVerifyPrompt("verify-tests.md", map[string]string{
-						"{{TASK_TITLE}}":       nextTask,
-						"{{TASK_DESCRIPTION}}": beadDesc,
-						"{{TEST_OUTPUT}}":      testOutput,
-						"{{SIGNAL_COMPLETE}}":  signalPath,
-					})
-
-					verifyResult := l.runFixAgent(ctx, "test failures", verifyPrompt, workDir, rawLogPath)
-					if !verifyResult.SignalDetected {
-						return false
-					}
-
-					// Re-check tests after fix agent (skip commit check — fix agent
-					// may not have new commits if it determined work was correct)
-			
-					testResult := verify.RunTests(ctx, l.cfg.VerifyDir)
-					if !testResult.Passed {
-						l.logger.Error("Tests still failing after verification agent: %s", testResult.Reason)
-						return false
-					}
-				}
-
-				// LLM verification — does the diff match the bead?
-				// Prefer PR diff (covers prior iterations) over iteration diff.
-				if passed {
-					beadDesc := l.getBeadDescription(taskID)
-
-					l.logger.Log("Running LLM verification...")
-					llmResult := l.llmVerifyFunc(ctx, workDir, l.cfg.Dirs.PromptsDir, taskID, headBefore, nextTask, beadDesc, l.git.GitHub)
-
-					if !llmResult.Passed {
-						l.logger.Error("LLM verification rejected: %s", llmResult.Details)
-
-						signalPath := filepath.Join(l.cfg.Dirs.RalphDir, ".signal_complete")
-						fixPrompt := l.loadVerifyPrompt("verify-llm.md", map[string]string{
-							"{{TASK_TITLE}}":       nextTask,
-							"{{TASK_DESCRIPTION}}": beadDesc,
-							"{{LLM_FEEDBACK}}":     llmResult.Details,
-							"{{SIGNAL_COMPLETE}}":  signalPath,
-						})
-
-						fixResult := l.runFixAgent(ctx, "LLM feedback", fixPrompt, workDir, rawLogPath)
-						if !fixResult.SignalDetected {
-							return false
-						}
-
-						// Re-verify tests after fix (skip commit check)
-				
-						testResult := verify.RunTests(ctx, l.cfg.VerifyDir)
-						if !testResult.Passed {
-							l.logger.Error("Tests failed after LLM fix agent: %s", testResult.Reason)
-							return false
-						}
-
-						// Escalate to Sonnet for re-verification (Haiku already rejected)
-						l.logger.Log("Escalating verification to Sonnet...")
-						llmResult2 := l.llmVerifyFunc(ctx, workDir, l.cfg.Dirs.PromptsDir, taskID, headBefore, nextTask, beadDesc, l.git.GitHub, "claude-sonnet-4-6")
-						if !llmResult2.Passed {
-							l.logger.Error("Sonnet also rejects: %s", llmResult2.Details)
-							// Skip this task instead of accepting bad work
-							if taskID != "" {
-								l.cfg.TaskBackend.SkipTask(taskID, "verification_rejected: "+llmResult2.Details)
-								l.logger.Warn("Skipping task %s — verification rejected twice", taskID)
-							}
-							return false
-						}
-						l.logger.Success("Sonnet verified after fix: %s", llmResult2.Reason)
-					} else {
-						l.logger.Success("LLM verified: %s", llmResult.Reason)
-					}
-				}
-
-				return true
+				return l.onSignal(signalParams{
+					ctx:        ctx,
+					headBefore: headBefore,
+					workDir:    workDir,
+					rawLogPath: rawLogPath,
+					taskID:     taskID,
+					nextTask:   nextTask,
+				})
 			},
 			FeedbackFile: filepath.Join(l.cfg.Dirs.RalphDir, "feedback"),
 		})
@@ -689,133 +600,6 @@ func (l *Loop) mergeWithRetry(ctx context.Context, taskID, nextTask, workDir, ra
 	return false, fmt.Errorf("merge failed after %d attempts", maxMergeAttempts)
 }
 
-// resolveConflict rebases onto the default branch and force-pushes to
-// resolve PR merge conflicts before the next merge attempt.
-func (l *Loop) resolveConflict(ctx context.Context) error {
-	l.logger.Log("Rebasing onto default branch to resolve merge conflicts...")
-	if err := l.git.RebaseOntoDefaultBranch(ctx); err != nil {
-		l.logger.Warn("Rebase failed: %v", err)
-		return fmt.Errorf("conflict resolution rebase failed: %w", err)
-	}
-
-	l.logger.Log("Force-pushing rebased branch...")
-	if err := l.forcePush(ctx); err != nil {
-		l.logger.Warn("Force-push after rebase failed: %v", err)
-		return fmt.Errorf("force-push after conflict rebase failed: %w", err)
-	}
-	return nil
-}
-
-// tryFixCI spawns a fix agent to address CI failures, pushes the fix,
-// and returns true if the fix was applied (ready for merge retry).
-func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, nextTask, workDir, rawLogPath string) bool {
-	l.logger.Log("CI failed on PR #%s — spawning fix agent", ciErr.PRNumber)
-
-	ciLog := l.getCIFailureLog(ciErr.PRNumber)
-	signalPath := filepath.Join(l.cfg.Dirs.RalphDir, ".signal_complete")
-	fixPrompt := l.loadVerifyPrompt("verify-tests.md", map[string]string{
-		"{{TASK_TITLE}}":       nextTask,
-		"{{TASK_DESCRIPTION}}": "CI checks failed after push. Fix the failures so CI passes.",
-		"{{TEST_OUTPUT}}":      ciErr.Error() + "\n\n" + ciLog,
-		"{{SIGNAL_COMPLETE}}":  signalPath,
-	})
-
-	fixResult := l.runFixAgent(ctx, "CI failures", fixPrompt, workDir, rawLogPath)
-	if !fixResult.SignalDetected {
-		return false
-	}
-
-	if pushErr := l.pushAndCreatePR(ctx, taskID, nextTask); pushErr != nil {
-		l.logger.Warn("Push after CI fix failed: %v", pushErr)
-		return false
-	}
-
-	return true
-}
-
-// runFixAgent stops the main agent's streaming, spawns a fix agent with the
-// given prompt, and returns the result. All fix agent invocations share the
-// same RunConfig shape — this method is the single place that wires it up.
-func (l *Loop) runFixAgent(ctx context.Context, description, prompt, workDir, rawLogPath string) claude.Result {
-	l.runner.StopStreaming()
-	l.logger.Log("Spawning fix agent: %s", description)
-
-	runner := l.newRunner()
-	result, _ := runner.Run(claude.RunConfig{
-		Ctx:          ctx,
-		WorkDir:      workDir,
-		RalphDir:     l.cfg.Dirs.RalphDir,
-		Prompt:       prompt,
-		RawLog:       rawLogPath,
-		Quiet:        true,
-		Signals:      l.signals,
-		PollInterval: 2 * time.Second,
-		IdleTimeout:  l.cfg.IdleTimeout,
-	})
-
-	if !result.SignalDetected {
-		l.logger.Warn("Fix agent exited without signal (%s)", description)
-	} else if result.Summary != "" {
-		l.logger.Log("Fix agent (%s): %s", description, result.Summary)
-	}
-
-	return result
-}
-
-// newRunner returns a claudeRunner for spawning sub-agents. Uses newRunnerFunc
-// if set (for testing), otherwise creates a default claude.Runner.
-func (l *Loop) newRunner() claudeRunner {
-	if l.newRunnerFunc != nil {
-		return l.newRunnerFunc()
-	}
-	return &claude.Runner{Logger: l.logger}
-}
-
-// forcePush force-pushes the current branch to the remote.
-func (l *Loop) forcePush(ctx context.Context) error {
-	if l.forcePushFunc != nil {
-		return l.forcePushFunc(ctx)
-	}
-	return l.git.ForcePush(ctx)
-}
-
-// getCIFailureLog retrieves the failed CI run's log output for the given PR.
-func (l *Loop) getCIFailureLog(prNumber string) string {
-	return l.git.GetCIFailureLog(prNumber)
-}
-
-// loadVerifyPrompt reads a prompt template from the prompts directory and
-// replaces placeholders with the given values.
-func (l *Loop) loadVerifyPrompt(filename string, vars map[string]string) string {
-	path := filepath.Join(l.cfg.Dirs.PromptsDir, filename)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		// Fallback: return a minimal prompt
-		result := ""
-		for k, v := range vars {
-			result += k + ": " + v + "\n"
-		}
-		return result
-	}
-	s := string(data)
-	for k, v := range vars {
-		s = strings.ReplaceAll(s, k, v)
-	}
-	return s
-}
-
-// getBeadDescription retrieves the bead description for LLM verification.
-func (l *Loop) getBeadDescription(taskID string) string {
-	if taskID == "" || l.cfg.TaskBackend == nil {
-		return ""
-	}
-	desc, err := l.cfg.TaskBackend.GetDescription(taskID)
-	if err != nil {
-		return ""
-	}
-	return desc
-}
-
 // isNewTask returns true when the next task differs from the last one stored
 // in state. Prefers task ID comparison (stable across description edits);
 // falls back to description when no ID is available.
@@ -828,39 +612,6 @@ func (l *Loop) isNewTask(taskID, taskDesc string) bool {
 	return lastTask != taskDesc
 }
 
-// verifyCompletion runs post-signal checks: commit presence and test suite.
-// Returns (true, "") on success or (false, reason) on failure.
-func (l *Loop) verifyCompletion(ctx context.Context, headBefore string) (bool, string) {
-	if l.verifyFunc != nil {
-		return l.verifyFunc(ctx, l.git.WorkDir, headBefore)
-	}
-
-	if l.cfg.VerifyDir == "" {
-		return true, ""
-	}
-
-	commitResult := verify.CheckCommits(l.git.WorkDir, headBefore)
-	if !commitResult.Passed {
-		return false, commitResult.Reason
-	}
-
-	testResult := verify.RunTests(ctx, l.cfg.VerifyDir)
-	now := time.Now().Format(time.RFC3339)
-	if !testResult.Passed {
-		l.state.Write("last_test_result", "fail")
-		l.state.Write("last_test_output", testResult.Details)
-		l.state.Write("last_test_time", now)
-		if testResult.Details != "" {
-			l.logger.Error("Test output:\n%s", testResult.Details)
-		}
-		return false, testResult.Reason
-	}
-
-	l.state.Write("last_test_result", "pass")
-	l.state.Write("last_test_output", "")
-	l.state.Write("last_test_time", now)
-	return true, ""
-}
 
 func (l *Loop) prePushRebase(ctx context.Context) error {
 	if l.prePushRebaseFunc != nil {
@@ -901,22 +652,6 @@ func (l *Loop) autoMerge(ctx context.Context) (bool, error) {
 		return l.mergeFunc(ctx)
 	}
 	return l.git.AutoMergeCurrentBranch(ctx)
-}
-
-
-func (l *Loop) findPRInfo(workDir string) (number, title string) {
-	if l.findPRInfoFunc != nil {
-		return l.findPRInfoFunc(workDir)
-	}
-	gh := l.git.GitHub
-	if gh == nil {
-		return "", ""
-	}
-	num, t, err := gh.FindPR(l.git.WorktreeBranch, workDir)
-	if err != nil {
-		return "", ""
-	}
-	return num, t
 }
 
 func (l *Loop) waitForTasks(ctx context.Context) bool {
@@ -1129,7 +864,6 @@ func (l *Loop) readFeedback() string {
 	return string(data)
 }
 
-
 // readReflection returns the content of a previous reflection file for a task.
 // Uses task ID if available, falls back to slugified task name.
 func (l *Loop) readReflection(taskID, taskName string) string {
@@ -1207,44 +941,6 @@ func (l *Loop) recordCompletedTask(taskID, taskTitle string) {
 	defer f.Close()
 	f.WriteString(label + "\n")
 }
-
-// runPreIterationTests runs the full test suite before handing off to the
-// agent. Stores results in state.json so they persist across restarts.
-// Returns a human-readable status string for the agent prompt.
-func (l *Loop) runPreIterationTests(ctx context.Context) string {
-	if l.cfg.VerifyDir == "" {
-		return ""
-	}
-
-	l.logger.Log("Running pre-iteration test suite...")
-	result := verify.RunTests(ctx, l.cfg.VerifyDir)
-	now := time.Now().Format(time.RFC3339)
-
-	if result.Passed {
-		l.state.Write("last_test_result", "pass")
-		l.state.Write("last_test_output", "")
-		l.state.Write("last_test_time", now)
-		l.logger.Success("Pre-iteration tests: all passing")
-		return "\n- Test suite status: all tests passing as of start."
-	}
-
-	l.state.Write("last_test_result", "fail")
-	l.state.Write("last_test_output", result.Details)
-	l.state.Write("last_test_time", now)
-	l.logger.Warn("Pre-iteration tests: failures detected")
-	msg := "\n- Test suite status: some tests are FAILING. Fix them before your task. If the tests pass when you run them, they were fixed externally — proceed with your task."
-	if result.Details != "" {
-		// Truncate to avoid bloating the prompt.
-		details := result.Details
-		lines := strings.Split(details, "\n")
-		if len(lines) > 20 {
-			details = strings.Join(lines[len(lines)-20:], "\n")
-		}
-		msg += "\n  Failure output:\n  " + strings.ReplaceAll(details, "\n", "\n  ")
-	}
-	return msg
-}
-
 
 func touchFile(path string) {
 	f, err := os.Create(path)
