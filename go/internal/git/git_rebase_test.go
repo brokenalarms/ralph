@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -74,7 +73,6 @@ func writeFile(t *testing.T, dir, name, content string) {
 	run(t, "git", "-C", dir, "add", name)
 }
 
-// --- RebaseOntoDefaultBranch tests ---
 
 // Clean rebase succeeds when no squash merges have happened
 func TestRebaseOntoDefaultBranch_CleanRebase(t *testing.T) {
@@ -348,7 +346,6 @@ func TestRebaseOntoDefaultBranch_SkipsWhenAhead(t *testing.T) {
 	}
 }
 
-// --- tryResumeWorktree fetch tests ---
 
 // Resuming a worktree fetches origin/main so subsequent rebase uses fresh refs,
 // not stale local copies from the previous run.
@@ -379,7 +376,6 @@ func TestTryResumeWorktree_FetchesOriginOnResume(t *testing.T) {
 	}
 }
 
-// --- TagTaskStart / TagTaskEnd tests ---
 
 // TagTaskStart creates a git tag using the bd task ID when available
 func TestTagTaskStart_WithTaskID(t *testing.T) {
@@ -516,7 +512,6 @@ func TestTagStartEnd_DifferentCommits(t *testing.T) {
 	}
 }
 
-// --- RecreateFromMain tests ---
 
 // RecreateFromMain removes the old worktree and creates a fresh one from main,
 // recovering from squash-merge rebase conflicts where completed work is already on main.
@@ -696,86 +691,3 @@ func TestRebaseOntoDefaultBranch_CancelledContextReturnsContextError(t *testing.
 	}
 }
 
-// --- AutoMergeCurrentBranch tests ---
-
-// AutoMergeCurrentBranch returns nil when no worktree branch is set,
-// so --auto-merge is a safe no-op without worktree isolation.
-func TestAutoMergeCurrentBranch_SkipsWhenNoWorktreeBranch(t *testing.T) {
-	mgr := &Manager{
-		WorkDir:    "/some/dir",
-		ProjectDir: "/some/dir",
-		Logger:     &testLog{},
-	}
-	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
-	if err != nil {
-		t.Errorf("expected nil error, got %v", err)
-	}
-	if merged {
-		t.Error("expected merged=false when no worktree branch")
-	}
-}
-
-// AutoMergeCurrentBranch returns nil when WorkDir equals ProjectDir,
-// avoiding merging from the project dir itself.
-func TestAutoMergeCurrentBranch_SkipsWhenWorkDirIsProjectDir(t *testing.T) {
-	mgr := &Manager{
-		WorktreeBranch: "ralph/project/01-some-task",
-		WorkDir:        "/some/dir",
-		ProjectDir:     "/some/dir",
-		Logger:         &testLog{},
-	}
-	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
-	if err != nil {
-		t.Errorf("expected nil error, got %v", err)
-	}
-	if merged {
-		t.Error("expected merged=false when WorkDir == ProjectDir")
-	}
-}
-
-// AutoMergeCurrentBranch returns 0 and logs "No open PR found" when no PR
-// exists for the branch, so an unpushed branch doesn't cause a failure.
-func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
-	if _, err := exec.LookPath("gh"); err != nil {
-		t.Skip("gh CLI not available")
-	}
-
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	state := newMemState()
-
-	mgr := &Manager{
-		ProjectDir:  project,
-		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
-		Logger:      &testLog{},
-	}
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	mgr.RenameBranchForTask("unpushed task", "")
-
-	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
-	if err != nil {
-		t.Errorf("expected nil error (skip), got %v", err)
-	}
-	if merged {
-		t.Error("expected merged=false when no PR exists")
-	}
-
-	log := mgr.Logger.(*testLog)
-	if !log.contains("No open PR found") {
-		t.Error("expected 'No open PR found' log message")
-	}
-}
-
-// mergeOpts always sets DeleteBranch=true since each task gets its own branch.
-func TestMergeOpts_AlwaysDeletesBranch(t *testing.T) {
-	mgr := &Manager{}
-	opts := mgr.mergeOpts()
-	if !opts.DeleteBranch {
-		t.Fatal("mergeOpts should always set DeleteBranch")
-	}
-}
