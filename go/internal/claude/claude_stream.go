@@ -123,12 +123,51 @@ func colorTag(tag string) string {
 
 var tagRe = regexp.MustCompile(`\[([A-Za-z][A-Za-z]*)\]`)
 
+// formatContent applies markdown stripping and ANSI tag coloring to text
+// without adding a timestamp prefix.
+func formatContent(text string) string {
+	text = stripMarkdown(text)
+	return tagRe.ReplaceAllStringFunc(text, colorTag)
+}
+
 // FormatStreamLine takes raw extracted text from a stream event and returns
 // a fully formatted output line with timestamp, ANSI colors, and markdown stripped.
 func FormatStreamLine(text string) string {
-	text = stripMarkdown(text)
-	text = tagRe.ReplaceAllStringFunc(text, colorTag)
-	return time.Now().Format("15:04:05") + " " + text
+	return time.Now().Format("15:04:05") + " " + formatContent(text)
+}
+
+// StreamFormatter tracks the last emitted timestamp so consecutive lines
+// within the same second are grouped: only the first line shows the
+// timestamp, continuation lines are indented with spaces.
+type StreamFormatter struct {
+	lastTS string
+}
+
+const tsWidth = 9 // "HH:MM:SS" (8) + space (1)
+
+// FormatLine formats text with timestamp grouping. If the current second
+// matches the previous line, the timestamp is replaced with whitespace.
+func (f *StreamFormatter) FormatLine(text string) string {
+	content := formatContent(text)
+	ts := time.Now().Format("15:04:05")
+	if ts == f.lastTS {
+		return strings.Repeat(" ", tsWidth) + content
+	}
+	f.lastTS = ts
+	return ts + " " + content
+}
+
+// FormatOutput formats a stream text line using timestamp grouping,
+// returning one or more output lines. Diagnosis lines (ISSUE:/FIX:)
+// get a banner above the content.
+func (f *StreamFormatter) FormatOutput(text string) []string {
+	if label, content, ok := parseDiagnosis(text); ok {
+		return []string{
+			diagnosisBanner(label),
+			f.FormatLine("[agent] " + content),
+		}
+	}
+	return []string{f.FormatLine("[agent] " + text)}
 }
 
 var diagnosisRe = regexp.MustCompile(`^(ISSUE|FIX):\s+(.+)`)
@@ -158,16 +197,12 @@ func diagnosisBanner(label string) string {
 		logging.Reset)
 }
 
-// FormatStreamOutput formats a stream text line, returning one or more output lines.
-// Diagnosis lines (ISSUE:/FIX:) get a banner above the content.
+// FormatStreamOutput formats a stream text line without timestamp grouping.
+// Each call uses a fresh formatter, so every line gets its own timestamp.
+// Used by ToolBatcher for backward-compatible output when no grouping is needed.
 func FormatStreamOutput(text string) []string {
-	if label, content, ok := parseDiagnosis(text); ok {
-		return []string{
-			diagnosisBanner(label),
-			FormatStreamLine("[agent] " + content),
-		}
-	}
-	return []string{FormatStreamLine("[agent] " + text)}
+	f := &StreamFormatter{}
+	return f.FormatOutput(text)
 }
 
 // filterStreamJSON tails the raw log file from its current end, extracting
