@@ -852,6 +852,60 @@ func TestBD_GetNextTaskInfo_AutoPrefixesTitle(t *testing.T) {
 	}
 }
 
+// Proves: within the same priority, bugs are preferred over tasks, and tasks over enhancements.
+func TestBD_GetNextTask_PrefersBugsOverTasksAtSamePriority(t *testing.T) {
+	runner := mockBD(
+		"3",
+		map[string]string{"open": "3", "closed": "0", "in_progress": "0"},
+		"[]",
+		`[{"id":"enh-1","title":"Add dark mode","priority":2,"type":"feature"},{"id":"bug-1","title":"Fix crash on login","priority":2,"type":"bug"},{"id":"task-1","title":"Write docs","priority":2,"type":"task"}]`,
+	)
+	b := setupBD(t, runner)
+	id, _, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "bug-1" {
+		t.Errorf("expected bug-1 (bug preferred over task/feature at same priority), got %q", id)
+	}
+}
+
+// Proves: tasks are preferred over features/enhancements at the same priority.
+func TestBD_GetNextTask_PrefersTasksOverEnhancementsAtSamePriority(t *testing.T) {
+	runner := mockBD(
+		"2",
+		map[string]string{"open": "2", "closed": "0", "in_progress": "0"},
+		"[]",
+		`[{"id":"enh-1","title":"Add dark mode","priority":2,"type":"feature"},{"id":"task-1","title":"Write docs","priority":2,"type":"task"}]`,
+	)
+	b := setupBD(t, runner)
+	id, _, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "task-1" {
+		t.Errorf("expected task-1 (task preferred over feature at same priority), got %q", id)
+	}
+}
+
+// Proves: priority still trumps type — a higher-priority feature beats a lower-priority bug.
+func TestBD_GetNextTask_PriorityTrumpsType(t *testing.T) {
+	runner := mockBD(
+		"2",
+		map[string]string{"open": "2", "closed": "0", "in_progress": "0"},
+		"[]",
+		`[{"id":"bug-1","title":"Minor bug","priority":3,"type":"bug"},{"id":"feat-1","title":"Critical feature","priority":1,"type":"feature"}]`,
+	)
+	b := setupBD(t, runner)
+	id, _, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "feat-1" {
+		t.Errorf("expected feat-1 (P1 feature beats P3 bug), got %q", id)
+	}
+}
+
 // Proves: GetNextTaskInfo does not double-prefix titles that already have a component prefix.
 func TestBD_GetNextTaskInfo_NoDoublePrefixing(t *testing.T) {
 	ready := `[{"id":"ralph-xyz","title":"ralph task: echo back beads","priority":2}]`
