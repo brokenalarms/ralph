@@ -432,7 +432,9 @@ func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
 			if text := extractStreamText(line); text != "" {
 				for _, tl := range strings.Split(text, "\n") {
 					if tl != "" {
-						fmt.Fprintf(logOut, "%s\n", FormatStreamLine("[agent] "+tl))
+						for _, out := range FormatStreamOutput(tl) {
+							fmt.Fprintf(logOut, "%s\n", out)
+						}
 					}
 				}
 			}
@@ -584,6 +586,45 @@ func FormatStreamLine(text string) string {
 	return time.Now().Format("15:04:05") + " " + text
 }
 
+var diagnosisRe = regexp.MustCompile(`^(ISSUE|FIX):\s+(.+)`)
+
+// parseDiagnosis checks if a line is an ISSUE: or FIX: diagnosis line.
+// Returns the label, content, and whether it matched.
+func parseDiagnosis(line string) (label, content string, ok bool) {
+	m := diagnosisRe.FindStringSubmatch(line)
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}
+
+// diagnosisBanner returns a bold yellow centered banner like ═══ ISSUE ═══.
+func diagnosisBanner(label string) string {
+	const totalWidth = 72
+	pad := totalWidth - len(label) - 2
+	if pad < 4 {
+		pad = 4
+	}
+	left := pad / 2
+	right := pad - left
+	return fmt.Sprintf("%s%s%s %s %s%s",
+		logging.Bold, logging.Yellow,
+		strings.Repeat("═", left), label, strings.Repeat("═", right),
+		logging.Reset)
+}
+
+// FormatStreamOutput formats a stream text line, returning one or more output lines.
+// Diagnosis lines (ISSUE:/FIX:) get a banner above the content.
+func FormatStreamOutput(text string) []string {
+	if label, content, ok := parseDiagnosis(text); ok {
+		return []string{
+			diagnosisBanner(label),
+			FormatStreamLine("[agent] " + content),
+		}
+	}
+	return []string{FormatStreamLine("[agent] " + text)}
+}
+
 // FilterStream tails a raw log file and writes formatted, colored output to
 // stdout. Intended for use as the tmux stream pane via `ralph filter-stream`.
 // Blocks until the process is killed (tmux manages its lifecycle).
@@ -612,7 +653,9 @@ func FilterStream(rawLogPath string) {
 			if text := extractStreamText(line); text != "" {
 				for _, tl := range strings.Split(text, "\n") {
 					if tl != "" {
-						fmt.Fprintln(os.Stdout, FormatStreamLine("[agent] "+tl))
+						for _, out := range FormatStreamOutput(tl) {
+							fmt.Fprintln(os.Stdout, out)
+						}
 					}
 				}
 			}

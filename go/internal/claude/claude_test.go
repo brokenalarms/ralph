@@ -372,6 +372,94 @@ func TestFormatStreamLine_NoTaskIDPrefix(t *testing.T) {
 	}
 }
 
+// --- Diagnosis banner tests ---
+
+// Verifies that ISSUE: lines are detected and produce a banner.
+func TestParseDiagnosis_Issue(t *testing.T) {
+	label, content, ok := parseDiagnosis("ISSUE: the build is broken")
+	if !ok {
+		t.Fatal("parseDiagnosis should detect ISSUE: prefix")
+	}
+	if label != "ISSUE" {
+		t.Errorf("label = %q, want ISSUE", label)
+	}
+	if content != "the build is broken" {
+		t.Errorf("content = %q, want 'the build is broken'", content)
+	}
+}
+
+// Verifies that FIX: lines are detected and produce a banner.
+func TestParseDiagnosis_Fix(t *testing.T) {
+	label, content, ok := parseDiagnosis("FIX: update the config")
+	if !ok {
+		t.Fatal("parseDiagnosis should detect FIX: prefix")
+	}
+	if label != "FIX" {
+		t.Errorf("label = %q, want FIX", label)
+	}
+	if content != "update the config" {
+		t.Errorf("content = %q, want 'update the config'", content)
+	}
+}
+
+// Verifies that ordinary lines are not treated as diagnosis.
+func TestParseDiagnosis_NormalLine(t *testing.T) {
+	_, _, ok := parseDiagnosis("Reading file /tmp/foo.go")
+	if ok {
+		t.Error("parseDiagnosis should not match ordinary lines")
+	}
+}
+
+// Verifies that partial matches like "ISSUES:" or "FIXED:" are not detected.
+func TestParseDiagnosis_NoFalsePositives(t *testing.T) {
+	for _, line := range []string{"ISSUES: plural", "FIXED: past tense", "issue: lowercase"} {
+		if _, _, ok := parseDiagnosis(line); ok {
+			t.Errorf("parseDiagnosis should not match %q", line)
+		}
+	}
+}
+
+// Verifies that diagnosisBanner produces a centered banner with ═ characters.
+func TestDiagnosisBanner(t *testing.T) {
+	banner := diagnosisBanner("ISSUE")
+	plain := ansiRe.ReplaceAllString(banner, "")
+
+	if !strings.Contains(plain, "═") {
+		t.Error("diagnosisBanner should contain ═ separator characters")
+	}
+	if !strings.Contains(plain, " ISSUE ") {
+		t.Errorf("diagnosisBanner should contain centered label, got: %q", plain)
+	}
+}
+
+// Verifies that diagnosis lines get banner treatment in FormatStreamOutput.
+func TestFormatStreamOutput_DiagnosisBanner(t *testing.T) {
+	lines := FormatStreamOutput("ISSUE: something is wrong")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines (banner + content), got %d", len(lines))
+	}
+	plainBanner := ansiRe.ReplaceAllString(lines[0], "")
+	if !strings.Contains(plainBanner, "ISSUE") || !strings.Contains(plainBanner, "═") {
+		t.Errorf("first line should be banner, got: %q", plainBanner)
+	}
+	plainContent := ansiRe.ReplaceAllString(lines[1], "")
+	if !strings.Contains(plainContent, "something is wrong") {
+		t.Errorf("second line should contain content, got: %q", plainContent)
+	}
+}
+
+// Verifies that non-diagnosis lines pass through normally in FormatStreamOutput.
+func TestFormatStreamOutput_NormalLine(t *testing.T) {
+	lines := FormatStreamOutput("Reading file /tmp/foo.go")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line for normal text, got %d", len(lines))
+	}
+	plain := ansiRe.ReplaceAllString(lines[0], "")
+	if !strings.Contains(plain, "[agent] Reading file /tmp/foo.go") {
+		t.Errorf("normal line should have [agent] prefix, got: %q", plain)
+	}
+}
+
 // --- JSON fragment stripping tests ---
 
 // Verifies that stripJSONFragment removes lines that are entirely JSON,
@@ -585,6 +673,58 @@ func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
 	}
 	if !strings.Contains(content, "[agent] some delta text") {
 		t.Errorf("delta text should have [agent] prefix, got: %q", content)
+	}
+}
+
+// Verifies that ISSUE:/FIX: diagnosis lines in the stream get banner treatment
+// so they stand out visually in the log output.
+func TestFilterStreamJSON_DiagnosisBanner(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+
+	os.WriteFile(rawPath, nil, 0o644)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		filterStreamJSON(rawPath, logPath, stop)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"ISSUE: the config is missing a required field"}]}}`)
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"FIX: add the default value to config.go"}]}}`)
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := ansiRe.ReplaceAllString(string(got), "")
+
+	if !strings.Contains(content, "═") {
+		t.Errorf("diagnosis output should contain ═ banner characters, got: %q", content)
+	}
+	if !strings.Contains(content, "ISSUE") {
+		t.Errorf("should contain ISSUE banner, got: %q", content)
+	}
+	if !strings.Contains(content, "FIX") {
+		t.Errorf("should contain FIX banner, got: %q", content)
+	}
+	if !strings.Contains(content, "the config is missing a required field") {
+		t.Errorf("should contain ISSUE content, got: %q", content)
+	}
+	if !strings.Contains(content, "add the default value to config.go") {
+		t.Errorf("should contain FIX content, got: %q", content)
 	}
 }
 
