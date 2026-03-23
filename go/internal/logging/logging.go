@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -103,19 +104,11 @@ func (l *Logger) Separator(color, label string) {
 	right := pad - left
 	line := fmt.Sprintf("\n%s%s%s %s %s%s\n\n",
 		Bold, color,
-		repeat("═", left), label, repeat("═", right),
+		strings.Repeat("═", left), label, strings.Repeat("═", right),
 		Reset)
 	if !l.streaming {
 		fmt.Fprint(l.out, line)
 	}
 	fmt.Fprint(l.logFile, line)
-}
-
-func repeat(s string, n int) string {
-	result := ""
-	for i := 0; i < n; i++ {
-		result += s
-	}
-	return result
 }
 
