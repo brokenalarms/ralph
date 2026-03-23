@@ -65,7 +65,7 @@ func run(args []string) int {
 
 	// Use on-disk prompts if available (running ralph on itself), otherwise
 	// extract embedded prompts to a temp dir.
-	promptsDir := filepath.Join(cfg.ProjectDir, "prompts")
+	promptsDir := filepath.Join(cfg.ProjectDir, "go", "cmd", "ralph", "prompts")
 	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
 		tmpDir, err := extractEmbeddedPrompts()
 		if err != nil {

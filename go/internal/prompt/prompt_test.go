@@ -7,12 +7,12 @@ import (
 	"testing"
 )
 
-// promptsDir returns the absolute path to the project's prompts/ directory.
+// promptsDir returns the absolute path to the embedded prompts directory.
 // Tests read the real template files so they stay in sync with the actual prompts.
 func promptsDir(t *testing.T) string {
 	t.Helper()
-	// go/internal/prompt/ → project root
-	dir, err := filepath.Abs(filepath.Join("..", "..", "..", "prompts"))
+	// go/internal/prompt/ → go/cmd/ralph/prompts/
+	dir, err := filepath.Abs(filepath.Join("..", "..", "cmd", "ralph", "prompts"))
 	if err != nil {
 		t.Fatalf("resolve prompts dir: %v", err)
 	}

@@ -4,10 +4,6 @@ set -euo pipefail
 
 root="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
 
-echo "[rebuild-go] Copying prompts into go/cmd/ralph/prompts/"
-rm -rf "$root/go/cmd/ralph/prompts"
-cp -r "$root/prompts" "$root/go/cmd/ralph/prompts"
-
 version=$(git -C "$root" describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --abbrev=0 2>/dev/null || echo "v0.1.0-dev")
 echo "[rebuild-go] Building ralph ${version}"
 

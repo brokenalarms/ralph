@@ -17,7 +17,7 @@
 - **state.json**: for all orchestrator-internal state that persists across iterations (iteration count, last task, test results, config overrides). If it's not agent↔orchestrator communication or user input, it goes in state.json.
 
 # Build
-- `go/cmd/ralph/prompts/` is a gitignored build artifact — copied from `prompts/` by `scripts/rebuild-go.sh`. The source of truth is `prompts/`. Edit there, not the copy. Run `scripts/rebuild-go.sh` to sync and rebuild.
+- `go/cmd/ralph/prompts/` is the source of truth for prompt templates, embedded into the binary via `//go:embed`. Edit them directly — no copy step needed.
 
 # Prompts
 - User-facing text strings and instructions for Claude belong in `.md` files under `prompts/`, not hardcoded in shell scripts. Shell code assembles and templates prompts but should not contain instructional prose.

@@ -9,4 +9,3 @@
 # Go build output
 /ralph
 /go/ralph
-go/cmd/ralph/prompts

@@ -345,40 +345,6 @@ func TestReadLineCtx_CancelledContext(t *testing.T) {
 
 // Verifies embedded prompts (go/cmd/ralph/prompts/) match the source prompts
 // (prompts/) so the fallback for non-self-hosted projects stays in sync.
-func TestEmbeddedPrompts_MatchSourcePrompts(t *testing.T) {
-	// go/cmd/ralph/ → project root
-	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
-	if err != nil {
-		t.Fatalf("resolve project root: %v", err)
-	}
-	sourceDir := filepath.Join(root, "prompts")
-	embeddedDir := filepath.Join(root, "go", "cmd", "ralph", "prompts")
-
-	entries, err := os.ReadDir(sourceDir)
-	if err != nil {
-		t.Fatalf("read source prompts dir: %v", err)
-	}
-
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		src, err := os.ReadFile(filepath.Join(sourceDir, name))
-		if err != nil {
-			t.Fatalf("read source %s: %v", name, err)
-		}
-		emb, err := os.ReadFile(filepath.Join(embeddedDir, name))
-		if err != nil {
-			t.Errorf("embedded prompt %s missing: %v", name, err)
-			continue
-		}
-		if string(src) != string(emb) {
-			t.Errorf("embedded prompt %s differs from source — run: cp prompts/%s go/cmd/ralph/prompts/%s", name, name, name)
-		}
-	}
-}
-
 // Verifies evolveRestart skips the pull/rebuild/exec sequence when a stop
 // file exists, so that "ralph stop" issued during an iteration is honored
 // before restarting with a new binary.
