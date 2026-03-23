@@ -968,9 +968,11 @@ func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 	if taskID == "" {
 		return fmt.Sprintf("Complete this task: %s", nextTask)
 	}
-	desc := l.getBeadDescription(taskID)
-	if desc != "" {
-		return fmt.Sprintf("Complete this task (bd id: %s): %s\n\nDescription:\n%s", taskID, nextTask, desc)
+	if l.cfg.TaskBackend != nil {
+		full, err := l.cfg.TaskBackend.GetFullContext(taskID)
+		if err == nil && full != "" {
+			return fmt.Sprintf("Complete this task (bd id: %s):\n\n%s", taskID, full)
+		}
 	}
 	return fmt.Sprintf("Complete this task (bd id: %s): %s", taskID, nextTask)
 }

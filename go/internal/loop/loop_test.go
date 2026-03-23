@@ -77,7 +77,8 @@ func (m *mutableBackend) SetState(_, _, _, _ string) error     { return nil }
 func (m *mutableBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (m *mutableBackend) ExecutionInstructions() (string, error) { return "", nil }
 func (m *mutableBackend) PlanningInstructions() string         { return "" }
-func (m *mutableBackend) GetDescription(_ string) (string, error) { return "", nil }
+func (m *mutableBackend) GetDescription(_ string) (string, error)  { return "", nil }
+func (m *mutableBackend) GetFullContext(_ string) (string, error)  { return "", nil }
 func (m *mutableBackend) ProjectContext() (string, error)          { return "", nil }
 func (m *mutableBackend) Label() string {
 	if m.label != "" {
@@ -104,7 +105,8 @@ func (s *stubBackend) SetState(_, _, _, _ string) error     { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (s *stubBackend) ExecutionInstructions() (string, error) { return "", nil }
 func (s *stubBackend) PlanningInstructions() string         { return "" }
-func (s *stubBackend) GetDescription(_ string) (string, error) { return "", nil }
+func (s *stubBackend) GetDescription(_ string) (string, error)  { return "", nil }
+func (s *stubBackend) GetFullContext(_ string) (string, error)  { return "", nil }
 func (s *stubBackend) ProjectContext() (string, error)          { return "", nil }
 func (s *stubBackend) Label() string {
 	if s.label != "" {
