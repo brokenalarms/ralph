@@ -227,10 +227,12 @@ DESCRIPTION: %s
 %s DIFF:
 %s
 
-Answer these two questions:
+Answer these questions:
 1. Does this diff implement what the task asks for?
-2. Do the test changes (if any) actually prove the functionality, or are they superficial?
-3. Are error paths and edge cases handled, or does the code fail silently?
+2. For code changes: do the test changes (if any) actually prove the functionality, or are they superficial?
+3. For code changes: are error paths and edge cases handled, or does the code fail silently?
+
+Some tasks are implemented through prompt or configuration changes (markdown files, .md templates) rather than traditional code. For these changes, only question 1 applies — do not reject for missing tests or error handling.
 
 Reply with exactly one line: YES or NO followed by a one-sentence reason.`, beadTitle, beadDescription, source, diff)
 }
