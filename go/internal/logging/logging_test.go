@@ -207,16 +207,16 @@ func TestNoPerLineTaskIDPrefix(t *testing.T) {
 	}
 }
 
-// Verifies that TaskBanner writes a bold separator with the task ID centered,
+// Verifies that TaskBanner writes a bold separator with the task ID and title centered,
 // replacing the old per-line prefix with a single banner per task.
 func TestTaskBanner(t *testing.T) {
 	var stdout, logFile bytes.Buffer
 	l := &Logger{out: &stdout, logFile: &logFile}
-	l.TaskBanner("ralph-l337")
+	l.TaskBanner("ralph-l337", "Fix the widget factory")
 	got := stdout.String()
 
-	if !strings.Contains(got, "ralph-l337") {
-		t.Errorf("TaskBanner should include task ID, got: %s", got)
+	if !strings.Contains(got, "ralph-l337: Fix the widget factory") {
+		t.Errorf("TaskBanner should include task ID and title, got: %s", got)
 	}
 	if !strings.Contains(got, "═") {
 		t.Error("TaskBanner should contain ═ separator characters")
@@ -227,7 +227,7 @@ func TestTaskBanner(t *testing.T) {
 	if !strings.Contains(got, Magenta) {
 		t.Error("TaskBanner should use magenta color")
 	}
-	if !strings.Contains(logFile.String(), "ralph-l337") {
+	if !strings.Contains(logFile.String(), "ralph-l337: Fix the widget factory") {
 		t.Error("TaskBanner should write to log file")
 	}
 }
@@ -237,12 +237,12 @@ func TestTaskBannerStreamingMode(t *testing.T) {
 	var stdout, logFile bytes.Buffer
 	l := &Logger{out: &stdout, logFile: &logFile}
 	l.SetStreaming(true)
-	l.TaskBanner("ralph-abc")
+	l.TaskBanner("ralph-abc", "Some task")
 
 	if stdout.Len() != 0 {
 		t.Error("TaskBanner should suppress stdout in streaming mode")
 	}
-	if !strings.Contains(logFile.String(), "ralph-abc") {
+	if !strings.Contains(logFile.String(), "ralph-abc: Some task") {
 		t.Error("TaskBanner should still write to log file in streaming mode")
 	}
 }

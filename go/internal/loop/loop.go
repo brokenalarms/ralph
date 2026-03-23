@@ -248,7 +248,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		if taskID != "" && taskChanged {
-			l.logger.TaskBanner(taskID)
+			l.logger.TaskBanner(taskID, nextTask)
 		}
 
 		phaseColor := logging.Green
@@ -257,11 +257,6 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 		l.logger.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done] ---",
 			runIteration, maxIter, iteration, completed, total)
-		if taskID != "" {
-			l.logger.Log("Next task: %s (%s)", nextTask, taskID)
-		} else {
-			l.logger.Log("Next task: %s", nextTask)
-		}
 		if desc := l.getBeadDescription(taskID); desc != "" {
 			l.logger.Log("  %s", desc)
 		}
@@ -283,8 +278,6 @@ func (l *Loop) Run(ctx context.Context) error {
 		if taskID != "" {
 			if err := l.cfg.TaskBackend.SetState(taskID, "phase", "implementing", "ralph: starting task"); err != nil {
 				l.logger.Warn("SetState phase=implementing: %v", err)
-			} else {
-				l.logger.Log("%s → implementing", taskID)
 			}
 		}
 
