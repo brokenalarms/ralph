@@ -430,6 +430,18 @@ func TestBD_ExecutionInstructions_Content(t *testing.T) {
 	}
 }
 
+// Proves: Checklist.ProjectContext returns empty string since checklists have no beads.
+func TestChecklist_ProjectContext_ReturnsEmpty(t *testing.T) {
+	c := &Checklist{PlanFile: "/tmp/plan.md"}
+	got, err := c.ProjectContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Errorf("expected empty project context for checklist, got %q", got)
+	}
+}
+
 // Proves: Checklist Init is a no-op (does not create .beads).
 func TestChecklist_Init_IsNoOp(t *testing.T) {
 	dir := t.TempDir()
@@ -750,6 +762,89 @@ func TestBD_CloseTask_RejectsEmptyPhase(t *testing.T) {
 	err := b.CloseTask("task-1", "done")
 	if err == nil {
 		t.Error("expected error when phase state is not set")
+	}
+}
+
+// Proves: ProjectContext assembles open beads, recently closed beads,
+// project directory, and config into a single string for prompt injection.
+func TestBD_ProjectContext_AssemblesAllSections(t *testing.T) {
+	openList := "○ task-1 [● P1] - Fix auth\n○ task-2 [● P2] - Add tests"
+	closedList := "✓ task-0 ● P1 - Bootstrap project"
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case joined == "list --flat":
+			return openList, nil
+		case strings.Contains(joined, "list") && strings.Contains(joined, "closed"):
+			return closedList, nil
+		case joined == "prime":
+			return "# bd prime output", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+
+	// Write a ralph.toml so config is included.
+	os.WriteFile(filepath.Join(b.ProjectDir, "ralph.toml"), []byte("max_iterations = 10\n"), 0644)
+
+	got, err := b.ProjectContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "task-1") {
+		t.Error("expected open beads in project context")
+	}
+	if !strings.Contains(got, "task-0") {
+		t.Error("expected recently closed beads in project context")
+	}
+	if !strings.Contains(got, b.ProjectDir) {
+		t.Error("expected project directory in project context")
+	}
+	if !strings.Contains(got, "max_iterations") {
+		t.Error("expected ralph config in project context")
+	}
+	if !strings.Contains(got, "bd prime output") {
+		t.Error("expected bd prime output in project context")
+	}
+}
+
+// Proves: ProjectContext gracefully handles missing ralph.toml.
+func TestBD_ProjectContext_NoConfig(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case joined == "list --flat":
+			return "○ task-1 - Something", nil
+		case strings.Contains(joined, "list") && strings.Contains(joined, "closed"):
+			return "", nil
+		case joined == "prime":
+			return "# prime", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	got, err := b.ProjectContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "task-1") {
+		t.Error("expected open beads even without config")
+	}
+}
+
+// Proves: ProjectContext returns empty when all bd commands fail.
+func TestBD_ProjectContext_AllCommandsFail(t *testing.T) {
+	failing := func(_ context.Context, dir string, args ...string) (string, error) {
+		return "", errors.New("fail")
+	}
+	b := setupBD(t, failing)
+	got, err := b.ProjectContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Should still include project directory at minimum.
+	if !strings.Contains(got, b.ProjectDir) {
+		t.Error("expected project directory even when bd commands fail")
 	}
 }
 

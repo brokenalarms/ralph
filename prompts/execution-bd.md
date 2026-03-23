@@ -1,6 +1,9 @@
 ## Task selection
 1. Read AGENTS.md or CLAUDE.md if present (mandatory — do not skip or summarize). Follow any project-specific guidance.
-2. This project uses `bd` for task tracking. Run `bd prime` for workflow context. All `bd` commands must run from {{PROJECT_DIR}} (where `.beads` lives), not the worktree.
+2. This project uses `bd` for task tracking. All `bd` commands must run from {{PROJECT_DIR}} (where `.beads` lives), not the worktree.
+
+## Project context
+{{BEADS_CONTEXT}}
 
 ## Your task this iteration
 {{TASK_PROMPT}}

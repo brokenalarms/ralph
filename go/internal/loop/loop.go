@@ -982,6 +982,11 @@ func (l *Loop) buildPrompt(taskPrompt, feedback, attemptHistory, testStatus stri
 		backend = prompt.BackendBD
 	}
 
+	beadsContext, err := l.cfg.TaskBackend.ProjectContext()
+	if err != nil {
+		l.logger.Warn("ProjectContext: %v", err)
+	}
+
 	return prompt.BuildPrompt(prompt.Vars{
 		PromptsDir:       l.cfg.PromptsDir,
 		ProjectDir:       l.cfg.ProjectDir,
@@ -995,6 +1000,7 @@ func (l *Loop) buildPrompt(taskPrompt, feedback, attemptHistory, testStatus stri
 		Feedback:         feedback,
 		AttemptHistory:   attemptHistory,
 		TestStatus:       testStatus,
+		BeadsContext:     beadsContext,
 		TaskBackend:      backend,
 	})
 }
