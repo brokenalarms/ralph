@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -1257,8 +1259,9 @@ func TestDisallowedTools_ContainsBdClose(t *testing.T) {
 
 // --- Run() cleanup tests ---
 
-// Verifies that Run() stops streaming goroutines before returning, so no
-// goroutines leak across iterations.
+// Verifies that Run() kills the claude process and stops streaming goroutines
+// before returning. Uses a long-running process and context cancellation to
+// exercise the kill path, then checks the process is actually dead.
 func TestRun_CleansUpStreamingOnReturn(t *testing.T) {
 	dir := t.TempDir()
 	rawLog := filepath.Join(dir, "raw.log")
@@ -1268,15 +1271,23 @@ func TestRun_CleansUpStreamingOnReturn(t *testing.T) {
 	runner := &Runner{
 		Logger: &testLogger{},
 		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
-			cmd := exec.Command("true")
+			cmd := exec.Command("sleep", "60")
 			cmd.Dir = cfg.WorkDir
 			cmd.Stdout = raw
 			cmd.Stderr = raw
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			return cmd
 		},
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
 	_, err := runner.Run(RunConfig{
+		Ctx:          ctx,
 		WorkDir:      dir,
 		RalphDir:     dir,
 		Prompt:       "test",
@@ -1290,6 +1301,10 @@ func TestRun_CleansUpStreamingOnReturn(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Since Run() returned without hanging, cmd.Wait() must have completed,
+	// confirming Kill+Wait were called on the process.
+
+	// Verify streaming goroutines were cleaned up.
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
 	if runner.filterStop != nil {
@@ -1306,21 +1321,92 @@ func TestRun_CleansUpStreamingOnReturn(t *testing.T) {
 	}
 }
 
+// Verifies that Run() kills a long-running process and the process is actually
+// dead after Run() returns. Tracks the PID from CmdFactory and uses kill -0 to
+// confirm the process was killed.
+func TestRun_KillsProcessOnContextCancel(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	logFile := filepath.Join(dir, "loop.log")
+	signals := DefaultSignalPaths(dir)
+
+	pidFile := filepath.Join(dir, "cmd.pid")
+	runner := &Runner{
+		Logger: &testLogger{},
+		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
+			script := fmt.Sprintf(`echo $$ > %s; sleep 60`, pidFile)
+			cmd := exec.Command("bash", "-c", script)
+			cmd.Dir = cfg.WorkDir
+			cmd.Stdout = raw
+			cmd.Stderr = raw
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			return cmd
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := runner.Run(RunConfig{
+		Ctx:          ctx,
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		LogFile:      logFile,
+		Quiet:        false,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Read the captured PID.
+	pidData, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal("PID file not written — process may not have started")
+	}
+	pid := strings.TrimSpace(string(pidData))
+
+	// Verify the process is dead. kill -0 checks if a process exists.
+	time.Sleep(100 * time.Millisecond)
+	check := exec.Command("kill", "-0", pid)
+	if err := check.Run(); err == nil {
+		t.Errorf("process %s should be dead after Run() returns, but kill -0 succeeded", pid)
+	}
+}
+
 // Verifies that a second Run() call stops streaming goroutines left by the
 // first Run() before starting new ones, preventing goroutine accumulation.
+// Also verifies the second Run()'s process is killed on context cancellation.
 func TestRun_SecondCallStopsPreviousStreaming(t *testing.T) {
 	dir := t.TempDir()
 	rawLog := filepath.Join(dir, "raw.log")
 	logFile := filepath.Join(dir, "loop.log")
 	signals := DefaultSignalPaths(dir)
 
+	var callCount atomic.Int32
+	pidFile1 := filepath.Join(dir, "cmd1.pid")
+	pidFile2 := filepath.Join(dir, "cmd2.pid")
+
 	runner := &Runner{
 		Logger: &testLogger{},
 		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
-			cmd := exec.Command("true")
+			n := callCount.Add(1)
+			pidFile := pidFile1
+			if n == 2 {
+				pidFile = pidFile2
+			}
+			script := fmt.Sprintf(`echo $$ > %s; sleep 60`, pidFile)
+			cmd := exec.Command("bash", "-c", script)
 			cmd.Dir = cfg.WorkDir
 			cmd.Stdout = raw
 			cmd.Stderr = raw
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			return cmd
 		},
 	}
@@ -1346,8 +1432,15 @@ func TestRun_SecondCallStopsPreviousStreaming(t *testing.T) {
 	runner.tailDone = prevTailDone
 	runner.mu.Unlock()
 
-	// Run() should stop the previous goroutines before starting new ones.
+	// Run() with context cancellation so the long-running process gets killed.
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
 	_, err := runner.Run(RunConfig{
+		Ctx:          ctx,
 		WorkDir:      dir,
 		RalphDir:     dir,
 		Prompt:       "test",
