@@ -49,7 +49,7 @@ func (m *Manager) EnforceAdmins() error {
 		dir = m.ProjectDir
 	}
 
-	remoteURL := gitOutput(dir, "remote", "get-url", "origin")
+	remoteURL := m.gitOutput(dir, "remote", "get-url", "origin")
 	if remoteURL == "" {
 		return nil
 	}
@@ -60,7 +60,7 @@ func (m *Manager) EnforceAdmins() error {
 		return nil
 	}
 
-	branch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
+	branch := m.detectDefaultBranch()
 
 	// Check current state first to avoid unnecessary API calls.
 	enforced, err := checkEnforceAdmins(nwo, branch)

@@ -61,6 +61,7 @@ type Manager struct {
 	BaseBranch    string
 	MergeAdmin    bool
 	GitHub         GitHub
+	Runner         Runner
 	State          StateStore
 	Logger         Log
 }
@@ -130,7 +131,7 @@ func (m *Manager) SetupWorktree(ctx context.Context) error {
 	}
 
 	// Prune stale worktree bookkeeping
-	gitCmd(m.ProjectDir, "worktree", "prune")
+	m.gitCmd(m.ProjectDir, "worktree", "prune")
 
 	// Remove leftover worktree directory from a previous run (git prune
 	// cleans the bookkeeping but leaves the directory on disk).
@@ -143,25 +144,25 @@ func (m *Manager) SetupWorktree(ctx context.Context) error {
 		return err
 	}
 
-	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
-	gitCmdCtx(ctx, m.ProjectDir, "fetch", "origin", defaultBranch)
+	defaultBranch := m.detectDefaultBranch()
+	m.gitCmdCtx(ctx, m.ProjectDir, "fetch", "origin", defaultBranch)
 
 	// Push main if remote is empty
-	if !refExists(m.ProjectDir, "origin/"+defaultBranch) &&
-		refExists(m.ProjectDir, "HEAD") &&
-		remoteExists(m.ProjectDir) {
+	if !m.refExists(m.ProjectDir, "origin/"+defaultBranch) &&
+		m.refExists(m.ProjectDir, "HEAD") &&
+		m.remoteExists() {
 		m.Logger.Log("Pushing %s to origin (empty remote — ensures correct default branch)", defaultBranch)
-		gitCmdCtx(ctx, m.ProjectDir, "push", "-u", "origin", defaultBranch)
+		m.gitCmdCtx(ctx, m.ProjectDir, "push", "-u", "origin", defaultBranch)
 	}
 
 	// Create worktree, preferring origin/default, falling back to HEAD
-	if err := gitCmdErr(m.ProjectDir, "worktree", "add", "-b", m.WorktreeBranch, m.WorkDir, "origin/"+defaultBranch); err != nil {
-		if err := gitCmdErr(m.ProjectDir, "worktree", "add", "-b", m.WorktreeBranch, m.WorkDir, "HEAD"); err != nil {
+	if err := m.gitCmdErr(m.ProjectDir, "worktree", "add", "-b", m.WorktreeBranch, m.WorkDir, "origin/"+defaultBranch); err != nil {
+		if err := m.gitCmdErr(m.ProjectDir, "worktree", "add", "-b", m.WorktreeBranch, m.WorkDir, "HEAD"); err != nil {
 			return fmt.Errorf("failed to create worktree: %w", err)
 		}
 	}
 
-	gitCmd(m.WorkDir, "config", "rebase.updateRefs", "true")
+	m.gitCmd(m.WorkDir, "config", "rebase.updateRefs", "true")
 	m.Logger.Log("Worktree: %s (branch: %s)", m.WorkDir, m.WorktreeBranch)
 
 	if m.State != nil {
@@ -199,8 +200,8 @@ func (m *Manager) tryResumeWorktree() error {
 
 	m.Logger.Log("Resuming worktree: %s", m.WorkDir)
 
-	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
-	if err := gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
+	defaultBranch := m.detectDefaultBranch()
+	if err := m.gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
 		m.Logger.Warn("Failed to fetch origin/%s on resume: %v", defaultBranch, err)
 	}
 
@@ -222,42 +223,42 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) {
 		return
 	}
 
-	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
+	defaultBranch := m.detectDefaultBranch()
 
-	if err := gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
+	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
 		m.Logger.Warn("Failed to fetch origin/%s: %v", defaultBranch, err)
 		return
 	}
 
-	if !refExists(m.WorkDir, "origin/"+defaultBranch) {
+	if !m.refExists(m.WorkDir, "origin/"+defaultBranch) {
 		return
 	}
 
 	// Already up to date?
-	if gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, "HEAD") == nil {
+	if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, "HEAD") == nil {
 		return
 	}
 
 	dirty := gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
-		gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
+		m.gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
 	if dirty {
 		m.Logger.Log("Stashing uncommitted changes before rebase...")
-		gitCmd(m.WorkDir, "stash", "push", "-m", "ralph-autostash")
+		m.gitCmd(m.WorkDir, "stash", "push", "-m", "ralph-autostash")
 	}
 
-	if err := gitCmdErrCtx(ctx, m.WorkDir, "rebase", "origin/"+defaultBranch); err != nil {
+	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "origin/"+defaultBranch); err != nil {
 		if resolved := m.autoResolveAndContinue(ctx, defaultBranch); !resolved {
 			m.Logger.Warn("Rebase onto %s failed with unresolvable conflicts — aborting", defaultBranch)
-			gitCmd(m.WorkDir, "rebase", "--abort")
+			m.gitCmd(m.WorkDir, "rebase", "--abort")
 		}
 	}
 
 	if dirty {
-		if err := gitCmdErr(m.WorkDir, "stash", "pop"); err != nil {
+		if err := m.gitCmdErr(m.WorkDir, "stash", "pop"); err != nil {
 			m.Logger.Warn("Stash pop conflict — committing stash as WIP")
-			gitCmd(m.WorkDir, "checkout", "--theirs", ".")
-			gitCmd(m.WorkDir, "add", "-A")
-			gitCmd(m.WorkDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
+			m.gitCmd(m.WorkDir, "checkout", "--theirs", ".")
+			m.gitCmd(m.WorkDir, "add", "-A")
+			m.gitCmd(m.WorkDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
 		}
 	}
 }
@@ -268,14 +269,14 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) {
 // Returns true if the rebase completed successfully.
 func (m *Manager) autoResolveAndContinue(ctx context.Context, defaultBranch string) bool {
 	for i := 0; i < 50; i++ { // max steps to prevent infinite loop
-		conflicted := gitOutput(m.WorkDir, "diff", "--name-only", "--diff-filter=U")
+		conflicted := m.gitOutput(m.WorkDir, "diff", "--name-only", "--diff-filter=U")
 		if conflicted == "" {
 			// No conflicts — try to continue
-			if err := gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--continue"); err == nil {
+			if err := m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--continue"); err == nil {
 				return true
 			}
 			// Might be done
-			if !rebaseInProgress(m.WorkDir) {
+			if !m.mRebaseInProgress() {
 				return true
 			}
 			continue
@@ -288,31 +289,31 @@ func (m *Manager) autoResolveAndContinue(ctx context.Context, defaultBranch stri
 				continue
 			}
 
-			ours := gitOutput(m.WorkDir, "show", ":2:"+f)
-			theirs := gitOutput(m.WorkDir, "show", ":3:"+f)
-			base := gitOutput(m.WorkDir, "show", ":1:"+f)
+			ours := m.gitOutput(m.WorkDir, "show", ":2:"+f)
+			theirs := m.gitOutput(m.WorkDir, "show", ":3:"+f)
+			base := m.gitOutput(m.WorkDir, "show", ":1:"+f)
 
 			if ours == theirs {
 				m.Logger.Log("Auto-resolved (identical): %s", f)
-				gitCmd(m.WorkDir, "checkout", "--theirs", f)
-				gitCmd(m.WorkDir, "add", f)
+				m.gitCmd(m.WorkDir, "checkout", "--theirs", f)
+				m.gitCmd(m.WorkDir, "add", f)
 				resolvedAny = true
 			} else if ours == base {
 				m.Logger.Log("Auto-resolved (only theirs changed): %s", f)
-				gitCmd(m.WorkDir, "checkout", "--theirs", f)
-				gitCmd(m.WorkDir, "add", f)
+				m.gitCmd(m.WorkDir, "checkout", "--theirs", f)
+				m.gitCmd(m.WorkDir, "add", f)
 				resolvedAny = true
 			} else if theirs == base {
 				m.Logger.Log("Auto-resolved (only ours changed): %s", f)
-				gitCmd(m.WorkDir, "checkout", "--ours", f)
-				gitCmd(m.WorkDir, "add", f)
+				m.gitCmd(m.WorkDir, "checkout", "--ours", f)
+				m.gitCmd(m.WorkDir, "add", f)
 				resolvedAny = true
 			} else {
 				// Both changed — check if ours is subset of theirs
 				if strings.Contains(theirs, ours) || isSubsetByLines(base, ours, theirs) {
 					m.Logger.Log("Auto-resolved (ours is subset of theirs): %s", f)
-					gitCmd(m.WorkDir, "checkout", "--theirs", f)
-					gitCmd(m.WorkDir, "add", f)
+					m.gitCmd(m.WorkDir, "checkout", "--theirs", f)
+					m.gitCmd(m.WorkDir, "add", f)
 					resolvedAny = true
 				} else {
 					m.Logger.Warn("Real conflict in %s — cannot auto-resolve", f)
@@ -326,8 +327,8 @@ func (m *Manager) autoResolveAndContinue(ctx context.Context, defaultBranch stri
 		}
 
 		// Continue the rebase
-		if err := gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--continue"); err != nil {
-			if !rebaseInProgress(m.WorkDir) {
+		if err := m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--continue"); err != nil {
+			if !m.mRebaseInProgress() {
 				return true
 			}
 			// Another step with conflicts — loop again
@@ -376,16 +377,16 @@ func (m *Manager) resumedBranchIsStale(defaultBranch string) bool {
 		return false
 	}
 
-	if !refExists(m.WorkDir, m.WorktreeBranch) {
+	if !m.refExists(m.WorkDir, m.WorktreeBranch) {
 		return true
 	}
 
-	if !refExists(m.WorkDir, "origin/"+defaultBranch) {
+	if !m.refExists(m.WorkDir, "origin/"+defaultBranch) {
 		return false
 	}
 
 	// If HEAD has no unique commits beyond origin/main, it's already up to date or empty.
-	revCount := gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+"..HEAD")
+	revCount := m.gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+"..HEAD")
 	if revCount == "" || revCount == "0" {
 		return false
 	}
@@ -400,16 +401,16 @@ func (m *Manager) resetResumedWorktree(defaultBranch string) error {
 	oldBranch := m.WorktreeBranch
 	newBranch := m.TempBranch()
 
-	if err := gitCmdErr(m.WorkDir, "checkout", "--force", "-B", newBranch, "origin/"+defaultBranch); err != nil {
+	if err := m.gitCmdErr(m.WorkDir, "checkout", "--force", "-B", newBranch, "origin/"+defaultBranch); err != nil {
 		return fmt.Errorf("resume reset: checkout failed: %w", err)
 	}
 
-	if err := gitCmdErr(m.WorkDir, "clean", "-fd"); err != nil {
+	if err := m.gitCmdErr(m.WorkDir, "clean", "-fd"); err != nil {
 		m.Logger.Warn("git clean failed (non-fatal): %v", err)
 	}
 
 	if oldBranch != newBranch {
-		gitCmd(m.WorkDir, "branch", "-D", oldBranch)
+		m.gitCmd(m.WorkDir, "branch", "-D", oldBranch)
 	}
 
 	m.WorktreeBranch = newBranch
@@ -424,18 +425,18 @@ func (m *Manager) resetResumedWorktree(defaultBranch string) error {
 // if necessary. Returns an error only if the branch is checked out in a
 // non-ralph worktree.
 func (m *Manager) cleanTempBranch() error {
-	if !refExists(m.ProjectDir, m.WorktreeBranch) {
+	if !m.refExists(m.ProjectDir, m.WorktreeBranch) {
 		return nil
 	}
-	if err := gitCmdErr(m.ProjectDir, "branch", "-D", m.WorktreeBranch); err == nil {
+	if err := m.gitCmdErr(m.ProjectDir, "branch", "-D", m.WorktreeBranch); err == nil {
 		return nil
 	}
 
-	existingWt := findWorktreeForBranch(m.ProjectDir, m.WorktreeBranch)
+	existingWt := m.findWorktreeForBranch(m.ProjectDir, m.WorktreeBranch)
 	if existingWt != "" && strings.Contains(existingWt, "/.ralph/worktrees/") {
 		m.Logger.Warn("Removing stale ralph worktree: %s", existingWt)
-		gitCmd(m.ProjectDir, "worktree", "remove", "--force", existingWt)
-		gitCmd(m.ProjectDir, "branch", "-D", m.WorktreeBranch)
+		m.gitCmd(m.ProjectDir, "worktree", "remove", "--force", existingWt)
+		m.gitCmd(m.ProjectDir, "branch", "-D", m.WorktreeBranch)
 		return nil
 	}
 
@@ -467,7 +468,7 @@ func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 	} else {
 		newBranch = fmt.Sprintf("ralph/%s/%02d-%s", m.ProjectName, m.TaskSeq, slug)
 	}
-	if err := gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); err == nil {
+	if err := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); err == nil {
 		m.WorktreeBranch = newBranch
 		if m.State != nil {
 			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
@@ -492,7 +493,7 @@ func (m *Manager) RotateBranch() {
 		return
 	}
 
-	if err := gitCmdErr(m.WorkDir, "checkout", "-B", newBranch); err == nil {
+	if err := m.gitCmdErr(m.WorkDir, "checkout", "-B", newBranch); err == nil {
 		m.WorktreeBranch = newBranch
 		if m.State != nil {
 			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
@@ -514,14 +515,14 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 
 	m.EnsureUpToDate(ctx)
 
-	repoURL := gitOutput(m.WorkDir, "remote", "get-url", "origin")
+	repoURL := m.gitOutput(m.WorkDir, "remote", "get-url", "origin")
 	if repoURL == "" {
 		return nil
 	}
 
 	// Check if branch has commits beyond the default branch.
-	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
-	revCount := gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+"..HEAD")
+	defaultBranch := m.detectDefaultBranch()
+	revCount := m.gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+"..HEAD")
 	if revCount == "" || revCount == "0" {
 		m.Logger.Log("No new commits to push")
 		return nil
@@ -529,7 +530,7 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 
 	// Push branch to remote.
 	m.Logger.Log("Pushing %s...", m.WorktreeBranch)
-	if err := gitCmdErrCtx(ctx, m.WorkDir, "push", "-u", "origin", m.WorktreeBranch); err != nil {
+	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "push", "-u", "origin", m.WorktreeBranch); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -590,7 +591,7 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("gh CLI not found — cannot auto-merge")
 	}
 
-	repoURL := gitOutput(m.WorkDir, "remote", "get-url", "origin")
+	repoURL := m.gitOutput(m.WorkDir, "remote", "get-url", "origin")
 	if repoURL == "" {
 		m.Logger.Log("No remote URL — skipping auto-merge")
 		return false, nil
@@ -706,12 +707,12 @@ func (m *Manager) GetCIFailureLog(prNumber string) string {
 func (m *Manager) postMergeUpdate(prNumber string) (bool, error) {
 	m.Logger.Log("PR #%s squash-merged into main", prNumber)
 
-	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
-	gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
+	defaultBranch := m.detectDefaultBranch()
+	m.gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
 	// Single atomic reset: advances ref, index, and working tree together.
 	// The previous two-step approach (update-ref + reset --hard HEAD) left
 	// the index stale between steps, staging reversions of merged PR changes.
-	gitCmd(m.ProjectDir, "reset", "--hard", "origin/"+defaultBranch)
+	m.gitCmd(m.ProjectDir, "reset", "--hard", "origin/"+defaultBranch)
 	m.Logger.Log("Updated local %s to origin/%s", defaultBranch, defaultBranch)
 
 	return true, nil
@@ -760,21 +761,21 @@ func (m *Manager) PostMergeReset() error {
 		return nil
 	}
 
-	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
+	defaultBranch := m.detectDefaultBranch()
 	oldBranch := m.WorktreeBranch
 	newBranch := m.TempBranch()
 
-	if err := gitCmdErr(m.WorkDir, "checkout", "--force", "-B", newBranch, "origin/"+defaultBranch); err != nil {
+	if err := m.gitCmdErr(m.WorkDir, "checkout", "--force", "-B", newBranch, "origin/"+defaultBranch); err != nil {
 		return fmt.Errorf("post-merge reset: checkout failed: %w", err)
 	}
 
 	// Remove untracked files and directories left by the previous task.
-	if err := gitCmdErr(m.WorkDir, "clean", "-fd"); err != nil {
+	if err := m.gitCmdErr(m.WorkDir, "clean", "-fd"); err != nil {
 		m.Logger.Warn("git clean failed (non-fatal): %v", err)
 	}
 
 	if oldBranch != newBranch {
-		gitCmd(m.WorkDir, "branch", "-D", oldBranch)
+		m.gitCmd(m.WorkDir, "branch", "-D", oldBranch)
 	}
 
 	m.WorktreeBranch = newBranch
@@ -797,22 +798,22 @@ func (m *Manager) RecreateFromMain(ctx context.Context) error {
 	}
 
 	m.Logger.Log("Removing old worktree: %s", m.WorkDir)
-	gitCmd(m.ProjectDir, "worktree", "remove", "--force", m.WorkDir)
+	m.gitCmd(m.ProjectDir, "worktree", "remove", "--force", m.WorkDir)
 
 	// Prune stale worktree references before listing branches — a worktree
 	// whose directory was deleted still marks its branch as checked-out.
-	gitCmd(m.ProjectDir, "worktree", "prune")
+	m.gitCmd(m.ProjectDir, "worktree", "prune")
 
 	// Delete all ralph project branches (squash-merged work is on main).
 	// A branch may be checked out in an external worktree (e.g. a Claude
 	// sub-agent in .claude/worktrees/). Force-remove such worktrees first.
 	branches := ListProjectBranches(m.ProjectDir, m.ProjectName)
 	for _, b := range branches {
-		if wt := findWorktreeForBranch(m.ProjectDir, b); wt != "" {
+		if wt := m.findWorktreeForBranch(m.ProjectDir, b); wt != "" {
 			m.Logger.Log("Removing worktree holding branch %s: %s", b, wt)
-			gitCmd(m.ProjectDir, "worktree", "remove", "--force", wt)
+			m.gitCmd(m.ProjectDir, "worktree", "remove", "--force", wt)
 		}
-		gitCmd(m.ProjectDir, "branch", "-D", b)
+		m.gitCmd(m.ProjectDir, "branch", "-D", b)
 	}
 
 	// Reset git-tracking fields
@@ -832,8 +833,8 @@ func (m *Manager) RecreateFromMain(ctx context.Context) error {
 
 // RemoveWorktree force-removes a worktree and deletes its branch.
 func (m *Manager) RemoveWorktree() {
-	gitCmd(m.ProjectDir, "worktree", "remove", "--force", m.WorkDir)
-	gitCmd(m.ProjectDir, "branch", "-D", m.WorktreeBranch)
+	m.gitCmd(m.ProjectDir, "worktree", "remove", "--force", m.WorkDir)
+	m.gitCmd(m.ProjectDir, "branch", "-D", m.WorktreeBranch)
 }
 
 // RebaseOntoDefaultBranch rebases the worktree onto origin's default branch,
@@ -842,24 +843,24 @@ func (m *Manager) RemoveWorktree() {
 func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
 	// Stash dirty state so rebase can proceed cleanly.
 	dirty := gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
-		gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
+		m.gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
 	if dirty {
 		m.Logger.Log("Stashing uncommitted changes before rebase...")
-		gitCmd(m.WorkDir, "stash", "push", "-m", "ralph-rebase-autostash")
+		m.gitCmd(m.WorkDir, "stash", "push", "-m", "ralph-rebase-autostash")
 	}
 	defer func() {
 		if dirty {
-			if err := gitCmdErr(m.WorkDir, "stash", "pop"); err != nil {
+			if err := m.gitCmdErr(m.WorkDir, "stash", "pop"); err != nil {
 				m.Logger.Warn("Stash pop conflict — committing stash as WIP")
-				gitCmd(m.WorkDir, "checkout", "--theirs", ".")
-				gitCmd(m.WorkDir, "add", "-A")
-				gitCmd(m.WorkDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
+				m.gitCmd(m.WorkDir, "checkout", "--theirs", ".")
+				m.gitCmd(m.WorkDir, "add", "-A")
+				m.gitCmd(m.WorkDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
 			}
 		}
 	}()
 
-	defaultBranch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
-	if err := gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
+	defaultBranch := m.detectDefaultBranch()
+	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -867,7 +868,7 @@ func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
 	}
 
 	// Skip if remote branch doesn't exist (e.g. repo never pushed)
-	if !refExists(m.WorkDir, "origin/"+defaultBranch) {
+	if !m.refExists(m.WorkDir, "origin/"+defaultBranch) {
 		m.Logger.Log("No remote branch origin/%s — skipping rebase", defaultBranch)
 		return nil
 	}
@@ -875,13 +876,13 @@ func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
 	// Already up to date: origin/main is ancestor of HEAD means HEAD
 	// includes everything from main. The reverse (HEAD ancestor of
 	// origin/main) would incorrectly skip rebase when HEAD is behind.
-	if gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, "HEAD") == nil {
+	if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, "HEAD") == nil {
 		m.Logger.Log("Already up to date with origin/%s", defaultBranch)
 		return nil
 	}
 
 	// Try simple rebase
-	if gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "origin/"+defaultBranch) == nil {
+	if m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "origin/"+defaultBranch) == nil {
 		m.Logger.Log("Rebased onto origin/%s", defaultBranch)
 		return nil
 	}
@@ -891,7 +892,7 @@ func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
 		m.Logger.Log("Rebased onto origin/%s (auto-resolved conflicts)", defaultBranch)
 		return nil
 	}
-	gitCmd(m.WorkDir, "rebase", "--abort")
+	m.gitCmd(m.WorkDir, "rebase", "--abort")
 
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -908,8 +909,8 @@ func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
 
 	m.Logger.Log("Detected squash-merged branch: %s", lastMerged)
 
-	if err := gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "--onto", "origin/"+defaultBranch, lastMerged, "HEAD"); err != nil {
-		gitCmd(m.WorkDir, "rebase", "--abort")
+	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "--onto", "origin/"+defaultBranch, lastMerged, "HEAD"); err != nil {
+		m.gitCmd(m.WorkDir, "rebase", "--abort")
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -920,7 +921,7 @@ func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
 	m.Logger.Log("Rebased onto origin/%s (skipped squash-merged branches)", defaultBranch)
 
 	m.TaskSeq = ParseTaskSeqFromBranches(m.ProjectDir, m.ProjectName)
-	gitCmd(m.ProjectDir, "branch", "-D", lastMerged)
+	m.gitCmd(m.ProjectDir, "branch", "-D", lastMerged)
 
 	return nil
 }
@@ -939,13 +940,13 @@ func (m *Manager) findLastSquashMergedBranch(defaultBranch string) string {
 			continue
 		}
 
-		mergeBase := gitOutput(m.WorkDir, "merge-base", "origin/"+defaultBranch, branch)
+		mergeBase := m.gitOutput(m.WorkDir, "merge-base", "origin/"+defaultBranch, branch)
 		if mergeBase == "" {
 			continue
 		}
 
 		// Skip branches with no changes
-		branchFiles := gitOutput(m.WorkDir, "diff", "--name-only", mergeBase, branch)
+		branchFiles := m.gitOutput(m.WorkDir, "diff", "--name-only", mergeBase, branch)
 		if branchFiles == "" {
 			continue
 		}
@@ -1134,38 +1135,14 @@ func remoteExists(dir string) bool {
 	return gitOutput(dir, "remote", "get-url", "origin") != ""
 }
 
-func detectDefaultBranch(dir, override string) string {
-	if override != "" {
-		return override
-	}
-	ref := gitOutput(dir, "symbolic-ref", "refs/remotes/origin/HEAD")
-	if ref != "" {
-		return strings.TrimPrefix(ref, "refs/remotes/origin/")
-	}
-	return "develop"
-}
 
 // findWorktreeForBranch finds the worktree path that has the given branch
-// checked out, using git worktree list --porcelain.
+// checked out, using git worktree list --porcelain. This standalone version
+// uses the default exec runner; Manager methods use m.findWorktreeForBranch
+// which routes through the injected Runner.
 func findWorktreeForBranch(dir, branch string) string {
 	out := gitOutput(dir, "worktree", "list", "--porcelain")
-	if out == "" {
-		return ""
-	}
-
-	target := "branch refs/heads/" + branch
-	lines := strings.Split(out, "\n")
-	for i, line := range lines {
-		if strings.TrimSpace(line) == target {
-			// Walk backwards to find the "worktree" line
-			for j := i - 1; j >= 0; j-- {
-				if strings.HasPrefix(lines[j], "worktree ") {
-					return strings.TrimPrefix(lines[j], "worktree ")
-				}
-			}
-		}
-	}
-	return ""
+	return parseWorktreeForBranch(out, branch)
 }
 
 // EnsureGitignored adds an entry to .gitignore if it's not already present,
@@ -1267,7 +1244,7 @@ func (m *Manager) TagTaskStart(taskID string) {
 		return
 	}
 	// Force-create to handle reruns of the same task
-	if err := gitCmdErr(m.WorkDir, "tag", "-f", tag); err == nil {
+	if err := m.gitCmdErr(m.WorkDir, "tag", "-f", tag); err == nil {
 		m.Logger.Log("Tag: %s", tag)
 	}
 }
@@ -1278,7 +1255,7 @@ func (m *Manager) TagTaskEnd(taskID string) {
 	if tag == "" {
 		return
 	}
-	if err := gitCmdErr(m.WorkDir, "tag", "-f", tag); err == nil {
+	if err := m.gitCmdErr(m.WorkDir, "tag", "-f", tag); err == nil {
 		m.Logger.Log("Tag: %s", tag)
 	}
 }
