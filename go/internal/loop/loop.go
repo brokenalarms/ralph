@@ -247,7 +247,11 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 		l.logger.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done] ---",
 			runIteration, maxIter, iteration, completed, total)
-		l.logger.Log("Next task: %s", nextTask)
+		if taskID != "" {
+			l.logger.Log("Next task: %s (%s)", nextTask, taskID)
+		} else {
+			l.logger.Log("Next task: %s", nextTask)
+		}
 		if desc := l.getBeadDescription(taskID); desc != "" {
 			l.logger.Log("  %s", desc)
 		}
@@ -269,6 +273,8 @@ func (l *Loop) Run(ctx context.Context) error {
 		if taskID != "" {
 			if err := l.cfg.TaskBackend.SetState(taskID, "phase", "implementing", "ralph: starting task"); err != nil {
 				l.logger.Warn("SetState phase=implementing: %v", err)
+			} else {
+				l.logger.Log("%s → implementing", taskID)
 			}
 		}
 
@@ -316,6 +322,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			WorkDir:             workDir,
 			RalphDir:            l.cfg.Dirs.RalphDir,
 			Prompt:              fullPrompt,
+			TaskID:              taskID,
 			RawLog:              rawLogPath,
 			LogFile:             filepath.Join(l.cfg.Dirs.RalphDir, "loop.log"),
 			Quiet:               l.cfg.Quiet,
@@ -514,6 +521,8 @@ func (l *Loop) Run(ctx context.Context) error {
 			if taskID != "" {
 				if err := l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: tests passed, commits present"); err != nil {
 					l.logger.Warn("SetState phase=verified: %v", err)
+				} else {
+					l.logger.Log("%s → verified", taskID)
 				}
 			}
 

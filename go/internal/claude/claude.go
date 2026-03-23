@@ -78,6 +78,10 @@ type RunConfig struct {
 	// FeedbackFile is the path where the orchestrator writes feedback for
 	// the agent to read. Used to send test failure output back to the agent.
 	FeedbackFile string
+
+	// TaskID is the bead/task identifier (e.g. "ralph-xyz") included in
+	// log messages so operators can identify which task is running.
+	TaskID string
 }
 
 // Result describes the outcome of a Claude run.
@@ -299,7 +303,11 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 			if !taskLogged && hasSignal(cfg.Signals.CurrentTask) {
 				desc := readFirstLine(cfg.Signals.CurrentTask)
 				if desc != "" {
-					r.Logger.Log("Working on: %s", desc)
+					if cfg.TaskID != "" {
+						r.Logger.Log("Working on: %s (%s)", desc, cfg.TaskID)
+					} else {
+						r.Logger.Log("Working on: %s", desc)
+					}
 					taskLogged = true
 					if r.OnTaskDetected != nil {
 						r.OnTaskDetected(desc)
@@ -313,7 +321,11 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				if summary == "" {
 					summary = "task done"
 				}
-				r.Logger.Success("Completed: %s", summary)
+				if cfg.TaskID != "" {
+					r.Logger.Success("%s completed: %s", cfg.TaskID, summary)
+				} else {
+					r.Logger.Success("Completed: %s", summary)
+				}
 
 				// If OnSignal is set, let the orchestrator verify before accepting.
 				if cfg.OnSignal != nil {
