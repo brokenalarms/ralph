@@ -55,6 +55,11 @@ func run(args []string) int {
 	// Resolve project directory to absolute path.
 	cfg.ProjectDir, _ = filepath.Abs(cfg.ProjectDir)
 
+	if !git.IsGitRepo(cfg.ProjectDir) {
+		log.Error("Not a git repository: %s", cfg.ProjectDir)
+		return 1
+	}
+
 	scriptPath, _ := os.Executable()
 	ralphDir := filepath.Join(cfg.ProjectDir, ".ralph")
 
@@ -112,6 +117,13 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		planFile = cfg.PlanFile
 	}
 
+	// Validate base branch before initializing state — a failed validation
+	// must not leave state that causes a false resume on retry.
+	if err := git.ValidateRemoteBranch(cfg.ProjectDir, cfg.BaseBranch); err != nil {
+		log.Error("%v", err)
+		return 1
+	}
+
 	// Initialize .ralph directory and check for resume.
 	resume, exitCode := initRalphDir(ctx, cfg, ralphDir, logFile, stateFile, log)
 	if exitCode >= 0 {
@@ -153,17 +165,6 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		MergeAdmin:     cfg.MergeAdmin,
 		State:          st,
 		Logger:         log,
-	}
-	if git.IsGitRepo(cfg.ProjectDir) {
-		if err := gm.ValidateBaseBranch(); err != nil {
-			log.Error("%v", err)
-			return 1
-		}
-		if cfg.AutoMerge {
-			if err := gm.EnforceAdmins(); err != nil {
-				log.Warn("enforce_admins: %v", err)
-			}
-		}
 	}
 	if err := gm.SetupWorktree(); err != nil {
 		log.Error("Worktree setup failed: %v", err)
@@ -491,6 +492,7 @@ func handleTmuxCommander(cfg config.Config, scriptPath string, args []string, ra
 		ProjectDir:  cfg.ProjectDir,
 		RalphDir:    ralphDir,
 		RawLogPath:  filepath.Join(ralphDir, "raw.log"),
+		ScriptPath:  scriptPath,
 		RalphCmd:    ralphCmd,
 		TaskCmd:     taskCmd,
 		Commander:   true,
@@ -544,6 +546,7 @@ func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir st
 		ProjectDir:  cfg.ProjectDir,
 		RalphDir:    ralphDir,
 		RawLogPath:  filepath.Join(ralphDir, "raw.log"),
+		ScriptPath:  scriptPath,
 		RalphCmd:    ralphCmd,
 		TaskBackend: backendLabel,
 		PlanFile:    planFile,

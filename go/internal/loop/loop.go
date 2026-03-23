@@ -66,9 +66,10 @@ type Loop struct {
 	attempts   *attempts.Tracker
 	logger     *logging.Logger
 	signals    claude.SignalPaths
-	mergeFunc      func() (bool, error)
-	pushPRFunc     func(taskDesc string) error
-	forcePushFunc  func() error
+	mergeFunc          func() (bool, error)
+	pushPRFunc         func(taskDesc string) error
+	forcePushFunc      func() error
+	prePushRebaseFunc  func() error
 	verifyFunc     func(dir, headBefore string) (passed bool, reason string)
 	newRunnerFunc  func() claudeRunner
 	lastAction     analyzer.Action
@@ -497,12 +498,21 @@ func (l *Loop) Run(ctx context.Context) error {
 				}
 			}
 
+			// Rebase onto latest base branch before pushing so that any
+			// direct pushes to main/develop during this iteration are
+			// included. Without this, squash-merge overwrites those commits.
+			if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
+				if rebaseErr := l.prePushRebase(ctx); rebaseErr != nil {
+					l.logger.Warn("Pre-push rebase: %v", rebaseErr)
+				}
+			}
+
 			if err := l.pushAndCreatePR(nextTask); err != nil {
 				l.logger.Warn("Push/PR: %v", err)
 			}
 
 			if l.cfg.AutoMerge {
-				merged, err := l.autoMerge()
+				merged, err := l.autoMerge(ctx)
 				if err != nil {
 					l.logger.Warn("Auto-merge: %v", err)
 					merged, err = l.handleAutoMergeError(ctx, err, nextTask, workDir, rawLogPath)
@@ -569,7 +579,7 @@ func (l *Loop) handleRebase(ctx context.Context) error {
 func (l *Loop) handleAutoMergeError(ctx context.Context, err error, nextTask, workDir, rawLogPath string) (bool, error) {
 	var conflictErr *git.MergeConflictError
 	if errors.As(err, &conflictErr) {
-		return l.handleMergeConflict(ctx, nextTask)
+		return l.handleMergeConflict(ctx, nextTask, workDir, rawLogPath)
 	}
 
 	var ciErr *git.CIFailureError
@@ -582,7 +592,7 @@ func (l *Loop) handleAutoMergeError(ctx context.Context, err error, nextTask, wo
 
 // handleMergeConflict rebases the working branch onto the default branch and
 // force-pushes to resolve PR merge conflicts, then retries the merge.
-func (l *Loop) handleMergeConflict(ctx context.Context, nextTask string) (bool, error) {
+func (l *Loop) handleMergeConflict(ctx context.Context, nextTask, workDir, rawLogPath string) (bool, error) {
 	l.logger.Log("Rebasing onto default branch to resolve merge conflicts...")
 
 	if err := l.git.RebaseOntoDefaultBranch(ctx); err != nil {
@@ -597,7 +607,14 @@ func (l *Loop) handleMergeConflict(ctx context.Context, nextTask string) (bool, 
 	}
 
 	l.logger.Log("Retrying merge after conflict resolution...")
-	return l.autoMerge()
+	merged, err := l.autoMerge(ctx)
+	if err != nil {
+		var ciErr *git.CIFailureError
+		if errors.As(err, &ciErr) {
+			return l.handleCIFailure(ctx, ciErr, nextTask, workDir, rawLogPath)
+		}
+	}
+	return merged, err
 }
 
 // handleCIFailure spawns fix agents to address CI failures and retries
@@ -629,7 +646,7 @@ func (l *Loop) handleCIFailure(ctx context.Context, ciErr *git.CIFailureError, n
 		}
 
 		var mergeErr error
-		merged, mergeErr = l.autoMerge()
+		merged, mergeErr = l.autoMerge(ctx)
 		if mergeErr == nil && merged {
 			return true, nil
 		}
@@ -819,6 +836,13 @@ func (l *Loop) verifyCompletion(headBefore string) (bool, string) {
 	return true, ""
 }
 
+func (l *Loop) prePushRebase(ctx context.Context) error {
+	if l.prePushRebaseFunc != nil {
+		return l.prePushRebaseFunc()
+	}
+	return l.handleRebase(ctx)
+}
+
 func (l *Loop) pushAndCreatePR(taskDesc string) error {
 	if l.pushPRFunc != nil {
 		return l.pushPRFunc(taskDesc)
@@ -826,11 +850,11 @@ func (l *Loop) pushAndCreatePR(taskDesc string) error {
 	return l.git.PushAndCreatePR(taskDesc)
 }
 
-func (l *Loop) autoMerge() (bool, error) {
+func (l *Loop) autoMerge(ctx ...context.Context) (bool, error) {
 	if l.mergeFunc != nil {
 		return l.mergeFunc()
 	}
-	return l.git.AutoMergeCurrentBranch()
+	return l.git.AutoMergeCurrentBranch(ctx...)
 }
 
 func (l *Loop) syncEmbeddedPrompts() {

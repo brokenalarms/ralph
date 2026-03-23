@@ -16,56 +16,23 @@ func TestAvailable(t *testing.T) {
 	_ = got
 }
 
-// Verifies that writeStreamFilter creates an executable script that pipes
-// raw JSON log through jq, perl, and sed for colored output.
-func TestWriteStreamFilter(t *testing.T) {
-	dir := t.TempDir()
-	s := &Session{RalphDir: dir}
-
-	if err := s.writeStreamFilter(); err != nil {
-		t.Fatalf("writeStreamFilter() error: %v", err)
+// Verifies that filterStreamCmd builds a command using the ralph binary
+// and raw log path, so the tmux stream pane runs the Go filter.
+func TestFilterStreamCmd(t *testing.T) {
+	s := &Session{
+		ScriptPath: "/usr/local/bin/ralph",
+		RawLogPath: "/tmp/project/.ralph/raw.log",
 	}
 
-	path := filepath.Join(dir, ".stream-filter.sh")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
+	cmd := s.filterStreamCmd()
+	if !strings.Contains(cmd, "filter-stream") {
+		t.Error("filterStreamCmd should include 'filter-stream' subcommand")
 	}
-	content := string(data)
-
-	if !strings.Contains(content, "tail -f") {
-		t.Error("stream filter missing tail -f")
+	if !strings.Contains(cmd, "/usr/local/bin/ralph") {
+		t.Error("filterStreamCmd should include the ralph binary path")
 	}
-	if !strings.Contains(content, "jq --raw-input") {
-		t.Error("stream filter missing jq invocation")
-	}
-
-	info, _ := os.Stat(path)
-	if info.Mode()&0o111 == 0 {
-		t.Error("stream filter is not executable")
-	}
-}
-
-// Verifies that the stream filter's perl stage adds HH:MM:SS timestamps
-// to each line without deduplicating, so the reader can see the source
-// and count of each event.
-func TestWriteStreamFilter_Timestamps(t *testing.T) {
-	dir := t.TempDir()
-	s := &Session{RalphDir: dir}
-
-	if err := s.writeStreamFilter(); err != nil {
-		t.Fatalf("writeStreamFilter() error: %v", err)
-	}
-
-	path := filepath.Join(dir, ".stream-filter.sh")
-	data, _ := os.ReadFile(path)
-	content := string(data)
-
-	if !strings.Contains(content, "strftime") {
-		t.Error("stream filter missing timestamp formatting (strftime)")
-	}
-	if strings.Contains(content, "flush_prev") {
-		t.Error("stream filter should not deduplicate (flush_prev removed)")
+	if !strings.Contains(cmd, "raw.log") {
+		t.Error("filterStreamCmd should include the raw log path")
 	}
 }
 
@@ -165,22 +132,6 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
-// Verifies that the stream filter disables terminal echo so arrow key
-// presses and other escape sequences don't clutter the display-only pane.
-func TestWriteStreamFilter_DisablesEcho(t *testing.T) {
-	dir := t.TempDir()
-	s := &Session{RalphDir: dir}
-
-	if err := s.writeStreamFilter(); err != nil {
-		t.Fatalf("writeStreamFilter() error: %v", err)
-	}
-
-	data, _ := os.ReadFile(filepath.Join(dir, ".stream-filter.sh"))
-	if !strings.Contains(string(data), "stty -echo") {
-		t.Error("stream filter should disable terminal echo to suppress escape sequences")
-	}
-}
-
 // Verifies that the plan watcher disables terminal echo so arrow key
 // presses and other escape sequences don't clutter the display-only pane.
 func TestWritePlanWatcher_DisablesEcho(t *testing.T) {
@@ -197,22 +148,6 @@ func TestWritePlanWatcher_DisablesEcho(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
 	if !strings.Contains(string(data), "stty -echo") {
 		t.Error("plan watcher should disable terminal echo to suppress escape sequences")
-	}
-}
-
-// Verifies that the stream filter script does not contain a 'kill 0'
-// trap, which would terminate the parent ralph process.
-func TestStreamFilter_NoKillZeroTrap(t *testing.T) {
-	dir := t.TempDir()
-	s := &Session{RalphDir: dir}
-
-	if err := s.writeStreamFilter(); err != nil {
-		t.Fatalf("writeStreamFilter() error: %v", err)
-	}
-
-	data, _ := os.ReadFile(filepath.Join(dir, ".stream-filter.sh"))
-	if strings.Contains(string(data), "kill 0") {
-		t.Error("stream filter should not contain 'kill 0' trap")
 	}
 }
 

@@ -38,6 +38,9 @@ type Session struct {
 	// RalphCmd is the command line to re-exec ralph in the loop pane (without --tmux).
 	RalphCmd string
 
+	// ScriptPath is the path to the ralph binary, used to build subcommands.
+	ScriptPath string
+
 	// TaskCmd is the command to run in the task manager pane (commander mode only).
 	TaskCmd string
 
@@ -67,10 +70,8 @@ func (s *Session) Setup() error {
 	// old data before the loop writes current values.
 	os.Remove(filepath.Join(s.RalphDir, ".stream-task"))
 	os.Remove(filepath.Join(s.RalphDir, ".completed-tasks"))
+	os.Remove(filepath.Join(s.RalphDir, ".stream-filter.sh"))
 
-	if err := s.writeStreamFilter(); err != nil {
-		return fmt.Errorf("write stream filter: %w", err)
-	}
 	if err := s.writePlanWatcher(); err != nil {
 		return fmt.Errorf("write plan watcher: %w", err)
 	}
@@ -124,7 +125,6 @@ func (s *Session) createSession() error {
 }
 
 func (s *Session) createStandardSession() error {
-	streamFilterPath := filepath.Join(s.RalphDir, ".stream-filter.sh")
 	planWatchPath := filepath.Join(s.RalphDir, ".plan-watch.sh")
 
 	ralphCmd := fmt.Sprintf("export _RALPH_TMUX_SESSION=%s; %s", s.Name, s.RalphCmd)
@@ -133,7 +133,7 @@ func (s *Session) createStandardSession() error {
 		return err
 	}
 
-	streamCmd := fmt.Sprintf("bash '%s' '%s'", streamFilterPath, s.RawLogPath)
+	streamCmd := s.filterStreamCmd()
 	if err := tmuxCmd("split-window", "-h", "-t", s.Name, streamCmd); err != nil {
 		return err
 	}
@@ -162,7 +162,6 @@ func (s *Session) createStandardSession() error {
 //	│ pane 1: task │ pane 3: plan │
 //	└──────────────┴──────────────┘
 func (s *Session) createCommanderSession() error {
-	streamFilterPath := filepath.Join(s.RalphDir, ".stream-filter.sh")
 	planWatchPath := filepath.Join(s.RalphDir, ".plan-watch.sh")
 
 	ralphCmd := fmt.Sprintf("export _RALPH_TMUX_SESSION=%s; %s", s.Name, s.RalphCmd)
@@ -171,7 +170,7 @@ func (s *Session) createCommanderSession() error {
 		return err
 	}
 
-	streamCmd := fmt.Sprintf("bash '%s' '%s'", streamFilterPath, s.RawLogPath)
+	streamCmd := s.filterStreamCmd()
 	if err := tmuxCmd("split-window", "-h", "-t", s.Name, streamCmd); err != nil {
 		return err
 	}
@@ -199,6 +198,10 @@ func (s *Session) createCommanderSession() error {
 	return nil
 }
 
+func (s *Session) filterStreamCmd() string {
+	return fmt.Sprintf("%s filter-stream %s", shellQuote(s.ScriptPath), shellQuote(s.RawLogPath))
+}
+
 func (s *Session) applySessionOptions() {
 	tmuxCmd("set-option", "-t", s.Name, "pane-border-status", "top")                                                                    //nolint:errcheck
 	tmuxCmd("set-option", "-t", s.Name, "pane-border-format", "#{?pane_dead, #{pane_title} (dead) — press q to exit , #{pane_title} }") //nolint:errcheck
@@ -207,47 +210,6 @@ func (s *Session) applySessionOptions() {
 	deadCheck := fmt.Sprintf("tmux display-message -t '%s:.0' -p '#{pane_dead}' | grep -q 1", s.Name)
 	killCmd := fmt.Sprintf("kill-session -t '%s'", s.Name)
 	tmuxCmd("bind-key", "-T", "root", "q", "if-shell", deadCheck, killCmd) //nolint:errcheck
-}
-
-func (s *Session) writeStreamFilter() error {
-	script := `#!/usr/bin/env bash
-set +m
-stty -echo 2>/dev/null
-exec 2>"$(dirname "$0")/.stream-filter.err"
-tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
-  fromjson? // empty |
-  if .type == "assistant" then
-    .message.content[0]? //empty |
-    if .type == "text" then "\n[claude] " + .text + "\n"
-    elif .type == "tool_use" then
-      if .name == "TodoWrite" then
-        ([.input.todos[]? | .content] | if length == 0 then "[]"
-          else join(", ") end) as $items |
-        "\n[TodoWrite] " + $items + "\n"
-      else
-        (.input.file_path // .input.command // .input.pattern //
-          .input.query // .input.url // .input.description //
-          .input.task_id // .input.skill // .input.prompt //
-          null) as $target |
-        if $target then "\n[" + .name + "] " + $target + "\n"
-        else "\n[" + .name + "]\n"
-        end
-      end
-    else empty end
-  elif .type == "result" then
-    "\n[done]\n"
-  else empty end
-' | perl -ne '
-  use POSIX; $|=1;
-  chomp;
-  next if $_ eq "";
-  print strftime("%H:%M:%S", localtime()) . " " . $_ . "\n";
-' | sed -u -E \
-  -e $'s/\\[done\\]/\033[0;32m[done]\033[0m/g' \
-  -e $'s/\\[claude\\]/\033[0;36m[claude]\033[0m/g' \
-  -e $'s/\\[([A-Z][A-Za-z]*)\\]/\033[0;34m[\\1]\033[0m/g'
-`
-	return writeScript(filepath.Join(s.RalphDir, ".stream-filter.sh"), script)
 }
 
 func (s *Session) writePlanWatcher() error {

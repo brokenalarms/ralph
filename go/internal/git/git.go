@@ -86,12 +86,13 @@ func (m *Manager) TempBranch() string {
 	return "ralph/" + m.ProjectName + "/next"
 }
 
-// ValidateBaseBranch checks that the configured base branch exists on the
-// remote. Fails fast at startup rather than silently skipping rebase later.
-func (m *Manager) ValidateBaseBranch() error {
-	branch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
-	gitCmd(m.ProjectDir, "fetch", "origin", branch)
-	if !refExists(m.ProjectDir, "origin/"+branch) {
+// ValidateRemoteBranch checks that the given branch exists on the remote.
+// Called before state initialization so a failed check doesn't leave
+// stale state that causes false resumes.
+func ValidateRemoteBranch(projectDir, baseBranch string) error {
+	branch := detectDefaultBranch(projectDir, baseBranch)
+	gitCmd(projectDir, "fetch", "origin", branch)
+	if !refExists(projectDir, "origin/"+branch) {
 		return fmt.Errorf("base branch %q does not exist on remote — create it or set --base-branch", branch)
 	}
 	return nil
@@ -431,7 +432,11 @@ func (m *Manager) PushAndCreatePR(taskDesc string) error {
 // Returns (true, nil) when a PR was merged, (false, nil) when no PR exists or
 // no action was needed, and (false, err) on failure. Proactively polls CI
 // checks before attempting merge so CI is treated as the final gate.
-func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
+func (m *Manager) AutoMergeCurrentBranch(ctx ...context.Context) (bool, error) {
+	var mergeCtx context.Context
+	if len(ctx) > 0 {
+		mergeCtx = ctx[0]
+	}
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
 		return false, nil
 	}
@@ -466,7 +471,7 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 	var status CIStatus
 	if fetchErr != nil || len(checks) == 0 {
 		m.Logger.Log("CI checks not available yet for PR #%s — waiting...", prNumber)
-		checks, status, err = waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+		checks, status, err = waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger, mergeCtx)
 		if err != nil {
 			m.Logger.Warn("CI polling failed for PR #%s: %v — attempting merge anyway", prNumber, err)
 		}
@@ -474,7 +479,7 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 		status = evaluateChecks(checks)
 		if status == CIPending {
 			m.Logger.Log("CI checks pending on PR #%s — waiting for completion...", prNumber)
-			checks, status, err = waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+			checks, status, err = waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger, mergeCtx)
 			if err != nil {
 				return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, err)
 			}
@@ -492,6 +497,26 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 		m.Logger.Log("CI passed for PR #%s — merging", prNumber)
 	}
 
+	// Update the PR branch to include any commits pushed directly to the
+	// base branch since our last rebase. This closes the gap between push
+	// and merge where direct pushes could otherwise be overwritten by squash.
+	if updated, updateErr := m.updatePRBranch(prNumber, repoURL); updateErr != nil {
+		m.Logger.Warn("PR branch update: %v", updateErr)
+	} else if updated {
+		m.Logger.Log("Updated PR #%s branch with latest base", prNumber)
+		// Re-wait for CI since the branch update triggers new checks.
+		checks, status, err = waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+		if err != nil {
+			m.Logger.Warn("CI polling after branch update: %v — attempting merge anyway", err)
+		}
+		if status == CIFailed {
+			return false, &CIFailureError{
+				PRNumber: prNumber,
+				Failures: failedChecks(checks),
+			}
+		}
+	}
+
 	mergeCmd := exec.Command("gh", m.ghMergeArgs(prNumber, repoURL)...)
 	mergeOut, mergeErr := mergeCmd.CombinedOutput()
 	if mergeErr == nil {
@@ -507,7 +532,7 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 
 	if isCIGatedError(mergeOutput) {
 		m.Logger.Log("PR #%s blocked by branch protection — waiting for CI...", prNumber)
-		checks, status, waitErr := waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+		checks, status, waitErr := waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger, mergeCtx)
 		if waitErr != nil {
 			return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, waitErr)
 		}
@@ -561,6 +586,48 @@ func (m *Manager) ghMergeArgs(prNumber, repoURL string) []string {
 		args = append(args, "--admin")
 	}
 	return args
+}
+
+// updatePRBranch asks GitHub to update the PR's head branch with the latest
+// base branch. Returns (true, nil) if the branch was updated, (false, nil)
+// if already up to date, and (false, err) on failure. This uses the same
+// server-side merge that the "Update branch" button performs in the UI.
+func (m *Manager) updatePRBranch(prNumber, repoURL string) (bool, error) {
+	// Extract owner/repo from the remote URL for the API call.
+	nwo := nwoFromRemote(repoURL)
+	if nwo == "" {
+		return false, fmt.Errorf("cannot parse owner/repo from %s", repoURL)
+	}
+
+	endpoint := fmt.Sprintf("repos/%s/pulls/%s/update-branch", nwo, prNumber)
+	cmd := exec.Command("gh", "api", endpoint, "--method", "PUT")
+	cmd.Dir = m.WorkDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		output := strings.TrimSpace(string(out))
+		if strings.Contains(output, "already up to date") ||
+			strings.Contains(output, "expected_head_sha") {
+			return false, nil
+		}
+		return false, fmt.Errorf("update-branch API: %s", output)
+	}
+	return true, nil
+}
+
+// nwoFromRemote extracts "owner/repo" from a GitHub remote URL.
+func nwoFromRemote(remoteURL string) string {
+	// Handle SSH: git@github.com:owner/repo.git
+	if idx := strings.Index(remoteURL, ":"); strings.HasPrefix(remoteURL, "git@") && idx > 0 {
+		nwo := remoteURL[idx+1:]
+		nwo = strings.TrimSuffix(nwo, ".git")
+		return nwo
+	}
+	// Handle HTTPS: https://github.com/owner/repo.git
+	parts := strings.Split(strings.TrimSuffix(remoteURL, ".git"), "/")
+	if len(parts) >= 2 {
+		return parts[len(parts)-2] + "/" + parts[len(parts)-1]
+	}
+	return ""
 }
 
 // ForcePush pushes the current branch to the remote with --force-with-lease,

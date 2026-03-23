@@ -3340,3 +3340,65 @@ func (p *promptCapturingRunner) Run(cfg claude.RunConfig) (claude.Result, error)
 func (p *promptCapturingRunner) StopStreaming() {
 	p.inner.StopStreaming()
 }
+
+// Verifies that the loop rebases onto the base branch before pushing after
+// a signal is detected. Without this, direct pushes to main/develop during
+// the iteration would be overwritten by the squash-merge.
+func TestLoop_PrePushRebaseBeforePush(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		RalphDir:       ralphDir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		WorktreeBranch: "ralph/test/01-task",
+		UseWorktree:    true,
+		BranchStrategy: git.BranchStacked,
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Fix the bug",
+		nextID:    "ralph-fix1",
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	var order []string
+	l.prePushRebaseFunc = func() error {
+		order = append(order, "rebase")
+		return nil
+	}
+	l.pushPRFunc = func(string) error {
+		order = append(order, "push")
+		return nil
+	}
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true, OnSignalUsed: true},
+	}
+
+	l.Run(context.Background())
+
+	if len(order) < 2 {
+		t.Fatalf("expected rebase and push to be called, got %v", order)
+	}
+	if order[0] != "rebase" || order[1] != "push" {
+		t.Errorf("expected [rebase, push] order, got %v", order)
+	}
+}

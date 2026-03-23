@@ -1478,3 +1478,24 @@ func TestPruneOrphanedWorktrees_IgnoresFiles(t *testing.T) {
 		t.Errorf("regular file should not be removed: %v", err)
 	}
 }
+
+// nwoFromRemote must extract owner/repo from both SSH and HTTPS remote URLs
+// so the GitHub API update-branch endpoint gets the correct repository path.
+func TestNwoFromRemote_SSHAndHTTPS(t *testing.T) {
+	tests := []struct {
+		remote string
+		want   string
+	}{
+		{"git@github.com:alice/my-repo.git", "alice/my-repo"},
+		{"git@github.com:alice/my-repo", "alice/my-repo"},
+		{"https://github.com/bob/other-repo.git", "bob/other-repo"},
+		{"https://github.com/bob/other-repo", "bob/other-repo"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := nwoFromRemote(tt.remote)
+		if got != tt.want {
+			t.Errorf("nwoFromRemote(%q) = %q, want %q", tt.remote, got, tt.want)
+		}
+	}
+}

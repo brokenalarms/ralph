@@ -6,11 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
+
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 // testLogger discards all output but records calls for verification.
 type testLogger struct {
@@ -291,6 +294,69 @@ func TestExtractStreamText_IgnoresNonTextEvents(t *testing.T) {
 	}
 }
 
+// Verifies that result events produce [done] output so users can see
+// when Claude finishes processing a request.
+func TestExtractStreamText_ResultDone(t *testing.T) {
+	line := `{"type":"result","subtype":"success"}`
+	got := extractStreamText(line)
+	if got != "[done]" {
+		t.Errorf("extractStreamText = %q, want %q", got, "[done]")
+	}
+}
+
+// Verifies that markdown bold is stripped from output so the terminal
+// shows clean text without literal asterisks.
+func TestStripMarkdown(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"**bold text**", "bold text"},
+		{"normal text", "normal text"},
+		{"some **bold** and **more bold**", "some bold and more bold"},
+		{"**nested** middle **end**", "nested middle end"},
+	}
+	for _, tt := range tests {
+		got := stripMarkdown(tt.input)
+		if got != tt.want {
+			t.Errorf("stripMarkdown(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// Verifies that FormatStreamLine adds a timestamp prefix and ANSI color codes
+// so output matches the format previously provided by the bash stream filter.
+func TestFormatStreamLine(t *testing.T) {
+	line := FormatStreamLine("[claude] [Read] /tmp/foo.go")
+	plain := ansiRe.ReplaceAllString(line, "")
+
+	// Should have HH:MM:SS timestamp prefix.
+	if len(plain) < 8 || plain[2] != ':' || plain[5] != ':' {
+		t.Errorf("FormatStreamLine missing timestamp prefix, got: %q", plain)
+	}
+
+	// Should contain the text content after stripping ANSI.
+	if !strings.Contains(plain, "[claude] [Read] /tmp/foo.go") {
+		t.Errorf("FormatStreamLine should preserve content, got: %q", plain)
+	}
+
+	// Should contain ANSI color codes for [claude] and [Read].
+	if !strings.Contains(line, "\033[0;36m") {
+		t.Error("FormatStreamLine should apply cyan to [claude]")
+	}
+	if !strings.Contains(line, "\033[0;34m") {
+		t.Error("FormatStreamLine should apply blue to [Read]")
+	}
+}
+
+// Verifies that [done] gets green color in the formatted output.
+func TestFormatStreamLine_DoneColor(t *testing.T) {
+	line := FormatStreamLine("[claude] [done]")
+	if !strings.Contains(line, "\033[0;32m") {
+		t.Error("FormatStreamLine should apply green to [done]")
+	}
+}
+
 // --- JSON fragment stripping tests ---
 
 // Verifies that stripJSONFragment removes lines that are entirely JSON,
@@ -334,9 +400,10 @@ func TestReadFirstLine_StripsJSON(t *testing.T) {
 
 // --- Stream filter tailing tests ---
 
-// Verifies that startTailGoroutine follows new lines appended to a file
-// and stops cleanly when the stop channel is closed. Pre-existing content
-// is not forwarded (tail -f -n 0 semantics).
+// Verifies that startTailGoroutine follows new [claude]-prefixed lines
+// appended to a file and stops cleanly when the stop channel is closed.
+// Non-[claude] lines (orchestrator messages) must NOT be forwarded to
+// stdout — the logger already writes those directly.
 func TestStartTailGoroutine_FollowsAndStops(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "loop.log")
@@ -345,13 +412,14 @@ func TestStartTailGoroutine_FollowsAndStops(t *testing.T) {
 	stop := make(chan struct{})
 	done := startTailGoroutine(logPath, stop)
 
+	// Append [claude]-prefixed and non-prefixed lines after goroutine starts.
 	time.Sleep(200 * time.Millisecond)
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fmt.Fprintln(f, "[claude] hello from agent")
-	fmt.Fprintln(f, "12:00:00 [ralph] orchestrator message")
+	fmt.Fprintln(f, "12:00:00 \033[0;36m[beads]\033[0m orchestrator message")
 	f.Close()
 
 	time.Sleep(200 * time.Millisecond)
@@ -378,14 +446,15 @@ func TestStartTailGoroutine_NonexistentFile(t *testing.T) {
 	}
 }
 
-// Verifies that startTailGoroutine forwards all lines to stdout (both
-// [claude] and orchestrator lines). Duplicate prevention is handled by the
-// logger's streaming mode, not by filtering in the tail goroutine.
-func TestStartTailGoroutine_ForwardsAllLines(t *testing.T) {
+// Verifies that startTailGoroutine only forwards [claude]-prefixed lines to
+// stdout, preventing orchestrator log messages from appearing twice (once from
+// the logger writing to stdout directly, and again from the tail goroutine).
+func TestStartTailGoroutine_FiltersNonClaudeLines(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "loop.log")
 	os.WriteFile(logPath, nil, 0o644)
 
+	// Capture stdout by replacing os.Stdout temporarily.
 	origStdout := os.Stdout
 	r, w, _ := os.Pipe()
 	os.Stdout = w
@@ -396,7 +465,7 @@ func TestStartTailGoroutine_ForwardsAllLines(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	f, _ := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	fmt.Fprintln(f, "[claude] agent output line")
-	fmt.Fprintln(f, "12:00:00 [ralph] orchestrator message")
+	fmt.Fprintln(f, "12:00:00 \033[0;36m[beads]\033[0m orchestrator message")
 	fmt.Fprintln(f, "[claude] second agent line")
 	f.Close()
 
@@ -415,8 +484,8 @@ func TestStartTailGoroutine_ForwardsAllLines(t *testing.T) {
 	if !strings.Contains(output, "[claude] second agent line") {
 		t.Errorf("expected second [claude] line to be forwarded, got: %q", output)
 	}
-	if !strings.Contains(output, "orchestrator message") {
-		t.Errorf("expected orchestrator lines to also be forwarded, got: %q", output)
+	if strings.Contains(output, "orchestrator message") {
+		t.Errorf("orchestrator messages should NOT be forwarded by tail goroutine, got: %q", output)
 	}
 }
 
@@ -455,7 +524,8 @@ func TestFilterStreamJSON_TailsFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(got), "[claude] hello from claude") {
+	plain := ansiRe.ReplaceAllString(string(got), "")
+	if !strings.Contains(plain, "[claude] hello from claude") {
 		t.Errorf("loop.log should contain [claude]-prefixed filtered text, got: %q", string(got))
 	}
 }
@@ -494,7 +564,7 @@ func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content := string(got)
+	content := ansiRe.ReplaceAllString(string(got), "")
 	if !strings.Contains(content, "[claude] [Read] /tmp/foo.go") {
 		t.Errorf("tool-use line should have [claude] prefix, got: %q", content)
 	}
@@ -530,7 +600,8 @@ func TestStartStreamFilter_NoExternalProcesses(t *testing.T) {
 	<-done
 
 	got, _ := os.ReadFile(logPath)
-	if !strings.Contains(string(got), "[claude] go filter works") {
+	plain := ansiRe.ReplaceAllString(string(got), "")
+	if !strings.Contains(plain, "[claude] go filter works") {
 		t.Errorf("expected Go filter output, got: %q", string(got))
 	}
 

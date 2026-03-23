@@ -152,6 +152,8 @@ func ParseSubcommand(args []string) (Subcommand, bool) {
 		return parseSubcommandWithDir(args, "commander"), true
 	case "task":
 		return parseSubcommandWithDir(args, "task"), true
+	case "filter-stream":
+		return parseFilterStream(args), true
 	default:
 		return Subcommand{}, false
 	}
@@ -170,6 +172,16 @@ func parseSubcommandWithDir(args []string, name string) Subcommand {
 	}
 
 	sub.Args = rest
+	return sub
+}
+
+// parseFilterStream handles `ralph filter-stream <rawlog>` where the argument
+// is a file path, not a directory.
+func parseFilterStream(args []string) Subcommand {
+	sub := Subcommand{Name: "filter-stream"}
+	if len(args) > 1 {
+		sub.Args = args[1:]
+	}
 	return sub
 }
 
