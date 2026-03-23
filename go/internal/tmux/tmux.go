@@ -47,12 +47,6 @@ type Session struct {
 	// Commander enables the 4-pane layout with a task manager pane.
 	Commander bool
 
-	// TaskBackend is "bd" or "checklist", controls plan pane rendering.
-	TaskBackend string
-
-	// PlanFile is the path to plan.md for checklist backend.
-	PlanFile string
-
 	paneTitle *PaneTitle
 }
 
@@ -213,12 +207,7 @@ func (s *Session) applySessionOptions() {
 }
 
 func (s *Session) writePlanWatcher() error {
-	var renderBlock string
-	if s.TaskBackend == "bd" {
-		renderBlock = s.bdPlanRender()
-	} else {
-		renderBlock = fmt.Sprintf("      cat '%s' 2>/dev/null", s.PlanFile)
-	}
+	renderBlock := s.bdPlanRender()
 
 	script := fmt.Sprintf(`#!/usr/bin/env bash
 stty -echo 2>/dev/null

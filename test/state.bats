@@ -22,10 +22,10 @@ teardown() {
 # Proves: task_backend is persisted to state so resume uses the same backend
 @test "task_backend is written to state on init" {
   init_ralph_dir
-  TASK_BACKEND="checklist"
+  TASK_BACKEND="bd"
   write_state "task_backend" "$TASK_BACKEND"
   result=$(read_state "task_backend")
-  [[ "$result" == "checklist" ]]
+  [[ "$result" == "bd" ]]
 }
 
 # Proves: iteration counter works.

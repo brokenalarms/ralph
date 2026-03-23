@@ -85,7 +85,7 @@ func (m *mutableBackend) Label() string {
 	if m.label != "" {
 		return m.label
 	}
-	return "checklist"
+	return "beads"
 }
 
 func (s *stubBackend) Init() error                          { return nil }
@@ -110,7 +110,7 @@ func (s *stubBackend) Label() string {
 	if s.label != "" {
 		return s.label
 	}
-	return "checklist"
+	return "beads"
 }
 
 func setupTestDir(t *testing.T) (string, *state.Store) {
@@ -678,7 +678,7 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 		total:     1,
 		nextTask:  "task A",
 		nextID:    "ralph-aaa",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	runner := &stubRunner{
@@ -1520,7 +1520,7 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 func createPromptTemplates(t *testing.T, dir string) {
 	t.Helper()
 	os.MkdirAll(dir, 0o755)
-	for _, name := range []string{"shared.md", "internal.md", "reflection.md", "signal.md", "feedback.md", "refactor.md", "refactor-style.md", "execution-checklist.md", "execution-bd.md"} {
+	for _, name := range []string{"shared.md", "internal.md", "reflection.md", "signal.md", "feedback.md", "refactor.md", "refactor-style.md", "execution-bd.md"} {
 		os.WriteFile(filepath.Join(dir, name), []byte("test"), 0o644)
 	}
 }
@@ -1885,7 +1885,7 @@ func TestLoop_RecordsAttemptAfterIteration(t *testing.T) {
 		total:     1,
 		nextTask:  "Fix the auth bug",
 		nextID:    "ralph-auth",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -1926,7 +1926,7 @@ func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
 		total:     1,
 		nextTask:  "Slow task",
 		nextID:    "ralph-slow",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -1978,7 +1978,7 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 		total:     1,
 		nextTask:  "Done task",
 		nextID:    "ralph-done",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -2026,7 +2026,7 @@ func TestLoop_IncludesReflectionInAttemptContext(t *testing.T) {
 			RalphDir:   ralphDir,
 		},
 		CallsPerHour: 80,
-		TaskBackend:  &stubBackend{label: "checklist"},
+		TaskBackend:  &stubBackend{label: "beads"},
 	}, st, gm, logging.New(nil))
 
 	// Write a reflection file
@@ -2058,7 +2058,7 @@ func TestLoop_CombinesAttemptsAndReflection(t *testing.T) {
 			RalphDir:   ralphDir,
 		},
 		CallsPerHour: 80,
-		TaskBackend:  &stubBackend{label: "checklist"},
+		TaskBackend:  &stubBackend{label: "beads"},
 	}, st, gm, logging.New(nil))
 
 	// Record an attempt
@@ -2094,7 +2094,7 @@ func TestLoop_EmptyAttemptContextForNewTask(t *testing.T) {
 			RalphDir:   ralphDir,
 		},
 		CallsPerHour: 80,
-		TaskBackend:  &stubBackend{label: "checklist"},
+		TaskBackend:  &stubBackend{label: "beads"},
 	}, st, gm, logging.New(nil))
 
 	ctx := l.buildAttemptContext("ralph-new", "Brand new task")
@@ -2118,7 +2118,7 @@ func TestLoop_CrossTaskReflectionsFedForward(t *testing.T) {
 			RalphDir:   ralphDir,
 		},
 		CallsPerHour: 80,
-		TaskBackend:  &stubBackend{label: "checklist"},
+		TaskBackend:  &stubBackend{label: "beads"},
 	}, st, gm, logging.New(nil))
 
 	// Write reflections from 2 previously completed tasks
@@ -2157,7 +2157,7 @@ func TestLoop_CrossTaskAttemptEntriesFedForward(t *testing.T) {
 			RalphDir:   ralphDir,
 		},
 		CallsPerHour: 80,
-		TaskBackend:  &stubBackend{label: "checklist"},
+		TaskBackend:  &stubBackend{label: "beads"},
 	}, st, gm, logging.New(nil))
 
 	// Record a halt from a different task
@@ -2192,7 +2192,7 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 		total:     1,
 		nextTask:  "first task",
 		nextID:    "t-1",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -2280,7 +2280,7 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 		remaining: 0,
 		completed: 1,
 		total:     1,
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -2325,7 +2325,7 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 		remaining: 0,
 		completed: 1,
 		total:     1,
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -2370,7 +2370,7 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 		remaining: 0,
 		completed: 2,
 		total:     2,
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -2422,7 +2422,7 @@ func TestLoop_RecordsCompletedTasks(t *testing.T) {
 		total:     2,
 		nextTask:  "first task",
 		nextID:    "ralph-aaa",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	runner := &stubRunner{
@@ -2521,8 +2521,8 @@ func TestLoop_ClearsCompletedTasksOnStart(t *testing.T) {
 	}
 }
 
-// Verifies that when a task has no ID (checklist backend), the task title
-// is recorded instead, so the plan pane can still show completed items.
+// Verifies that when a task has no ID, the task title is recorded instead,
+// so the plan pane can still show completed items.
 func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -2535,7 +2535,7 @@ func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 		total:     1,
 		nextTask:  "Add dark mode",
 		nextID:    "",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	runner := &stubRunner{
@@ -2595,7 +2595,7 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 		total:     1,
 		nextTask:  "fix the bug",
 		nextID:    "ralph-bug",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	runner := &stubRunner{
@@ -2657,7 +2657,7 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 		total:     1,
 		nextTask:  "add feature",
 		nextID:    "ralph-feat",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	runner := &stubRunner{
@@ -2724,7 +2724,7 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		total:     1,
 		nextTask:  "simple task",
 		nextID:    "ralph-simple",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	runner := &stubRunner{
@@ -3758,7 +3758,7 @@ func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
 		total:     1,
 		nextTask:  "last task",
 		nextID:    "ralph-last",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -3822,7 +3822,7 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 		total:     1,
 		nextTask:  "last task",
 		nextID:    "ralph-last",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -3891,7 +3891,7 @@ func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
 		total:     1,
 		nextTask:  "last task",
 		nextID:    "ralph-last",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -3954,7 +3954,7 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 		total:     1,
 		nextTask:  "last task",
 		nextID:    "ralph-last",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -4024,7 +4024,7 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 		total:     1,
 		nextTask:  "last task",
 		nextID:    "ralph-last",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -4087,7 +4087,7 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 		total:     1,
 		nextTask:  "last task",
 		nextID:    "ralph-last",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -4152,7 +4152,7 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 		total:     1,
 		nextTask:  "last task",
 		nextID:    "ralph-last",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -4217,7 +4217,7 @@ func TestLoop_SessionTasksRecordsCompletedWork(t *testing.T) {
 		total:     1,
 		nextTask:  "fix session display",
 		nextID:    "ralph-re76",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	runner := &stubRunner{
@@ -4279,7 +4279,7 @@ func TestLoop_SessionTasksEmptyOnVerificationFailure(t *testing.T) {
 		total:     1,
 		nextTask:  "broken task",
 		nextID:    "ralph-fail",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	runner := &stubRunner{
@@ -4472,7 +4472,7 @@ func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
 		total:     2,
 		nextTask:  "task A",
 		nextID:    "ralph-aaa",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	runner := &stubRunner{

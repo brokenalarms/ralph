@@ -1545,8 +1545,8 @@ fi
 	}
 }
 
-// When no bead ID is provided (e.g. checklist backend), the PR title
-// should be the task description without any bracketed prefix.
+// When no bead ID is provided, the PR title should be the task
+// description without any bracketed prefix.
 func TestPushAndCreatePR_NoBeadID(t *testing.T) {
 	project, cleanup := initBareRepoWithBranch(t, "main")
 	defer cleanup()

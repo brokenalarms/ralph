@@ -81,7 +81,7 @@ func TestSaveAndLoad_Roundtrip(t *testing.T) {
 		Status:            "planned",
 		StartedAt:         "2026-03-20T00:00:00Z",
 		LastTask:          "test task",
-		TaskBackend:       "checklist",
+		TaskBackend:       "bd",
 		MaxIterations:     20,
 		QualityScore:      12,
 		RefactorEvery: 20,
@@ -278,12 +278,12 @@ func TestTaskBackend_WrittenToState(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 	st.Save(State{})
-	if err := st.Write("task_backend", "checklist"); err != nil {
+	if err := st.Write("task_backend", "bd"); err != nil {
 		t.Fatal(err)
 	}
 	val, _ := st.Read("task_backend")
-	if val != "checklist" {
-		t.Errorf("task_backend = %q, want %q", val, "checklist")
+	if val != "bd" {
+		t.Errorf("task_backend = %q, want %q", val, "bd")
 	}
 }
 

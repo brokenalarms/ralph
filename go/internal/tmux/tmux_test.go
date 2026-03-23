@@ -42,8 +42,7 @@ func TestWritePlanWatcher_BD(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	if err := s.writePlanWatcher(); err != nil {
 		t.Fatalf("writePlanWatcher() error: %v", err)
@@ -66,28 +65,6 @@ func TestWritePlanWatcher_BD(t *testing.T) {
 	}
 	if !strings.Contains(content, "bd count --status open") {
 		t.Error("bd plan watcher should compute total from status-filtered counts")
-	}
-}
-
-// Verifies that writePlanWatcher generates a checklist-style plan script
-// that cats the plan file when TaskBackend is not "bd".
-func TestWritePlanWatcher_Checklist(t *testing.T) {
-	dir := t.TempDir()
-	s := &Session{
-		RalphDir:    dir,
-		TaskBackend: "checklist",
-		PlanFile:    "/tmp/test-plan.md",
-	}
-
-	if err := s.writePlanWatcher(); err != nil {
-		t.Fatalf("writePlanWatcher() error: %v", err)
-	}
-
-	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
-	content := string(data)
-
-	if !strings.Contains(content, "cat '/tmp/test-plan.md'") {
-		t.Error("checklist plan watcher missing plan file cat")
 	}
 }
 
@@ -141,8 +118,7 @@ func TestWritePlanWatcher_DisablesEcho(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	if err := s.writePlanWatcher(); err != nil {
 		t.Fatalf("writePlanWatcher() error: %v", err)
@@ -178,8 +154,7 @@ func TestSetup_ClearsStaleStreamTask(t *testing.T) {
 	s := &Session{
 		Name:        "test-session",
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	// Setup will fail on createSession (no tmux), but the stale file
 	// cleanup happens before that.
@@ -232,8 +207,7 @@ func TestWritePlanWatcher_BD_ShowsCompletedTasks(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	if err := s.writePlanWatcher(); err != nil {
 		t.Fatalf("writePlanWatcher() error: %v", err)
@@ -263,8 +237,7 @@ func TestSetup_ClearsStaleCompletedTasks(t *testing.T) {
 	s := &Session{
 		Name:        "test-session",
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	_ = s.Setup()
 
@@ -299,8 +272,7 @@ func TestWritePlanWatcher_BD_DoneCounter(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	if err := s.writePlanWatcher(); err != nil {
 		t.Fatalf("writePlanWatcher() error: %v", err)
@@ -323,8 +295,7 @@ func TestWritePlanWatcher_FlashSignal(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	if err := s.writePlanWatcher(); err != nil {
 		t.Fatalf("writePlanWatcher() error: %v", err)
@@ -402,8 +373,7 @@ func TestSetup_CommanderStreamPaneIndex(t *testing.T) {
 	s := &Session{
 		Name:        "test-session",
 		RalphDir:    dir,
-		TaskBackend: "bd",
-		Commander:   true,
+				Commander:   true,
 		TaskCmd:     "echo task",
 	}
 
@@ -428,8 +398,7 @@ func TestWritePlanWatcher_BD_PeriodicRefresh(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	if err := s.writePlanWatcher(); err != nil {
 		t.Fatalf("writePlanWatcher() error: %v", err)
@@ -452,8 +421,7 @@ func TestPlanWatcher_SignalPath(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	s.writePlanWatcher() //nolint:errcheck
 	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))

@@ -53,7 +53,25 @@ func (s *stubBackend) ExecutionInstructions() (string, error)     { return "", n
 func (s *stubBackend) ProjectContext() (string, error)            { return "", nil }
 func (s *stubBackend) GetDescription(_ string) (string, error)    { return "", nil }
 func (s *stubBackend) GetFullContext(_ string) (string, error)    { return "", nil }
-func (s *stubBackend) Label() string                              { return "checklist" }
+func (s *stubBackend) Label() string                              { return "beads" }
+
+// Proves: initTaskBackend returns an error (not a fallback) when bd is
+// unavailable. This ensures bd is a hard requirement.
+func TestInitTaskBackend_ErrorsWhenBDUnavailable(t *testing.T) {
+	// Remove bd from PATH so Init fails
+	cfg := config.Config{ProjectDir: t.TempDir()}
+	log := logging.New(nil)
+
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := initTaskBackend(cfg, t.TempDir(), log)
+	if err == nil {
+		t.Fatal("expected error when bd is unavailable, got nil")
+	}
+	if !strings.Contains(err.Error(), "bd is required") {
+		t.Errorf("error should mention bd is required, got: %v", err)
+	}
+}
 
 // Verifies the resume script contains the correct flags from the config,
 // proving that interrupted sessions can be resumed with the same parameters.

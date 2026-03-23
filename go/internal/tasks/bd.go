@@ -12,9 +12,8 @@ import (
 	"strings"
 )
 
-// ErrNeedsFallback signals that the bd backend is unavailable and the
-// caller should fall back to checklist.
-var ErrNeedsFallback = errors.New("bd unavailable, fall back to checklist")
+// ErrNeedsFallback signals that the bd backend is unavailable.
+var ErrNeedsFallback = errors.New("bd unavailable")
 
 // CommandRunner executes a bd subcommand in a directory and returns
 // combined stdout. Stderr is captured separately so callers can
