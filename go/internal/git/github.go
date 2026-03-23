@@ -36,6 +36,9 @@ type GitHub interface {
 	GetRunLog(prNumber, workDir string) string
 	CheckEnforceAdmins(nwo, branch string) (enabled bool, err error)
 	PostEnforceAdmins(nwo, branch string) (output string, err error)
+	FindPR(branch, workDir string) (number, title string, err error)
+	SearchPR(workDir, query string) (prNumber string, err error)
+	PRDiff(workDir, prNumber string) (string, error)
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -183,4 +186,45 @@ func (g *ghCLI) GetRunLog(prNumber, workDir string) string {
 		lines = lines[len(lines)-50:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (g *ghCLI) FindPR(branch, workDir string) (string, string, error) {
+	cmd := exec.Command("gh", "pr", "list",
+		"--head", branch,
+		"--state", "all", "--json", "number,title", "--jq", `.[0] | "\(.number)\t\(.title)"`)
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", "", fmt.Errorf("gh pr list failed: %w", err)
+	}
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return "", "", nil
+	}
+	parts := strings.SplitN(raw, "\t", 2)
+	if len(parts) < 2 {
+		return parts[0], "", nil
+	}
+	return parts[0], parts[1], nil
+}
+
+func (g *ghCLI) SearchPR(workDir, query string) (string, error) {
+	cmd := exec.Command("gh", "pr", "list", "--search", query,
+		"--state", "all", "--json", "number", "--jq", ".[0].number")
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("gh pr list search failed: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func (g *ghCLI) PRDiff(workDir, prNumber string) (string, error) {
+	cmd := exec.Command("gh", "pr", "diff", prNumber)
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("gh pr diff failed: %w", err)
+	}
+	return string(out), nil
 }

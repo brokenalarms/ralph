@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/brokenalarms/ralph/internal/git"
 )
 
 // Result describes the outcome of a post-signal verification.
@@ -82,7 +84,7 @@ func CheckCommits(dir, headBefore string) Result {
 		return Result{Passed: true, Reason: "no baseline to compare"}
 	}
 
-	headAfter := gitHeadRev(dir)
+	headAfter := git.HeadRev(dir)
 	if headAfter == "" {
 		return Result{Passed: true, Reason: "could not read HEAD"}
 	}
@@ -138,16 +140,6 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func gitHeadRev(dir string) string {
-	cmd := exec.Command("git", "rev-parse", "HEAD")
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
 // PreflightResult describes the outcome of pre-verification checks.
 type PreflightResult struct {
 	FilesChanged bool
@@ -159,24 +151,11 @@ type PreflightResult struct {
 // These are cheap and catch obvious failures: no files changed, no commits,
 // or bead prematurely closed by the agent.
 func PreflightChecks(workDir, headBefore string, beadStatus string) PreflightResult {
-	result := PreflightResult{}
-
-	// (1) git diff --stat — did files actually change?
-	diffCmd := exec.Command("git", "diff", "--stat", headBefore+"..HEAD")
-	diffCmd.Dir = workDir
-	diffOut, _ := diffCmd.Output()
-	result.FilesChanged = len(strings.TrimSpace(string(diffOut))) > 0
-
-	// (2) git log — are there new commits?
-	logCmd := exec.Command("git", "log", "--oneline", headBefore+"..HEAD")
-	logCmd.Dir = workDir
-	logOut, _ := logCmd.Output()
-	result.HasCommits = len(strings.TrimSpace(string(logOut))) > 0
-
-	// (3) check bead is still in_progress, not prematurely closed by agent
-	result.BeadOpen = beadStatus == "in_progress"
-
-	return result
+	return PreflightResult{
+		FilesChanged: git.DiffStatRange(workDir, headBefore, "HEAD") != "",
+		HasCommits:   git.LogOneline(workDir, headBefore, "HEAD") != "",
+		BeadOpen:     beadStatus == "in_progress",
+	}
 }
 
 
@@ -184,17 +163,14 @@ func PreflightChecks(workDir, headBefore string, beadStatus string) PreflightRes
 // Prefers the PR diff (which covers work from prior iterations) over the
 // current iteration's diff. Falls back to iteration diff when no PR exists.
 // Uses prompts/verify-review.md as the review template when available.
-func LLMVerifyPR(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, model ...string) Result {
-	diff := getPRDiff(ctx, workDir, taskID)
+func LLMVerifyPR(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, model ...string) Result {
+	diff := getPRDiff(ctx, workDir, taskID, gh)
 	source := "PR"
 	if diff == "" {
-		diffCmd := exec.Command("git", "diff", headBefore+"..HEAD")
-		diffCmd.Dir = workDir
-		diffOut, err := diffCmd.Output()
-		if err != nil || len(diffOut) == 0 {
+		diff = git.DiffFull(workDir, headBefore, "HEAD")
+		if diff == "" {
 			return Result{Passed: true, Reason: "no PR found and no new commits — agent confirms task complete"}
 		}
-		diff = string(diffOut)
 		source = "iteration"
 	}
 
@@ -238,26 +214,19 @@ Reply with exactly one line: YES or NO followed by a one-sentence reason.`, bead
 }
 
 // getPRDiff finds a PR matching the task ID and returns its diff.
-func getPRDiff(ctx context.Context, workDir, taskID string) string {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--search", taskID,
-		"--state", "all", "--json", "number", "--jq", ".[0].number")
-	cmd.Dir = workDir
-	out, err := cmd.Output()
+func getPRDiff(_ context.Context, workDir, taskID string, gh git.GitHub) string {
+	if gh == nil {
+		return ""
+	}
+	prNumber, err := gh.SearchPR(workDir, taskID)
+	if err != nil || prNumber == "" {
+		return ""
+	}
+	diff, err := gh.PRDiff(workDir, prNumber)
 	if err != nil {
 		return ""
 	}
-	prNumber := strings.TrimSpace(string(out))
-	if prNumber == "" {
-		return ""
-	}
-
-	diffCmd := exec.CommandContext(ctx, "gh", "pr", "diff", prNumber)
-	diffCmd.Dir = workDir
-	diffOut, err := diffCmd.Output()
-	if err != nil {
-		return ""
-	}
-	return string(diffOut)
+	return diff
 }
 
 // callLLM sends a prompt to a Claude model and interprets YES/NO response.
