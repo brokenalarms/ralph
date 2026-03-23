@@ -34,7 +34,7 @@ Write a test that proves the bead's requirement. Run it — it must FAIL. Then i
 
 ## Completion — this order is mandatory
 1. Commit your changes and ensure scoped tests pass for the code you touched.
-2. Push your branch and create or update the PR.
+2. Push your branch to the remote. The orchestrator handles PR creation.
 3. Write your post-task reflection.
 4. Signal completion by writing to the signal file. This MUST be the very last thing you do — Ralph will kill your process immediately when it detects the signal.
 Do NOT run `bd close` — the orchestrator closes your assigned task automatically after verifying your work.

@@ -74,8 +74,6 @@ type Loop struct {
 	signals    claude.SignalPaths
 	mergeFunc          func(ctx context.Context) (bool, error)
 	pushPRFunc         func(ctx context.Context, taskID, taskDesc string) error
-	forcePushFunc      func(ctx context.Context) error
-	prePushRebaseFunc  func(ctx context.Context) error
 	verifyFunc      func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
 	llmVerifyFunc   func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, model ...string) verify.Result
 	newRunnerFunc      func() claudeRunner
@@ -455,15 +453,8 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.recordCompletedTask(taskID, nextTask)
 			touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-flash"))
 
-			// Rebase onto latest base branch before pushing so that any
-			// direct pushes to main/develop during this iteration are
-			// included. Without this, squash-merge overwrites those commits.
-			if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
-				if rebaseErr := l.prePushRebase(ctx); rebaseErr != nil {
-					l.logger.Warn("Pre-push rebase: %v", rebaseErr)
-				}
-			}
-
+			// PushAndCreatePR calls EnsureUpToDate internally, which
+			// rebases onto the latest base branch before pushing.
 			if err := l.pushAndCreatePR(ctx, taskID, nextTask); err != nil {
 				l.logger.Warn("Push/PR: %v", err)
 			}
@@ -561,43 +552,18 @@ func (l *Loop) handleRebase(ctx context.Context) error {
 	}
 }
 
-// maxMergeAttempts is the total number of merge attempts including retries
-// after conflict resolution and CI fixes.
-const maxMergeAttempts = 4
-
-// mergeWithRetry is the single merge pipeline: try merge, detect error type,
-// handle it, retry. Replaces the former handleAutoMergeError / handleMergeConflict /
-// handleCIFailure chain with a linear retry loop.
+// mergeWithRetry delegates to git.Manager.MergeWithRetry, passing a CI fix
+// callback that spawns a fix agent. Test overrides via mergeFunc bypass the
+// git module entirely for loop-level tests that only care about the outcome.
 func (l *Loop) mergeWithRetry(ctx context.Context, taskID, nextTask, workDir, rawLogPath string) (bool, error) {
-	for attempt := 0; attempt < maxMergeAttempts; attempt++ {
-		merged, err := l.autoMerge(ctx)
-		if err == nil {
-			return merged, nil
-		}
-
-		if attempt > 0 {
-			l.logger.Warn("Merge attempt %d failed: %v", attempt+1, err)
-		}
-
-		var conflictErr *git.MergeConflictError
-		if errors.As(err, &conflictErr) {
-			if resolveErr := l.resolveConflict(ctx); resolveErr != nil {
-				return false, resolveErr
-			}
-			continue
-		}
-
-		var ciErr *git.CIFailureError
-		if errors.As(err, &ciErr) {
-			if !l.tryFixCI(ctx, ciErr, taskID, nextTask, workDir, rawLogPath) {
-				return false, err
-			}
-			continue
-		}
-
-		return false, err
+	if l.mergeFunc != nil {
+		return l.mergeFunc(ctx)
 	}
-	return false, fmt.Errorf("merge failed after %d attempts", maxMergeAttempts)
+	return l.git.MergeWithRetry(ctx, git.MergeRetryOpts{
+		OnCIFailure: func(ciErr *git.CIFailureError) bool {
+			return l.tryFixCI(ctx, ciErr, taskID, nextTask, workDir, rawLogPath)
+		},
+	})
 }
 
 // isNewTask returns true when the next task differs from the last one stored
@@ -613,13 +579,6 @@ func (l *Loop) isNewTask(taskID, taskDesc string) bool {
 }
 
 
-func (l *Loop) prePushRebase(ctx context.Context) error {
-	if l.prePushRebaseFunc != nil {
-		return l.prePushRebaseFunc(ctx)
-	}
-	return l.handleRebase(ctx)
-}
-
 func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc string) error {
 	if l.pushPRFunc != nil {
 		return l.pushPRFunc(ctx, taskID, taskDesc)
@@ -630,28 +589,32 @@ func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc string) err
 func (l *Loop) flushUnpushedWork(ctx context.Context) {
 	taskID, _ := l.state.Read("last_task_id")
 	taskDesc, _ := l.state.Read("last_task")
-	if err := l.pushAndCreatePR(ctx, taskID, taskDesc); err != nil {
-		l.logger.Warn("Flush push/PR: %v", err)
-		return
-	}
-	if l.cfg.AutoMerge && !l.lastTaskMerged {
-		merged, err := l.autoMerge(ctx)
-		if err != nil {
-			l.logger.Warn("Flush merge: %v", err)
+	if l.pushPRFunc != nil || l.mergeFunc != nil {
+		// Test override path: use the existing test funcs.
+		if err := l.pushAndCreatePR(ctx, taskID, taskDesc); err != nil {
+			l.logger.Warn("Flush push/PR: %v", err)
+			return
 		}
-		if merged {
-			if err := l.git.PostMergeReset(); err != nil {
-				l.logger.Warn("Flush post-merge reset: %v", err)
+		if l.cfg.AutoMerge && !l.lastTaskMerged {
+			if l.mergeFunc != nil {
+				merged, err := l.mergeFunc(ctx)
+				if err != nil {
+					l.logger.Warn("Flush merge: %v", err)
+				}
+				if merged {
+					if err := l.git.PostMergeReset(); err != nil {
+						l.logger.Warn("Flush post-merge reset: %v", err)
+					}
+				}
 			}
 		}
+		return
 	}
-}
-
-func (l *Loop) autoMerge(ctx context.Context) (bool, error) {
-	if l.mergeFunc != nil {
-		return l.mergeFunc(ctx)
+	merged, err := l.git.FlushUnpushedWork(ctx, taskID, taskDesc, l.cfg.AutoMerge && !l.lastTaskMerged)
+	if err != nil {
+		l.logger.Warn("Flush: %v", err)
 	}
-	return l.git.AutoMergeCurrentBranch(ctx)
+	_ = merged
 }
 
 func (l *Loop) waitForTasks(ctx context.Context) bool {

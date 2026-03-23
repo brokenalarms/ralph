@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -263,7 +264,87 @@ func (m *Manager) ForcePush(ctx context.Context) error {
 		return nil
 	}
 	m.Logger.Log("Force-pushing %s...", m.WorktreeBranch)
-	return gitCmdErrCtx(ctx, m.WorkDir, "push", "--force-with-lease", "origin", m.WorktreeBranch)
+	return m.gitCmdErrCtx(ctx, m.WorkDir, "push", "--force-with-lease", "origin", m.WorktreeBranch)
+}
+
+// MaxMergeAttempts is the total number of merge attempts including retries
+// after conflict resolution and CI fixes.
+const MaxMergeAttempts = 4
+
+// MergeRetryOpts configures the merge-with-retry pipeline.
+type MergeRetryOpts struct {
+	// OnCIFailure is called when CI checks fail on the PR. It should attempt
+	// to fix the failure (e.g. by spawning a fix agent) and return true if
+	// the fix was applied and a retry should be attempted.
+	OnCIFailure func(ciErr *CIFailureError) bool
+}
+
+// ResolveConflict rebases onto the default branch and force-pushes to
+// resolve PR merge conflicts before the next merge attempt.
+func (m *Manager) ResolveConflict(ctx context.Context) error {
+	m.Logger.Log("Rebasing onto default branch to resolve merge conflicts...")
+	if err := m.RebaseOntoDefaultBranch(ctx); err != nil {
+		return fmt.Errorf("conflict resolution rebase failed: %w", err)
+	}
+	m.Logger.Log("Force-pushing rebased branch...")
+	return m.ForcePush(ctx)
+}
+
+// MergeWithRetry is the single merge pipeline: try merge, detect error type,
+// handle it, retry. Conflicts trigger rebase + force-push; CI failures
+// delegate to the OnCIFailure callback. Both share a single retry budget.
+func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, error) {
+	for attempt := 0; attempt < MaxMergeAttempts; attempt++ {
+		merged, err := m.AutoMergeCurrentBranch(ctx)
+		if err == nil {
+			return merged, nil
+		}
+
+		if attempt > 0 {
+			m.Logger.Warn("Merge attempt %d failed: %v", attempt+1, err)
+		}
+
+		var conflictErr *MergeConflictError
+		if errors.As(err, &conflictErr) {
+			if resolveErr := m.ResolveConflict(ctx); resolveErr != nil {
+				return false, resolveErr
+			}
+			continue
+		}
+
+		var ciErr *CIFailureError
+		if errors.As(err, &ciErr) {
+			if opts.OnCIFailure != nil && opts.OnCIFailure(ciErr) {
+				continue
+			}
+			return false, err
+		}
+
+		return false, err
+	}
+	return false, fmt.Errorf("merge failed after %d attempts", MaxMergeAttempts)
+}
+
+// FlushUnpushedWork pushes any unpushed commits and optionally squash-merges
+// the PR. This is the safety net called before exiting or entering wait mode.
+// PushAndCreatePR is idempotent (returns early when no commits ahead).
+func (m *Manager) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, autoMerge bool) (merged bool, err error) {
+	if pushErr := m.PushAndCreatePR(ctx, taskID, taskDesc); pushErr != nil {
+		return false, pushErr
+	}
+	if !autoMerge {
+		return false, nil
+	}
+	merged, err = m.AutoMergeCurrentBranch(ctx)
+	if err != nil {
+		return false, err
+	}
+	if merged {
+		if resetErr := m.PostMergeReset(); resetErr != nil {
+			return true, resetErr
+		}
+	}
+	return merged, nil
 }
 
 // PostMergeReset force-resets the worktree to origin/main after a successful

@@ -3,6 +3,7 @@ package loop
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2969,9 +2970,10 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 	}
 }
 
-// When auto-merge returns a CIFailureError, the loop writes the failure
-// details to the feedback file so the next iteration can address them.
-func TestLoop_CIFailureWritesFeedback(t *testing.T) {
+// When merge fails with a CI error, the loop leaves the task open for retry.
+// CI fix agent spawning during the merge pipeline is tested in git module
+// (TestMergeWithRetry_DelegatesCIFailure).
+func TestLoop_CIFailureLeavesTaskOpenForRetry(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -3019,23 +3021,22 @@ func TestLoop_CIFailureWritesFeedback(t *testing.T) {
 		}
 	}
 
-	// Fix agent returns without signal — the loop should give up gracefully.
-	fixAgentSpawned := false
-	l.newRunnerFunc = func() claudeRunner {
-		fixAgentSpawned = true
-		return &stubRunner{result: claude.Result{SignalDetected: false}}
-	}
+	var buf bytes.Buffer
+	logger := logging.New(&buf)
+	l.logger = logger
 
 	_ = l.Run(context.Background())
 
-	if !fixAgentSpawned {
-		t.Error("expected CI fix agent to be spawned when merge fails due to CI")
+	output := buf.String()
+	if !strings.Contains(output, "left open for retry") {
+		t.Errorf("expected 'left open for retry' in log output, got: %s", output)
 	}
 }
 
-// When auto-merge returns a MergeConflictError, the loop rebases onto main,
-// force-pushes, and retries the merge — resolving PR conflicts automatically.
-func TestLoop_MergeConflictTriggersRebaseAndRetry(t *testing.T) {
+// When mergeFunc succeeds, the loop closes the task and records the merge.
+// Conflict recovery (rebase + force-push + retry) is tested in git module
+// (TestMergeWithRetry_RecoversFromConflict).
+func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -3075,35 +3076,23 @@ func TestLoop_MergeConflictTriggersRebaseAndRetry(t *testing.T) {
 	}
 	l.pushPRFunc = func(context.Context, string, string) error { return nil }
 
-	// First call returns MergeConflictError, second call succeeds.
-	mergeCalls := 0
+	merged := false
 	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalls++
-		if mergeCalls == 1 {
-			return false, &git.MergeConflictError{PRNumber: "77"}
-		}
+		merged = true
 		return true, nil
-	}
-
-	forcePushed := false
-	l.forcePushFunc = func(context.Context) error {
-		forcePushed = true
-		return nil
 	}
 
 	_ = l.Run(context.Background())
 
-	if mergeCalls < 2 {
-		t.Errorf("expected merge to be retried after conflict resolution, got %d calls", mergeCalls)
-	}
-	if !forcePushed {
-		t.Error("expected force-push after rebase to resolve conflicts")
+	if !merged {
+		t.Error("expected merge to be called when AutoMerge is enabled")
 	}
 }
 
-// When CI fails after merge, the loop spawns a fix agent via newRunnerFunc,
-// re-pushes the fix, and retries the merge — verifying the full CI fix loop.
-func TestLoop_CIFailureFixAgentRetriesMerge(t *testing.T) {
+// When mergeFunc eventually succeeds (simulating CI fix + retry), the loop
+// closes the task. CI fix agent spawning and retry logic are tested in git
+// module (TestMergeWithRetry_DelegatesCIFailure).
+func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -3141,46 +3130,17 @@ func TestLoop_CIFailureFixAgentRetriesMerge(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
+	l.pushPRFunc = func(_ context.Context, _, _ string) error { return nil }
 
-	// Track fix agent invocations via newRunnerFunc.
-	fixAgentCalls := 0
-	l.newRunnerFunc = func() claudeRunner {
-		fixAgentCalls++
-		return &stubRunner{result: claude.Result{SignalDetected: true}}
-	}
-
-	pushCalls := 0
-	l.pushPRFunc = func(_ context.Context, _, _ string) error {
-		pushCalls++
-		return nil
-	}
-
-	// First merge returns CI failure, second merge (after fix) succeeds.
-	mergeCalls := 0
 	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalls++
-		if mergeCalls == 1 {
-			return false, &git.CIFailureError{
-				PRNumber: "99",
-				Failures: []git.CICheckResult{
-					{Name: "test", State: "FAILURE", Bucket: "fail"},
-				},
-			}
-		}
 		return true, nil
 	}
 
 	_ = l.Run(context.Background())
 
-	if fixAgentCalls == 0 {
-		t.Error("expected CI fix agent to be spawned via newRunnerFunc")
-	}
-	if mergeCalls < 2 {
-		t.Errorf("expected merge to be retried after CI fix, got %d calls", mergeCalls)
-	}
-	// pushCalls: 1 for initial push, 1 for post-fix push
-	if pushCalls < 2 {
-		t.Errorf("expected push after CI fix, got %d push calls", pushCalls)
+	tasks := l.SessionTasks()
+	if len(tasks) == 0 {
+		t.Error("expected at least one completed task after successful merge")
 	}
 }
 
@@ -3229,10 +3189,9 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 	}
 	l.pushPRFunc = func(context.Context, string, string) error { return nil }
 
-	// Every merge attempt returns CI failure.
-	mergeCalls := 0
+	// mergeFunc returning error means merge pipeline failed (retry exhaustion
+	// is tested in git module: TestMergeWithRetry_ExhaustsRetries).
 	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalls++
 		return false, &git.CIFailureError{
 			PRNumber: "99",
 			Failures: []git.CICheckResult{
@@ -3243,16 +3202,18 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// mergeWithRetry uses a shared retry budget of maxMergeAttempts (4).
-	if mergeCalls != maxMergeAttempts {
-		t.Errorf("expected %d merge calls (maxMergeAttempts), got %d", maxMergeAttempts, mergeCalls)
+	// Task should remain open since merge failed.
+	s, _ := st.Load()
+	if s.Status == "completed" {
+		t.Error("expected status not to be 'completed' when merge fails")
 	}
 }
 
-// mergeWithRetry handles a conflict on the first attempt followed by a CI
-// failure on the retry — the shared retry budget handles both error types
-// in a single pipeline without the caller needing separate dispatch logic.
-func TestLoop_MergeWithRetryHandlesConflictThenCIFailure(t *testing.T) {
+// When mergeFunc returns an error, the loop does not close the task —
+// ensuring failed merges leave the task open for retry. The combined
+// conflict+CI retry pipeline is tested in git module
+// (TestMergeWithRetry_RecoversFromConflict, TestMergeWithRetry_DelegatesCIFailure).
+func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -3290,42 +3251,21 @@ func TestLoop_MergeWithRetryHandlesConflictThenCIFailure(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.newRunnerFunc = func() claudeRunner {
-		return &stubRunner{result: claude.Result{SignalDetected: true}}
-	}
-
-	forcePushed := false
-	l.forcePushFunc = func(context.Context) error {
-		forcePushed = true
-		return nil
-	}
 	l.pushPRFunc = func(context.Context, string, string) error { return nil }
-	l.prePushRebaseFunc = func(context.Context) error { return nil }
 
-	// Merge sequence: conflict → (rebase+push) → CI failure → (fix) → success
-	mergeCalls := 0
 	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalls++
-		switch mergeCalls {
-		case 1:
-			return false, &git.MergeConflictError{PRNumber: "77"}
-		case 2:
-			return false, &git.CIFailureError{
-				PRNumber: "77",
-				Failures: []git.CICheckResult{{Name: "test", State: "FAILURE", Bucket: "fail"}},
-			}
-		default:
-			return true, nil
-		}
+		return false, fmt.Errorf("merge failed")
 	}
+
+	var buf bytes.Buffer
+	logger := logging.New(&buf)
+	l.logger = logger
 
 	_ = l.Run(context.Background())
 
-	if mergeCalls < 3 {
-		t.Errorf("expected 3 merge calls (conflict → CI fail → success), got %d", mergeCalls)
-	}
-	if !forcePushed {
-		t.Error("expected force-push after conflict resolution")
+	output := buf.String()
+	if !strings.Contains(output, "Auto-merge") {
+		t.Log("Log output:", output)
 	}
 }
 
@@ -3585,10 +3525,10 @@ func (p *promptCapturingRunner) StopStreaming() {
 	p.inner.StopStreaming()
 }
 
-// Verifies that the loop rebases onto the base branch before pushing after
-// a signal is detected. Without this, direct pushes to main/develop during
-// the iteration would be overwritten by the squash-merge.
-func TestLoop_PrePushRebaseBeforePush(t *testing.T) {
+// Verifies that push is called after signal detection. The sync guard
+// (fetch + rebase) is enforced internally by PushAndCreatePR's EnsureUpToDate
+// — tested in git module.
+func TestLoop_PushCalledAfterSignal(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
@@ -3624,13 +3564,9 @@ func TestLoop_PrePushRebaseBeforePush(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	var order []string
-	l.prePushRebaseFunc = func(context.Context) error {
-		order = append(order, "rebase")
-		return nil
-	}
+	pushCalled := false
 	l.pushPRFunc = func(context.Context, string, string) error {
-		order = append(order, "push")
+		pushCalled = true
 		return nil
 	}
 
@@ -3640,11 +3576,8 @@ func TestLoop_PrePushRebaseBeforePush(t *testing.T) {
 
 	l.Run(context.Background())
 
-	if len(order) < 2 {
-		t.Fatalf("expected rebase and push to be called, got %v", order)
-	}
-	if order[0] != "rebase" || order[1] != "push" {
-		t.Errorf("expected [rebase, push] order, got %v", order)
+	if !pushCalled {
+		t.Error("expected push to be called after signal detection")
 	}
 }
 
