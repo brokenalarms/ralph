@@ -135,6 +135,26 @@ func TestSlugify_TruncationTrimsTrailingDash(t *testing.T) {
 	}
 }
 
+// Slugs are limited to 4 words to keep branch names short
+func TestSlugify_LimitsToFourWords(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"execution prompt reinforce boy scout rule applies", "execution-prompt-reinforce-boy"},
+		{"fix a bug", "fix-a-bug"},
+		{"one", "one"},
+		{"limit branch name slug to three four words after bead ID", "limit-branch-name-slug"},
+		{"hello world foo bar", "hello-world-foo-bar"},
+		{"hello world foo bar baz", "hello-world-foo-bar"},
+	}
+	for _, tc := range cases {
+		got := Slugify(tc.in)
+		if got != tc.want {
+			t.Errorf("Slugify(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 // --- SetupWorktree tests ---
 
 // SetupWorktree creates a new worktree in .ralph/worktrees and records state
