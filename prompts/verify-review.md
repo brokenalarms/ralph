@@ -19,6 +19,8 @@ If the diff is truncated, judge based on what you CAN see. Do not reject solely 
 
 The diff may contain changes from other tasks in the same PR. Ignore unrelated changes — only evaluate whether the task's requirements are met.
 
+This diff has already passed compilation and the full test suite. Do not reject for suspected compilation errors — variables that appear undefined in the diff may be defined elsewhere in the file. Trust the test results for correctness; focus your review on whether the task's intent is satisfied.
+
 Reply with exactly one line: YES or NO followed by a one-sentence reason.
 Example: YES — adds retry loop with test that verifies 3 retries on failure, handles timeout edge case.
 Example: NO — polling loop bails on fetch error instead of retrying, leaving CI unchecked.
