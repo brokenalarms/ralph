@@ -11,6 +11,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
 // mockBackend implements tasks.Backend for testing without real task systems.
@@ -90,11 +91,14 @@ func testDeps(t *testing.T) (Deps, string) {
 		Backend:    &mockBackend{label: "checklist", needsPlanning: true, totalTasks: 3, planningSucceeded: true, planningInstr: "write tasks to plan.md"},
 		StateStore: store,
 		Logger:     log,
-		PromptsDir: promptsDir,
-		WorkDir:    workDir,
-		RalphDir:   ralphDir,
-		Ctx:        context.Background(),
-		RunClaude:  func(context.Context, string) error { return nil },
+		Dirs: workctx.WorkContext{
+			ProjectDir: workDir,
+			WorkDir:    workDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		Ctx:       context.Background(),
+		RunClaude: func(context.Context, string) error { return nil },
 	}, tmp
 }
 
@@ -284,7 +288,7 @@ func TestInteractivePromptSubstitution(t *testing.T) {
 		t.Fatalf("buildInteractivePrompt() error: %v", err)
 	}
 
-	for _, want := range []string{d.WorkDir, d.RalphDir, d.StateStore.Path(), "write tasks to plan.md"} {
+	for _, want := range []string{d.Dirs.WorkDir, d.Dirs.RalphDir, d.StateStore.Path(), "write tasks to plan.md"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q", want)
 		}
@@ -306,7 +310,7 @@ func TestAutonomousPromptSubstitution(t *testing.T) {
 		t.Fatalf("buildAutonomousPrompt() error: %v", err)
 	}
 
-	for _, want := range []string{"build auth system", d.RalphDir, d.StateStore.Path(), "write tasks to plan.md"} {
+	for _, want := range []string{"build auth system", d.Dirs.RalphDir, d.StateStore.Path(), "write tasks to plan.md"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q", want)
 		}
@@ -367,7 +371,7 @@ func TestPlanFilePathDefault(t *testing.T) {
 	d.PlanFile = ""
 
 	got := planFilePath(d)
-	want := filepath.Join(d.RalphDir, "plan.md")
+	want := filepath.Join(d.Dirs.RalphDir, "plan.md")
 	if got != want {
 		t.Errorf("planFilePath() = %q, want %q", got, want)
 	}

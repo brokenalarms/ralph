@@ -21,6 +21,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/tmux"
+	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
 //go:embed prompts/*
@@ -85,10 +86,13 @@ func run(args []string) int {
 		return handleTmux(cfg, scriptPath, args, ralphDir, log)
 	}
 
-	return runMain(cfg, ralphDir, promptsDir, scriptPath, args, log)
+	dirs := workctx.New(cfg.ProjectDir, promptsDir)
+	return runMain(cfg, dirs, scriptPath, args, log)
 }
 
-func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []string, log *logging.Logger) int {
+func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, args []string, log *logging.Logger) int {
+	ralphDir := dirs.RalphDir
+	promptsDir := dirs.PromptsDir
 	// Set up signal handling for cleanup.
 	ctx, cancel := context.WithCancel(context.Background())
 	interrupted := false
@@ -168,6 +172,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		log.Error("Worktree setup failed: %v", err)
 		return 1
 	}
+	dirs.WorkDir = gm.WorkDir
 
 	// Write initial branch label for the pane title updater. On resume,
 	// the old task branch is still checked out until the loop renames it,
@@ -184,9 +189,9 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 	}
 
 	log.Phase("Ralph Loop v%s (go)", config.Version)
-	log.Log("Project: %s", cfg.ProjectDir)
-	if gm.WorkDir != cfg.ProjectDir {
-		log.Log("Worktree: %s", gm.WorkDir)
+	log.Log("Project: %s", dirs.ProjectDir)
+	if dirs.WorkDir != dirs.ProjectDir {
+		log.Log("Worktree: %s", dirs.WorkDir)
 	}
 	log.Log("Task backend: %s", backend.Label())
 	log.Log("Max iterations: %d", cfg.MaxIterations)
@@ -199,9 +204,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		Backend:      backend,
 		StateStore:   st,
 		Logger:       log,
-		PromptsDir:   promptsDir,
-		WorkDir:      gm.WorkDir,
-		RalphDir:     ralphDir,
+		Dirs:         dirs,
 		PlanFile:     planFile,
 		Prompt:       cfg.Prompt,
 		SkipPlanning: cfg.SkipPlanning,
@@ -222,10 +225,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 
 	// Execution phase.
 	execLoop := loop.New(loop.Config{
-		ProjectDir:          cfg.ProjectDir,
-		WorkDir:             gm.WorkDir,
-		RalphDir:            ralphDir,
-		PromptsDir:          promptsDir,
+		Dirs:                dirs,
 		PlanFile:            planFile,
 		MaxIterations:       cfg.MaxIterations,
 		RefactorEvery:       cfg.RefactorEvery,
@@ -242,7 +242,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		Wait:                cfg.Wait,
 		WaitInterval:        cfg.WaitInterval,
 		OnRebaseConflict:    promptRebaseRecovery(ctx),
-		VerifyDir:           gm.WorkDir,
+		VerifyDir:           dirs.WorkDir,
 	}, st, gm, log)
 
 	if err := execLoop.Run(ctx); err != nil {

@@ -15,6 +15,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
 // stubRunner replaces claude.Runner for tests that need to run the loop
@@ -142,9 +143,11 @@ func TestLoop_AllTasksComplete(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -181,9 +184,11 @@ func TestLoop_NoTasksError(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -223,9 +228,11 @@ func TestLoop_StopFileDetection(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -270,9 +277,11 @@ func TestLoop_ContextCancellation(t *testing.T) {
 	cancel()
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -309,9 +318,11 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 10,
 		RefactorEvery: 3,
 		CallsPerHour:  80,
@@ -339,7 +350,7 @@ func TestLoop_UpdateStreamTask(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	l := &Loop{
-		cfg: Config{RalphDir: ralphDir},
+		cfg: Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}},
 	}
 
 	l.updateStreamTask("ralph-abc", "Add feature X")
@@ -367,7 +378,7 @@ func TestLoop_WriteRunBranch(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	l := &Loop{
-		cfg: Config{RalphDir: ralphDir},
+		cfg: Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}},
 		git: &git.Manager{WorktreeBranch: "ralph/project/01-fix-bug"},
 	}
 
@@ -389,7 +400,7 @@ func TestLoop_WriteRunBranch_Default(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	l := &Loop{
-		cfg: Config{RalphDir: ralphDir},
+		cfg: Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}},
 		git: &git.Manager{},
 	}
 
@@ -411,7 +422,7 @@ func TestLoop_FeedbackReadAndClear(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	l := &Loop{
-		cfg: Config{RalphDir: ralphDir},
+		cfg: Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}},
 	}
 
 	feedbackFile := filepath.Join(ralphDir, "feedback")
@@ -484,7 +495,7 @@ func TestLoop_MaybeRefactor_CounterIncrement(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	l := &Loop{
-		cfg:   Config{RalphDir: ralphDir},
+		cfg:   Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}},
 		state: st,
 		logger: logging.New(nil),
 	}
@@ -518,7 +529,7 @@ func TestLoop_MaybeRefactor_NoRefactorDisables(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	l := &Loop{
-		cfg:    Config{RalphDir: ralphDir, NoRefactor: true},
+		cfg:    Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}, NoRefactor: true},
 		state:  st,
 		logger: logging.New(nil),
 	}
@@ -572,9 +583,11 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       wtDir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    wtDir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -617,9 +630,11 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -685,10 +700,12 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -760,9 +777,11 @@ func TestLoop_HandleRebase_FreshWorktreeRecovery(t *testing.T) {
 
 	handlerCalled := false
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -824,9 +843,11 @@ func TestLoop_HandleRebase_AbortHaltsLoop(t *testing.T) {
 
 	handlerCalled := false
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -887,9 +908,11 @@ func TestLoop_HandleRebase_NoHandlerPropagatesError(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -948,9 +971,11 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 	cancel() // simulate Ctrl-C already received
 
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -982,7 +1007,7 @@ func TestLoop_IsNewTask(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	l := &Loop{
-		cfg:   Config{RalphDir: ralphDir},
+		cfg:   Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}},
 		state: st,
 	}
 
@@ -1047,10 +1072,12 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 2,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -1111,10 +1138,12 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 3,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -1193,10 +1222,12 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 3,
 		RefactorEvery: 1,
 		CallsPerHour:  80,
@@ -1261,10 +1292,12 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -1319,10 +1352,12 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -1390,10 +1425,12 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -1441,10 +1478,12 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -1565,10 +1604,12 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -1650,10 +1691,12 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -1731,10 +1774,12 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		AutoMerge:     false,
@@ -1786,10 +1831,12 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -1831,10 +1878,12 @@ func TestLoop_RecordsAttemptAfterIteration(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -1870,10 +1919,12 @@ func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 2,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -1920,10 +1971,12 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -1954,9 +2007,11 @@ func TestLoop_IncludesReflectionInAttemptContext(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:   dir,
-		WorkDir:      dir,
-		RalphDir:     ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		CallsPerHour: 80,
 		TaskBackend:  &stubBackend{label: "checklist"},
 	}, st, gm, logging.New(nil))
@@ -1984,9 +2039,11 @@ func TestLoop_CombinesAttemptsAndReflection(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:   dir,
-		WorkDir:      dir,
-		RalphDir:     ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		CallsPerHour: 80,
 		TaskBackend:  &stubBackend{label: "checklist"},
 	}, st, gm, logging.New(nil))
@@ -2018,9 +2075,11 @@ func TestLoop_EmptyAttemptContextForNewTask(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:   dir,
-		WorkDir:      dir,
-		RalphDir:     ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		CallsPerHour: 80,
 		TaskBackend:  &stubBackend{label: "checklist"},
 	}, st, gm, logging.New(nil))
@@ -2073,10 +2132,12 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2140,9 +2201,11 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2183,9 +2246,11 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2226,9 +2291,11 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2298,10 +2365,12 @@ func TestLoop_RecordsCompletedTasks(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2349,9 +2418,11 @@ func TestLoop_ClearsCompletedTasksOnStart(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2397,10 +2468,12 @@ func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2446,10 +2519,12 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2512,10 +2587,12 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2577,10 +2654,12 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2648,10 +2727,12 @@ func TestLoop_LifecycleStates(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2705,10 +2786,12 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2762,10 +2845,12 @@ func TestLoop_CIFailureWritesFeedback(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -2824,10 +2909,12 @@ func TestLoop_MergeConflictTriggersRebaseAndRetry(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -2890,10 +2977,12 @@ func TestLoop_CIFailureFixAgentRetriesMerge(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -2971,10 +3060,12 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -3035,10 +3126,12 @@ func TestLoop_MergeWithRetryHandlesConflictThenCIFailure(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -3118,10 +3211,12 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -3184,10 +3279,12 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -3235,7 +3332,7 @@ func TestLoop_runFixAgent(t *testing.T) {
 	signals := claude.DefaultSignalPaths(ralphDir)
 	l := &Loop{
 		cfg: Config{
-			RalphDir:    ralphDir,
+			Dirs:        workctx.WorkContext{RalphDir: ralphDir},
 			IdleTimeout: 30 * time.Second,
 		},
 		state:   st,
@@ -3331,10 +3428,12 @@ func TestLoop_PrePushRebaseBeforePush(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -3400,9 +3499,11 @@ func TestLoop_OrchestratorMessagesUseRalphPrefix(t *testing.T) {
 			gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 			l := New(Config{
-				ProjectDir:    dir,
-				WorkDir:       dir,
-				RalphDir:      ralphDir,
+				Dirs: workctx.WorkContext{
+					ProjectDir: dir,
+					WorkDir:    dir,
+					RalphDir:   ralphDir,
+				},
 				MaxIterations: 5,
 				CallsPerHour:  80,
 				TaskBackend:   tt.backend,
