@@ -55,6 +55,10 @@ Every bead must have:
 - A description explaining *why* this work is needed and *what* to do — not
   options. Make the decision and write one clear path. The agent should not
   choose between approaches.
+- **Acceptance criteria** — a clear list of what "done" looks like. These are
+  checked by the verification LLM after the agent signals completion. Be
+  specific: "PR creation goes through a single function" not "improve PR flow."
+  Use `--acceptance` flag on `bd create` or include in the description.
 - At least one label for thematic grouping (e.g. `orchestrator`, `verification`,
   `git`, `prompt`, `ci`, `refactor`). The issue type (bug/task/feature) handles
   the category — labels are for topic/component.
