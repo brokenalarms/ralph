@@ -341,7 +341,7 @@ func TestExecutionBD_RequiresTDD(t *testing.T) {
 // attempts exist on the current task.
 func TestBuildPrompt_IncludesAttemptHistory(t *testing.T) {
 	v := testVars(t)
-	v.AttemptHistory = "### Attempt 1\nSummary: broke it\nChanges: none\nAnalysis: warn:stuck\n"
+	v.AttemptHistory = "## Previous attempts on this task\n### Attempt 1\nSummary: broke it\nChanges: none\nAnalysis: warn:stuck\n"
 	result, err := BuildPrompt(v)
 	if err != nil {
 		t.Fatalf("BuildPrompt: %v", err)

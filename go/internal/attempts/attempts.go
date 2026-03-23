@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/brokenalarms/ralph/internal/git"
@@ -89,6 +90,128 @@ func lastNAttempts(content string, n int) string {
 	for _, a := range tail {
 		b.WriteString("### Attempt ")
 		b.WriteString(a)
+	}
+	return b.String()
+}
+
+// ReflectionEntry holds a single reflection file's content and identity.
+type ReflectionEntry struct {
+	TaskID  string
+	Content string
+}
+
+// RecentReflections returns the n most recent reflection files sorted by
+// modification time (oldest first), excluding the file matching excludeKey.
+func (t *Tracker) RecentReflections(excludeKey string, n int) []ReflectionEntry {
+	refDir := filepath.Join(t.RalphDir, "reflections")
+	entries, err := os.ReadDir(refDir)
+	if err != nil {
+		return nil
+	}
+
+	type fileEntry struct {
+		taskID string
+		path   string
+		modTime int64
+	}
+
+	var files []fileEntry
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		taskID := strings.TrimSuffix(e.Name(), ".md")
+		if taskID == excludeKey {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, fileEntry{
+			taskID:  taskID,
+			path:    filepath.Join(refDir, e.Name()),
+			modTime: info.ModTime().UnixNano(),
+		})
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].modTime < files[j].modTime
+	})
+
+	if len(files) > n {
+		files = files[len(files)-n:]
+	}
+
+	result := make([]ReflectionEntry, 0, len(files))
+	for _, f := range files {
+		data, err := os.ReadFile(f.path)
+		if err != nil {
+			continue
+		}
+		result = append(result, ReflectionEntry{
+			TaskID:  f.taskID,
+			Content: string(data),
+		})
+	}
+	return result
+}
+
+// RecentAttemptEntries returns the last attempt entry from each of the n
+// most recently modified attempt logs, excluding the file matching excludeKey.
+// This provides cross-task context about recent halts, timeouts, and failures.
+func (t *Tracker) RecentAttemptEntries(excludeKey string, n int) string {
+	entries, err := os.ReadDir(t.attemptsDir())
+	if err != nil {
+		return ""
+	}
+
+	type fileEntry struct {
+		taskID string
+		path   string
+		modTime int64
+	}
+
+	var files []fileEntry
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") {
+			continue
+		}
+		taskID := strings.TrimSuffix(e.Name(), ".log")
+		if taskID == excludeKey {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, fileEntry{
+			taskID:  taskID,
+			path:    filepath.Join(t.attemptsDir(), e.Name()),
+			modTime: info.ModTime().UnixNano(),
+		})
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].modTime < files[j].modTime
+	})
+
+	if len(files) > n {
+		files = files[len(files)-n:]
+	}
+
+	var b strings.Builder
+	for _, f := range files {
+		data, err := os.ReadFile(f.path)
+		if err != nil {
+			continue
+		}
+		lastEntry := lastNAttempts(string(data), 1)
+		if lastEntry == "" {
+			continue
+		}
+		b.WriteString(fmt.Sprintf("#### Task: %s\n", f.taskID))
+		b.WriteString(lastEntry)
 	}
 	return b.String()
 }
