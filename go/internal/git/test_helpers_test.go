@@ -10,20 +10,26 @@ import (
 // Compose into tests by embedding or assigning fields for the methods
 // under test; all methods have sensible zero-value defaults.
 type stubGitHub struct {
-	available    bool
-	openPR       string
-	findPRErr    error
-	createPRErr  error
-	editPRErr    error
-	editPRTitle  string
-	mergeOutput  string
-	mergeErr     error
-	updateResult bool
-	updateErr    error
-	checks       []CICheckResult
-	checksErr    error
-	mergeCalls   int
-	mergeOpts    MergeOpts
+	available           bool
+	openPR              string
+	findPRErr           error
+	createPRErr         error
+	editPRErr           error
+	editPRTitle         string
+	mergeOutput         string
+	mergeErr            error
+	updateResult        bool
+	updateErr           error
+	checks              []CICheckResult
+	checksErr           error
+	mergeCalls          int
+	mergeOpts           MergeOpts
+	enforceAdmins       bool
+	enforceAdminsErr    error
+	postEnforceOutput   string
+	postEnforceErr      error
+	postEnforceCalled   bool
+	checkEnforceCalled  bool
 }
 
 func (s *stubGitHub) Available() bool { return s.available }
@@ -50,6 +56,14 @@ func (s *stubGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, erro
 }
 func (s *stubGitHub) GetRunLog(prNumber, workDir string) string {
 	return ""
+}
+func (s *stubGitHub) CheckEnforceAdmins(nwo, branch string) (bool, error) {
+	s.checkEnforceCalled = true
+	return s.enforceAdmins, s.enforceAdminsErr
+}
+func (s *stubGitHub) PostEnforceAdmins(nwo, branch string) (string, error) {
+	s.postEnforceCalled = true
+	return s.postEnforceOutput, s.postEnforceErr
 }
 
 // gitCall records a single git command invocation for assertion.

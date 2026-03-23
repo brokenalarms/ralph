@@ -1,9 +1,7 @@
 package git
 
 import (
-	"encoding/json"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 )
@@ -13,8 +11,6 @@ import (
 //   - https://github.com/owner/repo.git
 //   - git@github.com:owner/repo.git
 func repoNWO(remoteURL string) string {
-	// Try gh repo view first — most reliable when gh is authenticated.
-	// Falls back to URL parsing if gh isn't available.
 	remoteURL = strings.TrimSpace(remoteURL)
 	if remoteURL == "" {
 		return ""
@@ -61,9 +57,9 @@ func (m *Manager) EnforceAdmins() error {
 	}
 
 	branch := m.detectDefaultBranch()
+	gh := m.gh()
 
-	// Check current state first to avoid unnecessary API calls.
-	enforced, err := checkEnforceAdmins(nwo, branch)
+	enforced, err := gh.CheckEnforceAdmins(nwo, branch)
 	if err != nil {
 		m.Logger.Warn("Could not check enforce_admins status: %v — skipping", err)
 		return nil
@@ -73,8 +69,7 @@ func (m *Manager) EnforceAdmins() error {
 		return nil
 	}
 
-	// Enable enforce_admins via GitHub API.
-	output, err := postEnforceAdmins(nwo, branch)
+	output, err := gh.PostEnforceAdmins(nwo, branch)
 	if err != nil {
 		if strings.Contains(output, "Branch not protected") || strings.Contains(output, "Not Found") {
 			m.Logger.Warn("No branch protection rules on %s — cannot enable enforce_admins. Configure branch protection in GitHub settings first.", branch)
@@ -85,40 +80,4 @@ func (m *Manager) EnforceAdmins() error {
 
 	m.Logger.Log("Branch protection: enabled enforce_admins on %s", branch)
 	return nil
-}
-
-// enforceAdminsResponse is the JSON shape returned by the GitHub API for
-// the enforce_admins endpoint.
-type enforceAdminsResponse struct {
-	Enabled bool `json:"enabled"`
-}
-
-// checkEnforceAdmins checks whether enforce_admins is currently enabled.
-// Swappable for testing.
-var checkEnforceAdmins = defaultCheckEnforceAdmins
-
-// postEnforceAdmins enables enforce_admins via the GitHub API.
-// Swappable for testing.
-var postEnforceAdmins = defaultPostEnforceAdmins
-
-func defaultCheckEnforceAdmins(nwo, branch string) (bool, error) {
-	endpoint := fmt.Sprintf("/repos/%s/branches/%s/protection/enforce_admins", nwo, branch)
-	cmd := exec.Command("gh", "api", endpoint)
-	out, err := cmd.Output()
-	if err != nil {
-		return false, fmt.Errorf("gh api failed: %w", err)
-	}
-
-	var resp enforceAdminsResponse
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return false, fmt.Errorf("parsing response: %w", err)
-	}
-	return resp.Enabled, nil
-}
-
-func defaultPostEnforceAdmins(nwo, branch string) (string, error) {
-	endpoint := fmt.Sprintf("/repos/%s/branches/%s/protection/enforce_admins", nwo, branch)
-	cmd := exec.Command("gh", "api", "-X", "POST", endpoint)
-	out, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out)), err
 }

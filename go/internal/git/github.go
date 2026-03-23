@@ -34,6 +34,8 @@ type GitHub interface {
 	ListChecks(prNumber, repoURL string) ([]CICheckResult, error)
 	EditPR(prNumber, repoURL, title string) error
 	GetRunLog(prNumber, workDir string) string
+	CheckEnforceAdmins(nwo, branch string) (enabled bool, err error)
+	PostEnforceAdmins(nwo, branch string) (output string, err error)
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -120,6 +122,30 @@ func (g *ghCLI) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
 		return nil, fmt.Errorf("parsing check results: %w", err)
 	}
 	return checks, nil
+}
+
+func (g *ghCLI) CheckEnforceAdmins(nwo, branch string) (bool, error) {
+	endpoint := fmt.Sprintf("/repos/%s/branches/%s/protection/enforce_admins", nwo, branch)
+	cmd := exec.Command("gh", "api", endpoint)
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("gh api failed: %w", err)
+	}
+
+	var resp struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return false, fmt.Errorf("parsing response: %w", err)
+	}
+	return resp.Enabled, nil
+}
+
+func (g *ghCLI) PostEnforceAdmins(nwo, branch string) (string, error) {
+	endpoint := fmt.Sprintf("/repos/%s/branches/%s/protection/enforce_admins", nwo, branch)
+	cmd := exec.Command("gh", "api", "-X", "POST", endpoint)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
 }
 
 func (g *ghCLI) GetRunLog(prNumber, workDir string) string {
