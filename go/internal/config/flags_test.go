@@ -94,6 +94,64 @@ func TestAllConfigKeysInConfigMap(t *testing.T) {
 	}
 }
 
+// Verifies that Defaults() produces values matching every FlagDef.Default,
+// proving runtime defaults derive from the Flags registry (single source of truth)
+// rather than being independently hardcoded.
+func TestDefaultsDeriveFromFlagRegistry(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_REFACTOR_EVERY", "")
+	t.Setenv("RALPH_NO_REFACTOR", "")
+	t.Setenv("RALPH_REFACTOR_THRESHOLD", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+	t.Setenv("RALPH_BASE_BRANCH", "")
+	t.Setenv("RALPH_WAIT_INTERVAL", "")
+
+	cfg := Defaults()
+
+	// Build a second config by applying FlagDef defaults directly.
+	check := Config{ProjectDir: ".", UseWorktree: true}
+	for i := range Flags {
+		f := &Flags[i]
+		if f.Default != "" && f.Default != "cwd" {
+			if err := f.Apply(&check, f.Default); err != nil {
+				t.Fatalf("applying default %q for %s: %v", f.Default, f.Long, err)
+			}
+		}
+	}
+
+	if cfg.MaxIterations != check.MaxIterations {
+		t.Errorf("MaxIterations: Defaults()=%d, registry=%d", cfg.MaxIterations, check.MaxIterations)
+	}
+	if cfg.CallsPerHour != check.CallsPerHour {
+		t.Errorf("CallsPerHour: Defaults()=%d, registry=%d", cfg.CallsPerHour, check.CallsPerHour)
+	}
+	if cfg.RefactorEvery != check.RefactorEvery {
+		t.Errorf("RefactorEvery: Defaults()=%d, registry=%d", cfg.RefactorEvery, check.RefactorEvery)
+	}
+	if cfg.RefactorThreshold != check.RefactorThreshold {
+		t.Errorf("RefactorThreshold: Defaults()=%d, registry=%d", cfg.RefactorThreshold, check.RefactorThreshold)
+	}
+	if cfg.IdleTimeout != check.IdleTimeout {
+		t.Errorf("IdleTimeout: Defaults()=%v, registry=%v", cfg.IdleTimeout, check.IdleTimeout)
+	}
+	if cfg.IdleTimeoutProgress != check.IdleTimeoutProgress {
+		t.Errorf("IdleTimeoutProgress: Defaults()=%v, registry=%v", cfg.IdleTimeoutProgress, check.IdleTimeoutProgress)
+	}
+	if cfg.BaseBranch != check.BaseBranch {
+		t.Errorf("BaseBranch: Defaults()=%q, registry=%q", cfg.BaseBranch, check.BaseBranch)
+	}
+	if cfg.WaitInterval != check.WaitInterval {
+		t.Errorf("WaitInterval: Defaults()=%v, registry=%v", cfg.WaitInterval, check.WaitInterval)
+	}
+	if cfg.WatcherInterval != check.WatcherInterval {
+		t.Errorf("WatcherInterval: Defaults()=%d, registry=%d", cfg.WatcherInterval, check.WatcherInterval)
+	}
+	if cfg.StuckThreshold != check.StuckThreshold {
+		t.Errorf("StuckThreshold: Defaults()=%d, registry=%d", cfg.StuckThreshold, check.StuckThreshold)
+	}
+}
+
 // Verifies that InitConfig generates entries for all flags with ConfigKeys.
 func TestInitConfigUsesRegistry(t *testing.T) {
 	dir := t.TempDir()

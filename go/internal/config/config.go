@@ -42,86 +42,29 @@ type Config struct {
 	cliSet map[string]bool
 }
 
-// Defaults returns a Config with ralph.sh default values.
-// MaxIterations and RefactorEvery read from RALPH_MAX_ITERATIONS and
-// RALPH_REFACTOR_EVERY env vars, falling back to shell defaults (50 and 0).
+// Defaults returns a Config with default values derived from the Flags
+// registry (single source of truth). Environment variables listed in each
+// FlagDef.EnvVar override the registry defaults.
 func Defaults() Config {
-	return Config{
-		ProjectDir:                 ".",
-		MaxIterations:              envInt("RALPH_MAX_ITERATIONS", 50),
-		UseWorktree:                true,
-		CallsPerHour:               80,
-		RefactorEvery:              envInt("RALPH_REFACTOR_EVERY", 0),
-		NoRefactor:                 envBool("RALPH_NO_REFACTOR", false),
-		RefactorThreshold:          envInt("RALPH_REFACTOR_THRESHOLD", 20),
-		IdleTimeout:                envDuration("RALPH_IDLE_TIMEOUT", 10*time.Minute),
-		IdleTimeoutProgress:        envDuration("RALPH_IDLE_TIMEOUT_PROGRESS", 5*time.Minute),
-		WatcherInterval:            10,
-		StuckThreshold:             5,
-		StuckConfirmationThreshold: 2,
-		StagnationThreshold:        3,
-		TestSaturationThreshold:    3,
-		PermissionDenialThreshold:  3,
-		BaseBranch:   envString("RALPH_BASE_BRANCH", "develop"),
-		WaitInterval: envDuration("RALPH_WAIT_INTERVAL", 5*time.Second),
+	cfg := Config{
+		ProjectDir:  ".",
+		UseWorktree: true,
 	}
-}
-
-// envInt reads an integer from an environment variable, returning fallback
-// if unset or unparseable.
-func envInt(key string, fallback int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return fallback
-	}
-	return n
-}
-
-// envString reads a string from an environment variable, returning fallback
-// if unset or empty.
-func envString(key, fallback string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	return v
-}
-
-// envBool reads a boolean from an environment variable, returning fallback
-// if unset. Accepts "1", "true", "yes" as true; anything else is false.
-func envBool(key string, fallback bool) bool {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	switch strings.ToLower(v) {
-	case "1", "true", "yes":
-		return true
-	default:
-		return false
-	}
-}
-
-// envDuration reads a duration from an environment variable, returning
-// fallback if unset or unparseable. Accepts Go duration strings (e.g. "5m",
-// "30s") or bare integers interpreted as seconds.
-func envDuration(key string, fallback time.Duration) time.Duration {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		if n, err2 := strconv.Atoi(v); err2 == nil {
-			return time.Duration(n) * time.Second
+	for i := range Flags {
+		f := &Flags[i]
+		if f.Default != "" && f.Default != "cwd" {
+			_ = f.Apply(&cfg, f.Default)
 		}
-		return fallback
 	}
-	return d
+	for i := range Flags {
+		f := &Flags[i]
+		if f.EnvVar != "" {
+			if v := os.Getenv(f.EnvVar); v != "" {
+				_ = f.Apply(&cfg, v)
+			}
+		}
+	}
+	return cfg
 }
 
 // Subcommand represents a ralph subcommand (stop, feedback) parsed before flags.
