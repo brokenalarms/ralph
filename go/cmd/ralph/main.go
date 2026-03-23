@@ -117,6 +117,13 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		planFile = cfg.PlanFile
 	}
 
+	// Validate base branch before initializing state — a failed validation
+	// must not leave state that causes a false resume on retry.
+	if err := git.ValidateRemoteBranch(cfg.ProjectDir, cfg.BaseBranch); err != nil {
+		log.Error("%v", err)
+		return 1
+	}
+
 	// Initialize .ralph directory and check for resume.
 	resume, exitCode := initRalphDir(ctx, cfg, ralphDir, logFile, stateFile, log)
 	if exitCode >= 0 {
@@ -158,12 +165,6 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		MergeAdmin:     cfg.MergeAdmin,
 		State:          st,
 		Logger:         log,
-	}
-	if git.IsGitRepo(cfg.ProjectDir) {
-		if err := gm.ValidateBaseBranch(); err != nil {
-			log.Error("%v", err)
-			return 1
-		}
 	}
 	if err := gm.SetupWorktree(); err != nil {
 		log.Error("Worktree setup failed: %v", err)

@@ -86,12 +86,13 @@ func (m *Manager) TempBranch() string {
 	return "ralph/" + m.ProjectName + "/next"
 }
 
-// ValidateBaseBranch checks that the configured base branch exists on the
-// remote. Fails fast at startup rather than silently skipping rebase later.
-func (m *Manager) ValidateBaseBranch() error {
-	branch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
-	gitCmd(m.ProjectDir, "fetch", "origin", branch)
-	if !refExists(m.ProjectDir, "origin/"+branch) {
+// ValidateRemoteBranch checks that the given branch exists on the remote.
+// Called before state initialization so a failed check doesn't leave
+// stale state that causes false resumes.
+func ValidateRemoteBranch(projectDir, baseBranch string) error {
+	branch := detectDefaultBranch(projectDir, baseBranch)
+	gitCmd(projectDir, "fetch", "origin", branch)
+	if !refExists(projectDir, "origin/"+branch) {
 		return fmt.Errorf("base branch %q does not exist on remote — create it or set --base-branch", branch)
 	}
 	return nil
