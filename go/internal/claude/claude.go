@@ -421,6 +421,14 @@ func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
 	var remainder string
 	buf := make([]byte, 64*1024)
 
+	batcher := NewToolBatcher(5 * time.Second)
+
+	emitLines := func(lines []string) {
+		for _, out := range lines {
+			fmt.Fprintf(logOut, "%s\n", out)
+		}
+	}
+
 	processChunk := func(data string) string {
 		for {
 			idx := strings.IndexByte(data, '\n')
@@ -432,9 +440,7 @@ func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
 			if text := extractStreamText(line); text != "" {
 				for _, tl := range strings.Split(text, "\n") {
 					if tl != "" {
-						for _, out := range FormatStreamOutput(tl) {
-							fmt.Fprintf(logOut, "%s\n", out)
-						}
+						emitLines(batcher.ProcessLine(tl))
 					}
 				}
 			}
@@ -448,9 +454,9 @@ func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
 		}
 
 		if readErr != nil || n == 0 {
+			emitLines(batcher.FlushIfExpired())
 			select {
 			case <-stop:
-				// Final drain — read any bytes written after the last Read.
 				for {
 					n2, _ := f.Read(buf)
 					if n2 == 0 {
@@ -458,6 +464,7 @@ func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
 					}
 					remainder = processChunk(remainder + string(buf[:n2]))
 				}
+				emitLines(batcher.Flush())
 				return
 			default:
 				time.Sleep(100 * time.Millisecond)
@@ -641,6 +648,13 @@ func FilterStream(rawLogPath string) {
 
 	var remainder string
 	buf := make([]byte, 64*1024)
+	batcher := NewToolBatcher(5 * time.Second)
+
+	emitLines := func(lines []string) {
+		for _, out := range lines {
+			fmt.Fprintln(os.Stdout, out)
+		}
+	}
 
 	processChunk := func(data string) string {
 		for {
@@ -653,9 +667,7 @@ func FilterStream(rawLogPath string) {
 			if text := extractStreamText(line); text != "" {
 				for _, tl := range strings.Split(text, "\n") {
 					if tl != "" {
-						for _, out := range FormatStreamOutput(tl) {
-							fmt.Fprintln(os.Stdout, out)
-						}
+						emitLines(batcher.ProcessLine(tl))
 					}
 				}
 			}
@@ -668,6 +680,7 @@ func FilterStream(rawLogPath string) {
 			remainder = processChunk(remainder + string(buf[:n]))
 		}
 		if n == 0 {
+			emitLines(batcher.FlushIfExpired())
 			time.Sleep(100 * time.Millisecond)
 		}
 	}

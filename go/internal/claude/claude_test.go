@@ -668,8 +668,8 @@ func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := ansiRe.ReplaceAllString(string(got), "")
-	if !strings.Contains(content, "[agent] [Read] /tmp/foo.go") {
-		t.Errorf("tool-use line should have [agent] prefix, got: %q", content)
+	if !strings.Contains(content, "[agent] [Read] foo.go") {
+		t.Errorf("batched Read should show basename with [agent] prefix, got: %q", content)
 	}
 	if !strings.Contains(content, "[agent] some delta text") {
 		t.Errorf("delta text should have [agent] prefix, got: %q", content)
@@ -725,6 +725,57 @@ func TestFilterStreamJSON_DiagnosisBanner(t *testing.T) {
 	}
 	if !strings.Contains(content, "add the default value to config.go") {
 		t.Errorf("should contain FIX content, got: %q", content)
+	}
+}
+
+// Verifies that multiple Read/Grep tool calls within a batch window are
+// collapsed into comma-separated summary lines in the log output, with
+// Read showing basenames and Grep keeping patterns as-is.
+func TestFilterStreamJSON_BatchesToolCalls(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+
+	os.WriteFile(rawPath, nil, 0o644)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		filterStreamJSON(rawPath, logPath, stop)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write multiple Read and Grep tool calls, then a text event to flush.
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/project/go/internal/loop.go"}}]}}`)
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/project/go/internal/git.go"}}]}}`)
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"checklist_"}}]}}`)
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"TASK_BACKEND"}}]}}`)
+	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"analyzing results"}}`)
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := ansiRe.ReplaceAllString(string(got), "")
+
+	if !strings.Contains(content, "[agent] [Read] loop.go, git.go") {
+		t.Errorf("Read tools should be batched with basenames, got: %q", content)
+	}
+	if !strings.Contains(content, "[agent] [Grep] checklist_, TASK_BACKEND") {
+		t.Errorf("Grep tools should be batched with patterns, got: %q", content)
+	}
+	if !strings.Contains(content, "[agent] analyzing results") {
+		t.Errorf("text should flush batch and appear after, got: %q", content)
 	}
 }
 
