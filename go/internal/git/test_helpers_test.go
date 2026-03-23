@@ -14,6 +14,8 @@ type stubGitHub struct {
 	openPR       string
 	findPRErr    error
 	createPRErr  error
+	editPRErr    error
+	editPRTitle  string
 	mergeOutput  string
 	mergeErr     error
 	updateResult bool
@@ -30,6 +32,10 @@ func (s *stubGitHub) FindOpenPR(branch, repoURL string) (string, error) {
 }
 func (s *stubGitHub) CreatePR(opts CreatePROpts) error {
 	return s.createPRErr
+}
+func (s *stubGitHub) EditPR(prNumber, repoURL, title string) error {
+	s.editPRTitle = title
+	return s.editPRErr
 }
 func (s *stubGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error) {
 	s.mergeCalls++
