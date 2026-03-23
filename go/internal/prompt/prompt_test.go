@@ -567,4 +567,30 @@ func TestBuildTaskManagerPrompt_RequiredSections(t *testing.T) {
 	}
 }
 
+// Proves: bead echo-back instructions require showing ID, priority, type,
+// title, and description — with truncation guidance for long descriptions —
+// so the user can review and amend before moving on.
+func TestBuildTaskManagerPrompt_EchoBackIncludesDescription(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"review and amend", "echo-back should tell user they can review and amend"},
+		{"truncat", "echo-back should mention truncation for long descriptions"},
+		{"description", "echo-back should explicitly mention showing the description"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
 

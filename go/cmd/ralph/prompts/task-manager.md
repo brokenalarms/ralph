@@ -59,11 +59,15 @@ Every bead must have:
   the category — labels are for topic/component.
 - A priority (0–4). Do not use "high"/"medium"/"low".
 
-After creating a bead, echo back the result:
+After creating a bead, echo back the result so the user can review and amend:
 > Created **ralph-abc** · P2 task · `orchestrator` `git`
 > **ralph loop: force-reset worktree after merge**
 > Resets the worktree to origin/main after each squash-merge so stale
 > branches don't accumulate.
+
+Show the full description for short beads (up to ~3 lines). For longer
+descriptions, show the first ~3 lines and truncate with "…". Always include
+the ID, priority, type, labels, title, and description in the echo.
 
 Use `bd create --deps` for dependency chains — not notes.
 
