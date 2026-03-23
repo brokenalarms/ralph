@@ -4648,3 +4648,107 @@ func TestLoop_TaskBannerOnNewTask(t *testing.T) {
 		t.Error("expected ═ separator characters in task banner")
 	}
 }
+
+// Verifies that when Claude reports a rate limit, the loop waits until
+// the reset time and retries the iteration instead of counting it as
+// stagnation.
+func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	iterationCount := 0
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "fix the bug",
+		nextID:    "ralph-rl1",
+		label:     "beads",
+	}
+
+	// First call returns rate limited with a reset time in the past (so
+	// WaitUntil returns immediately). Second call completes the task.
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			if iterationCount >= 2 {
+				backend.mu.Lock()
+				backend.completed = 1
+				backend.remaining = 0
+				backend.mu.Unlock()
+			}
+		},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	var logBuf bytes.Buffer
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.NewWithWriter(&logBuf))
+
+	// Override the runner to return different results per iteration.
+	l.runner = &rateLimitStubRunner{
+		backend: backend,
+		counter: &iterationCount,
+	}
+	l.pushPRFunc = func(context.Context, string, string) error { return nil }
+	l.mergeFunc = func(context.Context) (bool, error) { return false, nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.llmVerifyFunc = func(context.Context, string, string, string, string, string, string, ...string) verify.Result {
+		return verify.Result{Passed: true}
+	}
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+	t.Logf("Output: %s", output)
+	if !strings.Contains(output, "rate limit") && !strings.Contains(output, "Rate limit") {
+		t.Errorf("expected rate limit log message, got: %s", output)
+	}
+	if !strings.Contains(output, "resuming") {
+		t.Errorf("expected 'resuming' after rate limit wait, got: %s", output)
+	}
+	// rateLimitStubRunner tracks its own calls.
+	rlRunner := l.runner.(*rateLimitStubRunner)
+	if rlRunner.calls < 2 {
+		t.Errorf("expected at least 2 Claude calls (rate limit + retry), got %d", rlRunner.calls)
+	}
+	_ = runner // silence unused
+	_ = iterationCount
+}
+
+// rateLimitStubRunner returns RateLimited on the first call, then
+// SignalDetected on subsequent calls.
+type rateLimitStubRunner struct {
+	backend *mutableBackend
+	counter *int
+	calls   int
+}
+
+func (r *rateLimitStubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
+	r.calls++
+	if r.calls == 1 {
+		return claude.Result{
+			RateLimited: true,
+			ResetAt:     time.Now().Add(-1 * time.Second),
+		}, nil
+	}
+	r.backend.mu.Lock()
+	r.backend.completed = 1
+	r.backend.remaining = 0
+	r.backend.mu.Unlock()
+	return claude.Result{SignalDetected: true, Summary: "done"}, nil
+}
+
+func (r *rateLimitStubRunner) StopStreaming() {}

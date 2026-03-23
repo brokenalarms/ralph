@@ -456,6 +456,21 @@ func (l *Loop) Run(ctx context.Context) error {
 			iteration--
 			continue
 		}
+		if result.RateLimited {
+			waitDur := claude.FormatWaitDuration(time.Until(result.ResetAt))
+			l.logger.Warn("Claude rate limit — waiting %s until %s", waitDur, result.ResetAt.Format("3:04pm"))
+			err := l.limiter.WaitUntil(ctx, result.ResetAt, func(secs int) {
+				l.logger.Log("Rate limit: %ds until reset", secs)
+			})
+			if err != nil {
+				l.logger.Warn("Rate limit wait interrupted: %v", err)
+				break
+			}
+			l.logger.Success("Rate limit reset — resuming")
+			runIteration--
+			iteration--
+			continue
+		}
 		elapsed := time.Since(taskStart)
 		l.limiter.Increment()
 
