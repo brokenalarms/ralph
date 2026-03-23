@@ -771,20 +771,11 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 	}
 }
 
-// Single-branch mode sets DeleteBranch=false so the remote branch survives.
-func TestMergeOpts_SingleBranchOmitsDeleteBranch(t *testing.T) {
-	mgr := &Manager{BranchStrategy: BranchSingle}
-	opts := mgr.mergeOpts()
-	if opts.DeleteBranch {
-		t.Fatal("single-branch mode must not set DeleteBranch")
-	}
-}
-
-// Stacked mode sets DeleteBranch=true since each task gets its own branch.
-func TestMergeOpts_StackedIncludesDeleteBranch(t *testing.T) {
-	mgr := &Manager{BranchStrategy: BranchStacked}
+// mergeOpts always sets DeleteBranch=true since each task gets its own branch.
+func TestMergeOpts_AlwaysDeletesBranch(t *testing.T) {
+	mgr := &Manager{}
 	opts := mgr.mergeOpts()
 	if !opts.DeleteBranch {
-		t.Fatal("stacked mode should set DeleteBranch")
+		t.Fatal("mergeOpts should always set DeleteBranch")
 	}
 }

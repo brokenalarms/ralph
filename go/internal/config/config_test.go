@@ -164,9 +164,6 @@ func TestAllFlags(t *testing.T) {
 	if !cfg.Evolve {
 		t.Error("Evolve should be true")
 	}
-	if cfg.BranchStrategy != "single" {
-		t.Errorf("BranchStrategy = %q, want \"single\" (default)", cfg.BranchStrategy)
-	}
 	if !cfg.Wait {
 		t.Error("Wait should be true")
 	}
@@ -732,39 +729,20 @@ func TestEvolveValidation(t *testing.T) {
 	}
 }
 
-// Verifies that --branch-strategy defaults to "single" and accepts both
-// valid values, rejecting anything else.
-func TestBranchStrategyFlag(t *testing.T) {
+// Verifies that the deprecated --branch-strategy flag is silently consumed
+// without error, so evolve restarts with stale flags don't break.
+func TestBranchStrategyFlag_SilentlyConsumed(t *testing.T) {
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
 	t.Setenv("RALPH_REFACTOR_EVERY", "")
 
-	cfg, err := Parse(nil)
+	_, err := Parse([]string{"--branch-strategy", "stacked"})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.BranchStrategy != "single" {
-		t.Errorf("BranchStrategy default = %q, want \"single\"", cfg.BranchStrategy)
+		t.Fatalf("deprecated --branch-strategy should be silently consumed, got: %v", err)
 	}
 
-	cfg, err = Parse([]string{"--branch-strategy", "stacked"})
+	_, err = Parse([]string{"--branch-strategy", "single"})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.BranchStrategy != "stacked" {
-		t.Errorf("BranchStrategy = %q, want \"stacked\"", cfg.BranchStrategy)
-	}
-
-	cfg, err = Parse([]string{"--branch-strategy", "single"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.BranchStrategy != "single" {
-		t.Errorf("BranchStrategy = %q, want \"single\"", cfg.BranchStrategy)
-	}
-
-	_, err = Parse([]string{"--branch-strategy", "invalid"})
-	if err == nil {
-		t.Fatal("expected error for invalid branch strategy")
+		t.Fatalf("deprecated --branch-strategy should be silently consumed, got: %v", err)
 	}
 
 	_, err = Parse([]string{"--branch-strategy"})
@@ -773,8 +751,8 @@ func TestBranchStrategyFlag(t *testing.T) {
 	}
 }
 
-// Verifies that branch_strategy in ralph.toml is loaded and CLI overrides it.
-func TestBranchStrategyConfigFile(t *testing.T) {
+// Verifies that branch_strategy in ralph.toml is silently ignored.
+func TestBranchStrategyConfigFile_SilentlyIgnored(t *testing.T) {
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
 	t.Setenv("RALPH_REFACTOR_EVERY", "")
 
@@ -784,17 +762,8 @@ func TestBranchStrategyConfigFile(t *testing.T) {
 
 	cfg, _ := Parse(nil)
 	cfg.LoadConfigFile(tomlPath)
-
-	if cfg.BranchStrategy != "stacked" {
-		t.Errorf("BranchStrategy = %q, want \"stacked\" from config file", cfg.BranchStrategy)
-	}
-
-	cfg, _ = Parse([]string{"--branch-strategy", "single"})
-	cfg.LoadConfigFile(tomlPath)
-
-	if cfg.BranchStrategy != "single" {
-		t.Errorf("BranchStrategy = %q, want \"single\" (CLI should override config file)", cfg.BranchStrategy)
-	}
+	// No error — stale config file entries are silently ignored.
+	_ = cfg
 }
 
 // Verifies base_branch defaults to "develop", can be set via --base-branch CLI

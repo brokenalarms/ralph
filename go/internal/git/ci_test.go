@@ -184,24 +184,21 @@ func TestMergeConflictError_Message(t *testing.T) {
 // users to bypass branch protection when desired.
 func TestMergeOpts_IncludesAdmin(t *testing.T) {
 	mgr := &Manager{
-		BranchStrategy: BranchStacked,
-		MergeAdmin:     true,
+		MergeAdmin: true,
 	}
 	opts := mgr.mergeOpts()
 	if !opts.Admin {
 		t.Error("expected Admin=true when MergeAdmin is set")
 	}
 	if !opts.DeleteBranch {
-		t.Error("expected DeleteBranch=true in stacked mode")
+		t.Error("expected DeleteBranch=true")
 	}
 }
 
 // mergeOpts omits Admin when MergeAdmin is false, preserving
 // the default behavior of respecting branch protection.
 func TestMergeOpts_OmitsAdminByDefault(t *testing.T) {
-	mgr := &Manager{
-		BranchStrategy: BranchStacked,
-	}
+	mgr := &Manager{}
 	opts := mgr.mergeOpts()
 	if opts.Admin {
 		t.Error("expected Admin=false by default")
@@ -344,13 +341,12 @@ func setupAutoMergeManager(t *testing.T, gh *stubGitHub) *Manager {
 	st := newMemState()
 
 	mgr := &Manager{
-		ProjectDir:     project,
-		RalphDir:       ralphDir,
-		UseWorktree:    true,
-		BranchStrategy: BranchStacked,
-		GitHub:         gh,
-		State:          st,
-		Logger:         &testLog{},
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		GitHub:      gh,
+		State:       st,
+		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -406,7 +402,7 @@ func TestAutoMerge_CIFailureReturnsTypedError(t *testing.T) {
 }
 
 // AutoMergeCurrentBranch passes MergeOpts from Manager config to the
-// GitHub interface, so single-branch and admin settings are respected.
+// GitHub interface, so admin settings are respected and branches are deleted.
 func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 	gh := &stubGitHub{
 		available: true,
@@ -419,23 +415,23 @@ func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 	st := newMemState()
 
 	mgr := &Manager{
-		ProjectDir:     project,
-		RalphDir:       ralphDir,
-		UseWorktree:    true,
-		BranchStrategy: BranchSingle,
-		MergeAdmin:     true,
-		GitHub:         gh,
-		State:          st,
-		Logger:         &testLog{},
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		MergeAdmin:  true,
+		GitHub:      gh,
+		State:       st,
+		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
+	mgr.RenameBranchForTask("test feature", "")
 	mgr.AutoMergeCurrentBranch(context.Background())
 
-	if gh.mergeOpts.DeleteBranch {
-		t.Error("single-branch mode should not set DeleteBranch")
+	if !gh.mergeOpts.DeleteBranch {
+		t.Error("merge should always set DeleteBranch")
 	}
 	if !gh.mergeOpts.Admin {
 		t.Error("MergeAdmin=true should set Admin in merge opts")
