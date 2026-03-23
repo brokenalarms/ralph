@@ -1552,7 +1552,7 @@ fi
 		Logger:         log,
 	}
 
-	err := mgr.PushAndCreatePR(context.Background(), "test task")
+	err := mgr.PushAndCreatePR(context.Background(), "", "test task")
 	if err != nil {
 		t.Fatalf("PushAndCreatePR failed: %v (log: %v)", err, log.messages)
 	}
@@ -1577,5 +1577,125 @@ fi
 
 	if !strings.Contains(createLine, "--base develop") {
 		t.Errorf("gh pr create should include --base develop, got: %s", createLine)
+	}
+}
+
+// PR titles must include the bead ID prefix so PRs are traceable back to
+// their originating task.
+func TestPushAndCreatePR_IncludesBeadIDInTitle(t *testing.T) {
+	project, cleanup := initBareRepoWithBranch(t, "main")
+	defer cleanup()
+
+	wtDir := filepath.Join(t.TempDir(), "worktree")
+	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
+	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
+
+	binDir := t.TempDir()
+	ghLog := filepath.Join(t.TempDir(), "gh-args.log")
+	ghScript := filepath.Join(binDir, "gh")
+	if err := os.WriteFile(ghScript, []byte(fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %s
+if [ "$2" = "list" ]; then
+  echo ""
+fi
+`, ghLog)), 0755); err != nil {
+		t.Fatalf("writing fake gh: %v", err)
+	}
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+":"+origPath)
+
+	log := &testLog{}
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        wtDir,
+		WorktreeBranch: "ralph/test/feature",
+		BaseBranch:     "main",
+		Logger:         log,
+	}
+
+	err := mgr.PushAndCreatePR(context.Background(), "ralph-hm8", "fix: include bead ID in PR title")
+	if err != nil {
+		t.Fatalf("PushAndCreatePR failed: %v", err)
+	}
+
+	ghArgs, readErr := os.ReadFile(ghLog)
+	if readErr != nil {
+		t.Fatalf("reading gh log: %v", readErr)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(ghArgs)), "\n")
+	var createLine string
+	for _, line := range lines {
+		if strings.Contains(line, "pr create") {
+			createLine = line
+			break
+		}
+	}
+	if createLine == "" {
+		t.Fatal("expected gh pr create to be called")
+	}
+
+	if !strings.Contains(createLine, "[ralph-hm8]") {
+		t.Errorf("PR title should contain bead ID prefix [ralph-hm8], got: %s", createLine)
+	}
+}
+
+// When no bead ID is provided (e.g. checklist backend), the PR title
+// should be the task description without any bracketed prefix.
+func TestPushAndCreatePR_NoBeadID(t *testing.T) {
+	project, cleanup := initBareRepoWithBranch(t, "main")
+	defer cleanup()
+
+	wtDir := filepath.Join(t.TempDir(), "worktree")
+	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
+	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
+
+	binDir := t.TempDir()
+	ghLog := filepath.Join(t.TempDir(), "gh-args.log")
+	ghScript := filepath.Join(binDir, "gh")
+	if err := os.WriteFile(ghScript, []byte(fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %s
+if [ "$2" = "list" ]; then
+  echo ""
+fi
+`, ghLog)), 0755); err != nil {
+		t.Fatalf("writing fake gh: %v", err)
+	}
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+":"+origPath)
+
+	log := &testLog{}
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        wtDir,
+		WorktreeBranch: "ralph/test/feature",
+		BaseBranch:     "main",
+		Logger:         log,
+	}
+
+	err := mgr.PushAndCreatePR(context.Background(), "", "add new feature")
+	if err != nil {
+		t.Fatalf("PushAndCreatePR failed: %v", err)
+	}
+
+	ghArgs, readErr := os.ReadFile(ghLog)
+	if readErr != nil {
+		t.Fatalf("reading gh log: %v", readErr)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(ghArgs)), "\n")
+	var createLine string
+	for _, line := range lines {
+		if strings.Contains(line, "pr create") {
+			createLine = line
+			break
+		}
+	}
+	if createLine == "" {
+		t.Fatal("expected gh pr create to be called")
+	}
+
+	if strings.Contains(createLine, "[") {
+		t.Errorf("PR title should not contain brackets when no bead ID, got: %s", createLine)
 	}
 }
