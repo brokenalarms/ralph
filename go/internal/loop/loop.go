@@ -851,6 +851,18 @@ func (l *Loop) flushUnpushedWork(ctx context.Context) {
 	taskDesc, _ := l.state.Read("last_task")
 	if err := l.pushAndCreatePR(ctx, taskID, taskDesc); err != nil {
 		l.logger.Warn("Flush push/PR: %v", err)
+		return
+	}
+	if l.cfg.AutoMerge {
+		merged, err := l.autoMerge(ctx)
+		if err != nil {
+			l.logger.Warn("Flush merge: %v", err)
+		}
+		if merged {
+			if err := l.git.PostMergeReset(); err != nil {
+				l.logger.Warn("Flush post-merge reset: %v", err)
+			}
+		}
 	}
 }
 

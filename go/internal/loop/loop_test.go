@@ -3658,3 +3658,199 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 		t.Errorf("expected pushPRFunc called at least 2 times (signal + flush), got %d", pushCalls)
 	}
 }
+
+// When AutoMerge is enabled, flushUnpushedWork must squash-merge after
+// pushing — same flow as every other task, no special case for last task.
+func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     true,
+		Wait:          false,
+	}, st, gm, logger)
+	l.runner = runner
+
+	l.pushPRFunc = func(_ context.Context, _, _ string) error { return nil }
+
+	var mergeCalls int
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mergeCalls == 0 {
+		t.Error("expected mergeFunc called during flush before exit, got 0 calls")
+	}
+}
+
+// When AutoMerge is enabled and --wait is set, flushUnpushedWork must
+// squash-merge before entering wait mode.
+func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     true,
+		Wait:          true,
+		WaitInterval:  50 * time.Millisecond,
+	}, st, gm, logger)
+	l.runner = runner
+
+	l.pushPRFunc = func(_ context.Context, _, _ string) error { return nil }
+
+	var mergeCalls int
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	err := l.Run(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mergeCalls == 0 {
+		t.Error("expected mergeFunc called during flush before wait, got 0 calls")
+	}
+}
+
+// When AutoMerge is disabled, flushUnpushedWork must NOT attempt to merge.
+func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     false,
+		Wait:          false,
+	}, st, gm, logger)
+	l.runner = runner
+
+	l.pushPRFunc = func(_ context.Context, _, _ string) error { return nil }
+
+	var mergeCalls int
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mergeCalls != 0 {
+		t.Errorf("expected mergeFunc NOT called when AutoMerge disabled, got %d calls", mergeCalls)
+	}
+}
