@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Verifies that each log level emits the correct ANSI color and [loop] prefix,
+// Verifies that each log level emits the correct ANSI color and [ralph] prefix,
 // matching ralph.sh's log, log_success, log_warn, log_error output format.
 func TestLogLevelColors(t *testing.T) {
 	tests := []struct {
@@ -26,7 +26,7 @@ func TestLogLevelColors(t *testing.T) {
 			l := &Logger{out: &buf, logFile: &buf}
 			tt.call(l)
 			got := buf.String()
-			if !strings.Contains(got, tt.wantColor+"[loop]") {
+			if !strings.Contains(got, tt.wantColor+"[ralph]") {
 				t.Errorf("output missing %q color prefix:\n%s", tt.name, got)
 			}
 			if !strings.Contains(got, "msg") {
