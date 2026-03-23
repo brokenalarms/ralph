@@ -8,10 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // Log is the logging interface used by Runner.
@@ -364,14 +367,6 @@ func (r *Runner) startStreamFilter(cfg RunConfig, stop <-chan struct{}) <-chan s
 		return done
 	}
 
-	// Write the bash filter script for tmux (which manages its own
-	// processes via tmux pane lifecycle). The Go filter below handles
-	// the in-process streaming path.
-	filterScript := filepath.Join(cfg.RalphDir, ".stream-filter.sh")
-	if _, err := os.Stat(filterScript); os.IsNotExist(err) {
-		writeStreamFilterScript(filterScript)
-	}
-
 	go func() {
 		defer close(done)
 		filterStreamJSON(cfg.RawLog, cfg.LogFile, stop)
@@ -415,7 +410,7 @@ func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
 			if text := extractStreamText(line); text != "" {
 				for _, tl := range strings.Split(text, "\n") {
 					if tl != "" {
-						fmt.Fprintf(logOut, "[claude] %s\n", tl)
+						fmt.Fprintf(logOut, "%s\n", FormatStreamLine("[claude] "+tl))
 					}
 				}
 			}
@@ -496,6 +491,7 @@ func extractStreamText(line string) string {
 		if ev.Subtype == "error_response" && ev.Error != "" {
 			return ev.Error
 		}
+		return "[done]"
 	}
 
 	return ""
@@ -537,6 +533,81 @@ func formatToolUse(c streamContent) string {
 	return "[" + c.Name + "]"
 }
 
+var mdBoldRe = regexp.MustCompile(`\*\*(.+?)\*\*`)
+
+// stripMarkdown removes markdown formatting from text for clean terminal output.
+func stripMarkdown(s string) string {
+	return mdBoldRe.ReplaceAllString(s, "$1")
+}
+
+// colorTag applies ANSI color to a bracketed tag like [claude] or [Read].
+func colorTag(tag string) string {
+	switch {
+	case tag == "[done]":
+		return logging.Green + tag + logging.Reset
+	case tag == "[claude]":
+		return logging.Cyan + tag + logging.Reset
+	default:
+		return logging.Blue + tag + logging.Reset
+	}
+}
+
+var tagRe = regexp.MustCompile(`\[([A-Za-z][A-Za-z]*)\]`)
+
+// FormatStreamLine takes raw extracted text from a stream event and returns
+// a fully formatted output line with timestamp, ANSI colors, and markdown stripped.
+func FormatStreamLine(text string) string {
+	text = stripMarkdown(text)
+	text = tagRe.ReplaceAllStringFunc(text, colorTag)
+	return time.Now().Format("15:04:05") + " " + text
+}
+
+// FilterStream tails a raw log file and writes formatted, colored output to
+// stdout. Intended for use as the tmux stream pane via `ralph filter-stream`.
+// Blocks until the process is killed (tmux manages its lifecycle).
+func FilterStream(rawLogPath string) {
+	f, err := os.Open(rawLogPath)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(0, 2); err != nil {
+		return
+	}
+
+	var remainder string
+	buf := make([]byte, 64*1024)
+
+	processChunk := func(data string) string {
+		for {
+			idx := strings.IndexByte(data, '\n')
+			if idx < 0 {
+				return data
+			}
+			line := data[:idx]
+			data = data[idx+1:]
+			if text := extractStreamText(line); text != "" {
+				for _, tl := range strings.Split(text, "\n") {
+					if tl != "" {
+						fmt.Fprintln(os.Stdout, FormatStreamLine("[claude] "+tl))
+					}
+				}
+			}
+		}
+	}
+
+	for {
+		n, _ := f.Read(buf)
+		if n > 0 {
+			remainder = processChunk(remainder + string(buf[:n]))
+		}
+		if n == 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}
+
 // startTailGoroutine follows new data appended to path and writes it to
 // stdout, similar to tail -f -n 0. Only forwards lines prefixed with
 // "[claude] " — orchestrator messages are already written to stdout directly
@@ -558,7 +629,6 @@ func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
 			return
 		}
 
-		const claudePrefix = "[claude] "
 		var remainder string
 		buf := make([]byte, 64*1024)
 
@@ -570,7 +640,7 @@ func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
 				}
 				line := data[:idx]
 				data = data[idx+1:]
-				if strings.HasPrefix(line, claudePrefix) {
+				if strings.Contains(line, "[claude]") {
 					fmt.Fprintln(os.Stdout, line)
 				}
 			}
@@ -589,7 +659,7 @@ func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
 						n2, _ := f.Read(buf)
 						if n2 == 0 {
 							// Flush any remaining partial line.
-							if remainder != "" && strings.HasPrefix(remainder, claudePrefix) {
+							if remainder != "" && strings.Contains(remainder, "[claude]") {
 								fmt.Fprintln(os.Stdout, remainder)
 							}
 							return
@@ -685,43 +755,6 @@ func gracefulKill(cmd *exec.Cmd, processDone <-chan struct{}) {
 	case <-time.After(2 * time.Second):
 		_ = cmd.Process.Kill()
 	}
-}
-
-func writeStreamFilterScript(path string) {
-	script := `#!/usr/bin/env bash
-set +m
-exec 2>"$(dirname "$0")/.stream-filter.err"
-tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
-  fromjson? // empty |
-  if .type == "assistant" then
-    .message.content[0]? //empty |
-    if .type == "text" then "\n[claude] " + .text + "\n"
-    elif .type == "tool_use" then
-      (.input.file_path // .input.command // .input.pattern //
-        .input.query // .input.url // .input.description //
-        .input.task_id // .input.skill // .input.prompt //
-        null) as $target |
-      if $target then "\n[" + .name + "] " + $target + "\n"
-      else "\n[" + .name + "]\n"
-      end
-    else empty end
-  elif .type == "result" then
-    "\n[done]\n"
-  else empty end
-' | perl -e '
-  use POSIX; $|=1;
-  while(<STDIN>) {
-    chomp;
-    next if $_ eq "";
-    my $ts = strftime("%H:%M:%S", localtime());
-    print "$ts $_\n";
-  }
-' | sed -u -E \
-  -e $'s/\\[done\\]/\033[0;32m[done]\033[0m/g' \
-  -e $'s/\\[claude\\]/\033[0;36m[claude]\033[0m/g' \
-  -e $'s/\\[([A-Z][A-Za-z]*)\\]/\033[0;34m[\\1]\033[0m/g'
-`
-	os.WriteFile(path, []byte(script), 0o755)
 }
 
 // stopProcessGroup kills cmd and all its descendants. Uses multiple

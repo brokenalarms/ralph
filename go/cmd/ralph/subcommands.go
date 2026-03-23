@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/prompt"
@@ -65,6 +66,14 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 
 	case "task":
 		return handleTask(sub, log)
+
+	case "filter-stream":
+		if len(sub.Args) == 0 {
+			log.Error("Usage: ralph filter-stream <rawlog>")
+			return 1
+		}
+		claude.FilterStream(sub.Args[0])
+		return 0
 	}
 
 	return 1
@@ -177,6 +186,7 @@ func printUsage() {
   ralph task [directory]       Interactive task manager (standalone, no tmux)
   ralph stop [directory]       Halt after the current iteration
   ralph feedback [message]     Show queued feedback, or queue a new message
+  ralph filter-stream <rawlog> Stream filter for tmux panes (colored, timestamped)
 
 %sHOW IT WORKS:%s
   1. Planning: Claude reads the repo and creates .ralph/plan.md with atomic tasks
