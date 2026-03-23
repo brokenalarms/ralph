@@ -345,13 +345,6 @@ func Parse(args []string) (Config, error) {
 			cfg.cliSet["base_branch"] = true
 			i += 2
 
-		case "--branch-strategy":
-			// Deprecated flag — silently consumed for evolve compatibility.
-			if _, err := requireArg(args, i); err != nil {
-				return cfg, err
-			}
-			i += 2
-
 		case "--idle-timeout":
 			v, err := requireArg(args, i)
 			if err != nil {
