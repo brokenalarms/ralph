@@ -197,8 +197,8 @@ func LLMVerifyPR(workDir, promptsDir, taskID, headBefore, beadTitle, beadDescrip
 		source = "iteration"
 	}
 
-	if len(diff) > 20000 {
-		diff = diff[:20000] + "\n\n[diff truncated at 20000 chars]"
+	if len(diff) > 100000 {
+		diff = diff[:100000] + "\n\n[diff truncated at 100000 chars]"
 	}
 
 	prompt := loadReviewPrompt(promptsDir, beadTitle, beadDescription, source, diff)
