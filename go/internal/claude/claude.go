@@ -86,14 +86,16 @@ type RunConfig struct {
 
 // Result describes the outcome of a Claude run.
 type Result struct {
-	SignalDetected     bool   // true if a completion signal was found
-	AllComplete        bool   // true if the all-complete signal was found
-	IdleTimeout        bool   // true if the session was killed due to idle timeout
-	OnSignalUsed       bool   // true if OnSignal callback was used for verification
-	VerificationFailed bool   // true if signal was detected but OnSignal rejected it
-	VerificationReason string // reason OnSignal rejected the signal
-	TaskDesc           string // task description from the current-task signal
-	Summary            string // completion summary from signal file
+	SignalDetected     bool      // true if a completion signal was found
+	AllComplete        bool      // true if the all-complete signal was found
+	IdleTimeout        bool      // true if the session was killed due to idle timeout
+	RateLimited        bool      // true if Claude reported hitting its usage limit
+	ResetAt            time.Time // when the rate limit resets (valid when RateLimited is true)
+	OnSignalUsed       bool      // true if OnSignal callback was used for verification
+	VerificationFailed bool      // true if signal was detected but OnSignal rejected it
+	VerificationReason string    // reason OnSignal rejected the signal
+	TaskDesc           string    // task description from the current-task signal
+	Summary            string    // completion summary from signal file
 }
 
 // OnTaskDetected is called when a current-task signal file appears.
@@ -262,6 +264,17 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 			r.Logger.Success("Task completed via signal")
 		} else {
 			r.Logger.Log("Claude exited (no completion signal)")
+		}
+	}
+
+	// Check for Claude rate limit in the raw log output.
+	if !result.SignalDetected && !result.IdleTimeout {
+		if logData, err := os.ReadFile(cfg.RawLog); err == nil {
+			if resetAt, found := ScanRawLogForRateLimit(string(logData), time.Now()); found {
+				result.RateLimited = true
+				result.ResetAt = resetAt
+				r.Logger.Warn("Claude rate limit detected — resets at %s", resetAt.Format("3:04pm"))
+			}
 		}
 	}
 

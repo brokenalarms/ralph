@@ -204,3 +204,78 @@ func TestWaitForResetOnTick(t *testing.T) {
 		t.Fatal("expected at least one tick callback")
 	}
 }
+
+// Verify WaitUntil returns immediately when the target time is in the past.
+func TestWaitUntilAlreadyPassed(t *testing.T) {
+	now := time.Date(2026, 3, 24, 15, 0, 0, 0, time.UTC)
+	cleanup := withFrozenTime(t, now)
+	defer cleanup()
+
+	l := newTestLimiter(t, 10)
+	target := time.Date(2026, 3, 24, 14, 0, 0, 0, time.UTC)
+
+	err := l.WaitUntil(context.Background(), target, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// Verify WaitUntil waits until the target time and calls onTick with
+// decreasing seconds.
+func TestWaitUntilCallsTick(t *testing.T) {
+	now := time.Date(2026, 3, 24, 23, 59, 50, 0, time.UTC)
+	cleanup := withFrozenTime(t, now)
+	defer cleanup()
+
+	l := newTestLimiter(t, 10)
+	target := time.Date(2026, 3, 25, 0, 0, 0, 0, time.UTC)
+
+	callCount := 0
+	timeNow = func() time.Time {
+		callCount++
+		if callCount > 2 {
+			return time.Date(2026, 3, 25, 0, 0, 1, 0, time.UTC)
+		}
+		return now
+	}
+
+	var tickValues []int
+	err := l.WaitUntil(context.Background(), target, func(secsLeft int) {
+		tickValues = append(tickValues, secsLeft)
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(tickValues) == 0 {
+		t.Fatal("expected at least one tick callback")
+	}
+}
+
+// Verify WaitUntil respects context cancellation.
+func TestWaitUntilContextCancel(t *testing.T) {
+	l := newTestLimiter(t, 10)
+	target := time.Now().Add(time.Hour)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := l.WaitUntil(ctx, target, nil)
+	if err == nil {
+		t.Fatal("expected context cancelled error")
+	}
+}
+
+// Verify WaitUntil aborts when stop file is present.
+func TestWaitUntilStopFile(t *testing.T) {
+	l := newTestLimiter(t, 10)
+	target := time.Now().Add(time.Hour)
+
+	if err := os.WriteFile(l.StopFile, []byte("stop\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := l.WaitUntil(context.Background(), target, nil)
+	if err == nil {
+		t.Fatal("expected error from stop file")
+	}
+}
