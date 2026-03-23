@@ -1,10 +1,14 @@
-## User feedback
+## Live feedback
 
-The user has provided the following feedback:
+The user may send feedback while you are working. Before each tool call, check for a feedback file:
 
-{{FEEDBACK}}
+```
+cat {{RALPH_DIR}}/feedback
+```
 
-Triage this feedback before acting:
+If the file exists and has content:
+1. Read it completely.
+2. Triage: **act now** if it corrects your current work, is critical, or blocks progress. **Defer** by creating a new task if it is unrelated or a separate enhancement.
+3. Clear the file after reading: `rm {{RALPH_DIR}}/feedback`
 
-- **Act now** if the feedback is critical, a bug fix, blocks other tasks, or corrects work you just did. Make the changes, then continue with your current task as normal (including any verification steps like tests).
-- **Defer** if the feedback is a subsequent feature, enhancement, or unrelated to in-progress work. Add it as a new task, then continue with your current task as normal.
+If the file does not exist or is empty, continue normally. Do not mention checking for feedback in your output — only mention it when feedback is actually found.

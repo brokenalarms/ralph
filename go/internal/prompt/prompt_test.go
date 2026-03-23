@@ -91,34 +91,34 @@ func TestBuildPrompt_IncludesSharedPrompt(t *testing.T) {
 	}
 }
 
-// Proves: user feedback is injected into the prompt when provided.
-func TestBuildPrompt_FeedbackIncluded(t *testing.T) {
+// Proves: live feedback instructions are always included in the prompt,
+// telling the agent to check the feedback file between tool calls.
+func TestBuildPrompt_LiveFeedbackInstructions(t *testing.T) {
 	v := testVars(t)
-	v.Feedback = "make it generic, use plugins"
 	result, err := BuildPrompt(v)
 	if err != nil {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-	if !strings.Contains(result, "User feedback") {
-		t.Error("prompt missing feedback section header")
+	if !strings.Contains(result, "Live feedback") {
+		t.Error("prompt missing live feedback section header")
 	}
-	if !strings.Contains(result, "make it generic") {
-		t.Error("prompt missing feedback content")
+	if !strings.Contains(result, "feedback") {
+		t.Error("prompt missing feedback file check instructions")
 	}
 }
 
-// Proves: no feedback section is present when feedback is empty.
-func TestBuildPrompt_NoFeedbackWhenEmpty(t *testing.T) {
+// Proves: the feedback instructions reference the ralph dir path so the
+// agent knows where to find the feedback file.
+func TestBuildPrompt_FeedbackReferencesRalphDir(t *testing.T) {
 	v := testVars(t)
-	v.Feedback = ""
 	result, err := BuildPrompt(v)
 	if err != nil {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-	if strings.Contains(result, "User feedback") {
-		t.Error("prompt should not contain feedback section when feedback is empty")
+	if !strings.Contains(result, v.RalphDir+"/feedback") {
+		t.Error("feedback instructions should reference {{RALPH_DIR}}/feedback with substituted path")
 	}
 }
 

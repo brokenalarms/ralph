@@ -26,7 +26,6 @@ type Vars struct {
 	CurrentTaskToken string
 	AllCompleteToken string
 	TaskPrompt       string
-	Feedback         string
 	AttemptHistory   string
 	TestStatus       string
 	BeadsContext     string
@@ -52,17 +51,12 @@ func BuildPrompt(v Vars) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
-	result := shared + "\n" + internal + "\n" + reflection + "\n" + signal
-
-	if v.Feedback != "" {
-		feedbackTmpl, err := readTemplate(v.PromptsDir, "feedback.md")
-		if err != nil {
-			return "", err
-		}
-		feedbackTmpl = strings.ReplaceAll(feedbackTmpl, "{{FEEDBACK}}", v.Feedback)
-		result += "\n\n" + feedbackTmpl
+	feedback, err := readTemplate(v.PromptsDir, "feedback.md")
+	if err != nil {
+		return "", err
 	}
+
+	result := shared + "\n" + internal + "\n" + reflection + "\n" + signal + "\n" + feedback
 
 	taskInstructions, err := executionInstructions(v)
 	if err != nil {

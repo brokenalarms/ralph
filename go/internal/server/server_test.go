@@ -190,7 +190,7 @@ func TestStopNoLoop(t *testing.T) {
 }
 
 // Verify /feedback appends the message to the feedback file,
-// which ralph.sh reads and injects into the next iteration's prompt.
+// which the agent checks between tool calls.
 func TestFeedback(t *testing.T) {
 	s, dir := newTestServer(t)
 	s.projectDir = dir
@@ -215,7 +215,7 @@ func TestFeedback(t *testing.T) {
 }
 
 // Verify /feedback appends (not overwrites) so multiple feedback
-// messages queue up for the next iteration.
+// messages accumulate for the agent to read.
 func TestFeedbackAppends(t *testing.T) {
 	s, dir := newTestServer(t)
 	s.projectDir = dir
