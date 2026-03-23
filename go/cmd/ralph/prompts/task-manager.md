@@ -87,7 +87,7 @@ Before updating or commenting on any bead, check its status:
 - **Closed** → do not comment or modify. Instead:
   - If the fix is completely wrong or doesn't work → `bd reopen`, then modify
   - If it's follow-on work or a small miss → create a new bead, reference the original
-- **In progress** → ask the user for confirmation before modifying. Do not
+- **in_progress** → ask the user for confirmation before modifying. Do not
   silently change tasks that the ralph loop is actively working on.
 - **Open** → modify freely.
 
