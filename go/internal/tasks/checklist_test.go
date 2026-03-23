@@ -111,56 +111,6 @@ func TestHasTasks_NoPlanFile(t *testing.T) {
 	}
 }
 
-// Proves: NeedsPlanning is true when no plan file exists yet.
-func TestNeedsPlanning_NoPlanFile(t *testing.T) {
-	c := &Checklist{PlanFile: "/nonexistent/plan.md"}
-	got, err := c.NeedsPlanning()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got {
-		t.Error("expected NeedsPlanning=true without plan file")
-	}
-}
-
-// Proves: NeedsPlanning is false when a plan file exists (even if empty).
-func TestNeedsPlanning_WithPlanFile(t *testing.T) {
-	c := setupChecklist(t, "")
-	// setupChecklist doesn't write when content is empty; write an empty file
-	os.WriteFile(c.PlanFile, []byte(""), 0644)
-	got, err := c.NeedsPlanning()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got {
-		t.Error("expected NeedsPlanning=false when plan file exists")
-	}
-}
-
-// Proves: PlanningSucceeded requires actual checkbox tasks, not just a file.
-func TestPlanningSucceeded_EmptyPlan(t *testing.T) {
-	c := setupChecklist(t, "no tasks here\n")
-	got, err := c.PlanningSucceeded()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got {
-		t.Error("expected PlanningSucceeded=false with no checkboxes")
-	}
-}
-
-// Proves: PlanningSucceeded is true when checkboxes exist.
-func TestPlanningSucceeded_WithTasks(t *testing.T) {
-	c := setupChecklist(t, "- [ ] A task\n")
-	got, err := c.PlanningSucceeded()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got {
-		t.Error("expected PlanningSucceeded=true with checkboxes")
-	}
-}
-
 // Proves: counts return zero when the plan file doesn't exist.
 func TestCounts_NoPlanFile(t *testing.T) {
 	c := &Checklist{PlanFile: "/nonexistent/plan.md"}

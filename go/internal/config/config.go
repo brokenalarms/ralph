@@ -16,9 +16,6 @@ type Config struct {
 	ProjectDir                 string
 	MaxIterations              int
 	Prompt                     string
-	PlanFile                   string
-	PlanOnly                   bool
-	SkipPlanning               bool
 	Quiet                      bool
 	UseWorktree                bool
 	CallsPerHour               int
@@ -220,22 +217,6 @@ func Parse(args []string) (Config, error) {
 			}
 			cfg.Prompt = v
 			i += 2
-
-		case "--plan-file":
-			v, err := requireArg(args, i)
-			if err != nil {
-				return cfg, err
-			}
-			cfg.PlanFile = v
-			i += 2
-
-		case "--plan":
-			cfg.PlanOnly = true
-			i++
-
-		case "--skip-planning":
-			cfg.SkipPlanning = true
-			i++
 
 		case "-q", "--quiet":
 			cfg.Quiet = true

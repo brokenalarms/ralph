@@ -189,7 +189,7 @@ func (l *Loop) Run(ctx context.Context) error {
 				hasTasks, _ := l.cfg.TaskBackend.HasTasks()
 				if !hasTasks {
 					if !l.cfg.Wait {
-						l.logger.Error("No tasks found")
+						l.logger.Error("No tasks found — run ralph task to create tasks")
 						l.state.Write("status", "error")
 						break
 					}

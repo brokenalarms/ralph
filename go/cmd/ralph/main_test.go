@@ -43,8 +43,6 @@ func (s *stubBackend) GetNextTask() (string, error)               { return "", n
 func (s *stubBackend) GetNextTaskID() (string, error)             { return "", nil }
 func (s *stubBackend) GetNextTaskInfo() (string, string, error)   { return "", "", nil }
 func (s *stubBackend) HasTasks() (bool, error)                    { return s.total > 0, nil }
-func (s *stubBackend) NeedsPlanning() (bool, error)               { return false, nil }
-func (s *stubBackend) PlanningSucceeded() (bool, error)           { return true, nil }
 func (s *stubBackend) CloseTask(string, string) error             { return nil }
 func (s *stubBackend) SkipTask(string, string) error              { return nil }
 func (s *stubBackend) ReopenTask(string) error                    { return nil }
@@ -52,7 +50,6 @@ func (s *stubBackend) SetState(_, _, _, _ string) error           { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error)       { return "", nil }
 func (s *stubBackend) ExecutionInstructions() (string, error)     { return "", nil }
 func (s *stubBackend) ProjectContext() (string, error)            { return "", nil }
-func (s *stubBackend) PlanningInstructions() string               { return "" }
 func (s *stubBackend) GetDescription(_ string) (string, error)    { return "", nil }
 func (s *stubBackend) GetFullContext(_ string) (string, error)    { return "", nil }
 func (s *stubBackend) Label() string                              { return "checklist" }
@@ -207,7 +204,7 @@ func TestInitRalphDir_CreatesDirectory(t *testing.T) {
 }
 
 // Verifies clearSignalFiles removes signal files but preserves state.json
-// and other .ralph contents, so evolve restart resumes instead of replanning.
+// and other .ralph contents, so evolve restart resumes correctly.
 func TestClearSignalFiles_PreservesState(t *testing.T) {
 	ralphDir := t.TempDir()
 
@@ -436,41 +433,6 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	}
 }
 
-// Verifies that validatePlanFile rejects a nonexistent file with "not found".
-func TestValidatePlanFile_NonexistentExitsWithError(t *testing.T) {
-	err := validatePlanFile("/nonexistent/plan.md")
-	if err == nil {
-		t.Fatal("expected error for nonexistent plan file")
-	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("expected 'not found' in error, got %q", err)
-	}
-}
-
-// Verifies that validatePlanFile rejects a file without checkboxes.
-func TestValidatePlanFile_NoCheckboxesRejected(t *testing.T) {
-	badPlan := filepath.Join(t.TempDir(), "bad-plan.md")
-	os.WriteFile(badPlan, []byte("Just some text without checkboxes"), 0o644)
-
-	err := validatePlanFile(badPlan)
-	if err == nil {
-		t.Fatal("expected error for plan without checkboxes")
-	}
-	if !strings.Contains(err.Error(), "Ralph format") {
-		t.Errorf("expected 'Ralph format' in error, got %q", err)
-	}
-}
-
-// Verifies that validatePlanFile accepts a valid plan with checkboxes.
-func TestValidatePlanFile_ValidPlanAccepted(t *testing.T) {
-	plan := filepath.Join(t.TempDir(), "plan.md")
-	os.WriteFile(plan, []byte("- [ ] Test task\n- [ ] Another task"), 0o644)
-
-	err := validatePlanFile(plan)
-	if err != nil {
-		t.Errorf("expected no error for valid plan, got %v", err)
-	}
-}
 
 // Verifies printSessionSummary displays bead ID, title, agent summary, and PR
 // reference for each completed task, giving the operator a clear picture of

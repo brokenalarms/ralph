@@ -86,15 +86,6 @@ func (c *Checklist) HasTasks() (bool, error) {
 	return total > 0, nil
 }
 
-func (c *Checklist) NeedsPlanning() (bool, error) {
-	_, err := os.Stat(c.PlanFile)
-	return os.IsNotExist(err), nil
-}
-
-func (c *Checklist) PlanningSucceeded() (bool, error) {
-	return c.HasTasks()
-}
-
 func (c *Checklist) CloseTask(_ string, _ string) error {
 	return nil
 }
@@ -127,13 +118,6 @@ func (c *Checklist) ExecutionInstructions() (string, error) {
 		return "", fmt.Errorf("reading execution instructions: %w", err)
 	}
 	return string(data), nil
-}
-
-func (c *Checklist) PlanningInstructions() string {
-	return fmt.Sprintf(`Write tasks to %s in markdown checkbox format:
-- [ ] Task 1 description
-- [ ] Task 2 description
-IMPORTANT: beads/bd is NOT installed in this environment. Do NOT attempt to use bd commands — they will fail. You MUST write the plan file directly. If the user asks to use beads, explain that bd is not installed and they need to install it and restart ralph.`, c.PlanFile)
 }
 
 func (c *Checklist) SetState(_, _, _, _ string) error  { return nil }

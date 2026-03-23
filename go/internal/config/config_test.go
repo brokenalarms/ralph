@@ -96,9 +96,6 @@ func TestAllFlags(t *testing.T) {
 		"-d", "/tmp/proj",
 		"-n", "10",
 		"-p", "fix tests",
-		"--plan-file", "plan.md",
-		"--plan",
-		"--skip-planning",
 		"-q",
 		"--no-worktree",
 		"--calls-per-hour", "40",
@@ -124,15 +121,6 @@ func TestAllFlags(t *testing.T) {
 	}
 	if cfg.Prompt != "fix tests" {
 		t.Errorf("Prompt = %q, want \"fix tests\"", cfg.Prompt)
-	}
-	if cfg.PlanFile != "plan.md" {
-		t.Errorf("PlanFile = %q, want plan.md", cfg.PlanFile)
-	}
-	if !cfg.PlanOnly {
-		t.Error("PlanOnly should be true")
-	}
-	if !cfg.SkipPlanning {
-		t.Error("SkipPlanning should be true")
 	}
 	if !cfg.Quiet {
 		t.Error("Quiet should be true")
@@ -317,7 +305,7 @@ func TestUnknownFlag(t *testing.T) {
 
 // Verifies that flags requiring a value return an error when the value is missing.
 func TestMissingArgValue(t *testing.T) {
-	for _, flag := range []string{"-d", "-n", "-p", "--plan-file", "--calls-per-hour", "--refactor-every", "--refactor-threshold", "--disable-check", "--idle-timeout", "--idle-timeout-progress"} {
+	for _, flag := range []string{"-d", "-n", "-p", "--calls-per-hour", "--refactor-every", "--refactor-threshold", "--disable-check", "--idle-timeout", "--idle-timeout-progress"} {
 		_, err := Parse([]string{flag})
 		if err == nil {
 			t.Errorf("Parse(%q) should error on missing value", flag)

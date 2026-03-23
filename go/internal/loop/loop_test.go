@@ -68,15 +68,12 @@ func (m *mutableBackend) GetNextTask() (string, error)         { m.mu.Lock(); de
 func (m *mutableBackend) GetNextTaskID() (string, error)       { m.mu.Lock(); defer m.mu.Unlock(); return m.nextID, nil }
 func (m *mutableBackend) GetNextTaskInfo() (string, string, error) { m.mu.Lock(); defer m.mu.Unlock(); return m.nextID, m.nextTask, nil }
 func (m *mutableBackend) HasTasks() (bool, error)              { m.mu.Lock(); defer m.mu.Unlock(); return m.total > 0, nil }
-func (m *mutableBackend) NeedsPlanning() (bool, error)         { return false, nil }
-func (m *mutableBackend) PlanningSucceeded() (bool, error)     { return true, nil }
 func (m *mutableBackend) CloseTask(string, string) error       { return nil }
 func (m *mutableBackend) SkipTask(string, string) error        { return nil }
 func (m *mutableBackend) ReopenTask(string) error              { return nil }
 func (m *mutableBackend) SetState(_, _, _, _ string) error     { return nil }
 func (m *mutableBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (m *mutableBackend) ExecutionInstructions() (string, error) { return "", nil }
-func (m *mutableBackend) PlanningInstructions() string         { return "" }
 func (m *mutableBackend) GetDescription(_ string) (string, error)  { return "", nil }
 func (m *mutableBackend) GetFullContext(_ string) (string, error)  { return "", nil }
 func (m *mutableBackend) ProjectContext() (string, error)          { return "", nil }
@@ -96,15 +93,12 @@ func (s *stubBackend) GetNextTask() (string, error)         { return s.nextTask,
 func (s *stubBackend) GetNextTaskID() (string, error)       { return s.nextID, nil }
 func (s *stubBackend) GetNextTaskInfo() (string, string, error) { return s.nextID, s.nextTask, nil }
 func (s *stubBackend) HasTasks() (bool, error)              { return s.total > 0, nil }
-func (s *stubBackend) NeedsPlanning() (bool, error)         { return false, nil }
-func (s *stubBackend) PlanningSucceeded() (bool, error)     { return true, nil }
 func (s *stubBackend) CloseTask(string, string) error       { return nil }
 func (s *stubBackend) SkipTask(string, string) error        { return nil }
 func (s *stubBackend) ReopenTask(string) error              { return nil }
 func (s *stubBackend) SetState(_, _, _, _ string) error     { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (s *stubBackend) ExecutionInstructions() (string, error) { return "", nil }
-func (s *stubBackend) PlanningInstructions() string         { return "" }
 func (s *stubBackend) GetDescription(_ string) (string, error)  { return "", nil }
 func (s *stubBackend) GetFullContext(_ string) (string, error)  { return "", nil }
 func (s *stubBackend) ProjectContext() (string, error)          { return "", nil }
