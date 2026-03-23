@@ -194,48 +194,55 @@ func TestSeparatorStreamingMode(t *testing.T) {
 	}
 }
 
-// Verifies that SetTaskID causes all log lines to include a magenta-colored
-// [taskID] tag after the timestamp, so inline-mode output identifies the
-// current bead being worked on.
-func TestTaskIDInLogOutput(t *testing.T) {
+// Verifies that log lines do NOT include a per-line task ID prefix —
+// task identification is handled by a one-time separator banner instead.
+func TestNoPerLineTaskIDPrefix(t *testing.T) {
 	var buf bytes.Buffer
 	l := &Logger{out: &buf, logFile: &buf}
-	l.SetTaskID("ralph-5iv")
 	l.Log("doing work")
 	got := buf.String()
 
-	if !strings.Contains(got, "[ralph-5iv]") {
-		t.Errorf("log output should include task ID tag, got: %s", got)
-	}
-	if !strings.Contains(got, Magenta+"[ralph-5iv]") {
-		t.Error("task ID tag should be colored magenta")
-	}
-	if !strings.Contains(got, "[ralph-5iv]"+Reset+" "+Cyan+"[ralph]") {
-		t.Errorf("task ID should appear before [ralph] prefix, got: %s", got)
+	if strings.Contains(got, Magenta+"[") {
+		t.Errorf("log output should not contain magenta task prefix, got: %s", got)
 	}
 }
 
-// Verifies that log output has no task ID tag when none is set.
-func TestNoTaskIDWhenEmpty(t *testing.T) {
-	var buf bytes.Buffer
-	l := &Logger{out: &buf, logFile: &buf}
-	l.Log("no task")
-	got := buf.String()
+// Verifies that TaskBanner writes a bold separator with the task ID centered,
+// replacing the old per-line prefix with a single banner per task.
+func TestTaskBanner(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile}
+	l.TaskBanner("ralph-l337")
+	got := stdout.String()
 
-	if strings.Contains(got, "[]") {
-		t.Errorf("log output should not have empty brackets, got: %s", got)
+	if !strings.Contains(got, "ralph-l337") {
+		t.Errorf("TaskBanner should include task ID, got: %s", got)
+	}
+	if !strings.Contains(got, "═") {
+		t.Error("TaskBanner should contain ═ separator characters")
+	}
+	if !strings.Contains(got, Bold) {
+		t.Error("TaskBanner should be bold")
+	}
+	if !strings.Contains(got, Magenta) {
+		t.Error("TaskBanner should use magenta color")
+	}
+	if !strings.Contains(logFile.String(), "ralph-l337") {
+		t.Error("TaskBanner should write to log file")
 	}
 }
 
-// Verifies that Phase output includes the task ID tag when set.
-func TestTaskIDInPhaseOutput(t *testing.T) {
-	var buf bytes.Buffer
-	l := &Logger{out: &buf, logFile: &buf}
-	l.SetTaskID("ralph-abc")
-	l.Phase("starting phase")
-	got := buf.String()
+// Verifies that TaskBanner respects streaming mode.
+func TestTaskBannerStreamingMode(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile}
+	l.SetStreaming(true)
+	l.TaskBanner("ralph-abc")
 
-	if !strings.Contains(got, "[ralph-abc]") {
-		t.Errorf("Phase output should include task ID tag, got: %s", got)
+	if stdout.Len() != 0 {
+		t.Error("TaskBanner should suppress stdout in streaming mode")
+	}
+	if !strings.Contains(logFile.String(), "ralph-abc") {
+		t.Error("TaskBanner should still write to log file in streaming mode")
 	}
 }

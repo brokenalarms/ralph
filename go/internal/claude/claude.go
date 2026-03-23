@@ -79,8 +79,8 @@ type RunConfig struct {
 	// the agent to read. Used to send test failure output back to the agent.
 	FeedbackFile string
 
-	// TaskID is the bead/task identifier (e.g. "ralph-xyz") included in
-	// log messages so operators can identify which task is running.
+	// TaskID is the bead/task identifier (e.g. "ralph-xyz") used in
+	// completion and status log messages.
 	TaskID string
 }
 
@@ -391,7 +391,7 @@ func (r *Runner) startStreamFilter(cfg RunConfig, stop <-chan struct{}) <-chan s
 
 	go func() {
 		defer close(done)
-		filterStreamJSON(cfg.RawLog, cfg.LogFile, cfg.TaskID, stop)
+		filterStreamJSON(cfg.RawLog, cfg.LogFile, stop)
 	}()
 
 	return done
@@ -400,7 +400,7 @@ func (r *Runner) startStreamFilter(cfg RunConfig, stop <-chan struct{}) <-chan s
 // filterStreamJSON tails the raw log file from its current end, extracting
 // human-readable content from Claude's stream-json format into logPath.
 // It keeps reading until stop is closed, then drains any final output.
-func filterStreamJSON(rawLogPath, logPath, taskID string, stop <-chan struct{}) {
+func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
 	logOut, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
@@ -432,7 +432,7 @@ func filterStreamJSON(rawLogPath, logPath, taskID string, stop <-chan struct{}) 
 			if text := extractStreamText(line); text != "" {
 				for _, tl := range strings.Split(text, "\n") {
 					if tl != "" {
-						fmt.Fprintf(logOut, "%s\n", FormatStreamLine("[claude] "+tl, taskID))
+						fmt.Fprintf(logOut, "%s\n", FormatStreamLine("[claude] "+tl))
 					}
 				}
 			}
@@ -578,15 +578,10 @@ var tagRe = regexp.MustCompile(`\[([A-Za-z][A-Za-z]*)\]`)
 
 // FormatStreamLine takes raw extracted text from a stream event and returns
 // a fully formatted output line with timestamp, ANSI colors, and markdown stripped.
-// When taskID is non-empty, it is included as a colored tag after the timestamp.
-func FormatStreamLine(text, taskID string) string {
+func FormatStreamLine(text string) string {
 	text = stripMarkdown(text)
 	text = tagRe.ReplaceAllStringFunc(text, colorTag)
-	prefix := time.Now().Format("15:04:05")
-	if taskID != "" {
-		prefix += " " + logging.Magenta + "[" + taskID + "]" + logging.Reset
-	}
-	return prefix + " " + text
+	return time.Now().Format("15:04:05") + " " + text
 }
 
 // FilterStream tails a raw log file and writes formatted, colored output to
@@ -617,7 +612,7 @@ func FilterStream(rawLogPath string) {
 			if text := extractStreamText(line); text != "" {
 				for _, tl := range strings.Split(text, "\n") {
 					if tl != "" {
-						fmt.Fprintln(os.Stdout, FormatStreamLine("[claude] "+tl, ""))
+						fmt.Fprintln(os.Stdout, FormatStreamLine("[claude] "+tl))
 					}
 				}
 			}

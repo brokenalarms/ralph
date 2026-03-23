@@ -4526,3 +4526,62 @@ func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
 		t.Errorf("expected 2 iterations, got %d", iterationCount)
 	}
 }
+
+// Verifies that the loop prints a task separator banner with the bead ID
+// when a new task starts, replacing the old per-line magenta prefix.
+func TestLoop_TaskBannerOnNewTask(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "fix the thing",
+		nextID:    "ralph-l337",
+		label:     "beads",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = runner
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "ralph-l337") {
+		t.Errorf("expected task banner with bead ID, got: %s", output)
+	}
+	if !strings.Contains(output, "═") {
+		t.Error("expected ═ separator characters in task banner")
+	}
+}
