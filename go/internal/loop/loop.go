@@ -720,45 +720,7 @@ func (l *Loop) forcePush(ctx context.Context) error {
 
 // getCIFailureLog retrieves the failed CI run's log output for the given PR.
 func (l *Loop) getCIFailureLog(prNumber string) string {
-	// Get the latest failed run ID
-	cmd := exec.Command("gh", "pr", "checks", prNumber, "--json", "name,state,link", "--jq",
-		`.[] | select(.state == "FAILURE") | .link`)
-	cmd.Dir = l.git.WorkDir
-	out, err := cmd.Output()
-	if err != nil || len(out) == 0 {
-		return ""
-	}
-
-	// Get the run ID from the first failed check URL
-	link := strings.TrimSpace(strings.Split(string(out), "\n")[0])
-	parts := strings.Split(link, "/")
-	if len(parts) < 2 {
-		return ""
-	}
-	runID := ""
-	for i, p := range parts {
-		if p == "runs" && i+1 < len(parts) {
-			runID = parts[i+1]
-			break
-		}
-	}
-	if runID == "" {
-		return ""
-	}
-
-	logCmd := exec.Command("gh", "run", "view", runID, "--log-failed")
-	logCmd.Dir = l.git.WorkDir
-	logOut, err := logCmd.Output()
-	if err != nil {
-		return ""
-	}
-
-	// Truncate to last 50 lines
-	lines := strings.Split(string(logOut), "\n")
-	if len(lines) > 50 {
-		lines = lines[len(lines)-50:]
-	}
-	return strings.Join(lines, "\n")
+	return l.git.GetCIFailureLog(prNumber)
 }
 
 // loadVerifyPrompt reads a prompt template from the prompts directory and

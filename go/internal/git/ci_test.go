@@ -328,7 +328,7 @@ func (s *stubGitHub) Available() bool { return s.available }
 func (s *stubGitHub) FindOpenPR(branch, repoURL string) (string, error) {
 	return s.openPR, s.findPRErr
 }
-func (s *stubGitHub) CreatePR(dir, branch, baseBranch, title, body, repoURL string) error {
+func (s *stubGitHub) CreatePR(opts CreatePROpts) error {
 	return s.createPRErr
 }
 func (s *stubGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error) {
@@ -339,8 +339,11 @@ func (s *stubGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) (string, 
 func (s *stubGitHub) UpdateBranch(dir, nwo, prNumber string) (bool, error) {
 	return s.updateResult, s.updateErr
 }
-func (s *stubGitHub) FetchChecks(prNumber, repoURL string) ([]CICheckResult, error) {
+func (s *stubGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
 	return s.checks, s.checksErr
+}
+func (s *stubGitHub) GetRunLog(prNumber, workDir string) string {
+	return ""
 }
 
 // setupAutoMergeManager creates a Manager with a stubGitHub and real git repos

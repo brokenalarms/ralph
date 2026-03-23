@@ -7,6 +7,16 @@ import (
 	"strings"
 )
 
+// CreatePROpts configures a PR creation operation.
+type CreatePROpts struct {
+	Head string
+	Base string
+	Title string
+	Body string
+	Repo string
+	Dir  string
+}
+
 // MergeOpts configures a PR merge operation.
 type MergeOpts struct {
 	DeleteBranch bool
@@ -18,10 +28,11 @@ type MergeOpts struct {
 type GitHub interface {
 	Available() bool
 	FindOpenPR(branch, repoURL string) (prNumber string, err error)
-	CreatePR(dir, branch, baseBranch, title, body, repoURL string) error
+	CreatePR(opts CreatePROpts) error
 	MergePR(prNumber, repoURL string, opts MergeOpts) (output string, err error)
 	UpdateBranch(dir, nwo, prNumber string) (updated bool, err error)
-	FetchChecks(prNumber, repoURL string) ([]CICheckResult, error)
+	ListChecks(prNumber, repoURL string) ([]CICheckResult, error)
+	GetRunLog(prNumber, workDir string) string
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -42,14 +53,14 @@ func (g *ghCLI) FindOpenPR(branch, repoURL string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func (g *ghCLI) CreatePR(dir, branch, baseBranch, title, body, repoURL string) error {
-	args := []string{"pr", "create", "--head", branch}
-	if baseBranch != "" {
-		args = append(args, "--base", baseBranch)
+func (g *ghCLI) CreatePR(opts CreatePROpts) error {
+	args := []string{"pr", "create", "--head", opts.Head}
+	if opts.Base != "" {
+		args = append(args, "--base", opts.Base)
 	}
-	args = append(args, "--title", title, "--body", body, "-R", repoURL)
+	args = append(args, "--title", opts.Title, "--body", opts.Body, "-R", opts.Repo)
 	cmd := exec.Command("gh", args...)
-	cmd.Dir = dir
+	cmd.Dir = opts.Dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("PR creation failed: %s", strings.TrimSpace(string(out)))
 	}
@@ -85,7 +96,7 @@ func (g *ghCLI) UpdateBranch(dir, nwo, prNumber string) (bool, error) {
 	return true, nil
 }
 
-func (g *ghCLI) FetchChecks(prNumber, repoURL string) ([]CICheckResult, error) {
+func (g *ghCLI) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
 	args := []string{"pr", "checks", prNumber, "--json", "name,state,bucket"}
 	if repoURL != "" {
 		args = append(args, "-R", repoURL)
@@ -100,4 +111,41 @@ func (g *ghCLI) FetchChecks(prNumber, repoURL string) ([]CICheckResult, error) {
 		return nil, fmt.Errorf("parsing check results: %w", err)
 	}
 	return checks, nil
+}
+
+func (g *ghCLI) GetRunLog(prNumber, workDir string) string {
+	cmd := exec.Command("gh", "pr", "checks", prNumber, "--json", "name,state,link", "--jq",
+		`.[] | select(.state == "FAILURE") | .link`)
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil || len(out) == 0 {
+		return ""
+	}
+
+	link := strings.TrimSpace(strings.Split(string(out), "\n")[0])
+	parts := strings.Split(link, "/")
+
+	var runID string
+	for i, p := range parts {
+		if p == "runs" && i+1 < len(parts) {
+			runID = parts[i+1]
+			break
+		}
+	}
+	if runID == "" {
+		return ""
+	}
+
+	logCmd := exec.Command("gh", "run", "view", runID, "--log-failed")
+	logCmd.Dir = workDir
+	logOut, err := logCmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(string(logOut), "\n")
+	if len(lines) > 50 {
+		lines = lines[len(lines)-50:]
+	}
+	return strings.Join(lines, "\n")
 }
