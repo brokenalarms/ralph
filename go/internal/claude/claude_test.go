@@ -328,7 +328,7 @@ func TestStripMarkdown(t *testing.T) {
 // Verifies that FormatStreamLine adds a timestamp prefix and ANSI color codes
 // so output matches the format previously provided by the bash stream filter.
 func TestFormatStreamLine(t *testing.T) {
-	line := FormatStreamLine("[claude] [Read] /tmp/foo.go")
+	line := FormatStreamLine("[claude] [Read] /tmp/foo.go", "")
 	plain := ansiRe.ReplaceAllString(line, "")
 
 	// Should have HH:MM:SS timestamp prefix.
@@ -352,9 +352,29 @@ func TestFormatStreamLine(t *testing.T) {
 
 // Verifies that [done] gets green color in the formatted output.
 func TestFormatStreamLine_DoneColor(t *testing.T) {
-	line := FormatStreamLine("[claude] [done]")
+	line := FormatStreamLine("[claude] [done]", "")
 	if !strings.Contains(line, "\033[0;32m") {
 		t.Error("FormatStreamLine should apply green to [done]")
+	}
+}
+
+// Verifies that FormatStreamLine includes the task ID as a colored tag
+// after the timestamp when a task ID is provided, so inline-mode output
+// shows which bead is being worked on.
+func TestFormatStreamLine_WithTaskID(t *testing.T) {
+	line := FormatStreamLine("[claude] [Read] /tmp/foo.go", "ralph-5iv")
+	plain := ansiRe.ReplaceAllString(line, "")
+
+	if !strings.Contains(plain, "[ralph-5iv]") {
+		t.Errorf("FormatStreamLine should include task ID tag, got: %q", plain)
+	}
+	// Task ID should appear between timestamp and content.
+	if !strings.Contains(plain, "[ralph-5iv] [claude]") {
+		t.Errorf("FormatStreamLine task ID should precede content, got: %q", plain)
+	}
+	// Task ID should be colored magenta.
+	if !strings.Contains(line, "\033[0;35m[ralph-5iv]") {
+		t.Error("FormatStreamLine should apply magenta to task ID tag")
 	}
 }
 
@@ -504,7 +524,7 @@ func TestFilterStreamJSON_TailsFile(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		filterStreamJSON(rawPath, logPath, stop)
+		filterStreamJSON(rawPath, logPath, "", stop)
 	}()
 
 	// Append a stream-json event after the filter has started.
@@ -544,7 +564,7 @@ func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		filterStreamJSON(rawPath, logPath, stop)
+		filterStreamJSON(rawPath, logPath, "", stop)
 	}()
 
 	time.Sleep(200 * time.Millisecond)

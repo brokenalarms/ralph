@@ -391,7 +391,7 @@ func (r *Runner) startStreamFilter(cfg RunConfig, stop <-chan struct{}) <-chan s
 
 	go func() {
 		defer close(done)
-		filterStreamJSON(cfg.RawLog, cfg.LogFile, stop)
+		filterStreamJSON(cfg.RawLog, cfg.LogFile, cfg.TaskID, stop)
 	}()
 
 	return done
@@ -400,7 +400,7 @@ func (r *Runner) startStreamFilter(cfg RunConfig, stop <-chan struct{}) <-chan s
 // filterStreamJSON tails the raw log file from its current end, extracting
 // human-readable content from Claude's stream-json format into logPath.
 // It keeps reading until stop is closed, then drains any final output.
-func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
+func filterStreamJSON(rawLogPath, logPath, taskID string, stop <-chan struct{}) {
 	logOut, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
@@ -432,7 +432,7 @@ func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
 			if text := extractStreamText(line); text != "" {
 				for _, tl := range strings.Split(text, "\n") {
 					if tl != "" {
-						fmt.Fprintf(logOut, "%s\n", FormatStreamLine("[claude] "+tl))
+						fmt.Fprintf(logOut, "%s\n", FormatStreamLine("[claude] "+tl, taskID))
 					}
 				}
 			}
@@ -578,10 +578,15 @@ var tagRe = regexp.MustCompile(`\[([A-Za-z][A-Za-z]*)\]`)
 
 // FormatStreamLine takes raw extracted text from a stream event and returns
 // a fully formatted output line with timestamp, ANSI colors, and markdown stripped.
-func FormatStreamLine(text string) string {
+// When taskID is non-empty, it is included as a colored tag after the timestamp.
+func FormatStreamLine(text, taskID string) string {
 	text = stripMarkdown(text)
 	text = tagRe.ReplaceAllStringFunc(text, colorTag)
-	return time.Now().Format("15:04:05") + " " + text
+	prefix := time.Now().Format("15:04:05")
+	if taskID != "" {
+		prefix += " " + logging.Magenta + "[" + taskID + "]" + logging.Reset
+	}
+	return prefix + " " + text
 }
 
 // FilterStream tails a raw log file and writes formatted, colored output to
@@ -612,7 +617,7 @@ func FilterStream(rawLogPath string) {
 			if text := extractStreamText(line); text != "" {
 				for _, tl := range strings.Split(text, "\n") {
 					if tl != "" {
-						fmt.Fprintln(os.Stdout, FormatStreamLine("[claude] "+tl))
+						fmt.Fprintln(os.Stdout, FormatStreamLine("[claude] "+tl, ""))
 					}
 				}
 			}

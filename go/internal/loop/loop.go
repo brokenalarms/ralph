@@ -221,6 +221,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.lastTaskMerged = false
 
 		taskID, nextTask, _ := l.cfg.TaskBackend.GetNextTaskInfo()
+		l.logger.SetTaskID(taskID)
 		taskChanged := l.isNewTask(taskID, nextTask)
 
 		if runIteration > 1 && taskChanged {
