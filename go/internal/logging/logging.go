@@ -102,10 +102,14 @@ func (l *Logger) PhaseColor(color string, format string, args ...any) {
 	fmt.Fprint(l.logFile, line)
 }
 
-// TaskBanner writes a bold magenta separator with the task ID centered,
+// TaskBanner writes a bold magenta separator with the task ID and title centered,
 // shown once when a new task begins.
-func (l *Logger) TaskBanner(taskID string) {
-	l.Separator(Magenta, taskID)
+func (l *Logger) TaskBanner(taskID, title string) {
+	label := taskID
+	if title != "" {
+		label = taskID + ": " + title
+	}
+	l.Separator(Magenta, label)
 }
 
 // DashedSeparator writes a bold, colored full-width dashed line using ─ characters.
