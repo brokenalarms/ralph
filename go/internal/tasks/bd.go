@@ -224,6 +224,7 @@ type bdIssue struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`
 	Priority *int   `json:"priority,omitempty"`
+	Type     string `json:"type,omitempty"`
 }
 
 // getNextIssue returns the highest-priority issue across in-progress and
@@ -242,16 +243,15 @@ func (b *BD) getNextIssue() (bdIssue, error) {
 		inProgress, hasIP = parseFirstIssue(out)
 	}
 
-	out, err = run(ctx, b.ProjectDir, "ready", "--limit", "1", "--json")
+	out, err = run(ctx, b.ProjectDir, "ready", "--json")
 	if err == nil {
-		ready, hasReady = parseFirstIssue(out)
+		ready, hasReady = bestIssue(out)
 	}
 
 	if hasIP && hasReady {
 		ipPri := issuePriority(inProgress)
 		rdPri := issuePriority(ready)
 		if rdPri < ipPri {
-			// Higher-priority ready task preempts; reopen the in-progress task.
 			_, _ = run(ctx, b.ProjectDir, "update", inProgress.ID, "--status=open")
 			return ready, nil
 		}
@@ -275,6 +275,19 @@ func issuePriority(issue bdIssue) int {
 	return 2
 }
 
+// issueTypeRank maps issue type to a sort order within the same priority.
+// Bugs are fixed first, then tasks, then features/enhancements.
+func issueTypeRank(issue bdIssue) int {
+	switch issue.Type {
+	case "bug":
+		return 0
+	case "task":
+		return 1
+	default:
+		return 2
+	}
+}
+
 func parseFirstIssue(jsonStr string) (bdIssue, bool) {
 	var issues []bdIssue
 	if err := json.Unmarshal([]byte(jsonStr), &issues); err != nil || len(issues) == 0 {
@@ -284,6 +297,35 @@ func parseFirstIssue(jsonStr string) (bdIssue, bool) {
 		return bdIssue{}, false
 	}
 	return issues[0], true
+}
+
+// bestIssue parses all issues from JSON and returns the one with the
+// highest priority (lowest number), breaking ties by type rank
+// (bug < task < feature/enhancement).
+func bestIssue(jsonStr string) (bdIssue, bool) {
+	var issues []bdIssue
+	if err := json.Unmarshal([]byte(jsonStr), &issues); err != nil || len(issues) == 0 {
+		return bdIssue{}, false
+	}
+
+	best := -1
+	for i, issue := range issues {
+		if issue.ID == "" && issue.Title == "" {
+			continue
+		}
+		if best == -1 {
+			best = i
+			continue
+		}
+		bp, ip := issuePriority(issues[best]), issuePriority(issue)
+		if ip < bp || (ip == bp && issueTypeRank(issue) < issueTypeRank(issues[best])) {
+			best = i
+		}
+	}
+	if best == -1 {
+		return bdIssue{}, false
+	}
+	return issues[best], true
 }
 
 func (b *BD) GetNextTaskInfo() (string, string, error) {
