@@ -432,7 +432,11 @@ func (m *Manager) PushAndCreatePR(taskDesc string) error {
 // Returns (true, nil) when a PR was merged, (false, nil) when no PR exists or
 // no action was needed, and (false, err) on failure. Proactively polls CI
 // checks before attempting merge so CI is treated as the final gate.
-func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
+func (m *Manager) AutoMergeCurrentBranch(ctx ...context.Context) (bool, error) {
+	var mergeCtx context.Context
+	if len(ctx) > 0 {
+		mergeCtx = ctx[0]
+	}
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
 		return false, nil
 	}
@@ -467,7 +471,7 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 	var status CIStatus
 	if fetchErr != nil || len(checks) == 0 {
 		m.Logger.Log("CI checks not available yet for PR #%s — waiting...", prNumber)
-		checks, status, err = waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+		checks, status, err = waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger, mergeCtx)
 		if err != nil {
 			m.Logger.Warn("CI polling failed for PR #%s: %v — attempting merge anyway", prNumber, err)
 		}
@@ -475,7 +479,7 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 		status = evaluateChecks(checks)
 		if status == CIPending {
 			m.Logger.Log("CI checks pending on PR #%s — waiting for completion...", prNumber)
-			checks, status, err = waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+			checks, status, err = waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger, mergeCtx)
 			if err != nil {
 				return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, err)
 			}
@@ -508,7 +512,7 @@ func (m *Manager) AutoMergeCurrentBranch() (bool, error) {
 
 	if isCIGatedError(mergeOutput) {
 		m.Logger.Log("PR #%s blocked by branch protection — waiting for CI...", prNumber)
-		checks, status, waitErr := waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+		checks, status, waitErr := waitForCI(fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger, mergeCtx)
 		if waitErr != nil {
 			return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, waitErr)
 		}

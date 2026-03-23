@@ -502,7 +502,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			}
 
 			if l.cfg.AutoMerge {
-				merged, err := l.autoMerge()
+				merged, err := l.autoMerge(ctx)
 				if err != nil {
 					l.logger.Warn("Auto-merge: %v", err)
 					merged, err = l.handleAutoMergeError(ctx, err, nextTask, workDir, rawLogPath)
@@ -597,7 +597,7 @@ func (l *Loop) handleMergeConflict(ctx context.Context, nextTask, workDir, rawLo
 	}
 
 	l.logger.Log("Retrying merge after conflict resolution...")
-	merged, err := l.autoMerge()
+	merged, err := l.autoMerge(ctx)
 	if err != nil {
 		var ciErr *git.CIFailureError
 		if errors.As(err, &ciErr) {
@@ -636,7 +636,7 @@ func (l *Loop) handleCIFailure(ctx context.Context, ciErr *git.CIFailureError, n
 		}
 
 		var mergeErr error
-		merged, mergeErr = l.autoMerge()
+		merged, mergeErr = l.autoMerge(ctx)
 		if mergeErr == nil && merged {
 			return true, nil
 		}
@@ -833,11 +833,11 @@ func (l *Loop) pushAndCreatePR(taskDesc string) error {
 	return l.git.PushAndCreatePR(taskDesc)
 }
 
-func (l *Loop) autoMerge() (bool, error) {
+func (l *Loop) autoMerge(ctx ...context.Context) (bool, error) {
 	if l.mergeFunc != nil {
 		return l.mergeFunc()
 	}
-	return l.git.AutoMergeCurrentBranch()
+	return l.git.AutoMergeCurrentBranch(ctx...)
 }
 
 func (l *Loop) syncEmbeddedPrompts() {
