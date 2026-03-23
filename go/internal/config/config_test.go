@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// Verifies that Parse with no arguments returns ralph.sh-compatible defaults:
-// cwd project dir, 50 iterations, worktree enabled, 80 calls/hr, refactor disabled,
-// idle timeouts at 10m/30s.
+// Verifies that Parse with no arguments returns defaults derived from the Flags
+// registry: cwd project dir, 50 iterations, worktree enabled, 80 calls/hr,
+// refactor disabled, idle timeouts at 10m/5m.
 func TestDefaultValues(t *testing.T) {
 	// Clear env vars so defaults are deterministic.
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
@@ -47,7 +47,7 @@ func TestDefaultValues(t *testing.T) {
 }
 
 // Verifies that RALPH_MAX_ITERATIONS and RALPH_REFACTOR_EVERY env vars
-// override the hardcoded defaults, matching ralph.sh's ${VAR:-default} pattern.
+// override the Flags registry defaults.
 func TestEnvVarDefaults(t *testing.T) {
 	t.Setenv("RALPH_MAX_ITERATIONS", "100")
 	t.Setenv("RALPH_REFACTOR_EVERY", "10")
@@ -277,7 +277,7 @@ func TestIdleTimeoutFlags(t *testing.T) {
 }
 
 // Verifies that RALPH_IDLE_TIMEOUT and RALPH_IDLE_TIMEOUT_PROGRESS env vars
-// override the hardcoded defaults.
+// override the Flags registry defaults.
 func TestIdleTimeoutEnvVars(t *testing.T) {
 	t.Setenv("RALPH_IDLE_TIMEOUT", "3m")
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "45")
