@@ -1157,7 +1157,7 @@ func (l *Loop) runPreIterationTests(ctx context.Context) string {
 	l.state.Write("last_test_output", result.Details)
 	l.state.Write("last_test_time", now)
 	l.logger.Warn("Pre-iteration tests: failures detected")
-	msg := "\n- Test suite status: some tests are FAILING. Fix them before your task."
+	msg := "\n- Test suite status: some tests are FAILING. Fix them before your task. If the tests pass when you run them, they were fixed externally — proceed with your task."
 	if result.Details != "" {
 		// Truncate to avoid bloating the prompt.
 		details := result.Details
