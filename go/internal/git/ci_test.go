@@ -28,12 +28,23 @@ func TestEvaluateChecks_AllPassed(t *testing.T) {
 	}
 }
 
-// evaluateChecks returns CIPending when any check is still running,
-// so the polling loop continues waiting.
-func TestEvaluateChecks_StillPending(t *testing.T) {
+// evaluateChecks returns CIPassed when at least one check passed and
+// none failed — pending deployment checks don't block.
+func TestEvaluateChecks_PassedWithPendingDeploy(t *testing.T) {
 	checks := []CICheckResult{
 		{Name: "test", State: "SUCCESS", Bucket: "pass"},
 		{Name: "deploy", State: "PENDING", Bucket: "pending"},
+	}
+	if got := evaluateChecks(checks); got != CIPassed {
+		t.Errorf("expected CIPassed (test passed, deploy pending), got %v", got)
+	}
+}
+
+// evaluateChecks returns CIPending when all checks are pending
+// and none have passed yet.
+func TestEvaluateChecks_AllPending(t *testing.T) {
+	checks := []CICheckResult{
+		{Name: "test", State: "PENDING", Bucket: "pending"},
 	}
 	if got := evaluateChecks(checks); got != CIPending {
 		t.Errorf("expected CIPending, got %v", got)

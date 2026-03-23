@@ -46,21 +46,39 @@ const DefaultCIPollInterval = 15 * time.Second
 const DefaultCIPollTimeout = 10 * time.Minute
 
 // evaluateChecks determines the overall CI status from individual check results.
+// If any check has failed, returns CIFailed. If all non-neutral checks have
+// completed (pass or fail), returns accordingly. Pending checks are only
+// blocking if no check has passed yet — this avoids hanging on deployment
+// checks (e.g. Netlify rules) that can stay pending indefinitely.
 func evaluateChecks(checks []CICheckResult) CIStatus {
 	if len(checks) == 0 {
 		return CIPending
 	}
+
+	hasFailed := false
+	hasPassed := false
+	allResolved := true
+
 	for _, c := range checks {
 		if c.Bucket == "fail" || c.State == "FAILURE" || c.State == "CANCELLED" {
-			return CIFailed
+			hasFailed = true
+		} else if c.Bucket == "pass" || c.State == "SUCCESS" {
+			hasPassed = true
+		} else if c.Bucket == "pending" || c.State == "PENDING" || c.State == "IN_PROGRESS" {
+			allResolved = false
 		}
 	}
-	for _, c := range checks {
-		if c.Bucket == "pending" || c.State == "PENDING" {
-			return CIPending
-		}
+
+	if hasFailed {
+		return CIFailed
 	}
-	return CIPassed
+	if hasPassed && !hasFailed {
+		return CIPassed
+	}
+	if allResolved {
+		return CIPassed
+	}
+	return CIPending
 }
 
 // failedChecks returns only the checks that did not succeed.
