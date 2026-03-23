@@ -154,6 +154,12 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		State:          st,
 		Logger:         log,
 	}
+	if git.IsGitRepo(cfg.ProjectDir) {
+		if err := gm.ValidateBaseBranch(); err != nil {
+			log.Error("%v", err)
+			return 1
+		}
+	}
 	if err := gm.SetupWorktree(); err != nil {
 		log.Error("Worktree setup failed: %v", err)
 		return 1

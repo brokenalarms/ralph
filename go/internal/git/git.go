@@ -86,6 +86,17 @@ func (m *Manager) TempBranch() string {
 	return "ralph/" + m.ProjectName + "/next"
 }
 
+// ValidateBaseBranch checks that the configured base branch exists on the
+// remote. Fails fast at startup rather than silently skipping rebase later.
+func (m *Manager) ValidateBaseBranch() error {
+	branch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
+	gitCmd(m.ProjectDir, "fetch", "origin", branch)
+	if !refExists(m.ProjectDir, "origin/"+branch) {
+		return fmt.Errorf("base branch %q does not exist on remote — create it or set --base-branch", branch)
+	}
+	return nil
+}
+
 // SetupWorktree creates (or resumes) a git worktree for isolated work.
 // Mirrors lib/git.sh setup_worktree.
 func (m *Manager) SetupWorktree() error {
@@ -916,7 +927,7 @@ func detectDefaultBranch(dir, override string) string {
 	if ref != "" {
 		return strings.TrimPrefix(ref, "refs/remotes/origin/")
 	}
-	return "main"
+	return "develop"
 }
 
 // findWorktreeForBranch finds the worktree path that has the given branch
