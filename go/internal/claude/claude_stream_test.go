@@ -239,6 +239,73 @@ func TestFormatStreamOutput_NormalLine(t *testing.T) {
 	}
 }
 
+// Verifies that consecutive lines with the same timestamp are grouped:
+// the first line shows the timestamp, continuation lines show spaces instead.
+func TestStreamFormatter_GroupsSameTimestamp(t *testing.T) {
+	f := &StreamFormatter{}
+	ts := time.Now().Format("15:04:05")
+
+	line1 := f.FormatLine("[agent] first line")
+	line2 := f.FormatLine("[agent] second line")
+	line3 := f.FormatLine("[agent] third line")
+
+	plain1 := ansiRe.ReplaceAllString(line1, "")
+	plain2 := ansiRe.ReplaceAllString(line2, "")
+	plain3 := ansiRe.ReplaceAllString(line3, "")
+
+	// First line has timestamp.
+	if !strings.HasPrefix(plain1, ts) {
+		t.Errorf("first line should have timestamp %q, got: %q", ts, plain1)
+	}
+
+	// Continuation lines have spaces instead of timestamp.
+	indent := strings.Repeat(" ", len(ts)+1)
+	if !strings.HasPrefix(plain2, indent) {
+		t.Errorf("second line should have indent %q, got: %q", indent, plain2)
+	}
+	if !strings.HasPrefix(plain3, indent) {
+		t.Errorf("third line should have indent %q, got: %q", indent, plain3)
+	}
+
+	// Continuation lines should NOT contain the timestamp.
+	if strings.HasPrefix(plain2, ts) {
+		t.Errorf("second line should not repeat timestamp, got: %q", plain2)
+	}
+}
+
+// Verifies that a new timestamp resets grouping so it appears on the next line.
+func TestStreamFormatter_NewTimestampResetsGroup(t *testing.T) {
+	f := &StreamFormatter{lastTS: "12:00:00"}
+
+	line := f.FormatLine("[agent] new second")
+	plain := ansiRe.ReplaceAllString(line, "")
+
+	// Should have a timestamp since lastTS differs from current time.
+	if plain[2] != ':' || plain[5] != ':' {
+		t.Errorf("line with new timestamp should show timestamp, got: %q", plain)
+	}
+}
+
+// Verifies that FormatOutput uses the formatter's timestamp grouping.
+func TestStreamFormatter_FormatOutput_Groups(t *testing.T) {
+	f := &StreamFormatter{}
+
+	lines1 := f.FormatOutput("first line")
+	lines2 := f.FormatOutput("second line")
+
+	plain1 := ansiRe.ReplaceAllString(lines1[0], "")
+	plain2 := ansiRe.ReplaceAllString(lines2[0], "")
+
+	// First has timestamp, second has indent.
+	if plain1[2] != ':' || plain1[5] != ':' {
+		t.Errorf("first line should have timestamp, got: %q", plain1)
+	}
+	indent := strings.Repeat(" ", 9)
+	if !strings.HasPrefix(plain2, indent) {
+		t.Errorf("second line should be indented, got: %q", plain2)
+	}
+}
+
 // Verifies that startTailGoroutine follows new [agent]-prefixed lines
 // appended to a file and stops cleanly when the stop channel is closed.
 // Non-[agent] lines (orchestrator messages) must NOT be forwarded to

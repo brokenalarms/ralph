@@ -17,15 +17,17 @@ type ToolBatcher struct {
 	batches     map[string][]string
 	windowStart time.Time
 	window      time.Duration
+	fmt         *StreamFormatter
 }
 
 // NewToolBatcher creates a batcher with the given window duration.
 // Tool calls arriving within a window are collapsed into one summary line
-// per tool type.
+// per tool type. Lines are formatted with timestamp grouping via StreamFormatter.
 func NewToolBatcher(window time.Duration) *ToolBatcher {
 	return &ToolBatcher{
 		batches: make(map[string][]string),
 		window:  window,
+		fmt:     &StreamFormatter{},
 	}
 }
 
@@ -56,7 +58,7 @@ func (b *ToolBatcher) ProcessLine(text string) []string {
 	}
 
 	flushed = append(flushed, b.flush()...)
-	flushed = append(flushed, FormatStreamOutput(text)...)
+	flushed = append(flushed, b.fmt.FormatOutput(text)...)
 	return flushed
 }
 
@@ -81,7 +83,7 @@ func (b *ToolBatcher) flush() []string {
 	for _, tool := range b.order {
 		args := b.batches[tool]
 		summary := "[" + tool + "] " + strings.Join(args, ", ")
-		lines = append(lines, FormatStreamOutput(summary)...)
+		lines = append(lines, b.fmt.FormatOutput(summary)...)
 	}
 	b.batches = make(map[string][]string)
 	b.order = nil
