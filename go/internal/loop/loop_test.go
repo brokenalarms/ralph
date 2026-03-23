@@ -1798,8 +1798,10 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if pushPRCalls != 2 {
-		t.Errorf("expected pushAndCreatePR called 2 times (once per task), got %d", pushPRCalls)
+	// 2 signal-handler pushes (one per task) + 1 safety-net flush before exit.
+	// PushAndCreatePR is idempotent, so the flush is harmless.
+	if pushPRCalls != 3 {
+		t.Errorf("expected pushAndCreatePR called 3 times (2 signal + 1 flush), got %d", pushPRCalls)
 	}
 }
 
@@ -3521,5 +3523,463 @@ func TestLoop_OrchestratorMessagesUseRalphPrefix(t *testing.T) {
 				t.Errorf("expected %q in log output:\n%s", tt.want, output)
 			}
 		})
+	}
+}
+
+// When the last task completes and no tasks remain, the loop should still
+// push and create a PR before exiting — not silently drop unpushed work.
+func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	runner := &stubRunner{
+		onRun: func() {
+			// Simulate the task completing — no remaining tasks after this.
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Wait:          false,
+	}, st, gm, logger)
+	l.runner = runner
+
+	var pushCalls int
+	l.pushPRFunc = func(_ context.Context, taskID, taskDesc string) error {
+		pushCalls++
+		return nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Push must be called: once during signal handling AND once as a flush
+	// before exit. PushAndCreatePR is idempotent (returns early when no new
+	// commits), so the safety-net call is harmless if the first succeeded.
+	if pushCalls < 2 {
+		t.Errorf("expected pushPRFunc called at least 2 times (signal + flush), got %d", pushCalls)
+	}
+}
+
+// When the last task completes and --wait is set, the loop should flush
+// unpushed work before entering wait mode, not lose it.
+func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Wait:          true,
+		WaitInterval:  50 * time.Millisecond,
+	}, st, gm, logger)
+	l.runner = runner
+
+	var pushCalls int
+	l.pushPRFunc = func(_ context.Context, taskID, taskDesc string) error {
+		pushCalls++
+		return nil
+	}
+
+	// Cancel after entering wait to prevent hanging.
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	err := l.Run(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if pushCalls < 2 {
+		t.Errorf("expected pushPRFunc called at least 2 times (signal + flush), got %d", pushCalls)
+	}
+}
+
+// When AutoMerge is enabled, flushUnpushedWork must squash-merge after
+// pushing — same flow as every other task, no special case for last task.
+func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     true,
+		Wait:          false,
+	}, st, gm, logger)
+	l.runner = runner
+
+	l.pushPRFunc = func(_ context.Context, _, _ string) error { return nil }
+
+	var mergeCalls int
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mergeCalls == 0 {
+		t.Error("expected mergeFunc called during flush before exit, got 0 calls")
+	}
+}
+
+// When AutoMerge is enabled and --wait is set, flushUnpushedWork must
+// squash-merge before entering wait mode.
+func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     true,
+		Wait:          true,
+		WaitInterval:  50 * time.Millisecond,
+	}, st, gm, logger)
+	l.runner = runner
+
+	l.pushPRFunc = func(_ context.Context, _, _ string) error { return nil }
+
+	var mergeCalls int
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	err := l.Run(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mergeCalls == 0 {
+		t.Error("expected mergeFunc called during flush before wait, got 0 calls")
+	}
+}
+
+// When AutoMerge is disabled, flushUnpushedWork must NOT attempt to merge.
+func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     false,
+		Wait:          false,
+	}, st, gm, logger)
+	l.runner = runner
+
+	l.pushPRFunc = func(_ context.Context, _, _ string) error { return nil }
+
+	var mergeCalls int
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mergeCalls != 0 {
+		t.Errorf("expected mergeFunc NOT called when AutoMerge disabled, got %d calls", mergeCalls)
+	}
+}
+
+// When the signal handler already merged the last task, the flush safety net
+// must not merge again — otherwise multi-task runs get an extra merge call.
+func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     true,
+		Wait:          false,
+	}, st, gm, logger)
+	l.runner = runner
+
+	l.pushPRFunc = func(_ context.Context, _, _ string) error { return nil }
+
+	var mergeCalls int
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Merge fires once in the signal handler. The flush must not merge again
+	// because lastTaskMerged is set.
+	if mergeCalls != 1 {
+		t.Errorf("expected exactly 1 merge (signal handler only), got %d", mergeCalls)
+	}
+}
+
+// When the agent exits without a signal, the flush safety net must still
+// push and merge so the last task's work is not lost.
+func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: false},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     true,
+		Wait:          false,
+	}, st, gm, logger)
+	l.runner = runner
+
+	l.pushPRFunc = func(_ context.Context, _, _ string) error { return nil }
+
+	var mergeCalls int
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Signal handler didn't fire, so merge only happens during flush.
+	if mergeCalls != 1 {
+		t.Errorf("expected exactly 1 merge (flush only), got %d", mergeCalls)
 	}
 }

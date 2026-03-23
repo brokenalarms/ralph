@@ -70,7 +70,8 @@ type Loop struct {
 	prePushRebaseFunc  func(ctx context.Context) error
 	verifyFunc     func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
 	newRunnerFunc  func() claudeRunner
-	lastAction     analyzer.Action
+	lastAction      analyzer.Action
+	lastTaskMerged  bool
 }
 
 // New creates an execution loop from the given configuration.
@@ -179,6 +180,13 @@ func (l *Loop) Run(ctx context.Context) error {
 					}
 				}
 			}
+			// Safety net: flush any unpushed work from the last task before
+			// exiting or entering wait mode. PushAndCreatePR is idempotent
+			// (returns early when no commits ahead), so this is harmless if
+			// the signal handler already pushed successfully.
+			if runIteration > 0 {
+				l.flushUnpushedWork(ctx)
+			}
 			if !l.cfg.Wait {
 				l.logger.Success("All tasks complete!")
 				l.state.Write("status", "completed")
@@ -192,6 +200,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		runIteration++
 		iteration++
+		l.lastTaskMerged = false
 
 		taskID, nextTask, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 		taskChanged := l.isNewTask(taskID, nextTask)
@@ -521,6 +530,7 @@ func (l *Loop) Run(ctx context.Context) error {
 					l.logger.Warn("Auto-merge: %v", err)
 				}
 				if merged {
+					l.lastTaskMerged = true
 					if err := l.git.PostMergeReset(); err != nil {
 						l.logger.Warn("Post-merge reset: %v", err)
 					}
@@ -837,6 +847,26 @@ func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc string) err
 		return l.pushPRFunc(ctx, taskID, taskDesc)
 	}
 	return l.git.PushAndCreatePR(ctx, taskID, taskDesc)
+}
+
+func (l *Loop) flushUnpushedWork(ctx context.Context) {
+	taskID, _ := l.state.Read("last_task_id")
+	taskDesc, _ := l.state.Read("last_task")
+	if err := l.pushAndCreatePR(ctx, taskID, taskDesc); err != nil {
+		l.logger.Warn("Flush push/PR: %v", err)
+		return
+	}
+	if l.cfg.AutoMerge && !l.lastTaskMerged {
+		merged, err := l.autoMerge(ctx)
+		if err != nil {
+			l.logger.Warn("Flush merge: %v", err)
+		}
+		if merged {
+			if err := l.git.PostMergeReset(); err != nil {
+				l.logger.Warn("Flush post-merge reset: %v", err)
+			}
+		}
+	}
 }
 
 func (l *Loop) autoMerge(ctx context.Context) (bool, error) {
