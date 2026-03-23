@@ -248,6 +248,9 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.logger.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done] ---",
 			runIteration, maxIter, iteration, completed, total)
 		l.logger.Log("Next task: %s", nextTask)
+		if desc := l.getBeadDescription(taskID); desc != "" {
+			l.logger.Log("  %s", desc)
+		}
 
 		touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
 

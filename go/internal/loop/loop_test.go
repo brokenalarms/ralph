@@ -39,24 +39,26 @@ func (s *stubRunner) StopStreaming() {}
 // bd or reading plan files. Lets us control exactly how many tasks remain
 // and what the next task is.
 type stubBackend struct {
-	remaining int
-	completed int
-	total     int
-	nextTask  string
-	nextID    string
-	label     string
+	remaining   int
+	completed   int
+	total       int
+	nextTask    string
+	nextID      string
+	label       string
+	description string
 }
 
 // mutableBackend is like stubBackend but allows changing the next task
 // mid-run to simulate task transitions.
 type mutableBackend struct {
-	mu        sync.Mutex
-	remaining int
-	completed int
-	total     int
-	nextTask  string
-	nextID    string
-	label     string
+	mu          sync.Mutex
+	remaining   int
+	completed   int
+	total       int
+	nextTask    string
+	nextID      string
+	label       string
+	description string
 }
 
 func (m *mutableBackend) Init() error                          { return nil }
@@ -74,7 +76,7 @@ func (m *mutableBackend) ReopenTask(string) error              { return nil }
 func (m *mutableBackend) SetState(_, _, _, _ string) error     { return nil }
 func (m *mutableBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (m *mutableBackend) ExecutionInstructions() (string, error) { return "", nil }
-func (m *mutableBackend) GetDescription(_ string) (string, error)  { return "", nil }
+func (m *mutableBackend) GetDescription(_ string) (string, error)  { m.mu.Lock(); defer m.mu.Unlock(); return m.description, nil }
 func (m *mutableBackend) GetFullContext(_ string) (string, error)  { return "", nil }
 func (m *mutableBackend) ProjectContext() (string, error)          { return "", nil }
 func (m *mutableBackend) Label() string {
@@ -99,7 +101,7 @@ func (s *stubBackend) ReopenTask(string) error              { return nil }
 func (s *stubBackend) SetState(_, _, _, _ string) error     { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (s *stubBackend) ExecutionInstructions() (string, error) { return "", nil }
-func (s *stubBackend) GetDescription(_ string) (string, error)  { return "", nil }
+func (s *stubBackend) GetDescription(_ string) (string, error)  { return s.description, nil }
 func (s *stubBackend) GetFullContext(_ string) (string, error)  { return "", nil }
 func (s *stubBackend) ProjectContext() (string, error)          { return "", nil }
 func (s *stubBackend) Label() string {
@@ -3590,6 +3592,103 @@ func TestLoop_OrchestratorMessagesUseRalphPrefix(t *testing.T) {
 				t.Errorf("expected %q in log output:\n%s", tt.want, output)
 			}
 		})
+	}
+}
+
+// Verifies that when a task has a description, the log output includes
+// the description on a separate line after the task title.
+func TestLoop_LogsTaskDescription(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	var logBuf strings.Builder
+	logger := logging.New(&logBuf)
+
+	backend := &stubBackend{
+		remaining:   1,
+		completed:   0,
+		total:       1,
+		nextTask:    "Fix the auth module",
+		nextID:      "ralph-abc",
+		label:       "beads",
+		description: "Auth tokens are expiring too early due to clock skew",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+
+	l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Next task: Fix the auth module") {
+		t.Errorf("expected task title in log output:\n%s", output)
+	}
+	if !strings.Contains(output, "Auth tokens are expiring too early due to clock skew") {
+		t.Errorf("expected task description in log output:\n%s", output)
+	}
+}
+
+// Verifies that when a task has no description, no extra description line
+// is logged — only the task title appears.
+func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	var logBuf strings.Builder
+	logger := logging.New(&logBuf)
+
+	backend := &stubBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "Fix the auth module",
+		nextID:    "ralph-abc",
+		label:     "beads",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+
+	l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Next task: Fix the auth module") {
+		t.Errorf("expected task title in log output:\n%s", output)
+	}
+	// Count lines containing "description" — there should be none since
+	// the backend returns an empty description.
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "Description:") {
+			t.Errorf("unexpected description line in log output when description is empty:\n%s", output)
+			break
+		}
 	}
 }
 
