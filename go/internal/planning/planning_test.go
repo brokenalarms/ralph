@@ -42,6 +42,7 @@ func (m *mockBackend) SetState(_, _, _, _ string) error       { return nil }
 func (m *mockBackend) GetState(_, _ string) (string, error)   { return "", nil }
 func (m *mockBackend) ExecutionInstructions() (string, error) { return "", nil }
 func (m *mockBackend) GetDescription(_ string) (string, error) { return "", nil }
+func (m *mockBackend) GetFullContext(_ string) (string, error) { return "", nil }
 func (m *mockBackend) ProjectContext() (string, error)         { return "", nil }
 func (m *mockBackend) Label() string                          { return m.label }
 func (m *mockBackend) PlanningInstructions() string           { return m.planningInstr }
