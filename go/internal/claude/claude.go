@@ -538,9 +538,11 @@ func formatToolUse(c streamContent) string {
 }
 
 // startTailGoroutine follows new data appended to path and writes it to
-// stdout, similar to tail -f -n 0. Runs entirely in-process so there are no
-// child processes to orphan. Returns a channel that closes when the goroutine
-// exits.
+// stdout, similar to tail -f -n 0. Only forwards lines prefixed with
+// "[claude] " — orchestrator messages are already written to stdout directly
+// by the logger, so forwarding them here would cause duplication.
+// Runs entirely in-process so there are no child processes to orphan.
+// Returns a channel that closes when the goroutine exits.
 func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -556,11 +558,28 @@ func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
 			return
 		}
 
+		const claudePrefix = "[claude] "
+		var remainder string
 		buf := make([]byte, 64*1024)
+
+		processChunk := func(data string) string {
+			for {
+				idx := strings.IndexByte(data, '\n')
+				if idx < 0 {
+					return data
+				}
+				line := data[:idx]
+				data = data[idx+1:]
+				if strings.HasPrefix(line, claudePrefix) {
+					fmt.Fprintln(os.Stdout, line)
+				}
+			}
+		}
+
 		for {
 			n, _ := f.Read(buf)
 			if n > 0 {
-				os.Stdout.Write(buf[:n])
+				remainder = processChunk(remainder + string(buf[:n]))
 			}
 			if n == 0 {
 				select {
@@ -569,9 +588,13 @@ func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
 					for {
 						n2, _ := f.Read(buf)
 						if n2 == 0 {
+							// Flush any remaining partial line.
+							if remainder != "" && strings.HasPrefix(remainder, claudePrefix) {
+								fmt.Fprintln(os.Stdout, remainder)
+							}
 							return
 						}
-						os.Stdout.Write(buf[:n2])
+						remainder = processChunk(remainder + string(buf[:n2]))
 					}
 				default:
 					time.Sleep(100 * time.Millisecond)

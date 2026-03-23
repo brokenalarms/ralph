@@ -2,6 +2,7 @@ package claude
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -333,10 +334,10 @@ func TestReadFirstLine_StripsJSON(t *testing.T) {
 
 // --- Stream filter tailing tests ---
 
-// Verifies that startTailGoroutine follows new data appended to a file and
-// stops cleanly when the stop channel is closed, with no external processes
-// left behind. This replaced the external tail -f process that caused orphan
-// accumulation.
+// Verifies that startTailGoroutine follows new [claude]-prefixed lines
+// appended to a file and stops cleanly when the stop channel is closed.
+// Non-[claude] lines (orchestrator messages) must NOT be forwarded to
+// stdout — the logger already writes those directly.
 func TestStartTailGoroutine_FollowsAndStops(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "loop.log")
@@ -345,13 +346,14 @@ func TestStartTailGoroutine_FollowsAndStops(t *testing.T) {
 	stop := make(chan struct{})
 	done := startTailGoroutine(logPath, stop)
 
-	// Append new data after the goroutine starts.
+	// Append [claude]-prefixed and non-prefixed lines after goroutine starts.
 	time.Sleep(200 * time.Millisecond)
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Fprintln(f, "new line")
+	fmt.Fprintln(f, "[claude] hello from agent")
+	fmt.Fprintln(f, "12:00:00 \033[0;36m[beads]\033[0m orchestrator message")
 	f.Close()
 
 	time.Sleep(200 * time.Millisecond)
@@ -375,6 +377,49 @@ func TestStartTailGoroutine_NonexistentFile(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		close(stop)
 		t.Fatal("startTailGoroutine should exit immediately for missing file")
+	}
+}
+
+// Verifies that startTailGoroutine only forwards [claude]-prefixed lines to
+// stdout, preventing orchestrator log messages from appearing twice (once from
+// the logger writing to stdout directly, and again from the tail goroutine).
+func TestStartTailGoroutine_FiltersNonClaudeLines(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "loop.log")
+	os.WriteFile(logPath, nil, 0o644)
+
+	// Capture stdout by replacing os.Stdout temporarily.
+	origStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	stop := make(chan struct{})
+	done := startTailGoroutine(logPath, stop)
+
+	time.Sleep(200 * time.Millisecond)
+	f, _ := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	fmt.Fprintln(f, "[claude] agent output line")
+	fmt.Fprintln(f, "12:00:00 \033[0;36m[beads]\033[0m orchestrator message")
+	fmt.Fprintln(f, "[claude] second agent line")
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	w.Close()
+	captured, _ := io.ReadAll(r)
+	os.Stdout = origStdout
+
+	output := string(captured)
+	if !strings.Contains(output, "[claude] agent output line") {
+		t.Errorf("expected [claude] lines to be forwarded, got: %q", output)
+	}
+	if !strings.Contains(output, "[claude] second agent line") {
+		t.Errorf("expected second [claude] line to be forwarded, got: %q", output)
+	}
+	if strings.Contains(output, "orchestrator message") {
+		t.Errorf("orchestrator messages should NOT be forwarded by tail goroutine, got: %q", output)
 	}
 }
 
