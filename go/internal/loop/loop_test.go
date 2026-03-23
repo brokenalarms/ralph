@@ -1392,13 +1392,15 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 // proving the orchestrator closes tasks rather than the agent.
 type trackingBackend struct {
 	mutableBackend
-	closedIDs []string
-	closeMu   sync.Mutex
+	closedIDs     []string
+	closeReasons  []string
+	closeMu       sync.Mutex
 }
 
 func (t *trackingBackend) CloseTask(id string, reason string) error {
 	t.closeMu.Lock()
 	t.closedIDs = append(t.closedIDs, id)
+	t.closeReasons = append(t.closeReasons, reason)
 	t.closeMu.Unlock()
 	return nil
 }
@@ -1460,6 +1462,67 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 	}
 	if backend.closedIDs[0] != "ralph-xyz" {
 		t.Errorf("expected CloseTask for ralph-xyz, got %q", backend.closedIDs[0])
+	}
+}
+
+// Verifies the close reason includes the PR number in "Fixed in PR #N" format,
+// making it traceable which PR shipped which fix.
+func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			completed: 0,
+			total:     1,
+			nextTask:  "Fix auth bug",
+			nextID:    "ralph-xyz",
+			label:     "beads",
+		},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = runner
+	l.pushPRFunc = func(context.Context, string, string) error { return nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.findPRInfoFunc = func(string) (string, string) { return "42", "Fix auth bug" }
+
+	_ = l.Run(context.Background())
+
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closeReasons) != 1 {
+		t.Fatalf("expected exactly 1 CloseTask call, got %d", len(backend.closeReasons))
+	}
+	want := "Fixed in PR #42"
+	if !strings.Contains(backend.closeReasons[0], want) {
+		t.Errorf("close reason should contain %q, got %q", want, backend.closeReasons[0])
 	}
 }
 

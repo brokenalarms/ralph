@@ -537,18 +537,6 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.recordCompletedTask(taskID, nextTask)
 			touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-flash"))
 
-			if taskID != "" {
-				closeReason := "completed by ralph"
-				if prNum, _ := l.findPRInfo(workDir); prNum != "" {
-					closeReason = fmt.Sprintf("completed by ralph — PR #%s", prNum)
-				}
-				if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
-					l.logger.Warn("CloseTask failed: %v", err)
-				} else {
-					l.logger.Log("Closed task %s (%s)", taskID, closeReason)
-				}
-			}
-
 			// Rebase onto latest base branch before pushing so that any
 			// direct pushes to main/develop during this iteration are
 			// included. Without this, squash-merge overwrites those commits.
@@ -560,6 +548,18 @@ func (l *Loop) Run(ctx context.Context) error {
 
 			if err := l.pushAndCreatePR(ctx, taskID, nextTask); err != nil {
 				l.logger.Warn("Push/PR: %v", err)
+			}
+
+			if taskID != "" {
+				closeReason := "completed by ralph"
+				if prNum, _ := l.findPRInfo(workDir); prNum != "" {
+					closeReason = fmt.Sprintf("Fixed in PR #%s", prNum)
+				}
+				if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
+					l.logger.Warn("CloseTask failed: %v", err)
+				} else {
+					l.logger.Log("Closed task %s (%s)", taskID, closeReason)
+				}
 			}
 
 			ct := CompletedTask{
