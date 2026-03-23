@@ -224,16 +224,17 @@ func TestMergeAdminRequiresAutoMerge(t *testing.T) {
 	}
 }
 
-// Verifies that a bare positional argument pointing to an existing directory
-// is accepted as the project directory.
-func TestPositionalProjectDir(t *testing.T) {
+// Verifies that a positional directory argument is rejected — users must
+// use --dir/-d explicitly. Prevents unknown words that happen to match
+// existing directory names from silently becoming ProjectDir.
+func TestPositionalDirectoryRejected(t *testing.T) {
 	dir := t.TempDir()
-	cfg, err := Parse([]string{dir})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, err := Parse([]string{dir})
+	if err == nil {
+		t.Fatal("expected error for positional directory arg")
 	}
-	if cfg.ProjectDir != dir {
-		t.Errorf("ProjectDir = %q, want %q", cfg.ProjectDir, dir)
+	if !strings.Contains(err.Error(), "unknown argument") {
+		t.Errorf("error should mention 'unknown argument', got %q", err)
 	}
 }
 
