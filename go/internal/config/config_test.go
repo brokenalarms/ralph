@@ -227,15 +227,29 @@ func TestMergeAdminRequiresAutoMerge(t *testing.T) {
 	}
 }
 
-// Verifies that a bare positional argument is treated as the project directory,
-// matching ralph.sh's `*) PROJECT_DIR="$1"` case.
+// Verifies that a bare positional argument pointing to an existing directory
+// is accepted as the project directory.
 func TestPositionalProjectDir(t *testing.T) {
-	cfg, err := Parse([]string{"/some/path"})
+	dir := t.TempDir()
+	cfg, err := Parse([]string{dir})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.ProjectDir != "/some/path" {
-		t.Errorf("ProjectDir = %q, want /some/path", cfg.ProjectDir)
+	if cfg.ProjectDir != dir {
+		t.Errorf("ProjectDir = %q, want %q", cfg.ProjectDir, dir)
+	}
+}
+
+// Verifies that a bare positional argument that isn't a directory is rejected,
+// preventing unknown words (e.g. misspelled subcommands) from silently creating
+// orphan project directories.
+func TestPositionalNonDirectoryRejected(t *testing.T) {
+	_, err := Parse([]string{"notasubcommand"})
+	if err == nil {
+		t.Fatal("expected error for non-directory positional arg")
+	}
+	if !strings.Contains(err.Error(), "unknown argument") {
+		t.Errorf("error should mention 'unknown argument', got %q", err)
 	}
 }
 
