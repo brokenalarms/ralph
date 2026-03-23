@@ -345,13 +345,6 @@ func Parse(args []string) (Config, error) {
 			cfg.cliSet["base_branch"] = true
 			i += 2
 
-		case "--branch-strategy":
-			// Deprecated flag — silently consumed for evolve compatibility.
-			if _, err := requireArg(args, i); err != nil {
-				return cfg, err
-			}
-			i += 2
-
 		case "--idle-timeout":
 			v, err := requireArg(args, i)
 			if err != nil {
@@ -383,12 +376,7 @@ func Parse(args []string) (Config, error) {
 			if len(args[i]) > 0 && args[i][0] == '-' {
 				return cfg, fmt.Errorf("unknown option: %s", args[i])
 			}
-			info, err := os.Stat(args[i])
-			if err != nil || !info.IsDir() {
-				return cfg, fmt.Errorf("unknown argument: %s (not a known subcommand or directory)", args[i])
-			}
-			cfg.ProjectDir = args[i]
-			i++
+			return cfg, fmt.Errorf("unknown argument: %s (use --dir to specify a project directory)", args[i])
 		}
 	}
 
@@ -486,8 +474,6 @@ func (c *Config) LoadConfigFile(path string) error {
 			if value != "" {
 				c.BaseBranch = value
 			}
-			continue
-		case "branch_strategy":
 			continue
 		case "no_refactor":
 			switch strings.ToLower(value) {

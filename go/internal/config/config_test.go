@@ -224,16 +224,17 @@ func TestMergeAdminRequiresAutoMerge(t *testing.T) {
 	}
 }
 
-// Verifies that a bare positional argument pointing to an existing directory
-// is accepted as the project directory.
-func TestPositionalProjectDir(t *testing.T) {
+// Verifies that a positional directory argument is rejected — users must
+// use --dir/-d explicitly. Prevents unknown words that happen to match
+// existing directory names from silently becoming ProjectDir.
+func TestPositionalDirectoryRejected(t *testing.T) {
 	dir := t.TempDir()
-	cfg, err := Parse([]string{dir})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, err := Parse([]string{dir})
+	if err == nil {
+		t.Fatal("expected error for positional directory arg")
 	}
-	if cfg.ProjectDir != dir {
-		t.Errorf("ProjectDir = %q, want %q", cfg.ProjectDir, dir)
+	if !strings.Contains(err.Error(), "unknown argument") {
+		t.Errorf("error should mention 'unknown argument', got %q", err)
 	}
 }
 
@@ -729,29 +730,19 @@ func TestEvolveValidation(t *testing.T) {
 	}
 }
 
-// Verifies that the deprecated --branch-strategy flag is silently consumed
-// without error, so evolve restarts with stale flags don't break.
-func TestBranchStrategyFlag_SilentlyConsumed(t *testing.T) {
+// Verifies that --branch-strategy is rejected as an unknown flag.
+func TestBranchStrategyFlag_Rejected(t *testing.T) {
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
 	t.Setenv("RALPH_REFACTOR_EVERY", "")
 
 	_, err := Parse([]string{"--branch-strategy", "stacked"})
-	if err != nil {
-		t.Fatalf("deprecated --branch-strategy should be silently consumed, got: %v", err)
-	}
-
-	_, err = Parse([]string{"--branch-strategy", "single"})
-	if err != nil {
-		t.Fatalf("deprecated --branch-strategy should be silently consumed, got: %v", err)
-	}
-
-	_, err = Parse([]string{"--branch-strategy"})
 	if err == nil {
-		t.Fatal("expected error for missing branch strategy value")
+		t.Fatal("expected error for removed --branch-strategy flag")
 	}
 }
 
-// Verifies that branch_strategy in ralph.toml is silently ignored.
+// Verifies that branch_strategy in ralph.toml is silently ignored
+// so existing config files don't cause errors.
 func TestBranchStrategyConfigFile_SilentlyIgnored(t *testing.T) {
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
 	t.Setenv("RALPH_REFACTOR_EVERY", "")
@@ -762,7 +753,6 @@ func TestBranchStrategyConfigFile_SilentlyIgnored(t *testing.T) {
 
 	cfg, _ := Parse(nil)
 	cfg.LoadConfigFile(tomlPath)
-	// No error — stale config file entries are silently ignored.
 	_ = cfg
 }
 
