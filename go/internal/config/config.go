@@ -180,184 +180,42 @@ func parseFilterStream(args []string) Subcommand {
 	return sub
 }
 
-// Parse processes CLI arguments into a Config. Returns an error for unknown
-// flags or missing values.
+// Parse processes CLI arguments into a Config using the Flags registry.
+// Returns an error for unknown flags or missing values.
 func Parse(args []string) (Config, error) {
 	cfg := Defaults()
 	cfg.cliSet = make(map[string]bool)
 	i := 0
 
 	for i < len(args) {
-		switch args[i] {
-		case "-d", "--dir":
-			v, err := requireArg(args, i)
-			if err != nil {
-				return cfg, err
-			}
-			cfg.ProjectDir = v
-			i += 2
-
-		case "-n", "--max":
-			v, err := requireArg(args, i)
-			if err != nil {
-				return cfg, err
-			}
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
-			}
-			cfg.MaxIterations = n
-			cfg.cliSet["max_iterations"] = true
-			i += 2
-
-		case "-p", "--prompt":
-			v, err := requireArg(args, i)
-			if err != nil {
-				return cfg, err
-			}
-			cfg.Prompt = v
-			i += 2
-
-		case "-q", "--quiet":
-			cfg.Quiet = true
-			i++
-
-		case "--no-worktree":
-			cfg.UseWorktree = false
-			i++
-
-		case "--calls-per-hour":
-			v, err := requireArg(args, i)
-			if err != nil {
-				return cfg, err
-			}
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
-			}
-			cfg.CallsPerHour = n
-			cfg.cliSet["calls_per_hour"] = true
-			i += 2
-
-		case "--refactor-every":
-			v, err := requireArg(args, i)
-			if err != nil {
-				return cfg, err
-			}
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
-			}
-			cfg.RefactorEvery = n
-			cfg.cliSet["refactor_every"] = true
-			i += 2
-
-		case "--no-refactor":
-			cfg.NoRefactor = true
-			cfg.cliSet["no_refactor"] = true
-			i++
-
-		case "--refactor-threshold":
-			v, err := requireArg(args, i)
-			if err != nil {
-				return cfg, err
-			}
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
-			}
-			cfg.RefactorThreshold = n
-			cfg.cliSet["refactor_threshold"] = true
-			i += 2
-
-		case "--disable-check":
-			v, err := requireArg(args, i)
-			if err != nil {
-				return cfg, err
-			}
-			for _, name := range strings.Split(v, ",") {
-				name = strings.TrimSpace(name)
-				if name != "" {
-					cfg.DisabledChecks = append(cfg.DisabledChecks, name)
-				}
-			}
-			cfg.cliSet["disabled_checks"] = true
-			i += 2
-
-		case "--tmux":
-			cfg.UseTmux = true
-			i++
-
-		case "--wait":
-			cfg.Wait = true
-			i++
-
-		case "--wait-interval":
-			v, err := requireArg(args, i)
-			if err != nil {
-				return cfg, err
-			}
-			d, err := parseDuration(v)
-			if err != nil {
-				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
-			}
-			cfg.WaitInterval = d
-			cfg.cliSet["wait_interval"] = true
-			i += 2
-
-		case "--auto-merge":
-			cfg.AutoMerge = true
-			i++
-
-		case "--merge-admin":
-			cfg.MergeAdmin = true
-			i++
-
-		case "--evolve":
-			cfg.Evolve = true
-			i++
-
-		case "--base-branch":
-			v, err := requireArg(args, i)
-			if err != nil {
-				return cfg, err
-			}
-			cfg.BaseBranch = v
-			cfg.cliSet["base_branch"] = true
-			i += 2
-
-		case "--idle-timeout":
-			v, err := requireArg(args, i)
-			if err != nil {
-				return cfg, err
-			}
-			d, err := parseDuration(v)
-			if err != nil {
-				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
-			}
-			cfg.IdleTimeout = d
-			i += 2
-
-		case "--idle-timeout-progress":
-			v, err := requireArg(args, i)
-			if err != nil {
-				return cfg, err
-			}
-			d, err := parseDuration(v)
-			if err != nil {
-				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
-			}
-			cfg.IdleTimeoutProgress = d
-			i += 2
-
-		case "-h", "--help":
-			return cfg, ErrHelp
-
-		default:
+		f, ok := flagMap[args[i]]
+		if !ok {
 			if len(args[i]) > 0 && args[i][0] == '-' {
 				return cfg, fmt.Errorf("unknown option: %s", args[i])
 			}
 			return cfg, fmt.Errorf("unknown argument: %s (use --dir to specify a project directory)", args[i])
+		}
+
+		if f.Kind == KindBool {
+			if err := f.Apply(&cfg, ""); err != nil {
+				return cfg, err
+			}
+			if f.TrackCLI && f.ConfigKey != "" {
+				cfg.cliSet[f.ConfigKey] = true
+			}
+			i++
+		} else {
+			v, err := requireArg(args, i)
+			if err != nil {
+				return cfg, err
+			}
+			if err := f.Apply(&cfg, v); err != nil {
+				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
+			}
+			if f.TrackCLI && f.ConfigKey != "" {
+				cfg.cliSet[f.ConfigKey] = true
+			}
+			i += 2
 		}
 	}
 
@@ -413,8 +271,8 @@ func parseDuration(s string) (time.Duration, error) {
 }
 
 // LoadConfigFile reads a TOML-like config file (key = value per line) and
-// applies values to the Config. CLI-set values (tracked via cliSet) take
-// precedence and are not overwritten.
+// applies values to the Config using the Flags registry. CLI-set values
+// (tracked via cliSet) take precedence and are not overwritten.
 func (c *Config) LoadConfigFile(path string) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -450,89 +308,33 @@ func (c *Config) LoadConfigFile(path string) error {
 			continue
 		}
 
-		switch key {
-		case "base_branch":
-			if value != "" {
-				c.BaseBranch = value
-			}
-			continue
-		case "no_refactor":
-			switch strings.ToLower(value) {
-			case "1", "true", "yes":
-				c.NoRefactor = true
-			}
-			continue
-		case "disabled_checks":
-			for _, name := range strings.Split(value, ",") {
-				name = strings.TrimSpace(name)
-				if name != "" {
-					c.DisabledChecks = append(c.DisabledChecks, name)
-				}
-			}
+		fd := configMap[key]
+		if fd == nil {
 			continue
 		}
-
-		n, err := strconv.Atoi(value)
-		if err != nil {
-			continue
-		}
-
-		switch key {
-		case "max_iterations":
-			c.MaxIterations = n
-		case "calls_per_hour":
-			c.CallsPerHour = n
-		case "refactor_every":
-			c.RefactorEvery = n
-		case "refactor_threshold":
-			c.RefactorThreshold = n
-		case "watcher_interval":
-			c.WatcherInterval = n
-		case "stuck_threshold":
-			c.StuckThreshold = n
-		case "stuck_confirmation_threshold":
-			c.StuckConfirmationThreshold = n
-		case "stagnation_threshold":
-			c.StagnationThreshold = n
-		case "test_saturation_threshold":
-			c.TestSaturationThreshold = n
-		case "permission_denial_threshold":
-			c.PermissionDenialThreshold = n
-		}
+		_ = fd.Apply(c, value)
 	}
 	return scanner.Err()
 }
 
-// configKeys lists all supported ralph.toml keys in display order.
-var configKeys = []struct {
-	Key     string
-	Default int
-}{
-	{"max_iterations", 50},
-	{"calls_per_hour", 80},
-	{"refactor_every", 0},
-	{"refactor_threshold", 20},
-	{"watcher_interval", 10},
-	{"stuck_threshold", 5},
-	{"stuck_confirmation_threshold", 2},
-	{"stagnation_threshold", 3},
-	{"test_saturation_threshold", 3},
-	{"permission_denial_threshold", 3},
-}
-
-// InitConfig generates a ralph.toml file at the given path with default values.
-// Returns an error if the file already exists.
+// InitConfig generates a ralph.toml file at the given path with default values
+// derived from the Flags registry. Returns an error if the file already exists.
 func InitConfig(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("config file already exists: %s", path)
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "base_branch = develop\n")
-	fmt.Fprintf(&b, "no_refactor = false\n")
-	for _, k := range configKeys {
-		fmt.Fprintf(&b, "%s = %d\n", k.Key, k.Default)
+	for _, f := range Flags {
+		if f.ConfigKey == "" {
+			continue
+		}
+		switch f.Kind {
+		case KindBool:
+			fmt.Fprintf(&b, "%s = false\n", f.ConfigKey)
+		default:
+			fmt.Fprintf(&b, "%s = %s\n", f.ConfigKey, f.Default)
+		}
 	}
-	fmt.Fprintf(&b, "disabled_checks =\n")
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }

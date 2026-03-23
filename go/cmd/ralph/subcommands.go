@@ -149,30 +149,10 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 }
 
 func printUsage() {
-	fmt.Printf(`%sRalph Loop v%s (go)%s - Autonomous Claude Code task iteration
-
-%sUSAGE:%s
-  ralph [OPTIONS]
-
-%sOPTIONS:%s
-  -d, --dir <path>       Project directory (default: cwd)
-  -n, --max <N>          Max iterations (default: 50, env RALPH_MAX_ITERATIONS)
-  -p, --prompt <text>    Prompt override (otherwise Claude reads repo context)
-  -q, --quiet            Suppress Claude output streaming (log only)
-  --no-worktree          Run directly in project dir (no git worktree isolation)
-  --calls-per-hour <N>   Max Claude calls per hour (default: 80)
-  --idle-timeout <dur>   Kill session after this idle duration (default: 10m, env RALPH_IDLE_TIMEOUT)
-  --idle-timeout-progress <dur>  Shorter idle timeout when progress detected (default: 30s, env RALPH_IDLE_TIMEOUT_PROGRESS)
-  --tmux                 Run in tmux 3-pane layout (status / output / plan)
-  --base-branch <name>   Base branch for rebase/merge (default: develop, env RALPH_BASE_BRANCH)
-  --auto-merge           Squash-merge PRs into base branch after task completion
-  --merge-admin          Use --admin flag on gh pr merge to bypass branch protection (requires --auto-merge)
-  --evolve               Self-improving mode: after each merged task, pull main, rebuild, restart (requires --auto-merge)
-  --wait                 Keep running after all tasks complete, polling for new tasks
-  --wait-interval <dur>  Polling interval for --wait (default: 30s, env RALPH_WAIT_INTERVAL)
-  -h, --help             Show this help
-
-%sEXAMPLES:%s
+	fmt.Printf("%sRalph Loop v%s (go)%s - Autonomous Claude Code task iteration\n\n", logging.Bold, config.Version, logging.Reset)
+	fmt.Printf("%sUSAGE:%s\n  ralph [OPTIONS]\n\n", logging.Bold, logging.Reset)
+	fmt.Printf("%sOPTIONS:%s\n%s\n", logging.Bold, logging.Reset, config.FlagUsage())
+	fmt.Printf(`%sEXAMPLES:%s
   ralph --dir ~/myproject -n 20
   ralph -p "Fix all failing tests"
 
@@ -189,9 +169,6 @@ func printUsage() {
   3. Completion: Claude signals when each task is done
   4. Repeat: Loop continues until all tasks complete or iteration cap is hit
 `,
-		logging.Bold, config.Version, logging.Reset,
-		logging.Bold, logging.Reset,
-		logging.Bold, logging.Reset,
 		logging.Bold, logging.Reset,
 		logging.Bold, logging.Reset,
 		logging.Bold, logging.Reset,
