@@ -51,6 +51,24 @@ func (l *testLog) contains(substr string) bool {
 
 // initBareRepo creates a bare repo with one commit, plus a clone to act as
 // the "project dir". Returns (projectDir, cleanup).
+func initBareRepoWithBranch(t *testing.T, branch string) (string, func()) {
+	t.Helper()
+	tmp := t.TempDir()
+
+	bare := filepath.Join(tmp, "bare.git")
+	run(t, "git", "init", "--bare", "-b", branch, bare)
+
+	project := filepath.Join(tmp, "project")
+	run(t, "git", "clone", bare, project)
+	run(t, "git", "-C", project, "config", "user.name", "test")
+	run(t, "git", "-C", project, "config", "user.email", "test@test")
+	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "init")
+	run(t, "git", "-C", project, "push", "-u", "origin", branch)
+	run(t, "git", "-C", project, "remote", "set-head", "origin", branch)
+
+	return project, func() {}
+}
+
 func initBareRepo(t *testing.T) (string, func()) {
 	t.Helper()
 	tmp := t.TempDir()
@@ -1498,5 +1516,70 @@ func TestNwoFromRemote_SSHAndHTTPS(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("nwoFromRemote(%q) = %q, want %q", tt.remote, got, tt.want)
 		}
+	}
+}
+
+// PushAndCreatePR must pass --base with the configured base branch to gh pr create,
+// so PRs target the correct branch (e.g. develop) instead of the repo default (main).
+func TestPushAndCreatePR_UsesBaseBranch(t *testing.T) {
+	project, cleanup := initBareRepoWithBranch(t, "develop")
+	defer cleanup()
+
+	// Create a worktree on a feature branch (WorkDir must differ from ProjectDir).
+	wtDir := filepath.Join(t.TempDir(), "worktree")
+	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
+	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
+
+	// Create a fake gh script that records its arguments.
+	binDir := t.TempDir()
+	ghLog := filepath.Join(t.TempDir(), "gh-args.log")
+	ghScript := filepath.Join(binDir, "gh")
+	if err := os.WriteFile(ghScript, []byte(fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %s
+# For pr list, output empty (no existing PR)
+if [ "$2" = "list" ]; then
+  echo ""
+fi
+`, ghLog)), 0755); err != nil {
+		t.Fatalf("writing fake gh: %v", err)
+	}
+	// Prepend fake gh to PATH.
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+":"+origPath)
+
+	log := &testLog{}
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        wtDir,
+		WorktreeBranch: "ralph/test/feature",
+		BaseBranch:     "develop",
+		Logger:         log,
+	}
+
+	err := mgr.PushAndCreatePR(context.Background(), "test task")
+	if err != nil {
+		t.Fatalf("PushAndCreatePR failed: %v (log: %v)", err, log.messages)
+	}
+
+	ghArgs, readErr := os.ReadFile(ghLog)
+	if readErr != nil {
+		t.Fatalf("reading gh log: %v", readErr)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(ghArgs)), "\n")
+	// Find the pr create invocation.
+	var createLine string
+	for _, line := range lines {
+		if strings.Contains(line, "pr create") {
+			createLine = line
+			break
+		}
+	}
+	if createLine == "" {
+		t.Fatal("expected gh pr create to be called, but it was not")
+	}
+
+	if !strings.Contains(createLine, "--base develop") {
+		t.Errorf("gh pr create should include --base develop, got: %s", createLine)
 	}
 }
