@@ -21,6 +21,8 @@ The diff may contain changes from other tasks in the same PR. Ignore unrelated c
 
 This diff has already passed compilation and the full test suite. Do not reject for suspected compilation errors — variables that appear undefined in the diff may be defined elsewhere in the file. Trust the test results for correctness; focus your review on whether the task's intent is satisfied.
 
+Some tasks are implemented through prompt or configuration changes (markdown files, .md templates) rather than traditional code. Changes to prompt files, instruction templates, or agent behavior documentation are valid implementations when the task describes agent behavior, workflows, or instructions.
+
 Reply with exactly one line: YES or NO followed by a one-sentence reason.
 Example: YES — adds retry loop with test that verifies 3 retries on failure, handles timeout edge case.
 Example: NO — polling loop bails on fetch error instead of retrying, leaving CI unchecked.
