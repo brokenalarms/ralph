@@ -246,8 +246,10 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) {
 	}
 
 	if err := gitCmdErrCtx(ctx, m.WorkDir, "rebase", "origin/"+defaultBranch); err != nil {
-		m.Logger.Warn("Rebase onto %s failed: %v — aborting", defaultBranch, err)
-		gitCmd(m.WorkDir, "rebase", "--abort")
+		if resolved := m.autoResolveAndContinue(ctx, defaultBranch); !resolved {
+			m.Logger.Warn("Rebase onto %s failed with unresolvable conflicts — aborting", defaultBranch)
+			gitCmd(m.WorkDir, "rebase", "--abort")
+		}
 	}
 
 	if dirty {
@@ -258,6 +260,113 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) {
 			gitCmd(m.WorkDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
 		}
 	}
+}
+
+// autoResolveAndContinue attempts to resolve rebase conflicts mechanically
+// and continue. For each conflicted file: if only one side changed from base,
+// take that side. If both changed but ours is a subset of theirs, take theirs.
+// Returns true if the rebase completed successfully.
+func (m *Manager) autoResolveAndContinue(ctx context.Context, defaultBranch string) bool {
+	for i := 0; i < 50; i++ { // max steps to prevent infinite loop
+		conflicted := gitOutput(m.WorkDir, "diff", "--name-only", "--diff-filter=U")
+		if conflicted == "" {
+			// No conflicts — try to continue
+			if err := gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--continue"); err == nil {
+				return true
+			}
+			// Might be done
+			if !rebaseInProgress(m.WorkDir) {
+				return true
+			}
+			continue
+		}
+
+		resolvedAny := false
+		for _, f := range strings.Split(conflicted, "\n") {
+			f = strings.TrimSpace(f)
+			if f == "" {
+				continue
+			}
+
+			ours := gitOutput(m.WorkDir, "show", ":2:"+f)
+			theirs := gitOutput(m.WorkDir, "show", ":3:"+f)
+			base := gitOutput(m.WorkDir, "show", ":1:"+f)
+
+			if ours == theirs {
+				m.Logger.Log("Auto-resolved (identical): %s", f)
+				gitCmd(m.WorkDir, "checkout", "--theirs", f)
+				gitCmd(m.WorkDir, "add", f)
+				resolvedAny = true
+			} else if ours == base {
+				m.Logger.Log("Auto-resolved (only theirs changed): %s", f)
+				gitCmd(m.WorkDir, "checkout", "--theirs", f)
+				gitCmd(m.WorkDir, "add", f)
+				resolvedAny = true
+			} else if theirs == base {
+				m.Logger.Log("Auto-resolved (only ours changed): %s", f)
+				gitCmd(m.WorkDir, "checkout", "--ours", f)
+				gitCmd(m.WorkDir, "add", f)
+				resolvedAny = true
+			} else {
+				// Both changed — check if ours is subset of theirs
+				if strings.Contains(theirs, ours) || isSubsetByLines(base, ours, theirs) {
+					m.Logger.Log("Auto-resolved (ours is subset of theirs): %s", f)
+					gitCmd(m.WorkDir, "checkout", "--theirs", f)
+					gitCmd(m.WorkDir, "add", f)
+					resolvedAny = true
+				} else {
+					m.Logger.Warn("Real conflict in %s — cannot auto-resolve", f)
+					return false
+				}
+			}
+		}
+
+		if !resolvedAny {
+			return false
+		}
+
+		// Continue the rebase
+		if err := gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--continue"); err != nil {
+			if !rebaseInProgress(m.WorkDir) {
+				return true
+			}
+			// Another step with conflicts — loop again
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// isSubsetByLines checks if every line ours added (relative to base) is
+// present in theirs. If so, theirs is a superset and wins.
+func isSubsetByLines(base, ours, theirs string) bool {
+	baseLines := make(map[string]bool)
+	for _, line := range strings.Split(base, "\n") {
+		baseLines[line] = true
+	}
+
+	theirsLines := make(map[string]bool)
+	for _, line := range strings.Split(theirs, "\n") {
+		theirsLines[line] = true
+	}
+
+	for _, line := range strings.Split(ours, "\n") {
+		if !baseLines[line] && !theirsLines[line] {
+			return false
+		}
+	}
+	return true
+}
+
+func rebaseInProgress(dir string) bool {
+	gitDir := gitOutput(dir, "rev-parse", "--git-dir")
+	if gitDir == "" {
+		return false
+	}
+	_, errMerge := os.Stat(filepath.Join(gitDir, "rebase-merge"))
+	_, errApply := os.Stat(filepath.Join(gitDir, "rebase-apply"))
+	return errMerge == nil || errApply == nil
 }
 
 // resumedBranchIsStale returns true when the stored branch no longer exists
@@ -765,6 +874,11 @@ func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
 		return nil
 	}
 
+	// Try auto-resolving mechanical conflicts (e.g. squash-merge overlaps)
+	if m.autoResolveAndContinue(ctx, defaultBranch) {
+		m.Logger.Log("Rebased onto origin/%s (auto-resolved conflicts)", defaultBranch)
+		return nil
+	}
 	gitCmd(m.WorkDir, "rebase", "--abort")
 
 	if ctx.Err() != nil {
