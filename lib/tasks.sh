@@ -116,6 +116,14 @@ bd_close_task() {
   local status
   status=$(run_bd show "$id" --json 2>/dev/null | jq -r '.[0].status // empty') || true
   if [[ "$status" == "in_progress" ]]; then
+    local branch pr_num
+    branch=$(git branch --show-current 2>/dev/null) || true
+    if [[ -n "$branch" ]]; then
+      pr_num=$(gh pr list --head "$branch" --state all --json number --jq '.[0].number' 2>/dev/null) || true
+    fi
+    if [[ -n "$pr_num" ]]; then
+      reason="Fixed in PR #${pr_num}"
+    fi
     run_bd close "$id" --reason "$reason" 2>/dev/null || true
   fi
 }
