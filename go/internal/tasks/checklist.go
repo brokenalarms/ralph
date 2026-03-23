@@ -141,6 +141,8 @@ func (c *Checklist) GetState(_, _ string) (string, error) { return "", nil }
 
 func (c *Checklist) GetDescription(_ string) (string, error) { return "", nil }
 
+func (c *Checklist) ProjectContext() (string, error) { return "", nil }
+
 func (c *Checklist) Label() string { return "checklist" }
 
 func (c *Checklist) readPlan() (string, error) {

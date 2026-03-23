@@ -447,6 +447,38 @@ func TestBuildPrompt_ChecklistCompletionOrderIncludesPush(t *testing.T) {
 	}
 }
 
+// Proves: beads context is injected into the prompt when provided,
+// giving the agent immediate awareness of project state at startup.
+func TestBuildPrompt_BeadsContextIncluded(t *testing.T) {
+	v := testVars(t)
+	v.TaskBackend = BackendBD
+	v.BeadsContext = "○ task-1 [● P1] - Fix auth\n✓ task-0 ● P1 - Bootstrap"
+	result, err := BuildPrompt(v)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+	if !strings.Contains(result, "task-1") {
+		t.Error("prompt missing beads context content")
+	}
+	if strings.Contains(result, "{{BEADS_CONTEXT}}") {
+		t.Error("prompt still contains unsubstituted {{BEADS_CONTEXT}}")
+	}
+}
+
+// Proves: no beads context placeholder remains when context is empty.
+func TestBuildPrompt_BeadsContextEmpty(t *testing.T) {
+	v := testVars(t)
+	v.TaskBackend = BackendBD
+	v.BeadsContext = ""
+	result, err := BuildPrompt(v)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+	if strings.Contains(result, "{{BEADS_CONTEXT}}") {
+		t.Error("prompt still contains unsubstituted {{BEADS_CONTEXT}}")
+	}
+}
+
 // Proves: an unknown backend returns an error instead of producing
 // a malformed prompt.
 func TestBuildPrompt_UnknownBackendErrors(t *testing.T) {

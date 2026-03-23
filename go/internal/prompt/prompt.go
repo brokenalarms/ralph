@@ -29,6 +29,7 @@ type Vars struct {
 	Feedback         string
 	AttemptHistory   string
 	TestStatus       string
+	BeadsContext     string
 	TaskBackend      TaskBackend
 }
 
@@ -85,6 +86,7 @@ func BuildPrompt(v Vars) (string, error) {
 		"{{TASK_PROMPT}}", v.TaskPrompt,
 		"{{ATTEMPT_HISTORY}}", attemptSection,
 		"{{TEST_STATUS}}", v.TestStatus,
+		"{{BEADS_CONTEXT}}", v.BeadsContext,
 	)
 	return r.Replace(result), nil
 }

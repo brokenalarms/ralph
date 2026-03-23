@@ -416,4 +416,31 @@ func (b *BD) GetDescription(id string) (string, error) {
 	return items[0].Description, nil
 }
 
+func (b *BD) ProjectContext() (string, error) {
+	ctx := b.ctx()
+	run := b.runner()
+
+	var sections []string
+
+	sections = append(sections, fmt.Sprintf("Project directory: %s", b.ProjectDir))
+
+	if configData, err := os.ReadFile(filepath.Join(b.ProjectDir, "ralph.toml")); err == nil {
+		sections = append(sections, "## Ralph config (ralph.toml)\n```\n"+strings.TrimSpace(string(configData))+"\n```")
+	}
+
+	if out, err := run(ctx, b.ProjectDir, "list", "--flat"); err == nil && out != "" {
+		sections = append(sections, "## Open beads\n```\n"+out+"\n```")
+	}
+
+	if out, err := run(ctx, b.ProjectDir, "list", "--status", "closed", "--limit", "20"); err == nil && out != "" {
+		sections = append(sections, "## Recently closed beads\n```\n"+out+"\n```")
+	}
+
+	if out, err := run(ctx, b.ProjectDir, "prime"); err == nil && out != "" {
+		sections = append(sections, "## bd workflow context\n"+out)
+	}
+
+	return strings.Join(sections, "\n\n"), nil
+}
+
 func (b *BD) Label() string { return "beads" }
