@@ -58,7 +58,7 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 			log.Error("Failed to write feedback: %v", err)
 			return 1
 		}
-		log.Success("Feedback queued for next iteration.")
+		log.Success("Feedback sent — agent will pick it up on next tool call.")
 		return 0
 
 	case "commander":

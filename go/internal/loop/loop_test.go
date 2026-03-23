@@ -415,8 +415,8 @@ func TestLoop_WriteRunBranch_Default(t *testing.T) {
 	}
 }
 
-// Verifies feedback file is read and cleared after consumption.
-func TestLoop_FeedbackReadAndClear(t *testing.T) {
+// Verifies feedback file is read without being cleared — the agent owns clearing.
+func TestLoop_FeedbackRead(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
@@ -433,14 +433,25 @@ func TestLoop_FeedbackReadAndClear(t *testing.T) {
 		t.Errorf("expected feedback content, got %q", got)
 	}
 
-	l.clearFeedback()
-	if _, err := os.Stat(feedbackFile); err == nil {
-		t.Error("feedback file should have been removed after clearing")
+	// File persists — agent is responsible for clearing it, not the loop.
+	if _, err := os.Stat(feedbackFile); err != nil {
+		t.Error("feedback file should persist after read — agent clears it")
+	}
+}
+
+// Verifies readFeedback returns empty string when no file exists.
+func TestLoop_FeedbackReadEmpty(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	l := &Loop{
+		cfg: Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}},
 	}
 
-	got = l.readFeedback()
+	got := l.readFeedback()
 	if got != "" {
-		t.Errorf("expected empty feedback after clear, got %q", got)
+		t.Errorf("expected empty feedback when file missing, got %q", got)
 	}
 }
 
@@ -1509,7 +1520,7 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 func createPromptTemplates(t *testing.T, dir string) {
 	t.Helper()
 	os.MkdirAll(dir, 0o755)
-	for _, name := range []string{"shared.md", "internal.md", "reflection.md", "signal.md", "refactor.md", "refactor-style.md", "execution-checklist.md", "execution-bd.md"} {
+	for _, name := range []string{"shared.md", "internal.md", "reflection.md", "signal.md", "feedback.md", "refactor.md", "refactor-style.md", "execution-checklist.md", "execution-bd.md"} {
 		os.WriteFile(filepath.Join(dir, name), []byte("test"), 0o644)
 	}
 }
@@ -3325,7 +3336,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	// Write templates with {{TEST_STATUS}} in internal.md
-	for _, name := range []string{"shared.md", "reflection.md", "signal.md", "execution-bd.md"} {
+	for _, name := range []string{"shared.md", "reflection.md", "signal.md", "feedback.md", "execution-bd.md"} {
 		os.WriteFile(filepath.Join(promptsDir, name), []byte("test"), 0o644)
 	}
 	os.WriteFile(filepath.Join(promptsDir, "internal.md"),

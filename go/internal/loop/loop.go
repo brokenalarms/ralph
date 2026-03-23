@@ -316,7 +316,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			}
 		}
 
-		fullPrompt, err := l.buildPrompt(taskPrompt, feedback, attemptContext, testStatus)
+		fullPrompt, err := l.buildPrompt(taskPrompt, attemptContext, testStatus)
 		if err != nil {
 			l.logger.Error("Prompt build failed: %v", err)
 			break
@@ -456,9 +456,6 @@ func (l *Loop) Run(ctx context.Context) error {
 		elapsed := time.Since(taskStart)
 		l.limiter.Increment()
 
-		if feedback != "" {
-			l.clearFeedback()
-		}
 
 		if result.Summary != "" {
 			l.logger.Log("Summary: %s", result.Summary)
@@ -1033,7 +1030,7 @@ func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 	return fmt.Sprintf("Complete this task (bd id: %s): %s", taskID, nextTask)
 }
 
-func (l *Loop) buildPrompt(taskPrompt, feedback, attemptHistory, testStatus string) (string, error) {
+func (l *Loop) buildPrompt(taskPrompt, attemptHistory, testStatus string) (string, error) {
 	backend := prompt.BackendChecklist
 	if l.cfg.TaskBackend.Label() == "beads" {
 		backend = prompt.BackendBD
@@ -1054,7 +1051,6 @@ func (l *Loop) buildPrompt(taskPrompt, feedback, attemptHistory, testStatus stri
 		CurrentTaskToken: l.signals.CurrentTask,
 		AllCompleteToken: l.signals.AllComplete,
 		TaskPrompt:       taskPrompt,
-		Feedback:         feedback,
 		AttemptHistory:   attemptHistory,
 		TestStatus:       testStatus,
 		BeadsContext:     beadsContext,
@@ -1125,20 +1121,6 @@ func (l *Loop) readFeedback() string {
 	return string(data)
 }
 
-func (l *Loop) writeFeedback(msg string) {
-	feedbackFile := filepath.Join(l.cfg.Dirs.RalphDir, "feedback")
-	f, err := os.OpenFile(feedbackFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		l.logger.Warn("Failed to write feedback: %v", err)
-		return
-	}
-	defer f.Close()
-	f.WriteString(msg + "\n")
-}
-
-func (l *Loop) clearFeedback() {
-	os.Remove(filepath.Join(l.cfg.Dirs.RalphDir, "feedback"))
-}
 
 // readReflection returns the content of a previous reflection file for a task.
 // Uses task ID if available, falls back to slugified task name.

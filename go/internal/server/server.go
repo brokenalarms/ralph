@@ -93,7 +93,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			"POST /start   - Start a ralph loop",
 			"GET  /status   - Get loop status",
 			"POST /stop     - Request graceful stop",
-			"POST /feedback - Queue feedback for next iteration",
+			"POST /feedback - Send live feedback to the running agent",
 			"POST /kill     - Kill the running process",
 			"GET  /log      - Tail the loop log",
 			"GET  /plan     - View the plan file",
@@ -315,8 +315,8 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":  "feedback_queued",
-		"message": "Feedback will be injected into the next iteration.",
+		"status":  "feedback_sent",
+		"message": "Agent will pick up feedback on next tool call.",
 	})
 }
 
