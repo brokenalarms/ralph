@@ -73,9 +73,10 @@ Refactor-type tasks get a `refactor` label.
 State what changed on every update — not just "updated issue". Example:
 > Updated **ralph-abc**: priority P3 → P1, added label `ci`.
 
-Before updating any bead, check if it is `in_progress`. If so, ask the user
-for confirmation before modifying — do not silently change tasks that the ralph
-loop is actively working on.
+Before updating or commenting on any bead, check its status. Do not modify
+or comment on closed beads — create a new bead instead. If a bead is
+`in_progress`, ask the user for confirmation before modifying — do not
+silently change tasks that the ralph loop is actively working on.
 
 ## Splitting and scoping
 
