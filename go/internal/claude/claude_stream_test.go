@@ -1,0 +1,516 @@
+package claude
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// Verifies that extractStreamText pulls text from assistant messages using
+// Claude's actual nested content array format: message.content[].text.
+func TestExtractStreamText_Assistant(t *testing.T) {
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"Hello world"}]}}`
+	got := extractStreamText(line)
+	if got != "Hello world" {
+		t.Errorf("extractStreamText = %q, want %q", got, "Hello world")
+	}
+}
+
+// Verifies that tool_use content blocks produce a short summary with the
+// tool name and its primary target (file_path, command, etc.).
+func TestExtractStreamText_AssistantToolUse(t *testing.T) {
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/foo.go"}}]}}`
+	got := extractStreamText(line)
+	if got != "[Read] /tmp/foo.go" {
+		t.Errorf("extractStreamText = %q, want %q", got, "[Read] /tmp/foo.go")
+	}
+}
+
+// Verifies that messages with both text and tool_use content blocks are
+// concatenated with newlines.
+func TestExtractStreamText_AssistantMixed(t *testing.T) {
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"reading file"},{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}`
+	got := extractStreamText(line)
+	want := "reading file\n[Bash] ls"
+	if got != want {
+		t.Errorf("extractStreamText = %q, want %q", got, want)
+	}
+}
+
+// Verifies text extraction from content_block_delta events (the most
+// common streaming event type during Claude output).
+func TestExtractStreamText_ContentBlockDelta(t *testing.T) {
+	line := `{"type":"content_block_delta","delta":{"text":"partial output"}}`
+	got := extractStreamText(line)
+	if got != "partial output" {
+		t.Errorf("extractStreamText = %q, want %q", got, "partial output")
+	}
+}
+
+// Verifies that error responses are extracted from result events so users
+// see API errors in the log.
+func TestExtractStreamText_ResultError(t *testing.T) {
+	line := `{"type":"result","subtype":"error_response","error":"rate limited"}`
+	got := extractStreamText(line)
+	if got != "rate limited" {
+		t.Errorf("extractStreamText = %q, want %q", got, "rate limited")
+	}
+}
+
+// Verifies that non-text JSON events are silently skipped.
+func TestExtractStreamText_IgnoresNonTextEvents(t *testing.T) {
+	lines := []string{
+		`{"type":"message_start"}`,
+		`{"type":"content_block_start","index":0}`,
+		`not json at all`,
+		``,
+	}
+	for _, line := range lines {
+		if got := extractStreamText(line); got != "" {
+			t.Errorf("extractStreamText(%q) = %q, want empty", line, got)
+		}
+	}
+}
+
+// Verifies that result events produce [done] output so users can see
+// when Claude finishes processing a request.
+func TestExtractStreamText_ResultDone(t *testing.T) {
+	line := `{"type":"result","subtype":"success"}`
+	got := extractStreamText(line)
+	if got != "[done]" {
+		t.Errorf("extractStreamText = %q, want %q", got, "[done]")
+	}
+}
+
+// Verifies that markdown bold is stripped from output so the terminal
+// shows clean text without literal asterisks.
+func TestStripMarkdown(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"**bold text**", "bold text"},
+		{"normal text", "normal text"},
+		{"some **bold** and **more bold**", "some bold and more bold"},
+		{"**nested** middle **end**", "nested middle end"},
+	}
+	for _, tt := range tests {
+		got := stripMarkdown(tt.input)
+		if got != tt.want {
+			t.Errorf("stripMarkdown(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// Verifies that FormatStreamLine adds a timestamp prefix and ANSI color codes
+// so output matches the format previously provided by the bash stream filter.
+func TestFormatStreamLine(t *testing.T) {
+	line := FormatStreamLine("[agent] [Read] /tmp/foo.go")
+	plain := ansiRe.ReplaceAllString(line, "")
+
+	// Should have HH:MM:SS timestamp prefix.
+	if len(plain) < 8 || plain[2] != ':' || plain[5] != ':' {
+		t.Errorf("FormatStreamLine missing timestamp prefix, got: %q", plain)
+	}
+
+	// Should contain the text content after stripping ANSI.
+	if !strings.Contains(plain, "[agent] [Read] /tmp/foo.go") {
+		t.Errorf("FormatStreamLine should preserve content, got: %q", plain)
+	}
+
+	// Should contain ANSI color codes for [agent] and [Read].
+	if !strings.Contains(line, "\033[0;36m") {
+		t.Error("FormatStreamLine should apply cyan to [agent]")
+	}
+	if !strings.Contains(line, "\033[0;34m") {
+		t.Error("FormatStreamLine should apply blue to [Read]")
+	}
+}
+
+// Verifies that [done] gets green color in the formatted output.
+func TestFormatStreamLine_DoneColor(t *testing.T) {
+	line := FormatStreamLine("[agent] [done]")
+	if !strings.Contains(line, "\033[0;32m") {
+		t.Error("FormatStreamLine should apply green to [done]")
+	}
+}
+
+// Verifies that FormatStreamLine does NOT include a per-line task ID prefix —
+// task identification is handled by a one-time separator banner instead.
+func TestFormatStreamLine_NoTaskIDPrefix(t *testing.T) {
+	line := FormatStreamLine("[agent] [Read] /tmp/foo.go")
+	plain := ansiRe.ReplaceAllString(line, "")
+
+	if strings.Contains(plain, "ralph-") {
+		t.Errorf("FormatStreamLine should not include task ID, got: %q", plain)
+	}
+	if !strings.Contains(plain, "[agent]") {
+		t.Errorf("FormatStreamLine should include [agent] tag, got: %q", plain)
+	}
+}
+
+// Verifies that ISSUE: lines are detected and produce a banner.
+func TestParseDiagnosis_Issue(t *testing.T) {
+	label, content, ok := parseDiagnosis("ISSUE: the build is broken")
+	if !ok {
+		t.Fatal("parseDiagnosis should detect ISSUE: prefix")
+	}
+	if label != "ISSUE" {
+		t.Errorf("label = %q, want ISSUE", label)
+	}
+	if content != "the build is broken" {
+		t.Errorf("content = %q, want 'the build is broken'", content)
+	}
+}
+
+// Verifies that FIX: lines are detected and produce a banner.
+func TestParseDiagnosis_Fix(t *testing.T) {
+	label, content, ok := parseDiagnosis("FIX: update the config")
+	if !ok {
+		t.Fatal("parseDiagnosis should detect FIX: prefix")
+	}
+	if label != "FIX" {
+		t.Errorf("label = %q, want FIX", label)
+	}
+	if content != "update the config" {
+		t.Errorf("content = %q, want 'update the config'", content)
+	}
+}
+
+// Verifies that ordinary lines are not treated as diagnosis.
+func TestParseDiagnosis_NormalLine(t *testing.T) {
+	_, _, ok := parseDiagnosis("Reading file /tmp/foo.go")
+	if ok {
+		t.Error("parseDiagnosis should not match ordinary lines")
+	}
+}
+
+// Verifies that partial matches like "ISSUES:" or "FIXED:" are not detected.
+func TestParseDiagnosis_NoFalsePositives(t *testing.T) {
+	for _, line := range []string{"ISSUES: plural", "FIXED: past tense", "issue: lowercase"} {
+		if _, _, ok := parseDiagnosis(line); ok {
+			t.Errorf("parseDiagnosis should not match %q", line)
+		}
+	}
+}
+
+// Verifies that diagnosisBanner produces a centered banner with ═ characters.
+func TestDiagnosisBanner(t *testing.T) {
+	banner := diagnosisBanner("ISSUE")
+	plain := ansiRe.ReplaceAllString(banner, "")
+
+	if !strings.Contains(plain, "═") {
+		t.Error("diagnosisBanner should contain ═ separator characters")
+	}
+	if !strings.Contains(plain, " ISSUE ") {
+		t.Errorf("diagnosisBanner should contain centered label, got: %q", plain)
+	}
+}
+
+// Verifies that diagnosis lines get banner treatment in FormatStreamOutput.
+func TestFormatStreamOutput_DiagnosisBanner(t *testing.T) {
+	lines := FormatStreamOutput("ISSUE: something is wrong")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines (banner + content), got %d", len(lines))
+	}
+	plainBanner := ansiRe.ReplaceAllString(lines[0], "")
+	if !strings.Contains(plainBanner, "ISSUE") || !strings.Contains(plainBanner, "═") {
+		t.Errorf("first line should be banner, got: %q", plainBanner)
+	}
+	plainContent := ansiRe.ReplaceAllString(lines[1], "")
+	if !strings.Contains(plainContent, "something is wrong") {
+		t.Errorf("second line should contain content, got: %q", plainContent)
+	}
+}
+
+// Verifies that non-diagnosis lines pass through normally in FormatStreamOutput.
+func TestFormatStreamOutput_NormalLine(t *testing.T) {
+	lines := FormatStreamOutput("Reading file /tmp/foo.go")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line for normal text, got %d", len(lines))
+	}
+	plain := ansiRe.ReplaceAllString(lines[0], "")
+	if !strings.Contains(plain, "[agent] Reading file /tmp/foo.go") {
+		t.Errorf("normal line should have [agent] prefix, got: %q", plain)
+	}
+}
+
+// Verifies that startTailGoroutine follows new [agent]-prefixed lines
+// appended to a file and stops cleanly when the stop channel is closed.
+// Non-[agent] lines (orchestrator messages) must NOT be forwarded to
+// stdout — the logger already writes those directly.
+func TestStartTailGoroutine_FollowsAndStops(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "loop.log")
+	os.WriteFile(logPath, []byte("existing\n"), 0o644)
+
+	stop := make(chan struct{})
+	done := startTailGoroutine(logPath, stop)
+
+	// Append [agent]-prefixed and non-prefixed lines after goroutine starts.
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintln(f, "[agent] hello from agent")
+	fmt.Fprintln(f, "12:00:00 \033[0;36m[beads]\033[0m orchestrator message")
+	f.Close()
+
+	time.Sleep(200 * time.Millisecond)
+	close(stop)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("startTailGoroutine did not stop within 2 seconds")
+	}
+}
+
+// Verifies that startTailGoroutine returns immediately for nonexistent files,
+// without leaving any goroutines running.
+func TestStartTailGoroutine_NonexistentFile(t *testing.T) {
+	stop := make(chan struct{})
+	done := startTailGoroutine("/nonexistent/path/log", stop)
+
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		close(stop)
+		t.Fatal("startTailGoroutine should exit immediately for missing file")
+	}
+}
+
+// Verifies that startTailGoroutine only forwards [agent]-prefixed lines to
+// stdout, preventing orchestrator log messages from appearing twice (once from
+// the logger writing to stdout directly, and again from the tail goroutine).
+func TestStartTailGoroutine_FiltersNonAgentLines(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "loop.log")
+	os.WriteFile(logPath, nil, 0o644)
+
+	// Capture stdout by replacing os.Stdout temporarily.
+	origStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	stop := make(chan struct{})
+	done := startTailGoroutine(logPath, stop)
+
+	time.Sleep(200 * time.Millisecond)
+	f, _ := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	fmt.Fprintln(f, "[agent] agent output line")
+	fmt.Fprintln(f, "12:00:00 \033[0;36m[beads]\033[0m orchestrator message")
+	fmt.Fprintln(f, "[agent] second agent line")
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	w.Close()
+	captured, _ := io.ReadAll(r)
+	os.Stdout = origStdout
+
+	output := string(captured)
+	if !strings.Contains(output, "[agent] agent output line") {
+		t.Errorf("expected [agent] lines to be forwarded, got: %q", output)
+	}
+	if !strings.Contains(output, "[agent] second agent line") {
+		t.Errorf("expected second [agent] line to be forwarded, got: %q", output)
+	}
+	if strings.Contains(output, "orchestrator message") {
+		t.Errorf("orchestrator messages should NOT be forwarded by tail goroutine, got: %q", output)
+	}
+}
+
+// Verifies that filterStreamJSON follows new data appended to the raw log
+// (like tail -f), rather than reading to EOF and exiting.
+func TestFilterStreamJSON_TailsFile(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+
+	// Create the raw log so the filter can open it.
+	os.WriteFile(rawPath, nil, 0o644)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		filterStreamJSON(rawPath, logPath, stop)
+	}()
+
+	// Append a stream-json event after the filter has started.
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"hello from claude"}]}}`)
+	f.Close()
+
+	// Give the filter time to process, then stop it.
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansiRe.ReplaceAllString(string(got), "")
+	if !strings.Contains(plain, "[agent] hello from claude") {
+		t.Errorf("loop.log should contain [agent]-prefixed filtered text, got: %q", string(got))
+	}
+}
+
+// Verifies that filterStreamJSON prefixes each output line with [agent]
+// so loop.log clearly distinguishes Claude's output from ralph's logger output.
+func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+
+	os.WriteFile(rawPath, nil, 0o644)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		filterStreamJSON(rawPath, logPath, stop)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write a tool-use event and a text event.
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/foo.go"}}]}}`)
+	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"some delta text"}}`)
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := ansiRe.ReplaceAllString(string(got), "")
+	if !strings.Contains(content, "[agent] [Read] foo.go") {
+		t.Errorf("batched Read should show basename with [agent] prefix, got: %q", content)
+	}
+	if !strings.Contains(content, "[agent] some delta text") {
+		t.Errorf("delta text should have [agent] prefix, got: %q", content)
+	}
+}
+
+// Verifies that ISSUE:/FIX: diagnosis lines in the stream get banner treatment
+// so they stand out visually in the log output.
+func TestFilterStreamJSON_DiagnosisBanner(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+
+	os.WriteFile(rawPath, nil, 0o644)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		filterStreamJSON(rawPath, logPath, stop)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"ISSUE: the config is missing a required field"}]}}`)
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"FIX: add the default value to config.go"}]}}`)
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := ansiRe.ReplaceAllString(string(got), "")
+
+	if !strings.Contains(content, "═") {
+		t.Errorf("diagnosis output should contain ═ banner characters, got: %q", content)
+	}
+	if !strings.Contains(content, "ISSUE") {
+		t.Errorf("should contain ISSUE banner, got: %q", content)
+	}
+	if !strings.Contains(content, "FIX") {
+		t.Errorf("should contain FIX banner, got: %q", content)
+	}
+	if !strings.Contains(content, "the config is missing a required field") {
+		t.Errorf("should contain ISSUE content, got: %q", content)
+	}
+	if !strings.Contains(content, "add the default value to config.go") {
+		t.Errorf("should contain FIX content, got: %q", content)
+	}
+}
+
+// Verifies that multiple Read/Grep tool calls within a batch window are
+// collapsed into comma-separated summary lines in the log output, with
+// Read showing basenames and Grep keeping patterns as-is.
+func TestFilterStreamJSON_BatchesToolCalls(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+
+	os.WriteFile(rawPath, nil, 0o644)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		filterStreamJSON(rawPath, logPath, stop)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write multiple Read and Grep tool calls, then a text event to flush.
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/project/go/internal/loop.go"}}]}}`)
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/project/go/internal/git.go"}}]}}`)
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"checklist_"}}]}}`)
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"TASK_BACKEND"}}]}}`)
+	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"analyzing results"}}`)
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := ansiRe.ReplaceAllString(string(got), "")
+
+	if !strings.Contains(content, "[agent] [Read] loop.go, git.go") {
+		t.Errorf("Read tools should be batched with basenames, got: %q", content)
+	}
+	if !strings.Contains(content, "[agent] [Grep] checklist_, TASK_BACKEND") {
+		t.Errorf("Grep tools should be batched with patterns, got: %q", content)
+	}
+	if !strings.Contains(content, "[agent] analyzing results") {
+		t.Errorf("text should flush batch and appear after, got: %q", content)
+	}
+}
