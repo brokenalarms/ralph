@@ -1061,15 +1061,22 @@ var (
 	dashTrim  = regexp.MustCompile(`^-|-$`)
 )
 
-// Slugify converts a description to a URL/branch-safe slug, matching
-// ralph.sh's slugify function. Max 50 characters.
+// Slugify converts a description to a URL/branch-safe slug.
+// Limited to 4 words and 50 characters to keep branch names short.
 func Slugify(s string) string {
 	s = strings.ToLower(s)
 	s = nonAlnum.ReplaceAllString(s, "-")
 	s = dashTrim.ReplaceAllString(s, "")
+
+	// Limit to 4 words
+	parts := strings.SplitN(s, "-", 5)
+	if len(parts) > 4 {
+		parts = parts[:4]
+	}
+	s = strings.Join(parts, "-")
+
 	if len(s) > 50 {
 		s = s[:50]
-		// Trim trailing dash after truncation
 		s = strings.TrimRight(s, "-")
 	}
 	return s
