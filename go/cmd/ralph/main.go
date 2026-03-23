@@ -119,7 +119,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 
 	// Validate base branch before initializing state — a failed validation
 	// must not leave state that causes a false resume on retry.
-	if err := git.ValidateRemoteBranch(cfg.ProjectDir, cfg.BaseBranch); err != nil {
+	if err := git.ValidateRemoteBranch(ctx, cfg.ProjectDir, cfg.BaseBranch); err != nil {
 		log.Error("%v", err)
 		return 1
 	}
@@ -166,7 +166,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		State:          st,
 		Logger:         log,
 	}
-	if err := gm.SetupWorktree(); err != nil {
+	if err := gm.SetupWorktree(ctx); err != nil {
 		log.Error("Worktree setup failed: %v", err)
 		return 1
 	}
@@ -197,6 +197,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 
 	// Planning phase.
 	planDeps := planning.Deps{
+		Ctx:          ctx,
 		Backend:      backend,
 		StateStore:   st,
 		Logger:       log,

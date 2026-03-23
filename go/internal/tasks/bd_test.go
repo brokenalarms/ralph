@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,7 +14,7 @@ import (
 // counts maps status -> count string; total is the bare "count" result.
 // inProgress and ready are JSON arrays for list/ready commands.
 func mockBD(total string, counts map[string]string, inProgress, ready string) CommandRunner {
-	return func(dir string, args ...string) (string, error) {
+	return func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) == 0 {
 			return "", errors.New("no args")
 		}
@@ -206,7 +207,7 @@ func TestBD_Init_IdempotentGitignore(t *testing.T) {
 
 // Proves: Init returns ErrNeedsFallback when bd is completely unavailable.
 func TestBD_Init_FallbackOnInitFailure(t *testing.T) {
-	failing := func(dir string, args ...string) (string, error) {
+	failing := func(_ context.Context, dir string, args ...string) (string, error) {
 		return "", errors.New("bd not found")
 	}
 	b := setupBD(t, failing)
@@ -218,7 +219,7 @@ func TestBD_Init_FallbackOnInitFailure(t *testing.T) {
 
 // Proves: Init returns ErrNeedsFallback when server is unreachable after retry.
 func TestBD_Init_FallbackOnUnhealthyServer(t *testing.T) {
-	runner := func(dir string, args ...string) (string, error) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "init" {
 			os.MkdirAll(filepath.Join(dir, ".beads"), 0755)
 			return "", nil
@@ -236,7 +237,7 @@ func TestBD_Init_FallbackOnUnhealthyServer(t *testing.T) {
 // Proves: Init retries and succeeds when .beads exists but server reconnects.
 func TestBD_Init_RetrySucceeds(t *testing.T) {
 	callCount := 0
-	runner := func(dir string, args ...string) (string, error) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) == 0 {
 			return "", errors.New("no args")
 		}
@@ -295,7 +296,7 @@ func TestBD_PlanningSucceeded_WithTasks(t *testing.T) {
 // Proves: CloseTask calls bd close for verified tasks.
 func TestBD_CloseTask(t *testing.T) {
 	closed := false
-	runner := func(dir string, args ...string) (string, error) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "close" {
 			closed = true
 			return "closed", nil
@@ -317,7 +318,7 @@ func TestBD_CloseTask(t *testing.T) {
 // Proves: CloseTask is a no-op with empty id.
 func TestBD_CloseTask_EmptyID(t *testing.T) {
 	called := false
-	runner := func(dir string, args ...string) (string, error) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		called = true
 		return "", nil
 	}
@@ -376,7 +377,7 @@ func TestBD_GetNextTask_FallsBackToReady(t *testing.T) {
 // Proves: bd skip_task closes the task with a blocked reason.
 func TestBD_SkipTask_ClosesWithBlockedReason(t *testing.T) {
 	var closeArgs []string
-	runner := func(dir string, args ...string) (string, error) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "close" {
 			closeArgs = args
 			return "closed", nil
@@ -399,7 +400,7 @@ func TestBD_SkipTask_ClosesWithBlockedReason(t *testing.T) {
 // Proves: bd SkipTask is a no-op with empty id.
 func TestBD_SkipTask_EmptyID(t *testing.T) {
 	called := false
-	runner := func(dir string, args ...string) (string, error) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		called = true
 		return "", nil
 	}
@@ -498,7 +499,7 @@ func TestBD_Init_FallbackWhenBinaryNotFound(t *testing.T) {
 // ensuring the loop gets a consistent task identity without race conditions.
 func TestBD_GetNextTaskInfo_ReturnsConsistentPair(t *testing.T) {
 	callCount := 0
-	runner := func(dir string, args ...string) (string, error) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) == 0 {
 			return "", errors.New("no args")
 		}
@@ -557,7 +558,7 @@ func TestBD_GetNextTaskInfo_PrefersInProgressAtSamePriority(t *testing.T) {
 // task, and the in-progress task is reopened via bd update.
 func TestBD_GetNextTask_HigherPriorityReadyPreempts(t *testing.T) {
 	var reopenedID string
-	runner := func(dir string, args ...string) (string, error) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) == 0 {
 			return "", errors.New("no args")
 		}
@@ -624,7 +625,7 @@ func TestBD_GetNextTask_DefaultPriorityComparison(t *testing.T) {
 // Proves: SetState calls bd set-state with the correct dimension=value format.
 func TestBD_SetState(t *testing.T) {
 	var capturedArgs []string
-	runner := func(dir string, args ...string) (string, error) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "set-state" {
 			capturedArgs = args
 			return "", nil
@@ -650,7 +651,7 @@ func TestBD_SetState(t *testing.T) {
 // Proves: SetState is a no-op with empty id.
 func TestBD_SetState_EmptyID(t *testing.T) {
 	called := false
-	runner := func(dir string, args ...string) (string, error) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		called = true
 		return "", nil
 	}
@@ -665,7 +666,7 @@ func TestBD_SetState_EmptyID(t *testing.T) {
 
 // Proves: GetState queries bd state and returns the dimension value.
 func TestBD_GetState(t *testing.T) {
-	runner := func(dir string, args ...string) (string, error) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) >= 3 && args[0] == "state" && args[2] == "phase" {
 			return "implementing", nil
 		}
@@ -695,7 +696,7 @@ func TestBD_GetState_EmptyID(t *testing.T) {
 
 // Proves: CloseTask is rejected when phase is not "verified".
 func TestBD_CloseTask_RejectsUnverified(t *testing.T) {
-	runner := func(dir string, args ...string) (string, error) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "state" {
 			return "implementing", nil
 		}
@@ -718,7 +719,7 @@ func TestBD_CloseTask_RejectsUnverified(t *testing.T) {
 // Proves: CloseTask succeeds when phase is "verified".
 func TestBD_CloseTask_AllowsVerified(t *testing.T) {
 	closed := false
-	runner := func(dir string, args ...string) (string, error) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "state" {
 			return "verified", nil
 		}
@@ -739,7 +740,7 @@ func TestBD_CloseTask_AllowsVerified(t *testing.T) {
 
 // Proves: CloseTask with empty phase (state not set) is rejected.
 func TestBD_CloseTask_RejectsEmptyPhase(t *testing.T) {
-	runner := func(dir string, args ...string) (string, error) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "state" {
 			return "", fmt.Errorf("no state set")
 		}
@@ -754,7 +755,7 @@ func TestBD_CloseTask_RejectsEmptyPhase(t *testing.T) {
 
 // Proves: counts return zero when bd commands fail.
 func TestBD_Counts_OnError(t *testing.T) {
-	failing := func(dir string, args ...string) (string, error) {
+	failing := func(_ context.Context, dir string, args ...string) (string, error) {
 		return "", errors.New("fail")
 	}
 	b := setupBD(t, failing)

@@ -3,6 +3,7 @@
 package planning
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 
 // Deps bundles the dependencies the planning phase needs from the outer loop.
 type Deps struct {
+	Ctx        context.Context
 	Backend    tasks.Backend
 	StateStore *state.Store
 	Logger     *logging.Logger
@@ -36,7 +38,7 @@ type Deps struct {
 	// RunClaude launches claude in non-interactive (autonomous) mode with the
 	// given system prompt. The caller is responsible for signal polling.
 	// If nil, defaultRunClaude is used.
-	RunClaude func(prompt string) error
+	RunClaude func(ctx context.Context, prompt string) error
 }
 
 // Run executes the planning phase. It mirrors ralph.sh's run_planning():
@@ -158,7 +160,7 @@ func runInteractive(d Deps) error {
 		"--system-prompt", prompt,
 	}
 
-	cmd := exec.Command("claude", args...)
+	cmd := exec.CommandContext(d.Ctx, "claude", args...)
 	cmd.Dir = d.WorkDir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -182,7 +184,7 @@ func runAutonomous(d Deps) error {
 		runner = defaultRunClaude(d)
 	}
 
-	return runner(prompt)
+	return runner(d.Ctx, prompt)
 }
 
 // buildInteractivePrompt assembles the interactive planning system prompt
@@ -296,8 +298,8 @@ func planFilePath(d Deps) string {
 
 // defaultRunClaude returns a RunClaude function that spawns claude in
 // non-interactive (--print) mode with the given system prompt.
-func defaultRunClaude(d Deps) func(string) error {
-	return func(prompt string) error {
+func defaultRunClaude(d Deps) func(context.Context, string) error {
+	return func(ctx context.Context, prompt string) error {
 		args := []string{
 			"--print", "--verbose",
 			"--output-format", "stream-json",
@@ -307,7 +309,7 @@ func defaultRunClaude(d Deps) func(string) error {
 			"-p", prompt,
 		}
 
-		cmd := exec.Command("claude", args...)
+		cmd := exec.CommandContext(ctx, "claude", args...)
 		cmd.Dir = d.WorkDir
 		cmd.Stdin = nil
 		cmd.Stdout = os.Stdout
