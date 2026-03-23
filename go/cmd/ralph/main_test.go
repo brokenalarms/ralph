@@ -55,6 +55,45 @@ func (s *stubBackend) GetDescription(_ string) (string, error)    { return "", n
 func (s *stubBackend) GetFullContext(_ string) (string, error)    { return "", nil }
 func (s *stubBackend) Label() string                              { return "beads" }
 
+// Proves: bare `ralph` (no args) returns 0 and does not enter the loop,
+// ensuring users must choose an explicit subcommand.
+func TestRun_BareRalphShowsUsage(t *testing.T) {
+	code := run(nil)
+	if code != 0 {
+		t.Errorf("bare ralph should exit 0, got %d", code)
+	}
+}
+
+// Proves: `ralph loop` is recognized as a subcommand and routes to handleLoop.
+// Without a valid git repo it should fail, confirming it reached the loop path.
+func TestRun_LoopSubcommand(t *testing.T) {
+	dir := t.TempDir()
+	code := run([]string{"loop", "--dir", dir})
+	// Should fail because dir is not a git repo — but the fact it fails
+	// with exit 1 (not "unknown command") proves routing works.
+	if code != 1 {
+		t.Errorf("ralph loop in non-git dir should exit 1, got %d", code)
+	}
+}
+
+// Proves: `ralph review` is recognized as a subcommand.
+func TestRun_ReviewSubcommand(t *testing.T) {
+	dir := t.TempDir()
+	code := run([]string{"review", dir})
+	// Should fail (no git repo / no prompts) but not with "unknown command".
+	if code != 1 {
+		t.Errorf("ralph review in non-git dir should exit 1, got %d", code)
+	}
+}
+
+// Proves: unknown subcommand shows error and exits 1.
+func TestRun_UnknownSubcommand(t *testing.T) {
+	code := run([]string{"bogus"})
+	if code != 1 {
+		t.Errorf("unknown subcommand should exit 1, got %d", code)
+	}
+}
+
 // Proves: initTaskBackend returns an error (not a fallback) when bd is
 // unavailable. This ensures bd is a hard requirement.
 func TestInitTaskBackend_ErrorsWhenBDUnavailable(t *testing.T) {

@@ -365,6 +365,36 @@ func TestParseSubcommand(t *testing.T) {
 		t.Errorf("got %+v, want Name=task Dir=.", sub)
 	}
 
+	// "loop" is a subcommand
+	sub, ok = ParseSubcommand([]string{"loop"})
+	if !ok {
+		t.Fatal("expected subcommand for 'loop'")
+	}
+	if sub.Name != "loop" || sub.Dir != "." {
+		t.Errorf("got %+v, want Name=loop Dir=.", sub)
+	}
+
+	// "loop" with flags passes them through as Args
+	sub, ok = ParseSubcommand([]string{"loop", "--max", "20", "--quiet"})
+	if !ok {
+		t.Fatal("expected subcommand for 'loop' with flags")
+	}
+	if sub.Name != "loop" {
+		t.Errorf("Name = %q, want loop", sub.Name)
+	}
+	if len(sub.Args) != 3 || sub.Args[0] != "--max" {
+		t.Errorf("Args = %v, want [--max 20 --quiet]", sub.Args)
+	}
+
+	// "review" is a subcommand
+	sub, ok = ParseSubcommand([]string{"review"})
+	if !ok {
+		t.Fatal("expected subcommand for 'review'")
+	}
+	if sub.Name != "review" || sub.Dir != "." {
+		t.Errorf("got %+v, want Name=review Dir=.", sub)
+	}
+
 	// Non-subcommand
 	_, ok = ParseSubcommand([]string{"/some/path"})
 	if ok {

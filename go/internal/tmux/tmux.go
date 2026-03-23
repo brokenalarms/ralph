@@ -282,10 +282,11 @@ func (s *Session) bdPlanRender() string {
 
 // BuildRalphCmd constructs the ralph re-exec command from the original args,
 // stripping --tmux and the commander subcommand, and adding --quiet.
+// Always emits the "loop" subcommand so the re-exec uses the explicit path.
 func BuildRalphCmd(scriptPath string, origArgs []string) string {
-	parts := []string{shellQuote(scriptPath)}
+	parts := []string{shellQuote(scriptPath), "loop"}
 	for _, arg := range origArgs {
-		if arg == "--tmux" || arg == "commander" {
+		if arg == "--tmux" || arg == "commander" || arg == "loop" {
 			continue
 		}
 		parts = append(parts, shellQuote(arg))

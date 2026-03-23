@@ -89,6 +89,9 @@ func TestBuildRalphCmd(t *testing.T) {
 	if !strings.Contains(cmd, "/projects/myapp") {
 		t.Error("BuildRalphCmd should include original args")
 	}
+	if !strings.Contains(cmd, " loop ") {
+		t.Error("BuildRalphCmd should include 'loop' subcommand")
+	}
 }
 
 // Verifies that shellQuote handles empty strings, simple strings,
@@ -333,6 +336,9 @@ func TestBuildRalphCmd_StripsCommander(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "/projects/myapp") {
 		t.Error("BuildRalphCmd should preserve other args")
+	}
+	if !strings.Contains(cmd, " loop ") {
+		t.Error("BuildRalphCmd should include 'loop' subcommand")
 	}
 }
 

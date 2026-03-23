@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,8 +10,10 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/config"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/prompt"
+	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
 func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
@@ -64,6 +67,12 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 	case "commander":
 		return handleCommander(sub, log)
 
+	case "loop":
+		return handleLoop(sub, log)
+
+	case "review":
+		return handleReview(sub, log)
+
 	case "task":
 		return handleTask(sub, log)
 
@@ -77,6 +86,106 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 	}
 
 	return 1
+}
+
+// handleLoop is the autonomous executor: picks up beads, writes code, pushes
+// PRs. This is the main ralph execution path, formerly the bare `ralph` default.
+func handleLoop(sub config.Subcommand, log *logging.Logger) int {
+	cfg, err := config.Parse(sub.Args)
+	if errors.Is(err, config.ErrHelp) {
+		printLoopUsage()
+		return 0
+	}
+	if err != nil {
+		log.Error("%v", err)
+		printLoopUsage()
+		return 1
+	}
+
+	projectDir, _ := filepath.Abs(sub.Dir)
+	if sub.Dir != "." {
+		cfg.ProjectDir = projectDir
+	} else {
+		cfg.ProjectDir, _ = filepath.Abs(cfg.ProjectDir)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		log.Error("%v", err)
+		return 1
+	}
+
+	if !git.IsGitRepo(cfg.ProjectDir) {
+		log.Error("Not a git repository: %s", cfg.ProjectDir)
+		return 1
+	}
+
+	scriptPath, _ := os.Executable()
+	ralphDir := filepath.Join(cfg.ProjectDir, ".ralph")
+
+	promptsDir := filepath.Join(cfg.ProjectDir, "go", "cmd", "ralph", "prompts")
+	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
+		tmpDir, extractErr := extractEmbeddedPrompts()
+		if extractErr != nil {
+			log.Error("Failed to extract embedded prompts: %v", extractErr)
+			return 1
+		}
+		promptsDir = tmpDir
+	}
+
+	if cfg.UseTmux {
+		if err := os.MkdirAll(ralphDir, 0o755); err != nil {
+			log.Error("Failed to create .ralph dir: %v", err)
+			return 1
+		}
+		return handleTmux(cfg, scriptPath, sub.Args, ralphDir, log)
+	}
+
+	dirs := workctx.New(cfg.ProjectDir, promptsDir)
+	return runMain(cfg, dirs, scriptPath, sub.Args, log)
+}
+
+// handleReview launches an interactive Claude session with the refactor/review
+// prompt for code quality sweeps.
+func handleReview(sub config.Subcommand, log *logging.Logger) int {
+	projectDir, _ := filepath.Abs(sub.Dir)
+
+	if !git.IsGitRepo(projectDir) {
+		log.Error("Not a git repository: %s", projectDir)
+		return 1
+	}
+
+	ralphDir := filepath.Join(projectDir, ".ralph")
+
+	promptsDir := filepath.Join(projectDir, "go", "cmd", "ralph", "prompts")
+	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
+		tmpDir, extractErr := extractEmbeddedPrompts()
+		if extractErr != nil {
+			log.Error("Failed to extract embedded prompts: %v", extractErr)
+			return 1
+		}
+		promptsDir = tmpDir
+	}
+
+	systemPrompt, err := prompt.BuildReviewPrompt(promptsDir, projectDir, ralphDir)
+	if err != nil {
+		log.Error("Failed to build review prompt: %v", err)
+		return 1
+	}
+
+	cmd := exec.Command("claude", "--system-prompt", systemPrompt)
+	cmd.Dir = projectDir
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode()
+		}
+		log.Error("Review session failed: %v", err)
+		return 1
+	}
+	return 0
 }
 
 // handleCommander launches the 4-pane tmux layout with both the ralph loop
@@ -149,28 +258,48 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 }
 
 func printUsage() {
-	fmt.Printf("%sRalph Loop v%s (go)%s - Autonomous Claude Code task iteration\n\n", logging.Bold, config.Version, logging.Reset)
-	fmt.Printf("%sUSAGE:%s\n  ralph [OPTIONS]\n\n", logging.Bold, logging.Reset)
-	fmt.Printf("%sOPTIONS:%s\n%s\n", logging.Bold, logging.Reset, config.FlagUsage())
-	fmt.Printf(`%sEXAMPLES:%s
-  ralph --dir ~/myproject -n 20
-  ralph -p "Fix all failing tests"
+	fmt.Printf("%sRalph v%s (go)%s - Autonomous Claude Code task orchestrator\n\n", logging.Bold, config.Version, logging.Reset)
+	fmt.Printf(`%sUSAGE:%s
+  ralph <command> [options]
 
-%sSUBCOMMANDS:%s
+%sCOMMANDS:%s
+  ralph loop [options]         Autonomous executor — picks up tasks, writes code, pushes PRs
+  ralph task [directory]       Interactive task triage and spec session
+  ralph review [directory]     Code quality review and refactoring session
   ralph commander [directory]  Full 4-pane tmux layout (loop + task manager + stream + plan)
-  ralph task [directory]       Interactive task manager (standalone, no tmux)
   ralph stop [directory]       Halt after the current iteration
   ralph feedback [message]     Show queued feedback, or queue a new message
-  ralph filter-stream <rawlog> Stream filter for tmux panes (colored, timestamped)
+
+%sEXAMPLES:%s
+  ralph loop --dir ~/myproject --max 20
+  ralph loop --auto-merge --evolve
+  ralph task ~/myproject
+  ralph review
 
 %sHOW IT WORKS:%s
-  1. Tasks: Create tasks with ralph task (or bd directly)
-  2. Execution: Each task runs in a fresh Claude context (~200k tokens)
-  3. Completion: Claude signals when each task is done
-  4. Repeat: Loop continues until all tasks complete or iteration cap is hit
+  1. Triage:   ralph task — create tasks, write specs, manage backlog
+  2. Execute:  ralph loop — autonomous iteration over tasks
+  3. Review:   ralph review — code quality sweeps and refactoring
+  Run task and loop in parallel: task in one window, loop in another.
+
+Use "ralph <command> --help" for more information about a command.
 `,
 		logging.Bold, logging.Reset,
 		logging.Bold, logging.Reset,
+		logging.Bold, logging.Reset,
+		logging.Bold, logging.Reset,
+	)
+}
+
+func printLoopUsage() {
+	fmt.Printf("%sralph loop%s - Autonomous task executor\n\n", logging.Bold, logging.Reset)
+	fmt.Printf("%sUSAGE:%s\n  ralph loop [OPTIONS]\n\n", logging.Bold, logging.Reset)
+	fmt.Printf("%sOPTIONS:%s\n%s\n", logging.Bold, logging.Reset, config.FlagUsage())
+	fmt.Printf(`%sEXAMPLES:%s
+  ralph loop --dir ~/myproject -n 20
+  ralph loop --auto-merge --evolve
+  ralph loop -p "Fix all failing tests"
+`,
 		logging.Bold, logging.Reset,
 	)
 }

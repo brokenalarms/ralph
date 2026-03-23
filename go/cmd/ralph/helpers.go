@@ -134,7 +134,7 @@ func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log
 	killChildProcesses()
 
 	log.Separator(logging.Magenta, "RALPH EVOLVED")
-	execArgs := append([]string{scriptPath}, args...)
+	execArgs := append([]string{scriptPath, "loop"}, args...)
 	return syscall.Exec(scriptPath, execArgs, os.Environ())
 }
 
