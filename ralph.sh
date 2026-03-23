@@ -91,11 +91,11 @@ NC=$'\033[0m'
 
 # --- Logging ---
 _ts() { date +%H:%M:%S; }
-log()         { echo -e "$(_ts) ${CYAN}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
-log_success() { echo -e "$(_ts) ${GREEN}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
-log_warn()    { echo -e "$(_ts) ${YELLOW}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
-log_error()   { echo -e "$(_ts) ${RED}[ralph]${NC} $*" | tee -a "$LOG_FILE"; }
-log_phase()   { echo -e "$(_ts) ${BOLD}${BLUE}[ralph]${NC} ${BOLD}$*${NC}" | tee -a "$LOG_FILE"; }
+log()         { echo -e "$(_ts) ${CYAN}[loop]${NC} $*" | tee -a "$LOG_FILE"; }
+log_success() { echo -e "$(_ts) ${GREEN}[loop]${NC} $*" | tee -a "$LOG_FILE"; }
+log_warn()    { echo -e "$(_ts) ${YELLOW}[loop]${NC} $*" | tee -a "$LOG_FILE"; }
+log_error()   { echo -e "$(_ts) ${RED}[loop]${NC} $*" | tee -a "$LOG_FILE"; }
+log_phase()   { echo -e "$(_ts) ${BOLD}${BLUE}[loop]${NC} ${BOLD}$*${NC}" | tee -a "$LOG_FILE"; }
 
 log_task()         { echo -e "$(_ts) ${CYAN}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
 log_task_success() { echo -e "$(_ts) ${GREEN}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
@@ -163,12 +163,12 @@ if [[ "${1:-}" == "stop" ]]; then
   fi
   ralph_dir="$local_dir/.ralph"
   if [[ ! -d "$ralph_dir" ]]; then
-    echo -e "${RED}[ralph]${NC} No .ralph directory found. Is ralph running here?"
+    echo -e "${RED}[loop]${NC} No .ralph directory found. Is ralph running here?"
     exit 1
   fi
   touch "$ralph_dir/stop"
-  echo -e "${YELLOW}[ralph]${NC} Stop requested — ralph will halt after the current iteration."
-  echo -e "${YELLOW}[ralph]${NC} Ctrl+C to kill immediately if you don't need iteration results."
+  echo -e "${YELLOW}[loop]${NC} Stop requested — ralph will halt after the current iteration."
+  echo -e "${YELLOW}[loop]${NC} Ctrl+C to kill immediately if you don't need iteration results."
   exit 0
 fi
 
@@ -181,21 +181,21 @@ if [[ "${1:-}" == "feedback" ]]; then
   fi
   ralph_dir="$local_dir/.ralph"
   if [[ ! -d "$ralph_dir" ]]; then
-    echo -e "${RED}[ralph]${NC} No .ralph directory found. Is ralph running here?"
+    echo -e "${RED}[loop]${NC} No .ralph directory found. Is ralph running here?"
     exit 1
   fi
   if [[ -z "$*" ]]; then
     feedback_file="$ralph_dir/feedback"
     if [[ -f "$feedback_file" && -s "$feedback_file" ]]; then
-      echo -e "${CYAN}[ralph]${NC} Queued feedback:"
+      echo -e "${CYAN}[loop]${NC} Queued feedback:"
       cat "$feedback_file"
     else
-      echo -e "${CYAN}[ralph]${NC} No feedback queued."
+      echo -e "${CYAN}[loop]${NC} No feedback queued."
     fi
     exit 0
   fi
   echo "$*" >> "$ralph_dir/feedback"
-  echo -e "${GREEN}[ralph]${NC} Feedback queued for next iteration."
+  echo -e "${GREEN}[loop]${NC} Feedback queued for next iteration."
   exit 0
 fi
 
@@ -205,7 +205,7 @@ if [[ "${1:-}" == "--init-config" ]]; then
   local_dir="${1:-.}"
   config_path="$local_dir/ralph.toml"
   if [[ -f "$config_path" ]]; then
-    echo -e "${YELLOW}[ralph]${NC} Config already exists: $config_path"
+    echo -e "${YELLOW}[loop]${NC} Config already exists: $config_path"
     exit 1
   fi
   cat > "$config_path" <<'TOML'
@@ -223,7 +223,7 @@ stagnation_threshold = 3
 test_saturation_threshold = 3
 permission_denial_threshold = 3
 TOML
-  echo -e "${GREEN}[ralph]${NC} Config written to $config_path"
+  echo -e "${GREEN}[loop]${NC} Config written to $config_path"
   exit 0
 fi
 
@@ -322,7 +322,7 @@ init_ralph_dir() {
     status=$(read_state "status")
     if [[ "$status" == "completed" ]]; then
       log_task "All tasks completed from previous run."
-      printf "${YELLOW}[ralph]${NC} Run fresh? (y/n) "
+      printf "${YELLOW}[loop]${NC} Run fresh? (y/n) "
       read -r answer
       if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
         # Only remove .ralph state — .beads and .dolt are permanent and must never be deleted.
@@ -343,7 +343,7 @@ init_ralph_dir() {
 
   # Check for leftover stop file before starting/resuming
   if [[ -f "$STOP_FILE" ]]; then
-    printf "${YELLOW}[ralph]${NC} Stop file found from a previous run. Delete it to continue? (y/n) "
+    printf "${YELLOW}[loop]${NC} Stop file found from a previous run. Delete it to continue? (y/n) "
     read -r answer
     if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
       rm -f "$STOP_FILE"
@@ -384,7 +384,7 @@ tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   fromjson? // empty |
   if .type == "assistant" then
     .message.content[0]? //empty |
-    if .type == "text" then "\n[claude] " + .text + "\n"
+    if .type == "text" then "\n[agent] " + .text + "\n"
     elif .type == "tool_use" then
       if .name == "TodoWrite" then
         ([.input.todos[]? | .content] | if length == 0 then "[]"
@@ -410,7 +410,7 @@ tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   print strftime("%H:%M:%S", localtime()) . " " . $_ . "\n";
 ' | sed -u -E \
   -e $'s/\\[done\\]/\033[0;32m[done]\033[0m/g' \
-  -e $'s/\\[claude\\]/\033[0;36m[claude]\033[0m/g' \
+  -e $'s/\\[claude\\]/\033[0;36m[agent]\033[0m/g' \
   -e $'s/\\[([A-Z][A-Za-z]*)\\]/\033[0;34m[\\1]\033[0m/g'
 STREAM
   chmod +x "$RALPH_DIR/.stream-filter.sh"
@@ -910,7 +910,7 @@ wait_for_rate_reset() {
     fi
     local display_min=$(( seconds_left / 60 ))
     local display_sec=$(( seconds_left % 60 ))
-    printf "\r${YELLOW}[ralph]${NC} Rate limit reset in %02d:%02d " "$display_min" "$display_sec"
+    printf "\r${YELLOW}[loop]${NC} Rate limit reset in %02d:%02d " "$display_min" "$display_sec"
     sleep 10
     current_hour=$(date +%Y%m%d%H)
     if [[ "$stored_hour" != "$current_hour" ]]; then

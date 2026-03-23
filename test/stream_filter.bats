@@ -71,7 +71,7 @@ teardown() {
     fromjson? // empty |
     if .type == "assistant" then
       .message.content[0]? //empty |
-      if .type == "text" then "\n[claude] " + .text + "\n"
+      if .type == "text" then "\n[agent] " + .text + "\n"
       elif .type == "tool_use" then
         if .name == "TodoWrite" then
           ([.input.todos[]? | .content] | if length == 0 then "[]"

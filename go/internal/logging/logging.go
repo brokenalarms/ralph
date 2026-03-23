@@ -67,24 +67,24 @@ func (l *Logger) emit(color, prefix, msg string) {
 	fmt.Fprint(l.logFile, line)
 }
 
-// Log writes an info-level message with cyan [ralph] prefix.
+// Log writes an info-level message with cyan [loop] prefix.
 func (l *Logger) Log(format string, args ...any) {
-	l.emit(Cyan, "ralph", fmt.Sprintf(format, args...))
+	l.emit(Cyan, "loop", fmt.Sprintf(format, args...))
 }
 
-// Success writes a success message with green [ralph] prefix.
+// Success writes a success message with green [loop] prefix.
 func (l *Logger) Success(format string, args ...any) {
-	l.emit(Green, "ralph", fmt.Sprintf(format, args...))
+	l.emit(Green, "loop", fmt.Sprintf(format, args...))
 }
 
-// Warn writes a warning with yellow [ralph] prefix.
+// Warn writes a warning with yellow [loop] prefix.
 func (l *Logger) Warn(format string, args ...any) {
-	l.emit(Yellow, "ralph", fmt.Sprintf(format, args...))
+	l.emit(Yellow, "loop", fmt.Sprintf(format, args...))
 }
 
-// Error writes an error with red [ralph] prefix.
+// Error writes an error with red [loop] prefix.
 func (l *Logger) Error(format string, args ...any) {
-	l.emit(Red, "ralph", fmt.Sprintf(format, args...))
+	l.emit(Red, "loop", fmt.Sprintf(format, args...))
 }
 
 // Phase writes a bold blue phase header.
@@ -95,7 +95,7 @@ func (l *Logger) Phase(format string, args ...any) {
 // PhaseColor writes a bold phase header in the given ANSI color.
 func (l *Logger) PhaseColor(color string, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	line := fmt.Sprintf("%s %s%s[ralph]%s %s%s%s\n", ts(), Bold, color, Reset, Bold, msg, Reset)
+	line := fmt.Sprintf("%s %s%s[loop]%s %s%s%s\n", ts(), Bold, color, Reset, Bold, msg, Reset)
 	if !l.streaming {
 		fmt.Fprint(l.out, line)
 	}
