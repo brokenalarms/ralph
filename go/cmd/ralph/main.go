@@ -242,7 +242,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		Wait:                cfg.Wait,
 		WaitInterval:        cfg.WaitInterval,
 		OnRebaseConflict:    promptRebaseRecovery(ctx),
-		VerifyDir:           cfg.ProjectDir,
+		VerifyDir:           gm.WorkDir,
 	}, st, gm, log)
 
 	if err := execLoop.Run(ctx); err != nil {
