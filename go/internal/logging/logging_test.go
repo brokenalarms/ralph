@@ -193,3 +193,49 @@ func TestSeparatorStreamingMode(t *testing.T) {
 		t.Error("Separator should still write to log file in streaming mode")
 	}
 }
+
+// Verifies that SetTaskID causes all log lines to include a magenta-colored
+// [taskID] tag after the timestamp, so inline-mode output identifies the
+// current bead being worked on.
+func TestTaskIDInLogOutput(t *testing.T) {
+	var buf bytes.Buffer
+	l := &Logger{out: &buf, logFile: &buf}
+	l.SetTaskID("ralph-5iv")
+	l.Log("doing work")
+	got := buf.String()
+
+	if !strings.Contains(got, "[ralph-5iv]") {
+		t.Errorf("log output should include task ID tag, got: %s", got)
+	}
+	if !strings.Contains(got, Magenta+"[ralph-5iv]") {
+		t.Error("task ID tag should be colored magenta")
+	}
+	if !strings.Contains(got, "[ralph-5iv]"+Reset+" "+Cyan+"[ralph]") {
+		t.Errorf("task ID should appear before [ralph] prefix, got: %s", got)
+	}
+}
+
+// Verifies that log output has no task ID tag when none is set.
+func TestNoTaskIDWhenEmpty(t *testing.T) {
+	var buf bytes.Buffer
+	l := &Logger{out: &buf, logFile: &buf}
+	l.Log("no task")
+	got := buf.String()
+
+	if strings.Contains(got, "[]") {
+		t.Errorf("log output should not have empty brackets, got: %s", got)
+	}
+}
+
+// Verifies that Phase output includes the task ID tag when set.
+func TestTaskIDInPhaseOutput(t *testing.T) {
+	var buf bytes.Buffer
+	l := &Logger{out: &buf, logFile: &buf}
+	l.SetTaskID("ralph-abc")
+	l.Phase("starting phase")
+	got := buf.String()
+
+	if !strings.Contains(got, "[ralph-abc]") {
+		t.Errorf("Phase output should include task ID tag, got: %s", got)
+	}
+}
