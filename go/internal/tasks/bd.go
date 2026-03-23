@@ -416,6 +416,17 @@ func (b *BD) GetDescription(id string) (string, error) {
 	return items[0].Description, nil
 }
 
+func (b *BD) GetFullContext(id string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", id)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
 func (b *BD) ProjectContext() (string, error) {
 	ctx := b.ctx()
 	run := b.runner()

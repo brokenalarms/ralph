@@ -39,12 +39,13 @@ func (s *stubRunner) StopStreaming() {}
 // bd or reading plan files. Lets us control exactly how many tasks remain
 // and what the next task is.
 type stubBackend struct {
-	remaining int
-	completed int
-	total     int
-	nextTask  string
-	nextID    string
-	label     string
+	remaining   int
+	completed   int
+	total       int
+	nextTask    string
+	nextID      string
+	label       string
+	fullContext string
 }
 
 // mutableBackend is like stubBackend but allows changing the next task
@@ -77,7 +78,8 @@ func (m *mutableBackend) SetState(_, _, _, _ string) error     { return nil }
 func (m *mutableBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (m *mutableBackend) ExecutionInstructions() (string, error) { return "", nil }
 func (m *mutableBackend) PlanningInstructions() string         { return "" }
-func (m *mutableBackend) GetDescription(_ string) (string, error) { return "", nil }
+func (m *mutableBackend) GetDescription(_ string) (string, error)  { return "", nil }
+func (m *mutableBackend) GetFullContext(_ string) (string, error)  { return "", nil }
 func (m *mutableBackend) ProjectContext() (string, error)          { return "", nil }
 func (m *mutableBackend) Label() string {
 	if m.label != "" {
@@ -104,7 +106,8 @@ func (s *stubBackend) SetState(_, _, _, _ string) error     { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (s *stubBackend) ExecutionInstructions() (string, error) { return "", nil }
 func (s *stubBackend) PlanningInstructions() string         { return "" }
-func (s *stubBackend) GetDescription(_ string) (string, error) { return "", nil }
+func (s *stubBackend) GetDescription(_ string) (string, error)  { return "", nil }
+func (s *stubBackend) GetFullContext(_ string) (string, error)  { return s.fullContext, nil }
 func (s *stubBackend) ProjectContext() (string, error)          { return "", nil }
 func (s *stubBackend) Label() string {
 	if s.label != "" {
@@ -457,6 +460,29 @@ func TestLoop_BuildTaskPrompt(t *testing.T) {
 	got = l.buildTaskPrompt("Implement feature X", "")
 	if got != "Complete this task: Implement feature X" {
 		t.Errorf("unexpected prompt without ID: %q", got)
+	}
+}
+
+// Verifies that buildTaskPrompt includes the full bead context (notes,
+// labels, dependencies) when the backend provides it, so the agent
+// gets complete task information without needing to run bd show.
+func TestLoop_BuildTaskPrompt_IncludesFullContext(t *testing.T) {
+	fullCtx := "○ ralph-xyz · Fix auth   [● P1 · OPEN]\nOwner: user\n\nDESCRIPTION\nFix the auth flow\n\nNOTES\nCheck the middleware\n\nLABELS: orchestrator"
+	backend := &stubBackend{fullContext: fullCtx}
+	l := &Loop{cfg: Config{TaskBackend: backend}}
+
+	got := l.buildTaskPrompt("Fix auth", "ralph-xyz")
+	if !strings.Contains(got, "NOTES") {
+		t.Error("task prompt should include notes from full context")
+	}
+	if !strings.Contains(got, "LABELS: orchestrator") {
+		t.Error("task prompt should include labels from full context")
+	}
+	if !strings.Contains(got, "Check the middleware") {
+		t.Error("task prompt should include note content")
+	}
+	if !strings.Contains(got, "ralph-xyz") {
+		t.Error("task prompt should include bead ID")
 	}
 }
 

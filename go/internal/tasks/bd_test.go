@@ -42,7 +42,11 @@ func mockBD(total string, counts map[string]string, inProgress, ready string) Co
 			}
 			return "", nil
 		case "show":
-			return `[{"status":"in_progress"}]`, nil
+			joined := strings.Join(args, " ")
+			if strings.Contains(joined, "--json") {
+				return `[{"description":"Fix the auth flow","status":"in_progress"}]`, nil
+			}
+			return "○ abc123 · Fix auth   [● P1 · OPEN]\nOwner: user\n\nDESCRIPTION\nFix the auth flow\n\nNOTES\nCheck middleware\n\nLABELS: orchestrator", nil
 		case "close":
 			return "closed", nil
 		case "update":
@@ -845,6 +849,49 @@ func TestBD_ProjectContext_AllCommandsFail(t *testing.T) {
 	// Should still include project directory at minimum.
 	if !strings.Contains(got, b.ProjectDir) {
 		t.Error("expected project directory even when bd commands fail")
+	}
+}
+
+// Proves: GetFullContext returns the complete human-readable bead output
+// including notes, labels, and dependencies so the agent gets full context.
+func TestBD_GetFullContext(t *testing.T) {
+	b := setupBD(t, defaultMock())
+	got, err := b.GetFullContext("abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "NOTES") {
+		t.Error("full context should include NOTES section")
+	}
+	if !strings.Contains(got, "LABELS: orchestrator") {
+		t.Error("full context should include LABELS")
+	}
+	if !strings.Contains(got, "Check middleware") {
+		t.Error("full context should include note content")
+	}
+}
+
+// Proves: GetFullContext returns empty string for empty ID.
+func TestBD_GetFullContext_EmptyID(t *testing.T) {
+	b := setupBD(t, defaultMock())
+	got, err := b.GetFullContext("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Errorf("expected empty string for empty ID, got %q", got)
+	}
+}
+
+// Proves: GetDescription extracts just the description field from JSON.
+func TestBD_GetDescription(t *testing.T) {
+	b := setupBD(t, defaultMock())
+	got, err := b.GetDescription("abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "Fix the auth flow" {
+		t.Errorf("GetDescription = %q, want %q", got, "Fix the auth flow")
 	}
 }
 

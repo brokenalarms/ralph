@@ -968,11 +968,28 @@ func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 	if taskID == "" {
 		return fmt.Sprintf("Complete this task: %s", nextTask)
 	}
+	fullCtx := l.getBeadFullContext(taskID)
+	if fullCtx != "" {
+		return fmt.Sprintf("Complete this task (bd id: %s): %s\n\n%s", taskID, nextTask, fullCtx)
+	}
 	desc := l.getBeadDescription(taskID)
 	if desc != "" {
 		return fmt.Sprintf("Complete this task (bd id: %s): %s\n\nDescription:\n%s", taskID, nextTask, desc)
 	}
 	return fmt.Sprintf("Complete this task (bd id: %s): %s", taskID, nextTask)
+}
+
+// getBeadFullContext retrieves the complete bead context (description, notes,
+// labels, dependencies, comments) for prompt injection.
+func (l *Loop) getBeadFullContext(taskID string) string {
+	if taskID == "" || l.cfg.TaskBackend == nil {
+		return ""
+	}
+	ctx, err := l.cfg.TaskBackend.GetFullContext(taskID)
+	if err != nil {
+		return ""
+	}
+	return ctx
 }
 
 func (l *Loop) buildPrompt(taskPrompt, feedback, attemptHistory, testStatus string) (string, error) {

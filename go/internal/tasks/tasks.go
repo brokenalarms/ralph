@@ -74,6 +74,12 @@ type Backend interface {
 	// Returns empty string for backends without descriptions.
 	GetDescription(id string) (string, error)
 
+	// GetFullContext returns the complete context of a task by ID,
+	// including notes, labels, dependencies, and comments — everything
+	// an agent needs to understand the task without running bd show.
+	// Returns empty string for backends without rich context.
+	GetFullContext(id string) (string, error)
+
 	// ProjectContext returns pre-assembled context about the project's task
 	// state for prompt injection. For bd, this includes open/closed beads,
 	// project directory, config, and bd prime output. Checklist returns "".
