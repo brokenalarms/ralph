@@ -214,7 +214,7 @@ stty -echo 2>/dev/null
 BOLD=$'\033[1m'
 CYAN=$'\033[0;36m'
 GREEN=$'\033[0;32m'
-DIM_BLUE=$'\033[2;34m'
+DIM=$'\033[2m'
 NC=$'\033[0m'
 poll_counter=0
 poll_interval=45
@@ -276,7 +276,7 @@ func (s *Session) bdPlanRender() string {
     printf "${GREEN}%%s/%%s done${NC}\n" "$closed" "$total"
     if [[ -f '%s/.completed-tasks' ]]; then
       completed=$(grep -v '^$' '%s/.completed-tasks' | paste -sd ',' - | sed 's/,/, /g')
-      [[ -n "$completed" ]] && printf "${DIM_BLUE}%%s${NC}\n" "$completed"
+      [[ -n "$completed" ]] && printf "${DIM}Done: %%s${NC}\n" "$completed"
     fi`, s.RalphDir, s.RalphDir)
 }
 

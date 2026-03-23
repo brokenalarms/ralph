@@ -202,7 +202,8 @@ func TestSanitizeSessionName(t *testing.T) {
 }
 
 // Verifies that completed tasks are rendered as a comma-separated inline
-// list in dim dark blue, so the user sees a compact summary of finished work.
+// list with a "Done:" prefix in dim styling, providing a compact summary
+// of finished work that stays visually receded.
 func TestWritePlanWatcher_BD_ShowsCompletedTasks(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
@@ -219,11 +220,14 @@ func TestWritePlanWatcher_BD_ShowsCompletedTasks(t *testing.T) {
 	if !strings.Contains(content, ".completed-tasks") {
 		t.Error("bd plan watcher should reference .completed-tasks file")
 	}
-	if !strings.Contains(content, "DIM_BLUE") {
-		t.Error("bd plan watcher should use dim dark blue styling for completed tasks")
+	if !strings.Contains(content, "DIM") {
+		t.Error("bd plan watcher should use dim styling for completed tasks")
 	}
 	if strings.Contains(content, "while IFS= read") {
 		t.Error("completed tasks should be comma-separated inline, not one-per-line")
+	}
+	if !strings.Contains(content, "Done:") {
+		t.Error("completed tasks should be labeled with 'Done:' prefix")
 	}
 }
 
