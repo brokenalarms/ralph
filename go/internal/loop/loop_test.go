@@ -3119,9 +3119,88 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Initial merge + 2 retries = 3 total merge calls.
-	if mergeCalls != 3 {
-		t.Errorf("expected 3 merge calls (1 initial + 2 retries), got %d", mergeCalls)
+	// mergeWithRetry uses a shared retry budget of maxMergeAttempts (4).
+	if mergeCalls != maxMergeAttempts {
+		t.Errorf("expected %d merge calls (maxMergeAttempts), got %d", maxMergeAttempts, mergeCalls)
+	}
+}
+
+// mergeWithRetry handles a conflict on the first attempt followed by a CI
+// failure on the retry — the shared retry budget handles both error types
+// in a single pipeline without the caller needing separate dispatch logic.
+func TestLoop_MergeWithRetryHandlesConflictThenCIFailure(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Mixed errors",
+		nextID:    "ralph-mixed",
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/project/01-mixed",
+		BranchStrategy: git.BranchStacked,
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		ProjectDir:    dir,
+		WorkDir:       gm.WorkDir,
+		RalphDir:      ralphDir,
+		PromptsDir:    promptsDir,
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+	l.newRunnerFunc = func() claudeRunner {
+		return &stubRunner{result: claude.Result{SignalDetected: true}}
+	}
+
+	forcePushed := false
+	l.forcePushFunc = func(context.Context) error {
+		forcePushed = true
+		return nil
+	}
+	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.prePushRebaseFunc = func(context.Context) error { return nil }
+
+	// Merge sequence: conflict → (rebase+push) → CI failure → (fix) → success
+	mergeCalls := 0
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		switch mergeCalls {
+		case 1:
+			return false, &git.MergeConflictError{PRNumber: "77"}
+		case 2:
+			return false, &git.CIFailureError{
+				PRNumber: "77",
+				Failures: []git.CICheckResult{{Name: "test", State: "FAILURE", Bucket: "fail"}},
+			}
+		default:
+			return true, nil
+		}
+	}
+
+	_ = l.Run(context.Background())
+
+	if mergeCalls < 3 {
+		t.Errorf("expected 3 merge calls (conflict → CI fail → success), got %d", mergeCalls)
+	}
+	if !forcePushed {
+		t.Error("expected force-push after conflict resolution")
 	}
 }
 
