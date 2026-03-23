@@ -66,9 +66,10 @@ type Loop struct {
 	attempts   *attempts.Tracker
 	logger     *logging.Logger
 	signals    claude.SignalPaths
-	mergeFunc      func() (bool, error)
-	pushPRFunc     func(taskDesc string) error
-	forcePushFunc  func() error
+	mergeFunc          func() (bool, error)
+	pushPRFunc         func(taskDesc string) error
+	forcePushFunc      func() error
+	prePushRebaseFunc  func() error
 	verifyFunc     func(dir, headBefore string) (passed bool, reason string)
 	newRunnerFunc  func() claudeRunner
 	lastAction     analyzer.Action
@@ -497,6 +498,15 @@ func (l *Loop) Run(ctx context.Context) error {
 				}
 			}
 
+			// Rebase onto latest base branch before pushing so that any
+			// direct pushes to main/develop during this iteration are
+			// included. Without this, squash-merge overwrites those commits.
+			if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
+				if rebaseErr := l.prePushRebase(ctx); rebaseErr != nil {
+					l.logger.Warn("Pre-push rebase: %v", rebaseErr)
+				}
+			}
+
 			if err := l.pushAndCreatePR(nextTask); err != nil {
 				l.logger.Warn("Push/PR: %v", err)
 			}
@@ -824,6 +834,13 @@ func (l *Loop) verifyCompletion(headBefore string) (bool, string) {
 	l.state.Write("last_test_output", "")
 	l.state.Write("last_test_time", now)
 	return true, ""
+}
+
+func (l *Loop) prePushRebase(ctx context.Context) error {
+	if l.prePushRebaseFunc != nil {
+		return l.prePushRebaseFunc()
+	}
+	return l.handleRebase(ctx)
 }
 
 func (l *Loop) pushAndCreatePR(taskDesc string) error {
