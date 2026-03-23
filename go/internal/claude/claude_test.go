@@ -328,7 +328,7 @@ func TestStripMarkdown(t *testing.T) {
 // Verifies that FormatStreamLine adds a timestamp prefix and ANSI color codes
 // so output matches the format previously provided by the bash stream filter.
 func TestFormatStreamLine(t *testing.T) {
-	line := FormatStreamLine("[claude] [Read] /tmp/foo.go")
+	line := FormatStreamLine("[agent] [Read] /tmp/foo.go")
 	plain := ansiRe.ReplaceAllString(line, "")
 
 	// Should have HH:MM:SS timestamp prefix.
@@ -337,13 +337,13 @@ func TestFormatStreamLine(t *testing.T) {
 	}
 
 	// Should contain the text content after stripping ANSI.
-	if !strings.Contains(plain, "[claude] [Read] /tmp/foo.go") {
+	if !strings.Contains(plain, "[agent] [Read] /tmp/foo.go") {
 		t.Errorf("FormatStreamLine should preserve content, got: %q", plain)
 	}
 
-	// Should contain ANSI color codes for [claude] and [Read].
+	// Should contain ANSI color codes for [agent] and [Read].
 	if !strings.Contains(line, "\033[0;36m") {
-		t.Error("FormatStreamLine should apply cyan to [claude]")
+		t.Error("FormatStreamLine should apply cyan to [agent]")
 	}
 	if !strings.Contains(line, "\033[0;34m") {
 		t.Error("FormatStreamLine should apply blue to [Read]")
@@ -352,7 +352,7 @@ func TestFormatStreamLine(t *testing.T) {
 
 // Verifies that [done] gets green color in the formatted output.
 func TestFormatStreamLine_DoneColor(t *testing.T) {
-	line := FormatStreamLine("[claude] [done]")
+	line := FormatStreamLine("[agent] [done]")
 	if !strings.Contains(line, "\033[0;32m") {
 		t.Error("FormatStreamLine should apply green to [done]")
 	}
@@ -361,14 +361,102 @@ func TestFormatStreamLine_DoneColor(t *testing.T) {
 // Verifies that FormatStreamLine does NOT include a per-line task ID prefix —
 // task identification is handled by a one-time separator banner instead.
 func TestFormatStreamLine_NoTaskIDPrefix(t *testing.T) {
-	line := FormatStreamLine("[claude] [Read] /tmp/foo.go")
+	line := FormatStreamLine("[agent] [Read] /tmp/foo.go")
 	plain := ansiRe.ReplaceAllString(line, "")
 
 	if strings.Contains(plain, "ralph-") {
 		t.Errorf("FormatStreamLine should not include task ID, got: %q", plain)
 	}
-	if !strings.Contains(plain, "[claude]") {
-		t.Errorf("FormatStreamLine should include [claude] tag, got: %q", plain)
+	if !strings.Contains(plain, "[agent]") {
+		t.Errorf("FormatStreamLine should include [agent] tag, got: %q", plain)
+	}
+}
+
+// --- Diagnosis banner tests ---
+
+// Verifies that ISSUE: lines are detected and produce a banner.
+func TestParseDiagnosis_Issue(t *testing.T) {
+	label, content, ok := parseDiagnosis("ISSUE: the build is broken")
+	if !ok {
+		t.Fatal("parseDiagnosis should detect ISSUE: prefix")
+	}
+	if label != "ISSUE" {
+		t.Errorf("label = %q, want ISSUE", label)
+	}
+	if content != "the build is broken" {
+		t.Errorf("content = %q, want 'the build is broken'", content)
+	}
+}
+
+// Verifies that FIX: lines are detected and produce a banner.
+func TestParseDiagnosis_Fix(t *testing.T) {
+	label, content, ok := parseDiagnosis("FIX: update the config")
+	if !ok {
+		t.Fatal("parseDiagnosis should detect FIX: prefix")
+	}
+	if label != "FIX" {
+		t.Errorf("label = %q, want FIX", label)
+	}
+	if content != "update the config" {
+		t.Errorf("content = %q, want 'update the config'", content)
+	}
+}
+
+// Verifies that ordinary lines are not treated as diagnosis.
+func TestParseDiagnosis_NormalLine(t *testing.T) {
+	_, _, ok := parseDiagnosis("Reading file /tmp/foo.go")
+	if ok {
+		t.Error("parseDiagnosis should not match ordinary lines")
+	}
+}
+
+// Verifies that partial matches like "ISSUES:" or "FIXED:" are not detected.
+func TestParseDiagnosis_NoFalsePositives(t *testing.T) {
+	for _, line := range []string{"ISSUES: plural", "FIXED: past tense", "issue: lowercase"} {
+		if _, _, ok := parseDiagnosis(line); ok {
+			t.Errorf("parseDiagnosis should not match %q", line)
+		}
+	}
+}
+
+// Verifies that diagnosisBanner produces a centered banner with ═ characters.
+func TestDiagnosisBanner(t *testing.T) {
+	banner := diagnosisBanner("ISSUE")
+	plain := ansiRe.ReplaceAllString(banner, "")
+
+	if !strings.Contains(plain, "═") {
+		t.Error("diagnosisBanner should contain ═ separator characters")
+	}
+	if !strings.Contains(plain, " ISSUE ") {
+		t.Errorf("diagnosisBanner should contain centered label, got: %q", plain)
+	}
+}
+
+// Verifies that diagnosis lines get banner treatment in FormatStreamOutput.
+func TestFormatStreamOutput_DiagnosisBanner(t *testing.T) {
+	lines := FormatStreamOutput("ISSUE: something is wrong")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines (banner + content), got %d", len(lines))
+	}
+	plainBanner := ansiRe.ReplaceAllString(lines[0], "")
+	if !strings.Contains(plainBanner, "ISSUE") || !strings.Contains(plainBanner, "═") {
+		t.Errorf("first line should be banner, got: %q", plainBanner)
+	}
+	plainContent := ansiRe.ReplaceAllString(lines[1], "")
+	if !strings.Contains(plainContent, "something is wrong") {
+		t.Errorf("second line should contain content, got: %q", plainContent)
+	}
+}
+
+// Verifies that non-diagnosis lines pass through normally in FormatStreamOutput.
+func TestFormatStreamOutput_NormalLine(t *testing.T) {
+	lines := FormatStreamOutput("Reading file /tmp/foo.go")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line for normal text, got %d", len(lines))
+	}
+	plain := ansiRe.ReplaceAllString(lines[0], "")
+	if !strings.Contains(plain, "[agent] Reading file /tmp/foo.go") {
+		t.Errorf("normal line should have [agent] prefix, got: %q", plain)
 	}
 }
 
@@ -415,9 +503,9 @@ func TestReadFirstLine_StripsJSON(t *testing.T) {
 
 // --- Stream filter tailing tests ---
 
-// Verifies that startTailGoroutine follows new [claude]-prefixed lines
+// Verifies that startTailGoroutine follows new [agent]-prefixed lines
 // appended to a file and stops cleanly when the stop channel is closed.
-// Non-[claude] lines (orchestrator messages) must NOT be forwarded to
+// Non-[agent] lines (orchestrator messages) must NOT be forwarded to
 // stdout — the logger already writes those directly.
 func TestStartTailGoroutine_FollowsAndStops(t *testing.T) {
 	dir := t.TempDir()
@@ -427,13 +515,13 @@ func TestStartTailGoroutine_FollowsAndStops(t *testing.T) {
 	stop := make(chan struct{})
 	done := startTailGoroutine(logPath, stop)
 
-	// Append [claude]-prefixed and non-prefixed lines after goroutine starts.
+	// Append [agent]-prefixed and non-prefixed lines after goroutine starts.
 	time.Sleep(200 * time.Millisecond)
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Fprintln(f, "[claude] hello from agent")
+	fmt.Fprintln(f, "[agent] hello from agent")
 	fmt.Fprintln(f, "12:00:00 \033[0;36m[beads]\033[0m orchestrator message")
 	f.Close()
 
@@ -461,10 +549,10 @@ func TestStartTailGoroutine_NonexistentFile(t *testing.T) {
 	}
 }
 
-// Verifies that startTailGoroutine only forwards [claude]-prefixed lines to
+// Verifies that startTailGoroutine only forwards [agent]-prefixed lines to
 // stdout, preventing orchestrator log messages from appearing twice (once from
 // the logger writing to stdout directly, and again from the tail goroutine).
-func TestStartTailGoroutine_FiltersNonClaudeLines(t *testing.T) {
+func TestStartTailGoroutine_FiltersNonAgentLines(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "loop.log")
 	os.WriteFile(logPath, nil, 0o644)
@@ -479,9 +567,9 @@ func TestStartTailGoroutine_FiltersNonClaudeLines(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 	f, _ := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
-	fmt.Fprintln(f, "[claude] agent output line")
+	fmt.Fprintln(f, "[agent] agent output line")
 	fmt.Fprintln(f, "12:00:00 \033[0;36m[beads]\033[0m orchestrator message")
-	fmt.Fprintln(f, "[claude] second agent line")
+	fmt.Fprintln(f, "[agent] second agent line")
 	f.Close()
 
 	time.Sleep(300 * time.Millisecond)
@@ -493,11 +581,11 @@ func TestStartTailGoroutine_FiltersNonClaudeLines(t *testing.T) {
 	os.Stdout = origStdout
 
 	output := string(captured)
-	if !strings.Contains(output, "[claude] agent output line") {
-		t.Errorf("expected [claude] lines to be forwarded, got: %q", output)
+	if !strings.Contains(output, "[agent] agent output line") {
+		t.Errorf("expected [agent] lines to be forwarded, got: %q", output)
 	}
-	if !strings.Contains(output, "[claude] second agent line") {
-		t.Errorf("expected second [claude] line to be forwarded, got: %q", output)
+	if !strings.Contains(output, "[agent] second agent line") {
+		t.Errorf("expected second [agent] line to be forwarded, got: %q", output)
 	}
 	if strings.Contains(output, "orchestrator message") {
 		t.Errorf("orchestrator messages should NOT be forwarded by tail goroutine, got: %q", output)
@@ -540,12 +628,12 @@ func TestFilterStreamJSON_TailsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	plain := ansiRe.ReplaceAllString(string(got), "")
-	if !strings.Contains(plain, "[claude] hello from claude") {
-		t.Errorf("loop.log should contain [claude]-prefixed filtered text, got: %q", string(got))
+	if !strings.Contains(plain, "[agent] hello from claude") {
+		t.Errorf("loop.log should contain [agent]-prefixed filtered text, got: %q", string(got))
 	}
 }
 
-// Verifies that filterStreamJSON prefixes each output line with [claude]
+// Verifies that filterStreamJSON prefixes each output line with [agent]
 // so loop.log clearly distinguishes Claude's output from ralph's logger output.
 func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
 	dir := t.TempDir()
@@ -580,11 +668,63 @@ func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := ansiRe.ReplaceAllString(string(got), "")
-	if !strings.Contains(content, "[claude] [Read] /tmp/foo.go") {
-		t.Errorf("tool-use line should have [claude] prefix, got: %q", content)
+	if !strings.Contains(content, "[agent] [Read] /tmp/foo.go") {
+		t.Errorf("tool-use line should have [agent] prefix, got: %q", content)
 	}
-	if !strings.Contains(content, "[claude] some delta text") {
-		t.Errorf("delta text should have [claude] prefix, got: %q", content)
+	if !strings.Contains(content, "[agent] some delta text") {
+		t.Errorf("delta text should have [agent] prefix, got: %q", content)
+	}
+}
+
+// Verifies that ISSUE:/FIX: diagnosis lines in the stream get banner treatment
+// so they stand out visually in the log output.
+func TestFilterStreamJSON_DiagnosisBanner(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+
+	os.WriteFile(rawPath, nil, 0o644)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		filterStreamJSON(rawPath, logPath, stop)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"ISSUE: the config is missing a required field"}]}}`)
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"FIX: add the default value to config.go"}]}}`)
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := ansiRe.ReplaceAllString(string(got), "")
+
+	if !strings.Contains(content, "═") {
+		t.Errorf("diagnosis output should contain ═ banner characters, got: %q", content)
+	}
+	if !strings.Contains(content, "ISSUE") {
+		t.Errorf("should contain ISSUE banner, got: %q", content)
+	}
+	if !strings.Contains(content, "FIX") {
+		t.Errorf("should contain FIX banner, got: %q", content)
+	}
+	if !strings.Contains(content, "the config is missing a required field") {
+		t.Errorf("should contain ISSUE content, got: %q", content)
+	}
+	if !strings.Contains(content, "add the default value to config.go") {
+		t.Errorf("should contain FIX content, got: %q", content)
 	}
 }
 
@@ -616,7 +756,7 @@ func TestStartStreamFilter_NoExternalProcesses(t *testing.T) {
 
 	got, _ := os.ReadFile(logPath)
 	plain := ansiRe.ReplaceAllString(string(got), "")
-	if !strings.Contains(plain, "[claude] go filter works") {
+	if !strings.Contains(plain, "[agent] go filter works") {
 		t.Errorf("expected Go filter output, got: %q", string(got))
 	}
 

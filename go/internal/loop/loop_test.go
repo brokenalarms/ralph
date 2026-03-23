@@ -3651,21 +3651,21 @@ func TestLoop_PrePushRebaseBeforePush(t *testing.T) {
 // Orchestrator status messages ("All tasks complete!", "No tasks found") must
 // use the [ralph] prefix, not the task backend label (e.g. [beads]). The task
 // label should only appear for actual backend operations.
-func TestLoop_OrchestratorMessagesUseRalphPrefix(t *testing.T) {
+func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 	tests := []struct {
 		name    string
 		backend *stubBackend
 		want    string // substring expected in log output
 	}{
 		{
-			name: "all tasks complete uses ralph prefix",
+			name: "all tasks complete uses loop prefix",
 			backend: &stubBackend{
 				remaining: 0, completed: 3, total: 3, label: "beads",
 			},
 			want: "[ralph]",
 		},
 		{
-			name: "no tasks error uses ralph prefix",
+			name: "no tasks error uses loop prefix",
 			backend: &stubBackend{
 				remaining: 0, completed: 0, total: 0, label: "beads",
 			},

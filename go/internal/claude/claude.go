@@ -432,7 +432,9 @@ func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
 			if text := extractStreamText(line); text != "" {
 				for _, tl := range strings.Split(text, "\n") {
 					if tl != "" {
-						fmt.Fprintf(logOut, "%s\n", FormatStreamLine("[claude] "+tl))
+						for _, out := range FormatStreamOutput(tl) {
+							fmt.Fprintf(logOut, "%s\n", out)
+						}
 					}
 				}
 			}
@@ -562,12 +564,12 @@ func stripMarkdown(s string) string {
 	return mdBoldRe.ReplaceAllString(s, "$1")
 }
 
-// colorTag applies ANSI color to a bracketed tag like [claude] or [Read].
+// colorTag applies ANSI color to a bracketed tag like [agent] or [Read].
 func colorTag(tag string) string {
 	switch {
 	case tag == "[done]":
 		return logging.Green + tag + logging.Reset
-	case tag == "[claude]":
+	case tag == "[agent]":
 		return logging.Cyan + tag + logging.Reset
 	default:
 		return logging.Blue + tag + logging.Reset
@@ -582,6 +584,45 @@ func FormatStreamLine(text string) string {
 	text = stripMarkdown(text)
 	text = tagRe.ReplaceAllStringFunc(text, colorTag)
 	return time.Now().Format("15:04:05") + " " + text
+}
+
+var diagnosisRe = regexp.MustCompile(`^(ISSUE|FIX):\s+(.+)`)
+
+// parseDiagnosis checks if a line is an ISSUE: or FIX: diagnosis line.
+// Returns the label, content, and whether it matched.
+func parseDiagnosis(line string) (label, content string, ok bool) {
+	m := diagnosisRe.FindStringSubmatch(line)
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}
+
+// diagnosisBanner returns a bold yellow centered banner like ═══ ISSUE ═══.
+func diagnosisBanner(label string) string {
+	const totalWidth = 72
+	pad := totalWidth - len(label) - 2
+	if pad < 4 {
+		pad = 4
+	}
+	left := pad / 2
+	right := pad - left
+	return fmt.Sprintf("%s%s%s %s %s%s",
+		logging.Bold, logging.Yellow,
+		strings.Repeat("═", left), label, strings.Repeat("═", right),
+		logging.Reset)
+}
+
+// FormatStreamOutput formats a stream text line, returning one or more output lines.
+// Diagnosis lines (ISSUE:/FIX:) get a banner above the content.
+func FormatStreamOutput(text string) []string {
+	if label, content, ok := parseDiagnosis(text); ok {
+		return []string{
+			diagnosisBanner(label),
+			FormatStreamLine("[agent] " + content),
+		}
+	}
+	return []string{FormatStreamLine("[agent] " + text)}
 }
 
 // FilterStream tails a raw log file and writes formatted, colored output to
@@ -612,7 +653,9 @@ func FilterStream(rawLogPath string) {
 			if text := extractStreamText(line); text != "" {
 				for _, tl := range strings.Split(text, "\n") {
 					if tl != "" {
-						fmt.Fprintln(os.Stdout, FormatStreamLine("[claude] "+tl))
+						for _, out := range FormatStreamOutput(tl) {
+							fmt.Fprintln(os.Stdout, out)
+						}
 					}
 				}
 			}
@@ -632,7 +675,7 @@ func FilterStream(rawLogPath string) {
 
 // startTailGoroutine follows new data appended to path and writes it to
 // stdout, similar to tail -f -n 0. Only forwards lines prefixed with
-// "[claude] " — orchestrator messages are already written to stdout directly
+// "[agent] " — orchestrator messages are already written to stdout directly
 // by the logger, so forwarding them here would cause duplication.
 // Runs entirely in-process so there are no child processes to orphan.
 // Returns a channel that closes when the goroutine exits.
@@ -662,7 +705,7 @@ func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
 				}
 				line := data[:idx]
 				data = data[idx+1:]
-				if strings.Contains(line, "[claude]") {
+				if strings.Contains(line, "[agent]") {
 					fmt.Fprintln(os.Stdout, line)
 				}
 			}
@@ -681,7 +724,7 @@ func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
 						n2, _ := f.Read(buf)
 						if n2 == 0 {
 							// Flush any remaining partial line.
-							if remainder != "" && strings.Contains(remainder, "[claude]") {
+							if remainder != "" && strings.Contains(remainder, "[agent]") {
 								fmt.Fprintln(os.Stdout, remainder)
 							}
 							return
