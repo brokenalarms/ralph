@@ -142,6 +142,43 @@ func TestSeparatorFormatting(t *testing.T) {
 	}
 }
 
+// Verifies that DashedSeparator outputs a full-width dashed line using ─
+// characters in the given color, distinct from Separator's ═ characters.
+func TestDashedSeparatorFormatting(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile}
+	l.DashedSeparator(Yellow)
+	got := stdout.String()
+
+	if !strings.Contains(got, Bold) || !strings.Contains(got, Yellow) {
+		t.Error("DashedSeparator should include bold+yellow formatting")
+	}
+	if !strings.Contains(got, "─") {
+		t.Error("DashedSeparator should contain ─ characters")
+	}
+	if !strings.Contains(got, Reset) {
+		t.Error("DashedSeparator should reset ANSI at end")
+	}
+	if !strings.Contains(logFile.String(), "─") {
+		t.Error("DashedSeparator should write to log file")
+	}
+}
+
+// Verifies that DashedSeparator respects streaming mode.
+func TestDashedSeparatorStreamingMode(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile}
+	l.SetStreaming(true)
+	l.DashedSeparator(Yellow)
+
+	if stdout.Len() != 0 {
+		t.Error("DashedSeparator should suppress stdout in streaming mode")
+	}
+	if !strings.Contains(logFile.String(), "─") {
+		t.Error("DashedSeparator should still write to log file in streaming mode")
+	}
+}
+
 // Verifies that Separator respects streaming mode.
 func TestSeparatorStreamingMode(t *testing.T) {
 	var stdout, logFile bytes.Buffer
