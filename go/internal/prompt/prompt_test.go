@@ -534,3 +534,36 @@ func TestBuildTaskManagerPrompt_MissingTemplate(t *testing.T) {
 	}
 }
 
+// Proves: task-manager.md prompt contains all required sections so the task
+// manager pane has complete instructions for bead CRUD, triage, and constraints.
+func TestBuildTaskManagerPrompt_RequiredSections(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Welcome", "prompt should have a welcome/preamble section"},
+		{"light triage", "prompt should describe light triage mode"},
+		{"hands-on fix", "prompt should describe hands-on fix mode"},
+		{"echo back", "prompt should instruct echoing back bead details after creation"},
+		{"label", "prompt should require labels on every bead"},
+		{"screenshot", "prompt should describe screenshot handling"},
+		{"P0", "prompt should reference priority levels"},
+		{"bd export", "prompt should instruct running bd export after mutations"},
+		{"in_progress", "prompt should warn about modifying in-progress beads"},
+		{"verbatim", "prompt should instruct including diagnostic content verbatim"},
+		{"split", "prompt should describe when to split beads"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
