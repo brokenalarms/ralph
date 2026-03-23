@@ -225,7 +225,7 @@ stty -echo 2>/dev/null
 BOLD=$'\033[1m'
 CYAN=$'\033[0;36m'
 GREEN=$'\033[0;32m'
-DIM=$'\033[2m'
+DIM_BLUE=$'\033[2;34m'
 NC=$'\033[0m'
 while true; do
   if [[ -f '%s/.plan-flash' ]]; then
@@ -270,21 +270,10 @@ func (s *Session) bdPlanRender() string {
     fi
     closed=$(bd count --status closed 2>/dev/null || echo 0)
     total=$(bd count 2>/dev/null || echo 0)
-    if [[ $total -gt 0 ]]; then
-      bar_w=20
-      filled=$((closed * bar_w / total))
-      empty=$((bar_w - filled))
-      bar=""
-      for ((i=0; i<filled; i++)); do bar+="█"; done
-      for ((i=0; i<empty; i++)); do bar+="░"; done
-      printf "${GREEN}[%%s] %%s/%%s done${NC}\n" "$bar" "$closed" "$total"
-    else
-      printf "${GREEN}0/0 done${NC}\n"
-    fi
+    printf "${GREEN}%%s/%%s done${NC}\n" "$closed" "$total"
     if [[ -f '%s/.completed-tasks' ]]; then
-      while IFS= read -r ctask; do
-        [[ -n "$ctask" ]] && printf "${DIM}  ✓ %%s${NC}\n" "$ctask"
-      done < '%s/.completed-tasks'
+      completed=$(grep -v '^$' '%s/.completed-tasks' | paste -sd ',' - | sed 's/,/, /g')
+      [[ -n "$completed" ]] && printf "${DIM_BLUE}%%s${NC}\n" "$completed"
     fi`, s.RalphDir, s.RalphDir)
 }
 
