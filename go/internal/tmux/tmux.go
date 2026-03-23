@@ -227,6 +227,8 @@ CYAN=$'\033[0;36m'
 GREEN=$'\033[0;32m'
 DIM_BLUE=$'\033[2;34m'
 NC=$'\033[0m'
+poll_counter=0
+poll_interval=45
 while true; do
   if [[ -f '%s/.plan-flash' ]]; then
     rm -f '%s/.plan-flash'
@@ -234,11 +236,21 @@ while true; do
      sleep 3
      tmux set-option -p -u pane-border-style 2>/dev/null) &
   fi
+  needs_render=0
   if [[ -f '%s/.plan-refresh' ]]; then
     rm -f '%s/.plan-refresh'
+    needs_render=1
+    poll_counter=0
+  fi
+  if (( poll_counter >= poll_interval )); then
+    needs_render=1
+    poll_counter=0
+  fi
+  if (( needs_render )); then
     printf '\033[2J\033[H'
 %s
   fi
+  poll_counter=$((poll_counter + 1))
   sleep 1
 done
 `, s.RalphDir, s.RalphDir, s.RalphDir, s.RalphDir, renderBlock)

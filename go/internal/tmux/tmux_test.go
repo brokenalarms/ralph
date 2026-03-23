@@ -418,6 +418,31 @@ func TestSetup_CommanderStreamPaneIndex(t *testing.T) {
 	}
 }
 
+// Verifies that the plan watcher periodically re-renders the bd ready list
+// without requiring a .plan-refresh signal, so new beads added during a long
+// iteration (e.g. from ralph task in another pane) appear within ~45 seconds.
+func TestWritePlanWatcher_BD_PeriodicRefresh(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{
+		RalphDir:    dir,
+		TaskBackend: "bd",
+	}
+
+	if err := s.writePlanWatcher(); err != nil {
+		t.Fatalf("writePlanWatcher() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
+	content := string(data)
+
+	if !strings.Contains(content, "poll_counter") {
+		t.Error("plan watcher should use a poll_counter for periodic refresh")
+	}
+	if !strings.Contains(content, "poll_interval") {
+		t.Error("plan watcher should define a poll_interval for the refresh period")
+	}
+}
+
 // Verifies that .plan-refresh signal path is correctly embedded in the
 // plan watcher script, so the pane redraws when signaled.
 func TestPlanWatcher_SignalPath(t *testing.T) {
