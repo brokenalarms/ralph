@@ -79,8 +79,9 @@ type Loop struct {
 	prePushRebaseFunc  func(ctx context.Context) error
 	verifyFunc      func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
 	llmVerifyFunc   func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, model ...string) verify.Result
-	newRunnerFunc   func() claudeRunner
-	lastAction      analyzer.Action
+	newRunnerFunc      func() claudeRunner
+	findPRInfoFunc     func(workDir string) (number, title string)
+	lastAction         analyzer.Action
 	lastTaskMerged  bool
 	sessionTasks    []CompletedTask
 }
@@ -890,6 +891,9 @@ func (l *Loop) autoMerge(ctx context.Context) (bool, error) {
 
 
 func (l *Loop) findPRInfo(workDir string) (number, title string) {
+	if l.findPRInfoFunc != nil {
+		return l.findPRInfoFunc(workDir)
+	}
 	cmd := exec.Command("gh", "pr", "list",
 		"--head", l.git.WorktreeBranch,
 		"--state", "all", "--json", "number,title", "--jq", ".[0] | \"\\(.number)\\t\\(.title)\"")

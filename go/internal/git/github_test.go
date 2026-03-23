@@ -82,25 +82,3 @@ func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
 	}
 }
 
-// capturingGitHub captures CreatePR calls for assertion.
-type capturingGitHub struct {
-	stubGitHub
-	createPR func(CreatePROpts) error
-}
-
-func (c *capturingGitHub) CreatePR(opts CreatePROpts) error {
-	if c.createPR != nil {
-		return c.createPR(opts)
-	}
-	return nil
-}
-
-// runLogGitHub stubs GetRunLog with a configurable return value.
-type runLogGitHub struct {
-	stubGitHub
-	log string
-}
-
-func (r *runLogGitHub) GetRunLog(prNumber, workDir string) string {
-	return r.log
-}

@@ -10,12 +10,6 @@ import (
 	"time"
 )
 
-type discardLog struct{}
-
-func (discardLog) Log(string, ...any)  {}
-func (discardLog) Warn(string, ...any) {}
-func (discardLog) Error(string, ...any) {}
-
 // evaluateChecks returns CIPassed when all checks have completed successfully,
 // verifying the happy path for CI-gated merges.
 func TestEvaluateChecks_AllPassed(t *testing.T) {
@@ -308,43 +302,6 @@ func TestGh_UsesInjectedGitHub(t *testing.T) {
 	}
 }
 
-// stubGitHub is a test double for the GitHub interface.
-type stubGitHub struct {
-	available    bool
-	openPR       string
-	findPRErr    error
-	createPRErr  error
-	mergeOutput  string
-	mergeErr     error
-	updateResult bool
-	updateErr    error
-	checks       []CICheckResult
-	checksErr    error
-	mergeCalls   int
-	mergeOpts    MergeOpts
-}
-
-func (s *stubGitHub) Available() bool { return s.available }
-func (s *stubGitHub) FindOpenPR(branch, repoURL string) (string, error) {
-	return s.openPR, s.findPRErr
-}
-func (s *stubGitHub) CreatePR(opts CreatePROpts) error {
-	return s.createPRErr
-}
-func (s *stubGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error) {
-	s.mergeCalls++
-	s.mergeOpts = opts
-	return s.mergeOutput, s.mergeErr
-}
-func (s *stubGitHub) UpdateBranch(dir, nwo, prNumber string) (bool, error) {
-	return s.updateResult, s.updateErr
-}
-func (s *stubGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
-	return s.checks, s.checksErr
-}
-func (s *stubGitHub) GetRunLog(prNumber, workDir string) string {
-	return ""
-}
 
 // setupAutoMergeManager creates a Manager with a stubGitHub and real git repos
 // so AutoMergeCurrentBranch can run without a real gh CLI.
