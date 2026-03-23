@@ -179,6 +179,13 @@ func (l *Loop) Run(ctx context.Context) error {
 					}
 				}
 			}
+			// Safety net: flush any unpushed work from the last task before
+			// exiting or entering wait mode. PushAndCreatePR is idempotent
+			// (returns early when no commits ahead), so this is harmless if
+			// the signal handler already pushed successfully.
+			if runIteration > 0 {
+				l.flushUnpushedWork(ctx)
+			}
 			if !l.cfg.Wait {
 				l.logger.Success("All tasks complete!")
 				l.state.Write("status", "completed")
@@ -837,6 +844,14 @@ func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc string) err
 		return l.pushPRFunc(ctx, taskID, taskDesc)
 	}
 	return l.git.PushAndCreatePR(ctx, taskID, taskDesc)
+}
+
+func (l *Loop) flushUnpushedWork(ctx context.Context) {
+	taskID, _ := l.state.Read("last_task_id")
+	taskDesc, _ := l.state.Read("last_task")
+	if err := l.pushAndCreatePR(ctx, taskID, taskDesc); err != nil {
+		l.logger.Warn("Flush push/PR: %v", err)
+	}
 }
 
 func (l *Loop) autoMerge(ctx context.Context) (bool, error) {
