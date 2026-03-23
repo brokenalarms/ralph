@@ -2,7 +2,6 @@ package loop
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -295,14 +294,6 @@ func (l *Loop) runPreIterationTests(ctx context.Context) string {
 	return msg
 }
 
-// forcePush force-pushes the current branch to the remote.
-func (l *Loop) forcePush(ctx context.Context) error {
-	if l.forcePushFunc != nil {
-		return l.forcePushFunc(ctx)
-	}
-	return l.git.ForcePush(ctx)
-}
-
 // findPRInfo looks up the PR number and title for the current branch.
 func (l *Loop) findPRInfo(workDir string) (number, title string) {
 	if l.findPRInfoFunc != nil {
@@ -319,19 +310,3 @@ func (l *Loop) findPRInfo(workDir string) (number, title string) {
 	return num, t
 }
 
-// resolveConflict rebases onto the default branch and force-pushes to
-// resolve PR merge conflicts before the next merge attempt.
-func (l *Loop) resolveConflict(ctx context.Context) error {
-	l.logger.Log("Rebasing onto default branch to resolve merge conflicts...")
-	if err := l.git.RebaseOntoDefaultBranch(ctx); err != nil {
-		l.logger.Warn("Rebase failed: %v", err)
-		return fmt.Errorf("conflict resolution rebase failed: %w", err)
-	}
-
-	l.logger.Log("Force-pushing rebased branch...")
-	if err := l.forcePush(ctx); err != nil {
-		l.logger.Warn("Force-push after rebase failed: %v", err)
-		return fmt.Errorf("force-push after conflict rebase failed: %w", err)
-	}
-	return nil
-}

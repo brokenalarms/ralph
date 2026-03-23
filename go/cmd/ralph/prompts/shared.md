@@ -31,9 +31,8 @@
 
 ### Github
 - One task = one PR. All commits for a task go into a single pull request. Never push directly to the base branch.
-- Before creating a PR, fetch and rebase onto the latest origin base branch to avoid merge conflicts.
-- Before creating a PR, check if one already exists for the current branch: `gh pr list --head "$(git branch --show-current)" --state open --json number --jq '.[0].number'`. If a PR exists, push your commits and update its title and description to reflect all commits on the branch. Only create a new PR if none exists.
-- Do not create a PR after each commit. Finish all commits for the task, push once, then create or update the PR.
+- Do not create PRs directly — the orchestrator creates and manages PRs with standardized titles. Just push your branch to the remote.
+- Do not create a PR after each commit. Finish all commits for the task, then push once.
 
 ### Boy Scout Rule
 Before committing, glance at the files you touched. If you see something genuinely worth cleaning up, do it:

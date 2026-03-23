@@ -509,3 +509,248 @@ func TestMergeOpts_AlwaysDeletesBranch(t *testing.T) {
 		t.Fatal("mergeOpts should always set DeleteBranch")
 	}
 }
+
+// ResolveConflict rebases onto the default branch and force-pushes, so
+// the PR branch is updated and the merge can be retried.
+func TestResolveConflict_RebasesAndForcePushes(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       st,
+		Logger:      &testLog{},
+	}
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("conflict task", "")
+
+	// Create a commit in the worktree so we have something to push
+	writeFile(t, mgr.WorkDir, "feature.txt", "feature content\n")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add feature")
+
+	// Push the branch so force-push has a remote tracking branch
+	run(t, "git", "-C", mgr.WorkDir, "push", "-u", "origin", mgr.WorktreeBranch)
+
+	// Add a commit to origin/main to make rebase non-trivial
+	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
+	bare := filepath.Join(filepath.Dir(project), "bare.git")
+	run(t, "git", "clone", bare, tmpClone)
+	run(t, "git", "-C", tmpClone, "config", "user.name", "test")
+	run(t, "git", "-C", tmpClone, "config", "user.email", "test@test")
+	writeFile(t, tmpClone, "other.txt", "other content\n")
+	run(t, "git", "-C", tmpClone, "commit", "-m", "divergent commit")
+	run(t, "git", "-C", tmpClone, "push", "origin", "main")
+
+	err := mgr.ResolveConflict(context.Background())
+	if err != nil {
+		t.Fatalf("ResolveConflict: %v", err)
+	}
+
+	// Verify we rebased onto the latest main (divergent commit should be ancestor)
+	divergentRev := gitOutput(tmpClone, "rev-parse", "HEAD")
+	if gitCmdErr(mgr.WorkDir, "merge-base", "--is-ancestor", divergentRev, "HEAD") != nil {
+		t.Error("expected worktree HEAD to be based on the divergent commit after rebase")
+	}
+}
+
+// MergeWithRetry recovers from a merge conflict by rebasing and force-pushing,
+// then retrying the merge successfully.
+func TestMergeWithRetry_RecoversFromConflict(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        filepath.Join(t.TempDir(), "wt"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/test/01-merge-retry",
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	mergeCalls := 0
+	gh := &sequentialMergeGitHub{
+		stubGitHub: stubGitHub{
+			available: true,
+			openPR:    "42",
+			checks:    []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		},
+		mergeResults: []mergeResult{
+			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
+			{output: "merged", err: nil},
+		},
+		onMerge: func() { mergeCalls++ },
+	}
+	mgr.GitHub = gh
+
+	runner := newStubRunner()
+	// Stub git operations that ResolveConflict + AutoMerge use
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", fmt.Errorf("not ancestor"))
+	runner.On("rebase", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("push --force-with-lease", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	mgr.Runner = runner
+
+	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{})
+	if err != nil {
+		t.Fatalf("MergeWithRetry: %v", err)
+	}
+	if !merged {
+		t.Error("expected merge to succeed after conflict resolution")
+	}
+	if mergeCalls < 2 {
+		t.Errorf("expected at least 2 merge attempts, got %d", mergeCalls)
+	}
+}
+
+// MergeWithRetry delegates CI failures to the OnCIFailure callback and
+// retries the merge when the callback reports success.
+func TestMergeWithRetry_DelegatesCIFailure(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        filepath.Join(t.TempDir(), "wt"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/test/01-ci-retry",
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	gh := &sequentialMergeGitHub{
+		stubGitHub: stubGitHub{
+			available: true,
+			openPR:    "55",
+			checks:    []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
+		},
+		// First AutoMerge returns CIFailureError before reaching MergePR.
+		// After CI fix, the second AutoMerge reaches MergePR with CI passing.
+		mergeResults: []mergeResult{
+			{output: "merged", err: nil},
+		},
+	}
+	mgr.GitHub = gh
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil) // already up to date
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	mgr.Runner = runner
+
+	ciFixCalled := false
+	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
+		OnCIFailure: func(ciErr *CIFailureError) bool {
+			ciFixCalled = true
+			return true
+		},
+	})
+	if err != nil {
+		t.Fatalf("MergeWithRetry: %v", err)
+	}
+	if !merged {
+		t.Error("expected merge to succeed after CI fix")
+	}
+	if !ciFixCalled {
+		t.Error("expected OnCIFailure callback to be called")
+	}
+}
+
+// MergeWithRetry gives up after MaxMergeAttempts, preventing infinite loops.
+func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
+	project, _ := initBareRepo(t)
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        filepath.Join(t.TempDir(), "wt"),
+		WorktreeBranch: "ralph/test/01-exhaust",
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	gh := &stubGitHub{
+		available: true,
+		openPR:    "99",
+		checks:    []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
+		mergeErr:  fmt.Errorf("CI failed"),
+	}
+	mgr.GitHub = gh
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	mgr.Runner = runner
+
+	ciFixCalls := 0
+	_, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
+		OnCIFailure: func(ciErr *CIFailureError) bool {
+			ciFixCalls++
+			return true
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error after exhausting retries")
+	}
+	if ciFixCalls != MaxMergeAttempts {
+		t.Errorf("expected %d CI fix attempts, got %d", MaxMergeAttempts, ciFixCalls)
+	}
+}
+
+// sequentialMergeGitHub returns different merge results on successive calls,
+// allowing tests to simulate conflict→success or CI-fail→success sequences.
+type sequentialMergeGitHub struct {
+	stubGitHub
+	mergeResults []mergeResult
+	mergeIdx     int
+	checkCalls   int
+	onMerge      func()
+}
+
+type mergeResult struct {
+	output string
+	err    error
+}
+
+func (s *sequentialMergeGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error) {
+	if s.onMerge != nil {
+		s.onMerge()
+	}
+	if s.mergeIdx < len(s.mergeResults) {
+		r := s.mergeResults[s.mergeIdx]
+		s.mergeIdx++
+		return r.output, r.err
+	}
+	return "merged", nil
+}
+
+func (s *sequentialMergeGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
+	s.checkCalls++
+	// After the first check call, CI passes (simulating a fix was applied)
+	if s.checkCalls > 1 && len(s.stubGitHub.checks) > 0 && s.stubGitHub.checks[0].State == "FAILURE" {
+		return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}, nil
+	}
+	return s.stubGitHub.checks, s.stubGitHub.checksErr
+}
