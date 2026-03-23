@@ -55,6 +55,11 @@ func run(args []string) int {
 	// Resolve project directory to absolute path.
 	cfg.ProjectDir, _ = filepath.Abs(cfg.ProjectDir)
 
+	if !git.IsGitRepo(cfg.ProjectDir) {
+		log.Error("Not a git repository: %s", cfg.ProjectDir)
+		return 1
+	}
+
 	scriptPath, _ := os.Executable()
 	ralphDir := filepath.Join(cfg.ProjectDir, ".ralph")
 
