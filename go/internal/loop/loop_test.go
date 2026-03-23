@@ -3483,3 +3483,60 @@ func TestLoop_PrePushRebaseBeforePush(t *testing.T) {
 		t.Errorf("expected [rebase, push] order, got %v", order)
 	}
 }
+
+// Orchestrator status messages ("All tasks complete!", "No tasks found") must
+// use the [ralph] prefix, not the task backend label (e.g. [beads]). The task
+// label should only appear for actual backend operations.
+func TestLoop_OrchestratorMessagesUseRalphPrefix(t *testing.T) {
+	tests := []struct {
+		name    string
+		backend *stubBackend
+		want    string // substring expected in log output
+	}{
+		{
+			name: "all tasks complete uses ralph prefix",
+			backend: &stubBackend{
+				remaining: 0, completed: 3, total: 3, label: "beads",
+			},
+			want: "[ralph]",
+		},
+		{
+			name: "no tasks error uses ralph prefix",
+			backend: &stubBackend{
+				remaining: 0, completed: 0, total: 0, label: "beads",
+			},
+			want: "[ralph]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, st := setupTestDir(t)
+			ralphDir := filepath.Join(dir, ".ralph")
+
+			var logBuf strings.Builder
+			logger := logging.New(&logBuf)
+
+			gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+			l := New(Config{
+				ProjectDir:    dir,
+				WorkDir:       dir,
+				RalphDir:      ralphDir,
+				MaxIterations: 5,
+				CallsPerHour:  80,
+				TaskBackend:   tt.backend,
+			}, st, gm, logger)
+
+			l.Run(context.Background())
+
+			output := logBuf.String()
+			if strings.Contains(output, "[beads]") {
+				t.Errorf("orchestrator messages should not use [beads] prefix:\n%s", output)
+			}
+			if !strings.Contains(output, tt.want) {
+				t.Errorf("expected %q in log output:\n%s", tt.want, output)
+			}
+		})
+	}
+}

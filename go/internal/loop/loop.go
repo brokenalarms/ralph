@@ -175,14 +175,14 @@ func (l *Loop) Run(ctx context.Context) error {
 				hasTasks, _ := l.cfg.TaskBackend.HasTasks()
 				if !hasTasks {
 					if !l.cfg.Wait {
-						l.logger.TaskError("No tasks found")
+						l.logger.Error("No tasks found")
 						l.state.Write("status", "error")
 						break
 					}
 				}
 			}
 			if !l.cfg.Wait {
-				l.logger.TaskSuccess("All tasks complete!")
+				l.logger.Success("All tasks complete!")
 				l.state.Write("status", "completed")
 				break
 			}
@@ -225,7 +225,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 		l.logger.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done] ---",
 			runIteration, maxIter, iteration, completed, total)
-		l.logger.Task("Next task: %s", nextTask)
+		l.logger.Log("Next task: %s", nextTask)
 
 		touchFile(filepath.Join(l.cfg.RalphDir, ".plan-refresh"))
 
@@ -417,7 +417,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		completed, _ = l.cfg.TaskBackend.CountCompleted()
 		total, _ = l.cfg.TaskBackend.CountTotal()
-		l.logger.Task("Run iteration %d complete (%dm%ds). %d/%d tasks done.",
+		l.logger.Log("Run iteration %d complete (%dm%ds). %d/%d tasks done.",
 			runIteration, int(elapsed.Minutes()), int(elapsed.Seconds())%60, completed, total)
 
 		headAfter := git.HeadRev(l.git.WorkDir)
@@ -890,7 +890,7 @@ func (l *Loop) waitForTasks(ctx context.Context) bool {
 				continue
 			}
 			if hasRemaining {
-				l.logger.TaskSuccess("New tasks detected!")
+				l.logger.Success("New tasks detected!")
 				touchFile(filepath.Join(l.cfg.RalphDir, ".plan-refresh"))
 				return true
 			}
@@ -963,7 +963,7 @@ func (l *Loop) maybeRefactor(refactorEvery int) error {
 	})
 	l.limiter.Increment()
 
-	l.logger.TaskSuccess("Refactor iteration complete")
+	l.logger.Success("Refactor iteration complete")
 	l.state.Write("iterations_since_refactor", "0")
 
 	return err
@@ -1149,7 +1149,7 @@ func (l *Loop) runPreIterationTests(ctx context.Context) string {
 		l.state.Write("last_test_result", "pass")
 		l.state.Write("last_test_output", "")
 		l.state.Write("last_test_time", now)
-		l.logger.TaskSuccess("Pre-iteration tests: all passing")
+		l.logger.Success("Pre-iteration tests: all passing")
 		return "\n- Test suite status: all tests passing as of start."
 	}
 

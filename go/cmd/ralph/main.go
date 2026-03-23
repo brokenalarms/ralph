@@ -152,7 +152,6 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 		return 1
 	}
 	st.Write("task_backend", backend.Label())
-	log.TaskLabel = func() string { return backend.Label() }
 
 	// Set up git manager.
 	gm := &git.Manager{
@@ -295,7 +294,7 @@ func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, sta
 		st := state.NewStore(ralphDir)
 		status, _ := st.Read("status")
 		if status == "completed" {
-			log.Task("All tasks completed from previous run.")
+			log.Log("All tasks completed from previous run.")
 			fmt.Printf("%s[ralph v%s (go)]%s Run fresh? (y/n) ", logging.Yellow, config.Version, logging.Reset)
 			answer, err := readLineCtx(ctx)
 			if err != nil {
@@ -441,7 +440,7 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 	completed, _ := backend.CountCompleted()
 	remaining, _ := backend.CountRemaining()
 	total, _ := backend.CountTotal()
-	log.Task("Tasks: %d/%d completed, %d remaining", completed, total, remaining)
+	log.Log("Tasks: %d/%d completed, %d remaining", completed, total, remaining)
 
 	log.Log("Log:        %s", filepath.Join(ralphDir, "loop.log"))
 	if backend.Label() == "checklist" {
