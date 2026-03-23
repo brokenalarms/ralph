@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -50,15 +51,35 @@ func (l *testLog) contains(substr string) bool {
 
 // initBareRepo creates a bare repo with one commit, plus a clone to act as
 // the "project dir". Returns (projectDir, cleanup).
+func initBareRepoWithBranch(t *testing.T, branch string) (string, func()) {
+	t.Helper()
+	tmp := t.TempDir()
+
+	bare := filepath.Join(tmp, "bare.git")
+	run(t, "git", "init", "--bare", "-b", branch, bare)
+
+	project := filepath.Join(tmp, "project")
+	run(t, "git", "clone", bare, project)
+	run(t, "git", "-C", project, "config", "user.name", "test")
+	run(t, "git", "-C", project, "config", "user.email", "test@test")
+	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "init")
+	run(t, "git", "-C", project, "push", "-u", "origin", branch)
+	run(t, "git", "-C", project, "remote", "set-head", "origin", branch)
+
+	return project, func() {}
+}
+
 func initBareRepo(t *testing.T) (string, func()) {
 	t.Helper()
 	tmp := t.TempDir()
 
 	bare := filepath.Join(tmp, "bare.git")
-	run(t, "git", "init", "--bare", bare)
+	run(t, "git", "init", "--bare", "-b", "main", bare)
 
 	project := filepath.Join(tmp, "project")
 	run(t, "git", "clone", bare, project)
+	run(t, "git", "-C", project, "config", "user.name", "test")
+	run(t, "git", "-C", project, "config", "user.email", "test@test")
 	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "init")
 	run(t, "git", "-C", project, "push", "-u", "origin", "main")
 	// Set origin/HEAD so detectDefaultBranch works
@@ -131,7 +152,7 @@ func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 		Logger:      log,
 	}
 
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree failed: %v", err)
 	}
 
@@ -165,7 +186,7 @@ func TestSetupWorktree_NoWorktreeMode(t *testing.T) {
 		Logger:      &testLog{},
 	}
 
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if mgr.WorkDir != project {
@@ -183,7 +204,7 @@ func TestSetupWorktree_NonGitDirErrors(t *testing.T) {
 		Logger:      &testLog{},
 	}
 
-	err := mgr.SetupWorktree()
+	err := mgr.SetupWorktree(context.Background())
 	if err == nil {
 		t.Fatal("expected error for non-git dir")
 	}
@@ -207,7 +228,7 @@ func TestSetupWorktree_Resume(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("first SetupWorktree: %v", err)
 	}
 	firstWorkDir := mgr.WorkDir
@@ -222,7 +243,7 @@ func TestSetupWorktree_Resume(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr2.SetupWorktree(); err != nil {
+	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("resume SetupWorktree: %v", err)
 	}
 
@@ -249,7 +270,7 @@ func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -266,7 +287,7 @@ func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr2.SetupWorktree(); err != nil {
+	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("resume SetupWorktree: %v", err)
 	}
 
@@ -292,7 +313,7 @@ func TestSetupWorktree_ResumeRestoresTaskSeqFromState(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -318,7 +339,7 @@ func TestSetupWorktree_ResumeRestoresTaskSeqFromState(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr2.SetupWorktree(); err != nil {
+	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("resume SetupWorktree: %v", err)
 	}
 
@@ -343,7 +364,7 @@ func TestResumeRotate_PreservesPreviousBranch(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -361,7 +382,7 @@ func TestResumeRotate_PreservesPreviousBranch(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr2.SetupWorktree(); err != nil {
+	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("resume SetupWorktree: %v", err)
 	}
 
@@ -408,7 +429,7 @@ func TestSetupWorktree_ResumeResetsSquashMergedBranch(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 	mgr.RenameBranchForTask("feature work", "")
@@ -432,7 +453,7 @@ func TestSetupWorktree_ResumeResetsSquashMergedBranch(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr2.SetupWorktree(); err != nil {
+	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("resume SetupWorktree: %v", err)
 	}
 
@@ -463,7 +484,7 @@ func TestSetupWorktree_ResumeResetsDeletedBranch(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 	mgr.RenameBranchForTask("doomed task", "")
@@ -483,7 +504,7 @@ func TestSetupWorktree_ResumeResetsDeletedBranch(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr2.SetupWorktree(); err != nil {
+	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("resume SetupWorktree: %v", err)
 	}
 
@@ -511,7 +532,7 @@ func TestSetupWorktree_ResumeKeepsValidBranch(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 	mgr.RenameBranchForTask("in progress work", "")
@@ -528,7 +549,7 @@ func TestSetupWorktree_ResumeKeepsValidBranch(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr2.SetupWorktree(); err != nil {
+	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("resume SetupWorktree: %v", err)
 	}
 
@@ -555,7 +576,7 @@ func TestRenameBranchForTask_RenamesBranch(t *testing.T) {
 		State:       state,
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -588,7 +609,7 @@ func TestRenameBranchForTask_IncludesTaskID(t *testing.T) {
 		State:       state,
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -613,7 +634,7 @@ func TestRenameBranchForTask_OnlyRenamesOnce(t *testing.T) {
 		State:       state,
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -655,7 +676,7 @@ func TestRotateBranch_CreatesNewTempBranch(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -692,7 +713,7 @@ func TestTaskSeq_IncrementsAcrossRotations(t *testing.T) {
 		State:       state,
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -727,7 +748,7 @@ func TestWorktreeDirUsesDateBasedName(t *testing.T) {
 		State:       state,
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -754,7 +775,7 @@ func TestSecondRunSameDayIncrementsSuffix(t *testing.T) {
 		State:       state,
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -779,7 +800,7 @@ func TestBranchSequenceResetsPerRun(t *testing.T) {
 		State:       state,
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -805,7 +826,7 @@ func TestRotateBranchLogsWarningOnFailure(t *testing.T) {
 		State:       state,
 		Logger:      log,
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -831,7 +852,7 @@ func TestStaleWorktreeBranchCleanedUpViaPrune(t *testing.T) {
 		State:       state,
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("first SetupWorktree: %v", err)
 	}
 	firstWorkDir := mgr.WorkDir
@@ -845,7 +866,7 @@ func TestStaleWorktreeBranchCleanedUpViaPrune(t *testing.T) {
 		State:       newMemState(),
 		Logger:      &testLog{},
 	}
-	if err := mgr2.SetupWorktree(); err != nil {
+	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("second SetupWorktree after prune: %v", err)
 	}
 	if _, err := os.Stat(mgr2.WorkDir); err != nil {
@@ -866,7 +887,7 @@ func TestLiveRalphWorktreeRemovedWhenBranchExists(t *testing.T) {
 		State:       state,
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("first SetupWorktree: %v", err)
 	}
 	firstWorkDir := mgr.WorkDir
@@ -878,7 +899,7 @@ func TestLiveRalphWorktreeRemovedWhenBranchExists(t *testing.T) {
 		State:       newMemState(),
 		Logger:      &testLog{},
 	}
-	if err := mgr2.SetupWorktree(); err != nil {
+	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("second SetupWorktree: %v", err)
 	}
 
@@ -903,7 +924,7 @@ func TestResumeRestoresTaskSeq(t *testing.T) {
 		State:       state,
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -927,7 +948,7 @@ func TestResumeRestoresTaskSeq(t *testing.T) {
 		State:       state,
 		Logger:      &testLog{},
 	}
-	if err := mgr2.SetupWorktree(); err != nil {
+	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("resume SetupWorktree: %v", err)
 	}
 
@@ -954,7 +975,7 @@ func TestWorktreeInheritsGitignore(t *testing.T) {
 		State:       state,
 		Logger:      &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -1023,7 +1044,7 @@ func TestRenameBranchForTask_SkippedInSingleMode(t *testing.T) {
 		State:          st,
 		Logger:         &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -1056,7 +1077,7 @@ func TestRotateBranch_SkippedInSingleMode(t *testing.T) {
 		State:          st,
 		Logger:         &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -1082,7 +1103,7 @@ func TestBranchStrategy_StackedBehavesLikeDefault(t *testing.T) {
 		State:          st,
 		Logger:         &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -1160,7 +1181,7 @@ func TestPostMergeReset_ResetsToOriginMain(t *testing.T) {
 		State:          st,
 		Logger:         &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -1203,7 +1224,7 @@ func TestPostMergeReset_SingleBranchKeepsSameName(t *testing.T) {
 		State:          st,
 		Logger:         &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -1253,7 +1274,7 @@ func TestPostMergeReset_CleansUntrackedAndDirtyFiles(t *testing.T) {
 		State:          st,
 		Logger:         &testLog{},
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -1313,7 +1334,7 @@ func TestPostMergeUpdate_AtomicResetNoStagedChanges(t *testing.T) {
 		State:          st,
 		Logger:         log,
 	}
-	if err := mgr.SetupWorktree(); err != nil {
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -1495,5 +1516,70 @@ func TestNwoFromRemote_SSHAndHTTPS(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("nwoFromRemote(%q) = %q, want %q", tt.remote, got, tt.want)
 		}
+	}
+}
+
+// PushAndCreatePR must pass --base with the configured base branch to gh pr create,
+// so PRs target the correct branch (e.g. develop) instead of the repo default (main).
+func TestPushAndCreatePR_UsesBaseBranch(t *testing.T) {
+	project, cleanup := initBareRepoWithBranch(t, "develop")
+	defer cleanup()
+
+	// Create a worktree on a feature branch (WorkDir must differ from ProjectDir).
+	wtDir := filepath.Join(t.TempDir(), "worktree")
+	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
+	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
+
+	// Create a fake gh script that records its arguments.
+	binDir := t.TempDir()
+	ghLog := filepath.Join(t.TempDir(), "gh-args.log")
+	ghScript := filepath.Join(binDir, "gh")
+	if err := os.WriteFile(ghScript, []byte(fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %s
+# For pr list, output empty (no existing PR)
+if [ "$2" = "list" ]; then
+  echo ""
+fi
+`, ghLog)), 0755); err != nil {
+		t.Fatalf("writing fake gh: %v", err)
+	}
+	// Prepend fake gh to PATH.
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+":"+origPath)
+
+	log := &testLog{}
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        wtDir,
+		WorktreeBranch: "ralph/test/feature",
+		BaseBranch:     "develop",
+		Logger:         log,
+	}
+
+	err := mgr.PushAndCreatePR(context.Background(), "test task")
+	if err != nil {
+		t.Fatalf("PushAndCreatePR failed: %v (log: %v)", err, log.messages)
+	}
+
+	ghArgs, readErr := os.ReadFile(ghLog)
+	if readErr != nil {
+		t.Fatalf("reading gh log: %v", readErr)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(ghArgs)), "\n")
+	// Find the pr create invocation.
+	var createLine string
+	for _, line := range lines {
+		if strings.Contains(line, "pr create") {
+			createLine = line
+			break
+		}
+	}
+	if createLine == "" {
+		t.Fatal("expected gh pr create to be called, but it was not")
+	}
+
+	if !strings.Contains(createLine, "--base develop") {
+		t.Errorf("gh pr create should include --base develop, got: %s", createLine)
 	}
 }

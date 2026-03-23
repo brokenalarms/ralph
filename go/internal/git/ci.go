@@ -146,13 +146,12 @@ type CIFetchFunc func(prNumber, repoURL string) ([]CICheckResult, error)
 // waitForCI polls PR checks until they complete or timeout is reached.
 // The fetch parameter controls how checks are retrieved — production code
 // passes fetchPRChecks; tests can inject a stub.
-func waitForCI(fetch CIFetchFunc, prNumber, repoURL string, interval, timeout time.Duration, log Log, ctx ...context.Context) ([]CICheckResult, CIStatus, error) {
+func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL string, interval, timeout time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
 	deadline := time.Now().Add(timeout)
 
-	// Optional context for cancellation.
 	var done <-chan struct{}
-	if len(ctx) > 0 && ctx[0] != nil {
-		done = ctx[0].Done()
+	if ctx != nil {
+		done = ctx.Done()
 	}
 
 	for {
