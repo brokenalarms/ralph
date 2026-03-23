@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -78,7 +77,7 @@ type Loop struct {
 	forcePushFunc      func(ctx context.Context) error
 	prePushRebaseFunc  func(ctx context.Context) error
 	verifyFunc      func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
-	llmVerifyFunc   func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, model ...string) verify.Result
+	llmVerifyFunc   func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, model ...string) verify.Result
 	newRunnerFunc      func() claudeRunner
 	findPRInfoFunc     func(workDir string) (number, title string)
 	lastAction         analyzer.Action
@@ -387,7 +386,7 @@ func (l *Loop) Run(ctx context.Context) error {
 					beadDesc := l.getBeadDescription(taskID)
 
 					l.logger.Log("Running LLM verification...")
-					llmResult := l.llmVerifyFunc(ctx, workDir, l.cfg.Dirs.PromptsDir, taskID, headBefore, nextTask, beadDesc)
+					llmResult := l.llmVerifyFunc(ctx, workDir, l.cfg.Dirs.PromptsDir, taskID, headBefore, nextTask, beadDesc, l.git.GitHub)
 
 					if !llmResult.Passed {
 						l.logger.Error("LLM verification rejected: %s", llmResult.Details)
@@ -415,7 +414,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 						// Escalate to Sonnet for re-verification (Haiku already rejected)
 						l.logger.Log("Escalating verification to Sonnet...")
-						llmResult2 := l.llmVerifyFunc(ctx, workDir, l.cfg.Dirs.PromptsDir, taskID, headBefore, nextTask, beadDesc, "claude-sonnet-4-6")
+						llmResult2 := l.llmVerifyFunc(ctx, workDir, l.cfg.Dirs.PromptsDir, taskID, headBefore, nextTask, beadDesc, l.git.GitHub, "claude-sonnet-4-6")
 						if !llmResult2.Passed {
 							l.logger.Error("Sonnet also rejects: %s", llmResult2.Details)
 							// Skip this task instead of accepting bad work
@@ -909,19 +908,15 @@ func (l *Loop) findPRInfo(workDir string) (number, title string) {
 	if l.findPRInfoFunc != nil {
 		return l.findPRInfoFunc(workDir)
 	}
-	cmd := exec.Command("gh", "pr", "list",
-		"--head", l.git.WorktreeBranch,
-		"--state", "all", "--json", "number,title", "--jq", ".[0] | \"\\(.number)\\t\\(.title)\"")
-	cmd.Dir = workDir
-	out, err := cmd.Output()
+	gh := l.git.GitHub
+	if gh == nil {
+		return "", ""
+	}
+	num, t, err := gh.FindPR(l.git.WorktreeBranch, workDir)
 	if err != nil {
 		return "", ""
 	}
-	parts := strings.SplitN(strings.TrimSpace(string(out)), "\t", 2)
-	if len(parts) < 2 {
-		return strings.TrimSpace(string(out)), ""
-	}
-	return parts[0], parts[1]
+	return num, t
 }
 
 func (l *Loop) waitForTasks(ctx context.Context) bool {

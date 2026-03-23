@@ -30,6 +30,10 @@ type stubGitHub struct {
 	postEnforceErr      error
 	postEnforceCalled   bool
 	checkEnforceCalled  bool
+	prNumber            string
+	prTitle             string
+	searchPRNumber      string
+	prDiff              string
 }
 
 func (s *stubGitHub) Available() bool { return s.available }
@@ -64,6 +68,15 @@ func (s *stubGitHub) CheckEnforceAdmins(nwo, branch string) (bool, error) {
 func (s *stubGitHub) PostEnforceAdmins(nwo, branch string) (string, error) {
 	s.postEnforceCalled = true
 	return s.postEnforceOutput, s.postEnforceErr
+}
+func (s *stubGitHub) FindPR(branch, workDir string) (string, string, error) {
+	return s.prNumber, s.prTitle, s.findPRErr
+}
+func (s *stubGitHub) SearchPR(workDir, query string) (string, error) {
+	return s.searchPRNumber, nil
+}
+func (s *stubGitHub) PRDiff(workDir, prNumber string) (string, error) {
+	return s.prDiff, nil
 }
 
 // gitCall records a single git command invocation for assertion.

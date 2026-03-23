@@ -523,6 +523,16 @@ func DiffStatRange(dir, from, to string) string {
 	return gitOutput(dir, "diff", "--stat", from, to)
 }
 
+// DiffFull returns the full diff between two commits.
+func DiffFull(dir, from, to string) string {
+	return gitOutput(dir, "diff", from+".."+to)
+}
+
+// LogOneline returns the oneline log between two commits.
+func LogOneline(dir, from, to string) string {
+	return gitOutput(dir, "log", "--oneline", from+".."+to)
+}
+
 // RecentChangedFiles returns files changed in the last N commits.
 func RecentChangedFiles(dir string, n int) string {
 	return gitOutput(dir, "diff", "--name-only", fmt.Sprintf("HEAD~%d", n), "HEAD")

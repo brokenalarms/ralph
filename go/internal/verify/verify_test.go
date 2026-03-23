@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/brokenalarms/ralph/internal/git"
 )
 
 // DetectTestCommand finds a Makefile test target when present,
@@ -135,7 +137,7 @@ func TestRunTests_NoTestRunner(t *testing.T) {
 func TestCheckCommits_NoNewCommits(t *testing.T) {
 	dir := setupGitRepo(t)
 
-	head := gitHeadRev(dir)
+	head := git.HeadRev(dir)
 	result := CheckCommits(dir, head)
 	if result.Passed {
 		t.Error("expected failure when HEAD hasn't moved")
@@ -150,7 +152,7 @@ func TestCheckCommits_NoNewCommits(t *testing.T) {
 func TestCheckCommits_WithNewCommits(t *testing.T) {
 	dir := setupGitRepo(t)
 
-	headBefore := gitHeadRev(dir)
+	headBefore := git.HeadRev(dir)
 
 	// Make a new commit
 	os.WriteFile(filepath.Join(dir, "new.txt"), []byte("change"), 0o644)
@@ -195,7 +197,7 @@ func TestLastNLines_ShortInput(t *testing.T) {
 // the full test suite.
 func TestPreflightChecks_WithChanges(t *testing.T) {
 	dir := setupGitRepo(t)
-	headBefore := gitHeadRev(dir)
+	headBefore := git.HeadRev(dir)
 
 	os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main"), 0o644)
 	exec.Command("git", "-C", dir, "add", ".").Run()
@@ -217,7 +219,7 @@ func TestPreflightChecks_WithChanges(t *testing.T) {
 // closes the task before the orchestrator verifies it.
 func TestPreflightChecks_PrematureClose(t *testing.T) {
 	dir := setupGitRepo(t)
-	headBefore := gitHeadRev(dir)
+	headBefore := git.HeadRev(dir)
 
 	result := PreflightChecks(dir, headBefore, "closed")
 	if result.BeadOpen {
@@ -228,7 +230,7 @@ func TestPreflightChecks_PrematureClose(t *testing.T) {
 // PreflightChecks correctly reports no changes when HEAD hasn't moved.
 func TestPreflightChecks_NoChanges(t *testing.T) {
 	dir := setupGitRepo(t)
-	headBefore := gitHeadRev(dir)
+	headBefore := git.HeadRev(dir)
 
 	result := PreflightChecks(dir, headBefore, "in_progress")
 	if result.FilesChanged {
@@ -283,12 +285,66 @@ func TestLoadReviewPrompt_Fallback(t *testing.T) {
 // LLMVerifyPR passes when no PR and no diff exist — agent confirmed task complete.
 func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
 	dir := setupGitRepo(t)
-	head := gitHeadRev(dir)
+	head := git.HeadRev(dir)
 
-	result := LLMVerifyPR(context.Background(), dir, t.TempDir(), "nonexistent-task", head, "some task", "some description")
+	result := LLMVerifyPR(context.Background(), dir, t.TempDir(), "nonexistent-task", head, "some task", "some description", nil)
 	if !result.Passed {
 		t.Errorf("expected pass when agent confirms complete with no new work needed, got: %s", result.Reason)
 	}
+}
+
+// LLMVerifyPR delegates PR lookup to the GitHub interface rather than
+// shelling out to gh directly, proving git/gh exec.Command calls are
+// routed through the git module.
+func TestLLMVerifyPR_UsesGitHubInterface(t *testing.T) {
+	dir := setupGitRepo(t)
+	head := git.HeadRev(dir)
+
+	stub := &stubGitHub{
+		searchResult: "99",
+		prDiff:       "+new line\n",
+	}
+
+	result := LLMVerifyPR(context.Background(), dir, t.TempDir(), "test-task", head, "test", "test desc", stub)
+
+	if !stub.searchCalled {
+		t.Error("expected SearchPR to be called via GitHub interface")
+	}
+	if !stub.prDiffCalled {
+		t.Error("expected PRDiff to be called via GitHub interface")
+	}
+
+	// LLM call will fail (no claude binary in test), so we expect pass with skip reason
+	_ = result
+}
+
+// stubGitHub implements git.GitHub for testing that verify delegates
+// to the interface instead of calling exec.Command directly.
+type stubGitHub struct {
+	searchResult string
+	prDiff       string
+	searchCalled bool
+	prDiffCalled bool
+}
+
+func (s *stubGitHub) Available() bool                                    { return true }
+func (s *stubGitHub) FindOpenPR(string, string) (string, error)         { return "", nil }
+func (s *stubGitHub) CreatePR(git.CreatePROpts) error                   { return nil }
+func (s *stubGitHub) EditPR(string, string, string) error               { return nil }
+func (s *stubGitHub) MergePR(string, string, git.MergeOpts) (string, error) { return "", nil }
+func (s *stubGitHub) UpdateBranch(string, string, string) (bool, error) { return false, nil }
+func (s *stubGitHub) ListChecks(string, string) ([]git.CICheckResult, error) { return nil, nil }
+func (s *stubGitHub) GetRunLog(string, string) string                   { return "" }
+func (s *stubGitHub) CheckEnforceAdmins(string, string) (bool, error)   { return false, nil }
+func (s *stubGitHub) PostEnforceAdmins(string, string) (string, error)  { return "", nil }
+func (s *stubGitHub) FindPR(string, string) (string, string, error)     { return "", "", nil }
+func (s *stubGitHub) SearchPR(_ string, _ string) (string, error) {
+	s.searchCalled = true
+	return s.searchResult, nil
+}
+func (s *stubGitHub) PRDiff(_ string, _ string) (string, error) {
+	s.prDiffCalled = true
+	return s.prDiff, nil
 }
 
 func setupGitRepo(t *testing.T) string {
