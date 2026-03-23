@@ -99,3 +99,32 @@ func TestFormatArgs(t *testing.T) {
 		t.Errorf("format interpolation failed: %s", got)
 	}
 }
+
+// Verifies that streaming mode suppresses stdout writes while continuing
+// to write to the log file. This prevents duplicate lines when a tail
+// goroutine is the sole stdout writer during a Claude Run().
+func TestStreamingModeSuppressesStdout(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile, TaskLabel: func() string { return "ralph" }}
+
+	l.SetStreaming(true)
+	l.Log("streamed message")
+	l.Phase("streamed phase")
+
+	if stdout.Len() != 0 {
+		t.Errorf("streaming mode should suppress stdout, got: %q", stdout.String())
+	}
+	if !strings.Contains(logFile.String(), "streamed message") {
+		t.Error("streaming mode should still write to log file")
+	}
+	if !strings.Contains(logFile.String(), "streamed phase") {
+		t.Error("streaming mode should still write phase to log file")
+	}
+
+	l.SetStreaming(false)
+	l.Log("normal message")
+
+	if !strings.Contains(stdout.String(), "normal message") {
+		t.Error("after disabling streaming, stdout should resume")
+	}
+}
