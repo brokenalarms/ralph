@@ -206,7 +206,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		IdleTimeoutProgress: cfg.IdleTimeoutProgress,
 		Wait:                cfg.Wait,
 		WaitInterval:        cfg.WaitInterval,
-		OnRebaseConflict:    promptRebaseRecovery(ctx),
+		OnRebaseConflict:    promptRebaseRecovery(ctx, cfg.Wait),
 		VerifyDir:           dirs.WorkDir,
 	}, st, gm, log)
 
@@ -262,12 +262,19 @@ func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, sta
 		status, _ := st.Read("status")
 		if status == "completed" {
 			log.Log("All tasks completed from previous run.")
-			fmt.Printf("%s[ralph v%s (go)]%s Run fresh? (y/n) ", logging.Yellow, config.Version, logging.Reset)
-			answer, err := readLineCtx(ctx)
-			if err != nil {
-				return false, 0
+			runFresh := false
+			if cfg.Wait {
+				log.Log("--wait: auto-resetting for new tasks")
+				runFresh = true
+			} else {
+				fmt.Printf("%s[ralph v%s (go)]%s Run fresh? (y/n) ", logging.Yellow, config.Version, logging.Reset)
+				answer, err := readLineCtx(ctx)
+				if err != nil {
+					return false, 0
+				}
+				runFresh = answer == "y" || answer == "Y"
 			}
-			if answer == "y" || answer == "Y" {
+			if runFresh {
 				os.RemoveAll(ralphDir)
 				os.MkdirAll(ralphDir, 0o755)
 				touchFile(logFile)
