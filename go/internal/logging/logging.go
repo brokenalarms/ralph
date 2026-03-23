@@ -102,6 +102,16 @@ func (l *Logger) PhaseColor(color string, format string, args ...any) {
 	fmt.Fprint(l.logFile, line)
 }
 
+// DashedSeparator writes a bold, colored full-width dashed line using ─ characters.
+func (l *Logger) DashedSeparator(color string) {
+	const totalWidth = 72
+	line := fmt.Sprintf("\n%s%s%s%s\n\n", Bold, color, strings.Repeat("─", totalWidth), Reset)
+	if !l.streaming {
+		fmt.Fprint(l.out, line)
+	}
+	fmt.Fprint(l.logFile, line)
+}
+
 // Separator writes a bold, colored full-width separator with a centered label.
 func (l *Logger) Separator(color, label string) {
 	const totalWidth = 72

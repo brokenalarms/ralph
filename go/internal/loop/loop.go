@@ -241,6 +241,10 @@ func (l *Loop) Run(ctx context.Context) error {
 		completed, _ := l.cfg.TaskBackend.CountCompleted()
 		total, _ := l.cfg.TaskBackend.CountTotal()
 
+		if runIteration > 1 {
+			l.logger.DashedSeparator(logging.Yellow)
+		}
+
 		phaseColor := logging.Green
 		if l.lastAction == analyzer.Warn {
 			phaseColor = logging.Yellow
