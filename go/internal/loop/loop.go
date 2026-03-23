@@ -374,13 +374,19 @@ func (l *Loop) Run(ctx context.Context) error {
 							return false
 						}
 
-						// Re-run LLM check using PR diff
-						llmResult2 := verify.LLMVerifyPR(ctx, workDir, l.cfg.PromptsDir, taskID, headBefore, nextTask, beadDesc)
+						// Escalate to Sonnet for re-verification (Haiku already rejected)
+						l.logger.Log("Escalating verification to Sonnet...")
+						llmResult2 := verify.LLMVerifyPR(ctx, workDir, l.cfg.PromptsDir, taskID, headBefore, nextTask, beadDesc, "claude-sonnet-4-6")
 						if !llmResult2.Passed {
-							l.logger.Warn("LLM still rejects after fix agent: %s — accepting anyway (tests passed)", llmResult2.Details)
-						} else {
-							l.logger.Log("LLM verified after fix: %s", llmResult2.Reason)
+							l.logger.Warn("Sonnet also rejects: %s", llmResult2.Details)
+							// Skip this task instead of accepting bad work
+							if taskID != "" {
+								l.cfg.TaskBackend.SkipTask(taskID, "verification_rejected: "+llmResult2.Details)
+								l.logger.Warn("Skipping task %s — verification rejected twice", taskID)
+							}
+							return false
 						}
+						l.logger.Log("Sonnet verified after fix: %s", llmResult2.Reason)
 					} else {
 						l.logger.Log("LLM verified: %s", llmResult.Reason)
 					}
@@ -765,7 +771,7 @@ func (l *Loop) loadVerifyPrompt(filename string, vars map[string]string) string 
 
 // getBeadDescription retrieves the bead description for LLM verification.
 func (l *Loop) getBeadDescription(taskID string) string {
-	if taskID == "" {
+	if taskID == "" || l.cfg.TaskBackend == nil {
 		return ""
 	}
 	desc, err := l.cfg.TaskBackend.GetDescription(taskID)
@@ -961,10 +967,14 @@ func (l *Loop) maybeRefactor(refactorEvery int) error {
 }
 
 func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
-	if taskID != "" {
-		return fmt.Sprintf("Complete this task (bd id: %s): %s", taskID, nextTask)
+	if taskID == "" {
+		return fmt.Sprintf("Complete this task: %s", nextTask)
 	}
-	return fmt.Sprintf("Complete this task: %s", nextTask)
+	desc := l.getBeadDescription(taskID)
+	if desc != "" {
+		return fmt.Sprintf("Complete this task (bd id: %s): %s\n\nDescription:\n%s", taskID, nextTask, desc)
+	}
+	return fmt.Sprintf("Complete this task (bd id: %s): %s", taskID, nextTask)
 }
 
 func (l *Loop) buildPrompt(taskPrompt, feedback, attemptHistory, testStatus string) (string, error) {

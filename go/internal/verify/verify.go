@@ -184,7 +184,7 @@ func PreflightChecks(workDir, headBefore string, beadStatus string) PreflightRes
 // Prefers the PR diff (which covers work from prior iterations) over the
 // current iteration's diff. Falls back to iteration diff when no PR exists.
 // Uses prompts/verify-review.md as the review template when available.
-func LLMVerifyPR(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string) Result {
+func LLMVerifyPR(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, model ...string) Result {
 	diff := getPRDiff(ctx, workDir, taskID)
 	source := "PR"
 	if diff == "" {
@@ -203,7 +203,7 @@ func LLMVerifyPR(ctx context.Context, workDir, promptsDir, taskID, headBefore, b
 	}
 
 	prompt := loadReviewPrompt(promptsDir, beadTitle, beadDescription, source, diff)
-	return callLLM(ctx, workDir, prompt)
+	return callLLM(ctx, workDir, prompt, model...)
 }
 
 func loadReviewPrompt(promptsDir, beadTitle, beadDescription, source, diff string) string {
@@ -258,9 +258,13 @@ func getPRDiff(ctx context.Context, workDir, taskID string) string {
 	return string(diffOut)
 }
 
-// callLLM sends a prompt to Claude Haiku and interprets YES/NO response.
-func callLLM(ctx context.Context, workDir, prompt string) Result {
-	cmd := exec.CommandContext(ctx, "claude", "--print", "--model", "claude-haiku-4-5-20251001", "-p", prompt)
+// callLLM sends a prompt to a Claude model and interprets YES/NO response.
+func callLLM(ctx context.Context, workDir, prompt string, model ...string) Result {
+	m := "claude-haiku-4-5-20251001"
+	if len(model) > 0 && model[0] != "" {
+		m = model[0]
+	}
+	cmd := exec.CommandContext(ctx, "claude", "--print", "--model", m, "-p", prompt)
 	cmd.Dir = workDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
