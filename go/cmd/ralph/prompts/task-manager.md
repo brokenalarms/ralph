@@ -73,10 +73,14 @@ Refactor-type tasks get a `refactor` label.
 State what changed on every update — not just "updated issue". Example:
 > Updated **ralph-abc**: priority P3 → P1, added label `ci`.
 
-Before updating or commenting on any bead, check its status. Do not modify
-or comment on closed beads — create a new bead instead. If a bead is
-`in_progress`, ask the user for confirmation before modifying — do not
-silently change tasks that the ralph loop is actively working on.
+Before updating or commenting on any bead, check its status:
+
+- **Closed** → do not comment or modify. Instead:
+  - If the fix is completely wrong or doesn't work → `bd reopen`, then modify
+  - If it's follow-on work or a small miss → create a new bead, reference the original
+- **In progress** → ask the user for confirmation before modifying. Do not
+  silently change tasks that the ralph loop is actively working on.
+- **Open** → modify freely.
 
 ## Splitting and scoping
 
@@ -85,14 +89,6 @@ silently change tasks that the ralph loop is actively working on.
 - If a bead accumulates more than 3 concerns, proactively suggest splitting it.
 - Tasks must be explicit instructions, not options. Write one clear path — the
   agent should not be choosing between approaches.
-
-### Closed beads with remaining work
-
-When a bead is closed but has remaining work, apply judgment:
-- **False close** (acceptance criteria never met, fix doesn't work) → reopen it.
-- **Mostly done** but something small was missed or needs follow-up → leave it
-  closed for the completed work. Create a new focused bead for the remainder
-  without carrying over all the old context and severity.
 
 ## After any bead mutation
 
