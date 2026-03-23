@@ -209,6 +209,30 @@ func (m *Manager) tryResumeWorktree() error {
 		return m.resetResumedWorktree(defaultBranch)
 	}
 
+	// Stash uncommitted changes, rebase onto latest, then reapply.
+	dirty := gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
+		gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
+	if dirty {
+		m.Logger.Log("Stashing uncommitted changes before rebase...")
+		gitCmd(m.WorkDir, "stash", "push", "-m", "ralph-resume-autostash")
+	}
+
+	if refExists(m.WorkDir, "origin/"+defaultBranch) {
+		if err := gitCmdErr(m.WorkDir, "rebase", "origin/"+defaultBranch); err != nil {
+			m.Logger.Warn("Rebase failed on resume: %v — aborting rebase", err)
+			gitCmd(m.WorkDir, "rebase", "--abort")
+		}
+	}
+
+	if dirty {
+		if err := gitCmdErr(m.WorkDir, "stash", "pop"); err != nil {
+			m.Logger.Warn("Stash pop conflict — committing stash as WIP")
+			gitCmd(m.WorkDir, "checkout", "--theirs", ".")
+			gitCmd(m.WorkDir, "add", "-A")
+			gitCmd(m.WorkDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
+		}
+	}
+
 	return nil
 }
 

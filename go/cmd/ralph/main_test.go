@@ -53,6 +53,7 @@ func (s *stubBackend) ExecutionInstructions() (string, error)     { return "", n
 func (s *stubBackend) ProjectContext() (string, error)            { return "", nil }
 func (s *stubBackend) PlanningInstructions() string               { return "" }
 func (s *stubBackend) GetDescription(_ string) (string, error)    { return "", nil }
+func (s *stubBackend) GetFullContext(_ string) (string, error)    { return "", nil }
 func (s *stubBackend) Label() string                              { return "checklist" }
 
 // Verifies the resume script contains the correct flags from the config,
