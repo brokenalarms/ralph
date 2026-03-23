@@ -366,7 +366,7 @@ func (m *Manager) RotateBranch() {
 // none exists. This ensures the Go code owns the push/PR lifecycle rather
 // than relying on Claude to do it — critical for single-branch mode where
 // the branch name doesn't change between tasks.
-func (m *Manager) PushAndCreatePR(ctx context.Context, taskDesc string) error {
+func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) error {
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
 		return nil
 	}
@@ -406,6 +406,9 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskDesc string) error {
 	}
 
 	title := taskDesc
+	if taskID != "" {
+		title = "[" + taskID + "] " + title
+	}
 	if len(title) > 70 {
 		title = title[:67] + "..."
 	}

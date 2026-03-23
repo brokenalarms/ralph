@@ -67,7 +67,7 @@ type Loop struct {
 	logger     *logging.Logger
 	signals    claude.SignalPaths
 	mergeFunc          func(ctx context.Context) (bool, error)
-	pushPRFunc         func(ctx context.Context, taskDesc string) error
+	pushPRFunc         func(ctx context.Context, taskID, taskDesc string) error
 	forcePushFunc      func(ctx context.Context) error
 	prePushRebaseFunc  func(ctx context.Context) error
 	verifyFunc     func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
@@ -507,12 +507,12 @@ func (l *Loop) Run(ctx context.Context) error {
 				}
 			}
 
-			if err := l.pushAndCreatePR(ctx, nextTask); err != nil {
+			if err := l.pushAndCreatePR(ctx, taskID, nextTask); err != nil {
 				l.logger.Warn("Push/PR: %v", err)
 			}
 
 			if l.cfg.AutoMerge {
-				merged, err := l.mergeWithRetry(ctx, nextTask, workDir, rawLogPath)
+				merged, err := l.mergeWithRetry(ctx, taskID, nextTask, workDir, rawLogPath)
 				if err != nil {
 					l.logger.Warn("Auto-merge: %v", err)
 				}
@@ -580,7 +580,7 @@ const maxMergeAttempts = 4
 // mergeWithRetry is the single merge pipeline: try merge, detect error type,
 // handle it, retry. Replaces the former handleAutoMergeError / handleMergeConflict /
 // handleCIFailure chain with a linear retry loop.
-func (l *Loop) mergeWithRetry(ctx context.Context, nextTask, workDir, rawLogPath string) (bool, error) {
+func (l *Loop) mergeWithRetry(ctx context.Context, taskID, nextTask, workDir, rawLogPath string) (bool, error) {
 	for attempt := 0; attempt < maxMergeAttempts; attempt++ {
 		merged, err := l.autoMerge(ctx)
 		if err == nil {
@@ -601,7 +601,7 @@ func (l *Loop) mergeWithRetry(ctx context.Context, nextTask, workDir, rawLogPath
 
 		var ciErr *git.CIFailureError
 		if errors.As(err, &ciErr) {
-			if !l.tryFixCI(ctx, ciErr, nextTask, workDir, rawLogPath) {
+			if !l.tryFixCI(ctx, ciErr, taskID, nextTask, workDir, rawLogPath) {
 				return false, err
 			}
 			continue
@@ -631,7 +631,7 @@ func (l *Loop) resolveConflict(ctx context.Context) error {
 
 // tryFixCI spawns a fix agent to address CI failures, pushes the fix,
 // and returns true if the fix was applied (ready for merge retry).
-func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask, workDir, rawLogPath string) bool {
+func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, nextTask, workDir, rawLogPath string) bool {
 	l.logger.Log("CI failed on PR #%s — spawning fix agent", ciErr.PRNumber)
 
 	ciLog := l.getCIFailureLog(ciErr.PRNumber)
@@ -648,7 +648,7 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask
 		return false
 	}
 
-	if pushErr := l.pushAndCreatePR(ctx, nextTask); pushErr != nil {
+	if pushErr := l.pushAndCreatePR(ctx, taskID, nextTask); pushErr != nil {
 		l.logger.Warn("Push after CI fix failed: %v", pushErr)
 		return false
 	}
@@ -828,11 +828,11 @@ func (l *Loop) prePushRebase(ctx context.Context) error {
 	return l.handleRebase(ctx)
 }
 
-func (l *Loop) pushAndCreatePR(ctx context.Context, taskDesc string) error {
+func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc string) error {
 	if l.pushPRFunc != nil {
-		return l.pushPRFunc(ctx, taskDesc)
+		return l.pushPRFunc(ctx, taskID, taskDesc)
 	}
-	return l.git.PushAndCreatePR(ctx, taskDesc)
+	return l.git.PushAndCreatePR(ctx, taskID, taskDesc)
 }
 
 func (l *Loop) autoMerge(ctx context.Context) (bool, error) {
