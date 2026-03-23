@@ -142,7 +142,7 @@ func TestManager_PushAndCreatePR_NoRealProcesses(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &stubGitHub{available: true, openPR: "42"}
+	gh := &stubGitHub{available: true, openPR: ""}
 
 	dir := t.TempDir()
 	mgr := &Manager{
@@ -161,7 +161,39 @@ func TestManager_PushAndCreatePR_NoRealProcesses(t *testing.T) {
 	}
 
 	if !r.CalledWith("push") {
-		t.Error("expected push to be called")
+		t.Error("expected push to be called when no PR exists")
+	}
+}
+
+// PushAndCreatePR skips push when the agent already pushed and a PR exists.
+func TestManager_PushAndCreatePR_SkipsPushWhenPRExists(t *testing.T) {
+	r := newStubRunner()
+	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
+	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	r.On("rev-list --count origin/main..HEAD", "3", nil)
+	r.On("fetch", "", nil)
+	r.On("merge-base --is-ancestor", "", nil)
+
+	gh := &stubGitHub{available: true, openPR: "42"}
+
+	dir := t.TempDir()
+	mgr := &Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir + "/worktree",
+		WorktreeBranch: "ralph/test/01-feature",
+		Runner:         r,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         discardLog{},
+	}
+
+	err := mgr.PushAndCreatePR(context.Background(), "test-123", "test feature")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if r.CalledWith("push") {
+		t.Error("push should be skipped when a PR already exists")
 	}
 }
 

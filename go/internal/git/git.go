@@ -528,6 +528,18 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 		return nil
 	}
 
+	gh := m.gh()
+	if !gh.Available() {
+		return fmt.Errorf("gh CLI not found — cannot create PR")
+	}
+
+	// If the agent already pushed and created a PR, skip the push.
+	prNumber, _ := gh.FindOpenPR(m.WorktreeBranch, repoURL)
+	if prNumber != "" {
+		m.Logger.Log("PR #%s exists for %s", prNumber, m.WorktreeBranch)
+		return nil
+	}
+
 	// Push branch to remote.
 	m.Logger.Log("Pushing %s...", m.WorktreeBranch)
 	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "push", "-u", "origin", m.WorktreeBranch); err != nil {
@@ -535,17 +547,6 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 			return ctx.Err()
 		}
 		return fmt.Errorf("push failed for %s", m.WorktreeBranch)
-	}
-
-	gh := m.gh()
-	if !gh.Available() {
-		return fmt.Errorf("gh CLI not found — cannot create PR")
-	}
-
-	prNumber, _ := gh.FindOpenPR(m.WorktreeBranch, repoURL)
-	if prNumber != "" {
-		m.Logger.Log("PR #%s exists for %s", prNumber, m.WorktreeBranch)
-		return nil
 	}
 
 	title := taskDesc
