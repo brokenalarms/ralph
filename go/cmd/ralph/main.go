@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"embed"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -37,56 +36,24 @@ func run(args []string) int {
 		return handleSubcommand(sub, log)
 	}
 
-	cfg, err := config.Parse(args)
-	if errors.Is(err, config.ErrHelp) {
-		printUsage()
-		return 0
-	}
-	if err != nil {
-		log.Error("%v", err)
-		printUsage()
-		return 1
-	}
-	if err := cfg.Validate(); err != nil {
-		log.Error("%v", err)
-		return 1
-	}
-
-	// Resolve project directory to absolute path.
-	cfg.ProjectDir, _ = filepath.Abs(cfg.ProjectDir)
-
-	if !git.IsGitRepo(cfg.ProjectDir) {
-		log.Error("Not a git repository: %s", cfg.ProjectDir)
-		return 1
-	}
-
-	scriptPath, _ := os.Executable()
-	ralphDir := filepath.Join(cfg.ProjectDir, ".ralph")
-
-	// Use on-disk prompts if available (running ralph on itself), otherwise
-	// extract embedded prompts to a temp dir.
-	promptsDir := filepath.Join(cfg.ProjectDir, "go", "cmd", "ralph", "prompts")
-	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
-		tmpDir, err := extractEmbeddedPrompts()
-		if err != nil {
-			log.Error("Failed to extract embedded prompts: %v", err)
-			return 1
+	// No subcommand: check for help flag, otherwise show usage.
+	for _, a := range args {
+		if a == "-h" || a == "--help" {
+			printUsage()
+			return 0
 		}
-		promptsDir = tmpDir
 	}
 
-	// Tmux outer wrapper: set up tmux session, then re-exec ralph inside pane 0.
-	// Ensure .ralph dir exists before tmux setup writes scripts into it.
-	if cfg.UseTmux {
-		if err := os.MkdirAll(ralphDir, 0o755); err != nil {
-			log.Error("Failed to create .ralph dir: %v", err)
-			return 1
-		}
-		return handleTmux(cfg, scriptPath, args, ralphDir, log)
+	if len(args) > 0 {
+		log.Error("unknown command: %s", args[0])
+		fmt.Println()
 	}
 
-	dirs := workctx.New(cfg.ProjectDir, promptsDir)
-	return runMain(cfg, dirs, scriptPath, args, log)
+	printUsage()
+	if len(args) > 0 {
+		return 1
+	}
+	return 0
 }
 
 func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, args []string, log *logging.Logger) int {
@@ -364,7 +331,7 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 	content := fmt.Sprintf(`#!/usr/bin/env bash
 # Ralph Loop - Resume Script
 # Generated at: %s
-exec "%s" --dir "%s" --max %d%s
+exec "%s" loop --dir "%s" --max %d%s
 `, time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 		scriptPath, cfg.ProjectDir, cfg.MaxIterations, extra)
 

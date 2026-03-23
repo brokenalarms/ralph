@@ -536,4 +536,33 @@ func TestBuildTaskManagerPrompt_EchoBackIncludesDescription(t *testing.T) {
 	}
 }
 
+// Proves: BuildReviewPrompt assembles the shared quality standards and
+// refactor style guide into an interactive review session prompt.
+func TestBuildReviewPrompt(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildReviewPrompt(dir, "/tmp/project", "/tmp/project/.ralph")
+	if err != nil {
+		t.Fatalf("BuildReviewPrompt error: %v", err)
+	}
 
+	if !strings.Contains(result, "Review Mode") {
+		t.Error("review prompt missing 'Review Mode' header")
+	}
+	if !strings.Contains(result, "/tmp/project") {
+		t.Error("review prompt missing project directory")
+	}
+	if !strings.Contains(result, "Commandments") {
+		t.Error("review prompt missing refactor style guide content")
+	}
+	if !strings.Contains(result, "refactor:") {
+		t.Error("review prompt should require refactor: commit prefix")
+	}
+}
+
+// Proves: BuildReviewPrompt returns an error when prompts directory is missing.
+func TestBuildReviewPrompt_MissingTemplate(t *testing.T) {
+	_, err := BuildReviewPrompt("/nonexistent", "/tmp", "/tmp/.ralph")
+	if err == nil {
+		t.Error("expected error for missing prompts directory")
+	}
+}

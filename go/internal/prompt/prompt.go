@@ -132,6 +132,48 @@ func BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir string) (string, er
 	return r.Replace(tmpl), nil
 }
 
+// BuildReviewPrompt assembles the system prompt for the interactive review
+// session, combining the shared quality standards with the refactor style guide.
+func BuildReviewPrompt(promptsDir, projectDir, ralphDir string) (string, error) {
+	shared, err := readTemplate(promptsDir, "shared.md")
+	if err != nil {
+		return "", err
+	}
+	style, err := readTemplate(promptsDir, "refactor-style.md")
+	if err != nil {
+		return "", err
+	}
+
+	tmpl := shared + "\n" + reviewInstructions(projectDir, ralphDir, style)
+	return tmpl, nil
+}
+
+func reviewInstructions(projectDir, ralphDir, style string) string {
+	return fmt.Sprintf(`## Review Mode
+
+You are running an interactive code review and refactoring session.
+
+### Context
+- Project: %s
+- Ralph state: %s
+
+### Style Guide
+%s
+
+### Instructions
+1. Read AGENTS.md or CLAUDE.md if present (mandatory). Follow project conventions.
+2. Look at recently changed files (use git log/diff). Hunt for quality issues.
+3. If nothing meaningful stands out, say so. Don't make changes for the sake of activity.
+4. If you find cleanup worth doing, implement it. Run tests. Commit with a refactor: prefix.
+5. Focus on human readability — that is the goal, not arbitrary rules.
+
+### Rules
+- Do NOT add new features or change behavior. Refactoring preserves external behavior.
+- Do NOT attempt big architectural rewrites. Keep changes scoped and verifiable.
+- One refactor = one commit. Atomic.
+`, projectDir, ralphDir, style)
+}
+
 func readTemplate(dir, name string) (string, error) {
 	path := filepath.Join(dir, name)
 	data, err := os.ReadFile(path)

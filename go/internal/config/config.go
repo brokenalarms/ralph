@@ -90,6 +90,10 @@ func ParseSubcommand(args []string) (Subcommand, bool) {
 		return parseSubcommandWithDir(args, "commander"), true
 	case "task":
 		return parseSubcommandWithDir(args, "task"), true
+	case "loop":
+		return parseSubcommandWithDir(args, "loop"), true
+	case "review":
+		return parseSubcommandWithDir(args, "review"), true
 	case "filter-stream":
 		return parseFilterStream(args), true
 	default:
