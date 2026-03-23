@@ -363,6 +363,9 @@ func (b *BD) SetState(id, dimension, value, reason string) error {
 		args = append(args, "--reason", reason)
 	}
 	_, err := b.runner()(b.ctx(), b.ProjectDir, args...)
+	if err == nil {
+		b.exportAfterMutation()
+	}
 	return err
 }
 
@@ -393,6 +396,9 @@ func (b *BD) CloseTask(id string, reason string) error {
 		reason = "completed by ralph"
 	}
 	_, err := run(b.ctx(), b.ProjectDir, "close", id, "--reason", reason)
+	if err == nil {
+		b.exportAfterMutation()
+	}
 	return err
 }
 
@@ -401,6 +407,9 @@ func (b *BD) ReopenTask(id string) error {
 		return nil
 	}
 	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status=open")
+	if err == nil {
+		b.exportAfterMutation()
+	}
 	return err
 }
 
@@ -412,6 +421,9 @@ func (b *BD) SkipTask(id string, reason string) error {
 		reason = "skipped by ralph"
 	}
 	_, err := b.runner()(b.ctx(), b.ProjectDir, "close", id, "--reason", "blocked: "+reason)
+	if err == nil {
+		b.exportAfterMutation()
+	}
 	return err
 }
 
@@ -482,6 +494,35 @@ func (b *BD) ProjectContext() (string, error) {
 	}
 
 	return strings.Join(sections, "\n\n"), nil
+}
+
+// Export runs bd export and writes the JSONL output to specs/beads-export.jsonl
+// in the project directory. Creates the specs/ directory if needed.
+// Non-fatal: returns the error but callers may choose to log and continue.
+func (b *BD) Export() error {
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "export")
+	if err != nil {
+		return fmt.Errorf("bd export: %w", err)
+	}
+	specsDir := filepath.Join(b.ProjectDir, "specs")
+	if err := os.MkdirAll(specsDir, 0755); err != nil {
+		return fmt.Errorf("creating specs dir: %w", err)
+	}
+	exportPath := filepath.Join(specsDir, "beads-export.jsonl")
+	content := out
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	if err := os.WriteFile(exportPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("writing export: %w", err)
+	}
+	return nil
+}
+
+// exportAfterMutation is called after any bead mutation to keep the JSONL
+// export in sync. Errors are silently ignored — export is best-effort.
+func (b *BD) exportAfterMutation() {
+	_ = b.Export()
 }
 
 func (b *BD) Label() string { return "beads" }
