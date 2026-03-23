@@ -9,13 +9,14 @@ import (
 
 // ANSI color codes matching ralph.sh.
 const (
-	Red    = "\033[0;31m"
-	Green  = "\033[0;32m"
-	Yellow = "\033[0;33m"
-	Blue   = "\033[0;34m"
-	Cyan   = "\033[0;36m"
-	Bold   = "\033[1m"
-	Reset  = "\033[0m"
+	Red     = "\033[0;31m"
+	Green   = "\033[0;32m"
+	Yellow  = "\033[0;33m"
+	Blue    = "\033[0;34m"
+	Magenta = "\033[0;35m"
+	Cyan    = "\033[0;36m"
+	Bold    = "\033[1m"
+	Reset   = "\033[0m"
 )
 
 // Logger provides colored, timestamped logging matching ralph.sh's output.
@@ -89,5 +90,32 @@ func (l *Logger) PhaseColor(color string, format string, args ...any) {
 		fmt.Fprint(l.out, line)
 	}
 	fmt.Fprint(l.logFile, line)
+}
+
+// Separator writes a bold, colored full-width separator with a centered label.
+func (l *Logger) Separator(color, label string) {
+	const totalWidth = 72
+	pad := totalWidth - len(label) - 2 // 2 for spaces around label
+	if pad < 4 {
+		pad = 4
+	}
+	left := pad / 2
+	right := pad - left
+	line := fmt.Sprintf("\n%s%s%s %s %s%s\n\n",
+		Bold, color,
+		repeat("═", left), label, repeat("═", right),
+		Reset)
+	if !l.streaming {
+		fmt.Fprint(l.out, line)
+	}
+	fmt.Fprint(l.logFile, line)
+}
+
+func repeat(s string, n int) string {
+	result := ""
+	for i := 0; i < n; i++ {
+		result += s
+	}
+	return result
 }
 
