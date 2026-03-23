@@ -81,7 +81,12 @@ bd_count_remaining() {
   inp=$(run_bd count --status in_progress 2>/dev/null) || inp=0
   echo $(( open + inp ))
 }
-bd_count_total()       { run_bd count 2>/dev/null || echo 0; }
+bd_count_total() {
+  local remaining completed
+  remaining=$(bd_count_remaining)
+  completed=$(bd_count_completed)
+  echo $(( remaining + completed ))
+}
 bd_get_next_task() {
   local ip_json ready_json ip_title ready_title ip_pri ready_pri
   ip_json=$(run_bd list --status in_progress --flat --json --limit 1 2>/dev/null) || ip_json="[]"

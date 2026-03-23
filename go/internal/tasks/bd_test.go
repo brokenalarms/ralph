@@ -113,6 +113,22 @@ func TestBD_CountTotal(t *testing.T) {
 	}
 }
 
+// Proves: CountTotal excludes deferred beads — only counts open + in_progress + closed.
+func TestBD_CountTotal_ExcludesDeferred(t *testing.T) {
+	// bare "bd count" returns 10 (includes deferred), but actionable = 3+1+4 = 8
+	runner := mockBD(
+		"10",
+		map[string]string{"open": "3", "in_progress": "1", "closed": "4"},
+		"[]",
+		`[{"id":"test-1","title":"Test task"}]`,
+	)
+	b := setupBD(t, runner)
+	got, _ := b.CountTotal()
+	if got != 8 {
+		t.Errorf("CountTotal = %d, want 8 (open+in_progress+closed, excluding deferred)", got)
+	}
+}
+
 // Proves: bd backend picks the next ready task by title.
 func TestBD_GetNextTask_FromReady(t *testing.T) {
 	b := setupBD(t, defaultMock())

@@ -197,15 +197,15 @@ func (b *BD) CountRemaining() (int, error) {
 }
 
 func (b *BD) CountTotal() (int, error) {
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "count")
+	remaining, err := b.CountRemaining()
 	if err != nil {
 		return 0, nil
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(out))
+	completed, err := b.CountCompleted()
 	if err != nil {
 		return 0, nil
 	}
-	return n, nil
+	return remaining + completed, nil
 }
 
 func (b *BD) countByStatus(status string) (int, error) {

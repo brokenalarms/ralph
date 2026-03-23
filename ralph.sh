@@ -516,7 +516,9 @@ while true; do
         fi
       fi
       closed=\$(bd count --status closed 2>/dev/null || echo 0)
-      total=\$(bd count 2>/dev/null || echo 0)
+      open=\$(bd count --status open 2>/dev/null || echo 0)
+      inp=\$(bd count --status in_progress 2>/dev/null || echo 0)
+      total=\$(( open + inp + closed ))
       progress_bar "\$closed" "\$total"
       printf "\n"
       calls=\$(cat '$RALPH_DIR/.call_count' 2>/dev/null || echo 0)
