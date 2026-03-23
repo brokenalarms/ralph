@@ -77,8 +77,9 @@ type Loop struct {
 	pushPRFunc         func(ctx context.Context, taskID, taskDesc string) error
 	forcePushFunc      func(ctx context.Context) error
 	prePushRebaseFunc  func(ctx context.Context) error
-	verifyFunc     func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
-	newRunnerFunc  func() claudeRunner
+	verifyFunc      func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
+	llmVerifyFunc   func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, model ...string) verify.Result
+	newRunnerFunc   func() claudeRunner
 	lastAction      analyzer.Action
 	lastTaskMerged  bool
 	sessionTasks    []CompletedTask
@@ -94,15 +95,16 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 	runner := &claude.Runner{Logger: logger}
 
 	return &Loop{
-		cfg:      cfg,
-		state:    st,
-		git:      gm,
-		limiter:  limiter,
-		runner:   runner,
-		analyzer: analyzer.New(),
-		attempts: attempts.New(cfg.Dirs.RalphDir),
-		logger:   logger,
-		signals:  signals,
+		cfg:           cfg,
+		state:         st,
+		git:           gm,
+		limiter:       limiter,
+		runner:        runner,
+		analyzer:      analyzer.New(),
+		attempts:      attempts.New(cfg.Dirs.RalphDir),
+		logger:        logger,
+		signals:       signals,
+		llmVerifyFunc: verify.LLMVerifyPR,
 	}
 }
 
@@ -388,10 +390,10 @@ func (l *Loop) Run(ctx context.Context) error {
 					beadDesc := l.getBeadDescription(taskID)
 
 					l.logger.Log("Running LLM verification...")
-					llmResult := verify.LLMVerifyPR(ctx, workDir, l.cfg.Dirs.PromptsDir, taskID, headBefore, nextTask, beadDesc)
+					llmResult := l.llmVerifyFunc(ctx, workDir, l.cfg.Dirs.PromptsDir, taskID, headBefore, nextTask, beadDesc)
 
 					if !llmResult.Passed {
-						l.logger.Warn("LLM verification rejected: %s", llmResult.Details)
+						l.logger.Error("LLM verification rejected: %s", llmResult.Details)
 
 						signalPath := filepath.Join(l.cfg.Dirs.RalphDir, ".signal_complete")
 						fixPrompt := l.loadVerifyPrompt("verify-llm.md", map[string]string{
@@ -416,9 +418,9 @@ func (l *Loop) Run(ctx context.Context) error {
 
 						// Escalate to Sonnet for re-verification (Haiku already rejected)
 						l.logger.Log("Escalating verification to Sonnet...")
-						llmResult2 := verify.LLMVerifyPR(ctx, workDir, l.cfg.Dirs.PromptsDir, taskID, headBefore, nextTask, beadDesc, "claude-sonnet-4-6")
+						llmResult2 := l.llmVerifyFunc(ctx, workDir, l.cfg.Dirs.PromptsDir, taskID, headBefore, nextTask, beadDesc, "claude-sonnet-4-6")
 						if !llmResult2.Passed {
-							l.logger.Warn("Sonnet also rejects: %s", llmResult2.Details)
+							l.logger.Error("Sonnet also rejects: %s", llmResult2.Details)
 							// Skip this task instead of accepting bad work
 							if taskID != "" {
 								l.cfg.TaskBackend.SkipTask(taskID, "verification_rejected: "+llmResult2.Details)
@@ -426,9 +428,9 @@ func (l *Loop) Run(ctx context.Context) error {
 							}
 							return false
 						}
-						l.logger.Log("Sonnet verified after fix: %s", llmResult2.Reason)
+						l.logger.Success("Sonnet verified after fix: %s", llmResult2.Reason)
 					} else {
-						l.logger.Log("LLM verified: %s", llmResult.Reason)
+						l.logger.Success("LLM verified: %s", llmResult.Reason)
 					}
 				}
 
