@@ -325,6 +325,18 @@ func TestExecutionBD_ReinforcesBoyScoutRule(t *testing.T) {
 	}
 }
 
+// Proves: execution-bd.md requires TDD — write a failing test first, then implement.
+func TestExecutionBD_RequiresTDD(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
+	if err != nil {
+		t.Fatalf("reading execution-bd.md: %v", err)
+	}
+	s := string(content)
+	if !strings.Contains(s, "must FAIL") || !strings.Contains(s, "must PASS") {
+		t.Error("execution-bd.md should require TDD: write a test that must FAIL, implement, then it must PASS")
+	}
+}
+
 // Proves: attempt history is injected into the prompt when previous
 // attempts exist on the current task.
 func TestBuildPrompt_IncludesAttemptHistory(t *testing.T) {
