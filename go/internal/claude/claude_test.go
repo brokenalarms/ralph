@@ -744,6 +744,51 @@ func TestRun_DetectsCompletionSignal(t *testing.T) {
 	}
 }
 
+// Verifies that the completion log message includes the bead ID when TaskID
+// is set, so operators can identify which task completed.
+func TestRun_CompletionMessageIncludesBeadID(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		tmp := signals.Complete + ".tmp"
+		os.WriteFile(tmp, []byte("fixed the bug"), 0o644)
+		os.Rename(tmp, signals.Complete)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 100 * time.Millisecond,
+		TaskID:       "ralph-xyz",
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+
+	if !result.SignalDetected {
+		t.Error("expected SignalDetected to be true")
+	}
+	if len(log.successes) == 0 {
+		t.Fatal("expected Success to be called")
+	}
+	got := log.successes[0]
+	if !strings.Contains(got, "ralph-xyz") {
+		t.Errorf("completion message should include bead ID, got: %q", got)
+	}
+	if !strings.Contains(got, "fixed the bug") {
+		t.Errorf("completion message should include summary, got: %q", got)
+	}
+}
+
 // Verifies that Run detects the all-complete signal and sets AllComplete=true,
 // which tells the main loop that no more iterations are needed.
 func TestRun_DetectsAllCompleteSignal(t *testing.T) {

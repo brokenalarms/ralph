@@ -3633,11 +3633,14 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 	l.Run(context.Background())
 
 	output := logBuf.String()
-	if !strings.Contains(output, "Next task: Fix the auth module") {
-		t.Errorf("expected task title in log output:\n%s", output)
+	if !strings.Contains(output, "Next task: Fix the auth module (ralph-abc)") {
+		t.Errorf("expected task title with bead ID in log output:\n%s", output)
 	}
 	if !strings.Contains(output, "Auth tokens are expiring too early due to clock skew") {
 		t.Errorf("expected task description in log output:\n%s", output)
+	}
+	if !strings.Contains(output, "ralph-abc → implementing") {
+		t.Errorf("expected state transition log with bead ID:\n%s", output)
 	}
 }
 
@@ -3678,8 +3681,8 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 	l.Run(context.Background())
 
 	output := logBuf.String()
-	if !strings.Contains(output, "Next task: Fix the auth module") {
-		t.Errorf("expected task title in log output:\n%s", output)
+	if !strings.Contains(output, "Next task: Fix the auth module (ralph-abc)") {
+		t.Errorf("expected task title with bead ID in log output:\n%s", output)
 	}
 	// Count lines containing "description" — there should be none since
 	// the backend returns an empty description.
