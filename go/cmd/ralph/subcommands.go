@@ -158,8 +158,9 @@ func printUsage() {
   --idle-timeout <dur>   Kill session after this idle duration (default: 10m, env RALPH_IDLE_TIMEOUT)
   --idle-timeout-progress <dur>  Shorter idle timeout when progress detected (default: 30s, env RALPH_IDLE_TIMEOUT_PROGRESS)
   --tmux                 Run in tmux 3-pane layout (status / output / plan)
+  --base-branch <name>   Base branch for rebase/merge (default: develop, env RALPH_BASE_BRANCH)
   --branch-strategy <s>  Branch strategy: "single" (default) or "stacked" (one branch per task)
-  --auto-merge           Squash-merge each PR into main after task completion (stacked only)
+  --auto-merge           Squash-merge PRs into base branch after task completion (stacked only)
   --merge-admin          Use --admin flag on gh pr merge to bypass branch protection (requires --auto-merge)
   --evolve               Self-improving mode: after each merged task, pull main, rebuild, restart (requires --auto-merge)
   --wait                 Keep running after all tasks complete, polling for new tasks
