@@ -3854,3 +3854,132 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 		t.Errorf("expected mergeFunc NOT called when AutoMerge disabled, got %d calls", mergeCalls)
 	}
 }
+
+// When the signal handler already merged the last task, the flush safety net
+// must not merge again — otherwise multi-task runs get an extra merge call.
+func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     true,
+		Wait:          false,
+	}, st, gm, logger)
+	l.runner = runner
+
+	l.pushPRFunc = func(_ context.Context, _, _ string) error { return nil }
+
+	var mergeCalls int
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Merge fires once in the signal handler. The flush must not merge again
+	// because lastTaskMerged is set.
+	if mergeCalls != 1 {
+		t.Errorf("expected exactly 1 merge (signal handler only), got %d", mergeCalls)
+	}
+}
+
+// When the agent exits without a signal, the flush safety net must still
+// push and merge so the last task's work is not lost.
+func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "checklist",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: false},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     true,
+		Wait:          false,
+	}, st, gm, logger)
+	l.runner = runner
+
+	l.pushPRFunc = func(_ context.Context, _, _ string) error { return nil }
+
+	var mergeCalls int
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Signal handler didn't fire, so merge only happens during flush.
+	if mergeCalls != 1 {
+		t.Errorf("expected exactly 1 merge (flush only), got %d", mergeCalls)
+	}
+}

@@ -70,7 +70,8 @@ type Loop struct {
 	prePushRebaseFunc  func(ctx context.Context) error
 	verifyFunc     func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
 	newRunnerFunc  func() claudeRunner
-	lastAction     analyzer.Action
+	lastAction      analyzer.Action
+	lastTaskMerged  bool
 }
 
 // New creates an execution loop from the given configuration.
@@ -199,6 +200,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		runIteration++
 		iteration++
+		l.lastTaskMerged = false
 
 		taskID, nextTask, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 		taskChanged := l.isNewTask(taskID, nextTask)
@@ -528,6 +530,7 @@ func (l *Loop) Run(ctx context.Context) error {
 					l.logger.Warn("Auto-merge: %v", err)
 				}
 				if merged {
+					l.lastTaskMerged = true
 					if err := l.git.PostMergeReset(); err != nil {
 						l.logger.Warn("Post-merge reset: %v", err)
 					}
@@ -853,7 +856,7 @@ func (l *Loop) flushUnpushedWork(ctx context.Context) {
 		l.logger.Warn("Flush push/PR: %v", err)
 		return
 	}
-	if l.cfg.AutoMerge {
+	if l.cfg.AutoMerge && !l.lastTaskMerged {
 		merged, err := l.autoMerge(ctx)
 		if err != nil {
 			l.logger.Warn("Flush merge: %v", err)
