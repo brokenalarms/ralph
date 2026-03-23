@@ -916,7 +916,7 @@ func detectDefaultBranch(dir, override string) string {
 	if ref != "" {
 		return strings.TrimPrefix(ref, "refs/remotes/origin/")
 	}
-	return "develop"
+	return "main"
 }
 
 // findWorktreeForBranch finds the worktree path that has the given branch
