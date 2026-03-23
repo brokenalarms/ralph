@@ -12,4 +12,13 @@ HOOK
 
 chmod +x "$hooks_dir/post-merge"
 
-echo "Git hooks installed (post-merge rebuild)."
+cat > "$hooks_dir/post-rewrite" <<'HOOK'
+#!/usr/bin/env bash
+if [ "$1" = "rebase" ]; then
+  "$(git rev-parse --show-toplevel)/scripts/rebuild-go.sh"
+fi
+HOOK
+
+chmod +x "$hooks_dir/post-rewrite"
+
+echo "Git hooks installed (post-merge, post-rewrite rebuild)."
