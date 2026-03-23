@@ -1,33 +1,29 @@
-# Git usage
-- ralph requires a git repository. Running in a non-git directory exits with an error. Use `--no-worktree` to skip git isolation, but a git repo is still required.
-- never push to the base branch (default: develop) - atomic commits comprising a feature should be pushed as a PR from the branch you're working on, this should be part of considering a task finished.
-- The final stage of a piece of work is always commiting and pushing to a branched PR- I shouldn't have to ask.
-- Before you push, you must rebase onto the latest base branch:
-  1. `git fetch origin develop`
-  2. `git rebase --update-refs origin/develop`
-  3. If step 2 conflicts because a base branch was squash-merged, abort and use: `git rebase --update-refs --onto origin/develop <squash-merged-branch> HEAD` where `<squash-merged-branch>` is the ralph branch ref that was already merged (e.g. `ralph/project/01-task-slug`). This skips the duplicate commits. Then delete the merged branch ref.
-  Always use `--update-refs` to keep stacked branch pointers correct.
-- It is up to the user to work through these stacks and merge them. Never merge a PR to the base branch without asking first.
+# Architecture
+- Read `docs/specs/architecture.md` before any refactoring or architectural work. It describes the target state all changes should move toward.
 
-# Implementation
-- **Go only by default.** The bash implementation (ralph.sh, lib/*.sh) is deprecated. All changes, fixes, and new features go in `go/` unless explicitly told otherwise.
+# Git
+- Ralph requires a git repository.
+- Never push directly to the base branch. Atomic commits comprising a feature should be pushed as a PR from the working branch. This is part of completing a task.
+- The final stage of a piece of work is always committing and pushing to a branched PR.
+- The orchestrator handles rebase, conflict resolution, and merge programmatically. Agents do not need to manually rebase — the git module ensures the worktree is up to date before any outbound operation.
+- Never merge a PR to the base branch without the orchestrator's auto-merge flow.
 
-# Architecture: files vs state
-- **Signal files** (.signal_complete, .signal_current_task, feedback, stop): for communication between agent and orchestrator outside of stdout, and for user commands into the system via `ralph stop`, `ralph feedback`, etc.
-- **state.json**: for all orchestrator-internal state that persists across iterations (iteration count, last task, test results, config overrides). If it's not agent↔orchestrator communication or user input, it goes in state.json.
+# Signal files vs state
+- **Signal files** (.signal_complete, .signal_current_task, feedback, stop): agent↔orchestrator communication and user commands (`ralph stop`, `ralph feedback`).
+- **state.json**: orchestrator-internal state that persists across iterations (iteration count, last task, test results). If it's not agent↔orchestrator communication, it goes in state.json.
 
 # Build
 - `go/cmd/ralph/prompts/` is the source of truth for prompt templates, embedded into the binary via `//go:embed`. Edit them directly — no copy step needed.
 
 # Prompts
-- User-facing text strings and instructions for Claude belong in `.md` files under `prompts/`, not hardcoded in shell scripts. Shell code assembles and templates prompts but should not contain instructional prose.
+- Instructions and text for the agent belong in `.md` template files under `go/cmd/ralph/prompts/`, not hardcoded in Go. Go code assembles and interpolates templates but should not contain instructional prose.
 
 # Beads / bd
-- We use 'beads' (`bd`) as the sole task backend for dependency management and issue tracking. `bd` is a hard requirement.
-- Never hardcode bd commands in prompts or scripts. All bd knowledge comes from `bd prime` — Claude learns the workflow at runtime. Prompts should refer to tasks generically (e.g. "add a new task", "close the task") and let `bd prime` teach the specifics.
-- **Hard invariant**: `.beads` is the project's permanent task history and must never be deleted, cleared, or force-reinitialized. Only `.ralph` state is ephemeral. Cleanup and reset operations must skip `.beads`.
+- We use `bd` as the sole task backend for dependency management and issue tracking.
+- Never hardcode bd commands in prompts. All bd knowledge comes from `bd prime` — the agent learns the workflow at runtime. Prompts refer to tasks generically and let `bd prime` teach the specifics.
+- **Hard invariant**: `.beads` is the project's permanent task history and must never be deleted, cleared, or force-reinitialized. Only `.ralph` state is ephemeral.
 
 # Testing
-- Tests should be put in place to lock in new features and prevent regressions.
-- They should explain in a comment for each why the test is being created, and what user functionality it is proving, so that a test has a specific feature based meaning, and isn't just written to be correct eg assert 1 = true.
-- Do not write tests that assert specific strings or phrases from prompt templates (.md files) are present. Prompts are loose, natural-language guidance — testing that a particular word or sentence exists misunderstands the point of tests. Tests should verify behavior and functionality, not pin down prose.
+- Tests lock in features and prevent regressions.
+- Each test should explain in a comment why it exists and what user functionality it proves — not just assert correctness mechanically.
+- Do not write tests that assert specific strings from prompt templates. Prompts are natural-language guidance — test behavior, not prose.
