@@ -116,3 +116,43 @@ func TestStreamingModeSuppressesStdout(t *testing.T) {
 		t.Error("after disabling streaming, stdout should resume")
 	}
 }
+
+// Verifies that Separator outputs a bold, colored full-width line with
+// centered label and ═ characters, written to both stdout and log file.
+func TestSeparatorFormatting(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile}
+	l.Separator(Magenta, "RALPH EVOLVED")
+	got := stdout.String()
+
+	if !strings.Contains(got, Bold) || !strings.Contains(got, Magenta) {
+		t.Error("Separator should include bold+magenta formatting")
+	}
+	if !strings.Contains(got, "RALPH EVOLVED") {
+		t.Errorf("Separator missing label: %s", got)
+	}
+	if !strings.Contains(got, "═") {
+		t.Error("Separator should contain ═ characters")
+	}
+	if !strings.Contains(got, Reset) {
+		t.Error("Separator should reset ANSI at end")
+	}
+	if !strings.Contains(logFile.String(), "RALPH EVOLVED") {
+		t.Error("Separator should write to log file")
+	}
+}
+
+// Verifies that Separator respects streaming mode.
+func TestSeparatorStreamingMode(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile}
+	l.SetStreaming(true)
+	l.Separator(Magenta, "TEST")
+
+	if stdout.Len() != 0 {
+		t.Error("Separator should suppress stdout in streaming mode")
+	}
+	if !strings.Contains(logFile.String(), "TEST") {
+		t.Error("Separator should still write to log file in streaming mode")
+	}
+}

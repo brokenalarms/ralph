@@ -376,12 +376,7 @@ func Parse(args []string) (Config, error) {
 			if len(args[i]) > 0 && args[i][0] == '-' {
 				return cfg, fmt.Errorf("unknown option: %s", args[i])
 			}
-			info, err := os.Stat(args[i])
-			if err != nil || !info.IsDir() {
-				return cfg, fmt.Errorf("unknown argument: %s (not a known subcommand or directory)", args[i])
-			}
-			cfg.ProjectDir = args[i]
-			i++
+			return cfg, fmt.Errorf("unknown argument: %s (use --dir to specify a project directory)", args[i])
 		}
 	}
 

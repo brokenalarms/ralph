@@ -152,7 +152,7 @@ func printUsage() {
 	fmt.Printf(`%sRalph Loop v%s (go)%s - Autonomous Claude Code task iteration
 
 %sUSAGE:%s
-  ralph [OPTIONS] [directory]
+  ralph [OPTIONS]
 
 %sOPTIONS:%s
   -d, --dir <path>       Project directory (default: cwd)
@@ -176,9 +176,9 @@ func printUsage() {
   -h, --help             Show this help
 
 %sEXAMPLES:%s
-  ralph ~/myproject -n 20
+  ralph --dir ~/myproject -n 20
   ralph -p "Fix all failing tests"
-  ralph . --plan-file plan.md
+  ralph --dir . --plan-file plan.md
 
 %sSUBCOMMANDS:%s
   ralph commander [directory]  Full 4-pane tmux layout (loop + task manager + stream + plan)

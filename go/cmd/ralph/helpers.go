@@ -126,11 +126,11 @@ func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log
 		return fmt.Errorf("git merge --ff-only failed: %s", out)
 	}
 
-	log.Log("Rebuilding ralph binary...")
-	goDir := filepath.Join(projectDir, "go")
 	version := gitVersion(projectDir)
+	log.Log("Building ralph %s...", version)
+	goDir := filepath.Join(projectDir, "go")
 	ldflags := fmt.Sprintf("-X github.com/brokenalarms/ralph/internal/config.Version=%s", version)
-	buildCmd := exec.Command("go", "build", "-ldflags", ldflags, "-o", scriptPath, "./cmd/ralph")
+	buildCmd := exec.Command("go", "build", "-v", "-ldflags", ldflags, "-o", scriptPath, "./cmd/ralph")
 	buildCmd.Dir = goDir
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr
@@ -145,7 +145,7 @@ func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log
 	// they become orphans that accumulate across evolve restarts.
 	killChildProcesses()
 
-	log.Log("Restarting ralph with new binary...")
+	log.Separator(logging.Magenta, "RALPH EVOLVED")
 	execArgs := append([]string{scriptPath}, args...)
 	return syscall.Exec(scriptPath, execArgs, os.Environ())
 }
