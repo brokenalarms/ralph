@@ -567,3 +567,28 @@ func TestBuildTaskManagerPrompt_RequiredSections(t *testing.T) {
 	}
 }
 
+// Proves: task-manager.md enumerates component prefixes so the task manager
+// knows which prefix to apply when creating beads for different parts of ralph.
+func TestBuildTaskManagerPrompt_ComponentPrefixes(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	components := []struct {
+		prefix string
+		reason string
+	}{
+		{"ralph loop:", "prompt should define the ralph loop component prefix for orchestrator/execution work"},
+		{"ralph task:", "prompt should define the ralph task component prefix for task manager work"},
+		{"ralph command:", "prompt should define the ralph command component prefix for CLI/tmux layout"},
+	}
+
+	for _, tc := range components {
+		if !strings.Contains(result, tc.prefix) {
+			t.Errorf("missing component prefix %q: %s", tc.prefix, tc.reason)
+		}
+	}
+}
+

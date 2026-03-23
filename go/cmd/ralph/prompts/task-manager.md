@@ -40,8 +40,17 @@ Also check recently closed beads — if one was falsely closed (acceptance
 criteria never met), reopen it instead of creating a duplicate.
 
 Every bead must have:
-- A clear, imperative title prefixed with its target component
-  (e.g. `ralph loop: force-reset worktree after merge`)
+- A clear, imperative title prefixed with its target component. Determine the
+  component from the area of the codebase affected:
+  - **ralph loop:** — orchestrator, iteration execution, worktree management,
+    signal files, verification, merge/rebase, evolve, git operations
+  - **ralph task:** — task manager prompt and behavior, bead triage, bd
+    integration, backlog management
+  - **ralph command:** — CLI entry points, subcommands, flags, tmux four-pane
+    layout, iTerm integration
+  Examples: `ralph loop: force-reset worktree after merge`,
+  `ralph task: echo back created beads for review`,
+  `ralph command: four-pane tmux with loop + task manager`
 - A description explaining *why* this work is needed and *what* to do — not
   options. Make the decision and write one clear path. The agent should not
   choose between approaches.
