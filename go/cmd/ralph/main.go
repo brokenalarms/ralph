@@ -140,7 +140,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	log = logging.New(logFileWriter)
 
 	// Initialize task backend.
-	backend, err := initTaskBackend(cfg, resume, st, ralphDir, planFile, promptsDir, log)
+	backend, err := initTaskBackend(cfg, promptsDir, log)
 	if err != nil {
 		log.Error("Task backend init failed: %v", err)
 		return 1
@@ -290,44 +290,17 @@ func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, sta
 	return false, -1
 }
 
-// initTaskBackend selects and initializes the task backend. On resume,
-// restores from state. BD falls back to checklist if unavailable.
-func initTaskBackend(cfg config.Config, resume bool, st *state.Store, ralphDir, planFile, promptsDir string, log *logging.Logger) (tasks.Backend, error) {
-	backendLabel := "bd"
-
-	if resume {
-		stored, _ := st.Read("task_backend")
-		if stored == "bd" || stored == "checklist" {
-			backendLabel = stored
-		} else if fileExists(planFile) {
-			data, _ := os.ReadFile(planFile)
-			if strings.Contains(string(data), "- [") {
-				backendLabel = "checklist"
-			}
-		}
-	}
-
-	if backendLabel == "bd" {
-		bd := &tasks.BD{
-			ProjectDir: cfg.ProjectDir,
-			PromptsDir: promptsDir,
-		}
-		if err := bd.Init(); err != nil {
-			if errors.Is(err, tasks.ErrNeedsFallback) {
-				log.Warn("bd unavailable (%v), falling back to checklist", err)
-				backendLabel = "checklist"
-			} else {
-				return nil, err
-			}
-		} else {
-			return bd, nil
-		}
-	}
-
-	return &tasks.Checklist{
-		PlanFile:   planFile,
+// initTaskBackend initializes the bd task backend. BD is required — if
+// unavailable, ralph exits with an error.
+func initTaskBackend(cfg config.Config, promptsDir string, log *logging.Logger) (tasks.Backend, error) {
+	bd := &tasks.BD{
+		ProjectDir: cfg.ProjectDir,
 		PromptsDir: promptsDir,
-	}, nil
+	}
+	if err := bd.Init(); err != nil {
+		return nil, fmt.Errorf("bd is required but unavailable: %w", err)
+	}
+	return bd, nil
 }
 
 // cleanup generates resume script, prints summary, and removes unused worktrees.
@@ -446,9 +419,6 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 	log.Log("Tasks: %d/%d completed, %d remaining", completed, total, remaining)
 
 	log.Log("Log:        %s", filepath.Join(ralphDir, "loop.log"))
-	if backend.Label() == "checklist" {
-		log.Log("Plan:       %s", planFile)
-	}
 
 	if gm.WorktreeBranch != "" && gm.ProjectName != "" {
 		log.Log("Worktree:   %s", gm.WorkDir)
@@ -483,12 +453,6 @@ func handleTmuxCommander(cfg config.Config, scriptPath string, args []string, ra
 
 	ralphCmd := tmux.BuildRalphCmd(scriptPath, args)
 	taskCmd := tmux.BuildTaskCmd(scriptPath, cfg.ProjectDir)
-	planFile := filepath.Join(ralphDir, "plan.md")
-
-	backendLabel := "bd"
-	if fileExists(planFile) {
-		backendLabel = "checklist"
-	}
 
 	sess := &tmux.Session{
 		Name:        tmux.SessionName(cfg.ProjectDir),
@@ -496,11 +460,9 @@ func handleTmuxCommander(cfg config.Config, scriptPath string, args []string, ra
 		RalphDir:    ralphDir,
 		RawLogPath:  filepath.Join(ralphDir, "raw.log"),
 		ScriptPath:  scriptPath,
-		RalphCmd:    ralphCmd,
-		TaskCmd:     taskCmd,
-		Commander:   true,
-		TaskBackend: backendLabel,
-		PlanFile:    planFile,
+		RalphCmd:  ralphCmd,
+		TaskCmd:   taskCmd,
+		Commander: true,
 	}
 
 	if err := sess.Setup(); err != nil {
@@ -536,23 +498,14 @@ func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir st
 	}
 
 	ralphCmd := tmux.BuildRalphCmd(scriptPath, args)
-	planFile := filepath.Join(ralphDir, "plan.md")
-
-	backendLabel := "bd"
-	// Quick check: if checklist plan exists, use checklist rendering.
-	if fileExists(planFile) {
-		backendLabel = "checklist"
-	}
 
 	sess := &tmux.Session{
-		Name:        tmux.SessionName(cfg.ProjectDir),
-		ProjectDir:  cfg.ProjectDir,
-		RalphDir:    ralphDir,
-		RawLogPath:  filepath.Join(ralphDir, "raw.log"),
-		ScriptPath:  scriptPath,
-		RalphCmd:    ralphCmd,
-		TaskBackend: backendLabel,
-		PlanFile:    planFile,
+		Name:       tmux.SessionName(cfg.ProjectDir),
+		ProjectDir: cfg.ProjectDir,
+		RalphDir:   ralphDir,
+		RawLogPath: filepath.Join(ralphDir, "raw.log"),
+		ScriptPath: scriptPath,
+		RalphCmd:   ralphCmd,
 	}
 
 	if err := sess.Setup(); err != nil {

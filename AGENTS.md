@@ -23,7 +23,7 @@
 - User-facing text strings and instructions for Claude belong in `.md` files under `prompts/`, not hardcoded in shell scripts. Shell code assembles and templates prompts but should not contain instructional prose.
 
 # Beads / bd
-- We use 'beads' (`bd`) for dependency management and issue tracking, with markdown checklists as a fallback if not available.
+- We use 'beads' (`bd`) as the sole task backend for dependency management and issue tracking. `bd` is a hard requirement.
 - Never hardcode bd commands in prompts or scripts. All bd knowledge comes from `bd prime` — Claude learns the workflow at runtime. Prompts should refer to tasks generically (e.g. "add a new task", "close the task") and let `bd prime` teach the specifics.
 - **Hard invariant**: `.beads` is the project's permanent task history and must never be deleted, cleared, or force-reinitialized. Only `.ralph` state is ephemeral. Cleanup and reset operations must skip `.beads`.
 

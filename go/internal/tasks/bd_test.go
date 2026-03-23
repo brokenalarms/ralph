@@ -416,30 +416,6 @@ func TestBD_ExecutionInstructions_Content(t *testing.T) {
 	}
 }
 
-// Proves: Checklist.ProjectContext returns empty string since checklists have no beads.
-func TestChecklist_ProjectContext_ReturnsEmpty(t *testing.T) {
-	c := &Checklist{PlanFile: "/tmp/plan.md"}
-	got, err := c.ProjectContext()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "" {
-		t.Errorf("expected empty project context for checklist, got %q", got)
-	}
-}
-
-// Proves: Checklist Init is a no-op (does not create .beads).
-func TestChecklist_Init_IsNoOp(t *testing.T) {
-	dir := t.TempDir()
-	c := &Checklist{PlanFile: filepath.Join(dir, "plan.md")}
-	if err := c.Init(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, ".beads")); !os.IsNotExist(err) {
-		t.Error("expected .beads to not exist after checklist Init")
-	}
-}
-
 // Proves: resolveBD finds bd via exec.LookPath when it's on PATH.
 func TestBD_ResolveBD_FindsOnPath(t *testing.T) {
 	b := &BD{}

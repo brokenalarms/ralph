@@ -22,7 +22,6 @@ RESUME=false
 PLAN_ONLY=false
 SKIP_PLANNING=false
 WATCHER_INTERVAL=2
-PLAN_FILE_ARG=""
 QUIET=false
 USE_WORKTREE=true
 CALLS_PER_HOUR=80
@@ -122,7 +121,6 @@ ${BOLD}OPTIONS:${NC}
   -d, --dir <path>       Project directory (default: cwd)
   -n, --max <N>          Max iterations (default: 50)
   -p, --prompt <text>    Prompt override (otherwise Claude reads repo context)
-  --plan-file <path>     Pre-made plan in Ralph format (markdown checkboxes). Skips planning phase.
   --plan                 Run planning phase only
   --skip-planning        Skip interactive planning, go straight to autonomous execution
   -q, --quiet            Suppress Claude output streaming (log only)
@@ -137,7 +135,7 @@ ${BOLD}OPTIONS:${NC}
 ${BOLD}EXAMPLES:${NC}
   ralph.sh ~/myproject -n 20
   ralph.sh -p "Fix all failing tests"
-  ralph.sh . --plan-file plan.md
+  ralph.sh . --skip-planning
 
 ${BOLD}CONFIG FILE:${NC}
   Place a ralph.toml in your project root to set defaults. CLI args override config values.
@@ -238,7 +236,6 @@ while [[ $# -gt 0 ]]; do
     -d|--dir)       PROJECT_DIR="$2"; shift 2 ;;
     -n|--max)       MAX_ITERATIONS="$2"; _CLI_MAX_ITERATIONS="$2"; shift 2 ;;
     -p|--prompt)    PROMPT_OVERRIDE="$2"; shift 2 ;;
-    --plan-file)    PLAN_FILE_ARG="$2"; shift 2 ;;
     --plan)         PLAN_ONLY=true; shift ;;
     --skip-planning) SKIP_PLANNING=true; shift ;;
     -q|--quiet)     QUIET=true; shift ;;
@@ -254,14 +251,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# --- Detect task backend ---
-if command -v bd &>/dev/null; then
-  TASK_BACKEND="bd"
-else
-  TASK_BACKEND="checklist"
+# --- Task backend ---
+if ! command -v bd &>/dev/null; then
+  log_error "bd (beads) is required but not found on PATH. Install bd and retry."
+  exit 1
 fi
-# NOTE: bd health is verified later in bd_init() which falls back to checklist
-# if the Dolt server is unreachable or misconfigured.
+TASK_BACKEND="bd"
 
 # --- Resolve paths ---
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
@@ -278,24 +273,6 @@ if [[ -z "$_CLI_REFACTOR_EVERY" && -n "${RALPH_REFACTOR_EVERY:-}" ]]; then
   REFACTOR_EVERY="$RALPH_REFACTOR_EVERY"
 fi
 PLAN_FILE="$RALPH_DIR/plan.md"
-if [[ -n "$PLAN_FILE_ARG" ]]; then
-  # Resolve plan-file to absolute path
-  if [[ "$PLAN_FILE_ARG" != /* ]]; then
-    PLAN_FILE_ARG="$(cd "$(dirname "$PROJECT_DIR/$PLAN_FILE_ARG")" && pwd)/$(basename "$PLAN_FILE_ARG")"
-  fi
-  if [[ ! -f "$PLAN_FILE_ARG" ]]; then
-    log_error "Plan file not found: $PLAN_FILE_ARG"
-    exit 1
-  fi
-  if ! grep -qE '^\s*- \[ \]' "$PLAN_FILE_ARG"; then
-    log_error "Plan file is not in Ralph format (must contain '- [ ]' checkboxes): $PLAN_FILE_ARG"
-    exit 1
-  fi
-  if [[ "$TASK_BACKEND" == "bd" ]]; then
-    log "Note: --plan-file forces checklist backend (bd available but not used)"
-  fi
-  TASK_BACKEND="checklist"
-fi
 STATE_FILE="$RALPH_DIR/state.json"
 STOP_FILE="$RALPH_DIR/stop"
 LOG_FILE="$RALPH_DIR/loop.log"
@@ -489,8 +466,7 @@ while true; do
   if [[ -f '$RALPH_DIR/.plan-refresh' ]]; then
     rm -f '$RALPH_DIR/.plan-refresh'
     printf '\033[2J\033[H'
-    if [[ '$TASK_BACKEND' == 'bd' ]]; then
-      current_json=\$(bd list --status in_progress --flat --json --limit 1 2>/dev/null)
+    current_json=\$(bd list --status in_progress --flat --json --limit 1 2>/dev/null)
       current_title=\$(echo "\$current_json" | jq -r '.[0].title // empty' 2>/dev/null)
       current_id=\$(echo "\$current_json" | jq -r '.[0].id // empty' 2>/dev/null)
       if [[ -n "\$current_title" ]]; then
@@ -523,9 +499,6 @@ while true; do
       printf "\n"
       calls=\$(cat '$RALPH_DIR/.call_count' 2>/dev/null || echo 0)
       printf "\${DIM}calls this hour: %s/$CALLS_PER_HOUR\${NC}\n" "\$calls"
-    else
-      cat '$PLAN_FILE' 2>/dev/null
-    fi
   fi
   sleep 1
 done
@@ -859,7 +832,7 @@ _rename_worktree_from_theme() {
   fi
 
   # Fallback: derive theme from first bd task title
-  if [[ -z "$theme" && "$TASK_BACKEND" == "bd" ]]; then
+  if [[ -z "$theme" ]]; then
     theme=$(run_bd list --status=open --flat --json --limit 1 2>/dev/null | jq -r '.[0].title // empty')
   fi
 
@@ -1179,15 +1152,6 @@ build_refactor_prompt() {
 run_planning() {
   log_phase "=== PHASE 1: PLANNING ==="
 
-  if [[ -n "$PLAN_FILE_ARG" && ! -f "$PLAN_FILE" ]]; then
-    cp "$PLAN_FILE_ARG" "$PLAN_FILE"
-    local total
-    total=$(count_total)
-    write_state "status" "planned"
-    log_task "Copied plan from $PLAN_FILE_ARG ($total tasks)"
-    return 0
-  fi
-
   if [[ "$RESUME" == true ]]; then
     local status
     status=$(read_state "status")
@@ -1209,11 +1173,7 @@ run_planning() {
     interactive_prompt="${interactive_prompt//\{\{RALPH_DIR\}\}/$RALPH_DIR}"
     interactive_prompt="${interactive_prompt//\{\{STATE_FILE\}\}/$STATE_FILE}"
     interactive_prompt="${interactive_prompt//\{\{TASK_INSTRUCTIONS\}\}/$(task_planning_instructions)}"
-    if [[ "$TASK_BACKEND" == "bd" ]]; then
-      interactive_prompt="${interactive_prompt//\{\{PLAN_FILE_LINE\}\}/}"
-    else
-      interactive_prompt="${interactive_prompt//\{\{PLAN_FILE_LINE\}\}/- Plan file: $PLAN_FILE}"
-    fi
+    interactive_prompt="${interactive_prompt//\{\{PLAN_FILE_LINE\}\}/}"
 
     cd "$WORK_DIR"
     claude --add-dir "$WORK_DIR" \
@@ -1807,9 +1767,6 @@ print_summary() {
   log_task "Tasks: $completed/$total completed, $remaining remaining"
 
   log "Log:        $LOG_FILE"
-  if [[ "$TASK_BACKEND" == "checklist" ]]; then
-    log "Plan:       $PLAN_FILE"
-  fi
 
   if [[ -n "$WORKTREE_BRANCH" && -n "$PROJECT_NAME" ]]; then
     log "Worktree:   $WORK_DIR"
@@ -1874,24 +1831,8 @@ main() {
     setup_tmux
   fi
 
-  if [[ "$RESUME" == true ]]; then
-    stored_backend=$(read_state "task_backend")
-    if [[ "$stored_backend" == "bd" || "$stored_backend" == "checklist" ]]; then
-      TASK_BACKEND="$stored_backend"
-    elif [[ -f "$PLAN_FILE" ]] && grep -qE '^\s*- \[[ x]\]' "$PLAN_FILE"; then
-      TASK_BACKEND="checklist"
-    fi
-  fi
-
   # Init task backend BEFORE worktree so .beads/.dolt are gitignored first
-  _validate_backend
-  local pre_init_backend="$TASK_BACKEND"
   init_task_backend
-  # bd_init may have fallen back to checklist — re-validate if backend changed
-  if [[ "$TASK_BACKEND" != "$pre_init_backend" ]]; then
-    _validate_backend
-    init_task_backend
-  fi
   write_state "task_backend" "$TASK_BACKEND"
 
   setup_worktree

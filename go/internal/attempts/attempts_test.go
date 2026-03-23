@@ -29,8 +29,7 @@ func TestRecord_CreatesFileForBDTask(t *testing.T) {
 	}
 }
 
-// Proves: checklist tasks (no id) use a slugified task name as the
-// attempt key.
+// Proves: tasks without an ID use a slugified task name as the attempt key.
 func TestRecord_UsesSlugifiedNameWhenNoTaskID(t *testing.T) {
 	tr := newTestTracker(t)
 	err := tr.Record("", "Fix the auth bug", "tried auth", "", "continue")

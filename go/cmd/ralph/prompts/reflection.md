@@ -1,5 +1,5 @@
 ## Post-task reflection
-Before signaling completion, write a brief reflection to `{{RALPH_DIR}}/reflections/<task-identifier>.md` where `<task-identifier>` is the bd task ID (e.g. `ralph-3ux`) or a short slug of the task title for checklist tasks.
+Before signaling completion, write a brief reflection to `{{RALPH_DIR}}/reflections/<task-identifier>.md` where `<task-identifier>` is the bd task ID (e.g. `ralph-3ux`).
 
 Use this structure:
 

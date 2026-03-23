@@ -11,8 +11,7 @@ import (
 type TaskBackend string
 
 const (
-	BackendBD        TaskBackend = "bd"
-	BackendChecklist TaskBackend = "checklist"
+	BackendBD TaskBackend = "bd"
 )
 
 // Vars holds all substitution values for prompt template assembly.
@@ -114,19 +113,9 @@ func BuildRefactorPrompt(v Vars, recentFiles string) (string, error) {
 	return r.Replace(result), nil
 }
 
-// executionInstructions returns the task-selection template content based on
-// the configured backend (bd or checklist).
+// executionInstructions returns the bd execution template content.
 func executionInstructions(v Vars) (string, error) {
-	var filename string
-	switch v.TaskBackend {
-	case BackendBD:
-		filename = "execution-bd.md"
-	case BackendChecklist:
-		filename = "execution-checklist.md"
-	default:
-		return "", fmt.Errorf("unknown task backend: %q", v.TaskBackend)
-	}
-	return readTemplate(v.PromptsDir, filename)
+	return readTemplate(v.PromptsDir, "execution-bd.md")
 }
 
 // BuildTaskManagerPrompt assembles the system prompt for the interactive

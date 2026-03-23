@@ -1032,11 +1032,6 @@ func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 }
 
 func (l *Loop) buildPrompt(taskPrompt, attemptHistory, testStatus string) (string, error) {
-	backend := prompt.BackendChecklist
-	if l.cfg.TaskBackend.Label() == "beads" {
-		backend = prompt.BackendBD
-	}
-
 	beadsContext, err := l.cfg.TaskBackend.ProjectContext()
 	if err != nil {
 		l.logger.Warn("ProjectContext: %v", err)
@@ -1055,7 +1050,7 @@ func (l *Loop) buildPrompt(taskPrompt, attemptHistory, testStatus string) (strin
 		AttemptHistory:   attemptHistory,
 		TestStatus:       testStatus,
 		BeadsContext:     beadsContext,
-		TaskBackend:      backend,
+		TaskBackend:      prompt.BackendBD,
 	})
 }
 

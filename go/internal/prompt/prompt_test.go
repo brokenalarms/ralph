@@ -34,7 +34,7 @@ func testVars(t *testing.T) Vars {
 		CurrentTaskToken: "###RALPH_CURRENT_TASK###",
 		AllCompleteToken: "###RALPH_ALL_COMPLETE###",
 		TaskPrompt:       "Fix auth",
-		TaskBackend:      BackendChecklist,
+		TaskBackend:      BackendBD,
 	}
 }
 
@@ -47,12 +47,12 @@ func TestBuildPrompt_VariablesSubstituted(t *testing.T) {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-	for _, want := range []string{v.WorkDir, v.RalphDir, v.PlanFile} {
+	for _, want := range []string{v.WorkDir, v.RalphDir} {
 		if !strings.Contains(result, want) {
 			t.Errorf("prompt missing %q", want)
 		}
 	}
-	for _, raw := range []string{"{{WORK_DIR}}", "{{RALPH_DIR}}", "{{PLAN_FILE}}"} {
+	for _, raw := range []string{"{{WORK_DIR}}", "{{RALPH_DIR}}"} {
 		if strings.Contains(result, raw) {
 			t.Errorf("prompt still contains unsubstituted %s", raw)
 		}
@@ -122,18 +122,16 @@ func TestBuildPrompt_FeedbackReferencesRalphDir(t *testing.T) {
 	}
 }
 
-// Proves: the bd backend uses execution-bd.md for task instructions.
+// Proves: the prompt uses execution-bd.md for task instructions.
 func TestBuildPrompt_BDBackend(t *testing.T) {
 	v := testVars(t)
-	v.TaskBackend = BackendBD
 	result, err := BuildPrompt(v)
 	if err != nil {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-	// bd template references bd prime; checklist template references plan file
 	if !strings.Contains(result, "bd") {
-		t.Error("bd backend prompt should reference bd")
+		t.Error("prompt should reference bd")
 	}
 }
 
@@ -403,29 +401,6 @@ func TestBuildPrompt_BDCompletionOrderIncludesPush(t *testing.T) {
 	}
 }
 
-// Proves: the checklist execution template specifies completion ordering
-// with push before signal.
-func TestBuildPrompt_ChecklistCompletionOrderIncludesPush(t *testing.T) {
-	v := testVars(t)
-	v.TaskBackend = BackendChecklist
-	result, err := BuildPrompt(v)
-	if err != nil {
-		t.Fatalf("BuildPrompt: %v", err)
-	}
-
-	pushIdx := strings.Index(result, "Push your branch")
-	signalIdx := strings.Index(result, "Signal completion by writing to the signal file")
-	if pushIdx < 0 {
-		t.Fatal("checklist completion section missing push step")
-	}
-	if signalIdx < 0 {
-		t.Fatal("checklist completion section missing signal step")
-	}
-	if pushIdx >= signalIdx {
-		t.Error("push step must come before signal step in completion order")
-	}
-}
-
 // Proves: beads context is injected into the prompt when provided,
 // giving the agent immediate awareness of project state at startup.
 func TestBuildPrompt_BeadsContextIncluded(t *testing.T) {
@@ -455,17 +430,6 @@ func TestBuildPrompt_BeadsContextEmpty(t *testing.T) {
 	}
 	if strings.Contains(result, "{{BEADS_CONTEXT}}") {
 		t.Error("prompt still contains unsubstituted {{BEADS_CONTEXT}}")
-	}
-}
-
-// Proves: an unknown backend returns an error instead of producing
-// a malformed prompt.
-func TestBuildPrompt_UnknownBackendErrors(t *testing.T) {
-	v := testVars(t)
-	v.TaskBackend = "nonexistent"
-	_, err := BuildPrompt(v)
-	if err == nil {
-		t.Fatal("expected error for unknown backend")
 	}
 }
 

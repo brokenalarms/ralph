@@ -17,7 +17,7 @@ teardown() {
   [[ -f "$RALPH_DIR/attempts/ralph-abc.log" ]]
 }
 
-# Proves: checklist tasks (no id) use a slugified task name as the attempt key.
+# Proves: tasks without an id use a slugified task name as the attempt key.
 @test "record_attempt uses slugified name when no task id" {
   record_attempt "" "Fix the auth bug" "tried auth" "" "continue"
   [[ -f "$RALPH_DIR/attempts/fix-the-auth-bug.log" ]]
