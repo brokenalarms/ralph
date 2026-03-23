@@ -25,7 +25,6 @@ type Logger struct {
 	out       io.Writer
 	logFile   io.Writer
 	streaming bool
-	taskID    string
 }
 
 // New creates a Logger that writes to stdout and the given log file writer.
@@ -60,31 +59,12 @@ func (l *Logger) SetStreaming(on bool) {
 	l.streaming = on
 }
 
-// SetTaskID sets the current task identifier (e.g. "ralph-xyz") which is
-// included in every log line after the timestamp in inline mode.
-func (l *Logger) SetTaskID(id string) {
-	l.taskID = id
-}
-
-// TaskID returns the current task identifier.
-func (l *Logger) TaskID() string {
-	return l.taskID
-}
-
 func (l *Logger) emit(color, prefix, msg string) {
-	taskTag := l.taskTag()
-	line := fmt.Sprintf("%s %s%s[%s]%s %s\n", ts(), taskTag, color, prefix, Reset, msg)
+	line := fmt.Sprintf("%s %s[%s]%s %s\n", ts(), color, prefix, Reset, msg)
 	if !l.streaming {
 		fmt.Fprint(l.out, line)
 	}
 	fmt.Fprint(l.logFile, line)
-}
-
-func (l *Logger) taskTag() string {
-	if l.taskID == "" {
-		return ""
-	}
-	return Magenta + "[" + l.taskID + "]" + Reset + " "
 }
 
 // Log writes an info-level message with cyan [ralph] prefix.
@@ -115,12 +95,17 @@ func (l *Logger) Phase(format string, args ...any) {
 // PhaseColor writes a bold phase header in the given ANSI color.
 func (l *Logger) PhaseColor(color string, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	taskTag := l.taskTag()
-	line := fmt.Sprintf("%s %s%s%s[ralph]%s %s%s%s\n", ts(), taskTag, Bold, color, Reset, Bold, msg, Reset)
+	line := fmt.Sprintf("%s %s%s[ralph]%s %s%s%s\n", ts(), Bold, color, Reset, Bold, msg, Reset)
 	if !l.streaming {
 		fmt.Fprint(l.out, line)
 	}
 	fmt.Fprint(l.logFile, line)
+}
+
+// TaskBanner writes a bold magenta separator with the task ID centered,
+// shown once when a new task begins.
+func (l *Logger) TaskBanner(taskID string) {
+	l.Separator(Magenta, taskID)
 }
 
 // DashedSeparator writes a bold, colored full-width dashed line using ─ characters.

@@ -155,7 +155,6 @@ func (l *Loop) Run(ctx context.Context) error {
 	st, _ := l.state.Load()
 	iteration := st.Iteration
 
-	l.logger.Phase("=== PHASE 2: EXECUTION ===")
 
 	// Clear completed-tasks tracker for this run so the plan pane only
 	// shows tasks completed in the current run, not historical closures.
@@ -221,7 +220,6 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.lastTaskMerged = false
 
 		taskID, nextTask, _ := l.cfg.TaskBackend.GetNextTaskInfo()
-		l.logger.SetTaskID(taskID)
 		taskChanged := l.isNewTask(taskID, nextTask)
 
 		if runIteration > 1 && taskChanged {
@@ -247,6 +245,10 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		if runIteration > 1 {
 			l.logger.DashedSeparator(logging.Yellow)
+		}
+
+		if taskID != "" && taskChanged {
+			l.logger.TaskBanner(taskID)
 		}
 
 		phaseColor := logging.Green
