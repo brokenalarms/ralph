@@ -63,7 +63,7 @@ func (m *Manager) EnforceAdmins() error {
 	branch := detectDefaultBranch(m.ProjectDir, m.BaseBranch)
 
 	// Check current state first to avoid unnecessary API calls.
-	enforced, err := isEnforceAdminsEnabled(nwo, branch)
+	enforced, err := checkEnforceAdmins(nwo, branch)
 	if err != nil {
 		m.Logger.Warn("Could not check enforce_admins status: %v — skipping", err)
 		return nil
@@ -74,11 +74,8 @@ func (m *Manager) EnforceAdmins() error {
 	}
 
 	// Enable enforce_admins via GitHub API.
-	endpoint := fmt.Sprintf("/repos/%s/branches/%s/protection/enforce_admins", nwo, branch)
-	cmd := exec.Command("gh", "api", "-X", "POST", endpoint)
-	out, err := cmd.CombinedOutput()
+	output, err := postEnforceAdmins(nwo, branch)
 	if err != nil {
-		output := strings.TrimSpace(string(out))
 		if strings.Contains(output, "Branch not protected") || strings.Contains(output, "Not Found") {
 			m.Logger.Warn("No branch protection rules on %s — cannot enable enforce_admins. Configure branch protection in GitHub settings first.", branch)
 			return nil
@@ -96,9 +93,15 @@ type enforceAdminsResponse struct {
 	Enabled bool `json:"enabled"`
 }
 
-// isEnforceAdminsEnabled checks whether enforce_admins is currently enabled
-// on a branch's protection rules.
-func isEnforceAdminsEnabled(nwo, branch string) (bool, error) {
+// checkEnforceAdmins checks whether enforce_admins is currently enabled.
+// Swappable for testing.
+var checkEnforceAdmins = defaultCheckEnforceAdmins
+
+// postEnforceAdmins enables enforce_admins via the GitHub API.
+// Swappable for testing.
+var postEnforceAdmins = defaultPostEnforceAdmins
+
+func defaultCheckEnforceAdmins(nwo, branch string) (bool, error) {
 	endpoint := fmt.Sprintf("/repos/%s/branches/%s/protection/enforce_admins", nwo, branch)
 	cmd := exec.Command("gh", "api", endpoint)
 	out, err := cmd.Output()
@@ -111,4 +114,11 @@ func isEnforceAdminsEnabled(nwo, branch string) (bool, error) {
 		return false, fmt.Errorf("parsing response: %w", err)
 	}
 	return resp.Enabled, nil
+}
+
+func defaultPostEnforceAdmins(nwo, branch string) (string, error) {
+	endpoint := fmt.Sprintf("/repos/%s/branches/%s/protection/enforce_admins", nwo, branch)
+	cmd := exec.Command("gh", "api", "-X", "POST", endpoint)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
 }
