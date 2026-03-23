@@ -2094,6 +2094,79 @@ func TestLoop_EmptyAttemptContextForNewTask(t *testing.T) {
 	}
 }
 
+// Verifies that buildAttemptContext includes reflections from other completed
+// tasks, not just the current task. This proves cross-task feed-forward works.
+func TestLoop_CrossTaskReflectionsFedForward(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
+		CallsPerHour: 80,
+		TaskBackend:  &stubBackend{label: "checklist"},
+	}, st, gm, logging.New(nil))
+
+	// Write reflections from 2 previously completed tasks
+	reflDir := filepath.Join(ralphDir, "reflections")
+	os.MkdirAll(reflDir, 0o755)
+	os.WriteFile(filepath.Join(reflDir, "ralph-old1.md"),
+		[]byte("# Old task 1\n## What would help future iterations\n- Run rebuild-go.sh before tests"), 0o644)
+	os.WriteFile(filepath.Join(reflDir, "ralph-old2.md"),
+		[]byte("# Old task 2\n## What was discovered\n- Auth middleware needs special handling"), 0o644)
+
+	// Build context for a NEW task (ralph-new) — should include old reflections
+	ctx := l.buildAttemptContext("ralph-new", "Brand new task")
+	if !strings.Contains(ctx, "rebuild-go.sh") {
+		t.Error("expected cross-task reflection from ralph-old1")
+	}
+	if !strings.Contains(ctx, "Auth middleware") {
+		t.Error("expected cross-task reflection from ralph-old2")
+	}
+	if !strings.Contains(ctx, "Recent learnings from previous tasks") {
+		t.Error("expected 'Recent learnings' section header")
+	}
+}
+
+// Verifies that cross-task attempt entries from halted/killed tasks are fed
+// forward so the next task knows what happened.
+func TestLoop_CrossTaskAttemptEntriesFedForward(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
+		CallsPerHour: 80,
+		TaskBackend:  &stubBackend{label: "checklist"},
+	}, st, gm, logging.New(nil))
+
+	// Record a halt from a different task
+	l.attempts.Record("ralph-prev", "Previous task", "Halted: stagnation", "", "no code changes for 3 iterations")
+
+	// Build context for the next task
+	ctx := l.buildAttemptContext("ralph-next", "Next task")
+	if !strings.Contains(ctx, "ralph-prev") {
+		t.Error("expected cross-task attempt entry from ralph-prev")
+	}
+	if !strings.Contains(ctx, "stagnation") {
+		t.Error("expected halt reason in cross-task context")
+	}
+	if !strings.Contains(ctx, "Recent learnings") {
+		t.Error("expected 'Recent learnings' section header")
+	}
+}
+
 // Verifies that --wait keeps the loop alive when tasks complete, then resumes
 // when new tasks appear. Without --wait, the loop would exit immediately.
 func TestLoop_WaitResumeOnNewTasks(t *testing.T) {

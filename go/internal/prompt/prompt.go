@@ -72,7 +72,7 @@ func BuildPrompt(v Vars) (string, error) {
 
 	attemptSection := ""
 	if v.AttemptHistory != "" {
-		attemptSection = "\n## Previous attempts on this task\n" + v.AttemptHistory
+		attemptSection = "\n" + v.AttemptHistory
 	}
 
 	r := strings.NewReplacer(

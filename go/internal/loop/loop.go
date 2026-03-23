@@ -278,7 +278,11 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		attemptContext := l.buildAttemptContext(taskID, nextTask)
 		if attemptContext != "" {
-			l.logger.Log("Including %d previous attempt(s) in prompt", strings.Count(attemptContext, "### Attempt "))
+			attemptCount := strings.Count(attemptContext, "### Attempt ")
+			reflectionCount := strings.Count(attemptContext, "## Recent learnings")
+			if attemptCount > 0 || reflectionCount > 0 {
+				l.logger.Log("Including prior context: %d attempt(s), cross-task learnings: %v", attemptCount, reflectionCount > 0)
+			}
 		}
 
 		fullPrompt, err := l.buildPrompt(taskPrompt, feedback, attemptContext, testStatus)
@@ -1135,17 +1139,45 @@ func (l *Loop) readReflection(taskID, taskName string) string {
 	return string(data)
 }
 
-// buildAttemptContext assembles attempt history and reflections into a single
-// block for the prompt. Returns empty string if no prior context exists.
+const maxCrossTaskReflections = 3
+const maxCrossTaskAttempts = 3
+
+// buildAttemptContext assembles attempt history, reflections, and cross-task
+// learnings into a single block for the prompt. Returns empty string if no
+// prior context exists.
 func (l *Loop) buildAttemptContext(taskID, taskName string) string {
 	var parts []string
 
+	// Same-task attempt history (retries of this specific task)
 	if history := l.attempts.Read(taskID, taskName); history != "" {
-		parts = append(parts, history)
+		parts = append(parts, "## Previous attempts on this task\n"+history)
 	}
 
+	// Same-task reflection
 	if reflection := l.readReflection(taskID, taskName); reflection != "" {
 		parts = append(parts, "### Previous reflection\n"+reflection)
+	}
+
+	// Cross-task learnings: recent reflections from other completed tasks
+	excludeKey := taskID
+	if excludeKey == "" {
+		excludeKey = git.Slugify(taskName)
+	}
+
+	var crossParts []string
+
+	reflections := l.attempts.RecentReflections(excludeKey, maxCrossTaskReflections)
+	for _, r := range reflections {
+		crossParts = append(crossParts, fmt.Sprintf("### %s\n%s", r.TaskID, r.Content))
+	}
+
+	recentAttempts := l.attempts.RecentAttemptEntries(excludeKey, maxCrossTaskAttempts)
+	if recentAttempts != "" {
+		crossParts = append(crossParts, "### Recent attempt outcomes\n"+recentAttempts)
+	}
+
+	if len(crossParts) > 0 {
+		parts = append(parts, "## Recent learnings from previous tasks\n"+strings.Join(crossParts, "\n"))
 	}
 
 	return strings.Join(parts, "\n")

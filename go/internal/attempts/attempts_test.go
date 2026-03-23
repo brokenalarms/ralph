@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newTestTracker(t *testing.T) *Tracker {
@@ -149,6 +150,104 @@ func TestRead_ReturnsAllWhenUnderCap(t *testing.T) {
 		if !strings.Contains(history, want) {
 			t.Errorf("missing %s — should return all when at or under cap", want)
 		}
+	}
+}
+
+// Proves: RecentReflections returns the N most recent reflection files
+// sorted by modification time, excluding the current task.
+func TestRecentReflections_ReturnsLastNByMtime(t *testing.T) {
+	tr := newTestTracker(t)
+	refDir := filepath.Join(tr.RalphDir, "reflections")
+	os.MkdirAll(refDir, 0o755)
+
+	// Write 4 reflections with staggered mtimes
+	files := []struct {
+		name    string
+		content string
+	}{
+		{"ralph-aaa.md", "# Task A\n## What was discovered\n- Found bug A"},
+		{"ralph-bbb.md", "# Task B\n## What was discovered\n- Found bug B"},
+		{"ralph-ccc.md", "# Task C\n## What was discovered\n- Found bug C"},
+		{"ralph-ddd.md", "# Task D\n## What was discovered\n- Found bug D"},
+	}
+	base := time.Now().Add(-4 * time.Hour)
+	for i, f := range files {
+		path := filepath.Join(refDir, f.name)
+		os.WriteFile(path, []byte(f.content), 0o644)
+		mtime := base.Add(time.Duration(i) * time.Hour)
+		os.Chtimes(path, mtime, mtime)
+	}
+
+	// Request last 2, excluding ralph-ddd (the current task)
+	result := tr.RecentReflections("ralph-ddd", 2)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 reflections, got %d", len(result))
+	}
+	// Should be ralph-bbb and ralph-ccc (most recent excluding ddd)
+	if result[0].TaskID != "ralph-bbb" {
+		t.Errorf("expected ralph-bbb first, got %s", result[0].TaskID)
+	}
+	if result[1].TaskID != "ralph-ccc" {
+		t.Errorf("expected ralph-ccc second, got %s", result[1].TaskID)
+	}
+	if !strings.Contains(result[0].Content, "Found bug B") {
+		t.Error("reflection B content missing")
+	}
+}
+
+// Proves: RecentReflections returns empty when no reflections exist.
+func TestRecentReflections_EmptyWhenNoneExist(t *testing.T) {
+	tr := newTestTracker(t)
+	result := tr.RecentReflections("ralph-xxx", 3)
+	if len(result) != 0 {
+		t.Errorf("expected empty, got %d reflections", len(result))
+	}
+}
+
+// Proves: RecentAttemptEntries returns the last entry from each of the
+// N most recently modified attempt logs, excluding the current task.
+func TestRecentAttemptEntries_ReturnsLastEntryPerTask(t *testing.T) {
+	tr := newTestTracker(t)
+
+	// Record attempts for 3 different tasks
+	tr.Record("task-a", "Task A", "first try A", "", "continue")
+	tr.Record("task-a", "Task A", "second try A", "", "halted: stagnation")
+
+	tr.Record("task-b", "Task B", "try B", "1 file changed", "idle_timeout")
+
+	tr.Record("task-c", "Task C", "try C", "", "continue")
+
+	// Stagger mtimes so ordering is deterministic
+	base := time.Now().Add(-3 * time.Hour)
+	for i, id := range []string{"task-a", "task-b", "task-c"} {
+		path := filepath.Join(tr.attemptsDir(), id+".log")
+		mtime := base.Add(time.Duration(i) * time.Hour)
+		os.Chtimes(path, mtime, mtime)
+	}
+
+	// Request last 2, excluding task-c (current task)
+	result := tr.RecentAttemptEntries("task-c", 2)
+	if !strings.Contains(result, "task-a") {
+		t.Error("expected task-a entry")
+	}
+	if !strings.Contains(result, "task-b") {
+		t.Error("expected task-b entry")
+	}
+	if strings.Contains(result, "task-c") {
+		t.Error("should exclude current task task-c")
+	}
+	// Should contain last entry from task-a (attempt 2, not 1)
+	if !strings.Contains(result, "halted: stagnation") {
+		t.Error("expected last attempt from task-a (halted)")
+	}
+}
+
+// Proves: RecentAttemptEntries returns empty when no attempt files exist.
+func TestRecentAttemptEntries_EmptyWhenNoneExist(t *testing.T) {
+	tr := newTestTracker(t)
+	result := tr.RecentAttemptEntries("task-x", 3)
+	if result != "" {
+		t.Errorf("expected empty, got %q", result)
 	}
 }
 
