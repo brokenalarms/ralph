@@ -21,14 +21,12 @@ import (
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/verify"
+	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
 // Config holds all parameters needed by the execution loop.
 type Config struct {
-	ProjectDir          string
-	WorkDir             string
-	RalphDir            string
-	PromptsDir          string
+	Dirs                workctx.WorkContext
 	PlanFile            string
 	MaxIterations       int
 	RefactorEvery       int
@@ -77,10 +75,10 @@ type Loop struct {
 
 // New creates an execution loop from the given configuration.
 func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *Loop {
-	signals := claude.DefaultSignalPaths(cfg.RalphDir)
+	signals := claude.DefaultSignalPaths(cfg.Dirs.RalphDir)
 
-	limiter := ratelimit.New(cfg.RalphDir, cfg.CallsPerHour)
-	limiter.StopFile = filepath.Join(cfg.RalphDir, "stop")
+	limiter := ratelimit.New(cfg.Dirs.RalphDir, cfg.CallsPerHour)
+	limiter.StopFile = filepath.Join(cfg.Dirs.RalphDir, "stop")
 
 	runner := &claude.Runner{Logger: logger}
 
@@ -91,7 +89,7 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 		limiter:  limiter,
 		runner:   runner,
 		analyzer: analyzer.New(),
-		attempts: attempts.New(cfg.RalphDir),
+		attempts: attempts.New(cfg.Dirs.RalphDir),
 		logger:   logger,
 		signals:  signals,
 	}
@@ -142,7 +140,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 	// Clear completed-tasks tracker for this run so the plan pane only
 	// shows tasks completed in the current run, not historical closures.
-	os.Remove(filepath.Join(l.cfg.RalphDir, ".completed-tasks"))
+	os.Remove(filepath.Join(l.cfg.Dirs.RalphDir, ".completed-tasks"))
 
 	for {
 		maxIter := l.state.ReadMaxIterations(l.cfg.MaxIterations)
@@ -227,7 +225,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			runIteration, maxIter, iteration, completed, total)
 		l.logger.Log("Next task: %s", nextTask)
 
-		touchFile(filepath.Join(l.cfg.RalphDir, ".plan-refresh"))
+		touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
 
 		l.state.Write("iteration", strconv.Itoa(iteration))
 		l.state.Write("status", "running")
@@ -261,7 +259,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		headBefore := git.HeadRev(l.git.WorkDir)
-		rawLogPath := filepath.Join(l.cfg.RalphDir, "raw.log")
+		rawLogPath := filepath.Join(l.cfg.Dirs.RalphDir, "raw.log")
 		logStart := fileLineCount(rawLogPath)
 
 		feedback := l.readFeedback()
@@ -285,10 +283,10 @@ func (l *Loop) Run(ctx context.Context) error {
 		result, runErr := l.runner.Run(claude.RunConfig{
 			Ctx:                 ctx,
 			WorkDir:             workDir,
-			RalphDir:            l.cfg.RalphDir,
+			RalphDir:            l.cfg.Dirs.RalphDir,
 			Prompt:              fullPrompt,
 			RawLog:              rawLogPath,
-			LogFile:             filepath.Join(l.cfg.RalphDir, "loop.log"),
+			LogFile:             filepath.Join(l.cfg.Dirs.RalphDir, "loop.log"),
 			Quiet:               l.cfg.Quiet,
 			Signals:             l.signals,
 			PollInterval:        2 * time.Second,
@@ -319,7 +317,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 					beadDesc := l.getBeadDescription(taskID)
 
-					signalPath := filepath.Join(l.cfg.RalphDir, ".signal_complete")
+					signalPath := filepath.Join(l.cfg.Dirs.RalphDir, ".signal_complete")
 					verifyPrompt := l.loadVerifyPrompt("verify-tests.md", map[string]string{
 						"{{TASK_TITLE}}":       nextTask,
 						"{{TASK_DESCRIPTION}}": beadDesc,
@@ -348,12 +346,12 @@ func (l *Loop) Run(ctx context.Context) error {
 					beadDesc := l.getBeadDescription(taskID)
 
 					l.logger.Log("Running LLM verification...")
-					llmResult := verify.LLMVerifyPR(ctx, workDir, l.cfg.PromptsDir, taskID, headBefore, nextTask, beadDesc)
+					llmResult := verify.LLMVerifyPR(ctx, workDir, l.cfg.Dirs.PromptsDir, taskID, headBefore, nextTask, beadDesc)
 
 					if !llmResult.Passed {
 						l.logger.Warn("LLM verification rejected: %s", llmResult.Details)
 
-						signalPath := filepath.Join(l.cfg.RalphDir, ".signal_complete")
+						signalPath := filepath.Join(l.cfg.Dirs.RalphDir, ".signal_complete")
 						fixPrompt := l.loadVerifyPrompt("verify-llm.md", map[string]string{
 							"{{TASK_TITLE}}":       nextTask,
 							"{{TASK_DESCRIPTION}}": beadDesc,
@@ -376,7 +374,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 						// Escalate to Sonnet for re-verification (Haiku already rejected)
 						l.logger.Log("Escalating verification to Sonnet...")
-						llmResult2 := verify.LLMVerifyPR(ctx, workDir, l.cfg.PromptsDir, taskID, headBefore, nextTask, beadDesc, "claude-sonnet-4-6")
+						llmResult2 := verify.LLMVerifyPR(ctx, workDir, l.cfg.Dirs.PromptsDir, taskID, headBefore, nextTask, beadDesc, "claude-sonnet-4-6")
 						if !llmResult2.Passed {
 							l.logger.Warn("Sonnet also rejects: %s", llmResult2.Details)
 							// Skip this task instead of accepting bad work
@@ -394,7 +392,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 				return true
 			},
-			FeedbackFile: filepath.Join(l.cfg.RalphDir, "feedback"),
+			FeedbackFile: filepath.Join(l.cfg.Dirs.RalphDir, "feedback"),
 		})
 		if runErr != nil {
 			l.logger.Warn("Claude failed on iteration %d, continuing...", runIteration)
@@ -490,7 +488,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 			l.attempts.Clear(taskID, nextTask)
 			l.recordCompletedTask(taskID, nextTask)
-			touchFile(filepath.Join(l.cfg.RalphDir, ".plan-flash"))
+			touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-flash"))
 
 			if taskID != "" {
 				closeReason := "completed by ralph"
@@ -641,7 +639,7 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, 
 	l.logger.Log("CI failed on PR #%s — spawning fix agent", ciErr.PRNumber)
 
 	ciLog := l.getCIFailureLog(ciErr.PRNumber)
-	signalPath := filepath.Join(l.cfg.RalphDir, ".signal_complete")
+	signalPath := filepath.Join(l.cfg.Dirs.RalphDir, ".signal_complete")
 	fixPrompt := l.loadVerifyPrompt("verify-tests.md", map[string]string{
 		"{{TASK_TITLE}}":       nextTask,
 		"{{TASK_DESCRIPTION}}": "CI checks failed after push. Fix the failures so CI passes.",
@@ -673,7 +671,7 @@ func (l *Loop) runFixAgent(ctx context.Context, description, prompt, workDir, ra
 	result, _ := runner.Run(claude.RunConfig{
 		Ctx:          ctx,
 		WorkDir:      workDir,
-		RalphDir:     l.cfg.RalphDir,
+		RalphDir:     l.cfg.Dirs.RalphDir,
 		Prompt:       prompt,
 		RawLog:       rawLogPath,
 		Quiet:        true,
@@ -752,7 +750,7 @@ func (l *Loop) getCIFailureLog(prNumber string) string {
 // loadVerifyPrompt reads a prompt template from the prompts directory and
 // replaces placeholders with the given values.
 func (l *Loop) loadVerifyPrompt(filename string, vars map[string]string) string {
-	path := filepath.Join(l.cfg.PromptsDir, filename)
+	path := filepath.Join(l.cfg.Dirs.PromptsDir, filename)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		// Fallback: return a minimal prompt
@@ -865,7 +863,7 @@ func (l *Loop) waitForTasks(ctx context.Context) bool {
 	l.logger.Log("Waiting for new tasks (polling every %s)...", l.cfg.WaitInterval)
 	l.state.Write("status", "waiting")
 	l.updateStreamTask("", "Waiting for tasks...")
-	touchFile(filepath.Join(l.cfg.RalphDir, ".plan-refresh"))
+	touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
 
 	ticker := time.NewTicker(l.cfg.WaitInterval)
 	defer ticker.Stop()
@@ -888,7 +886,7 @@ func (l *Loop) waitForTasks(ctx context.Context) bool {
 			}
 			if hasRemaining {
 				l.logger.Success("New tasks detected!")
-				touchFile(filepath.Join(l.cfg.RalphDir, ".plan-refresh"))
+				touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
 				return true
 			}
 		}
@@ -896,7 +894,7 @@ func (l *Loop) waitForTasks(ctx context.Context) bool {
 }
 
 func (l *Loop) checkStopFile() bool {
-	stopFile := filepath.Join(l.cfg.RalphDir, "stop")
+	stopFile := filepath.Join(l.cfg.Dirs.RalphDir, "stop")
 	if _, err := os.Stat(stopFile); err == nil {
 		os.Remove(stopFile)
 		return true
@@ -927,7 +925,7 @@ func (l *Loop) maybeRefactor(refactorEvery int) error {
 	}
 
 	refactorPrompt, err := prompt.BuildRefactorPrompt(prompt.Vars{
-		PromptsDir:       l.cfg.PromptsDir,
+		PromptsDir:       l.cfg.Dirs.PromptsDir,
 		WorkDir:          l.git.WorkDir,
 		SignalToken:      l.signals.Complete,
 		CurrentTaskToken: l.signals.CurrentTask,
@@ -947,13 +945,13 @@ func (l *Loop) maybeRefactor(refactorEvery int) error {
 		}
 	}
 
-	rawLogPath := filepath.Join(l.cfg.RalphDir, "raw.log")
+	rawLogPath := filepath.Join(l.cfg.Dirs.RalphDir, "raw.log")
 	_, err = l.runner.Run(claude.RunConfig{
 		WorkDir:      l.git.WorkDir,
-		RalphDir:     l.cfg.RalphDir,
+		RalphDir:     l.cfg.Dirs.RalphDir,
 		Prompt:       refactorPrompt,
 		RawLog:       rawLogPath,
-		LogFile:      filepath.Join(l.cfg.RalphDir, "loop.log"),
+		LogFile:      filepath.Join(l.cfg.Dirs.RalphDir, "loop.log"),
 		Quiet:        l.cfg.Quiet,
 		Signals:      l.signals,
 		PollInterval: 2 * time.Second,
@@ -989,10 +987,10 @@ func (l *Loop) buildPrompt(taskPrompt, feedback, attemptHistory, testStatus stri
 	}
 
 	return prompt.BuildPrompt(prompt.Vars{
-		PromptsDir:       l.cfg.PromptsDir,
-		ProjectDir:       l.cfg.ProjectDir,
+		PromptsDir:       l.cfg.Dirs.PromptsDir,
+		ProjectDir:       l.cfg.Dirs.ProjectDir,
 		WorkDir:          l.git.WorkDir,
-		RalphDir:         l.cfg.RalphDir,
+		RalphDir:         l.cfg.Dirs.RalphDir,
 		PlanFile:         l.cfg.PlanFile,
 		SignalToken:      l.signals.Complete,
 		CurrentTaskToken: l.signals.CurrentTask,
@@ -1048,11 +1046,11 @@ func (l *Loop) writeRunBranch() {
 	if branch == "" {
 		branch = "ralph"
 	}
-	os.WriteFile(filepath.Join(l.cfg.RalphDir, ".run-branch"), []byte(branch), 0o644)
+	os.WriteFile(filepath.Join(l.cfg.Dirs.RalphDir, ".run-branch"), []byte(branch), 0o644)
 }
 
 func (l *Loop) updateStreamTask(taskID, nextTask string) {
-	streamTaskFile := filepath.Join(l.cfg.RalphDir, ".stream-task")
+	streamTaskFile := filepath.Join(l.cfg.Dirs.RalphDir, ".stream-task")
 	content := nextTask
 	if taskID != "" {
 		content = taskID + ": " + nextTask
@@ -1061,7 +1059,7 @@ func (l *Loop) updateStreamTask(taskID, nextTask string) {
 }
 
 func (l *Loop) readFeedback() string {
-	feedbackFile := filepath.Join(l.cfg.RalphDir, "feedback")
+	feedbackFile := filepath.Join(l.cfg.Dirs.RalphDir, "feedback")
 	data, err := os.ReadFile(feedbackFile)
 	if err != nil || len(data) == 0 {
 		return ""
@@ -1070,7 +1068,7 @@ func (l *Loop) readFeedback() string {
 }
 
 func (l *Loop) writeFeedback(msg string) {
-	feedbackFile := filepath.Join(l.cfg.RalphDir, "feedback")
+	feedbackFile := filepath.Join(l.cfg.Dirs.RalphDir, "feedback")
 	f, err := os.OpenFile(feedbackFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		l.logger.Warn("Failed to write feedback: %v", err)
@@ -1081,7 +1079,7 @@ func (l *Loop) writeFeedback(msg string) {
 }
 
 func (l *Loop) clearFeedback() {
-	os.Remove(filepath.Join(l.cfg.RalphDir, "feedback"))
+	os.Remove(filepath.Join(l.cfg.Dirs.RalphDir, "feedback"))
 }
 
 // readReflection returns the content of a previous reflection file for a task.
@@ -1091,7 +1089,7 @@ func (l *Loop) readReflection(taskID, taskName string) string {
 	if key == "" {
 		key = git.Slugify(taskName)
 	}
-	path := filepath.Join(l.cfg.RalphDir, "reflections", key+".md")
+	path := filepath.Join(l.cfg.Dirs.RalphDir, "reflections", key+".md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -1125,7 +1123,7 @@ func (l *Loop) recordCompletedTask(taskID, taskTitle string) {
 	if label == "" {
 		return
 	}
-	path := filepath.Join(l.cfg.RalphDir, ".completed-tasks")
+	path := filepath.Join(l.cfg.Dirs.RalphDir, ".completed-tasks")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return

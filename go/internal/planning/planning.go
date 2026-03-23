@@ -14,6 +14,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
+	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
 // Deps bundles the dependencies the planning phase needs from the outer loop.
@@ -22,9 +23,7 @@ type Deps struct {
 	Backend    tasks.Backend
 	StateStore *state.Store
 	Logger     *logging.Logger
-	PromptsDir string
-	WorkDir    string // worktree or project directory
-	RalphDir   string // .ralph state directory
+	Dirs       workctx.WorkContext
 	PlanFile   string // path to plan.md (checklist backend)
 	Prompt     string // user-supplied --prompt override (may be empty)
 
@@ -153,15 +152,15 @@ func runInteractive(d Deps) error {
 	}
 
 	args := []string{
-		"--add-dir", d.WorkDir,
-		"--add-dir", d.RalphDir,
+		"--add-dir", d.Dirs.WorkDir,
+		"--add-dir", d.Dirs.RalphDir,
 		"--permission-mode", "plan",
 		"--allowedTools", "Bash",
 		"--system-prompt", prompt,
 	}
 
 	cmd := exec.CommandContext(d.Ctx, "claude", args...)
-	cmd.Dir = d.WorkDir
+	cmd.Dir = d.Dirs.WorkDir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -190,15 +189,15 @@ func runAutonomous(d Deps) error {
 // buildInteractivePrompt assembles the interactive planning system prompt
 // from the template, substituting backend-specific instructions.
 func buildInteractivePrompt(d Deps) (string, error) {
-	tmplPath := filepath.Join(d.PromptsDir, "interactive-planning.md")
+	tmplPath := filepath.Join(d.Dirs.PromptsDir, "interactive-planning.md")
 	data, err := os.ReadFile(tmplPath)
 	if err != nil {
 		return "", fmt.Errorf("reading interactive planning template: %w", err)
 	}
 
 	prompt := string(data)
-	prompt = strings.ReplaceAll(prompt, "{{WORK_DIR}}", d.WorkDir)
-	prompt = strings.ReplaceAll(prompt, "{{RALPH_DIR}}", d.RalphDir)
+	prompt = strings.ReplaceAll(prompt, "{{WORK_DIR}}", d.Dirs.WorkDir)
+	prompt = strings.ReplaceAll(prompt, "{{RALPH_DIR}}", d.Dirs.RalphDir)
 
 	stateFile := d.StateStore.Path()
 	prompt = strings.ReplaceAll(prompt, "{{STATE_FILE}}", stateFile)
@@ -247,7 +246,7 @@ func existingTasksContext(d Deps) string {
 // buildAutonomousPrompt assembles the autonomous planning prompt from the
 // template with context and backend instructions.
 func buildAutonomousPrompt(d Deps) (string, error) {
-	tmplPath := filepath.Join(d.PromptsDir, "planning.md")
+	tmplPath := filepath.Join(d.Dirs.PromptsDir, "planning.md")
 	data, err := os.ReadFile(tmplPath)
 	if err != nil {
 		return "", fmt.Errorf("reading planning template: %w", err)
@@ -256,7 +255,7 @@ func buildAutonomousPrompt(d Deps) (string, error) {
 	prompt := string(data)
 	prompt = strings.ReplaceAll(prompt, "{{PLANNING_CONTEXT}}", d.Prompt)
 	prompt = strings.ReplaceAll(prompt, "{{PLAN_FILE}}", planFilePath(d))
-	prompt = strings.ReplaceAll(prompt, "{{RALPH_DIR}}", d.RalphDir)
+	prompt = strings.ReplaceAll(prompt, "{{RALPH_DIR}}", d.Dirs.RalphDir)
 
 	stateFile := d.StateStore.Path()
 	prompt = strings.ReplaceAll(prompt, "{{STATE_FILE}}", stateFile)
@@ -293,7 +292,7 @@ func planFilePath(d Deps) string {
 	if d.PlanFile != "" {
 		return d.PlanFile
 	}
-	return filepath.Join(d.RalphDir, "plan.md")
+	return filepath.Join(d.Dirs.RalphDir, "plan.md")
 }
 
 // defaultRunClaude returns a RunClaude function that spawns claude in
@@ -303,14 +302,14 @@ func defaultRunClaude(d Deps) func(context.Context, string) error {
 		args := []string{
 			"--print", "--verbose",
 			"--output-format", "stream-json",
-			"--add-dir", d.WorkDir,
-			"--add-dir", d.RalphDir,
+			"--add-dir", d.Dirs.WorkDir,
+			"--add-dir", d.Dirs.RalphDir,
 			"--allowedTools", strings.Join(claude.IterationAllowedTools, ","),
 			"-p", prompt,
 		}
 
 		cmd := exec.CommandContext(ctx, "claude", args...)
-		cmd.Dir = d.WorkDir
+		cmd.Dir = d.Dirs.WorkDir
 		cmd.Stdin = nil
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
