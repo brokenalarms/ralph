@@ -13,7 +13,7 @@ You are a verification agent. The previous agent's work was rejected by a review
 1. Address the reviewer's feedback — add missing tests, fix the implementation, etc.
 2. Run scoped tests to confirm your changes work.
 3. Commit all fixes.
-4. Signal completion: `echo "done" > {{SIGNAL_COMPLETE}}`
+4. Signal completion: `echo "<one-line summary of what you fixed>" > {{SIGNAL_COMPLETE}}`
    This signal MUST be your very last action.
 
 Do NOT add unrelated features. Only address the reviewer's specific feedback.
