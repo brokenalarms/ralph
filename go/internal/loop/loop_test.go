@@ -727,7 +727,7 @@ func TestLoop_HandleRebase_FreshWorktreeRecovery(t *testing.T) {
 		State:       st,
 		Logger:      logging.New(nil),
 	}
-	if err := gm.SetupWorktree(); err != nil {
+	if err := gm.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 	run(t, "git", "-C", gm.WorkDir, "remote", "set-url", "origin", bare)
@@ -800,7 +800,7 @@ func TestLoop_HandleRebase_AbortHaltsLoop(t *testing.T) {
 		State:       st,
 		Logger:      logging.New(nil),
 	}
-	if err := gm.SetupWorktree(); err != nil {
+	if err := gm.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 	run(t, "git", "-C", gm.WorkDir, "remote", "set-url", "origin", bare)
@@ -864,7 +864,7 @@ func TestLoop_HandleRebase_NoHandlerPropagatesError(t *testing.T) {
 		State:       st,
 		Logger:      logging.New(nil),
 	}
-	if err := gm.SetupWorktree(); err != nil {
+	if err := gm.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 	run(t, "git", "-C", gm.WorkDir, "remote", "set-url", "origin", bare)
@@ -921,7 +921,7 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 		State:       st,
 		Logger:      logging.New(nil),
 	}
-	if err := gm.SetupWorktree(); err != nil {
+	if err := gm.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 	run(t, "git", "-C", gm.WorkDir, "remote", "set-url", "origin", bare)
@@ -1026,7 +1026,7 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 		State:       st,
 		Logger:      logging.New(nil),
 	}
-	if err := gm.SetupWorktree(); err != nil {
+	if err := gm.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -1093,7 +1093,7 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 		State:       st,
 		Logger:      logging.New(nil),
 	}
-	if err := gm.SetupWorktree(); err != nil {
+	if err := gm.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -1175,7 +1175,7 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 		State:       st,
 		Logger:      logging.New(nil),
 	}
-	if err := gm.SetupWorktree(); err != nil {
+	if err := gm.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -1274,8 +1274,8 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(string) error { return nil }
-	l.mergeFunc = func() (bool, error) { return true, nil }
+	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -1307,7 +1307,7 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 		State:          st,
 		Logger:         logging.New(nil),
 	}
-	if err := gm.SetupWorktree(); err != nil {
+	if err := gm.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -1400,8 +1400,8 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.pushPRFunc = func(string) error { return nil }
-	l.verifyFunc = func(dir, headBefore string) (bool, string) { return true, "" }
+	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
 
@@ -1451,8 +1451,8 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.pushPRFunc = func(string) error { return nil }
-	l.verifyFunc = func(dir, headBefore string) (bool, string) { return false, "no commits" }
+	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "no commits" }
 
 	_ = l.Run(context.Background())
 
@@ -1578,8 +1578,8 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 				TaskBackend:   backend,
 			}, st, gm, logging.New(nil))
 			l.runner = runner
-			l.pushPRFunc = func(string) error { return nil }
-			l.mergeFunc = func() (bool, error) {
+			l.pushPRFunc = func(context.Context, string) error { return nil }
+			l.mergeFunc = func(context.Context) (bool, error) {
 				mergeCount++
 				return true, nil
 			}
@@ -1622,7 +1622,7 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 				State:          st,
 				Logger:         logging.New(nil),
 			}
-			if err := gm.SetupWorktree(); err != nil {
+			if err := gm.SetupWorktree(context.Background()); err != nil {
 				t.Fatalf("SetupWorktree: %v", err)
 			}
 
@@ -1670,7 +1670,7 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 				TaskBackend:   backend,
 			}, st, gm, logging.New(nil))
 			l.runner = runner
-			l.mergeFunc = func() (bool, error) {
+			l.mergeFunc = func(context.Context) (bool, error) {
 				return true, nil
 			}
 
@@ -1760,7 +1760,7 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 				TaskBackend:   backend,
 			}, st, gm, logging.New(nil))
 			l.runner = runner
-			l.pushPRFunc = func(taskDesc string) error {
+			l.pushPRFunc = func(_ context.Context, taskDesc string) error {
 				pushPRCalls++
 				return nil
 			}
@@ -1818,11 +1818,11 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(taskDesc string) error {
+	l.pushPRFunc = func(_ context.Context, taskDesc string) error {
 		pushPRCalls++
 		return nil
 	}
-	l.mergeFunc = func() (bool, error) {
+	l.mergeFunc = func(context.Context) (bool, error) {
 		t.Error("auto-merge should not be called without signal")
 		return false, nil
 	}
@@ -2047,7 +2047,7 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true, Summary: "task completed"},
 	}
-	l.pushPRFunc = func(string) error { return nil }
+	l.pushPRFunc = func(context.Context, string) error { return nil }
 
 	_ = l.Run(context.Background())
 
@@ -2196,7 +2196,7 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 		WaitInterval:  50 * time.Millisecond,
 	}, st, gm, logger)
 	l.runner = runner
-	l.pushPRFunc = func(string) error { return nil }
+	l.pushPRFunc = func(context.Context, string) error { return nil }
 
 	// After the loop enters wait mode, inject a new task. After the Claude
 	// call completes, the loop will re-enter wait mode; cancel the context
@@ -2567,10 +2567,10 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.verifyFunc = func(workDir, headBefore string) (bool, string) {
+	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return false, "test suite failed"
 	}
-	l.pushPRFunc = func(string) error {
+	l.pushPRFunc = func(context.Context, string) error {
 		t.Error("push should not be called when verification fails")
 		return nil
 	}
@@ -2633,10 +2633,10 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.verifyFunc = func(workDir, headBefore string) (bool, string) {
+	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
-	l.pushPRFunc = func(string) error {
+	l.pushPRFunc = func(_ context.Context, _ string) error {
 		pushCalled = true
 		return nil
 	}
@@ -2699,7 +2699,7 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		// VerifyDir deliberately not set
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(string) error {
+	l.pushPRFunc = func(_ context.Context, _ string) error {
 		pushCalled = true
 		return nil
 	}
@@ -2769,10 +2769,10 @@ func TestLoop_LifecycleStates(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.verifyFunc = func(workDir, headBefore string) (bool, string) {
+	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
-	l.pushPRFunc = func(string) error { return nil }
+	l.pushPRFunc = func(context.Context, string) error { return nil }
 
 	_ = l.Run(context.Background())
 
@@ -2826,7 +2826,7 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.verifyFunc = func(workDir, headBefore string) (bool, string) {
+	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return false, "tests failed"
 	}
 
@@ -2888,8 +2888,8 @@ func TestLoop_CIFailureWritesFeedback(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(string) error { return nil }
-	l.mergeFunc = func() (bool, error) {
+	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.mergeFunc = func(context.Context) (bool, error) {
 		return false, &git.CIFailureError{
 			PRNumber: "99",
 			Failures: []git.CICheckResult{
@@ -2951,11 +2951,11 @@ func TestLoop_MergeConflictTriggersRebaseAndRetry(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(string) error { return nil }
+	l.pushPRFunc = func(context.Context, string) error { return nil }
 
 	// First call returns MergeConflictError, second call succeeds.
 	mergeCalls := 0
-	l.mergeFunc = func() (bool, error) {
+	l.mergeFunc = func(context.Context) (bool, error) {
 		mergeCalls++
 		if mergeCalls == 1 {
 			return false, &git.MergeConflictError{PRNumber: "77"}
@@ -2964,7 +2964,7 @@ func TestLoop_MergeConflictTriggersRebaseAndRetry(t *testing.T) {
 	}
 
 	forcePushed := false
-	l.forcePushFunc = func() error {
+	l.forcePushFunc = func(context.Context) error {
 		forcePushed = true
 		return nil
 	}
@@ -3027,14 +3027,14 @@ func TestLoop_CIFailureFixAgentRetriesMerge(t *testing.T) {
 	}
 
 	pushCalls := 0
-	l.pushPRFunc = func(string) error {
+	l.pushPRFunc = func(_ context.Context, _ string) error {
 		pushCalls++
 		return nil
 	}
 
 	// First merge returns CI failure, second merge (after fix) succeeds.
 	mergeCalls := 0
-	l.mergeFunc = func() (bool, error) {
+	l.mergeFunc = func(context.Context) (bool, error) {
 		mergeCalls++
 		if mergeCalls == 1 {
 			return false, &git.CIFailureError{
@@ -3103,11 +3103,11 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 	l.newRunnerFunc = func() claudeRunner {
 		return &stubRunner{result: claude.Result{SignalDetected: true}}
 	}
-	l.pushPRFunc = func(string) error { return nil }
+	l.pushPRFunc = func(context.Context, string) error { return nil }
 
 	// Every merge attempt returns CI failure.
 	mergeCalls := 0
-	l.mergeFunc = func() (bool, error) {
+	l.mergeFunc = func(context.Context) (bool, error) {
 		mergeCalls++
 		return false, &git.CIFailureError{
 			PRNumber: "99",
@@ -3166,8 +3166,8 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 		VerifyDir:     dir,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.verifyFunc = func(d, h string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(string) error { return nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.pushPRFunc = func(context.Context, string) error { return nil }
 
 	_ = l.Run(context.Background())
 
@@ -3245,8 +3245,8 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		inner: origRunner,
 		captured: &capturedPrompt,
 	}
-	l.verifyFunc = func(d, h string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(string) error { return nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.pushPRFunc = func(context.Context, string) error { return nil }
 
 	_ = l.Run(context.Background())
 
@@ -3380,11 +3380,11 @@ func TestLoop_PrePushRebaseBeforePush(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	var order []string
-	l.prePushRebaseFunc = func() error {
+	l.prePushRebaseFunc = func(context.Context) error {
 		order = append(order, "rebase")
 		return nil
 	}
-	l.pushPRFunc = func(string) error {
+	l.pushPRFunc = func(context.Context, string) error {
 		order = append(order, "push")
 		return nil
 	}

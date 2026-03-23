@@ -1,6 +1,7 @@
 package planning
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -91,7 +92,8 @@ func testDeps(t *testing.T) (Deps, string) {
 		PromptsDir: promptsDir,
 		WorkDir:    workDir,
 		RalphDir:   ralphDir,
-		RunClaude:  func(string) error { return nil },
+		Ctx:        context.Background(),
+		RunClaude:  func(context.Context, string) error { return nil },
 	}, tmp
 }
 
@@ -128,7 +130,7 @@ func TestResumeSkipsPlanning(t *testing.T) {
 	d.StateStore.Write("status", "planned")
 
 	claudeCalled := false
-	d.RunClaude = func(string) error {
+	d.RunClaude = func(context.Context, string) error {
 		claudeCalled = true
 		return nil
 	}
@@ -159,7 +161,7 @@ func TestForcePlanBypassesResume(t *testing.T) {
 		planningInstr:     "write tasks",
 	}
 
-	d.RunClaude = func(string) error { return nil }
+	d.RunClaude = func(context.Context, string) error { return nil }
 
 	if err := Run(d); err != nil {
 		t.Fatalf("Run() error: %v", err)
@@ -234,7 +236,7 @@ func TestSkipPlanningGoesDirectToAutonomous(t *testing.T) {
 	}
 
 	autonomousCalled := false
-	d.RunClaude = func(prompt string) error {
+	d.RunClaude = func(_ context.Context, prompt string) error {
 		autonomousCalled = true
 		return nil
 	}
@@ -260,7 +262,7 @@ func TestAutonomousPlanningFailure(t *testing.T) {
 		planningSucceeded: false,
 	}
 
-	d.RunClaude = func(string) error { return nil }
+	d.RunClaude = func(context.Context, string) error { return nil }
 
 	err := Run(d)
 	if err == nil {
@@ -396,7 +398,7 @@ func TestFullAutonomousRun(t *testing.T) {
 	}
 
 	var capturedPrompt string
-	d.RunClaude = func(prompt string) error {
+	d.RunClaude = func(_ context.Context, prompt string) error {
 		capturedPrompt = prompt
 		return nil
 	}
@@ -435,7 +437,7 @@ func TestCopyPlanFileNonExistent(t *testing.T) {
 	}
 
 	autonomousCalled := false
-	d.RunClaude = func(string) error {
+	d.RunClaude = func(context.Context, string) error {
 		autonomousCalled = true
 		return nil
 	}
@@ -490,7 +492,7 @@ func TestAutonomousRunClaudeError(t *testing.T) {
 		planningSucceedSeq: []bool{false},
 	}
 
-	d.RunClaude = func(string) error {
+	d.RunClaude = func(context.Context, string) error {
 		return fmt.Errorf("claude crashed")
 	}
 

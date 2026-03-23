@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -52,13 +53,13 @@ func DetectTestCommand(dir string) *TestCommand {
 // RunTests executes the detected test command and returns the result.
 // If no test command is detected, verification passes (we can't block
 // on projects that don't have tests).
-func RunTests(dir string) Result {
+func RunTests(ctx context.Context, dir string) Result {
 	tc := DetectTestCommand(dir)
 	if tc == nil {
 		return Result{Passed: true, Reason: "no test runner detected"}
 	}
 
-	cmd := exec.Command(tc.Cmd, tc.Args...)
+	cmd := exec.CommandContext(ctx, tc.Cmd, tc.Args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -183,8 +184,8 @@ func PreflightChecks(workDir, headBefore string, beadStatus string) PreflightRes
 // Prefers the PR diff (which covers work from prior iterations) over the
 // current iteration's diff. Falls back to iteration diff when no PR exists.
 // Uses prompts/verify-review.md as the review template when available.
-func LLMVerifyPR(workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string) Result {
-	diff := getPRDiff(workDir, taskID)
+func LLMVerifyPR(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string) Result {
+	diff := getPRDiff(ctx, workDir, taskID)
 	source := "PR"
 	if diff == "" {
 		diffCmd := exec.Command("git", "diff", headBefore+"..HEAD")
@@ -202,7 +203,7 @@ func LLMVerifyPR(workDir, promptsDir, taskID, headBefore, beadTitle, beadDescrip
 	}
 
 	prompt := loadReviewPrompt(promptsDir, beadTitle, beadDescription, source, diff)
-	return callLLM(workDir, prompt)
+	return callLLM(ctx, workDir, prompt)
 }
 
 func loadReviewPrompt(promptsDir, beadTitle, beadDescription, source, diff string) string {
@@ -235,8 +236,8 @@ Reply with exactly one line: YES or NO followed by a one-sentence reason.`, bead
 }
 
 // getPRDiff finds a PR matching the task ID and returns its diff.
-func getPRDiff(workDir, taskID string) string {
-	cmd := exec.Command("gh", "pr", "list", "--search", taskID,
+func getPRDiff(ctx context.Context, workDir, taskID string) string {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--search", taskID,
 		"--state", "all", "--json", "number", "--jq", ".[0].number")
 	cmd.Dir = workDir
 	out, err := cmd.Output()
@@ -248,7 +249,7 @@ func getPRDiff(workDir, taskID string) string {
 		return ""
 	}
 
-	diffCmd := exec.Command("gh", "pr", "diff", prNumber)
+	diffCmd := exec.CommandContext(ctx, "gh", "pr", "diff", prNumber)
 	diffCmd.Dir = workDir
 	diffOut, err := diffCmd.Output()
 	if err != nil {
@@ -258,8 +259,8 @@ func getPRDiff(workDir, taskID string) string {
 }
 
 // callLLM sends a prompt to Claude Haiku and interprets YES/NO response.
-func callLLM(workDir, prompt string) Result {
-	cmd := exec.Command("claude", "--print", "--model", "claude-haiku-4-5-20251001", "-p", prompt)
+func callLLM(ctx context.Context, workDir, prompt string) Result {
+	cmd := exec.CommandContext(ctx, "claude", "--print", "--model", "claude-haiku-4-5-20251001", "-p", prompt)
 	cmd.Dir = workDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
