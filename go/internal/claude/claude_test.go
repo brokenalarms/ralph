@@ -1255,6 +1255,132 @@ func TestDisallowedTools_ContainsBdClose(t *testing.T) {
 	}
 }
 
+// --- Run() cleanup tests ---
+
+// Verifies that Run() stops streaming goroutines before returning, so no
+// goroutines leak across iterations.
+func TestRun_CleansUpStreamingOnReturn(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	logFile := filepath.Join(dir, "loop.log")
+	signals := DefaultSignalPaths(dir)
+
+	runner := &Runner{
+		Logger: &testLogger{},
+		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
+			cmd := exec.Command("true")
+			cmd.Dir = cfg.WorkDir
+			cmd.Stdout = raw
+			cmd.Stderr = raw
+			return cmd
+		},
+	}
+
+	_, err := runner.Run(RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		LogFile:      logFile,
+		Quiet:        false,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if runner.filterStop != nil {
+		t.Error("filterStop should be nil after Run() returns")
+	}
+	if runner.filterDone != nil {
+		t.Error("filterDone should be nil after Run() returns")
+	}
+	if runner.tailStop != nil {
+		t.Error("tailStop should be nil after Run() returns")
+	}
+	if runner.tailDone != nil {
+		t.Error("tailDone should be nil after Run() returns")
+	}
+}
+
+// Verifies that a second Run() call stops streaming goroutines left by the
+// first Run() before starting new ones, preventing goroutine accumulation.
+func TestRun_SecondCallStopsPreviousStreaming(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	logFile := filepath.Join(dir, "loop.log")
+	signals := DefaultSignalPaths(dir)
+
+	runner := &Runner{
+		Logger: &testLogger{},
+		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
+			cmd := exec.Command("true")
+			cmd.Dir = cfg.WorkDir
+			cmd.Stdout = raw
+			cmd.Stderr = raw
+			return cmd
+		},
+	}
+
+	// Simulate a previous Run() that left active streaming goroutines by
+	// manually starting them and registering on the Runner.
+	os.WriteFile(rawLog, nil, 0o644)
+	os.WriteFile(logFile, nil, 0o644)
+
+	prevFilterStop := make(chan struct{})
+	prevFilterDone := runner.startStreamFilter(RunConfig{
+		RalphDir: dir,
+		RawLog:   rawLog,
+		LogFile:  logFile,
+	}, prevFilterStop)
+	prevTailStop := make(chan struct{})
+	prevTailDone := startTailGoroutine(logFile, prevTailStop)
+
+	runner.mu.Lock()
+	runner.filterStop = prevFilterStop
+	runner.filterDone = prevFilterDone
+	runner.tailStop = prevTailStop
+	runner.tailDone = prevTailDone
+	runner.mu.Unlock()
+
+	// Run() should stop the previous goroutines before starting new ones.
+	_, err := runner.Run(RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		LogFile:      logFile,
+		Quiet:        false,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Previous goroutines must have been drained.
+	select {
+	case <-prevFilterDone:
+	default:
+		t.Error("previous filter goroutine should have been stopped by second Run()")
+	}
+	select {
+	case <-prevTailDone:
+	default:
+		t.Error("previous tail goroutine should have been stopped by second Run()")
+	}
+
+	// Runner state should be clean after the second Run() completes.
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if runner.filterStop != nil || runner.tailStop != nil {
+		t.Error("streaming channels should be nil after Run() returns")
+	}
+}
+
 // Verifies that git checkout and git branch are disallowed so sub-agents
 // can't check out ralph's branches, which would block RecreateFromMain.
 func TestDisallowedTools_BlocksGitCheckoutAndBranch(t *testing.T) {

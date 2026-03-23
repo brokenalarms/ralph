@@ -130,12 +130,18 @@ var IterationDisallowedTools = []string{
 	"Bash(git branch*)",
 }
 
+// CmdFactory builds the exec.Cmd that Run() will start. Receives the
+// RunConfig so it can set WorkDir and pipe stdout/stderr to the raw log.
+// If nil, Run() spawns "claude" with the standard iteration flags.
+type CmdFactory func(cfg RunConfig, rawLog *os.File) *exec.Cmd
+
 // Runner manages Claude process lifecycle: spawning, signal polling, and cleanup.
 // It tracks active streaming goroutines (filter and tail) so they can be
 // explicitly stopped before a new Run() call to prevent goroutine accumulation.
 type Runner struct {
 	Logger         Log
 	OnTaskDetected OnTaskDetected
+	CmdFactory     CmdFactory
 
 	mu         sync.Mutex
 	filterStop chan struct{}
@@ -185,22 +191,27 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	}
 	defer rawLog.Close()
 
-	args := []string{
-		"--print", "--verbose",
-		"--output-format", "stream-json",
-		"--add-dir", cfg.WorkDir,
-		"--add-dir", cfg.RalphDir,
-		"--allowedTools", strings.Join(IterationAllowedTools, ","),
-		"--disallowedTools", strings.Join(IterationDisallowedTools, ","),
-		"-p", cfg.Prompt,
+	var cmd *exec.Cmd
+	if r.CmdFactory != nil {
+		cmd = r.CmdFactory(cfg, rawLog)
+	} else {
+		args := []string{
+			"--print", "--verbose",
+			"--output-format", "stream-json",
+			"--add-dir", cfg.WorkDir,
+			"--add-dir", cfg.RalphDir,
+			"--allowedTools", strings.Join(IterationAllowedTools, ","),
+			"--disallowedTools", strings.Join(IterationDisallowedTools, ","),
+			"-p", cfg.Prompt,
+		}
+		cmd = exec.Command("claude", args...)
+		cmd.Dir = cfg.WorkDir
+		cmd.Stdin = nil
+		cmd.Stdout = rawLog
+		cmd.Stderr = rawLog
+		// Start in its own process group so we can signal it cleanly.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
-	cmd := exec.Command("claude", args...)
-	cmd.Dir = cfg.WorkDir
-	cmd.Stdin = nil
-	cmd.Stdout = rawLog
-	cmd.Stderr = rawLog
-	// Start in its own process group so we can signal it cleanly.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
 		return Result{}, fmt.Errorf("starting claude: %w", err)
