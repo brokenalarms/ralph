@@ -240,6 +240,46 @@ func TestPreflightChecks_NoChanges(t *testing.T) {
 }
 
 
+// loadReviewPrompt includes guidance that prompt/config changes are valid
+// implementations and that code-specific criteria (tests, error handling)
+// should not be required for non-code changes.
+func TestLoadReviewPrompt_PromptChangeGuidance(t *testing.T) {
+	promptsDir := t.TempDir()
+	src := filepath.Join("..", "..", "cmd", "ralph", "prompts", "verify-review.md")
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("failed to read verify-review.md from source: %v", err)
+	}
+	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), data, 0o644)
+
+	prompt := loadReviewPrompt(promptsDir, "Update agent instructions", "Change the prompt template", "PR", "diff content")
+
+	checks := []struct {
+		desc    string
+		snippet string
+	}{
+		{"acknowledges prompt changes as valid", "prompt or configuration changes"},
+		{"scopes test requirement to code", "code changes include tests"},
+		{"mentions markdown as valid", "markdown"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(strings.ToLower(prompt), strings.ToLower(c.snippet)) {
+			t.Errorf("prompt missing guidance: %s (looked for %q)", c.desc, c.snippet)
+		}
+	}
+}
+
+// loadReviewPrompt fallback (no template file) still produces a usable prompt.
+func TestLoadReviewPrompt_Fallback(t *testing.T) {
+	prompt := loadReviewPrompt("/nonexistent", "task title", "task desc", "iteration", "some diff")
+	if !strings.Contains(prompt, "task title") {
+		t.Error("fallback prompt should contain task title")
+	}
+	if !strings.Contains(prompt, "some diff") {
+		t.Error("fallback prompt should contain diff")
+	}
+}
+
 // LLMVerifyPR passes when no PR and no diff exist — agent confirmed task complete.
 func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
 	dir := setupGitRepo(t)
