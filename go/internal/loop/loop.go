@@ -971,7 +971,13 @@ func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 	if l.cfg.TaskBackend != nil {
 		full, err := l.cfg.TaskBackend.GetFullContext(taskID)
 		if err == nil && full != "" {
-			return fmt.Sprintf("Complete this task (bd id: %s):\n\n%s", taskID, full)
+			tmplPath := filepath.Join(l.cfg.Dirs.PromptsDir, "task-assignment.md")
+			if data, readErr := os.ReadFile(tmplPath); readErr == nil {
+				prompt := string(data)
+				prompt = strings.ReplaceAll(prompt, "{{TASK_ID}}", taskID)
+				prompt = strings.ReplaceAll(prompt, "{{TASK_CONTEXT}}", full)
+				return prompt
+			}
 		}
 	}
 	return fmt.Sprintf("Complete this task (bd id: %s): %s", taskID, nextTask)
