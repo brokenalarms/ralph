@@ -4056,3 +4056,113 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 		t.Errorf("expected exactly 1 merge (flush only), got %d", mergeCalls)
 	}
 }
+
+// Verifies that SessionTasks() captures the bead ID, title, and agent summary
+// for each task completed via signal detection, so the session summary can
+// display what was accomplished before evolve restart or exit.
+func TestLoop_SessionTasksRecordsCompletedWork(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "fix session display",
+		nextID:    "ralph-re76",
+		label:     "checklist",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "added session summary before evolve"},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.verifyFunc = func(context.Context, string, string) (bool, string) {
+		return true, ""
+	}
+	l.pushPRFunc = func(_ context.Context, _, _ string) error { return nil }
+
+	_ = l.Run(context.Background())
+
+	tasks := l.SessionTasks()
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 session task, got %d", len(tasks))
+	}
+	if tasks[0].ID != "ralph-re76" {
+		t.Errorf("expected task ID ralph-re76, got %s", tasks[0].ID)
+	}
+	if tasks[0].Title != "fix session display" {
+		t.Errorf("expected task title 'fix session display', got %s", tasks[0].Title)
+	}
+	if tasks[0].Summary != "added session summary before evolve" {
+		t.Errorf("expected summary 'added session summary before evolve', got %s", tasks[0].Summary)
+	}
+}
+
+// Verifies that SessionTasks() is empty when verification fails and no task
+// is actually completed, preventing false entries in the session summary.
+func TestLoop_SessionTasksEmptyOnVerificationFailure(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "broken task",
+		nextID:    "ralph-fail",
+		label:     "checklist",
+	}
+
+	runner := &stubRunner{
+		result: claude.Result{SignalDetected: true, Summary: "tried to fix it"},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.verifyFunc = func(context.Context, string, string) (bool, string) {
+		return false, "tests failed"
+	}
+
+	_ = l.Run(context.Background())
+
+	tasks := l.SessionTasks()
+	if len(tasks) != 0 {
+		t.Errorf("expected 0 session tasks on verification failure, got %d", len(tasks))
+	}
+}

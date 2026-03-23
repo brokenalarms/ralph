@@ -39,6 +39,15 @@ func New(logFile io.Writer) *Logger {
 	}
 }
 
+// NewWithWriter creates a Logger that writes to the given writer instead of
+// stdout, useful for capturing output in tests.
+func NewWithWriter(w io.Writer) *Logger {
+	return &Logger{
+		out:     w,
+		logFile: io.Discard,
+	}
+}
+
 func ts() string {
 	return time.Now().Format("15:04:05")
 }

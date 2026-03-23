@@ -12,6 +12,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/loop"
 	"github.com/brokenalarms/ralph/internal/state"
 )
 
@@ -403,7 +404,7 @@ func TestCleanup_InterruptedWritesStopped(t *testing.T) {
 	log := logging.New(nil)
 	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, UseWorktree: true, CallsPerHour: 80}
 
-	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, true, log)
+	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, nil, true, log)
 
 	status, _ := st.Read("status")
 	if status != "stopped" {
@@ -427,7 +428,7 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	log := logging.New(nil)
 	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, UseWorktree: true, CallsPerHour: 80}
 
-	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, false, log)
+	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, nil, false, log)
 
 	status, _ := st.Read("status")
 	if status != "completed" {
@@ -468,5 +469,66 @@ func TestValidatePlanFile_ValidPlanAccepted(t *testing.T) {
 	err := validatePlanFile(plan)
 	if err != nil {
 		t.Errorf("expected no error for valid plan, got %v", err)
+	}
+}
+
+// Verifies printSessionSummary displays bead ID, title, agent summary, and PR
+// reference for each completed task, giving the operator a clear picture of
+// what was accomplished before evolve restart or exit.
+func TestPrintSessionSummary_FormatsCompletedTasks(t *testing.T) {
+	var buf strings.Builder
+	log := logging.NewWithWriter(&buf)
+
+	tasks := []loop.CompletedTask{
+		{
+			ID:      "ralph-5eu",
+			Title:   "[bug] Last task's work not pushed before wait mode",
+			Summary: "Track last-merged flag, skip flush when already merged",
+			PRNum:   "160",
+			PRTitle: "fix: skip redundant flush after signal-handler merge",
+		},
+		{
+			ID:      "ralph-abc",
+			Title:   "Add session summary",
+			Summary: "Show completed tasks before evolve",
+		},
+	}
+
+	printSessionSummary(tasks, log)
+	out := buf.String()
+
+	if !strings.Contains(out, "ralph-5eu") {
+		t.Error("expected bead ID ralph-5eu in output")
+	}
+	if !strings.Contains(out, "[bug] Last task's work not pushed before wait mode") {
+		t.Error("expected task title in output")
+	}
+	if !strings.Contains(out, "Track last-merged flag") {
+		t.Error("expected agent summary in output")
+	}
+	if !strings.Contains(out, "PR #160") {
+		t.Error("expected PR number in output")
+	}
+	if !strings.Contains(out, "fix: skip redundant flush") {
+		t.Error("expected PR title in output")
+	}
+	if !strings.Contains(out, "ralph-abc") {
+		t.Error("expected second task ID in output")
+	}
+	if strings.Contains(out, "PR #") && strings.Count(out, "PR #") != 1 {
+		t.Error("second task without PR should not show PR line")
+	}
+}
+
+// Verifies printSessionSummary produces no output when no tasks were completed,
+// keeping the log clean for sessions that didn't finish any work.
+func TestPrintSessionSummary_EmptyNoOutput(t *testing.T) {
+	var buf strings.Builder
+	log := logging.NewWithWriter(&buf)
+
+	printSessionSummary(nil, log)
+
+	if buf.Len() > 0 {
+		t.Errorf("expected no output for empty session, got: %s", buf.String())
 	}
 }
