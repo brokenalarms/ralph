@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -115,7 +116,7 @@ func (r *Runner) sandboxedCmdFactory(cfg claude.RunConfig, rawLog *os.File) *exe
 		"-p", cfg.Prompt,
 	}
 
-	writeDirs := []string{cfg.WorkDir, cfg.RalphDir}
+	writeDirs := sandboxWriteDirs(cfg.WorkDir, cfg.RalphDir)
 	cmd := r.Sandbox.Wrap(cfg.Ctx, writeDirs, "claude", args...)
 	cmd.Dir = cfg.WorkDir
 	cmd.Stdin = nil
@@ -123,4 +124,57 @@ func (r *Runner) sandboxedCmdFactory(cfg claude.RunConfig, rawLog *os.File) *exe
 	cmd.Stderr = rawLog
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	return cmd
+}
+
+// sandboxWriteDirs returns the directories that need write access inside
+// the sandbox. Beyond the worktree and ralph dir, this includes the git
+// common dir (worktrees point to the parent repo's .git/worktrees/) and
+// tool caches (Go build cache, module cache).
+func sandboxWriteDirs(workDir, ralphDir string) []string {
+	dirs := []string{workDir, ralphDir}
+
+	// Git worktrees have a .git file pointing to the parent repo's
+	// .git/worktrees/<name>. The agent needs write access there for
+	// git operations (commit, push, rebase).
+	gitCommon := resolveGitCommonDir(workDir)
+	if gitCommon != "" {
+		dirs = append(dirs, gitCommon)
+	}
+
+	// Go build cache and module cache.
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, "Library", "Caches", "go-build"))
+		dirs = append(dirs, filepath.Join(home, "go"))
+	}
+
+	return dirs
+}
+
+// resolveGitCommonDir finds the git common directory for worktrees.
+// For a worktree, .git is a file containing "gitdir: /path/to/.git/worktrees/<name>".
+// The common dir is the parent .git, which needs write access.
+func resolveGitCommonDir(workDir string) string {
+	gitPath := filepath.Join(workDir, ".git")
+	info, err := os.Stat(gitPath)
+	if err != nil {
+		return ""
+	}
+	if info.IsDir() {
+		return gitPath
+	}
+	data, err := os.ReadFile(gitPath)
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(line, "gitdir: ") {
+		return ""
+	}
+	gitDir := strings.TrimPrefix(line, "gitdir: ")
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(workDir, gitDir)
+	}
+	// gitDir is .git/worktrees/<name>, we need the parent .git
+	commonDir := filepath.Dir(filepath.Dir(gitDir))
+	return commonDir
 }
