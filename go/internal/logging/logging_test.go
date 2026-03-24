@@ -194,6 +194,22 @@ func TestSeparatorStreamingMode(t *testing.T) {
 	}
 }
 
+// Verifies BranchTag formats a branch name as a green colored tag
+// for use in merge/rebase log messages.
+func TestBranchTag(t *testing.T) {
+	got := BranchTag("main")
+	want := Green + "[main]" + Reset
+	if got != want {
+		t.Errorf("BranchTag(\"main\") = %q, want %q", got, want)
+	}
+
+	got = BranchTag("develop")
+	want = Green + "[develop]" + Reset
+	if got != want {
+		t.Errorf("BranchTag(\"develop\") = %q, want %q", got, want)
+	}
+}
+
 // Verifies that log lines do NOT include a per-line task ID prefix —
 // task identification is handled by a one-time separator banner instead.
 func TestNoPerLineTaskIDPrefix(t *testing.T) {

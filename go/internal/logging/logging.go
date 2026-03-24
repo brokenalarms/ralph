@@ -20,6 +20,12 @@ const (
 	Reset   = "\033[0m"
 )
 
+// BranchTag formats a branch name as a colored tag for log messages,
+// e.g. "[main]" in green.
+func BranchTag(branch string) string {
+	return Green + "[" + branch + "]" + Reset
+}
+
 // Logger provides colored, timestamped logging matching ralph.sh's output.
 type Logger struct {
 	out       io.Writer
