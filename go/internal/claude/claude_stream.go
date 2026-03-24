@@ -116,6 +116,8 @@ func colorTag(tag string) string {
 		return logging.Green + tag + logging.Reset
 	case tag == "[r]":
 		return logging.Cyan + tag + logging.Reset
+	case tag == "[signal]":
+		return logging.Yellow + tag + logging.Reset
 	default:
 		return logging.Blue + tag + logging.Reset
 	}
@@ -164,6 +166,9 @@ func (f *StreamFormatter) FormatLine(text string) string {
 // get a banner above the content. Prose lines (not tool calls or
 // diagnosis) are truncated to maxLineWidth to prevent terminal overflow.
 func (f *StreamFormatter) FormatOutput(text string) []string {
+	if name, msg, ok := parseSignalLine(text); ok {
+		return []string{f.FormatLine("[signal] " + name + ": " + msg)}
+	}
 	if label, content, ok := parseDiagnosis(text); ok {
 		return []string{
 			diagnosisBanner(label),
@@ -188,6 +193,18 @@ func truncateProse(text string, maxLen int) string {
 		return text
 	}
 	return string(runes[:maxLen-1]) + "…"
+}
+
+var signalRe = regexp.MustCompile(`^\[Bash\] echo ["'](.+?)["'] > .+/\.signal_(current_task|complete|all_complete)$`)
+
+// parseSignalLine detects Bash commands that write to .signal_* files.
+// Returns the signal name (e.g. "current_task") and message content.
+func parseSignalLine(text string) (name, msg string, ok bool) {
+	m := signalRe.FindStringSubmatch(text)
+	if m == nil {
+		return "", "", false
+	}
+	return m[2], m[1], true
 }
 
 var diagnosisRe = regexp.MustCompile(`^(ISSUE|FIX):\s+(.+)`)
@@ -387,7 +404,7 @@ func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
 				}
 				line := data[:idx]
 				data = data[idx+1:]
-				if strings.Contains(line, "[r]") {
+				if strings.Contains(line, "[r]") || strings.Contains(line, "[signal]") {
 					fmt.Fprintln(os.Stdout, line)
 				}
 			}
@@ -406,7 +423,7 @@ func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
 						n2, _ := f.Read(buf)
 						if n2 == 0 {
 							// Flush any remaining partial line.
-							if remainder != "" && strings.Contains(remainder, "[r]") {
+							if remainder != "" && (strings.Contains(remainder, "[r]") || strings.Contains(remainder, "[signal]")) {
 								fmt.Fprintln(os.Stdout, remainder)
 							}
 							return

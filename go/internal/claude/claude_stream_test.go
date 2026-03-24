@@ -641,6 +641,150 @@ func TestFormatOutput_DoesNotTruncateDiagnosis(t *testing.T) {
 	}
 }
 
+// Verifies that Bash commands writing to .signal_* files are detected and
+// reformatted with a [signal] prefix instead of [Bash], so signal writes
+// stand out visually as task boundary markers in the stream output.
+func TestParseSignalLine_CurrentTask(t *testing.T) {
+	name, msg, ok := parseSignalLine(`[Bash] echo "Implement feature X" > /path/to/.ralph/.signal_current_task`)
+	if !ok {
+		t.Fatal("should detect signal_current_task write")
+	}
+	if name != "current_task" {
+		t.Errorf("name = %q, want current_task", name)
+	}
+	if msg != "Implement feature X" {
+		t.Errorf("msg = %q, want 'Implement feature X'", msg)
+	}
+}
+
+// Verifies that .signal_complete writes are detected.
+func TestParseSignalLine_Complete(t *testing.T) {
+	name, msg, ok := parseSignalLine(`[Bash] echo "Done with the task" > /some/path/.signal_complete`)
+	if !ok {
+		t.Fatal("should detect signal_complete write")
+	}
+	if name != "complete" {
+		t.Errorf("name = %q, want complete", name)
+	}
+	if msg != "Done with the task" {
+		t.Errorf("msg = %q, want 'Done with the task'", msg)
+	}
+}
+
+// Verifies that .signal_all_complete writes are detected.
+func TestParseSignalLine_AllComplete(t *testing.T) {
+	name, _, ok := parseSignalLine(`[Bash] echo "All done" > /some/path/.signal_all_complete`)
+	if !ok {
+		t.Fatal("should detect signal_all_complete write")
+	}
+	if name != "all_complete" {
+		t.Errorf("name = %q, want all_complete", name)
+	}
+}
+
+// Verifies that normal Bash commands are NOT treated as signal writes.
+func TestParseSignalLine_NormalBash(t *testing.T) {
+	for _, line := range []string{
+		`[Bash] ls -la`,
+		`[Bash] echo "hello" > /tmp/output.txt`,
+		`[Bash] cat .signal_complete`,
+	} {
+		if _, _, ok := parseSignalLine(line); ok {
+			t.Errorf("should not match %q", line)
+		}
+	}
+}
+
+// Verifies that [signal] tags get yellow color in formatted output.
+func TestColorTag_Signal(t *testing.T) {
+	tag := colorTag("[signal]")
+	if !strings.Contains(tag, "\033[0;33m") {
+		t.Error("colorTag should apply yellow to [signal]")
+	}
+}
+
+// Verifies that signal lines in FormatOutput get [signal] prefix instead of [r] [Bash].
+func TestFormatOutput_SignalLine(t *testing.T) {
+	f := &StreamFormatter{}
+	lines := f.FormatOutput(`[Bash] echo "Working on feature" > /path/.signal_current_task`)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+	plain := ansiRe.ReplaceAllString(lines[0], "")
+	if !strings.Contains(plain, "[signal]") {
+		t.Errorf("signal write should show [signal] prefix, got: %q", plain)
+	}
+	if strings.Contains(plain, "[Bash]") {
+		t.Errorf("signal write should not show [Bash], got: %q", plain)
+	}
+	if !strings.Contains(plain, "current_task") {
+		t.Errorf("signal write should show signal name, got: %q", plain)
+	}
+}
+
+// Verifies that signal lines get yellow color applied to the [signal] tag.
+func TestFormatOutput_SignalLineYellow(t *testing.T) {
+	f := &StreamFormatter{}
+	lines := f.FormatOutput(`[Bash] echo "task done" > /path/.signal_complete`)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+	if !strings.Contains(lines[0], "\033[0;33m") {
+		t.Errorf("signal line should contain yellow ANSI code, got: %q", lines[0])
+	}
+}
+
+// Verifies that signal file writes in the raw stream are formatted with
+// [signal] prefix and yellow color in the filtered log output.
+func TestFilterStreamJSON_SignalHighlight(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+
+	os.WriteFile(rawPath, nil, 0o644)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		filterStreamJSON(rawPath, logPath, stop)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo \"Working on feature X\" > /path/.ralph/.signal_current_task"}}]}}`)
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := ansiRe.ReplaceAllString(string(got), "")
+
+	if !strings.Contains(content, "[signal]") {
+		t.Errorf("signal write should show [signal] prefix, got: %q", content)
+	}
+	if strings.Contains(content, "[Bash]") {
+		t.Errorf("signal write should not show [Bash], got: %q", content)
+	}
+	if !strings.Contains(content, "current_task") {
+		t.Errorf("signal write should show signal name, got: %q", content)
+	}
+	if !strings.Contains(content, "Working on feature X") {
+		t.Errorf("signal write should show message content, got: %q", content)
+	}
+	if !strings.Contains(string(got), "\033[0;33m") {
+		t.Errorf("signal write should have yellow ANSI color, got: %q", string(got))
+	}
+}
+
 // Verifies that short prose lines are not truncated or modified.
 func TestFormatOutput_ShortProseUnchanged(t *testing.T) {
 	f := &StreamFormatter{}
