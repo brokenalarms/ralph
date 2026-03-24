@@ -68,6 +68,31 @@ func TestListChecks_Stubbable(t *testing.T) {
 	}
 }
 
+// isHarmlessUpdateBranchError suppresses known-benign 422 responses from the
+// GitHub update-branch API so they don't surface as warnings in the loop log.
+func TestIsHarmlessUpdateBranchError(t *testing.T) {
+	harmless := []struct {
+		name, output string
+	}{
+		{"already up to date", `{"message":"Validation Failed","errors":[{"message":"already up to date"}]}`},
+		{"expected_head_sha", `{"message":"Update is not a fast forward","errors":[{"field":"expected_head_sha"}]}`},
+		{"no new commits", `{"message":"Validation Failed","errors":[{"message":"There are no new commits on the base branch to update the pull request with."}]}`},
+	}
+	for _, tc := range harmless {
+		t.Run(tc.name, func(t *testing.T) {
+			if !isHarmlessUpdateBranchError(tc.output) {
+				t.Errorf("expected harmless=true for %q", tc.output)
+			}
+		})
+	}
+
+	t.Run("real error is not harmless", func(t *testing.T) {
+		if isHarmlessUpdateBranchError(`{"message":"Not Found"}`) {
+			t.Error("expected harmless=false for a real error")
+		}
+	})
+}
+
 // Manager.GetCIFailureLog delegates to the injected GitHub interface's GetRunLog,
 // confirming that loop code can get CI logs without shelling out.
 func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
