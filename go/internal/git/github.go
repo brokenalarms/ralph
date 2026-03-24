@@ -37,7 +37,7 @@ type GitHub interface {
 	GetRunLog(prNumber, workDir string) string
 	CheckEnforceAdmins(nwo, branch string) (enabled bool, err error)
 	PostEnforceAdmins(nwo, branch string) (output string, err error)
-	FindPR(branch, workDir string) (number, title string, err error)
+	FindPR(branch, workDir string) (number, title, url string, err error)
 	SearchPR(workDir, query string) (prNumber string, err error)
 	PRDiff(workDir, prNumber string) (string, error)
 }
@@ -192,24 +192,27 @@ func (g *ghCLI) GetRunLog(prNumber, workDir string) string {
 	return strings.Join(lines, "\n")
 }
 
-func (g *ghCLI) FindPR(branch, workDir string) (string, string, error) {
+func (g *ghCLI) FindPR(branch, workDir string) (string, string, string, error) {
 	cmd := exec.Command("gh", "pr", "list",
 		"--head", branch,
-		"--state", "all", "--json", "number,title", "--jq", `.[0] | "\(.number)\t\(.title)"`)
+		"--state", "all", "--json", "number,title,url", "--jq", `.[0] | "\(.number)\t\(.title)\t\(.url)"`)
 	cmd.Dir = workDir
 	out, err := cmd.Output()
 	if err != nil {
-		return "", "", fmt.Errorf("gh pr list failed: %w", err)
+		return "", "", "", fmt.Errorf("gh pr list failed: %w", err)
 	}
 	raw := strings.TrimSpace(string(out))
 	if raw == "" {
-		return "", "", nil
+		return "", "", "", nil
 	}
-	parts := strings.SplitN(raw, "\t", 2)
+	parts := strings.SplitN(raw, "\t", 3)
 	if len(parts) < 2 {
-		return parts[0], "", nil
+		return parts[0], "", "", nil
 	}
-	return parts[0], parts[1], nil
+	if len(parts) < 3 {
+		return parts[0], parts[1], "", nil
+	}
+	return parts[0], parts[1], parts[2], nil
 }
 
 func (g *ghCLI) SearchPR(workDir, query string) (string, error) {

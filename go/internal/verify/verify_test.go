@@ -337,7 +337,7 @@ func (s *stubGitHub) ListChecks(string, string) ([]git.CICheckResult, error) { r
 func (s *stubGitHub) GetRunLog(string, string) string                   { return "" }
 func (s *stubGitHub) CheckEnforceAdmins(string, string) (bool, error)   { return false, nil }
 func (s *stubGitHub) PostEnforceAdmins(string, string) (string, error)  { return "", nil }
-func (s *stubGitHub) FindPR(string, string) (string, string, error)     { return "", "", nil }
+func (s *stubGitHub) FindPR(string, string) (string, string, string, error) { return "", "", "", nil }
 func (s *stubGitHub) SearchPR(_ string, _ string) (string, error) {
 	s.searchCalled = true
 	return s.searchResult, nil

@@ -61,6 +61,7 @@ type CompletedTask struct {
 	Summary string
 	PRNum   string
 	PRTitle string
+	PRURL   string
 }
 
 // Loop orchestrates the execution phase: task selection, prompt building,
@@ -474,9 +475,10 @@ func (l *Loop) Run(ctx context.Context) error {
 				Title:   nextTask,
 				Summary: result.Summary,
 			}
-			if prNum, prTitle := l.findPRInfo(workDir); prNum != "" {
+			if prNum, prTitle, prURL := l.findPRInfo(workDir); prNum != "" {
 				ct.PRNum = prNum
 				ct.PRTitle = prTitle
+				ct.PRURL = prURL
 			}
 
 			merged := false

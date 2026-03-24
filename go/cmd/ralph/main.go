@@ -361,10 +361,14 @@ func printSessionSummary(tasks []loop.CompletedTask, log *logging.Logger) {
 			log.Log("", "  Fix: %s", t.Summary)
 		}
 		if t.PRNum != "" {
+			pr := fmt.Sprintf("PR #%s", t.PRNum)
+			if t.PRURL != "" {
+				pr = t.PRURL
+			}
 			if t.PRTitle != "" {
-				log.Log("", "  PR #%s: %s", t.PRNum, t.PRTitle)
+				log.Log("", "  %s: %s", pr, t.PRTitle)
 			} else {
-				log.Log("", "  PR #%s", t.PRNum)
+				log.Log("", "  %s", pr)
 			}
 		}
 	}

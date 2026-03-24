@@ -651,6 +651,33 @@ func TestHelpText_StopFeedbackInLoopOnly(t *testing.T) {
 	}
 }
 
+// Verifies printSessionSummary shows a clickable PR URL instead of
+// bare "PR #N" when the URL is available from GitHub.
+func TestPrintSessionSummary_ShowsPRURL(t *testing.T) {
+	var buf strings.Builder
+	log := logging.NewWithWriter(&buf)
+
+	tasks := []loop.CompletedTask{
+		{
+			ID:      "ralph-xyz",
+			Title:   "Add PR link to session summary",
+			PRNum:   "172",
+			PRTitle: "feat: clickable PR links",
+			PRURL:   "https://github.com/brokenalarms/ralph/pull/172",
+		},
+	}
+
+	printSessionSummary(tasks, log)
+	out := buf.String()
+
+	if !strings.Contains(out, "https://github.com/brokenalarms/ralph/pull/172") {
+		t.Error("expected full PR URL in output")
+	}
+	if strings.Contains(out, "PR #172") {
+		t.Error("should show URL, not bare PR #172, when URL is available")
+	}
+}
+
 // Verifies printSessionSummary produces no output when no tasks were completed,
 // keeping the log clean for sessions that didn't finish any work.
 func TestPrintSessionSummary_EmptyNoOutput(t *testing.T) {

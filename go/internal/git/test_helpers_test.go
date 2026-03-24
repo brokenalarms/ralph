@@ -32,6 +32,7 @@ type stubGitHub struct {
 	checkEnforceCalled  bool
 	prNumber            string
 	prTitle             string
+	prURL               string
 	searchPRNumber      string
 	prDiff              string
 	createdPR           string
@@ -73,8 +74,8 @@ func (s *stubGitHub) PostEnforceAdmins(nwo, branch string) (string, error) {
 	s.postEnforceCalled = true
 	return s.postEnforceOutput, s.postEnforceErr
 }
-func (s *stubGitHub) FindPR(branch, workDir string) (string, string, error) {
-	return s.prNumber, s.prTitle, s.findPRErr
+func (s *stubGitHub) FindPR(branch, workDir string) (string, string, string, error) {
+	return s.prNumber, s.prTitle, s.prURL, s.findPRErr
 }
 func (s *stubGitHub) SearchPR(workDir, query string) (string, error) {
 	return s.searchPRNumber, nil
