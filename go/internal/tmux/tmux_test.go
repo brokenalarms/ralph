@@ -425,6 +425,33 @@ func TestWritePlanWatcher_BD_PeriodicRefresh(t *testing.T) {
 	}
 }
 
+// Verifies that applySessionOptions disables set-titles so that pane border
+// title updates don't propagate to the iTerm window title, preserving
+// Claude's /rename of the terminal window.
+func TestApplySessionOptions_DisablesSetTitles(t *testing.T) {
+	orig := tmuxCmd
+	var calls [][]string
+	tmuxCmd = func(args ...string) error {
+		calls = append(calls, args)
+		return nil
+	}
+	defer func() { tmuxCmd = orig }()
+
+	s := &Session{Name: "test-loop"}
+	s.applySessionOptions()
+
+	found := false
+	for _, args := range calls {
+		if len(args) >= 5 && args[0] == "set-option" && args[3] == "set-titles" && args[4] == "off" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("applySessionOptions should set 'set-titles off' to prevent tmux from overwriting iTerm window title")
+	}
+}
+
 // Verifies that .plan-refresh signal path is correctly embedded in the
 // plan watcher script, so the pane redraws when signaled.
 func TestPlanWatcher_SignalPath(t *testing.T) {

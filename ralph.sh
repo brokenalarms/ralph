@@ -531,6 +531,7 @@ PLAN_SCRIPT
   tmux set-option -t "$TMUX_SESSION" pane-border-format \
     "#{?pane_dead, #{pane_title} (dead) — press q to exit , #{pane_title} }"
   tmux set-option -t "$TMUX_SESSION" remain-on-exit on
+  tmux set-option -t "$TMUX_SESSION" set-titles off
 
   # Bind q to kill session when the main (ralph) pane is dead
   tmux bind-key -T root q if-shell \
