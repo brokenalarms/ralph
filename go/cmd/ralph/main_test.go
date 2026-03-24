@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -605,6 +606,47 @@ func TestPrintSessionSummary_FormatsCompletedTasks(t *testing.T) {
 	}
 	if strings.Contains(out, "PR #") && strings.Count(out, "PR #") != 1 {
 		t.Error("second task without PR should not show PR line")
+	}
+}
+
+// Proves stop and feedback appear in loop help as WHILE RUNNING commands,
+// not in the top-level help, so users discover them where they're relevant.
+func TestHelpText_StopFeedbackInLoopOnly(t *testing.T) {
+	captureStdout := func(fn func()) string {
+		t.Helper()
+		r, w, _ := os.Pipe()
+		old := os.Stdout
+		os.Stdout = w
+		fn()
+		w.Close()
+		os.Stdout = old
+		data, _ := io.ReadAll(r)
+		return string(data)
+	}
+
+	loopHelp := captureStdout(printLoopUsage)
+
+	if !strings.Contains(loopHelp, "WHILE RUNNING") {
+		t.Error("loop help should contain WHILE RUNNING section")
+	}
+	if !strings.Contains(loopHelp, "ralph stop") {
+		t.Error("loop help should list ralph stop")
+	}
+	if !strings.Contains(loopHelp, "ralph feedback [message]") {
+		t.Error("loop help should show feedback with optional [message] arg")
+	}
+	// Feedback should be a single line, not split into two commands.
+	if strings.Contains(loopHelp, "ralph feedback <message>") {
+		t.Error("feedback should be one line with [message], not separate <message> line")
+	}
+
+	topHelp := captureStdout(printUsage)
+
+	if strings.Contains(topHelp, "ralph stop") {
+		t.Error("top-level help should NOT list ralph stop")
+	}
+	if strings.Contains(topHelp, "ralph feedback") {
+		t.Error("top-level help should NOT list ralph feedback")
 	}
 }
 

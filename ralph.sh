@@ -149,7 +149,8 @@ ${BOLD}HOW IT WORKS:${NC}
 
 ${BOLD}SUBCOMMANDS:${NC}
   ralph stop [directory]       Halt after the current iteration
-  ralph feedback [message]     Show queued feedback, or queue a new message
+  ralph feedback               Show queued feedback for the loop
+  ralph feedback [message]     Queue a message to the loop in progress
 EOF
 }
 
