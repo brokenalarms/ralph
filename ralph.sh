@@ -409,7 +409,7 @@ tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
 ' | sed -u -E \
   -e $'s/\\[done\\]/\033[0;32m[done]\033[0m/g' \
   -e $'s/\\[r\\]/\033[0;36m[r]\033[0m/g' \
-  -e $'s/\\[([A-Z][A-Za-z]*)\\]/\033[0;34m[\\1]\033[0m/g'
+  -e $'s/\\[([A-Z][A-Za-z]*)\\]/\033[0;94m[\\1]\033[0m/g'
 STREAM
   chmod +x "$RALPH_DIR/.stream-filter.sh"
 }

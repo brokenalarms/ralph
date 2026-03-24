@@ -166,7 +166,7 @@ func colorTag(tag string) string {
 	case tag == "[signal]":
 		return logging.Yellow + tag + logging.Reset
 	default:
-		return logging.Blue + tag + logging.Reset
+		return logging.BrightBlue + tag + logging.Reset
 	}
 }
 

@@ -3,6 +3,8 @@ package claude
 import (
 	"strings"
 	"testing"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // Verifies that extractStreamText pulls text from assistant messages using
@@ -233,8 +235,8 @@ func TestFormatStreamLine(t *testing.T) {
 	if !strings.Contains(line, "\033[0;36m") {
 		t.Error("FormatStreamLine should apply cyan to [r]")
 	}
-	if !strings.Contains(line, "\033[0;34m") {
-		t.Error("FormatStreamLine should apply blue to [Read]")
+	if !strings.Contains(line, "\033[0;94m") {
+		t.Error("FormatStreamLine should apply bright blue to [Read]")
 	}
 }
 
@@ -405,5 +407,19 @@ func TestColorTag_Signal(t *testing.T) {
 	tag := colorTag("[signal]")
 	if !strings.Contains(tag, "\033[0;33m") {
 		t.Error("colorTag should apply yellow to [signal]")
+	}
+}
+
+// Verifies that tool tags like [Edit], [Read], [Bash] use bright blue
+// so they stand out clearly in the stream log on dark terminals and mobile.
+func TestColorTag_ToolUsesBrightBlue(t *testing.T) {
+	for _, name := range []string{"[Edit]", "[Read]", "[Bash]", "[Grep]", "[Write]"} {
+		tag := colorTag(name)
+		if !strings.Contains(tag, logging.BrightBlue) {
+			t.Errorf("colorTag(%q) should use BrightBlue, got: %q", name, tag)
+		}
+		if strings.Contains(tag, logging.Blue+name) {
+			t.Errorf("colorTag(%q) should NOT use dim Blue", name)
+		}
 	}
 }
