@@ -221,3 +221,43 @@ func (t *Tracker) RecentAttemptEntries(excludeKey string, n int) string {
 func (t *Tracker) Clear(taskID, taskName string) {
 	os.Remove(t.attemptFile(taskID, taskName))
 }
+
+const MaxMergeFailures = 3
+
+func (t *Tracker) mergeFailureFile(taskID string) string {
+	return filepath.Join(t.attemptsDir(), taskID+".merge-failures")
+}
+
+// RecordMergeFailure increments the merge failure count for a task.
+func (t *Tracker) RecordMergeFailure(taskID string) (int, error) {
+	if taskID == "" {
+		return 0, nil
+	}
+	if err := os.MkdirAll(t.attemptsDir(), 0o755); err != nil {
+		return 0, err
+	}
+	count := t.MergeFailureCount(taskID) + 1
+	path := t.mergeFailureFile(taskID)
+	return count, os.WriteFile(path, []byte(fmt.Sprintf("%d", count)), 0o644)
+}
+
+// MergeFailureCount returns the number of consecutive merge failures for a task.
+func (t *Tracker) MergeFailureCount(taskID string) int {
+	if taskID == "" {
+		return 0
+	}
+	data, err := os.ReadFile(t.mergeFailureFile(taskID))
+	if err != nil {
+		return 0
+	}
+	n := 0
+	fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &n)
+	return n
+}
+
+// ClearMergeFailures removes the merge failure counter for a task.
+func (t *Tracker) ClearMergeFailures(taskID string) {
+	if taskID != "" {
+		os.Remove(t.mergeFailureFile(taskID))
+	}
+}

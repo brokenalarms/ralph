@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -1396,6 +1397,9 @@ type trackingBackend struct {
 	closedIDs     []string
 	closeReasons  []string
 	closeMu       sync.Mutex
+	skippedIDs    []string
+	skipReasons   []string
+	skipMu        sync.Mutex
 }
 
 func (t *trackingBackend) CloseTask(id string, reason string) error {
@@ -1403,6 +1407,14 @@ func (t *trackingBackend) CloseTask(id string, reason string) error {
 	t.closedIDs = append(t.closedIDs, id)
 	t.closeReasons = append(t.closeReasons, reason)
 	t.closeMu.Unlock()
+	return nil
+}
+
+func (t *trackingBackend) SkipTask(id string, reason string) error {
+	t.skipMu.Lock()
+	t.skippedIDs = append(t.skippedIDs, id)
+	t.skipReasons = append(t.skipReasons, reason)
+	t.skipMu.Unlock()
 	return nil
 }
 
@@ -3266,6 +3278,201 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	output := buf.String()
 	if !strings.Contains(output, "Auto-merge") {
 		t.Log("Log output:", output)
+	}
+}
+
+// Verifies that after MaxMergeFailures consecutive merge failures, the loop
+// skips the task instead of retrying indefinitely. Merge failures are tracked
+// across iterations via the attempts tracker.
+func TestLoop_SkipsTaskAfterRepeatedMergeFailures(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			completed: 0,
+			total:     1,
+			nextTask:  "Stubborn task",
+			nextID:    "ralph-stub",
+			label:     "beads",
+		},
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/project/01-stubborn",
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	tracker := attempts.New(ralphDir)
+	// Seed 2 prior merge failures (one below threshold).
+	tracker.RecordMergeFailure("ralph-stub")
+	tracker.RecordMergeFailure("ralph-stub")
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+	l.pushPRFunc = func(context.Context, string, string) error { return nil }
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return false, fmt.Errorf("push denied by sandbox")
+	}
+
+	_ = l.Run(context.Background())
+
+	backend.skipMu.Lock()
+	defer backend.skipMu.Unlock()
+	if len(backend.skippedIDs) != 1 {
+		t.Fatalf("expected 1 SkipTask call, got %d", len(backend.skippedIDs))
+	}
+	if backend.skippedIDs[0] != "ralph-stub" {
+		t.Errorf("expected SkipTask for ralph-stub, got %q", backend.skippedIDs[0])
+	}
+	if !strings.Contains(backend.skipReasons[0], "merge_failed") {
+		t.Errorf("expected merge_failed reason, got %q", backend.skipReasons[0])
+	}
+}
+
+// Verifies that merge failures below the threshold leave the task open
+// and record the failure count for the next iteration.
+func TestLoop_MergeFailureBelowThresholdLeavesTaskOpen(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			completed: 0,
+			total:     1,
+			nextTask:  "Fixable task",
+			nextID:    "ralph-fix",
+			label:     "beads",
+		},
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/project/01-fixable",
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+	l.pushPRFunc = func(context.Context, string, string) error { return nil }
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return false, fmt.Errorf("merge conflict")
+	}
+
+	_ = l.Run(context.Background())
+
+	// Task should NOT be skipped — only 1 failure.
+	backend.skipMu.Lock()
+	defer backend.skipMu.Unlock()
+	if len(backend.skippedIDs) != 0 {
+		t.Errorf("expected no SkipTask calls on first merge failure, got %d", len(backend.skippedIDs))
+	}
+
+	// Merge failure should be recorded for next iteration.
+	tracker := attempts.New(ralphDir)
+	if count := tracker.MergeFailureCount("ralph-fix"); count != 1 {
+		t.Errorf("expected merge failure count 1, got %d", count)
+	}
+}
+
+// Verifies that successful merge clears the merge failure counter.
+func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			completed: 0,
+			total:     1,
+			nextTask:  "Recovering task",
+			nextID:    "ralph-rec",
+			label:     "beads",
+		},
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/project/01-recover",
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	// Seed 2 prior failures.
+	tracker := attempts.New(ralphDir)
+	tracker.RecordMergeFailure("ralph-rec")
+	tracker.RecordMergeFailure("ralph-rec")
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+	l.pushPRFunc = func(context.Context, string, string) error { return nil }
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return true, nil
+	}
+
+	_ = l.Run(context.Background())
+
+	if count := tracker.MergeFailureCount("ralph-rec"); count != 0 {
+		t.Errorf("expected merge failures cleared after successful merge, got %d", count)
 	}
 }
 
