@@ -143,7 +143,9 @@ type StreamFormatter struct {
 	lastTS string
 }
 
-const tsWidth = 9 // "HH:MM:SS" (8) + space (1)
+const tsWidth = 9       // "HH:MM:SS" (8) + space (1)
+const agentPrefix = 8   // "[agent] " (8)
+const maxLineWidth = 120
 
 // FormatLine formats text with timestamp grouping. If the current second
 // matches the previous line, the timestamp is replaced with whitespace.
@@ -159,7 +161,8 @@ func (f *StreamFormatter) FormatLine(text string) string {
 
 // FormatOutput formats a stream text line using timestamp grouping,
 // returning one or more output lines. Diagnosis lines (ISSUE:/FIX:)
-// get a banner above the content.
+// get a banner above the content. Prose lines (not tool calls or
+// diagnosis) are truncated to maxLineWidth to prevent terminal overflow.
 func (f *StreamFormatter) FormatOutput(text string) []string {
 	if label, content, ok := parseDiagnosis(text); ok {
 		return []string{
@@ -167,7 +170,24 @@ func (f *StreamFormatter) FormatOutput(text string) []string {
 			f.FormatLine("[agent] " + content),
 		}
 	}
+	if !isToolLine(text) {
+		text = truncateProse(text, maxLineWidth-tsWidth-agentPrefix)
+	}
 	return []string{f.FormatLine("[agent] " + text)}
+}
+
+// isToolLine returns true if the line starts with a bracketed tool name.
+func isToolLine(text string) bool {
+	return len(text) > 0 && text[0] == '['
+}
+
+// truncateProse shortens text to maxLen runes, appending "…" if truncated.
+func truncateProse(text string, maxLen int) string {
+	runes := []rune(text)
+	if len(runes) <= maxLen {
+		return text
+	}
+	return string(runes[:maxLen-1]) + "…"
 }
 
 var diagnosisRe = regexp.MustCompile(`^(ISSUE|FIX):\s+(.+)`)
