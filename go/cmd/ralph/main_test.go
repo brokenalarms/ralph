@@ -16,6 +16,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/loop"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
 func runCmd(t *testing.T, name string, args ...string) {
@@ -43,7 +44,7 @@ func (s *stubBackend) CountRemaining() (int, error)               { return s.rem
 func (s *stubBackend) CountTotal() (int, error)                   { return s.total, nil }
 func (s *stubBackend) GetNextTask() (string, error)               { return "", nil }
 func (s *stubBackend) GetNextTaskID() (string, error)             { return "", nil }
-func (s *stubBackend) GetNextTaskInfo() (string, string, error)   { return "", "", nil }
+func (s *stubBackend) GetNextTaskInfo() (tasks.TaskInfo, error)   { return tasks.TaskInfo{}, nil }
 func (s *stubBackend) HasTasks() (bool, error)                    { return s.total > 0, nil }
 func (s *stubBackend) CloseTask(string, string) error             { return nil }
 func (s *stubBackend) SkipTask(string, string) error              { return nil }
