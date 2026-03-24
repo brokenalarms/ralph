@@ -588,6 +588,32 @@ func TestBuildTaskManagerPrompt_EchoBackIncludesDescription(t *testing.T) {
 	}
 }
 
+// Proves: after echoing back a created bead, the task manager asks the user
+// to confirm or amend — so they don't have to run bd show separately.
+func TestBuildTaskManagerPrompt_ConfirmAfterCreate(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Looks good", "should ask the user to confirm the created bead"},
+		{"confirm", "should mention confirming"},
+		{"changes", "should offer the option to request changes"},
+		{"bd update", "should use bd update to apply amendments"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
 // Proves: task manager prompt tells the task manager that user bug reports
 // reference loop log output, so it doesn't ask for clarification about where
 // things were seen.
