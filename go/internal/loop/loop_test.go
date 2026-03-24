@@ -4718,7 +4718,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 			passed:    false,
 			details:   "missing error handling",
 			wantColor: logging.Red,
-			wantMsg:   "LLM verification rejected: missing error handling",
+			wantMsg:   "LLM verification rejected (attempt 1/3): missing error handling",
 		},
 	}
 
