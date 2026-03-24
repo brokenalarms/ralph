@@ -44,7 +44,7 @@ func TestOnSignal_HappyPath(t *testing.T) {
 	}, st, gm, logger)
 
 	// Stub LLM verify to pass
-	l.llmVerifyFunc = func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, model ...string) verify.Result {
+	l.llmVerifyFunc = func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
 		return verify.Result{Passed: true, Reason: "looks good"}
 	}
 
@@ -101,7 +101,7 @@ func TestOnSignal_LLMReject_SkipsTask(t *testing.T) {
 
 	// LLM verify rejects on both attempts (Haiku then Sonnet escalation)
 	llmCalls := 0
-	l.llmVerifyFunc = func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, model ...string) verify.Result {
+	l.llmVerifyFunc = func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
 		llmCalls++
 		return verify.Result{Passed: false, Details: "diff doesn't match bead"}
 	}

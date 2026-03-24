@@ -11,6 +11,11 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 )
 
+// QueryFunc runs a prompt through an agent and returns the response text.
+// This is injected by the orchestrator so LLM verification goes through
+// the centralized agent module rather than directly spawning processes.
+type QueryFunc func(ctx context.Context, workDir, prompt, model string) (string, error)
+
 // Result describes the outcome of a post-signal verification.
 type Result struct {
 	Passed  bool
@@ -163,7 +168,8 @@ func PreflightChecks(workDir, headBefore string, beadStatus string) PreflightRes
 // Prefers the PR diff (which covers work from prior iterations) over the
 // current iteration's diff. Falls back to iteration diff when no PR exists.
 // Uses prompts/verify-review.md as the review template when available.
-func LLMVerifyPR(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, model ...string) Result {
+// When queryFn is non-nil, LLM calls go through the centralized agent module.
+func LLMVerifyPR(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, queryFn QueryFunc, model ...string) Result {
 	diff := getPRDiff(ctx, workDir, taskID, gh)
 	source := "PR"
 	if diff == "" {
@@ -179,7 +185,7 @@ func LLMVerifyPR(ctx context.Context, workDir, promptsDir, taskID, headBefore, b
 	}
 
 	prompt := loadReviewPrompt(promptsDir, beadTitle, beadDescription, source, diff)
-	return callLLM(ctx, workDir, prompt, model...)
+	return callLLM(ctx, workDir, prompt, queryFn, model...)
 }
 
 func loadReviewPrompt(promptsDir, beadTitle, beadDescription, source, diff string) string {
@@ -230,19 +236,30 @@ func getPRDiff(_ context.Context, workDir, taskID string, gh git.GitHub) string 
 }
 
 // callLLM sends a prompt to a Claude model and interprets YES/NO response.
-func callLLM(ctx context.Context, workDir, prompt string, model ...string) Result {
+// When queryFn is non-nil, the call goes through the centralized agent module.
+// Falls back to direct exec.Command when queryFn is nil (tests, standalone use).
+func callLLM(ctx context.Context, workDir, prompt string, queryFn QueryFunc, model ...string) Result {
 	m := "claude-haiku-4-5-20251001"
 	if len(model) > 0 && model[0] != "" {
 		m = model[0]
 	}
-	cmd := exec.CommandContext(ctx, "claude", "--print", "--model", m, "-p", prompt)
-	cmd.Dir = workDir
-	out, err := cmd.CombinedOutput()
+
+	var response string
+	var err error
+	if queryFn != nil {
+		response, err = queryFn(ctx, workDir, prompt, m)
+	} else {
+		cmd := exec.CommandContext(ctx, "claude", "--print", "--model", m, "-p", prompt)
+		cmd.Dir = workDir
+		out, cmdErr := cmd.CombinedOutput()
+		response = string(out)
+		err = cmdErr
+	}
 	if err != nil {
 		return Result{Passed: true, Reason: "LLM verification skipped: " + err.Error()}
 	}
 
-	response := strings.TrimSpace(string(out))
+	response = strings.TrimSpace(response)
 	if strings.HasPrefix(strings.ToUpper(response), "NO") {
 		return Result{
 			Passed:  false,

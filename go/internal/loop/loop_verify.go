@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brokenalarms/ralph/internal/agent"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/verify"
@@ -74,7 +75,7 @@ func (l *Loop) onSignal(p signalParams) bool {
 		beadDesc := l.getBeadDescription(p.taskID)
 
 		l.logger.Log("Running LLM verification...")
-		llmResult := l.llmVerifyFunc(p.ctx, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, l.git.GitHub)
+		llmResult := l.llmVerifyFunc(p.ctx, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, l.git.GitHub, l.queryFunc())
 
 		if !llmResult.Passed {
 			l.logger.Error("LLM verification rejected: %s", llmResult.Details)
@@ -102,7 +103,7 @@ func (l *Loop) onSignal(p signalParams) bool {
 
 			// Escalate to Sonnet for re-verification (Haiku already rejected)
 			l.logger.Log("Escalating verification to Sonnet...")
-			llmResult2 := l.llmVerifyFunc(p.ctx, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, l.git.GitHub, "claude-sonnet-4-6")
+			llmResult2 := l.llmVerifyFunc(p.ctx, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, l.git.GitHub, l.queryFunc(), "claude-sonnet-4-6")
 			if !llmResult2.Passed {
 				l.logger.Error("Sonnet also rejects: %s", llmResult2.Details)
 				// Skip this task instead of accepting bad work
@@ -185,12 +186,26 @@ func (l *Loop) runFixAgent(ctx context.Context, description, prompt, workDir, ra
 }
 
 // newRunner returns a claudeRunner for spawning sub-agents. Uses newRunnerFunc
-// if set (for testing), otherwise creates a default claude.Runner.
+// if set (for testing), otherwise creates a new agent.Runner through the
+// centralized agent module (with container isolation if available).
 func (l *Loop) newRunner() claudeRunner {
 	if l.newRunnerFunc != nil {
 		return l.newRunnerFunc()
 	}
-	return &claude.Runner{Logger: l.logger}
+	var sandbox *agent.Sandbox
+	if l.agentRunner != nil && l.agentRunner.Sandbox != nil {
+		sandbox = l.agentRunner.Sandbox
+	}
+	return agent.New(l.logger, sandbox)
+}
+
+// queryFunc returns the Query method from the centralized agent runner,
+// routing LLM verification through the agent module (with container isolation).
+func (l *Loop) queryFunc() verify.QueryFunc {
+	if l.agentRunner != nil {
+		return l.agentRunner.Query
+	}
+	return nil
 }
 
 // loadVerifyPrompt reads a prompt template from the prompts directory and

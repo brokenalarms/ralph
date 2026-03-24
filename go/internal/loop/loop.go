@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brokenalarms/ralph/internal/agent"
 	"github.com/brokenalarms/ralph/internal/analyzer"
 	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
@@ -75,34 +76,42 @@ type Loop struct {
 	mergeFunc          func(ctx context.Context) (bool, error)
 	pushPRFunc         func(ctx context.Context, taskID, taskDesc string) error
 	verifyFunc      func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
-	llmVerifyFunc   func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, model ...string) verify.Result
+	llmVerifyFunc   func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result
 	newRunnerFunc      func() claudeRunner
 	findPRInfoFunc     func(workDir string) (number, title string)
+	agentRunner        *agent.Runner
 	lastAction         analyzer.Action
 	lastTaskMerged  bool
 	sessionTasks    []CompletedTask
 }
 
-// New creates an execution loop from the given configuration.
+// New creates an execution loop from the given configuration. All agent
+// invocations go through the centralized agent module, which applies
+// container isolation when sandbox-exec is available on the host.
 func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *Loop {
 	signals := claude.DefaultSignalPaths(cfg.Dirs.RalphDir)
 
 	limiter := ratelimit.New(cfg.Dirs.RalphDir, cfg.CallsPerHour)
 	limiter.StopFile = filepath.Join(cfg.Dirs.RalphDir, "stop")
 
-	runner := &claude.Runner{Logger: logger}
+	var sandbox *agent.Sandbox
+	if agent.Available() {
+		sandbox = agent.DefaultSandbox()
+	}
+	agentRunner := agent.New(logger, sandbox)
 
 	return &Loop{
 		cfg:           cfg,
 		state:         st,
 		git:           gm,
 		limiter:       limiter,
-		runner:        runner,
+		runner:        agentRunner,
 		analyzer:      analyzer.New(),
 		attempts:      attempts.New(cfg.Dirs.RalphDir),
 		logger:        logger,
 		signals:       signals,
 		llmVerifyFunc: verify.LLMVerifyPR,
+		agentRunner:   agentRunner,
 	}
 }
 
