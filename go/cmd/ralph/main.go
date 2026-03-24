@@ -175,6 +175,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		WaitInterval:        cfg.WaitInterval,
 		OnRebaseConflict:    promptRebaseRecovery(ctx, cfg.Wait),
 		VerifyDir:           dirs.WorkDir,
+		VerifyLevel:         cfg.VerifyLevel,
 	}, st, gm, log)
 
 	if err := execLoop.Run(ctx); err != nil {

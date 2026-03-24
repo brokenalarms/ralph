@@ -35,8 +35,9 @@ type Config struct {
 	StagnationThreshold        int
 	TestSaturationThreshold    int
 	PermissionDenialThreshold  int
-	BaseBranch string
-	Wait       bool
+	BaseBranch   string
+	Wait         bool
+	VerifyLevel  string
 	WaitInterval               time.Duration
 
 	cliSet map[string]bool

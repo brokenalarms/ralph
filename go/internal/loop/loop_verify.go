@@ -77,6 +77,13 @@ func (l *Loop) onSignal(p signalParams) bool {
 		l.logger.Log("llm", "Running LLM verification...")
 		llmResult := l.llmVerifyFunc(p.ctx, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, l.git.GitHub, l.queryFunc())
 
+		if llmResult.Passed && llmResult.NoDiff && l.cfg.VerifyLevel == "hog" {
+			l.logger.Log("llm", "No diff detected — spawning codebase verification agent (hog mode)")
+			if !l.verifyFeatureExists(p, beadDesc) {
+				return false
+			}
+		}
+
 		if !llmResult.Passed {
 			l.logger.Error("llm", "LLM verification rejected: %s", llmResult.Details)
 
@@ -226,6 +233,32 @@ func (l *Loop) loadVerifyPrompt(filename string, vars map[string]string) string 
 		s = strings.ReplaceAll(s, k, v)
 	}
 	return s
+}
+
+// verifyFeatureExists spawns a verification agent with tool access to
+// grep/read the codebase and confirm the described feature actually exists.
+// Used in "hog" mode when the agent signals completion with no diff.
+func (l *Loop) verifyFeatureExists(p signalParams, beadDesc string) bool {
+	signalPath := filepath.Join(l.cfg.Dirs.RalphDir, ".signal_complete")
+	prompt := l.loadVerifyPrompt("verify-exists.md", map[string]string{
+		"{{TASK_TITLE}}":       p.nextTask,
+		"{{TASK_DESCRIPTION}}": beadDesc,
+		"{{WORK_DIR}}":         p.workDir,
+		"{{SIGNAL_COMPLETE}}":  signalPath,
+	})
+
+	result := l.runFixAgent(p.ctx, "feature existence check", prompt, p.workDir, p.rawLogPath)
+	if !result.SignalDetected {
+		l.logger.Warn("llm", "Verification agent exited without signal — treating as rejection")
+		if p.taskID != "" {
+			l.cfg.TaskBackend.SkipTask(p.taskID, "verification_no_signal: agent could not confirm feature exists")
+			l.logger.Warn("llm", "Skipping task %s — verification agent did not confirm", p.taskID)
+		}
+		return false
+	}
+
+	l.logger.Success("llm", "Verification agent confirmed feature exists")
+	return true
 }
 
 // getBeadDescription retrieves the bead description for LLM verification.

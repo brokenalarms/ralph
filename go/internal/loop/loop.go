@@ -46,6 +46,7 @@ type Config struct {
 	WaitInterval        time.Duration
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 	VerifyDir           string // project root where tests are run; empty disables verification
+	VerifyLevel         string // "fire" (default) or "hog" — controls no-diff verification depth
 }
 
 // claudeRunner abstracts the Claude execution interface for testability.
