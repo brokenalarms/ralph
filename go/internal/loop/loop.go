@@ -489,6 +489,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 			// Close bead only after successful merge (or if auto-merge is off).
 			if taskID != "" && (merged || !l.cfg.AutoMerge) {
+				l.attempts.ClearMergeFailures(taskID)
 				closeReason := "completed by ralph"
 				if ct.PRNum != "" {
 					closeReason = fmt.Sprintf("Fixed in PR #%s", ct.PRNum)
@@ -499,7 +500,15 @@ func (l *Loop) Run(ctx context.Context) error {
 					l.logger.Log("Closed task %s (%s)", taskID, closeReason)
 				}
 			} else if taskID != "" && l.cfg.AutoMerge && !merged {
-				l.logger.Warn("Merge failed — task %s left open for retry", taskID)
+				count, _ := l.attempts.RecordMergeFailure(taskID)
+				if count >= attempts.MaxMergeFailures {
+					l.logger.Warn("Merge failed %d times — skipping task %s for manual review", count, taskID)
+					if err := l.cfg.TaskBackend.SkipTask(taskID, fmt.Sprintf("merge_failed_%d_times", count)); err != nil {
+						l.logger.Warn("SkipTask: %v", err)
+					}
+				} else {
+					l.logger.Warn("Merge failed (%d/%d) — task %s left open for retry", count, attempts.MaxMergeFailures, taskID)
+				}
 			}
 
 			l.sessionTasks = append(l.sessionTasks, ct)
