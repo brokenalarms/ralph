@@ -89,11 +89,10 @@ func TestToolBatcher_GrepKeepsPattern(t *testing.T) {
 	}
 }
 
-// Edit and other non-batchable tools pass through via the formatter buffer.
+// Edit and other non-batchable tools pass through immediately.
 func TestToolBatcher_EditPassesThrough(t *testing.T) {
 	b := NewToolBatcher(5*time.Second, "")
-	b.ProcessLine("[Edit] /path/to/file.go")
-	out := b.Flush()
+	out := b.ProcessLine("[Edit] /path/to/file.go")
 	if len(out) != 1 {
 		t.Fatalf("Edit should produce 1 line, got %d lines", len(out))
 	}
@@ -125,7 +124,7 @@ func TestToolBatcher_BashFlushesAndPassesThrough(t *testing.T) {
 }
 
 // Different tool types within a batch get separate summary lines.
-// With 3 tool types, the timestamp appears on its own header line.
+// First line gets a trailing timestamp; same-second lines do not.
 func TestToolBatcher_SeparateLinePerToolType(t *testing.T) {
 	b := NewToolBatcher(5*time.Second, "")
 	b.ProcessLine("[Read] /path/a.go")
@@ -134,26 +133,21 @@ func TestToolBatcher_SeparateLinePerToolType(t *testing.T) {
 	b.ProcessLine("[Read] /path/b.go")
 
 	out := b.Flush()
-	// 3 tool types = 3+ grouped lines → timestamp header + 3 content = 4 lines
-	if len(out) != 4 {
-		t.Fatalf("expected 4 lines (timestamp + Read, Grep, Glob), got %d: %v", len(out), out)
+	// 3 tool types = 3 lines (first has trailing timestamp, others don't)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 lines (Read, Grep, Glob), got %d: %v", len(out), out)
 	}
-	// First line is the standalone timestamp.
-	plainTS := stripANSI(out[0])
-	if len(plainTS) != 8 || plainTS[2] != ':' || plainTS[5] != ':' {
-		t.Errorf("first line should be standalone timestamp, got: %q", plainTS)
+	plain0 := stripANSI(out[0])
+	if !strings.Contains(plain0, "[Read] a.go, b.go") {
+		t.Errorf("Read should group both files, got: %s", plain0)
 	}
 	plain1 := stripANSI(out[1])
-	if !strings.Contains(plain1, "[Read] a.go, b.go") {
-		t.Errorf("Read should group both files, got: %s", plain1)
+	if !strings.Contains(plain1, "[Grep] pattern1") {
+		t.Errorf("Grep should be on its own line, got: %s", plain1)
 	}
 	plain2 := stripANSI(out[2])
-	if !strings.Contains(plain2, "[Grep] pattern1") {
-		t.Errorf("Grep should be on its own line, got: %s", plain2)
-	}
-	plain3 := stripANSI(out[3])
-	if !strings.Contains(plain3, "[Glob] /dir/**/*.go") {
-		t.Errorf("Glob should be on its own line, got: %s", plain3)
+	if !strings.Contains(plain2, "[Glob] /dir/**/*.go") {
+		t.Errorf("Glob should be on its own line, got: %s", plain2)
 	}
 }
 

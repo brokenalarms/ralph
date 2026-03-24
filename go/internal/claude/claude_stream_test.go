@@ -16,6 +16,49 @@ func fixedClock(ts string) func() time.Time {
 	return func() time.Time { return parsed }
 }
 
+// Verifies that timestamps appear at the END of lines, only when the
+// second changes from the previous line. First line always gets a timestamp.
+func TestStreamFormatter_TimestampAtEnd(t *testing.T) {
+	sec := 0
+	f := &StreamFormatter{clock: func() time.Time {
+		return time.Date(2026, 1, 1, 15, 57, 20+sec, 0, time.UTC)
+	}}
+
+	// First line: always gets timestamp at end.
+	lines1 := f.FormatOutput("[Edit] claude_stream.go")
+	if len(lines1) != 1 {
+		t.Fatalf("first line: expected 1 line, got %d", len(lines1))
+	}
+	plain1 := ansiRe.ReplaceAllString(lines1[0], "")
+	if !strings.HasSuffix(plain1, " 15:57:20") {
+		t.Errorf("first line should end with timestamp, got: %q", plain1)
+	}
+	if !strings.Contains(plain1, "[r] [Edit] claude_stream.go") {
+		t.Errorf("first line should contain content, got: %q", plain1)
+	}
+
+	// Second line same second: no timestamp.
+	lines2 := f.FormatOutput("[Edit] claude_stream.go")
+	if len(lines2) != 1 {
+		t.Fatalf("second line: expected 1 line, got %d", len(lines2))
+	}
+	plain2 := ansiRe.ReplaceAllString(lines2[0], "")
+	if strings.Contains(plain2, "15:57") {
+		t.Errorf("same-second line should have no timestamp, got: %q", plain2)
+	}
+
+	// Third line different second: gets timestamp.
+	sec = 3
+	lines3 := f.FormatOutput("[Read] claude_stream.go")
+	if len(lines3) != 1 {
+		t.Fatalf("third line: expected 1 line, got %d", len(lines3))
+	}
+	plain3 := ansiRe.ReplaceAllString(lines3[0], "")
+	if !strings.HasSuffix(plain3, " 15:57:23") {
+		t.Errorf("different-second line should end with timestamp, got: %q", plain3)
+	}
+}
+
 // Verifies that extractStreamText pulls text from assistant messages using
 // Claude's actual nested content array format: message.content[].text.
 func TestExtractStreamText_Assistant(t *testing.T) {
@@ -190,15 +233,18 @@ func TestStripMarkdown(t *testing.T) {
 	}
 }
 
-// Verifies that FormatStreamLine adds a timestamp prefix and ANSI color codes
-// so output matches the format previously provided by the bash stream filter.
+// Verifies that FormatStreamLine adds a trailing timestamp and ANSI color codes.
 func TestFormatStreamLine(t *testing.T) {
 	line := FormatStreamLine("[r] [Read] /tmp/foo.go")
 	plain := ansiRe.ReplaceAllString(line, "")
 
-	// Should have HH:MM:SS timestamp prefix.
-	if len(plain) < 8 || plain[2] != ':' || plain[5] != ':' {
-		t.Errorf("FormatStreamLine missing timestamp prefix, got: %q", plain)
+	// Should have HH:MM:SS timestamp suffix.
+	if len(plain) < 8 {
+		t.Fatalf("FormatStreamLine too short, got: %q", plain)
+	}
+	suffix := plain[len(plain)-8:]
+	if suffix[2] != ':' || suffix[5] != ':' {
+		t.Errorf("FormatStreamLine missing timestamp suffix, got: %q", plain)
 	}
 
 	// Should contain the text content after stripping ANSI.
@@ -323,101 +369,95 @@ func TestFormatStreamOutput_NormalLine(t *testing.T) {
 	}
 }
 
-// Verifies that under 3 lines sharing a timestamp, each gets its own
-// timestamp prefix (no grouping).
-func TestStreamFormatter_Under3_EachGetsTimestamp(t *testing.T) {
+// Verifies that same-second lines omit the timestamp (only the first
+// line in a given second shows it).
+func TestStreamFormatter_SameSecond_NoTimestamp(t *testing.T) {
 	ts := "14:30:00"
 	f := &StreamFormatter{clock: fixedClock(ts)}
 
-	f.FormatOutput("first line")
-	f.FormatOutput("second line")
-	lines := f.FlushPending()
+	lines1 := f.FormatOutput("first line")
+	lines2 := f.FormatOutput("second line")
 
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 lines, got %d", len(lines))
+	if len(lines1) != 1 || len(lines2) != 1 {
+		t.Fatalf("expected 1 line each, got %d and %d", len(lines1), len(lines2))
 	}
-	for i, line := range lines {
-		plain := ansiRe.ReplaceAllString(line, "")
-		if !strings.HasPrefix(plain, ts+" ") {
-			t.Errorf("line %d should have timestamp prefix %q, got: %q", i, ts, plain)
+	plain1 := ansiRe.ReplaceAllString(lines1[0], "")
+	plain2 := ansiRe.ReplaceAllString(lines2[0], "")
+
+	if !strings.HasSuffix(plain1, " "+ts) {
+		t.Errorf("first line should end with timestamp, got: %q", plain1)
+	}
+	if strings.Contains(plain2, ts) {
+		t.Errorf("same-second line should not have timestamp, got: %q", plain2)
+	}
+}
+
+// Verifies that many lines at the same second still only show the
+// timestamp on the first line.
+func TestStreamFormatter_ManySameSecond(t *testing.T) {
+	ts := "14:30:00"
+	f := &StreamFormatter{clock: fixedClock(ts)}
+
+	for i := 0; i < 5; i++ {
+		lines := f.FormatOutput(fmt.Sprintf("line %d", i))
+		if len(lines) != 1 {
+			t.Fatalf("line %d: expected 1 line, got %d", i, len(lines))
+		}
+		plain := ansiRe.ReplaceAllString(lines[0], "")
+		if i == 0 {
+			if !strings.HasSuffix(plain, " "+ts) {
+				t.Errorf("first line should end with timestamp, got: %q", plain)
+			}
+		} else {
+			if strings.Contains(plain, ts) {
+				t.Errorf("line %d should not have timestamp, got: %q", i, plain)
+			}
 		}
 	}
 }
 
-// Verifies that 3+ lines sharing a timestamp produce a header-style
-// timestamp on its own line, with content lines at root level (no indent).
-func TestStreamFormatter_3Plus_TimestampOnOwnLine(t *testing.T) {
-	ts := "14:30:00"
-	f := &StreamFormatter{clock: fixedClock(ts)}
-
-	f.FormatOutput("first line")
-	f.FormatOutput("second line")
-	f.FormatOutput("third line")
-	lines := f.FlushPending()
-
-	if len(lines) != 4 {
-		t.Fatalf("expected 4 lines (1 timestamp + 3 content), got %d: %v", len(lines), lines)
-	}
-
-	// First line is the standalone timestamp (dim).
-	plainTS := ansiRe.ReplaceAllString(lines[0], "")
-	if plainTS != ts {
-		t.Errorf("first line should be standalone timestamp %q, got: %q", ts, plainTS)
-	}
-
-	// Content lines should NOT have timestamp prefix or indentation.
-	for i := 1; i < len(lines); i++ {
-		plain := ansiRe.ReplaceAllString(lines[i], "")
-		if strings.HasPrefix(plain, ts) {
-			t.Errorf("content line %d should not have timestamp prefix, got: %q", i, plain)
-		}
-		if strings.HasPrefix(plain, " ") {
-			t.Errorf("content line %d should not be indented, got: %q", i, plain)
-		}
-	}
-}
-
-// Verifies that a new timestamp flushes the previous group.
-func TestStreamFormatter_NewTimestampFlushes(t *testing.T) {
+// Verifies that each line with a different second gets a trailing timestamp.
+func TestStreamFormatter_DifferentSeconds_EachGetsTimestamp(t *testing.T) {
 	sec := 0
 	f := &StreamFormatter{clock: func() time.Time {
 		sec++
 		return time.Date(2026, 1, 1, 14, 30, sec, 0, time.UTC)
 	}}
 
-	// Each call gets a different second, so each flushes the previous.
-	lines1 := f.FormatOutput("first line")  // buffers (sec=1), returns nil
-	lines2 := f.FormatOutput("second line") // flushes first (sec=2), buffers second
+	lines1 := f.FormatOutput("first line")
+	lines2 := f.FormatOutput("second line")
 
-	if len(lines1) != 0 {
-		t.Errorf("first call should buffer, got %d lines", len(lines1))
+	if len(lines1) != 1 {
+		t.Fatalf("first call: expected 1 line, got %d", len(lines1))
 	}
 	if len(lines2) != 1 {
-		t.Fatalf("second call should flush 1 line, got %d", len(lines2))
+		t.Fatalf("second call: expected 1 line, got %d", len(lines2))
 	}
-	plain := ansiRe.ReplaceAllString(lines2[0], "")
-	if !strings.HasPrefix(plain, "14:30:01") {
-		t.Errorf("flushed line should have first timestamp, got: %q", plain)
+	plain1 := ansiRe.ReplaceAllString(lines1[0], "")
+	plain2 := ansiRe.ReplaceAllString(lines2[0], "")
+	if !strings.HasSuffix(plain1, " 14:30:01") {
+		t.Errorf("first line should end with 14:30:01, got: %q", plain1)
+	}
+	if !strings.HasSuffix(plain2, " 14:30:02") {
+		t.Errorf("second line should end with 14:30:02, got: %q", plain2)
 	}
 }
 
-// Verifies that FormatOutput buffers lines and FlushPending emits them.
-func TestStreamFormatter_FormatOutput_BuffersAndFlushes(t *testing.T) {
+// Verifies that FormatOutput returns lines immediately (no buffering).
+func TestStreamFormatter_FormatOutput_ReturnsImmediately(t *testing.T) {
 	ts := "14:30:00"
 	f := &StreamFormatter{clock: fixedClock(ts)}
 
-	result := f.FormatOutput("hello world")
-	if len(result) != 0 {
-		t.Errorf("FormatOutput should buffer, got %d lines", len(result))
-	}
-
-	lines := f.FlushPending()
+	lines := f.FormatOutput("hello world")
 	if len(lines) != 1 {
-		t.Fatalf("FlushPending should return 1 line, got %d", len(lines))
+		t.Fatalf("FormatOutput should return 1 line immediately, got %d", len(lines))
 	}
 	plain := ansiRe.ReplaceAllString(lines[0], "")
 	if !strings.Contains(plain, "[r] hello world") {
-		t.Errorf("flushed line should contain content, got: %q", plain)
+		t.Errorf("line should contain content, got: %q", plain)
+	}
+	if !strings.HasSuffix(plain, " "+ts) {
+		t.Errorf("line should end with timestamp, got: %q", plain)
 	}
 }
 
@@ -745,21 +785,18 @@ func TestFilterStreamJSON_ShortensAbsolutePaths(t *testing.T) {
 func TestFormatOutput_TruncatesLongProse(t *testing.T) {
 	f := &StreamFormatter{}
 	longProse := strings.Repeat("Now I understand the current state and will analyze ", 5)
-	f.FormatOutput(longProse)
-	lines := f.FlushPending()
+	lines := f.FormatOutput(longProse)
 
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
 	plain := ansiRe.ReplaceAllString(lines[0], "")
-	// Line should be truncated: tsWidth(9) + "[r] "(4) + content + "…"
-	// Total rune count should not exceed maxLineWidth.
 	runeCount := utf8.RuneCountInString(plain)
 	if runeCount > maxLineWidth {
 		t.Errorf("prose line should be truncated to %d runes, got %d: %q", maxLineWidth, runeCount, plain)
 	}
-	if !strings.HasSuffix(plain, "…") {
-		t.Errorf("truncated prose should end with ellipsis, got: %q", plain)
+	if !strings.Contains(plain, "…") {
+		t.Errorf("truncated prose should contain ellipsis, got: %q", plain)
 	}
 }
 
@@ -768,8 +805,7 @@ func TestFormatOutput_TruncatesLongProse(t *testing.T) {
 func TestFormatOutput_DoesNotTruncateToolLines(t *testing.T) {
 	f := &StreamFormatter{}
 	longToolLine := "[Edit] " + strings.Repeat("/very/long/path/to/some/deeply/nested/", 5) + "file.go"
-	f.FormatOutput(longToolLine)
-	lines := f.FlushPending()
+	lines := f.FormatOutput(longToolLine)
 
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
@@ -789,7 +825,6 @@ func TestFormatOutput_DoesNotTruncateDiagnosis(t *testing.T) {
 	f := &StreamFormatter{}
 	longDiag := "ISSUE: " + strings.Repeat("the configuration is completely broken because ", 5)
 	lines := f.FormatOutput(longDiag)
-	lines = append(lines, f.FlushPending()...)
 
 	// Diagnosis produces 2 lines: banner + content.
 	if len(lines) != 2 {
@@ -866,8 +901,7 @@ func TestColorTag_Signal(t *testing.T) {
 // Verifies that signal lines in FormatOutput get [signal] prefix instead of [r] [Bash].
 func TestFormatOutput_SignalLine(t *testing.T) {
 	f := &StreamFormatter{}
-	f.FormatOutput(`[Bash] echo "Working on feature" > /path/.signal_current_task`)
-	lines := f.FlushPending()
+	lines := f.FormatOutput(`[Bash] echo "Working on feature" > /path/.signal_current_task`)
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
@@ -886,8 +920,7 @@ func TestFormatOutput_SignalLine(t *testing.T) {
 // Verifies that signal lines get yellow color applied to the [signal] tag.
 func TestFormatOutput_SignalLineYellow(t *testing.T) {
 	f := &StreamFormatter{}
-	f.FormatOutput(`[Bash] echo "task done" > /path/.signal_complete`)
-	lines := f.FlushPending()
+	lines := f.FormatOutput(`[Bash] echo "task done" > /path/.signal_complete`)
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
@@ -950,8 +983,7 @@ func TestFilterStreamJSON_SignalHighlight(t *testing.T) {
 // Verifies that short prose lines are not truncated or modified.
 func TestFormatOutput_ShortProseUnchanged(t *testing.T) {
 	f := &StreamFormatter{}
-	f.FormatOutput("Reading the config file")
-	lines := f.FlushPending()
+	lines := f.FormatOutput("Reading the config file")
 
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
@@ -972,23 +1004,19 @@ func TestFormatOutput_DeduplicatesSignalLines(t *testing.T) {
 	f := &StreamFormatter{}
 	signalLine := `[Bash] echo "Working on feature X" > /path/.ralph/.signal_current_task`
 
-	// First call buffers the signal line.
-	f.FormatOutput(signalLine)
-	lines1 := f.FlushPending()
+	lines1 := f.FormatOutput(signalLine)
 	if len(lines1) != 1 {
 		t.Fatalf("first signal call: expected 1 line, got %d", len(lines1))
 	}
 
 	// Second identical call should be suppressed.
 	lines2 := f.FormatOutput(signalLine)
-	lines2 = append(lines2, f.FlushPending()...)
 	if len(lines2) != 0 {
 		t.Errorf("duplicate signal should be suppressed, got %d lines: %v", len(lines2), lines2)
 	}
 
 	// Third identical call should also be suppressed.
 	lines3 := f.FormatOutput(signalLine)
-	lines3 = append(lines3, f.FlushPending()...)
 	if len(lines3) != 0 {
 		t.Errorf("third duplicate signal should be suppressed, got %d lines: %v", len(lines3), lines3)
 	}
@@ -999,14 +1027,12 @@ func TestFormatOutput_DeduplicatesSignalLines(t *testing.T) {
 func TestFormatOutput_DifferentSignalsNotSuppressed(t *testing.T) {
 	f := &StreamFormatter{}
 
-	f.FormatOutput(`[Bash] echo "task A" > /path/.signal_current_task`)
-	lines1 := f.FlushPending()
+	lines1 := f.FormatOutput(`[Bash] echo "task A" > /path/.signal_current_task`)
 	if len(lines1) != 1 {
 		t.Fatalf("first signal: expected 1 line, got %d", len(lines1))
 	}
 
-	f.FormatOutput(`[Bash] echo "task B" > /path/.signal_current_task`)
-	lines2 := f.FlushPending()
+	lines2 := f.FormatOutput(`[Bash] echo "task B" > /path/.signal_current_task`)
 	if len(lines2) != 1 {
 		t.Fatalf("different signal: expected 1 line, got %d", len(lines2))
 	}
@@ -1020,7 +1046,7 @@ func TestFormatOutput_ShortensAbsolutePaths(t *testing.T) {
 	}
 
 	lines := f.FormatOutput("[Edit] /Users/daniel/Developer/ralph/.ralph/worktrees/ralph-20260323-01/go/internal/claude/claude_stream.go")
-	lines = append(lines, f.FlushPending()...)
+
 
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
@@ -1042,7 +1068,7 @@ func TestFormatOutput_ShortensProsePaths(t *testing.T) {
 	}
 
 	lines := f.FormatOutput("Reading file /tmp/worktree/src/main.go for context")
-	lines = append(lines, f.FlushPending()...)
+
 
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
@@ -1061,7 +1087,7 @@ func TestFormatOutput_NoWorkDir_PathsUnchanged(t *testing.T) {
 	f := &StreamFormatter{}
 
 	lines := f.FormatOutput("[Edit] /absolute/path/to/file.go")
-	lines = append(lines, f.FlushPending()...)
+
 
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
@@ -1079,18 +1105,15 @@ func TestFormatOutput_SignalDedupPersistsAcrossNonSignal(t *testing.T) {
 	f := &StreamFormatter{}
 	signalLine := `[Bash] echo "task done" > /path/.signal_complete`
 
-	f.FormatOutput(signalLine)
-	lines1 := f.FlushPending()
+	lines1 := f.FormatOutput(signalLine)
 	if len(lines1) != 1 {
 		t.Fatalf("first signal: expected 1 line, got %d", len(lines1))
 	}
 
 	f.FormatOutput("Reading some file")
-	f.FlushPending()
 
 	// Same signal again after intervening output — still suppressed.
 	lines3 := f.FormatOutput(signalLine)
-	lines3 = append(lines3, f.FlushPending()...)
 	if len(lines3) != 0 {
 		t.Errorf("same signal after non-signal should still be suppressed, got %d lines", len(lines3))
 	}
