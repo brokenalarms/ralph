@@ -357,6 +357,11 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 					}
 				}
 
+				// Wait for the agent to finish its final output before killing.
+				// The signal file is often written before the agent's completion
+				// message appears in the log; killing immediately truncates it.
+				waitForOutputSettle(cfg.RawLog, processDone)
+
 				gracefulKill(cmd, processDone)
 
 				return Result{
@@ -471,6 +476,43 @@ func processAlive(cmd *exec.Cmd) bool {
 	}
 	// Signal 0 checks if process exists without sending a signal.
 	return cmd.Process.Signal(syscall.Signal(0)) == nil
+}
+
+// waitForOutputSettle waits until the raw log file has not been modified for
+// a settle period, indicating the agent has finished writing. Caps the total
+// wait to prevent hanging if the agent keeps writing indefinitely.
+func waitForOutputSettle(rawLogPath string, processDone <-chan struct{}) {
+	const (
+		settleTime = 2 * time.Second
+		maxWait    = 10 * time.Second
+		checkEvery = 250 * time.Millisecond
+	)
+
+	deadline := time.Now().Add(maxWait)
+	lastMod := time.Now()
+
+	// Snapshot current mtime as the baseline.
+	if info, err := os.Stat(rawLogPath); err == nil {
+		lastMod = info.ModTime()
+	}
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-processDone:
+			return
+		case <-time.After(checkEvery):
+		}
+
+		if info, err := os.Stat(rawLogPath); err == nil {
+			if info.ModTime().After(lastMod) {
+				lastMod = info.ModTime()
+			}
+		}
+
+		if time.Since(lastMod) >= settleTime {
+			return
+		}
+	}
 }
 
 // gracefulKill sends SIGTERM, waits briefly, then SIGKILL if needed.
