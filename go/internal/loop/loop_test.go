@@ -52,6 +52,8 @@ type stubBackend struct {
 	label        string
 	description  string
 	fullContext   string
+	skippedTask  string
+	skipReason   string
 }
 
 // mutableBackend is like stubBackend but allows changing the next task
@@ -103,7 +105,7 @@ func (s *stubBackend) GetNextTaskID() (string, error)       { return s.nextID, n
 func (s *stubBackend) GetNextTaskInfo() (tasks.TaskInfo, error) { return tasks.TaskInfo{ID: s.nextID, Title: s.nextTask, Priority: s.nextPriority}, nil }
 func (s *stubBackend) HasTasks() (bool, error)              { return s.total > 0, nil }
 func (s *stubBackend) CloseTask(string, string) error       { return nil }
-func (s *stubBackend) SkipTask(string, string) error        { return nil }
+func (s *stubBackend) SkipTask(id, reason string) error     { s.skippedTask = id; s.skipReason = reason; return nil }
 func (s *stubBackend) ReopenTask(string) error              { return nil }
 func (s *stubBackend) SetState(_, _, _, _ string) error     { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error) { return "", nil }

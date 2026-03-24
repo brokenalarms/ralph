@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/verify"
 )
+
+const maxLLMVerifyAttempts = 3
 
 // signalParams holds the context needed by onSignal, avoiding a long
 // parameter list of values captured from the iteration scope.
@@ -70,22 +73,36 @@ func (l *Loop) onSignal(p signalParams) bool {
 	}
 
 	// LLM verification — does the diff match the bead?
-	// Prefer PR diff (covers prior iterations) over iteration diff.
+	// Fail-closed loop: reject → fix agent → re-verify until approved or
+	// maxLLMVerifyAttempts reached.
 	if passed {
 		beadDesc := l.getBeadDescription(p.taskID)
 
-		l.logger.Log("llm", "Running LLM verification...")
-		llmResult := l.llmVerifyFunc(p.ctx, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, l.git.GitHub, l.queryFunc())
+		for attempt := 1; attempt <= maxLLMVerifyAttempts; attempt++ {
+			l.logger.Log("llm", "Running LLM verification (attempt %d/%d)...", attempt, maxLLMVerifyAttempts)
+			llmResult := l.llmVerifyFunc(p.ctx, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, l.git.GitHub, l.queryFunc())
 
-		if llmResult.Passed && llmResult.NoDiff && l.cfg.VerifyLevel == "hog" {
-			l.logger.Log("llm", "No diff detected — spawning codebase verification agent (hog mode)")
-			if !l.verifyFeatureExists(p, beadDesc) {
+			if llmResult.Passed && llmResult.NoDiff && l.cfg.VerifyLevel == "hog" {
+				l.logger.Log("llm", "No diff detected — spawning codebase verification agent (hog mode)")
+				if !l.verifyFeatureExists(p, beadDesc) {
+					return false
+				}
+			}
+
+			if llmResult.Passed {
+				l.logger.Success("llm", "LLM verified: %s", llmResult.Reason)
+				return true
+			}
+
+			l.logger.Error("llm", "LLM verification rejected (attempt %d/%d): %s", attempt, maxLLMVerifyAttempts, llmResult.Details)
+
+			if attempt == maxLLMVerifyAttempts {
+				if p.taskID != "" {
+					l.cfg.TaskBackend.SkipTask(p.taskID, fmt.Sprintf("verification_rejected_%d_attempts: %s", maxLLMVerifyAttempts, llmResult.Details))
+					l.logger.Warn("llm", "Skipping task %s — verification rejected %d times", p.taskID, maxLLMVerifyAttempts)
+				}
 				return false
 			}
-		}
-
-		if !llmResult.Passed {
-			l.logger.Error("llm", "LLM verification rejected: %s", llmResult.Details)
 
 			signalPath := filepath.Join(l.cfg.Dirs.RalphDir, ".signal_complete")
 			fixPrompt := l.loadVerifyPrompt("verify-llm.md", map[string]string{
@@ -95,34 +112,16 @@ func (l *Loop) onSignal(p signalParams) bool {
 				"{{SIGNAL_COMPLETE}}":  signalPath,
 			})
 
-			fixResult := l.runFixAgent(p.ctx, "LLM feedback", fixPrompt, p.workDir, p.rawLogPath)
+			fixResult := l.runFixAgent(p.ctx, fmt.Sprintf("LLM feedback (attempt %d)", attempt), fixPrompt, p.workDir, p.rawLogPath)
 			if !fixResult.SignalDetected {
 				return false
 			}
-
-			// Re-verify tests after fix (skip commit check)
 
 			testResult := verify.RunTests(p.ctx, l.cfg.VerifyDir)
 			if !testResult.Passed {
 				l.logger.Error("test", "Tests failed after LLM fix agent: %s", testResult.Reason)
 				return false
 			}
-
-			// Escalate to Sonnet for re-verification (Haiku already rejected)
-			l.logger.Log("llm", "Escalating verification to Sonnet...")
-			llmResult2 := l.llmVerifyFunc(p.ctx, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, l.git.GitHub, l.queryFunc(), "claude-sonnet-4-6")
-			if !llmResult2.Passed {
-				l.logger.Error("llm", "Sonnet also rejects: %s", llmResult2.Details)
-				// Skip this task instead of accepting bad work
-				if p.taskID != "" {
-					l.cfg.TaskBackend.SkipTask(p.taskID, "verification_rejected: "+llmResult2.Details)
-					l.logger.Warn("llm", "Skipping task %s — verification rejected twice", p.taskID)
-				}
-				return false
-			}
-			l.logger.Success("llm", "Sonnet verified after fix: %s", llmResult2.Reason)
-		} else {
-			l.logger.Success("llm", "LLM verified: %s", llmResult.Reason)
 		}
 	}
 
