@@ -1896,6 +1896,98 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 	}
 }
 
+// Verifies the full post-merge branch rename cycle: task A merges →
+// PostMergeReset resets to /next → next iteration renames to thematic
+// branch for task B. Proves each successive task gets its own descriptively
+// named branch even after the previous one is squash-merged.
+func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(10, 0)
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	gm := &git.Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+		UseWorktree: true,
+		State:       st,
+		Logger:      logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	iterationCount := 0
+	var branchDuringTaskA, branchDuringTaskB string
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "Fix tail leak",
+		nextID:    "ralph-t1",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			switch iterationCount {
+			case 1:
+				branchDuringTaskA = gm.WorktreeBranch
+				backend.mu.Lock()
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "Add retry logic"
+				backend.nextID = "ralph-r2"
+				backend.mu.Unlock()
+			case 2:
+				branchDuringTaskB = gm.WorktreeBranch
+				backend.mu.Lock()
+				backend.completed = 2
+				backend.remaining = 0
+				backend.mu.Unlock()
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if iterationCount != 2 {
+		t.Fatalf("expected 2 iterations, got %d", iterationCount)
+	}
+
+	if !strings.Contains(branchDuringTaskA, "ralph-t1-fix-tail-leak") {
+		t.Errorf("task A branch should contain slug, got %q", branchDuringTaskA)
+	}
+	if !strings.Contains(branchDuringTaskB, "ralph-r2-add-retry-logic") {
+		t.Errorf("task B branch should contain slug, got %q", branchDuringTaskB)
+	}
+	if branchDuringTaskA == branchDuringTaskB {
+		t.Errorf("tasks should have different branches, both got %q", branchDuringTaskA)
+	}
+}
+
 // Verifies that pushAndCreatePR fires for every completed task when signal
 // is detected, regardless of whether auto-merge is enabled. This ensures the
 // Go code owns the push/PR lifecycle.
