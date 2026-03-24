@@ -15,9 +15,7 @@ type Finding struct {
 	Score   int
 }
 
-// DefaultRefactorThreshold is the quality score threshold that triggers
-// a refactor iteration. 0 disables adaptive refactoring by default.
-const DefaultRefactorThreshold = 0
+const DefaultRefactorThreshold = 200
 
 const (
 	CheckAnyType      = "any-type"
@@ -65,6 +63,9 @@ func Assess(workDir, findingsFile string, opts *Options, files ...string) (int, 
 	var allFindings []string
 
 	for _, relPath := range files {
+		if shouldExclude(relPath) {
+			continue
+		}
 		absPath := filepath.Join(workDir, relPath)
 		data, err := os.ReadFile(absPath)
 		if err != nil {
@@ -170,4 +171,30 @@ func isJSOrTS(path string) bool {
 
 func isGo(path string) bool {
 	return strings.ToLower(filepath.Ext(path)) == ".go"
+}
+
+var legacyScripts = map[string]bool{
+	"ralph.sh": true,
+}
+
+func shouldExclude(relPath string) bool {
+	base := filepath.Base(relPath)
+
+	if strings.HasSuffix(base, "_test.go") || strings.HasSuffix(base, ".bats") {
+		return true
+	}
+
+	if strings.HasPrefix(relPath, "test/") || strings.HasPrefix(relPath, "test"+string(filepath.Separator)) {
+		return true
+	}
+
+	if legacyScripts[base] {
+		return true
+	}
+
+	if base == "main.go" && strings.Contains(relPath, "cmd/") {
+		return true
+	}
+
+	return false
 }

@@ -1,7 +1,6 @@
 package tmux
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -253,23 +252,41 @@ func TestSetup_ClearsStaleCompletedTasks(t *testing.T) {
 	}
 }
 
-// Verifies that the dead-pane exit hint format string and q-binding command
-// are constructed correctly, so users see "(dead) — press q to exit" in the
-// pane border and can press q to kill the session when the ralph pane dies.
-func TestDeadPaneExitHint(t *testing.T) {
-	sessionName := "test-loop"
-
-	deadCheck := fmt.Sprintf("tmux display-message -t '%s:.0' -p '#{pane_dead}' | grep -q 1", sessionName)
-	killCmd := fmt.Sprintf("kill-session -t '%s'", sessionName)
-
-	if !strings.Contains(deadCheck, sessionName+":.0") {
-		t.Error("dead-check should target pane 0 (ralph pane)")
+// Verifies that applySessionOptions installs a pane-died hook that auto-kills
+// the session when pane 0 (ralph loop) dies, replacing the old root-level q
+// binding that stole keypresses from all panes.
+func TestApplySessionOptions_PaneDiedHook(t *testing.T) {
+	orig := tmuxCmd
+	var calls [][]string
+	tmuxCmd = func(args ...string) error {
+		calls = append(calls, args)
+		return nil
 	}
-	if !strings.Contains(deadCheck, "pane_dead") {
-		t.Error("dead-check should use tmux pane_dead variable")
+	defer func() { tmuxCmd = orig }()
+
+	s := &Session{Name: "test-loop"}
+	s.applySessionOptions()
+
+	var hookArgs []string
+	for _, args := range calls {
+		if len(args) >= 4 && args[0] == "set-hook" && args[3] == "pane-died" {
+			hookArgs = args
+			break
+		}
 	}
-	if !strings.Contains(killCmd, sessionName) {
-		t.Error("kill command should target the session")
+	if hookArgs == nil {
+		t.Fatal("applySessionOptions should install a pane-died hook")
+	}
+
+	hookCmd := strings.Join(hookArgs[4:], " ")
+	if !strings.Contains(hookCmd, "pane_dead") {
+		t.Error("pane-died hook should check #{pane_dead} on pane 0")
+	}
+	if !strings.Contains(hookCmd, "kill-session") {
+		t.Error("pane-died hook should kill the session when pane 0 is dead")
+	}
+	if !strings.Contains(hookCmd, "test-loop") {
+		t.Error("pane-died hook should target the correct session")
 	}
 }
 

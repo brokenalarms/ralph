@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Verifies that each log level emits the correct ANSI color and [o] actor prefix
@@ -80,15 +81,59 @@ func TestPhaseFormatting(t *testing.T) {
 	}
 }
 
-// Verifies that log output includes HH:MM:SS timestamps, matching ralph.sh's _ts().
-func TestTimestamp(t *testing.T) {
+// Verifies that timestamps appear at the end of the line (not the beginning),
+// and only when the second changes from the previous line.
+func TestTimestampAtEndOfLine(t *testing.T) {
 	var buf bytes.Buffer
-	l := &Logger{out: &buf, logFile: &buf}
-	l.Log("", "test")
+	fixed := time.Date(2026, 3, 25, 14, 30, 45, 0, time.UTC)
+	l := &Logger{out: &buf, logFile: &buf, clock: func() time.Time { return fixed }}
+
+	l.Log("", "first message")
 	got := buf.String()
-	// Timestamp format is HH:MM:SS — check for two colons in first 8 chars.
-	if len(got) < 8 || got[2] != ':' || got[5] != ':' {
-		t.Errorf("expected HH:MM:SS timestamp prefix, got: %q", got[:min(20, len(got))])
+
+	// Timestamp should be at the end, not the beginning.
+	if strings.HasPrefix(got, "14:30:45") {
+		t.Errorf("timestamp should not be at start of line, got: %q", got)
+	}
+	if !strings.Contains(got, "14:30:45") {
+		t.Errorf("first line should include timestamp, got: %q", got)
+	}
+	if !strings.HasSuffix(strings.TrimRight(got, "\n"), "14:30:45"+Reset) {
+		t.Errorf("timestamp should be at end of line, got: %q", got)
+	}
+
+	// Second line at same second should NOT have a timestamp.
+	buf.Reset()
+	l.Log("", "second message")
+	got = buf.String()
+	if strings.Contains(got, "14:30:45") {
+		t.Errorf("same-second line should not include timestamp, got: %q", got)
+	}
+
+	// Third line at a new second SHOULD have a timestamp.
+	buf.Reset()
+	next := fixed.Add(time.Second)
+	l.clock = func() time.Time { return next }
+	l.Log("", "third message")
+	got = buf.String()
+	if !strings.Contains(got, "14:30:46") {
+		t.Errorf("new-second line should include timestamp, got: %q", got)
+	}
+}
+
+// Verifies that Phase lines also use trailing timestamps.
+func TestPhaseTimestampAtEnd(t *testing.T) {
+	var buf bytes.Buffer
+	fixed := time.Date(2026, 3, 25, 10, 0, 0, 0, time.UTC)
+	l := &Logger{out: &buf, logFile: &buf, clock: func() time.Time { return fixed }}
+	l.Phase("starting")
+	got := buf.String()
+
+	if strings.HasPrefix(got, "10:00:00") {
+		t.Errorf("Phase timestamp should not be at start, got: %q", got)
+	}
+	if !strings.HasSuffix(strings.TrimRight(got, "\n"), "10:00:00"+Reset) {
+		t.Errorf("Phase timestamp should be at end, got: %q", got)
 	}
 }
 

@@ -936,7 +936,7 @@ func TestNoRefactorEnvVar(t *testing.T) {
 }
 
 // Verifies --refactor-threshold sets the quality score threshold and
-// defaults to 20 (matching DefaultRefactorThreshold).
+// defaults to 200.
 func TestRefactorThresholdFlag(t *testing.T) {
 	t.Setenv("RALPH_REFACTOR_THRESHOLD", "")
 
@@ -944,8 +944,8 @@ func TestRefactorThresholdFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.RefactorThreshold != 20 {
-		t.Errorf("RefactorThreshold = %d, want 20 (default)", cfg.RefactorThreshold)
+	if cfg.RefactorThreshold != 200 {
+		t.Errorf("RefactorThreshold = %d, want 200 (default)", cfg.RefactorThreshold)
 	}
 
 	cfg, err = Parse([]string{"--refactor-threshold", "30"})

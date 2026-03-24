@@ -127,7 +127,7 @@ var Flags = []FlagDef{
 	},
 	{
 		Long: "--refactor-threshold", MetaVar: "<N>",
-		Help: "Quality score threshold for refactoring", Default: "20",
+		Help: "Quality score threshold for refactoring", Default: "200",
 		EnvVar: "RALPH_REFACTOR_THRESHOLD", ConfigKey: "refactor_threshold",
 		Kind: KindInt, TrackCLI: true,
 		Apply: func(cfg *Config, val string) error {
