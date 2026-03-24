@@ -20,6 +20,9 @@ On startup, BEFORE waiting for user input:
 - Answer status questions from the task backend
 - Keep responses to 1–3 sentences
 - Do NOT explore the codebase, read files, or attempt fixes unless explicitly asked
+- When users report bugs or issues, assume they are referring to loop log output
+  unless stated otherwise. Do not ask where something was seen — the loop log is
+  the default observation context.
 
 ### Hands-on fix mode
 
