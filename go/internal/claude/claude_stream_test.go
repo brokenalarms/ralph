@@ -159,6 +159,37 @@ func TestFormatToolUse_NonReflectionWrite(t *testing.T) {
 	}
 }
 
+// Verifies that multi-line Bash commands (heredocs, inline scripts) show
+// only the first line of the command, not the entire body.
+func TestFormatToolUse_MultiLineBashTruncated(t *testing.T) {
+	cmd := "node -e '\nconst x = 1;\nconsole.log(x);\nprocess.exit(0);\n'"
+	c := streamContent{
+		Type:  "tool_use",
+		Name:  "Bash",
+		Input: map[string]interface{}{"command": cmd},
+	}
+	got := formatToolUse(c)
+	if strings.Contains(got, "const x") {
+		t.Errorf("multi-line Bash should not include body lines, got: %q", got)
+	}
+	if !strings.HasPrefix(got, "[Bash] node -e '") {
+		t.Errorf("should show first line with [Bash] prefix, got: %q", got)
+	}
+}
+
+// Verifies that single-line Bash commands pass through unchanged.
+func TestFormatToolUse_SingleLineBash(t *testing.T) {
+	c := streamContent{
+		Type:  "tool_use",
+		Name:  "Bash",
+		Input: map[string]interface{}{"command": "go test ./..."},
+	}
+	got := formatToolUse(c)
+	if got != "[Bash] go test ./..." {
+		t.Errorf("single-line Bash should pass through, got: %q", got)
+	}
+}
+
 // Verifies that markdown bold is stripped from output so the terminal
 // shows clean text without literal asterisks.
 func TestStripMarkdown(t *testing.T) {

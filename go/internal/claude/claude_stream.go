@@ -86,6 +86,8 @@ func extractAssistantText(msg *streamMsg) string {
 }
 
 // formatToolUse returns a short summary of a tool invocation.
+// Multi-line values (e.g. Bash commands with heredocs or inline scripts)
+// are truncated to just the first line.
 func formatToolUse(c streamContent) string {
 	if summary, ok := reflectionSummary(c); ok {
 		return "[" + c.Name + "] " + summary
@@ -96,11 +98,20 @@ func formatToolUse(c streamContent) string {
 	} {
 		if v, ok := c.Input[key]; ok {
 			if s, ok := v.(string); ok && s != "" {
-				return "[" + c.Name + "] " + s
+				return "[" + c.Name + "] " + firstLine(s)
 			}
 		}
 	}
 	return "[" + c.Name + "]"
+}
+
+// firstLine returns everything up to the first newline, or the whole
+// string if it contains no newlines.
+func firstLine(s string) string {
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		return s[:idx]
+	}
+	return s
 }
 
 const maxReflectionSummary = 80
