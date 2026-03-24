@@ -152,7 +152,7 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 			log.Error("", "Failed to create .ralph dir: %v", err)
 			return 1
 		}
-		return handleTmux(cfg, scriptPath, sub.Args, ralphDir, log)
+		return handleTmux(cfg, scriptPath, sub.Args, ralphDir, false, log)
 	}
 
 	dirs := workctx.New(cfg.ProjectDir, promptsDir)
@@ -227,7 +227,7 @@ func handleCommander(sub config.Subcommand, log *logging.Logger) int {
 		allArgs = append([]string{"command", sub.Dir}, sub.Args...)
 	}
 
-	return handleTmuxCommander(cfg, scriptPath, allArgs, ralphDir, log)
+	return handleTmux(cfg, scriptPath, allArgs, ralphDir, true, log)
 }
 
 // handleTask launches an interactive Claude session with the task manager prompt.

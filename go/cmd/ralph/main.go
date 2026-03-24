@@ -416,59 +416,11 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 	}
 }
 
-func handleTmuxCommander(cfg config.Config, scriptPath string, args []string, ralphDir string, log *logging.Logger) int {
+func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir string, commander bool, log *logging.Logger) int {
 	if !tmux.Available() {
 		log.Error("", "tmux not found on PATH")
 		return 1
 	}
-
-	ralphCmd := tmux.BuildRalphCmd(scriptPath, args)
-	taskCmd := tmux.BuildTaskCmd(scriptPath, cfg.ProjectDir)
-
-	sess := &tmux.Session{
-		Name:        tmux.SessionName(cfg.ProjectDir),
-		ProjectDir:  cfg.ProjectDir,
-		RalphDir:    ralphDir,
-		RawLogPath:  filepath.Join(ralphDir, "raw.log"),
-		ScriptPath:  scriptPath,
-		RalphCmd:  ralphCmd,
-		TaskCmd:   taskCmd,
-		Commander: true,
-	}
-
-	if err := sess.Setup(); err != nil {
-		log.Error("", "Tmux setup failed: %v", err)
-		return 1
-	}
-
-	stopTitle := make(chan struct{})
-	var stopOnce sync.Once
-	closeTitle := func() { stopOnce.Do(func() { close(stopTitle) }) }
-	go sess.PaneTitle().Run(stopTitle)
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		closeTitle()
-		sess.Kill()
-	}()
-
-	if err := sess.Attach(); err != nil {
-		closeTitle()
-		return 1
-	}
-	closeTitle()
-	return 0
-}
-
-func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir string, log *logging.Logger) int {
-	if !tmux.Available() {
-		log.Error("", "tmux not found on PATH")
-		return 1
-	}
-
-	ralphCmd := tmux.BuildRalphCmd(scriptPath, args)
 
 	sess := &tmux.Session{
 		Name:       tmux.SessionName(cfg.ProjectDir),
@@ -476,7 +428,11 @@ func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir st
 		RalphDir:   ralphDir,
 		RawLogPath: filepath.Join(ralphDir, "raw.log"),
 		ScriptPath: scriptPath,
-		RalphCmd:   ralphCmd,
+		RalphCmd:   tmux.BuildRalphCmd(scriptPath, args),
+		Commander:  commander,
+	}
+	if commander {
+		sess.TaskCmd = tmux.BuildTaskCmd(scriptPath, cfg.ProjectDir)
 	}
 
 	if err := sess.Setup(); err != nil {
@@ -504,5 +460,3 @@ func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir st
 	closeTitle()
 	return 0
 }
-
-
