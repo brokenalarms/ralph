@@ -183,6 +183,9 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	}
 
 	opts := m.mergeOpts()
+	if _, prTitle, titleErr := gh.FindPR(m.WorktreeBranch, m.WorkDir); titleErr == nil && prTitle != "" {
+		opts.Subject = fmt.Sprintf("%s (#%s)", prTitle, prNumber)
+	}
 	mergeOutput, mergeErr := gh.MergePR(prNumber, repoURL, opts)
 	if mergeErr == nil {
 		return m.postMergeUpdate(prNumber)
