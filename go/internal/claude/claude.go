@@ -405,7 +405,7 @@ func (r *Runner) startStreamFilter(cfg RunConfig, stop <-chan struct{}) <-chan s
 
 	go func() {
 		defer close(done)
-		filterStreamJSON(cfg.RawLog, cfg.LogFile, stop)
+		filterStreamJSON(cfg.RawLog, cfg.LogFile, cfg.WorkDir, stop)
 	}()
 
 	return done

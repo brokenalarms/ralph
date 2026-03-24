@@ -446,7 +446,7 @@ func TestFilterStreamJSON_TailsFile(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		filterStreamJSON(rawPath, logPath, stop)
+		filterStreamJSON(rawPath, logPath, "", stop)
 	}()
 
 	// Append a stream-json event after the filter has started.
@@ -486,7 +486,7 @@ func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		filterStreamJSON(rawPath, logPath, stop)
+		filterStreamJSON(rawPath, logPath, "", stop)
 	}()
 
 	time.Sleep(200 * time.Millisecond)
@@ -529,7 +529,7 @@ func TestFilterStreamJSON_DiagnosisBanner(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		filterStreamJSON(rawPath, logPath, stop)
+		filterStreamJSON(rawPath, logPath, "", stop)
 	}()
 
 	time.Sleep(200 * time.Millisecond)
@@ -582,7 +582,7 @@ func TestFilterStreamJSON_BatchesToolCalls(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		filterStreamJSON(rawPath, logPath, stop)
+		filterStreamJSON(rawPath, logPath, "", stop)
 	}()
 
 	time.Sleep(200 * time.Millisecond)
@@ -616,6 +616,49 @@ func TestFilterStreamJSON_BatchesToolCalls(t *testing.T) {
 	}
 	if !strings.Contains(content, "[r] analyzing results") {
 		t.Errorf("text should flush batch and appear after, got: %q", content)
+	}
+}
+
+// Verifies that filterStreamJSON strips the workDir prefix from absolute
+// paths in tool-use events, producing relative paths in log output.
+func TestFilterStreamJSON_ShortensAbsolutePaths(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+
+	os.WriteFile(rawPath, nil, 0o644)
+
+	workDir := "/Users/daniel/Developer/ralph/.ralph/worktrees/ralph-20260323-01"
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		filterStreamJSON(rawPath, logPath, workDir, stop)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/Users/daniel/Developer/ralph/.ralph/worktrees/ralph-20260323-01/go/internal/claude/claude_stream.go"}}]}}`)
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := ansiRe.ReplaceAllString(string(got), "")
+
+	if strings.Contains(content, "/Users/daniel") {
+		t.Errorf("should not contain absolute path, got: %q", content)
+	}
+	if !strings.Contains(content, "go/internal/claude/claude_stream.go") {
+		t.Errorf("should contain relative path, got: %q", content)
 	}
 }
 
@@ -788,7 +831,7 @@ func TestFilterStreamJSON_SignalHighlight(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		filterStreamJSON(rawPath, logPath, stop)
+		filterStreamJSON(rawPath, logPath, "", stop)
 	}()
 
 	time.Sleep(200 * time.Millisecond)
@@ -888,6 +931,66 @@ func TestFormatOutput_DifferentSignalsNotSuppressed(t *testing.T) {
 	lines2 := f.FlushPending()
 	if len(lines2) != 1 {
 		t.Fatalf("different signal: expected 1 line, got %d", len(lines2))
+	}
+}
+
+// Verifies that when workDir is set, absolute paths in tool use lines are
+// shortened to relative paths (strips the worktree prefix).
+func TestFormatOutput_ShortensAbsolutePaths(t *testing.T) {
+	f := &StreamFormatter{
+		workDir: "/Users/daniel/Developer/ralph/.ralph/worktrees/ralph-20260323-01",
+	}
+
+	lines := f.FormatOutput("[Edit] /Users/daniel/Developer/ralph/.ralph/worktrees/ralph-20260323-01/go/internal/claude/claude_stream.go")
+	lines = append(lines, f.FlushPending()...)
+
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+	plain := ansiRe.ReplaceAllString(lines[0], "")
+	if strings.Contains(plain, "/Users/daniel") {
+		t.Errorf("should not contain absolute path, got: %q", plain)
+	}
+	if !strings.Contains(plain, "go/internal/claude/claude_stream.go") {
+		t.Errorf("should contain relative path, got: %q", plain)
+	}
+}
+
+// Verifies that path shortening also applies to non-tool prose lines
+// (e.g. when Claude mentions a file path in reasoning text).
+func TestFormatOutput_ShortensProsePaths(t *testing.T) {
+	f := &StreamFormatter{
+		workDir: "/tmp/worktree",
+	}
+
+	lines := f.FormatOutput("Reading file /tmp/worktree/src/main.go for context")
+	lines = append(lines, f.FlushPending()...)
+
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+	plain := ansiRe.ReplaceAllString(lines[0], "")
+	if strings.Contains(plain, "/tmp/worktree/") {
+		t.Errorf("should strip workDir prefix, got: %q", plain)
+	}
+	if !strings.Contains(plain, "src/main.go") {
+		t.Errorf("should keep relative path, got: %q", plain)
+	}
+}
+
+// Verifies that when workDir is empty, paths are left unchanged.
+func TestFormatOutput_NoWorkDir_PathsUnchanged(t *testing.T) {
+	f := &StreamFormatter{}
+
+	lines := f.FormatOutput("[Edit] /absolute/path/to/file.go")
+	lines = append(lines, f.FlushPending()...)
+
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+	plain := ansiRe.ReplaceAllString(lines[0], "")
+	if !strings.Contains(plain, "/absolute/path/to/file.go") {
+		t.Errorf("path should be unchanged when workDir empty, got: %q", plain)
 	}
 }
 

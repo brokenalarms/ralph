@@ -14,7 +14,7 @@ func stripANSI(s string) string {
 // Batchable tool calls are not emitted immediately — they accumulate
 // until flushed by non-batchable content or window expiry.
 func TestToolBatcher_AccumulatesReadOnlyTools(t *testing.T) {
-	b := NewToolBatcher(5 * time.Second)
+	b := NewToolBatcher(5*time.Second, "")
 	out := b.ProcessLine("[Read] /some/path/loop.go")
 	if len(out) != 0 {
 		t.Errorf("batchable tool should not emit immediately, got %v", out)
@@ -28,7 +28,7 @@ func TestToolBatcher_AccumulatesReadOnlyTools(t *testing.T) {
 // Non-batchable text flushes the accumulated batch. The text itself is
 // buffered by the formatter until the next flush boundary.
 func TestToolBatcher_FlushesOnText(t *testing.T) {
-	b := NewToolBatcher(5 * time.Second)
+	b := NewToolBatcher(5*time.Second, "")
 	b.ProcessLine("[Read] /path/to/loop.go")
 	b.ProcessLine("[Read] /path/to/git.go")
 	b.ProcessLine("[Grep] checklist")
@@ -55,7 +55,7 @@ func TestToolBatcher_FlushesOnText(t *testing.T) {
 
 // Read and Glob args show just the filename, not the full path.
 func TestToolBatcher_ReadGlobBasename(t *testing.T) {
-	b := NewToolBatcher(5 * time.Second)
+	b := NewToolBatcher(5*time.Second, "")
 	b.ProcessLine("[Read] /very/long/path/to/config.go")
 	b.ProcessLine("[Glob] /some/dir/**/*.ts")
 
@@ -75,7 +75,7 @@ func TestToolBatcher_ReadGlobBasename(t *testing.T) {
 
 // Grep args pass through as-is (they're search patterns, not paths).
 func TestToolBatcher_GrepKeepsPattern(t *testing.T) {
-	b := NewToolBatcher(5 * time.Second)
+	b := NewToolBatcher(5*time.Second, "")
 	b.ProcessLine("[Grep] checklist_")
 	b.ProcessLine("[Grep] TASK_BACKEND")
 
@@ -91,7 +91,7 @@ func TestToolBatcher_GrepKeepsPattern(t *testing.T) {
 
 // Edit and other non-batchable tools pass through via the formatter buffer.
 func TestToolBatcher_EditPassesThrough(t *testing.T) {
-	b := NewToolBatcher(5 * time.Second)
+	b := NewToolBatcher(5*time.Second, "")
 	b.ProcessLine("[Edit] /path/to/file.go")
 	out := b.Flush()
 	if len(out) != 1 {
@@ -106,7 +106,7 @@ func TestToolBatcher_EditPassesThrough(t *testing.T) {
 // Bash commands flush any pending batch. The Bash line itself is buffered
 // by the formatter until the next flush boundary.
 func TestToolBatcher_BashFlushesAndPassesThrough(t *testing.T) {
-	b := NewToolBatcher(5 * time.Second)
+	b := NewToolBatcher(5*time.Second, "")
 	b.ProcessLine("[Read] /path/file.go")
 	out := b.ProcessLine("[Bash] go test ./...")
 	out = append(out, b.Flush()...)
@@ -127,7 +127,7 @@ func TestToolBatcher_BashFlushesAndPassesThrough(t *testing.T) {
 // Different tool types within a batch get separate summary lines.
 // With 3 tool types, the timestamp appears on its own header line.
 func TestToolBatcher_SeparateLinePerToolType(t *testing.T) {
-	b := NewToolBatcher(5 * time.Second)
+	b := NewToolBatcher(5*time.Second, "")
 	b.ProcessLine("[Read] /path/a.go")
 	b.ProcessLine("[Grep] pattern1")
 	b.ProcessLine("[Glob] /dir/**/*.go")
@@ -159,7 +159,7 @@ func TestToolBatcher_SeparateLinePerToolType(t *testing.T) {
 
 // FlushIfExpired only emits when the window has elapsed.
 func TestToolBatcher_FlushIfExpired(t *testing.T) {
-	b := NewToolBatcher(50 * time.Millisecond)
+	b := NewToolBatcher(50*time.Millisecond, "")
 	b.ProcessLine("[Read] /path/file.go")
 
 	// Immediately — should not flush batch (formatter stale flush may or may not fire).
@@ -181,7 +181,7 @@ func TestToolBatcher_FlushIfExpired(t *testing.T) {
 
 // Flush on empty batcher returns nil.
 func TestToolBatcher_FlushEmpty(t *testing.T) {
-	b := NewToolBatcher(5 * time.Second)
+	b := NewToolBatcher(5*time.Second, "")
 	out := b.Flush()
 	if out != nil {
 		t.Errorf("flush on empty batcher should return nil, got %v", out)
@@ -190,7 +190,7 @@ func TestToolBatcher_FlushEmpty(t *testing.T) {
 
 // Window expiry during ProcessLine flushes old batch before accumulating new tool.
 func TestToolBatcher_WindowExpiryDuringProcess(t *testing.T) {
-	b := NewToolBatcher(50 * time.Millisecond)
+	b := NewToolBatcher(50*time.Millisecond, "")
 	b.ProcessLine("[Read] /path/old.go")
 
 	time.Sleep(60 * time.Millisecond)

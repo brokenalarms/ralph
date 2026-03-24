@@ -89,10 +89,14 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 
 	case "filter-stream":
 		if len(sub.Args) == 0 {
-			log.Error("", "Usage: ralph filter-stream <rawlog>")
+			log.Error("", "Usage: ralph filter-stream <rawlog> [workdir]")
 			return 1
 		}
-		claude.FilterStream(sub.Args[0])
+		var workDir string
+		if len(sub.Args) > 1 {
+			workDir = sub.Args[1]
+		}
+		claude.FilterStream(sub.Args[0], workDir)
 		return 0
 	}
 

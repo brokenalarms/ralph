@@ -193,7 +193,7 @@ func (s *Session) createCommanderSession() error {
 }
 
 func (s *Session) filterStreamCmd() string {
-	return fmt.Sprintf("%s filter-stream %s", shellQuote(s.ScriptPath), shellQuote(s.RawLogPath))
+	return fmt.Sprintf("%s filter-stream %s %s", shellQuote(s.ScriptPath), shellQuote(s.RawLogPath), shellQuote(s.ProjectDir))
 }
 
 func (s *Session) applySessionOptions() {
