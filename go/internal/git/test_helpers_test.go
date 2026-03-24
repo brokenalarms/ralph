@@ -34,6 +34,7 @@ type stubGitHub struct {
 	prTitle             string
 	searchPRNumber      string
 	prDiff              string
+	createdPR           string
 }
 
 func (s *stubGitHub) Available() bool { return s.available }
@@ -41,6 +42,9 @@ func (s *stubGitHub) FindOpenPR(branch, repoURL string) (string, error) {
 	return s.openPR, s.findPRErr
 }
 func (s *stubGitHub) CreatePR(opts CreatePROpts) error {
+	if s.createPRErr == nil && s.createdPR != "" {
+		s.openPR = s.createdPR
+	}
 	return s.createPRErr
 }
 func (s *stubGitHub) EditPR(prNumber, repoURL, title string) error {
