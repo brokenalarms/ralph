@@ -288,6 +288,13 @@ func TestApplySessionOptions_PaneDiedHook(t *testing.T) {
 	if !strings.Contains(hookCmd, "test-loop") {
 		t.Error("pane-died hook should target the correct session")
 	}
+
+	// Regression: root-level key bindings steal keypresses from all panes.
+	for _, args := range calls {
+		if len(args) >= 3 && args[0] == "bind-key" && args[1] == "-T" && args[2] == "root" {
+			t.Errorf("applySessionOptions must not use root-level bind-key, found: %v", args)
+		}
+	}
 }
 
 // Verifies that the bd plan watcher renders a simple "X/Y done" counter
