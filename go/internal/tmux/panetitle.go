@@ -27,8 +27,6 @@ type PaneTitle struct {
 
 // NewPaneTitle creates a PaneTitle bound to the given tmux session name.
 // ralphDir is the .ralph directory where signal files are written by the loop.
-// NewPaneTitle creates a PaneTitle bound to the given tmux session name.
-// ralphDir is the .ralph directory where signal files are written by the loop.
 // streamPane is the tmux pane index for the stream pane (1 in standard, 2 in commander).
 func NewPaneTitle(session, ralphDir string, streamPane int) *PaneTitle {
 	now := time.Now()
