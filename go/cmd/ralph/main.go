@@ -211,14 +211,14 @@ func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, sta
 
 	// Check for uncommitted changes (skip on resume).
 	if !fileExists(stateFile) {
-		if git.IsGitRepo(cfg.ProjectDir) && hasUncommittedChanges(cfg.ProjectDir) {
+		if git.IsGitRepo(cfg.ProjectDir) && git.HasUncommittedChanges(cfg.ProjectDir) {
 			log.Error("", "uncommitted changes in %s — please commit or stash before running ralph.", cfg.ProjectDir)
 			return false, 1
 		}
 	}
 
 	// Ensure .ralph is gitignored.
-	ensureGitignored(cfg.ProjectDir, ".ralph")
+	git.EnsureGitignored(cfg.ProjectDir, ".ralph")
 
 	// Clean up orphaned worktrees from previous runs.
 	git.PruneOrphanedWorktrees(cfg.ProjectDir, ralphDir, log)

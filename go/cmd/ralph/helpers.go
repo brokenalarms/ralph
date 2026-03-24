@@ -53,13 +53,6 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func hasUncommittedChanges(dir string) bool {
-	cmd1 := exec.Command("git", "-C", dir, "diff", "--quiet")
-	cmd2 := exec.Command("git", "-C", dir, "diff", "--cached", "--quiet")
-	return cmd1.Run() != nil || cmd2.Run() != nil
-}
-
-
 func promptRebaseRecovery(ctx context.Context, wait bool) func(err error) git.RebaseRecovery {
 	return func(err error) git.RebaseRecovery {
 		if wait {
@@ -198,30 +191,3 @@ func clearSignalFiles(ralphDir string) {
 	}
 }
 
-func ensureGitignored(projectDir, entry string) {
-	gitignorePath := fmt.Sprintf("%s/.gitignore", projectDir)
-	existing := ""
-	if data, err := os.ReadFile(gitignorePath); err == nil {
-		existing = string(data)
-	}
-
-	found := false
-	for _, line := range strings.Split(existing, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == entry || trimmed == entry+"/" || trimmed == entry+"/*" {
-			found = true
-			break
-		}
-	}
-	if found {
-		return
-	}
-
-	existing += entry + "\n"
-	os.WriteFile(gitignorePath, []byte(existing), 0o644)
-
-	if git.IsGitRepo(projectDir) {
-		exec.Command("git", "-C", projectDir, "add", ".gitignore").Run()
-		exec.Command("git", "-C", projectDir, "commit", "-m", "Add "+entry+" to .gitignore").Run()
-	}
-}
