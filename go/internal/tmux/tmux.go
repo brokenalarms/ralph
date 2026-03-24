@@ -197,10 +197,18 @@ func (s *Session) filterStreamCmd() string {
 }
 
 func (s *Session) applySessionOptions() {
-	tmuxCmd("set-option", "-t", s.Name, "pane-border-status", "top")                                                                    //nolint:errcheck
+	tmuxCmd("set-option", "-t", s.Name, "pane-border-status", "top")                                                  //nolint:errcheck
 	tmuxCmd("set-option", "-t", s.Name, "pane-border-format", "#{?pane_dead, #{pane_title} (dead) , #{pane_title} }") //nolint:errcheck
 	tmuxCmd("set-option", "-t", s.Name, "remain-on-exit", "on")                                                       //nolint:errcheck
 	tmuxCmd("set-option", "-t", s.Name, "set-titles", "off")                                                           //nolint:errcheck
+
+	// Auto-kill the session when the ralph loop pane (pane 0) dies.
+	// This replaces the old root-level q binding that stole keypresses globally.
+	hookCmd := fmt.Sprintf(
+		"if-shell \"tmux display-message -t '%s:.0' -p '#{pane_dead}' | grep -q 1\" \"kill-session -t '%s'\"",
+		s.Name, s.Name,
+	)
+	tmuxCmd("set-hook", "-t", s.Name, "pane-died", hookCmd) //nolint:errcheck
 }
 
 func (s *Session) writePlanWatcher() error {
