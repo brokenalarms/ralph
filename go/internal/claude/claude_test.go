@@ -22,10 +22,14 @@ type testLogger struct {
 	successes []string
 }
 
-func (l *testLogger) Log(format string, args ...any)     { l.logs = append(l.logs, fmt.Sprintf(format, args...)) }
-func (l *testLogger) Warn(format string, args ...any)    {}
-func (l *testLogger) Error(format string, args ...any)   {}
-func (l *testLogger) Success(format string, args ...any) { l.successes = append(l.successes, fmt.Sprintf(format, args...)) }
+func (l *testLogger) Log(_ string, format string, args ...any) {
+	l.logs = append(l.logs, fmt.Sprintf(format, args...))
+}
+func (l *testLogger) Warn(_ string, _ string, _ ...any)    {}
+func (l *testLogger) Error(_ string, _ string, _ ...any)   {}
+func (l *testLogger) Success(_ string, format string, args ...any) {
+	l.successes = append(l.successes, fmt.Sprintf(format, args...))
+}
 
 // --- Signal file tests ---
 
@@ -295,7 +299,7 @@ func TestStartStreamFilter_NoExternalProcesses(t *testing.T) {
 
 	got, _ := os.ReadFile(logPath)
 	plain := ansiRe.ReplaceAllString(string(got), "")
-	if !strings.Contains(plain, "[agent] go filter works") {
+	if !strings.Contains(plain, "[r] go filter works") {
 		t.Errorf("expected Go filter output, got: %q", string(got))
 	}
 

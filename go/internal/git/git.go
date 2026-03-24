@@ -23,9 +23,9 @@ type StateStore interface {
 // Log is the logging interface used by Manager, matching the subset of
 // logging.Logger that git operations need.
 type Log interface {
-	Log(format string, args ...any)
-	Warn(format string, args ...any)
-	Error(format string, args ...any)
+	Log(domain string, format string, args ...any)
+	Warn(domain string, format string, args ...any)
+	Error(domain string, format string, args ...any)
 }
 
 // Manager handles git worktree creation, branch rotation, and renaming.
@@ -132,7 +132,7 @@ func (m *Manager) SetupWorktree(ctx context.Context) error {
 	if !m.refExists(m.ProjectDir, "origin/"+defaultBranch) &&
 		m.refExists(m.ProjectDir, "HEAD") &&
 		m.remoteExists() {
-		m.Logger.Log("Pushing %s to origin (empty remote — ensures correct default branch)", defaultBranch)
+		m.Logger.Log("git", "Pushing %s to origin (empty remote — ensures correct default branch)", defaultBranch)
 		m.gitCmdCtx(ctx, m.ProjectDir, "push", "-u", "origin", defaultBranch)
 	}
 
@@ -144,7 +144,7 @@ func (m *Manager) SetupWorktree(ctx context.Context) error {
 	}
 
 	m.gitCmd(m.WorkDir, "config", "rebase.updateRefs", "true")
-	m.Logger.Log("Worktree: %s (branch: %s)", m.WorkDir, m.WorktreeBranch)
+	m.Logger.Log("git", "Worktree: %s (branch: %s)", m.WorkDir, m.WorktreeBranch)
 
 	if m.State != nil {
 		_ = m.State.Write("worktree_dir", m.WorkDir)
@@ -179,15 +179,15 @@ func (m *Manager) tryResumeWorktree() error {
 		}
 	}
 
-	m.Logger.Log("Resuming worktree: %s", m.WorkDir)
+	m.Logger.Log("git", "Resuming worktree: %s", m.WorkDir)
 
 	defaultBranch := m.detectDefaultBranch()
 	if err := m.gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
-		m.Logger.Warn("Failed to fetch origin/%s on resume: %v", defaultBranch, err)
+		m.Logger.Warn("git", "Failed to fetch origin/%s on resume: %v", defaultBranch, err)
 	}
 
 	if m.resumedBranchIsStale(defaultBranch) {
-		m.Logger.Log("Stale branch detected on resume — resetting to origin/%s", defaultBranch)
+		m.Logger.Log("git", "Stale branch detected on resume — resetting to origin/%s", defaultBranch)
 		return m.resetResumedWorktree(defaultBranch)
 	}
 
@@ -207,7 +207,7 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) {
 	defaultBranch := m.detectDefaultBranch()
 
 	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
-		m.Logger.Warn("Failed to fetch origin/%s: %v", defaultBranch, err)
+		m.Logger.Warn("git", "Failed to fetch origin/%s: %v", defaultBranch, err)
 		return
 	}
 
@@ -223,25 +223,25 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) {
 	dirty := gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
 		m.gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
 	if dirty {
-		m.Logger.Log("Stashing uncommitted changes before rebase...")
+		m.Logger.Log("git", "Stashing uncommitted changes before rebase...")
 		m.gitCmd(m.WorkDir, "stash", "push", "-m", "ralph-autostash")
 	}
 
 	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "origin/"+defaultBranch); err != nil {
 		if resolved := m.autoResolveAndContinue(ctx, defaultBranch); !resolved {
-			m.Logger.Warn("%s Rebase onto %s failed with unresolvable conflicts — aborting", logging.BranchTag(defaultBranch), defaultBranch)
+			m.Logger.Warn("git", "%s Rebase onto %s failed with unresolvable conflicts — aborting", logging.BranchTag(defaultBranch), defaultBranch)
 			m.gitCmd(m.WorkDir, "rebase", "--abort")
 		}
 	}
 
 	if dirty {
 		if err := m.gitCmdErr(m.WorkDir, "stash", "pop"); err != nil {
-			m.Logger.Warn("Stash pop conflict — committing stash as WIP")
+			m.Logger.Warn("git", "Stash pop conflict — committing stash as WIP")
 			m.gitCmd(m.WorkDir, "checkout", "--theirs", ".")
 			m.gitCmd(m.WorkDir, "add", "-A")
 			m.gitCmd(m.WorkDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
 		} else {
-			m.Logger.Log("Re-applied stashed changes")
+			m.Logger.Log("git", "Re-applied stashed changes")
 		}
 	}
 }
@@ -259,7 +259,7 @@ func (m *Manager) cleanTempBranch() error {
 
 	existingWt := m.findWorktreeForBranch(m.ProjectDir, m.WorktreeBranch)
 	if existingWt != "" && strings.Contains(existingWt, "/.ralph/worktrees/") {
-		m.Logger.Warn("Removing stale ralph worktree: %s", existingWt)
+		m.Logger.Warn("git", "Removing stale ralph worktree: %s", existingWt)
 		m.gitCmd(m.ProjectDir, "worktree", "remove", "--force", existingWt)
 		m.gitCmd(m.ProjectDir, "branch", "-D", m.WorktreeBranch)
 		return nil
@@ -324,9 +324,9 @@ func (m *Manager) RotateBranch() {
 			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
 		}
 		m.BranchRenamed = false
-		m.Logger.Log("Branch: %s (from previous iteration)", m.WorktreeBranch)
+		m.Logger.Log("git", "Branch: %s (from previous iteration)", m.WorktreeBranch)
 	} else {
-		m.Logger.Warn("Branch rotation failed, continuing on %s", m.WorktreeBranch)
+		m.Logger.Warn("git", "Branch rotation failed, continuing on %s", m.WorktreeBranch)
 	}
 }
 
@@ -552,7 +552,7 @@ func (m *Manager) TagTaskStart(taskID string) {
 	}
 	// Force-create to handle reruns of the same task
 	if err := m.gitCmdErr(m.WorkDir, "tag", "-f", tag); err == nil {
-		m.Logger.Log("Tag: %s", tag)
+		m.Logger.Log("git", "Tag: %s", tag)
 	}
 }
 
@@ -563,7 +563,7 @@ func (m *Manager) TagTaskEnd(taskID string) {
 		return
 	}
 	if err := m.gitCmdErr(m.WorkDir, "tag", "-f", tag); err == nil {
-		m.Logger.Log("Tag: %s", tag)
+		m.Logger.Log("git", "Tag: %s", tag)
 	}
 }
 
@@ -629,7 +629,7 @@ func PruneOrphanedWorktrees(projectDir, ralphDir string, logger Log) {
 			continue
 		}
 		if logger != nil {
-			logger.Log("Removing orphaned worktree directory: %s", dirPath)
+			logger.Log("git", "Removing orphaned worktree directory: %s", dirPath)
 		}
 		os.RemoveAll(dirPath)
 	}

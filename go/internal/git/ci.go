@@ -157,7 +157,7 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL string,
 			if time.Now().After(deadline) {
 				return nil, CIPending, fmt.Errorf("CI checks not available within %v: %w", timeout, err)
 			}
-			log.Log("CI checks not available yet for PR #%s, polling in %v...", prNumber, interval)
+			log.Log("ci", "CI checks not available yet for PR #%s, polling in %v...", prNumber, interval)
 			select {
 			case <-done:
 				return nil, CIPending, fmt.Errorf("interrupted")
@@ -169,19 +169,19 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL string,
 		status := evaluateChecks(checks)
 		switch status {
 		case CIPassed:
-			log.Log("CI checks passed for PR #%s", prNumber)
+			log.Log("ci", "CI checks passed for PR #%s", prNumber)
 			return checks, CIPassed, nil
 		case CIFailed:
-			log.Warn("CI checks failed for PR #%s", prNumber)
+			log.Warn("ci", "CI checks failed for PR #%s", prNumber)
 			return checks, CIFailed, nil
 		}
 
 		if time.Now().After(deadline) {
-			log.Warn("CI poll timeout reached for PR #%s", prNumber)
+			log.Warn("ci", "CI poll timeout reached for PR #%s", prNumber)
 			return checks, CIPending, fmt.Errorf("CI checks did not complete within %v", timeout)
 		}
 
-		log.Log("CI checks pending for PR #%s, polling in %v...", prNumber, interval)
+		log.Log("ci", "CI checks pending for PR #%s, polling in %v...", prNumber, interval)
 		select {
 		case <-done:
 			return nil, CIPending, fmt.Errorf("interrupted")

@@ -110,7 +110,7 @@ func TestStripMarkdown(t *testing.T) {
 // Verifies that FormatStreamLine adds a timestamp prefix and ANSI color codes
 // so output matches the format previously provided by the bash stream filter.
 func TestFormatStreamLine(t *testing.T) {
-	line := FormatStreamLine("[agent] [Read] /tmp/foo.go")
+	line := FormatStreamLine("[r] [Read] /tmp/foo.go")
 	plain := ansiRe.ReplaceAllString(line, "")
 
 	// Should have HH:MM:SS timestamp prefix.
@@ -119,13 +119,13 @@ func TestFormatStreamLine(t *testing.T) {
 	}
 
 	// Should contain the text content after stripping ANSI.
-	if !strings.Contains(plain, "[agent] [Read] /tmp/foo.go") {
+	if !strings.Contains(plain, "[r] [Read] /tmp/foo.go") {
 		t.Errorf("FormatStreamLine should preserve content, got: %q", plain)
 	}
 
-	// Should contain ANSI color codes for [agent] and [Read].
+	// Should contain ANSI color codes for [r] and [Read].
 	if !strings.Contains(line, "\033[0;36m") {
-		t.Error("FormatStreamLine should apply cyan to [agent]")
+		t.Error("FormatStreamLine should apply cyan to [r]")
 	}
 	if !strings.Contains(line, "\033[0;34m") {
 		t.Error("FormatStreamLine should apply blue to [Read]")
@@ -134,7 +134,7 @@ func TestFormatStreamLine(t *testing.T) {
 
 // Verifies that [done] gets green color in the formatted output.
 func TestFormatStreamLine_DoneColor(t *testing.T) {
-	line := FormatStreamLine("[agent] [done]")
+	line := FormatStreamLine("[r] [done]")
 	if !strings.Contains(line, "\033[0;32m") {
 		t.Error("FormatStreamLine should apply green to [done]")
 	}
@@ -143,14 +143,14 @@ func TestFormatStreamLine_DoneColor(t *testing.T) {
 // Verifies that FormatStreamLine does NOT include a per-line task ID prefix —
 // task identification is handled by a one-time separator banner instead.
 func TestFormatStreamLine_NoTaskIDPrefix(t *testing.T) {
-	line := FormatStreamLine("[agent] [Read] /tmp/foo.go")
+	line := FormatStreamLine("[r] [Read] /tmp/foo.go")
 	plain := ansiRe.ReplaceAllString(line, "")
 
 	if strings.Contains(plain, "ralph-") {
 		t.Errorf("FormatStreamLine should not include task ID, got: %q", plain)
 	}
-	if !strings.Contains(plain, "[agent]") {
-		t.Errorf("FormatStreamLine should include [agent] tag, got: %q", plain)
+	if !strings.Contains(plain, "[r]") {
+		t.Errorf("FormatStreamLine should include [r] tag, got: %q", plain)
 	}
 }
 
@@ -235,8 +235,8 @@ func TestFormatStreamOutput_NormalLine(t *testing.T) {
 		t.Fatalf("expected 1 line for normal text, got %d", len(lines))
 	}
 	plain := ansiRe.ReplaceAllString(lines[0], "")
-	if !strings.Contains(plain, "[agent] Reading file /tmp/foo.go") {
-		t.Errorf("normal line should have [agent] prefix, got: %q", plain)
+	if !strings.Contains(plain, "[r] Reading file /tmp/foo.go") {
+		t.Errorf("normal line should have [r] prefix, got: %q", plain)
 	}
 }
 
@@ -246,9 +246,9 @@ func TestStreamFormatter_GroupsSameTimestamp(t *testing.T) {
 	f := &StreamFormatter{}
 	ts := time.Now().Format("15:04:05")
 
-	line1 := f.FormatLine("[agent] first line")
-	line2 := f.FormatLine("[agent] second line")
-	line3 := f.FormatLine("[agent] third line")
+	line1 := f.FormatLine("[r] first line")
+	line2 := f.FormatLine("[r] second line")
+	line3 := f.FormatLine("[r] third line")
 
 	plain1 := ansiRe.ReplaceAllString(line1, "")
 	plain2 := ansiRe.ReplaceAllString(line2, "")
@@ -278,7 +278,7 @@ func TestStreamFormatter_GroupsSameTimestamp(t *testing.T) {
 func TestStreamFormatter_NewTimestampResetsGroup(t *testing.T) {
 	f := &StreamFormatter{lastTS: "12:00:00"}
 
-	line := f.FormatLine("[agent] new second")
+	line := f.FormatLine("[r] new second")
 	plain := ansiRe.ReplaceAllString(line, "")
 
 	// Should have a timestamp since lastTS differs from current time.
@@ -307,9 +307,9 @@ func TestStreamFormatter_FormatOutput_Groups(t *testing.T) {
 	}
 }
 
-// Verifies that startTailGoroutine follows new [agent]-prefixed lines
+// Verifies that startTailGoroutine follows new [r]-prefixed lines
 // appended to a file and stops cleanly when the stop channel is closed.
-// Non-[agent] lines (orchestrator messages) must NOT be forwarded to
+// Non-[r] lines (orchestrator messages) must NOT be forwarded to
 // stdout — the logger already writes those directly.
 func TestStartTailGoroutine_FollowsAndStops(t *testing.T) {
 	dir := t.TempDir()
@@ -319,13 +319,13 @@ func TestStartTailGoroutine_FollowsAndStops(t *testing.T) {
 	stop := make(chan struct{})
 	done := startTailGoroutine(logPath, stop)
 
-	// Append [agent]-prefixed and non-prefixed lines after goroutine starts.
+	// Append [r]-prefixed and non-prefixed lines after goroutine starts.
 	time.Sleep(200 * time.Millisecond)
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Fprintln(f, "[agent] hello from agent")
+	fmt.Fprintln(f, "[r] hello from agent")
 	fmt.Fprintln(f, "12:00:00 \033[0;36m[beads]\033[0m orchestrator message")
 	f.Close()
 
@@ -353,7 +353,7 @@ func TestStartTailGoroutine_NonexistentFile(t *testing.T) {
 	}
 }
 
-// Verifies that startTailGoroutine only forwards [agent]-prefixed lines to
+// Verifies that startTailGoroutine only forwards [r]-prefixed lines to
 // stdout, preventing orchestrator log messages from appearing twice (once from
 // the logger writing to stdout directly, and again from the tail goroutine).
 func TestStartTailGoroutine_FiltersNonAgentLines(t *testing.T) {
@@ -371,9 +371,9 @@ func TestStartTailGoroutine_FiltersNonAgentLines(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 	f, _ := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
-	fmt.Fprintln(f, "[agent] agent output line")
+	fmt.Fprintln(f, "[r] agent output line")
 	fmt.Fprintln(f, "12:00:00 \033[0;36m[beads]\033[0m orchestrator message")
-	fmt.Fprintln(f, "[agent] second agent line")
+	fmt.Fprintln(f, "[r] second agent line")
 	f.Close()
 
 	time.Sleep(300 * time.Millisecond)
@@ -385,11 +385,11 @@ func TestStartTailGoroutine_FiltersNonAgentLines(t *testing.T) {
 	os.Stdout = origStdout
 
 	output := string(captured)
-	if !strings.Contains(output, "[agent] agent output line") {
-		t.Errorf("expected [agent] lines to be forwarded, got: %q", output)
+	if !strings.Contains(output, "[r] agent output line") {
+		t.Errorf("expected [r] lines to be forwarded, got: %q", output)
 	}
-	if !strings.Contains(output, "[agent] second agent line") {
-		t.Errorf("expected second [agent] line to be forwarded, got: %q", output)
+	if !strings.Contains(output, "[r] second agent line") {
+		t.Errorf("expected second [r] line to be forwarded, got: %q", output)
 	}
 	if strings.Contains(output, "orchestrator message") {
 		t.Errorf("orchestrator messages should NOT be forwarded by tail goroutine, got: %q", output)
@@ -432,12 +432,12 @@ func TestFilterStreamJSON_TailsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	plain := ansiRe.ReplaceAllString(string(got), "")
-	if !strings.Contains(plain, "[agent] hello from claude") {
-		t.Errorf("loop.log should contain [agent]-prefixed filtered text, got: %q", string(got))
+	if !strings.Contains(plain, "[r] hello from claude") {
+		t.Errorf("loop.log should contain [r]-prefixed filtered text, got: %q", string(got))
 	}
 }
 
-// Verifies that filterStreamJSON prefixes each output line with [agent]
+// Verifies that filterStreamJSON prefixes each output line with [r]
 // so loop.log clearly distinguishes Claude's output from ralph's logger output.
 func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
 	dir := t.TempDir()
@@ -472,11 +472,11 @@ func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := ansiRe.ReplaceAllString(string(got), "")
-	if !strings.Contains(content, "[agent] [Read] foo.go") {
-		t.Errorf("batched Read should show basename with [agent] prefix, got: %q", content)
+	if !strings.Contains(content, "[r] [Read] foo.go") {
+		t.Errorf("batched Read should show basename with [r] prefix, got: %q", content)
 	}
-	if !strings.Contains(content, "[agent] some delta text") {
-		t.Errorf("delta text should have [agent] prefix, got: %q", content)
+	if !strings.Contains(content, "[r] some delta text") {
+		t.Errorf("delta text should have [r] prefix, got: %q", content)
 	}
 }
 
@@ -572,13 +572,13 @@ func TestFilterStreamJSON_BatchesToolCalls(t *testing.T) {
 	}
 	content := ansiRe.ReplaceAllString(string(got), "")
 
-	if !strings.Contains(content, "[agent] [Read] loop.go, git.go") {
+	if !strings.Contains(content, "[r] [Read] loop.go, git.go") {
 		t.Errorf("Read tools should be batched with basenames, got: %q", content)
 	}
-	if !strings.Contains(content, "[agent] [Grep] checklist_, TASK_BACKEND") {
+	if !strings.Contains(content, "[r] [Grep] checklist_, TASK_BACKEND") {
 		t.Errorf("Grep tools should be batched with patterns, got: %q", content)
 	}
-	if !strings.Contains(content, "[agent] analyzing results") {
+	if !strings.Contains(content, "[r] analyzing results") {
 		t.Errorf("text should flush batch and appear after, got: %q", content)
 	}
 }
@@ -594,7 +594,7 @@ func TestFormatOutput_TruncatesLongProse(t *testing.T) {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
 	plain := ansiRe.ReplaceAllString(lines[0], "")
-	// Line should be truncated: tsWidth(9) + "[agent] "(8) + content + "…"
+	// Line should be truncated: tsWidth(9) + "[r] "(4) + content + "…"
 	// Total rune count should not exceed maxLineWidth.
 	runeCount := utf8.RuneCountInString(plain)
 	if runeCount > maxLineWidth {
@@ -650,7 +650,7 @@ func TestFormatOutput_ShortProseUnchanged(t *testing.T) {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
 	plain := ansiRe.ReplaceAllString(lines[0], "")
-	if !strings.Contains(plain, "[agent] Reading the config file") {
+	if !strings.Contains(plain, "[r] Reading the config file") {
 		t.Errorf("short prose should pass through unchanged, got: %q", plain)
 	}
 	if strings.HasSuffix(plain, "…") {

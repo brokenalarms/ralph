@@ -3789,8 +3789,8 @@ func TestLoop_PushCalledAfterSignal(t *testing.T) {
 }
 
 // Orchestrator status messages ("All tasks complete!", "No tasks found") must
-// use the [ralph] prefix, not the task backend label (e.g. [beads]). The task
-// label should only appear for actual backend operations.
+// use the [o] actor prefix, not the task backend label (e.g. [beads] without [o]).
+// The [o][beads] tag is valid — it marks orchestrator-initiated beads operations.
 func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -3798,18 +3798,18 @@ func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 		want    string // substring expected in log output
 	}{
 		{
-			name: "all tasks complete uses loop prefix",
+			name: "all tasks complete uses orchestrator actor prefix",
 			backend: &stubBackend{
 				remaining: 0, completed: 3, total: 3, label: "beads",
 			},
-			want: "[ralph]",
+			want: "[o]",
 		},
 		{
-			name: "no tasks error uses loop prefix",
+			name: "no tasks error uses orchestrator actor prefix",
 			backend: &stubBackend{
 				remaining: 0, completed: 0, total: 0, label: "beads",
 			},
-			want: "[ralph]",
+			want: "[o]",
 		},
 	}
 
@@ -3837,9 +3837,6 @@ func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 			l.Run(context.Background())
 
 			output := logBuf.String()
-			if strings.Contains(output, "[beads]") {
-				t.Errorf("orchestrator messages should not use [beads] prefix:\n%s", output)
-			}
 			if !strings.Contains(output, tt.want) {
 				t.Errorf("expected %q in log output:\n%s", tt.want, output)
 			}

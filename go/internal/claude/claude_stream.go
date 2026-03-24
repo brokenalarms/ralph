@@ -109,12 +109,12 @@ func stripMarkdown(s string) string {
 	return mdBoldRe.ReplaceAllString(s, "$1")
 }
 
-// colorTag applies ANSI color to a bracketed tag like [agent] or [Read].
+// colorTag applies ANSI color to a bracketed tag like [r] or [Read].
 func colorTag(tag string) string {
 	switch {
 	case tag == "[done]":
 		return logging.Green + tag + logging.Reset
-	case tag == "[agent]":
+	case tag == "[r]":
 		return logging.Cyan + tag + logging.Reset
 	default:
 		return logging.Blue + tag + logging.Reset
@@ -144,7 +144,7 @@ type StreamFormatter struct {
 }
 
 const tsWidth = 9       // "HH:MM:SS" (8) + space (1)
-const agentPrefix = 8   // "[agent] " (8)
+const agentPrefix = 4 // "[r] " (4)
 const maxLineWidth = 120
 
 // FormatLine formats text with timestamp grouping. If the current second
@@ -167,13 +167,13 @@ func (f *StreamFormatter) FormatOutput(text string) []string {
 	if label, content, ok := parseDiagnosis(text); ok {
 		return []string{
 			diagnosisBanner(label),
-			f.FormatLine("[agent] " + content),
+			f.FormatLine("[r] " + content),
 		}
 	}
 	if !isToolLine(text) {
 		text = truncateProse(text, maxLineWidth-tsWidth-agentPrefix)
 	}
-	return []string{f.FormatLine("[agent] " + text)}
+	return []string{f.FormatLine("[r] " + text)}
 }
 
 // isToolLine returns true if the line starts with a bracketed tool name.
@@ -357,7 +357,7 @@ func FilterStream(rawLogPath string) {
 
 // startTailGoroutine follows new data appended to path and writes it to
 // stdout, similar to tail -f -n 0. Only forwards lines prefixed with
-// "[agent] " — orchestrator messages are already written to stdout directly
+// "[r] " — orchestrator messages are already written to stdout directly
 // by the logger, so forwarding them here would cause duplication.
 // Runs entirely in-process so there are no child processes to orphan.
 // Returns a channel that closes when the goroutine exits.
@@ -387,7 +387,7 @@ func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
 				}
 				line := data[:idx]
 				data = data[idx+1:]
-				if strings.Contains(line, "[agent]") {
+				if strings.Contains(line, "[r]") {
 					fmt.Fprintln(os.Stdout, line)
 				}
 			}
@@ -406,7 +406,7 @@ func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
 						n2, _ := f.Read(buf)
 						if n2 == 0 {
 							// Flush any remaining partial line.
-							if remainder != "" && strings.Contains(remainder, "[agent]") {
+							if remainder != "" && strings.Contains(remainder, "[r]") {
 								fmt.Fprintln(os.Stdout, remainder)
 							}
 							return

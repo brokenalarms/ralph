@@ -30,18 +30,18 @@ func (l *Loop) onSignal(p signalParams) bool {
 	// Step 1: Run tests (commit check is a warning, not a gate)
 	commitResult := verify.CheckCommits(l.git.WorkDir, p.headBefore)
 	if !commitResult.Passed {
-		l.logger.Warn("No new commits — will verify via LLM if work is already on main")
+		l.logger.Warn("git", "No new commits — will verify via LLM if work is already on main")
 	}
 
-	l.logger.Log("Running post-signal test suite...")
+	l.logger.Log("test", "Running post-signal test suite...")
 	testResult := verify.RunTests(p.ctx, l.cfg.VerifyDir)
 	passed := testResult.Passed
 	reason := testResult.Reason
 	if passed {
-		l.logger.Log("Tests passed")
+		l.logger.Log("test", "Tests passed")
 	}
 	if !passed {
-		l.logger.Warn("Tests failed: %s", reason)
+		l.logger.Warn("test", "Tests failed: %s", reason)
 		testOutput := testResult.Details
 
 		beadDesc := l.getBeadDescription(p.taskID)
@@ -64,7 +64,7 @@ func (l *Loop) onSignal(p signalParams) bool {
 
 		testResult := verify.RunTests(p.ctx, l.cfg.VerifyDir)
 		if !testResult.Passed {
-			l.logger.Error("Tests still failing after verification agent: %s", testResult.Reason)
+			l.logger.Error("test", "Tests still failing after verification agent: %s", testResult.Reason)
 			return false
 		}
 	}
@@ -74,11 +74,11 @@ func (l *Loop) onSignal(p signalParams) bool {
 	if passed {
 		beadDesc := l.getBeadDescription(p.taskID)
 
-		l.logger.Log("Running LLM verification...")
+		l.logger.Log("llm", "Running LLM verification...")
 		llmResult := l.llmVerifyFunc(p.ctx, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, l.git.GitHub, l.queryFunc())
 
 		if !llmResult.Passed {
-			l.logger.Error("LLM verification rejected: %s", llmResult.Details)
+			l.logger.Error("llm", "LLM verification rejected: %s", llmResult.Details)
 
 			signalPath := filepath.Join(l.cfg.Dirs.RalphDir, ".signal_complete")
 			fixPrompt := l.loadVerifyPrompt("verify-llm.md", map[string]string{
@@ -97,25 +97,25 @@ func (l *Loop) onSignal(p signalParams) bool {
 
 			testResult := verify.RunTests(p.ctx, l.cfg.VerifyDir)
 			if !testResult.Passed {
-				l.logger.Error("Tests failed after LLM fix agent: %s", testResult.Reason)
+				l.logger.Error("test", "Tests failed after LLM fix agent: %s", testResult.Reason)
 				return false
 			}
 
 			// Escalate to Sonnet for re-verification (Haiku already rejected)
-			l.logger.Log("Escalating verification to Sonnet...")
+			l.logger.Log("llm", "Escalating verification to Sonnet...")
 			llmResult2 := l.llmVerifyFunc(p.ctx, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, l.git.GitHub, l.queryFunc(), "claude-sonnet-4-6")
 			if !llmResult2.Passed {
-				l.logger.Error("Sonnet also rejects: %s", llmResult2.Details)
+				l.logger.Error("llm", "Sonnet also rejects: %s", llmResult2.Details)
 				// Skip this task instead of accepting bad work
 				if p.taskID != "" {
 					l.cfg.TaskBackend.SkipTask(p.taskID, "verification_rejected: "+llmResult2.Details)
-					l.logger.Warn("Skipping task %s — verification rejected twice", p.taskID)
+					l.logger.Warn("llm", "Skipping task %s — verification rejected twice", p.taskID)
 				}
 				return false
 			}
-			l.logger.Success("Sonnet verified after fix: %s", llmResult2.Reason)
+			l.logger.Success("llm", "Sonnet verified after fix: %s", llmResult2.Reason)
 		} else {
-			l.logger.Success("LLM verified: %s", llmResult.Reason)
+			l.logger.Success("llm", "LLM verified: %s", llmResult.Reason)
 		}
 	}
 
@@ -145,7 +145,7 @@ func (l *Loop) verifyCompletion(ctx context.Context, headBefore string) (bool, s
 		l.state.Write("last_test_output", testResult.Details)
 		l.state.Write("last_test_time", now)
 		if testResult.Details != "" {
-			l.logger.Error("Test output:\n%s", testResult.Details)
+			l.logger.Error("test", "Test output:\n%s", testResult.Details)
 		}
 		return false, testResult.Reason
 	}
@@ -161,7 +161,7 @@ func (l *Loop) verifyCompletion(ctx context.Context, headBefore string) (bool, s
 // same RunConfig shape — this method is the single place that wires it up.
 func (l *Loop) runFixAgent(ctx context.Context, description, prompt, workDir, rawLogPath string) claude.Result {
 	l.runner.StopStreaming()
-	l.logger.Log("Spawning fix agent: %s", description)
+	l.logger.Log("llm", "Spawning fix agent: %s", description)
 
 	runner := l.newRunner()
 	result, _ := runner.Run(claude.RunConfig{
@@ -177,9 +177,9 @@ func (l *Loop) runFixAgent(ctx context.Context, description, prompt, workDir, ra
 	})
 
 	if !result.SignalDetected {
-		l.logger.Warn("Fix agent exited without signal (%s)", description)
+		l.logger.Warn("llm", "Fix agent exited without signal (%s)", description)
 	} else if result.Summary != "" {
-		l.logger.Log("Fix agent (%s): %s", description, result.Summary)
+		l.logger.Log("llm", "Fix agent (%s): %s", description, result.Summary)
 	}
 
 	return result
@@ -248,7 +248,7 @@ func (l *Loop) getCIFailureLog(prNumber string) string {
 // tryFixCI spawns a fix agent to address CI failures, pushes the fix,
 // and returns true if the fix was applied (ready for merge retry).
 func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, nextTask, workDir, rawLogPath string) bool {
-	l.logger.Log("CI failed on PR #%s — spawning fix agent", ciErr.PRNumber)
+	l.logger.Log("ci", "CI failed on PR #%s — spawning fix agent", ciErr.PRNumber)
 
 	ciLog := l.getCIFailureLog(ciErr.PRNumber)
 	signalPath := filepath.Join(l.cfg.Dirs.RalphDir, ".signal_complete")
@@ -265,7 +265,7 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, 
 	}
 
 	if pushErr := l.pushAndCreatePR(ctx, taskID, nextTask); pushErr != nil {
-		l.logger.Warn("Push after CI fix failed: %v", pushErr)
+		l.logger.Warn("git", "Push after CI fix failed: %v", pushErr)
 		return false
 	}
 
@@ -280,7 +280,7 @@ func (l *Loop) runPreIterationTests(ctx context.Context) string {
 		return ""
 	}
 
-	l.logger.Log("Running pre-iteration test suite...")
+	l.logger.Log("test", "Running pre-iteration test suite...")
 	result := verify.RunTests(ctx, l.cfg.VerifyDir)
 	now := time.Now().Format(time.RFC3339)
 
@@ -288,14 +288,14 @@ func (l *Loop) runPreIterationTests(ctx context.Context) string {
 		l.state.Write("last_test_result", "pass")
 		l.state.Write("last_test_output", "")
 		l.state.Write("last_test_time", now)
-		l.logger.Success("Pre-iteration tests: all passing")
+		l.logger.Success("test", "Pre-iteration tests: all passing")
 		return "\n- Test suite status: all tests passing as of start."
 	}
 
 	l.state.Write("last_test_result", "fail")
 	l.state.Write("last_test_output", result.Details)
 	l.state.Write("last_test_time", now)
-	l.logger.Warn("Pre-iteration tests: failures detected")
+	l.logger.Warn("test", "Pre-iteration tests: failures detected")
 	msg := "\n- Test suite status: some tests are FAILING. Fix them before your task. If the tests pass when you run them, they were fixed externally — proceed with your task."
 	if result.Details != "" {
 		// Truncate to avoid bloating the prompt.

@@ -15,10 +15,10 @@ import (
 
 type testLogger struct{}
 
-func (l *testLogger) Log(format string, args ...any)     {}
-func (l *testLogger) Warn(format string, args ...any)    {}
-func (l *testLogger) Error(format string, args ...any)   {}
-func (l *testLogger) Success(format string, args ...any) {}
+func (l *testLogger) Log(_ string, _ string, _ ...any)     {}
+func (l *testLogger) Warn(_ string, _ string, _ ...any)    {}
+func (l *testLogger) Error(_ string, _ string, _ ...any)   {}
+func (l *testLogger) Success(_ string, _ string, _ ...any) {}
 
 func TestSandboxProfile_DenyDefault(t *testing.T) {
 	s := &Sandbox{}
