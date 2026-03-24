@@ -17,6 +17,10 @@ const (
 	// task manager Claude session so it executes the startup sequence
 	// (bd prime, bd list, status summary) without waiting for user input.
 	TaskManagerBootstrapPrompt = "Run your startup sequence."
+
+	// ReviewBootstrapPrompt is the initial user message sent to the review
+	// session so it begins analysis immediately.
+	ReviewBootstrapPrompt = "Begin your review. Read AGENTS.md/CLAUDE.md first, then work through each responsibility."
 )
 
 // Vars holds all substitution values for prompt template assembly.
@@ -138,8 +142,9 @@ func BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir string) (string, er
 }
 
 // BuildReviewPrompt assembles the system prompt for the interactive review
-// session, combining the shared quality standards with the refactor style guide.
-func BuildReviewPrompt(promptsDir, projectDir, ralphDir string) (string, error) {
+// session, combining the shared quality standards with the refactor style guide
+// and post-mortem reflection analysis.
+func BuildReviewPrompt(promptsDir, projectDir, ralphDir, reflections string) (string, error) {
 	shared, err := readTemplate(promptsDir, "shared.md")
 	if err != nil {
 		return "", err
@@ -149,14 +154,21 @@ func BuildReviewPrompt(promptsDir, projectDir, ralphDir string) (string, error) 
 		return "", err
 	}
 
-	tmpl := shared + "\n" + reviewInstructions(projectDir, ralphDir, style)
+	tmpl := shared + "\n" + reviewInstructions(projectDir, ralphDir, style, reflections)
 	return tmpl, nil
 }
 
-func reviewInstructions(projectDir, ralphDir, style string) string {
-	return fmt.Sprintf(`## Review Mode
+func reviewInstructions(projectDir, ralphDir, style, reflections string) string {
+	reflectionSection := "No reflections found — skip reflection analysis and focus on test audit and refactor opportunities."
+	if reflections != "" {
+		reflectionSection = reflections
+	}
 
-You are running an interactive code review and refactoring session.
+	return fmt.Sprintf(`## Review Mode — Post-Mortem
+
+You are running an interactive post-mortem review session. Your job is to analyze
+reflections from past iterations, audit code health, and present findings to the
+user for approval before creating any tasks.
 
 ### Context
 - Project: %s
@@ -165,18 +177,50 @@ You are running an interactive code review and refactoring session.
 ### Style Guide
 %s
 
-### Instructions
-1. Read AGENTS.md or CLAUDE.md if present (mandatory). Follow project conventions.
-2. Look at recently changed files (use git log/diff). Hunt for quality issues.
-3. If nothing meaningful stands out, say so. Don't make changes for the sake of activity.
-4. If you find cleanup worth doing, implement it. Run tests. Commit with a refactor: prefix.
-5. Focus on human readability — that is the goal, not arbitrary rules.
+### Responsibility 1: Reflection Analysis
+
+Read the reflections below. Extract:
+- **Recurring patterns**: issues that appear across multiple reflections
+- **Permanent learnings**: insights that should be codified in AGENTS.md, CLAUDE.md, or prompt templates
+- **One-off surprises**: things that were non-obvious but don't need permanent rules
+
+<reflections>
+%s
+</reflections>
+
+### Responsibility 2: Test Audit
+
+Examine the test suite for:
+- **Stale tests**: tests for removed or renamed functionality
+- **Weak assertions**: tests that assert true, check only exit codes, or pin prompt prose instead of behavior
+- **Missing coverage**: behavioral code (branching, state, algorithms) without corresponding tests
+
+### Responsibility 3: Refactor Opportunities
+
+Using the style guide above, identify:
+- Files over 500 lines with distinct responsibilities worth splitting
+- Dead code: unused functions, unreachable branches, commented-out blocks
+- Naming issues in recently changed code
+- Duplicated logic that has grown past three occurrences
+
+### Responsibility 4: Present Findings
+
+Present findings to the user interactively. For each finding:
+1. State what you found and why it matters
+2. Propose the action (add to AGENTS.md, create a bead, refactor now, delete dead code)
+3. Wait for user approval before acting
+
+For approved actions that are too large to do in this session, create a bead:
+` + "```" + `
+bd create --title="..." --description="..." --type=task --priority=3
+` + "```" + `
 
 ### Rules
-- Do NOT add new features or change behavior. Refactoring preserves external behavior.
-- Do NOT attempt big architectural rewrites. Keep changes scoped and verifiable.
-- One refactor = one commit. Atomic.
-`, projectDir, ralphDir, style)
+- This is an interactive session — present, discuss, then act. Do not silently make changes.
+- Refactoring preserves external behavior. Do NOT add new features.
+- One refactor = one commit. Atomic. Use a refactor: prefix.
+- If nothing meaningful stands out, say so. No-op is a valid outcome.
+`, projectDir, ralphDir, style, reflectionSection)
 }
 
 func readTemplate(dir, name string) (string, error) {

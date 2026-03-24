@@ -685,11 +685,11 @@ func TestBuildTaskManagerPrompt_ScreenshotHandling(t *testing.T) {
 	}
 }
 
-// Proves: BuildReviewPrompt assembles the shared quality standards and
-// refactor style guide into an interactive review session prompt.
+// Proves: BuildReviewPrompt assembles the shared quality standards,
+// refactor style guide, and reflections into a post-mortem review prompt.
 func TestBuildReviewPrompt(t *testing.T) {
 	dir := promptsDir(t)
-	result, err := BuildReviewPrompt(dir, "/tmp/project", "/tmp/project/.ralph")
+	result, err := BuildReviewPrompt(dir, "/tmp/project", "/tmp/project/.ralph", "some reflections")
 	if err != nil {
 		t.Fatalf("BuildReviewPrompt error: %v", err)
 	}
@@ -710,7 +710,7 @@ func TestBuildReviewPrompt(t *testing.T) {
 
 // Proves: BuildReviewPrompt returns an error when prompts directory is missing.
 func TestBuildReviewPrompt_MissingTemplate(t *testing.T) {
-	_, err := BuildReviewPrompt("/nonexistent", "/tmp", "/tmp/.ralph")
+	_, err := BuildReviewPrompt("/nonexistent", "/tmp", "/tmp/.ralph", "")
 	if err == nil {
 		t.Error("expected error for missing prompts directory")
 	}
