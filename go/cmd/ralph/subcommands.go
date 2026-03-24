@@ -292,7 +292,8 @@ func printLoopUsage() {
 	fmt.Printf("%sOPTIONS:%s\n%s\n", logging.Bold, logging.Reset, config.FlagUsage())
 	fmt.Printf(`%sWHILE RUNNING:%s
   ralph stop                 Halt the loop after the current iteration
-  ralph feedback [message]   Show or queue feedback for the loop in progress
+  ralph feedback             Show queued feedback for the loop
+  ralph feedback [message]   Queue a message to the loop in progress
 
 %sEXAMPLES:%s
   ralph loop --dir ~/myproject -n 20
