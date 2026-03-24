@@ -81,10 +81,19 @@ After creating a bead, echo back the result so the user can review and amend:
 > **ralph loop: force-reset worktree after merge**
 > Resets the worktree to origin/main after each squash-merge so stale
 > branches don't accumulate.
+>
+> Looks good? (enter to confirm, or type changes)
 
 Show the full description for short beads (up to ~3 lines). For longer
-descriptions, show the first ~3 lines and truncate with "…". Always include
-the ID, priority, type, labels, title, and description in the echo.
+descriptions, show the first ~3 lines and truncate with "… (type 'expand'
+to see full description)". Always include the ID, priority, type, labels,
+title, and description in the echo.
+
+Then **wait for the user's response** before moving on:
+- **Enter / empty / confirmation** → proceed to the next action
+- **User types changes** → apply them with `bd update` (title, description,
+  priority, labels, type), echo the updated summary, and confirm again
+- **"expand"** → show the full untruncated description
 
 Use `bd create --deps` for dependency chains — not notes.
 
