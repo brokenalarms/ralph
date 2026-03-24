@@ -263,6 +263,79 @@ func TestManager_PushAndCreatePR_NoEditWithoutTaskID(t *testing.T) {
 	}
 }
 
+// PushAndCreatePR logs "already open" when a PR exists before push.
+func TestManager_PushAndCreatePR_LogsAlreadyOpen(t *testing.T) {
+	r := newStubRunner()
+	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
+	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	r.On("rev-list --count origin/main..HEAD", "3", nil)
+	r.On("fetch", "", nil)
+	r.On("merge-base --is-ancestor", "", nil)
+
+	gh := &stubGitHub{available: true, openPR: "42"}
+
+	dir := t.TempDir()
+	log := &testLog{}
+	mgr := &Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir + "/worktree",
+		WorktreeBranch: "ralph/test/01-feature",
+		Runner:         r,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         log,
+	}
+
+	err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix: some bug")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !log.contains("PR #42 already open") {
+		t.Errorf("expected 'already open' log, got: %v", log.messages)
+	}
+	if log.contains("Created PR") {
+		t.Error("should not log 'Created PR' when PR already exists")
+	}
+}
+
+// PushAndCreatePR logs "Created PR #N" when a new PR is created.
+func TestManager_PushAndCreatePR_LogsCreatedPR(t *testing.T) {
+	r := newStubRunner()
+	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
+	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	r.On("rev-list --count origin/main..HEAD", "3", nil)
+	r.On("push", "", nil)
+	r.On("fetch", "", nil)
+	r.On("merge-base --is-ancestor", "", nil)
+
+	gh := &stubGitHub{available: true, openPR: "", createdPR: "99"}
+
+	dir := t.TempDir()
+	log := &testLog{}
+	mgr := &Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir + "/worktree",
+		WorktreeBranch: "ralph/test/01-feature",
+		Runner:         r,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         log,
+	}
+
+	err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix: some bug")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !log.contains("Created PR #99") {
+		t.Errorf("expected 'Created PR #99' log, got: %v", log.messages)
+	}
+	if log.contains("already open") {
+		t.Error("should not log 'already open' when PR was just created")
+	}
+}
+
 // parseWorktreeForBranch extracts paths from porcelain output without git.
 func TestParseWorktreeForBranch(t *testing.T) {
 	porcelain := `worktree /home/user/project

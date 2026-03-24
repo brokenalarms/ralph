@@ -47,7 +47,7 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 				m.Logger.Warn("git", "Failed to update PR #%s title: %v", prNumber, err)
 			}
 		}
-		m.Logger.Log("git", "PR #%s exists for %s", prNumber, m.WorktreeBranch)
+		m.Logger.Log("git", "PR #%s already open for %s", prNumber, m.WorktreeBranch)
 		return nil
 	}
 
@@ -74,7 +74,12 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 		return err
 	}
 
-	m.Logger.Log("git", "Created PR for %s", m.WorktreeBranch)
+	newPR, _ := gh.FindOpenPR(m.WorktreeBranch, repoURL)
+	if newPR != "" {
+		m.Logger.Log("git", "Created PR #%s for %s", newPR, m.WorktreeBranch)
+	} else {
+		m.Logger.Log("git", "Created PR for %s", m.WorktreeBranch)
+	}
 	return nil
 }
 
