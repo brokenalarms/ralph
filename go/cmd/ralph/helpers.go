@@ -118,12 +118,10 @@ func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log
 	log.Log("", "Building ralph %s...", version)
 	goDir := filepath.Join(projectDir, "go")
 	ldflags := fmt.Sprintf("-X github.com/brokenalarms/ralph/internal/config.Version=%s", version)
-	buildCmd := exec.Command("go", "build", "-v", "-ldflags", ldflags, "-o", scriptPath, "./cmd/ralph")
+	buildCmd := exec.Command("go", "build", "-ldflags", ldflags, "-o", scriptPath, "./cmd/ralph")
 	buildCmd.Dir = goDir
-	buildCmd.Stdout = os.Stdout
-	buildCmd.Stderr = os.Stderr
-	if err := buildCmd.Run(); err != nil {
-		return fmt.Errorf("go build failed: %v", err)
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("go build failed: %s", out)
 	}
 	log.Log("", "Installed ralph %s to %s", version, scriptPath)
 

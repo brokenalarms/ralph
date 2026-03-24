@@ -309,19 +309,20 @@ func (l *Loop) runPreIterationTests(ctx context.Context) string {
 	return msg
 }
 
-// findPRInfo looks up the PR number and title for the current branch.
-func (l *Loop) findPRInfo(workDir string) (number, title string) {
+// findPRInfo looks up the PR number, title, and URL for the current branch.
+func (l *Loop) findPRInfo(workDir string) (number, title, url string) {
 	if l.findPRInfoFunc != nil {
-		return l.findPRInfoFunc(workDir)
+		n, t := l.findPRInfoFunc(workDir)
+		return n, t, ""
 	}
 	gh := l.git.GitHub
 	if gh == nil {
-		return "", ""
+		return "", "", ""
 	}
-	num, t, err := gh.FindPR(l.git.WorktreeBranch, workDir)
+	num, t, u, err := gh.FindPR(l.git.WorktreeBranch, workDir)
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
-	return num, t
+	return num, t, u
 }
 
