@@ -588,6 +588,21 @@ func TestBuildTaskManagerPrompt_EchoBackIncludesDescription(t *testing.T) {
 	}
 }
 
+// Proves: task manager prompt tells the task manager that user bug reports
+// reference loop log output, so it doesn't ask for clarification about where
+// things were seen.
+func TestBuildTaskManagerPrompt_LoopLogContext(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	if !strings.Contains(result, "loop log") {
+		t.Error("task manager prompt should reference loop log as default context for bug reports")
+	}
+}
+
 // Proves: BuildReviewPrompt assembles the shared quality standards and
 // refactor style guide into an interactive review session prompt.
 func TestBuildReviewPrompt(t *testing.T) {
