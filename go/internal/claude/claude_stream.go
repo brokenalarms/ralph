@@ -142,7 +142,8 @@ func FormatStreamLine(text string) string {
 // within the same second are grouped: only the first line shows the
 // timestamp, continuation lines are indented with spaces.
 type StreamFormatter struct {
-	lastTS string
+	lastTS     string
+	lastSignal string // dedup: suppress consecutive identical signal lines
 }
 
 const tsWidth = 9       // "HH:MM:SS" (8) + space (1)
@@ -167,6 +168,11 @@ func (f *StreamFormatter) FormatLine(text string) string {
 // diagnosis) are truncated to maxLineWidth to prevent terminal overflow.
 func (f *StreamFormatter) FormatOutput(text string) []string {
 	if name, msg, ok := parseSignalLine(text); ok {
+		key := name + ":" + msg
+		if key == f.lastSignal {
+			return nil
+		}
+		f.lastSignal = key
 		return []string{f.FormatLine("[signal] " + name + ": " + msg)}
 	}
 	if label, content, ok := parseDiagnosis(text); ok {
