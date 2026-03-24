@@ -302,6 +302,33 @@ func TestExecutionBD_ReinforcesBoyScoutRule(t *testing.T) {
 	}
 }
 
+// Proves: execution-bd.md instructs the agent to echo bead details neatly
+// after bd create — ID, priority, type, labels, title, description — instead
+// of dumping the raw command with all flags.
+func TestExecutionBD_BeadEchoBack(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
+	if err != nil {
+		t.Fatalf("reading execution-bd.md: %v", err)
+	}
+	s := string(content)
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"echo back", "should instruct echoing bead details after creation"},
+		{"priority", "echo should include priority"},
+		{"labels", "echo should include labels"},
+		{"truncat", "echo should mention truncation for long descriptions"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(s, tc.substr) {
+			t.Errorf("execution-bd.md missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
 // Proves: execution-bd.md requires TDD — write a failing test first, then implement.
 func TestExecutionBD_RequiresTDD(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
