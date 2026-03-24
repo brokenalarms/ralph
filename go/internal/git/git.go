@@ -238,6 +238,8 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) {
 			m.gitCmd(m.WorkDir, "checkout", "--theirs", ".")
 			m.gitCmd(m.WorkDir, "add", "-A")
 			m.gitCmd(m.WorkDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
+		} else {
+			m.Logger.Log("Re-applied stashed changes")
 		}
 	}
 }
