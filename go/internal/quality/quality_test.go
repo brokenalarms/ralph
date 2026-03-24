@@ -132,10 +132,10 @@ console.warn('????');
 	}
 }
 
-// Proves: REFACTOR_THRESHOLD defaults to 20.
+// Proves: REFACTOR_THRESHOLD defaults to 0 (disabled).
 func TestDefaultRefactorThreshold(t *testing.T) {
-	if DefaultRefactorThreshold != 20 {
-		t.Errorf("expected 20, got %d", DefaultRefactorThreshold)
+	if DefaultRefactorThreshold != 0 {
+		t.Errorf("expected 0 (disabled), got %d", DefaultRefactorThreshold)
 	}
 }
 

@@ -16,8 +16,8 @@ type Finding struct {
 }
 
 // DefaultRefactorThreshold is the quality score threshold that triggers
-// a refactor iteration.
-const DefaultRefactorThreshold = 20
+// a refactor iteration. 0 disables adaptive refactoring by default.
+const DefaultRefactorThreshold = 0
 
 const (
 	CheckAnyType      = "any-type"
