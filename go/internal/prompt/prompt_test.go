@@ -658,6 +658,33 @@ func TestBuildTaskManagerPrompt_PhaseLifecycleTracking(t *testing.T) {
 	}
 }
 
+// Proves: task manager prompt includes detailed screenshot handling instructions:
+// describe the visual issue, save with naming convention, and reference in bead.
+func TestBuildTaskManagerPrompt_ScreenshotHandling(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Describe", "should instruct describing the visual issue"},
+		{"screenshots/", "should reference the screenshots directory path"},
+		{"slug", "should explain the naming convention with slug"},
+		{"bd update", "should instruct referencing screenshot path in the bead"},
+		{"Read tool", "should mention the fixing agent reads via multimodal Read"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
 // Proves: BuildReviewPrompt assembles the shared quality standards and
 // refactor style guide into an interactive review session prompt.
 func TestBuildReviewPrompt(t *testing.T) {

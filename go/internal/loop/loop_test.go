@@ -52,6 +52,7 @@ type stubBackend struct {
 	nextPriority *int
 	label        string
 	description  string
+	fullContext   string
 }
 
 // mutableBackend is like stubBackend but allows changing the next task
@@ -109,7 +110,7 @@ func (s *stubBackend) SetState(_, _, _, _ string) error     { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (s *stubBackend) ExecutionInstructions() (string, error) { return "", nil }
 func (s *stubBackend) GetDescription(_ string) (string, error)  { return s.description, nil }
-func (s *stubBackend) GetFullContext(_ string) (string, error)  { return "", nil }
+func (s *stubBackend) GetFullContext(_ string) (string, error)  { return s.fullContext, nil }
 func (s *stubBackend) ProjectContext() (string, error)          { return "", nil }
 func (s *stubBackend) Label() string {
 	if s.label != "" {
@@ -484,6 +485,74 @@ func TestLoop_BuildTaskPrompt(t *testing.T) {
 	got = l.buildTaskPrompt("Implement feature X", "")
 	if got != "Complete this task: Implement feature X" {
 		t.Errorf("unexpected prompt without ID: %q", got)
+	}
+}
+
+// Verifies that buildTaskPrompt appends screenshot paths when screenshots
+// exist in the ralph screenshots directory for the given bead ID.
+func TestLoop_BuildTaskPrompt_WithScreenshots(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	ssDir := filepath.Join(ralphDir, "screenshots")
+	os.MkdirAll(ssDir, 0o755)
+	os.WriteFile(filepath.Join(ssDir, "ralph-abc-01-broken-modal.png"), []byte("img"), 0o644)
+
+	pDir, err := filepath.Abs(filepath.Join("..", "..", "cmd", "ralph", "prompts"))
+	if err != nil {
+		t.Fatalf("resolve prompts dir: %v", err)
+	}
+
+	backend := &stubBackend{nextID: "ralph-abc", nextTask: "Fix modal", fullContext: "○ ralph-abc · Fix modal [● P3 · OPEN]"}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: pDir,
+		},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+	}, st, gm, logging.New(nil))
+
+	got := l.buildTaskPrompt("Fix modal", "ralph-abc")
+
+	if !strings.Contains(got, "## Screenshots") {
+		t.Error("task prompt should include screenshots section when screenshots exist")
+	}
+	if !strings.Contains(got, "ralph-abc-01-broken-modal.png") {
+		t.Error("task prompt should include the screenshot filename")
+	}
+}
+
+// Verifies that buildTaskPrompt omits the screenshots section when no
+// screenshots exist for the bead.
+func TestLoop_BuildTaskPrompt_NoScreenshots(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	pDir, err := filepath.Abs(filepath.Join("..", "..", "cmd", "ralph", "prompts"))
+	if err != nil {
+		t.Fatalf("resolve prompts dir: %v", err)
+	}
+
+	backend := &stubBackend{nextID: "ralph-xyz", nextTask: "Fix layout", fullContext: "○ ralph-xyz · Fix layout [● P3 · OPEN]"}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: pDir,
+		},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+	}, st, gm, logging.New(nil))
+
+	got := l.buildTaskPrompt("Fix layout", "ralph-xyz")
+
+	if strings.Contains(got, "## Screenshots") {
+		t.Error("task prompt should not include screenshots section when none exist")
 	}
 }
 

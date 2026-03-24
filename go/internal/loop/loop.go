@@ -755,10 +755,14 @@ func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 		if err == nil && full != "" {
 			tmplPath := filepath.Join(l.cfg.Dirs.PromptsDir, "task-assignment.md")
 			if data, readErr := os.ReadFile(tmplPath); readErr == nil {
-				prompt := string(data)
-				prompt = strings.ReplaceAll(prompt, "{{TASK_ID}}", taskID)
-				prompt = strings.ReplaceAll(prompt, "{{TASK_CONTEXT}}", full)
-				return prompt
+				p := string(data)
+				p = strings.ReplaceAll(p, "{{TASK_ID}}", taskID)
+				p = strings.ReplaceAll(p, "{{TASK_CONTEXT}}", full)
+
+				screenshots := prompt.ScreenshotsForBead(l.cfg.Dirs.RalphDir, taskID)
+				p += prompt.FormatScreenshotContext(screenshots)
+
+				return p
 			}
 		}
 	}
