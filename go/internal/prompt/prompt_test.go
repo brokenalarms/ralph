@@ -603,6 +603,33 @@ func TestBuildTaskManagerPrompt_LoopLogContext(t *testing.T) {
 	}
 }
 
+// Proves: task manager prompt includes unwieldy bead detection instructions
+// so it proactively audits beads for excessive scope and suggests splitting
+// them into focused subtasks with acceptance criteria and dependencies.
+func TestBuildTaskManagerPrompt_UnwieldyBeadDetection(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"unwieldy", "prompt should name the concept of unwieldy beads"},
+		{"acceptance criteria", "split suggestions should include acceptance criteria"},
+		{"subtask", "prompt should instruct creating subtasks"},
+		{"bd show", "detection should use bd show to inspect bead details"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(strings.ToLower(result), strings.ToLower(tc.substr)) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
 // Proves: BuildReviewPrompt assembles the shared quality standards and
 // refactor style guide into an interactive review session prompt.
 func TestBuildReviewPrompt(t *testing.T) {
