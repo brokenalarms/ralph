@@ -4,10 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/brokenalarms/ralph/internal/agent"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -15,6 +15,17 @@ import (
 	"github.com/brokenalarms/ralph/internal/prompt"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
+
+// newInteractiveAgent creates a centralized agent runner for interactive
+// sessions (review, task manager). Container isolation is applied when
+// sandbox-exec is available.
+func newInteractiveAgent(log *logging.Logger) *agent.Runner {
+	var sandbox *agent.Sandbox
+	if agent.Available() {
+		sandbox = agent.DefaultSandbox()
+	}
+	return agent.New(log, sandbox)
+}
 
 func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 	ralphDir := fmt.Sprintf("%s/.ralph", sub.Dir)
@@ -172,20 +183,13 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 
-	cmd := exec.Command("claude", "--system-prompt", systemPrompt)
-	cmd.Dir = projectDir
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return exitErr.ExitCode()
-		}
+	r := newInteractiveAgent(log)
+	exitCode, err := r.Interactive(projectDir, systemPrompt)
+	if err != nil {
 		log.Error("Review session failed: %v", err)
 		return 1
 	}
-	return 0
+	return exitCode
 }
 
 // handleCommander launches the 4-pane tmux layout with both the ralph loop
@@ -241,20 +245,13 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 
-	cmd := exec.Command("claude", "--system-prompt", systemPrompt, prompt.TaskManagerBootstrapPrompt)
-	cmd.Dir = projectDir
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return exitErr.ExitCode()
-		}
+	r := newInteractiveAgent(log)
+	exitCode, err := r.Interactive(projectDir, systemPrompt, prompt.TaskManagerBootstrapPrompt)
+	if err != nil {
 		log.Error("Task manager failed: %v", err)
 		return 1
 	}
-	return 0
+	return exitCode
 }
 
 func printUsage() {

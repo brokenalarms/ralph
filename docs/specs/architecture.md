@@ -38,10 +38,17 @@ cmd/ralph/
   prompts/             — embedded prompt templates (source of truth)
 
 internal/
+  agent/
+    agent.go           — centralized agent module: all agent invocations go through here
+    sandbox.go         — macOS sandbox-exec container isolation
+    The agent module is the single code path for spawning agents. Loop, task,
+    review, verification, and fix agents all route through agent.Runner.
+    Container isolation via sandbox-exec is applied by default when available.
+
   loop/
     loop.go            — iteration control, task selection, stop/wait
     loop_verify.go     — post-signal verification, LLM escalation, fix agent spawning
-    The loop owns the orchestration story. It composes git, verify, and claude
+    The loop owns the orchestration story. It composes git, verify, and agent
     modules. No git commands, no gh commands, no exec.Command in this package.
 
   git/
@@ -54,7 +61,7 @@ internal/
     ci.go              — CI check evaluation, polling, status types
 
   claude/
-    claude.go          — agent process runner, lifecycle management
+    claude.go          — agent process runner, lifecycle management (internal to agent module)
     claude_stream.go   — stream filtering, tool call batching, formatting
 
   verify/
@@ -122,17 +129,17 @@ Already exists as an interface for test stubbing.
 loop.Run()
   ├── tasks: get next task + full context
   ├── prompt: assemble from templates
-  ├── claude: run agent
+  ├── agent: run iteration agent (sandboxed)
   │     └── on signal:
   │           ├── verify: run test suite
-  │           ├── verify: LLM review (fast model)
-  │           ├── claude: fix agent if rejected
-  │           └── verify: LLM review (smart model escalation)
+  │           ├── agent: LLM review via Query (fast model, sandboxed)
+  │           ├── agent: fix agent if rejected (sandboxed)
+  │           └── agent: LLM review via Query (smart model escalation)
   ├── git: merge with retry
   │     ├── sync worktree to latest base branch
   │     ├── attempt merge via GitHub
   │     ├── on conflict: rebase + auto-resolve + force-push + retry
-  │     └── on CI failure: spawn fix agent + retry
+  │     └── on CI failure: agent: spawn fix agent + retry
   └── tasks: close bead (only after successful merge)
 ```
 
@@ -151,6 +158,7 @@ Each tag has a fixed color. Defined once in logging/logging.go.
 
 ## What NOT to Do
 
+- No `exec.Command("claude", ...)` outside the agent and claude packages
 - No `exec.Command("git", ...)` outside the git package
 - No `exec.Command("gh", ...)` outside git/github.go
 - No `exec.Command("bd", ...)` outside tasks/bd.go
