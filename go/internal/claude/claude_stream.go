@@ -172,22 +172,23 @@ func formatContent(text string) string {
 // FormatStreamLine takes raw extracted text from a stream event and returns
 // a fully formatted output line with timestamp, ANSI colors, and markdown stripped.
 func FormatStreamLine(text string) string {
-	return time.Now().Format("15:04:05") + " " + formatContent(text)
+	return formatContent(text) + " " + time.Now().Format("15:04:05")
 }
 
-// StreamFormatter buffers consecutive lines that share the same timestamp
-// and emits them as a group when the second changes:
-//   - Under 3 lines: each line gets its own timestamp prefix
-//   - 3+ lines: timestamp on its own line, content lines at root level
+// StreamFormatter emits lines immediately, appending a trailing timestamp
+// only when the second changes from the previous line:
+//
+//	[Edit] claude_stream.go 15:57:20
+//	[Edit] claude_stream.go
+//	[Read] claude_stream.go 15:57:23
 type StreamFormatter struct {
-	lastSignal string // dedup: suppress consecutive identical signal lines
-	pendingTS  string
-	pending    []string          // formatted content without timestamp prefix
-	clock      func() time.Time  // injectable clock; nil defaults to time.Now
-	workDir    string            // when set, strip this prefix from absolute paths
+	lastSignal string           // dedup: suppress consecutive identical signal lines
+	lastTS     string           // timestamp of the last emitted line
+	clock      func() time.Time // injectable clock; nil defaults to time.Now
+	workDir    string           // when set, strip this prefix from absolute paths
 }
 
-const tsWidth = 9       // "HH:MM:SS" (8) + space (1)
+const tsWidth = 9     // " HH:MM:SS" (space + 8)
 const agentPrefix = 4 // "[r] " (4)
 const maxLineWidth = 120
 
@@ -205,71 +206,43 @@ func (f *StreamFormatter) now() time.Time {
 	return time.Now()
 }
 
-// FlushPending emits any buffered lines with appropriate timestamp formatting.
+// FlushPending is a no-op — lines are emitted immediately, not buffered.
+// Kept for API compatibility with ToolBatcher.
 func (f *StreamFormatter) FlushPending() []string {
-	if len(f.pending) == 0 {
-		return nil
-	}
-	ts := f.pendingTS
-	lines := f.pending
-	f.pending = nil
-	f.pendingTS = ""
-
-	if len(lines) < 3 {
-		result := make([]string, len(lines))
-		for i, c := range lines {
-			result[i] = ts + " " + c
-		}
-		return result
-	}
-
-	result := make([]string, 0, len(lines)+1)
-	result = append(result, logging.Dim+ts+logging.Reset)
-	for _, c := range lines {
-		result = append(result, c)
-	}
-	return result
-}
-
-// FlushIfStale emits pending lines only if the current second has changed.
-func (f *StreamFormatter) FlushIfStale() []string {
-	if len(f.pending) == 0 {
-		return nil
-	}
-	ts := f.now().Format("15:04:05")
-	if ts != f.pendingTS {
-		return f.FlushPending()
-	}
 	return nil
 }
 
-// bufferLine adds a formatted content line to the pending buffer.
-// If the timestamp has changed, flushes the previous group first.
-func (f *StreamFormatter) bufferLine(content string) []string {
-	ts := f.now().Format("15:04:05")
-
-	var flushed []string
-	if ts != f.pendingTS && len(f.pending) > 0 {
-		flushed = f.FlushPending()
-	}
-
-	f.pendingTS = ts
-	f.pending = append(f.pending, content)
-	return flushed
+// FlushIfStale is a no-op — lines are emitted immediately, not buffered.
+// Kept for API compatibility with ToolBatcher.
+func (f *StreamFormatter) FlushIfStale() []string {
+	return nil
 }
 
-// FormatLine formats text with a timestamp prefix. Kept for simple
-// single-line formatting; does not participate in buffered grouping.
+// emitLine appends a trailing timestamp to content when the second has
+// changed from the previous line, then returns the formatted line.
+func (f *StreamFormatter) emitLine(content string) []string {
+	ts := f.now().Format("15:04:05")
+	var line string
+	if ts != f.lastTS {
+		line = content + " " + logging.Dim + ts + logging.Reset
+	} else {
+		line = content
+	}
+	f.lastTS = ts
+	return []string{line}
+}
+
+// FormatLine formats text with a trailing timestamp when the second changes.
 func (f *StreamFormatter) FormatLine(text string) string {
 	content := formatContent(text)
-	ts := f.now().Format("15:04:05")
-	return ts + " " + content
+	lines := f.emitLine(content)
+	return lines[0]
 }
 
-// FormatOutput formats a stream text line using timestamp grouping,
-// returning one or more output lines. Diagnosis lines (ISSUE:/FIX:)
-// get a banner above the content. Prose lines (not tool calls or
-// diagnosis) are truncated to maxLineWidth to prevent terminal overflow.
+// FormatOutput formats a stream text line, appending a trailing timestamp
+// only when the second changes. Diagnosis lines (ISSUE:/FIX:) get a banner
+// above the content. Prose lines (not tool calls or diagnosis) are truncated
+// to maxLineWidth to prevent terminal overflow.
 func (f *StreamFormatter) FormatOutput(text string) []string {
 	text = f.shortenPaths(text)
 	if name, msg, ok := parseSignalLine(text); ok {
@@ -278,19 +251,18 @@ func (f *StreamFormatter) FormatOutput(text string) []string {
 			return nil
 		}
 		f.lastSignal = key
-		return f.bufferLine(formatContent("[signal] " + name + ": " + msg))
+		return f.emitLine(formatContent("[signal] " + name + ": " + msg))
 	}
 	if label, content, ok := parseDiagnosis(text); ok {
 		var result []string
-		result = append(result, f.FlushPending()...)
 		result = append(result, diagnosisBanner(label))
-		result = append(result, f.bufferLine(formatContent("[r] "+content))...)
+		result = append(result, f.emitLine(formatContent("[r] "+content))...)
 		return result
 	}
 	if !isToolLine(text) {
 		text = truncateProse(text, maxLineWidth-tsWidth-agentPrefix)
 	}
-	return f.bufferLine(formatContent("[r] " + text))
+	return f.emitLine(formatContent("[r] " + text))
 }
 
 // isToolLine returns true if the line starts with a bracketed tool name.
@@ -346,13 +318,10 @@ func diagnosisBanner(label string) string {
 		logging.Reset)
 }
 
-// FormatStreamOutput formats a stream text line without timestamp grouping.
-// Each call uses a fresh formatter, so every line gets its own timestamp.
-// Used by ToolBatcher for backward-compatible output when no grouping is needed.
+// FormatStreamOutput formats a stream text line using a fresh formatter,
+// so the first line always gets a trailing timestamp.
 func FormatStreamOutput(text string) []string {
 	f := &StreamFormatter{}
-	result := f.FormatOutput(text)
-	result = append(result, f.FlushPending()...)
-	return result
+	return f.FormatOutput(text)
 }
 
