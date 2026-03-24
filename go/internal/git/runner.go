@@ -27,9 +27,34 @@ func (r *execRunner) Run(ctx context.Context, dir string, args ...string) (strin
 // defaultRunner is the package-level runner used by standalone helper functions.
 var defaultRunner Runner = &execRunner{}
 
+// Standalone git command wrappers that delegate to defaultRunner.
+// Used by package-level helper functions that don't have a Manager instance.
+
+func gitCmd(dir string, args ...string) {
+	defaultRunner.Run(context.Background(), dir, args...)
+}
+
+func gitCmdCtx(ctx context.Context, dir string, args ...string) {
+	defaultRunner.Run(ctx, dir, args...)
+}
+
+func gitCmdErr(dir string, args ...string) error {
+	_, err := defaultRunner.Run(context.Background(), dir, args...)
+	return err
+}
+
+func gitOutput(dir string, args ...string) string {
+	out, _ := defaultRunner.Run(context.Background(), dir, args...)
+	return out
+}
+
+func refExists(dir, ref string) bool {
+	return gitCmdErr(dir, "rev-parse", "--verify", ref) == nil
+}
+
 // Manager-level git command wrappers that delegate to the injected Runner.
-// These mirror the package-level gitCmd/gitCmdErr/gitOutput functions but
-// route through m.run() so tests can intercept all git calls.
+// These mirror the standalone wrappers above but route through m.run()
+// so tests can intercept all git calls.
 
 func (m *Manager) run() Runner {
 	if m.Runner != nil {
