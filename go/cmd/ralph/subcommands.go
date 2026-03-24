@@ -261,9 +261,6 @@ func printUsage() {
 
 %sCOMMANDS:%s
   ralph loop [options]         Autonomous executor — picks up tasks, writes code, pushes PRs
-    ralph stop                 Halt the loop after the current iteration
-    ralph feedback             Show queued feedback for the loop in progress
-    ralph feedback [message]   Queue a message to the loop in progress
   ralph task [directory]       Interactive task triage and spec session
   ralph review [directory]     Code quality review and refactoring session
   ralph commander [directory]  Full 4-pane tmux layout (loop + task manager + stream + plan)
@@ -293,11 +290,17 @@ func printLoopUsage() {
 	fmt.Printf("%sralph loop%s - Autonomous task executor\n\n", logging.Bold, logging.Reset)
 	fmt.Printf("%sUSAGE:%s\n  ralph loop [OPTIONS]\n\n", logging.Bold, logging.Reset)
 	fmt.Printf("%sOPTIONS:%s\n%s\n", logging.Bold, logging.Reset, config.FlagUsage())
-	fmt.Printf(`%sEXAMPLES:%s
+	fmt.Printf(`%sWHILE RUNNING:%s
+  ralph stop                 Halt the loop after the current iteration
+  ralph feedback             Show queued feedback for the loop
+  ralph feedback <message>   Queue a message for the loop agent
+
+%sEXAMPLES:%s
   ralph loop --dir ~/myproject -n 20
   ralph loop --auto-merge --evolve
   ralph loop -p "Fix all failing tests"
 `,
+		logging.Bold, logging.Reset,
 		logging.Bold, logging.Reset,
 	)
 }

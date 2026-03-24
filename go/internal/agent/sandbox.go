@@ -48,6 +48,10 @@ func (s *Sandbox) Profile(writeDirs []string) string {
 	}
 	b.WriteString("(allow file-write* (subpath \"/tmp\"))\n")
 	b.WriteString("(allow file-write* (subpath \"/private/tmp\"))\n")
+	b.WriteString("(allow file-write* (literal \"/dev/null\"))\n")
+	b.WriteString("(allow file-write* (literal \"/dev/zero\"))\n")
+	b.WriteString("(allow file-write* (subpath \"/dev/fd\"))\n")
+	b.WriteString("(allow file-write* (regex #\"^/dev/ttys[0-9]+$\"))\n")
 
 	b.WriteString("(allow process*)\n")
 	b.WriteString("(allow sysctl*)\n")

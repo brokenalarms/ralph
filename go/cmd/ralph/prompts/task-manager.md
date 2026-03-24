@@ -34,6 +34,10 @@ pushing (`gh pr view <number> --json state`). PRs may have been merged or closed
 while you were working. If merged/closed, create a new branch from `origin/main`
 and a new PR for the remaining work.
 
+When the user reports minor issues that don't block the loop, create beads for
+them rather than fixing inline. Only switch to hands-on fix mode when the loop
+is broken or the user explicitly asks for a fix.
+
 ## Task backend
 
 Run `bd prime` for workflow context. All `bd` commands must run from
