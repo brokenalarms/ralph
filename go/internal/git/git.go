@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // StateStore abstracts reading and writing ralph JSON state.
@@ -227,7 +229,7 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) {
 
 	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "origin/"+defaultBranch); err != nil {
 		if resolved := m.autoResolveAndContinue(ctx, defaultBranch); !resolved {
-			m.Logger.Warn("Rebase onto %s failed with unresolvable conflicts — aborting", defaultBranch)
+			m.Logger.Warn("%s Rebase onto %s failed with unresolvable conflicts — aborting", logging.BranchTag(defaultBranch), defaultBranch)
 			m.gitCmd(m.WorkDir, "rebase", "--abort")
 		}
 	}

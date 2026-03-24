@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // PushAndCreatePR pushes the current branch to remote and creates a PR if
@@ -118,7 +120,8 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	m.Logger.Log("Auto-merging PR #%s (branch: %s)...", prNumber, m.WorktreeBranch)
+	defaultBranch := m.detectDefaultBranch()
+	m.Logger.Log("%s Auto-merging PR #%s...", logging.BranchTag(defaultBranch), prNumber)
 
 	fetch := gh.ListChecks
 
@@ -220,9 +223,8 @@ func (m *Manager) GetCIFailureLog(prNumber string) string {
 // postMergeUpdate fetches the latest default branch after a successful merge
 // so the next iteration starts from merged state.
 func (m *Manager) postMergeUpdate(prNumber string) (bool, error) {
-	m.Logger.Log("PR #%s squash-merged into main", prNumber)
-
 	defaultBranch := m.detectDefaultBranch()
+	m.Logger.Log("%s PR #%s squash-merged", logging.BranchTag(defaultBranch), prNumber)
 	m.gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
 	// Single atomic reset: advances ref, index, and working tree together.
 	// The previous two-step approach (update-ref + reset --hard HEAD) left
@@ -282,11 +284,12 @@ type MergeRetryOpts struct {
 // ResolveConflict rebases onto the default branch and force-pushes to
 // resolve PR merge conflicts before the next merge attempt.
 func (m *Manager) ResolveConflict(ctx context.Context) error {
-	m.Logger.Log("Rebasing onto default branch to resolve merge conflicts...")
+	defaultBranch := m.detectDefaultBranch()
+	m.Logger.Log("%s Rebasing onto %s to resolve merge conflicts...", logging.BranchTag(defaultBranch), defaultBranch)
 	if err := m.RebaseOntoDefaultBranch(ctx); err != nil {
 		return fmt.Errorf("conflict resolution rebase failed: %w", err)
 	}
-	m.Logger.Log("Force-pushing rebased branch...")
+	m.Logger.Log("%s Force-pushing rebased branch...", logging.BranchTag(defaultBranch))
 	return m.ForcePush(ctx)
 }
 
@@ -378,6 +381,6 @@ func (m *Manager) PostMergeReset() error {
 	if m.State != nil {
 		_ = m.State.Write("worktree_branch", m.WorktreeBranch)
 	}
-	m.Logger.Log("Force-reset to %s from origin/%s", newBranch, defaultBranch)
+	m.Logger.Log("%s Force-reset to %s", logging.BranchTag(defaultBranch), newBranch)
 	return nil
 }

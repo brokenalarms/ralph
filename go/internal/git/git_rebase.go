@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // RebaseRecovery represents the user's chosen recovery action when rebase
@@ -229,19 +231,19 @@ func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
 	// includes everything from main. The reverse (HEAD ancestor of
 	// origin/main) would incorrectly skip rebase when HEAD is behind.
 	if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, "HEAD") == nil {
-		m.Logger.Log("Already up to date with origin/%s", defaultBranch)
+		m.Logger.Log("%s Already up to date with origin/%s", logging.BranchTag(defaultBranch), defaultBranch)
 		return nil
 	}
 
 	// Try simple rebase
 	if m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "origin/"+defaultBranch) == nil {
-		m.Logger.Log("Rebased onto origin/%s", defaultBranch)
+		m.Logger.Log("%s Rebased onto origin/%s", logging.BranchTag(defaultBranch), defaultBranch)
 		return nil
 	}
 
 	// Try auto-resolving mechanical conflicts (e.g. squash-merge overlaps)
 	if m.autoResolveAndContinue(ctx, defaultBranch) {
-		m.Logger.Log("Rebased onto origin/%s (auto-resolved conflicts)", defaultBranch)
+		m.Logger.Log("%s Rebased onto origin/%s (auto-resolved conflicts)", logging.BranchTag(defaultBranch), defaultBranch)
 		return nil
 	}
 	m.gitCmd(m.WorkDir, "rebase", "--abort")
@@ -255,7 +257,7 @@ func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
 	lastMerged := m.findLastSquashMergedBranch(defaultBranch)
 
 	if lastMerged == "" {
-		m.Logger.Error("Rebase onto %s failed with real conflicts", defaultBranch)
+		m.Logger.Error("%s Rebase onto %s failed with real conflicts", logging.BranchTag(defaultBranch), defaultBranch)
 		return &RebaseConflictError{Cause: fmt.Sprintf("rebase onto %s failed with real conflicts", defaultBranch)}
 	}
 
@@ -266,11 +268,11 @@ func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		m.Logger.Error("Rebase onto %s past squash-merged branches failed", defaultBranch)
+		m.Logger.Error("%s Rebase onto %s past squash-merged branches failed", logging.BranchTag(defaultBranch), defaultBranch)
 		return &RebaseConflictError{Cause: fmt.Sprintf("rebase onto %s past squash-merged branches failed", defaultBranch)}
 	}
 
-	m.Logger.Log("Rebased onto origin/%s (skipped squash-merged branches)", defaultBranch)
+	m.Logger.Log("%s Rebased onto origin/%s (skipped squash-merged branches)", logging.BranchTag(defaultBranch), defaultBranch)
 
 	m.TaskSeq = ParseTaskSeqFromBranches(m.ProjectDir, m.ProjectName)
 	m.gitCmd(m.ProjectDir, "branch", "-D", lastMerged)
