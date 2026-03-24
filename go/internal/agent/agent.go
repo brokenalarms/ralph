@@ -141,8 +141,10 @@ func sandboxWriteDirs(workDir, ralphDir string) []string {
 		dirs = append(dirs, gitCommon)
 	}
 
-	// Go build cache and module cache.
 	if home, err := os.UserHomeDir(); err == nil {
+		// Claude CLI session state (session-env, history, etc.)
+		dirs = append(dirs, filepath.Join(home, ".claude"))
+		// Go build cache and module cache.
 		dirs = append(dirs, filepath.Join(home, "Library", "Caches", "go-build"))
 		dirs = append(dirs, filepath.Join(home, "go"))
 	}
