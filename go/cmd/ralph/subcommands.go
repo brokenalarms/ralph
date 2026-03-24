@@ -75,7 +75,7 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 		log.Success("", "Feedback sent — agent will pick it up on next tool call.")
 		return 0
 
-	case "commander":
+	case "command":
 		return handleCommander(sub, log)
 
 	case "loop":
@@ -207,7 +207,6 @@ func handleCommander(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 
-	// Re-parse remaining args as loop flags (everything after "commander [dir]").
 	cfg, err := config.Parse(sub.Args)
 	if err != nil {
 		log.Error("", "%v", err)
@@ -218,10 +217,9 @@ func handleCommander(sub config.Subcommand, log *logging.Logger) int {
 
 	scriptPath, _ := os.Executable()
 
-	// Build the two commands for the tmux panes.
-	allArgs := append([]string{"commander"}, sub.Args...)
+	allArgs := append([]string{"command"}, sub.Args...)
 	if sub.Dir != "." {
-		allArgs = append([]string{"commander", sub.Dir}, sub.Args...)
+		allArgs = append([]string{"command", sub.Dir}, sub.Args...)
 	}
 
 	return handleTmuxCommander(cfg, scriptPath, allArgs, ralphDir, log)
@@ -267,7 +265,7 @@ func printUsage() {
   ralph loop [options]         Autonomous executor — picks up tasks, writes code, pushes PRs
   ralph task [directory]       Interactive task triage and spec session
   ralph review [directory]     Code quality review and refactoring session
-  ralph commander [directory]  Full 4-pane tmux layout (loop + task manager + stream + plan)
+  ralph command [directory]    Full 4-pane tmux layout (loop + task manager + stream + plan)
 
 %sEXAMPLES:%s
   ralph loop --dir ~/myproject --max 20

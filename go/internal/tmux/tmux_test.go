@@ -319,26 +319,28 @@ func TestWritePlanWatcher_FlashSignal(t *testing.T) {
 	}
 }
 
-// Verifies that BuildRalphCmd strips the "commander" subcommand from the
-// args so the re-exec'd loop pane runs the main loop, not commander again.
-func TestBuildRalphCmd_StripsCommander(t *testing.T) {
-	cmd := BuildRalphCmd("/usr/local/bin/ralph", []string{
-		"commander",
-		"--dir", "/projects/myapp",
-		"-n", "10",
-	})
+// Verifies that BuildRalphCmd strips "command" and "commander" subcommands
+// from args so the re-exec'd loop pane runs the main loop, not command again.
+func TestBuildRalphCmd_StripsCommand(t *testing.T) {
+	for _, sub := range []string{"command", "commander"} {
+		cmd := BuildRalphCmd("/usr/local/bin/ralph", []string{
+			sub,
+			"--dir", "/projects/myapp",
+			"-n", "10",
+		})
 
-	if strings.Contains(cmd, "commander") {
-		t.Error("BuildRalphCmd should strip 'commander' subcommand")
-	}
-	if !strings.Contains(cmd, "--quiet") {
-		t.Error("BuildRalphCmd should append --quiet")
-	}
-	if !strings.Contains(cmd, "/projects/myapp") {
-		t.Error("BuildRalphCmd should preserve other args")
-	}
-	if !strings.Contains(cmd, " loop ") {
-		t.Error("BuildRalphCmd should include 'loop' subcommand")
+		if strings.Contains(cmd, sub) {
+			t.Errorf("BuildRalphCmd should strip %q subcommand", sub)
+		}
+		if !strings.Contains(cmd, "--quiet") {
+			t.Errorf("BuildRalphCmd should append --quiet (input: %s)", sub)
+		}
+		if !strings.Contains(cmd, "/projects/myapp") {
+			t.Errorf("BuildRalphCmd should preserve other args (input: %s)", sub)
+		}
+		if !strings.Contains(cmd, " loop ") {
+			t.Errorf("BuildRalphCmd should include 'loop' subcommand (input: %s)", sub)
+		}
 	}
 }
 
