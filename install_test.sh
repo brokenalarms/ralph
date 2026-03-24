@@ -15,6 +15,11 @@ echo "$deps_line" | grep -q 'gh' || fail "BREW_DEPS missing gh"
 echo "$deps_line" | grep -q 'tmux' || fail "BREW_DEPS missing tmux"
 echo "$deps_line" | grep -q 'jq' && fail "BREW_DEPS should not include jq"
 
+# --- Test: clones from agent-skeleton template if repo is new ---
+# When installing fresh, the script should bootstrap from the agent-skeleton template.
+grep -q 'agent-skeleton' "$SCRIPT_DIR/install.sh" || fail "should clone from agent-skeleton template"
+grep -q '\.git' "$SCRIPT_DIR/install.sh" || fail "should check if .git exists"
+
 # --- Test: Go toolchain check is present ---
 # The install script must verify that go is available before building.
 grep -q 'command -v go' "$SCRIPT_DIR/install.sh" || fail "missing Go toolchain check"

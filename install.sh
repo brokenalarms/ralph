@@ -19,6 +19,14 @@ if [[ ${#missing[@]} -gt 0 ]]; then
   brew install "${missing[@]}"
 fi
 
+# --- Clone from template if new ---
+RALPH_REPO="${RALPH_REPO:-$HOME/Developer/ralph}"
+if [[ ! -d "$RALPH_REPO/.git" ]]; then
+  echo "Repository not found at $RALPH_REPO — cloning from agent-skeleton template..."
+  gh repo create brokenalarms/ralph --template brokenalarms/agent-skeleton --private --clone -- "$RALPH_REPO"
+  SCRIPT_DIR="$RALPH_REPO"
+fi
+
 # --- Go toolchain ---
 if ! command -v go &>/dev/null; then
   echo "Error: go not found. Install Go from https://go.dev/dl/ or via 'brew install go'"
