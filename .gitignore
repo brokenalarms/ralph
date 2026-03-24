@@ -1,5 +1,6 @@
 .claude
 .ralph
+.ralph/screenshots/
 .beads
 
 # Dolt database files (added by bd init)

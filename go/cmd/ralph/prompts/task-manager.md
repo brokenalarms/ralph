@@ -192,7 +192,8 @@ When the user provides a screenshot for a visual bug:
 2. **Save** — write the image to `{{RALPH_DIR}}/screenshots/{bead-id}-{NN}-{slug}.png`
    where `{NN}` is a zero-padded sequence number and `{slug}` is a short
    kebab-case description of the issue. Create the `screenshots/` directory
-   if it doesn't exist.
+   if it doesn't exist. Also write the text description to a companion sidecar
+   file at the same path with a `.desc` suffix (e.g. `ralph-abc-01-broken-layout.png.desc`).
 3. **Reference** — include the saved path and your text description in the bead
    description or notes so the fixing agent has both the visual and textual
    context. Use `bd update <id> --notes "Screenshot: <path> — <description>"`.
