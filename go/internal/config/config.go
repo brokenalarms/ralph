@@ -86,8 +86,8 @@ func ParseSubcommand(args []string) (Subcommand, bool) {
 		return Subcommand{Name: "stop", Dir: ".", Args: args[1:]}, true
 	case "feedback":
 		return parseSubcommandWithDir(args, "feedback"), true
-	case "commander":
-		return parseSubcommandWithDir(args, "commander"), true
+	case "command", "commander":
+		return parseSubcommandWithDir(args, "command"), true
 	case "task":
 		return parseSubcommandWithDir(args, "task"), true
 	case "loop":

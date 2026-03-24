@@ -287,7 +287,7 @@ func (s *Session) bdPlanRender() string {
 func BuildRalphCmd(scriptPath string, origArgs []string) string {
 	parts := []string{shellQuote(scriptPath), "loop"}
 	for _, arg := range origArgs {
-		if arg == "--tmux" || arg == "commander" || arg == "loop" {
+		if arg == "--tmux" || arg == "command" || arg == "commander" || arg == "loop" {
 			continue
 		}
 		parts = append(parts, shellQuote(arg))

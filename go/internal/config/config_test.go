@@ -347,13 +347,22 @@ func TestParseSubcommand(t *testing.T) {
 		t.Errorf("Args = %v, want [hello world]", sub.Args)
 	}
 
-	// "commander" is a subcommand
+	// "command" is a subcommand
+	sub, ok = ParseSubcommand([]string{"command"})
+	if !ok {
+		t.Fatal("expected subcommand for 'command'")
+	}
+	if sub.Name != "command" || sub.Dir != "." {
+		t.Errorf("got %+v, want Name=command Dir=.", sub)
+	}
+
+	// "commander" is accepted as an alias
 	sub, ok = ParseSubcommand([]string{"commander"})
 	if !ok {
-		t.Fatal("expected subcommand for 'commander'")
+		t.Fatal("expected subcommand for 'commander' alias")
 	}
-	if sub.Name != "commander" || sub.Dir != "." {
-		t.Errorf("got %+v, want Name=commander Dir=.", sub)
+	if sub.Name != "command" {
+		t.Errorf("commander alias should resolve to Name=command, got %q", sub.Name)
 	}
 
 	// "task" is a subcommand
