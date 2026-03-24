@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 )
 
 // ANSI color codes.
@@ -63,8 +62,7 @@ type Logger struct {
 	out       io.Writer
 	logFile   io.Writer
 	streaming bool
-	lastTS    string
-	clock     func() time.Time
+	Fmt       LineFormatter
 }
 
 // New creates a Logger that writes to stdout and the given log file writer.
@@ -88,24 +86,6 @@ func NewWithWriter(w io.Writer) *Logger {
 	}
 }
 
-func (l *Logger) now() time.Time {
-	if l.clock != nil {
-		return l.clock()
-	}
-	return time.Now()
-}
-
-// tsSuffix returns a dim trailing timestamp when the second has changed
-// since the last emitted line, or empty string if it hasn't.
-func (l *Logger) tsSuffix() string {
-	ts := l.now().Format("15:04:05")
-	if ts == l.lastTS {
-		return ""
-	}
-	l.lastTS = ts
-	return " " + Dim + ts + Reset
-}
-
 // SetStreaming enables or disables streaming mode. In streaming mode, the
 // logger writes only to the log file — stdout is handled by a single tail
 // goroutine to prevent duplicate output.
@@ -115,7 +95,8 @@ func (l *Logger) SetStreaming(on bool) {
 
 func (l *Logger) emit(color string, domain Domain, msg string) {
 	tag := Tag(color, Orch, domain)
-	line := fmt.Sprintf("%s %s%s\n", tag, msg, l.tsSuffix())
+	content := fmt.Sprintf("%s %s", tag, msg)
+	line := l.Fmt.FormatLine(content) + "\n"
 	if !l.streaming {
 		fmt.Fprint(l.out, line)
 	}
@@ -150,7 +131,8 @@ func (l *Logger) Phase(format string, args ...any) {
 // PhaseColor writes a bold phase header in the given ANSI color.
 func (l *Logger) PhaseColor(color string, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	line := fmt.Sprintf("%s%s[o]%s %s%s%s%s\n", Bold, color, Reset, Bold, msg, Reset, l.tsSuffix())
+	content := fmt.Sprintf("%s%s[o]%s %s%s%s", Bold, color, Reset, Bold, msg, Reset)
+	line := l.Fmt.FormatLine(content) + "\n"
 	if !l.streaming {
 		fmt.Fprint(l.out, line)
 	}

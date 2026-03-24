@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/brokenalarms/ralph/internal/logging"
 )
@@ -172,23 +171,22 @@ func formatContent(text string) string {
 // FormatStreamLine takes raw extracted text from a stream event and returns
 // a fully formatted output line with timestamp, ANSI colors, and markdown stripped.
 func FormatStreamLine(text string) string {
-	return formatContent(text) + " " + time.Now().Format("15:04:05")
+	f := &logging.LineFormatter{}
+	return f.FormatLine(formatContent(text))
 }
 
-// StreamFormatter emits lines immediately, appending a trailing timestamp
+// StreamFormatter emits lines immediately, prepending a dim timestamp
 // only when the second changes from the previous line:
 //
-//	[Edit] claude_stream.go 15:57:20
-//	[Edit] claude_stream.go
-//	[Read] claude_stream.go 15:57:23
+//	15:57:20 [Edit] claude_stream.go
+//	         [Edit] claude_stream.go
+//	15:57:23 [Read] claude_stream.go
 type StreamFormatter struct {
-	lastSignal string           // dedup: suppress consecutive identical signal lines
-	lastTS     string           // timestamp of the last emitted line
-	clock      func() time.Time // injectable clock; nil defaults to time.Now
-	workDir    string           // when set, strip this prefix from absolute paths
+	lastSignal string // dedup: suppress consecutive identical signal lines
+	Fmt        logging.LineFormatter
+	workDir    string // when set, strip this prefix from absolute paths
 }
 
-const tsWidth = 9     // " HH:MM:SS" (space + 8)
 const agentPrefix = 4 // "[r] " (4)
 const maxLineWidth = 120
 
@@ -197,13 +195,6 @@ func (f *StreamFormatter) shortenPaths(text string) string {
 		return text
 	}
 	return strings.ReplaceAll(text, f.workDir+"/", "")
-}
-
-func (f *StreamFormatter) now() time.Time {
-	if f.clock != nil {
-		return f.clock()
-	}
-	return time.Now()
 }
 
 // FlushPending is a no-op — lines are emitted immediately, not buffered.
@@ -218,28 +209,18 @@ func (f *StreamFormatter) FlushIfStale() []string {
 	return nil
 }
 
-// emitLine appends a trailing timestamp to content when the second has
-// changed from the previous line, then returns the formatted line.
+// emitLine formats content via the shared LineFormatter, returning it as
+// a single-element slice for caller convenience.
 func (f *StreamFormatter) emitLine(content string) []string {
-	ts := f.now().Format("15:04:05")
-	var line string
-	if ts != f.lastTS {
-		line = content + " " + logging.Dim + ts + logging.Reset
-	} else {
-		line = content
-	}
-	f.lastTS = ts
-	return []string{line}
+	return []string{f.Fmt.FormatLine(content)}
 }
 
-// FormatLine formats text with a trailing timestamp when the second changes.
+// FormatLine formats text with a front timestamp via the shared LineFormatter.
 func (f *StreamFormatter) FormatLine(text string) string {
-	content := formatContent(text)
-	lines := f.emitLine(content)
-	return lines[0]
+	return f.Fmt.FormatLine(formatContent(text))
 }
 
-// FormatOutput formats a stream text line, appending a trailing timestamp
+// FormatOutput formats a stream text line, prepending a dim timestamp
 // only when the second changes. Diagnosis lines (ISSUE:/FIX:) get a banner
 // above the content. Prose lines (not tool calls or diagnosis) are truncated
 // to maxLineWidth to prevent terminal overflow.
@@ -260,7 +241,7 @@ func (f *StreamFormatter) FormatOutput(text string) []string {
 		return result
 	}
 	if !isToolLine(text) {
-		text = truncateProse(text, maxLineWidth-tsWidth-agentPrefix)
+		text = truncateProse(text, maxLineWidth-logging.TSWidth-agentPrefix)
 	}
 	return f.emitLine(formatContent("[r] " + text))
 }
@@ -319,7 +300,7 @@ func diagnosisBanner(label string) string {
 }
 
 // FormatStreamOutput formats a stream text line using a fresh formatter,
-// so the first line always gets a trailing timestamp.
+// so the first line always gets a leading timestamp.
 func FormatStreamOutput(text string) []string {
 	f := &StreamFormatter{}
 	return f.FormatOutput(text)

@@ -179,18 +179,18 @@ func TestStripMarkdown(t *testing.T) {
 	}
 }
 
-// Verifies that FormatStreamLine adds a trailing timestamp and ANSI color codes.
+// Verifies that FormatStreamLine adds a leading timestamp and ANSI color codes.
 func TestFormatStreamLine(t *testing.T) {
 	line := FormatStreamLine("[r] [Read] /tmp/foo.go")
 	plain := ansiRe.ReplaceAllString(line, "")
 
-	// Should have HH:MM:SS timestamp suffix.
-	if len(plain) < 8 {
+	// Should have HH:MM:SS timestamp prefix.
+	if len(plain) < 9 {
 		t.Fatalf("FormatStreamLine too short, got: %q", plain)
 	}
-	suffix := plain[len(plain)-8:]
-	if suffix[2] != ':' || suffix[5] != ':' {
-		t.Errorf("FormatStreamLine missing timestamp suffix, got: %q", plain)
+	prefix := plain[:8]
+	if prefix[2] != ':' || prefix[5] != ':' {
+		t.Errorf("FormatStreamLine missing timestamp prefix, got: %q", plain)
 	}
 
 	// Should contain the text content after stripping ANSI.
