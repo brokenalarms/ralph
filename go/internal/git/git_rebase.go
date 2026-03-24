@@ -335,7 +335,7 @@ func IsBranchSquashMerged(dir, branch, baseBranch string) bool {
 // temporary index and reverse-applies the branch diff — success means
 // origin already contains the changes (squash-merged).
 func checkSquashMerged(dir, defaultBranch, mergeBase, branch string) bool {
-	tmpIndex, err := os.CreateTemp("", "ralph_squash_check.*")
+	tmpIndex, err := os.CreateTemp(dir, ".ralph_squash_check.*")
 	if err != nil {
 		return false
 	}
