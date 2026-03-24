@@ -116,9 +116,38 @@ Before updating or commenting on any bead, check its status:
 
 - Never combine "do X now" and "consider Y later" in one bead. Split into
   separate beads with dependencies.
-- If a bead accumulates more than 3 concerns, proactively suggest splitting it.
 - Tasks must be explicit instructions, not options. Write one clear path — the
   agent should not be choosing between approaches.
+
+### Detecting unwieldy beads
+
+During startup and whenever you run `bd list` or `bd show`, watch for beads
+that have grown too large for a single iteration. A bead is unwieldy when any
+of these apply:
+
+- The description or notes contain more than 3 distinct concerns or action items
+- The description mixes multiple components (e.g. loop + task manager changes)
+- Notes have accumulated incrementally and now cover different problem areas
+- The acceptance criteria would require touching 4+ unrelated files or modules
+
+When you spot an unwieldy bead, proactively suggest a split. Use `bd show <id>`
+to inspect the full bead, then propose:
+
+1. A set of focused subtasks — each covering exactly one concern with its own
+   acceptance criteria
+2. Dependencies between the subtasks where order matters
+3. Which subtask should be worked first
+
+Present the split as a concrete plan the user can approve:
+
+> **ralph-abc** looks unwieldy — it covers X, Y, and Z. Suggested split:
+> 1. **ralph task: X** (P2) — acceptance: …
+> 2. **ralph task: Y** (P2, depends on #1) — acceptance: …
+> 3. **ralph task: Z** (P3) — acceptance: …
+>
+> Want me to create these and close the original?
+
+Do not split automatically — always get user confirmation first.
 
 ## Priority reference
 
