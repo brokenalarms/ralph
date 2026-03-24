@@ -1171,6 +1171,61 @@ func TestRun_SecondCallStopsPreviousStreaming(t *testing.T) {
 	}
 }
 
+// Proves that after detecting a completion signal, the orchestrator waits for
+// the raw log to stop being modified before killing the agent. This prevents
+// truncation of the agent's final output (e.g., completion summary).
+func TestRun_WaitsForOutputAfterSignal(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// Simulate: signal file appears, then raw log keeps being written for 500ms.
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		tmp := signals.Complete + ".tmp"
+		os.WriteFile(tmp, []byte("task finished"), 0o644)
+		os.Rename(tmp, signals.Complete)
+
+		// Agent still writing output after signal.
+		for i := 0; i < 5; i++ {
+			time.Sleep(100 * time.Millisecond)
+			f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_WRONLY, 0o644)
+			fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"finishing up"}}`)
+			f.Close()
+		}
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 100 * time.Millisecond,
+	}
+
+	start := time.Now()
+	result := runWithCommand(t, &runner, cfg, "sleep", "30")
+	elapsed := time.Since(start)
+
+	if !result.SignalDetected {
+		t.Error("expected SignalDetected to be true")
+	}
+	// Should have waited at least 500ms after signal (5 writes * 100ms) plus
+	// the settle period, not killed immediately on signal detection.
+	if elapsed < 700*time.Millisecond {
+		t.Errorf("expected grace period after signal, but killed in %s", elapsed)
+	}
+	// But shouldn't wait forever — should finish within a few seconds.
+	if elapsed > 5*time.Second {
+		t.Errorf("grace period took too long: %s", elapsed)
+	}
+}
+
 // Verifies that git checkout and git branch are disallowed so sub-agents
 // can't check out ralph's branches, which would block RecreateFromMain.
 func TestDisallowedTools_BlocksGitCheckoutAndBranch(t *testing.T) {
