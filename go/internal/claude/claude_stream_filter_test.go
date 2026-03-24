@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -377,5 +378,62 @@ func TestFilterStreamJSON_SignalHighlight(t *testing.T) {
 	}
 	if !strings.Contains(string(got), "\033[0;33m") {
 		t.Errorf("signal write should have yellow ANSI color, got: %q", string(got))
+	}
+}
+
+// Verifies that multi-line Bash commands (heredocs, inline scripts) produce
+// only one output line showing the first line of the command, not the entire body.
+func TestFilterStreamJSON_MultiLineBashTruncated(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+
+	os.WriteFile(rawPath, nil, 0o644)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		filterStreamJSON(rawPath, logPath, "", stop)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Multi-line Bash command with an inline script containing real newlines.
+	cmd := "node -e '\nconst http = require(\"http\");\nconst server = http.createServer();\nserver.listen(3000);\nconsole.log(\"started\");\n'"
+	// Build JSON manually to ensure newlines are properly encoded.
+	cmdJSON, _ := json.Marshal(cmd)
+	fmt.Fprintf(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":%s}}]}}`, cmdJSON)
+	fmt.Fprintln(f)
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := ansiRe.ReplaceAllString(string(got), "")
+
+	if strings.Contains(content, "createServer") {
+		t.Errorf("multi-line Bash body should not appear in log, got: %q", content)
+	}
+	if !strings.Contains(content, "[r] [Bash] node -e '") {
+		t.Errorf("should show first line of Bash command, got: %q", content)
+	}
+	// Should be a single [r] line, not multiple.
+	rLines := 0
+	for _, line := range strings.Split(content, "\n") {
+		if strings.Contains(line, "[r]") {
+			rLines++
+		}
+	}
+	if rLines > 1 {
+		t.Errorf("expected 1 [r] output line for multi-line Bash, got %d in: %q", rLines, content)
 	}
 }
