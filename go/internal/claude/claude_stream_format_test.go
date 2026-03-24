@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 func fixedClock(ts string) func() time.Time {
@@ -13,28 +15,28 @@ func fixedClock(ts string) func() time.Time {
 	return func() time.Time { return parsed }
 }
 
-// Verifies that timestamps appear at the END of lines, only when the
+// Verifies that timestamps appear at the front of lines, only when the
 // second changes from the previous line. First line always gets a timestamp.
-func TestStreamFormatter_TimestampAtEnd(t *testing.T) {
+func TestStreamFormatter_TimestampAtFront(t *testing.T) {
 	sec := 0
-	f := &StreamFormatter{clock: func() time.Time {
+	f := &StreamFormatter{Fmt: logging.LineFormatter{Clock: func() time.Time {
 		return time.Date(2026, 1, 1, 15, 57, 20+sec, 0, time.UTC)
-	}}
+	}}}
 
-	// First line: always gets timestamp at end.
+	// First line: always gets timestamp at front.
 	lines1 := f.FormatOutput("[Edit] claude_stream.go")
 	if len(lines1) != 1 {
 		t.Fatalf("first line: expected 1 line, got %d", len(lines1))
 	}
 	plain1 := ansiRe.ReplaceAllString(lines1[0], "")
-	if !strings.HasSuffix(plain1, " 15:57:20") {
-		t.Errorf("first line should end with timestamp, got: %q", plain1)
+	if !strings.HasPrefix(plain1, "15:57:20 ") {
+		t.Errorf("first line should start with timestamp, got: %q", plain1)
 	}
 	if !strings.Contains(plain1, "[r] [Edit] claude_stream.go") {
 		t.Errorf("first line should contain content, got: %q", plain1)
 	}
 
-	// Second line same second: no timestamp.
+	// Second line same second: no timestamp, padded.
 	lines2 := f.FormatOutput("[Edit] claude_stream.go")
 	if len(lines2) != 1 {
 		t.Fatalf("second line: expected 1 line, got %d", len(lines2))
@@ -51,8 +53,8 @@ func TestStreamFormatter_TimestampAtEnd(t *testing.T) {
 		t.Fatalf("third line: expected 1 line, got %d", len(lines3))
 	}
 	plain3 := ansiRe.ReplaceAllString(lines3[0], "")
-	if !strings.HasSuffix(plain3, " 15:57:23") {
-		t.Errorf("different-second line should end with timestamp, got: %q", plain3)
+	if !strings.HasPrefix(plain3, "15:57:23 ") {
+		t.Errorf("different-second line should start with timestamp, got: %q", plain3)
 	}
 }
 
@@ -60,7 +62,7 @@ func TestStreamFormatter_TimestampAtEnd(t *testing.T) {
 // line in a given second shows it).
 func TestStreamFormatter_SameSecond_NoTimestamp(t *testing.T) {
 	ts := "14:30:00"
-	f := &StreamFormatter{clock: fixedClock(ts)}
+	f := &StreamFormatter{Fmt: logging.LineFormatter{Clock: fixedClock(ts)}}
 
 	lines1 := f.FormatOutput("first line")
 	lines2 := f.FormatOutput("second line")
@@ -71,8 +73,8 @@ func TestStreamFormatter_SameSecond_NoTimestamp(t *testing.T) {
 	plain1 := ansiRe.ReplaceAllString(lines1[0], "")
 	plain2 := ansiRe.ReplaceAllString(lines2[0], "")
 
-	if !strings.HasSuffix(plain1, " "+ts) {
-		t.Errorf("first line should end with timestamp, got: %q", plain1)
+	if !strings.HasPrefix(plain1, ts+" ") {
+		t.Errorf("first line should start with timestamp, got: %q", plain1)
 	}
 	if strings.Contains(plain2, ts) {
 		t.Errorf("same-second line should not have timestamp, got: %q", plain2)
@@ -83,7 +85,7 @@ func TestStreamFormatter_SameSecond_NoTimestamp(t *testing.T) {
 // timestamp on the first line.
 func TestStreamFormatter_ManySameSecond(t *testing.T) {
 	ts := "14:30:00"
-	f := &StreamFormatter{clock: fixedClock(ts)}
+	f := &StreamFormatter{Fmt: logging.LineFormatter{Clock: fixedClock(ts)}}
 
 	for i := 0; i < 5; i++ {
 		lines := f.FormatOutput(fmt.Sprintf("line %d", i))
@@ -92,8 +94,8 @@ func TestStreamFormatter_ManySameSecond(t *testing.T) {
 		}
 		plain := ansiRe.ReplaceAllString(lines[0], "")
 		if i == 0 {
-			if !strings.HasSuffix(plain, " "+ts) {
-				t.Errorf("first line should end with timestamp, got: %q", plain)
+			if !strings.HasPrefix(plain, ts+" ") {
+				t.Errorf("first line should start with timestamp, got: %q", plain)
 			}
 		} else {
 			if strings.Contains(plain, ts) {
@@ -103,13 +105,13 @@ func TestStreamFormatter_ManySameSecond(t *testing.T) {
 	}
 }
 
-// Verifies that each line with a different second gets a trailing timestamp.
+// Verifies that each line with a different second gets a leading timestamp.
 func TestStreamFormatter_DifferentSeconds_EachGetsTimestamp(t *testing.T) {
 	sec := 0
-	f := &StreamFormatter{clock: func() time.Time {
+	f := &StreamFormatter{Fmt: logging.LineFormatter{Clock: func() time.Time {
 		sec++
 		return time.Date(2026, 1, 1, 14, 30, sec, 0, time.UTC)
-	}}
+	}}}
 
 	lines1 := f.FormatOutput("first line")
 	lines2 := f.FormatOutput("second line")
@@ -122,18 +124,18 @@ func TestStreamFormatter_DifferentSeconds_EachGetsTimestamp(t *testing.T) {
 	}
 	plain1 := ansiRe.ReplaceAllString(lines1[0], "")
 	plain2 := ansiRe.ReplaceAllString(lines2[0], "")
-	if !strings.HasSuffix(plain1, " 14:30:01") {
-		t.Errorf("first line should end with 14:30:01, got: %q", plain1)
+	if !strings.HasPrefix(plain1, "14:30:01 ") {
+		t.Errorf("first line should start with 14:30:01, got: %q", plain1)
 	}
-	if !strings.HasSuffix(plain2, " 14:30:02") {
-		t.Errorf("second line should end with 14:30:02, got: %q", plain2)
+	if !strings.HasPrefix(plain2, "14:30:02 ") {
+		t.Errorf("second line should start with 14:30:02, got: %q", plain2)
 	}
 }
 
 // Verifies that FormatOutput returns lines immediately (no buffering).
 func TestStreamFormatter_FormatOutput_ReturnsImmediately(t *testing.T) {
 	ts := "14:30:00"
-	f := &StreamFormatter{clock: fixedClock(ts)}
+	f := &StreamFormatter{Fmt: logging.LineFormatter{Clock: fixedClock(ts)}}
 
 	lines := f.FormatOutput("hello world")
 	if len(lines) != 1 {
@@ -143,8 +145,8 @@ func TestStreamFormatter_FormatOutput_ReturnsImmediately(t *testing.T) {
 	if !strings.Contains(plain, "[r] hello world") {
 		t.Errorf("line should contain content, got: %q", plain)
 	}
-	if !strings.HasSuffix(plain, " "+ts) {
-		t.Errorf("line should end with timestamp, got: %q", plain)
+	if !strings.HasPrefix(plain, ts+" ") {
+		t.Errorf("line should start with timestamp, got: %q", plain)
 	}
 }
 

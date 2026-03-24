@@ -7,6 +7,15 @@ import (
 	"time"
 )
 
+func timestampAtFront(plain string) bool {
+	// plain should start with "HH:MM:SS " (8 + 1 = 9 chars).
+	if len(plain) < 9 {
+		return false
+	}
+	ts := plain[:8]
+	return ts[2] == ':' && ts[5] == ':' && plain[8] == ' '
+}
+
 // Verifies that each log level emits the correct ANSI color and [o] actor prefix
 // with the specified domain tag.
 func TestLogLevelColors(t *testing.T) {
@@ -33,6 +42,11 @@ func TestLogLevelColors(t *testing.T) {
 			}
 			if !strings.Contains(got, "msg") {
 				t.Error("output missing message body")
+			}
+			// Timestamp should be at the front via LineFormatter.
+			plain := ansiRe.ReplaceAllString(got, "")
+			if !timestampAtFront(plain) {
+				t.Errorf("timestamp should be at front of line, got: %q", plain)
 			}
 		})
 	}
@@ -81,59 +95,64 @@ func TestPhaseFormatting(t *testing.T) {
 	}
 }
 
-// Verifies that timestamps appear at the end of the line (not the beginning),
-// and only when the second changes from the previous line.
-func TestTimestampAtEndOfLine(t *testing.T) {
+// Verifies that timestamps appear at the front of the line and only when
+// the second changes from the previous line.
+func TestTimestampAtFrontOfLine(t *testing.T) {
 	var buf bytes.Buffer
 	fixed := time.Date(2026, 3, 25, 14, 30, 45, 0, time.UTC)
-	l := &Logger{out: &buf, logFile: &buf, clock: func() time.Time { return fixed }}
+	l := &Logger{out: &buf, logFile: &buf}
+	l.Fmt.Clock = func() time.Time { return fixed }
 
 	l.Log("", "first message")
 	got := buf.String()
+	plain := ansiRe.ReplaceAllString(got, "")
 
-	// Timestamp should be at the end, not the beginning.
-	if strings.HasPrefix(got, "14:30:45") {
-		t.Errorf("timestamp should not be at start of line, got: %q", got)
+	if !strings.HasPrefix(plain, "14:30:45 ") {
+		t.Errorf("first line should start with timestamp, got: %q", plain)
 	}
-	if !strings.Contains(got, "14:30:45") {
-		t.Errorf("first line should include timestamp, got: %q", got)
-	}
-	if !strings.HasSuffix(strings.TrimRight(got, "\n"), "14:30:45"+Reset) {
-		t.Errorf("timestamp should be at end of line, got: %q", got)
+	if !strings.Contains(plain, "first message") {
+		t.Errorf("first line should include message, got: %q", plain)
 	}
 
-	// Second line at same second should NOT have a timestamp.
+	// Second line at same second: padded, no timestamp.
 	buf.Reset()
 	l.Log("", "second message")
 	got = buf.String()
-	if strings.Contains(got, "14:30:45") {
-		t.Errorf("same-second line should not include timestamp, got: %q", got)
+	plain = ansiRe.ReplaceAllString(got, "")
+	if strings.Contains(plain, "14:30:45") {
+		t.Errorf("same-second line should not include timestamp, got: %q", plain)
+	}
+	if !strings.HasPrefix(plain, "         ") {
+		t.Errorf("same-second line should be padded, got: %q", plain)
 	}
 
-	// Third line at a new second SHOULD have a timestamp.
+	// Third line at a new second: timestamp.
 	buf.Reset()
 	next := fixed.Add(time.Second)
-	l.clock = func() time.Time { return next }
+	l.Fmt.Clock = func() time.Time { return next }
 	l.Log("", "third message")
 	got = buf.String()
-	if !strings.Contains(got, "14:30:46") {
-		t.Errorf("new-second line should include timestamp, got: %q", got)
+	plain = ansiRe.ReplaceAllString(got, "")
+	if !strings.HasPrefix(plain, "14:30:46 ") {
+		t.Errorf("new-second line should start with timestamp, got: %q", plain)
 	}
 }
 
-// Verifies that Phase lines also use trailing timestamps.
-func TestPhaseTimestampAtEnd(t *testing.T) {
+// Verifies that Phase lines also use front timestamps via LineFormatter.
+func TestPhaseTimestampAtFront(t *testing.T) {
 	var buf bytes.Buffer
 	fixed := time.Date(2026, 3, 25, 10, 0, 0, 0, time.UTC)
-	l := &Logger{out: &buf, logFile: &buf, clock: func() time.Time { return fixed }}
+	l := &Logger{out: &buf, logFile: &buf}
+	l.Fmt.Clock = func() time.Time { return fixed }
 	l.Phase("starting")
 	got := buf.String()
+	plain := ansiRe.ReplaceAllString(got, "")
 
-	if strings.HasPrefix(got, "10:00:00") {
-		t.Errorf("Phase timestamp should not be at start, got: %q", got)
+	if !strings.HasPrefix(strings.TrimLeft(plain, "\n"), "10:00:00 ") {
+		t.Errorf("Phase timestamp should be at front, got: %q", plain)
 	}
-	if !strings.HasSuffix(strings.TrimRight(got, "\n"), "10:00:00"+Reset) {
-		t.Errorf("Phase timestamp should be at end, got: %q", got)
+	if !strings.Contains(plain, "starting") {
+		t.Errorf("Phase output missing message, got: %q", plain)
 	}
 }
 
