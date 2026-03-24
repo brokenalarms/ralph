@@ -801,3 +801,66 @@ func TestFormatOutput_ShortProseUnchanged(t *testing.T) {
 		t.Errorf("short prose should not have ellipsis, got: %q", plain)
 	}
 }
+
+// Verifies that consecutive identical signal lines are deduplicated —
+// Claude's stream-json emits the same Bash tool call across multiple events,
+// so without dedup the same [signal] line appears 2-3 times in the log.
+func TestFormatOutput_DeduplicatesSignalLines(t *testing.T) {
+	f := &StreamFormatter{}
+	signalLine := `[Bash] echo "Working on feature X" > /path/.ralph/.signal_current_task`
+
+	// First call should produce output.
+	lines1 := f.FormatOutput(signalLine)
+	if len(lines1) != 1 {
+		t.Fatalf("first signal call: expected 1 line, got %d", len(lines1))
+	}
+
+	// Second identical call should be suppressed.
+	lines2 := f.FormatOutput(signalLine)
+	if len(lines2) != 0 {
+		t.Errorf("duplicate signal should be suppressed, got %d lines: %v", len(lines2), lines2)
+	}
+
+	// Third identical call should also be suppressed.
+	lines3 := f.FormatOutput(signalLine)
+	if len(lines3) != 0 {
+		t.Errorf("third duplicate signal should be suppressed, got %d lines: %v", len(lines3), lines3)
+	}
+}
+
+// Verifies that different signal lines are NOT suppressed — only exact
+// consecutive duplicates are filtered.
+func TestFormatOutput_DifferentSignalsNotSuppressed(t *testing.T) {
+	f := &StreamFormatter{}
+
+	lines1 := f.FormatOutput(`[Bash] echo "task A" > /path/.signal_current_task`)
+	if len(lines1) != 1 {
+		t.Fatalf("first signal: expected 1 line, got %d", len(lines1))
+	}
+
+	lines2 := f.FormatOutput(`[Bash] echo "task B" > /path/.signal_current_task`)
+	if len(lines2) != 1 {
+		t.Fatalf("different signal: expected 1 line, got %d", len(lines2))
+	}
+}
+
+// Verifies that dedup persists across intervening non-signal lines — the
+// same Bash command appears in multiple Claude stream events seconds apart,
+// often with non-signal content between them.
+func TestFormatOutput_SignalDedupPersistsAcrossNonSignal(t *testing.T) {
+	f := &StreamFormatter{}
+	signalLine := `[Bash] echo "task done" > /path/.signal_complete`
+
+	lines1 := f.FormatOutput(signalLine)
+	if len(lines1) != 1 {
+		t.Fatalf("first signal: expected 1 line, got %d", len(lines1))
+	}
+
+	f.FormatOutput("Reading some file")
+
+	// Same signal again after intervening output — still suppressed.
+	lines3 := f.FormatOutput(signalLine)
+	if len(lines3) != 0 {
+		t.Errorf("same signal after non-signal should still be suppressed, got %d lines", len(lines3))
+	}
+}
