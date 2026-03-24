@@ -406,12 +406,23 @@ func TestParseSubcommand(t *testing.T) {
 // as the target dir.
 func TestSubcommandWithDir(t *testing.T) {
 	dir := t.TempDir()
-	sub, ok := ParseSubcommand([]string{"stop", dir})
+	sub, ok := ParseSubcommand([]string{"task", dir})
 	if !ok {
 		t.Fatal("expected subcommand")
 	}
 	if sub.Dir != dir {
 		t.Errorf("Dir = %q, want %q", sub.Dir, dir)
+	}
+}
+
+func TestStopIgnoresDirectoryArg(t *testing.T) {
+	dir := t.TempDir()
+	sub, ok := ParseSubcommand([]string{"stop", dir})
+	if !ok {
+		t.Fatal("expected subcommand")
+	}
+	if sub.Dir != "." {
+		t.Errorf("stop should always use current dir, got Dir = %q", sub.Dir)
 	}
 }
 
@@ -447,7 +458,9 @@ func TestStopSubcommandIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sub, _ := ParseSubcommand([]string{"stop", dir})
+	sub, _ := ParseSubcommand([]string{"stop"})
+	// Override Dir for testing since stop always uses "."
+	sub.Dir = dir
 	stopFile := filepath.Join(sub.Dir, ".ralph", "stop")
 	if err := os.WriteFile(stopFile, nil, 0o644); err != nil {
 		t.Fatalf("failed to create stop file: %v", err)

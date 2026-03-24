@@ -261,11 +261,12 @@ func printUsage() {
 
 %sCOMMANDS:%s
   ralph loop [options]         Autonomous executor — picks up tasks, writes code, pushes PRs
+    ralph stop                 Halt the loop after the current iteration
+    ralph feedback             Show queued feedback for the loop in progress
+    ralph feedback [message]   Queue a message to the loop in progress
   ralph task [directory]       Interactive task triage and spec session
   ralph review [directory]     Code quality review and refactoring session
   ralph commander [directory]  Full 4-pane tmux layout (loop + task manager + stream + plan)
-  ralph stop [directory]       Halt after the current iteration
-  ralph feedback [message]     Show queued feedback, or queue a new message
 
 %sEXAMPLES:%s
   ralph loop --dir ~/myproject --max 20
