@@ -20,7 +20,6 @@ func TestPostMergeReset_ResetsToOriginMain(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:     project,
 		RalphDir:       ralphDir,
-		UseWorktree:    true,
 		State:  st,
 		Logger: &testLog{},
 	}
@@ -63,8 +62,7 @@ func TestPostMergeReset_CleansUntrackedAndDirtyFiles(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -122,8 +120,7 @@ func TestPostMergeUpdate_AtomicResetNoStagedChanges(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      log,
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -477,8 +474,7 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -520,8 +516,7 @@ func TestResolveConflict_RebasesAndForcePushes(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {

@@ -126,7 +126,7 @@ func TestDefaultsDeriveFromFlagRegistry(t *testing.T) {
 	cfg := Defaults()
 
 	// Build a second config by applying FlagDef defaults directly.
-	check := Config{ProjectDir: ".", UseWorktree: true}
+	check := Config{ProjectDir: "."}
 	for i := range Flags {
 		f := &Flags[i]
 		if f.Default != "" && f.Default != "cwd" {

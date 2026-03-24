@@ -118,7 +118,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	gm := &git.Manager{
 		ProjectDir:     cfg.ProjectDir,
 		RalphDir:       ralphDir,
-		UseWorktree:    cfg.UseWorktree,
 		Resume:         resume,
 		BaseBranch:     cfg.BaseBranch,
 		MergeAdmin: cfg.MergeAdmin,
@@ -301,9 +300,6 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 	var extraArgs []string
 	if cfg.Quiet {
 		extraArgs = append(extraArgs, "--quiet")
-	}
-	if !cfg.UseWorktree {
-		extraArgs = append(extraArgs, "--no-worktree")
 	}
 	if cfg.CallsPerHour != 80 {
 		extraArgs = append(extraArgs, fmt.Sprintf("--calls-per-hour %d", cfg.CallsPerHour))

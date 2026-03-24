@@ -811,8 +811,7 @@ func TestLoop_HandleRebase_FreshWorktreeRecovery(t *testing.T) {
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
@@ -886,8 +885,7 @@ func TestLoop_HandleRebase_AbortHaltsLoop(t *testing.T) {
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
@@ -952,8 +950,7 @@ func TestLoop_HandleRebase_NoHandlerPropagatesError(t *testing.T) {
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
@@ -1011,8 +1008,7 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
@@ -1118,8 +1114,7 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
@@ -1187,8 +1182,7 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
@@ -1271,8 +1265,7 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
@@ -1405,7 +1398,6 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 	gm := &git.Manager{
 		ProjectDir:     project,
 		RalphDir:       ralphDir,
-		UseWorktree:    true,
 		State:  st,
 		Logger: logging.New(nil),
 	}
@@ -1794,8 +1786,7 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
@@ -1885,8 +1876,7 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
@@ -3895,7 +3885,6 @@ func TestLoop_PushCalledAfterSignal(t *testing.T) {
 		RalphDir:       ralphDir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/test/01-task",
-		UseWorktree:    true,
 		State:  st,
 		Logger: logging.New(nil),
 	}

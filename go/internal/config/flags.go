@@ -86,15 +86,6 @@ var Flags = []FlagDef{
 		},
 	},
 	{
-		Long: "--no-worktree",
-		Help: "Run directly in project dir (no git worktree isolation)",
-		Kind: KindBool,
-		Apply: func(cfg *Config, _ string) error {
-			cfg.UseWorktree = false
-			return nil
-		},
-	},
-	{
 		Long: "--calls-per-hour", MetaVar: "<N>",
 		Help: "Max Claude calls per hour", Default: "80",
 		ConfigKey: "calls_per_hour",

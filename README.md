@@ -86,7 +86,6 @@ ralph.sh --tmux
 | `--plan` | Run planning phase only | — |
 | `--skip-planning` | Skip interactive planning, go straight to autonomous execution | — |
 | `-q, --quiet` | Suppress streaming output (log only) | — |
-| `--no-worktree` | Run directly in project dir (no git isolation) | — |
 | `--calls-per-hour <N>` | Rate limit Claude calls per hour | 80 |
 | `--tmux` | 3-pane tmux layout | — |
 
@@ -124,8 +123,6 @@ ralph/myproject/02-fix-failing-tests
 The branch is created with a sequence number at the start and renamed to include a task slug once Claude picks its first task. Merge when ready with `git merge ralph/myproject/01-add-authentication`.
 
 The worktree has `rebase.updateRefs` enabled, so rebasing any branch in the stack automatically updates all intermediate branch pointers. This means you can rebase the entire stack onto an updated main with a single `git rebase --update-refs origin/main` from the top branch.
-
-Use `--no-worktree` to skip this and work directly in the project directory.
 
 ## Response analyzer
 

@@ -125,8 +125,7 @@ func TestGenerateResumeScript(t *testing.T) {
 		ProjectDir:    dir,
 		MaxIterations: 20,
 		Quiet:         true,
-		UseWorktree:   true,
-		AutoMerge:     true,
+				AutoMerge:     true,
 		CallsPerHour:  40,
 	}
 
@@ -152,9 +151,6 @@ func TestGenerateResumeScript(t *testing.T) {
 	if !strings.Contains(content, "--auto-merge") {
 		t.Error("resume script should contain --auto-merge")
 	}
-	if strings.Contains(content, "--no-worktree") {
-		t.Error("resume script should NOT contain --no-worktree when worktree is enabled")
-	}
 }
 
 // Verifies the resume script includes --evolve when enabled.
@@ -166,8 +162,7 @@ func TestGenerateResumeScript_Evolve(t *testing.T) {
 	cfg := config.Config{
 		ProjectDir:    dir,
 		MaxIterations: 50,
-		UseWorktree:   true,
-		AutoMerge:     true,
+				AutoMerge:     true,
 		Evolve:        true,
 		CallsPerHour:  80,
 	}
@@ -182,28 +177,6 @@ func TestGenerateResumeScript_Evolve(t *testing.T) {
 	}
 	if !strings.Contains(content, "--auto-merge") {
 		t.Error("resume script should contain --auto-merge")
-	}
-}
-
-// Verifies the resume script includes --no-worktree when worktree is disabled.
-func TestGenerateResumeScript_NoWorktree(t *testing.T) {
-	dir := t.TempDir()
-	ralphDir := filepath.Join(dir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-
-	cfg := config.Config{
-		ProjectDir:    dir,
-		MaxIterations: 50,
-		UseWorktree:   false,
-		CallsPerHour:  80,
-	}
-
-	log := logging.New(nil)
-	generateResumeScript(cfg, ralphDir, "/usr/local/bin/ralph", nil, log)
-
-	data, _ := os.ReadFile(filepath.Join(ralphDir, "resume.sh"))
-	if !strings.Contains(string(data), "--no-worktree") {
-		t.Error("resume script should contain --no-worktree")
 	}
 }
 
@@ -459,7 +432,7 @@ func TestCleanup_InterruptedWritesStopped(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	backend := &stubBackend{total: 1, remaining: 1}
 	log := logging.New(nil)
-	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, UseWorktree: true, CallsPerHour: 80}
+	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
 	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, nil, true, log)
 
@@ -483,7 +456,7 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	backend := &stubBackend{total: 3, completed: 3}
 	log := logging.New(nil)
-	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, UseWorktree: true, CallsPerHour: 80}
+	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
 	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, nil, false, log)
 

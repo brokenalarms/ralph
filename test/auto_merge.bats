@@ -12,7 +12,7 @@ teardown() {
 }
 
 # Proves: auto_merge_current_branch returns cleanly when there is no worktree
-# branch set (e.g. --no-worktree mode), so --auto-merge is a safe no-op.
+# branch set, so --auto-merge is a safe no-op.
 @test "auto_merge_current_branch skips when no worktree branch" {
   WORKTREE_BRANCH=""
   WORK_DIR="$PROJECT_DIR"
@@ -75,7 +75,7 @@ teardown() {
 
   # Simulate flag parsing by checking variable after sourcing with flag
   output=$(bash -c '
-    set -- --auto-merge --no-worktree
+    set -- --auto-merge
     RALPH_SOURCED=true
     source "'"$RALPH_SH"'"
     echo "$AUTO_MERGE"

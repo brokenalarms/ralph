@@ -23,7 +23,6 @@ PLAN_ONLY=false
 SKIP_PLANNING=false
 WATCHER_INTERVAL=2
 QUIET=false
-USE_WORKTREE=true
 CALLS_PER_HOUR=80
 REFACTOR_THRESHOLD="${RALPH_REFACTOR_THRESHOLD:-20}"
 MAX_TASK_ATTEMPTS="${RALPH_MAX_TASK_ATTEMPTS:-5}"
@@ -124,7 +123,6 @@ ${BOLD}OPTIONS:${NC}
   --plan                 Run planning phase only
   --skip-planning        Skip interactive planning, go straight to autonomous execution
   -q, --quiet            Suppress Claude output streaming (log only)
-  --no-worktree          Run directly in project dir (no git worktree isolation)
   --calls-per-hour <N>   Max Claude calls per hour (default: 80)
   --refactor-threshold <N> Quality pain score that triggers a refactor iteration (default: 20, 0 to disable)
   --max-task-attempts <N> Max attempts per task before skipping (default: 5)
@@ -240,7 +238,6 @@ while [[ $# -gt 0 ]]; do
     --plan)         PLAN_ONLY=true; shift ;;
     --skip-planning) SKIP_PLANNING=true; shift ;;
     -q|--quiet)     QUIET=true; shift ;;
-    --no-worktree)  USE_WORKTREE=false; shift ;;
     --calls-per-hour) CALLS_PER_HOUR="$2"; _CLI_CALLS_PER_HOUR="$2"; shift 2 ;;
     --refactor-threshold) REFACTOR_THRESHOLD="$2"; shift 2 ;;
     --max-task-attempts) MAX_TASK_ATTEMPTS="$2"; shift 2 ;;
@@ -1725,9 +1722,6 @@ generate_resume_script() {
   local extra_args=""
   if [[ "$QUIET" == true ]]; then
     extra_args="$extra_args --quiet"
-  fi
-  if [[ "$USE_WORKTREE" == false ]]; then
-    extra_args="$extra_args --no-worktree"
   fi
   if [[ "$CALLS_PER_HOUR" != 80 ]]; then
     extra_args="$extra_args --calls-per-hour $CALLS_PER_HOUR"
