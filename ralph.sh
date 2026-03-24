@@ -390,19 +390,19 @@ tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
       if .name == "TodoWrite" then
         ([.input.todos[]? | .content] | if length == 0 then "[]"
           else join(", ") end) as $items |
-        "\n[TodoWrite] " + $items + "\n"
+        "\n[r] [TodoWrite] " + $items + "\n"
       else
         (.input.file_path // .input.command // .input.pattern //
           .input.query // .input.url // .input.description //
           .input.task_id // .input.skill // .input.prompt //
           null) as $target |
-        if $target then "\n[" + .name + "] " + $target + "\n"
-        else "\n[" + .name + "]\n"
+        if $target then "\n[r] [" + .name + "] " + $target + "\n"
+        else "\n[r] [" + .name + "]\n"
         end
       end
     else empty end
   elif .type == "result" then
-    "\n[done]\n"
+    "\n[r] [done]\n"
   else empty end
 ' | perl -ne '
   use POSIX; $|=1;
@@ -411,7 +411,7 @@ tail -f -n 0 "$1" | jq --raw-input --join-output --unbuffered '
   print strftime("%H:%M:%S", localtime()) . " " . $_ . "\n";
 ' | sed -u -E \
   -e $'s/\\[done\\]/\033[0;32m[done]\033[0m/g' \
-  -e $'s/\\[claude\\]/\033[0;36m[r]\033[0m/g' \
+  -e $'s/\\[r\\]/\033[0;36m[r]\033[0m/g' \
   -e $'s/\\[([A-Z][A-Za-z]*)\\]/\033[0;34m[\\1]\033[0m/g'
 STREAM
   chmod +x "$RALPH_DIR/.stream-filter.sh"

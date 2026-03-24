@@ -76,19 +76,19 @@ teardown() {
         if .name == "TodoWrite" then
           ([.input.todos[]? | .content] | if length == 0 then "[]"
             else join(", ") end) as $items |
-          "\n[TodoWrite] " + $items + "\n"
+          "\n[r] [TodoWrite] " + $items + "\n"
         else
           (.input.file_path // .input.command // .input.pattern //
             .input.query // .input.url // .input.description //
             .input.task_id // .input.skill // .input.prompt //
             null) as $target |
-          if $target then "\n[" + .name + "] " + $target + "\n"
-          else "\n[" + .name + "]\n"
+          if $target then "\n[r] [" + .name + "] " + $target + "\n"
+          else "\n[r] [" + .name + "]\n"
           end
         end
       else empty end
     elif .type == "result" then
-      "\n[done]\n"
+      "\n[r] [done]\n"
     else empty end
   ' | perl -ne '
     use POSIX; $|=1;
@@ -115,6 +115,11 @@ teardown() {
 
   # Last line should be [done]
   echo "$output" | tail -1 | grep -q '\[done\]'
+
+  # Every line must have [r] source prefix
+  local unprefixed
+  unprefixed=$(echo "$output" | grep -v '^\s*$' | grep -vF '[r]' || true)
+  [[ -z "$unprefixed" ]]
 }
 
 @test "Stream filter has no kill 0 trap" {
