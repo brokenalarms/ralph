@@ -231,6 +231,53 @@ func TestSandboxWrap_WritesProfileFile(t *testing.T) {
 	t.Error("could not find -f flag in sandbox-exec args")
 }
 
+func TestSandboxWriteDirs_IncludesGitCommonDir(t *testing.T) {
+	tmp := t.TempDir()
+	workDir := filepath.Join(tmp, "worktree")
+	os.MkdirAll(workDir, 0o755)
+
+	parentGit := filepath.Join(tmp, "project", ".git", "worktrees", "wt1")
+	os.MkdirAll(parentGit, 0o755)
+	os.WriteFile(filepath.Join(workDir, ".git"),
+		[]byte("gitdir: "+parentGit+"\n"), 0o644)
+
+	dirs := sandboxWriteDirs(workDir, filepath.Join(tmp, ".ralph"))
+
+	found := false
+	expectedGitDir := filepath.Join(tmp, "project", ".git")
+	for _, d := range dirs {
+		if d == expectedGitDir {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("sandboxWriteDirs should include git common dir %s, got %v", expectedGitDir, dirs)
+	}
+}
+
+func TestSandboxWriteDirs_IncludesGoCaches(t *testing.T) {
+	dirs := sandboxWriteDirs("/work", "/work/.ralph")
+
+	home, _ := os.UserHomeDir()
+	hasGoCache := false
+	hasGoMod := false
+	for _, d := range dirs {
+		if d == filepath.Join(home, "Library", "Caches", "go-build") {
+			hasGoCache = true
+		}
+		if d == filepath.Join(home, "go") {
+			hasGoMod = true
+		}
+	}
+	if !hasGoCache {
+		t.Error("sandboxWriteDirs should include Go build cache")
+	}
+	if !hasGoMod {
+		t.Error("sandboxWriteDirs should include Go module cache")
+	}
+}
+
 func TestSandboxedCmdFactory_IncludesToolPermissions(t *testing.T) {
 	s := &Sandbox{}
 	r := New(&testLogger{}, s)
