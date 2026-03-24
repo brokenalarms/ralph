@@ -33,46 +33,46 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 	switch sub.Name {
 	case "stop":
 		if _, err := os.Stat(ralphDir); os.IsNotExist(err) {
-			log.Error("No .ralph directory found. Is ralph running here?")
+			log.Error("", "No .ralph directory found. Is ralph running here?")
 			return 1
 		}
 		stopFile := fmt.Sprintf("%s/stop", ralphDir)
 		if err := os.WriteFile(stopFile, nil, 0o644); err != nil {
-			log.Error("Failed to create stop file: %v", err)
+			log.Error("", "Failed to create stop file: %v", err)
 			return 1
 		}
-		log.Warn("Stop requested — ralph will halt after the current iteration.")
-		log.Warn("Ctrl+C to kill immediately if you don't need iteration results.")
+		log.Warn("", "Stop requested — ralph will halt after the current iteration.")
+		log.Warn("", "Ctrl+C to kill immediately if you don't need iteration results.")
 		return 0
 
 	case "feedback":
 		if _, err := os.Stat(ralphDir); os.IsNotExist(err) {
-			log.Error("No .ralph directory found. Is ralph running here?")
+			log.Error("", "No .ralph directory found. Is ralph running here?")
 			return 1
 		}
 		feedbackFile := fmt.Sprintf("%s/feedback", ralphDir)
 		if len(sub.Args) == 0 {
 			data, err := os.ReadFile(feedbackFile)
 			if err == nil && len(data) > 0 {
-				log.Log("Queued feedback:")
+				log.Log("", "Queued feedback:")
 				fmt.Print(string(data))
 			} else {
-				log.Log("No feedback queued.")
+				log.Log("", "No feedback queued.")
 			}
 			return 0
 		}
 		msg := strings.Join(sub.Args, " ") + "\n"
 		f, err := os.OpenFile(feedbackFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
-			log.Error("Failed to write feedback: %v", err)
+			log.Error("", "Failed to write feedback: %v", err)
 			return 1
 		}
 		defer f.Close()
 		if _, err := f.WriteString(msg); err != nil {
-			log.Error("Failed to write feedback: %v", err)
+			log.Error("", "Failed to write feedback: %v", err)
 			return 1
 		}
-		log.Success("Feedback sent — agent will pick it up on next tool call.")
+		log.Success("", "Feedback sent — agent will pick it up on next tool call.")
 		return 0
 
 	case "commander":
@@ -89,7 +89,7 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 
 	case "filter-stream":
 		if len(sub.Args) == 0 {
-			log.Error("Usage: ralph filter-stream <rawlog>")
+			log.Error("", "Usage: ralph filter-stream <rawlog>")
 			return 1
 		}
 		claude.FilterStream(sub.Args[0])
@@ -108,7 +108,7 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 		return 0
 	}
 	if err != nil {
-		log.Error("%v", err)
+		log.Error("", "%v", err)
 		printLoopUsage()
 		return 1
 	}
@@ -121,12 +121,12 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 	}
 
 	if err := cfg.Validate(); err != nil {
-		log.Error("%v", err)
+		log.Error("", "%v", err)
 		return 1
 	}
 
 	if !git.IsGitRepo(cfg.ProjectDir) {
-		log.Error("Not a git repository: %s", cfg.ProjectDir)
+		log.Error("", "Not a git repository: %s", cfg.ProjectDir)
 		return 1
 	}
 
@@ -137,7 +137,7 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
 		tmpDir, extractErr := extractEmbeddedPrompts()
 		if extractErr != nil {
-			log.Error("Failed to extract embedded prompts: %v", extractErr)
+			log.Error("", "Failed to extract embedded prompts: %v", extractErr)
 			return 1
 		}
 		promptsDir = tmpDir
@@ -145,7 +145,7 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 
 	if cfg.UseTmux {
 		if err := os.MkdirAll(ralphDir, 0o755); err != nil {
-			log.Error("Failed to create .ralph dir: %v", err)
+			log.Error("", "Failed to create .ralph dir: %v", err)
 			return 1
 		}
 		return handleTmux(cfg, scriptPath, sub.Args, ralphDir, log)
@@ -161,7 +161,7 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 	projectDir, _ := filepath.Abs(sub.Dir)
 
 	if !git.IsGitRepo(projectDir) {
-		log.Error("Not a git repository: %s", projectDir)
+		log.Error("", "Not a git repository: %s", projectDir)
 		return 1
 	}
 
@@ -171,7 +171,7 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
 		tmpDir, extractErr := extractEmbeddedPrompts()
 		if extractErr != nil {
-			log.Error("Failed to extract embedded prompts: %v", extractErr)
+			log.Error("", "Failed to extract embedded prompts: %v", extractErr)
 			return 1
 		}
 		promptsDir = tmpDir
@@ -179,14 +179,14 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 
 	systemPrompt, err := prompt.BuildReviewPrompt(promptsDir, projectDir, ralphDir)
 	if err != nil {
-		log.Error("Failed to build review prompt: %v", err)
+		log.Error("", "Failed to build review prompt: %v", err)
 		return 1
 	}
 
 	r := newInteractiveAgent(log)
 	exitCode, err := r.Interactive(projectDir, systemPrompt)
 	if err != nil {
-		log.Error("Review session failed: %v", err)
+		log.Error("", "Review session failed: %v", err)
 		return 1
 	}
 	return exitCode
@@ -199,14 +199,14 @@ func handleCommander(sub config.Subcommand, log *logging.Logger) int {
 	ralphDir := filepath.Join(projectDir, ".ralph")
 
 	if err := os.MkdirAll(ralphDir, 0o755); err != nil {
-		log.Error("Failed to create .ralph dir: %v", err)
+		log.Error("", "Failed to create .ralph dir: %v", err)
 		return 1
 	}
 
 	// Re-parse remaining args as loop flags (everything after "commander [dir]").
 	cfg, err := config.Parse(sub.Args)
 	if err != nil {
-		log.Error("%v", err)
+		log.Error("", "%v", err)
 		return 1
 	}
 	cfg.ProjectDir = projectDir
@@ -233,7 +233,7 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
 		tmpDir, extractErr := extractEmbeddedPrompts()
 		if extractErr != nil {
-			log.Error("Failed to extract embedded prompts: %v", extractErr)
+			log.Error("", "Failed to extract embedded prompts: %v", extractErr)
 			return 1
 		}
 		promptsDir = tmpDir
@@ -241,14 +241,14 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 
 	systemPrompt, err := prompt.BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir)
 	if err != nil {
-		log.Error("Failed to build task manager prompt: %v", err)
+		log.Error("", "Failed to build task manager prompt: %v", err)
 		return 1
 	}
 
 	r := newInteractiveAgent(log)
 	exitCode, err := r.Interactive(projectDir, systemPrompt, prompt.TaskManagerBootstrapPrompt)
 	if err != nil {
-		log.Error("Task manager failed: %v", err)
+		log.Error("", "Task manager failed: %v", err)
 		return 1
 	}
 	return exitCode

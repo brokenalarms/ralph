@@ -96,11 +96,11 @@ func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log
 	stopFile := filepath.Join(ralphDir, "stop")
 	if _, err := os.Stat(stopFile); err == nil {
 		os.Remove(stopFile)
-		log.Log("Stop signal detected — skipping evolve restart")
+		log.Log("", "Stop signal detected — skipping evolve restart")
 		return nil
 	}
 
-	log.Log("Pulling latest %s...", baseBranch)
+	log.Log("", "Pulling latest %s...", baseBranch)
 	fetchCmd := exec.Command("git", "-C", projectDir, "fetch", "origin", baseBranch)
 	if out, err := fetchCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git fetch failed: %s", out)
@@ -115,7 +115,7 @@ func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log
 	}
 
 	version := gitVersion(projectDir)
-	log.Log("Building ralph %s...", version)
+	log.Log("", "Building ralph %s...", version)
 	goDir := filepath.Join(projectDir, "go")
 	ldflags := fmt.Sprintf("-X github.com/brokenalarms/ralph/internal/config.Version=%s", version)
 	buildCmd := exec.Command("go", "build", "-v", "-ldflags", ldflags, "-o", scriptPath, "./cmd/ralph")
@@ -125,7 +125,7 @@ func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log
 	if err := buildCmd.Run(); err != nil {
 		return fmt.Errorf("go build failed: %v", err)
 	}
-	log.Log("Installed ralph %s to %s", version, scriptPath)
+	log.Log("", "Installed ralph %s to %s", version, scriptPath)
 
 	clearSignalFiles(ralphDir)
 

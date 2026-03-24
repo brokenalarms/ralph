@@ -6,18 +6,19 @@ import (
 	"testing"
 )
 
-// Verifies that each log level emits the correct ANSI color and [ralph] prefix,
-// matching ralph.sh's log, log_success, log_warn, log_error output format.
+// Verifies that each log level emits the correct ANSI color and [o] actor prefix
+// with the specified domain tag.
 func TestLogLevelColors(t *testing.T) {
 	tests := []struct {
 		name      string
 		call      func(*Logger)
 		wantColor string
+		wantTag   string
 	}{
-		{"Log", func(l *Logger) { l.Log("msg") }, Cyan},
-		{"Success", func(l *Logger) { l.Success("msg") }, Green},
-		{"Warn", func(l *Logger) { l.Warn("msg") }, Yellow},
-		{"Error", func(l *Logger) { l.Error("msg") }, Red},
+		{"Log", func(l *Logger) { l.Log(Git, "msg") }, Cyan, "[o][git]"},
+		{"Success", func(l *Logger) { l.Success(Git, "msg") }, Green, "[o][git]"},
+		{"Warn", func(l *Logger) { l.Warn(Git, "msg") }, Yellow, "[o][git]"},
+		{"Error", func(l *Logger) { l.Error(Git, "msg") }, Red, "[o][git]"},
 	}
 
 	for _, tt := range tests {
@@ -26,7 +27,7 @@ func TestLogLevelColors(t *testing.T) {
 			l := &Logger{out: &buf, logFile: &buf}
 			tt.call(l)
 			got := buf.String()
-			if !strings.Contains(got, tt.wantColor+"[ralph]") {
+			if !strings.Contains(got, tt.wantColor+tt.wantTag) {
 				t.Errorf("output missing %q color prefix:\n%s", tt.name, got)
 			}
 			if !strings.Contains(got, "msg") {
@@ -36,8 +37,33 @@ func TestLogLevelColors(t *testing.T) {
 	}
 }
 
-// Verifies that Phase output includes bold+blue formatting and the message,
-// matching ralph.sh's log_phase format.
+// Verifies that Tag formats actor+domain tags with ANSI color codes,
+// producing the [actor][domain] format greppable by actor or domain.
+func TestTagFormat(t *testing.T) {
+	tests := []struct {
+		name   string
+		color  string
+		actor  Actor
+		domain Domain
+		want   string
+	}{
+		{"orchestrator git", Cyan, Orch, Git, Cyan + "[o][git]" + Reset},
+		{"orchestrator ci", Green, Orch, CI, Green + "[o][ci]" + Reset},
+		{"agent no domain", Cyan, AgentActor, "", Cyan + "[r]" + Reset},
+		{"no domain", Yellow, Orch, "", Yellow + "[o]" + Reset},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Tag(tt.color, tt.actor, tt.domain)
+			if got != tt.want {
+				t.Errorf("Tag() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// Verifies that Phase output includes bold+blue formatting with [o] prefix.
 func TestPhaseFormatting(t *testing.T) {
 	var buf bytes.Buffer
 	l := &Logger{out: &buf, logFile: &buf}
@@ -45,6 +71,9 @@ func TestPhaseFormatting(t *testing.T) {
 	got := buf.String()
 	if !strings.Contains(got, Bold) || !strings.Contains(got, Blue) {
 		t.Error("Phase should include bold+blue formatting")
+	}
+	if !strings.Contains(got, "[o]") {
+		t.Error("Phase should use [o] actor prefix")
 	}
 	if !strings.Contains(got, "starting phase 1") {
 		t.Errorf("Phase output missing message: %s", got)
@@ -55,7 +84,7 @@ func TestPhaseFormatting(t *testing.T) {
 func TestTimestamp(t *testing.T) {
 	var buf bytes.Buffer
 	l := &Logger{out: &buf, logFile: &buf}
-	l.Log("test")
+	l.Log("", "test")
 	got := buf.String()
 	// Timestamp format is HH:MM:SS — check for two colons in first 8 chars.
 	if len(got) < 8 || got[2] != ':' || got[5] != ':' {
@@ -68,7 +97,7 @@ func TestTimestamp(t *testing.T) {
 func TestDualOutput(t *testing.T) {
 	var stdout, logFile bytes.Buffer
 	l := &Logger{out: &stdout, logFile: &logFile}
-	l.Log("dual")
+	l.Log("", "dual")
 	if !strings.Contains(stdout.String(), "dual") {
 		t.Error("message missing from stdout")
 	}
@@ -81,7 +110,7 @@ func TestDualOutput(t *testing.T) {
 func TestFormatArgs(t *testing.T) {
 	var buf bytes.Buffer
 	l := &Logger{out: &buf, logFile: &buf}
-	l.Log("count=%d name=%s", 42, "test")
+	l.Log("", "count=%d name=%s", 42, "test")
 	got := buf.String()
 	if !strings.Contains(got, "count=42 name=test") {
 		t.Errorf("format interpolation failed: %s", got)
@@ -96,7 +125,7 @@ func TestStreamingModeSuppressesStdout(t *testing.T) {
 	l := &Logger{out: &stdout, logFile: &logFile}
 
 	l.SetStreaming(true)
-	l.Log("streamed message")
+	l.Log("", "streamed message")
 	l.Phase("streamed phase")
 
 	if stdout.Len() != 0 {
@@ -110,7 +139,7 @@ func TestStreamingModeSuppressesStdout(t *testing.T) {
 	}
 
 	l.SetStreaming(false)
-	l.Log("normal message")
+	l.Log("", "normal message")
 
 	if !strings.Contains(stdout.String(), "normal message") {
 		t.Error("after disabling streaming, stdout should resume")
@@ -215,7 +244,7 @@ func TestBranchTag(t *testing.T) {
 func TestNoPerLineTaskIDPrefix(t *testing.T) {
 	var buf bytes.Buffer
 	l := &Logger{out: &buf, logFile: &buf}
-	l.Log("doing work")
+	l.Log("", "doing work")
 	got := buf.String()
 
 	if strings.Contains(got, Magenta+"[") {

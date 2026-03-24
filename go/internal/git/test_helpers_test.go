@@ -178,9 +178,9 @@ func (s *stubRunner) On(key string, output string, err error) *stubRunner {
 // discardLog silences log output during tests.
 type discardLog struct{}
 
-func (discardLog) Log(string, ...any)   {}
-func (discardLog) Warn(string, ...any)  {}
-func (discardLog) Error(string, ...any) {}
+func (discardLog) Log(string, string, ...any)   {}
+func (discardLog) Warn(string, string, ...any)  {}
+func (discardLog) Error(string, string, ...any) {}
 
 // capturingGitHub captures CreatePR calls for assertion.
 type capturingGitHub struct {

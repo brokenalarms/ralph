@@ -46,8 +46,8 @@ func TestToolBatcher_FlushesOnText(t *testing.T) {
 		t.Errorf("Grep summary expected, got: %s", plain1)
 	}
 	plain2 := stripANSI(out[2])
-	if !strings.Contains(plain2, "[agent] Now analyzing the code") {
-		t.Errorf("text should pass through with [agent] prefix, got: %s", plain2)
+	if !strings.Contains(plain2, "[r] Now analyzing the code") {
+		t.Errorf("text should pass through with [r] prefix, got: %s", plain2)
 	}
 }
 

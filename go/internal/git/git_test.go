@@ -36,9 +36,15 @@ type testLog struct {
 	messages []string
 }
 
-func (l *testLog) Log(format string, args ...any)   { l.messages = append(l.messages, fmt.Sprintf(format, args...)) }
-func (l *testLog) Warn(format string, args ...any)  { l.messages = append(l.messages, "WARN: "+fmt.Sprintf(format, args...)) }
-func (l *testLog) Error(format string, args ...any) { l.messages = append(l.messages, "ERROR: "+fmt.Sprintf(format, args...)) }
+func (l *testLog) Log(_ string, format string, args ...any) {
+	l.messages = append(l.messages, fmt.Sprintf(format, args...))
+}
+func (l *testLog) Warn(_ string, format string, args ...any) {
+	l.messages = append(l.messages, "WARN: "+fmt.Sprintf(format, args...))
+}
+func (l *testLog) Error(_ string, format string, args ...any) {
+	l.messages = append(l.messages, "ERROR: "+fmt.Sprintf(format, args...))
+}
 
 func (l *testLog) contains(substr string) bool {
 	for _, m := range l.messages {

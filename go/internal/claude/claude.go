@@ -15,10 +15,10 @@ import (
 
 // Log is the logging interface used by Runner.
 type Log interface {
-	Log(format string, args ...any)
-	Success(format string, args ...any)
-	Warn(format string, args ...any)
-	Error(format string, args ...any)
+	Log(domain string, format string, args ...any)
+	Success(domain string, format string, args ...any)
+	Warn(domain string, format string, args ...any)
+	Error(domain string, format string, args ...any)
 }
 
 // SignalPaths holds the file paths used for inter-process signaling between
@@ -214,7 +214,7 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	if err := cmd.Start(); err != nil {
 		return Result{}, fmt.Errorf("starting claude: %w", err)
 	}
-	r.Logger.Log("Claude started (PID: %d)", cmd.Process.Pid)
+	r.Logger.Log("llm", "Claude started (PID: %d)", cmd.Process.Pid)
 
 	// Record stream start time for the filter.
 	_ = os.WriteFile(filepath.Join(cfg.RalphDir, ".stream-start"),
@@ -257,9 +257,9 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 			result.SignalDetected = true
 			result.AllComplete = hasSignal(cfg.Signals.AllComplete)
 			result.Summary = readSignalSummary(cfg.Signals)
-			r.Logger.Success("Task completed via signal")
+			r.Logger.Success("llm", "Task completed via signal")
 		} else {
-			r.Logger.Log("Claude exited (no completion signal)")
+			r.Logger.Log("llm", "Claude exited (no completion signal)")
 		}
 	}
 
@@ -269,7 +269,7 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 			if resetAt, found := ScanRawLogForRateLimit(string(logData), time.Now()); found {
 				result.RateLimited = true
 				result.ResetAt = resetAt
-				r.Logger.Warn("Claude rate limit detected — resets at %s", resetAt.Format("3:04pm"))
+				r.Logger.Warn("llm", "Claude rate limit detected — resets at %s", resetAt.Format("3:04pm"))
 			}
 		}
 	}
@@ -324,9 +324,9 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				desc := readFirstLine(cfg.Signals.CurrentTask)
 				if desc != "" {
 					if cfg.TaskID != "" {
-						r.Logger.Log("Working on: %s (%s)", desc, cfg.TaskID)
+						r.Logger.Log("beads", "Working on: %s (%s)", desc, cfg.TaskID)
 					} else {
-						r.Logger.Log("Working on: %s", desc)
+						r.Logger.Log("beads", "Working on: %s", desc)
 					}
 					taskLogged = true
 					if r.OnTaskDetected != nil {
@@ -342,16 +342,16 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 					summary = "task done"
 				}
 				if cfg.TaskID != "" {
-					r.Logger.Success("%s completed: %s", cfg.TaskID, summary)
+					r.Logger.Success("llm", "%s completed: %s", cfg.TaskID, summary)
 				} else {
-					r.Logger.Success("Completed: %s", summary)
+					r.Logger.Success("llm", "Completed: %s", summary)
 				}
 
 				// If OnSignal is set, let the orchestrator verify before accepting.
 				if cfg.OnSignal != nil {
 					if !cfg.OnSignal(summary) {
 						// Verification failed — clear signal, let agent continue.
-						r.Logger.Warn("Verification rejected signal — agent continues")
+						r.Logger.Warn("llm", "Verification rejected signal — agent continues")
 						clearSignals(cfg.Signals)
 						continue
 					}
@@ -376,7 +376,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 				idle := time.Since(lastActivity)
 				if idle >= timeout {
-					r.Logger.Warn("Idle timeout (%s with no output) — killing session", timeout)
+					r.Logger.Warn("llm", "Idle timeout (%s with no output) — killing session", timeout)
 					gracefulKill(cmd, processDone)
 					return Result{IdleTimeout: true}
 				}

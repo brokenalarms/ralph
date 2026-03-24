@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// ANSI color codes matching ralph.sh.
+// ANSI color codes.
 const (
 	Red     = "\033[0;31m"
 	Green   = "\033[0;32m"
@@ -19,6 +19,35 @@ const (
 	Bold    = "\033[1m"
 	Reset   = "\033[0m"
 )
+
+// Actor identifies the source of a log message.
+type Actor string
+
+const (
+	Orch       Actor = "o" // orchestrator
+	AgentActor Actor = "r" // ralph/agent
+)
+
+// Domain categorizes what a log message is about.
+type Domain = string
+
+const (
+	Git   Domain = "git"
+	CI    Domain = "ci"
+	Beads Domain = "beads"
+	Test  Domain = "test"
+	LLM   Domain = "llm"
+	Shell Domain = "bash"
+)
+
+// Tag formats [actor][domain] with ANSI color. If domain is empty,
+// only [actor] is emitted. Greppable by actor or domain independently.
+func Tag(color string, actor Actor, domain Domain) string {
+	if domain == "" {
+		return fmt.Sprintf("%s[%s]%s", color, actor, Reset)
+	}
+	return fmt.Sprintf("%s[%s][%s]%s", color, actor, domain, Reset)
+}
 
 // BranchTag formats a branch name as a colored tag for log messages,
 // e.g. "[main]" in green.
@@ -65,32 +94,33 @@ func (l *Logger) SetStreaming(on bool) {
 	l.streaming = on
 }
 
-func (l *Logger) emit(color, prefix, msg string) {
-	line := fmt.Sprintf("%s %s[%s]%s %s\n", ts(), color, prefix, Reset, msg)
+func (l *Logger) emit(color string, domain Domain, msg string) {
+	tag := Tag(color, Orch, domain)
+	line := fmt.Sprintf("%s %s %s\n", ts(), tag, msg)
 	if !l.streaming {
 		fmt.Fprint(l.out, line)
 	}
 	fmt.Fprint(l.logFile, line)
 }
 
-// Log writes an info-level message with cyan [ralph] prefix.
-func (l *Logger) Log(format string, args ...any) {
-	l.emit(Cyan, "ralph", fmt.Sprintf(format, args...))
+// Log writes an info-level message with cyan [o][domain] prefix.
+func (l *Logger) Log(domain Domain, format string, args ...any) {
+	l.emit(Cyan, domain, fmt.Sprintf(format, args...))
 }
 
-// Success writes a success message with green [ralph] prefix.
-func (l *Logger) Success(format string, args ...any) {
-	l.emit(Green, "ralph", fmt.Sprintf(format, args...))
+// Success writes a success message with green [o][domain] prefix.
+func (l *Logger) Success(domain Domain, format string, args ...any) {
+	l.emit(Green, domain, fmt.Sprintf(format, args...))
 }
 
-// Warn writes a warning with yellow [ralph] prefix.
-func (l *Logger) Warn(format string, args ...any) {
-	l.emit(Yellow, "ralph", fmt.Sprintf(format, args...))
+// Warn writes a warning with yellow [o][domain] prefix.
+func (l *Logger) Warn(domain Domain, format string, args ...any) {
+	l.emit(Yellow, domain, fmt.Sprintf(format, args...))
 }
 
-// Error writes an error with red [ralph] prefix.
-func (l *Logger) Error(format string, args ...any) {
-	l.emit(Red, "ralph", fmt.Sprintf(format, args...))
+// Error writes an error with red [o][domain] prefix.
+func (l *Logger) Error(domain Domain, format string, args ...any) {
+	l.emit(Red, domain, fmt.Sprintf(format, args...))
 }
 
 // Phase writes a bold blue phase header.
@@ -101,7 +131,7 @@ func (l *Logger) Phase(format string, args ...any) {
 // PhaseColor writes a bold phase header in the given ANSI color.
 func (l *Logger) PhaseColor(color string, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	line := fmt.Sprintf("%s %s%s[ralph]%s %s%s%s\n", ts(), Bold, color, Reset, Bold, msg, Reset)
+	line := fmt.Sprintf("%s %s%s[o]%s %s%s%s\n", ts(), Bold, color, Reset, Bold, msg, Reset)
 	if !l.streaming {
 		fmt.Fprint(l.out, line)
 	}

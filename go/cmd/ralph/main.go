@@ -45,7 +45,7 @@ func run(args []string) int {
 	}
 
 	if len(args) > 0 {
-		log.Error("unknown command: %s", args[0])
+		log.Error("", "unknown command: %s", args[0])
 		fmt.Println()
 	}
 
@@ -66,7 +66,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		log.Warn("Ctrl-C received — exiting gracefully")
+		log.Warn("", "Ctrl-C received — exiting gracefully")
 		interrupted = true
 		cancel()
 	}()
@@ -81,7 +81,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	// Validate base branch before initializing state — a failed validation
 	// must not leave state that causes a false resume on retry.
 	if err := git.ValidateRemoteBranch(ctx, cfg.ProjectDir, cfg.BaseBranch); err != nil {
-		log.Error("%v", err)
+		log.Error("", "%v", err)
 		return 1
 	}
 
@@ -93,14 +93,14 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 	st := state.NewStore(ralphDir)
 	if err := st.Init(cfg.MaxIterations, 0); err != nil {
-		log.Error("Failed to initialize state: %v", err)
+		log.Error("", "Failed to initialize state: %v", err)
 		return 1
 	}
 
 	// Set up log file writer.
 	logFileWriter, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		log.Error("Failed to open log file: %v", err)
+		log.Error("", "Failed to open log file: %v", err)
 		return 1
 	}
 	defer logFileWriter.Close()
@@ -109,7 +109,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	// Initialize task backend.
 	backend, err := initTaskBackend(cfg, promptsDir, log)
 	if err != nil {
-		log.Error("Task backend init failed: %v", err)
+		log.Error("", "Task backend init failed: %v", err)
 		return 1
 	}
 	st.Write("task_backend", backend.Label())
@@ -126,7 +126,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		Logger:         log,
 	}
 	if err := gm.SetupWorktree(ctx); err != nil {
-		log.Error("Worktree setup failed: %v", err)
+		log.Error("", "Worktree setup failed: %v", err)
 		return 1
 	}
 	dirs.WorkDir = gm.WorkDir
@@ -146,12 +146,12 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	}
 
 	log.Phase("Ralph Loop v%s (go)", config.Version)
-	log.Log("Project: %s", dirs.ProjectDir)
+	log.Log("", "Project: %s", dirs.ProjectDir)
 	if dirs.WorkDir != dirs.ProjectDir {
-		log.Log("Worktree: %s", dirs.WorkDir)
+		log.Log("", "Worktree: %s", dirs.WorkDir)
 	}
-	log.Log("Task backend: %s", backend.Label())
-	log.Log("Max iterations: %d", cfg.MaxIterations)
+	log.Log("", "Task backend: %s", backend.Label())
+	log.Log("", "Max iterations: %d", cfg.MaxIterations)
 
 	st.Write("started_at", time.Now().UTC().Format("2006-01-02T15:04:05Z"))
 
@@ -178,7 +178,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	}, st, gm, log)
 
 	if err := execLoop.Run(ctx); err != nil {
-		log.Error("Execution failed: %v", err)
+		log.Error("", "Execution failed: %v", err)
 	}
 
 	sessionTasks := execLoop.SessionTasks()
@@ -186,7 +186,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	if status, _ := st.Read("status"); status == "evolve_restart" {
 		printSessionSummary(sessionTasks, log)
 		if err := evolveRestart(cfg.ProjectDir, scriptPath, cfg.BaseBranch, args, log); err != nil {
-			log.Error("Evolve restart failed: %v", err)
+			log.Error("", "Evolve restart failed: %v", err)
 		}
 	}
 
@@ -198,7 +198,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 // detection. Returns (resume, exitCode). exitCode < 0 means continue.
 func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
 	if err := os.MkdirAll(ralphDir, 0o755); err != nil {
-		log.Error("Failed to create .ralph dir: %v", err)
+		log.Error("", "Failed to create .ralph dir: %v", err)
 		return false, 1
 	}
 
@@ -212,7 +212,7 @@ func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, sta
 	// Check for uncommitted changes (skip on resume).
 	if !fileExists(stateFile) {
 		if git.IsGitRepo(cfg.ProjectDir) && hasUncommittedChanges(cfg.ProjectDir) {
-			log.Error("uncommitted changes in %s — please commit or stash before running ralph.", cfg.ProjectDir)
+			log.Error("", "uncommitted changes in %s — please commit or stash before running ralph.", cfg.ProjectDir)
 			return false, 1
 		}
 	}
@@ -228,10 +228,10 @@ func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, sta
 		st := state.NewStore(ralphDir)
 		status, _ := st.Read("status")
 		if status == "completed" {
-			log.Log("All tasks completed from previous run.")
+			log.Log("", "All tasks completed from previous run.")
 			runFresh := false
 			if cfg.Wait {
-				log.Log("--wait: auto-resetting for new tasks")
+				log.Log("", "--wait: auto-resetting for new tasks")
 				runFresh = true
 			} else {
 				fmt.Printf("%s[ralph v%s (go)]%s Run fresh? (y/n) ", logging.Yellow, config.Version, logging.Reset)
@@ -250,7 +250,7 @@ func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, sta
 			}
 			return false, 0
 		}
-		log.Log("Resuming from previous state (status: %s)", status)
+		log.Log("", "Resuming from previous state (status: %s)", status)
 		return true, -1
 	}
 
@@ -336,7 +336,7 @@ exec "%s" loop --dir "%s" --max %d%s
 		scriptPath, cfg.ProjectDir, cfg.MaxIterations, extra)
 
 	os.WriteFile(resumePath, []byte(content), 0o755)
-	log.Log("Resume script: %s", resumePath)
+	log.Log("", "Resume script: %s", resumePath)
 }
 
 // printSessionSummary shows what was accomplished this session: each completed
@@ -353,18 +353,18 @@ func printSessionSummary(tasks []loop.CompletedTask, log *logging.Logger) {
 			label = t.Title
 		}
 		if t.Title != "" && t.ID != "" {
-			log.Log("%s: %s", t.ID, t.Title)
+			log.Log("", "%s: %s", t.ID, t.Title)
 		} else {
-			log.Log("%s", label)
+			log.Log("", "%s", label)
 		}
 		if t.Summary != "" {
-			log.Log("  Fix: %s", t.Summary)
+			log.Log("", "  Fix: %s", t.Summary)
 		}
 		if t.PRNum != "" {
 			if t.PRTitle != "" {
-				log.Log("  PR #%s: %s", t.PRNum, t.PRTitle)
+				log.Log("", "  PR #%s: %s", t.PRNum, t.PRTitle)
 			} else {
-				log.Log("  PR #%s", t.PRNum)
+				log.Log("", "  PR #%s", t.PRNum)
 			}
 		}
 	}
@@ -377,44 +377,44 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 
 	iteration, _ := st.Read("iteration")
 	status, _ := st.Read("status")
-	log.Log("Status:     %s", status)
-	log.Log("Iterations: %s lifetime", iteration)
+	log.Log("", "Status:     %s", status)
+	log.Log("", "Iterations: %s lifetime", iteration)
 
 	completed, _ := backend.CountCompleted()
 	remaining, _ := backend.CountRemaining()
 	total, _ := backend.CountTotal()
-	log.Log("Tasks: %d/%d completed, %d remaining", completed, total, remaining)
+	log.Log("", "Tasks: %d/%d completed, %d remaining", completed, total, remaining)
 
-	log.Log("Log:        %s", filepath.Join(ralphDir, "loop.log"))
+	log.Log("", "Log:        %s", filepath.Join(ralphDir, "loop.log"))
 
 	if gm.WorktreeBranch != "" && gm.ProjectName != "" {
-		log.Log("Worktree:   %s", gm.WorkDir)
+		log.Log("", "Worktree:   %s", gm.WorkDir)
 
 		branches := git.ListProjectBranches(cfg.ProjectDir, gm.ProjectName)
 		if len(branches) > 1 {
-			log.Log("Branches:")
+			log.Log("", "Branches:")
 			for _, b := range branches {
 				if git.IsBranchSquashMerged(cfg.ProjectDir, b, cfg.BaseBranch) {
-					log.Log("  %s [MERGED]", b)
+					log.Log("", "  %s [MERGED]", b)
 				} else {
-					log.Log("  %s", b)
+					log.Log("", "  %s", b)
 				}
 			}
 		} else {
-			log.Log("Branch:     %s", gm.WorktreeBranch)
+			log.Log("", "Branch:     %s", gm.WorktreeBranch)
 		}
-		log.Log("To merge:   git merge %s", gm.WorktreeBranch)
+		log.Log("", "To merge:   git merge %s", gm.WorktreeBranch)
 	}
 
 	hasRemaining, _ := backend.HasRemaining()
 	if hasRemaining {
-		log.Log("Resume:     %s", filepath.Join(ralphDir, "resume.sh"))
+		log.Log("", "Resume:     %s", filepath.Join(ralphDir, "resume.sh"))
 	}
 }
 
 func handleTmuxCommander(cfg config.Config, scriptPath string, args []string, ralphDir string, log *logging.Logger) int {
 	if !tmux.Available() {
-		log.Error("tmux not found on PATH")
+		log.Error("", "tmux not found on PATH")
 		return 1
 	}
 
@@ -433,7 +433,7 @@ func handleTmuxCommander(cfg config.Config, scriptPath string, args []string, ra
 	}
 
 	if err := sess.Setup(); err != nil {
-		log.Error("Tmux setup failed: %v", err)
+		log.Error("", "Tmux setup failed: %v", err)
 		return 1
 	}
 
@@ -460,7 +460,7 @@ func handleTmuxCommander(cfg config.Config, scriptPath string, args []string, ra
 
 func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir string, log *logging.Logger) int {
 	if !tmux.Available() {
-		log.Error("tmux not found on PATH")
+		log.Error("", "tmux not found on PATH")
 		return 1
 	}
 
@@ -476,7 +476,7 @@ func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir st
 	}
 
 	if err := sess.Setup(); err != nil {
-		log.Error("Tmux setup failed: %v", err)
+		log.Error("", "Tmux setup failed: %v", err)
 		return 1
 	}
 

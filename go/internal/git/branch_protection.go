@@ -52,7 +52,7 @@ func (m *Manager) EnforceAdmins() error {
 
 	nwo := repoNWO(remoteURL)
 	if nwo == "" {
-		m.Logger.Warn("Could not parse repo owner/name from remote URL — skipping enforce_admins")
+		m.Logger.Warn("git", "Could not parse repo owner/name from remote URL — skipping enforce_admins")
 		return nil
 	}
 
@@ -61,23 +61,23 @@ func (m *Manager) EnforceAdmins() error {
 
 	enforced, err := gh.CheckEnforceAdmins(nwo, branch)
 	if err != nil {
-		m.Logger.Warn("Could not check enforce_admins status: %v — skipping", err)
+		m.Logger.Warn("git", "Could not check enforce_admins status: %v — skipping", err)
 		return nil
 	}
 	if enforced {
-		m.Logger.Log("Branch protection: enforce_admins already enabled on %s", branch)
+		m.Logger.Log("git", "Branch protection: enforce_admins already enabled on %s", branch)
 		return nil
 	}
 
 	output, err := gh.PostEnforceAdmins(nwo, branch)
 	if err != nil {
 		if strings.Contains(output, "Branch not protected") || strings.Contains(output, "Not Found") {
-			m.Logger.Warn("No branch protection rules on %s — cannot enable enforce_admins. Configure branch protection in GitHub settings first.", branch)
+			m.Logger.Warn("git", "No branch protection rules on %s — cannot enable enforce_admins. Configure branch protection in GitHub settings first.", branch)
 			return nil
 		}
 		return fmt.Errorf("failed to enable enforce_admins on %s: %s", branch, output)
 	}
 
-	m.Logger.Log("Branch protection: enabled enforce_admins on %s", branch)
+	m.Logger.Log("git", "Branch protection: enabled enforce_admins on %s", branch)
 	return nil
 }
