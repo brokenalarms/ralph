@@ -20,24 +20,36 @@ func (l *testLogger) Warn(format string, args ...any)    {}
 func (l *testLogger) Error(format string, args ...any)   {}
 func (l *testLogger) Success(format string, args ...any) {}
 
-func TestSandboxProfile_AllowThenDenyStrategy(t *testing.T) {
-	s := &Sandbox{DenyWritePaths: []string{"/Users"}}
+func TestSandboxProfile_DenyDefault(t *testing.T) {
+	s := &Sandbox{}
 	profile := s.Profile([]string{"/work/tree", "/work/.ralph"})
 
-	if !strings.Contains(profile, "(allow file*)") {
-		t.Error("profile should allow all file operations globally")
+	if !strings.Contains(profile, "(deny default)") {
+		t.Error("profile should deny by default")
 	}
-	if !strings.Contains(profile, `(deny file-write* (subpath "/Users"))`) {
-		t.Error("profile should deny writes under /Users")
+	if !strings.Contains(profile, `(allow file-read* (subpath "/"))`) {
+		t.Error("profile should allow global reads")
 	}
 	if !strings.Contains(profile, `(allow file-write* (subpath "/work/tree"))`) {
-		t.Error("profile should punch write hole for worktree")
+		t.Error("profile should allow writes to worktree")
 	}
 	if !strings.Contains(profile, `(allow file-write* (subpath "/work/.ralph"))`) {
-		t.Error("profile should punch write hole for ralph dir")
+		t.Error("profile should allow writes to ralph dir")
 	}
-	if !strings.Contains(profile, `(deny default)`) {
-		t.Error("profile should deny default for non-file operations")
+	if !strings.Contains(profile, "(allow file-map-executable)") {
+		t.Error("profile should allow file-map-executable for Node.js")
+	}
+}
+
+func TestSandboxProfile_NoWriteOutsideAllowed(t *testing.T) {
+	s := &Sandbox{}
+	profile := s.Profile([]string{"/work/tree"})
+
+	if strings.Contains(profile, `file-write* (subpath "/")`) {
+		t.Error("profile must NOT allow global writes")
+	}
+	if strings.Contains(profile, `file-write* (subpath "/Users")`) {
+		t.Error("profile must NOT allow writes to /Users")
 	}
 }
 
@@ -62,22 +74,8 @@ func TestSandboxProfile_AllowsNetwork(t *testing.T) {
 	}
 }
 
-func TestSandboxProfile_DenyBeforeAllow(t *testing.T) {
-	s := &Sandbox{DenyWritePaths: []string{"/Users"}}
-	profile := s.Profile([]string{"/Users/daniel/work"})
-
-	denyIdx := strings.Index(profile, `(deny file-write* (subpath "/Users"))`)
-	allowIdx := strings.Index(profile, `(allow file-write* (subpath "/Users/daniel/work"))`)
-	if denyIdx < 0 || allowIdx < 0 {
-		t.Fatal("profile missing deny or allow rules")
-	}
-	if allowIdx < denyIdx {
-		t.Error("allow must come after deny so it takes precedence in Seatbelt")
-	}
-}
-
 func TestSandboxWrap_ProducesSandboxExecCommand(t *testing.T) {
-	s := &Sandbox{DenyWritePaths: []string{"/Users"}}
+	s := &Sandbox{}
 	cmd := s.Wrap(context.Background(), []string{"/work"}, "echo", "hello")
 
 	if filepath.Base(cmd.Path) != "sandbox-exec" {
@@ -105,8 +103,7 @@ func TestSandboxWrap_ProducesSandboxExecCommand(t *testing.T) {
 	if profileIdx < 0 {
 		t.Fatal("could not find profile path in args")
 	}
-	profilePath := cmd.Args[profileIdx]
-	data, err := os.ReadFile(profilePath)
+	data, err := os.ReadFile(cmd.Args[profileIdx])
 	if err != nil {
 		t.Fatalf("could not read profile file: %v", err)
 	}
@@ -123,23 +120,8 @@ func TestAvailable(t *testing.T) {
 	}
 }
 
-func TestDefaultSandbox_DeniesUsersWrites(t *testing.T) {
-	s := DefaultSandbox()
-
-	found := false
-	for _, p := range s.DenyWritePaths {
-		if p == "/Users" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("DefaultSandbox should deny writes under /Users")
-	}
-}
-
 func TestNew_WithSandbox_SetsCmdFactory(t *testing.T) {
-	s := &Sandbox{DenyWritePaths: []string{"/Users"}}
+	s := &Sandbox{}
 	r := New(&testLogger{}, s)
 
 	if r.inner.CmdFactory == nil {
@@ -156,7 +138,7 @@ func TestNew_WithoutSandbox_NoCmdFactory(t *testing.T) {
 }
 
 func TestSandboxedCmdFactory_ProducesCorrectCommand(t *testing.T) {
-	s := &Sandbox{DenyWritePaths: []string{"/Users"}}
+	s := &Sandbox{}
 	r := New(&testLogger{}, s)
 
 	tmpDir := t.TempDir()

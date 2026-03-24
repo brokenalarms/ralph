@@ -10,24 +10,14 @@ import (
 )
 
 // Sandbox configures macOS sandbox-exec container isolation. The profile
-// uses an allow-then-deny strategy: all file operations are allowed globally,
-// then writes are denied under user-controlled paths, then specific write
-// holes are punched for the worktree and ralph state dir. This avoids the
-// fragile deny-default approach where Node.js crashes because of missing
-// operations like file-map-executable or file-ioctl.
-type Sandbox struct {
-	// DenyWritePaths lists directories where writes are blocked.
-	// Typically just "/Users" to prevent writes outside the worktree.
-	DenyWritePaths []string
-}
+// uses deny-default: all operations are denied unless explicitly allowed.
+// Reads are granted globally (agents need system libs, tools, git config).
+// Writes are scoped to the worktree, ralph state dir, and /tmp only.
+type Sandbox struct{}
 
-// DefaultSandbox returns a Sandbox that denies writes under /Users.
-// Per-invocation write access (worktree, ralph state dir) is punched
-// through via the writeDirs parameter in Profile/Wrap.
+// DefaultSandbox returns a Sandbox with the standard deny-default profile.
 func DefaultSandbox() *Sandbox {
-	return &Sandbox{
-		DenyWritePaths: []string{"/Users"},
-	}
+	return &Sandbox{}
 }
 
 // Available checks whether sandbox-exec is present on this system.
@@ -37,20 +27,21 @@ func Available() bool {
 }
 
 // Profile generates a macOS Seatbelt sandbox profile. Strategy:
-//  1. Allow all non-file operations (process, network, mach, ipc, etc.)
-//  2. Allow all file operations globally (covers file-map-executable, etc.)
-//  3. Deny writes under DenyWritePaths (e.g. /Users)
-//  4. Punch write holes for writeDirs, /tmp, and /private/tmp
+//  1. (deny default) — block everything
+//  2. (allow file-read* (subpath "/")) — global read for system libs/tools
+//  3. (allow file-write* ...) — scoped writes to writeDirs and /tmp only
+//  4. (allow file-map-executable) etc. — Node.js requires these globally
+//  5. Non-file operations (process, network, mach, ipc) allowed
 func (s *Sandbox) Profile(writeDirs []string) string {
 	var b strings.Builder
 	b.WriteString("(version 1)\n")
 	b.WriteString("(deny default)\n")
 
-	b.WriteString("(allow file*)\n")
-
-	for _, d := range s.DenyWritePaths {
-		b.WriteString(fmt.Sprintf("(deny file-write* (subpath %q))\n", d))
-	}
+	b.WriteString("(allow file-read* (subpath \"/\"))\n")
+	b.WriteString("(allow file-read-metadata)\n")
+	b.WriteString("(allow file-map-executable)\n")
+	b.WriteString("(allow file-ioctl)\n")
+	b.WriteString("(allow file-test-existence)\n")
 
 	for _, d := range writeDirs {
 		b.WriteString(fmt.Sprintf("(allow file-write* (subpath %q))\n", d))
@@ -72,7 +63,7 @@ func (s *Sandbox) Profile(writeDirs []string) string {
 
 // Wrap creates an exec.Cmd that runs the given command inside a
 // sandbox-exec container. writeDirs specifies directories that get
-// read-write access (typically worktree + ralph state dir).
+// write access (typically worktree + ralph state dir).
 func (s *Sandbox) Wrap(ctx context.Context, writeDirs []string, name string, args ...string) *exec.Cmd {
 	profile := s.Profile(writeDirs)
 
