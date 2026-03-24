@@ -194,7 +194,7 @@ func (m *Manager) resetResumedWorktree(defaultBranch string) error {
 // detecting and skipping squash-merged branches when a naive rebase conflicts.
 func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
 	// Stash dirty state so rebase can proceed cleanly.
-	dirty := gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
+	dirty := m.gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
 		m.gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
 	if dirty {
 		m.Logger.Log("git", "Stashing uncommitted changes before rebase...")
@@ -317,34 +317,7 @@ func (m *Manager) findLastSquashMergedBranch(defaultBranch string) string {
 // already present in origin/defaultBranch by reverse-applying the diff against
 // a temporary index loaded with origin/default's tree.
 func (m *Manager) isSquashMerged(defaultBranch, mergeBase, branch string) bool {
-	tmpIndex, err := os.CreateTemp("", "ralph_squash_check.*")
-	if err != nil {
-		return false
-	}
-	tmpPath := tmpIndex.Name()
-	tmpIndex.Close()
-	defer os.Remove(tmpPath)
-
-	// Load origin/default's tree into the temp index
-	readTreeCmd := exec.Command("git", "-C", m.WorkDir, "read-tree", "origin/"+defaultBranch)
-	readTreeCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpPath)
-	if readTreeCmd.Run() != nil {
-		return false
-	}
-
-	// Generate the diff between merge-base and branch
-	diffCmd := exec.Command("git", "-C", m.WorkDir, "diff", mergeBase, branch)
-	diffOut, err := diffCmd.Output()
-	if err != nil || len(diffOut) == 0 {
-		return false
-	}
-
-	// Reverse-apply the diff against the temp index — if it succeeds,
-	// origin/default already contains these changes.
-	applyCmd := exec.Command("git", "-C", m.WorkDir, "apply", "--cached", "--reverse", "--check", "-C0")
-	applyCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpPath)
-	applyCmd.Stdin = strings.NewReader(string(diffOut))
-	return applyCmd.Run() == nil
+	return checkSquashMerged(m.WorkDir, defaultBranch, mergeBase, branch)
 }
 
 // IsBranchSquashMerged checks whether a branch's changes have been
@@ -365,6 +338,14 @@ func IsBranchSquashMerged(dir, branch, baseBranch string) bool {
 		return false
 	}
 
+	return checkSquashMerged(dir, defaultBranch, mergeBase, branch)
+}
+
+// checkSquashMerged tests whether a branch's changes (from mergeBase) are
+// already present in origin/defaultBranch. Loads origin's tree into a
+// temporary index and reverse-applies the branch diff — success means
+// origin already contains the changes (squash-merged).
+func checkSquashMerged(dir, defaultBranch, mergeBase, branch string) bool {
 	tmpIndex, err := os.CreateTemp("", "ralph_squash_check.*")
 	if err != nil {
 		return false
