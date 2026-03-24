@@ -35,7 +35,6 @@ type Manager struct {
 	ProjectName    string
 	WorkDir        string
 	WorktreeBranch string
-	UseWorktree    bool
 	Resume         bool
 	TaskSeq        int
 	BranchRenamed bool
@@ -76,12 +75,8 @@ func ValidateRemoteBranch(ctx context.Context, projectDir, baseBranch string) er
 func (m *Manager) SetupWorktree(ctx context.Context) error {
 	m.WorkDir = m.ProjectDir
 
-	if !m.UseWorktree {
-		return nil
-	}
-
 	if !IsGitRepo(m.ProjectDir) {
-		return fmt.Errorf("not a git repo — ralph requires git. Use --no-worktree to run without git isolation")
+		return fmt.Errorf("not a git repo — ralph requires git")
 	}
 
 	if m.Resume {

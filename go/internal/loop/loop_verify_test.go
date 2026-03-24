@@ -68,9 +68,9 @@ func TestOnSignal_HappyPath(t *testing.T) {
 	}
 }
 
-// Verifies the extracted onSignal method returns false when LLM verification
-// rejects the work and both the fix agent and Sonnet escalation also reject.
-func TestOnSignal_LLMReject_SkipsTask(t *testing.T) {
+// LLM rejects every attempt — verification loop exhausts maxLLMVerifyAttempts
+// and skips the task.
+func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
@@ -99,14 +99,13 @@ func TestOnSignal_LLMReject_SkipsTask(t *testing.T) {
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
-	// LLM verify rejects on both attempts (Haiku then Sonnet escalation)
 	llmCalls := 0
 	l.llmVerifyFunc = func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
 		llmCalls++
 		return verify.Result{Passed: false, Details: "diff doesn't match bead"}
 	}
 
-	// Fix agent signals completion (so escalation proceeds)
+	// Fix agent signals completion each time (so loop continues)
 	l.newRunnerFunc = func() claudeRunner {
 		return &stubRunner{result: stubResult(true, "fixed")}
 	}
@@ -122,10 +121,103 @@ func TestOnSignal_LLMReject_SkipsTask(t *testing.T) {
 
 	result := l.onSignal(params)
 	if result {
-		t.Fatal("expected onSignal to return false when LLM verification rejects twice")
+		t.Fatal("expected onSignal to return false when LLM verification exhausts retries")
+	}
+	if llmCalls != maxLLMVerifyAttempts {
+		t.Fatalf("expected %d LLM verify calls, got %d", maxLLMVerifyAttempts, llmCalls)
+	}
+	if backend.skippedTask == "" {
+		t.Fatal("expected task to be skipped after exhausting retries")
+	}
+}
+
+// LLM rejects once, fix agent fixes, LLM approves on second attempt.
+func TestOnSignal_LLMReject_PassesOnRetry(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task"},
+		VerifyDir:     dir,
+	}, st, gm, logger)
+
+	llmCalls := 0
+	l.llmVerifyFunc = func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+		llmCalls++
+		if llmCalls == 1 {
+			return verify.Result{Passed: false, Details: "missing error handling"}
+		}
+		return verify.Result{Passed: true, Reason: "looks good after fix"}
+	}
+
+	l.newRunnerFunc = func() claudeRunner {
+		return &stubRunner{result: stubResult(true, "fixed")}
+	}
+
+	result := l.onSignal(signalParams{
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID: "test-retry", nextTask: "Retry test",
+	})
+
+	if !result {
+		t.Fatal("expected onSignal to pass when LLM approves on retry")
 	}
 	if llmCalls != 2 {
-		t.Fatalf("expected 2 LLM verify calls (Haiku + Sonnet), got %d", llmCalls)
+		t.Fatalf("expected 2 LLM verify calls, got %d", llmCalls)
+	}
+}
+
+// When the fix agent exits without signaling, the verification loop stops
+// and onSignal returns false without retrying.
+func TestOnSignal_LLMReject_FixAgentNoSignal_StopsLoop(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task"},
+		VerifyDir:     dir,
+	}, st, gm, logger)
+
+	llmCalls := 0
+	l.llmVerifyFunc = func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+		llmCalls++
+		return verify.Result{Passed: false, Details: "bad code"}
+	}
+
+	// Fix agent exits without signal
+	l.newRunnerFunc = func() claudeRunner {
+		return &stubRunner{result: stubResult(false, "")}
+	}
+
+	result := l.onSignal(signalParams{
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID: "test-nosignal", nextTask: "No signal test",
+	})
+
+	if result {
+		t.Fatal("expected onSignal to return false when fix agent doesn't signal")
+	}
+	if llmCalls != 1 {
+		t.Fatalf("expected 1 LLM call (no retry after fix agent failure), got %d", llmCalls)
 	}
 }
 
@@ -133,5 +225,134 @@ func stubResult(signal bool, summary string) claude.Result {
 	return claude.Result{
 		SignalDetected: signal,
 		Summary:        summary,
+	}
+}
+
+// In fire mode (default), a no-diff LLM result passes without spawning
+// a verification agent — the agent's claim is trusted.
+func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task"},
+		VerifyDir:     dir,
+		VerifyLevel:   "fire",
+	}, st, gm, logger)
+
+	l.llmVerifyFunc = func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+		return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
+	}
+
+	runnerSpawned := false
+	l.newRunnerFunc = func() claudeRunner {
+		runnerSpawned = true
+		return &stubRunner{result: stubResult(true, "confirmed")}
+	}
+
+	result := l.onSignal(signalParams{
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID: "test-fire", nextTask: "Fire test",
+	})
+
+	if !result {
+		t.Fatal("fire mode should accept no-diff completion")
+	}
+	if runnerSpawned {
+		t.Fatal("fire mode should not spawn a verification agent")
+	}
+}
+
+// In hog mode, a no-diff LLM result spawns a verification agent. When the
+// verifier signals confirmation, onSignal passes.
+func TestOnSignal_HogMode_NoDiffSpawnsVerifier_Passes(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task"},
+		VerifyDir:     dir,
+		VerifyLevel:   "hog",
+	}, st, gm, logger)
+
+	l.llmVerifyFunc = func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+		return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
+	}
+
+	runnerSpawned := false
+	l.newRunnerFunc = func() claudeRunner {
+		runnerSpawned = true
+		return &stubRunner{result: stubResult(true, "feature exists")}
+	}
+
+	result := l.onSignal(signalParams{
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID: "test-hog", nextTask: "Hog test",
+	})
+
+	if !result {
+		t.Fatal("hog mode should pass when verification agent confirms feature exists")
+	}
+	if !runnerSpawned {
+		t.Fatal("hog mode should spawn a verification agent on no-diff")
+	}
+}
+
+// In hog mode, when the verification agent exits without signaling (feature
+// not found), onSignal rejects and the task is skipped.
+func TestOnSignal_HogMode_NoDiffVerifierRejects(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	backend := &stubBackend{remaining: 1, total: 1, description: "test task"}
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+		VerifyLevel:   "hog",
+	}, st, gm, logger)
+
+	l.llmVerifyFunc = func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+		return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
+	}
+
+	l.newRunnerFunc = func() claudeRunner {
+		return &stubRunner{result: stubResult(false, "")}
+	}
+
+	result := l.onSignal(signalParams{
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID: "test-hog-reject", nextTask: "Hog reject test",
+	})
+
+	if result {
+		t.Fatal("hog mode should reject when verification agent does not confirm")
 	}
 }

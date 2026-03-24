@@ -19,6 +19,7 @@ type QueryFunc func(ctx context.Context, workDir, prompt, model string) (string,
 // Result describes the outcome of a post-signal verification.
 type Result struct {
 	Passed  bool
+	NoDiff  bool // true when verification passed because no diff was found
 	Reason  string
 	Details string
 }
@@ -175,7 +176,7 @@ func LLMVerifyPR(ctx context.Context, workDir, promptsDir, taskID, headBefore, b
 	if diff == "" {
 		diff = git.DiffFull(workDir, headBefore, "HEAD")
 		if diff == "" {
-			return Result{Passed: true, Reason: "no PR found and no new commits — agent confirms task complete"}
+			return Result{Passed: true, NoDiff: true, Reason: "no PR found and no new commits — agent confirms task complete"}
 		}
 		source = "iteration"
 	}

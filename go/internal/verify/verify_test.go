@@ -291,6 +291,9 @@ func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
 	if !result.Passed {
 		t.Errorf("expected pass when agent confirms complete with no new work needed, got: %s", result.Reason)
 	}
+	if !result.NoDiff {
+		t.Error("expected NoDiff=true when no PR and no iteration diff exist")
+	}
 }
 
 // LLMVerifyPR delegates PR lookup to the GitHub interface rather than

@@ -17,7 +17,6 @@ type Config struct {
 	MaxIterations              int
 	Prompt                     string
 	Quiet                      bool
-	UseWorktree                bool
 	CallsPerHour               int
 	RefactorEvery              int
 	NoRefactor                 bool
@@ -35,8 +34,9 @@ type Config struct {
 	StagnationThreshold        int
 	TestSaturationThreshold    int
 	PermissionDenialThreshold  int
-	BaseBranch string
-	Wait       bool
+	BaseBranch   string
+	Wait         bool
+	VerifyLevel  string
 	WaitInterval               time.Duration
 
 	cliSet map[string]bool
@@ -47,8 +47,7 @@ type Config struct {
 // FlagDef.EnvVar override the registry defaults.
 func Defaults() Config {
 	cfg := Config{
-		ProjectDir:  ".",
-		UseWorktree: true,
+		ProjectDir: ".",
 	}
 	for i := range Flags {
 		f := &Flags[i]

@@ -42,7 +42,6 @@ setup_test_repo() {
 
   TASK_BACKEND="bd"
   RESUME=false
-  USE_WORKTREE=true
   CALLS_PER_HOUR=80
   REFACTOR_THRESHOLD=0
   QUIET=false

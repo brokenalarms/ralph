@@ -39,8 +39,7 @@ func setupRebaseMgr(t *testing.T, project, bare string) *Manager {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -385,8 +384,7 @@ func TestTagTaskStart_WithTaskID(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       newMemState(),
+				State:       newMemState(),
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -408,8 +406,7 @@ func TestTagTaskEnd_WithTaskID(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       newMemState(),
+				State:       newMemState(),
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -431,8 +428,7 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       newMemState(),
+				State:       newMemState(),
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -465,8 +461,7 @@ func TestTagTaskStart_SkipsNextBranch(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       newMemState(),
+				State:       newMemState(),
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -490,8 +485,7 @@ func TestTagStartEnd_DifferentCommits(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       newMemState(),
+				State:       newMemState(),
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {

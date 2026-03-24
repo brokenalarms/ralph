@@ -9,8 +9,8 @@ import (
 )
 
 // Verifies that Parse with no arguments returns defaults derived from the Flags
-// registry: cwd project dir, 50 iterations, worktree enabled, 80 calls/hr,
-// refactor disabled, idle timeouts at 10m/5m.
+// registry: cwd project dir, 50 iterations, 80 calls/hr, refactor disabled,
+// idle timeouts at 10m/5m.
 func TestDefaultValues(t *testing.T) {
 	// Clear env vars so defaults are deterministic.
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
@@ -31,9 +31,6 @@ func TestDefaultValues(t *testing.T) {
 	}
 	if cfg.ProjectDir != "." {
 		t.Errorf("ProjectDir = %q, want \".\"", cfg.ProjectDir)
-	}
-	if !cfg.UseWorktree {
-		t.Error("UseWorktree should default to true")
 	}
 	if cfg.CallsPerHour != 80 {
 		t.Errorf("CallsPerHour = %d, want 80", cfg.CallsPerHour)
@@ -97,7 +94,6 @@ func TestAllFlags(t *testing.T) {
 		"-n", "10",
 		"-p", "fix tests",
 		"-q",
-		"--no-worktree",
 		"--calls-per-hour", "40",
 		"--refactor-every", "3",
 		"--no-refactor",
@@ -124,9 +120,6 @@ func TestAllFlags(t *testing.T) {
 	}
 	if !cfg.Quiet {
 		t.Error("Quiet should be true")
-	}
-	if cfg.UseWorktree {
-		t.Error("UseWorktree should be false after --no-worktree")
 	}
 	if cfg.CallsPerHour != 40 {
 		t.Errorf("CallsPerHour = %d, want 40", cfg.CallsPerHour)
@@ -157,6 +150,17 @@ func TestAllFlags(t *testing.T) {
 	}
 }
 
+// Verifies that --no-worktree is rejected — worktree isolation is mandatory.
+func TestNoWorktreeFlagRejected(t *testing.T) {
+	_, err := Parse([]string{"--no-worktree"})
+	if err == nil {
+		t.Fatal("--no-worktree should be rejected as unknown flag")
+	}
+	if !strings.Contains(err.Error(), "unknown") {
+		t.Errorf("expected 'unknown' error, got: %v", err)
+	}
+}
+
 // Verifies that --auto-merge flag defaults to false and is set to true when
 // the flag is present, matching ralph.sh's AUTO_MERGE variable.
 func TestAutoMergeFlag(t *testing.T) {
@@ -168,7 +172,7 @@ func TestAutoMergeFlag(t *testing.T) {
 		t.Error("AutoMerge should default to false")
 	}
 
-	cfg, err = Parse([]string{"--auto-merge", "--no-worktree"})
+	cfg, err = Parse([]string{"--auto-merge"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -188,7 +192,7 @@ func TestMergeAdminFlag(t *testing.T) {
 		t.Error("MergeAdmin should default to false")
 	}
 
-	cfg, err = Parse([]string{"--auto-merge", "--merge-admin", "--no-worktree"})
+	cfg, err = Parse([]string{"--auto-merge", "--merge-admin"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -203,7 +207,7 @@ func TestMergeAdminFlag(t *testing.T) {
 // --merge-admin without --auto-merge is invalid since admin merge bypass
 // only makes sense when auto-merge is enabled.
 func TestMergeAdminRequiresAutoMerge(t *testing.T) {
-	cfg, err := Parse([]string{"--merge-admin", "--no-worktree"})
+	cfg, err := Parse([]string{"--merge-admin"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1056,5 +1060,30 @@ func TestInitConfigIncludesRefactorKeys(t *testing.T) {
 		if !strings.Contains(content, key) {
 			t.Errorf("generated config missing key %q", key)
 		}
+	}
+}
+
+// Verifies --verify-level defaults to "fire" and accepts "fire" or "hog",
+// rejecting invalid values — controlling no-diff verification depth.
+func TestVerifyLevelFlag(t *testing.T) {
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.VerifyLevel != "fire" {
+		t.Errorf("VerifyLevel = %q, want %q (default)", cfg.VerifyLevel, "fire")
+	}
+
+	cfg, err = Parse([]string{"--verify-level", "hog"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.VerifyLevel != "hog" {
+		t.Errorf("VerifyLevel = %q, want %q", cfg.VerifyLevel, "hog")
+	}
+
+	_, err = Parse([]string{"--verify-level", "invalid"})
+	if err == nil {
+		t.Fatal("expected error for invalid verify-level")
 	}
 }

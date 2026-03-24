@@ -171,8 +171,7 @@ func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      log,
 	}
 
@@ -200,32 +199,13 @@ func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 	}
 }
 
-// --no-worktree mode should skip worktree creation entirely
-func TestSetupWorktree_NoWorktreeMode(t *testing.T) {
-	project, _ := initBareRepo(t)
-	mgr := &Manager{
-		ProjectDir:  project,
-		RalphDir:    filepath.Join(project, ".ralph"),
-		UseWorktree: false,
-		Logger:      &testLog{},
-	}
-
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if mgr.WorkDir != project {
-		t.Errorf("WorkDir = %q, want project dir %q", mgr.WorkDir, project)
-	}
-}
-
 // SetupWorktree in a non-git directory should return an error
 func TestSetupWorktree_NonGitDirErrors(t *testing.T) {
 	tmp := t.TempDir()
 	mgr := &Manager{
 		ProjectDir:  tmp,
 		RalphDir:    filepath.Join(tmp, ".ralph"),
-		UseWorktree: true,
-		Logger:      &testLog{},
+				Logger:      &testLog{},
 	}
 
 	err := mgr.SetupWorktree(context.Background())
@@ -248,8 +228,7 @@ func TestSetupWorktree_Resume(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      log,
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -262,8 +241,7 @@ func TestSetupWorktree_Resume(t *testing.T) {
 	mgr2 := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		Resume:      true,
+				Resume:      true,
 		State:       state,
 		Logger:      log,
 	}
@@ -290,8 +268,7 @@ func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      log,
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -306,8 +283,7 @@ func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 	mgr2 := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		Resume:      true,
+				Resume:      true,
 		State:       state,
 		Logger:      log,
 	}
@@ -333,8 +309,7 @@ func TestSetupWorktree_ResumeRestoresTaskSeqFromState(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      log,
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -358,8 +333,7 @@ func TestSetupWorktree_ResumeRestoresTaskSeqFromState(t *testing.T) {
 	mgr2 := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		Resume:      true,
+				Resume:      true,
 		State:       state,
 		Logger:      log,
 	}
@@ -384,8 +358,7 @@ func TestResumeRotate_PreservesPreviousBranch(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      log,
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -401,8 +374,7 @@ func TestResumeRotate_PreservesPreviousBranch(t *testing.T) {
 	mgr2 := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		Resume:      true,
+				Resume:      true,
 		State:       state,
 		Logger:      log,
 	}
@@ -449,8 +421,7 @@ func TestSetupWorktree_ResumeResetsSquashMergedBranch(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      log,
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -472,8 +443,7 @@ func TestSetupWorktree_ResumeResetsSquashMergedBranch(t *testing.T) {
 	mgr2 := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		Resume:      true,
+				Resume:      true,
 		State:       state,
 		Logger:      log,
 	}
@@ -504,8 +474,7 @@ func TestSetupWorktree_ResumeResetsDeletedBranch(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      log,
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -523,8 +492,7 @@ func TestSetupWorktree_ResumeResetsDeletedBranch(t *testing.T) {
 	mgr2 := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		Resume:      true,
+				Resume:      true,
 		State:       state,
 		Logger:      log,
 	}
@@ -552,8 +520,7 @@ func TestSetupWorktree_ResumeKeepsValidBranch(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      log,
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -568,8 +535,7 @@ func TestSetupWorktree_ResumeKeepsValidBranch(t *testing.T) {
 	mgr2 := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		Resume:      true,
+				Resume:      true,
 		State:       state,
 		Logger:      log,
 	}
@@ -595,8 +561,7 @@ func TestRenameBranchForTask_RenamesBranch(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -628,8 +593,7 @@ func TestRenameBranchForTask_IncludesTaskID(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -653,8 +617,7 @@ func TestRenameBranchForTask_OnlyRenamesOnce(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -694,8 +657,7 @@ func TestRotateBranch_CreatesNewTempBranch(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      log,
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -730,8 +692,7 @@ func TestTaskSeq_IncrementsAcrossRotations(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -765,8 +726,7 @@ func TestWorktreeDirUsesDateBasedName(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -792,8 +752,7 @@ func TestSecondRunSameDayIncrementsSuffix(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -817,8 +776,7 @@ func TestBranchSequenceResetsPerRun(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -843,8 +801,7 @@ func TestRotateBranchLogsWarningOnFailure(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      log,
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -869,8 +826,7 @@ func TestStaleWorktreeBranchCleanedUpViaPrune(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -883,8 +839,7 @@ func TestStaleWorktreeBranchCleanedUpViaPrune(t *testing.T) {
 	mgr2 := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       newMemState(),
+				State:       newMemState(),
 		Logger:      &testLog{},
 	}
 	if err := mgr2.SetupWorktree(context.Background()); err != nil {
@@ -904,8 +859,7 @@ func TestLiveRalphWorktreeRemovedWhenBranchExists(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -916,8 +870,7 @@ func TestLiveRalphWorktreeRemovedWhenBranchExists(t *testing.T) {
 	mgr2 := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       newMemState(),
+				State:       newMemState(),
 		Logger:      &testLog{},
 	}
 	if err := mgr2.SetupWorktree(context.Background()); err != nil {
@@ -941,8 +894,7 @@ func TestResumeRestoresTaskSeq(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -964,8 +916,7 @@ func TestResumeRestoresTaskSeq(t *testing.T) {
 	mgr2 := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		Resume:      true,
+				Resume:      true,
 		State:       state,
 		Logger:      &testLog{},
 	}
@@ -992,8 +943,7 @@ func TestWorktreeInheritsGitignore(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       state,
+				State:       state,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -1053,8 +1003,7 @@ func TestRenameBranchForTask_AndRotateBranch(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
