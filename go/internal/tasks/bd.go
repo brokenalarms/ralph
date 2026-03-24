@@ -327,22 +327,26 @@ func bestIssue(jsonStr string) (bdIssue, bool) {
 	return issues[best], true
 }
 
-func (b *BD) GetNextTaskInfo() (string, string, error) {
+func (b *BD) GetNextTaskInfo() (TaskInfo, error) {
 	issue, err := b.getNextIssue()
 	if err != nil {
-		return "", "", err
+		return TaskInfo{}, err
 	}
-	return issue.ID, EnsureComponentPrefix(issue.Title, ""), nil
+	return TaskInfo{
+		ID:       issue.ID,
+		Title:    EnsureComponentPrefix(issue.Title, ""),
+		Priority: issue.Priority,
+	}, nil
 }
 
 func (b *BD) GetNextTask() (string, error) {
-	_, title, err := b.GetNextTaskInfo()
-	return title, err
+	info, err := b.GetNextTaskInfo()
+	return info.Title, err
 }
 
 func (b *BD) GetNextTaskID() (string, error) {
-	id, _, err := b.GetNextTaskInfo()
-	return id, err
+	info, err := b.GetNextTaskInfo()
+	return info.ID, err
 }
 
 func (b *BD) HasTasks() (bool, error) {

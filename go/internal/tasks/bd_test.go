@@ -495,15 +495,15 @@ func TestBD_GetNextTaskInfo_ReturnsConsistentPair(t *testing.T) {
 		return "", nil
 	}
 	b := setupBD(t, runner)
-	id, title, err := b.GetNextTaskInfo()
+	info, err := b.GetNextTaskInfo()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != "task-42" {
-		t.Errorf("id = %q, want %q", id, "task-42")
+	if info.ID != "task-42" {
+		t.Errorf("id = %q, want %q", info.ID, "task-42")
 	}
-	if title != "Implement login" {
-		t.Errorf("title = %q, want %q", title, "Implement login")
+	if info.Title != "Implement login" {
+		t.Errorf("title = %q, want %q", info.Title, "Implement login")
 	}
 	if callCount != 2 {
 		t.Errorf("expected 2 bd calls (list + ready), got %d", callCount)
@@ -519,12 +519,12 @@ func TestBD_GetNextTaskInfo_PrefersInProgressAtSamePriority(t *testing.T) {
 		`[{"id":"new-1","title":"Start fresh","priority":2}]`,
 	)
 	b := setupBD(t, runner)
-	id, title, err := b.GetNextTaskInfo()
+	info, err := b.GetNextTaskInfo()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != "wip-99" || title != "Resume this" {
-		t.Errorf("expected wip-99/Resume this, got %s/%s", id, title)
+	if info.ID != "wip-99" || info.Title != "Resume this" {
+		t.Errorf("expected wip-99/Resume this, got %s/%s", info.ID, info.Title)
 	}
 }
 
@@ -832,15 +832,15 @@ func TestBD_GetNextTaskInfo_AutoPrefixesTitle(t *testing.T) {
 	runner := mockBD("1", map[string]string{"open": "1"}, "[]", ready)
 	b := setupBD(t, runner)
 
-	id, title, err := b.GetNextTaskInfo()
+	info, err := b.GetNextTaskInfo()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != "ralph-abc" {
-		t.Errorf("id = %q, want ralph-abc", id)
+	if info.ID != "ralph-abc" {
+		t.Errorf("id = %q, want ralph-abc", info.ID)
 	}
-	if title != "ralph loop: force-reset worktree after merge" {
-		t.Errorf("title = %q, want %q", title, "ralph loop: force-reset worktree after merge")
+	if info.Title != "ralph loop: force-reset worktree after merge" {
+		t.Errorf("title = %q, want %q", info.Title, "ralph loop: force-reset worktree after merge")
 	}
 }
 
@@ -853,12 +853,12 @@ func TestBD_GetNextTask_PrefersBugsOverTasksAtSamePriority(t *testing.T) {
 		`[{"id":"enh-1","title":"Add dark mode","priority":2,"type":"feature"},{"id":"bug-1","title":"Fix crash on login","priority":2,"type":"bug"},{"id":"task-1","title":"Write docs","priority":2,"type":"task"}]`,
 	)
 	b := setupBD(t, runner)
-	id, _, err := b.GetNextTaskInfo()
+	info, err := b.GetNextTaskInfo()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != "bug-1" {
-		t.Errorf("expected bug-1 (bug preferred over task/feature at same priority), got %q", id)
+	if info.ID != "bug-1" {
+		t.Errorf("expected bug-1 (bug preferred over task/feature at same priority), got %q", info.ID)
 	}
 }
 
@@ -871,12 +871,12 @@ func TestBD_GetNextTask_PrefersTasksOverEnhancementsAtSamePriority(t *testing.T)
 		`[{"id":"enh-1","title":"Add dark mode","priority":2,"type":"feature"},{"id":"task-1","title":"Write docs","priority":2,"type":"task"}]`,
 	)
 	b := setupBD(t, runner)
-	id, _, err := b.GetNextTaskInfo()
+	info, err := b.GetNextTaskInfo()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != "task-1" {
-		t.Errorf("expected task-1 (task preferred over feature at same priority), got %q", id)
+	if info.ID != "task-1" {
+		t.Errorf("expected task-1 (task preferred over feature at same priority), got %q", info.ID)
 	}
 }
 
@@ -889,12 +889,12 @@ func TestBD_GetNextTask_PriorityTrumpsType(t *testing.T) {
 		`[{"id":"bug-1","title":"Minor bug","priority":3,"type":"bug"},{"id":"feat-1","title":"Critical feature","priority":1,"type":"feature"}]`,
 	)
 	b := setupBD(t, runner)
-	id, _, err := b.GetNextTaskInfo()
+	info, err := b.GetNextTaskInfo()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != "feat-1" {
-		t.Errorf("expected feat-1 (P1 feature beats P3 bug), got %q", id)
+	if info.ID != "feat-1" {
+		t.Errorf("expected feat-1 (P1 feature beats P3 bug), got %q", info.ID)
 	}
 }
 
@@ -904,12 +904,45 @@ func TestBD_GetNextTaskInfo_NoDoublePrefixing(t *testing.T) {
 	runner := mockBD("1", map[string]string{"open": "1"}, "[]", ready)
 	b := setupBD(t, runner)
 
-	_, title, err := b.GetNextTaskInfo()
+	info, err := b.GetNextTaskInfo()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if title != "ralph task: echo back beads" {
-		t.Errorf("title = %q, should be unchanged", title)
+	if info.Title != "ralph task: echo back beads" {
+		t.Errorf("title = %q, should be unchanged", info.Title)
+	}
+}
+
+// Verifies that GetNextTaskInfo returns priority from the bd JSON response.
+func TestBD_GetNextTaskInfo_ReturnsPriority(t *testing.T) {
+	ready := `[{"id":"ralph-p1","title":"Urgent fix","priority":1}]`
+	runner := mockBD("1", map[string]string{"open": "1"}, "[]", ready)
+	b := setupBD(t, runner)
+
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Priority == nil {
+		t.Fatal("expected non-nil priority")
+	}
+	if *info.Priority != 1 {
+		t.Errorf("priority = %d, want 1", *info.Priority)
+	}
+}
+
+// Verifies that GetNextTaskInfo returns nil priority when the issue has no priority set.
+func TestBD_GetNextTaskInfo_NilPriorityWhenUnset(t *testing.T) {
+	ready := `[{"id":"ralph-np","title":"No priority task"}]`
+	runner := mockBD("1", map[string]string{"open": "1"}, "[]", ready)
+	b := setupBD(t, runner)
+
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Priority != nil {
+		t.Errorf("expected nil priority, got %d", *info.Priority)
 	}
 }
 
