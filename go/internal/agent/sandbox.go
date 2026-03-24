@@ -7,7 +7,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 )
+
+var spawnCounter atomic.Uint64
 
 // Sandbox configures macOS sandbox-exec container isolation. The profile
 // uses deny-default: all operations are denied unless explicitly allowed.
@@ -71,9 +74,10 @@ func (s *Sandbox) Profile(writeDirs []string) string {
 func (s *Sandbox) Wrap(ctx context.Context, writeDirs []string, name string, args ...string) *exec.Cmd {
 	profile := s.Profile(writeDirs)
 
-	profileDir := filepath.Join(os.TempDir(), "ralph-sandbox")
+	profileDir := "/tmp/ralph-sandbox"
 	os.MkdirAll(profileDir, 0o755)
-	profilePath := filepath.Join(profileDir, fmt.Sprintf("agent-%d.sb", os.Getpid()))
+	seq := spawnCounter.Add(1)
+	profilePath := filepath.Join(profileDir, fmt.Sprintf("agent-%d-%d.sb", os.Getpid(), seq))
 	os.WriteFile(profilePath, []byte(profile), 0o600)
 
 	sandboxArgs := []string{"-f", profilePath, name}

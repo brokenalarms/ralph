@@ -98,6 +98,12 @@ func (g *ghCLI) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error
 	return string(out), err
 }
 
+func isHarmlessUpdateBranchError(output string) bool {
+	return strings.Contains(output, "already up to date") ||
+		strings.Contains(output, "expected_head_sha") ||
+		strings.Contains(output, "no new commits")
+}
+
 func (g *ghCLI) UpdateBranch(dir, nwo, prNumber string) (bool, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%s/update-branch", nwo, prNumber)
 	cmd := exec.Command("gh", "api", endpoint, "--method", "PUT")
@@ -105,8 +111,7 @@ func (g *ghCLI) UpdateBranch(dir, nwo, prNumber string) (bool, error) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		output := strings.TrimSpace(string(out))
-		if strings.Contains(output, "already up to date") ||
-			strings.Contains(output, "expected_head_sha") {
+		if isHarmlessUpdateBranchError(output) {
 			return false, nil
 		}
 		return false, fmt.Errorf("update-branch API: %s", output)

@@ -231,6 +231,43 @@ func TestSandboxWrap_WritesProfileFile(t *testing.T) {
 	t.Error("could not find -f flag in sandbox-exec args")
 }
 
+// Each Wrap call must produce a unique profile file so concurrent spawns
+// (iteration agent + verification query) don't overwrite each other's
+// write-dir lists.
+func TestSandboxWrap_UniqueProfilePerSpawn(t *testing.T) {
+	s := &Sandbox{}
+	cmd1 := s.Wrap(nil, []string{"/work1"}, "true")
+	cmd2 := s.Wrap(nil, []string{"/work2"}, "true")
+
+	path1 := extractProfilePath(t, cmd1)
+	path2 := extractProfilePath(t, cmd2)
+
+	if path1 == path2 {
+		t.Errorf("concurrent Wrap calls must produce different profile files, both got %s", path1)
+	}
+
+	// Verify each profile contains its own write dirs.
+	data1, _ := os.ReadFile(path1)
+	data2, _ := os.ReadFile(path2)
+	if !strings.Contains(string(data1), "/work1") {
+		t.Error("first profile should contain /work1")
+	}
+	if !strings.Contains(string(data2), "/work2") {
+		t.Error("second profile should contain /work2")
+	}
+}
+
+func extractProfilePath(t *testing.T, cmd *exec.Cmd) string {
+	t.Helper()
+	for i, a := range cmd.Args {
+		if a == "-f" && i+1 < len(cmd.Args) {
+			return cmd.Args[i+1]
+		}
+	}
+	t.Fatal("could not find -f flag in sandbox-exec args")
+	return ""
+}
+
 func TestSandboxWriteDirs_IncludesGitCommonDir(t *testing.T) {
 	tmp := t.TempDir()
 	workDir := filepath.Join(tmp, "worktree")
