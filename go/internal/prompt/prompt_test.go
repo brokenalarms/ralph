@@ -401,6 +401,23 @@ func TestBuildPrompt_BDCompletionOrderIncludesPush(t *testing.T) {
 	}
 }
 
+// Proves: the iteration prompt instructs the agent to be concise —
+// no narration or reasoning aloud, just state/fix/test/signal.
+func TestBuildPrompt_DemandsConciseOutput(t *testing.T) {
+	v := testVars(t)
+	result, err := BuildPrompt(v)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	if !strings.Contains(result, "concise") {
+		t.Error("prompt should instruct the agent to be concise")
+	}
+	if !strings.Contains(result, "narrat") {
+		t.Error("prompt should explicitly prohibit narration")
+	}
+}
+
 // Proves: beads context is injected into the prompt when provided,
 // giving the agent immediate awareness of project state at startup.
 func TestBuildPrompt_BeadsContextIncluded(t *testing.T) {

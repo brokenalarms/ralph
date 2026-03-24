@@ -4,6 +4,9 @@ work (using git's update-refs to keep the stack consistent). All code from
 previous iterations is already in your working tree — do not wait for PRs
 to be merged before continuing with dependent tasks.
 
+## Output style
+Be concise. State the issue, apply the fix, write tests, signal completion. Do not narrate your thought process, explain what you are about to do, or reason aloud. Every line you emit appears in the stream log — make each one count.
+
 ## Current iteration context
 - Project: {{WORK_DIR}}
 - Ralph state dir: {{RALPH_DIR}}
