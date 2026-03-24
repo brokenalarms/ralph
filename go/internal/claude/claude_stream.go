@@ -147,11 +147,19 @@ type StreamFormatter struct {
 	pendingTS  string
 	pending    []string          // formatted content without timestamp prefix
 	clock      func() time.Time  // injectable clock; nil defaults to time.Now
+	workDir    string            // when set, strip this prefix from absolute paths
 }
 
 const tsWidth = 9       // "HH:MM:SS" (8) + space (1)
 const agentPrefix = 4 // "[r] " (4)
 const maxLineWidth = 120
+
+func (f *StreamFormatter) shortenPaths(text string) string {
+	if f.workDir == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, f.workDir+"/", "")
+}
 
 func (f *StreamFormatter) now() time.Time {
 	if f.clock != nil {
@@ -226,6 +234,7 @@ func (f *StreamFormatter) FormatLine(text string) string {
 // get a banner above the content. Prose lines (not tool calls or
 // diagnosis) are truncated to maxLineWidth to prevent terminal overflow.
 func (f *StreamFormatter) FormatOutput(text string) []string {
+	text = f.shortenPaths(text)
 	if name, msg, ok := parseSignalLine(text); ok {
 		key := name + ":" + msg
 		if key == f.lastSignal {
@@ -313,7 +322,7 @@ func FormatStreamOutput(text string) []string {
 // filterStreamJSON tails the raw log file from its current end, extracting
 // human-readable content from Claude's stream-json format into logPath.
 // It keeps reading until stop is closed, then drains any final output.
-func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
+func filterStreamJSON(rawLogPath, logPath, workDir string, stop <-chan struct{}) {
 	logOut, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
@@ -334,7 +343,7 @@ func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
 	var remainder string
 	buf := make([]byte, 64*1024)
 
-	batcher := NewToolBatcher(5 * time.Second)
+	batcher := NewToolBatcher(5*time.Second, workDir)
 
 	emitLines := func(lines []string) {
 		for _, out := range lines {
@@ -389,7 +398,7 @@ func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
 // FilterStream tails a raw log file and writes formatted, colored output to
 // stdout. Intended for use as the tmux stream pane via `ralph filter-stream`.
 // Blocks until the process is killed (tmux manages its lifecycle).
-func FilterStream(rawLogPath string) {
+func FilterStream(rawLogPath, workDir string) {
 	f, err := os.Open(rawLogPath)
 	if err != nil {
 		return
@@ -402,7 +411,7 @@ func FilterStream(rawLogPath string) {
 
 	var remainder string
 	buf := make([]byte, 64*1024)
-	batcher := NewToolBatcher(5 * time.Second)
+	batcher := NewToolBatcher(5*time.Second, workDir)
 
 	emitLines := func(lines []string) {
 		for _, out := range lines {

@@ -23,11 +23,11 @@ type ToolBatcher struct {
 // NewToolBatcher creates a batcher with the given window duration.
 // Tool calls arriving within a window are collapsed into one summary line
 // per tool type. Lines are formatted with timestamp grouping via StreamFormatter.
-func NewToolBatcher(window time.Duration) *ToolBatcher {
+func NewToolBatcher(window time.Duration, workDir string) *ToolBatcher {
 	return &ToolBatcher{
 		batches: make(map[string][]string),
 		window:  window,
-		fmt:     &StreamFormatter{},
+		fmt:     &StreamFormatter{workDir: workDir},
 	}
 }
 
