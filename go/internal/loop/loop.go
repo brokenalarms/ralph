@@ -18,6 +18,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
 	"github.com/brokenalarms/ralph/internal/prompt"
+	"github.com/brokenalarms/ralph/internal/quality"
 	"github.com/brokenalarms/ralph/internal/ratelimit"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
@@ -155,8 +156,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		return fmt.Errorf("rate limiter init: %w", err)
 	}
 
-	l.state.WriteConfig(l.cfg.MaxIterations, l.cfg.RefactorEvery)
-	l.state.Write("iterations_since_refactor", "0")
+	l.state.WriteConfig(l.cfg.MaxIterations)
 
 	var runIteration int
 	st, _ := l.state.Load()
@@ -169,7 +169,6 @@ func (l *Loop) Run(ctx context.Context) error {
 
 	for {
 		maxIter := l.state.ReadMaxIterations(l.cfg.MaxIterations)
-		refactorEvery := l.state.ReadRefactorEvery()
 
 		if runIteration >= maxIter {
 			l.logger.Warn("", "Max iterations (%d) reached", maxIter)
@@ -244,7 +243,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			}
 		}
 
-		if err := l.maybeRefactor(refactorEvery); err != nil {
+		if err := l.maybeRefactor(); err != nil {
 			l.logger.Warn("", "Refactor iteration error: %v", err)
 		}
 
@@ -684,27 +683,47 @@ func (l *Loop) checkStopFile() bool {
 	return false
 }
 
-func (l *Loop) maybeRefactor(refactorEvery int) error {
-	if l.cfg.NoRefactor || refactorEvery <= 0 {
+const defaultLookbackCommits = 5
+
+func (l *Loop) maybeRefactor() error {
+	if l.cfg.NoRefactor {
 		return nil
 	}
 
-	sinceRefactorStr, _ := l.state.Read("iterations_since_refactor")
-	sinceRefactor, _ := strconv.Atoi(sinceRefactorStr)
-
-	if sinceRefactor < refactorEvery {
-		l.state.Write("iterations_since_refactor", strconv.Itoa(sinceRefactor+1))
+	threshold := l.cfg.RefactorThreshold
+	if threshold <= 0 {
 		return nil
 	}
 
-	l.logger.Phase("--- Refactor iteration (every %d iterations) ---", refactorEvery)
-
-	recentFiles := git.RecentChangedFiles(l.git.WorkDir, refactorEvery)
+	lookback := defaultLookbackCommits
+	recentFiles := git.RecentChangedFiles(l.git.WorkDir, lookback)
 	if recentFiles == "" {
-		l.logger.Log("", "No recently changed files — skipping refactor")
-		l.state.Write("iterations_since_refactor", "0")
 		return nil
 	}
+
+	files := strings.Split(strings.TrimSpace(recentFiles), "\n")
+	findingsFile := filepath.Join(l.cfg.Dirs.RalphDir, ".quality-findings")
+
+	opts := &quality.Options{DisabledChecks: make(map[string]bool)}
+	for _, name := range l.cfg.DisabledChecks {
+		opts.DisabledChecks[name] = true
+	}
+
+	score, err := quality.Assess(l.git.WorkDir, findingsFile, opts, files...)
+	if err != nil {
+		return fmt.Errorf("quality assessment: %w", err)
+	}
+
+	l.state.Write("quality_score", strconv.Itoa(score))
+
+	if score < threshold {
+		l.logger.Log("quality", "Score %d/%d — below threshold, skipping refactor", score, threshold)
+		return nil
+	}
+
+	l.logger.Phase("--- Adaptive refactor (quality score %d >= threshold %d) ---", score, threshold)
+
+	qualityFindings := quality.FormatFindings(findingsFile)
 
 	refactorPrompt, err := prompt.BuildRefactorPrompt(prompt.Vars{
 		PromptsDir:       l.cfg.Dirs.PromptsDir,
@@ -712,9 +731,8 @@ func (l *Loop) maybeRefactor(refactorEvery int) error {
 		SignalToken:      l.signals.Complete,
 		CurrentTaskToken: l.signals.CurrentTask,
 		AllCompleteToken: l.signals.AllComplete,
-	}, recentFiles)
+	}, recentFiles, qualityFindings)
 	if err != nil {
-		l.state.Write("iterations_since_refactor", "0")
 		return fmt.Errorf("building refactor prompt: %w", err)
 	}
 
@@ -741,7 +759,6 @@ func (l *Loop) maybeRefactor(refactorEvery int) error {
 	l.limiter.Increment()
 
 	l.logger.Success("", "Refactor iteration complete")
-	l.state.Write("iterations_since_refactor", "0")
 
 	return err
 }

@@ -191,6 +191,8 @@ func TestAllChecksContainsEveryCheck(t *testing.T) {
 		CheckOversizedFile: true,
 		CheckSilentCatch:   true,
 		CheckConsoleLog:    true,
+		CheckDebugPrint:    true,
+		CheckTodoCount:     true,
 	}
 	if len(AllChecks) != len(expected) {
 		t.Fatalf("AllChecks has %d entries, want %d", len(AllChecks), len(expected))
@@ -199,5 +201,109 @@ func TestAllChecksContainsEveryCheck(t *testing.T) {
 		if !expected[name] {
 			t.Errorf("unexpected check name in AllChecks: %q", name)
 		}
+	}
+}
+
+// Proves: assess_quality detects fmt.Println/Printf debug prints in Go files
+// and scores >= 4 for 2 occurrences (2 * 2 = 4).
+func TestAssess_DetectsDebugPrintsInGo(t *testing.T) {
+	workDir := setupWorkDir(t)
+	writeFile(t, workDir, "cmd/main.go", `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("debug here")
+	fmt.Printf("value: %d\n", 42)
+}
+`)
+	findingsFile := filepath.Join(workDir, ".quality-findings")
+	score, err := Assess(workDir, findingsFile, nil, "cmd/main.go")
+	if err != nil {
+		t.Fatalf("Assess: %v", err)
+	}
+	if score < 4 {
+		t.Errorf("expected score >= 4, got %d", score)
+	}
+	data, _ := os.ReadFile(findingsFile)
+	if !strings.Contains(string(data), "fmt.Print") {
+		t.Errorf("findings should mention 'fmt.Print', got: %s", data)
+	}
+}
+
+// Proves: debug-print check only fires for Go files, not JS/TS.
+func TestAssess_DebugPrintSkipsNonGoFiles(t *testing.T) {
+	workDir := setupWorkDir(t)
+	writeFile(t, workDir, "src/app.ts", `fmt.Println("not go");`)
+	score, err := Assess(workDir, "", nil, "src/app.ts")
+	if err != nil {
+		t.Fatalf("Assess: %v", err)
+	}
+	if score != 0 {
+		t.Errorf("expected score 0 for non-Go file, got %d", score)
+	}
+}
+
+// Proves: assess_quality detects TODO accumulation (>= 3 TODOs per file)
+// and scores equal to the TODO count.
+func TestAssess_DetectsTodoAccumulation(t *testing.T) {
+	workDir := setupWorkDir(t)
+	writeFile(t, workDir, "internal/handler.go", `package handler
+
+// TODO: implement auth
+// TODO: add logging
+// TODO: handle errors
+func Handle() {}
+`)
+	findingsFile := filepath.Join(workDir, ".quality-findings")
+	score, err := Assess(workDir, findingsFile, nil, "internal/handler.go")
+	if err != nil {
+		t.Fatalf("Assess: %v", err)
+	}
+	if score < 3 {
+		t.Errorf("expected score >= 3, got %d", score)
+	}
+	data, _ := os.ReadFile(findingsFile)
+	if !strings.Contains(string(data), "TODO") {
+		t.Errorf("findings should mention 'TODO', got: %s", data)
+	}
+}
+
+// Proves: fewer than 3 TODOs in a file do not trigger the TODO accumulation check.
+func TestAssess_FewTodosDoNotTrigger(t *testing.T) {
+	workDir := setupWorkDir(t)
+	writeFile(t, workDir, "lib/util.go", `package lib
+
+// TODO: clean up later
+func Util() {}
+`)
+	score, err := Assess(workDir, "", nil, "lib/util.go")
+	if err != nil {
+		t.Fatalf("Assess: %v", err)
+	}
+	if score != 0 {
+		t.Errorf("expected score 0 for < 3 TODOs, got %d", score)
+	}
+}
+
+// Proves: FormatFindings returns file content when findings exist,
+// empty string when file is missing or empty.
+func TestFormatFindings(t *testing.T) {
+	dir := t.TempDir()
+	emptyPath := filepath.Join(dir, "empty")
+	os.WriteFile(emptyPath, nil, 0o644)
+	if got := FormatFindings(emptyPath); got != "" {
+		t.Errorf("expected empty for empty file, got: %q", got)
+	}
+
+	if got := FormatFindings(filepath.Join(dir, "nonexistent")); got != "" {
+		t.Errorf("expected empty for missing file, got: %q", got)
+	}
+
+	filledPath := filepath.Join(dir, "findings")
+	os.WriteFile(filledPath, []byte("src/auth.ts:\n  - 3x untyped `any`\n"), 0o644)
+	got := FormatFindings(filledPath)
+	if !strings.Contains(got, "untyped") {
+		t.Errorf("expected findings content, got: %q", got)
 	}
 }

@@ -24,6 +24,8 @@ const (
 	CheckOversizedFile = "oversized-file"
 	CheckSilentCatch  = "silent-catch"
 	CheckConsoleLog   = "console-log"
+	CheckDebugPrint   = "debug-print"
+	CheckTodoCount    = "todo-count"
 )
 
 // AllChecks lists every quality check name.
@@ -32,6 +34,8 @@ var AllChecks = []string{
 	CheckOversizedFile,
 	CheckSilentCatch,
 	CheckConsoleLog,
+	CheckDebugPrint,
+	CheckTodoCount,
 }
 
 // Options controls which quality checks run during Assess.
@@ -50,6 +54,8 @@ var (
 	anyTypeRe     = regexp.MustCompile(`\bany\b`)
 	silentCatchRe = regexp.MustCompile(`catch\s*\([^)]*\)\s*\{\s*\}`)
 	consoleLogRe  = regexp.MustCompile(`console\.(log|debug|warn|error)\s*\(`)
+	debugPrintRe  = regexp.MustCompile(`fmt\.(Println|Printf|Print)\s*\(`)
+	todoRe        = regexp.MustCompile(`(?i)\bTODO\b`)
 )
 
 // Assess scans changed files for quality issues and returns the total
@@ -110,6 +116,26 @@ func Assess(workDir, findingsFile string, opts *Options, files ...string) (int, 
 			}
 		}
 
+		if opts.enabled(CheckDebugPrint) && isGo(relPath) {
+			matches := debugPrintRe.FindAllString(content, -1)
+			if len(matches) > 0 {
+				score := len(matches) * 2
+				totalScore += score
+				fileFindings = append(fileFindings,
+					fmt.Sprintf("  - %d fmt.Print/Println/Printf call(s)", len(matches)))
+			}
+		}
+
+		if opts.enabled(CheckTodoCount) {
+			matches := todoRe.FindAllString(content, -1)
+			if len(matches) >= 3 {
+				score := len(matches)
+				totalScore += score
+				fileFindings = append(fileFindings,
+					fmt.Sprintf("  - %d TODO comments", len(matches)))
+			}
+		}
+
 		if len(fileFindings) > 0 {
 			allFindings = append(allFindings, relPath+":")
 			allFindings = append(allFindings, fileFindings...)
@@ -127,7 +153,21 @@ func Assess(workDir, findingsFile string, opts *Options, files ...string) (int, 
 	return totalScore, nil
 }
 
+// FormatFindings reads a findings file and returns its content as a string
+// suitable for inclusion in a refactor prompt.
+func FormatFindings(findingsFile string) string {
+	data, err := os.ReadFile(findingsFile)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	return string(data)
+}
+
 func isJSOrTS(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	return ext == ".js" || ext == ".ts" || ext == ".tsx" || ext == ".jsx"
+}
+
+func isGo(path string) bool {
+	return strings.ToLower(filepath.Ext(path)) == ".go"
 }
