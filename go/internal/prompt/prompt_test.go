@@ -469,6 +469,15 @@ func TestBuildTaskManagerPrompt(t *testing.T) {
 	}
 }
 
+// Proves: TaskManagerBootstrapPrompt is non-empty, so the task manager
+// Claude session receives an initial user message that triggers the startup
+// sequence (bd prime, bd list, status summary) without waiting for user input.
+func TestTaskManagerBootstrapPrompt_NonEmpty(t *testing.T) {
+	if TaskManagerBootstrapPrompt == "" {
+		t.Fatal("TaskManagerBootstrapPrompt must be non-empty to trigger startup")
+	}
+}
+
 // Proves: BuildTaskManagerPrompt returns an error when the template is missing.
 func TestBuildTaskManagerPrompt_MissingTemplate(t *testing.T) {
 	_, err := BuildTaskManagerPrompt("/nonexistent/path", "/proj", "/proj/.ralph")
