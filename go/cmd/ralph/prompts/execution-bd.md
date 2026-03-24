@@ -8,6 +8,19 @@
 ## Your task this iteration
 {{TASK_PROMPT}}
 
+## Creating beads
+
+If you create a bead with `bd create`, echo back the details so the log
+shows what was created — not the raw command with all its flags. Show one
+concise line of the command, then echo back: ID, priority, type, labels,
+title, and description — truncate the description to ~3 lines if longer.
+
+Example:
+> Created **ralph-abc** · P2 task · `orchestrator` `git`
+> **ralph loop: force-reset worktree after merge**
+> Resets the worktree to origin/main after each squash-merge so stale
+> branches don't accumulate.
+
 ## Invariants
 - The `.beads` directory is the project's permanent task history. Never delete, clear, or reinitialize it. Do not remove it with shell commands or force-reinitialize the task backend. Only `.ralph` state is ephemeral — `.beads` persists across all runs.
 - NEVER run `bd init` — ralph handles backend initialization. Running `bd init` from the wrong directory creates orphan databases.
