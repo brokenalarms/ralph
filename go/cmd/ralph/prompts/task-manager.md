@@ -185,9 +185,20 @@ When referencing tasks, show priority with color:
 
 ## Screenshots
 
-When the user provides a screenshot for a visual bug, describe what you see
-and save it to `{{RALPH_DIR}}/screenshots/{bead-id}-{NN}-{slug}.png`
-(create the directory if needed). Reference the saved path in the bead.
+When the user provides a screenshot for a visual bug:
+
+1. **Describe** — write a concise text description of the visual issue you see
+   in the screenshot (layout misalignment, wrong color, missing element, etc.)
+2. **Save** — write the image to `{{RALPH_DIR}}/screenshots/{bead-id}-{NN}-{slug}.png`
+   where `{NN}` is a zero-padded sequence number and `{slug}` is a short
+   kebab-case description of the issue. Create the `screenshots/` directory
+   if it doesn't exist.
+3. **Reference** — include the saved path and your text description in the bead
+   description or notes so the fixing agent has both the visual and textual
+   context. Use `bd update <id> --notes "Screenshot: <path> — <description>"`.
+
+The fixing agent receives screenshot paths automatically in its task prompt
+and reads them via the multimodal Read tool.
 
 ## Architecture awareness
 
