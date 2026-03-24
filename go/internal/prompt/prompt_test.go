@@ -30,9 +30,9 @@ func testVars(t *testing.T) Vars {
 		WorkDir:          "/tmp/project/worktree",
 		RalphDir:         "/tmp/project/.ralph",
 		PlanFile:         "/tmp/project/.ralph/plan.md",
-		SignalToken:       "###RALPH_TASK_COMPLETE###",
-		CurrentTaskToken: "###RALPH_CURRENT_TASK###",
-		AllCompleteToken: "###RALPH_ALL_COMPLETE###",
+		SignalToken:       "/tmp/project/.ralph/.signal_complete",
+		CurrentTaskToken: "/tmp/project/.ralph/.signal_current_task",
+		AllCompleteToken: "/tmp/project/.ralph/.signal_all_complete",
 		TaskPrompt:       "Fix auth",
 		TaskBackend:      BackendBD,
 	}
