@@ -115,10 +115,37 @@ func truncateTask(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
+// StoppedTitle returns the stream pane title with "stopped" replacing the
+// elapsed timer, so the user can see at a glance that ralph is no longer running.
+func (p *PaneTitle) StoppedTitle() string {
+	p.mu.RLock()
+	task := p.task
+	p.mu.RUnlock()
+
+	if task == "" {
+		return "stream — stopped"
+	}
+	return task + " — stopped"
+}
+
+// StoppedRalphTitle returns the ralph pane title with "stopped" replacing
+// the elapsed timer.
+func (p *PaneTitle) StoppedRalphTitle() string {
+	p.mu.RLock()
+	branch := p.branch
+	p.mu.RUnlock()
+
+	if branch == "" {
+		return "ralph — stopped"
+	}
+	return branch + " — stopped"
+}
+
 // Run starts the background ticker that updates tmux pane titles every
 // second. On each tick it reads signal files written by the loop process,
 // resets timers when tasks change, and updates both pane 0 (ralph) and
-// pane 1 (stream). It blocks until stop is closed.
+// pane 1 (stream). It blocks until stop is closed, then sets final
+// "stopped" titles before returning.
 func (p *PaneTitle) Run(stop <-chan struct{}) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -126,6 +153,9 @@ func (p *PaneTitle) Run(stop <-chan struct{}) {
 	for {
 		select {
 		case <-stop:
+			streamTarget := fmt.Sprintf("%s:.%d", p.session, p.streamPane)
+			exec.Command("tmux", "select-pane", "-t", streamTarget, "-T", p.StoppedTitle()).Run()       //nolint:errcheck
+			exec.Command("tmux", "select-pane", "-t", p.session+":.0", "-T", p.StoppedRalphTitle()).Run() //nolint:errcheck
 			return
 		case <-ticker.C:
 			p.syncFromFile()
