@@ -89,6 +89,9 @@ func extractAssistantText(msg *streamMsg) string {
 
 // formatToolUse returns a short summary of a tool invocation.
 func formatToolUse(c streamContent) string {
+	if summary, ok := reflectionSummary(c); ok {
+		return "[" + c.Name + "] " + summary
+	}
 	for _, key := range []string{
 		"file_path", "command", "pattern", "query", "url",
 		"description", "task_id", "skill", "prompt",
@@ -100,6 +103,41 @@ func formatToolUse(c streamContent) string {
 		}
 	}
 	return "[" + c.Name + "]"
+}
+
+const maxReflectionSummary = 80
+
+// reflectionSummary detects Write calls to reflections/ and returns a
+// one-line summary of the content (e.g. "Reflection: Fixed arg order").
+func reflectionSummary(c streamContent) (string, bool) {
+	if c.Name != "Write" {
+		return "", false
+	}
+	fp, _ := c.Input["file_path"].(string)
+	if !strings.Contains(fp, "/reflections/") {
+		return "", false
+	}
+	content, _ := c.Input["content"].(string)
+	if content == "" {
+		return "", false
+	}
+	line := firstMeaningfulLine(content)
+	line = strings.TrimPrefix(line, "# ")
+	if len([]rune(line)) > maxReflectionSummary {
+		line = string([]rune(line)[:maxReflectionSummary-1]) + "…"
+	}
+	return "Reflection: " + line, true
+}
+
+// firstMeaningfulLine returns the first non-empty line from text.
+func firstMeaningfulLine(text string) string {
+	for _, line := range strings.SplitN(text, "\n", 10) {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 var mdBoldRe = regexp.MustCompile(`\*\*(.+?)\*\*`)
