@@ -16,6 +16,8 @@ const (
 	Blue    = "\033[0;34m"
 	Magenta = "\033[0;35m"
 	Cyan    = "\033[0;36m"
+	Orange  = "\033[0;38;5;208m"
+	Dim     = "\033[2;37m"
 	Bold    = "\033[1m"
 	Reset   = "\033[0m"
 )
@@ -138,14 +140,45 @@ func (l *Logger) PhaseColor(color string, format string, args ...any) {
 	fmt.Fprint(l.logFile, line)
 }
 
+// PriorityColor returns the ANSI color for a given priority level.
+func PriorityColor(priority int) string {
+	switch priority {
+	case 0:
+		return Red
+	case 1:
+		return Orange
+	case 2:
+		return Yellow
+	case 3:
+		return Green
+	case 4:
+		return Dim
+	default:
+		return Reset
+	}
+}
+
+// PriorityTag returns a colored "[P0]"-style tag for the given priority.
+// Returns empty string when priority is nil (unset).
+func PriorityTag(priority *int) string {
+	if priority == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s[P%d]%s", PriorityColor(*priority), *priority, Reset)
+}
+
 // TaskBanner writes a bold magenta separator with the task ID and title centered,
-// shown once when a new task begins.
-func (l *Logger) TaskBanner(taskID, title string) {
+// shown once when a new task begins. When priority is non-nil, a colored
+// priority tag is included after the separator.
+func (l *Logger) TaskBanner(taskID, title string, priority *int) {
 	label := taskID
 	if title != "" {
 		label = taskID + ": " + title
 	}
 	l.Separator(Magenta, label)
+	if priority != nil {
+		l.Log("", "%s %s", PriorityTag(priority), title)
+	}
 }
 
 // DashedSeparator writes a bold, colored full-width dashed line using ─ characters.

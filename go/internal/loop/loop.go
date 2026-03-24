@@ -139,8 +139,8 @@ func (l *Loop) Run(ctx context.Context) error {
 		// differs from the last one. If it's the same task, stay on
 		// the existing task branch so additional commits land there.
 		if !strings.HasSuffix(l.git.WorktreeBranch, "/next") {
-			nextTaskID, nextTask, _ := l.cfg.TaskBackend.GetNextTaskInfo()
-			if l.isNewTask(nextTaskID, nextTask) {
+			nextInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
+			if l.isNewTask(nextInfo.ID, nextInfo.Title) {
 				l.git.RotateBranch()
 			} else {
 				l.git.BranchRenamed = true
@@ -226,7 +226,8 @@ func (l *Loop) Run(ctx context.Context) error {
 		iteration++
 		l.lastTaskMerged = false
 
-		taskID, nextTask, _ := l.cfg.TaskBackend.GetNextTaskInfo()
+		taskInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
+		taskID, nextTask := taskInfo.ID, taskInfo.Title
 		taskChanged := l.isNewTask(taskID, nextTask)
 
 		if runIteration > 1 && taskChanged {
@@ -255,7 +256,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		if taskID != "" && taskChanged {
-			l.logger.TaskBanner(taskID, nextTask)
+			l.logger.TaskBanner(taskID, nextTask, taskInfo.Priority)
 		}
 
 		phaseColor := logging.Green
@@ -280,7 +281,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.writeRunBranch()
 		l.git.TagTaskStart(taskID)
 
-		l.updateStreamTask(taskID, nextTask)
+		l.updateStreamTask(taskID, nextTask, taskInfo.Priority)
 
 		if taskID != "" {
 			if err := l.cfg.TaskBackend.SetState(taskID, "phase", "implementing", "ralph: starting task"); err != nil {
@@ -643,7 +644,7 @@ func (l *Loop) flushUnpushedWork(ctx context.Context) {
 func (l *Loop) waitForTasks(ctx context.Context) bool {
 	l.logger.Log("beads", "Waiting for new tasks (polling every %s)...", l.cfg.WaitInterval)
 	l.state.Write("status", "waiting")
-	l.updateStreamTask("", "Waiting for tasks...")
+	l.updateStreamTask("", "Waiting for tasks...", nil)
 	touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
 
 	ticker := time.NewTicker(l.cfg.WaitInterval)
@@ -832,11 +833,16 @@ func (l *Loop) writeRunBranch() {
 	os.WriteFile(filepath.Join(l.cfg.Dirs.RalphDir, ".run-branch"), []byte(branch), 0o644)
 }
 
-func (l *Loop) updateStreamTask(taskID, nextTask string) {
+func (l *Loop) updateStreamTask(taskID, nextTask string, priority *int) {
 	streamTaskFile := filepath.Join(l.cfg.Dirs.RalphDir, ".stream-task")
 	content := nextTask
 	if taskID != "" {
-		content = taskID + ": " + nextTask
+		tag := logging.PriorityTag(priority)
+		if tag != "" {
+			content = taskID + ": " + tag + " " + nextTask
+		} else {
+			content = taskID + ": " + nextTask
+		}
 	}
 	os.WriteFile(streamTaskFile, []byte(content), 0o644)
 }

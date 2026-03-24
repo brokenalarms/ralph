@@ -257,7 +257,7 @@ func TestNoPerLineTaskIDPrefix(t *testing.T) {
 func TestTaskBanner(t *testing.T) {
 	var stdout, logFile bytes.Buffer
 	l := &Logger{out: &stdout, logFile: &logFile}
-	l.TaskBanner("ralph-l337", "Fix the widget factory")
+	l.TaskBanner("ralph-l337", "Fix the widget factory", nil)
 	got := stdout.String()
 
 	if !strings.Contains(got, "ralph-l337: Fix the widget factory") {
@@ -277,12 +277,28 @@ func TestTaskBanner(t *testing.T) {
 	}
 }
 
+// Verifies that TaskBanner includes a colored priority tag when priority is set.
+func TestTaskBannerWithPriority(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile}
+	p := 0
+	l.TaskBanner("ralph-abc", "Critical bug fix", &p)
+	got := stdout.String()
+
+	if !strings.Contains(got, "[P0]") {
+		t.Errorf("TaskBanner with P0 should include [P0] tag, got: %s", got)
+	}
+	if !strings.Contains(got, Red) {
+		t.Error("P0 priority tag should use red color")
+	}
+}
+
 // Verifies that TaskBanner respects streaming mode.
 func TestTaskBannerStreamingMode(t *testing.T) {
 	var stdout, logFile bytes.Buffer
 	l := &Logger{out: &stdout, logFile: &logFile}
 	l.SetStreaming(true)
-	l.TaskBanner("ralph-abc", "Some task")
+	l.TaskBanner("ralph-abc", "Some task", nil)
 
 	if stdout.Len() != 0 {
 		t.Error("TaskBanner should suppress stdout in streaming mode")
@@ -291,3 +307,41 @@ func TestTaskBannerStreamingMode(t *testing.T) {
 		t.Error("TaskBanner should still write to log file in streaming mode")
 	}
 }
+
+// Verifies that PriorityTag returns the correct colored tag for each priority level,
+// and returns empty string when priority is nil.
+func TestPriorityTag(t *testing.T) {
+	tests := []struct {
+		name      string
+		priority  *int
+		wantColor string
+		wantTag   string
+	}{
+		{"P0", intPtr(0), Red, "[P0]"},
+		{"P1", intPtr(1), Orange, "[P1]"},
+		{"P2", intPtr(2), Yellow, "[P2]"},
+		{"P3", intPtr(3), Green, "[P3]"},
+		{"P4", intPtr(4), Dim, "[P4]"},
+		{"nil", nil, "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := PriorityTag(tt.priority)
+			if tt.priority == nil {
+				if got != "" {
+					t.Errorf("PriorityTag(nil) = %q, want empty", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tt.wantTag) {
+				t.Errorf("PriorityTag(%d) = %q, want to contain %q", *tt.priority, got, tt.wantTag)
+			}
+			if !strings.Contains(got, tt.wantColor) {
+				t.Errorf("PriorityTag(%d) should use color %q", *tt.priority, tt.wantColor)
+			}
+		})
+	}
+}
+
+func intPtr(n int) *int { return &n }

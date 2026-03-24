@@ -1,6 +1,13 @@
 // Package tasks defines the task backend interface and the bd implementation.
 package tasks
 
+// TaskInfo holds the result of a GetNextTaskInfo call.
+type TaskInfo struct {
+	ID       string
+	Title    string
+	Priority *int
+}
+
 // Backend abstracts task tracking so ralph can drive iteration.
 type Backend interface {
 	// Init prepares the backend for use (e.g. health checks).
@@ -27,10 +34,10 @@ type Backend interface {
 	// Returns empty string when no tasks remain.
 	GetNextTaskID() (string, error)
 
-	// GetNextTaskInfo returns both the ID and description of the next task
+	// GetNextTaskInfo returns the ID, description, and priority of the next task
 	// in a single backend query, avoiding the race condition where separate
 	// GetNextTask/GetNextTaskID calls could return data from different tasks.
-	GetNextTaskInfo() (id string, title string, err error)
+	GetNextTaskInfo() (TaskInfo, error)
 
 	// HasTasks reports whether any tasks exist at all.
 	HasTasks() (bool, error)

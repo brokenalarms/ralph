@@ -18,6 +18,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -43,26 +44,28 @@ func (s *stubRunner) StopStreaming() {}
 // bd or reading plan files. Lets us control exactly how many tasks remain
 // and what the next task is.
 type stubBackend struct {
-	remaining   int
-	completed   int
-	total       int
-	nextTask    string
-	nextID      string
-	label       string
-	description string
+	remaining    int
+	completed    int
+	total        int
+	nextTask     string
+	nextID       string
+	nextPriority *int
+	label        string
+	description  string
 }
 
 // mutableBackend is like stubBackend but allows changing the next task
 // mid-run to simulate task transitions.
 type mutableBackend struct {
-	mu          sync.Mutex
-	remaining   int
-	completed   int
-	total       int
-	nextTask    string
-	nextID      string
-	label       string
-	description string
+	mu           sync.Mutex
+	remaining    int
+	completed    int
+	total        int
+	nextTask     string
+	nextID       string
+	nextPriority *int
+	label        string
+	description  string
 }
 
 func (m *mutableBackend) Init() error                          { return nil }
@@ -72,7 +75,7 @@ func (m *mutableBackend) CountRemaining() (int, error)         { m.mu.Lock(); de
 func (m *mutableBackend) CountTotal() (int, error)             { m.mu.Lock(); defer m.mu.Unlock(); return m.total, nil }
 func (m *mutableBackend) GetNextTask() (string, error)         { m.mu.Lock(); defer m.mu.Unlock(); return m.nextTask, nil }
 func (m *mutableBackend) GetNextTaskID() (string, error)       { m.mu.Lock(); defer m.mu.Unlock(); return m.nextID, nil }
-func (m *mutableBackend) GetNextTaskInfo() (string, string, error) { m.mu.Lock(); defer m.mu.Unlock(); return m.nextID, m.nextTask, nil }
+func (m *mutableBackend) GetNextTaskInfo() (tasks.TaskInfo, error) { m.mu.Lock(); defer m.mu.Unlock(); return tasks.TaskInfo{ID: m.nextID, Title: m.nextTask, Priority: m.nextPriority}, nil }
 func (m *mutableBackend) HasTasks() (bool, error)              { m.mu.Lock(); defer m.mu.Unlock(); return m.total > 0, nil }
 func (m *mutableBackend) CloseTask(string, string) error       { return nil }
 func (m *mutableBackend) SkipTask(string, string) error        { return nil }
@@ -97,7 +100,7 @@ func (s *stubBackend) CountRemaining() (int, error)         { return s.remaining
 func (s *stubBackend) CountTotal() (int, error)             { return s.total, nil }
 func (s *stubBackend) GetNextTask() (string, error)         { return s.nextTask, nil }
 func (s *stubBackend) GetNextTaskID() (string, error)       { return s.nextID, nil }
-func (s *stubBackend) GetNextTaskInfo() (string, string, error) { return s.nextID, s.nextTask, nil }
+func (s *stubBackend) GetNextTaskInfo() (tasks.TaskInfo, error) { return tasks.TaskInfo{ID: s.nextID, Title: s.nextTask, Priority: s.nextPriority}, nil }
 func (s *stubBackend) HasTasks() (bool, error)              { return s.total > 0, nil }
 func (s *stubBackend) CloseTask(string, string) error       { return nil }
 func (s *stubBackend) SkipTask(string, string) error        { return nil }
@@ -355,7 +358,7 @@ func TestLoop_UpdateStreamTask(t *testing.T) {
 		cfg: Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}},
 	}
 
-	l.updateStreamTask("ralph-abc", "Add feature X")
+	l.updateStreamTask("ralph-abc", "Add feature X", nil)
 
 	data, err := os.ReadFile(filepath.Join(ralphDir, ".stream-task"))
 	if err != nil {
@@ -365,10 +368,21 @@ func TestLoop_UpdateStreamTask(t *testing.T) {
 		t.Errorf("expected 'ralph-abc: Add feature X', got %q", string(data))
 	}
 
-	l.updateStreamTask("", "Add feature Y")
+	l.updateStreamTask("", "Add feature Y", nil)
 	data, _ = os.ReadFile(filepath.Join(ralphDir, ".stream-task"))
 	if string(data) != "Add feature Y" {
 		t.Errorf("expected 'Add feature Y', got %q", string(data))
+	}
+
+	p := 3
+	l.updateStreamTask("ralph-xyz", "Some task", &p)
+	data, _ = os.ReadFile(filepath.Join(ralphDir, ".stream-task"))
+	got := string(data)
+	if !strings.Contains(got, "[P3]") {
+		t.Errorf("stream task with priority should include [P3], got %q", got)
+	}
+	if !strings.Contains(got, "ralph-xyz") {
+		t.Errorf("stream task should include task ID, got %q", got)
 	}
 }
 
