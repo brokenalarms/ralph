@@ -225,7 +225,7 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 	projectDir, _ := filepath.Abs(sub.Dir)
 	ralphDir := filepath.Join(projectDir, ".ralph")
 
-	promptsDir := filepath.Join(projectDir, "prompts")
+	promptsDir := filepath.Join(projectDir, "go", "cmd", "ralph", "prompts")
 	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
 		tmpDir, extractErr := extractEmbeddedPrompts()
 		if extractErr != nil {
@@ -241,7 +241,7 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 
-	cmd := exec.Command("claude", "--system-prompt", systemPrompt)
+	cmd := exec.Command("claude", "--system-prompt", systemPrompt, prompt.TaskManagerBootstrapPrompt)
 	cmd.Dir = projectDir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout

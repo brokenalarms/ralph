@@ -12,6 +12,11 @@ type TaskBackend string
 
 const (
 	BackendBD TaskBackend = "bd"
+
+	// TaskManagerBootstrapPrompt is the initial user message sent to the
+	// task manager Claude session so it executes the startup sequence
+	// (bd prime, bd list, status summary) without waiting for user input.
+	TaskManagerBootstrapPrompt = "Run your startup sequence."
 )
 
 // Vars holds all substitution values for prompt template assembly.
