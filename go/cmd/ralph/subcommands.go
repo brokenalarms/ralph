@@ -159,8 +159,8 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 	return runMain(cfg, dirs, scriptPath, sub.Args, log)
 }
 
-// handleReview launches an interactive Claude session with the refactor/review
-// prompt for code quality sweeps.
+// handleReview launches an interactive Claude session for post-mortem review:
+// reflection analysis, test audit, refactor opportunities, and interactive findings.
 func handleReview(sub config.Subcommand, log *logging.Logger) int {
 	projectDir, _ := filepath.Abs(sub.Dir)
 
@@ -181,14 +181,19 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 		promptsDir = tmpDir
 	}
 
-	systemPrompt, err := prompt.BuildReviewPrompt(promptsDir, projectDir, ralphDir)
+	reflections, err := prompt.ReadReflections(ralphDir)
+	if err != nil {
+		log.Warn("", "Failed to read reflections: %v", err)
+	}
+
+	systemPrompt, err := prompt.BuildReviewPrompt(promptsDir, projectDir, ralphDir, reflections)
 	if err != nil {
 		log.Error("", "Failed to build review prompt: %v", err)
 		return 1
 	}
 
 	r := newInteractiveAgent(log)
-	exitCode, err := r.Interactive(projectDir, systemPrompt)
+	exitCode, err := r.Interactive(projectDir, systemPrompt, prompt.ReviewBootstrapPrompt)
 	if err != nil {
 		log.Error("", "Review session failed: %v", err)
 		return 1
@@ -264,7 +269,7 @@ func printUsage() {
 %sCOMMANDS:%s
   ralph loop [options]         Autonomous executor — picks up tasks, writes code, pushes PRs
   ralph task [directory]       Interactive task triage and spec session
-  ralph review [directory]     Code quality review and refactoring session
+  ralph review [directory]     Post-mortem review: reflections, test audit, refactoring
   ralph command [directory]    Full 4-pane tmux layout (loop + task manager + stream + plan)
 
 %sEXAMPLES:%s
@@ -276,7 +281,7 @@ func printUsage() {
 %sHOW IT WORKS:%s
   1. Triage:   ralph task — create tasks, write specs, manage backlog
   2. Execute:  ralph loop — autonomous iteration over tasks
-  3. Review:   ralph review — code quality sweeps and refactoring
+  3. Review:   ralph review — post-mortem analysis of reflections, tests, and code health
   Run task and loop in parallel: task in one window, loop in another.
 
 Use "ralph <command> --help" for more information about a command.
