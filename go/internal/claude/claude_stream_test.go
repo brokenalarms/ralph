@@ -92,6 +92,84 @@ func TestExtractStreamText_ResultDone(t *testing.T) {
 	}
 }
 
+// Verifies that Write to a reflections/ path shows a summary of the
+// reflection content instead of the raw file path.
+func TestFormatToolUse_ReflectionSummary(t *testing.T) {
+	content := "# Fixed is-ancestor arg order\n\n## What was discovered\n- Was comparing HEAD to main instead of main to HEAD"
+	c := streamContent{
+		Type: "tool_use",
+		Name: "Write",
+		Input: map[string]interface{}{
+			"file_path": "/Users/daniel/.ralph/reflections/ralph-259.md",
+			"content":   content,
+		},
+	}
+	got := formatToolUse(c)
+	want := "[Write] Reflection: Fixed is-ancestor arg order"
+	if got != want {
+		t.Errorf("formatToolUse reflection = %q, want %q", got, want)
+	}
+}
+
+// Verifies that reflection summary works with content that has no heading.
+func TestFormatToolUse_ReflectionNoHeading(t *testing.T) {
+	content := "Some reflection content without a heading\nSecond line"
+	c := streamContent{
+		Type: "tool_use",
+		Name: "Write",
+		Input: map[string]interface{}{
+			"file_path": "/Users/daniel/.ralph/reflections/ralph-abc.md",
+			"content":   content,
+		},
+	}
+	got := formatToolUse(c)
+	want := "[Write] Reflection: Some reflection content without a heading"
+	if got != want {
+		t.Errorf("formatToolUse reflection = %q, want %q", got, want)
+	}
+}
+
+// Verifies that reflection summary truncates long first lines.
+func TestFormatToolUse_ReflectionTruncatesLong(t *testing.T) {
+	content := "# " + strings.Repeat("A very long reflection title ", 5) + "\n\n## Details"
+	c := streamContent{
+		Type: "tool_use",
+		Name: "Write",
+		Input: map[string]interface{}{
+			"file_path": "/tmp/.ralph/reflections/task.md",
+			"content":   content,
+		},
+	}
+	got := formatToolUse(c)
+	if !strings.HasPrefix(got, "[Write] Reflection: ") {
+		t.Errorf("expected reflection prefix, got %q", got)
+	}
+	// [Write] prefix (8) + "Reflection: " (12) + 80 max summary = 100 max
+	if len([]rune(got)) > 102 {
+		t.Errorf("expected truncated output, got %d chars: %q", len([]rune(got)), got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("expected truncation ellipsis, got %q", got)
+	}
+}
+
+// Verifies that non-reflection Write calls still show the file path.
+func TestFormatToolUse_NonReflectionWrite(t *testing.T) {
+	c := streamContent{
+		Type: "tool_use",
+		Name: "Write",
+		Input: map[string]interface{}{
+			"file_path": "/tmp/some/other/file.go",
+			"content":   "package main",
+		},
+	}
+	got := formatToolUse(c)
+	want := "[Write] /tmp/some/other/file.go"
+	if got != want {
+		t.Errorf("formatToolUse non-reflection = %q, want %q", got, want)
+	}
+}
+
 // Verifies that markdown bold is stripped from output so the terminal
 // shows clean text without literal asterisks.
 func TestStripMarkdown(t *testing.T) {
