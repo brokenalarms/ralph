@@ -14,6 +14,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/health"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
 	"github.com/brokenalarms/ralph/internal/ratelimit"
@@ -250,6 +251,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		total, _ := l.cfg.TaskBackend.CountTotal()
 
 		if runIteration > 1 {
+			health.Log(l.logger, health.Collect(l.cfg.Dirs.RalphDir, l.git.WorkDir))
 			l.logger.DashedSeparator(logging.Yellow)
 		}
 

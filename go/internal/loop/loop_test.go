@@ -5035,3 +5035,77 @@ func (r *rateLimitStubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
 }
 
 func (r *rateLimitStubRunner) StopStreaming() {}
+
+// Health dashboard is logged between iterations so operators can detect
+// process leaks, stale signal files, and growing state.json.
+func TestLoop_HealthDashboardLoggedBetweenIterations(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5, 0)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	// Create a signal file so the health snapshot has something to report.
+	os.WriteFile(filepath.Join(ralphDir, ".signal_current_task"), []byte("test task"), 0o644)
+
+	callCount := 0
+	backend := &mutableBackend{
+		remaining: 1,
+		total:     2,
+		nextTask:  "First task",
+		nextID:    "ralph-h1",
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 3,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+
+	l.runner = &stubRunner{
+		onRun: func() {
+			callCount++
+			if callCount >= 2 {
+				os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
+			}
+		},
+	}
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+
+	if !strings.Contains(output, "[health]") {
+		t.Error("expected [health] tag in log output between iterations")
+	}
+	if !strings.Contains(output, "state fields") {
+		t.Error("expected 'state fields' in health log")
+	}
+	if !strings.Contains(output, "signals:") {
+		t.Error("expected 'signals:' in health log")
+	}
+	if !strings.Contains(output, "branch:") {
+		t.Error("expected 'branch:' in health log")
+	}
+}
