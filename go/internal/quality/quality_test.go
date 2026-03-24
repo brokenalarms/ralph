@@ -132,10 +132,89 @@ console.warn('????');
 	}
 }
 
-// Proves: REFACTOR_THRESHOLD defaults to 0 (disabled).
+// Proves: REFACTOR_THRESHOLD defaults to 200, high enough to avoid
+// triggering on normal codebase noise.
 func TestDefaultRefactorThreshold(t *testing.T) {
-	if DefaultRefactorThreshold != 0 {
-		t.Errorf("expected 0 (disabled), got %d", DefaultRefactorThreshold)
+	if DefaultRefactorThreshold != 200 {
+		t.Errorf("expected 200, got %d", DefaultRefactorThreshold)
+	}
+}
+
+// Proves: test files (_test.go, .bats, test/ prefix) are excluded from scoring
+// so test fixture strings and naturally large test files don't inflate quality scores.
+func TestAssess_ExcludesTestFiles(t *testing.T) {
+	workDir := setupWorkDir(t)
+	// Go test file with debug prints — should be excluded
+	writeFile(t, workDir, "internal/loop/loop_test.go", `package loop
+import "fmt"
+func TestSomething() { fmt.Println("debug") }
+`)
+	// Bats test file — should be excluded
+	writeFile(t, workDir, "test/refactor.bats", strings.Repeat("echo line\n", 600))
+	// Test helper in test/ directory — should be excluded
+	writeFile(t, workDir, "test/helper.sh", strings.Repeat("echo line\n", 600))
+
+	score, err := Assess(workDir, "", nil,
+		"internal/loop/loop_test.go",
+		"test/refactor.bats",
+		"test/helper.sh",
+	)
+	if err != nil {
+		t.Fatalf("Assess: %v", err)
+	}
+	if score != 0 {
+		t.Errorf("expected score 0 for test files, got %d", score)
+	}
+}
+
+// Proves: legacy scripts (ralph.sh) are excluded from scoring so their
+// oversized-file score doesn't dominate the quality assessment.
+func TestAssess_ExcludesLegacyScripts(t *testing.T) {
+	workDir := setupWorkDir(t)
+	writeFile(t, workDir, "ralph.sh", strings.Repeat("echo line\n", 2000))
+
+	score, err := Assess(workDir, "", nil, "ralph.sh")
+	if err != nil {
+		t.Fatalf("Assess: %v", err)
+	}
+	if score != 0 {
+		t.Errorf("expected score 0 for legacy ralph.sh, got %d", score)
+	}
+}
+
+// Proves: CLI entry points (cmd/*/main.go) are excluded from scoring so
+// intentional fmt.Print in CLI output code doesn't trigger debug-print checks.
+func TestAssess_ExcludesCLIEntryPoints(t *testing.T) {
+	workDir := setupWorkDir(t)
+	writeFile(t, workDir, "go/cmd/ralph/main.go", `package main
+import "fmt"
+func main() {
+	fmt.Println("ralph v1.0")
+	fmt.Printf("running...\n")
+}
+`)
+	score, err := Assess(workDir, "", nil, "go/cmd/ralph/main.go")
+	if err != nil {
+		t.Fatalf("Assess: %v", err)
+	}
+	if score != 0 {
+		t.Errorf("expected score 0 for CLI entry point, got %d", score)
+	}
+}
+
+// Proves: non-excluded Go files still get scored normally.
+func TestAssess_NonExcludedGoFilesStillScored(t *testing.T) {
+	workDir := setupWorkDir(t)
+	writeFile(t, workDir, "internal/loop/loop.go", `package loop
+import "fmt"
+func Run() { fmt.Println("debug") }
+`)
+	score, err := Assess(workDir, "", nil, "internal/loop/loop.go")
+	if err != nil {
+		t.Fatalf("Assess: %v", err)
+	}
+	if score < 2 {
+		t.Errorf("expected score >= 2 for non-excluded Go file with debug print, got %d", score)
 	}
 }
 
@@ -208,17 +287,17 @@ func TestAllChecksContainsEveryCheck(t *testing.T) {
 // and scores >= 4 for 2 occurrences (2 * 2 = 4).
 func TestAssess_DetectsDebugPrintsInGo(t *testing.T) {
 	workDir := setupWorkDir(t)
-	writeFile(t, workDir, "cmd/main.go", `package main
+	writeFile(t, workDir, "internal/debug.go", `package internal
 
 import "fmt"
 
-func main() {
+func debug() {
 	fmt.Println("debug here")
 	fmt.Printf("value: %d\n", 42)
 }
 `)
 	findingsFile := filepath.Join(workDir, ".quality-findings")
-	score, err := Assess(workDir, findingsFile, nil, "cmd/main.go")
+	score, err := Assess(workDir, findingsFile, nil, "internal/debug.go")
 	if err != nil {
 		t.Fatalf("Assess: %v", err)
 	}
