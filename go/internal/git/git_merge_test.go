@@ -719,6 +719,54 @@ func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 	}
 }
 
+// AutoMergeCurrentBranch passes --subject with the PR title and number so the
+// squash-merge commit message on main matches the PR title, not the single
+// commit message GitHub would otherwise use.
+func TestAutoMergeCurrentBranch_PassesPRTitleAsSubject(t *testing.T) {
+	project, _ := initBareRepo(t)
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        filepath.Join(t.TempDir(), "wt"),
+		WorktreeBranch: "ralph/test/01-subject",
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	gh := &stubGitHub{
+		available: true,
+		openPR:    "77",
+		prTitle:   "[ralph-31w] Fix squash-merge subject",
+		checks:    []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+	}
+	mgr.GitHub = gh
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("reset --hard", "", nil)
+	mgr.Runner = runner
+
+	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("AutoMergeCurrentBranch: %v", err)
+	}
+	if !merged {
+		t.Fatal("expected merge to succeed")
+	}
+
+	want := "[ralph-31w] Fix squash-merge subject (#77)"
+	if gh.mergeOpts.Subject != want {
+		t.Errorf("merge subject = %q, want %q", gh.mergeOpts.Subject, want)
+	}
+}
+
 // sequentialMergeGitHub returns different merge results on successive calls,
 // allowing tests to simulate conflict→success or CI-fail→success sequences.
 type sequentialMergeGitHub struct {

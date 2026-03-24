@@ -21,6 +21,7 @@ type CreatePROpts struct {
 type MergeOpts struct {
 	DeleteBranch bool
 	Admin        bool
+	Subject      string
 }
 
 // GitHub abstracts GitHub CLI operations for testability. Production code
@@ -83,6 +84,9 @@ func (g *ghCLI) EditPR(prNumber, repoURL, title string) error {
 
 func (g *ghCLI) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error) {
 	args := []string{"pr", "merge", prNumber, "--squash", "-R", repoURL}
+	if opts.Subject != "" {
+		args = append(args, "--subject", opts.Subject)
+	}
 	if opts.DeleteBranch {
 		args = append(args, "--delete-branch")
 	}
