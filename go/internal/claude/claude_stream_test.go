@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // Verifies that extractStreamText pulls text from assistant messages using
@@ -579,5 +580,80 @@ func TestFilterStreamJSON_BatchesToolCalls(t *testing.T) {
 	}
 	if !strings.Contains(content, "[agent] analyzing results") {
 		t.Errorf("text should flush batch and appear after, got: %q", content)
+	}
+}
+
+// Verifies that long prose lines are truncated to fit terminal width,
+// preventing overflow and wrapped lines in the stream output.
+func TestFormatOutput_TruncatesLongProse(t *testing.T) {
+	f := &StreamFormatter{}
+	longProse := strings.Repeat("Now I understand the current state and will analyze ", 5)
+	lines := f.FormatOutput(longProse)
+
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+	plain := ansiRe.ReplaceAllString(lines[0], "")
+	// Line should be truncated: tsWidth(9) + "[agent] "(8) + content + "…"
+	// Total rune count should not exceed maxLineWidth.
+	runeCount := utf8.RuneCountInString(plain)
+	if runeCount > maxLineWidth {
+		t.Errorf("prose line should be truncated to %d runes, got %d: %q", maxLineWidth, runeCount, plain)
+	}
+	if !strings.HasSuffix(plain, "…") {
+		t.Errorf("truncated prose should end with ellipsis, got: %q", plain)
+	}
+}
+
+// Verifies that tool call lines are NOT truncated — they contain important
+// file paths, commands, and patterns that users need to see in full.
+func TestFormatOutput_DoesNotTruncateToolLines(t *testing.T) {
+	f := &StreamFormatter{}
+	longToolLine := "[Edit] " + strings.Repeat("/very/long/path/to/some/deeply/nested/", 5) + "file.go"
+	lines := f.FormatOutput(longToolLine)
+
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+	plain := ansiRe.ReplaceAllString(lines[0], "")
+	if !strings.Contains(plain, "file.go") {
+		t.Errorf("tool line should not be truncated, got: %q", plain)
+	}
+	if strings.HasSuffix(plain, "…") {
+		t.Errorf("tool line should not have ellipsis, got: %q", plain)
+	}
+}
+
+// Verifies that diagnosis lines (ISSUE:/FIX:) are NOT truncated since they
+// contain critical information about the root cause and fix.
+func TestFormatOutput_DoesNotTruncateDiagnosis(t *testing.T) {
+	f := &StreamFormatter{}
+	longDiag := "ISSUE: " + strings.Repeat("the configuration is completely broken because ", 5)
+	lines := f.FormatOutput(longDiag)
+
+	// Diagnosis produces 2 lines: banner + content.
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines for diagnosis, got %d", len(lines))
+	}
+	plain := ansiRe.ReplaceAllString(lines[1], "")
+	if !strings.Contains(plain, "completely broken") {
+		t.Errorf("diagnosis content should not be truncated, got: %q", plain)
+	}
+}
+
+// Verifies that short prose lines are not truncated or modified.
+func TestFormatOutput_ShortProseUnchanged(t *testing.T) {
+	f := &StreamFormatter{}
+	lines := f.FormatOutput("Reading the config file")
+
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+	plain := ansiRe.ReplaceAllString(lines[0], "")
+	if !strings.Contains(plain, "[agent] Reading the config file") {
+		t.Errorf("short prose should pass through unchanged, got: %q", plain)
+	}
+	if strings.HasSuffix(plain, "…") {
+		t.Errorf("short prose should not have ellipsis, got: %q", plain)
 	}
 }
