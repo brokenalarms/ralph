@@ -29,6 +29,11 @@ an issue blocks the ralph loop from running at all. In this mode:
 - Read code, make targeted fixes, run tests, commit
 - Return to light triage mode when the fix is done
 
+When pushing iterative commits to a PR branch, always check the PR state before
+pushing (`gh pr view <number> --json state`). PRs may have been merged or closed
+while you were working. If merged/closed, create a new branch from `origin/main`
+and a new PR for the remaining work.
+
 ## Task backend
 
 Run `bd prime` for workflow context. All `bd` commands must run from
@@ -107,10 +112,6 @@ Before updating or commenting on any bead, check its status:
 - If a bead accumulates more than 3 concerns, proactively suggest splitting it.
 - Tasks must be explicit instructions, not options. Write one clear path — the
   agent should not be choosing between approaches.
-
-## After any bead mutation
-
-Run `bd export > specs/beads-export.jsonl` to keep the export in sync.
 
 ## Priority reference
 

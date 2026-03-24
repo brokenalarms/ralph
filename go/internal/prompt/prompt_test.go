@@ -506,7 +506,6 @@ func TestBuildTaskManagerPrompt_RequiredSections(t *testing.T) {
 		{"label", "prompt should require labels on every bead"},
 		{"screenshot", "prompt should describe screenshot handling"},
 		{"P0", "prompt should reference priority levels"},
-		{"bd export", "prompt should instruct running bd export after mutations"},
 		{"in_progress", "prompt should warn about modifying in-progress beads"},
 		{"verbatim", "prompt should instruct including diagnostic content verbatim"},
 		{"split", "prompt should describe when to split beads"},
