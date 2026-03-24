@@ -62,17 +62,22 @@ func (b *ToolBatcher) ProcessLine(text string) []string {
 	return flushed
 }
 
-// Flush emits any pending batched tool calls as summary lines.
+// Flush emits any pending batched tool calls and buffered formatter lines.
 func (b *ToolBatcher) Flush() []string {
-	return b.flush()
+	lines := b.flush()
+	lines = append(lines, b.fmt.FlushPending()...)
+	return lines
 }
 
-// FlushIfExpired emits pending batches only if the window has elapsed.
+// FlushIfExpired emits pending batches if the window has elapsed,
+// and flushes stale formatter lines whose timestamp second has passed.
 func (b *ToolBatcher) FlushIfExpired() []string {
+	var lines []string
 	if len(b.batches) > 0 && !b.windowStart.IsZero() && time.Since(b.windowStart) >= b.window {
-		return b.flush()
+		lines = b.flush()
 	}
-	return nil
+	lines = append(lines, b.fmt.FlushIfStale()...)
+	return lines
 }
 
 func (b *ToolBatcher) flush() []string {
@@ -88,5 +93,6 @@ func (b *ToolBatcher) flush() []string {
 	b.batches = make(map[string][]string)
 	b.order = nil
 	b.windowStart = time.Time{}
+	lines = append(lines, b.fmt.FlushPending()...)
 	return lines
 }

@@ -138,27 +138,86 @@ func FormatStreamLine(text string) string {
 	return time.Now().Format("15:04:05") + " " + formatContent(text)
 }
 
-// StreamFormatter tracks the last emitted timestamp so consecutive lines
-// within the same second are grouped: only the first line shows the
-// timestamp, continuation lines are indented with spaces.
+// StreamFormatter buffers consecutive lines that share the same timestamp
+// and emits them as a group when the second changes:
+//   - Under 3 lines: each line gets its own timestamp prefix
+//   - 3+ lines: timestamp on its own line, content lines at root level
 type StreamFormatter struct {
-	lastTS     string
 	lastSignal string // dedup: suppress consecutive identical signal lines
+	pendingTS  string
+	pending    []string          // formatted content without timestamp prefix
+	clock      func() time.Time  // injectable clock; nil defaults to time.Now
 }
 
 const tsWidth = 9       // "HH:MM:SS" (8) + space (1)
 const agentPrefix = 4 // "[r] " (4)
 const maxLineWidth = 120
 
-// FormatLine formats text with timestamp grouping. If the current second
-// matches the previous line, the timestamp is replaced with whitespace.
+func (f *StreamFormatter) now() time.Time {
+	if f.clock != nil {
+		return f.clock()
+	}
+	return time.Now()
+}
+
+// FlushPending emits any buffered lines with appropriate timestamp formatting.
+func (f *StreamFormatter) FlushPending() []string {
+	if len(f.pending) == 0 {
+		return nil
+	}
+	ts := f.pendingTS
+	lines := f.pending
+	f.pending = nil
+	f.pendingTS = ""
+
+	if len(lines) < 3 {
+		result := make([]string, len(lines))
+		for i, c := range lines {
+			result[i] = ts + " " + c
+		}
+		return result
+	}
+
+	result := make([]string, 0, len(lines)+1)
+	result = append(result, logging.Dim+ts+logging.Reset)
+	for _, c := range lines {
+		result = append(result, c)
+	}
+	return result
+}
+
+// FlushIfStale emits pending lines only if the current second has changed.
+func (f *StreamFormatter) FlushIfStale() []string {
+	if len(f.pending) == 0 {
+		return nil
+	}
+	ts := f.now().Format("15:04:05")
+	if ts != f.pendingTS {
+		return f.FlushPending()
+	}
+	return nil
+}
+
+// bufferLine adds a formatted content line to the pending buffer.
+// If the timestamp has changed, flushes the previous group first.
+func (f *StreamFormatter) bufferLine(content string) []string {
+	ts := f.now().Format("15:04:05")
+
+	var flushed []string
+	if ts != f.pendingTS && len(f.pending) > 0 {
+		flushed = f.FlushPending()
+	}
+
+	f.pendingTS = ts
+	f.pending = append(f.pending, content)
+	return flushed
+}
+
+// FormatLine formats text with a timestamp prefix. Kept for simple
+// single-line formatting; does not participate in buffered grouping.
 func (f *StreamFormatter) FormatLine(text string) string {
 	content := formatContent(text)
-	ts := time.Now().Format("15:04:05")
-	if ts == f.lastTS {
-		return strings.Repeat(" ", tsWidth) + content
-	}
-	f.lastTS = ts
+	ts := f.now().Format("15:04:05")
 	return ts + " " + content
 }
 
@@ -173,18 +232,19 @@ func (f *StreamFormatter) FormatOutput(text string) []string {
 			return nil
 		}
 		f.lastSignal = key
-		return []string{f.FormatLine("[signal] " + name + ": " + msg)}
+		return f.bufferLine(formatContent("[signal] " + name + ": " + msg))
 	}
 	if label, content, ok := parseDiagnosis(text); ok {
-		return []string{
-			diagnosisBanner(label),
-			f.FormatLine("[r] " + content),
-		}
+		var result []string
+		result = append(result, f.FlushPending()...)
+		result = append(result, diagnosisBanner(label))
+		result = append(result, f.bufferLine(formatContent("[r] "+content))...)
+		return result
 	}
 	if !isToolLine(text) {
 		text = truncateProse(text, maxLineWidth-tsWidth-agentPrefix)
 	}
-	return []string{f.FormatLine("[r] " + text)}
+	return f.bufferLine(formatContent("[r] " + text))
 }
 
 // isToolLine returns true if the line starts with a bracketed tool name.
@@ -245,7 +305,9 @@ func diagnosisBanner(label string) string {
 // Used by ToolBatcher for backward-compatible output when no grouping is needed.
 func FormatStreamOutput(text string) []string {
 	f := &StreamFormatter{}
-	return f.FormatOutput(text)
+	result := f.FormatOutput(text)
+	result = append(result, f.FlushPending()...)
+	return result
 }
 
 // filterStreamJSON tails the raw log file from its current end, extracting
