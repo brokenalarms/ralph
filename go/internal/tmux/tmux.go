@@ -198,13 +198,9 @@ func (s *Session) filterStreamCmd() string {
 
 func (s *Session) applySessionOptions() {
 	tmuxCmd("set-option", "-t", s.Name, "pane-border-status", "top")                                                                    //nolint:errcheck
-	tmuxCmd("set-option", "-t", s.Name, "pane-border-format", "#{?pane_dead, #{pane_title} (dead) — press q to exit , #{pane_title} }") //nolint:errcheck
-	tmuxCmd("set-option", "-t", s.Name, "remain-on-exit", "on")                                                                         //nolint:errcheck
-	tmuxCmd("set-option", "-t", s.Name, "set-titles", "off")                                                                            //nolint:errcheck
-
-	deadCheck := fmt.Sprintf("tmux display-message -t '%s:.0' -p '#{pane_dead}' | grep -q 1", s.Name)
-	killCmd := fmt.Sprintf("kill-session -t '%s'", s.Name)
-	tmuxCmd("bind-key", "-T", "root", "q", "if-shell", deadCheck, killCmd) //nolint:errcheck
+	tmuxCmd("set-option", "-t", s.Name, "pane-border-format", "#{?pane_dead, #{pane_title} (dead) , #{pane_title} }") //nolint:errcheck
+	tmuxCmd("set-option", "-t", s.Name, "remain-on-exit", "on")                                                       //nolint:errcheck
+	tmuxCmd("set-option", "-t", s.Name, "set-titles", "off")                                                           //nolint:errcheck
 }
 
 func (s *Session) writePlanWatcher() error {
