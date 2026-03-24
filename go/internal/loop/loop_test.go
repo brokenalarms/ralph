@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -341,11 +340,6 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 	if maxIter != 10 {
 		t.Errorf("expected max_iterations=10 in state, got %d", maxIter)
 	}
-
-	refEvery := st.ReadRefactorEvery()
-	if refEvery != 3 {
-		t.Errorf("expected refactor_every=3 in state, got %d", refEvery)
-	}
 }
 
 // Verifies the stream task file is written with task ID and description,
@@ -584,62 +578,39 @@ func TestReadLogFrom(t *testing.T) {
 	}
 }
 
-// Verifies the refactor iteration counter increments correctly and only
-// triggers a refactor when the threshold is reached.
-func TestLoop_MaybeRefactor_CounterIncrement(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-
-	l := &Loop{
-		cfg:   Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}},
-		state: st,
-		logger: logging.New(nil),
-	}
-
-	st.Write("iterations_since_refactor", "0")
-
-	// refactorEvery=0 should do nothing.
-	err := l.maybeRefactor(0)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// refactorEvery=5, counter at 2 should just increment.
-	st.Write("iterations_since_refactor", "2")
-	err = l.maybeRefactor(5)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	val, _ := st.Read("iterations_since_refactor")
-	n, _ := strconv.Atoi(val)
-	if n != 3 {
-		t.Errorf("expected counter=3, got %d", n)
-	}
-}
-
-// Verifies that NoRefactor=true prevents maybeRefactor from running even
-// when refactorEvery is set, allowing users to disable refactoring entirely.
+// Proves: maybeRefactor skips when NoRefactor is true, regardless of
+// quality score, allowing users to disable refactoring entirely.
 func TestLoop_MaybeRefactor_NoRefactorDisables(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	l := &Loop{
-		cfg:    Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}, NoRefactor: true},
+		cfg:    Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}, NoRefactor: true, RefactorThreshold: 20},
 		state:  st,
 		logger: logging.New(nil),
 	}
 
-	st.Write("iterations_since_refactor", "10")
-
-	err := l.maybeRefactor(5)
+	err := l.maybeRefactor()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
 
-	val, _ := st.Read("iterations_since_refactor")
-	if val != "10" {
-		t.Errorf("counter should not change when NoRefactor=true, got %s", val)
+// Proves: maybeRefactor skips when RefactorThreshold is 0, treating it
+// as an explicit opt-out of quality-based refactoring.
+func TestLoop_MaybeRefactor_ZeroThresholdDisables(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	l := &Loop{
+		cfg:   Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}, RefactorThreshold: 0},
+		state: st,
+		logger: logging.New(nil),
+	}
+
+	err := l.maybeRefactor()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

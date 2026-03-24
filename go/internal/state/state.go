@@ -193,10 +193,9 @@ func (st *Store) Init(maxIterations, refactorEvery int) error {
 	return st.Save(s)
 }
 
-// WriteConfig writes max_iterations and refactor_every to state.
-func (st *Store) WriteConfig(maxIterations, refactorEvery int) {
+// WriteConfig writes max_iterations to state.
+func (st *Store) WriteConfig(maxIterations int) {
 	st.Write("max_iterations", strconv.Itoa(maxIterations))
-	st.Write("refactor_every", strconv.Itoa(refactorEvery))
 }
 
 // ReadMaxIterations returns max_iterations from state, falling back to the given default.
@@ -206,13 +205,6 @@ func (st *Store) ReadMaxIterations(defaultVal int) int {
 		return n
 	}
 	return defaultVal
-}
-
-// ReadRefactorEvery returns the refactor_every value from state.
-func (st *Store) ReadRefactorEvery() int {
-	v, _ := st.Read("refactor_every")
-	n, _ := strconv.Atoi(v)
-	return n
 }
 
 // getField extracts a named field from State as a string.
