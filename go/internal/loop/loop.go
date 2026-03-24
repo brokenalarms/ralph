@@ -16,6 +16,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/notify"
 	"github.com/brokenalarms/ralph/internal/prompt"
 	"github.com/brokenalarms/ralph/internal/ratelimit"
 	"github.com/brokenalarms/ralph/internal/state"
@@ -515,6 +516,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 			if merged {
 				l.lastTaskMerged = true
+				notify.TaskMerged(taskID, nextTask)
 				if err := l.git.PostMergeReset(); err != nil {
 					l.logger.Warn("git", "Post-merge reset: %v", err)
 				}
@@ -620,6 +622,7 @@ func (l *Loop) flushUnpushedWork(ctx context.Context) {
 					l.logger.Warn("git", "Flush merge: %v", err)
 				}
 				if merged {
+					notify.TaskMerged(taskID, taskDesc)
 					if err := l.git.PostMergeReset(); err != nil {
 						l.logger.Warn("git", "Flush post-merge reset: %v", err)
 					}
@@ -632,7 +635,9 @@ func (l *Loop) flushUnpushedWork(ctx context.Context) {
 	if err != nil {
 		l.logger.Warn("git", "Flush: %v", err)
 	}
-	_ = merged
+	if merged {
+		notify.TaskMerged(taskID, taskDesc)
+	}
 }
 
 func (l *Loop) waitForTasks(ctx context.Context) bool {
