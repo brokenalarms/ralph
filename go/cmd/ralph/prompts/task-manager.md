@@ -98,6 +98,31 @@ titled "Stop file not deleted" with a red `bug` label is better than
 
 Refactor-type tasks get a `refactor` label.
 
+## Phase lifecycle tracking
+
+The ralph loop tracks each task through phases using `bd set-state` and
+`bd state`. The lifecycle is:
+
+  **implementing** → **verified** → (close)
+
+The orchestrator sets `phase=implementing` when an agent starts work and
+`phase=verified` after tests pass and commits are present. A task cannot be
+closed unless its phase is `verified`.
+
+Use `bd state <id> phase` to query the current phase of any task. This is
+your primary tool for auditing whether a task genuinely completed its
+lifecycle or was falsely closed.
+
+When reopening a falsely-closed task (fix doesn't work, acceptance criteria
+not met), reset its phase so verification runs again:
+```
+bd reopen <id>
+bd set-state <id> phase=unverified --reason "reopened: <why>"
+```
+
+When auditing closed tasks, challenge any close where the phase is not
+`verified` — this indicates the close skipped the verification gate.
+
 ## Updating beads
 
 State what changed on every update — not just "updated issue". Example:
@@ -106,7 +131,7 @@ State what changed on every update — not just "updated issue". Example:
 Before updating or commenting on any bead, check its status:
 
 - **Closed** → do not comment or modify. Instead:
-  - If the fix is completely wrong or doesn't work → `bd reopen`, then modify
+  - If the fix is completely wrong or doesn't work → `bd reopen` + `bd set-state <id> phase=unverified`, then modify
   - If it's follow-on work or a small miss → create a new bead, reference the original
 - **in_progress** → ask the user for confirmation before modifying. Do not
   silently change tasks that the ralph loop is actively working on.

@@ -630,6 +630,34 @@ func TestBuildTaskManagerPrompt_UnwieldyBeadDetection(t *testing.T) {
 	}
 }
 
+// Proves: task manager prompt instructs the LLM to query bd state for phase
+// tracking, challenge closes that skipped the verified phase, and set
+// phase=unverified when reopening falsely-closed tasks.
+func TestBuildTaskManagerPrompt_PhaseLifecycleTracking(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"bd state", "prompt should instruct querying bd state for phase"},
+		{"phase", "prompt should reference the phase dimension"},
+		{"verified", "prompt should reference the verified phase"},
+		{"unverified", "prompt should instruct setting phase=unverified on reopen"},
+		{"set-state", "prompt should instruct using bd set-state to change phase"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(strings.ToLower(result), strings.ToLower(tc.substr)) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
 // Proves: BuildReviewPrompt assembles the shared quality standards and
 // refactor style guide into an interactive review session prompt.
 func TestBuildReviewPrompt(t *testing.T) {
