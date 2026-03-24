@@ -215,7 +215,7 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) {
 		return
 	}
 
-	dirty := gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
+	dirty := m.gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
 		m.gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
 	if dirty {
 		m.Logger.Log("git", "Stashing uncommitted changes before rebase...")
