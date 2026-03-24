@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -127,16 +126,6 @@ func isSubsetByLines(base, ours, theirs string) bool {
 		}
 	}
 	return true
-}
-
-func rebaseInProgress(dir string) bool {
-	gitDir := gitOutput(dir, "rev-parse", "--git-dir")
-	if gitDir == "" {
-		return false
-	}
-	_, errMerge := os.Stat(filepath.Join(gitDir, "rebase-merge"))
-	_, errApply := os.Stat(filepath.Join(gitDir, "rebase-apply"))
-	return errMerge == nil || errApply == nil
 }
 
 // resumedBranchIsStale returns true when the stored branch no longer exists
