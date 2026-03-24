@@ -112,11 +112,9 @@ func TestSandboxWrap_ProducesSandboxExecCommand(t *testing.T) {
 	}
 }
 
-func TestAvailable(t *testing.T) {
-	_, err := exec.LookPath("sandbox-exec")
-	expected := err == nil
-	if Available() != expected {
-		t.Errorf("Available() = %v, want %v", Available(), expected)
+func TestAvailable_DisabledUntilProfileValidated(t *testing.T) {
+	if Available() {
+		t.Error("Available() should return false — sandbox is disabled")
 	}
 }
 

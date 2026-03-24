@@ -23,10 +23,11 @@ func DefaultSandbox() *Sandbox {
 	return &Sandbox{}
 }
 
-// Available checks whether sandbox-exec is present on this system.
+// Available returns false — sandbox-exec is disabled until the profile
+// can be validated against all agent operations without silent failures.
+// See ralph-djn for the re-enablement plan.
 func Available() bool {
-	_, err := exec.LookPath("sandbox-exec")
-	return err == nil
+	return false
 }
 
 // Profile generates a macOS Seatbelt sandbox profile. Strategy:

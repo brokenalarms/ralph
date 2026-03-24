@@ -84,7 +84,7 @@ func (r *Runner) Interactive(workDir, systemPrompt string, extraArgs ...string) 
 
 	var cmd *exec.Cmd
 	if r.Sandbox != nil {
-		cmd = r.Sandbox.Wrap(context.Background(), []string{workDir}, "claude", args...)
+		cmd = r.Sandbox.Wrap(context.Background(), sandboxWriteDirs(workDir, filepath.Join(workDir, ".ralph")), "claude", args...)
 	} else {
 		cmd = exec.Command("claude", args...)
 	}
