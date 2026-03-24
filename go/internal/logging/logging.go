@@ -57,11 +57,14 @@ func BranchTag(branch string) string {
 	return Green + "[" + branch + "]" + Reset
 }
 
-// Logger provides colored, timestamped logging matching ralph.sh's output.
+// Logger provides colored logging with trailing timestamps that appear
+// only when the second changes from the previous line.
 type Logger struct {
 	out       io.Writer
 	logFile   io.Writer
 	streaming bool
+	lastTS    string
+	clock     func() time.Time
 }
 
 // New creates a Logger that writes to stdout and the given log file writer.
@@ -85,8 +88,22 @@ func NewWithWriter(w io.Writer) *Logger {
 	}
 }
 
-func ts() string {
-	return time.Now().Format("15:04:05")
+func (l *Logger) now() time.Time {
+	if l.clock != nil {
+		return l.clock()
+	}
+	return time.Now()
+}
+
+// tsSuffix returns a dim trailing timestamp when the second has changed
+// since the last emitted line, or empty string if it hasn't.
+func (l *Logger) tsSuffix() string {
+	ts := l.now().Format("15:04:05")
+	if ts == l.lastTS {
+		return ""
+	}
+	l.lastTS = ts
+	return " " + Dim + ts + Reset
 }
 
 // SetStreaming enables or disables streaming mode. In streaming mode, the
@@ -98,7 +115,7 @@ func (l *Logger) SetStreaming(on bool) {
 
 func (l *Logger) emit(color string, domain Domain, msg string) {
 	tag := Tag(color, Orch, domain)
-	line := fmt.Sprintf("%s %s %s\n", ts(), tag, msg)
+	line := fmt.Sprintf("%s %s%s\n", tag, msg, l.tsSuffix())
 	if !l.streaming {
 		fmt.Fprint(l.out, line)
 	}
@@ -133,7 +150,7 @@ func (l *Logger) Phase(format string, args ...any) {
 // PhaseColor writes a bold phase header in the given ANSI color.
 func (l *Logger) PhaseColor(color string, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	line := fmt.Sprintf("%s %s%s[o]%s %s%s%s\n", ts(), Bold, color, Reset, Bold, msg, Reset)
+	line := fmt.Sprintf("%s%s[o]%s %s%s%s%s\n", Bold, color, Reset, Bold, msg, Reset, l.tsSuffix())
 	if !l.streaming {
 		fmt.Fprint(l.out, line)
 	}
