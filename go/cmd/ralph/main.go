@@ -412,11 +412,7 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 		if len(branches) > 1 {
 			log.Log("", "Branches:")
 			for _, b := range branches {
-				if gm.IsBranchSquashMerged(b) {
-					log.Log("", "  %s [MERGED]", b)
-				} else {
-					log.Log("", "  %s", b)
-				}
+				log.Log("", "  %s", b)
 			}
 		} else {
 			log.Log("", "Branch:     %s", gm.WorktreeBranch)

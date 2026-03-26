@@ -10,51 +10,9 @@ import (
 	"testing"
 )
 
-// PostMergeReset resets the worktree to a fresh branch at origin/main after
-// auto-merge, so the next task starts from merged state instead of stale commits.
-func TestPostMergeReset_ResetsToOriginMain(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := newMemState()
-
-	mgr := &Manager{
-		ProjectDir:     project,
-		RalphDir:       ralphDir,
-		State:  st,
-		Logger: &testLog{},
-	}
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	// Rename to a task branch (simulating a completed task)
-	mgr.RenameBranchForTask("completed task", "")
-	taskBranch := mgr.WorktreeBranch
-	if taskBranch == mgr.TempBranch() {
-		t.Fatal("expected task branch to differ from temp branch")
-	}
-
-	if err := mgr.PostMergeReset(); err != nil {
-		t.Fatalf("PostMergeReset: %v", err)
-	}
-
-	if mgr.WorktreeBranch != mgr.TempBranch() {
-		t.Errorf("expected branch %q after reset, got %q", mgr.TempBranch(), mgr.WorktreeBranch)
-	}
-	if mgr.BranchRenamed {
-		t.Error("BranchRenamed should be false after PostMergeReset")
-	}
-
-	// Old task branch should be deleted
-	if refExists(mgr.WorkDir, taskBranch) {
-		t.Errorf("old task branch %q should have been deleted", taskBranch)
-	}
-}
-
-// Force-reset must clean both dirty tracked files and untracked files left
-// by the previous task, so the next task starts with a pristine worktree
-// matching origin/main exactly.
-func TestPostMergeReset_CleansUntrackedAndDirtyFiles(t *testing.T) {
+// PostMergeUpdateMain updates local main to match origin/main after a merge,
+// but does NOT touch the worktree.
+func TestPostMergeUpdateMain_AdvancesLocalMain(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := newMemState()
@@ -62,54 +20,45 @@ func TestPostMergeReset_CleansUntrackedAndDirtyFiles(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-				State:       st,
+		State:       st,
 		Logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.RenameBranchForTask("dirty task", "")
+	mgr.RenameBranchForTask("completed task", "")
 
-	// Create an untracked file (simulating build artifacts or generated files)
-	untrackedPath := filepath.Join(mgr.WorkDir, "leftover-artifact.txt")
-	if err := os.WriteFile(untrackedPath, []byte("stale artifact\n"), 0644); err != nil {
-		t.Fatal(err)
+	// Simulate a commit landing on origin/main (as happens after merge)
+	bare := filepath.Join(filepath.Dir(project), "bare.git")
+	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
+	run(t, "git", "clone", bare, tmpClone)
+	writeFile(t, tmpClone, "merged-work.txt", "merged content\n")
+	run(t, "git", "-C", tmpClone, "commit", "-m", "merged PR")
+	run(t, "git", "-C", tmpClone, "push", "origin", "main")
+
+	run(t, "git", "-C", project, "fetch", "origin", "main")
+	localBefore := gitOutput(project, "rev-parse", "main")
+	originMain := gitOutput(project, "rev-parse", "origin/main")
+	if localBefore == originMain {
+		t.Fatal("test setup: local main should not yet match origin/main")
 	}
 
-	// Modify a tracked file without committing (dirty working tree)
-	trackedPath := filepath.Join(mgr.WorkDir, "dirty-edit.txt")
-	writeFile(t, mgr.WorkDir, "dirty-edit.txt", "original\n")
-	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add tracked file")
-	if err := os.WriteFile(trackedPath, []byte("modified\n"), 0644); err != nil {
-		t.Fatal(err)
+	mgr.PostMergeUpdateMain()
+
+	localAfter := gitOutput(project, "rev-parse", "main")
+	if localAfter != originMain {
+		t.Errorf("local main should match origin/main: got %s, want %s", localAfter, originMain)
 	}
 
-	if err := mgr.PostMergeReset(); err != nil {
-		t.Fatalf("PostMergeReset: %v", err)
-	}
-
-	if _, err := os.Stat(untrackedPath); !os.IsNotExist(err) {
-		t.Error("untracked file should have been removed by force-reset")
-	}
-
-	// Tracked file from the task branch should no longer exist (it wasn't on origin/main)
-	if _, err := os.Stat(trackedPath); !os.IsNotExist(err) {
-		t.Error("tracked file from task branch should not exist after reset to origin/main")
-	}
-
-	headAfter := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
-	originMain := gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
-	if headAfter != originMain {
-		t.Errorf("HEAD should match origin/main, got %s vs %s", headAfter, originMain)
+	// Worktree branch should be unchanged
+	if !strings.Contains(mgr.WorktreeBranch, "completed-task") {
+		t.Errorf("worktree branch should still be the task branch, got %q", mgr.WorktreeBranch)
 	}
 }
 
-// After auto-merge squash-merges a PR, postMergeUpdate must advance local
-// main to match origin/main without leaving stale staged changes. The old
-// two-step approach (update-ref + reset --hard HEAD) left the index pointing
-// at the old tree between steps, staging reversions of merged PR work. The
-// fix uses a single atomic `git reset --hard origin/main`.
+// postMergeUpdate must advance local main to match origin/main without
+// leaving stale staged changes.
 func TestPostMergeUpdate_AtomicResetNoStagedChanges(t *testing.T) {
 	project, _ := initBareRepo(t)
 	bare := filepath.Join(filepath.Dir(project), "bare.git")

@@ -26,13 +26,14 @@ type Log interface {
 	Error(domain string, format string, args ...any)
 }
 
-// Manager handles git worktree creation, branch rotation, and renaming.
+// Manager handles git worktree creation, branch naming, and sync.
 type Manager struct {
 	ProjectDir     string
 	RalphDir       string
 	ProjectName    string
 	WorkDir        string
 	WorktreeBranch string
+	PrevBranch     string
 	Resume         bool
 	TaskSeq        int
 	BranchRenamed bool
@@ -57,10 +58,6 @@ func (m *Manager) gh() GitHub {
 	return m.GH()
 }
 
-// TempBranch returns the temporary branch name for the current project.
-func (m *Manager) TempBranch() string {
-	return "ralph/" + m.ProjectName + "/next"
-}
 
 // SetupWorktree creates (or resumes) a git worktree for isolated work.
 func (m *Manager) SetupWorktree(ctx context.Context) error {
@@ -90,7 +87,9 @@ func (m *Manager) SetupWorktree(ctx context.Context) error {
 		}
 	}
 
-	m.WorktreeBranch = m.TempBranch()
+	// Use a placeholder branch name; RenameBranchForTask will rename it
+	// to a proper task branch before the first commit.
+	m.WorktreeBranch = fmt.Sprintf("ralph/%s/wip", m.ProjectName)
 	m.WorkDir = filepath.Join(m.RalphDir, "worktrees", fmt.Sprintf("ralph-%s-%02d", today, runSeq))
 
 	if err := os.MkdirAll(filepath.Join(m.RalphDir, "worktrees"), 0o755); err != nil {
@@ -99,14 +98,16 @@ func (m *Manager) SetupWorktree(ctx context.Context) error {
 
 	m.gitCmd(m.ProjectDir, "worktree", "prune")
 
-	// Remove leftover worktree directory from a previous run (git prune
-	// cleans the bookkeeping but leaves the directory on disk).
 	if _, err := os.Stat(m.WorkDir); err == nil {
 		os.RemoveAll(m.WorkDir)
 	}
 
-	if err := m.cleanTempBranch(); err != nil {
-		return err
+	// Clean up leftover wip branch from a previous run.
+	if m.refExists(m.ProjectDir, m.WorktreeBranch) {
+		if wt := m.findWorktreeForBranch(m.ProjectDir, m.WorktreeBranch); wt != "" && strings.Contains(wt, "/.ralph/worktrees/") {
+			m.gitCmd(m.ProjectDir, "worktree", "remove", "--force", wt)
+		}
+		_ = m.gitCmdErr(m.ProjectDir, "branch", "-D", m.WorktreeBranch)
 	}
 
 	defaultBranch := m.detectDefaultBranch()
@@ -156,8 +157,6 @@ func (m *Manager) tryResumeWorktree() error {
 	m.ProjectName = filepath.Base(m.ProjectDir)
 	if renamed, _ := m.State.Read("branch_renamed"); renamed == "true" {
 		m.BranchRenamed = true
-	} else {
-		m.BranchRenamed = branch != m.TempBranch()
 	}
 
 	if seqStr, _ := m.State.Read("task_seq"); seqStr != "" {
@@ -166,17 +165,11 @@ func (m *Manager) tryResumeWorktree() error {
 		}
 	}
 
+	if prev, _ := m.State.Read("prev_branch"); prev != "" {
+		m.PrevBranch = prev
+	}
+
 	m.Logger.Log("git", "Resuming worktree: %s", m.WorkDir)
-
-	defaultBranch := m.detectDefaultBranch()
-	if err := m.gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
-		m.Logger.Warn("git", "Failed to fetch origin/%s on resume: %v", defaultBranch, err)
-	}
-
-	if m.resumedBranchIsStale(defaultBranch) {
-		m.Logger.Log("git", "Stale branch detected on resume — resetting to origin/%s", defaultBranch)
-		return m.resetResumedWorktree(defaultBranch)
-	}
 
 	_ = m.EnsureUpToDate(context.Background())
 	return nil
@@ -208,22 +201,9 @@ func (m *Manager) withStash(stashMsg string, fn func()) {
 }
 
 // EnsureUpToDate fetches the latest base branch, stashes any uncommitted
-// changes, rebases onto origin, and reapplies the stash. This is the single
-// sync point that ALL git operations go through: push, merge, resume, and
-// the loop's handleRebase. Includes squash-merge detection, auto-resolve,
-// and force-reset as last resort.
-// EnsureUpToDate is the single sync point for all git operations. It
-// fetches the latest default branch and applies an escalating series of
-// strategies to get the worktree up to date:
-//
-//  1. Fast-forward rebase — clean replay on top of origin
-//  2. Auto-resolve — mechanical conflict resolution (theirs for new files)
-//  3. Skip squash-merged — rebase past branches already on main
-//  4. Reset and replay — force-reset to origin, cherry-pick local commits
-//
-// Each strategy preserves the agent's committed work. If cherry-pick
-// fails on a real conflict, the stale work is discarded and the remote
-// branch is cleaned up so the task re-runs on a clean base.
+// changes, rebases onto origin, and reapplies the stash. If rebase fails
+// after auto-resolve, it aborts and returns an error — the caller decides
+// what to do (e.g. push anyway and let GitHub handle merge conflicts).
 func (m *Manager) EnsureUpToDate(ctx context.Context) error {
 	if m.WorkDir == "" || m.WorkDir == m.ProjectDir {
 		return nil
@@ -265,13 +245,9 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) error {
 			return
 		}
 
-		// 3. Skip squash-merged branches
-		if m.trySkipSquashMerged(ctx, defaultBranch) {
-			return
-		}
-
-		// 4. Last resort: reset to origin, replay local commits
-		result = m.ResetAndReplay(defaultBranch)
+		m.Logger.Warn("git", "Rebase failed — aborting, caller will handle")
+		m.gitCmd(m.WorkDir, "rebase", "--abort")
+		result = fmt.Errorf("rebase onto origin/%s failed", defaultBranch)
 	})
 	return result
 }
@@ -293,90 +269,10 @@ func (m *Manager) tryAutoResolve(ctx context.Context, defaultBranch string) bool
 	return false
 }
 
-func (m *Manager) trySkipSquashMerged(ctx context.Context, defaultBranch string) bool {
-	m.Logger.Warn("git", "Rebase failed, checking for squash-merged branches...")
-	lastMerged := m.findLastSquashMergedBranch(defaultBranch)
-	if lastMerged == "" {
-		return false
-	}
-	m.Logger.Log("git", "Detected squash-merged branch: %s", lastMerged)
-	if m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "--onto", "origin/"+defaultBranch, lastMerged, "HEAD") == nil {
-		m.Logger.Log("git", "%s Rebased onto origin/%s (skipped squash-merged)", logging.BranchTag(defaultBranch), defaultBranch)
-		m.TaskSeq = m.ParseTaskSeqFromBranches()
-		m.gitCmd(m.ProjectDir, "branch", "-D", lastMerged)
-		return true
-	}
-	m.gitCmd(m.WorkDir, "rebase", "--abort")
-	return false
-}
-
-// ResetAndReplay saves local commits ahead of origin/defaultBranch,
-// force-resets to origin/defaultBranch, then cherry-picks the commits
-// back on top. This is the last-resort sync strategy when all rebase
-// approaches fail — it always gets to the latest base while preserving
-// the agent's committed work.
-func (m *Manager) ResetAndReplay(defaultBranch string) error {
-	raw := m.gitOutput(m.WorkDir, "rev-list", "--reverse", "origin/"+defaultBranch+"..HEAD")
-	commits := strings.Split(strings.TrimSpace(raw), "\n")
-
-	count := 0
-	for _, c := range commits {
-		if c != "" {
-			count++
-		}
-	}
-
-	m.Logger.Warn("git", "%s Rebase failed — resetting to origin/%s and replaying %d commits",
-		logging.BranchTag(defaultBranch), defaultBranch, count)
-	m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+defaultBranch)
-
-	for _, sha := range commits {
-		if sha == "" {
-			continue
-		}
-		if err := m.gitCmdErr(m.WorkDir, "cherry-pick", sha); err != nil {
-			m.Logger.Warn("git", "Cherry-pick %s failed — discarding stale work, task will re-run", sha[:8])
-			m.gitCmd(m.WorkDir, "cherry-pick", "--abort")
-			// Stay on the clean origin/default — stale work is gone.
-			// Delete the remote branch so RemoteBranchHasWork doesn't
-			// find it again. Close any open PR for this branch.
-			if m.WorktreeBranch != "" {
-				_ = m.gitCmdErr(m.WorkDir, "push", "origin", "--delete", m.WorktreeBranch)
-				m.Logger.Log("git", "Deleted stale remote branch %s", m.WorktreeBranch)
-			}
-			return nil // no error — worktree is clean, task re-runs
-		}
-	}
-	return nil
-}
-
-// cleanTempBranch removes the temp branch, force-removing a stale worktree
-// if necessary. Returns an error only if the branch is checked out in a
-// non-ralph worktree.
-func (m *Manager) cleanTempBranch() error {
-	if !m.refExists(m.ProjectDir, m.WorktreeBranch) {
-		return nil
-	}
-	if err := m.gitCmdErr(m.ProjectDir, "branch", "-D", m.WorktreeBranch); err == nil {
-		return nil
-	}
-
-	existingWt := m.findWorktreeForBranch(m.ProjectDir, m.WorktreeBranch)
-	if existingWt != "" && strings.Contains(existingWt, "/.ralph/worktrees/") {
-		m.Logger.Warn("git", "Removing stale ralph worktree: %s", existingWt)
-		m.gitCmd(m.ProjectDir, "worktree", "remove", "--force", existingWt)
-		m.gitCmd(m.ProjectDir, "branch", "-D", m.WorktreeBranch)
-		return nil
-	}
-
-	return fmt.Errorf("cannot delete branch '%s' — it is checked out in a non-ralph worktree: %s",
-		m.WorktreeBranch, existingWt)
-}
 
 // RenameBranchForTask renames the current branch to include a task slug.
-// Each call increments TaskSeq. Only renames once per iteration (tracked by
-// BranchRenamed). When taskID is provided, it is included in the branch name
-// for traceability.
+// Each call increments TaskSeq and records the previous branch name for
+// stacked PR targeting. Only renames once per task (tracked by BranchRenamed).
 func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 	if m.BranchRenamed || m.WorktreeBranch == "" || taskDesc == "" {
 		return
@@ -390,6 +286,7 @@ func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 		return
 	}
 
+	oldBranch := m.WorktreeBranch
 	m.TaskSeq++
 	var newBranch string
 	if taskID != "" {
@@ -398,45 +295,50 @@ func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 		newBranch = fmt.Sprintf("ralph/%s/%02d-%s", m.ProjectName, m.TaskSeq, slug)
 	}
 	if err := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); err == nil {
+		// Track the previous named branch for stacked PR targeting.
+		// Only set PrevBranch if the old branch was a task branch (not wip).
+		if !strings.HasSuffix(oldBranch, "/wip") {
+			m.PrevBranch = oldBranch
+		}
 		m.WorktreeBranch = newBranch
 		m.BranchRenamed = true
 		if m.State != nil {
 			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
 			_ = m.State.Write("task_seq", fmt.Sprintf("%d", m.TaskSeq))
 			_ = m.State.Write("branch_renamed", "true")
+			_ = m.State.Write("prev_branch", m.PrevBranch)
 		}
 	}
 }
 
-// RotateBranch creates a fresh temp branch from the current HEAD, ready for
-// the next iteration.
-func (m *Manager) RotateBranch() {
-	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
-		return
+// PrepareForNextTask resets BranchRenamed so the next task gets a new branch
+// name via RenameBranchForTask. Unlike the old RotateBranch, this does NOT
+// create a new branch — the worktree stays on the current commit.
+func (m *Manager) PrepareForNextTask() {
+	m.BranchRenamed = false
+	if m.State != nil {
+		_ = m.State.Write("branch_renamed", "false")
 	}
+}
 
-	newBranch := m.TempBranch()
-
-	// Already on the temp branch (e.g. after PostMergeReset)
-	if m.WorktreeBranch == newBranch {
-		m.BranchRenamed = false
-		if m.State != nil {
-			_ = m.State.Write("branch_renamed", "false")
-		}
-		return
+// SquashToOneCommit squashes all commits since baseSHA into a single commit
+// with the given message. No-op if there is already exactly one commit
+// ahead of base. Returns an error if there are no commits to squash.
+func (m *Manager) SquashToOneCommit(baseSHA, message string) error {
+	countStr := m.gitOutput(m.WorkDir, "rev-list", "--count", baseSHA+"..HEAD")
+	count := 0
+	if countStr != "" {
+		fmt.Sscanf(countStr, "%d", &count)
 	}
-
-	if err := m.gitCmdErr(m.WorkDir, "checkout", "-B", newBranch); err == nil {
-		m.WorktreeBranch = newBranch
-		m.BranchRenamed = false
-		if m.State != nil {
-			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
-			_ = m.State.Write("branch_renamed", "false")
-		}
-		m.Logger.Log("git", "Branch: %s (from previous iteration)", m.WorktreeBranch)
-	} else {
-		m.Logger.Warn("git", "Branch rotation failed, continuing on %s", m.WorktreeBranch)
+	if count == 0 {
+		return fmt.Errorf("no commits ahead of %s", baseSHA)
 	}
+	if count == 1 {
+		return nil
+	}
+	m.Logger.Log("git", "Squashing %d commits into one", count)
+	m.gitCmd(m.WorkDir, "reset", "--soft", baseSHA)
+	return m.gitCmdErr(m.WorkDir, "commit", "-m", message)
 }
 
 // RemoveWorktree force-removes a worktree and deletes its branch.
@@ -493,7 +395,7 @@ func extractSeqSlug(branch string) string {
 		return ""
 	}
 	seg := parts[2]
-	if seg == "next" || seg == "" {
+	if seg == "next" || seg == "wip" || seg == "" {
 		return ""
 	}
 	return seg

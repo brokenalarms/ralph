@@ -134,16 +134,13 @@ func (l *Loop) Run(ctx context.Context) error {
 			return fmt.Errorf("initial rebase failed: %w", err)
 		}
 
-		// On resume, only rotate to a fresh branch if the next task
-		// differs from the last one. If it's the same task, stay on
-		// the existing task branch so additional commits land there.
-		if !strings.HasSuffix(l.git.WorktreeBranch, "/next") {
-			nextInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
-			if l.isNewTask(nextInfo.ID, nextInfo.Title) {
-				l.git.RotateBranch()
-			} else {
-				l.git.BranchRenamed = true
-			}
+		// On resume, if the next task is the same, mark branch as renamed
+		// so we continue on the current branch.
+		nextInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
+		if !l.isNewTask(nextInfo.ID, nextInfo.Title) {
+			l.git.BranchRenamed = true
+		} else {
+			l.git.PrepareForNextTask()
 		}
 
 		l.logger.Log("git", "Branch: %s", l.git.WorktreeBranch)
@@ -232,7 +229,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		taskChanged := l.isNewTask(taskID, nextTask)
 
 		if runIteration > 1 && taskChanged {
-			l.git.RotateBranch()
+			l.git.PrepareForNextTask()
 			if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
 				if err := l.handleRebase(ctx); err != nil {
 					if ctx.Err() != nil {
@@ -559,9 +556,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			if merged {
 				l.lastTaskMerged = true
 				notify.TaskMerged(taskID, nextTask)
-				if err := l.git.PostMergeReset(); err != nil {
-					l.logger.Warn("git", "Post-merge reset: %v", err)
-				}
+				l.git.PostMergeUpdateMain()
 				if l.cfg.Evolve {
 					l.git.TagTaskEnd(taskID)
 					l.logger.Phase("Evolve: restarting with latest main")

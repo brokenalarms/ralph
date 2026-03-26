@@ -223,21 +223,3 @@ func (m *Manager) PruneOrphanedWorktrees() {
 	}
 }
 
-func (m *Manager) IsBranchSquashMerged(branch string) bool {
-	defaultBranch := m.detectDefaultBranch()
-	if !m.refExists(m.WorkDir, "origin/"+defaultBranch) {
-		return false
-	}
-
-	mergeBase := m.gitOutput(m.WorkDir, "merge-base", "origin/"+defaultBranch, branch)
-	if mergeBase == "" {
-		return false
-	}
-
-	branchFiles := m.gitOutput(m.WorkDir, "diff", "--name-only", mergeBase, branch)
-	if branchFiles == "" {
-		return false
-	}
-
-	return checkSquashMerged(m.WorkDir, defaultBranch, mergeBase, branch)
-}

@@ -833,7 +833,7 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 		nextID:    "ralph-new",
 	}
 
-	// Set up a real git repo as the worktree so RotateBranch can checkout
+	// Set up a real git repo as the worktree
 	wtDir := filepath.Join(dir, "worktree")
 	os.MkdirAll(wtDir, 0o755)
 	exec.Command("git", "init", "-b", "main", wtDir).Run()
@@ -863,9 +863,9 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Task changed, so the branch should have been rotated to /next
-	if gm.WorktreeBranch != "ralph/myproject/next" {
-		t.Errorf("expected branch rotated to ralph/myproject/next, got %q", gm.WorktreeBranch)
+	// With stacked PRs, no rotation to /next — branch keeps its task name
+	if strings.HasSuffix(gm.WorktreeBranch, "/next") {
+		t.Errorf("branch should not be /next with stacked PRs, got %q", gm.WorktreeBranch)
 	}
 }
 
@@ -1026,7 +1026,7 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 	writeFile(t, gm.WorkDir, "shared.txt", "final\n")
 	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "final")
 
-	gm.RotateBranch()
+	gm.BranchRenamed = false
 	gm.RenameBranchForTask("second task", "")
 	writeFile(t, gm.WorkDir, "second.txt", "second\n")
 	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "second")
@@ -1058,17 +1058,12 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 		},
 	}, st, gm, logging.New(nil))
 
-	err := l.Run(context.Background())
-	if err != nil {
-		t.Fatalf("expected no error after recovery, got %v", err)
+	err := l.handleRebase(context.Background())
+	// With stacked PRs, rebase conflicts are propagated — no auto-recovery.
+	if err == nil {
+		t.Fatal("expected rebase error for real conflicts")
 	}
-
-	_ = handlerCalled // OnRebaseConflict no longer used — EnsureUpToDate handles recovery
-
-	// Worktree should have been recreated
-	if _, err := os.Stat(gm.WorkDir); err != nil {
-		t.Error("worktree should exist after recovery")
-	}
+	_ = handlerCalled
 }
 
 // Verifies that handleRebase recovers from conflicts — EnsureUpToDate
@@ -1121,17 +1116,15 @@ func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 		},
 	}, st, gm, logging.New(nil))
 
-	err := l.Run(context.Background())
-	if err != nil {
-		t.Fatalf("expected recovery, got %v", err)
+	err := l.handleRebase(context.Background())
+	if err == nil {
+		t.Fatal("expected rebase error for real conflicts")
 	}
-
-	_ = handlerCalled // OnRebaseConflict no longer used — EnsureUpToDate handles recovery
+	_ = handlerCalled
 }
 
-// Verifies handleRebase works without OnRebaseConflict set — EnsureUpToDate
-// handles everything internally.
-func TestLoop_HandleRebase_WorksWithoutHandler(t *testing.T) {
+// Verifies handleRebase propagates rebase errors.
+func TestLoop_HandleRebase_PropagatesError(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := state.NewStore(ralphDir)
@@ -1175,8 +1168,8 @@ func TestLoop_HandleRebase_WorksWithoutHandler(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	err := l.handleRebase(context.Background())
-	if err != nil {
-		t.Fatalf("expected recovery without handler, got %v", err)
+	if err == nil {
+		t.Fatal("expected rebase error for real conflicts")
 	}
 }
 
@@ -1425,17 +1418,8 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 		t.Errorf("expected TaskSeq=2, got %d", gm.TaskSeq)
 	}
 
-	// The first task's branch should still exist
-	branches := gm.ListProjectBranches()
-	hasFirst := false
-	for _, b := range branches {
-		if strings.Contains(b, "first-task") {
-			hasFirst = true
-		}
-	}
-	if !hasFirst {
-		t.Errorf("expected first task branch to be preserved, branches: %v", branches)
-	}
+	// With stacked PRs, the branch is renamed for each task —
+	// the first task's branch name is replaced by the second.
 }
 
 // Verifies that refactor iterations commit to the current task branch
@@ -2038,10 +2022,8 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 		t.Errorf("second iteration should start from origin/main (%s), got %s", originMain, headAfterMerge)
 	}
 
-	tempBranch := gm.TempBranch()
-	if gm.WorktreeBranch != tempBranch {
-		t.Errorf("expected branch %q after PostMergeReset, got %q", tempBranch, gm.WorktreeBranch)
-	}
+	// With stacked PRs, the branch stays as the task branch after merge
+	// — no reset to temp branch.
 }
 
 // Verifies the full post-merge branch rename cycle: task A merges →
@@ -2593,8 +2575,8 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 		label:     "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
 
 	var (
 		callsMu sync.Mutex
@@ -2681,8 +2663,8 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 		label:     "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -2726,8 +2708,8 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 		label:     "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -2771,8 +2753,8 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 		label:     "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -4290,8 +4272,8 @@ func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
 		label:     "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -4354,8 +4336,8 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 		label:     "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -4423,8 +4405,8 @@ func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
 		label:     "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -4486,8 +4468,8 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 		label:     "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -4556,8 +4538,8 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 		label:     "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -4619,8 +4601,8 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 		label:     "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -4684,8 +4666,8 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 		label:     "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
 
 	runner := &stubRunner{
 		onRun: func() {
