@@ -174,13 +174,17 @@ func (l *Loop) resumeFromRemoteBranch(ctx context.Context, taskID, nextTask stri
 		return false
 	}
 
-	testsPass, _ := l.verifyCompletion(ctx, "")
+	// Use origin/default as the baseline for verification — the agent's
+	// commits are on top of this, so the diff shows only the agent's work.
+	headBaseline := l.git.OriginRev(defaultBranch)
+
+	testsPass, _ := l.verifyCompletion(ctx, headBaseline)
 	llmPass := false
 	if testsPass {
 		beadDesc := l.getBeadDescription(taskID)
 		beadAcceptance := l.getBeadAcceptance(taskID)
 		l.logger.Log("llm", "Running LLM verification on previous iteration's work...")
-		llmResult := l.llmVerifyFunc(ctx, l.git, l.git.WorkDir, l.cfg.Dirs.PromptsDir, taskID, "", nextTask, beadDesc, beadAcceptance, l.git.GitHub, l.queryFunc())
+		llmResult := l.llmVerifyFunc(ctx, l.git, l.git.WorkDir, l.cfg.Dirs.PromptsDir, taskID, headBaseline, nextTask, beadDesc, beadAcceptance, l.git.GitHub, l.queryFunc())
 		llmPass = llmResult.Passed
 		if !llmPass {
 			l.logger.Warn("llm", "LLM rejected previous work: %s", llmResult.Reason)
