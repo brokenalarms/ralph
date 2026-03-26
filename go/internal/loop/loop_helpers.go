@@ -62,8 +62,7 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 	// Try PR-based resolution first.
 	if taskID != "" {
 		ref, _ := l.cfg.TaskBackend.GetExternalRef(taskID)
-		if strings.HasPrefix(ref, "gh-") {
-			prNumber := strings.TrimPrefix(ref, "gh-")
+		if prNumber := parsePRNumber(ref); prNumber != "" {
 			return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
 		}
 	}
@@ -208,7 +207,12 @@ func (l *Loop) resumeFromRemoteBranch(ctx context.Context, taskID, nextTask stri
 		l.logger.Log("git", "Push/PR: %v (branch already on remote, continuing to merge)", pushErr)
 	}
 	if prNumber != "" && taskID != "" {
-		if refErr := l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNumber); refErr != nil {
+		_, _, prURL := l.findPRInfo(l.git.WorkDir)
+		ref := prURL
+		if ref == "" {
+			ref = "gh-" + prNumber
+		}
+		if refErr := l.cfg.TaskBackend.SetExternalRef(taskID, ref); refErr != nil {
 			l.logger.Warn("beads", "SetExternalRef: %v", refErr)
 		}
 	}
@@ -561,4 +565,19 @@ func (l *Loop) skipTask(id, reason string) {
 	}
 	skipped, _ := l.state.GetSkippedTasks()
 	l.cfg.TaskBackend.SetSkippedIDs(skipped)
+}
+
+// parsePRNumber extracts a PR number from either a URL
+// (https://github.com/owner/repo/pull/123) or a legacy gh-123 ref.
+func parsePRNumber(ref string) string {
+	if strings.HasPrefix(ref, "gh-") {
+		return strings.TrimPrefix(ref, "gh-")
+	}
+	if strings.Contains(ref, "/pull/") {
+		parts := strings.Split(ref, "/pull/")
+		if len(parts) == 2 && parts[1] != "" {
+			return parts[1]
+		}
+	}
+	return ""
 }

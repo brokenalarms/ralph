@@ -497,7 +497,12 @@ func (l *Loop) Run(ctx context.Context) error {
 				l.logger.Warn("git", "Push/PR: %v", pushErr)
 			}
 			if prNumber != "" && taskID != "" {
-				if refErr := l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNumber); refErr != nil {
+				_, _, prURL := l.findPRInfo(workDir)
+				ref := prURL
+				if ref == "" {
+					ref = "gh-" + prNumber
+				}
+				if refErr := l.cfg.TaskBackend.SetExternalRef(taskID, ref); refErr != nil {
 					l.logger.Warn("beads", "SetExternalRef: %v", refErr)
 				}
 			}
