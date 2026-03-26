@@ -153,8 +153,10 @@ When auditing closed tasks, challenge any close where the phase is not
 
 ## Updating beads
 
-State what changed on every update — not just "updated issue". Example:
+After every `bd update`, echo back what changed — not the raw command.
+Show the bead ID, what fields changed (old → new), and the current state:
 > Updated **ralph-abc**: priority P3 → P1, added label `ci`.
+> **ralph loop: force-reset worktree after merge** · P1 task · `orchestrator` `ci`
 
 Before updating or commenting on any bead, check its status:
 
