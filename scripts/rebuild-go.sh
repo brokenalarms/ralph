@@ -4,6 +4,9 @@ set -euo pipefail
 
 root="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
 
+# Fetch latest tags from remote (GitHub Action creates them on PR merge)
+git -C "$root" fetch --tags --quiet 2>/dev/null || true
+
 version=$(git -C "$root" describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --abbrev=0 2>/dev/null || echo "v0.1.0-dev")
 echo "[rebuild-go] Building ralph ${version}"
 
