@@ -49,6 +49,7 @@ type Config struct {
 type claudeRunner interface {
 	Run(cfg claude.RunConfig) (claude.Result, error)
 	StopStreaming()
+	InjectMessage(msg string) error
 }
 
 // CompletedTask holds summary info for a task completed during this session.
@@ -82,8 +83,10 @@ type Loop struct {
 	agentRunner        *agent.Runner
 	refactorQueryFunc  func(ctx context.Context, workDir, prompt, model string) (string, error)
 	lastAction         analyzer.Action
-	lastTaskMerged  bool
-	sessionTasks    []CompletedTask
+	lastTaskMerged     bool
+	sessionTasks       []CompletedTask
+	testFixAttempts    int
+	llmVerifyAttempts  int
 }
 
 // New creates an execution loop from the given configuration. All agent
@@ -228,6 +231,10 @@ func (l *Loop) Run(ctx context.Context) error {
 		taskInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 		taskID, nextTask := taskInfo.ID, taskInfo.Title
 		taskChanged := l.isNewTask(taskID, nextTask)
+		if taskChanged {
+			l.testFixAttempts = 0
+			l.llmVerifyAttempts = 0
+		}
 
 		if runIteration > 1 && taskChanged {
 			l.git.PrepareForNextTask()
@@ -387,10 +394,11 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.logger.Warn("llm", "Claude failed on iteration %d, continuing...", runIteration)
 		}
 		if result.FeedbackKill {
-			l.logger.Warn("llm", "Restarting iteration %d — user feedback received", runIteration)
+			// Fallback path: stdin injection failed, agent was killed.
+			l.logger.Warn("llm", "Restarting iteration %d — feedback injection failed, agent killed", runIteration)
 			diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
 			l.attempts.Record(taskID, nextTask,
-				"Killed: user feedback received. Feedback: "+result.FeedbackContent,
+				"Killed: feedback injection failed. Feedback: "+result.FeedbackContent,
 				diffStat,
 				"user_feedback: "+result.FeedbackContent)
 			runIteration--

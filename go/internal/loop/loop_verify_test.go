@@ -99,15 +99,13 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
+	// Inject-capable runner so onSignal uses stdin injection (not fix agent fallback).
+	l.runner = &injectCapturingRunner{}
+
 	llmCalls := 0
 	l.llmVerifyFunc = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
 		llmCalls++
 		return verify.Result{Passed: false, Details: "diff doesn't match bead"}
-	}
-
-	// Fix agent signals completion each time (so loop continues)
-	l.newRunnerFunc = func() claudeRunner {
-		return &stubRunner{result: stubResult(true, "fixed")}
 	}
 
 	params := signalParams{
@@ -119,7 +117,12 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 		nextTask:   "Test task",
 	}
 
-	result := l.onSignal(params)
+	// Call onSignal maxLLMVerifyAttempts times — each call injects feedback
+	// and returns false. On the final call, the task is skipped.
+	var result bool
+	for i := 0; i < maxLLMVerifyAttempts; i++ {
+		result = l.onSignal(params)
+	}
 	if result {
 		t.Fatal("expected onSignal to return false when LLM verification exhausts retries")
 	}
@@ -151,6 +154,9 @@ func TestOnSignal_LLMReject_PassesOnRetry(t *testing.T) {
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
+	// Inject-capable runner so onSignal uses stdin injection (not fix agent fallback).
+	l.runner = &injectCapturingRunner{}
+
 	llmCalls := 0
 	l.llmVerifyFunc = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
 		llmCalls++
@@ -160,16 +166,19 @@ func TestOnSignal_LLMReject_PassesOnRetry(t *testing.T) {
 		return verify.Result{Passed: true, Reason: "looks good after fix"}
 	}
 
-	l.newRunnerFunc = func() claudeRunner {
-		return &stubRunner{result: stubResult(true, "fixed")}
-	}
-
-	result := l.onSignal(signalParams{
+	params := signalParams{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-retry", nextTask: "Retry test",
-	})
+	}
 
+	// First call: LLM rejects, feedback injected, returns false.
+	result := l.onSignal(params)
+	if result {
+		t.Fatal("expected first onSignal to return false when LLM rejects")
+	}
+	// Second call: LLM approves.
+	result = l.onSignal(params)
 	if !result {
 		t.Fatal("expected onSignal to pass when LLM approves on retry")
 	}
@@ -196,6 +205,9 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_StopsLoop(t *testing.T) {
 		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task"},
 		VerifyDir:     dir,
 	}, st, gm, logger)
+
+	// Broken-injection runner to force fix agent fallback path.
+	l.runner = &injectFailRunner{result: claude.Result{}}
 
 	llmCalls := 0
 	l.llmVerifyFunc = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {

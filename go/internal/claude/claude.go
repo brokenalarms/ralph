@@ -3,7 +3,9 @@ package claude
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -146,6 +148,7 @@ type Runner struct {
 	CmdFactory     CmdFactory
 
 	mu         sync.Mutex
+	stdinPipe  io.WriteCloser
 	filterStop chan struct{}
 	filterDone <-chan struct{}
 	tailStop   chan struct{}
@@ -175,6 +178,29 @@ func (r *Runner) StopStreaming() {
 	}
 }
 
+// InjectMessage writes a user message to the running agent's stdin pipe using
+// the stream-json input format. Returns an error if no pipe is available (agent
+// not running) or the write fails (pipe broken — agent exited).
+func (r *Runner) InjectMessage(msg string) error {
+	r.mu.Lock()
+	pipe := r.stdinPipe
+	r.mu.Unlock()
+	if pipe == nil {
+		return fmt.Errorf("no stdin pipe available")
+	}
+	payload := UserInputMessage(msg)
+	_, err := fmt.Fprintln(pipe, payload)
+	return err
+}
+
+// UserInputMessage builds a stream-json user message for injection into a
+// running Claude process via stdin. The content is JSON-escaped to handle
+// multi-line test output, error messages, etc.
+func UserInputMessage(content string) string {
+	escaped, _ := json.Marshal(content)
+	return fmt.Sprintf(`{"type":"user_input_text","content":%s}`, string(escaped))
+}
+
 // Run spawns a Claude process, polls for signal files, and returns when the
 // process exits or a completion signal is detected. Mirrors ralph.sh run_claude.
 func (r *Runner) Run(cfg RunConfig) (Result, error) {
@@ -200,6 +226,7 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 		args := []string{
 			"--print", "--verbose",
 			"--output-format", "stream-json",
+			"--input-format", "stream-json",
 			"--add-dir", cfg.WorkDir,
 			"--add-dir", cfg.RalphDir,
 			"--allowedTools", strings.Join(IterationAllowedTools, ","),
@@ -208,12 +235,22 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 		}
 		cmd = exec.Command("claude", args...)
 		cmd.Dir = cfg.WorkDir
-		cmd.Stdin = nil
 		cmd.Stdout = rawLog
 		cmd.Stderr = rawLog
 		// Start in its own process group so we can signal it cleanly.
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
+
+	// Create stdin pipe for message injection. The pipe stays open for
+	// the lifetime of the process, allowing feedback and test failure
+	// output to be sent to the running agent without killing it.
+	stdinPipe, pipeErr := cmd.StdinPipe()
+	if pipeErr != nil {
+		return Result{}, fmt.Errorf("creating stdin pipe: %w", pipeErr)
+	}
+	r.mu.Lock()
+	r.stdinPipe = stdinPipe
+	r.mu.Unlock()
 
 	if err := cmd.Start(); err != nil {
 		return Result{}, fmt.Errorf("starting claude: %w", err)
@@ -254,6 +291,14 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 
 	// Stop streaming goroutines and drain remaining output.
 	r.StopStreaming()
+
+	// Close stdin pipe so the agent sees EOF. Safe to call after process exit.
+	r.mu.Lock()
+	if r.stdinPipe != nil {
+		r.stdinPipe.Close()
+		r.stdinPipe = nil
+	}
+	r.mu.Unlock()
 
 	// Final signal check — Claude may have written a signal just before exiting.
 	if !result.SignalDetected {
@@ -377,15 +422,19 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 			}
 
-			// Check for user feedback — kill agent so it restarts with
-			// the feedback in its attempt context.
+			// Check for user feedback — inject via stdin pipe so the
+			// agent processes it with full context of its current work.
 			if cfg.FeedbackFile != "" {
 				if data, err := os.ReadFile(cfg.FeedbackFile); err == nil && len(data) > 0 {
 					content := strings.TrimSpace(string(data))
-					r.Logger.Warn("llm", "User feedback received — killing agent to restart with feedback")
 					os.Remove(cfg.FeedbackFile)
-					gracefulKill(cmd, processDone)
-					return Result{FeedbackKill: true, FeedbackContent: content}
+					if injectErr := r.InjectMessage("User feedback:\n\n" + content); injectErr != nil {
+						r.Logger.Warn("llm", "Stdin injection failed (%v) — killing agent to restart with feedback", injectErr)
+						gracefulKill(cmd, processDone)
+						return Result{FeedbackKill: true, FeedbackContent: content}
+					}
+					r.Logger.Log("llm", "User feedback injected via stdin")
+					continue
 				}
 			}
 
