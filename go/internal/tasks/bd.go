@@ -27,6 +27,7 @@ type BD struct {
 	PromptsDir string
 	RunBD      CommandRunner // injectable for testing; nil uses defaultRunBD
 	bdPath     string        // resolved absolute path to the bd binary
+	skippedIDs map[string]bool
 }
 
 func (b *BD) ctx() context.Context {
@@ -240,11 +241,14 @@ func (b *BD) getNextIssue() (bdIssue, error) {
 	out, err := run(ctx, b.ProjectDir, "list", "--status", "in_progress", "--flat", "--json", "--limit", "1")
 	if err == nil {
 		inProgress, hasIP = parseFirstIssue(out)
+		if hasIP && b.skippedIDs[inProgress.ID] {
+			hasIP = false
+		}
 	}
 
 	out, err = run(ctx, b.ProjectDir, "ready", "--json")
 	if err == nil {
-		ready, hasReady = bestIssue(out)
+		ready, hasReady = bestIssue(out, b.skippedIDs)
 	}
 
 	if hasIP && hasReady {
@@ -301,7 +305,7 @@ func parseFirstIssue(jsonStr string) (bdIssue, bool) {
 // bestIssue parses all issues from JSON and returns the one with the
 // highest priority (lowest number), breaking ties by type rank
 // (bug < task < feature/enhancement).
-func bestIssue(jsonStr string) (bdIssue, bool) {
+func bestIssue(jsonStr string, skip map[string]bool) (bdIssue, bool) {
 	var issues []bdIssue
 	if err := json.Unmarshal([]byte(jsonStr), &issues); err != nil || len(issues) == 0 {
 		return bdIssue{}, false
@@ -310,6 +314,9 @@ func bestIssue(jsonStr string) (bdIssue, bool) {
 	best := -1
 	for i, issue := range issues {
 		if issue.ID == "" && issue.Title == "" {
+			continue
+		}
+		if skip[issue.ID] {
 			continue
 		}
 		if best == -1 {
@@ -413,19 +420,20 @@ func (b *BD) ReopenTask(id string) error {
 	return err
 }
 
-func (b *BD) SkipTask(id string, reason string) error {
+func (b *BD) SkipTask(id string, _ string) error {
 	if id == "" {
 		return nil
 	}
-	if reason == "" {
-		reason = "skipped by ralph"
-	}
-	// Defer the task instead of closing it — it comes back after 1 hour.
-	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id,
-		"--status", "open",
-		"--defer", "+1h",
-		"--append-notes", "Deferred by ralph: "+reason)
+	// Ensure the task stays open so it's visible in the backlog.
+	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status", "open")
 	return err
+}
+
+func (b *BD) SetSkippedIDs(ids []string) {
+	b.skippedIDs = make(map[string]bool, len(ids))
+	for _, id := range ids {
+		b.skippedIDs[id] = true
+	}
 }
 
 func (b *BD) ExecutionInstructions() (string, error) {

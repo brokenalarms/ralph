@@ -48,6 +48,9 @@ type Backend interface {
 	// SkipTask marks a task as blocked/skipped with a reason.
 	SkipTask(id string, reason string) error
 
+	// SetSkippedIDs configures task IDs to exclude from selection.
+	SetSkippedIDs(ids []string)
+
 	// ReopenTask sets an in-progress task back to open status so it
 	// returns to the ready queue.
 	ReopenTask(id string) error

@@ -82,6 +82,7 @@ func (m *mutableBackend) GetNextTaskInfo() (tasks.TaskInfo, error) { m.mu.Lock()
 func (m *mutableBackend) HasTasks() (bool, error)              { m.mu.Lock(); defer m.mu.Unlock(); return m.total > 0, nil }
 func (m *mutableBackend) CloseTask(string, string) error       { return nil }
 func (m *mutableBackend) SkipTask(string, string) error        { return nil }
+func (m *mutableBackend) SetSkippedIDs([]string)               {}
 func (m *mutableBackend) ReopenTask(string) error              { return nil }
 func (m *mutableBackend) SetState(_, _, _, _ string) error     { return nil }
 func (m *mutableBackend) GetState(_, _ string) (string, error) { return "", nil }
@@ -110,6 +111,7 @@ func (s *stubBackend) GetNextTaskInfo() (tasks.TaskInfo, error) { return tasks.T
 func (s *stubBackend) HasTasks() (bool, error)              { return s.total > 0, nil }
 func (s *stubBackend) CloseTask(string, string) error       { return nil }
 func (s *stubBackend) SkipTask(id, reason string) error     { s.skippedTask = id; s.skipReason = reason; return nil }
+func (s *stubBackend) SetSkippedIDs([]string)               {}
 func (s *stubBackend) ReopenTask(string) error              { return nil }
 func (s *stubBackend) SetState(_, _, _, _ string) error     { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error) { return "", nil }
@@ -3658,16 +3660,16 @@ func TestLoop_SkipsTaskAfterRepeatedMergeFailures(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	backend.skipMu.Lock()
-	defer backend.skipMu.Unlock()
-	if len(backend.skippedIDs) != 1 {
-		t.Fatalf("expected 1 SkipTask call, got %d", len(backend.skippedIDs))
+	// Verify skip is persisted to state.json rather than bd defer.
+	skipped, err := st.GetSkippedTasks()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if backend.skippedIDs[0] != "ralph-stub" {
-		t.Errorf("expected SkipTask for ralph-stub, got %q", backend.skippedIDs[0])
+	if len(skipped) != 1 {
+		t.Fatalf("expected 1 skipped task in state, got %d", len(skipped))
 	}
-	if !strings.Contains(backend.skipReasons[0], "merge_failed") {
-		t.Errorf("expected merge_failed reason, got %q", backend.skipReasons[0])
+	if skipped[0] != "ralph-stub" {
+		t.Errorf("expected ralph-stub in skip list, got %q", skipped[0])
 	}
 }
 
@@ -3723,10 +3725,9 @@ func TestLoop_MergeFailureBelowThresholdLeavesTaskOpen(t *testing.T) {
 	_ = l.Run(context.Background())
 
 	// Task should NOT be skipped — only 1 failure.
-	backend.skipMu.Lock()
-	defer backend.skipMu.Unlock()
-	if len(backend.skippedIDs) != 0 {
-		t.Errorf("expected no SkipTask calls on first merge failure, got %d", len(backend.skippedIDs))
+	skipped, _ := st.GetSkippedTasks()
+	if len(skipped) != 0 {
+		t.Errorf("expected no skipped tasks on first merge failure, got %v", skipped)
 	}
 
 	// Merge failure should be recorded for next iteration.

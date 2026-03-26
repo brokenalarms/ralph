@@ -160,6 +160,10 @@ func (l *Loop) Run(ctx context.Context) error {
 	st, _ := l.state.Load()
 	iteration := st.Iteration
 
+	if len(st.SkippedTasks) > 0 {
+		l.logger.Warn("beads", "Skipped tasks: %s", strings.Join(st.SkippedTasks, ", "))
+		l.cfg.TaskBackend.SetSkippedIDs(st.SkippedTasks)
+	}
 
 	// Clear completed-tasks tracker for this run so the plan pane only
 	// shows tasks completed in the current run, not historical closures.
@@ -534,9 +538,7 @@ func (l *Loop) Run(ctx context.Context) error {
 				count, _ := l.attempts.RecordMergeFailure(taskID)
 				if count >= attempts.MaxMergeFailures {
 					l.logger.Warn("git", "Merge failed %d times — skipping task %s for manual review", count, taskID)
-					if err := l.cfg.TaskBackend.SkipTask(taskID, fmt.Sprintf("merge_failed_%d_times", count)); err != nil {
-						l.logger.Warn("beads", "SkipTask: %v", err)
-					}
+					l.skipTask(taskID, fmt.Sprintf("merge_failed_%d_times", count))
 				} else {
 					l.logger.Warn("git", "Merge failed (%d/%d) — task %s left open for retry", count, attempts.MaxMergeFailures, taskID)
 				}

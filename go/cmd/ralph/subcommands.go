@@ -13,6 +13,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/prompt"
+	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -49,6 +50,9 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 		if _, err := os.Stat(ralphDir); os.IsNotExist(err) {
 			log.Error("", "No .ralph directory found. Is ralph running here?")
 			return 1
+		}
+		if len(sub.Args) > 0 && sub.Args[0] == "unskip" {
+			return handleUnskip(ralphDir, log)
 		}
 		feedbackFile := fmt.Sprintf("%s/feedback", ralphDir)
 		if len(sub.Args) == 0 {
@@ -283,6 +287,26 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 	return exitCode
 }
 
+func handleUnskip(ralphDir string, log *logging.Logger) int {
+	st := state.NewStore(ralphDir)
+	skipped, err := st.GetSkippedTasks()
+	if err != nil {
+		log.Error("", "Failed to read state: %v", err)
+		return 1
+	}
+	if len(skipped) == 0 {
+		log.Log("", "No tasks are currently skipped.")
+		return 0
+	}
+	log.Log("", "Clearing %d skipped task(s): %s", len(skipped), strings.Join(skipped, ", "))
+	if err := st.ClearSkippedTasks(); err != nil {
+		log.Error("", "Failed to clear skip list: %v", err)
+		return 1
+	}
+	log.Success("", "Skip list cleared — tasks will be eligible on next iteration.")
+	return 0
+}
+
 func printUsage() {
 	fmt.Printf("%sRalph v%s (go)%s - Autonomous Claude Code task orchestrator\n\n", logging.Bold, config.Version, logging.Reset)
 	fmt.Printf(`%sUSAGE:%s
@@ -342,6 +366,7 @@ func printLoopUsage() {
   ralph stop                 Halt the loop after the current iteration
   ralph feedback             Show queued feedback for the loop
   ralph feedback [message]   Queue a message to the loop in progress
+  ralph feedback unskip      Clear the skip list so all tasks are eligible again
 
 %sEXAMPLES:%s
   ralph loop --dir ~/myproject -n 20

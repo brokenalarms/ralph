@@ -136,8 +136,8 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 					l.logger.Log("beads", "Closed task %s (PR #%s merged)", taskID, prNumber)
 				}
 			} else {
-				l.logger.Warn("git", "Merge failed for PR #%s — deferring task", prNumber)
-				_ = l.cfg.TaskBackend.SkipTask(taskID, "merge_failed_open_pr")
+				l.logger.Warn("git", "Merge failed for PR #%s — skipping task", prNumber)
+				l.skipTask(taskID, "merge_failed_open_pr")
 			}
 		}
 		if merged {
@@ -229,8 +229,8 @@ func (l *Loop) resumeFromRemoteBranch(ctx context.Context, taskID, nextTask stri
 				l.logger.Log("beads", "Closed task %s (completed by ralph)", taskID)
 			}
 		} else {
-			l.logger.Warn("git", "Merge failed for remote work — deferring task")
-			_ = l.cfg.TaskBackend.SkipTask(taskID, "merge_failed_remote_work")
+			l.logger.Warn("git", "Merge failed for remote work — skipping task")
+			l.skipTask(taskID, "merge_failed_remote_work")
 		}
 	}
 	if merged {
@@ -547,4 +547,18 @@ func readLogFrom(path string, startLine int) string {
 		return ""
 	}
 	return string(data[offset:])
+}
+
+// skipTask adds a task to the skip list in state.json and updates the
+// backend's filter so the task is excluded from future selection.
+func (l *Loop) skipTask(id, reason string) {
+	if id == "" {
+		return
+	}
+	l.logger.Warn("beads", "Skipping task %s: %s", id, reason)
+	if err := l.state.AddSkippedTask(id); err != nil {
+		l.logger.Warn("beads", "Failed to persist skip for %s: %v", id, err)
+	}
+	skipped, _ := l.state.GetSkippedTasks()
+	l.cfg.TaskBackend.SetSkippedIDs(skipped)
 }
