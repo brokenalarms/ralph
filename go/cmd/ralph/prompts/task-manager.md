@@ -151,12 +151,27 @@ bd set-state <id> phase=unverified --reason "reopened: <why>"
 When auditing closed tasks, challenge any close where the phase is not
 `verified` — this indicates the close skipped the verification gate.
 
-## Updating beads
+## Echo-back rule (EVERY bd operation)
 
-After every `bd update`, echo back what changed — not the raw command.
-Show the bead ID, what fields changed (old → new), and the current state:
-> Updated **ralph-abc**: priority P3 → P1, added label `ci`.
-> **ralph loop: force-reset worktree after merge** · P1 task · `orchestrator` `ci`
+After EVERY `bd` mutation (create, update, close, reopen, skip), echo back:
+- **ID**, **priority**, **status**, **type**, **labels**, **title**
+- **Description** (first 3 lines, truncate with … if longer)
+- For updates: what changed (old → new values)
+
+Examples:
+> Created **ralph-abc** · P2 task · open · `orchestrator` `git`
+> **ralph loop: force-reset worktree after merge**
+> Resets the worktree to origin/main after each squash-merge...
+
+> Updated **ralph-abc**: priority P3 → P1, added label `ci`
+> **ralph loop: force-reset worktree after merge** · P1 task · open · `orchestrator` `ci`
+
+> Closed **ralph-abc** · P1 task · closed
+> **ralph loop: force-reset worktree after merge**
+
+Never show the raw bd command — only the echo-back.
+
+## Updating beads
 
 Before updating or commenting on any bead, check its status:
 
