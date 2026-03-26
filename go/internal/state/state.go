@@ -195,6 +195,46 @@ func (st *Store) WriteConfig(maxIterations int) {
 	st.Write("max_iterations", strconv.Itoa(maxIterations))
 }
 
+// SaveCLIConfig writes CLI config key-value pairs into state.json under a
+// "cli_config" key. This allows evolve restart to reconstruct args from the
+// semantic config rather than replaying raw CLI args.
+func (st *Store) SaveCLIConfig(cfg map[string]string) error {
+	s, err := st.Load()
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	if s.Overflow == nil {
+		s.Overflow = make(map[string]json.RawMessage)
+	}
+	s.Overflow["cli_config"] = json.RawMessage(data)
+	return st.Save(s)
+}
+
+// LoadCLIConfig reads the "cli_config" map from state.json. Returns nil map
+// if not present.
+func (st *Store) LoadCLIConfig() (map[string]string, error) {
+	s, err := st.Load()
+	if err != nil {
+		return nil, err
+	}
+	if s.Overflow == nil {
+		return nil, nil
+	}
+	raw, ok := s.Overflow["cli_config"]
+	if !ok {
+		return nil, nil
+	}
+	var cfg map[string]string
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing cli_config: %w", err)
+	}
+	return cfg, nil
+}
+
 // ReadMaxIterations returns max_iterations from state, falling back to the given default.
 func (st *Store) ReadMaxIterations(defaultVal int) int {
 	v, _ := st.Read("max_iterations")

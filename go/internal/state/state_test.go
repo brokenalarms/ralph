@@ -328,6 +328,61 @@ func TestState_TestResultFieldsRoundTrip(t *testing.T) {
 	}
 }
 
+// Verifies that SaveCLIConfig/LoadCLIConfig round-trips a config map through
+// state.json, enabling evolve restart to reconstruct args from semantic config.
+func TestSaveCLIConfig_Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Save(State{Iteration: 5, Status: "running"})
+
+	cfg := map[string]string{
+		"dir":        "/tmp/project",
+		"max":        "20",
+		"auto-merge": "true",
+		"evolve":     "true",
+	}
+
+	if err := st.SaveCLIConfig(cfg); err != nil {
+		t.Fatalf("SaveCLIConfig: %v", err)
+	}
+
+	loaded, err := st.LoadCLIConfig()
+	if err != nil {
+		t.Fatalf("LoadCLIConfig: %v", err)
+	}
+
+	for k, v := range cfg {
+		if loaded[k] != v {
+			t.Errorf("key %q = %q, want %q", k, loaded[k], v)
+		}
+	}
+
+	// Verify other state fields are preserved.
+	s, _ := st.Load()
+	if s.Iteration != 5 {
+		t.Errorf("Iteration = %d, want 5 (preserved)", s.Iteration)
+	}
+	if s.Status != "running" {
+		t.Errorf("Status = %q, want running (preserved)", s.Status)
+	}
+}
+
+// Verifies that LoadCLIConfig returns nil when no cli_config exists in state,
+// so callers can fall back to raw args on first run.
+func TestLoadCLIConfig_MissingReturnsNil(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Save(State{Status: "running"})
+
+	cfg, err := st.LoadCLIConfig()
+	if err != nil {
+		t.Fatalf("LoadCLIConfig: %v", err)
+	}
+	if cfg != nil {
+		t.Errorf("expected nil map, got %v", cfg)
+	}
+}
+
 // Verifies that test result fields are preserved as known keys
 // (not overflow) when serialized to JSON.
 func TestState_TestResultFieldsInJSON(t *testing.T) {

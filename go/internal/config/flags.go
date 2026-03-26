@@ -27,6 +27,14 @@ type FlagDef struct {
 	Kind      FlagKind
 	TrackCLI  bool
 	Apply     func(cfg *Config, val string) error
+	Read      func(cfg *Config) string // returns current value; "" means default/unset for bools
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return ""
 }
 
 func parseBoolVal(val string) bool {
@@ -52,6 +60,7 @@ var Flags = []FlagDef{
 			cfg.ProjectDir = val
 			return nil
 		},
+		Read: func(cfg *Config) string { return cfg.ProjectDir },
 	},
 	{
 		Short: "-n", Long: "--max", MetaVar: "<N>",
@@ -66,6 +75,7 @@ var Flags = []FlagDef{
 			cfg.MaxIterations = n
 			return nil
 		},
+		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxIterations) },
 	},
 	{
 		Short: "-p", Long: "--prompt", MetaVar: "<text>",
@@ -75,6 +85,7 @@ var Flags = []FlagDef{
 			cfg.Prompt = val
 			return nil
 		},
+		Read: func(cfg *Config) string { return cfg.Prompt },
 	},
 	{
 		Short: "-q", Long: "--quiet",
@@ -84,6 +95,7 @@ var Flags = []FlagDef{
 			cfg.Quiet = true
 			return nil
 		},
+		Read: func(cfg *Config) string { return boolStr(cfg.Quiet) },
 	},
 	{
 		Long: "--calls-per-hour", MetaVar: "<N>",
@@ -98,6 +110,7 @@ var Flags = []FlagDef{
 			cfg.CallsPerHour = n
 			return nil
 		},
+		Read: func(cfg *Config) string { return strconv.Itoa(cfg.CallsPerHour) },
 	},
 	{
 		Long: "--refactor",
@@ -108,6 +121,7 @@ var Flags = []FlagDef{
 			cfg.Refactor = true
 			return nil
 		},
+		Read: func(cfg *Config) string { return boolStr(cfg.Refactor) },
 	},
 	{
 		Long: "--idle-timeout", MetaVar: "<dur>",
@@ -122,6 +136,7 @@ var Flags = []FlagDef{
 			cfg.IdleTimeout = d
 			return nil
 		},
+		Read: func(cfg *Config) string { return cfg.IdleTimeout.String() },
 	},
 	{
 		Long: "--idle-timeout-progress", MetaVar: "<dur>",
@@ -136,6 +151,7 @@ var Flags = []FlagDef{
 			cfg.IdleTimeoutProgress = d
 			return nil
 		},
+		Read: func(cfg *Config) string { return cfg.IdleTimeoutProgress.String() },
 	},
 	{
 		Long: "--tmux",
@@ -145,6 +161,7 @@ var Flags = []FlagDef{
 			cfg.UseTmux = true
 			return nil
 		},
+		Read: func(cfg *Config) string { return boolStr(cfg.UseTmux) },
 	},
 	{
 		Long: "--base-branch", MetaVar: "<name>",
@@ -157,6 +174,7 @@ var Flags = []FlagDef{
 			}
 			return nil
 		},
+		Read: func(cfg *Config) string { return cfg.BaseBranch },
 	},
 	{
 		Long: "--auto-merge",
@@ -166,6 +184,7 @@ var Flags = []FlagDef{
 			cfg.AutoMerge = true
 			return nil
 		},
+		Read: func(cfg *Config) string { return boolStr(cfg.AutoMerge) },
 	},
 	{
 		Long: "--merge-admin",
@@ -175,6 +194,7 @@ var Flags = []FlagDef{
 			cfg.MergeAdmin = true
 			return nil
 		},
+		Read: func(cfg *Config) string { return boolStr(cfg.MergeAdmin) },
 	},
 	{
 		Long: "--evolve",
@@ -184,6 +204,7 @@ var Flags = []FlagDef{
 			cfg.Evolve = true
 			return nil
 		},
+		Read: func(cfg *Config) string { return boolStr(cfg.Evolve) },
 	},
 	{
 		Long: "--wait",
@@ -193,6 +214,7 @@ var Flags = []FlagDef{
 			cfg.Wait = true
 			return nil
 		},
+		Read: func(cfg *Config) string { return boolStr(cfg.Wait) },
 	},
 	{
 		Long: "--wait-interval", MetaVar: "<dur>",
@@ -207,6 +229,7 @@ var Flags = []FlagDef{
 			cfg.WaitInterval = d
 			return nil
 		},
+		Read: func(cfg *Config) string { return cfg.WaitInterval.String() },
 	},
 	{
 		Short: "-h", Long: "--help",
@@ -305,6 +328,7 @@ var Flags = []FlagDef{
 			}
 			return nil
 		},
+		Read: func(cfg *Config) string { return cfg.VerifyLevel },
 	},
 }
 
@@ -370,4 +394,64 @@ func FlagUsage() string {
 		fmt.Fprintf(&b, "%s%s%s\n", left, strings.Repeat(" ", padding), right)
 	}
 	return b.String()
+}
+
+// ConfigToState returns a map of config key → value for all CLI flags that
+// have both a Long name and a Read function. Bools are stored as "true" when
+// set, omitted when false. Values matching the registry default are omitted
+// to keep state.json minimal. The --dir flag is always included so evolve
+// restart knows the project directory.
+func ConfigToState(cfg *Config) map[string]string {
+	defaults := Defaults()
+	m := make(map[string]string)
+	for i := range Flags {
+		f := &Flags[i]
+		if f.Long == "" || f.Read == nil {
+			continue
+		}
+		// Use the long flag name without "--" as the state key.
+		key := strings.TrimPrefix(f.Long, "--")
+		val := f.Read(cfg)
+
+		// Skip bools that are false (empty string from boolStr).
+		if f.Kind == KindBool && val == "" {
+			continue
+		}
+
+		// Skip values that match the default (except --dir which is always needed).
+		if f.Long != "--dir" && val == f.Read(&defaults) {
+			continue
+		}
+
+		m[key] = val
+	}
+	return m
+}
+
+// ArgsFromState reconstructs CLI args from a state map produced by
+// ConfigToState. Only keys that match a current flag definition are included;
+// unknown keys (from old binary versions) are silently ignored.
+func ArgsFromState(state map[string]string) []string {
+	var args []string
+	for i := range Flags {
+		f := &Flags[i]
+		if f.Long == "" {
+			continue
+		}
+		key := strings.TrimPrefix(f.Long, "--")
+		val, ok := state[key]
+		if !ok || val == "" {
+			continue
+		}
+		// --help is never reconstructed from state.
+		if f.Long == "--help" {
+			continue
+		}
+		if f.Kind == KindBool {
+			args = append(args, f.Long)
+		} else {
+			args = append(args, f.Long, val)
+		}
+	}
+	return args
 }

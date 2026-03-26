@@ -928,6 +928,172 @@ func TestInitConfigIncludesRefactorKey(t *testing.T) {
 	}
 }
 
+// Verifies ConfigToState captures non-default config values as a map
+// suitable for state.json persistence.
+func TestConfigToState_CapturesNonDefaults(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+	t.Setenv("RALPH_BASE_BRANCH", "")
+	t.Setenv("RALPH_WAIT_INTERVAL", "")
+
+	cfg, _ := Parse([]string{
+		"--dir", "/tmp/project",
+		"--max", "20",
+		"--auto-merge",
+		"--evolve",
+		"--quiet",
+	})
+
+	m := ConfigToState(&cfg)
+
+	if m["dir"] != "/tmp/project" {
+		t.Errorf("dir = %q, want /tmp/project", m["dir"])
+	}
+	if m["max"] != "20" {
+		t.Errorf("max = %q, want 20", m["max"])
+	}
+	if m["auto-merge"] != "true" {
+		t.Errorf("auto-merge = %q, want true", m["auto-merge"])
+	}
+	if m["evolve"] != "true" {
+		t.Errorf("evolve = %q, want true", m["evolve"])
+	}
+	if m["quiet"] != "true" {
+		t.Errorf("quiet = %q, want true", m["quiet"])
+	}
+	// Default values should be omitted.
+	if _, ok := m["calls-per-hour"]; ok {
+		t.Error("calls-per-hour should be omitted when at default")
+	}
+	if _, ok := m["refactor"]; ok {
+		t.Error("refactor should be omitted when false")
+	}
+}
+
+// Verifies ArgsFromState reconstructs CLI args from a state map,
+// only including flags the current binary recognizes.
+func TestArgsFromState_ReconstructsArgs(t *testing.T) {
+	state := map[string]string{
+		"dir":        "/tmp/project",
+		"max":        "20",
+		"auto-merge": "true",
+		"evolve":     "true",
+		"quiet":      "true",
+	}
+
+	args := ArgsFromState(state)
+
+	// Verify the reconstructed args parse correctly.
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+	t.Setenv("RALPH_BASE_BRANCH", "")
+
+	cfg, err := Parse(args)
+	if err != nil {
+		t.Fatalf("Parse(ArgsFromState) failed: %v", err)
+	}
+	if cfg.ProjectDir != "/tmp/project" {
+		t.Errorf("ProjectDir = %q, want /tmp/project", cfg.ProjectDir)
+	}
+	if cfg.MaxIterations != 20 {
+		t.Errorf("MaxIterations = %d, want 20", cfg.MaxIterations)
+	}
+	if !cfg.AutoMerge {
+		t.Error("AutoMerge should be true")
+	}
+	if !cfg.Evolve {
+		t.Error("Evolve should be true")
+	}
+	if !cfg.Quiet {
+		t.Error("Quiet should be true")
+	}
+}
+
+// Verifies that ArgsFromState silently ignores unknown state keys from old
+// binary versions — the core acceptance criterion for evolve restart safety.
+func TestArgsFromState_IgnoresUnknownKeys(t *testing.T) {
+	state := map[string]string{
+		"dir":         "/tmp/project",
+		"auto-merge":  "true",
+		"evolve":      "true",
+		"no-refactor": "true", // removed flag from old binary
+		"some-future": "value",
+	}
+
+	args := ArgsFromState(state)
+
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+	t.Setenv("RALPH_BASE_BRANCH", "")
+
+	cfg, err := Parse(args)
+	if err != nil {
+		t.Fatalf("Parse should succeed after ignoring unknown keys, got: %v", err)
+	}
+	if !cfg.AutoMerge {
+		t.Error("AutoMerge should be true")
+	}
+	if !cfg.Evolve {
+		t.Error("Evolve should be true")
+	}
+}
+
+// Verifies the full round-trip: Config → ConfigToState → ArgsFromState → Parse
+// produces an equivalent Config (for the fields that matter to evolve restart).
+func TestConfigToState_ArgsFromState_Roundtrip(t *testing.T) {
+	t.Setenv("RALPH_MAX_ITERATIONS", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT", "")
+	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+	t.Setenv("RALPH_BASE_BRANCH", "")
+	t.Setenv("RALPH_WAIT_INTERVAL", "")
+
+	original, _ := Parse([]string{
+		"--dir", "/tmp/project",
+		"--max", "30",
+		"--auto-merge",
+		"--merge-admin",
+		"--evolve",
+		"--wait",
+		"--refactor",
+		"--base-branch", "main",
+	})
+
+	state := ConfigToState(&original)
+	args := ArgsFromState(state)
+	restored, err := Parse(args)
+	if err != nil {
+		t.Fatalf("Parse(ArgsFromState(ConfigToState)) failed: %v", err)
+	}
+
+	if restored.ProjectDir != original.ProjectDir {
+		t.Errorf("ProjectDir = %q, want %q", restored.ProjectDir, original.ProjectDir)
+	}
+	if restored.MaxIterations != original.MaxIterations {
+		t.Errorf("MaxIterations = %d, want %d", restored.MaxIterations, original.MaxIterations)
+	}
+	if restored.AutoMerge != original.AutoMerge {
+		t.Errorf("AutoMerge = %v, want %v", restored.AutoMerge, original.AutoMerge)
+	}
+	if restored.MergeAdmin != original.MergeAdmin {
+		t.Errorf("MergeAdmin = %v, want %v", restored.MergeAdmin, original.MergeAdmin)
+	}
+	if restored.Evolve != original.Evolve {
+		t.Errorf("Evolve = %v, want %v", restored.Evolve, original.Evolve)
+	}
+	if restored.Wait != original.Wait {
+		t.Errorf("Wait = %v, want %v", restored.Wait, original.Wait)
+	}
+	if restored.Refactor != original.Refactor {
+		t.Errorf("Refactor = %v, want %v", restored.Refactor, original.Refactor)
+	}
+	if restored.BaseBranch != original.BaseBranch {
+		t.Errorf("BaseBranch = %q, want %q", restored.BaseBranch, original.BaseBranch)
+	}
+}
+
 // Verifies --verify-level defaults to "fire" and accepts "fire" or "hog",
 // rejecting invalid values — controlling no-diff verification depth.
 func TestVerifyLevelFlag(t *testing.T) {
