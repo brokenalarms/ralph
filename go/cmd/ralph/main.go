@@ -203,7 +203,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		if stateConfig, err := st.LoadCLIConfig(); err == nil && stateConfig != nil {
 			evolveArgs = config.ArgsFromState(stateConfig)
 		}
-		if err := evolveRestart(cfg.ProjectDir, scriptPath, cfg.BaseBranch, evolveArgs, log); err != nil {
+		if err := evolveRestart(cfg.ProjectDir, config.ResolveSourceDir(), scriptPath, cfg.BaseBranch, evolveArgs, log); err != nil {
 			log.Error("", "Evolve restart failed: %v", err)
 		}
 	}
