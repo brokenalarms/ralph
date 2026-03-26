@@ -426,7 +426,7 @@ func TestEvolveRestart_StopFileSkipsRestart(t *testing.T) {
 
 	// evolveRestart would fail on git fetch in a non-git temp dir,
 	// so if it returns nil, the stop file short-circuited before any git ops.
-	err := evolveRestart(dir, "/nonexistent/ralph", "develop", nil, log)
+	err := evolveRestart(dir, "/nonexistent/source", "/nonexistent/ralph", "develop", nil, log)
 	if err != nil {
 		t.Fatalf("expected nil error when stop file present, got: %v", err)
 	}
@@ -445,10 +445,55 @@ func TestEvolveRestart_NoStopFileProceeds(t *testing.T) {
 
 	log := logging.New(nil)
 
-	// No stop file → should attempt git fetch, which fails in a temp dir.
-	err := evolveRestart(dir, "/nonexistent/ralph", "develop", nil, log)
+	// No stop file → should attempt rebuild, which fails with nonexistent source dir.
+	err := evolveRestart(dir, "/nonexistent/source", "/nonexistent/ralph", "develop", nil, log)
 	if err == nil {
-		t.Fatal("expected error from git fetch in temp dir, got nil")
+		t.Fatal("expected error with nonexistent source dir, got nil")
+	}
+}
+
+// Verifies evolveRestart returns a clear error when sourceDir is empty,
+// which happens when Ralph's source directory is neither embedded at build
+// time nor resolvable from the binary path (e.g. running from a different project).
+func TestEvolveRestart_EmptySourceDirErrors(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	log := logging.New(nil)
+
+	err := evolveRestart(dir, "", "/nonexistent/ralph", "develop", nil, log)
+	if err == nil {
+		t.Fatal("expected error when sourceDir is empty, got nil")
+	}
+	if !strings.Contains(err.Error(), "source directory unknown") {
+		t.Errorf("expected 'source directory unknown' in error, got: %v", err)
+	}
+}
+
+// Verifies ResolveSourceDir returns the embedded SourceDir when set.
+func TestResolveSourceDir_UsesEmbedded(t *testing.T) {
+	original := config.SourceDir
+	defer func() { config.SourceDir = original }()
+
+	config.SourceDir = "/embedded/ralph/source"
+	if got := config.ResolveSourceDir(); got != "/embedded/ralph/source" {
+		t.Errorf("expected /embedded/ralph/source, got %s", got)
+	}
+}
+
+// Verifies ResolveSourceDir falls back to walking up from the binary's
+// real path when SourceDir is not embedded.
+func TestResolveSourceDir_FallbackWalksUp(t *testing.T) {
+	original := config.SourceDir
+	defer func() { config.SourceDir = original }()
+
+	config.SourceDir = ""
+	// With no embedded value, ResolveSourceDir tries to walk up from the
+	// test binary. It won't find scripts/build-go.sh, so returns "".
+	got := config.ResolveSourceDir()
+	if got != "" {
+		t.Errorf("expected empty string from test binary fallback, got %s", got)
 	}
 }
 
