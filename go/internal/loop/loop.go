@@ -40,6 +40,7 @@ type Config struct {
 	Wait                bool
 	WaitInterval        time.Duration
 	OnRebaseConflict    func(err error) git.RebaseRecovery
+	Version             string
 	VerifyDir           string // project root where tests are run; empty disables verification
 	VerifyLevel         string // "fire" (default) or "hog" — controls no-diff verification depth
 }
@@ -262,8 +263,12 @@ func (l *Loop) Run(ctx context.Context) error {
 		if l.lastAction == analyzer.Warn {
 			phaseColor = logging.Yellow
 		}
-		l.logger.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done] ---",
-			runIteration, maxIter, iteration, completed, total)
+		versionTag := ""
+		if l.cfg.Version != "" {
+			versionTag = fmt.Sprintf(" | Ralph v%s", l.cfg.Version)
+		}
+		l.logger.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done]%s ---",
+			runIteration, maxIter, iteration, completed, total, versionTag)
 		if desc := l.getBeadDescription(taskID); desc != "" {
 			l.logger.Log("beads", "  %s", desc)
 		}
