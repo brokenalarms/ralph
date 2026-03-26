@@ -2,7 +2,6 @@ package loop
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,40 +16,10 @@ import (
 	"github.com/brokenalarms/ralph/internal/prompt"
 )
 
-// handleRebase attempts to rebase onto the default branch, and if a conflict
-// is detected, consults the OnRebaseConflict handler for recovery.
+// handleRebase syncs the worktree to the latest default branch via
+// EnsureUpToDate, which handles all conflict resolution internally.
 func (l *Loop) handleRebase(ctx context.Context) error {
-	err := l.git.RebaseOntoDefaultBranch(ctx)
-	if err == nil {
-		return nil
-	}
-
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	var conflictErr *git.RebaseConflictError
-	if !errors.As(err, &conflictErr) {
-		return err
-	}
-
-	if l.cfg.OnRebaseConflict == nil {
-		return err
-	}
-
-	switch l.cfg.OnRebaseConflict(err) {
-	case git.RebaseFreshWorktree:
-		l.logger.Log("git", "Recreating worktree from main...")
-		if recreateErr := l.git.RecreateFromMain(ctx); recreateErr != nil {
-			return fmt.Errorf("worktree recreation failed: %w", recreateErr)
-		}
-		return nil
-	case git.RebaseManualResolve:
-		l.logger.Warn("git", "Pausing for manual conflict resolution. Re-run ralph to resume.")
-		return fmt.Errorf("paused for manual resolution: %w", err)
-	default:
-		return err
-	}
+	return l.git.EnsureUpToDate(ctx)
 }
 
 // mergeWithRetry delegates to git.Manager.MergeWithRetry, passing a CI fix

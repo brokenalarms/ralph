@@ -993,9 +993,9 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 	}
 }
 
-// Verifies that handleRebase with OnRebaseConflict set to RebaseFreshWorktree
-// recovers from a squash-merge rebase failure by recreating the worktree.
-func TestLoop_HandleRebase_FreshWorktreeRecovery(t *testing.T) {
+// Verifies handleRebase recovers from conflicts via EnsureUpToDate's
+// escalating retry strategy — worktree ends up at origin/main.
+func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := state.NewStore(ralphDir)
@@ -1061,9 +1061,7 @@ func TestLoop_HandleRebase_FreshWorktreeRecovery(t *testing.T) {
 		t.Fatalf("expected no error after recovery, got %v", err)
 	}
 
-	if !handlerCalled {
-		t.Error("OnRebaseConflict handler should have been called")
-	}
+	_ = handlerCalled // OnRebaseConflict no longer used — EnsureUpToDate handles recovery
 
 	// Worktree should have been recreated
 	if _, err := os.Stat(gm.WorkDir); err != nil {
@@ -1071,9 +1069,9 @@ func TestLoop_HandleRebase_FreshWorktreeRecovery(t *testing.T) {
 	}
 }
 
-// Verifies that handleRebase with OnRebaseConflict returning RebaseAbort
-// propagates the error and halts the loop.
-func TestLoop_HandleRebase_AbortHaltsLoop(t *testing.T) {
+// Verifies that handleRebase recovers from conflicts — EnsureUpToDate
+// resets and replays, so the loop continues rather than halting.
+func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := state.NewStore(ralphDir)
@@ -1122,23 +1120,16 @@ func TestLoop_HandleRebase_AbortHaltsLoop(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	err := l.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error when rebase is aborted")
+	if err != nil {
+		t.Fatalf("expected recovery, got %v", err)
 	}
 
-	if !handlerCalled {
-		t.Error("OnRebaseConflict handler should have been called")
-	}
-
-	finalState, _ := st.Load()
-	if finalState.Status != "error" {
-		t.Errorf("expected status 'error', got %q", finalState.Status)
-	}
+	_ = handlerCalled // OnRebaseConflict no longer used — EnsureUpToDate handles recovery
 }
 
-// Verifies that without an OnRebaseConflict handler, rebase failures still
-// propagate as errors (backward compatible).
-func TestLoop_HandleRebase_NoHandlerPropagatesError(t *testing.T) {
+// Verifies handleRebase works without OnRebaseConflict set — EnsureUpToDate
+// handles everything internally.
+func TestLoop_HandleRebase_WorksWithoutHandler(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := state.NewStore(ralphDir)
@@ -1181,14 +1172,9 @@ func TestLoop_HandleRebase_NoHandlerPropagatesError(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	err := l.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error when no handler and rebase fails")
-	}
-
-	finalState, _ := st.Load()
-	if finalState.Status != "error" {
-		t.Errorf("expected status 'error', got %q", finalState.Status)
+	err := l.handleRebase(context.Background())
+	if err != nil {
+		t.Fatalf("expected recovery without handler, got %v", err)
 	}
 }
 

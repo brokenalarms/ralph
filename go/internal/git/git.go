@@ -201,6 +201,18 @@ func (m *Manager) withStash(stashMsg string, fn func()) {
 // sync point that ALL git operations go through: push, merge, resume, and
 // the loop's handleRebase. Includes squash-merge detection, auto-resolve,
 // and force-reset as last resort.
+// EnsureUpToDate is the single sync point for all git operations. It
+// fetches the latest default branch and applies an escalating series of
+// strategies to get the worktree up to date:
+//
+//  1. Fast-forward rebase — clean replay on top of origin
+//  2. Auto-resolve — mechanical conflict resolution (theirs for new files)
+//  3. Skip squash-merged — rebase past branches already on main
+//  4. Reset and replay — force-reset to origin, cherry-pick local commits
+//
+// Each strategy preserves the agent's committed work. If cherry-pick
+// fails on a real conflict, the stale work is discarded and the remote
+// branch is cleaned up so the task re-runs on a clean base.
 func (m *Manager) EnsureUpToDate(ctx context.Context) error {
 	if m.WorkDir == "" || m.WorkDir == m.ProjectDir {
 		return nil
@@ -227,44 +239,64 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) error {
 
 	var result error
 	m.withStash("ralph-autostash", func() {
-		// Try simple rebase first.
-		if m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "origin/"+defaultBranch) == nil {
-			m.Logger.Log("git", "%s Rebased onto origin/%s", logging.BranchTag(defaultBranch), defaultBranch)
-			return
-		}
-
-		// Try auto-resolving mechanical conflicts.
-		if m.autoResolveAndContinue(ctx, defaultBranch) {
-			m.Logger.Log("git", "%s Rebased onto origin/%s (auto-resolved)", logging.BranchTag(defaultBranch), defaultBranch)
-			return
-		}
-		m.gitCmd(m.WorkDir, "rebase", "--abort")
-
 		if ctx.Err() != nil {
 			result = ctx.Err()
 			return
 		}
 
-		// Check for squash-merged branches that cause phantom conflicts.
-		m.Logger.Warn("git", "Rebase failed, checking for squash-merged branches...")
-		lastMerged := m.findLastSquashMergedBranch(defaultBranch)
-		if lastMerged != "" {
-			m.Logger.Log("git", "Detected squash-merged branch: %s", lastMerged)
-			if m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "--onto", "origin/"+defaultBranch, lastMerged, "HEAD") == nil {
-				m.Logger.Log("git", "%s Rebased onto origin/%s (skipped squash-merged)", logging.BranchTag(defaultBranch), defaultBranch)
-				m.TaskSeq = m.ParseTaskSeqFromBranches()
-				m.gitCmd(m.ProjectDir, "branch", "-D", lastMerged)
-				return
-			}
-			m.gitCmd(m.WorkDir, "rebase", "--abort")
+		// 1. Fast-forward rebase
+		if m.tryRebase(ctx, defaultBranch) {
+			return
 		}
 
-		// All rebase strategies failed — reset and replay.
-		if err := m.ResetAndReplay(defaultBranch); err != nil {
-			result = err
+		// 2. Auto-resolve mechanical conflicts
+		if m.tryAutoResolve(ctx, defaultBranch) {
+			return
 		}
+
+		// 3. Skip squash-merged branches
+		if m.trySkipSquashMerged(ctx, defaultBranch) {
+			return
+		}
+
+		// 4. Last resort: reset to origin, replay local commits
+		result = m.ResetAndReplay(defaultBranch)
 	})
 	return result
+}
+
+func (m *Manager) tryRebase(ctx context.Context, defaultBranch string) bool {
+	if m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "origin/"+defaultBranch) == nil {
+		m.Logger.Log("git", "%s Rebased onto origin/%s", logging.BranchTag(defaultBranch), defaultBranch)
+		return true
+	}
+	return false
+}
+
+func (m *Manager) tryAutoResolve(ctx context.Context, defaultBranch string) bool {
+	if m.autoResolveAndContinue(ctx, defaultBranch) {
+		m.Logger.Log("git", "%s Rebased onto origin/%s (auto-resolved)", logging.BranchTag(defaultBranch), defaultBranch)
+		return true
+	}
+	m.gitCmd(m.WorkDir, "rebase", "--abort")
+	return false
+}
+
+func (m *Manager) trySkipSquashMerged(ctx context.Context, defaultBranch string) bool {
+	m.Logger.Warn("git", "Rebase failed, checking for squash-merged branches...")
+	lastMerged := m.findLastSquashMergedBranch(defaultBranch)
+	if lastMerged == "" {
+		return false
+	}
+	m.Logger.Log("git", "Detected squash-merged branch: %s", lastMerged)
+	if m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "--onto", "origin/"+defaultBranch, lastMerged, "HEAD") == nil {
+		m.Logger.Log("git", "%s Rebased onto origin/%s (skipped squash-merged)", logging.BranchTag(defaultBranch), defaultBranch)
+		m.TaskSeq = m.ParseTaskSeqFromBranches()
+		m.gitCmd(m.ProjectDir, "branch", "-D", lastMerged)
+		return true
+	}
+	m.gitCmd(m.WorkDir, "rebase", "--abort")
+	return false
 }
 
 // ResetAndReplay saves local commits ahead of origin/defaultBranch,
@@ -292,9 +324,16 @@ func (m *Manager) ResetAndReplay(defaultBranch string) error {
 			continue
 		}
 		if err := m.gitCmdErr(m.WorkDir, "cherry-pick", sha); err != nil {
-			m.Logger.Warn("git", "Cherry-pick %s failed — aborting replay", sha[:8])
+			m.Logger.Warn("git", "Cherry-pick %s failed — discarding stale work, task will re-run", sha[:8])
 			m.gitCmd(m.WorkDir, "cherry-pick", "--abort")
-			return &RebaseConflictError{Cause: fmt.Sprintf("rebase onto %s failed — cherry-pick replay had conflicts", defaultBranch)}
+			// Stay on the clean origin/default — stale work is gone.
+			// Delete the remote branch so RemoteBranchHasWork doesn't
+			// find it again. Close any open PR for this branch.
+			if m.WorktreeBranch != "" {
+				_ = m.gitCmdErr(m.WorkDir, "push", "origin", "--delete", m.WorktreeBranch)
+				m.Logger.Log("git", "Deleted stale remote branch %s", m.WorktreeBranch)
+			}
+			return nil // no error — worktree is clean, task re-runs
 		}
 	}
 	return nil

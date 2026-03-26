@@ -258,10 +258,9 @@ func TestRebaseOntoDefaultBranch_StackedBranchesSameFile(t *testing.T) {
 	}
 }
 
-// Real conflicts: reset to origin/main, cherry-pick replays the agent's
-// commits. When cherry-pick also conflicts, returns RebaseConflictError
-// with HEAD at origin/main (agent's commit couldn't be replayed).
-func TestRebaseOntoDefaultBranch_ReplayFailsOnRealConflicts(t *testing.T) {
+// Real conflicts: reset to origin/main, cherry-pick fails, stale work
+// discarded. Worktree is clean at origin/main, no error — task re-runs.
+func TestRebaseOntoDefaultBranch_DiscardsStaleWorkOnConflict(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	mgr := setupRebaseMgr(t, project, bare)
 
@@ -274,17 +273,14 @@ func TestRebaseOntoDefaultBranch_ReplayFailsOnRealConflicts(t *testing.T) {
 	pushToOrigin(t, project)
 
 	err := mgr.RebaseOntoDefaultBranch(context.Background())
-	if err == nil {
-		t.Fatal("expected RebaseConflictError after cherry-pick failure")
+	if err != nil {
+		t.Fatalf("expected no error (stale work discarded), got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "cherry-pick") {
-		t.Errorf("unexpected error: %v", err)
-	}
-	// HEAD should be at origin/main (reset succeeded, cherry-pick failed)
+	// HEAD should be at origin/main — clean slate for task re-run
 	head := mgr.gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
 	origin := mgr.gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
 	if head != origin {
-		t.Errorf("expected HEAD at origin/main after failed cherry-pick replay")
+		t.Errorf("expected HEAD at origin/main after discarding stale work")
 	}
 }
 
@@ -641,9 +637,9 @@ func TestRecreateFromMain_PrunesExternalWorktreeHoldingBranch(t *testing.T) {
 	}
 }
 
-// RebaseOntoDefaultBranch returns a RebaseConflictError for real conflicts,
-// allowing callers to distinguish conflict types for recovery.
-func TestRebaseOntoDefaultBranch_ReturnsTypedError(t *testing.T) {
+// RebaseOntoDefaultBranch discards stale work on real conflicts and
+// leaves the worktree clean at origin/main — no error, task re-runs.
+func TestRebaseOntoDefaultBranch_DiscardsAndRecoversOnConflict(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	mgr := setupRebaseMgr(t, project, bare)
 
@@ -655,13 +651,14 @@ func TestRebaseOntoDefaultBranch_ReturnsTypedError(t *testing.T) {
 	pushToOrigin(t, project)
 
 	err := mgr.RebaseOntoDefaultBranch(context.Background())
-	if err == nil {
-		t.Fatal("expected error for real conflicts")
+	if err != nil {
+		t.Fatalf("expected clean recovery, got: %v", err)
 	}
 
-	var conflictErr *RebaseConflictError
-	if !errors.As(err, &conflictErr) {
-		t.Errorf("expected RebaseConflictError, got %T: %v", err, err)
+	head := mgr.gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
+	origin := mgr.gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
+	if head != origin {
+		t.Errorf("expected HEAD at origin/main after conflict recovery")
 	}
 }
 
