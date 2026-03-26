@@ -309,7 +309,7 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, 
 		return false
 	}
 
-	if pushErr := l.pushAndCreatePR(ctx, taskID, nextTask); pushErr != nil {
+	if _, pushErr := l.pushAndCreatePR(ctx, taskID, nextTask); pushErr != nil {
 		l.logger.Warn("git", "Push after CI fix failed: %v", pushErr)
 		return false
 	}

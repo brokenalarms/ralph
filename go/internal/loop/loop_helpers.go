@@ -81,11 +81,177 @@ func (l *Loop) isNewTask(taskID, taskDesc string) bool {
 	return lastTask != taskDesc
 }
 
-func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc string) error {
+func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc string) (string, error) {
 	if l.pushPRFunc != nil {
 		return l.pushPRFunc(ctx, taskID, taskDesc)
 	}
 	return l.git.PushAndCreatePR(ctx, taskID, taskDesc)
+}
+
+// resumeViaPR checks the bead's external-ref for a linked PR and resolves
+// accordingly. Returns true if the task was fully handled (merged or skipped)
+// and the loop should continue to the next task; false if the agent should run.
+func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
+	// Try PR-based resolution first.
+	if taskID != "" {
+		ref, _ := l.cfg.TaskBackend.GetExternalRef(taskID)
+		if strings.HasPrefix(ref, "gh-") {
+			prNumber := strings.TrimPrefix(ref, "gh-")
+			return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
+		}
+	}
+
+	// Backwards compat: fall back to RemoteBranchHasWork for branches
+	// that predate the external-ref system.
+	if l.git.RemoteBranchHasWork() != "" {
+		return l.resumeFromRemoteBranch(ctx, taskID, nextTask)
+	}
+
+	return false
+}
+
+// resolveByPRState inspects the PR's state and takes the appropriate action.
+func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber string) bool {
+	gh := l.git.GitHub
+	if gh == nil {
+		l.logger.Warn("git", "No GitHub interface — falling back to remote branch check")
+		if l.git.RemoteBranchHasWork() != "" {
+			return l.resumeFromRemoteBranch(ctx, taskID, nextTask)
+		}
+		return false
+	}
+
+	prState, err := gh.GetPRState(l.git.WorkDir, prNumber)
+	if err != nil {
+		l.logger.Warn("git", "Failed to get PR #%s state: %v — falling back to remote branch check", prNumber, err)
+		if l.git.RemoteBranchHasWork() != "" {
+			return l.resumeFromRemoteBranch(ctx, taskID, nextTask)
+		}
+		return false
+	}
+
+	switch strings.ToUpper(prState) {
+	case "MERGED":
+		l.logger.Success("git", "PR #%s already merged — closing bead and moving on", prNumber)
+		l.git.DeleteRemoteBranch()
+		l.attempts.Clear(taskID, nextTask)
+		l.attempts.ClearMergeFailures(taskID)
+		l.recordCompletedTask(taskID, nextTask)
+		if taskID != "" {
+			_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: PR merged")
+			if err := l.cfg.TaskBackend.CloseTask(taskID, fmt.Sprintf("Fixed in PR #%s", prNumber)); err != nil {
+				l.logger.Warn("beads", "CloseTask failed: %v", err)
+			} else {
+				l.logger.Log("beads", "Closed task %s (PR #%s merged)", taskID, prNumber)
+			}
+		}
+		if err := l.git.PostMergeReset(); err != nil {
+			l.logger.Warn("git", "Post-merge reset: %v", err)
+		}
+		return true
+
+	case "OPEN":
+		l.logger.Log("git", "PR #%s still open — proceeding to merge", prNumber)
+		merged := false
+		if l.cfg.AutoMerge {
+			var mergeErr error
+			merged, mergeErr = l.mergeWithRetry(ctx, taskID, nextTask, l.git.WorkDir, filepath.Join(l.cfg.Dirs.RalphDir, "raw.log"))
+			if mergeErr != nil {
+				l.logger.Warn("git", "Auto-merge: %v", mergeErr)
+			}
+		}
+		if taskID != "" {
+			if merged || !l.cfg.AutoMerge {
+				l.attempts.ClearMergeFailures(taskID)
+				if err := l.cfg.TaskBackend.CloseTask(taskID, fmt.Sprintf("Fixed in PR #%s", prNumber)); err != nil {
+					l.logger.Warn("beads", "CloseTask failed: %v", err)
+				} else {
+					l.logger.Log("beads", "Closed task %s (PR #%s merged)", taskID, prNumber)
+				}
+			} else {
+				l.logger.Warn("git", "Merge failed for PR #%s — deferring task", prNumber)
+				_ = l.cfg.TaskBackend.SkipTask(taskID, "merge_failed_open_pr")
+			}
+		}
+		if merged {
+			if err := l.git.PostMergeReset(); err != nil {
+				l.logger.Warn("git", "Post-merge reset: %v", err)
+			}
+		}
+		return true
+
+	default:
+		l.logger.Warn("git", "PR #%s is %s (not merged) — re-running agent", prNumber, prState)
+		return false
+	}
+}
+
+// resumeFromRemoteBranch is the legacy path: pull remote work, verify, merge.
+func (l *Loop) resumeFromRemoteBranch(ctx context.Context, taskID, nextTask string) bool {
+	l.logger.Log("git", "Remote branch has work from previous iteration — pulling and verifying")
+	l.git.ResetToRemoteBranch()
+
+	testsPass, _ := l.verifyCompletion(ctx, "")
+	llmPass := false
+	if testsPass {
+		beadDesc := l.getBeadDescription(taskID)
+		beadAcceptance := l.getBeadAcceptance(taskID)
+		l.logger.Log("llm", "Running LLM verification on previous iteration's work...")
+		llmResult := l.llmVerifyFunc(ctx, l.git, l.git.WorkDir, l.cfg.Dirs.PromptsDir, taskID, "", nextTask, beadDesc, beadAcceptance, l.git.GitHub, l.queryFunc())
+		llmPass = llmResult.Passed
+		if !llmPass {
+			l.logger.Warn("llm", "LLM rejected previous work: %s", llmResult.Reason)
+		}
+	}
+
+	if !testsPass || !llmPass {
+		l.logger.Warn("git", "Previous work failed verification — running agent")
+		return false
+	}
+
+	l.logger.Success("git", "Previous work verified — proceeding to merge")
+	if taskID != "" {
+		_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: previous iteration work verified")
+		l.logger.Log("beads", "%s → verified", taskID)
+	}
+	l.attempts.Clear(taskID, nextTask)
+	l.recordCompletedTask(taskID, nextTask)
+	prNumber, pushErr := l.pushAndCreatePR(ctx, taskID, nextTask)
+	if pushErr != nil {
+		l.logger.Log("git", "Push/PR: %v (branch already on remote, continuing to merge)", pushErr)
+	}
+	if prNumber != "" && taskID != "" {
+		if refErr := l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNumber); refErr != nil {
+			l.logger.Warn("beads", "SetExternalRef: %v", refErr)
+		}
+	}
+	merged := false
+	if l.cfg.AutoMerge {
+		var mergeErr error
+		merged, mergeErr = l.mergeWithRetry(ctx, taskID, nextTask, l.git.WorkDir, filepath.Join(l.cfg.Dirs.RalphDir, "raw.log"))
+		if mergeErr != nil {
+			l.logger.Warn("git", "Auto-merge: %v", mergeErr)
+		}
+	}
+	if taskID != "" {
+		if merged || !l.cfg.AutoMerge {
+			l.attempts.ClearMergeFailures(taskID)
+			if err := l.cfg.TaskBackend.CloseTask(taskID, "completed by ralph"); err != nil {
+				l.logger.Warn("beads", "CloseTask failed: %v", err)
+			} else {
+				l.logger.Log("beads", "Closed task %s (completed by ralph)", taskID)
+			}
+		} else {
+			l.logger.Warn("git", "Merge failed for remote work — deferring task")
+			_ = l.cfg.TaskBackend.SkipTask(taskID, "merge_failed_remote_work")
+		}
+	}
+	if merged {
+		if err := l.git.PostMergeReset(); err != nil {
+			l.logger.Warn("git", "Post-merge reset: %v", err)
+		}
+	}
+	return true
 }
 
 func (l *Loop) flushUnpushedWork(ctx context.Context) {
@@ -93,7 +259,7 @@ func (l *Loop) flushUnpushedWork(ctx context.Context) {
 	taskDesc, _ := l.state.Read("last_task")
 	if l.pushPRFunc != nil || l.mergeFunc != nil {
 		// Test override path: use the existing test funcs.
-		if err := l.pushAndCreatePR(ctx, taskID, taskDesc); err != nil {
+		if _, err := l.pushAndCreatePR(ctx, taskID, taskDesc); err != nil {
 			l.logger.Warn("git", "Flush push/PR: %v", err)
 			return
 		}

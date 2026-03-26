@@ -949,3 +949,71 @@ func TestBD_GetNextTaskInfo_NilPriorityWhenUnset(t *testing.T) {
 	}
 }
 
+func TestBD_GetExternalRef(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
+			return `[{"external_ref":"gh-42"}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	ref, err := b.GetExternalRef("abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref != "gh-42" {
+		t.Errorf("GetExternalRef = %q, want %q", ref, "gh-42")
+	}
+}
+
+func TestBD_GetExternalRef_Empty(t *testing.T) {
+	b := setupBD(t, defaultMock())
+	ref, err := b.GetExternalRef("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref != "" {
+		t.Errorf("GetExternalRef with empty id = %q, want empty", ref)
+	}
+}
+
+func TestBD_SetExternalRef(t *testing.T) {
+	var capturedArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "update" {
+			capturedArgs = args
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SetExternalRef("abc123", "gh-42"); err != nil {
+		t.Fatal(err)
+	}
+	if len(capturedArgs) == 0 {
+		t.Fatal("expected update to be called")
+	}
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "--external-ref") {
+		t.Errorf("expected --external-ref in args, got: %v", capturedArgs)
+	}
+	if !strings.Contains(joined, "gh-42") {
+		t.Errorf("expected gh-42 in args, got: %v", capturedArgs)
+	}
+}
+
+func TestBD_SetExternalRef_EmptyID(t *testing.T) {
+	called := false
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		called = true
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SetExternalRef("", "gh-42"); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Error("expected no bd calls with empty id")
+	}
+}
+

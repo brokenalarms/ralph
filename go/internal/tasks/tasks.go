@@ -75,6 +75,12 @@ type Backend interface {
 	// state for prompt injection (open/closed beads, config, bd prime output).
 	ProjectContext() (string, error)
 
+	// GetExternalRef returns the external reference (e.g. "gh-123") for a task.
+	GetExternalRef(id string) (string, error)
+
+	// SetExternalRef sets the external reference on a task (e.g. "gh-123" for PR #123).
+	SetExternalRef(id, ref string) error
+
 	// Label returns a human-readable name for the backend.
 	Label() string
 }

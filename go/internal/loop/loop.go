@@ -76,7 +76,7 @@ type Loop struct {
 	logger     *logging.Logger
 	signals    claude.SignalPaths
 	mergeFunc          func(ctx context.Context) (bool, error)
-	pushPRFunc         func(ctx context.Context, taskID, taskDesc string) error
+	pushPRFunc         func(ctx context.Context, taskID, taskDesc string) (string, error)
 	verifyFunc      func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
 	llmVerifyFunc   func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result
 	newRunnerFunc      func() claudeRunner
@@ -283,77 +283,12 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		l.updateStreamTask(taskID, nextTask, taskInfo.Priority)
 
-		// Check if a previous iteration pushed work to the remote branch.
-		// "merged" = already squash-merged, cleaned up, skip to next task.
-		// "unmerged" = real work that needs PR creation and merge.
-		remoteState := l.git.RemoteBranchHasWork()
-		if remoteState == "merged" {
-			l.logger.Log("git", "Previous work already on main — skipping to next task")
-			if taskID != "" {
-				_ = l.cfg.TaskBackend.CloseTask(taskID, "completed by ralph (squash-merged)")
-				l.logger.Log("beads", "Closed task %s (already merged)", taskID)
-			}
+		// PR-based resume: check the bead's external-ref for a linked PR.
+		if resumed := l.resumeViaPR(ctx, taskID, nextTask); resumed {
 			l.git.TagTaskEnd(taskID)
 			runIteration++
 			iteration++
 			continue
-		}
-		if remoteState == "unmerged" {
-			l.logger.Log("git", "Remote branch has unmerged work — pulling, verifying, and creating PR")
-			l.git.ResetToRemoteBranch()
-
-			testsPass, _ := l.verifyCompletion(ctx, "")
-			llmPass := false
-			if testsPass {
-				beadDesc := l.getBeadDescription(taskID)
-				beadAcceptance := l.getBeadAcceptance(taskID)
-				l.logger.Log("llm", "Running LLM verification on previous iteration's work...")
-				llmResult := l.llmVerifyFunc(ctx, l.git, l.git.WorkDir, l.cfg.Dirs.PromptsDir, taskID, "", nextTask, beadDesc, beadAcceptance, l.git.GitHub, l.queryFunc())
-				llmPass = llmResult.Passed
-				if !llmPass {
-					l.logger.Warn("llm", "LLM rejected previous work: %s", llmResult.Reason)
-				}
-			}
-
-			if testsPass && llmPass {
-				l.logger.Success("git", "Previous work verified — proceeding to merge")
-				if taskID != "" {
-					_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: previous iteration work verified")
-					l.logger.Log("beads", "%s → verified", taskID)
-				}
-				l.attempts.Clear(taskID, nextTask)
-				l.recordCompletedTask(taskID, nextTask)
-				// Branch is already on remote — just create the PR.
-				if err := l.pushAndCreatePR(ctx, taskID, nextTask); err != nil {
-					l.logger.Log("git", "Push/PR: %v (continuing to merge)", err)
-				}
-				merged := false
-				if l.cfg.AutoMerge {
-					var mergeErr error
-					merged, mergeErr = l.mergeWithRetry(ctx, taskID, nextTask, l.git.WorkDir, filepath.Join(l.cfg.Dirs.RalphDir, "raw.log"))
-					if mergeErr != nil {
-						l.logger.Warn("git", "Auto-merge: %v", mergeErr)
-					}
-				}
-				if taskID != "" {
-					if merged || !l.cfg.AutoMerge {
-						l.attempts.ClearMergeFailures(taskID)
-						if err := l.cfg.TaskBackend.CloseTask(taskID, "completed by ralph"); err != nil {
-							l.logger.Warn("beads", "CloseTask failed: %v", err)
-						} else {
-							l.logger.Log("beads", "Closed task %s (completed by ralph)", taskID)
-						}
-					} else {
-						l.logger.Warn("git", "Merge failed for remote work — deferring task")
-						_ = l.cfg.TaskBackend.SkipTask(taskID, "merge_failed_remote_work")
-					}
-				}
-				l.git.TagTaskEnd(taskID)
-				runIteration++
-				iteration++
-				continue
-			}
-			l.logger.Warn("git", "Previous work failed verification — running agent")
 		}
 
 		if taskID != "" {
@@ -555,8 +490,14 @@ func (l *Loop) Run(ctx context.Context) error {
 
 			// PushAndCreatePR calls EnsureUpToDate internally, which
 			// rebases onto the latest base branch before pushing.
-			if err := l.pushAndCreatePR(ctx, taskID, nextTask); err != nil {
-				l.logger.Warn("git", "Push/PR: %v", err)
+			prNumber, pushErr := l.pushAndCreatePR(ctx, taskID, nextTask)
+			if pushErr != nil {
+				l.logger.Warn("git", "Push/PR: %v", pushErr)
+			}
+			if prNumber != "" && taskID != "" {
+				if refErr := l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNumber); refErr != nil {
+					l.logger.Warn("beads", "SetExternalRef: %v", refErr)
+				}
 			}
 
 			ct := CompletedTask{

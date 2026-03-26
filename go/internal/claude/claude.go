@@ -128,6 +128,8 @@ var IterationDisallowedTools = []string{
 	"Bash(bd close*)",
 	"Bash(git checkout*)",
 	"Bash(git branch*)",
+	"Bash(git push*)",
+	"Bash(gh pr create*)",
 }
 
 // CmdFactory builds the exec.Cmd that Run() will start. Receives the

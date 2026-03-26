@@ -515,4 +515,29 @@ func (b *BD) ProjectContext() (string, error) {
 	return strings.Join(sections, "\n\n"), nil
 }
 
+func (b *BD) GetExternalRef(id string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", id, "--json")
+	if err != nil {
+		return "", err
+	}
+	var items []struct {
+		ExternalRef string `json:"external_ref"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil || len(items) == 0 {
+		return "", nil
+	}
+	return items[0].ExternalRef, nil
+}
+
+func (b *BD) SetExternalRef(id, ref string) error {
+	if id == "" {
+		return nil
+	}
+	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--external-ref", ref)
+	return err
+}
+
 func (b *BD) Label() string { return "beads" }

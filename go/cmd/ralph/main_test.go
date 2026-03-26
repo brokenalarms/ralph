@@ -56,6 +56,8 @@ func (s *stubBackend) ProjectContext() (string, error)            { return "", n
 func (s *stubBackend) GetDescription(_ string) (string, error)    { return "", nil }
 func (s *stubBackend) GetAcceptance(_ string) (string, error)     { return "", nil }
 func (s *stubBackend) GetFullContext(_ string) (string, error)    { return "", nil }
+func (s *stubBackend) GetExternalRef(_ string) (string, error)    { return "", nil }
+func (s *stubBackend) SetExternalRef(_, _ string) error           { return nil }
 func (s *stubBackend) Label() string                              { return "beads" }
 
 // Proves: bare `ralph` (no args) returns 0 and does not enter the loop,

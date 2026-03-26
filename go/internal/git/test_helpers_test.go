@@ -36,6 +36,7 @@ type stubGitHub struct {
 	searchPRNumber      string
 	prDiff              string
 	createdPR           string
+	prState             string
 }
 
 func (s *stubGitHub) Available() bool { return s.available }
@@ -82,6 +83,9 @@ func (s *stubGitHub) SearchPR(workDir, query string) (string, error) {
 }
 func (s *stubGitHub) PRDiff(workDir, prNumber string) (string, error) {
 	return s.prDiff, nil
+}
+func (s *stubGitHub) GetPRState(workDir, prNumber string) (string, error) {
+	return s.prState, nil
 }
 
 // gitCall records a single git command invocation for assertion.

@@ -407,7 +407,7 @@ func TestBuildPrompt_SignalWarnsAboutTermination(t *testing.T) {
 
 // Proves: the bd execution template specifies that pushing and PR creation
 // must happen before signaling completion.
-func TestBuildPrompt_BDCompletionOrderIncludesPush(t *testing.T) {
+func TestBuildPrompt_BDCompletionOrderNoPush(t *testing.T) {
 	v := testVars(t)
 	v.TaskBackend = BackendBD
 	result, err := BuildPrompt(v)
@@ -415,16 +415,12 @@ func TestBuildPrompt_BDCompletionOrderIncludesPush(t *testing.T) {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-	pushIdx := strings.Index(result, "Push your branch")
-	signalIdx := strings.Index(result, "Signal completion by writing to the signal file")
-	if pushIdx < 0 {
-		t.Fatal("bd completion section missing push step")
+	if strings.Contains(result, "Push your branch") {
+		t.Error("completion section must not include push step — orchestrator owns push")
 	}
+	signalIdx := strings.Index(result, "Signal completion by writing to the signal file")
 	if signalIdx < 0 {
 		t.Fatal("bd completion section missing signal step")
-	}
-	if pushIdx >= signalIdx {
-		t.Error("push step must come before signal step in completion order")
 	}
 }
 

@@ -10,18 +10,18 @@ import (
 )
 
 // PushAndCreatePR pushes the current branch to remote and creates a PR if
-// none exists. This ensures the Go code owns the push/PR lifecycle rather
-// than relying on Claude to do it.
-func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) error {
+// none exists. Returns the PR number (e.g. "42") so the caller can link it
+// to the task backend, and an error if push or PR creation fails.
+func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) (string, error) {
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
-		return nil
+		return "", nil
 	}
 
 	m.EnsureUpToDate(ctx)
 
 	repoURL := m.gitOutput(m.WorkDir, "remote", "get-url", "origin")
 	if repoURL == "" {
-		return nil
+		return "", nil
 	}
 
 	// Check if branch has commits beyond the default branch.
@@ -29,16 +29,15 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 	revCount := m.gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+"..HEAD")
 	if revCount == "" || revCount == "0" {
 		m.Logger.Log("git", "No new commits to push")
-		return nil
+		return "", nil
 	}
 
 	gh := m.gh()
 	if !gh.Available() {
-		return fmt.Errorf("gh CLI not found — cannot create PR")
+		return "", fmt.Errorf("gh CLI not found — cannot create PR")
 	}
 
-	// If the agent already pushed and created a PR, update the title
-	// to include the bead ID (the agent may not have included it).
+	// If a PR already exists, update the title and return its number.
 	prNumber, _ := gh.FindOpenPR(m.WorktreeBranch, repoURL)
 	if prNumber != "" {
 		if taskID != "" {
@@ -48,7 +47,7 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 			}
 		}
 		m.Logger.Log("git", "PR #%s already open for %s", prNumber, m.WorktreeBranch)
-		return nil
+		return prNumber, nil
 	}
 
 	// Push branch to remote. If push fails (e.g. remote branch already
@@ -58,7 +57,7 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 	m.Logger.Log("git", "Pushing %s...", m.WorktreeBranch)
 	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "push", "-u", "origin", m.WorktreeBranch); err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return "", ctx.Err()
 		}
 		// Fetch the remote branch and check if it contains our HEAD.
 		_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", m.WorktreeBranch)
@@ -67,7 +66,7 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 			m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "HEAD", remoteBranch) == nil {
 			m.Logger.Log("git", "Remote branch already contains our work — skipping push")
 		} else {
-			return fmt.Errorf("push failed for %s", m.WorktreeBranch)
+			return "", fmt.Errorf("push failed for %s", m.WorktreeBranch)
 		}
 	}
 
@@ -82,7 +81,7 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 		Repo:  repoURL,
 		Dir:   m.WorkDir,
 	}); err != nil {
-		return err
+		return "", err
 	}
 
 	newPR, _ := gh.FindOpenPR(m.WorktreeBranch, repoURL)
@@ -91,7 +90,7 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 	} else {
 		m.Logger.Log("git", "Created PR for %s", m.WorktreeBranch)
 	}
-	return nil
+	return newPR, nil
 }
 
 // ResetToRemoteBranch fetches and resets the local branch to match the
@@ -326,6 +325,15 @@ func (m *Manager) ForcePush(ctx context.Context) error {
 	return m.gitCmdErrCtx(ctx, m.WorkDir, "push", "--force-with-lease", "origin", m.WorktreeBranch)
 }
 
+// DeleteRemoteBranch removes the current branch from the remote. Used to
+// clean up after a PR has been merged externally.
+func (m *Manager) DeleteRemoteBranch() {
+	if m.WorktreeBranch == "" {
+		return
+	}
+	_ = m.gitCmdErr(m.WorkDir, "push", "origin", "--delete", m.WorktreeBranch)
+}
+
 // MaxMergeAttempts is the total number of merge attempts including retries
 // after conflict resolution and CI fixes.
 const MaxMergeAttempts = 4
@@ -389,7 +397,7 @@ func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool
 // the PR. This is the safety net called before exiting or entering wait mode.
 // PushAndCreatePR is idempotent (returns early when no commits ahead).
 func (m *Manager) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, autoMerge bool) (merged bool, err error) {
-	if pushErr := m.PushAndCreatePR(ctx, taskID, taskDesc); pushErr != nil {
+	if _, pushErr := m.PushAndCreatePR(ctx, taskID, taskDesc); pushErr != nil {
 		return false, pushErr
 	}
 	if !autoMerge {

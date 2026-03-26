@@ -155,7 +155,7 @@ func TestManager_PushAndCreatePR_NoRealProcesses(t *testing.T) {
 		Logger:         discardLog{},
 	}
 
-	err := mgr.PushAndCreatePR(context.Background(), "test-123", "test feature")
+	_, err := mgr.PushAndCreatePR(context.Background(), "test-123", "test feature")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestManager_PushAndCreatePR_SkipsPushWhenPRExists(t *testing.T) {
 		Logger:         discardLog{},
 	}
 
-	err := mgr.PushAndCreatePR(context.Background(), "test-123", "test feature")
+	_, err := mgr.PushAndCreatePR(context.Background(), "test-123", "test feature")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestManager_PushAndCreatePR_UpdatesTitleWhenPRExists(t *testing.T) {
 		Logger:         discardLog{},
 	}
 
-	err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix: some bug")
+	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix: some bug")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestManager_PushAndCreatePR_NoEditWithoutTaskID(t *testing.T) {
 		Logger:         discardLog{},
 	}
 
-	err := mgr.PushAndCreatePR(context.Background(), "", "fix: some bug")
+	_, err := mgr.PushAndCreatePR(context.Background(), "", "fix: some bug")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestManager_PushAndCreatePR_LogsAlreadyOpen(t *testing.T) {
 		Logger:         log,
 	}
 
-	err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix: some bug")
+	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix: some bug")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestManager_PushAndCreatePR_LogsCreatedPR(t *testing.T) {
 		Logger:         log,
 	}
 
-	err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix: some bug")
+	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix: some bug")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

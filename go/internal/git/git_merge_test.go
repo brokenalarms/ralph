@@ -277,7 +277,7 @@ fi
 		Logger:         log,
 	}
 
-	err := mgr.PushAndCreatePR(context.Background(), "", "test task")
+	_, err := mgr.PushAndCreatePR(context.Background(), "", "test task")
 	if err != nil {
 		t.Fatalf("PushAndCreatePR failed: %v (log: %v)", err, log.messages)
 	}
@@ -338,7 +338,7 @@ fi
 		Logger:         log,
 	}
 
-	err := mgr.PushAndCreatePR(context.Background(), "ralph-hm8", "fix: include bead ID in PR title")
+	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-hm8", "fix: include bead ID in PR title")
 	if err != nil {
 		t.Fatalf("PushAndCreatePR failed: %v", err)
 	}
@@ -398,7 +398,7 @@ fi
 		Logger:         log,
 	}
 
-	err := mgr.PushAndCreatePR(context.Background(), "", "add new feature")
+	_, err := mgr.PushAndCreatePR(context.Background(), "", "add new feature")
 	if err != nil {
 		t.Fatalf("PushAndCreatePR failed: %v", err)
 	}
