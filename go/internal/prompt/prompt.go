@@ -94,7 +94,7 @@ func BuildPrompt(v Vars) (string, error) {
 }
 
 // BuildRefactorPrompt assembles the refactor iteration prompt.
-func BuildRefactorPrompt(v Vars, recentFiles, qualityFindings string) (string, error) {
+func BuildRefactorPrompt(v Vars, recentFiles string) (string, error) {
 	shared, err := readTemplate(v.PromptsDir, "shared.md")
 	if err != nil {
 		return "", err
@@ -114,7 +114,6 @@ func BuildRefactorPrompt(v Vars, recentFiles, qualityFindings string) (string, e
 		"{{WORK_DIR}}", v.WorkDir,
 		"{{RALPH_DIR}}", v.RalphDir,
 		"{{RECENT_FILES}}", recentFiles,
-		"{{QUALITY_FINDINGS}}", qualityFindings,
 		"{{SIGNAL_TOKEN}}", v.SignalToken,
 		"{{CURRENT_TASK_TOKEN}}", v.CurrentTaskToken,
 		"{{ALL_COMPLETE_TOKEN}}", v.AllCompleteToken,

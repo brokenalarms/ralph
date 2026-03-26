@@ -220,7 +220,7 @@ func TestPrintSummary_TaskCounts(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 	st.Write("iteration", "3")
 	st.Write("status", "completed")
 
@@ -335,7 +335,7 @@ func TestInitRalphDir_DetectsResume(t *testing.T) {
 	stateFile := filepath.Join(ralphDir, "state.json")
 
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 	st.Write("status", "running")
 
 	cfg := config.Config{ProjectDir: dir}
@@ -459,7 +459,7 @@ func TestCleanup_InterruptedWritesStopped(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 	st.Write("status", "halted_stagnation")
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -483,7 +483,7 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 	st.Write("status", "completed")
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -510,7 +510,7 @@ func TestInitRalphDir_WaitAutoResetsOnCompleted(t *testing.T) {
 	stateFile := filepath.Join(ralphDir, "state.json")
 
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 	st.Write("status", "completed")
 
 	cfg := config.Config{ProjectDir: dir, Wait: true}
@@ -541,7 +541,7 @@ func TestInitRalphDir_NoWaitCompletedBlocksOnPrompt(t *testing.T) {
 	stateFile := filepath.Join(ralphDir, "state.json")
 
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 	st.Write("status", "completed")
 
 	cfg := config.Config{ProjectDir: dir, Wait: false}

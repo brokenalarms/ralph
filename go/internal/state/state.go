@@ -21,8 +21,6 @@ type State struct {
 	WorktreeBranch         string `json:"worktree_branch,omitempty"`
 	TaskBackend            string `json:"task_backend,omitempty"`
 	MaxIterations      int `json:"max_iterations"`
-	QualityScore       int `json:"quality_score"`
-	RefactorEvery  int `json:"refactor_every"`
 	LastTestResult     string `json:"last_test_result,omitempty"`
 	LastTestOutput     string `json:"last_test_output,omitempty"`
 	LastTestTime       string `json:"last_test_time,omitempty"`
@@ -80,7 +78,6 @@ func (s *State) UnmarshalJSON(data []byte) error {
 		"iteration": true, "status": true, "started_at": true,
 		"last_task": true, "worktree_dir": true, "worktree_branch": true,
 		"task_backend": true, "max_iterations": true,
-		"quality_score": true, "refactor_every": true,
 		"last_test_result": true, "last_test_output": true, "last_test_time": true,
 	}
 
@@ -185,7 +182,7 @@ func (st *Store) Write(key, value string) error {
 }
 
 // Init initializes state with config values. Creates the file if missing.
-func (st *Store) Init(maxIterations, refactorEvery int) error {
+func (st *Store) Init(maxIterations int) error {
 	s, _ := st.Load()
 	if s.MaxIterations == 0 {
 		s.MaxIterations = maxIterations
@@ -226,10 +223,6 @@ func getField(s State, key string) string {
 		return s.TaskBackend
 	case "max_iterations":
 		return strconv.Itoa(s.MaxIterations)
-	case "quality_score":
-		return strconv.Itoa(s.QualityScore)
-	case "refactor_every":
-		return strconv.Itoa(s.RefactorEvery)
 	case "last_test_result":
 		return s.LastTestResult
 	case "last_test_output":
@@ -269,10 +262,6 @@ func setField(s *State, key, value string) {
 		s.TaskBackend = value
 	case "max_iterations":
 		s.MaxIterations, _ = strconv.Atoi(value)
-	case "quality_score":
-		s.QualityScore, _ = strconv.Atoi(value)
-	case "refactor_every":
-		s.RefactorEvery, _ = strconv.Atoi(value)
 	case "last_test_result":
 		s.LastTestResult = value
 	case "last_test_output":

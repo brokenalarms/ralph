@@ -100,57 +100,12 @@ var Flags = []FlagDef{
 		},
 	},
 	{
-		Long: "--refactor-every", MetaVar: "<N>",
-		Help: "Refactor every N iterations", Default: "0",
-		EnvVar: "RALPH_REFACTOR_EVERY", ConfigKey: "refactor_every",
-		Kind: KindInt, TrackCLI: true,
-		Apply: func(cfg *Config, val string) error {
-			n, err := strconv.Atoi(val)
-			if err != nil {
-				return err
-			}
-			cfg.RefactorEvery = n
-			return nil
-		},
-	},
-	{
-		Long: "--no-refactor",
-		Help: "Disable refactoring entirely",
-		EnvVar: "RALPH_NO_REFACTOR", ConfigKey: "no_refactor",
+		Long: "--refactor",
+		Help: "Enable LLM-based adaptive refactoring (checks every 5 task completions)",
+		ConfigKey: "refactor",
 		Kind: KindBool, TrackCLI: true,
-		Apply: func(cfg *Config, val string) error {
-			if parseBoolVal(val) {
-				cfg.NoRefactor = true
-			}
-			return nil
-		},
-	},
-	{
-		Long: "--refactor-threshold", MetaVar: "<N>",
-		Help: "Quality score threshold for refactoring", Default: "200",
-		EnvVar: "RALPH_REFACTOR_THRESHOLD", ConfigKey: "refactor_threshold",
-		Kind: KindInt, TrackCLI: true,
-		Apply: func(cfg *Config, val string) error {
-			n, err := strconv.Atoi(val)
-			if err != nil {
-				return err
-			}
-			cfg.RefactorThreshold = n
-			return nil
-		},
-	},
-	{
-		Long: "--disable-check", MetaVar: "<checks>",
-		Help: "Disable specific quality checks (comma-separated)",
-		ConfigKey: "disabled_checks",
-		Kind: KindStringList, TrackCLI: true,
-		Apply: func(cfg *Config, val string) error {
-			for _, name := range strings.Split(val, ",") {
-				name = strings.TrimSpace(name)
-				if name != "" {
-					cfg.DisabledChecks = append(cfg.DisabledChecks, name)
-				}
-			}
+		Apply: func(cfg *Config, _ string) error {
+			cfg.Refactor = true
 			return nil
 		},
 	},

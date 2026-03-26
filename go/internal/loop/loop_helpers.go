@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,7 +14,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
-	"github.com/brokenalarms/ralph/internal/quality"
 	"github.com/brokenalarms/ralph/internal/prompt"
 )
 
@@ -331,47 +329,37 @@ func (l *Loop) checkStopFile() bool {
 	return false
 }
 
-const defaultLookbackCommits = 5
+const refactorCheckInterval = 5
+const refactorLookbackCommits = 10
 
 func (l *Loop) maybeRefactor() error {
-	if l.cfg.NoRefactor {
+	if !l.cfg.Refactor {
 		return nil
 	}
 
-	threshold := l.cfg.RefactorThreshold
-	if threshold <= 0 {
+	completedCount := len(l.sessionTasks)
+	if completedCount == 0 || completedCount%refactorCheckInterval != 0 {
 		return nil
 	}
 
-	lookback := defaultLookbackCommits
-	recentFiles := l.git.RecentChangedFiles(lookback)
+	recentFiles := l.git.RecentChangedFiles(refactorLookbackCommits)
 	if recentFiles == "" {
 		return nil
 	}
 
-	files := strings.Split(strings.TrimSpace(recentFiles), "\n")
-	findingsFile := filepath.Join(l.cfg.Dirs.RalphDir, ".quality-findings")
+	archSpec := l.readArchSpec()
 
-	opts := &quality.Options{DisabledChecks: make(map[string]bool)}
-	for _, name := range l.cfg.DisabledChecks {
-		opts.DisabledChecks[name] = true
-	}
-
-	score, err := quality.Assess(l.git.WorkDir, findingsFile, opts, files...)
+	shouldRefactor, err := l.llmShouldRefactor(context.Background(), archSpec, recentFiles)
 	if err != nil {
-		return fmt.Errorf("quality assessment: %w", err)
+		return fmt.Errorf("refactor check: %w", err)
 	}
 
-	l.state.Write("quality_score", strconv.Itoa(score))
-
-	if score < threshold {
-		l.logger.Log("quality", "Score %d/%d — below threshold, skipping refactor", score, threshold)
+	if !shouldRefactor {
+		l.logger.Log("refactor", "LLM says no refactoring needed — skipping")
 		return nil
 	}
 
-	l.logger.Phase("--- Adaptive refactor (quality score %d >= threshold %d) ---", score, threshold)
-
-	qualityFindings := quality.FormatFindings(findingsFile)
+	l.logger.Phase("--- Adaptive refactor (LLM recommended) ---")
 
 	refactorPrompt, err := prompt.BuildRefactorPrompt(prompt.Vars{
 		PromptsDir:       l.cfg.Dirs.PromptsDir,
@@ -379,7 +367,7 @@ func (l *Loop) maybeRefactor() error {
 		SignalToken:      l.signals.Complete,
 		CurrentTaskToken: l.signals.CurrentTask,
 		AllCompleteToken: l.signals.AllComplete,
-	}, recentFiles, qualityFindings)
+	}, recentFiles)
 	if err != nil {
 		return fmt.Errorf("building refactor prompt: %w", err)
 	}
@@ -409,6 +397,46 @@ func (l *Loop) maybeRefactor() error {
 	l.logger.Success("", "Refactor iteration complete")
 
 	return err
+}
+
+func (l *Loop) readArchSpec() string {
+	path := filepath.Join(l.git.WorkDir, "docs", "specs", "architecture.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	content := string(data)
+	if len(content) > 4000 {
+		content = content[:4000]
+	}
+	return content
+}
+
+func (l *Loop) llmShouldRefactor(ctx context.Context, archSpec, recentFiles string) (bool, error) {
+	queryFn := l.refactorQueryFunc
+	if queryFn == nil && l.agentRunner != nil {
+		queryFn = l.agentRunner.Query
+	}
+	if queryFn == nil {
+		return false, fmt.Errorf("no query function available")
+	}
+
+	prompt := "You are deciding whether a codebase needs refactoring.\n\n"
+	if archSpec != "" {
+		prompt += "## Architecture spec\n" + archSpec + "\n\n"
+	}
+	prompt += "## Recently changed files\n" + recentFiles + "\n\n"
+	prompt += "Based on the recently changed files and the architecture spec, does this codebase need refactoring right now?\n"
+	prompt += "Consider: code duplication, unclear naming, files growing too large, architectural drift from the spec, dead code.\n"
+	prompt += "Reply with exactly YES or NO on the first line, followed by a brief explanation."
+
+	response, err := queryFn(ctx, l.git.WorkDir, prompt, "")
+	if err != nil {
+		return false, err
+	}
+
+	firstLine := strings.SplitN(strings.TrimSpace(response), "\n", 2)[0]
+	return strings.EqualFold(strings.TrimSpace(firstLine), "YES"), nil
 }
 
 func (l *Loop) waitForRate(ctx context.Context) bool {

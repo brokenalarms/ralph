@@ -20,9 +20,7 @@ func TestLoad_BashCompatible(t *testing.T) {
   "worktree_dir": "/tmp/worktrees/test-01",
   "worktree_branch": "ralph/test/01-state",
   "task_backend": "bd",
-  "max_iterations": 50,
-  "quality_score": 15,
-  "refactor_every": 20
+  "max_iterations": 50
 }`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(stateJSON), 0o644); err != nil {
 		t.Fatal(err)
@@ -42,12 +40,6 @@ func TestLoad_BashCompatible(t *testing.T) {
 	}
 	if s.MaxIterations != 50 {
 		t.Errorf("MaxIterations = %d, want 50", s.MaxIterations)
-	}
-	if s.QualityScore != 15 {
-		t.Errorf("QualityScore = %d, want 15", s.QualityScore)
-	}
-	if s.RefactorEvery != 20 {
-		t.Errorf("RefactorEvery = %d, want 20", s.RefactorEvery)
 	}
 	if s.TaskBackend != "bd" {
 		t.Errorf("TaskBackend = %q, want %q", s.TaskBackend, "bd")
@@ -83,8 +75,6 @@ func TestSaveAndLoad_Roundtrip(t *testing.T) {
 		LastTask:          "test task",
 		TaskBackend:       "bd",
 		MaxIterations:     20,
-		QualityScore:      12,
-		RefactorEvery: 20,
 	}
 
 	if err := st.Save(original); err != nil {
@@ -99,8 +89,7 @@ func TestSaveAndLoad_Roundtrip(t *testing.T) {
 	if loaded.Iteration != original.Iteration ||
 		loaded.Status != original.Status ||
 		loaded.MaxIterations != original.MaxIterations ||
-		loaded.LastTask != original.LastTask ||
-		loaded.RefactorEvery != original.RefactorEvery {
+		loaded.LastTask != original.LastTask {
 		t.Errorf("Roundtrip mismatch:\n  saved:  %+v\n  loaded: %+v", original, loaded)
 	}
 }
@@ -229,7 +218,7 @@ func TestInit_CreatesFreshState(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 
-	if err := st.Init(50, 20); err != nil {
+	if err := st.Init(50); err != nil {
 		t.Fatal(err)
 	}
 
@@ -254,7 +243,7 @@ func TestInit_PreservesStateOnResume(t *testing.T) {
 
 	st.Save(State{Iteration: 3, Status: "running", MaxIterations: 50})
 
-	if err := st.Init(50, 20); err != nil {
+	if err := st.Init(50); err != nil {
 		t.Fatal(err)
 	}
 
@@ -284,38 +273,6 @@ func TestTaskBackend_WrittenToState(t *testing.T) {
 	val, _ := st.Read("task_backend")
 	if val != "bd" {
 		t.Errorf("task_backend = %q, want %q", val, "bd")
-	}
-}
-
-// Proves: quality_score defaults to 0 in initial state.
-func TestQualityScore_DefaultsToZero(t *testing.T) {
-	dir := t.TempDir()
-	st := NewStore(dir)
-	st.Init(5, 0)
-	st.Write("quality_score", "0")
-
-	val, err := st.Read("quality_score")
-	if err != nil {
-		t.Fatalf("Read quality_score: %v", err)
-	}
-	if val != "0" {
-		t.Errorf("quality_score = %q, want %q", val, "0")
-	}
-}
-
-// Proves: quality_score tracks across writes.
-func TestQualityScore_TracksAcrossWrites(t *testing.T) {
-	dir := t.TempDir()
-	st := NewStore(dir)
-	st.Init(5, 0)
-	st.Write("quality_score", "25")
-
-	val, err := st.Read("quality_score")
-	if err != nil {
-		t.Fatalf("Read quality_score: %v", err)
-	}
-	if val != "25" {
-		t.Errorf("quality_score = %q, want %q", val, "25")
 	}
 }
 

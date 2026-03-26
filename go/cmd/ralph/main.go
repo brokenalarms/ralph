@@ -103,7 +103,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	}
 
 	st := state.NewStore(ralphDir)
-	if err := st.Init(cfg.MaxIterations, 0); err != nil {
+	if err := st.Init(cfg.MaxIterations); err != nil {
 		log.Error("", "Failed to initialize state: %v", err)
 		return 1
 	}
@@ -165,10 +165,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		Dirs:                dirs,
 		PlanFile:            planFile,
 		MaxIterations:       cfg.MaxIterations,
-		RefactorEvery:       cfg.RefactorEvery,
-		NoRefactor:          cfg.NoRefactor,
-		RefactorThreshold:   cfg.RefactorThreshold,
-		DisabledChecks:      cfg.DisabledChecks,
+		Refactor:            cfg.Refactor,
 		Quiet:               cfg.Quiet,
 		AutoMerge:           cfg.AutoMerge,
 		Evolve:              cfg.Evolve,

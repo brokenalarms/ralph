@@ -18,10 +18,7 @@ type Config struct {
 	Prompt                     string
 	Quiet                      bool
 	CallsPerHour               int
-	RefactorEvery              int
-	NoRefactor                 bool
-	RefactorThreshold          int
-	DisabledChecks             []string
+	Refactor                   bool
 	UseTmux                    bool
 	AutoMerge                  bool
 	MergeAdmin                 bool
