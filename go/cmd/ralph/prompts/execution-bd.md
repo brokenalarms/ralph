@@ -49,4 +49,6 @@ Write a test that proves the bead's requirement. Run it — it must FAIL. Then i
 1. Commit your changes and ensure scoped tests pass for the code you touched.
 2. Write your post-task reflection.
 3. Signal completion by writing to the signal file. This MUST be the very last thing you do — Ralph will kill your process immediately when it detects the signal.
+
 Do NOT run `bd close` — the orchestrator closes your assigned task automatically after verifying your work.
+Do NOT run `git push` or `gh pr create` — the orchestrator handles pushing, PR creation, and merging. You do not have access to these commands.
