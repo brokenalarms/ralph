@@ -6,8 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-
-	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // RebaseRecovery represents the user's chosen recovery action when rebase
@@ -179,76 +177,11 @@ func (m *Manager) resetResumedWorktree(defaultBranch string) error {
 	return nil
 }
 
-// RebaseOntoDefaultBranch rebases the worktree onto origin's default branch,
-// detecting and skipping squash-merged branches when a naive rebase conflicts.
+// RebaseOntoDefaultBranch delegates to EnsureUpToDate, which is the single
+// sync point for all rebase operations. Kept as a named method for callers
+// that explicitly want to rebase (e.g. handleRebase in the loop).
 func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
-	var result error
-	m.withStash("ralph-rebase-autostash", func() {
-		result = m.rebaseOntoDefaultBranchInner(ctx)
-	})
-	return result
-}
-
-func (m *Manager) rebaseOntoDefaultBranchInner(ctx context.Context) error {
-	defaultBranch := m.detectDefaultBranch()
-	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		m.Logger.Warn("git", "Failed to fetch origin/%s: %v", defaultBranch, err)
-	}
-
-	if !m.refExists(m.WorkDir, "origin/"+defaultBranch) {
-		m.Logger.Log("git", "No remote branch origin/%s — skipping rebase", defaultBranch)
-		return nil
-	}
-
-	if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, "HEAD") == nil {
-		m.Logger.Log("git", "%s Already up to date with origin/%s", logging.BranchTag(defaultBranch), defaultBranch)
-		return nil
-	}
-
-	if m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "origin/"+defaultBranch) == nil {
-		m.Logger.Log("git", "%s Rebased onto origin/%s", logging.BranchTag(defaultBranch), defaultBranch)
-		return nil
-	}
-
-	if m.autoResolveAndContinue(ctx, defaultBranch) {
-		m.Logger.Log("git", "%s Rebased onto origin/%s (auto-resolved conflicts)", logging.BranchTag(defaultBranch), defaultBranch)
-		return nil
-	}
-	m.gitCmd(m.WorkDir, "rebase", "--abort")
-
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	m.Logger.Warn("git", "Rebase failed, checking for squash-merged branches...")
-
-	lastMerged := m.findLastSquashMergedBranch(defaultBranch)
-
-	if lastMerged == "" {
-		m.Logger.Error("git", "%s Rebase onto %s failed with real conflicts", logging.BranchTag(defaultBranch), defaultBranch)
-		return &RebaseConflictError{Cause: fmt.Sprintf("rebase onto %s failed with real conflicts", defaultBranch)}
-	}
-
-	m.Logger.Log("git", "Detected squash-merged branch: %s", lastMerged)
-
-	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "--onto", "origin/"+defaultBranch, lastMerged, "HEAD"); err != nil {
-		m.gitCmd(m.WorkDir, "rebase", "--abort")
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		m.Logger.Error("git", "%s Rebase onto %s past squash-merged branches failed", logging.BranchTag(defaultBranch), defaultBranch)
-		return &RebaseConflictError{Cause: fmt.Sprintf("rebase onto %s past squash-merged branches failed", defaultBranch)}
-	}
-
-	m.Logger.Log("git", "%s Rebased onto origin/%s (skipped squash-merged branches)", logging.BranchTag(defaultBranch), defaultBranch)
-
-	m.TaskSeq = m.ParseTaskSeqFromBranches()
-	m.gitCmd(m.ProjectDir, "branch", "-D", lastMerged)
-
-	return nil
+	return m.EnsureUpToDate(ctx)
 }
 
 // findLastSquashMergedBranch iterates ralph/<project>/* branches (sorted by

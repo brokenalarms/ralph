@@ -17,7 +17,7 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 		return "", nil
 	}
 
-	m.EnsureUpToDate(ctx)
+	_ = m.EnsureUpToDate(ctx)
 
 	repoURL := m.gitOutput(m.WorkDir, "remote", "get-url", "origin")
 	if repoURL == "" {
@@ -154,7 +154,7 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	m.EnsureUpToDate(ctx)
+	_ = m.EnsureUpToDate(ctx)
 
 	gh := m.gh()
 	if !gh.Available() {

@@ -258,8 +258,8 @@ func TestRebaseOntoDefaultBranch_StackedBranchesSameFile(t *testing.T) {
 	}
 }
 
-// Real conflicts (not squash-merge related) halt rebase with an error
-func TestRebaseOntoDefaultBranch_HaltsOnRealConflicts(t *testing.T) {
+// Real conflicts force-reset to origin/main and return a RebaseConflictError.
+func TestRebaseOntoDefaultBranch_ForceResetsOnRealConflicts(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	mgr := setupRebaseMgr(t, project, bare)
 
@@ -273,10 +273,16 @@ func TestRebaseOntoDefaultBranch_HaltsOnRealConflicts(t *testing.T) {
 
 	err := mgr.RebaseOntoDefaultBranch(context.Background())
 	if err == nil {
-		t.Fatal("expected error for real conflicts")
+		t.Fatal("expected RebaseConflictError after force-reset")
 	}
-	if !strings.Contains(err.Error(), "real conflicts") {
+	if !strings.Contains(err.Error(), "force-reset") {
 		t.Errorf("unexpected error: %v", err)
+	}
+	// Worktree should now be at origin/main (force-reset)
+	head := mgr.gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
+	origin := mgr.gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
+	if head != origin {
+		t.Errorf("expected HEAD to match origin/main after force-reset")
 	}
 }
 
