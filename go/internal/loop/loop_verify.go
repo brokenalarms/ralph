@@ -31,7 +31,7 @@ type signalParams struct {
 // agent spawning. Returns true when the work is verified and ready to merge.
 func (l *Loop) onSignal(p signalParams) bool {
 	// Step 1: Run tests (commit check is a warning, not a gate)
-	commitResult := verify.CheckCommits(l.git.WorkDir, p.headBefore)
+	commitResult := verify.CheckCommits(l.git, p.headBefore)
 	if !commitResult.Passed {
 		l.logger.Warn("git", "No new commits — will verify via LLM if work is already on main")
 	}
@@ -81,7 +81,7 @@ func (l *Loop) onSignal(p signalParams) bool {
 
 		for attempt := 1; attempt <= maxLLMVerifyAttempts; attempt++ {
 			l.logger.Log("llm", "Running LLM verification (attempt %d/%d)...", attempt, maxLLMVerifyAttempts)
-			llmResult := l.llmVerifyFunc(p.ctx, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, beadAcceptance, l.git.GitHub, l.queryFunc())
+			llmResult := l.llmVerifyFunc(p.ctx, l.git, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, beadAcceptance, l.git.GitHub, l.queryFunc())
 
 			if llmResult.Passed && llmResult.NoDiff && l.cfg.VerifyLevel == "hog" {
 				l.logger.Log("llm", "No diff detected — spawning codebase verification agent (hog mode)")
@@ -140,7 +140,7 @@ func (l *Loop) verifyCompletion(ctx context.Context, headBefore string) (bool, s
 		return true, ""
 	}
 
-	commitResult := verify.CheckCommits(l.git.WorkDir, headBefore)
+	commitResult := verify.CheckCommits(l.git, headBefore)
 	if !commitResult.Passed {
 		return false, commitResult.Reason
 	}

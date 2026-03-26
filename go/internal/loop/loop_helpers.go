@@ -178,7 +178,7 @@ func (l *Loop) maybeRefactor() error {
 	}
 
 	lookback := defaultLookbackCommits
-	recentFiles := git.RecentChangedFiles(l.git.WorkDir, lookback)
+	recentFiles := l.git.RecentChangedFiles(lookback)
 	if recentFiles == "" {
 		return nil
 	}
@@ -260,9 +260,9 @@ func (l *Loop) waitForRate(ctx context.Context) bool {
 
 func (l *Loop) analyzeIteration(rawLogPath string, logStart int, headBefore, headAfter, taskKey string) analyzer.Result {
 	iterLog := readLogFrom(rawLogPath, logStart)
-	hasDiff := git.HasDiff(l.git.WorkDir)
+	hasDiff := l.git.HasDiff()
 	newCommits := headBefore != "" && headAfter != "" && headBefore != headAfter
-	changedFiles := git.ChangedFiles(l.git.WorkDir, headBefore, headAfter)
+	changedFiles := l.git.ChangedFiles(headBefore, headAfter)
 
 	hasSignal := false
 	if _, err := os.Stat(l.signals.Complete); err == nil {

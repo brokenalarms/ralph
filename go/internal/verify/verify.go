@@ -11,6 +11,15 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 )
 
+// GitQuerier abstracts the git operations that verify needs, allowing the
+// package to work without calling git package-level functions directly.
+type GitQuerier interface {
+	HeadRev() string
+	DiffStatRange(from, to string) string
+	DiffFull(from, to string) string
+	LogOneline(from, to string) string
+}
+
 // QueryFunc runs a prompt through an agent and returns the response text.
 // This is injected by the orchestrator so LLM verification goes through
 // the centralized agent module rather than directly spawning processes.
@@ -85,12 +94,12 @@ func RunTests(ctx context.Context, dir string) Result {
 
 // CheckCommits returns a Result indicating whether HEAD moved since the
 // given baseline revision. A signal with no new commits is suspicious.
-func CheckCommits(dir, headBefore string) Result {
+func CheckCommits(gq GitQuerier, headBefore string) Result {
 	if headBefore == "" {
 		return Result{Passed: true, Reason: "no baseline to compare"}
 	}
 
-	headAfter := git.HeadRev(dir)
+	headAfter := gq.HeadRev()
 	if headAfter == "" {
 		return Result{Passed: true, Reason: "could not read HEAD"}
 	}
@@ -156,10 +165,10 @@ type PreflightResult struct {
 // PreflightChecks runs lightweight shell checks before the full test suite.
 // These are cheap and catch obvious failures: no files changed, no commits,
 // or bead prematurely closed by the agent.
-func PreflightChecks(workDir, headBefore string, beadStatus string) PreflightResult {
+func PreflightChecks(gq GitQuerier, headBefore string, beadStatus string) PreflightResult {
 	return PreflightResult{
-		FilesChanged: git.DiffStatRange(workDir, headBefore, "HEAD") != "",
-		HasCommits:   git.LogOneline(workDir, headBefore, "HEAD") != "",
+		FilesChanged: gq.DiffStatRange(headBefore, "HEAD") != "",
+		HasCommits:   gq.LogOneline(headBefore, "HEAD") != "",
 		BeadOpen:     beadStatus == "in_progress",
 	}
 }
@@ -170,11 +179,11 @@ func PreflightChecks(workDir, headBefore string, beadStatus string) PreflightRes
 // current iteration's diff. Falls back to iteration diff when no PR exists.
 // Uses prompts/verify-review.md as the review template when available.
 // When queryFn is non-nil, LLM calls go through the centralized agent module.
-func LLMVerifyPR(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn QueryFunc, model ...string) Result {
+func LLMVerifyPR(ctx context.Context, gq GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn QueryFunc, model ...string) Result {
 	diff := getPRDiff(ctx, workDir, taskID, gh)
 	source := "PR"
 	if diff == "" {
-		diff = git.DiffFull(workDir, headBefore, "HEAD")
+		diff = gq.DiffFull(headBefore, "HEAD")
 		if diff == "" {
 			return Result{Passed: true, NoDiff: true, Reason: "no PR found and no new commits — agent confirms task complete"}
 		}

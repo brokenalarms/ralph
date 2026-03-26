@@ -149,7 +149,7 @@ func (m *Manager) resumedBranchIsStale(defaultBranch string) bool {
 		return false
 	}
 
-	return IsBranchSquashMerged(m.WorkDir, m.WorktreeBranch, m.BaseBranch)
+	return m.IsBranchSquashMerged(m.WorktreeBranch)
 }
 
 // resetResumedWorktree force-resets the worktree to origin/defaultBranch,
@@ -182,26 +182,14 @@ func (m *Manager) resetResumedWorktree(defaultBranch string) error {
 // RebaseOntoDefaultBranch rebases the worktree onto origin's default branch,
 // detecting and skipping squash-merged branches when a naive rebase conflicts.
 func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
-	// Stash dirty state so rebase can proceed cleanly.
-	dirty := m.gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
-		m.gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
-	if dirty {
-		m.Logger.Log("git", "Stashing uncommitted changes before rebase...")
-		m.gitCmd(m.WorkDir, "stash", "push", "-m", "ralph-rebase-autostash")
-	}
-	defer func() {
-		if dirty {
-			if err := m.gitCmdErr(m.WorkDir, "stash", "pop"); err != nil {
-				m.Logger.Warn("git", "Stash pop conflict — committing stash as WIP")
-				m.gitCmd(m.WorkDir, "checkout", "--theirs", ".")
-				m.gitCmd(m.WorkDir, "add", "-A")
-				m.gitCmd(m.WorkDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
-			} else {
-				m.Logger.Log("git", "Re-applied stashed changes")
-			}
-		}
-	}()
+	var result error
+	m.withStash("ralph-rebase-autostash", func() {
+		result = m.rebaseOntoDefaultBranchInner(ctx)
+	})
+	return result
+}
 
+func (m *Manager) rebaseOntoDefaultBranchInner(ctx context.Context) error {
 	defaultBranch := m.detectDefaultBranch()
 	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
 		if ctx.Err() != nil {
@@ -210,27 +198,21 @@ func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
 		m.Logger.Warn("git", "Failed to fetch origin/%s: %v", defaultBranch, err)
 	}
 
-	// Skip if remote branch doesn't exist (e.g. repo never pushed)
 	if !m.refExists(m.WorkDir, "origin/"+defaultBranch) {
 		m.Logger.Log("git", "No remote branch origin/%s — skipping rebase", defaultBranch)
 		return nil
 	}
 
-	// Already up to date: origin/main is ancestor of HEAD means HEAD
-	// includes everything from main. The reverse (HEAD ancestor of
-	// origin/main) would incorrectly skip rebase when HEAD is behind.
 	if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, "HEAD") == nil {
 		m.Logger.Log("git", "%s Already up to date with origin/%s", logging.BranchTag(defaultBranch), defaultBranch)
 		return nil
 	}
 
-	// Try simple rebase
 	if m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "origin/"+defaultBranch) == nil {
 		m.Logger.Log("git", "%s Rebased onto origin/%s", logging.BranchTag(defaultBranch), defaultBranch)
 		return nil
 	}
 
-	// Try auto-resolving mechanical conflicts (e.g. squash-merge overlaps)
 	if m.autoResolveAndContinue(ctx, defaultBranch) {
 		m.Logger.Log("git", "%s Rebased onto origin/%s (auto-resolved conflicts)", logging.BranchTag(defaultBranch), defaultBranch)
 		return nil
@@ -263,7 +245,7 @@ func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
 
 	m.Logger.Log("git", "%s Rebased onto origin/%s (skipped squash-merged branches)", logging.BranchTag(defaultBranch), defaultBranch)
 
-	m.TaskSeq = ParseTaskSeqFromBranches(m.ProjectDir, m.ProjectName)
+	m.TaskSeq = m.ParseTaskSeqFromBranches()
 	m.gitCmd(m.ProjectDir, "branch", "-D", lastMerged)
 
 	return nil
@@ -275,7 +257,7 @@ func (m *Manager) RebaseOntoDefaultBranch(ctx context.Context) error {
 // read-tree origin/default, then reverse-apply the branch's diff. If that
 // succeeds, main already contains the branch's changes (squash-merged).
 func (m *Manager) findLastSquashMergedBranch(defaultBranch string) string {
-	branches := ListProjectBranches(m.ProjectDir, m.ProjectName)
+	branches := m.ListProjectBranches()
 	lastMerged := ""
 
 	for _, branch := range branches {
@@ -307,27 +289,6 @@ func (m *Manager) findLastSquashMergedBranch(defaultBranch string) string {
 // a temporary index loaded with origin/default's tree.
 func (m *Manager) isSquashMerged(defaultBranch, mergeBase, branch string) bool {
 	return checkSquashMerged(m.WorkDir, defaultBranch, mergeBase, branch)
-}
-
-// IsBranchSquashMerged checks whether a branch's changes have been
-// squash-merged into origin's default branch.
-func IsBranchSquashMerged(dir, branch, baseBranch string) bool {
-	defaultBranch := detectDefaultBranch(dir, baseBranch)
-	if !refExists(dir, "origin/"+defaultBranch) {
-		return false
-	}
-
-	mergeBase := gitOutput(dir, "merge-base", "origin/"+defaultBranch, branch)
-	if mergeBase == "" {
-		return false
-	}
-
-	branchFiles := gitOutput(dir, "diff", "--name-only", mergeBase, branch)
-	if branchFiles == "" {
-		return false
-	}
-
-	return checkSquashMerged(dir, defaultBranch, mergeBase, branch)
 }
 
 // checkSquashMerged tests whether a branch's changes (from mergeBase) are
@@ -381,7 +342,7 @@ func (m *Manager) RecreateFromMain(ctx context.Context) error {
 	// Delete all ralph project branches (squash-merged work is on main).
 	// A branch may be checked out in an external worktree (e.g. a Claude
 	// sub-agent in .claude/worktrees/). Force-remove such worktrees first.
-	branches := ListProjectBranches(m.ProjectDir, m.ProjectName)
+	branches := m.ListProjectBranches()
 	for _, b := range branches {
 		if wt := m.findWorktreeForBranch(m.ProjectDir, b); wt != "" {
 			m.Logger.Log("git", "Removing worktree holding branch %s: %s", b, wt)

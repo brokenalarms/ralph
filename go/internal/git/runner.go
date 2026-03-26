@@ -24,18 +24,11 @@ func (r *execRunner) Run(ctx context.Context, dir string, args ...string) (strin
 	return strings.TrimSpace(string(out)), err
 }
 
-// defaultRunner is the package-level runner used by standalone helper functions.
+// defaultRunner is the package-level runner used by IsGitRepo and test helpers.
 var defaultRunner Runner = &execRunner{}
-
-// Standalone git command wrappers that delegate to defaultRunner.
-// Used by package-level helper functions that don't have a Manager instance.
 
 func gitCmd(dir string, args ...string) {
 	defaultRunner.Run(context.Background(), dir, args...)
-}
-
-func gitCmdCtx(ctx context.Context, dir string, args ...string) {
-	defaultRunner.Run(ctx, dir, args...)
 }
 
 func gitCmdErr(dir string, args ...string) error {

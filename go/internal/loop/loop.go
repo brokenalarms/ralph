@@ -78,7 +78,7 @@ type Loop struct {
 	mergeFunc          func(ctx context.Context) (bool, error)
 	pushPRFunc         func(ctx context.Context, taskID, taskDesc string) error
 	verifyFunc      func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
-	llmVerifyFunc   func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result
+	llmVerifyFunc   func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result
 	newRunnerFunc      func() claudeRunner
 	findPRInfoFunc     func(workDir string) (number, title string)
 	agentRunner        *agent.Runner
@@ -342,7 +342,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			break
 		}
 
-		headBefore := git.HeadRev(l.git.WorkDir)
+		headBefore := l.git.HeadRev()
 		rawLogPath := filepath.Join(l.cfg.Dirs.RalphDir, "raw.log")
 		logStart := fileLineCount(rawLogPath)
 
@@ -382,7 +382,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			IdleTimeout:         l.cfg.IdleTimeout,
 			IdleTimeoutProgress: l.cfg.IdleTimeoutProgress,
 			HasProgress: func() bool {
-				return git.HasDiff(workDir) || git.HeadRev(workDir) != headBefore
+				return l.git.HasDiff() || l.git.HeadRev() != headBefore
 			},
 			OnSignal: func(summary string) bool {
 				return l.onSignal(signalParams{
@@ -401,7 +401,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 		if result.IdleTimeout {
 			l.logger.Warn("llm", "Restarting iteration %d after idle timeout", runIteration)
-			diffStat := git.DiffStatRange(l.git.WorkDir, headBefore, git.HeadRev(l.git.WorkDir))
+			diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
 			l.attempts.Record(taskID, nextTask,
 				"Killed: idle timeout (no output for configured duration)",
 				diffStat,
@@ -438,8 +438,8 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.logger.Log("", "Run iteration %d complete (%dm%ds). %d/%d tasks done.",
 			runIteration, int(elapsed.Minutes()), int(elapsed.Seconds())%60, completed, total)
 
-		headAfter := git.HeadRev(l.git.WorkDir)
-		diffStat := git.DiffStatRange(l.git.WorkDir, headBefore, headAfter)
+		headAfter := l.git.HeadRev()
+		diffStat := l.git.DiffStatRange(headBefore, headAfter)
 		analysisResult := l.analyzeIteration(rawLogPath, logStart, headBefore, headAfter, taskID)
 
 		summary := result.Summary

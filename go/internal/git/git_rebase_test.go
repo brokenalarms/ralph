@@ -545,7 +545,7 @@ func TestRecreateFromMain_CreatesCleanWorktree(t *testing.T) {
 	}
 
 	// Old task branches should be deleted
-	branches := ListProjectBranches(project, mgr.ProjectName)
+	branches := mgr.ListProjectBranches()
 	for _, b := range branches {
 		if b == oldBranch {
 			t.Errorf("old branch %q should have been deleted", oldBranch)
@@ -626,7 +626,7 @@ func TestRecreateFromMain_PrunesExternalWorktreeHoldingBranch(t *testing.T) {
 	}
 
 	// The old task branch should be gone
-	for _, b := range ListProjectBranches(project, mgr.ProjectName) {
+	for _, b := range mgr.ListProjectBranches() {
 		if b == taskBranch {
 			t.Errorf("branch %q should have been deleted", taskBranch)
 		}

@@ -171,6 +171,31 @@ func (m *Manager) tryResumeWorktree() error {
 	return nil
 }
 
+// withStash stashes any uncommitted changes, runs fn, then reapplies the stash.
+// Used by EnsureUpToDate and RebaseOntoDefaultBranch to avoid duplicating
+// the stash/pop logic.
+func (m *Manager) withStash(stashMsg string, fn func()) {
+	dirty := m.gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
+		m.gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
+	if dirty {
+		m.Logger.Log("git", "Stashing uncommitted changes before rebase...")
+		m.gitCmd(m.WorkDir, "stash", "push", "-m", stashMsg)
+	}
+
+	fn()
+
+	if dirty {
+		if err := m.gitCmdErr(m.WorkDir, "stash", "pop"); err != nil {
+			m.Logger.Warn("git", "Stash pop conflict — committing stash as WIP")
+			m.gitCmd(m.WorkDir, "checkout", "--theirs", ".")
+			m.gitCmd(m.WorkDir, "add", "-A")
+			m.gitCmd(m.WorkDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
+		} else {
+			m.Logger.Log("git", "Re-applied stashed changes")
+		}
+	}
+}
+
 // EnsureUpToDate fetches the latest base branch, stashes any uncommitted
 // changes, rebases onto origin, and reapplies the stash. This is the single
 // sync point that all git operations (push, merge, resume) go through to
@@ -195,30 +220,14 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) {
 		return
 	}
 
-	dirty := m.gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
-		m.gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
-	if dirty {
-		m.Logger.Log("git", "Stashing uncommitted changes before rebase...")
-		m.gitCmd(m.WorkDir, "stash", "push", "-m", "ralph-autostash")
-	}
-
-	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "origin/"+defaultBranch); err != nil {
-		if resolved := m.autoResolveAndContinue(ctx, defaultBranch); !resolved {
-			m.Logger.Warn("git", "%s Rebase onto %s failed with unresolvable conflicts — aborting", logging.BranchTag(defaultBranch), defaultBranch)
-			m.gitCmd(m.WorkDir, "rebase", "--abort")
+	m.withStash("ralph-autostash", func() {
+		if err := m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "origin/"+defaultBranch); err != nil {
+			if resolved := m.autoResolveAndContinue(ctx, defaultBranch); !resolved {
+				m.Logger.Warn("git", "%s Rebase onto %s failed with unresolvable conflicts — aborting", logging.BranchTag(defaultBranch), defaultBranch)
+				m.gitCmd(m.WorkDir, "rebase", "--abort")
+			}
 		}
-	}
-
-	if dirty {
-		if err := m.gitCmdErr(m.WorkDir, "stash", "pop"); err != nil {
-			m.Logger.Warn("git", "Stash pop conflict — committing stash as WIP")
-			m.gitCmd(m.WorkDir, "checkout", "--theirs", ".")
-			m.gitCmd(m.WorkDir, "add", "-A")
-			m.gitCmd(m.WorkDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
-		} else {
-			m.Logger.Log("git", "Re-applied stashed changes")
-		}
-	}
+	})
 }
 
 // cleanTempBranch removes the temp branch, force-removing a stale worktree

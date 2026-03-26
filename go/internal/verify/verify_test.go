@@ -11,6 +11,44 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 )
 
+// dirQuerier implements GitQuerier for test repos by shelling out to git.
+type dirQuerier struct {
+	dir string
+}
+
+func (q *dirQuerier) HeadRev() string {
+	out, _ := exec.Command("git", "-C", q.dir, "rev-parse", "HEAD").Output()
+	return strings.TrimSpace(string(out))
+}
+
+func (q *dirQuerier) DiffStatRange(from, to string) string {
+	if from == "" || to == "" || from == to {
+		return ""
+	}
+	out, _ := exec.Command("git", "-C", q.dir, "diff", "--stat", from, to).Output()
+	return strings.TrimSpace(string(out))
+}
+
+func (q *dirQuerier) DiffFull(from, to string) string {
+	out, _ := exec.Command("git", "-C", q.dir, "diff", from+".."+to).Output()
+	return strings.TrimSpace(string(out))
+}
+
+func (q *dirQuerier) LogOneline(from, to string) string {
+	out, _ := exec.Command("git", "-C", q.dir, "log", "--oneline", from+".."+to).Output()
+	return strings.TrimSpace(string(out))
+}
+
+func newQuerier(dir string) *dirQuerier {
+	return &dirQuerier{dir: dir}
+}
+
+// Compile-time check that dirQuerier satisfies GitQuerier.
+var _ GitQuerier = (*dirQuerier)(nil)
+
+// Compile-time check that git.Manager satisfies GitQuerier.
+var _ GitQuerier = (*git.Manager)(nil)
+
 // DetectTestCommand finds a Makefile test target when present,
 // proving ralph can auto-detect the project's test runner.
 func TestDetectTestCommand_Makefile(t *testing.T) {
@@ -136,9 +174,10 @@ func TestRunTests_NoTestRunner(t *testing.T) {
 // the case where Claude signals completion without making code changes.
 func TestCheckCommits_NoNewCommits(t *testing.T) {
 	dir := setupGitRepo(t)
+	gq := newQuerier(dir)
 
-	head := git.HeadRev(dir)
-	result := CheckCommits(dir, head)
+	head := gq.HeadRev()
+	result := CheckCommits(gq, head)
 	if result.Passed {
 		t.Error("expected failure when HEAD hasn't moved")
 	}
@@ -151,15 +190,16 @@ func TestCheckCommits_NoNewCommits(t *testing.T) {
 // produced actual code changes before signaling completion.
 func TestCheckCommits_WithNewCommits(t *testing.T) {
 	dir := setupGitRepo(t)
+	gq := newQuerier(dir)
 
-	headBefore := git.HeadRev(dir)
+	headBefore := gq.HeadRev()
 
 	// Make a new commit
 	os.WriteFile(filepath.Join(dir, "new.txt"), []byte("change"), 0o644)
 	exec.Command("git", "-C", dir, "add", ".").Run()
 	exec.Command("git", "-C", dir, "commit", "-m", "new").Run()
 
-	result := CheckCommits(dir, headBefore)
+	result := CheckCommits(gq, headBefore)
 	if !result.Passed {
 		t.Errorf("expected pass with new commits, got: %s", result.Reason)
 	}
@@ -168,9 +208,9 @@ func TestCheckCommits_WithNewCommits(t *testing.T) {
 // CheckCommits passes when no baseline is provided (first iteration),
 // so we don't block on edge cases.
 func TestCheckCommits_EmptyBaseline(t *testing.T) {
-	dir := t.TempDir()
+	gq := newQuerier(t.TempDir())
 
-	result := CheckCommits(dir, "")
+	result := CheckCommits(gq, "")
 	if !result.Passed {
 		t.Errorf("expected pass with empty baseline, got: %s", result.Reason)
 	}
@@ -197,13 +237,14 @@ func TestLastNLines_ShortInput(t *testing.T) {
 // the full test suite.
 func TestPreflightChecks_WithChanges(t *testing.T) {
 	dir := setupGitRepo(t)
-	headBefore := git.HeadRev(dir)
+	gq := newQuerier(dir)
+	headBefore := gq.HeadRev()
 
 	os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main"), 0o644)
 	exec.Command("git", "-C", dir, "add", ".").Run()
 	exec.Command("git", "-C", dir, "commit", "-m", "add feature").Run()
 
-	result := PreflightChecks(dir, headBefore, "in_progress")
+	result := PreflightChecks(gq, headBefore, "in_progress")
 	if !result.FilesChanged {
 		t.Error("expected FilesChanged=true after adding a file")
 	}
@@ -219,9 +260,10 @@ func TestPreflightChecks_WithChanges(t *testing.T) {
 // closes the task before the orchestrator verifies it.
 func TestPreflightChecks_PrematureClose(t *testing.T) {
 	dir := setupGitRepo(t)
-	headBefore := git.HeadRev(dir)
+	gq := newQuerier(dir)
+	headBefore := gq.HeadRev()
 
-	result := PreflightChecks(dir, headBefore, "closed")
+	result := PreflightChecks(gq, headBefore, "closed")
 	if result.BeadOpen {
 		t.Error("expected BeadOpen=false when status is closed (premature close)")
 	}
@@ -230,9 +272,10 @@ func TestPreflightChecks_PrematureClose(t *testing.T) {
 // PreflightChecks correctly reports no changes when HEAD hasn't moved.
 func TestPreflightChecks_NoChanges(t *testing.T) {
 	dir := setupGitRepo(t)
-	headBefore := git.HeadRev(dir)
+	gq := newQuerier(dir)
+	headBefore := gq.HeadRev()
 
-	result := PreflightChecks(dir, headBefore, "in_progress")
+	result := PreflightChecks(gq, headBefore, "in_progress")
 	if result.FilesChanged {
 		t.Error("expected FilesChanged=false when no files changed")
 	}
@@ -285,9 +328,10 @@ func TestLoadReviewPrompt_Fallback(t *testing.T) {
 // LLMVerifyPR passes when no PR and no diff exist — agent confirmed task complete.
 func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
 	dir := setupGitRepo(t)
-	head := git.HeadRev(dir)
+	gq := newQuerier(dir)
+	head := gq.HeadRev()
 
-	result := LLMVerifyPR(context.Background(), dir, t.TempDir(), "nonexistent-task", head, "some task", "some description", "", nil, nil)
+	result := LLMVerifyPR(context.Background(), gq, dir, t.TempDir(), "nonexistent-task", head, "some task", "some description", "", nil, nil)
 	if !result.Passed {
 		t.Errorf("expected pass when agent confirms complete with no new work needed, got: %s", result.Reason)
 	}
@@ -301,14 +345,15 @@ func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
 // routed through the git module.
 func TestLLMVerifyPR_UsesGitHubInterface(t *testing.T) {
 	dir := setupGitRepo(t)
-	head := git.HeadRev(dir)
+	gq := newQuerier(dir)
+	head := gq.HeadRev()
 
 	stub := &stubGitHub{
 		searchResult: "99",
 		prDiff:       "+new line\n",
 	}
 
-	result := LLMVerifyPR(context.Background(), dir, t.TempDir(), "test-task", head, "test", "test desc", "", stub, nil)
+	result := LLMVerifyPR(context.Background(), gq, dir, t.TempDir(), "test-task", head, "test", "test desc", "", stub, nil)
 
 	if !stub.searchCalled {
 		t.Error("expected SearchPR to be called via GitHub interface")

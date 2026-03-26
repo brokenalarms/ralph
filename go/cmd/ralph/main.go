@@ -78,15 +78,26 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	stateFile := filepath.Join(ralphDir, "state.json")
 	logFile := filepath.Join(ralphDir, "loop.log")
 
+	// Create git manager early so pre-setup calls use it instead of
+	// package-level functions. SetupWorktree is called after state init.
+	gm := &git.Manager{
+		ProjectDir: cfg.ProjectDir,
+		WorkDir:    cfg.ProjectDir,
+		RalphDir:   ralphDir,
+		BaseBranch: cfg.BaseBranch,
+		MergeAdmin: cfg.MergeAdmin,
+		Logger:     log,
+	}
+
 	// Validate base branch before initializing state — a failed validation
 	// must not leave state that causes a false resume on retry.
-	if err := git.ValidateRemoteBranch(ctx, cfg.ProjectDir, cfg.BaseBranch); err != nil {
+	if err := gm.ValidateRemoteBranch(ctx); err != nil {
 		log.Error("", "%v", err)
 		return 1
 	}
 
 	// Initialize .ralph directory and check for resume.
-	resume, exitCode := initRalphDir(ctx, cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(ctx, cfg, gm, ralphDir, logFile, stateFile, log)
 	if exitCode >= 0 {
 		return exitCode
 	}
@@ -114,16 +125,11 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	}
 	st.Write("task_backend", backend.Label())
 
-	// Set up git manager.
-	gm := &git.Manager{
-		ProjectDir:     cfg.ProjectDir,
-		RalphDir:       ralphDir,
-		Resume:         resume,
-		BaseBranch:     cfg.BaseBranch,
-		MergeAdmin: cfg.MergeAdmin,
-		State:          st,
-		Logger:         log,
-	}
+	// Wire remaining fields now that state and logger are ready.
+	gm.Resume = resume
+	gm.State = st
+	gm.Logger = log
+
 	if err := gm.SetupWorktree(ctx); err != nil {
 		log.Error("", "Worktree setup failed: %v", err)
 		return 1
@@ -196,7 +202,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 // initRalphDir creates .ralph, checks for dirty working tree, handles resume
 // detection. Returns (resume, exitCode). exitCode < 0 means continue.
-func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
+func initRalphDir(ctx context.Context, cfg config.Config, gm *git.Manager, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
 	if err := os.MkdirAll(ralphDir, 0o755); err != nil {
 		log.Error("", "Failed to create .ralph dir: %v", err)
 		return false, 1
@@ -211,17 +217,17 @@ func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, sta
 
 	// Check for uncommitted changes (skip on resume).
 	if !fileExists(stateFile) {
-		if git.IsGitRepo(cfg.ProjectDir) && git.HasUncommittedChanges(cfg.ProjectDir) {
+		if git.IsGitRepo(cfg.ProjectDir) && gm.HasUncommittedChanges() {
 			log.Error("", "uncommitted changes in %s — please commit or stash before running ralph.", cfg.ProjectDir)
 			return false, 1
 		}
 	}
 
 	// Ensure .ralph is gitignored.
-	git.EnsureGitignored(cfg.ProjectDir, ".ralph")
+	gm.EnsureGitignored(".ralph")
 
 	// Clean up orphaned worktrees from previous runs.
-	git.PruneOrphanedWorktrees(cfg.ProjectDir, ralphDir, log)
+	gm.PruneOrphanedWorktrees()
 
 	// Check for existing state (resume detection).
 	if fileExists(stateFile) {
@@ -391,11 +397,11 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 	if gm.WorktreeBranch != "" && gm.ProjectName != "" {
 		log.Log("", "Worktree:   %s", gm.WorkDir)
 
-		branches := git.ListProjectBranches(cfg.ProjectDir, gm.ProjectName)
+		branches := gm.ListProjectBranches()
 		if len(branches) > 1 {
 			log.Log("", "Branches:")
 			for _, b := range branches {
-				if git.IsBranchSquashMerged(cfg.ProjectDir, b, cfg.BaseBranch) {
+				if gm.IsBranchSquashMerged(b) {
 					log.Log("", "  %s [MERGED]", b)
 				} else {
 					log.Log("", "  %s", b)

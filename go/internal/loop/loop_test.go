@@ -1243,7 +1243,7 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 	}
 
 	// The first task's branch should still exist
-	branches := git.ListProjectBranches(project, gm.ProjectName)
+	branches := gm.ListProjectBranches()
 	hasFirst := false
 	for _, b := range branches {
 		if strings.Contains(b, "first-task") {
@@ -1320,7 +1320,7 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	}
 
 	// Only one ralph branch should exist (the task branch)
-	branches := git.ListProjectBranches(project, gm.ProjectName)
+	branches := gm.ListProjectBranches()
 	nonNextBranches := 0
 	for _, b := range branches {
 		if !strings.HasSuffix(b, "/next") {
@@ -1795,7 +1795,7 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	originMain := git.HeadRev(gm.WorkDir)
+	originMain := gm.HeadRev()
 	iterationCount := 0
 
 	backend := &mutableBackend{
@@ -1818,7 +1818,7 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 				backend.nextTask = "task B"
 				backend.nextID = "ralph-bbb"
 			} else {
-				headAfterMerge = git.HeadRev(gm.WorkDir)
+				headAfterMerge = gm.HeadRev()
 				backend.completed = 2
 				backend.remaining = 0
 			}
@@ -4765,7 +4765,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				VerifyDir:     dir,
 			}, st, gm, logger)
 			l.runner = runner
-			l.llmVerifyFunc = func(context.Context, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+			l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
 				return llmResult
 			}
 			l.pushPRFunc = func(context.Context, string, string) error { return nil }
@@ -4778,7 +4778,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				// After fix agent, re-verification will call llmVerifyFunc again;
 				// make it pass on second call to avoid skip-task path
 				callCount := 0
-				l.llmVerifyFunc = func(context.Context, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+				l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
 					callCount++
 					if callCount == 1 {
 						return llmResult
@@ -4990,7 +4990,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 	l.pushPRFunc = func(context.Context, string, string) error { return nil }
 	l.mergeFunc = func(context.Context) (bool, error) { return false, nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.llmVerifyFunc = func(context.Context, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+	l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
 		return verify.Result{Passed: true}
 	}
 

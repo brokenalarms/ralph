@@ -10,18 +10,6 @@ import (
 	"strings"
 )
 
-// ValidateRemoteBranch checks that the given branch exists on the remote.
-// Called before state initialization so a failed check doesn't leave
-// stale state that causes false resumes.
-func ValidateRemoteBranch(ctx context.Context, projectDir, baseBranch string) error {
-	branch := detectDefaultBranch(projectDir, baseBranch)
-	gitCmdCtx(ctx, projectDir, "fetch", "origin", branch)
-	if !refExists(projectDir, "origin/"+branch) {
-		return fmt.Errorf("base branch %q does not exist on remote — create it or set --base-branch", branch)
-	}
-	return nil
-}
-
 var (
 	nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 	dashTrim = regexp.MustCompile(`^-|-$`)
@@ -47,9 +35,31 @@ func Slugify(s string) string {
 	return s
 }
 
-// ListProjectBranches returns ralph/<project>/* branches sorted by refname.
-func ListProjectBranches(dir, projectName string) []string {
-	out := gitOutput(dir, "branch", "--list", "ralph/"+projectName+"/*", "--sort=refname")
+// IsGitRepo returns true if dir is inside a git repository.
+func IsGitRepo(dir string) bool {
+	return gitCmdErr(dir, "rev-parse", "--git-dir") == nil
+}
+
+func parseTaskSeqFromOutput(out string) int {
+	if out == "" {
+		return 0
+	}
+	seqRe := regexp.MustCompile(`/(\d+)-`)
+	maxSeq := 0
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "* ")
+		line = strings.TrimPrefix(line, "+ ")
+		if m := seqRe.FindStringSubmatch(line); len(m) > 1 {
+			if n, err := strconv.Atoi(m[1]); err == nil && n > maxSeq {
+				maxSeq = n
+			}
+		}
+	}
+	return maxSeq
+}
+
+func parseBranchList(out string) []string {
 	if out == "" {
 		return nil
 	}
@@ -65,15 +75,89 @@ func ListProjectBranches(dir, projectName string) []string {
 	return branches
 }
 
-// IsGitRepo returns true if dir is inside a git repository.
-func IsGitRepo(dir string) bool {
-	return gitCmdErr(dir, "rev-parse", "--git-dir") == nil
+// Manager methods that mirror the package-level helpers but route
+// through the Manager's injected Runner.
+
+func (m *Manager) HasDiff() bool {
+	if m.gitOutput(m.WorkDir, "diff", "--stat") != "" {
+		return true
+	}
+	return m.gitOutput(m.WorkDir, "diff", "--cached", "--stat") != ""
 }
 
-// EnsureGitignored adds an entry to .gitignore if it's not already present,
-// then commits the change. Preserves existing content.
-func EnsureGitignored(projectDir, entry string) {
-	gitignorePath := filepath.Join(projectDir, ".gitignore")
+func (m *Manager) HeadRev() string {
+	return m.gitOutput(m.WorkDir, "rev-parse", "HEAD")
+}
+
+func (m *Manager) HasUncommittedChanges() bool {
+	return m.gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
+		m.gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
+}
+
+func (m *Manager) ChangedFiles(headBefore, headAfter string) []string {
+	seen := make(map[string]bool)
+	var result []string
+
+	add := func(out string) {
+		for _, f := range strings.Split(out, "\n") {
+			f = strings.TrimSpace(f)
+			if f != "" && !seen[f] {
+				seen[f] = true
+				result = append(result, f)
+			}
+		}
+	}
+
+	add(m.gitOutput(m.WorkDir, "diff", "--name-only"))
+	add(m.gitOutput(m.WorkDir, "diff", "--cached", "--name-only"))
+
+	if headBefore != "" && headAfter != "" && headBefore != headAfter {
+		add(m.gitOutput(m.WorkDir, "diff", "--name-only", headBefore+"..."+headAfter))
+	}
+
+	return result
+}
+
+func (m *Manager) DiffStatRange(from, to string) string {
+	if from == "" || to == "" || from == to {
+		return ""
+	}
+	return m.gitOutput(m.WorkDir, "diff", "--stat", from, to)
+}
+
+func (m *Manager) DiffFull(from, to string) string {
+	return m.gitOutput(m.WorkDir, "diff", from+".."+to)
+}
+
+func (m *Manager) LogOneline(from, to string) string {
+	return m.gitOutput(m.WorkDir, "log", "--oneline", from+".."+to)
+}
+
+func (m *Manager) RecentChangedFiles(n int) string {
+	return m.gitOutput(m.WorkDir, "diff", "--name-only", fmt.Sprintf("HEAD~%d", n), "HEAD")
+}
+
+func (m *Manager) ListProjectBranches() []string {
+	out := m.gitOutput(m.ProjectDir, "branch", "--list", "ralph/"+m.ProjectName+"/*", "--sort=refname")
+	return parseBranchList(out)
+}
+
+func (m *Manager) ParseTaskSeqFromBranches() int {
+	out := m.gitOutput(m.ProjectDir, "branch", "--list", "ralph/"+m.ProjectName+"/*", "--sort=refname")
+	return parseTaskSeqFromOutput(out)
+}
+
+func (m *Manager) ValidateRemoteBranch(ctx context.Context) error {
+	branch := m.detectDefaultBranch()
+	m.gitCmdCtx(ctx, m.ProjectDir, "fetch", "origin", branch)
+	if !m.refExists(m.ProjectDir, "origin/"+branch) {
+		return fmt.Errorf("base branch %q does not exist on remote — create it or set --base-branch", branch)
+	}
+	return nil
+}
+
+func (m *Manager) EnsureGitignored(entry string) {
+	gitignorePath := filepath.Join(m.ProjectDir, ".gitignore")
 	existing := ""
 	if data, err := os.ReadFile(gitignorePath); err == nil {
 		existing = string(data)
@@ -94,88 +178,14 @@ func EnsureGitignored(projectDir, entry string) {
 	existing += entry + "\n"
 	os.WriteFile(gitignorePath, []byte(existing), 0o644)
 
-	if IsGitRepo(projectDir) {
-		gitCmd(projectDir, "add", ".gitignore")
-		gitCmd(projectDir, "commit", "-m", "Add "+entry+" to .gitignore")
+	if IsGitRepo(m.ProjectDir) {
+		m.gitCmd(m.ProjectDir, "add", ".gitignore")
+		m.gitCmd(m.ProjectDir, "commit", "-m", "Add "+entry+" to .gitignore")
 	}
 }
 
-// HasUncommittedChanges returns true if the working tree has staged or
-// unstaged changes (git diff --quiet fails).
-func HasUncommittedChanges(dir string) bool {
-	return gitCmdErr(dir, "diff", "--quiet") != nil ||
-		gitCmdErr(dir, "diff", "--cached", "--quiet") != nil
-}
-
-// HeadRev returns the current HEAD commit hash, or empty string on error.
-func HeadRev(dir string) string {
-	return gitOutput(dir, "rev-parse", "HEAD")
-}
-
-// HasDiff returns true if the worktree has staged or unstaged changes.
-func HasDiff(dir string) bool {
-	if gitOutput(dir, "diff", "--stat") != "" {
-		return true
-	}
-	return gitOutput(dir, "diff", "--cached", "--stat") != ""
-}
-
-// ChangedFiles returns a deduplicated list of files changed in the worktree
-// (staged + unstaged), and optionally between two commits.
-func ChangedFiles(dir, headBefore, headAfter string) []string {
-	seen := make(map[string]bool)
-	var result []string
-
-	add := func(out string) {
-		for _, f := range strings.Split(out, "\n") {
-			f = strings.TrimSpace(f)
-			if f != "" && !seen[f] {
-				seen[f] = true
-				result = append(result, f)
-			}
-		}
-	}
-
-	add(gitOutput(dir, "diff", "--name-only"))
-	add(gitOutput(dir, "diff", "--cached", "--name-only"))
-
-	if headBefore != "" && headAfter != "" && headBefore != headAfter {
-		add(gitOutput(dir, "diff", "--name-only", headBefore+"..."+headAfter))
-	}
-
-	return result
-}
-
-// DiffStatRange returns the --stat summary between two commits.
-// Returns empty string if the commits are equal or missing.
-func DiffStatRange(dir, from, to string) string {
-	if from == "" || to == "" || from == to {
-		return ""
-	}
-	return gitOutput(dir, "diff", "--stat", from, to)
-}
-
-// DiffFull returns the full diff between two commits.
-func DiffFull(dir, from, to string) string {
-	return gitOutput(dir, "diff", from+".."+to)
-}
-
-// LogOneline returns the oneline log between two commits.
-func LogOneline(dir, from, to string) string {
-	return gitOutput(dir, "log", "--oneline", from+".."+to)
-}
-
-// RecentChangedFiles returns files changed in the last N commits.
-func RecentChangedFiles(dir string, n int) string {
-	return gitOutput(dir, "diff", "--name-only", fmt.Sprintf("HEAD~%d", n), "HEAD")
-}
-
-// PruneOrphanedWorktrees removes worktree directories under ralphDir/worktrees
-// that are no longer tracked by git. It first runs `git worktree prune` to
-// clean up stale bookkeeping, then removes any leftover directories that git
-// no longer knows about.
-func PruneOrphanedWorktrees(projectDir, ralphDir string, logger Log) {
-	worktreeRoot := filepath.Join(ralphDir, "worktrees")
+func (m *Manager) PruneOrphanedWorktrees() {
+	worktreeRoot := filepath.Join(m.RalphDir, "worktrees")
 	entries, err := os.ReadDir(worktreeRoot)
 	if err != nil {
 		return
@@ -184,9 +194,15 @@ func PruneOrphanedWorktrees(projectDir, ralphDir string, logger Log) {
 		return
 	}
 
-	gitCmd(projectDir, "worktree", "prune")
+	m.gitCmd(m.ProjectDir, "worktree", "prune")
 
-	tracked := trackedWorktreePaths(projectDir)
+	out := m.gitOutput(m.ProjectDir, "worktree", "list", "--porcelain")
+	tracked := make(map[string]bool)
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "worktree ") {
+			tracked[strings.TrimPrefix(line, "worktree ")] = true
+		}
+	}
 
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -200,44 +216,28 @@ func PruneOrphanedWorktrees(projectDir, ralphDir string, logger Log) {
 		if tracked[dirPath] || tracked[resolved] {
 			continue
 		}
-		if logger != nil {
-			logger.Log("git", "Removing orphaned worktree directory: %s", dirPath)
+		if m.Logger != nil {
+			m.Logger.Log("git", "Removing orphaned worktree directory: %s", dirPath)
 		}
 		os.RemoveAll(dirPath)
 	}
 }
 
-// trackedWorktreePaths returns the set of worktree paths that git currently
-// tracks, parsed from `git worktree list --porcelain`.
-func trackedWorktreePaths(projectDir string) map[string]bool {
-	out := gitOutput(projectDir, "worktree", "list", "--porcelain")
-	paths := make(map[string]bool)
-	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "worktree ") {
-			paths[strings.TrimPrefix(line, "worktree ")] = true
-		}
+func (m *Manager) IsBranchSquashMerged(branch string) bool {
+	defaultBranch := m.detectDefaultBranch()
+	if !m.refExists(m.WorkDir, "origin/"+defaultBranch) {
+		return false
 	}
-	return paths
-}
 
-// ParseTaskSeqFromBranches scans ralph/<project>/* branches and returns the
-// highest sequence number found.
-func ParseTaskSeqFromBranches(dir, projectName string) int {
-	out := gitOutput(dir, "branch", "--list", "ralph/"+projectName+"/*", "--sort=refname")
-	if out == "" {
-		return 0
+	mergeBase := m.gitOutput(m.WorkDir, "merge-base", "origin/"+defaultBranch, branch)
+	if mergeBase == "" {
+		return false
 	}
-	seqRe := regexp.MustCompile(`/(\d+)-`)
-	maxSeq := 0
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		line = strings.TrimPrefix(line, "* ")
-		line = strings.TrimPrefix(line, "+ ")
-		if m := seqRe.FindStringSubmatch(line); len(m) > 1 {
-			if n, err := strconv.Atoi(m[1]); err == nil && n > maxSeq {
-				maxSeq = n
-			}
-		}
+
+	branchFiles := m.gitOutput(m.WorkDir, "diff", "--name-only", mergeBase, branch)
+	if branchFiles == "" {
+		return false
 	}
-	return maxSeq
+
+	return checkSquashMerged(m.WorkDir, defaultBranch, mergeBase, branch)
 }

@@ -936,7 +936,8 @@ func TestWorktreeInheritsGitignore(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	EnsureGitignored(project, ".ralph")
+	preSetupMgr := &Manager{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, Logger: &testLog{}}
+	preSetupMgr.EnsureGitignored(".ralph")
 	run(t, "git", "-C", project, "push", "origin", "main", "-q")
 
 	state := newMemState()
@@ -967,7 +968,8 @@ func TestExistingGitignoreContentPreserved(t *testing.T) {
 	run(t, "git", "-C", project, "add", ".gitignore")
 	run(t, "git", "-C", project, "commit", "-m", "add gitignore")
 
-	EnsureGitignored(project, ".ralph")
+	mgr := &Manager{ProjectDir: project, WorkDir: project, Logger: &testLog{}}
+	mgr.EnsureGitignored(".ralph")
 
 	data, err := os.ReadFile(filepath.Join(project, ".gitignore"))
 	if err != nil {
@@ -989,7 +991,8 @@ func TestDirtyWorkingTreeDetected(t *testing.T) {
 	os.WriteFile(filepath.Join(project, "dirty.txt"), []byte("uncommitted\n"), 0o644)
 	run(t, "git", "-C", project, "add", "dirty.txt")
 
-	if !HasUncommittedChanges(project) {
+	dirtyMgr := &Manager{ProjectDir: project, WorkDir: project, Logger: &testLog{}}
+	if !dirtyMgr.HasUncommittedChanges() {
 		t.Error("should detect uncommitted changes")
 	}
 }
@@ -1053,7 +1056,8 @@ func TestPruneOrphanedWorktrees_RemovesOrphaned(t *testing.T) {
 	activeDir := filepath.Join(worktreeRoot, "ralph-20260322-active")
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/next", activeDir, "HEAD")
 
-	PruneOrphanedWorktrees(project, ralphDir, log)
+	mgr := &Manager{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, Logger: log}
+	mgr.PruneOrphanedWorktrees()
 
 	// Orphaned directory should be removed
 	if _, err := os.Stat(orphanDir); !os.IsNotExist(err) {
@@ -1076,7 +1080,8 @@ func TestPruneOrphanedWorktrees_NoWorktreeDir(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	log := &testLog{}
 
-	PruneOrphanedWorktrees(project, ralphDir, log)
+	mgr := &Manager{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, Logger: log}
+	mgr.PruneOrphanedWorktrees()
 
 	if len(log.messages) > 0 {
 		t.Errorf("expected no log messages, got %v", log.messages)
@@ -1094,7 +1099,8 @@ func TestPruneOrphanedWorktrees_IgnoresFiles(t *testing.T) {
 	filePath := filepath.Join(worktreeRoot, "some-file.txt")
 	os.WriteFile(filePath, []byte("keep"), 0o644)
 
-	PruneOrphanedWorktrees(project, ralphDir, log)
+	mgr := &Manager{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, Logger: log}
+	mgr.PruneOrphanedWorktrees()
 
 	if _, err := os.Stat(filePath); err != nil {
 		t.Errorf("regular file should not be removed: %v", err)
