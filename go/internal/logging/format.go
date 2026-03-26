@@ -8,6 +8,11 @@ import (
 // TSWidth is the visible width of the timestamp prefix: "HH:MM:SS " (9 chars).
 const TSWidth = 9
 
+// MaxLineWidth is the total visible width limit for log lines. Both
+// orchestrator and agent output use this as the single source of truth
+// for truncation decisions.
+const MaxLineWidth = 120
+
 // LineFormatter is the single source of truth for log line formatting.
 // Both the orchestrator Logger and the agent StreamFormatter use it to
 // ensure consistent timestamp placement, dedup, and color.
