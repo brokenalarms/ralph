@@ -349,6 +349,11 @@ func (l *Loop) Run(ctx context.Context) error {
 		feedback := l.readFeedback()
 		if feedback != "" {
 			l.logger.Warn("", "[feedback] %s", feedback)
+			l.clearFeedback()
+			l.attempts.Record(taskID, nextTask,
+				"User feedback (pre-iteration): "+feedback,
+				"",
+				"user_feedback: "+feedback)
 		}
 
 		attemptContext := l.buildAttemptContext(taskID, nextTask)
@@ -398,6 +403,17 @@ func (l *Loop) Run(ctx context.Context) error {
 		})
 		if runErr != nil {
 			l.logger.Warn("llm", "Claude failed on iteration %d, continuing...", runIteration)
+		}
+		if result.FeedbackKill {
+			l.logger.Warn("llm", "Restarting iteration %d — user feedback received", runIteration)
+			diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
+			l.attempts.Record(taskID, nextTask,
+				"Killed: user feedback received. Feedback: "+result.FeedbackContent,
+				diffStat,
+				"user_feedback: "+result.FeedbackContent)
+			runIteration--
+			iteration--
+			continue
 		}
 		if result.IdleTimeout {
 			l.logger.Warn("llm", "Restarting iteration %d after idle timeout", runIteration)

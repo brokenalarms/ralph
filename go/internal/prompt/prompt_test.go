@@ -93,31 +93,31 @@ func TestBuildPrompt_IncludesSharedPrompt(t *testing.T) {
 
 // Proves: live feedback instructions are always included in the prompt,
 // telling the agent to check the feedback file between tool calls.
-func TestBuildPrompt_LiveFeedbackInstructions(t *testing.T) {
+func TestBuildPrompt_FeedbackInstructions(t *testing.T) {
 	v := testVars(t)
 	result, err := BuildPrompt(v)
 	if err != nil {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-	if !strings.Contains(result, "Live feedback") {
-		t.Error("prompt missing live feedback section header")
+	if !strings.Contains(result, "User feedback") {
+		t.Error("prompt missing user feedback section header")
 	}
-	if !strings.Contains(result, "feedback") {
-		t.Error("prompt missing feedback file check instructions")
+	if !strings.Contains(result, "attempt history") {
+		t.Error("prompt should explain feedback appears in attempt history")
 	}
 }
 
-// Proves: the feedback instructions reference the ralph dir path so the
-// agent knows where to find the feedback file.
-func TestBuildPrompt_FeedbackReferencesRalphDir(t *testing.T) {
+// Proves: the feedback prompt explains the orchestrator handles feedback
+// delivery — the agent doesn't need to poll for it.
+func TestBuildPrompt_FeedbackExplainsOrchestration(t *testing.T) {
 	v := testVars(t)
 	result, err := BuildPrompt(v)
 	if err != nil {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-	if !strings.Contains(result, v.RalphDir+"/feedback") {
+	if !strings.Contains(result, "orchestrator") {
 		t.Error("feedback instructions should reference {{RALPH_DIR}}/feedback with substituted path")
 	}
 }

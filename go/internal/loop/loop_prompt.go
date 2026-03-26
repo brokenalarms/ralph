@@ -106,7 +106,11 @@ func (l *Loop) readFeedback() string {
 	if err != nil || len(data) == 0 {
 		return ""
 	}
-	return string(data)
+	return strings.TrimSpace(string(data))
+}
+
+func (l *Loop) clearFeedback() {
+	os.Remove(filepath.Join(l.cfg.Dirs.RalphDir, "feedback"))
 }
 
 // readReflection returns the content of a previous reflection file for a task.

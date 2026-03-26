@@ -85,6 +85,8 @@ type Result struct {
 	SignalDetected     bool      // true if a completion signal was found
 	AllComplete        bool      // true if the all-complete signal was found
 	IdleTimeout        bool      // true if the session was killed due to idle timeout
+	FeedbackKill       bool      // true if killed because user feedback arrived
+	FeedbackContent    string    // the feedback that caused the kill
 	RateLimited        bool      // true if Claude reported hitting its usage limit
 	ResetAt            time.Time // when the rate limit resets (valid when RateLimited is true)
 	OnSignalUsed       bool      // true if OnSignal callback was used for verification
@@ -370,6 +372,18 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 					OnSignalUsed:   cfg.OnSignal != nil,
 					TaskDesc:       readFirstLine(cfg.Signals.CurrentTask),
 					Summary:        summary,
+				}
+			}
+
+			// Check for user feedback — kill agent so it restarts with
+			// the feedback in its attempt context.
+			if cfg.FeedbackFile != "" {
+				if data, err := os.ReadFile(cfg.FeedbackFile); err == nil && len(data) > 0 {
+					content := strings.TrimSpace(string(data))
+					r.Logger.Warn("llm", "User feedback received — killing agent to restart with feedback")
+					os.Remove(cfg.FeedbackFile)
+					gracefulKill(cmd, processDone)
+					return Result{FeedbackKill: true, FeedbackContent: content}
 				}
 			}
 
