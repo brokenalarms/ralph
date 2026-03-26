@@ -106,20 +106,30 @@ func (m *Manager) ResetToRemoteBranch() {
 }
 
 // RemoteBranchHasWork checks whether the remote tracking branch for the
-// current worktree branch exists and has commits beyond the default branch.
-// This detects work pushed by a previous iteration that wasn't merged.
-func (m *Manager) RemoteBranchHasWork() bool {
+// RemoteBranchHasWork checks whether the remote tracking branch for the
+// current worktree branch exists and has unmerged commits beyond the default
+// branch. Returns "unmerged" if work exists and needs a PR, "merged" if the
+// work was already squash-merged (stale branch), or "" if no remote branch.
+func (m *Manager) RemoteBranchHasWork() string {
 	if m.WorktreeBranch == "" {
-		return false
+		return ""
 	}
 	_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", m.WorktreeBranch)
 	remote := "origin/" + m.WorktreeBranch
 	if !m.refExists(m.WorkDir, remote) {
-		return false
+		return ""
 	}
 	defaultBranch := m.detectDefaultBranch()
 	count := m.gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+".."+remote)
-	return count != "" && count != "0"
+	if count == "" || count == "0" {
+		return ""
+	}
+	if m.IsBranchSquashMerged(m.WorktreeBranch) {
+		_ = m.gitCmdErr(m.WorkDir, "push", "origin", "--delete", m.WorktreeBranch)
+		m.Logger.Log("git", "Remote branch %s already squash-merged — cleaned up", m.WorktreeBranch)
+		return "merged"
+	}
+	return "unmerged"
 }
 
 func (m *Manager) prTitle(taskID, taskDesc string) string {

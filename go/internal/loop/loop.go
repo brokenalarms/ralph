@@ -283,12 +283,23 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		l.updateStreamTask(taskID, nextTask, taskInfo.Priority)
 
-		// If a previous iteration pushed this branch but merge failed,
-		// the remote already has the completed work. Pull it, verify
-		// (tests only — the agent already finished), and skip straight
-		// to merge if it passes.
-		if l.git.RemoteBranchHasWork() {
-			l.logger.Log("git", "Remote branch has work from previous iteration — pulling and verifying")
+		// Check if a previous iteration pushed work to the remote branch.
+		// "merged" = already squash-merged, cleaned up, skip to next task.
+		// "unmerged" = real work that needs PR creation and merge.
+		remoteState := l.git.RemoteBranchHasWork()
+		if remoteState == "merged" {
+			l.logger.Log("git", "Previous work already on main — skipping to next task")
+			if taskID != "" {
+				_ = l.cfg.TaskBackend.CloseTask(taskID, "completed by ralph (squash-merged)")
+				l.logger.Log("beads", "Closed task %s (already merged)", taskID)
+			}
+			l.git.TagTaskEnd(taskID)
+			runIteration++
+			iteration++
+			continue
+		}
+		if remoteState == "unmerged" {
+			l.logger.Log("git", "Remote branch has unmerged work — pulling, verifying, and creating PR")
 			l.git.ResetToRemoteBranch()
 
 			testsPass, _ := l.verifyCompletion(ctx, "")
@@ -312,8 +323,9 @@ func (l *Loop) Run(ctx context.Context) error {
 				}
 				l.attempts.Clear(taskID, nextTask)
 				l.recordCompletedTask(taskID, nextTask)
+				// Branch is already on remote — just create the PR.
 				if err := l.pushAndCreatePR(ctx, taskID, nextTask); err != nil {
-					l.logger.Log("git", "Push/PR: %v (branch already on remote, continuing to merge)", err)
+					l.logger.Log("git", "Push/PR: %v (continuing to merge)", err)
 				}
 				merged := false
 				if l.cfg.AutoMerge {
