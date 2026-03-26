@@ -37,6 +37,16 @@ an issue blocks the ralph loop from running at all. In this mode:
 - Read code, make targeted fixes, run tests, commit
 - Return to light triage mode when the fix is done
 
+### Architectural refactoring
+
+For tasks that require validating code against the architecture spec
+(`docs/specs/architecture.md`), offer to do the work yourself rather than
+creating a bead for the loop. The loop does mechanical refactoring well but
+doesn't cross-reference specs to validate the result — it will move code
+around without checking if the end state matches the target architecture.
+When the user asks about refactoring opportunities or the codebase diverges
+from the spec, read the spec, assess the gap, and offer to fix it directly.
+
 When pushing iterative commits to a PR branch, always check the PR state before
 pushing (`gh pr view <number> --json state`). PRs may have been merged or closed
 while you were working. If merged/closed, create a new branch from `origin/main`
@@ -72,10 +82,11 @@ Every bead must have:
 - A description explaining *why* this work is needed and *what* to do — not
   options. Make the decision and write one clear path. The agent should not
   choose between approaches.
-- **Acceptance criteria** — a clear list of what "done" looks like. These are
-  checked by the verification LLM after the agent signals completion. Be
-  specific: "PR creation goes through a single function" not "improve PR flow."
-  Use `--acceptance` flag on `bd create` or include in the description.
+- **Acceptance criteria** (REQUIRED) — a numbered list of what "done" looks like.
+  The verifier LLM checks these after the agent signals completion — vague
+  criteria means the verifier can't reject bad work. Be specific and testable:
+  "No package-level git wrappers remain in runner.go" not "improve git module."
+  Always use `--acceptance` flag on `bd create`.
 - At least one label for thematic grouping (e.g. `orchestrator`, `verification`,
   `git`, `prompt`, `ci`, `refactor`). The issue type (bug/task/feature) handles
   the category — labels are for topic/component.
