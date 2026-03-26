@@ -268,6 +268,7 @@ func (l *Loop) maybeRefactor() error {
 		RawLog:       rawLogPath,
 		LogFile:      filepath.Join(l.cfg.Dirs.RalphDir, "loop.log"),
 		Quiet:        l.cfg.Quiet,
+		Verbose:      l.cfg.Verbose,
 		Signals:      l.signals,
 		PollInterval: 2 * time.Second,
 	})

@@ -149,6 +149,32 @@ func firstMeaningfulLine(text string) string {
 	return ""
 }
 
+// VerboseOnlyTools lists tool names that are hidden from the stream log by
+// default and only shown with --verbose. Adding/removing a tool is a one-line
+// change in this map. This is the single source of truth for tool visibility.
+var VerboseOnlyTools = map[string]bool{
+	"Bash":       true,
+	"Read":       true,
+	"Write":      true,
+	"Grep":       true,
+	"Glob":       true,
+	"ToolSearch": true,
+	"TodoWrite":  true,
+}
+
+// toolNameRe extracts the tool name from a bracketed tool line like "[Read] foo".
+var toolNameRe = regexp.MustCompile(`^\[([A-Za-z]+)\]`)
+
+// isVerboseOnlyLine returns true if the line is a tool call for a verbose-only
+// tool. Non-tool lines (prose, diagnosis) always return false.
+func isVerboseOnlyLine(text string) bool {
+	m := toolNameRe.FindStringSubmatch(text)
+	if m == nil {
+		return false
+	}
+	return VerboseOnlyTools[m[1]]
+}
+
 var mdBoldRe = regexp.MustCompile(`\*\*(.+?)\*\*`)
 
 // stripMarkdown removes markdown formatting from text for clean terminal output.
@@ -193,9 +219,10 @@ func FormatStreamLine(text string) string {
 //	         [Edit] claude_stream.go
 //	15:57:23 [Read] claude_stream.go
 type StreamFormatter struct {
-	lastSignal string // dedup: suppress consecutive identical signal lines
-	Fmt        logging.LineFormatter
-	workDir    string // when set, strip this prefix from absolute paths
+	lastSignal       string // dedup: suppress consecutive identical signal lines
+	Fmt              logging.LineFormatter
+	workDir          string // when set, strip this prefix from absolute paths
+	hideVerboseOnly  bool   // when true, suppress VerboseOnlyTools lines
 }
 
 const agentPrefix = 4 // "[r] " (4)
@@ -250,6 +277,9 @@ func (f *StreamFormatter) FormatOutput(text string) []string {
 		result = append(result, diagnosisBanner(label))
 		result = append(result, f.emitLine(formatContent("[r] "+content))...)
 		return result
+	}
+	if f.hideVerboseOnly && isVerboseOnlyLine(text) {
+		return nil
 	}
 	if !isToolLine(text) {
 		text = truncateProse(text, maxLineWidth-logging.TSWidth-agentPrefix)

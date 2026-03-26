@@ -71,6 +71,7 @@ type Config struct {
 	PermissionDenialThreshold  int
 	BaseBranch   string
 	Wait         bool
+	Verbose      bool
 	VerifyLevel  string
 	WaitInterval               time.Duration
 
