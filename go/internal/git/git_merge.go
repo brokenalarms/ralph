@@ -446,6 +446,7 @@ func (m *Manager) PostMergeReset() error {
 
 	if oldBranch != newBranch {
 		m.gitCmd(m.WorkDir, "branch", "-D", oldBranch)
+		_ = m.gitCmdErr(m.WorkDir, "push", "origin", "--delete", oldBranch)
 	}
 
 	m.WorktreeBranch = newBranch
