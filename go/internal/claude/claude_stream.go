@@ -175,12 +175,9 @@ func isVerboseOnlyLine(text string) bool {
 	return VerboseOnlyTools[m[1]]
 }
 
-var mdBoldRe = regexp.MustCompile(`\*\*(.+?)\*\*`)
-
-// stripMarkdown removes markdown formatting from text for clean terminal output.
-func stripMarkdown(s string) string {
-	return mdBoldRe.ReplaceAllString(s, "$1")
-}
+// colorTags applies ANSI color to bracketed tags like [r] or [Edit].
+// This is the agent-specific coloring step applied before the shared
+// Format path (which handles markdown stripping and timestamps).
 
 // colorTag applies ANSI color to a bracketed tag like [r] or [Read].
 func colorTag(tag string) string {
@@ -198,10 +195,7 @@ func colorTag(tag string) string {
 
 var tagRe = regexp.MustCompile(`\[([A-Za-z][A-Za-z]*)\]`)
 
-// formatContent applies markdown stripping and ANSI tag coloring to text
-// without adding a timestamp prefix.
-func formatContent(text string) string {
-	text = stripMarkdown(text)
+func colorTags(text string) string {
 	return tagRe.ReplaceAllStringFunc(text, colorTag)
 }
 
@@ -209,7 +203,7 @@ func formatContent(text string) string {
 // a fully formatted output line with timestamp, ANSI colors, and markdown stripped.
 func FormatStreamLine(text string) string {
 	f := &logging.LineFormatter{}
-	return f.FormatLine(formatContent(text))
+	return f.Format(colorTags(text))
 }
 
 // StreamFormatter emits lines immediately, prepending a dim timestamp
@@ -246,15 +240,15 @@ func (f *StreamFormatter) FlushIfStale() []string {
 	return nil
 }
 
-// emitLine formats content via the shared LineFormatter, returning it as
-// a single-element slice for caller convenience.
+// emitLine formats content via the shared Format path (markdown stripping +
+// timestamp), returning it as a single-element slice for caller convenience.
 func (f *StreamFormatter) emitLine(content string) []string {
-	return []string{f.Fmt.FormatLine(content)}
+	return []string{f.Fmt.Format(content)}
 }
 
-// FormatLine formats text with a front timestamp via the shared LineFormatter.
+// FormatLine formats text with a front timestamp via the shared Format path.
 func (f *StreamFormatter) FormatLine(text string) string {
-	return f.Fmt.FormatLine(formatContent(text))
+	return f.Fmt.Format(colorTags(text))
 }
 
 // FormatOutput formats a stream text line, prepending a dim timestamp
@@ -269,19 +263,19 @@ func (f *StreamFormatter) FormatOutput(text string) []string {
 			return nil
 		}
 		f.lastSignal = key
-		return f.emitLine(formatContent("[signal] " + name + ": " + msg))
+		return f.emitLine(colorTags("[signal] " + name + ": " + msg))
 	}
 	if label, content, ok := parseDiagnosis(text); ok {
 		var result []string
 		result = append(result, diagnosisBanner(label))
-		result = append(result, f.emitLine(formatContent("[r] "+content))...)
+		result = append(result, f.emitLine(colorTags("[r] "+content))...)
 		return result
 	}
 	if f.hideVerboseOnly && isVerboseOnlyLine(text) {
 		return nil
 	}
 	text = truncateLine(text, logging.MaxLineWidth-logging.TSWidth-agentPrefix)
-	return f.emitLine(formatContent("[r] " + text))
+	return f.emitLine(colorTags("[r] " + text))
 }
 
 // truncateLine shortens text to maxLen runes, appending "…" if truncated.

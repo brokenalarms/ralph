@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"regexp"
 	"strings"
 	"time"
 )
@@ -37,4 +38,25 @@ func (f *LineFormatter) FormatLine(content string) string {
 		return Dim + ts + Reset + " " + content
 	}
 	return strings.Repeat(" ", TSWidth) + content
+}
+
+// Format applies shared content formatting (markdown stripping) and timestamp,
+// producing a complete log line. This is the single formatting path used by
+// both orchestrator (Logger) and agent (StreamFormatter) output.
+func (f *LineFormatter) Format(content string) string {
+	return f.FormatLine(FormatContent(content))
+}
+
+var mdBoldRe = regexp.MustCompile(`\*\*(.+?)\*\*`)
+
+// StripMarkdown removes markdown formatting from text for clean terminal output.
+func StripMarkdown(s string) string {
+	return mdBoldRe.ReplaceAllString(s, "$1")
+}
+
+// FormatContent applies shared content formatting that all regular log output
+// passes through, regardless of source. Visual separators (Phase, Separator)
+// bypass this and use FormatLine directly.
+func FormatContent(content string) string {
+	return StripMarkdown(content)
 }

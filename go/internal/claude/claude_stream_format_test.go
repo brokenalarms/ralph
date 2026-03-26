@@ -353,6 +353,23 @@ func TestFormatOutput_NoWorkDir_PathsUnchanged(t *testing.T) {
 	}
 }
 
+// Verifies that StreamFormatter strips markdown via the shared Format path,
+// confirming it uses the same formatting code path as Logger.
+func TestFormatOutput_StripsMarkdown(t *testing.T) {
+	f := &StreamFormatter{}
+	lines := f.FormatOutput("Reading **important** config")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+	plain := ansiRe.ReplaceAllString(lines[0], "")
+	if strings.Contains(plain, "**important**") {
+		t.Error("FormatOutput should strip markdown via shared Format path")
+	}
+	if !strings.Contains(plain, "Reading important config") {
+		t.Errorf("stripped content missing, got: %q", plain)
+	}
+}
+
 // Verifies that dedup persists across intervening non-signal lines — the
 // same Bash command appears in multiple Claude stream events seconds apart,
 // often with non-signal content between them.

@@ -421,4 +421,19 @@ func TestPriorityTag(t *testing.T) {
 	}
 }
 
+// Verifies that Logger strips markdown via the shared Format path —
+// proves it goes through FormatContent, not just FormatLine.
+func TestLoggerStripsMarkdown(t *testing.T) {
+	var buf bytes.Buffer
+	l := &Logger{out: &buf, logFile: &buf}
+	l.Log("", "hello **world**")
+	got := buf.String()
+	if strings.Contains(got, "**world**") {
+		t.Error("Logger should strip markdown via shared Format path")
+	}
+	if !strings.Contains(got, "hello world") {
+		t.Errorf("stripped content missing: %s", got)
+	}
+}
+
 func intPtr(n int) *int { return &n }

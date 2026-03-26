@@ -106,7 +106,7 @@ func (l *Logger) write(s string) {
 func (l *Logger) emit(color string, domain Domain, msg string) {
 	tag := Tag(color, Orch, domain)
 	content := fmt.Sprintf("%s %s", tag, msg)
-	l.write(l.Fmt.FormatLine(content) + "\n")
+	l.write(l.Fmt.Format(content) + "\n")
 }
 
 // Log writes an info-level message with cyan [o][domain] prefix.
