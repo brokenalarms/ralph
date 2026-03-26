@@ -121,7 +121,7 @@ func (g *ghCLI) UpdateBranch(dir, nwo, prNumber string) (bool, error) {
 }
 
 func (g *ghCLI) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
-	args := []string{"pr", "checks", prNumber, "--json", "name,state,bucket,required"}
+	args := []string{"pr", "checks", prNumber, "--json", "name,state,bucket"}
 	if repoURL != "" {
 		args = append(args, "-R", repoURL)
 	}
@@ -134,7 +134,42 @@ func (g *ghCLI) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
 	if err := json.Unmarshal(out, &checks); err != nil {
 		return nil, fmt.Errorf("parsing check results: %w", err)
 	}
+
+	// Mark required checks by querying branch protection rules.
+	requiredNames := g.getRequiredCheckNames(repoURL)
+	for i := range checks {
+		for _, req := range requiredNames {
+			if checks[i].Name == req {
+				checks[i].Required = true
+				break
+			}
+		}
+	}
 	return checks, nil
+}
+
+// getRequiredCheckNames fetches the required status check names from branch protection.
+func (g *ghCLI) getRequiredCheckNames(repoURL string) []string {
+	nwo := nwoFromRemote(repoURL)
+	if nwo == "" {
+		return nil
+	}
+	// Try main, then develop
+	for _, branch := range []string{"main", "develop"} {
+		endpoint := fmt.Sprintf("/repos/%s/branches/%s/protection/required_status_checks", nwo, branch)
+		cmd := exec.Command("gh", "api", endpoint)
+		out, err := cmd.Output()
+		if err != nil {
+			continue
+		}
+		var result struct {
+			Contexts []string `json:"contexts"`
+		}
+		if json.Unmarshal(out, &result) == nil && len(result.Contexts) > 0 {
+			return result.Contexts
+		}
+	}
+	return nil
 }
 
 func (g *ghCLI) CheckEnforceAdmins(nwo, branch string) (bool, error) {
