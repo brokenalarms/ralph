@@ -226,7 +226,7 @@ fi
 		Logger:         log,
 	}
 
-	_, err := mgr.PushAndCreatePR(context.Background(), "", "test task")
+	_, err := mgr.PushAndCreatePR(context.Background(), "", "test task", "")
 	if err != nil {
 		t.Fatalf("PushAndCreatePR failed: %v (log: %v)", err, log.messages)
 	}
@@ -287,7 +287,7 @@ fi
 		Logger:         log,
 	}
 
-	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-hm8", "fix: include bead ID in PR title")
+	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-hm8", "fix: include bead ID in PR title", "")
 	if err != nil {
 		t.Fatalf("PushAndCreatePR failed: %v", err)
 	}
@@ -347,7 +347,7 @@ fi
 		Logger:         log,
 	}
 
-	_, err := mgr.PushAndCreatePR(context.Background(), "", "add new feature")
+	_, err := mgr.PushAndCreatePR(context.Background(), "", "add new feature", "")
 	if err != nil {
 		t.Fatalf("PushAndCreatePR failed: %v", err)
 	}
@@ -371,6 +371,92 @@ fi
 
 	if strings.Contains(createLine, "[") {
 		t.Errorf("PR title should not contain brackets when no bead ID, got: %s", createLine)
+	}
+}
+
+// PushAndCreatePR passes the body parameter through to CreatePR, so the
+// PR description uses bead context instead of generic boilerplate.
+func TestPushAndCreatePR_PassesBodyToCreatePR(t *testing.T) {
+	r := newStubRunner()
+	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
+	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	r.On("rev-list --count origin/main..HEAD", "3", nil)
+	r.On("push", "", nil)
+	r.On("fetch", "", nil)
+	r.On("merge-base --is-ancestor", "", nil)
+
+	var capturedOpts CreatePROpts
+	gh := &capturingGitHub{
+		stubGitHub: stubGitHub{available: true, createdPR: "55"},
+		createPR: func(opts CreatePROpts) error {
+			capturedOpts = opts
+			return nil
+		},
+	}
+
+	dir := t.TempDir()
+	mgr := &Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir + "/worktree",
+		WorktreeBranch: "ralph/test/01-feature",
+		Runner:         r,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         discardLog{},
+	}
+
+	body := "## Description\nFix auth middleware\n\n## Summary\nDone"
+	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix auth", body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedOpts.Body != body {
+		t.Errorf("CreatePR body = %q, want %q", capturedOpts.Body, body)
+	}
+	if !strings.HasPrefix(capturedOpts.Title, "[ralph-abc]") {
+		t.Errorf("title should start with [ralph-abc], got %q", capturedOpts.Title)
+	}
+}
+
+// PushAndCreatePR uses the task description as body when no explicit body
+// is provided, avoiding completely empty PR descriptions.
+func TestPushAndCreatePR_FallsBackToTaskDescWhenNoBody(t *testing.T) {
+	r := newStubRunner()
+	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
+	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	r.On("rev-list --count origin/main..HEAD", "3", nil)
+	r.On("push", "", nil)
+	r.On("fetch", "", nil)
+	r.On("merge-base --is-ancestor", "", nil)
+
+	var capturedOpts CreatePROpts
+	gh := &capturingGitHub{
+		stubGitHub: stubGitHub{available: true, createdPR: "55"},
+		createPR: func(opts CreatePROpts) error {
+			capturedOpts = opts
+			return nil
+		},
+	}
+
+	dir := t.TempDir()
+	mgr := &Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir + "/worktree",
+		WorktreeBranch: "ralph/test/01-feature",
+		Runner:         r,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         discardLog{},
+	}
+
+	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix auth middleware", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedOpts.Body != "fix auth middleware" {
+		t.Errorf("CreatePR body should fall back to task desc, got %q", capturedOpts.Body)
 	}
 }
 
