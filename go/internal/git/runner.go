@@ -101,6 +101,27 @@ func (m *Manager) remoteExists() bool {
 	return m.gitOutput(m.ProjectDir, "remote", "get-url", "origin") != ""
 }
 
+// RemoteURL returns the origin remote URL.
+func (m *Manager) RemoteURL() string {
+	return m.gitOutput(m.ProjectDir, "remote", "get-url", "origin")
+}
+
+// FetchBranch fetches a specific branch from origin.
+func (m *Manager) FetchBranch(branch string) error {
+	return m.gitCmdErr(m.WorkDir, "fetch", "origin", branch)
+}
+
+// RemoteBranchHasCommits checks if origin/<branch> has commits beyond the default branch.
+func (m *Manager) RemoteBranchHasCommits(branch string) bool {
+	remote := "origin/" + branch
+	if !m.refExists(m.WorkDir, remote) {
+		return false
+	}
+	defaultBranch := m.detectDefaultBranch()
+	count := m.gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+".."+remote)
+	return count != "" && count != "0"
+}
+
 func (m *Manager) mRebaseInProgress() bool {
 	gitDir := m.gitOutput(m.WorkDir, "rev-parse", "--git-dir")
 	if gitDir == "" {

@@ -60,12 +60,46 @@ func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc string) (st
 // accordingly. Returns true if the task was fully handled (merged or skipped)
 // and the loop should continue to the next task; false if the agent should run.
 func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
-	if taskID != "" {
-		ref, _ := l.cfg.TaskBackend.GetExternalRef(taskID)
-		if prNumber := parsePRNumber(ref); prNumber != "" {
-			return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
+	if taskID == "" {
+		return false
+	}
+
+	// Check bead's external-ref for an existing PR.
+	ref, _ := l.cfg.TaskBackend.GetExternalRef(taskID)
+	if prNumber := parsePRNumber(ref); prNumber != "" {
+		return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
+	}
+
+	// No external-ref — check if a remote branch exists for this task.
+	// The branch was pushed by a previous iteration but PR creation failed.
+	gh := l.git.GH()
+	if gh == nil || !gh.Available() {
+		return false
+	}
+	repoURL := l.git.RemoteURL()
+	branch := l.git.WorktreeBranch
+	if branch == "" || repoURL == "" {
+		return false
+	}
+	prNumber, _ := gh.FindOpenPR(branch, repoURL)
+	if prNumber != "" {
+		l.logger.Log("git", "Found orphaned PR #%s for %s — resolving", prNumber, branch)
+		if taskID != "" {
+			_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNumber)
+		}
+		return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
+	}
+
+	// No PR — check if the remote branch has commits (push succeeded, PR failed).
+	_ = l.git.FetchBranch(branch)
+	if l.git.RemoteBranchHasCommits(branch) {
+		l.logger.Log("git", "Remote branch %s has work but no PR — creating PR", branch)
+		prNum, err := l.pushAndCreatePR(ctx, taskID, nextTask)
+		if err == nil && prNum != "" {
+			return l.resolveByPRState(ctx, taskID, nextTask, prNum)
 		}
 	}
+
 	return false
 }
 
