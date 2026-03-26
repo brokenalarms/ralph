@@ -7,12 +7,18 @@ root="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
 
 # Sync with remote
 echo "[rebuild-go] Pulling latest..."
-git -C "$root" pull --rebase 2>&1 | grep -v "^$" || true
+if ! git -C "$root" pull --rebase 2>&1; then
+  echo "[rebuild-go] Pull --rebase failed, aborting build" >&2
+  exit 1
+fi
 
 ahead=$(git -C "$root" rev-list --count @{u}..HEAD 2>/dev/null || echo "0")
 if [ "$ahead" != "0" ]; then
   echo "[rebuild-go] Pushing $ahead commit(s)..."
-  git -C "$root" push 2>&1 | grep -v "^$" || true
+  if ! git -C "$root" push 2>&1; then
+    echo "[rebuild-go] Push failed, aborting build" >&2
+    exit 1
+  fi
 fi
 
 # Poll for new version tag from GitHub Action
