@@ -17,7 +17,16 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 		return "", nil
 	}
 
-	_ = m.EnsureUpToDate(ctx)
+	// Light sync: fetch + rebase to get agent's commits on top of latest
+	// default branch. Unlike EnsureUpToDate, this does NOT force-reset on
+	// conflict — the agent's commits are preserved. If rebase fails, we
+	// push anyway and let GitHub handle the merge conflict.
+	defaultBranch := m.detectDefaultBranch()
+	_ = m.gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", defaultBranch)
+	if m.gitCmdErr(m.WorkDir, "rebase", "origin/"+defaultBranch) != nil {
+		m.gitCmd(m.WorkDir, "rebase", "--abort")
+		m.Logger.Warn("git", "Pre-push rebase failed — pushing without rebase, GitHub will handle conflicts")
+	}
 
 	repoURL := m.gitOutput(m.WorkDir, "remote", "get-url", "origin")
 	if repoURL == "" {
@@ -25,7 +34,6 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 	}
 
 	// Check if branch has commits beyond the default branch.
-	defaultBranch := m.detectDefaultBranch()
 	revCount := m.gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+"..HEAD")
 	if revCount == "" || revCount == "0" {
 		m.Logger.Log("git", "No new commits to push")
@@ -153,8 +161,6 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
 		return false, nil
 	}
-
-	_ = m.EnsureUpToDate(ctx)
 
 	gh := m.gh()
 	if !gh.Available() {
