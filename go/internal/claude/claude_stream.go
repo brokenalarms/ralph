@@ -226,7 +226,6 @@ type StreamFormatter struct {
 }
 
 const agentPrefix = 4 // "[r] " (4)
-const maxLineWidth = 120
 
 func (f *StreamFormatter) shortenPaths(text string) string {
 	if f.workDir == "" {
@@ -281,19 +280,12 @@ func (f *StreamFormatter) FormatOutput(text string) []string {
 	if f.hideVerboseOnly && isVerboseOnlyLine(text) {
 		return nil
 	}
-	if !isToolLine(text) {
-		text = truncateProse(text, maxLineWidth-logging.TSWidth-agentPrefix)
-	}
+	text = truncateLine(text, logging.MaxLineWidth-logging.TSWidth-agentPrefix)
 	return f.emitLine(formatContent("[r] " + text))
 }
 
-// isToolLine returns true if the line starts with a bracketed tool name.
-func isToolLine(text string) bool {
-	return len(text) > 0 && text[0] == '['
-}
-
-// truncateProse shortens text to maxLen runes, appending "…" if truncated.
-func truncateProse(text string, maxLen int) string {
+// truncateLine shortens text to maxLen runes, appending "…" if truncated.
+func truncateLine(text string, maxLen int) string {
 	runes := []rune(text)
 	if len(runes) <= maxLen {
 		return text

@@ -211,10 +211,13 @@ func TestStreamingModeSuppressesStdout(t *testing.T) {
 }
 
 // Verifies that Separator outputs a bold, colored full-width line with
-// centered label and ═ characters, written to both stdout and log file.
+// centered label and ═ characters, written to both stdout and log file,
+// with a leading timestamp from LineFormatter.
 func TestSeparatorFormatting(t *testing.T) {
 	var stdout, logFile bytes.Buffer
+	fixed := time.Date(2026, 3, 25, 14, 30, 45, 0, time.UTC)
 	l := &Logger{out: &stdout, logFile: &logFile}
+	l.Fmt.Clock = func() time.Time { return fixed }
 	l.Separator(Magenta, "RALPH EVOLVED")
 	got := stdout.String()
 
@@ -233,13 +236,19 @@ func TestSeparatorFormatting(t *testing.T) {
 	if !strings.Contains(logFile.String(), "RALPH EVOLVED") {
 		t.Error("Separator should write to log file")
 	}
+	plain := ansiRe.ReplaceAllString(got, "")
+	if !strings.Contains(plain, "14:30:45") {
+		t.Errorf("Separator should have timestamp from LineFormatter, got: %q", plain)
+	}
 }
 
 // Verifies that DashedSeparator outputs a full-width dashed line using ─
-// characters in the given color, distinct from Separator's ═ characters.
+// characters in the given color, with a timestamp from LineFormatter.
 func TestDashedSeparatorFormatting(t *testing.T) {
 	var stdout, logFile bytes.Buffer
+	fixed := time.Date(2026, 3, 25, 14, 30, 45, 0, time.UTC)
 	l := &Logger{out: &stdout, logFile: &logFile}
+	l.Fmt.Clock = func() time.Time { return fixed }
 	l.DashedSeparator(Yellow)
 	got := stdout.String()
 
@@ -254,6 +263,10 @@ func TestDashedSeparatorFormatting(t *testing.T) {
 	}
 	if !strings.Contains(logFile.String(), "─") {
 		t.Error("DashedSeparator should write to log file")
+	}
+	plain := ansiRe.ReplaceAllString(got, "")
+	if !strings.Contains(plain, "14:30:45") {
+		t.Errorf("DashedSeparator should have timestamp from LineFormatter, got: %q", plain)
 	}
 }
 
