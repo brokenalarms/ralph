@@ -228,6 +228,15 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) error {
 		return nil
 	}
 
+	// No local commits ahead of main → safe to force-reset (fresh start).
+	localCommits := m.gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+"..HEAD")
+	if localCommits == "" || localCommits == "0" {
+		m.Logger.Log("git", "%s Resetting to origin/%s (no local work)", logging.BranchTag(defaultBranch), defaultBranch)
+		m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+defaultBranch)
+		return nil
+	}
+
+	// Local commits exist — try to rebase them onto latest main.
 	var result error
 	m.withStash("ralph-autostash", func() {
 		if ctx.Err() != nil {
@@ -245,9 +254,10 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) error {
 			return
 		}
 
-		m.Logger.Warn("git", "Rebase failed — aborting, caller will handle")
+		// Stack diverges — abort rebase, keep local commits, let merge handle it.
+		m.Logger.Warn("git", "Rebase conflict with local work — stack diverged, continuing")
 		m.gitCmd(m.WorkDir, "rebase", "--abort")
-		result = fmt.Errorf("rebase onto origin/%s failed", defaultBranch)
+		result = nil // not an error — diverged stack is expected
 	})
 	return result
 }

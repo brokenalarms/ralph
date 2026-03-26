@@ -1059,9 +1059,9 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	err := l.handleRebase(context.Background())
-	// With stacked PRs, rebase conflicts are propagated — no auto-recovery.
-	if err == nil {
-		t.Fatal("expected rebase error for real conflicts")
+	// With stacked PRs, rebase conflicts cause stack to diverge — not an error.
+	if err != nil {
+		t.Fatalf("expected nil (stack diverges), got: %v", err)
 	}
 	_ = handlerCalled
 }

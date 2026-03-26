@@ -100,7 +100,9 @@ func TestRebaseOntoDefaultBranch_CleanRebase(t *testing.T) {
 }
 
 // Real conflicts return an error — caller decides what to do
-func TestRebaseOntoDefaultBranch_ReturnsErrorOnConflict(t *testing.T) {
+// Rebase conflicts with local work cause the stack to diverge —
+// returns nil (not an error), logs the divergence.
+func TestRebaseOntoDefaultBranch_DivergesOnConflict(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	mgr := setupRebaseMgr(t, project, bare)
 
@@ -112,8 +114,8 @@ func TestRebaseOntoDefaultBranch_ReturnsErrorOnConflict(t *testing.T) {
 	pushToOrigin(t, project)
 
 	err := mgr.RebaseOntoDefaultBranch(context.Background())
-	if err == nil {
-		t.Fatal("expected error on real conflict")
+	if err != nil {
+		t.Fatalf("expected nil (stack diverges), got: %v", err)
 	}
 }
 
