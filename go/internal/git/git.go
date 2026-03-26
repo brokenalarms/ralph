@@ -154,7 +154,11 @@ func (m *Manager) tryResumeWorktree() error {
 	branch, _ := m.State.Read("worktree_branch")
 	m.WorktreeBranch = branch
 	m.ProjectName = filepath.Base(m.ProjectDir)
-	m.BranchRenamed = !strings.HasSuffix(branch, "/next")
+	if renamed, _ := m.State.Read("branch_renamed"); renamed == "true" {
+		m.BranchRenamed = true
+	} else {
+		m.BranchRenamed = branch != m.TempBranch()
+	}
 
 	if seqStr, _ := m.State.Read("task_seq"); seqStr != "" {
 		if n, err := strconv.Atoi(seqStr); err == nil {
@@ -395,11 +399,12 @@ func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 	}
 	if err := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); err == nil {
 		m.WorktreeBranch = newBranch
+		m.BranchRenamed = true
 		if m.State != nil {
 			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
 			_ = m.State.Write("task_seq", fmt.Sprintf("%d", m.TaskSeq))
+			_ = m.State.Write("branch_renamed", "true")
 		}
-		m.BranchRenamed = true
 	}
 }
 
@@ -415,15 +420,19 @@ func (m *Manager) RotateBranch() {
 	// Already on the temp branch (e.g. after PostMergeReset)
 	if m.WorktreeBranch == newBranch {
 		m.BranchRenamed = false
+		if m.State != nil {
+			_ = m.State.Write("branch_renamed", "false")
+		}
 		return
 	}
 
 	if err := m.gitCmdErr(m.WorkDir, "checkout", "-B", newBranch); err == nil {
 		m.WorktreeBranch = newBranch
+		m.BranchRenamed = false
 		if m.State != nil {
 			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
+			_ = m.State.Write("branch_renamed", "false")
 		}
-		m.BranchRenamed = false
 		m.Logger.Log("git", "Branch: %s (from previous iteration)", m.WorktreeBranch)
 	} else {
 		m.Logger.Warn("git", "Branch rotation failed, continuing on %s", m.WorktreeBranch)

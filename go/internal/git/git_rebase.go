@@ -173,6 +173,7 @@ func (m *Manager) resetResumedWorktree(defaultBranch string) error {
 	m.BranchRenamed = false
 	if m.State != nil {
 		_ = m.State.Write("worktree_branch", m.WorktreeBranch)
+		_ = m.State.Write("branch_renamed", "false")
 	}
 	return nil
 }
@@ -288,6 +289,9 @@ func (m *Manager) RecreateFromMain(ctx context.Context) error {
 	m.WorktreeBranch = ""
 	m.BranchRenamed = false
 	m.TaskSeq = 0
+	if m.State != nil {
+		_ = m.State.Write("branch_renamed", "false")
+	}
 
 	// Re-run SetupWorktree to create a fresh worktree from main
 	m.Resume = false
