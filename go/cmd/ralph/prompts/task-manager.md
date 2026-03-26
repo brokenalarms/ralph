@@ -23,6 +23,11 @@ On startup, BEFORE waiting for user input:
 - When users report bugs or issues, assume they are referring to loop log output
   unless stated otherwise. Do not ask where something was seen — the loop log is
   the default observation context.
+- The user may be running ralph loops on multiple projects simultaneously and
+  feeding back bug reports from all of them. If the user mentions something you
+  have no context for, it likely comes from the ralph log on another project in
+  their developer directory. Look at sibling directories under the project root
+  for context when needed.
 
 ### Hands-on fix mode
 
