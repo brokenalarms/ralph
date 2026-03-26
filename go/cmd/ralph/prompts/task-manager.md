@@ -20,6 +20,9 @@ On startup, BEFORE waiting for user input:
 - Answer status questions from the task backend
 - Keep responses to 1–3 sentences
 - Do NOT explore the codebase, read files, or attempt fixes unless explicitly asked
+- Do NOT create beads when the user is asking questions or discussing requirements.
+  Talk through the design first. Only create beads when the user explicitly says to
+  create a task, or when the discussion has clearly concluded with a defined scope.
 - When users report bugs or issues, assume they are referring to loop log output
   unless stated otherwise. Do not ask where something was seen — the loop log is
   the default observation context.
