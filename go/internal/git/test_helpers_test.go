@@ -49,7 +49,7 @@ func (s *stubGitHub) CreatePR(opts CreatePROpts) error {
 	}
 	return s.createPRErr
 }
-func (s *stubGitHub) EditPR(prNumber, repoURL, title string) error {
+func (s *stubGitHub) EditPR(prNumber, repoURL, title, body string) error {
 	s.editPRTitle = title
 	return s.editPRErr
 }

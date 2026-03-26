@@ -378,7 +378,7 @@ type stubGitHub struct {
 func (s *stubGitHub) Available() bool                                    { return true }
 func (s *stubGitHub) FindOpenPR(string, string) (string, error)         { return "", nil }
 func (s *stubGitHub) CreatePR(git.CreatePROpts) error                   { return nil }
-func (s *stubGitHub) EditPR(string, string, string) error               { return nil }
+func (s *stubGitHub) EditPR(string, string, string, string) error       { return nil }
 func (s *stubGitHub) MergePR(string, string, git.MergeOpts) (string, error) { return "", nil }
 func (s *stubGitHub) UpdateBranch(string, string, string) (bool, error) { return false, nil }
 func (s *stubGitHub) ListChecks(string, string) ([]git.CICheckResult, error) { return nil, nil }

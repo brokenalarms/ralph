@@ -49,11 +49,36 @@ func (l *Loop) isNewTask(taskID, taskDesc string) bool {
 	return lastTask != taskDesc
 }
 
-func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc string) (string, error) {
+func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
 	if l.pushPRFunc != nil {
-		return l.pushPRFunc(ctx, taskID, taskDesc)
+		return l.pushPRFunc(ctx, taskID, taskDesc, body)
 	}
-	return l.git.PushAndCreatePR(ctx, taskID, taskDesc)
+	return l.git.PushAndCreatePR(ctx, taskID, taskDesc, body)
+}
+
+// buildPRBody assembles a PR description from bead context and agent summary.
+// Uses whatever context is available — bead description, acceptance criteria,
+// agent summary — and composes them into a coherent body.
+func (l *Loop) buildPRBody(taskID, summary string) string {
+	var sections []string
+
+	if taskID != "" {
+		if desc, err := l.cfg.TaskBackend.GetDescription(taskID); err == nil && desc != "" {
+			sections = append(sections, "## Description\n"+desc)
+		}
+		if ac, err := l.cfg.TaskBackend.GetAcceptance(taskID); err == nil && ac != "" {
+			sections = append(sections, "## Acceptance Criteria\n"+ac)
+		}
+	}
+
+	if summary != "" {
+		sections = append(sections, "## Summary\n"+summary)
+	}
+
+	if len(sections) == 0 {
+		return ""
+	}
+	return strings.Join(sections, "\n\n")
 }
 
 // resumeViaPR checks the bead's external-ref for a linked PR and resolves
@@ -179,7 +204,7 @@ func (l *Loop) flushUnpushedWork(ctx context.Context) {
 	taskID, _ := l.state.Read("last_task_id")
 	taskDesc, _ := l.state.Read("last_task")
 	if l.pushPRFunc != nil || l.mergeFunc != nil {
-		if _, err := l.pushAndCreatePR(ctx, taskID, taskDesc); err != nil {
+		if _, err := l.pushAndCreatePR(ctx, taskID, taskDesc, ""); err != nil {
 			l.logger.Warn("git", "Flush push/PR: %v", err)
 			return
 		}

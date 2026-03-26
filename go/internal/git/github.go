@@ -33,7 +33,7 @@ type GitHub interface {
 	MergePR(prNumber, repoURL string, opts MergeOpts) (output string, err error)
 	UpdateBranch(dir, nwo, prNumber string) (updated bool, err error)
 	ListChecks(prNumber, repoURL string) ([]CICheckResult, error)
-	EditPR(prNumber, repoURL, title string) error
+	EditPR(prNumber, repoURL, title, body string) error
 	GetRunLog(prNumber, workDir string) string
 	CheckEnforceAdmins(nwo, branch string) (enabled bool, err error)
 	PostEnforceAdmins(nwo, branch string) (output string, err error)
@@ -76,8 +76,12 @@ func (g *ghCLI) CreatePR(opts CreatePROpts) error {
 	return nil
 }
 
-func (g *ghCLI) EditPR(prNumber, repoURL, title string) error {
-	cmd := exec.Command("gh", "pr", "edit", prNumber, "--title", title, "-R", repoURL)
+func (g *ghCLI) EditPR(prNumber, repoURL, title, body string) error {
+	args := []string{"pr", "edit", prNumber, "--title", title, "-R", repoURL}
+	if body != "" {
+		args = append(args, "--body", body)
+	}
+	cmd := exec.Command("gh", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("PR edit failed: %s", strings.TrimSpace(string(out)))
 	}

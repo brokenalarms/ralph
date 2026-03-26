@@ -76,7 +76,7 @@ type Loop struct {
 	logger     *logging.Logger
 	signals    claude.SignalPaths
 	mergeFunc          func(ctx context.Context) (bool, error)
-	pushPRFunc         func(ctx context.Context, taskID, taskDesc string) (string, error)
+	pushPRFunc         func(ctx context.Context, taskID, taskDesc, body string) (string, error)
 	verifyFunc      func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
 	llmVerifyFunc   func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result
 	newRunnerFunc      func() claudeRunner
@@ -516,12 +516,13 @@ func (l *Loop) Run(ctx context.Context) error {
 
 			// PushAndCreatePR calls EnsureUpToDate internally, which
 			// rebases onto the latest base branch before pushing.
-			prNumber, pushErr := l.pushAndCreatePR(ctx, taskID, nextTask)
+			prBody := l.buildPRBody(taskID, result.Summary)
+			prNumber, pushErr := l.pushAndCreatePR(ctx, taskID, nextTask, prBody)
 			if pushErr != nil {
 				if !isOnline() {
 					l.logger.Warn("git", "Push failed — internet appears down")
 					l.waitForInternet(ctx)
-					prNumber, pushErr = l.pushAndCreatePR(ctx, taskID, nextTask)
+					prNumber, pushErr = l.pushAndCreatePR(ctx, taskID, nextTask, prBody)
 				}
 				if pushErr != nil {
 					l.logger.Warn("git", "Push/PR: %v", pushErr)
