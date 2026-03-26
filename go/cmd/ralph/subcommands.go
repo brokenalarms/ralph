@@ -159,9 +159,21 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 	return runMain(cfg, dirs, scriptPath, sub.Args, log)
 }
 
-// handleReview launches an interactive Claude session for post-mortem review:
-// reflection analysis, test audit, refactor opportunities, and interactive findings.
+func hasHelpFlag(args []string) bool {
+	for _, a := range args {
+		if a == "-h" || a == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
 func handleReview(sub config.Subcommand, log *logging.Logger) int {
+	if hasHelpFlag(sub.Args) {
+		printReviewUsage()
+		return 0
+	}
+
 	projectDir, _ := filepath.Abs(sub.Dir)
 
 	if !git.IsGitRepo(projectDir) {
@@ -204,6 +216,11 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 // handleCommander launches the 4-pane tmux layout with both the ralph loop
 // and an interactive task manager. Remaining args are passed through to the loop.
 func handleCommander(sub config.Subcommand, log *logging.Logger) int {
+	if hasHelpFlag(sub.Args) {
+		printCommanderUsage()
+		return 0
+	}
+
 	projectDir, _ := filepath.Abs(sub.Dir)
 	ralphDir := filepath.Join(projectDir, ".ralph")
 
@@ -233,6 +250,11 @@ func handleCommander(sub config.Subcommand, log *logging.Logger) int {
 // handleTask launches an interactive Claude session with the task manager prompt.
 // Runs standalone — no tmux required.
 func handleTask(sub config.Subcommand, log *logging.Logger) int {
+	if hasHelpFlag(sub.Args) {
+		printTaskUsage()
+		return 0
+	}
+
 	projectDir, _ := filepath.Abs(sub.Dir)
 	ralphDir := filepath.Join(projectDir, ".ralph")
 
@@ -291,6 +313,25 @@ Use "ralph <command> --help" for more information about a command.
 		logging.Bold, logging.Reset,
 		logging.Bold, logging.Reset,
 	)
+}
+
+func printTaskUsage() {
+	fmt.Printf("%sralph task%s - Interactive task triage and spec session\n\n", logging.Bold, logging.Reset)
+	fmt.Printf("%sUSAGE:%s\n  ralph task [directory]\n\n", logging.Bold, logging.Reset)
+	fmt.Printf("Launches an interactive Claude session for creating tasks, writing specs,\nand managing the project backlog.\n")
+}
+
+func printReviewUsage() {
+	fmt.Printf("%sralph review%s - Post-mortem review\n\n", logging.Bold, logging.Reset)
+	fmt.Printf("%sUSAGE:%s\n  ralph review [directory]\n\n", logging.Bold, logging.Reset)
+	fmt.Printf("Launches an interactive Claude session for reviewing reflections, auditing\ntests, and identifying refactoring opportunities.\n")
+}
+
+func printCommanderUsage() {
+	fmt.Printf("%sralph command%s - Full 4-pane tmux layout\n\n", logging.Bold, logging.Reset)
+	fmt.Printf("%sUSAGE:%s\n  ralph command [directory] [loop-options...]\n\n", logging.Bold, logging.Reset)
+	fmt.Printf("Starts a tmux session with the autonomous loop, task manager, stream log,\nand plan watcher in a 4-pane layout.\n\n")
+	fmt.Printf("%sLOOP OPTIONS:%s\n%s\n", logging.Bold, logging.Reset, config.FlagUsage())
 }
 
 func printLoopUsage() {

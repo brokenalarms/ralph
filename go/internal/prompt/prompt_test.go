@@ -140,7 +140,7 @@ func TestBuildPrompt_BDBackend(t *testing.T) {
 func TestBuildRefactorPrompt(t *testing.T) {
 	v := testVars(t)
 	files := "main.go\nconfig.go"
-	result, err := BuildRefactorPrompt(v, files, "")
+	result, err := BuildRefactorPrompt(v, files)
 	if err != nil {
 		t.Fatalf("BuildRefactorPrompt: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestBuildRefactorPrompt(t *testing.T) {
 // and refactor-specific instructions.
 func TestBuildRefactorPrompt_IncludesSharedAndRefactorInstructions(t *testing.T) {
 	v := testVars(t)
-	result, err := BuildRefactorPrompt(v, "ralph.sh server.js", "")
+	result, err := BuildRefactorPrompt(v, "ralph.sh server.js")
 	if err != nil {
 		t.Fatalf("BuildRefactorPrompt: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestBuildRefactorPrompt_IncludesSharedAndRefactorInstructions(t *testing.T)
 // raw placeholders remain.
 func TestBuildRefactorPrompt_ResolvesTemplateVariables(t *testing.T) {
 	v := testVars(t)
-	result, err := BuildRefactorPrompt(v, "lib/tasks.sh", "")
+	result, err := BuildRefactorPrompt(v, "lib/tasks.sh")
 	if err != nil {
 		t.Fatalf("BuildRefactorPrompt: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestBuildRefactorPrompt_ResolvesTemplateVariables(t *testing.T) {
 // Proves: refactor prompt enforces behavior preservation.
 func TestBuildRefactorPrompt_EnforcesNoBehaviorChange(t *testing.T) {
 	v := testVars(t)
-	result, err := BuildRefactorPrompt(v, "file.sh", "")
+	result, err := BuildRefactorPrompt(v, "file.sh")
 	if err != nil {
 		t.Fatalf("BuildRefactorPrompt: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestBuildRefactorPrompt_EnforcesNoBehaviorChange(t *testing.T) {
 // Proves: refactor prompt requires refactor: commit prefix.
 func TestBuildRefactorPrompt_RequiresRefactorCommitPrefix(t *testing.T) {
 	v := testVars(t)
-	result, err := BuildRefactorPrompt(v, "file.sh", "")
+	result, err := BuildRefactorPrompt(v, "file.sh")
 	if err != nil {
 		t.Fatalf("BuildRefactorPrompt: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestBuildRefactorPrompt_RequiresRefactorCommitPrefix(t *testing.T) {
 // Proves: refactor prompt allows skipping when no meaningful debt exists.
 func TestBuildRefactorPrompt_AllowsNoOp(t *testing.T) {
 	v := testVars(t)
-	result, err := BuildRefactorPrompt(v, "file.sh", "")
+	result, err := BuildRefactorPrompt(v, "file.sh")
 	if err != nil {
 		t.Fatalf("BuildRefactorPrompt: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestBuildRefactorPrompt_AllowsNoOp(t *testing.T) {
 // Proves: refactor prompt warns against premature abstractions.
 func TestBuildRefactorPrompt_DiscouragesPrematureAbstractions(t *testing.T) {
 	v := testVars(t)
-	result, err := BuildRefactorPrompt(v, "file.sh", "")
+	result, err := BuildRefactorPrompt(v, "file.sh")
 	if err != nil {
 		t.Fatalf("BuildRefactorPrompt: %v", err)
 	}
@@ -252,24 +252,12 @@ func TestBuildRefactorPrompt_DiscouragesPrematureAbstractions(t *testing.T) {
 // Proves: refactor prompt uses 500 lines as the split signal.
 func TestBuildRefactorPrompt_References500LineThreshold(t *testing.T) {
 	v := testVars(t)
-	result, err := BuildRefactorPrompt(v, "file.sh", "")
+	result, err := BuildRefactorPrompt(v, "file.sh")
 	if err != nil {
 		t.Fatalf("BuildRefactorPrompt: %v", err)
 	}
 	if !strings.Contains(result, "500") {
 		t.Error("refactor prompt missing 500 line threshold")
-	}
-}
-
-// Proves: refactor prompt includes quality findings section header.
-func TestBuildRefactorPrompt_IncludesQualityFindings(t *testing.T) {
-	v := testVars(t)
-	result, err := BuildRefactorPrompt(v, "src/auth.ts", "src/auth.ts:\n  - 3x untyped `any` usage")
-	if err != nil {
-		t.Fatalf("BuildRefactorPrompt: %v", err)
-	}
-	if !strings.Contains(result, "Quality signals detected") {
-		t.Error("refactor prompt missing 'Quality signals detected' section")
 	}
 }
 

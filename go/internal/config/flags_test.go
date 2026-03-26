@@ -54,12 +54,9 @@ func TestFlagUsageContainsEnvVars(t *testing.T) {
 // ensuring the registry and parser are in sync.
 func TestAllRegisteredFlagsAreParseable(t *testing.T) {
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
-	t.Setenv("RALPH_REFACTOR_EVERY", "")
 	t.Setenv("RALPH_IDLE_TIMEOUT", "")
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 	t.Setenv("RALPH_BASE_BRANCH", "")
-	t.Setenv("RALPH_NO_REFACTOR", "")
-	t.Setenv("RALPH_REFACTOR_THRESHOLD", "")
 	t.Setenv("RALPH_WAIT_INTERVAL", "")
 
 	for _, f := range Flags {
@@ -115,9 +112,6 @@ func TestAllConfigKeysInConfigMap(t *testing.T) {
 // rather than being independently hardcoded.
 func TestDefaultsDeriveFromFlagRegistry(t *testing.T) {
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
-	t.Setenv("RALPH_REFACTOR_EVERY", "")
-	t.Setenv("RALPH_NO_REFACTOR", "")
-	t.Setenv("RALPH_REFACTOR_THRESHOLD", "")
 	t.Setenv("RALPH_IDLE_TIMEOUT", "")
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 	t.Setenv("RALPH_BASE_BRANCH", "")
@@ -141,12 +135,6 @@ func TestDefaultsDeriveFromFlagRegistry(t *testing.T) {
 	}
 	if cfg.CallsPerHour != check.CallsPerHour {
 		t.Errorf("CallsPerHour: Defaults()=%d, registry=%d", cfg.CallsPerHour, check.CallsPerHour)
-	}
-	if cfg.RefactorEvery != check.RefactorEvery {
-		t.Errorf("RefactorEvery: Defaults()=%d, registry=%d", cfg.RefactorEvery, check.RefactorEvery)
-	}
-	if cfg.RefactorThreshold != check.RefactorThreshold {
-		t.Errorf("RefactorThreshold: Defaults()=%d, registry=%d", cfg.RefactorThreshold, check.RefactorThreshold)
 	}
 	if cfg.IdleTimeout != check.IdleTimeout {
 		t.Errorf("IdleTimeout: Defaults()=%v, registry=%v", cfg.IdleTimeout, check.IdleTimeout)

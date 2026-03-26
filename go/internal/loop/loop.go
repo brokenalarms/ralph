@@ -29,10 +29,7 @@ type Config struct {
 	Dirs                workctx.WorkContext
 	PlanFile            string
 	MaxIterations       int
-	RefactorEvery       int
-	NoRefactor          bool
-	RefactorThreshold   int
-	DisabledChecks      []string
+	Refactor            bool
 	Quiet               bool
 	AutoMerge           bool
 	Evolve              bool
@@ -82,6 +79,7 @@ type Loop struct {
 	newRunnerFunc      func() claudeRunner
 	findPRInfoFunc     func(workDir string) (number, title string)
 	agentRunner        *agent.Runner
+	refactorQueryFunc  func(ctx context.Context, workDir, prompt, model string) (string, error)
 	lastAction         analyzer.Action
 	lastTaskMerged  bool
 	sessionTasks    []CompletedTask

@@ -20,9 +20,7 @@ func TestLoad_BashCompatible(t *testing.T) {
   "worktree_dir": "/tmp/worktrees/test-01",
   "worktree_branch": "ralph/test/01-state",
   "task_backend": "bd",
-  "max_iterations": 50,
-  "quality_score": 15,
-  "refactor_every": 20
+  "max_iterations": 50
 }`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(stateJSON), 0o644); err != nil {
 		t.Fatal(err)
@@ -42,12 +40,6 @@ func TestLoad_BashCompatible(t *testing.T) {
 	}
 	if s.MaxIterations != 50 {
 		t.Errorf("MaxIterations = %d, want 50", s.MaxIterations)
-	}
-	if s.QualityScore != 15 {
-		t.Errorf("QualityScore = %d, want 15", s.QualityScore)
-	}
-	if s.RefactorEvery != 20 {
-		t.Errorf("RefactorEvery = %d, want 20", s.RefactorEvery)
 	}
 	if s.TaskBackend != "bd" {
 		t.Errorf("TaskBackend = %q, want %q", s.TaskBackend, "bd")
@@ -83,8 +75,6 @@ func TestSaveAndLoad_Roundtrip(t *testing.T) {
 		LastTask:          "test task",
 		TaskBackend:       "bd",
 		MaxIterations:     20,
-		QualityScore:      12,
-		RefactorEvery: 20,
 	}
 
 	if err := st.Save(original); err != nil {
@@ -99,8 +89,7 @@ func TestSaveAndLoad_Roundtrip(t *testing.T) {
 	if loaded.Iteration != original.Iteration ||
 		loaded.Status != original.Status ||
 		loaded.MaxIterations != original.MaxIterations ||
-		loaded.LastTask != original.LastTask ||
-		loaded.RefactorEvery != original.RefactorEvery {
+		loaded.LastTask != original.LastTask {
 		t.Errorf("Roundtrip mismatch:\n  saved:  %+v\n  loaded: %+v", original, loaded)
 	}
 }
@@ -229,7 +218,7 @@ func TestInit_CreatesFreshState(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 
-	if err := st.Init(50, 20); err != nil {
+	if err := st.Init(50); err != nil {
 		t.Fatal(err)
 	}
 
@@ -254,7 +243,7 @@ func TestInit_PreservesStateOnResume(t *testing.T) {
 
 	st.Save(State{Iteration: 3, Status: "running", MaxIterations: 50})
 
-	if err := st.Init(50, 20); err != nil {
+	if err := st.Init(50); err != nil {
 		t.Fatal(err)
 	}
 
@@ -284,38 +273,6 @@ func TestTaskBackend_WrittenToState(t *testing.T) {
 	val, _ := st.Read("task_backend")
 	if val != "bd" {
 		t.Errorf("task_backend = %q, want %q", val, "bd")
-	}
-}
-
-// Proves: quality_score defaults to 0 in initial state.
-func TestQualityScore_DefaultsToZero(t *testing.T) {
-	dir := t.TempDir()
-	st := NewStore(dir)
-	st.Init(5, 0)
-	st.Write("quality_score", "0")
-
-	val, err := st.Read("quality_score")
-	if err != nil {
-		t.Fatalf("Read quality_score: %v", err)
-	}
-	if val != "0" {
-		t.Errorf("quality_score = %q, want %q", val, "0")
-	}
-}
-
-// Proves: quality_score tracks across writes.
-func TestQualityScore_TracksAcrossWrites(t *testing.T) {
-	dir := t.TempDir()
-	st := NewStore(dir)
-	st.Init(5, 0)
-	st.Write("quality_score", "25")
-
-	val, err := st.Read("quality_score")
-	if err != nil {
-		t.Fatalf("Read quality_score: %v", err)
-	}
-	if val != "25" {
-		t.Errorf("quality_score = %q, want %q", val, "25")
 	}
 }
 
@@ -368,6 +325,61 @@ func TestState_TestResultFieldsRoundTrip(t *testing.T) {
 	}
 	if s.LastTestTime != "2026-03-22T10:00:00Z" {
 		t.Errorf("LastTestTime = %q, want %q", s.LastTestTime, "2026-03-22T10:00:00Z")
+	}
+}
+
+// Verifies that SaveCLIConfig/LoadCLIConfig round-trips a config map through
+// state.json, enabling evolve restart to reconstruct args from semantic config.
+func TestSaveCLIConfig_Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Save(State{Iteration: 5, Status: "running"})
+
+	cfg := map[string]string{
+		"dir":        "/tmp/project",
+		"max":        "20",
+		"auto-merge": "true",
+		"evolve":     "true",
+	}
+
+	if err := st.SaveCLIConfig(cfg); err != nil {
+		t.Fatalf("SaveCLIConfig: %v", err)
+	}
+
+	loaded, err := st.LoadCLIConfig()
+	if err != nil {
+		t.Fatalf("LoadCLIConfig: %v", err)
+	}
+
+	for k, v := range cfg {
+		if loaded[k] != v {
+			t.Errorf("key %q = %q, want %q", k, loaded[k], v)
+		}
+	}
+
+	// Verify other state fields are preserved.
+	s, _ := st.Load()
+	if s.Iteration != 5 {
+		t.Errorf("Iteration = %d, want 5 (preserved)", s.Iteration)
+	}
+	if s.Status != "running" {
+		t.Errorf("Status = %q, want running (preserved)", s.Status)
+	}
+}
+
+// Verifies that LoadCLIConfig returns nil when no cli_config exists in state,
+// so callers can fall back to raw args on first run.
+func TestLoadCLIConfig_MissingReturnsNil(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Save(State{Status: "running"})
+
+	cfg, err := st.LoadCLIConfig()
+	if err != nil {
+		t.Fatalf("LoadCLIConfig: %v", err)
+	}
+	if cfg != nil {
+		t.Errorf("expected nil map, got %v", cfg)
 	}
 }
 
