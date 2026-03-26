@@ -1066,8 +1066,8 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 	_ = handlerCalled
 }
 
-// Verifies that handleRebase recovers from conflicts — EnsureUpToDate
-// resets and replays, so the loop continues rather than halting.
+// Verifies that handleRebase returns nil on real conflicts — EnsureUpToDate
+// aborts the rebase and lets the loop continue (diverged stack is expected).
 func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
@@ -1077,7 +1077,7 @@ func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-				State:       st,
+		State:       st,
 		Logger:      logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
@@ -1100,7 +1100,6 @@ func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 		nextTask:  "Some task",
 	}
 
-	handlerCalled := false
 	l := New(Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: project,
@@ -1110,31 +1109,27 @@ func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-		OnRebaseConflict: func(err error) git.RebaseRecovery {
-			handlerCalled = true
-			return git.RebaseAbort
-		},
 	}, st, gm, logging.New(nil))
 
 	err := l.handleRebase(context.Background())
-	if err == nil {
-		t.Fatal("expected rebase error for real conflicts")
+	if err != nil {
+		t.Fatalf("expected nil (diverged stack continues), got: %v", err)
 	}
-	_ = handlerCalled
 }
 
-// Verifies handleRebase propagates rebase errors.
-func TestLoop_HandleRebase_PropagatesError(t *testing.T) {
+// Verifies handleRebase returns nil on real conflicts — the diverged
+// stack is expected and the loop should continue.
+func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := state.NewStore(ralphDir)
 	st.Init(5)
 
 	gm := &git.Manager{
-		ProjectDir:  project,
-		RalphDir:    ralphDir,
-				State:       st,
-		Logger:      logging.New(nil),
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -1168,8 +1163,8 @@ func TestLoop_HandleRebase_PropagatesError(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	err := l.handleRebase(context.Background())
-	if err == nil {
-		t.Fatal("expected rebase error for real conflicts")
+	if err != nil {
+		t.Fatalf("expected nil (diverged stack continues), got: %v", err)
 	}
 }
 
@@ -1538,7 +1533,7 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "42", nil }
 	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
 
 	err := l.Run(context.Background())
@@ -1919,7 +1914,7 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "99", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		mergeCount++
 		return true, nil
@@ -3390,7 +3385,7 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "42", nil }
 
 	merged := false
 	l.mergeFunc = func(context.Context) (bool, error) {
@@ -3767,7 +3762,7 @@ func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "42", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return true, nil
 	}
@@ -5272,5 +5267,62 @@ func TestLoop_HealthDashboardLoggedBetweenIterations(t *testing.T) {
 	}
 	if !strings.Contains(output, "branch:") {
 		t.Error("expected 'branch:' in health log")
+	}
+}
+
+// Verifies that the iteration banner includes the Ralph version when
+// Config.Version is set, so operators can tell which build is running.
+func TestLoop_IterationBannerShowsVersion(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "check version",
+		nextID:    "ralph-ver1",
+		label:     "beads",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		Version:       "1.2.3",
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = runner
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Ralph v1.2.3") {
+		t.Errorf("expected 'Ralph v1.2.3' in iteration banner, got:\n%s", output)
 	}
 }
