@@ -290,7 +290,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		if l.git.RemoteBranchHasWork() {
 			l.logger.Log("git", "Remote branch has work from previous iteration — pulling and verifying")
 			l.git.ResetToRemoteBranch()
-			if passed, _ := l.verifyFunc(ctx, l.git.WorkDir, ""); passed {
+			if passed, _ := l.verifyCompletion(ctx, ""); passed {
 				l.logger.Success("git", "Previous work verified — proceeding to merge")
 				if taskID != "" {
 					_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: previous iteration work verified")
