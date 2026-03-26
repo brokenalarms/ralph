@@ -83,8 +83,18 @@ func (m *Manager) refExists(dir, ref string) bool {
 	return m.gitCmdErr(dir, "rev-parse", "--verify", ref) == nil
 }
 
+// DetectDefaultBranch returns the resolved default branch name.
+func (m *Manager) DetectDefaultBranch() string {
+	return m.detectDefaultBranch()
+}
+
 func (m *Manager) detectDefaultBranch() string {
 	return detectDefaultBranch(m.ProjectDir, m.BaseBranch, m.run())
+}
+
+// OriginRev returns the commit hash of origin/<branch>.
+func (m *Manager) OriginRev(branch string) string {
+	return m.gitOutput(m.WorkDir, "rev-parse", "origin/"+branch)
 }
 
 func (m *Manager) remoteExists() bool {

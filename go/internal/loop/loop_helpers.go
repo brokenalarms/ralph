@@ -153,10 +153,26 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 	}
 }
 
-// resumeFromRemoteBranch is the legacy path: pull remote work, verify, merge.
+// resumeFromRemoteBranch is the legacy path: pull remote work, sync to
+// latest base branch, verify, merge. If the sync discards stale work
+// (cherry-pick conflict), returns false so the agent re-runs.
 func (l *Loop) resumeFromRemoteBranch(ctx context.Context, taskID, nextTask string) bool {
 	l.logger.Log("git", "Remote branch has work from previous iteration — pulling and verifying")
 	l.git.ResetToRemoteBranch()
+
+	// Sync to latest base branch BEFORE verification. If this discards
+	// stale work (cherry-pick conflict), there's nothing to verify.
+	if err := l.git.EnsureUpToDate(ctx); err != nil {
+		l.logger.Warn("git", "Sync failed: %v — agent will re-run", err)
+		return false
+	}
+	// If sync discarded stale work, HEAD is at origin/main with no
+	// local commits — nothing to verify or merge.
+	defaultBranch := l.git.DetectDefaultBranch()
+	if l.git.HeadRev() == l.git.OriginRev(defaultBranch) {
+		l.logger.Log("git", "Stale work discarded during sync — agent will re-run")
+		return false
+	}
 
 	testsPass, _ := l.verifyCompletion(ctx, "")
 	llmPass := false
