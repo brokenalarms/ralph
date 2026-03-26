@@ -54,6 +54,7 @@ type stubBackend struct {
 	nextPriority *int
 	label        string
 	description  string
+	acceptance   string
 	fullContext   string
 	skippedTask  string
 	skipReason   string
@@ -119,7 +120,7 @@ func (s *stubBackend) SetState(_, _, _, _ string) error     { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (s *stubBackend) ExecutionInstructions() (string, error) { return "", nil }
 func (s *stubBackend) GetDescription(_ string) (string, error)  { return s.description, nil }
-func (s *stubBackend) GetAcceptance(_ string) (string, error)   { return "", nil }
+func (s *stubBackend) GetAcceptance(_ string) (string, error)   { return s.acceptance, nil }
 func (s *stubBackend) GetFullContext(_ string) (string, error)  { return s.fullContext, nil }
 func (s *stubBackend) ProjectContext() (string, error)          { return "", nil }
 func (s *stubBackend) GetExternalRef(_ string) (string, error) { return "", nil }
@@ -1535,7 +1536,7 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "42", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
 
 	err := l.Run(context.Background())
@@ -1676,7 +1677,7 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
@@ -1735,7 +1736,7 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.findPRInfoFunc = func(string) (string, string) { return "42", "Fix auth bug" }
 
@@ -1790,7 +1791,7 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "no commits" }
 
 	_ = l.Run(context.Background())
@@ -1916,7 +1917,7 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "99", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		mergeCount++
 		return true, nil
@@ -2174,7 +2175,7 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(_ context.Context, _, taskDesc string) (string, error) {
+	l.pushPRFunc = func(_ context.Context, _, taskDesc, _ string) (string, error) {
 		pushPRCalls++
 		return "", nil
 	}
@@ -2233,7 +2234,7 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(_ context.Context, _, taskDesc string) (string, error) {
+	l.pushPRFunc = func(_ context.Context, _, taskDesc, _ string) (string, error) {
 		pushPRCalls++
 		return "", nil
 	}
@@ -2378,7 +2379,7 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true, Summary: "task completed"},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -2608,7 +2609,7 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 		WaitInterval:  50 * time.Millisecond,
 	}, st, gm, logger)
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	// After the loop enters wait mode, inject a new task. After the Claude
 	// call completes, the loop will re-enter wait mode; cancel the context
@@ -2996,7 +2997,7 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return false, "test suite failed"
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) {
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) {
 		t.Error("push should not be called when verification fails")
 		return "", nil
 	}
@@ -3064,7 +3065,7 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) {
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) {
 		pushCalled = true
 		return "", nil
 	}
@@ -3129,7 +3130,7 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		// VerifyDir deliberately not set
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) {
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) {
 		pushCalled = true
 		return "", nil
 	}
@@ -3204,7 +3205,7 @@ func TestLoop_LifecycleStates(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -3324,7 +3325,7 @@ func TestLoop_CIFailureLeavesTaskOpenForRetry(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return false, &git.CIFailureError{
 			PRNumber: "99",
@@ -3387,7 +3388,7 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "42", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 
 	merged := false
 	l.mergeFunc = func(context.Context) (bool, error) {
@@ -3443,7 +3444,7 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) { return "", nil }
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return true, nil
@@ -3500,7 +3501,7 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 	l.newRunnerFunc = func() claudeRunner {
 		return &stubRunner{result: claude.Result{SignalDetected: true}}
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	// mergeFunc returning error means merge pipeline failed (retry exhaustion
 	// is tested in git module: TestMergeWithRetry_ExhaustsRetries).
@@ -3564,7 +3565,7 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return false, fmt.Errorf("merge failed")
@@ -3632,7 +3633,7 @@ func TestLoop_SkipsTaskAfterRepeatedMergeFailures(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return false, fmt.Errorf("push denied by sandbox")
 	}
@@ -3696,7 +3697,7 @@ func TestLoop_MergeFailureBelowThresholdLeavesTaskOpen(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return false, fmt.Errorf("merge conflict")
 	}
@@ -3764,7 +3765,7 @@ func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "42", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return true, nil
 	}
@@ -3820,7 +3821,7 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -3901,7 +3902,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		captured: &capturedPrompt,
 	}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -4079,7 +4080,7 @@ func TestLoop_PushCalledAfterSignal(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	pushCalled := false
-	l.pushPRFunc = func(context.Context, string, string) (string, error) {
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) {
 		pushCalled = true
 		return "", nil
 	}
@@ -4192,7 +4193,7 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	l.Run(context.Background())
 
@@ -4254,7 +4255,7 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	l.Run(context.Background())
 
@@ -4322,7 +4323,7 @@ func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
 	l.runner = runner
 
 	var pushCalls int
-	l.pushPRFunc = func(_ context.Context, taskID, taskDesc string) (string, error) {
+	l.pushPRFunc = func(_ context.Context, taskID, taskDesc, _ string) (string, error) {
 		pushCalls++
 		return "", nil
 	}
@@ -4388,7 +4389,7 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 	l.runner = runner
 
 	var pushCalls int
-	l.pushPRFunc = func(_ context.Context, taskID, taskDesc string) (string, error) {
+	l.pushPRFunc = func(_ context.Context, taskID, taskDesc, _ string) (string, error) {
 		pushCalls++
 		return "", nil
 	}
@@ -4454,7 +4455,7 @@ func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) { return "", nil }
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
 	var mergeCalls int
 	l.mergeFunc = func(context.Context) (bool, error) {
@@ -4520,7 +4521,7 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) { return "", nil }
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
 	var mergeCalls int
 	l.mergeFunc = func(context.Context) (bool, error) {
@@ -4587,7 +4588,7 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) { return "", nil }
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
 	var mergeCalls int
 	l.mergeFunc = func(context.Context) (bool, error) {
@@ -4650,7 +4651,7 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) { return "", nil }
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
 	var mergeCalls int
 	l.mergeFunc = func(context.Context) (bool, error) {
@@ -4715,7 +4716,7 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) { return "", nil }
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
 	var mergeCalls int
 	l.mergeFunc = func(context.Context) (bool, error) {
@@ -4779,7 +4780,7 @@ func TestLoop_SessionTasksRecordsCompletedWork(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) { return "", nil }
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -4954,7 +4955,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 			l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
 				return llmResult
 			}
-			l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+			l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 			// For rejection, stub out newRunnerFunc so fix agent doesn't launch real Claude
 			if !tt.passed {
@@ -5173,7 +5174,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		backend: backend,
 		counter: &iterationCount,
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.mergeFunc = func(context.Context) (bool, error) { return false, nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
@@ -5640,5 +5641,119 @@ func TestLoop_onSignal_TestFixAttemptsTracked(t *testing.T) {
 	// Should have injected 3 times (the max), then given up on the 4th.
 	if len(runner.injected) != 3 {
 		t.Errorf("expected 3 injections before giving up, got %d", len(runner.injected))
+	}
+}
+
+// buildPRBody assembles description, acceptance criteria, and agent summary
+// into a structured PR body when all context is available.
+func TestBuildPRBody_FullContext(t *testing.T) {
+	backend := &stubBackend{
+		description: "Fix the auth middleware to validate tokens",
+		acceptance:  "1. Tokens are validated\n2. Invalid tokens return 401",
+	}
+
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir}
+
+	l := New(Config{
+		Dirs:         workctx.WorkContext{RalphDir: ralphDir, PromptsDir: dir},
+		TaskBackend:  backend,
+		CallsPerHour: 80,
+	}, st, gm, logging.New(nil))
+
+	body := l.buildPRBody("ralph-abc", "Fixed auth middleware token validation")
+
+	if !strings.Contains(body, "## Description") {
+		t.Error("body should contain Description section")
+	}
+	if !strings.Contains(body, "Fix the auth middleware") {
+		t.Error("body should contain bead description")
+	}
+	if !strings.Contains(body, "## Acceptance Criteria") {
+		t.Error("body should contain Acceptance Criteria section")
+	}
+	if !strings.Contains(body, "Tokens are validated") {
+		t.Error("body should contain acceptance criteria content")
+	}
+	if !strings.Contains(body, "## Summary") {
+		t.Error("body should contain Summary section")
+	}
+	if !strings.Contains(body, "Fixed auth middleware") {
+		t.Error("body should contain agent summary")
+	}
+}
+
+// buildPRBody falls back to agent summary when bead has no description.
+func TestBuildPRBody_NoBeadDescription(t *testing.T) {
+	backend := &stubBackend{}
+
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir}
+
+	l := New(Config{
+		Dirs:         workctx.WorkContext{RalphDir: ralphDir, PromptsDir: dir},
+		TaskBackend:  backend,
+		CallsPerHour: 80,
+	}, st, gm, logging.New(nil))
+
+	body := l.buildPRBody("ralph-abc", "Implemented the feature")
+
+	if strings.Contains(body, "## Description") {
+		t.Error("body should not contain Description when bead has none")
+	}
+	if !strings.Contains(body, "## Summary") {
+		t.Error("body should contain Summary section as fallback")
+	}
+	if !strings.Contains(body, "Implemented the feature") {
+		t.Error("body should contain agent summary")
+	}
+}
+
+// buildPRBody returns empty string when no context is available at all.
+func TestBuildPRBody_NoContext(t *testing.T) {
+	backend := &stubBackend{}
+
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir}
+
+	l := New(Config{
+		Dirs:         workctx.WorkContext{RalphDir: ralphDir, PromptsDir: dir},
+		TaskBackend:  backend,
+		CallsPerHour: 80,
+	}, st, gm, logging.New(nil))
+
+	body := l.buildPRBody("", "")
+
+	if body != "" {
+		t.Errorf("body should be empty when no context is available, got %q", body)
+	}
+}
+
+// PR body must never contain the old generic "Automated PR for:" text.
+func TestBuildPRBody_NeverGeneric(t *testing.T) {
+	backend := &stubBackend{
+		description: "Some task description",
+	}
+
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir}
+
+	l := New(Config{
+		Dirs:         workctx.WorkContext{RalphDir: ralphDir, PromptsDir: dir},
+		TaskBackend:  backend,
+		CallsPerHour: 80,
+	}, st, gm, logging.New(nil))
+
+	body := l.buildPRBody("ralph-abc", "completed task")
+
+	if strings.Contains(body, "Automated PR for") {
+		t.Error("body must not contain generic 'Automated PR for' text")
+	}
+	if strings.Contains(body, "Generated by ralph") {
+		t.Error("body must not contain generic 'Generated by ralph' text")
 	}
 }
