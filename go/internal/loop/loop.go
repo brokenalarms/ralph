@@ -506,11 +506,14 @@ func (l *Loop) Run(ctx context.Context) error {
 				ID:      taskID,
 				Title:   nextTask,
 				Summary: result.Summary,
+				PRNum:   prNumber,
 			}
 			if prNum, prTitle, prURL := l.findPRInfo(workDir); prNum != "" {
 				ct.PRNum = prNum
 				ct.PRTitle = prTitle
 				ct.PRURL = prURL
+			} else if prNumber != "" {
+				ct.PRNum = prNumber
 			}
 
 			merged := false
@@ -526,7 +529,9 @@ func (l *Loop) Run(ctx context.Context) error {
 			if taskID != "" && (merged || !l.cfg.AutoMerge) {
 				l.attempts.ClearMergeFailures(taskID)
 				closeReason := "completed by ralph"
-				if ct.PRNum != "" {
+				if ct.PRURL != "" {
+					closeReason = fmt.Sprintf("Fixed in %s", ct.PRURL)
+				} else if ct.PRNum != "" {
 					closeReason = fmt.Sprintf("Fixed in PR #%s", ct.PRNum)
 				}
 				if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
