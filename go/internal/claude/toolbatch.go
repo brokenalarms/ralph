@@ -13,11 +13,18 @@ var batchableToolRe = regexp.MustCompile(`^\[(Read|Grep|Glob)\] (.+)$`)
 // time window and emits them as collapsed summary lines. Edit, Bash, and
 // text output pass through immediately, flushing any pending batch.
 type ToolBatcher struct {
-	order       []string
-	batches     map[string][]string
-	windowStart time.Time
-	window      time.Duration
-	fmt         *StreamFormatter
+	order           []string
+	batches         map[string][]string
+	windowStart     time.Time
+	window          time.Duration
+	fmt             *StreamFormatter
+	hideVerboseOnly bool
+}
+
+// SetVerbose controls whether verbose-only tool calls are shown or suppressed.
+func (b *ToolBatcher) SetVerbose(v bool) {
+	b.hideVerboseOnly = !v
+	b.fmt.hideVerboseOnly = !v
 }
 
 // NewToolBatcher creates a batcher with the given window duration.
@@ -44,6 +51,9 @@ func (b *ToolBatcher) ProcessLine(text string) []string {
 	m := batchableToolRe.FindStringSubmatch(text)
 	if m != nil {
 		tool, arg := m[1], m[2]
+		if b.hideVerboseOnly && VerboseOnlyTools[tool] {
+			return flushed
+		}
 		if len(b.batches) == 0 {
 			b.windowStart = time.Now()
 		}

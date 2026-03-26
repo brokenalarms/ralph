@@ -114,7 +114,7 @@ func TestFilterStreamJSON_TailsFile(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		filterStreamJSON(rawPath, logPath, "", stop)
+		filterStreamJSON(rawPath, logPath, "", true, stop)
 	}()
 
 	// Append a stream-json event after the filter has started.
@@ -154,7 +154,7 @@ func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		filterStreamJSON(rawPath, logPath, "", stop)
+		filterStreamJSON(rawPath, logPath, "", true, stop)
 	}()
 
 	time.Sleep(200 * time.Millisecond)
@@ -197,7 +197,7 @@ func TestFilterStreamJSON_DiagnosisBanner(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		filterStreamJSON(rawPath, logPath, "", stop)
+		filterStreamJSON(rawPath, logPath, "", true, stop)
 	}()
 
 	time.Sleep(200 * time.Millisecond)
@@ -250,7 +250,7 @@ func TestFilterStreamJSON_BatchesToolCalls(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		filterStreamJSON(rawPath, logPath, "", stop)
+		filterStreamJSON(rawPath, logPath, "", true, stop)
 	}()
 
 	time.Sleep(200 * time.Millisecond)
@@ -301,7 +301,7 @@ func TestFilterStreamJSON_ShortensAbsolutePaths(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		filterStreamJSON(rawPath, logPath, workDir, stop)
+		filterStreamJSON(rawPath, logPath, workDir, true, stop)
 	}()
 
 	time.Sleep(200 * time.Millisecond)
@@ -343,7 +343,7 @@ func TestFilterStreamJSON_SignalHighlight(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		filterStreamJSON(rawPath, logPath, "", stop)
+		filterStreamJSON(rawPath, logPath, "", true, stop)
 	}()
 
 	time.Sleep(200 * time.Millisecond)
@@ -394,7 +394,7 @@ func TestFilterStreamJSON_MultiLineBashTruncated(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		filterStreamJSON(rawPath, logPath, "", stop)
+		filterStreamJSON(rawPath, logPath, "", true, stop)
 	}()
 
 	time.Sleep(200 * time.Millisecond)
@@ -435,5 +435,86 @@ func TestFilterStreamJSON_MultiLineBashTruncated(t *testing.T) {
 	}
 	if rLines > 1 {
 		t.Errorf("expected 1 [r] output line for multi-line Bash, got %d in: %q", rLines, content)
+	}
+}
+
+// Verifies that non-verbose mode hides Read/Bash/Write but keeps Edit, Agent,
+// prose, signals, and diagnosis banners visible in the filtered output.
+func TestFilterStreamJSON_NonVerboseHidesLowValueTools(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+
+	os.WriteFile(rawPath, nil, 0o644)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		filterStreamJSON(rawPath, logPath, "", false, stop)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Verbose-only tools (should be hidden).
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/foo.go"}}]}}`)
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}}]}}`)
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/tmp/out.go"}}]}}`)
+	// Visible tools.
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/tmp/fix.go"}}]}}`)
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","input":{"prompt":"explore codebase"}}]}}`)
+	// Prose.
+	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"analyzing the results"}}`)
+	// Signal (starts as Bash but should be converted to [signal]).
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo \"done\" > /path/.ralph/.signal_complete"}}]}}`)
+	// Diagnosis.
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"ISSUE: config is broken"}]}}`)
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := ansiRe.ReplaceAllString(string(got), "")
+
+	// Hidden tools should NOT appear.
+	if strings.Contains(content, "[Read]") {
+		t.Errorf("Read should be hidden in non-verbose mode, got: %q", content)
+	}
+	if strings.Contains(content, "[Bash] go test") {
+		t.Errorf("Bash should be hidden in non-verbose mode, got: %q", content)
+	}
+	if strings.Contains(content, "[Write]") {
+		t.Errorf("Write should be hidden in non-verbose mode, got: %q", content)
+	}
+
+	// Visible tools should appear.
+	if !strings.Contains(content, "[Edit]") {
+		t.Errorf("Edit should be visible in non-verbose mode, got: %q", content)
+	}
+	if !strings.Contains(content, "[Agent]") {
+		t.Errorf("Agent should be visible in non-verbose mode, got: %q", content)
+	}
+
+	// Prose should appear.
+	if !strings.Contains(content, "analyzing the results") {
+		t.Errorf("prose should be visible in non-verbose mode, got: %q", content)
+	}
+
+	// Signal should appear.
+	if !strings.Contains(content, "[signal]") {
+		t.Errorf("signal should be visible in non-verbose mode, got: %q", content)
+	}
+
+	// Diagnosis should appear.
+	if !strings.Contains(content, "ISSUE") {
+		t.Errorf("diagnosis should be visible in non-verbose mode, got: %q", content)
 	}
 }
