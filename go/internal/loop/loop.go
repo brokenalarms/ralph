@@ -298,8 +298,10 @@ func (l *Loop) Run(ctx context.Context) error {
 				}
 				l.attempts.Clear(taskID, nextTask)
 				l.recordCompletedTask(taskID, nextTask)
+				// Skip push — the branch is already on the remote (we just
+				// pulled from it). Go straight to PR creation and merge.
 				if err := l.pushAndCreatePR(ctx, taskID, nextTask); err != nil {
-					l.logger.Warn("git", "Push/PR: %v", err)
+					l.logger.Log("git", "Push/PR: %v (branch already on remote, continuing to merge)", err)
 				}
 				merged := false
 				if l.cfg.AutoMerge {
@@ -309,12 +311,21 @@ func (l *Loop) Run(ctx context.Context) error {
 						l.logger.Warn("git", "Auto-merge: %v", mergeErr)
 					}
 				}
-				if taskID != "" && (merged || !l.cfg.AutoMerge) {
-					l.attempts.ClearMergeFailures(taskID)
-					if err := l.cfg.TaskBackend.CloseTask(taskID, "completed by ralph"); err != nil {
-						l.logger.Warn("beads", "CloseTask failed: %v", err)
+				if taskID != "" {
+					if merged || !l.cfg.AutoMerge {
+						l.attempts.ClearMergeFailures(taskID)
+						if err := l.cfg.TaskBackend.CloseTask(taskID, "completed by ralph"); err != nil {
+							l.logger.Warn("beads", "CloseTask failed: %v", err)
+						} else {
+							l.logger.Log("beads", "Closed task %s (completed by ralph)", taskID)
+						}
 					} else {
-						l.logger.Log("beads", "Closed task %s (completed by ralph)", taskID)
+						// Merge failed even with remote branch — skip task to
+						// avoid infinite retry loop.
+						l.logger.Warn("git", "Merge failed for remote work — skipping task to avoid loop")
+						if err := l.cfg.TaskBackend.SkipTask(taskID, "merge_failed_remote_work"); err != nil {
+							l.logger.Warn("beads", "SkipTask failed: %v", err)
+						}
 					}
 				}
 				l.git.TagTaskEnd(taskID)
