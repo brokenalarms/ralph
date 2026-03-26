@@ -114,7 +114,10 @@ Then **wait for the user's response** before moving on:
   priority, labels, type), echo the updated summary, and confirm again
 - **"expand"** → show the full untruncated description
 
-Use `bd create --deps` for dependency chains — not notes.
+Use `bd create --deps` for dependency chains — not notes. When creating
+related beads, always check if one depends on or blocks another and link
+them with `bd dep add <issue> <depends-on>`. Missing dependencies cause
+tasks to be worked out of order.
 
 When the user pastes DOM fragments, logs, stack traces, or other diagnostic
 content, include it verbatim and unedited in the bead description. This is
