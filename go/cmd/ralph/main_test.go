@@ -91,6 +91,36 @@ func TestRun_ReviewSubcommand(t *testing.T) {
 	}
 }
 
+// Proves: `ralph task -h` prints help and exits 0 instead of passing -h to Claude.
+func TestRun_TaskHelp(t *testing.T) {
+	for _, flag := range []string{"-h", "--help"} {
+		code := run([]string{"task", flag})
+		if code != 0 {
+			t.Errorf("ralph task %s should exit 0, got %d", flag, code)
+		}
+	}
+}
+
+// Proves: `ralph review -h` prints help and exits 0 instead of passing -h to Claude.
+func TestRun_ReviewHelp(t *testing.T) {
+	for _, flag := range []string{"-h", "--help"} {
+		code := run([]string{"review", flag})
+		if code != 0 {
+			t.Errorf("ralph review %s should exit 0, got %d", flag, code)
+		}
+	}
+}
+
+// Proves: `ralph command -h` prints help and exits 0 instead of passing -h to Claude.
+func TestRun_CommanderHelp(t *testing.T) {
+	for _, flag := range []string{"-h", "--help"} {
+		code := run([]string{"command", flag})
+		if code != 0 {
+			t.Errorf("ralph command %s should exit 0, got %d", flag, code)
+		}
+	}
+}
+
 // Proves: unknown subcommand shows error and exits 1.
 func TestRun_UnknownSubcommand(t *testing.T) {
 	code := run([]string{"bogus"})
