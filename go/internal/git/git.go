@@ -44,11 +44,17 @@ type Manager struct {
 	Logger         Log
 }
 
-func (m *Manager) gh() GitHub {
+// GH returns the GitHub interface, using the injected stub if set (tests)
+// or a live ghCLI wrapper in production.
+func (m *Manager) GH() GitHub {
 	if m.GitHub != nil {
 		return m.GitHub
 	}
 	return &ghCLI{}
+}
+
+func (m *Manager) gh() GitHub {
+	return m.GH()
 }
 
 // TempBranch returns the temporary branch name for the current project.

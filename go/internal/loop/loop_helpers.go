@@ -79,9 +79,9 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 
 // resolveByPRState inspects the PR's state and takes the appropriate action.
 func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber string) bool {
-	gh := l.git.GitHub
-	if gh == nil {
-		l.logger.Warn("git", "No GitHub interface — falling back to remote branch check")
+	gh := l.git.GH()
+	if gh == nil || !gh.Available() {
+		l.logger.Warn("git", "gh CLI not available — falling back to remote branch check")
 		if l.git.RemoteBranchHasWork() != "" {
 			return l.resumeFromRemoteBranch(ctx, taskID, nextTask)
 		}
