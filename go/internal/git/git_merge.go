@@ -51,13 +51,24 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 		return nil
 	}
 
-	// Push branch to remote.
+	// Push branch to remote. If push fails (e.g. remote branch already
+	// exists from a previous iteration's push), check whether the remote
+	// already contains our HEAD. If so, the work is already there — skip
+	// push and continue to PR creation.
 	m.Logger.Log("git", "Pushing %s...", m.WorktreeBranch)
 	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "push", "-u", "origin", m.WorktreeBranch); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return fmt.Errorf("push failed for %s", m.WorktreeBranch)
+		// Fetch the remote branch and check if it contains our HEAD.
+		_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", m.WorktreeBranch)
+		remoteBranch := "origin/" + m.WorktreeBranch
+		if m.refExists(m.WorkDir, remoteBranch) &&
+			m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "HEAD", remoteBranch) == nil {
+			m.Logger.Log("git", "Remote branch already contains our work — skipping push")
+		} else {
+			return fmt.Errorf("push failed for %s", m.WorktreeBranch)
+		}
 	}
 
 	title := m.prTitle(taskID, taskDesc)
@@ -81,6 +92,34 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 		m.Logger.Log("git", "Created PR for %s", m.WorktreeBranch)
 	}
 	return nil
+}
+
+// ResetToRemoteBranch fetches and resets the local branch to match the
+// remote tracking branch. Used when a previous iteration pushed work
+// that wasn't merged — we pull it down to verify locally.
+func (m *Manager) ResetToRemoteBranch() {
+	if m.WorktreeBranch == "" {
+		return
+	}
+	_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", m.WorktreeBranch)
+	_ = m.gitCmdErr(m.WorkDir, "reset", "--hard", "origin/"+m.WorktreeBranch)
+}
+
+// RemoteBranchHasWork checks whether the remote tracking branch for the
+// current worktree branch exists and has commits beyond the default branch.
+// This detects work pushed by a previous iteration that wasn't merged.
+func (m *Manager) RemoteBranchHasWork() bool {
+	if m.WorktreeBranch == "" {
+		return false
+	}
+	_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", m.WorktreeBranch)
+	remote := "origin/" + m.WorktreeBranch
+	if !m.refExists(m.WorkDir, remote) {
+		return false
+	}
+	defaultBranch := m.detectDefaultBranch()
+	count := m.gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+".."+remote)
+	return count != "" && count != "0"
 }
 
 func (m *Manager) prTitle(taskID, taskDesc string) string {

@@ -283,6 +283,48 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		l.updateStreamTask(taskID, nextTask, taskInfo.Priority)
 
+		// If a previous iteration pushed this branch but merge failed,
+		// the remote already has the completed work. Pull it, verify
+		// (tests only — the agent already finished), and skip straight
+		// to merge if it passes.
+		if l.git.RemoteBranchHasWork() {
+			l.logger.Log("git", "Remote branch has work from previous iteration — pulling and verifying")
+			l.git.ResetToRemoteBranch()
+			if passed, _ := l.verifyFunc(ctx, l.git.WorkDir, ""); passed {
+				l.logger.Success("git", "Previous work verified — proceeding to merge")
+				if taskID != "" {
+					_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: previous iteration work verified")
+					l.logger.Log("beads", "%s → verified", taskID)
+				}
+				l.attempts.Clear(taskID, nextTask)
+				l.recordCompletedTask(taskID, nextTask)
+				if err := l.pushAndCreatePR(ctx, taskID, nextTask); err != nil {
+					l.logger.Warn("git", "Push/PR: %v", err)
+				}
+				merged := false
+				if l.cfg.AutoMerge {
+					var mergeErr error
+					merged, mergeErr = l.mergeWithRetry(ctx, taskID, nextTask, l.git.WorkDir, filepath.Join(l.cfg.Dirs.RalphDir, "raw.log"))
+					if mergeErr != nil {
+						l.logger.Warn("git", "Auto-merge: %v", mergeErr)
+					}
+				}
+				if taskID != "" && (merged || !l.cfg.AutoMerge) {
+					l.attempts.ClearMergeFailures(taskID)
+					if err := l.cfg.TaskBackend.CloseTask(taskID, "completed by ralph"); err != nil {
+						l.logger.Warn("beads", "CloseTask failed: %v", err)
+					} else {
+						l.logger.Log("beads", "Closed task %s (completed by ralph)", taskID)
+					}
+				}
+				l.git.TagTaskEnd(taskID)
+				runIteration++
+				iteration++
+				continue
+			}
+			l.logger.Warn("git", "Previous work failed verification — running agent")
+		}
+
 		if taskID != "" {
 			if err := l.cfg.TaskBackend.SetState(taskID, "phase", "implementing", "ralph: starting task"); err != nil {
 				l.logger.Warn("beads", "SetState phase=implementing: %v", err)
