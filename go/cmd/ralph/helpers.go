@@ -61,7 +61,7 @@ func autoRebaseRecovery() func(err error) git.RebaseRecovery {
 	}
 }
 
-func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log *logging.Logger) error {
+func evolveRestart(projectDir, sourceDir, scriptPath, baseBranch string, args []string, log *logging.Logger) error {
 	ralphDir := filepath.Join(projectDir, ".ralph")
 
 	stopFile := filepath.Join(ralphDir, "stop")
@@ -71,8 +71,12 @@ func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log
 		return nil
 	}
 
+	if sourceDir == "" {
+		return fmt.Errorf("cannot evolve: Ralph source directory unknown (not embedded at build time and not resolvable from binary path)")
+	}
+
 	// PostMergeReset already synced main. Just build — no git sync needed.
-	rebuildScript := filepath.Join(projectDir, "scripts", "build-go.sh")
+	rebuildScript := filepath.Join(sourceDir, "scripts", "build-go.sh")
 	rebuildCmd := exec.Command("bash", rebuildScript)
 	rebuildCmd.Stdout = os.Stdout
 	rebuildCmd.Stderr = os.Stderr
