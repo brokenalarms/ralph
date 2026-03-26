@@ -64,6 +64,9 @@ type Backend interface {
 	// GetDescription returns the description/body of a task by ID.
 	GetDescription(id string) (string, error)
 
+	// GetAcceptance returns the acceptance criteria for a task by ID.
+	GetAcceptance(id string) (string, error)
+
 	// GetFullContext returns the complete human-readable task context
 	// (title, description, notes, labels, dependencies, comments).
 	GetFullContext(id string) (string, error)

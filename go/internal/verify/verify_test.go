@@ -254,7 +254,7 @@ func TestLoadReviewPrompt_PromptChangeGuidance(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), data, 0o644)
 
-	prompt := loadReviewPrompt(promptsDir, "Update agent instructions", "Change the prompt template", "PR", "diff content")
+	prompt := loadReviewPrompt(promptsDir, "Update agent instructions", "Change the prompt template", "", "PR", "diff content")
 
 	checks := []struct {
 		desc    string
@@ -273,7 +273,7 @@ func TestLoadReviewPrompt_PromptChangeGuidance(t *testing.T) {
 
 // loadReviewPrompt fallback (no template file) still produces a usable prompt.
 func TestLoadReviewPrompt_Fallback(t *testing.T) {
-	prompt := loadReviewPrompt("/nonexistent", "task title", "task desc", "iteration", "some diff")
+	prompt := loadReviewPrompt("/nonexistent", "task title", "task desc", "", "iteration", "some diff")
 	if !strings.Contains(prompt, "task title") {
 		t.Error("fallback prompt should contain task title")
 	}
@@ -287,7 +287,7 @@ func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
 	dir := setupGitRepo(t)
 	head := git.HeadRev(dir)
 
-	result := LLMVerifyPR(context.Background(), dir, t.TempDir(), "nonexistent-task", head, "some task", "some description", nil, nil)
+	result := LLMVerifyPR(context.Background(), dir, t.TempDir(), "nonexistent-task", head, "some task", "some description", "", nil, nil)
 	if !result.Passed {
 		t.Errorf("expected pass when agent confirms complete with no new work needed, got: %s", result.Reason)
 	}
@@ -308,7 +308,7 @@ func TestLLMVerifyPR_UsesGitHubInterface(t *testing.T) {
 		prDiff:       "+new line\n",
 	}
 
-	result := LLMVerifyPR(context.Background(), dir, t.TempDir(), "test-task", head, "test", "test desc", stub, nil)
+	result := LLMVerifyPR(context.Background(), dir, t.TempDir(), "test-task", head, "test", "test desc", "", stub, nil)
 
 	if !stub.searchCalled {
 		t.Error("expected SearchPR to be called via GitHub interface")

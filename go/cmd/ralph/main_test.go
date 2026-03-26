@@ -54,6 +54,7 @@ func (s *stubBackend) GetState(_, _ string) (string, error)       { return "", n
 func (s *stubBackend) ExecutionInstructions() (string, error)     { return "", nil }
 func (s *stubBackend) ProjectContext() (string, error)            { return "", nil }
 func (s *stubBackend) GetDescription(_ string) (string, error)    { return "", nil }
+func (s *stubBackend) GetAcceptance(_ string) (string, error)     { return "", nil }
 func (s *stubBackend) GetFullContext(_ string) (string, error)    { return "", nil }
 func (s *stubBackend) Label() string                              { return "beads" }
 

@@ -86,6 +86,7 @@ func (m *mutableBackend) SetState(_, _, _, _ string) error     { return nil }
 func (m *mutableBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (m *mutableBackend) ExecutionInstructions() (string, error) { return "", nil }
 func (m *mutableBackend) GetDescription(_ string) (string, error)  { m.mu.Lock(); defer m.mu.Unlock(); return m.description, nil }
+func (m *mutableBackend) GetAcceptance(_ string) (string, error)   { return "", nil }
 func (m *mutableBackend) GetFullContext(_ string) (string, error)  { return "", nil }
 func (m *mutableBackend) ProjectContext() (string, error)          { return "", nil }
 func (m *mutableBackend) Label() string {
@@ -111,6 +112,7 @@ func (s *stubBackend) SetState(_, _, _, _ string) error     { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (s *stubBackend) ExecutionInstructions() (string, error) { return "", nil }
 func (s *stubBackend) GetDescription(_ string) (string, error)  { return s.description, nil }
+func (s *stubBackend) GetAcceptance(_ string) (string, error)   { return "", nil }
 func (s *stubBackend) GetFullContext(_ string) (string, error)  { return s.fullContext, nil }
 func (s *stubBackend) ProjectContext() (string, error)          { return "", nil }
 func (s *stubBackend) Label() string {
@@ -4763,7 +4765,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				VerifyDir:     dir,
 			}, st, gm, logger)
 			l.runner = runner
-			l.llmVerifyFunc = func(context.Context, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+			l.llmVerifyFunc = func(context.Context, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
 				return llmResult
 			}
 			l.pushPRFunc = func(context.Context, string, string) error { return nil }
@@ -4776,7 +4778,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				// After fix agent, re-verification will call llmVerifyFunc again;
 				// make it pass on second call to avoid skip-task path
 				callCount := 0
-				l.llmVerifyFunc = func(context.Context, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+				l.llmVerifyFunc = func(context.Context, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
 					callCount++
 					if callCount == 1 {
 						return llmResult
@@ -4988,7 +4990,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 	l.pushPRFunc = func(context.Context, string, string) error { return nil }
 	l.mergeFunc = func(context.Context) (bool, error) { return false, nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.llmVerifyFunc = func(context.Context, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+	l.llmVerifyFunc = func(context.Context, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
 		return verify.Result{Passed: true}
 	}
 

@@ -453,6 +453,24 @@ func (b *BD) GetDescription(id string) (string, error) {
 	return items[0].Description, nil
 }
 
+func (b *BD) GetAcceptance(id string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	run := b.runner()
+	out, err := run(b.ctx(), b.ProjectDir, "show", id, "--json")
+	if err != nil {
+		return "", err
+	}
+	var items []struct {
+		Acceptance string `json:"acceptance_criteria"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil || len(items) == 0 {
+		return "", nil
+	}
+	return items[0].Acceptance, nil
+}
+
 func (b *BD) GetFullContext(id string) (string, error) {
 	if id == "" {
 		return "", nil

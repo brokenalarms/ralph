@@ -77,10 +77,11 @@ func (l *Loop) onSignal(p signalParams) bool {
 	// maxLLMVerifyAttempts reached.
 	if passed {
 		beadDesc := l.getBeadDescription(p.taskID)
+		beadAcceptance := l.getBeadAcceptance(p.taskID)
 
 		for attempt := 1; attempt <= maxLLMVerifyAttempts; attempt++ {
 			l.logger.Log("llm", "Running LLM verification (attempt %d/%d)...", attempt, maxLLMVerifyAttempts)
-			llmResult := l.llmVerifyFunc(p.ctx, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, l.git.GitHub, l.queryFunc())
+			llmResult := l.llmVerifyFunc(p.ctx, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, beadAcceptance, l.git.GitHub, l.queryFunc())
 
 			if llmResult.Passed && llmResult.NoDiff && l.cfg.VerifyLevel == "hog" {
 				l.logger.Log("llm", "No diff detected — spawning codebase verification agent (hog mode)")
@@ -258,6 +259,18 @@ func (l *Loop) verifyFeatureExists(p signalParams, beadDesc string) bool {
 
 	l.logger.Success("llm", "Verification agent confirmed feature exists")
 	return true
+}
+
+// getBeadAcceptance retrieves the acceptance criteria for verification.
+func (l *Loop) getBeadAcceptance(taskID string) string {
+	if taskID == "" || l.cfg.TaskBackend == nil {
+		return ""
+	}
+	ac, err := l.cfg.TaskBackend.GetAcceptance(taskID)
+	if err != nil {
+		return ""
+	}
+	return ac
 }
 
 // getBeadDescription retrieves the bead description for LLM verification.

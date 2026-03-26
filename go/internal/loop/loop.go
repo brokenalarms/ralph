@@ -78,7 +78,7 @@ type Loop struct {
 	mergeFunc          func(ctx context.Context) (bool, error)
 	pushPRFunc         func(ctx context.Context, taskID, taskDesc string) error
 	verifyFunc      func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
-	llmVerifyFunc   func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result
+	llmVerifyFunc   func(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result
 	newRunnerFunc      func() claudeRunner
 	findPRInfoFunc     func(workDir string) (number, title string)
 	agentRunner        *agent.Runner

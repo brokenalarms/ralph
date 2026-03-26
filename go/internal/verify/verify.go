@@ -170,7 +170,7 @@ func PreflightChecks(workDir, headBefore string, beadStatus string) PreflightRes
 // current iteration's diff. Falls back to iteration diff when no PR exists.
 // Uses prompts/verify-review.md as the review template when available.
 // When queryFn is non-nil, LLM calls go through the centralized agent module.
-func LLMVerifyPR(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription string, gh git.GitHub, queryFn QueryFunc, model ...string) Result {
+func LLMVerifyPR(ctx context.Context, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn QueryFunc, model ...string) Result {
 	diff := getPRDiff(ctx, workDir, taskID, gh)
 	source := "PR"
 	if diff == "" {
@@ -185,17 +185,18 @@ func LLMVerifyPR(ctx context.Context, workDir, promptsDir, taskID, headBefore, b
 		diff = diff[:100000] + "\n\n[diff truncated at 100000 chars]"
 	}
 
-	prompt := loadReviewPrompt(promptsDir, beadTitle, beadDescription, source, diff)
+	prompt := loadReviewPrompt(promptsDir, beadTitle, beadDescription, beadAcceptance, source, diff)
 	return callLLM(ctx, workDir, prompt, queryFn, model...)
 }
 
-func loadReviewPrompt(promptsDir, beadTitle, beadDescription, source, diff string) string {
+func loadReviewPrompt(promptsDir, beadTitle, beadDescription, beadAcceptance, source, diff string) string {
 	tmplPath := filepath.Join(promptsDir, "verify-review.md")
 	data, err := os.ReadFile(tmplPath)
 	if err == nil {
 		prompt := string(data)
 		prompt = strings.ReplaceAll(prompt, "{{TASK_TITLE}}", beadTitle)
 		prompt = strings.ReplaceAll(prompt, "{{TASK_DESCRIPTION}}", beadDescription)
+		prompt = strings.ReplaceAll(prompt, "{{ACCEPTANCE_CRITERIA}}", beadAcceptance)
 		prompt = strings.ReplaceAll(prompt, "{{DIFF_SOURCE}}", source)
 		prompt = strings.ReplaceAll(prompt, "{{DIFF}}", diff)
 		return prompt
