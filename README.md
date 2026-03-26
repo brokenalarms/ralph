@@ -4,19 +4,18 @@ Autonomous [Claude Code](https://docs.anthropic.com/en/docs/claude-code) task or
 
 ## How it works
 
-Ralph runs Claude Code repeatedly, one task per iteration, with fresh context each time. Each iteration gets a task from the backlog ([bd](https://github.com/brokenalarms/bd)), works it on an isolated git worktree branch, runs the test suite, gets the diff reviewed by a verification LLM, and squash-merges the result. Then it force-resets the worktree to the updated base branch and picks up the next task.
+Ralph runs Claude Code repeatedly, one task per iteration. Each iteration gets a task from the backlog ([bd](https://github.com/brokenalarms/bd)), works it on an isolated git worktree, runs the test suite, gets the diff reviewed by a verification LLM, and the orchestrator pushes, creates a PR, and merges. Each task produces one commit that stacks linearly on the previous — no worktree reset between tasks.
 
 ```
 ralph loop
   ├── pick task from bd backlog
-  ├── create fresh worktree branch
-  ├── iteration 1 → agent works, signals done
+  ├── rename branch for task
+  ├── iteration → agent works, signals done
   │     ├── run test suite
   │     ├── LLM verification of diff against acceptance criteria
   │     └── fix agent if rejected (up to N retries)
-  ├── orchestrator pushes, creates PR, merges
-  ├── force-reset worktree to base
-  └── next task
+  ├── orchestrator pushes, creates PR, links to bead, merges
+  └── next task (continues from previous commit)
 ```
 
 ## Three subcommands
@@ -168,9 +167,17 @@ This replaced multiple ad-hoc rebase paths (`RebaseOntoDefaultBranch`, inline re
 
 When the orchestrator creates a PR, it stores the full PR URL as an `external-ref` on the bead. The close reason also includes the PR URL when available. PR numbers are parsed from both URL format and legacy `gh-123` format.
 
-## Stacked PRs (planned)
+## Git strategy: stacked commits
 
-The current strategy resets the worktree to `origin/main` after every squash-merge. A planned evolution moves to stacked single-commit PRs where each task produces one commit and the worktree never resets. See [docs/specs/stacked-prs.md](docs/specs/stacked-prs.md) for the full design.
+Each task produces one commit, stacked linearly on the previous. PRs target the previous task's branch (not main), so each PR shows only its own changes.
+
+When main moves (e.g. direct pushes), Ralph rebases onto latest main on startup. If the rebase conflicts, the stack diverges — Ralph continues building on top without trying to auto-resolve. Subsequent tasks are unaffected since they build on each other, not on main.
+
+To resolve a diverged stack later: `git rebase --update-refs origin/main` from the stack tip. Fix conflicts once at the first conflicting commit — all downstream commits replay cleanly. An automated conflict-resolution agent is planned.
+
+For rapid iteration, run the loop against `main`. For a safer workflow, use `--base-branch develop` to accumulate changes on develop and merge to main when ready.
+
+See [docs/specs/stacked-prs.md](docs/specs/stacked-prs.md) for the full design.
 
 ## Evolve mode
 
