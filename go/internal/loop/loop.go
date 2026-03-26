@@ -39,6 +39,7 @@ type Config struct {
 	IdleTimeoutProgress time.Duration
 	Wait                bool
 	WaitInterval        time.Duration
+	Verbose             bool
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 	Version             string
 	VerifyDir           string // project root where tests are run; empty disables verification
@@ -362,6 +363,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			RawLog:              rawLogPath,
 			LogFile:             filepath.Join(l.cfg.Dirs.RalphDir, "loop.log"),
 			Quiet:               l.cfg.Quiet,
+			Verbose:             l.cfg.Verbose,
 			Signals:             l.signals,
 			PollInterval:        2 * time.Second,
 			IdleTimeout:         l.cfg.IdleTimeout,

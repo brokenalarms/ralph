@@ -10,7 +10,7 @@ import (
 // filterStreamJSON tails the raw log file from its current end, extracting
 // human-readable content from Claude's stream-json format into logPath.
 // It keeps reading until stop is closed, then drains any final output.
-func filterStreamJSON(rawLogPath, logPath, workDir string, stop <-chan struct{}) {
+func filterStreamJSON(rawLogPath, logPath, workDir string, verbose bool, stop <-chan struct{}) {
 	logOut, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
@@ -32,6 +32,7 @@ func filterStreamJSON(rawLogPath, logPath, workDir string, stop <-chan struct{})
 	buf := make([]byte, 64*1024)
 
 	batcher := NewToolBatcher(5*time.Second, workDir)
+	batcher.SetVerbose(verbose)
 
 	emitLines := func(lines []string) {
 		for _, out := range lines {
@@ -86,7 +87,7 @@ func filterStreamJSON(rawLogPath, logPath, workDir string, stop <-chan struct{})
 // FilterStream tails a raw log file and writes formatted, colored output to
 // stdout. Intended for use as the tmux stream pane via `ralph filter-stream`.
 // Blocks until the process is killed (tmux manages its lifecycle).
-func FilterStream(rawLogPath, workDir string) {
+func FilterStream(rawLogPath, workDir string, verbose bool) {
 	f, err := os.Open(rawLogPath)
 	if err != nil {
 		return
@@ -100,6 +101,7 @@ func FilterStream(rawLogPath, workDir string) {
 	var remainder string
 	buf := make([]byte, 64*1024)
 	batcher := NewToolBatcher(5*time.Second, workDir)
+	batcher.SetVerbose(verbose)
 
 	emitLines := func(lines []string) {
 		for _, out := range lines {
