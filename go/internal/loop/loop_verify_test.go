@@ -126,8 +126,9 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	if llmCalls != maxLLMVerifyAttempts {
 		t.Fatalf("expected %d LLM verify calls, got %d", maxLLMVerifyAttempts, llmCalls)
 	}
-	if backend.skippedTask == "" {
-		t.Fatal("expected task to be skipped after exhausting retries")
+	skipped, _ := st.GetSkippedTasks()
+	if len(skipped) == 0 || skipped[0] != "test-123" {
+		t.Fatalf("expected test-123 in skip list, got %v", skipped)
 	}
 }
 

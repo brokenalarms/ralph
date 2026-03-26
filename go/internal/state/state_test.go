@@ -403,3 +403,83 @@ func TestState_TestResultFieldsInJSON(t *testing.T) {
 		}
 	}
 }
+
+// Proves: AddSkippedTask persists IDs to state.json and deduplicates.
+func TestSkippedTasks_AddAndDeduplicate(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5)
+
+	if err := st.AddSkippedTask("ralph-abc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSkippedTask("ralph-def"); err != nil {
+		t.Fatal(err)
+	}
+	// Duplicate should be ignored.
+	if err := st.AddSkippedTask("ralph-abc"); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped, err := st.GetSkippedTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skipped) != 2 {
+		t.Fatalf("expected 2 skipped tasks, got %d: %v", len(skipped), skipped)
+	}
+	if skipped[0] != "ralph-abc" || skipped[1] != "ralph-def" {
+		t.Errorf("unexpected order: %v", skipped)
+	}
+}
+
+// Proves: ClearSkippedTasks removes all entries from state.json.
+func TestSkippedTasks_Clear(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5)
+
+	st.AddSkippedTask("ralph-abc")
+	st.AddSkippedTask("ralph-def")
+
+	if err := st.ClearSkippedTasks(); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped, err := st.GetSkippedTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skipped) != 0 {
+		t.Errorf("expected empty skip list, got %v", skipped)
+	}
+
+	// Verify omitempty: skipped_tasks should not appear in JSON when empty.
+	data, _ := os.ReadFile(filepath.Join(dir, "state.json"))
+	if strings.Contains(string(data), "skipped_tasks") {
+		t.Errorf("expected skipped_tasks omitted from JSON when empty, got: %s", data)
+	}
+}
+
+// Proves: skipped_tasks round-trips through JSON serialization.
+func TestSkippedTasks_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+
+	s := State{
+		Iteration:    5,
+		Status:       "running",
+		SkippedTasks: []string{"ralph-x", "ralph-y"},
+	}
+	if err := st.Save(s); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.SkippedTasks) != 2 || loaded.SkippedTasks[0] != "ralph-x" {
+		t.Errorf("expected [ralph-x ralph-y], got %v", loaded.SkippedTasks)
+	}
+}

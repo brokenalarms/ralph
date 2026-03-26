@@ -360,8 +360,8 @@ func TestBD_GetNextTask_FallsBackToReady(t *testing.T) {
 	}
 }
 
-// Proves: bd skip_task defers the task with a reason instead of closing it.
-func TestBD_SkipTask_DefersWithReason(t *testing.T) {
+// Proves: bd SkipTask sets task to open without defer or append-notes.
+func TestBD_SkipTask_SetsOpenNoDeferNoNotes(t *testing.T) {
 	var updateArgs []string
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "update" {
@@ -378,11 +378,14 @@ func TestBD_SkipTask_DefersWithReason(t *testing.T) {
 		t.Fatal("expected update to be called")
 	}
 	joined := strings.Join(updateArgs, " ")
-	if !strings.Contains(joined, "--defer") {
-		t.Errorf("expected --defer in update args, got: %v", updateArgs)
+	if strings.Contains(joined, "--defer") {
+		t.Errorf("SkipTask must not defer: %v", updateArgs)
 	}
-	if !strings.Contains(joined, "stuck_loop") {
-		t.Errorf("expected reason in update args, got: %v", updateArgs)
+	if strings.Contains(joined, "--append-notes") {
+		t.Errorf("SkipTask must not append notes: %v", updateArgs)
+	}
+	if !strings.Contains(joined, "--status") || !strings.Contains(joined, "open") {
+		t.Errorf("expected --status open in update args, got: %v", updateArgs)
 	}
 }
 
@@ -399,6 +402,50 @@ func TestBD_SkipTask_EmptyID(t *testing.T) {
 	}
 	if called {
 		t.Error("expected no bd calls with empty id")
+	}
+}
+
+// Proves: SetSkippedIDs causes getNextIssue to filter out skipped tasks.
+func TestBD_SetSkippedIDs_FiltersTaskSelection(t *testing.T) {
+	readyJSON := `[{"id":"ralph-aaa","title":"First","priority":1,"type":"task"},{"id":"ralph-bbb","title":"Second","priority":2,"type":"task"}]`
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "ready" {
+			return readyJSON, nil
+		}
+		if len(args) > 0 && args[0] == "list" {
+			return "[]", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+
+	// Without skip: returns highest priority task.
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-aaa" {
+		t.Errorf("expected ralph-aaa without skip, got %q", info.ID)
+	}
+
+	// With skip: filters out ralph-aaa, returns ralph-bbb.
+	b.SetSkippedIDs([]string{"ralph-aaa"})
+	info, err = b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-bbb" {
+		t.Errorf("expected ralph-bbb with skip, got %q", info.ID)
+	}
+
+	// Skip all: returns empty.
+	b.SetSkippedIDs([]string{"ralph-aaa", "ralph-bbb"})
+	info, err = b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "" {
+		t.Errorf("expected empty ID when all skipped, got %q", info.ID)
 	}
 }
 

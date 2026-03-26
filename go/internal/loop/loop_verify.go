@@ -99,8 +99,7 @@ func (l *Loop) onSignal(p signalParams) bool {
 
 			if attempt == maxLLMVerifyAttempts {
 				if p.taskID != "" {
-					l.cfg.TaskBackend.SkipTask(p.taskID, fmt.Sprintf("verification_rejected_%d_attempts: %s", maxLLMVerifyAttempts, llmResult.Details))
-					l.logger.Warn("llm", "Skipping task %s — verification rejected %d times", p.taskID, maxLLMVerifyAttempts)
+					l.skipTask(p.taskID, fmt.Sprintf("verification_rejected_%d_attempts: %s", maxLLMVerifyAttempts, llmResult.Details))
 				}
 				return false
 			}
@@ -251,8 +250,7 @@ func (l *Loop) verifyFeatureExists(p signalParams, beadDesc string) bool {
 	if !result.SignalDetected {
 		l.logger.Warn("llm", "Verification agent exited without signal — treating as rejection")
 		if p.taskID != "" {
-			l.cfg.TaskBackend.SkipTask(p.taskID, "verification_no_signal: agent could not confirm feature exists")
-			l.logger.Warn("llm", "Skipping task %s — verification agent did not confirm", p.taskID)
+			l.skipTask(p.taskID, "verification_no_signal: agent could not confirm feature exists")
 		}
 		return false
 	}
