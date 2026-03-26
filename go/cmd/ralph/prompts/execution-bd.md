@@ -45,6 +45,8 @@ Include this in your reflection as well, before the learnings section.
 ## Test-driven development
 Write a test that proves the bead's requirement. Run it — it must FAIL. Then implement the fix. Run the test again — it must PASS. This is the minimum proof that your change does what the bead asks.
 
+Never skip a failing test. If any test fails — even one unrelated to your task — fix it before signaling completion. Do not disable tests, mark them as expected-failure, or defer them.
+
 ## Completion — this order is mandatory
 1. Commit your changes and ensure scoped tests pass for the code you touched.
 2. Write your post-task reflection.

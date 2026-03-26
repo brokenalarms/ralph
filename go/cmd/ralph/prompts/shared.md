@@ -9,7 +9,7 @@
 - Tests should assert actual state changes (before/after), not just exit codes or stdout. Testing `returncode == 0` is useless — it only confirms the script didn't crash.
 - Each test needs a preamble comment explaining what user-facing functionality it proves.
 - When porting or rewriting functionality to a new language or framework, the existing test suite is the acceptance criteria. Port every existing test — it must fail against stubs, then pass against the new implementation. New code without equivalent test coverage for the behavior it replaces is not complete.
-- Never consider a task finished if any tests are broken — even unrelated ones. Fix them as part of the task. If user feedback reports a test failure, fix it now — broken tests are never deferred to a future task.
+- Never skip a failing test. There is no justification for moving on with a test in a broken state — not scope, not time, not relevance. If a test is failing, fix it before doing anything else. Do not disable it, mark it as expected-failure, or defer it to a follow-up. Never consider a task finished if any tests are broken — even unrelated ones. Fix them as part of the task.
 - Run only scoped and relevant tests during development, not the full suite if possible, unless a change affects interrelated concerns.
 - Unit tests are the building block — prefer them for verifying logic. Visual/UI/integration/end-to-end tests are expensive and should only run when significant UI changes have been made, not as routine verification for non-UI work.
 - Always run tests in fast-fail mode with minimal output. Only show output for failing tests — passing test noise wastes context.
