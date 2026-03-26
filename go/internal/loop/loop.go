@@ -546,15 +546,24 @@ func (l *Loop) Run(ctx context.Context) error {
 				}
 			}
 
-			// No PR created — check if the bead's existing PR was already merged.
+			// No new PR created — check the bead's existing PR.
 			if prNumber == "" && taskID != "" && l.cfg.AutoMerge {
 				ref, _ := l.cfg.TaskBackend.GetExternalRef(taskID)
 				if existingPR := parsePRNumber(ref); existingPR != "" {
 					gh := l.git.GH()
 					if gh != nil {
-						if prState, _ := gh.GetPRState(workDir, existingPR); strings.ToUpper(prState) == "MERGED" {
+						prState, _ := gh.GetPRState(workDir, existingPR)
+						switch strings.ToUpper(prState) {
+						case "MERGED":
 							l.logger.Log("git", "PR #%s already merged — work is on main", existingPR)
 							merged = true
+						case "OPEN":
+							l.logger.Log("git", "Existing PR #%s still open — attempting merge", existingPR)
+							var mergeErr error
+							merged, mergeErr = l.mergeWithRetry(ctx, taskID, nextTask, workDir, rawLogPath)
+							if mergeErr != nil {
+								l.logger.Warn("git", "Auto-merge existing PR: %v", mergeErr)
+							}
 						}
 					}
 				}
