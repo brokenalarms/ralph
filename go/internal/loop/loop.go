@@ -273,7 +273,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.state.Write("status", "running")
 		l.state.Write("last_task", nextTask)
 		l.state.Write("last_task_id", taskID)
-		if taskChanged {
+		if taskChanged || strings.HasSuffix(l.git.WorktreeBranch, "/next") {
 			l.git.RenameBranchForTask(nextTask, taskID)
 		}
 		l.writeRunBranch()

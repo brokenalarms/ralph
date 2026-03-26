@@ -121,7 +121,7 @@ func (g *ghCLI) UpdateBranch(dir, nwo, prNumber string) (bool, error) {
 }
 
 func (g *ghCLI) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
-	args := []string{"pr", "checks", prNumber, "--json", "name,state,bucket"}
+	args := []string{"pr", "checks", prNumber, "--json", "name,state,bucket,required"}
 	if repoURL != "" {
 		args = append(args, "-R", repoURL)
 	}

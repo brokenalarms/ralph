@@ -154,6 +154,7 @@ func (m *Manager) tryResumeWorktree() error {
 	branch, _ := m.State.Read("worktree_branch")
 	m.WorktreeBranch = branch
 	m.ProjectName = filepath.Base(m.ProjectDir)
+	m.BranchRenamed = !strings.HasSuffix(branch, "/next")
 
 	if seqStr, _ := m.State.Read("task_seq"); seqStr != "" {
 		if n, err := strconv.Atoi(seqStr); err == nil {

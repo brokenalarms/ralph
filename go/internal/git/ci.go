@@ -11,9 +11,10 @@ import (
 // gh pr checks --json returns: name, state (SUCCESS/FAILURE/PENDING/CANCELLED),
 // bucket (pass/fail/pending).
 type CICheckResult struct {
-	Name   string `json:"name"`
-	State  string `json:"state"`
-	Bucket string `json:"bucket"`
+	Name     string `json:"name"`
+	State    string `json:"state"`
+	Bucket   string `json:"bucket"`
+	Required bool   `json:"required"`
 }
 
 // CIStatus summarizes the overall state of all CI checks on a PR.
@@ -46,19 +47,59 @@ const DefaultCIPollInterval = 15 * time.Second
 const DefaultCIPollTimeout = 10 * time.Minute
 
 // evaluateChecks determines the overall CI status from individual check results.
-// If any check has failed, returns CIFailed. If all non-neutral checks have
-// completed (pass or fail), returns accordingly. Pending checks are only
-// blocking if no check has passed yet — this avoids hanging on deployment
-// checks (e.g. Netlify rules) that can stay pending indefinitely.
+// Only required checks are blocking — non-required failures (e.g. Netlify
+// deploy previews) are ignored. If any required check has failed, returns
+// CIFailed. If all required checks pass, returns CIPassed even if optional
+// checks fail.
 func evaluateChecks(checks []CICheckResult) CIStatus {
 	if len(checks) == 0 {
 		return CIPending
 	}
 
+	hasRequired := false
+	requiredFailed := false
+	requiredPassed := false
+	requiredAllResolved := true
+
+	for _, c := range checks {
+		failed := c.Bucket == "fail" || c.State == "FAILURE" || c.State == "CANCELLED"
+		passed := c.Bucket == "pass" || c.State == "SUCCESS"
+		pending := c.Bucket == "pending" || c.State == "PENDING" || c.State == "IN_PROGRESS"
+
+		if c.Required {
+			hasRequired = true
+			if failed {
+				requiredFailed = true
+			} else if passed {
+				requiredPassed = true
+			} else if pending {
+				requiredAllResolved = false
+			}
+		}
+	}
+
+	// If no checks are marked required, fall back to treating all as required.
+	if !hasRequired {
+		return evaluateAllChecks(checks)
+	}
+
+	if requiredFailed {
+		return CIFailed
+	}
+	if requiredPassed && requiredAllResolved {
+		return CIPassed
+	}
+	if requiredAllResolved {
+		return CIPassed
+	}
+	return CIPending
+}
+
+// evaluateAllChecks is the fallback when no checks are marked required.
+func evaluateAllChecks(checks []CICheckResult) CIStatus {
 	hasFailed := false
 	hasPassed := false
 	allResolved := true
-
 	for _, c := range checks {
 		if c.Bucket == "fail" || c.State == "FAILURE" || c.State == "CANCELLED" {
 			hasFailed = true
@@ -68,7 +109,6 @@ func evaluateChecks(checks []CICheckResult) CIStatus {
 			allResolved = false
 		}
 	}
-
 	if hasFailed {
 		return CIFailed
 	}

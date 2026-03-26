@@ -71,30 +71,14 @@ func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log
 		return nil
 	}
 
-	log.Log("", "Pulling latest %s...", baseBranch)
-	fetchCmd := exec.Command("git", "-C", projectDir, "fetch", "origin", baseBranch)
-	if out, err := fetchCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git fetch failed: %s", out)
+	// PostMergeReset already synced main. Just build — no git sync needed.
+	rebuildScript := filepath.Join(projectDir, "scripts", "build-go.sh")
+	rebuildCmd := exec.Command("bash", rebuildScript)
+	rebuildCmd.Stdout = os.Stdout
+	rebuildCmd.Stderr = os.Stderr
+	if err := rebuildCmd.Run(); err != nil {
+		return fmt.Errorf("rebuild failed: %w", err)
 	}
-
-	checkoutCmd := exec.Command("git", "-C", projectDir, "checkout", baseBranch)
-	checkoutCmd.CombinedOutput()
-
-	pullCmd := exec.Command("git", "-C", projectDir, "merge", "--ff-only", "origin/"+baseBranch)
-	if out, err := pullCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git merge --ff-only failed: %s", out)
-	}
-
-	version := gitVersion(projectDir)
-	log.Log("", "Building ralph %s...", version)
-	goDir := filepath.Join(projectDir, "go")
-	ldflags := fmt.Sprintf("-X github.com/brokenalarms/ralph/internal/config.Version=%s", version)
-	buildCmd := exec.Command("go", "build", "-ldflags", ldflags, "-o", scriptPath, "./cmd/ralph")
-	buildCmd.Dir = goDir
-	if out, err := buildCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("go build failed: %s", out)
-	}
-	log.Log("", "Installed ralph %s to %s", version, scriptPath)
 
 	clearSignalFiles(ralphDir)
 
@@ -105,17 +89,6 @@ func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log
 	log.Separator(logging.Magenta, "RALPH EVOLVED")
 	execArgs := append([]string{scriptPath, "loop"}, args...)
 	return syscall.Exec(scriptPath, execArgs, os.Environ())
-}
-
-func gitVersion(projectDir string) string {
-	cmd := exec.Command("git", "-C", projectDir, "describe", "--tags",
-		"--match", "v[0-9]*.[0-9]*.[0-9]*", "--abbrev=0")
-	out, err := cmd.Output()
-	if err != nil {
-		return "0.1.0-dev"
-	}
-	v := strings.TrimSpace(string(out))
-	return strings.TrimPrefix(v, "v")
 }
 
 func extractEmbeddedPrompts() (string, error) {
