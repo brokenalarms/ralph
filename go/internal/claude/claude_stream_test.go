@@ -205,9 +205,9 @@ func TestStripMarkdown(t *testing.T) {
 		{"**nested** middle **end**", "nested middle end"},
 	}
 	for _, tt := range tests {
-		got := stripMarkdown(tt.input)
+		got := logging.StripMarkdown(tt.input)
 		if got != tt.want {
-			t.Errorf("stripMarkdown(%q) = %q, want %q", tt.input, got, tt.want)
+			t.Errorf("logging.StripMarkdown(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
 }

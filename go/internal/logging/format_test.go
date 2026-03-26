@@ -73,6 +73,36 @@ func TestLineFormatter_TSWidth(t *testing.T) {
 	}
 }
 
+// Verifies that Format applies both markdown stripping and timestamp.
+func TestLineFormatter_Format(t *testing.T) {
+	fixed := time.Date(2026, 3, 25, 14, 30, 45, 0, time.UTC)
+	f := &LineFormatter{Clock: func() time.Time { return fixed }}
+
+	line := f.Format("[o] hello **world**")
+	plain := stripANSI(line)
+	if !strings.HasPrefix(plain, "14:30:45 ") {
+		t.Errorf("Format should prepend timestamp, got: %q", plain)
+	}
+	if strings.Contains(plain, "**world**") {
+		t.Error("Format should strip markdown")
+	}
+	if !strings.Contains(plain, "hello world") {
+		t.Errorf("Format should preserve stripped content, got: %q", plain)
+	}
+}
+
+// Verifies that StripMarkdown removes bold markdown.
+func TestStripMarkdown(t *testing.T) {
+	got := StripMarkdown("hello **world** and **foo**")
+	if got != "hello world and foo" {
+		t.Errorf("StripMarkdown got %q", got)
+	}
+	got = StripMarkdown("no markdown here")
+	if got != "no markdown here" {
+		t.Errorf("StripMarkdown should be no-op for plain text, got %q", got)
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
