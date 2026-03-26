@@ -175,6 +175,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		MaxIterations:       cfg.MaxIterations,
 		Refactor:            cfg.Refactor,
 		Quiet:               cfg.Quiet,
+		Verbose:             cfg.Verbose,
 		AutoMerge:           cfg.AutoMerge,
 		Evolve:              cfg.Evolve,
 		CallsPerHour:        cfg.CallsPerHour,
@@ -327,6 +328,9 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 	}
 	if cfg.MergeAdmin {
 		extraArgs = append(extraArgs, "--merge-admin")
+	}
+	if cfg.Verbose {
+		extraArgs = append(extraArgs, "--verbose")
 	}
 	if cfg.Evolve {
 		extraArgs = append(extraArgs, "--evolve")

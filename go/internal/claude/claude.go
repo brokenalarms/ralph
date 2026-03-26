@@ -77,6 +77,10 @@ type RunConfig struct {
 	// the agent to read. Used to send test failure output back to the agent.
 	FeedbackFile string
 
+	// Verbose shows all tool calls in the stream log. When false,
+	// low-value tools (Read, Bash, etc.) are hidden.
+	Verbose bool
+
 	// TaskID is the bead/task identifier (e.g. "ralph-xyz") used in
 	// completion and status log messages.
 	TaskID string
@@ -470,7 +474,7 @@ func (r *Runner) startStreamFilter(cfg RunConfig, stop <-chan struct{}) <-chan s
 
 	go func() {
 		defer close(done)
-		filterStreamJSON(cfg.RawLog, cfg.LogFile, cfg.WorkDir, stop)
+		filterStreamJSON(cfg.RawLog, cfg.LogFile, cfg.WorkDir, cfg.Verbose, stop)
 	}()
 
 	return done
