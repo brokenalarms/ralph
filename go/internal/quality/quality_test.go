@@ -132,11 +132,10 @@ console.warn('????');
 	}
 }
 
-// Proves: REFACTOR_THRESHOLD defaults to 200, high enough to avoid
-// triggering on normal codebase noise.
+// Proves: REFACTOR_THRESHOLD defaults to 100.
 func TestDefaultRefactorThreshold(t *testing.T) {
-	if DefaultRefactorThreshold != 200 {
-		t.Errorf("expected 200, got %d", DefaultRefactorThreshold)
+	if DefaultRefactorThreshold != 100 {
+		t.Errorf("expected 100, got %d", DefaultRefactorThreshold)
 	}
 }
 

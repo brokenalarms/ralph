@@ -15,7 +15,7 @@ type Finding struct {
 	Score   int
 }
 
-const DefaultRefactorThreshold = 200
+const DefaultRefactorThreshold = 100
 
 const (
 	CheckAnyType      = "any-type"
