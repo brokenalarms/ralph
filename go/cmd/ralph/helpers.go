@@ -53,33 +53,11 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func promptRebaseRecovery(ctx context.Context, wait bool) func(err error) git.RebaseRecovery {
+func autoRebaseRecovery() func(err error) git.RebaseRecovery {
 	return func(err error) git.RebaseRecovery {
-		if wait {
-			fmt.Printf("\n%sRebase conflict:%s %v\n", logging.Red, logging.Reset, err)
-			fmt.Printf("--wait: auto-choosing fresh worktree\n")
-			return git.RebaseFreshWorktree
-		}
-
-		fmt.Printf("\n%sRebase conflict:%s %v\n\n", logging.Red, logging.Reset, err)
-		fmt.Printf("  %s1)%s Create fresh worktree from main (recommended — completed work is already merged)\n", logging.Bold, logging.Reset)
-		fmt.Printf("  %s2)%s Abort — exit so you can resolve conflicts manually\n", logging.Bold, logging.Reset)
-		fmt.Printf("  %s3)%s Skip — continue without rebasing (may cause issues)\n\n", logging.Bold, logging.Reset)
-		fmt.Printf("%sChoice [1/2/3]:%s ", logging.Yellow, logging.Reset)
-
-		answer, readErr := readLineCtx(ctx)
-		if readErr != nil {
-			return git.RebaseManualResolve
-		}
-
-		switch strings.TrimSpace(answer) {
-		case "1", "":
-			return git.RebaseFreshWorktree
-		case "2":
-			return git.RebaseManualResolve
-		default:
-			return git.RebaseAbort
-		}
+		fmt.Printf("\n%sRebase conflict:%s %v\n", logging.Red, logging.Reset, err)
+		fmt.Printf("Recreating worktree from main\n")
+		return git.RebaseFreshWorktree
 	}
 }
 

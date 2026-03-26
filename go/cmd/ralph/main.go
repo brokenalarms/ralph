@@ -183,7 +183,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		IdleTimeoutProgress: cfg.IdleTimeoutProgress,
 		Wait:                cfg.Wait,
 		WaitInterval:        cfg.WaitInterval,
-		OnRebaseConflict:    promptRebaseRecovery(ctx, cfg.Wait),
+		OnRebaseConflict:    autoRebaseRecovery(),
 		VerifyDir:           dirs.WorkDir,
 		VerifyLevel:         cfg.VerifyLevel,
 	}, st, gm, log)

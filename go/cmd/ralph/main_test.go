@@ -557,14 +557,13 @@ func TestInitRalphDir_NoWaitCompletedBlocksOnPrompt(t *testing.T) {
 	}
 }
 
-// Verifies that --wait auto-chooses fresh worktree on rebase conflict,
-// skipping the interactive recovery prompt.
-func TestPromptRebaseRecovery_WaitAutoChoosesFreshWorktree(t *testing.T) {
-	handler := promptRebaseRecovery(context.Background(), true)
+// Verifies that rebase conflict always auto-chooses fresh worktree.
+func TestAutoRebaseRecovery_AlwaysChoosesFreshWorktree(t *testing.T) {
+	handler := autoRebaseRecovery()
 	result := handler(fmt.Errorf("test conflict"))
 
 	if result != git.RebaseFreshWorktree {
-		t.Errorf("expected RebaseFreshWorktree with --wait, got %v", result)
+		t.Errorf("expected RebaseFreshWorktree, got %v", result)
 	}
 }
 
