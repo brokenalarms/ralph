@@ -353,11 +353,12 @@ type MergeRetryOpts struct {
 }
 
 // ResolveConflict rebases onto the default branch and force-pushes to
-// resolve PR merge conflicts before the next merge attempt.
+// resolve PR merge conflicts before the next merge attempt. Goes through
+// EnsureUpToDate which preserves local commits on conflict.
 func (m *Manager) ResolveConflict(ctx context.Context) error {
 	defaultBranch := m.detectDefaultBranch()
 	m.Logger.Log("git", "%s Rebasing onto %s to resolve merge conflicts...", logging.BranchTag(defaultBranch), defaultBranch)
-	if err := m.RebaseOntoDefaultBranch(ctx); err != nil {
+	if err := m.EnsureUpToDate(ctx); err != nil {
 		return fmt.Errorf("conflict resolution rebase failed: %w", err)
 	}
 	m.Logger.Log("git", "%s Force-pushing rebased branch...", logging.BranchTag(defaultBranch))

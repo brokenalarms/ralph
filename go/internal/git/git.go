@@ -259,13 +259,45 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) error {
 			m.gitCmd(m.WorkDir, "rebase", "--abort")
 		}
 
-		// All rebase strategies failed — force-reset to origin/default.
-		// The task stays open and will re-run on a clean base.
-		m.Logger.Warn("git", "%s Rebase failed — force-resetting to origin/%s", logging.BranchTag(defaultBranch), defaultBranch)
-		m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+defaultBranch)
-		result = &RebaseConflictError{Cause: fmt.Sprintf("rebase onto %s failed — force-reset applied", defaultBranch)}
+		// All rebase strategies failed — reset and replay.
+		if err := m.ResetAndReplay(defaultBranch); err != nil {
+			result = err
+		}
 	})
 	return result
+}
+
+// ResetAndReplay saves local commits ahead of origin/defaultBranch,
+// force-resets to origin/defaultBranch, then cherry-picks the commits
+// back on top. This is the last-resort sync strategy when all rebase
+// approaches fail — it always gets to the latest base while preserving
+// the agent's committed work.
+func (m *Manager) ResetAndReplay(defaultBranch string) error {
+	raw := m.gitOutput(m.WorkDir, "rev-list", "--reverse", "origin/"+defaultBranch+"..HEAD")
+	commits := strings.Split(strings.TrimSpace(raw), "\n")
+
+	count := 0
+	for _, c := range commits {
+		if c != "" {
+			count++
+		}
+	}
+
+	m.Logger.Warn("git", "%s Rebase failed — resetting to origin/%s and replaying %d commits",
+		logging.BranchTag(defaultBranch), defaultBranch, count)
+	m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+defaultBranch)
+
+	for _, sha := range commits {
+		if sha == "" {
+			continue
+		}
+		if err := m.gitCmdErr(m.WorkDir, "cherry-pick", sha); err != nil {
+			m.Logger.Warn("git", "Cherry-pick %s failed — aborting replay", sha[:8])
+			m.gitCmd(m.WorkDir, "cherry-pick", "--abort")
+			return &RebaseConflictError{Cause: fmt.Sprintf("rebase onto %s failed — cherry-pick replay had conflicts", defaultBranch)}
+		}
+	}
+	return nil
 }
 
 // cleanTempBranch removes the temp branch, force-removing a stale worktree

@@ -258,8 +258,10 @@ func TestRebaseOntoDefaultBranch_StackedBranchesSameFile(t *testing.T) {
 	}
 }
 
-// Real conflicts force-reset to origin/main and return a RebaseConflictError.
-func TestRebaseOntoDefaultBranch_ForceResetsOnRealConflicts(t *testing.T) {
+// Real conflicts: reset to origin/main, cherry-pick replays the agent's
+// commits. When cherry-pick also conflicts, returns RebaseConflictError
+// with HEAD at origin/main (agent's commit couldn't be replayed).
+func TestRebaseOntoDefaultBranch_ReplayFailsOnRealConflicts(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	mgr := setupRebaseMgr(t, project, bare)
 
@@ -273,16 +275,16 @@ func TestRebaseOntoDefaultBranch_ForceResetsOnRealConflicts(t *testing.T) {
 
 	err := mgr.RebaseOntoDefaultBranch(context.Background())
 	if err == nil {
-		t.Fatal("expected RebaseConflictError after force-reset")
+		t.Fatal("expected RebaseConflictError after cherry-pick failure")
 	}
-	if !strings.Contains(err.Error(), "force-reset") {
+	if !strings.Contains(err.Error(), "cherry-pick") {
 		t.Errorf("unexpected error: %v", err)
 	}
-	// Worktree should now be at origin/main (force-reset)
+	// HEAD should be at origin/main (reset succeeded, cherry-pick failed)
 	head := mgr.gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
 	origin := mgr.gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
 	if head != origin {
-		t.Errorf("expected HEAD to match origin/main after force-reset")
+		t.Errorf("expected HEAD at origin/main after failed cherry-pick replay")
 	}
 }
 
