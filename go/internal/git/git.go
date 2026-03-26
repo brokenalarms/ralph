@@ -223,8 +223,11 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) {
 	m.withStash("ralph-autostash", func() {
 		if err := m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "origin/"+defaultBranch); err != nil {
 			if resolved := m.autoResolveAndContinue(ctx, defaultBranch); !resolved {
-				m.Logger.Warn("git", "%s Rebase onto %s failed with unresolvable conflicts — aborting", logging.BranchTag(defaultBranch), defaultBranch)
 				m.gitCmd(m.WorkDir, "rebase", "--abort")
+				// Force-reset to origin/default branch — the stale work
+				// can't be rebased, so start clean. The task will re-run.
+				m.Logger.Warn("git", "%s Rebase failed — force-resetting to origin/%s", logging.BranchTag(defaultBranch), defaultBranch)
+				m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+defaultBranch)
 			}
 		}
 	})
