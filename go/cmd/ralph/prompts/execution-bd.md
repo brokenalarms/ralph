@@ -26,12 +26,15 @@ Example:
 - NEVER run `bd init` — ralph handles backend initialization. Running `bd init` from the wrong directory creates orphan databases.
 - NEVER create directories named after task IDs. Work only in the worktree at {{WORK_DIR}}.
 
-## Diagnosis format
-When you identify the root cause, state it clearly in the log:
+## Diagnosis format (MANDATORY)
+Before writing any code, state the diagnosis clearly in the log. This is
+the most important output you produce — it shows in the stream as a
+highlighted banner:
 ```
 ISSUE: <what is wrong and why>
 FIX: <what you will do to fix it>
 ```
+Every task must have an ISSUE and FIX statement. No exceptions.
 Include this in your reflection as well, before the learnings section.
 
 ## Rules
