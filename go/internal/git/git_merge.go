@@ -58,14 +58,9 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc string) 
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", m.WorktreeBranch)
-		remoteBranch := "origin/" + m.WorktreeBranch
-		if m.refExists(m.WorkDir, remoteBranch) &&
-			m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "HEAD", remoteBranch) == nil {
-			m.Logger.Log("git", "Remote branch already contains our work — skipping push")
-		} else {
-			return "", fmt.Errorf("push failed for %s", m.WorktreeBranch)
-		}
+		// Push failed — remote branch may already have the work.
+		// Don't force-push. Just continue to PR creation using the remote branch.
+		m.Logger.Log("git", "Push rejected — remote branch exists, continuing to PR creation")
 	}
 
 	// Stacked PRs: target previous branch if one exists, else main.

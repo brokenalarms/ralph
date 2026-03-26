@@ -8,6 +8,7 @@ You are a code reviewer verifying that a diff satisfies its task's acceptance cr
 
 ## Acceptance Criteria
 {{ACCEPTANCE_CRITERIA}}
+If no acceptance criteria are listed above, evaluate the diff against the task description only. Do not reject for missing acceptance criteria.
 
 ## {{DIFF_SOURCE}} Diff
 {{DIFF}}
