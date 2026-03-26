@@ -290,7 +290,21 @@ func (l *Loop) Run(ctx context.Context) error {
 		if l.git.RemoteBranchHasWork() {
 			l.logger.Log("git", "Remote branch has work from previous iteration — pulling and verifying")
 			l.git.ResetToRemoteBranch()
-			if passed, _ := l.verifyCompletion(ctx, ""); passed {
+
+			testsPass, _ := l.verifyCompletion(ctx, "")
+			llmPass := false
+			if testsPass {
+				beadDesc := l.getBeadDescription(taskID)
+				beadAcceptance := l.getBeadAcceptance(taskID)
+				l.logger.Log("llm", "Running LLM verification on previous iteration's work...")
+				llmResult := l.llmVerifyFunc(ctx, l.git, l.git.WorkDir, l.cfg.Dirs.PromptsDir, taskID, "", nextTask, beadDesc, beadAcceptance, l.git.GitHub, l.queryFunc())
+				llmPass = llmResult.Passed
+				if !llmPass {
+					l.logger.Warn("llm", "LLM rejected previous work: %s", llmResult.Reason)
+				}
+			}
+
+			if testsPass && llmPass {
 				l.logger.Success("git", "Previous work verified — proceeding to merge")
 				if taskID != "" {
 					_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: previous iteration work verified")
@@ -298,8 +312,6 @@ func (l *Loop) Run(ctx context.Context) error {
 				}
 				l.attempts.Clear(taskID, nextTask)
 				l.recordCompletedTask(taskID, nextTask)
-				// Skip push — the branch is already on the remote (we just
-				// pulled from it). Go straight to PR creation and merge.
 				if err := l.pushAndCreatePR(ctx, taskID, nextTask); err != nil {
 					l.logger.Log("git", "Push/PR: %v (branch already on remote, continuing to merge)", err)
 				}
@@ -320,12 +332,8 @@ func (l *Loop) Run(ctx context.Context) error {
 							l.logger.Log("beads", "Closed task %s (completed by ralph)", taskID)
 						}
 					} else {
-						// Merge failed even with remote branch — skip task to
-						// avoid infinite retry loop.
-						l.logger.Warn("git", "Merge failed for remote work — skipping task to avoid loop")
-						if err := l.cfg.TaskBackend.SkipTask(taskID, "merge_failed_remote_work"); err != nil {
-							l.logger.Warn("beads", "SkipTask failed: %v", err)
-						}
+						l.logger.Warn("git", "Merge failed for remote work — deferring task")
+						_ = l.cfg.TaskBackend.SkipTask(taskID, "merge_failed_remote_work")
 					}
 				}
 				l.git.TagTaskEnd(taskID)

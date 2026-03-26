@@ -420,9 +420,11 @@ func (b *BD) SkipTask(id string, reason string) error {
 	if reason == "" {
 		reason = "skipped by ralph"
 	}
-	_, err := b.runner()(b.ctx(), b.ProjectDir, "close", id, "--reason", "blocked: "+reason)
-	if err == nil {
-		}
+	// Defer the task instead of closing it — it comes back after 1 hour.
+	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id,
+		"--status", "open",
+		"--defer", "+1h",
+		"--append-notes", "Deferred by ralph: "+reason)
 	return err
 }
 

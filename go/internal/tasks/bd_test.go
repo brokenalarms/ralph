@@ -360,13 +360,13 @@ func TestBD_GetNextTask_FallsBackToReady(t *testing.T) {
 	}
 }
 
-// Proves: bd skip_task closes the task with a blocked reason.
-func TestBD_SkipTask_ClosesWithBlockedReason(t *testing.T) {
-	var closeArgs []string
+// Proves: bd skip_task defers the task with a reason instead of closing it.
+func TestBD_SkipTask_DefersWithReason(t *testing.T) {
+	var updateArgs []string
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] == "close" {
-			closeArgs = args
-			return "closed", nil
+		if len(args) > 0 && args[0] == "update" {
+			updateArgs = args
+			return "updated", nil
 		}
 		return "", nil
 	}
@@ -374,12 +374,15 @@ func TestBD_SkipTask_ClosesWithBlockedReason(t *testing.T) {
 	if err := b.SkipTask("abc123", "stuck_loop"); err != nil {
 		t.Fatal(err)
 	}
-	if len(closeArgs) == 0 {
-		t.Fatal("expected close to be called")
+	if len(updateArgs) == 0 {
+		t.Fatal("expected update to be called")
 	}
-	joined := strings.Join(closeArgs, " ")
-	if !strings.Contains(joined, "blocked: stuck_loop") {
-		t.Errorf("expected blocked reason in close args, got: %v", closeArgs)
+	joined := strings.Join(updateArgs, " ")
+	if !strings.Contains(joined, "--defer") {
+		t.Errorf("expected --defer in update args, got: %v", updateArgs)
+	}
+	if !strings.Contains(joined, "stuck_loop") {
+		t.Errorf("expected reason in update args, got: %v", updateArgs)
 	}
 }
 
