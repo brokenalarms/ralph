@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -450,6 +451,46 @@ func (l *Loop) skipTask(id, reason string) {
 	}
 	skipped, _ := l.state.GetSkippedTasks()
 	l.cfg.TaskBackend.SetSkippedIDs(skipped)
+}
+
+// isOnline checks internet connectivity with a quick DNS lookup.
+func isOnline() bool {
+	conn, err := net.DialTimeout("tcp", "api.anthropic.com:443", 3*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+// waitForInternet blocks until internet connectivity is restored.
+// Shows a single updating line in the terminal log, writes one summary
+// line to the log file when restored. Returns false if context is cancelled.
+func (l *Loop) waitForInternet(ctx context.Context) bool {
+	if isOnline() {
+		return true
+	}
+
+	start := time.Now()
+	l.logger.Warn("", "Internet unreachable — waiting for connectivity...")
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+			if isOnline() {
+				elapsed := time.Since(start).Truncate(time.Second)
+				l.logger.Success("", "Internet restored after %s", elapsed)
+				return true
+			}
+			elapsed := time.Since(start).Truncate(time.Second)
+			l.logger.Log("", "Internet still unreachable (%s elapsed)", elapsed)
+		}
+	}
 }
 
 // parsePRNumber extracts a PR number from either a URL

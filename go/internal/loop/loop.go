@@ -303,6 +303,9 @@ func (l *Loop) Run(ctx context.Context) error {
 		// full suite both here (pre-iteration) and after signal (gate).
 		testStatus := l.runPreIterationTests(ctx)
 
+		if !l.waitForInternet(ctx) {
+			break
+		}
 		if !l.waitForRate(ctx) {
 			break
 		}
