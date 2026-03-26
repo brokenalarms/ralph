@@ -54,6 +54,11 @@ func (r *Runner) StopStreaming() {
 	r.inner.StopStreaming()
 }
 
+// InjectMessage writes a user message to the running agent's stdin pipe.
+func (r *Runner) InjectMessage(msg string) error {
+	return r.inner.InjectMessage(msg)
+}
+
 // Query runs a quick non-interactive agent for verification (LLM review).
 // Returns the raw response text. This is the single code path for all
 // prompt-response style invocations (no signal polling, no streaming).
@@ -109,6 +114,7 @@ func (r *Runner) sandboxedCmdFactory(cfg claude.RunConfig, rawLog *os.File) *exe
 	args := []string{
 		"--print", "--verbose",
 		"--output-format", "stream-json",
+		"--input-format", "stream-json",
 		"--add-dir", cfg.WorkDir,
 		"--add-dir", cfg.RalphDir,
 		"--allowedTools", strings.Join(claude.IterationAllowedTools, ","),
@@ -119,7 +125,6 @@ func (r *Runner) sandboxedCmdFactory(cfg claude.RunConfig, rawLog *os.File) *exe
 	writeDirs := sandboxWriteDirs(cfg.WorkDir, cfg.RalphDir)
 	cmd := r.Sandbox.Wrap(cfg.Ctx, writeDirs, "claude", args...)
 	cmd.Dir = cfg.WorkDir
-	cmd.Stdin = nil
 	cmd.Stdout = rawLog
 	cmd.Stderr = rawLog
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

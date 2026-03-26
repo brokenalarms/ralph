@@ -40,6 +40,8 @@ func (s *stubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
 
 func (s *stubRunner) StopStreaming() {}
 
+func (s *stubRunner) InjectMessage(_ string) error { return nil }
+
 // stubBackend implements tasks.Backend for testing without shelling out to
 // bd or reading plan files. Lets us control exactly how many tasks remain
 // and what the next task is.
@@ -4015,6 +4017,10 @@ func (c *configCapturingRunner) StopStreaming() {
 	c.inner.StopStreaming()
 }
 
+func (c *configCapturingRunner) InjectMessage(msg string) error {
+	return c.inner.InjectMessage(msg)
+}
+
 // promptCapturingRunner wraps a claude runner to capture the prompt.
 type promptCapturingRunner struct {
 	inner    claudeRunner
@@ -4028,6 +4034,10 @@ func (p *promptCapturingRunner) Run(cfg claude.RunConfig) (claude.Result, error)
 
 func (p *promptCapturingRunner) StopStreaming() {
 	p.inner.StopStreaming()
+}
+
+func (p *promptCapturingRunner) InjectMessage(msg string) error {
+	return p.inner.InjectMessage(msg)
 }
 
 // Verifies that push is called after signal detection. The sync guard
@@ -4175,6 +4185,14 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 	}, st, gm, logger)
+	l.runner = &stubRunner{
+		onRun: func() {
+			backend.remaining = 0
+			backend.completed = 1
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
 
 	l.Run(context.Background())
 
@@ -4229,6 +4247,14 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 	}, st, gm, logger)
+	l.runner = &stubRunner{
+		onRun: func() {
+			backend.remaining = 0
+			backend.completed = 1
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
 
 	l.Run(context.Background())
 
@@ -4844,6 +4870,8 @@ func (s *signalCallingRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
 
 func (s *signalCallingRunner) StopStreaming() {}
 
+func (s *signalCallingRunner) InjectMessage(_ string) error { return nil }
+
 // Verifies that LLM verification pass logs with green (Success) color
 // and LLM verification reject logs with red (Error) color.
 func TestLoop_LLMVerificationLogColors(t *testing.T) {
@@ -5196,6 +5224,8 @@ func (r *rateLimitStubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
 
 func (r *rateLimitStubRunner) StopStreaming() {}
 
+func (r *rateLimitStubRunner) InjectMessage(_ string) error { return nil }
+
 // Health dashboard is logged between iterations so operators can detect
 // process leaks, stale signal files, and growing state.json.
 func TestLoop_HealthDashboardLoggedBetweenIterations(t *testing.T) {
@@ -5324,5 +5354,291 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 	output := logBuf.String()
 	if !strings.Contains(output, "Ralph v1.2.3") {
 		t.Errorf("expected 'Ralph v1.2.3' in iteration banner, got:\n%s", output)
+	}
+}
+
+// injectCapturingRunner records messages sent via InjectMessage so tests
+// can verify that onSignal injects feedback instead of spawning fix agents.
+type injectCapturingRunner struct {
+	onRun    func()
+	result   claude.Result
+	injected []string
+}
+
+func (r *injectCapturingRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
+	if r.onRun != nil {
+		r.onRun()
+	}
+	return r.result, nil
+}
+
+func (r *injectCapturingRunner) StopStreaming() {}
+
+func (r *injectCapturingRunner) InjectMessage(msg string) error {
+	r.injected = append(r.injected, msg)
+	return nil
+}
+
+// Verifies that when post-signal tests fail, the failure output is injected
+// to the running agent via stdin instead of spawning a separate fix agent.
+// The agent has full context of what it built and can fix its own work.
+func TestLoop_onSignal_InjectsTestFailures(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	// Create a Makefile with a failing test command so verify.RunTests
+	// detects a test runner and returns a failure.
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\t@echo 'FAIL: broken test' && exit 1\n"), 0o644)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Fix something",
+		nextID:    "ralph-test1",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	runner := &injectCapturingRunner{}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logger)
+	l.runner = runner
+
+	p := signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-test1",
+		nextTask:   "Fix something",
+	}
+
+	accepted := l.onSignal(p)
+
+	if accepted {
+		t.Error("onSignal should return false when tests fail (agent continues)")
+	}
+	if len(runner.injected) == 0 {
+		t.Fatal("expected test failure to be injected to agent via stdin")
+	}
+	if !strings.Contains(runner.injected[0], "Tests failed") {
+		t.Errorf("injected message should contain test failure info, got: %q", runner.injected[0])
+	}
+
+	output := logBuf.String()
+	if !strings.Contains(output, "injected to agent via stdin") {
+		t.Errorf("expected injection log message, got:\n%s", output)
+	}
+}
+
+// Verifies that when LLM verification rejects the agent's work, the rejection
+// feedback is injected to the running agent instead of spawning a fix agent.
+func TestLoop_onSignal_InjectsLLMRejection(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Add feature",
+		nextID:    "ralph-llm1",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	runner := &injectCapturingRunner{}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logger)
+	l.runner = runner
+
+	// Tests pass but LLM rejects.
+	l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+		return verify.Result{Passed: false, Details: "missing error handling in parseConfig"}
+	}
+
+	p := signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-llm1",
+		nextTask:   "Add feature",
+	}
+
+	accepted := l.onSignal(p)
+
+	if accepted {
+		t.Error("onSignal should return false when LLM rejects (agent continues)")
+	}
+	if len(runner.injected) == 0 {
+		t.Fatal("expected LLM rejection to be injected to agent via stdin")
+	}
+	if !strings.Contains(runner.injected[0], "missing error handling") {
+		t.Errorf("injected message should contain LLM feedback, got: %q", runner.injected[0])
+	}
+}
+
+// Verifies that when stdin injection fails, onSignal falls back to spawning
+// a fix agent — the old behavior provides a safety net.
+func TestLoop_onSignal_FallsBackToFixAgentOnBrokenPipe(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Fix bug",
+		nextID:    "ralph-fb1",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	// Runner that fails injection — simulates broken pipe.
+	brokenRunner := &injectFailRunner{
+		result: claude.Result{},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logger)
+	l.runner = brokenRunner
+
+	// Tests pass, LLM rejects, injection fails → should fall back to fix agent.
+	l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+		return verify.Result{Passed: false, Details: "incomplete implementation"}
+	}
+
+	fixAgentCalled := false
+	l.newRunnerFunc = func() claudeRunner {
+		fixAgentCalled = true
+		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
+	}
+
+	p := signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-fb1",
+		nextTask:   "Fix bug",
+	}
+
+	l.onSignal(p)
+
+	if !fixAgentCalled {
+		t.Error("expected fix agent to be spawned as fallback when injection fails")
+	}
+}
+
+// injectFailRunner always fails InjectMessage to test fallback behavior.
+type injectFailRunner struct {
+	result claude.Result
+}
+
+func (r *injectFailRunner) Run(_ claude.RunConfig) (claude.Result, error) {
+	return r.result, nil
+}
+
+func (r *injectFailRunner) StopStreaming() {}
+
+func (r *injectFailRunner) InjectMessage(_ string) error {
+	return fmt.Errorf("broken pipe")
+}
+
+// Verifies that test fix attempts are tracked across onSignal calls and
+// the agent is not allowed infinite retries.
+func TestLoop_onSignal_TestFixAttemptsTracked(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	// Create a Makefile with a failing test command.
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\t@echo 'FAIL: broken' && exit 1\n"), 0o644)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Fix tests",
+		nextID:    "ralph-tr1",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+	runner := &injectCapturingRunner{}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logger)
+	l.runner = runner
+
+	p := signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-tr1",
+		nextTask:   "Fix tests",
+	}
+
+	// Call onSignal maxTestFixAttempts+1 times — the last should give up.
+	for i := 0; i <= 3; i++ {
+		l.onSignal(p)
+	}
+
+	// Should have injected 3 times (the max), then given up on the 4th.
+	if len(runner.injected) != 3 {
+		t.Errorf("expected 3 injections before giving up, got %d", len(runner.injected))
 	}
 }

@@ -258,6 +258,170 @@ func TestStripJSONFragment_CleanText(t *testing.T) {
 	}
 }
 
+// --- Stdin injection tests ---
+
+// Verifies UserInputMessage produces valid JSON with the stream-json
+// input format expected by Claude Code's --input-format stream-json.
+func TestUserInputMessage_Format(t *testing.T) {
+	got := UserInputMessage("fix the tests")
+	want := `{"type":"user_input_text","content":"fix the tests"}`
+	if got != want {
+		t.Errorf("UserInputMessage = %q, want %q", got, want)
+	}
+}
+
+// Verifies that UserInputMessage correctly JSON-escapes multiline content
+// with special characters, which is typical for test failure output.
+func TestUserInputMessage_EscapesSpecialChars(t *testing.T) {
+	msg := "test failed:\n\texpected \"foo\"\n\tgot \"bar\""
+	got := UserInputMessage(msg)
+	// The content should be JSON-escaped inside the JSON string.
+	if !strings.Contains(got, `\n`) {
+		t.Errorf("expected JSON-escaped newlines, got: %s", got)
+	}
+	if !strings.Contains(got, `\"foo\"`) {
+		t.Errorf("expected JSON-escaped quotes, got: %s", got)
+	}
+}
+
+// Verifies that InjectMessage returns an error when no pipe is available,
+// which is the expected state before Run() is called or after it returns.
+func TestInjectMessage_NoPipe(t *testing.T) {
+	runner := &Runner{Logger: &testLogger{}}
+	err := runner.InjectMessage("hello")
+	if err == nil {
+		t.Error("InjectMessage should fail when no stdin pipe is available")
+	}
+}
+
+// Verifies that InjectMessage writes the message as a JSON line to the
+// stdin pipe, which the running agent reads as a follow-up user message.
+func TestInjectMessage_WritesToPipe(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+
+	runner := &Runner{Logger: &testLogger{}}
+	runner.stdinPipe = pw
+
+	if err := runner.InjectMessage("user feedback here"); err != nil {
+		t.Fatalf("InjectMessage failed: %v", err)
+	}
+	pw.Close()
+
+	buf := make([]byte, 4096)
+	n, _ := pr.Read(buf)
+	got := strings.TrimSpace(string(buf[:n]))
+	want := `{"type":"user_input_text","content":"user feedback here"}`
+	if got != want {
+		t.Errorf("pipe content = %q, want %q", got, want)
+	}
+}
+
+// Verifies that feedback is injected via stdin instead of killing the agent,
+// keeping the agent alive with full context of its current work.
+func TestPoll_FeedbackInjectedViaStdin(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+	feedbackFile := filepath.Join(dir, "feedback")
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// Set up a pipe so InjectMessage works.
+	pr, pw, _ := os.Pipe()
+	defer pr.Close()
+	runner.stdinPipe = pw
+
+	// Write feedback that should be injected (not cause a kill).
+	os.WriteFile(feedbackFile, []byte("please fix the tests"), 0o644)
+
+	// Write completion signal after a delay so the poll can detect
+	// feedback first, then detect completion.
+	go func() {
+		time.Sleep(400 * time.Millisecond)
+		tmp := signals.Complete + ".tmp"
+		os.WriteFile(tmp, []byte("done"), 0o644)
+		os.Rename(tmp, signals.Complete)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 100 * time.Millisecond,
+		FeedbackFile: feedbackFile,
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+
+	// Agent should NOT have been killed for feedback.
+	if result.FeedbackKill {
+		t.Error("expected feedback to be injected, not kill the agent")
+	}
+	// Signal should still be detected after feedback injection.
+	if !result.SignalDetected {
+		t.Error("expected signal to be detected after feedback injection")
+	}
+	// Feedback file should be removed.
+	if _, err := os.Stat(feedbackFile); !os.IsNotExist(err) {
+		t.Error("feedback file should be removed after injection")
+	}
+	// Check that feedback was written to the pipe.
+	pw.Close()
+	buf := make([]byte, 4096)
+	n, _ := pr.Read(buf)
+	pipeContent := string(buf[:n])
+	if !strings.Contains(pipeContent, "please fix the tests") {
+		t.Errorf("expected feedback in pipe content, got: %q", pipeContent)
+	}
+}
+
+// Verifies that when stdin injection fails (broken pipe), the agent is
+// killed and FeedbackKill is returned — the fallback to the old behavior.
+func TestPoll_FeedbackFallsBackToKillOnBrokenPipe(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+	feedbackFile := filepath.Join(dir, "feedback")
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// Create and immediately close the write end so injection fails.
+	_, pw, _ := os.Pipe()
+	pw.Close()
+	runner.stdinPipe = pw
+
+	os.WriteFile(feedbackFile, []byte("fix this"), 0o644)
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 100 * time.Millisecond,
+		FeedbackFile: feedbackFile,
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+
+	if !result.FeedbackKill {
+		t.Error("expected FeedbackKill when stdin injection fails")
+	}
+	if result.FeedbackContent != "fix this" {
+		t.Errorf("FeedbackContent = %q, want %q", result.FeedbackContent, "fix this")
+	}
+}
+
 // Verifies that readFirstLine strips JSON fragments from signal files,
 // so log messages like "Completed: <summary>" stay human-readable.
 func TestReadFirstLine_StripsJSON(t *testing.T) {
