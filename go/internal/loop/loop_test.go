@@ -1533,7 +1533,7 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "42", nil }
 	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
 
 	err := l.Run(context.Background())
@@ -1914,7 +1914,7 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "99", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		mergeCount++
 		return true, nil
@@ -3385,7 +3385,7 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "42", nil }
 
 	merged := false
 	l.mergeFunc = func(context.Context) (bool, error) {
@@ -3762,7 +3762,7 @@ func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "42", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return true, nil
 	}
