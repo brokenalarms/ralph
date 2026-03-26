@@ -370,6 +370,15 @@ func (l *Loop) Run(ctx context.Context) error {
 			FeedbackFile: filepath.Join(l.cfg.Dirs.RalphDir, "feedback"),
 		})
 		if runErr != nil {
+			if !isOnline() {
+				l.logger.Warn("llm", "Claude failed — internet appears down")
+				if !l.waitForInternet(ctx) {
+					break
+				}
+				runIteration--
+				iteration--
+				continue
+			}
 			l.logger.Warn("llm", "Claude failed on iteration %d, continuing...", runIteration)
 		}
 		if result.FeedbackKill {
@@ -494,7 +503,14 @@ func (l *Loop) Run(ctx context.Context) error {
 			// rebases onto the latest base branch before pushing.
 			prNumber, pushErr := l.pushAndCreatePR(ctx, taskID, nextTask)
 			if pushErr != nil {
-				l.logger.Warn("git", "Push/PR: %v", pushErr)
+				if !isOnline() {
+					l.logger.Warn("git", "Push failed — internet appears down")
+					l.waitForInternet(ctx)
+					prNumber, pushErr = l.pushAndCreatePR(ctx, taskID, nextTask)
+				}
+				if pushErr != nil {
+					l.logger.Warn("git", "Push/PR: %v", pushErr)
+				}
 			}
 			if prNumber != "" && taskID != "" {
 				_, _, prURL := l.findPRInfo(workDir)
