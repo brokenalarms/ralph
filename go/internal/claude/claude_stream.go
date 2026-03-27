@@ -152,6 +152,7 @@ func firstMeaningfulLine(text string) string {
 // change in this map. This is the single source of truth for tool visibility.
 var VerboseOnlyTools = map[string]bool{
 	"Bash":       true,
+	"Edit":       true,
 	"Read":       true,
 	"Write":      true,
 	"Grep":       true,
