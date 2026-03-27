@@ -540,10 +540,11 @@ func TestFilterStreamJSON_NonVerboseHidesLowValueTools(t *testing.T) {
 		t.Errorf("Write should be hidden in non-verbose mode, got: %q", content)
 	}
 
-	// Visible tools should appear.
-	if !strings.Contains(content, "[Edit]") {
-		t.Errorf("Edit should be visible in non-verbose mode, got: %q", content)
+	// Edit is now verbose-only — should be hidden.
+	if strings.Contains(content, "[Edit]") {
+		t.Errorf("Edit should be hidden in non-verbose mode, got: %q", content)
 	}
+	// Agent should still be visible.
 	if !strings.Contains(content, "[Agent]") {
 		t.Errorf("Agent should be visible in non-verbose mode, got: %q", content)
 	}
