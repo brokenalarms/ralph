@@ -331,6 +331,34 @@ func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 	}
 }
 
+// RenameBranchTo renames the current worktree branch to a specific name.
+// Used when the bead already has a stored branch name from a previous run.
+func (m *Manager) RenameBranchTo(name string) {
+	if m.BranchRenamed || m.WorktreeBranch == "" || name == "" {
+		return
+	}
+	if m.WorktreeBranch == name {
+		m.BranchRenamed = true
+		if m.State != nil {
+			_ = m.State.Write("branch_renamed", "true")
+		}
+		return
+	}
+	oldBranch := m.WorktreeBranch
+	if err := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, name); err == nil {
+		if !strings.HasSuffix(oldBranch, "/wip") {
+			m.PrevBranch = oldBranch
+		}
+		m.WorktreeBranch = name
+		m.BranchRenamed = true
+		if m.State != nil {
+			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
+			_ = m.State.Write("branch_renamed", "true")
+			_ = m.State.Write("prev_branch", m.PrevBranch)
+		}
+	}
+}
+
 // PrepareForNextTask resets BranchRenamed so the next task gets a new branch
 // name via RenameBranchForTask. Unlike the old RotateBranch, this does NOT
 // create a new branch — the worktree stays on the current commit.

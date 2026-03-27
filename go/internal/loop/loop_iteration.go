@@ -2,15 +2,12 @@ package loop
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/notify"
 )
 
@@ -94,10 +91,16 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 					}
 				}
 			} else {
-				// No PR reference — agent says done but no proof. Close anyway
-				// since verification passed, but log it clearly.
-				canClose = true
-				l.logger.Log("git", "No PR reference but verification passed — closing bead")
+				// No PR reference — only close if worktree tree matches main,
+				// proving the work actually landed. Without this check, beads
+				// get closed while their branch work is orphaned.
+				if l.git.WorktreeMatchesMain() {
+					canClose = true
+					closeReason = "tree matches main (no PR reference)"
+					l.logger.Log("git", "No PR reference but worktree matches main — closing bead")
+				} else {
+					l.logger.Warn("git", "No PR reference and worktree differs from main — task stays open")
+				}
 			}
 		}
 		if canClose && p.taskID != "" {
@@ -210,11 +213,17 @@ func (l *Loop) mergeIfEnabled(p postSignalParams, prNumber string) (bool, error)
 					l.logger.Log("git", "PR #%s already merged — work is on main", existingPR)
 					merged = true
 				case "OPEN":
-					l.logger.Log("git", "Existing PR #%s still open — attempting merge", existingPR)
-					var mergeErr error
-					merged, mergeErr = l.mergeWithRetry(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
-					if mergeErr != nil {
-						l.logger.Warn("git", "Auto-merge existing PR: %v", mergeErr)
+					prBase := l.getPRBase(existingPR)
+					defaultBranch := l.git.DetectDefaultBranch()
+					if prBase != "" && prBase != defaultBranch {
+						l.logger.Log("git", "Existing PR #%s targets %s (not %s) — stacked, skipping merge", existingPR, prBase, defaultBranch)
+					} else {
+						l.logger.Log("git", "Existing PR #%s still open — attempting merge", existingPR)
+						var mergeErr error
+						merged, mergeErr = l.mergeWithRetry(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
+						if mergeErr != nil {
+							l.logger.Warn("git", "Auto-merge existing PR: %v", mergeErr)
+						}
 					}
 				}
 			}
@@ -224,36 +233,32 @@ func (l *Loop) mergeIfEnabled(p postSignalParams, prNumber string) (bool, error)
 	return merged, lastErr
 }
 
-// closeOrRetryTask closes the bead after merge success, or records a merge
-// failure for retry.
+// closeOrRetryTask closes the bead. The PR exists so the work is done.
+// If merge failed after retries (CI fix agent already tried), skip for
+// manual review — re-running the agent won't produce new information.
 func (l *Loop) closeOrRetryTask(taskID string, ct CompletedTask, merged bool, mergeErr error) {
 	if taskID == "" {
 		return
 	}
-	if merged || !l.cfg.AutoMerge {
-		l.attempts.ClearMergeFailures(taskID)
-		closeReason := "completed by ralph"
-		if ct.PRURL != "" {
-			closeReason = fmt.Sprintf("Fixed in %s", ct.PRURL)
-		} else if ct.PRNum != "" {
-			closeReason = fmt.Sprintf("Fixed in PR #%s", ct.PRNum)
-		}
-		if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
-			l.logger.Warn("beads", "CloseTask failed: %v", err)
-		} else {
-			l.logger.Log("beads", "Closed task %s (%s)", taskID, closeReason)
-		}
-	} else if l.cfg.AutoMerge && !merged {
-		// Don't count stacked PR waiting as a failure — it's expected.
-		if !errors.Is(mergeErr, git.ErrStackedPRWaiting) {
-			count, _ := l.attempts.RecordMergeFailure(taskID)
-			if count >= attempts.MaxMergeFailures {
-				l.logger.Warn("git", "Merge failed %d times — skipping task %s for manual review", count, taskID)
-				l.skipTask(taskID, fmt.Sprintf("merge_failed_%d_times", count))
-			} else {
-				l.logger.Warn("git", "Merge failed (%d/%d) — task %s left open for retry", count, attempts.MaxMergeFailures, taskID)
-			}
-		}
+
+	closeReason := "completed by ralph"
+	if ct.PRURL != "" {
+		closeReason = fmt.Sprintf("Fixed in %s", ct.PRURL)
+	} else if ct.PRNum != "" {
+		closeReason = fmt.Sprintf("Fixed in PR #%s", ct.PRNum)
+	}
+
+	if !merged && l.cfg.AutoMerge && mergeErr != nil {
+		l.logger.Warn("git", "Merge failed — skipping task %s (PR exists for manual review)", taskID)
+		l.skipTask(taskID, "merge_failed")
+		return
+	}
+
+	l.attempts.ClearMergeFailures(taskID)
+	if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
+		l.logger.Warn("beads", "CloseTask failed: %v", err)
+	} else {
+		l.logger.Log("beads", "Closed task %s (%s)", taskID, closeReason)
 	}
 }
 
@@ -263,14 +268,19 @@ func (l *Loop) closeOrRetryTask(taskID string, ct CompletedTask, merged bool, me
 // new name in metadata. Returns true if an existing remote branch was
 // checked out.
 func (l *Loop) checkoutExistingBranch(taskID, nextTask string) bool {
+	storedBranch := ""
 	if taskID != "" {
-		if storedBranch, _ := l.cfg.TaskBackend.GetMetadata(taskID, "branch"); storedBranch != "" {
-			_ = l.git.FetchBranch(storedBranch)
-			if l.git.RemoteBranchHasCommits(storedBranch) {
-				l.git.CheckoutRemoteBranch(storedBranch)
-				return true
-			}
+		storedBranch, _ = l.cfg.TaskBackend.GetMetadata(taskID, "branch")
+	}
+	if storedBranch != "" {
+		_ = l.git.FetchBranch(storedBranch)
+		if l.git.RemoteBranchHasCommits(storedBranch) {
+			l.git.CheckoutRemoteBranch(storedBranch)
+			return true
 		}
+		// Remote has no work but bead knows the branch name — reuse it.
+		l.git.RenameBranchTo(storedBranch)
+		return false
 	}
 	l.git.RenameBranchForTask(nextTask, taskID)
 	if taskID != "" && l.git.WorktreeBranch != "" && strings.Contains(l.git.WorktreeBranch, taskID) {

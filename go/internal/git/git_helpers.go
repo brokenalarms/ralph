@@ -127,6 +127,15 @@ func (m *Manager) DiffStatRange(from, to string) string {
 	return m.gitOutput(m.WorkDir, "diff", "--stat", from, to)
 }
 
+// WorktreeMatchesMain returns true if the worktree tree is identical to
+// origin's default branch. Uses tree diff so squash-merge hash mismatches
+// don't cause false negatives.
+func (m *Manager) WorktreeMatchesMain() bool {
+	defaultBranch := m.detectDefaultBranch()
+	_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch)
+	return m.gitOutput(m.WorkDir, "diff", "--stat", "HEAD", "origin/"+defaultBranch) == ""
+}
+
 func (m *Manager) DiffFull(from, to string) string {
 	return m.gitOutput(m.WorkDir, "diff", from+".."+to)
 }

@@ -192,26 +192,31 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 		return true
 
 	case "OPEN":
-		l.logger.Log("git", "PR #%s still open — proceeding to merge", prNumber)
+		// Work is done — the PR exists. Close the bead regardless of merge outcome.
+		if taskID != "" {
+			l.attempts.ClearMergeFailures(taskID)
+			if err := l.cfg.TaskBackend.CloseTask(taskID, fmt.Sprintf("Fixed in PR #%s", prNumber)); err != nil {
+				l.logger.Warn("beads", "CloseTask failed: %v", err)
+			} else {
+				l.logger.Log("beads", "Closed task %s (PR #%s)", taskID, prNumber)
+			}
+		}
+
+		// Try to merge if the PR targets the default branch directly.
+		prBase := l.getPRBase(prNumber)
+		defaultBranch := l.git.DetectDefaultBranch()
+		if prBase != "" && prBase != defaultBranch {
+			l.logger.Log("git", "PR #%s targets %s — will merge when base lands", prNumber, prBase)
+			return true
+		}
+
 		merged := false
 		if l.cfg.AutoMerge {
+			l.logger.Log("git", "PR #%s targets %s — merging", prNumber, defaultBranch)
 			var mergeErr error
 			merged, mergeErr = l.mergeWithRetry(ctx, taskID, nextTask, l.git.WorkDir, filepath.Join(l.cfg.Dirs.RalphDir, "raw.log"))
 			if mergeErr != nil {
 				l.logger.Warn("git", "Auto-merge: %v", mergeErr)
-			}
-		}
-		if taskID != "" {
-			if merged || !l.cfg.AutoMerge {
-				l.attempts.ClearMergeFailures(taskID)
-				if err := l.cfg.TaskBackend.CloseTask(taskID, fmt.Sprintf("Fixed in PR #%s", prNumber)); err != nil {
-					l.logger.Warn("beads", "CloseTask failed: %v", err)
-				} else {
-					l.logger.Log("beads", "Closed task %s (PR #%s merged)", taskID, prNumber)
-				}
-			} else {
-				l.logger.Warn("git", "Merge failed for PR #%s — skipping task", prNumber)
-				l.skipTask(taskID, "merge_failed_open_pr")
 			}
 		}
 		if merged {
@@ -663,6 +668,16 @@ func (l *Loop) waitForInternet(ctx context.Context) bool {
 			l.logger.Log("", "Internet still unreachable (%s elapsed)", elapsed)
 		}
 	}
+}
+
+// getPRBase returns the base branch of the given PR, or empty string on error.
+func (l *Loop) getPRBase(prNumber string) string {
+	gh := l.git.GH()
+	if gh == nil || !gh.Available() {
+		return ""
+	}
+	base, _ := gh.GetPRBase(l.git.WorkDir, prNumber)
+	return base
 }
 
 // parsePRNumber extracts a PR number from either a URL

@@ -3319,7 +3319,9 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 // When merge fails with a CI error, the loop leaves the task open for retry.
 // CI fix agent spawning during the merge pipeline is tested in git module
 // (TestMergeWithRetry_DelegatesCIFailure).
-func TestLoop_CIFailureLeavesTaskOpenForRetry(t *testing.T) {
+// When CI fails, the task is still closed because the PR exists — merge
+// is a separate concern from task completion.
+func TestLoop_CIFailureStillClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -3357,7 +3359,7 @@ func TestLoop_CIFailureLeavesTaskOpenForRetry(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return false, &git.CIFailureError{
 			PRNumber: "99",
@@ -3367,15 +3369,11 @@ func TestLoop_CIFailureLeavesTaskOpenForRetry(t *testing.T) {
 		}
 	}
 
-	var buf bytes.Buffer
-	logger := logging.New(&buf)
-	l.logger = logger
-
 	_ = l.Run(context.Background())
 
-	output := buf.String()
-	if !strings.Contains(output, "left open for retry") {
-		t.Errorf("expected 'left open for retry' in log output, got: %s", output)
+	skipped, _ := st.GetSkippedTasks()
+	if len(skipped) != 1 || skipped[0] != "ralph-ci1" {
+		t.Errorf("expected ralph-ci1 in skip list, got %v", skipped)
 	}
 }
 
@@ -3618,7 +3616,8 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 // Verifies that after MaxMergeFailures consecutive merge failures, the loop
 // skips the task instead of retrying indefinitely. Merge failures are tracked
 // across iterations via the attempts tracker.
-func TestLoop_SkipsTaskAfterRepeatedMergeFailures(t *testing.T) {
+// Merge failures no longer cause task skipping — the PR exists, work is done.
+func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -3644,11 +3643,6 @@ func TestLoop_SkipsTaskAfterRepeatedMergeFailures(t *testing.T) {
 		Logger:         logging.New(nil),
 	}
 
-	tracker := attempts.New(ralphDir)
-	// Seed 2 prior merge failures (one below threshold).
-	tracker.RecordMergeFailure("ralph-stub")
-	tracker.RecordMergeFailure("ralph-stub")
-
 	l := New(Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -3665,29 +3659,22 @@ func TestLoop_SkipsTaskAfterRepeatedMergeFailures(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return false, fmt.Errorf("push denied by sandbox")
 	}
 
 	_ = l.Run(context.Background())
 
-	// Verify skip is persisted to state.json rather than bd defer.
-	skipped, err := st.GetSkippedTasks()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(skipped) != 1 {
-		t.Fatalf("expected 1 skipped task in state, got %d", len(skipped))
-	}
-	if skipped[0] != "ralph-stub" {
-		t.Errorf("expected ralph-stub in skip list, got %q", skipped[0])
+	// Task should be skipped — merge failed, PR exists for manual review.
+	skipped, _ := st.GetSkippedTasks()
+	if len(skipped) != 1 || skipped[0] != "ralph-stub" {
+		t.Errorf("expected ralph-stub in skip list, got %v", skipped)
 	}
 }
 
-// Verifies that merge failures below the threshold leave the task open
-// and record the failure count for the next iteration.
-func TestLoop_MergeFailureBelowThresholdLeavesTaskOpen(t *testing.T) {
+// Merge failure skips the task — PR exists, work is done. No retry counting.
+func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -3729,23 +3716,17 @@ func TestLoop_MergeFailureBelowThresholdLeavesTaskOpen(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "50", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return false, fmt.Errorf("merge conflict")
 	}
 
 	_ = l.Run(context.Background())
 
-	// Task should NOT be skipped — only 1 failure.
+	// Task should be skipped — merge failed, PR exists for manual review.
 	skipped, _ := st.GetSkippedTasks()
-	if len(skipped) != 0 {
-		t.Errorf("expected no skipped tasks on first merge failure, got %v", skipped)
-	}
-
-	// Merge failure should be recorded for next iteration.
-	tracker := attempts.New(ralphDir)
-	if count := tracker.MergeFailureCount("ralph-fix"); count != 1 {
-		t.Errorf("expected merge failure count 1, got %d", count)
+	if len(skipped) != 1 || skipped[0] != "ralph-fix" {
+		t.Errorf("expected ralph-fix in skip list, got %v", skipped)
 	}
 }
 
