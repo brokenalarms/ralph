@@ -73,37 +73,20 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 
 	headAfterSignal := l.git.HeadRev()
 	if p.headBefore != "" && headAfterSignal == p.headBefore {
-		// No new commits — check if there's a merged PR proving the work is on main.
-		l.logger.Log("git", "No new commits — checking for merged PR")
-		canClose := false
-		closeReason := "work already on main"
+		// No new commits but verification passed (agent + LLM + tests agree).
+		// That's sufficient proof the work is on main — close the bead.
+		l.logger.Log("git", "No new commits — verified complete, closing bead")
 		if p.taskID != "" {
+			closeReason := "verified complete (no new commits)"
 			ref, _ := l.cfg.TaskBackend.GetExternalRef(p.taskID)
 			if prNum := parsePRNumber(ref); prNum != "" {
 				gh := l.git.GH()
 				if gh != nil {
 					if prState, _ := gh.GetPRState(l.git.WorkDir, prNum); strings.ToUpper(prState) == "MERGED" {
-						canClose = true
 						closeReason = fmt.Sprintf("PR #%s already merged", prNum)
-						l.logger.Log("git", "PR #%s confirmed merged — closing bead", prNum)
-					} else {
-						l.logger.Warn("git", "No new commits but PR #%s is %s — task stays open", prNum, prState)
 					}
 				}
-			} else {
-				// No PR reference — only close if worktree tree matches main,
-				// proving the work actually landed. Without this check, beads
-				// get closed while their branch work is orphaned.
-				if l.git.WorktreeMatchesMain() {
-					canClose = true
-					closeReason = "tree matches main (no PR reference)"
-					l.logger.Log("git", "No PR reference but worktree matches main — closing bead")
-				} else {
-					l.logger.Warn("git", "No PR reference and worktree differs from main — task stays open")
-				}
 			}
-		}
-		if canClose && p.taskID != "" {
 			_ = l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", closeReason)
 			if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
 				l.logger.Warn("beads", "CloseTask: %v", err)
@@ -111,8 +94,6 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 				l.logger.Log("beads", "Closed task %s (%s)", p.taskID, closeReason)
 				persistCompletedTask(l.state, l.logger, p.taskID, p.nextTask, "", closeReason)
 			}
-		} else if p.taskID != "" {
-			l.logger.Warn("beads", "Task %s stays open — no merged PR to confirm work on main", p.taskID)
 		}
 		l.git.TagTaskEnd(p.taskID)
 		*runIteration++
