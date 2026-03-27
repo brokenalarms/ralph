@@ -551,6 +551,7 @@ func (l *Loop) Run(ctx context.Context) error {
 				if ref == "" {
 					ref = "gh-" + prNumber
 				}
+				l.logger.Log("git", "Linking task %s to %s (branch: %s)", taskID, ref, l.git.WorktreeBranch)
 				if refErr := l.cfg.TaskBackend.SetExternalRef(taskID, ref); refErr != nil {
 					l.logger.Warn("beads", "SetExternalRef: %v", refErr)
 				}

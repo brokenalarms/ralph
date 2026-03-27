@@ -120,7 +120,8 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 	// Check if a PR exists for this branch.
 	prNumber, _ := gh.FindOpenPR(branch, repoURL)
 	if prNumber != "" {
-		l.logger.Log("git", "Found PR #%s for %s — resolving", prNumber, branch)
+		l.logger.Log("git", "Found PR #%s for branch %s (task %s) — resolving", prNumber, branch, taskID)
+		l.logger.Log("git", "Setting external-ref on %s to gh-%s", taskID, prNumber)
 		_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNumber)
 		return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
 	}
@@ -130,6 +131,7 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 	l.git.CheckoutRemoteBranch(branch)
 	prNum, err := l.pushAndCreatePR(ctx, taskID, nextTask, "")
 	if err == nil && prNum != "" {
+		l.logger.Log("git", "Created PR #%s for branch %s (task %s)", prNum, branch, taskID)
 		_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNum)
 		return l.resolveByPRState(ctx, taskID, nextTask, prNum)
 	}
