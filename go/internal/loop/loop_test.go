@@ -6629,3 +6629,187 @@ func TestGetBeadDescription_Standalone(t *testing.T) {
 		t.Errorf("nil backend should return empty, got %q", desc)
 	}
 }
+
+// handlePostSignal returns within PostSignalTimeout even when push blocks
+// indefinitely, proving the timeout prevents infinite stalls from rate limits
+// or network issues.
+func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix bug", nextID: "ralph-timeout"},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	var logBuf bytes.Buffer
+	logger := logging.New(&logBuf)
+
+	l := New(Config{
+		Dirs:              workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations:     1,
+		CallsPerHour:      80,
+		TaskBackend:       backend,
+		PostSignalTimeout: 50 * time.Millisecond,
+	}, st, gm, logger)
+	l.runner = &stubRunner{}
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.pushPRFunc = func(ctx context.Context, _, _, _ string) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+
+	writeFile(t, project, "fix.go", "package main\n")
+	run(t, "git", "-C", project, "add", "fix.go")
+	run(t, "git", "-C", project, "commit", "-m", "fix")
+
+	runIter, iter := 1, 1
+	done := make(chan postSignalAction, 1)
+	go func() {
+		done <- l.handlePostSignal(postSignalParams{
+			ctx:        context.Background(),
+			result:     claude.Result{SignalDetected: true},
+			headBefore: "",
+			workDir:    project,
+			rawLogPath: filepath.Join(ralphDir, "raw.log"),
+			taskID:     "ralph-timeout",
+			nextTask:   "Fix bug",
+		}, &runIter, &iter)
+	}()
+
+	select {
+	case action := <-done:
+		if action != signalComplete {
+			t.Errorf("expected signalComplete, got %d", action)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("handlePostSignal hung — PostSignalTimeout did not fire")
+	}
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Post-signal timeout") {
+		t.Errorf("expected timeout log message, got: %s", output)
+	}
+
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) > 0 {
+		t.Errorf("task should not be closed when timeout fires before push, got %v", backend.closedIDs)
+	}
+}
+
+// handlePostSignal completes normally within PostSignalTimeout when operations
+// are fast, proving the timeout doesn't interfere with successful flows.
+func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix login", nextID: "ralph-fast"},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:              workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations:     1,
+		CallsPerHour:      80,
+		TaskBackend:       backend,
+		PostSignalTimeout: 5 * time.Second,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+
+	writeFile(t, project, "fix.go", "package main\n")
+	run(t, "git", "-C", project, "add", "fix.go")
+	run(t, "git", "-C", project, "commit", "-m", "fix")
+
+	runIter, iter := 1, 1
+	action := l.handlePostSignal(postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "",
+		workDir:    project,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-fast",
+		nextTask:   "Fix login",
+	}, &runIter, &iter)
+
+	if action != signalComplete {
+		t.Errorf("expected signalComplete, got %d", action)
+	}
+
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-fast" {
+		t.Errorf("expected task ralph-fast closed, got %v", backend.closedIDs)
+	}
+}
+
+// handlePostSignal cancels a blocking merge when the post-signal timeout
+// fires, so the orchestrator doesn't stall on a rate-limited API call.
+func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Slow merge", nextID: "ralph-slow"},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:              workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations:     1,
+		CallsPerHour:      80,
+		TaskBackend:       backend,
+		AutoMerge:         true,
+		PostSignalTimeout: 50 * time.Millisecond,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
+	l.mergeFunc = func(ctx context.Context) (bool, error) {
+		<-ctx.Done()
+		return false, ctx.Err()
+	}
+
+	writeFile(t, project, "fix.go", "package main\n")
+	run(t, "git", "-C", project, "add", "fix.go")
+	run(t, "git", "-C", project, "commit", "-m", "fix")
+
+	runIter, iter := 1, 1
+	done := make(chan postSignalAction, 1)
+	go func() {
+		done <- l.handlePostSignal(postSignalParams{
+			ctx:        context.Background(),
+			result:     claude.Result{SignalDetected: true},
+			headBefore: "",
+			workDir:    project,
+			rawLogPath: filepath.Join(ralphDir, "raw.log"),
+			taskID:     "ralph-slow",
+			nextTask:   "Slow merge",
+		}, &runIter, &iter)
+	}()
+
+	select {
+	case <-done:
+		// Returned within timeout — merge was cancelled, not hung
+	case <-time.After(5 * time.Second):
+		t.Fatal("handlePostSignal hung — PostSignalTimeout did not cancel merge")
+	}
+}
