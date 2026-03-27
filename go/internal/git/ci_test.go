@@ -534,6 +534,90 @@ func setupAutoMergeManager(t *testing.T, gh *stubGitHub) *Manager {
 	return mgr
 }
 
+// updatePRBranch returns a CIFailureError when CI fails after the
+// branch is updated with the latest base.
+func TestUpdatePRBranch_ReturnsFailureAfterUpdate(t *testing.T) {
+	origSleep := ciSleep
+	ciSleep = func(d time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+	defer func() { ciSleep = origSleep }()
+
+	gh := &stubGitHub{
+		available:    true,
+		openPR:       "10",
+		updateResult: true,
+		checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
+	}
+	mgr := setupAutoMergeManager(t, gh)
+
+	err := mgr.updatePRBranch(context.Background(), "10", "https://github.com/test/repo.git")
+	var ciErr *CIFailureError
+	if !errors.As(err, &ciErr) {
+		t.Errorf("expected CIFailureError after branch update with failing CI, got %T: %v", err, err)
+	}
+}
+
+// updatePRBranch returns nil without polling when the branch was
+// already up to date (no update needed).
+func TestUpdatePRBranch_NoUpdateNeeded(t *testing.T) {
+	gh := &stubGitHub{
+		available:    true,
+		openPR:       "10",
+		updateResult: false,
+		checks:       []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+	}
+	mgr := setupAutoMergeManager(t, gh)
+
+	err := mgr.updatePRBranch(context.Background(), "10", "https://github.com/test/repo.git")
+	if err != nil {
+		t.Fatalf("expected nil when no update needed, got: %v", err)
+	}
+}
+
+// executeMerge retries the merge after CI passes when the initial merge
+// is blocked by branch protection.
+func TestExecuteMerge_RetriesAfterCIGate(t *testing.T) {
+	origSleep := ciSleep
+	ciSleep = func(d time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+	defer func() { ciSleep = origSleep }()
+
+	calls := 0
+	gh := &stubGitHub{
+		available: true,
+		openPR:    "10",
+		checks:    []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+	}
+	mgr := setupAutoMergeManager(t, gh)
+
+	seqGH := &sequentialMergeGitHub{
+		stubGitHub: *gh,
+		mergeResults: []mergeResult{
+			{"Base branch policy prohibits the merge", fmt.Errorf("exit 1")},
+			{"merged", nil},
+		},
+		onMerge: func() { calls++ },
+	}
+	mgr.GitHub = seqGH
+
+	merged, err := mgr.executeMerge(context.Background(), "10", "https://github.com/test/repo.git")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !merged {
+		t.Error("expected merge to succeed on retry")
+	}
+	if calls != 2 {
+		t.Errorf("expected 2 merge calls (initial + retry), got %d", calls)
+	}
+}
+
 // AutoMergeCurrentBranch returns a MergeConflictError when the gh merge
 // command reports merge conflicts, so the caller can rebase and retry.
 func TestAutoMerge_MergeConflictReturnsTypedError(t *testing.T) {

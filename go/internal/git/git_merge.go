@@ -182,7 +182,8 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 }
 
 // updatePRBranch updates the PR branch with the latest base branch commits.
-// If the branch was updated, waits for CI to pass on the new HEAD.
+// If the branch was updated, waits for CI on the new HEAD. Returns a
+// CIFailureError when CI fails after the update.
 func (m *Manager) updatePRBranch(ctx context.Context, prNumber, repoURL string) error {
 	nwo := nwoFromRemote(repoURL)
 	if nwo == "" {
@@ -213,6 +214,7 @@ func (m *Manager) updatePRBranch(ctx context.Context, prNumber, repoURL string) 
 func (m *Manager) executeMerge(ctx context.Context, prNumber, repoURL string) (bool, error) {
 	gh := m.gh()
 	opts := m.mergeOpts()
+
 	if _, prTitle, _, titleErr := gh.FindPR(m.WorktreeBranch, m.WorkDir); titleErr == nil && prTitle != "" {
 		opts.Subject = fmt.Sprintf("%s (#%s)", prTitle, prNumber)
 	}
