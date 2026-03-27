@@ -129,7 +129,9 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 		NewRunner:   l.newRunner,
 		QueryFn:     l.queryFunc(),
 		LLMVerify:   verify.LLMVerifyPR,
-		SkipTask:    l.skipTask,
+		SkipTask: func(id, reason string) {
+			skipTask(l.state, l.cfg.TaskBackend, l.logger, id, reason)
+		},
 	})
 	return l
 }
@@ -175,7 +177,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			return nil
 		}
 
-		if l.checkStopFile() {
+		if checkStopFile(l.cfg.Dirs.RalphDir) {
 			l.logger.Warn("", "Stop file detected - halting")
 			l.state.Write("status", "stopped")
 			break
@@ -214,7 +216,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		taskInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 		taskID, nextTask := taskInfo.ID, taskInfo.Title
-		taskChanged := l.isNewTask(taskID, nextTask)
+		taskChanged := isNewTask(l.state, taskID, nextTask)
 		if taskChanged {
 			l.verifier.ResetCounters()
 		}
@@ -249,9 +251,9 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.setStackHead()
 			l.checkoutExistingBranch(taskID, nextTask)
 		}
-		l.writeRunBranch()
+		writeRunBranch(l.cfg.Dirs.RalphDir, l.git.WorktreeBranch)
 		l.git.TagTaskStart(taskID)
-		l.updateStreamTask(taskID, nextTask, taskInfo.Priority)
+		updateStreamTask(l.cfg.Dirs.RalphDir, taskID, nextTask, taskInfo.Priority)
 
 		if resumed := l.resumeViaPR(ctx, taskID, nextTask); resumed {
 			l.git.TagTaskEnd(taskID)

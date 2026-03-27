@@ -5,6 +5,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/agent"
 	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/verify"
 )
 
@@ -63,12 +64,11 @@ func (l *Loop) getCIFailureLog(prNumber string) string {
 	return l.git.GetCIFailureLog(prNumber)
 }
 
-// getBeadDescription retrieves the bead description for LLM verification.
-func (l *Loop) getBeadDescription(taskID string) string {
-	if taskID == "" || l.cfg.TaskBackend == nil {
+func getBeadDescription(backend tasks.Backend, taskID string) string {
+	if taskID == "" || backend == nil {
 		return ""
 	}
-	desc, err := l.cfg.TaskBackend.GetDescription(taskID)
+	desc, err := backend.GetDescription(taskID)
 	if err != nil {
 		return ""
 	}

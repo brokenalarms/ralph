@@ -71,7 +71,7 @@ func (l *Loop) buildAttemptContext(taskID, taskName string) string {
 	}
 
 	// Same-task reflection
-	if reflection := l.readReflection(taskID, taskName); reflection != "" {
+	if reflection := readReflection(l.cfg.Dirs.RalphDir, taskID, taskName); reflection != "" {
 		parts = append(parts, "### Previous reflection\n"+reflection)
 	}
 
@@ -100,8 +100,8 @@ func (l *Loop) buildAttemptContext(taskID, taskName string) string {
 	return strings.Join(parts, "\n")
 }
 
-func (l *Loop) readFeedback() string {
-	feedbackFile := filepath.Join(l.cfg.Dirs.RalphDir, "feedback")
+func readFeedback(ralphDir string) string {
+	feedbackFile := filepath.Join(ralphDir, "feedback")
 	data, err := os.ReadFile(feedbackFile)
 	if err != nil || len(data) == 0 {
 		return ""
@@ -109,18 +109,18 @@ func (l *Loop) readFeedback() string {
 	return strings.TrimSpace(string(data))
 }
 
-func (l *Loop) clearFeedback() {
-	os.Remove(filepath.Join(l.cfg.Dirs.RalphDir, "feedback"))
+func clearFeedback(ralphDir string) {
+	os.Remove(filepath.Join(ralphDir, "feedback"))
 }
 
 // readReflection returns the content of a previous reflection file for a task.
 // Uses task ID if available, falls back to slugified task name.
-func (l *Loop) readReflection(taskID, taskName string) string {
+func readReflection(ralphDir, taskID, taskName string) string {
 	key := taskID
 	if key == "" {
 		key = git.Slugify(taskName)
 	}
-	path := filepath.Join(l.cfg.Dirs.RalphDir, "reflections", key+".md")
+	path := filepath.Join(ralphDir, "reflections", key+".md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""

@@ -37,13 +37,13 @@ func (l *Loop) initRun(ctx context.Context) error {
 		return fmt.Errorf("initial rebase failed: %w", err)
 	}
 	nextInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
-	if !l.isNewTask(nextInfo.ID, nextInfo.Title) {
+	if !isNewTask(l.state, nextInfo.ID, nextInfo.Title) {
 		l.git.BranchRenamed = true
 	} else {
 		l.git.PrepareForNextTask()
 	}
 	l.logger.Log("git", "Branch: %s", l.git.WorktreeBranch)
-	l.writeRunBranch()
+	writeRunBranch(l.cfg.Dirs.RalphDir, l.git.WorktreeBranch)
 	return nil
 }
 
@@ -70,12 +70,12 @@ func (l *Loop) mergeWithRetry(ctx context.Context, taskID, nextTask, workDir, ra
 // isNewTask returns true when the next task differs from the last one stored
 // in state. Prefers task ID comparison (stable across description edits);
 // falls back to description when no ID is available.
-func (l *Loop) isNewTask(taskID, taskDesc string) bool {
+func isNewTask(st *state.Store, taskID, taskDesc string) bool {
 	if taskID != "" {
-		lastID, _ := l.state.Read("last_task_id")
+		lastID, _ := st.Read("last_task_id")
 		return lastID != taskID
 	}
-	lastTask, _ := l.state.Read("last_task")
+	lastTask, _ := st.Read("last_task")
 	return lastTask != taskDesc
 }
 
@@ -89,14 +89,14 @@ func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc, body strin
 // buildPRBody assembles a PR description from bead context and agent summary.
 // Uses whatever context is available — bead description, acceptance criteria,
 // agent summary — and composes them into a coherent body.
-func (l *Loop) buildPRBody(taskID, summary string) string {
+func buildPRBody(backend tasks.Backend, taskID, summary string) string {
 	var sections []string
 
 	if taskID != "" {
-		if desc, err := l.cfg.TaskBackend.GetDescription(taskID); err == nil && desc != "" {
+		if desc, err := backend.GetDescription(taskID); err == nil && desc != "" {
 			sections = append(sections, "## Description\n"+desc)
 		}
-		if ac, err := l.cfg.TaskBackend.GetAcceptance(taskID); err == nil && ac != "" {
+		if ac, err := backend.GetAcceptance(taskID); err == nil && ac != "" {
 			sections = append(sections, "## Acceptance Criteria\n"+ac)
 		}
 	}
@@ -186,7 +186,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 		l.logger.Success("git", "PR #%s already merged — closing bead and moving on", prNumber)
 		l.attempts.Clear(taskID, nextTask)
 		l.attempts.ClearMergeFailures(taskID)
-		l.recordCompletedTask(taskID, nextTask)
+		recordCompletedTask(l.cfg.Dirs.RalphDir, taskID, nextTask)
 		if taskID != "" {
 			closeReason := fmt.Sprintf("Fixed in PR #%s", prNumber)
 			_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: PR merged")
@@ -194,14 +194,14 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 				l.logger.Warn("beads", "CloseTask failed: %v", err)
 			} else {
 				l.logger.Log("beads", "Closed task %s (PR #%s merged)", taskID, prNumber)
-				l.persistCompletedTask(taskID, nextTask, prNumber, closeReason)
+				persistCompletedTask(l.state, l.logger, taskID, nextTask, prNumber, closeReason)
 			}
 		}
 		l.git.PostMergeUpdateMain()
 		return true
 
 	case "OPEN":
-		if ok, reason := l.prChainIsHealthy(prNumber); !ok {
+		if ok, reason := prChainIsHealthy(gh, l.git.WorkDir, l.git, prNumber); !ok {
 			l.logger.Warn("git", "PR #%s chain unhealthy: %s — re-running agent", prNumber, reason)
 			return false
 		}
@@ -209,7 +209,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 		// PR exists and branch is healthy. Try to merge (includes CI wait
 		// and fix agent on failure). Only close bead after merge succeeds.
 		if l.cfg.AutoMerge {
-			prBase := l.getPRBase(prNumber)
+			prBase := getPRBase(gh, l.git.WorkDir, prNumber)
 			defaultBranch := l.git.DetectDefaultBranch()
 			if prBase != "" && prBase != defaultBranch {
 				// Stacked PR — can't merge until base lands. Close bead,
@@ -223,7 +223,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 				}
 				if !merged {
 					l.logger.Warn("git", "Merge failed for PR #%s — skipping task", prNumber)
-					l.skipTask(taskID, "merge_failed")
+					skipTask(l.state, l.cfg.TaskBackend, l.logger, taskID, "merge_failed")
 					return true
 				}
 				l.git.PostMergeUpdateMain()
@@ -238,7 +238,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 				l.logger.Warn("beads", "CloseTask failed: %v", err)
 			} else {
 				l.logger.Log("beads", "Closed task %s (PR #%s)", taskID, prNumber)
-				l.persistCompletedTask(taskID, nextTask, prNumber, closeReason)
+				persistCompletedTask(l.state, l.logger, taskID, nextTask, prNumber, closeReason)
 			}
 		}
 		return true
@@ -283,7 +283,7 @@ func (l *Loop) flushUnpushedWork(ctx context.Context) {
 func (l *Loop) waitForTasks(ctx context.Context) bool {
 	l.logger.Log("beads", "Waiting for new tasks (polling every %s)...", l.cfg.WaitInterval)
 	l.state.Write("status", "waiting")
-	l.updateStreamTask("", "Waiting for tasks...", nil)
+	updateStreamTask(l.cfg.Dirs.RalphDir, "", "Waiting for tasks...", nil)
 	touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
 
 	ticker := time.NewTicker(l.cfg.WaitInterval)
@@ -295,7 +295,7 @@ func (l *Loop) waitForTasks(ctx context.Context) bool {
 			l.state.Write("status", "stopped")
 			return false
 		case <-ticker.C:
-			if l.checkStopFile() {
+			if checkStopFile(l.cfg.Dirs.RalphDir) {
 				l.logger.Warn("", "Stop file detected - halting")
 				l.state.Write("status", "stopped")
 				return false
@@ -314,8 +314,8 @@ func (l *Loop) waitForTasks(ctx context.Context) bool {
 	}
 }
 
-func (l *Loop) checkStopFile() bool {
-	stopFile := filepath.Join(l.cfg.Dirs.RalphDir, "stop")
+func checkStopFile(ralphDir string) bool {
+	stopFile := filepath.Join(ralphDir, "stop")
 	if _, err := os.Stat(stopFile); err == nil {
 		os.Remove(stopFile)
 		return true
@@ -341,7 +341,7 @@ func (l *Loop) maybeRefactor() error {
 		return nil
 	}
 
-	archSpec := l.readArchSpec()
+	archSpec := readArchSpec(l.git.WorkDir)
 
 	shouldRefactor, err := l.llmShouldRefactor(context.Background(), archSpec, recentFiles)
 	if err != nil {
@@ -394,8 +394,8 @@ func (l *Loop) maybeRefactor() error {
 	return err
 }
 
-func (l *Loop) readArchSpec() string {
-	path := filepath.Join(l.git.WorkDir, "docs", "specs", "architecture.md")
+func readArchSpec(workDir string) string {
+	path := filepath.Join(workDir, "docs", "specs", "architecture.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -546,21 +546,20 @@ func (l *Loop) logIterationBanner(runIteration, maxIter, iteration int, taskID, 
 	}
 	l.logger.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done]%s ---",
 		runIteration, maxIter, iteration, completed, total, versionTag)
-	if desc := l.getBeadDescription(taskID); desc != "" {
+	if desc := getBeadDescription(l.cfg.TaskBackend, taskID); desc != "" {
 		l.logger.Log("beads", "  %s", desc)
 	}
 }
 
-func (l *Loop) writeRunBranch() {
-	branch := l.git.WorktreeBranch
+func writeRunBranch(ralphDir, branch string) {
 	if branch == "" {
 		branch = "ralph"
 	}
-	os.WriteFile(filepath.Join(l.cfg.Dirs.RalphDir, ".run-branch"), []byte(branch), 0o644)
+	os.WriteFile(filepath.Join(ralphDir, ".run-branch"), []byte(branch), 0o644)
 }
 
-func (l *Loop) updateStreamTask(taskID, nextTask string, priority *int) {
-	streamTaskFile := filepath.Join(l.cfg.Dirs.RalphDir, ".stream-task")
+func updateStreamTask(ralphDir, taskID, nextTask string, priority *int) {
+	streamTaskFile := filepath.Join(ralphDir, ".stream-task")
 	content := nextTask
 	if taskID != "" {
 		tag := logging.PriorityTag(priority)
@@ -621,7 +620,7 @@ func (l *Loop) setStackHead() {
 
 // persistCompletedTask writes a completed task record to state.json so
 // ralph-task can verify tasks weren't falsely closed.
-func (l *Loop) persistCompletedTask(taskID, title, prNumber, closeReason string) {
+func persistCompletedTask(st *state.Store, logger *logging.Logger, taskID, title, prNumber, closeReason string) {
 	if taskID == "" && title == "" {
 		return
 	}
@@ -631,14 +630,14 @@ func (l *Loop) persistCompletedTask(taskID, title, prNumber, closeReason string)
 		PRNumber:    prNumber,
 		CloseReason: closeReason,
 	}
-	if err := l.state.AddCompletedTask(ct); err != nil {
-		l.logger.Warn("state", "AddCompletedTask: %v", err)
+	if err := st.AddCompletedTask(ct); err != nil {
+		logger.Warn("state", "AddCompletedTask: %v", err)
 	}
 }
 
 // recordCompletedTask appends a completed task label to .completed-tasks
 // so the plan pane can show which tasks were finished in this run.
-func (l *Loop) recordCompletedTask(taskID, taskTitle string) {
+func recordCompletedTask(ralphDir, taskID, taskTitle string) {
 	label := taskID
 	if label == "" {
 		label = taskTitle
@@ -646,7 +645,7 @@ func (l *Loop) recordCompletedTask(taskID, taskTitle string) {
 	if label == "" {
 		return
 	}
-	path := filepath.Join(l.cfg.Dirs.RalphDir, ".completed-tasks")
+	path := filepath.Join(ralphDir, ".completed-tasks")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
@@ -700,16 +699,16 @@ func readLogFrom(path string, startLine int) string {
 
 // skipTask adds a task to the skip list in state.json and updates the
 // backend's filter so the task is excluded from future selection.
-func (l *Loop) skipTask(id, reason string) {
+func skipTask(st *state.Store, backend tasks.Backend, logger *logging.Logger, id, reason string) {
 	if id == "" {
 		return
 	}
-	l.logger.Warn("beads", "Skipping task %s: %s", id, reason)
-	if err := l.state.AddSkippedTask(id); err != nil {
-		l.logger.Warn("beads", "Failed to persist skip for %s: %v", id, err)
+	logger.Warn("beads", "Skipping task %s: %s", id, reason)
+	if err := st.AddSkippedTask(id); err != nil {
+		logger.Warn("beads", "Failed to persist skip for %s: %v", id, err)
 	}
-	skipped, _ := l.state.GetSkippedTasks()
-	l.cfg.TaskBackend.SetSkippedIDs(skipped)
+	skipped, _ := st.GetSkippedTasks()
+	backend.SetSkippedIDs(skipped)
 }
 
 // isOnline checks internet connectivity with a quick DNS lookup.
@@ -725,13 +724,13 @@ func isOnline() bool {
 // waitForInternet blocks until internet connectivity is restored.
 // Shows a single updating line in the terminal log, writes one summary
 // line to the log file when restored. Returns false if context is cancelled.
-func (l *Loop) waitForInternet(ctx context.Context) bool {
+func waitForInternet(ctx context.Context, logger *logging.Logger) bool {
 	if isOnline() {
 		return true
 	}
 
 	start := time.Now()
-	l.logger.Warn("", "Internet unreachable — waiting for connectivity...")
+	logger.Warn("", "Internet unreachable — waiting for connectivity...")
 
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -743,42 +742,43 @@ func (l *Loop) waitForInternet(ctx context.Context) bool {
 		case <-ticker.C:
 			if isOnline() {
 				elapsed := time.Since(start).Truncate(time.Second)
-				l.logger.Success("", "Internet restored after %s", elapsed)
+				logger.Success("", "Internet restored after %s", elapsed)
 				return true
 			}
 			elapsed := time.Since(start).Truncate(time.Second)
-			l.logger.Log("", "Internet still unreachable (%s elapsed)", elapsed)
+			logger.Log("", "Internet still unreachable (%s elapsed)", elapsed)
 		}
 	}
 }
 
-// prChainIsHealthy checks whether the PR's head branch is still based
-// on the configured default branch. Returns false if the branch has
-// diverged (stale work from a previous run that main has moved past).
-func (l *Loop) prChainIsHealthy(prNumber string) (bool, string) {
-	gh := l.git.GH()
+// branchChecker provides the narrow git operations needed by prChainIsHealthy.
+type branchChecker interface {
+	FetchBranch(branch string) error
+	RemoteBranchIsOnMain(branch string) bool
+	DetectDefaultBranch() string
+}
+
+func prChainIsHealthy(gh git.GitHub, workDir string, branches branchChecker, prNumber string) (bool, string) {
 	if gh == nil || !gh.Available() {
 		return false, "gh CLI not available"
 	}
 
-	headBranch, _ := gh.GetPRHead(l.git.WorkDir, prNumber)
+	headBranch, _ := gh.GetPRHead(workDir, prNumber)
 	if headBranch == "" {
 		return false, fmt.Sprintf("PR #%s has no head branch", prNumber)
 	}
-	_ = l.git.FetchBranch(headBranch)
-	if !l.git.RemoteBranchIsOnMain(headBranch) {
-		return false, fmt.Sprintf("branch %s diverged from %s", headBranch, l.git.DetectDefaultBranch())
+	_ = branches.FetchBranch(headBranch)
+	if !branches.RemoteBranchIsOnMain(headBranch) {
+		return false, fmt.Sprintf("branch %s diverged from %s", headBranch, branches.DetectDefaultBranch())
 	}
 	return true, ""
 }
 
-// getPRBase returns the base branch of the given PR, or empty string on error.
-func (l *Loop) getPRBase(prNumber string) string {
-	gh := l.git.GH()
+func getPRBase(gh git.GitHub, workDir, prNumber string) string {
 	if gh == nil || !gh.Available() {
 		return ""
 	}
-	base, _ := gh.GetPRBase(l.git.WorkDir, prNumber)
+	base, _ := gh.GetPRBase(workDir, prNumber)
 	return base
 }
 
