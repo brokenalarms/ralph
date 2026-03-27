@@ -132,6 +132,12 @@ func (m *Manager) CheckoutRemoteBranch(branch string) {
 	}
 }
 
+// RemoteBranchDiffFromMain returns the diff stat between origin/<branch> and
+// origin/<defaultBranch>. Empty means no difference (work is on main).
+func (m *Manager) RemoteBranchDiffFromMain(branch, defaultBranch string) string {
+	return m.gitOutput(m.WorkDir, "diff", "--stat", "origin/"+defaultBranch, "origin/"+branch)
+}
+
 // RemoteURL returns the origin remote URL.
 func (m *Manager) RemoteURL() string {
 	return m.gitOutput(m.ProjectDir, "remote", "get-url", "origin")
