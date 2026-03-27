@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -760,6 +761,28 @@ func getPRBase(gh git.GitHub, workDir, prNumber string) string {
 	}
 	base, _ := gh.GetPRBase(workDir, prNumber)
 	return base
+}
+
+// runPostTask executes the --post-task script if configured. Runs in the
+// project directory with RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED
+// env vars. Non-zero exit warns and continues.
+func (l *Loop) runPostTask(ctx context.Context, taskID, prNumber string, merged bool) {
+	if l.cfg.PostTask == "" {
+		return
+	}
+	cmd := exec.CommandContext(ctx, l.cfg.PostTask)
+	cmd.Dir = l.cfg.Dirs.ProjectDir
+	cmd.Env = append(os.Environ(),
+		"RALPH_TASK_ID="+taskID,
+		"RALPH_PR_NUMBER="+prNumber,
+		"RALPH_MERGED="+fmt.Sprintf("%t", merged),
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	l.logger.Log("post-task", "Running %s (task=%s pr=%s merged=%t)", l.cfg.PostTask, taskID, prNumber, merged)
+	if err := cmd.Run(); err != nil {
+		l.logger.Warn("post-task", "Script exited with error: %v", err)
+	}
 }
 
 // parsePRNumber extracts a PR number from either a URL

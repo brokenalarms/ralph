@@ -102,6 +102,7 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 			}
 		}
 		l.git.TagTaskEnd(p.taskID)
+		l.runPostTask(p.ctx, p.taskID, "", false)
 		*runIteration++
 		*iteration++
 		return signalSkipped
@@ -156,6 +157,8 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 		rawLogPath: p.rawLogPath,
 	})
 	l.sessionTasks = append(l.sessionTasks, ct)
+
+	l.runPostTask(p.ctx, p.taskID, prNumber, result.merged)
 
 	if result.merged {
 		l.lastTaskMerged = true
