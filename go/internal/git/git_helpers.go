@@ -16,19 +16,29 @@ var (
 
 const branchPrefix = "ralph/"
 
+// normalizeBranch ensures a branch name has exactly one "ralph/" prefix.
+// All branch name constructors go through this to prevent duplication.
+func normalizeBranch(name string) string {
+	// Strip any existing prefix(es) before adding the canonical one.
+	for strings.HasPrefix(name, branchPrefix) {
+		name = strings.TrimPrefix(name, branchPrefix)
+	}
+	return branchPrefix + name
+}
+
 // BranchName returns the canonical branch name for a task.
 // With a taskID: ralph/<taskID>-<slug>
-// Without:      ralph/<project>/<slug>
+// Without:      ralph/<slug>
 func BranchName(projectName, taskID, slug string) string {
 	if taskID != "" {
-		return branchPrefix + taskID + "-" + slug
+		return normalizeBranch(taskID + "-" + slug)
 	}
-	return branchPrefix + projectName + "/" + slug
+	return normalizeBranch(slug)
 }
 
 // WipBranchName returns the placeholder branch used before a task is assigned.
 func WipBranchName(projectName string) string {
-	return branchPrefix + projectName + "/wip"
+	return normalizeBranch("wip")
 }
 
 // BranchListPattern returns the glob pattern for listing ralph branches.

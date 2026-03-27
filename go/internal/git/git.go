@@ -421,16 +421,19 @@ func (m *Manager) taskTag(taskID, suffix string) string {
 	return fmt.Sprintf("task/%s/%s", seqSlug, suffix)
 }
 
-// extractSeqSlug pulls the "NN-slug" portion from a branch like
-// "ralph/project/01-my-task".
+// extractSeqSlug pulls the slug portion from a branch like "ralph/my-task"
+// or legacy "ralph/project/01-my-task".
 func extractSeqSlug(branch string) string {
-	parts := strings.SplitN(branch, "/", 3)
-	if len(parts) < 3 {
+	stripped := strings.TrimPrefix(branch, branchPrefix)
+	if stripped == branch || stripped == "" {
 		return ""
 	}
-	seg := parts[2]
-	if seg == "next" || seg == "wip" || seg == "" {
+	// Handle legacy format with extra path segment.
+	if idx := strings.LastIndex(stripped, "/"); idx >= 0 {
+		stripped = stripped[idx+1:]
+	}
+	if stripped == "next" || stripped == "wip" || stripped == "" {
 		return ""
 	}
-	return seg
+	return stripped
 }

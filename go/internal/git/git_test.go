@@ -115,20 +115,34 @@ func TestBranchName(t *testing.T) {
 		t.Errorf("BranchName with taskID = %q, want %q", got, want)
 	}
 
-	// Without task ID: ralph/<project>/<slug>
+	// Without task ID: ralph/<slug>
 	got = BranchName("myproject", "", "fix-auth-bug")
-	want = "ralph/myproject/fix-auth-bug"
+	want = "ralph/fix-auth-bug"
 	if got != want {
 		t.Errorf("BranchName without taskID = %q, want %q", got, want)
 	}
 }
 
-// WipBranchName returns the placeholder branch for a project
 func TestWipBranchName(t *testing.T) {
 	got := WipBranchName("myproject")
-	want := "ralph/myproject/wip"
+	want := "ralph/wip"
 	if got != want {
 		t.Errorf("WipBranchName = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeBranch_StripsDuplicatePrefix(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"ralph/ralph/ralph-abc-slug", "ralph/ralph-abc-slug"},
+		{"ralph/ralph-abc-slug", "ralph/ralph-abc-slug"},
+		{"ralph-abc-slug", "ralph/ralph-abc-slug"},
+		{"wip", "ralph/wip"},
+	}
+	for _, tc := range cases {
+		got := normalizeBranch(tc.in)
+		if got != tc.want {
+			t.Errorf("normalizeBranch(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
 
@@ -247,7 +261,7 @@ func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 	}
 
 	// Branch name must be exactly ralph/<projectName>/wip
-	wantBranch := "ralph/" + mgr.ProjectName + "/wip"
+	wantBranch := "ralph/wip"
 	if mgr.WorktreeBranch != wantBranch {
 		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, wantBranch)
 	}
@@ -457,7 +471,7 @@ func TestRenameBranchForTask_RenamesBranch(t *testing.T) {
 
 	mgr.RenameBranchForTask("Fix auth bug", "")
 
-	wantBranch := "ralph/" + mgr.ProjectName + "/fix-auth-bug"
+	wantBranch := "ralph/fix-auth-bug"
 	if mgr.WorktreeBranch != wantBranch {
 		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, wantBranch)
 	}
@@ -601,7 +615,7 @@ func TestBranchNamingIgnoresStale(t *testing.T) {
 
 	mgr.RenameBranchForTask("First task", "")
 
-	want := "ralph/" + mgr.ProjectName + "/first-task"
+	want := "ralph/first-task"
 	if mgr.WorktreeBranch != want {
 		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, want)
 	}
