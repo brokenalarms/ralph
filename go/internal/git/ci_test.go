@@ -385,6 +385,133 @@ func TestGh_UsesInjectedGitHub(t *testing.T) {
 }
 
 
+// AwaitCI returns CIPassed immediately when checks already pass,
+// without entering the polling loop.
+func TestAwaitCI_PassedImmediately(t *testing.T) {
+	gh := &stubGitHub{
+		checks: []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
+	}
+	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
+
+	checks, status, err := mgr.AwaitCI(context.Background(), "1", "repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+	if len(checks) != 1 || checks[0].Name != "test" {
+		t.Errorf("unexpected checks: %v", checks)
+	}
+}
+
+// AwaitCI returns CIFailed immediately when checks have already failed,
+// without entering the polling loop.
+func TestAwaitCI_FailedImmediately(t *testing.T) {
+	gh := &stubGitHub{
+		checks: []CICheckResult{{Name: "lint", State: "FAILURE", Bucket: "fail"}},
+	}
+	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
+
+	checks, status, err := mgr.AwaitCI(context.Background(), "1", "repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIFailed {
+		t.Errorf("expected CIFailed, got %v", status)
+	}
+	if len(checks) != 1 || checks[0].Name != "lint" {
+		t.Errorf("unexpected checks: %v", checks)
+	}
+}
+
+// AwaitCI polls until pending checks resolve, proving it delegates to
+// waitForCI when the initial fetch returns pending results.
+func TestAwaitCI_PollsWhenPending(t *testing.T) {
+	origSleep := ciSleep
+	ciSleep = func(d time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+	defer func() { ciSleep = origSleep }()
+
+	var calls atomic.Int32
+	gh := &stubGitHub{}
+	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
+
+	// Override ListChecks to transition from pending to passed.
+	pollGH := &pollableGitHub{
+		stubGitHub: *gh,
+		listChecks: func(pr, repo string) ([]CICheckResult, error) {
+			n := calls.Add(1)
+			if n < 3 {
+				return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
+			}
+			return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
+		},
+	}
+	mgr.GitHub = pollGH
+
+	_, status, err := mgr.AwaitCI(context.Background(), "1", "repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+	if calls.Load() < 3 {
+		t.Errorf("expected at least 3 polls, got %d", calls.Load())
+	}
+}
+
+// AwaitCI polls when the initial fetch returns an error (checks not yet
+// registered), proving it handles the "CI not available" case.
+func TestAwaitCI_PollsWhenFetchErrors(t *testing.T) {
+	origSleep := ciSleep
+	ciSleep = func(d time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+	defer func() { ciSleep = origSleep }()
+
+	var calls atomic.Int32
+	pollGH := &pollableGitHub{
+		stubGitHub: stubGitHub{},
+		listChecks: func(pr, repo string) ([]CICheckResult, error) {
+			n := calls.Add(1)
+			if n < 2 {
+				return nil, fmt.Errorf("no checks yet")
+			}
+			return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
+		},
+	}
+	mgr := &Manager{GitHub: pollGH, Logger: &testLog{}}
+
+	_, status, err := mgr.AwaitCI(context.Background(), "1", "repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+}
+
+// pollableGitHub wraps stubGitHub but allows overriding ListChecks
+// with a function that changes behavior across calls.
+type pollableGitHub struct {
+	stubGitHub
+	listChecks func(string, string) ([]CICheckResult, error)
+}
+
+func (p *pollableGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
+	if p.listChecks != nil {
+		return p.listChecks(prNumber, repoURL)
+	}
+	return p.stubGitHub.ListChecks(prNumber, repoURL)
+}
+
 // setupAutoMergeManager creates a Manager with a stubGitHub and real git repos
 // so AutoMergeCurrentBranch can run without a real gh CLI.
 func setupAutoMergeManager(t *testing.T, gh *stubGitHub) *Manager {
@@ -405,6 +532,90 @@ func setupAutoMergeManager(t *testing.T, gh *stubGitHub) *Manager {
 	}
 	mgr.RenameBranchForTask("test feature", "")
 	return mgr
+}
+
+// updatePRBranch returns a CIFailureError when CI fails after the
+// branch is updated with the latest base.
+func TestUpdatePRBranch_ReturnsFailureAfterUpdate(t *testing.T) {
+	origSleep := ciSleep
+	ciSleep = func(d time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+	defer func() { ciSleep = origSleep }()
+
+	gh := &stubGitHub{
+		available:    true,
+		openPR:       "10",
+		updateResult: true,
+		checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
+	}
+	mgr := setupAutoMergeManager(t, gh)
+
+	err := mgr.updatePRBranch(context.Background(), "10", "https://github.com/test/repo.git")
+	var ciErr *CIFailureError
+	if !errors.As(err, &ciErr) {
+		t.Errorf("expected CIFailureError after branch update with failing CI, got %T: %v", err, err)
+	}
+}
+
+// updatePRBranch returns nil without polling when the branch was
+// already up to date (no update needed).
+func TestUpdatePRBranch_NoUpdateNeeded(t *testing.T) {
+	gh := &stubGitHub{
+		available:    true,
+		openPR:       "10",
+		updateResult: false,
+		checks:       []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+	}
+	mgr := setupAutoMergeManager(t, gh)
+
+	err := mgr.updatePRBranch(context.Background(), "10", "https://github.com/test/repo.git")
+	if err != nil {
+		t.Fatalf("expected nil when no update needed, got: %v", err)
+	}
+}
+
+// executeMerge retries the merge after CI passes when the initial merge
+// is blocked by branch protection.
+func TestExecuteMerge_RetriesAfterCIGate(t *testing.T) {
+	origSleep := ciSleep
+	ciSleep = func(d time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+	defer func() { ciSleep = origSleep }()
+
+	calls := 0
+	gh := &stubGitHub{
+		available: true,
+		openPR:    "10",
+		checks:    []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+	}
+	mgr := setupAutoMergeManager(t, gh)
+
+	seqGH := &sequentialMergeGitHub{
+		stubGitHub: *gh,
+		mergeResults: []mergeResult{
+			{"Base branch policy prohibits the merge", fmt.Errorf("exit 1")},
+			{"merged", nil},
+		},
+		onMerge: func() { calls++ },
+	}
+	mgr.GitHub = seqGH
+
+	merged, err := mgr.executeMerge(context.Background(), "10", "https://github.com/test/repo.git")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !merged {
+		t.Error("expected merge to succeed on retry")
+	}
+	if calls != 2 {
+		t.Errorf("expected 2 merge calls (initial + retry), got %d", calls)
+	}
 }
 
 // AutoMergeCurrentBranch returns a MergeConflictError when the gh merge

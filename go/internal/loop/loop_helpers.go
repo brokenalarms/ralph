@@ -12,10 +12,38 @@ import (
 	"github.com/brokenalarms/ralph/internal/analyzer"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/health"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
 	"github.com/brokenalarms/ralph/internal/prompt"
+	"github.com/brokenalarms/ralph/internal/tasks"
 )
+
+// initRun performs the initial rebase and branch setup for worktree
+// resumption. Returns a sentinel error (*stopError) if the context was
+// cancelled during rebase (caller should return nil, not the error).
+func (l *Loop) initRun(ctx context.Context) error {
+	if l.git.WorktreeBranch == "" || l.git.WorkDir == l.git.ProjectDir {
+		return nil
+	}
+	if err := l.handleRebase(ctx); err != nil {
+		if ctx.Err() != nil {
+			l.state.Write("status", "stopped")
+			return nil
+		}
+		l.state.Write("status", "error")
+		return fmt.Errorf("initial rebase failed: %w", err)
+	}
+	nextInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
+	if !l.isNewTask(nextInfo.ID, nextInfo.Title) {
+		l.git.BranchRenamed = true
+	} else {
+		l.git.PrepareForNextTask()
+	}
+	l.logger.Log("git", "Branch: %s", l.git.WorktreeBranch)
+	l.writeRunBranch()
+	return nil
+}
 
 // handleRebase syncs the worktree to the latest default branch via
 // EnsureUpToDate, which handles all conflict resolution internally.
@@ -417,6 +445,86 @@ func (l *Loop) analyzeIteration(rawLogPath string, logStart int, headBefore, hea
 		IterationLog: iterLog,
 		TaskKey:      taskKey,
 	})
+}
+
+// processRunOutcome logs the Claude result, analyzes the iteration, and
+// records attempts. Returns the diffStat (needed by signal handling) and
+// halt=true if the analyzer says to stop (caller should return nil).
+func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, runIteration int, prep iterationPrompt, taskID, nextTask string) (string, bool) {
+	if result.Summary != "" {
+		l.logger.Log("llm", "Summary: %s", result.Summary)
+	}
+
+	completed, _ := l.cfg.TaskBackend.CountCompleted()
+	total, _ := l.cfg.TaskBackend.CountTotal()
+	l.logger.Log("", "Run iteration %d complete (%dm%ds). %d/%d tasks done.",
+		runIteration, int(elapsed.Minutes()), int(elapsed.Seconds())%60, completed, total)
+
+	headAfter := l.git.HeadRev()
+	diffStat := l.git.DiffStatRange(prep.headBefore, headAfter)
+	analysisResult := l.analyzeIteration(prep.rawLogPath, prep.logStart, prep.headBefore, headAfter, taskID)
+
+	summary := result.Summary
+	if summary == "" {
+		summary = "no completion summary"
+	}
+	analysisDesc := analysisResult.Reason
+	if analysisDesc == "" {
+		analysisDesc = "continue"
+	}
+
+	l.lastAction = analysisResult.Action
+
+	switch analysisResult.Action {
+	case analyzer.Halt:
+		l.logger.Error("", "Halting: %s", analysisResult.Reason)
+		if analysisResult.Detail != "" {
+			l.logger.Error("", "  %s", analysisResult.Detail)
+		}
+		l.attempts.Record(taskID, nextTask, "Halted: "+analysisResult.Reason, diffStat, analysisResult.Detail)
+		l.state.Write("status", "halted_"+analysisResult.Reason)
+		l.git.TagTaskEnd(taskID)
+		return diffStat, true
+	case analyzer.Warn:
+		l.logger.Warn("", "Analysis: %s", analysisResult.Reason)
+		l.attempts.Record(taskID, nextTask, summary, diffStat, "warn: "+analysisDesc)
+	default:
+		if !result.SignalDetected {
+			l.attempts.Record(taskID, nextTask, summary, diffStat, analysisDesc)
+		}
+	}
+
+	return diffStat, false
+}
+
+// logIterationBanner prints the health dashboard, separator, task banner,
+// and iteration phase line between iterations.
+func (l *Loop) logIterationBanner(runIteration, maxIter, iteration int, taskID, nextTask string, taskChanged bool, taskInfo tasks.TaskInfo) {
+	completed, _ := l.cfg.TaskBackend.CountCompleted()
+	total, _ := l.cfg.TaskBackend.CountTotal()
+
+	if runIteration > 1 {
+		health.Log(l.logger, health.Collect(l.cfg.Dirs.RalphDir, l.git.WorkDir))
+		l.logger.DashedSeparator(logging.Yellow)
+	}
+
+	if taskID != "" && taskChanged {
+		l.logger.TaskBanner(taskID, nextTask, taskInfo.Priority)
+	}
+
+	phaseColor := logging.Green
+	if l.lastAction == analyzer.Warn {
+		phaseColor = logging.Yellow
+	}
+	versionTag := ""
+	if l.cfg.Version != "" {
+		versionTag = fmt.Sprintf(" | Ralph v%s", l.cfg.Version)
+	}
+	l.logger.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done]%s ---",
+		runIteration, maxIter, iteration, completed, total, versionTag)
+	if desc := l.getBeadDescription(taskID); desc != "" {
+		l.logger.Log("beads", "  %s", desc)
+	}
 }
 
 func (l *Loop) writeRunBranch() {

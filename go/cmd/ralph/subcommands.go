@@ -18,14 +18,9 @@ import (
 )
 
 // newInteractiveAgent creates a centralized agent runner for interactive
-// sessions (review, task manager). Container isolation is applied when
-// sandbox-exec is available.
+// sessions (review, task manager).
 func newInteractiveAgent(log *logging.Logger) *agent.Runner {
-	var sandbox *agent.Sandbox
-	if agent.Available() {
-		sandbox = agent.DefaultSandbox()
-	}
-	return agent.New(log, sandbox)
+	return agent.New(log)
 }
 
 func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {

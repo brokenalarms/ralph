@@ -325,13 +325,49 @@ func TestLoadReviewPrompt_Fallback(t *testing.T) {
 	}
 }
 
+// LLMVerifyPR accepts a VerifyOpts struct instead of positional parameters,
+// proving the struct-based API compiles and works end-to-end.
+func TestLLMVerifyPR_AcceptsVerifyOpts(t *testing.T) {
+	dir := setupGitRepo(t)
+	gq := newQuerier(dir)
+	head := gq.HeadRev()
+
+	result := LLMVerifyPR(VerifyOpts{
+		Ctx:             context.Background(),
+		Git:             gq,
+		WorkDir:         dir,
+		PromptsDir:      t.TempDir(),
+		TaskID:          "struct-test",
+		HeadBefore:      head,
+		BeadTitle:       "struct api test",
+		BeadDescription: "proves VerifyOpts struct works",
+		BeadAcceptance:  "accepts struct",
+		Model:           ModelHaiku,
+	})
+	if !result.Passed {
+		t.Errorf("expected pass with no diff, got: %s", result.Reason)
+	}
+	if !result.NoDiff {
+		t.Error("expected NoDiff=true when no PR and no iteration diff exist")
+	}
+}
+
 // LLMVerifyPR passes when no PR and no diff exist — agent confirmed task complete.
 func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
 	dir := setupGitRepo(t)
 	gq := newQuerier(dir)
 	head := gq.HeadRev()
 
-	result := LLMVerifyPR(context.Background(), gq, dir, t.TempDir(), "nonexistent-task", head, "some task", "some description", "", nil, nil)
+	result := LLMVerifyPR(VerifyOpts{
+		Ctx:             context.Background(),
+		Git:             gq,
+		WorkDir:         dir,
+		PromptsDir:      t.TempDir(),
+		TaskID:          "nonexistent-task",
+		HeadBefore:      head,
+		BeadTitle:       "some task",
+		BeadDescription: "some description",
+	})
 	if !result.Passed {
 		t.Errorf("expected pass when agent confirms complete with no new work needed, got: %s", result.Reason)
 	}
@@ -353,7 +389,17 @@ func TestLLMVerifyPR_UsesGitHubInterface(t *testing.T) {
 		prDiff:       "+new line\n",
 	}
 
-	result := LLMVerifyPR(context.Background(), gq, dir, t.TempDir(), "test-task", head, "test", "test desc", "", stub, nil)
+	result := LLMVerifyPR(VerifyOpts{
+		Ctx:             context.Background(),
+		Git:             gq,
+		WorkDir:         dir,
+		PromptsDir:      t.TempDir(),
+		TaskID:          "test-task",
+		HeadBefore:      head,
+		BeadTitle:       "test",
+		BeadDescription: "test desc",
+		GitHub:          stub,
+	})
 
 	if !stub.searchCalled {
 		t.Error("expected SearchPR to be called via GitHub interface")

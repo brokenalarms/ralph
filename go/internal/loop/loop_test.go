@@ -1962,7 +1962,7 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 	}
 }
 
-// Verifies that PostMergeReset actually resets the worktree branch to
+// Verifies that PostMergeUpdateMain resets the worktree branch to
 // origin/main between tasks using a real git worktree, proving each task
 // starts from merged main rather than building on stale commits.
 func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
@@ -2050,7 +2050,7 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 }
 
 // Verifies the full post-merge branch rename cycle: task A merges →
-// PostMergeReset resets to /next → next iteration renames to thematic
+// PostMergeUpdateMain resets to /next → next iteration renames to thematic
 // branch for task B. Proves each successive task gets its own descriptively
 // named branch even after the previous one is squash-merged.
 func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
@@ -4985,7 +4985,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				VerifyDir:     dir,
 			}, st, gm, logger)
 			l.runner = runner
-			l.verifier.deps.LLMVerify = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+			l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 				return llmResult
 			}
 			l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
@@ -4998,7 +4998,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				// After fix agent, re-verification will call llmVerifyFunc again;
 				// make it pass on second call to avoid skip-task path
 				callCount := 0
-				l.verifier.deps.LLMVerify = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+				l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 					callCount++
 					if callCount == 1 {
 						return llmResult
@@ -5210,7 +5210,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.mergeFunc = func(context.Context) (bool, error) { return false, nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.verifier.deps.LLMVerify = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: true}
 	}
 
@@ -5516,7 +5516,7 @@ func TestLoop_onSignal_InjectsLLMRejection(t *testing.T) {
 	l.runner = runner
 
 	// Tests pass but LLM rejects.
-	l.verifier.deps.LLMVerify = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: false, Details: "missing error handling in parseConfig"}
 	}
 
@@ -5580,7 +5580,7 @@ func TestLoop_onSignal_FallsBackToFixAgentOnBrokenPipe(t *testing.T) {
 	l.runner = brokenRunner
 
 	// Tests pass, LLM rejects, injection fails → should fall back to fix agent.
-	l.verifier.deps.LLMVerify = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: false, Details: "incomplete implementation"}
 	}
 
@@ -5875,6 +5875,164 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 
 // Branch name format uses beadID-slug without sequence number,
 // proving the old TaskSeq pattern has been removed.
+// handlePostSignal: verifies that a successful signal pushes, closes the
+// task, and returns signalComplete for the normal (non-evolve) path.
+func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			total:     1,
+			nextTask:  "Fix auth bug",
+			nextID:    "ralph-xyz",
+		},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	// Create a commit so HeadRev() returns something different from headBefore=""
+	writeFile(t, project, "fix.go", "package main\n")
+	run(t, "git", "-C", project, "add", "fix.go")
+	run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
+
+	runIter, iter := 1, 1
+	action := l.handlePostSignal(postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "",
+		workDir:    project,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-xyz",
+		nextTask:   "Fix auth bug",
+		diffStat:   "",
+	}, &runIter, &iter)
+
+	if action != signalComplete {
+		t.Errorf("expected signalComplete, got %d", action)
+	}
+
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-xyz" {
+		t.Errorf("expected CloseTask for ralph-xyz, got %v", backend.closedIDs)
+	}
+}
+
+// handlePostSignal: verification failure returns signalRetry so the loop
+// continues without closing the task.
+func TestLoop_HandlePostSignal_VerificationFailure(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix bug", nextID: "ralph-abc"},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
+
+	runIter, iter := 1, 1
+	action := l.handlePostSignal(postSignalParams{
+		ctx:      context.Background(),
+		result:   claude.Result{},
+		taskID:   "ralph-abc",
+		nextTask: "Fix bug",
+	}, &runIter, &iter)
+
+	if action != signalRetry {
+		t.Errorf("expected signalRetry, got %d", action)
+	}
+
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) != 0 {
+		t.Errorf("task should not be closed on verification failure, got %v", backend.closedIDs)
+	}
+}
+
+// checkoutExistingBranch: when no stored branch exists in metadata,
+// returns false (no remote checkout) and the branch gets renamed.
+func TestLoop_CheckoutExistingBranch_NoRemote(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{remaining: 1, total: 1, nextTask: "Fix login"}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	checkedOut := l.checkoutExistingBranch("ralph-xyz", "Fix login")
+	if checkedOut {
+		t.Error("expected false (no stored branch in metadata), got true")
+	}
+}
+
+// prepareAndBuildPrompt: verifies it returns a non-empty prompt and
+// the expected head/log state.
+func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{remaining: 1, total: 1, nextTask: "Fix login", nextID: "ralph-xyz"}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+
+	prep, ok := l.prepareAndBuildPrompt(context.Background(), "ralph-xyz", "Fix login")
+	if !ok {
+		t.Fatal("expected ok=true from prepareAndBuildPrompt")
+	}
+	if prep.fullPrompt == "" {
+		t.Error("expected non-empty prompt")
+	}
+	if prep.workDir != dir {
+		t.Errorf("expected workDir=%s, got %s", dir, prep.workDir)
+	}
+}
+
 func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 	project, _ := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")

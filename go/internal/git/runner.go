@@ -108,7 +108,7 @@ func (m *Manager) FindRemoteBranchForTask(taskID string) string {
 		return ""
 	}
 	_ = m.gitCmdErr(m.ProjectDir, "fetch", "--prune", "origin")
-	out := m.gitOutput(m.ProjectDir, "branch", "-r", "--list", "origin/ralph/*"+taskID+"*")
+	out := m.gitOutput(m.ProjectDir, "branch", "-r", "--list", "origin/"+BranchListPattern()+taskID+"*")
 	for _, line := range strings.Split(out, "\n") {
 		branch := strings.TrimSpace(line)
 		branch = strings.TrimPrefix(branch, "origin/")

@@ -189,7 +189,7 @@ Ralph creates a git worktree per run so the agent works on an isolated branch wh
 
 1. **Fresh branch per task** — each task starts on a new branch off the base
 2. **Squash-merge** — all commits for a task are squash-merged into the base branch
-3. **Force-reset** — after merge, the worktree is force-reset to the updated base
+3. **Reset** — after merge, the worktree is reset to the updated base branch
 
 Branch names follow the pattern `ralph/<project>/<seq>-<beadID>-<slug>`.
 

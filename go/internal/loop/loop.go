@@ -14,9 +14,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
-	"github.com/brokenalarms/ralph/internal/health"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/notify"
 	"github.com/brokenalarms/ralph/internal/ratelimit"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
@@ -91,19 +89,14 @@ type Loop struct {
 }
 
 // New creates an execution loop from the given configuration. All agent
-// invocations go through the centralized agent module, which applies
-// container isolation when sandbox-exec is available on the host.
+// invocations go through the centralized agent module.
 func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *Loop {
 	signals := claude.DefaultSignalPaths(cfg.Dirs.RalphDir)
 
 	limiter := ratelimit.New(cfg.Dirs.RalphDir, cfg.CallsPerHour)
 	limiter.StopFile = filepath.Join(cfg.Dirs.RalphDir, "stop")
 
-	var sandbox *agent.Sandbox
-	if agent.Available() {
-		sandbox = agent.DefaultSandbox()
-	}
-	agentRunner := agent.New(logger, sandbox)
+	agentRunner := agent.New(logger)
 
 	l := &Loop{
 		cfg:           cfg,
@@ -150,46 +143,21 @@ func (l *Loop) SessionTasks() []CompletedTask {
 // (all tasks done, max iterations reached, or stopped). Returns an error
 // for unrecoverable failures.
 func (l *Loop) Run(ctx context.Context) error {
-	if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
-		if err := l.handleRebase(ctx); err != nil {
-			if ctx.Err() != nil {
-				l.state.Write("status", "stopped")
-				return nil
-			}
-			l.state.Write("status", "error")
-			return fmt.Errorf("initial rebase failed: %w", err)
-		}
-
-		// On resume, if the next task is the same, mark branch as renamed
-		// so we continue on the current branch.
-		nextInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
-		if !l.isNewTask(nextInfo.ID, nextInfo.Title) {
-			l.git.BranchRenamed = true
-		} else {
-			l.git.PrepareForNextTask()
-		}
-
-		l.logger.Log("git", "Branch: %s", l.git.WorktreeBranch)
-		l.writeRunBranch()
+	if err := l.initRun(ctx); err != nil {
+		return err
 	}
-
 	if err := l.limiter.Init(); err != nil {
 		return fmt.Errorf("rate limiter init: %w", err)
 	}
-
 	l.state.WriteConfig(l.cfg.MaxIterations)
 
 	var runIteration int
 	st, _ := l.state.Load()
 	iteration := st.Iteration
-
 	if len(st.SkippedTasks) > 0 {
 		l.logger.Warn("beads", "Skipped tasks: %s", strings.Join(st.SkippedTasks, ", "))
 		l.cfg.TaskBackend.SetSkippedIDs(st.SkippedTasks)
 	}
-
-	// Clear completed-tasks tracker for this run so the plan pane only
-	// shows tasks completed in the current run, not historical closures.
 	os.Remove(filepath.Join(l.cfg.Dirs.RalphDir, ".completed-tasks"))
 
 	for {
@@ -220,18 +188,12 @@ func (l *Loop) Run(ctx context.Context) error {
 		if !hasRemaining {
 			if runIteration == 0 {
 				hasTasks, _ := l.cfg.TaskBackend.HasTasks()
-				if !hasTasks {
-					if !l.cfg.Wait {
-						l.logger.Error("beads", "No tasks found — run ralph task to create tasks")
-						l.state.Write("status", "error")
-						break
-					}
+				if !hasTasks && !l.cfg.Wait {
+					l.logger.Error("beads", "No tasks found — run ralph task to create tasks")
+					l.state.Write("status", "error")
+					break
 				}
 			}
-			// Safety net: flush any unpushed work from the last task before
-			// exiting or entering wait mode. PushAndCreatePR is idempotent
-			// (returns early when no commits ahead), so this is harmless if
-			// the signal handler already pushed successfully.
 			if runIteration > 0 {
 				l.flushUnpushedWork(ctx)
 			}
@@ -275,66 +237,21 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.logger.Warn("", "Refactor iteration error: %v", err)
 		}
 
-		completed, _ := l.cfg.TaskBackend.CountCompleted()
-		total, _ := l.cfg.TaskBackend.CountTotal()
-
-		if runIteration > 1 {
-			health.Log(l.logger, health.Collect(l.cfg.Dirs.RalphDir, l.git.WorkDir))
-			l.logger.DashedSeparator(logging.Yellow)
-		}
-
-		if taskID != "" && taskChanged {
-			l.logger.TaskBanner(taskID, nextTask, taskInfo.Priority)
-		}
-
-		phaseColor := logging.Green
-		if l.lastAction == analyzer.Warn {
-			phaseColor = logging.Yellow
-		}
-		versionTag := ""
-		if l.cfg.Version != "" {
-			versionTag = fmt.Sprintf(" | Ralph v%s", l.cfg.Version)
-		}
-		l.logger.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done]%s ---",
-			runIteration, maxIter, iteration, completed, total, versionTag)
-		if desc := l.getBeadDescription(taskID); desc != "" {
-			l.logger.Log("beads", "  %s", desc)
-		}
-
+		l.logIterationBanner(runIteration, maxIter, iteration, taskID, nextTask, taskChanged, taskInfo)
 		touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
 
 		l.state.Write("iteration", strconv.Itoa(iteration))
 		l.state.Write("status", "running")
 		l.state.Write("last_task", nextTask)
 		l.state.Write("last_task_id", taskID)
+
 		if taskChanged || !l.git.BranchRenamed {
-			// Check metadata for a branch from a previous iteration.
-			// If the remote has that branch with work, check it out to continue.
-			checkedOut := false
-			if taskID != "" {
-				if storedBranch, _ := l.cfg.TaskBackend.GetMetadata(taskID, "branch"); storedBranch != "" {
-					_ = l.git.FetchBranch(storedBranch)
-					if l.git.RemoteBranchHasCommits(storedBranch) {
-						l.git.CheckoutRemoteBranch(storedBranch)
-						checkedOut = true
-					}
-				}
-			}
-			if !checkedOut {
-				l.git.RenameBranchForTask(nextTask, taskID)
-				// Only store branch in metadata if the rename succeeded and
-				// the branch name actually contains this task's ID.
-				if taskID != "" && l.git.WorktreeBranch != "" && strings.Contains(l.git.WorktreeBranch, taskID) {
-					_ = l.cfg.TaskBackend.SetMetadata(taskID, "branch", l.git.WorktreeBranch)
-				}
-			}
+			l.checkoutExistingBranch(taskID, nextTask)
 		}
 		l.writeRunBranch()
 		l.git.TagTaskStart(taskID)
-
 		l.updateStreamTask(taskID, nextTask, taskInfo.Priority)
 
-		// Resume: check external-ref for a linked PR and resolve it.
 		if resumed := l.resumeViaPR(ctx, taskID, nextTask); resumed {
 			l.git.TagTaskEnd(taskID)
 			runIteration++
@@ -342,64 +259,19 @@ func (l *Loop) Run(ctx context.Context) error {
 			continue
 		}
 
-		if taskID != "" {
-			if err := l.cfg.TaskBackend.SetState(taskID, "phase", "implementing", "ralph: starting task"); err != nil {
-				l.logger.Warn("beads", "SetState phase=implementing: %v", err)
-			}
-		}
-
-		taskPrompt := l.buildTaskPrompt(nextTask, taskID)
-
-		// Run full test suite before handing off to agent. The agent only
-		// runs scoped tests during development; the orchestrator owns the
-		// full suite both here (pre-iteration) and after signal (gate).
-		testStatus := l.runPreIterationTests(ctx)
-
-		if !l.waitForInternet(ctx) {
-			break
-		}
-		if !l.waitForRate(ctx) {
+		prep, ok := l.prepareAndBuildPrompt(ctx, taskID, nextTask)
+		if !ok {
 			break
 		}
 
-		headBefore := l.git.HeadRev()
-		rawLogPath := filepath.Join(l.cfg.Dirs.RalphDir, "raw.log")
-		logStart := fileLineCount(rawLogPath)
-
-		feedback := l.readFeedback()
-		if feedback != "" {
-			l.logger.Warn("", "[feedback] %s", feedback)
-			l.clearFeedback()
-			l.attempts.Record(taskID, nextTask,
-				"User feedback (pre-iteration): "+feedback,
-				"",
-				"user_feedback: "+feedback)
-		}
-
-		attemptContext := l.buildAttemptContext(taskID, nextTask)
-		if attemptContext != "" {
-			attemptCount := strings.Count(attemptContext, "### Attempt ")
-			reflectionCount := strings.Count(attemptContext, "## Recent learnings")
-			if attemptCount > 0 || reflectionCount > 0 {
-				l.logger.Log("", "Including prior context: %d attempt(s), cross-task learnings: %v", attemptCount, reflectionCount > 0)
-			}
-		}
-
-		fullPrompt, err := l.buildPrompt(taskPrompt, attemptContext, testStatus)
-		if err != nil {
-			l.logger.Error("", "Prompt build failed: %v", err)
-			break
-		}
-
-		workDir := l.git.WorkDir
 		taskStart := time.Now()
 		result, runErr := l.runner.Run(claude.RunConfig{
 			Ctx:                 ctx,
-			WorkDir:             workDir,
+			WorkDir:             prep.workDir,
 			RalphDir:            l.cfg.Dirs.RalphDir,
-			Prompt:              fullPrompt,
+			Prompt:              prep.fullPrompt,
 			TaskID:              taskID,
-			RawLog:              rawLogPath,
+			RawLog:              prep.rawLogPath,
 			LogFile:             filepath.Join(l.cfg.Dirs.RalphDir, "loop.log"),
 			Quiet:               l.cfg.Quiet,
 			Verbose:             l.cfg.Verbose,
@@ -408,278 +280,53 @@ func (l *Loop) Run(ctx context.Context) error {
 			IdleTimeout:         l.cfg.IdleTimeout,
 			IdleTimeoutProgress: l.cfg.IdleTimeoutProgress,
 			HasProgress: func() bool {
-				return l.git.HasDiff() || l.git.HeadRev() != headBefore
+				return l.git.HasDiff() || l.git.HeadRev() != prep.headBefore
 			},
 			OnSignal: func(summary string) bool {
 				return l.onSignal(signalParams{
 					ctx:        ctx,
-					headBefore: headBefore,
-					workDir:    workDir,
-					rawLogPath: rawLogPath,
+					headBefore: prep.headBefore,
+					workDir:    prep.workDir,
+					rawLogPath: prep.rawLogPath,
 					taskID:     taskID,
 					nextTask:   nextTask,
 				})
 			},
 			FeedbackFile: filepath.Join(l.cfg.Dirs.RalphDir, "feedback"),
 		})
-		if runErr != nil {
-			if !isOnline() {
-				l.logger.Warn("llm", "Claude failed — internet appears down")
-				if !l.waitForInternet(ctx) {
-					break
-				}
-				runIteration--
-				iteration--
-				continue
-			}
-			l.logger.Warn("llm", "Claude failed on iteration %d, continuing...", runIteration)
-		}
-		if result.FeedbackKill {
-			// Fallback path: stdin injection failed, agent was killed.
-			l.logger.Warn("llm", "Restarting iteration %d — feedback injection failed, agent killed", runIteration)
-			diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
-			l.attempts.Record(taskID, nextTask,
-				"Killed: feedback injection failed. Feedback: "+result.FeedbackContent,
-				diffStat,
-				"user_feedback: "+result.FeedbackContent)
-			runIteration--
-			iteration--
+
+		action := l.handleRunResult(ctx, result, runErr, taskID, nextTask, prep.headBefore, &runIteration, &iteration)
+		if action == resultRetry {
 			continue
 		}
-		if result.IdleTimeout {
-			l.logger.Warn("llm", "Restarting iteration %d after idle timeout", runIteration)
-			diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
-			l.attempts.Record(taskID, nextTask,
-				"Killed: idle timeout (no output for configured duration)",
-				diffStat,
-				"idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output")
-			runIteration--
-			iteration--
-			continue
-		}
-		if result.RateLimited {
-			waitDur := claude.FormatWaitDuration(time.Until(result.ResetAt))
-			l.logger.Warn("llm", "Claude rate limit — waiting %s until %s", waitDur, result.ResetAt.Format("3:04pm"))
-			err := l.limiter.WaitUntil(ctx, result.ResetAt, func(secs int) {
-				l.logger.Log("llm", "Rate limit: %ds until reset", secs)
-			})
-			if err != nil {
-				l.logger.Warn("llm", "Rate limit wait interrupted: %v", err)
-				break
-			}
-			l.logger.Success("llm", "Rate limit reset — resuming")
-			runIteration--
-			iteration--
-			continue
+		if action == resultBreak {
+			break
 		}
 		elapsed := time.Since(taskStart)
 		l.limiter.Increment()
 
-
-		if result.Summary != "" {
-			l.logger.Log("llm", "Summary: %s", result.Summary)
-		}
-
-		completed, _ = l.cfg.TaskBackend.CountCompleted()
-		total, _ = l.cfg.TaskBackend.CountTotal()
-		l.logger.Log("", "Run iteration %d complete (%dm%ds). %d/%d tasks done.",
-			runIteration, int(elapsed.Minutes()), int(elapsed.Seconds())%60, completed, total)
-
-		headAfter := l.git.HeadRev()
-		diffStat := l.git.DiffStatRange(headBefore, headAfter)
-		analysisResult := l.analyzeIteration(rawLogPath, logStart, headBefore, headAfter, taskID)
-
-		summary := result.Summary
-		if summary == "" {
-			summary = "no completion summary"
-		}
-		analysisDesc := analysisResult.Reason
-		if analysisDesc == "" {
-			analysisDesc = "continue"
-		}
-
-		l.lastAction = analysisResult.Action
-
-		switch analysisResult.Action {
-		case analyzer.Halt:
-			l.logger.Error("", "Halting: %s", analysisResult.Reason)
-			if analysisResult.Detail != "" {
-				l.logger.Error("", "  %s", analysisResult.Detail)
-			}
-			l.attempts.Record(taskID, nextTask, "Halted: "+analysisResult.Reason, diffStat, analysisResult.Detail)
-			l.state.Write("status", "halted_"+analysisResult.Reason)
-			l.git.TagTaskEnd(taskID)
+		diffStat, halt := l.processRunOutcome(result, elapsed, runIteration, prep, taskID, nextTask)
+		if halt {
 			return nil
-		case analyzer.Warn:
-			l.logger.Warn("", "Analysis: %s", analysisResult.Reason)
-			l.attempts.Record(taskID, nextTask, summary, diffStat, "warn: "+analysisDesc)
-		default:
-			if !result.SignalDetected {
-				l.attempts.Record(taskID, nextTask, summary, diffStat, analysisDesc)
-			}
 		}
 
 		if result.SignalDetected {
-			// Preflight: check bead wasn't prematurely closed by the agent.
-			if taskID != "" {
-				phase, _ := l.cfg.TaskBackend.GetState(taskID, "phase")
-				if phase != "implementing" {
-					l.logger.Warn("beads", "Task %s phase is %q (expected implementing) — agent may have tampered with task state", taskID, phase)
-				}
-			}
+			signalAction := l.handlePostSignal(postSignalParams{
+				ctx:        ctx,
+				result:     result,
+				headBefore: prep.headBefore,
+				workDir:    prep.workDir,
+				rawLogPath: prep.rawLogPath,
+				taskID:     taskID,
+				nextTask:   nextTask,
+				diffStat:   diffStat,
+			}, &runIteration, &iteration)
 
-			// If OnSignal was set, verification already passed in the runner.
-			// If not (legacy/test path), run verification here as fallback.
-			if result.OnSignalUsed == false {
-				if passed, reason := l.verifyCompletion(ctx, headBefore); !passed {
-					l.logger.Warn("test", "Verification failed: %s", reason)
-					l.attempts.Record(taskID, nextTask,
-						"Signal received but verification failed: "+reason,
-						diffStat,
-						"verification_failed: fix must pass tests and produce commits before closing")
-					continue
-				}
-			}
-
-			if taskID != "" {
-				if err := l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: tests passed, commits present"); err != nil {
-					l.logger.Warn("beads", "SetState phase=verified: %v", err)
-				} else {
-					l.logger.Log("beads", "%s → verified", taskID)
-				}
-			}
-
-			l.attempts.Clear(taskID, nextTask)
-			l.recordCompletedTask(taskID, nextTask)
-			touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-flash"))
-
-			// PushAndCreatePR calls EnsureUpToDate internally, which
-			// rebases onto the latest base branch before pushing.
-			headAfterSignal := l.git.HeadRev()
-			if headBefore != "" && headAfterSignal == headBefore {
-				// No new commits — agent confirmed task is already done.
-				// Verification passed, so close the bead.
-				l.logger.Log("git", "No new commits — work already on main")
-				if taskID != "" {
-					_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "work already on main, agent confirmed")
-					if err := l.cfg.TaskBackend.CloseTask(taskID, "work already on main"); err != nil {
-						l.logger.Warn("beads", "CloseTask: %v", err)
-					} else {
-						l.logger.Log("beads", "Closed task %s (work already on main)", taskID)
-					}
-				}
-				l.git.TagTaskEnd(taskID)
-				runIteration++
-				iteration++
+			switch signalAction {
+			case signalRetry, signalSkipped:
 				continue
-			}
-
-			prBody := l.buildPRBody(taskID, result.Summary)
-			prNumber, pushErr := l.pushAndCreatePR(ctx, taskID, nextTask, prBody)
-			if pushErr != nil {
-				if !isOnline() {
-					l.logger.Warn("git", "Push failed — internet appears down")
-					l.waitForInternet(ctx)
-					prNumber, pushErr = l.pushAndCreatePR(ctx, taskID, nextTask, prBody)
-				}
-				if pushErr != nil {
-					l.logger.Warn("git", "Push/PR: %v", pushErr)
-				}
-			}
-			if prNumber != "" && taskID != "" {
-				_, _, prURL := l.findPRInfo(workDir)
-				ref := prURL
-				if ref == "" {
-					ref = "gh-" + prNumber
-				}
-				l.logger.Log("git", "Linking task %s to %s (branch: %s)", taskID, ref, l.git.WorktreeBranch)
-				if refErr := l.cfg.TaskBackend.SetExternalRef(taskID, ref); refErr != nil {
-					l.logger.Warn("beads", "SetExternalRef: %v", refErr)
-				}
-			}
-
-			ct := CompletedTask{
-				ID:      taskID,
-				Title:   nextTask,
-				Summary: result.Summary,
-				PRNum:   prNumber,
-			}
-			if prNum, prTitle, prURL := l.findPRInfo(workDir); prNum != "" {
-				ct.PRNum = prNum
-				ct.PRTitle = prTitle
-				ct.PRURL = prURL
-			} else if prNumber != "" {
-				ct.PRNum = prNumber
-			}
-
-			merged := false
-			if l.cfg.AutoMerge && prNumber != "" {
-				var mergeErr error
-				merged, mergeErr = l.mergeWithRetry(ctx, taskID, nextTask, workDir, rawLogPath)
-				if mergeErr != nil {
-					l.logger.Warn("git", "Auto-merge: %v", mergeErr)
-				}
-			}
-
-			// No new PR created — check the bead's existing PR.
-			if prNumber == "" && taskID != "" && l.cfg.AutoMerge {
-				ref, _ := l.cfg.TaskBackend.GetExternalRef(taskID)
-				if existingPR := parsePRNumber(ref); existingPR != "" {
-					gh := l.git.GH()
-					if gh != nil {
-						prState, _ := gh.GetPRState(workDir, existingPR)
-						switch strings.ToUpper(prState) {
-						case "MERGED":
-							l.logger.Log("git", "PR #%s already merged — work is on main", existingPR)
-							merged = true
-						case "OPEN":
-							l.logger.Log("git", "Existing PR #%s still open — attempting merge", existingPR)
-							var mergeErr error
-							merged, mergeErr = l.mergeWithRetry(ctx, taskID, nextTask, workDir, rawLogPath)
-							if mergeErr != nil {
-								l.logger.Warn("git", "Auto-merge existing PR: %v", mergeErr)
-							}
-						}
-					}
-				}
-			}
-
-			// Close bead only after successful merge (or if auto-merge is off).
-			if taskID != "" && (merged || !l.cfg.AutoMerge) {
-				l.attempts.ClearMergeFailures(taskID)
-				closeReason := "completed by ralph"
-				if ct.PRURL != "" {
-					closeReason = fmt.Sprintf("Fixed in %s", ct.PRURL)
-				} else if ct.PRNum != "" {
-					closeReason = fmt.Sprintf("Fixed in PR #%s", ct.PRNum)
-				}
-				if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
-					l.logger.Warn("beads", "CloseTask failed: %v", err)
-				} else {
-					l.logger.Log("beads", "Closed task %s (%s)", taskID, closeReason)
-				}
-			} else if taskID != "" && l.cfg.AutoMerge && !merged {
-				count, _ := l.attempts.RecordMergeFailure(taskID)
-				if count >= attempts.MaxMergeFailures {
-					l.logger.Warn("git", "Merge failed %d times — skipping task %s for manual review", count, taskID)
-					l.skipTask(taskID, fmt.Sprintf("merge_failed_%d_times", count))
-				} else {
-					l.logger.Warn("git", "Merge failed (%d/%d) — task %s left open for retry", count, attempts.MaxMergeFailures, taskID)
-				}
-			}
-
-			l.sessionTasks = append(l.sessionTasks, ct)
-
-			if merged {
-				l.lastTaskMerged = true
-				notify.TaskMerged(taskID, nextTask)
-				l.git.PostMergeUpdateMain()
-				if l.cfg.Evolve {
-					l.git.TagTaskEnd(taskID)
-					l.logger.Phase("Evolve: restarting with latest main")
-					l.state.Write("status", "evolve_restart")
-					return nil
-				}
+			case signalEvolve:
+				return nil
 			}
 		}
 

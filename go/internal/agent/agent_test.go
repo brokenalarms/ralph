@@ -1,13 +1,6 @@
 package agent
 
 import (
-	"context"
-	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
@@ -20,327 +13,28 @@ func (l *testLogger) Warn(_ string, _ string, _ ...any)    {}
 func (l *testLogger) Error(_ string, _ string, _ ...any)   {}
 func (l *testLogger) Success(_ string, _ string, _ ...any) {}
 
-func TestSandboxProfile_DenyDefault(t *testing.T) {
-	s := &Sandbox{}
-	profile := s.Profile([]string{"/work/tree", "/work/.ralph"})
-
-	if !strings.Contains(profile, "(deny default)") {
-		t.Error("profile should deny by default")
-	}
-	if !strings.Contains(profile, `(allow file-read* (subpath "/"))`) {
-		t.Error("profile should allow global reads")
-	}
-	if !strings.Contains(profile, `(allow file-write* (subpath "/work/tree"))`) {
-		t.Error("profile should allow writes to worktree")
-	}
-	if !strings.Contains(profile, `(allow file-write* (subpath "/work/.ralph"))`) {
-		t.Error("profile should allow writes to ralph dir")
-	}
-	if !strings.Contains(profile, "(allow file-map-executable)") {
-		t.Error("profile should allow file-map-executable for Node.js")
-	}
-}
-
-func TestSandboxProfile_NoWriteOutsideAllowed(t *testing.T) {
-	s := &Sandbox{}
-	profile := s.Profile([]string{"/work/tree"})
-
-	if strings.Contains(profile, `file-write* (subpath "/")`) {
-		t.Error("profile must NOT allow global writes")
-	}
-	if strings.Contains(profile, `file-write* (subpath "/Users")`) {
-		t.Error("profile must NOT allow writes to /Users")
-	}
-}
-
-func TestSandboxProfile_IncludesTmpAccess(t *testing.T) {
-	s := &Sandbox{}
-	profile := s.Profile([]string{"/work"})
-
-	if !strings.Contains(profile, `(allow file-write* (subpath "/tmp"))`) {
-		t.Error("profile should allow /tmp write access")
-	}
-	if !strings.Contains(profile, `(allow file-write* (subpath "/private/tmp"))`) {
-		t.Error("profile should allow /private/tmp write access")
-	}
-}
-
-func TestSandboxProfile_AllowsNetwork(t *testing.T) {
-	s := &Sandbox{}
-	profile := s.Profile([]string{"/work"})
-
-	if !strings.Contains(profile, "(allow network*)") {
-		t.Error("profile should allow network access")
-	}
-}
-
-func TestSandboxWrap_ProducesSandboxExecCommand(t *testing.T) {
-	s := &Sandbox{}
-	cmd := s.Wrap(context.Background(), []string{"/work"}, "echo", "hello")
-
-	if filepath.Base(cmd.Path) != "sandbox-exec" {
-		t.Errorf("expected sandbox-exec, got %s", cmd.Path)
-	}
-
-	args := strings.Join(cmd.Args, " ")
-	if !strings.Contains(args, "-f") {
-		t.Error("expected -f flag for profile file")
-	}
-	if !strings.Contains(args, "echo") {
-		t.Error("expected wrapped command in args")
-	}
-	if !strings.Contains(args, "hello") {
-		t.Error("expected wrapped args")
-	}
-
-	profileIdx := -1
-	for i, a := range cmd.Args {
-		if a == "-f" && i+1 < len(cmd.Args) {
-			profileIdx = i + 1
-			break
-		}
-	}
-	if profileIdx < 0 {
-		t.Fatal("could not find profile path in args")
-	}
-	data, err := os.ReadFile(cmd.Args[profileIdx])
-	if err != nil {
-		t.Fatalf("could not read profile file: %v", err)
-	}
-	if !strings.Contains(string(data), "(deny default)") {
-		t.Error("profile file should contain deny default")
-	}
-}
-
-func TestAvailable_DisabledUntilProfileValidated(t *testing.T) {
-	if Available() {
-		t.Error("Available() should return false — sandbox is disabled")
-	}
-}
-
-func TestNew_WithSandbox_SetsCmdFactory(t *testing.T) {
-	s := &Sandbox{}
-	r := New(&testLogger{}, s)
-
-	if r.inner.CmdFactory == nil {
-		t.Error("expected CmdFactory to be set when Sandbox is provided")
-	}
-}
-
-func TestNew_WithoutSandbox_NoCmdFactory(t *testing.T) {
-	r := New(&testLogger{}, nil)
+// New should create a runner with no CmdFactory — the inner claude.Runner
+// uses its default command construction.
+func TestNew_NoCmdFactory(t *testing.T) {
+	r := New(&testLogger{})
 
 	if r.inner.CmdFactory != nil {
-		t.Error("expected CmdFactory to be nil when no Sandbox is provided")
+		t.Error("expected CmdFactory to be nil")
 	}
 }
 
-func TestSandboxedCmdFactory_ProducesCorrectCommand(t *testing.T) {
-	s := &Sandbox{}
-	r := New(&testLogger{}, s)
-
-	tmpDir := t.TempDir()
-	rawLog, _ := os.CreateTemp(tmpDir, "raw-*.log")
-	defer rawLog.Close()
-
-	cfg := claude.RunConfig{
-		Ctx:      context.Background(),
-		WorkDir:  "/work/tree",
-		RalphDir: "/work/.ralph",
-		Prompt:   "test prompt",
-	}
-
-	cmd := r.sandboxedCmdFactory(cfg, rawLog)
-
-	if filepath.Base(cmd.Path) != "sandbox-exec" {
-		t.Errorf("expected sandbox-exec, got %s", cmd.Path)
-	}
-
-	args := strings.Join(cmd.Args, " ")
-	if !strings.Contains(args, "--print") {
-		t.Error("missing --print flag")
-	}
-	if !strings.Contains(args, "--verbose") {
-		t.Error("missing --verbose flag")
-	}
-	if !strings.Contains(args, "stream-json") {
-		t.Error("missing stream-json output format")
-	}
-	if !strings.Contains(args, "--add-dir /work/tree") {
-		t.Error("missing --add-dir for work dir")
-	}
-	if !strings.Contains(args, "--add-dir /work/.ralph") {
-		t.Error("missing --add-dir for ralph dir")
-	}
-	if !strings.Contains(args, "test prompt") {
-		t.Error("missing prompt")
-	}
-
-	if cmd.Dir != "/work/tree" {
-		t.Errorf("expected Dir=/work/tree, got %s", cmd.Dir)
-	}
-	if cmd.Stdout != rawLog {
-		t.Error("stdout should be raw log file")
-	}
-	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setpgid {
-		t.Error("expected Setpgid for process group isolation")
-	}
-}
-
-func TestQuery_WithoutSandbox_CallsClaude(t *testing.T) {
-	r := New(&testLogger{}, nil)
-	_ = r
-}
-
+// Runner must satisfy the interface used by the loop: Run + StopStreaming.
 func TestRunner_ImplementsClaudeRunnerInterface(t *testing.T) {
 	var r interface {
 		Run(claude.RunConfig) (claude.Result, error)
 		StopStreaming()
 	}
-	r = New(&testLogger{}, nil)
+	r = New(&testLogger{})
 	_ = r
 }
 
-func TestSandboxWrap_RespectsContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	s := &Sandbox{}
-	cmd := s.Wrap(ctx, []string{"/work"}, "echo", "test")
-
-	if cmd.Process != nil {
-		t.Error("command should not be started yet")
-	}
+// Query without a sandbox should produce a direct claude command.
+func TestQuery_CallsClaude(t *testing.T) {
+	r := New(&testLogger{})
+	_ = r
 }
-
-func TestSandboxWrap_WritesProfileFile(t *testing.T) {
-	s := &Sandbox{}
-	cmd := s.Wrap(nil, []string{"/work"}, "true")
-
-	for i, a := range cmd.Args {
-		if a == "-f" && i+1 < len(cmd.Args) {
-			profilePath := cmd.Args[i+1]
-			if _, err := os.Stat(profilePath); err != nil {
-				t.Errorf("profile file should exist at %s", profilePath)
-			}
-			return
-		}
-	}
-	t.Error("could not find -f flag in sandbox-exec args")
-}
-
-// Each Wrap call must produce a unique profile file so concurrent spawns
-// (iteration agent + verification query) don't overwrite each other's
-// write-dir lists.
-func TestSandboxWrap_UniqueProfilePerSpawn(t *testing.T) {
-	s := &Sandbox{}
-	cmd1 := s.Wrap(nil, []string{"/work1"}, "true")
-	cmd2 := s.Wrap(nil, []string{"/work2"}, "true")
-
-	path1 := extractProfilePath(t, cmd1)
-	path2 := extractProfilePath(t, cmd2)
-
-	if path1 == path2 {
-		t.Errorf("concurrent Wrap calls must produce different profile files, both got %s", path1)
-	}
-
-	// Verify each profile contains its own write dirs.
-	data1, _ := os.ReadFile(path1)
-	data2, _ := os.ReadFile(path2)
-	if !strings.Contains(string(data1), "/work1") {
-		t.Error("first profile should contain /work1")
-	}
-	if !strings.Contains(string(data2), "/work2") {
-		t.Error("second profile should contain /work2")
-	}
-}
-
-func extractProfilePath(t *testing.T, cmd *exec.Cmd) string {
-	t.Helper()
-	for i, a := range cmd.Args {
-		if a == "-f" && i+1 < len(cmd.Args) {
-			return cmd.Args[i+1]
-		}
-	}
-	t.Fatal("could not find -f flag in sandbox-exec args")
-	return ""
-}
-
-func TestSandboxWriteDirs_IncludesGitCommonDir(t *testing.T) {
-	tmp := t.TempDir()
-	workDir := filepath.Join(tmp, "worktree")
-	os.MkdirAll(workDir, 0o755)
-
-	parentGit := filepath.Join(tmp, "project", ".git", "worktrees", "wt1")
-	os.MkdirAll(parentGit, 0o755)
-	os.WriteFile(filepath.Join(workDir, ".git"),
-		[]byte("gitdir: "+parentGit+"\n"), 0o644)
-
-	dirs := sandboxWriteDirs(workDir, filepath.Join(tmp, ".ralph"))
-
-	found := false
-	expectedGitDir := filepath.Join(tmp, "project", ".git")
-	for _, d := range dirs {
-		if d == expectedGitDir {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("sandboxWriteDirs should include git common dir %s, got %v", expectedGitDir, dirs)
-	}
-}
-
-func TestSandboxWriteDirs_IncludesGoCaches(t *testing.T) {
-	dirs := sandboxWriteDirs("/work", "/work/.ralph")
-
-	home, _ := os.UserHomeDir()
-	hasGoCache := false
-	hasGoMod := false
-	for _, d := range dirs {
-		if d == filepath.Join(home, "Library", "Caches", "go-build") {
-			hasGoCache = true
-		}
-		if d == filepath.Join(home, "go") {
-			hasGoMod = true
-		}
-	}
-	if !hasGoCache {
-		t.Error("sandboxWriteDirs should include Go build cache")
-	}
-	if !hasGoMod {
-		t.Error("sandboxWriteDirs should include Go module cache")
-	}
-}
-
-func TestSandboxedCmdFactory_IncludesToolPermissions(t *testing.T) {
-	s := &Sandbox{}
-	r := New(&testLogger{}, s)
-
-	tmpDir := t.TempDir()
-	rawLog, _ := os.CreateTemp(tmpDir, "raw-*.log")
-	defer rawLog.Close()
-
-	cfg := claude.RunConfig{
-		Ctx:      context.Background(),
-		WorkDir:  tmpDir,
-		RalphDir: filepath.Join(tmpDir, ".ralph"),
-		Prompt:   "test",
-	}
-
-	cmd := r.sandboxedCmdFactory(cfg, rawLog)
-	args := strings.Join(cmd.Args, " ")
-
-	if !strings.Contains(args, "--allowedTools") {
-		t.Error("missing --allowedTools flag")
-	}
-	if !strings.Contains(args, "--disallowedTools") {
-		t.Error("missing --disallowedTools flag")
-	}
-	if !strings.Contains(args, "Bash(*)") {
-		t.Error("allowed tools should include Bash(*)")
-	}
-}
-
-var _ = syscall.SysProcAttr{}
-var _ = fmt.Sprintf

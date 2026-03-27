@@ -47,11 +47,7 @@ func (l *Loop) newRunner() claudeRunner {
 	if l.newRunnerFunc != nil {
 		return l.newRunnerFunc()
 	}
-	var sandbox *agent.Sandbox
-	if l.agentRunner != nil && l.agentRunner.Sandbox != nil {
-		sandbox = l.agentRunner.Sandbox
-	}
-	return agent.New(l.logger, sandbox)
+	return agent.New(l.logger)
 }
 
 // queryFunc returns the Query method from the centralized agent runner.
