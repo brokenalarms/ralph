@@ -3947,11 +3947,10 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	}
 }
 
-// runFixAgent stops the main runner's streaming, creates a new runner via
-// newRunnerFunc, passes the standard RunConfig, and returns the result.
-// This test verifies all three behaviors in isolation.
-func TestLoop_runFixAgent(t *testing.T) {
-	dir, st := setupTestDir(t)
+// Verifier.runFixAgent stops the main runner's streaming, creates a new
+// runner via NewRunner, passes the standard RunConfig, and returns the result.
+func TestVerifier_runFixAgent(t *testing.T) {
+	dir, _ := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	mainRunner := &stubRunner{}
@@ -3959,22 +3958,23 @@ func TestLoop_runFixAgent(t *testing.T) {
 	fixRunner := &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
 
 	signals := claude.DefaultSignalPaths(ralphDir)
-	l := &Loop{
-		cfg: Config{
-			Dirs:        workctx.WorkContext{RalphDir: ralphDir},
+	v := &Verifier{
+		cfg: VerifierConfig{
+			RalphDir:    ralphDir,
 			IdleTimeout: 30 * time.Second,
 		},
-		state:   st,
-		runner:  mainRunner,
-		logger:  logging.New(nil),
-		signals: signals,
-		newRunnerFunc: func() claudeRunner {
-			return &configCapturingRunner{inner: fixRunner, captured: &capturedCfg}
+		deps: VerifierDeps{
+			Logger:  logging.New(nil),
+			Runner:  func() claudeRunner { return mainRunner },
+			Signals: signals,
+			NewRunner: func() claudeRunner {
+				return &configCapturingRunner{inner: fixRunner, captured: &capturedCfg}
+			},
 		},
 	}
 
 	ctx := context.Background()
-	result := l.runFixAgent(ctx, "test failures", "fix the tests", "/work", "/logs/raw.log")
+	result := v.runFixAgent(ctx, "test failures", "fix the tests", "/work", "/logs/raw.log")
 
 	if !result.SignalDetected {
 		t.Error("expected SignalDetected from fix agent result")
@@ -4001,8 +4001,8 @@ func TestLoop_runFixAgent(t *testing.T) {
 
 // Verifies that a fix agent's summary is logged when the signal includes
 // a descriptive message (not just "done").
-func TestLoop_runFixAgent_logsSummary(t *testing.T) {
-	dir, st := setupTestDir(t)
+func TestVerifier_runFixAgent_logsSummary(t *testing.T) {
+	dir, _ := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	var logBuf bytes.Buffer
@@ -4012,22 +4012,23 @@ func TestLoop_runFixAgent_logsSummary(t *testing.T) {
 	}}
 
 	signals := claude.DefaultSignalPaths(ralphDir)
-	l := &Loop{
-		cfg: Config{
-			Dirs:        workctx.WorkContext{RalphDir: ralphDir},
+	v := &Verifier{
+		cfg: VerifierConfig{
+			RalphDir:    ralphDir,
 			IdleTimeout: 30 * time.Second,
 		},
-		state:   st,
-		runner:  &stubRunner{},
-		logger:  logging.NewWithWriter(&logBuf),
-		signals: signals,
-		newRunnerFunc: func() claudeRunner {
-			return fixRunner
+		deps: VerifierDeps{
+			Logger:  logging.NewWithWriter(&logBuf),
+			Runner:  func() claudeRunner { return &stubRunner{} },
+			Signals: signals,
+			NewRunner: func() claudeRunner {
+				return fixRunner
+			},
 		},
 	}
 
 	ctx := context.Background()
-	l.runFixAgent(ctx, "test failures", "fix the tests", "/work", "/logs/raw.log")
+	v.runFixAgent(ctx, "test failures", "fix the tests", "/work", "/logs/raw.log")
 
 	output := logBuf.String()
 	if !strings.Contains(output, "Fix agent (test failures): added missing nil check in parseConfig") {
@@ -4984,7 +4985,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				VerifyDir:     dir,
 			}, st, gm, logger)
 			l.runner = runner
-			l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+			l.verifier.deps.LLMVerify = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
 				return llmResult
 			}
 			l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
@@ -4997,7 +4998,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				// After fix agent, re-verification will call llmVerifyFunc again;
 				// make it pass on second call to avoid skip-task path
 				callCount := 0
-				l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+				l.verifier.deps.LLMVerify = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
 					callCount++
 					if callCount == 1 {
 						return llmResult
@@ -5209,7 +5210,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.mergeFunc = func(context.Context) (bool, error) { return false, nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
 		return verify.Result{Passed: true}
 	}
 
@@ -5515,7 +5516,7 @@ func TestLoop_onSignal_InjectsLLMRejection(t *testing.T) {
 	l.runner = runner
 
 	// Tests pass but LLM rejects.
-	l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
 		return verify.Result{Passed: false, Details: "missing error handling in parseConfig"}
 	}
 
@@ -5579,7 +5580,7 @@ func TestLoop_onSignal_FallsBackToFixAgentOnBrokenPipe(t *testing.T) {
 	l.runner = brokenRunner
 
 	// Tests pass, LLM rejects, injection fails → should fall back to fix agent.
-	l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
 		return verify.Result{Passed: false, Details: "incomplete implementation"}
 	}
 

@@ -42,8 +42,10 @@ type Config struct {
 	Verbose             bool
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 	Version             string
-	VerifyDir           string // project root where tests are run; empty disables verification
-	VerifyLevel         string // "fire" (default) or "hog" — controls no-diff verification depth
+	VerifyDir             string // project root where tests are run; empty disables verification
+	VerifyLevel           string // "fire" (default) or "hog" — controls no-diff verification depth
+	VerifyModel           string // model for first LLM verification attempt
+	VerifyEscalationModel string // model for subsequent LLM verification attempts
 }
 
 // claudeRunner abstracts the Claude execution interface for testability.
@@ -71,6 +73,7 @@ type Loop struct {
 	git        *git.Manager
 	limiter    *ratelimit.Limiter
 	runner     claudeRunner
+	verifier   *Verifier
 	analyzer   *analyzer.Analyzer
 	attempts   *attempts.Tracker
 	logger     *logging.Logger
@@ -78,7 +81,6 @@ type Loop struct {
 	mergeFunc          func(ctx context.Context) (bool, error)
 	pushPRFunc         func(ctx context.Context, taskID, taskDesc, body string) (string, error)
 	verifyFunc      func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
-	llmVerifyFunc   func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result
 	newRunnerFunc      func() claudeRunner
 	findPRInfoFunc     func(workDir string) (number, title string)
 	agentRunner        *agent.Runner
@@ -86,8 +88,6 @@ type Loop struct {
 	lastAction         analyzer.Action
 	lastTaskMerged     bool
 	sessionTasks       []CompletedTask
-	testFixAttempts    int
-	llmVerifyAttempts  int
 }
 
 // New creates an execution loop from the given configuration. All agent
@@ -105,7 +105,7 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 	}
 	agentRunner := agent.New(logger, sandbox)
 
-	return &Loop{
+	l := &Loop{
 		cfg:           cfg,
 		state:         st,
 		git:           gm,
@@ -115,9 +115,30 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 		attempts:      attempts.New(cfg.Dirs.RalphDir),
 		logger:        logger,
 		signals:       signals,
-		llmVerifyFunc: verify.LLMVerifyPR,
 		agentRunner:   agentRunner,
 	}
+	l.verifier = NewVerifier(VerifierConfig{
+		VerifyDir:             cfg.VerifyDir,
+		VerifyLevel:           cfg.VerifyLevel,
+		VerifyModel:           cfg.VerifyModel,
+		VerifyEscalationModel: cfg.VerifyEscalationModel,
+		PromptsDir:            cfg.Dirs.PromptsDir,
+		RalphDir:              cfg.Dirs.RalphDir,
+		IdleTimeout:           cfg.IdleTimeout,
+	}, VerifierDeps{
+		Logger:      logger,
+		Git:         gm,
+		GitHub:      gm.GitHub,
+		State:       st,
+		TaskBackend: cfg.TaskBackend,
+		Runner:      func() claudeRunner { return l.runner },
+		Signals:     signals,
+		NewRunner:   l.newRunner,
+		QueryFn:     l.queryFunc(),
+		LLMVerify:   verify.LLMVerifyPR,
+		SkipTask:    l.skipTask,
+	})
+	return l
 }
 
 // SessionTasks returns the tasks completed during this session.
@@ -233,8 +254,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		taskID, nextTask := taskInfo.ID, taskInfo.Title
 		taskChanged := l.isNewTask(taskID, nextTask)
 		if taskChanged {
-			l.testFixAttempts = 0
-			l.llmVerifyAttempts = 0
+			l.verifier.ResetCounters()
 		}
 
 		if runIteration > 1 && taskChanged {

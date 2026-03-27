@@ -340,6 +340,30 @@ var Flags = []FlagDef{
 		},
 		Read: func(cfg *Config) string { return cfg.VerifyLevel },
 	},
+	{
+		Long: "--verify-model", MetaVar: "<model>",
+		Help:      "Model for LLM verification (first attempt)",
+		Default:   "claude-haiku-4-5-20251001",
+		ConfigKey: "verify_model",
+		Kind:      KindString, TrackCLI: true,
+		Apply: func(cfg *Config, val string) error {
+			cfg.VerifyModel = val
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.VerifyModel },
+	},
+	{
+		Long: "--verify-escalation-model", MetaVar: "<model>",
+		Help:      "Model for LLM verification escalation (subsequent attempts)",
+		Default:   "claude-sonnet-4-5-20241022",
+		ConfigKey: "verify_escalation_model",
+		Kind:      KindString, TrackCLI: true,
+		Apply: func(cfg *Config, val string) error {
+			cfg.VerifyEscalationModel = val
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.VerifyEscalationModel },
+	},
 }
 
 var (

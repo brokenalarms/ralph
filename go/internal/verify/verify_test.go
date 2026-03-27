@@ -397,6 +397,26 @@ func (s *stubGitHub) PRDiff(_ string, _ string) (string, error) {
 func (s *stubGitHub) GetPRState(string, string) (string, error) { return "", nil }
 func (s *stubGitHub) GetPRBase(string, string) (string, error)  { return "", nil }
 
+// ModelShortName extracts a human-friendly name from a full model ID,
+// so log lines show "haiku" instead of "claude-haiku-4-5-20251001".
+func TestModelShortName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{ModelHaiku, "haiku"},
+		{ModelSonnet, "sonnet"},
+		{"claude-opus-4-6-20260101", "opus"},
+		{"unknown-model-v1", "unknown-model-v1"},
+	}
+	for _, tt := range tests {
+		got := ModelShortName(tt.input)
+		if got != tt.want {
+			t.Errorf("ModelShortName(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
 func setupGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
