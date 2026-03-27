@@ -36,7 +36,6 @@ type Manager struct {
 	Resume         bool
 	BranchRenamed bool
 	BaseBranch    string
-	MergeAdmin    bool
 	GitHub         GitHub
 	Runner         Runner
 	State          StateStore

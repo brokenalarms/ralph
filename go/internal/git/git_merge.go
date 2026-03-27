@@ -270,7 +270,6 @@ func (m *Manager) postMergeUpdate(prNumber string) (bool, error) {
 func (m *Manager) mergeOpts() MergeOpts {
 	return MergeOpts{
 		DeleteBranch: true,
-		Admin:        m.MergeAdmin,
 	}
 }
 

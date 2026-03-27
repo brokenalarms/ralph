@@ -186,31 +186,6 @@ func TestMergeConflictError_Message(t *testing.T) {
 	}
 }
 
-// mergeOpts includes Admin when MergeAdmin is set, allowing admin
-// users to bypass branch protection when desired.
-func TestMergeOpts_IncludesAdmin(t *testing.T) {
-	mgr := &Manager{
-		MergeAdmin: true,
-	}
-	opts := mgr.mergeOpts()
-	if !opts.Admin {
-		t.Error("expected Admin=true when MergeAdmin is set")
-	}
-	if !opts.DeleteBranch {
-		t.Error("expected DeleteBranch=true")
-	}
-}
-
-// mergeOpts omits Admin when MergeAdmin is false, preserving
-// the default behavior of respecting branch protection.
-func TestMergeOpts_OmitsAdminByDefault(t *testing.T) {
-	mgr := &Manager{}
-	opts := mgr.mergeOpts()
-	if opts.Admin {
-		t.Error("expected Admin=false by default")
-	}
-}
-
 func TestWaitForCI_PollsUntilPassed(t *testing.T) {
 	var calls atomic.Int32
 	fetch := func(pr, repo string) ([]CICheckResult, error) {
@@ -665,7 +640,7 @@ func TestAutoMerge_CIFailureReturnsTypedError(t *testing.T) {
 }
 
 // AutoMergeCurrentBranch passes MergeOpts from Manager config to the
-// GitHub interface, so admin settings are respected and branches are deleted.
+// GitHub interface, ensuring branches are deleted after merge.
 func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 	gh := &stubGitHub{
 		available: true,
@@ -678,12 +653,11 @@ func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 	st := newMemState()
 
 	mgr := &Manager{
-		ProjectDir:  project,
-		RalphDir:    ralphDir,
-				MergeAdmin:  true,
-		GitHub:      gh,
-		State:       st,
-		Logger:      &testLog{},
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		GitHub:     gh,
+		State:      st,
+		Logger:     &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -694,8 +668,5 @@ func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 
 	if !gh.mergeOpts.DeleteBranch {
 		t.Error("merge should always set DeleteBranch")
-	}
-	if !gh.mergeOpts.Admin {
-		t.Error("MergeAdmin=true should set Admin in merge opts")
 	}
 }

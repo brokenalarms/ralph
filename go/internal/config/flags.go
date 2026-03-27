@@ -177,16 +177,6 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return boolStr(cfg.AutoMerge) },
 	},
 	{
-		Long: "--merge-admin",
-		Help: "Use --admin flag on gh pr merge to bypass branch protection (requires --auto-merge)",
-		Kind: KindBool,
-		Apply: func(cfg *Config, _ string) error {
-			cfg.MergeAdmin = true
-			return nil
-		},
-		Read: func(cfg *Config) string { return boolStr(cfg.MergeAdmin) },
-	},
-	{
 		Long: "--evolve",
 		Help: "Self-improving mode: after each merged task, pull main, rebuild, restart (requires --auto-merge)",
 		Kind: KindBool,
