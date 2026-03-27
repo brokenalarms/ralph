@@ -140,6 +140,7 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 	remoteDiff := l.git.RemoteBranchDiffFromMain(branch, defaultBranch)
 	if remoteDiff == "" {
 		l.logger.Log("git", "Work for %s already on %s — closing bead", taskID, defaultBranch)
+		_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "work already on "+defaultBranch)
 		if err := l.cfg.TaskBackend.CloseTask(taskID, "work already on "+defaultBranch); err != nil {
 			l.logger.Warn("beads", "CloseTask: %v", err)
 		}
