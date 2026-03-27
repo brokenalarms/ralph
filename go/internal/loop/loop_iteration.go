@@ -242,11 +242,15 @@ func (l *Loop) closeOrRetryTask(taskID string, ct CompletedTask, merged bool, me
 		return
 	}
 
-	closeReason := "completed by ralph"
+	// No PR = not done. Work must be in a PR to close the bead.
+	if ct.PRNum == "" {
+		l.logger.Warn("git", "No PR created — task %s stays open", taskID)
+		return
+	}
+
+	closeReason := fmt.Sprintf("Fixed in PR #%s", ct.PRNum)
 	if ct.PRURL != "" {
 		closeReason = fmt.Sprintf("Fixed in %s", ct.PRURL)
-	} else if ct.PRNum != "" {
-		closeReason = fmt.Sprintf("Fixed in PR #%s", ct.PRNum)
 	}
 
 	if !merged && l.cfg.AutoMerge && mergeErr != nil {

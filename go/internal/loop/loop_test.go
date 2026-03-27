@@ -1689,7 +1689,7 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
