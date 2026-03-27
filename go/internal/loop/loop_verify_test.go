@@ -13,56 +13,37 @@ import (
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
-// Verifies the extracted onSignal method returns true when both test
-// verification and LLM verification pass on the first attempt.
+// Verifies Loop.onSignal delegates to Verifier and returns true when both
+// test verification and LLM verification pass on the first attempt.
 func TestOnSignal_HappyPath(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
-
-	// Create prompts dir so loadVerifyPrompt doesn't fail
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.Manager{
-		ProjectDir: dir,
-		WorkDir:    dir,
-	}
-
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
 	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
-			RalphDir:   ralphDir,
-			PromptsDir: promptsDir,
-		},
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task"},
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
-	// Stub LLM verify to pass
-	l.llmVerifyFunc = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
 		return verify.Result{Passed: true, Reason: "looks good"}
 	}
-
-	// Stub verify to pass (test suite)
 	l.verifyFunc = func(ctx context.Context, dir, headBefore string) (bool, string) {
 		return true, ""
 	}
 
-	params := signalParams{
-		ctx:        context.Background(),
-		headBefore: "abc123",
-		workDir:    dir,
-		rawLogPath: filepath.Join(ralphDir, "raw.log"),
-		taskID:     "test-123",
-		nextTask:   "Test task",
-	}
-
-	result := l.onSignal(params)
+	result := l.onSignal(signalParams{
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID: "test-123", nextTask: "Test task",
+	})
 	if !result {
 		t.Fatal("expected onSignal to return true when verification passes")
 	}
@@ -73,52 +54,35 @@ func TestOnSignal_HappyPath(t *testing.T) {
 func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
-
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.Manager{
-		ProjectDir: dir,
-		WorkDir:    dir,
-	}
-
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
-
 	backend := &stubBackend{remaining: 1, total: 1, description: "test task"}
 
 	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
-			RalphDir:   ralphDir,
-			PromptsDir: promptsDir,
-		},
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
-	// Inject-capable runner so onSignal uses stdin injection (not fix agent fallback).
-	l.runner = &injectCapturingRunner{}
+	l.verifier.deps.Runner = func() claudeRunner { return &injectCapturingRunner{} }
 
 	llmCalls := 0
-	l.llmVerifyFunc = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
 		llmCalls++
 		return verify.Result{Passed: false, Details: "diff doesn't match bead"}
 	}
 
 	params := signalParams{
-		ctx:        context.Background(),
-		headBefore: "abc123",
-		workDir:    dir,
-		rawLogPath: filepath.Join(ralphDir, "raw.log"),
-		taskID:     "test-123",
-		nextTask:   "Test task",
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID: "test-123", nextTask: "Test task",
 	}
 
-	// Call onSignal maxLLMVerifyAttempts times — each call injects feedback
-	// and returns false. On the final call, the task is skipped.
 	var result bool
 	for i := 0; i < maxLLMVerifyAttempts; i++ {
 		result = l.onSignal(params)
@@ -136,7 +100,7 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 }
 
 // First verification uses Haiku; after rejection + fix, re-verification
-// escalates to Sonnet. Confirms model escalation across attempts.
+// escalates to Sonnet.
 func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -154,11 +118,11 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
-	l.runner = &injectCapturingRunner{}
+	l.verifier.deps.Runner = func() claudeRunner { return &injectCapturingRunner{} }
 
 	var modelsUsed []string
 	llmCalls := 0
-	l.llmVerifyFunc = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
 		llmCalls++
 		if len(model) > 0 {
 			modelsUsed = append(modelsUsed, model[0])
@@ -175,11 +139,8 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 		taskID: "test-escalation", nextTask: "Escalation test",
 	}
 
-	// Attempt 1: Haiku rejects
 	l.onSignal(params)
-	// Attempt 2: Sonnet rejects
 	l.onSignal(params)
-	// Attempt 3: Sonnet approves
 	l.onSignal(params)
 
 	if len(modelsUsed) != 3 {
@@ -196,8 +157,7 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	}
 }
 
-// When VerifyModel and VerifyEscalationModel are set in config, verifyModel()
-// uses them instead of the hardcoded defaults, proving models are configurable.
+// Config-driven model selection overrides defaults.
 func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -220,10 +180,10 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 		VerifyEscalationModel: customEscalation,
 	}, st, gm, logger)
 
-	l.runner = &injectCapturingRunner{}
+	l.verifier.deps.Runner = func() claudeRunner { return &injectCapturingRunner{} }
 
 	var modelsUsed []string
-	l.llmVerifyFunc = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
 		if len(model) > 0 {
 			modelsUsed = append(modelsUsed, model[0])
 		}
@@ -261,7 +221,6 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 func TestOnSignal_LLMReject_PassesOnRetry(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
-
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
@@ -276,11 +235,10 @@ func TestOnSignal_LLMReject_PassesOnRetry(t *testing.T) {
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
-	// Inject-capable runner so onSignal uses stdin injection (not fix agent fallback).
-	l.runner = &injectCapturingRunner{}
+	l.verifier.deps.Runner = func() claudeRunner { return &injectCapturingRunner{} }
 
 	llmCalls := 0
-	l.llmVerifyFunc = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
 		llmCalls++
 		if llmCalls == 1 {
 			return verify.Result{Passed: false, Details: "missing error handling"}
@@ -294,12 +252,10 @@ func TestOnSignal_LLMReject_PassesOnRetry(t *testing.T) {
 		taskID: "test-retry", nextTask: "Retry test",
 	}
 
-	// First call: LLM rejects, feedback injected, returns false.
 	result := l.onSignal(params)
 	if result {
 		t.Fatal("expected first onSignal to return false when LLM rejects")
 	}
-	// Second call: LLM approves.
 	result = l.onSignal(params)
 	if !result {
 		t.Fatal("expected onSignal to pass when LLM approves on retry")
@@ -309,8 +265,7 @@ func TestOnSignal_LLMReject_PassesOnRetry(t *testing.T) {
 	}
 }
 
-// When the fix agent exits without signaling, the verification loop stops
-// and onSignal returns false without retrying.
+// When the fix agent exits without signaling, the verification loop stops.
 func TestOnSignal_LLMReject_FixAgentNoSignal_StopsLoop(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -328,17 +283,15 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_StopsLoop(t *testing.T) {
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
-	// Broken-injection runner to force fix agent fallback path.
-	l.runner = &injectFailRunner{result: claude.Result{}}
+	l.verifier.deps.Runner = func() claudeRunner { return &injectFailRunner{result: claude.Result{}} }
 
 	llmCalls := 0
-	l.llmVerifyFunc = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
 		llmCalls++
 		return verify.Result{Passed: false, Details: "bad code"}
 	}
 
-	// Fix agent exits without signal
-	l.newRunnerFunc = func() claudeRunner {
+	l.verifier.deps.NewRunner = func() claudeRunner {
 		return &stubRunner{result: stubResult(false, "")}
 	}
 
@@ -356,15 +309,8 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_StopsLoop(t *testing.T) {
 	}
 }
 
-func stubResult(signal bool, summary string) claude.Result {
-	return claude.Result{
-		SignalDetected: signal,
-		Summary:        summary,
-	}
-}
-
 // In fire mode (default), a no-diff LLM result passes without spawning
-// a verification agent — the agent's claim is trusted.
+// a verification agent.
 func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -383,12 +329,12 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 		VerifyLevel:   "fire",
 	}, st, gm, logger)
 
-	l.llmVerifyFunc = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
 		return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
 	}
 
 	runnerSpawned := false
-	l.newRunnerFunc = func() claudeRunner {
+	l.verifier.deps.NewRunner = func() claudeRunner {
 		runnerSpawned = true
 		return &stubRunner{result: stubResult(true, "confirmed")}
 	}
@@ -407,8 +353,7 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 	}
 }
 
-// In hog mode, a no-diff LLM result spawns a verification agent. When the
-// verifier signals confirmation, onSignal passes.
+// In hog mode, a no-diff LLM result spawns a verification agent.
 func TestOnSignal_HogMode_NoDiffSpawnsVerifier_Passes(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -427,12 +372,12 @@ func TestOnSignal_HogMode_NoDiffSpawnsVerifier_Passes(t *testing.T) {
 		VerifyLevel:   "hog",
 	}, st, gm, logger)
 
-	l.llmVerifyFunc = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
 		return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
 	}
 
 	runnerSpawned := false
-	l.newRunnerFunc = func() claudeRunner {
+	l.verifier.deps.NewRunner = func() claudeRunner {
 		runnerSpawned = true
 		return &stubRunner{result: stubResult(true, "feature exists")}
 	}
@@ -451,8 +396,8 @@ func TestOnSignal_HogMode_NoDiffSpawnsVerifier_Passes(t *testing.T) {
 	}
 }
 
-// In hog mode, when the verification agent exits without signaling (feature
-// not found), onSignal rejects and the task is skipped.
+// In hog mode, when the verification agent exits without signaling,
+// onSignal rejects and the task is skipped.
 func TestOnSignal_HogMode_NoDiffVerifierRejects(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -461,7 +406,6 @@ func TestOnSignal_HogMode_NoDiffVerifierRejects(t *testing.T) {
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
-
 	backend := &stubBackend{remaining: 1, total: 1, description: "test task"}
 
 	l := New(Config{
@@ -473,11 +417,11 @@ func TestOnSignal_HogMode_NoDiffVerifierRejects(t *testing.T) {
 		VerifyLevel:   "hog",
 	}, st, gm, logger)
 
-	l.llmVerifyFunc = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
 		return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
 	}
 
-	l.newRunnerFunc = func() claudeRunner {
+	l.verifier.deps.NewRunner = func() claudeRunner {
 		return &stubRunner{result: stubResult(false, "")}
 	}
 
@@ -489,5 +433,12 @@ func TestOnSignal_HogMode_NoDiffVerifierRejects(t *testing.T) {
 
 	if result {
 		t.Fatal("hog mode should reject when verification agent does not confirm")
+	}
+}
+
+func stubResult(signal bool, summary string) claude.Result {
+	return claude.Result{
+		SignalDetected: signal,
+		Summary:        summary,
 	}
 }
