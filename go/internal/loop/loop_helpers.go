@@ -16,6 +16,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
 	"github.com/brokenalarms/ralph/internal/prompt"
+	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
@@ -178,11 +179,13 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 		l.attempts.ClearMergeFailures(taskID)
 		l.recordCompletedTask(taskID, nextTask)
 		if taskID != "" {
+			closeReason := fmt.Sprintf("Fixed in PR #%s", prNumber)
 			_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: PR merged")
-			if err := l.cfg.TaskBackend.CloseTask(taskID, fmt.Sprintf("Fixed in PR #%s", prNumber)); err != nil {
+			if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
 				l.logger.Warn("beads", "CloseTask failed: %v", err)
 			} else {
 				l.logger.Log("beads", "Closed task %s (PR #%s merged)", taskID, prNumber)
+				l.persistCompletedTask(taskID, nextTask, prNumber, closeReason)
 			}
 		}
 		l.git.PostMergeUpdateMain()
@@ -194,12 +197,14 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 			return false
 		}
 		if taskID != "" {
+			closeReason := fmt.Sprintf("Fixed in PR #%s", prNumber)
 			l.attempts.ClearMergeFailures(taskID)
 			_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: PR chain healthy")
-			if err := l.cfg.TaskBackend.CloseTask(taskID, fmt.Sprintf("Fixed in PR #%s", prNumber)); err != nil {
+			if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
 				l.logger.Warn("beads", "CloseTask failed: %v", err)
 			} else {
 				l.logger.Log("beads", "Closed task %s (PR #%s)", taskID, prNumber)
+				l.persistCompletedTask(taskID, nextTask, prNumber, closeReason)
 			}
 		}
 		return true
@@ -532,6 +537,23 @@ func (l *Loop) updateStreamTask(taskID, nextTask string, priority *int) {
 		}
 	}
 	os.WriteFile(streamTaskFile, []byte(content), 0o644)
+}
+
+// persistCompletedTask writes a completed task record to state.json so
+// ralph-task can verify tasks weren't falsely closed.
+func (l *Loop) persistCompletedTask(taskID, title, prNumber, closeReason string) {
+	if taskID == "" && title == "" {
+		return
+	}
+	ct := state.CompletedTask{
+		ID:          taskID,
+		Title:       title,
+		PRNumber:    prNumber,
+		CloseReason: closeReason,
+	}
+	if err := l.state.AddCompletedTask(ct); err != nil {
+		l.logger.Warn("state", "AddCompletedTask: %v", err)
+	}
 }
 
 // recordCompletedTask appends a completed task label to .completed-tasks
