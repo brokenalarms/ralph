@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,7 @@ type execRunner struct{}
 
 func (r *execRunner) Run(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd.Stderr = io.Discard
 	out, err := cmd.Output()
 	return strings.TrimSpace(string(out)), err
 }

@@ -18,6 +18,7 @@ import (
 // Log is the logging interface used by Runner.
 type Log interface {
 	Log(domain string, format string, args ...any)
+	AgentLog(domain string, format string, args ...any)
 	Success(domain string, format string, args ...any)
 	Warn(domain string, format string, args ...any)
 	Error(domain string, format string, args ...any)
@@ -366,9 +367,9 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				desc := readFirstLine(cfg.Signals.CurrentTask)
 				if desc != "" {
 					if cfg.TaskID != "" {
-						r.Logger.Log("beads", "Working on: %s (%s)", desc, cfg.TaskID)
+						r.Logger.AgentLog("", "Working on: %s (%s)", desc, cfg.TaskID)
 					} else {
-						r.Logger.Log("beads", "Working on: %s", desc)
+						r.Logger.AgentLog("", "Working on: %s", desc)
 					}
 					taskLogged = true
 					if r.OnTaskDetected != nil {

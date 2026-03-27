@@ -436,4 +436,58 @@ func TestLoggerStripsMarkdown(t *testing.T) {
 	}
 }
 
+// AgentLog emits [r] actor prefix instead of [o], used when the orchestrator
+// relays an agent action like task pickup.
+func TestAgentLogUsesAgentActor(t *testing.T) {
+	var buf bytes.Buffer
+	l := &Logger{out: &buf, logFile: &buf}
+	l.AgentLog("", "Working on: fix the bug")
+	got := buf.String()
+
+	if !strings.Contains(got, "[r]") {
+		t.Errorf("AgentLog should emit [r] actor prefix, got: %s", got)
+	}
+	if strings.Contains(got, "[o]") {
+		t.Errorf("AgentLog should NOT emit [o] actor prefix, got: %s", got)
+	}
+	if !strings.Contains(got, "Working on: fix the bug") {
+		t.Errorf("AgentLog should contain message body, got: %s", got)
+	}
+}
+
+// Hyperlink returns OSC 8 terminal escape sequences wrapping the visible
+// text with a clickable URL.
+func TestHyperlink(t *testing.T) {
+	got := Hyperlink("https://example.com", "click me")
+	want := "\033]8;;https://example.com\033\\click me\033]8;;\033\\"
+	if got != want {
+		t.Errorf("Hyperlink() = %q, want %q", got, want)
+	}
+}
+
+// PRLink returns a clickable "PR #N" with OSC 8 link to the GitHub PR URL.
+func TestPRLink(t *testing.T) {
+	got := PRLink("alice/repo", "42")
+	if !strings.Contains(got, "PR #42") {
+		t.Errorf("PRLink should contain 'PR #42', got: %q", got)
+	}
+	if !strings.Contains(got, "https://github.com/alice/repo/pull/42") {
+		t.Errorf("PRLink should contain GitHub URL, got: %q", got)
+	}
+	if !strings.Contains(got, "\033]8;;") {
+		t.Errorf("PRLink should contain OSC 8 escape, got: %q", got)
+	}
+}
+
+// PRLink returns plain "PR #N" when nwo is empty (no remote URL available).
+func TestPRLink_NoNWO(t *testing.T) {
+	got := PRLink("", "42")
+	if got != "PR #42" {
+		t.Errorf("PRLink with empty nwo should return plain 'PR #42', got: %q", got)
+	}
+	if strings.Contains(got, "\033") {
+		t.Error("PRLink with empty nwo should not contain escape sequences")
+	}
+}
+
 func intPtr(n int) *int { return &n }

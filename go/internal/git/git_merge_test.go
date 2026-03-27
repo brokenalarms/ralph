@@ -57,9 +57,9 @@ func TestPostMergeUpdateMain_AdvancesLocalMain(t *testing.T) {
 	}
 }
 
-// postMergeUpdate must advance local main to match origin/main without
+// PostMergeUpdateMain must advance local main to match origin/main without
 // leaving stale staged changes.
-func TestPostMergeUpdate_AtomicResetNoStagedChanges(t *testing.T) {
+func TestPostMergeUpdateMain_AtomicResetNoStagedChanges(t *testing.T) {
 	project, _ := initBareRepo(t)
 	bare := filepath.Join(filepath.Dir(project), "bare.git")
 	ralphDir := filepath.Join(project, ".ralph")
@@ -100,14 +100,8 @@ func TestPostMergeUpdate_AtomicResetNoStagedChanges(t *testing.T) {
 		t.Fatal("origin/main should have advanced")
 	}
 
-	// Call postMergeUpdate (the method under test)
-	merged, err := mgr.postMergeUpdate("42")
-	if err != nil {
-		t.Fatalf("postMergeUpdate failed: %v", err)
-	}
-	if !merged {
-		t.Fatal("postMergeUpdate should return true")
-	}
+	// Call PostMergeUpdateMain (the method under test)
+	mgr.PostMergeUpdateMain()
 
 	// Local main should now match origin/main
 	localMainAfter := gitOutput(project, "rev-parse", "main")
@@ -207,9 +201,9 @@ func TestPostMergeUpdateMain_LogSaysResetWorktreeToLatest(t *testing.T) {
 	}
 }
 
-// nwoFromRemote must extract owner/repo from both SSH and HTTPS remote URLs
+// NWOFromRemote must extract owner/repo from both SSH and HTTPS remote URLs
 // so the GitHub API update-branch endpoint gets the correct repository path.
-func TestNwoFromRemote_SSHAndHTTPS(t *testing.T) {
+func TestNWOFromRemote_SSHAndHTTPS(t *testing.T) {
 	tests := []struct {
 		remote string
 		want   string
@@ -221,9 +215,9 @@ func TestNwoFromRemote_SSHAndHTTPS(t *testing.T) {
 		{"", ""},
 	}
 	for _, tt := range tests {
-		got := nwoFromRemote(tt.remote)
+		got := NWOFromRemote(tt.remote)
 		if got != tt.want {
-			t.Errorf("nwoFromRemote(%q) = %q, want %q", tt.remote, got, tt.want)
+			t.Errorf("NWOFromRemote(%q) = %q, want %q", tt.remote, got, tt.want)
 		}
 	}
 }

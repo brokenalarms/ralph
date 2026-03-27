@@ -156,7 +156,7 @@ func (g *ghCLI) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
 
 // getRequiredCheckNames fetches the required status check names from branch protection.
 func (g *ghCLI) getRequiredCheckNames(repoURL string) []string {
-	nwo := nwoFromRemote(repoURL)
+	nwo := NWOFromRemote(repoURL)
 	if nwo == "" {
 		return nil
 	}

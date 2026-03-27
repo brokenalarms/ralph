@@ -210,7 +210,6 @@ func (m *Manager) AwaitCI(ctx context.Context, prNumber, repoURL string) ([]CICh
 	if status != CIPending {
 		return checks, status, nil
 	}
-	m.Logger.Log("ci", "CI checks pending on PR #%s — waiting for completion...", prNumber)
 	return waitForCI(ctx, fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
 }
 
@@ -249,23 +248,20 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL string,
 		switch status {
 		case CIPassed:
 			if len(pollDurations) > 0 {
-				log.Log("ci", "CI checks pending for PR #%s (polled %s)", prNumber, strings.Join(pollDurations, ".."))
+				log.Log("ci", "CI polled %s for PR #%s", strings.Join(pollDurations, ".."), prNumber)
 			}
-			log.Log("ci", "CI checks passed for PR #%s", prNumber)
 			return checks, CIPassed, nil
 		case CIFailed:
 			if len(pollDurations) > 0 {
-				log.Log("ci", "CI checks pending for PR #%s (polled %s)", prNumber, strings.Join(pollDurations, ".."))
+				log.Log("ci", "CI polled %s for PR #%s", strings.Join(pollDurations, ".."), prNumber)
 			}
-			log.Warn("ci", "CI checks failed for PR #%s", prNumber)
 			return checks, CIFailed, nil
 		}
 
 		if time.Now().After(deadline) {
 			if len(pollDurations) > 0 {
-				log.Log("ci", "CI checks pending for PR #%s (polled %s)", prNumber, strings.Join(pollDurations, ".."))
+				log.Log("ci", "CI polled %s for PR #%s", strings.Join(pollDurations, ".."), prNumber)
 			}
-			log.Warn("ci", "CI poll timeout reached for PR #%s", prNumber)
 			return checks, CIPending, fmt.Errorf("CI checks did not complete within %v", timeout)
 		}
 
