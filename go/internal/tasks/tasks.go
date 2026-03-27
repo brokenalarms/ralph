@@ -84,6 +84,12 @@ type Backend interface {
 	// SetExternalRef sets the external reference on a task (e.g. "gh-123" for PR #123).
 	SetExternalRef(id, ref string) error
 
+	// SetMetadata sets a custom metadata key-value pair on a task.
+	SetMetadata(id, key, value string) error
+
+	// GetMetadata returns the value of a custom metadata key on a task.
+	GetMetadata(id, key string) (string, error)
+
 	// Label returns a human-readable name for the backend.
 	Label() string
 }

@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -38,25 +37,6 @@ func Slugify(s string) string {
 // IsGitRepo returns true if dir is inside a git repository.
 func IsGitRepo(dir string) bool {
 	return gitCmdErr(dir, "rev-parse", "--git-dir") == nil
-}
-
-func parseTaskSeqFromOutput(out string) int {
-	if out == "" {
-		return 0
-	}
-	seqRe := regexp.MustCompile(`/(\d+)-`)
-	maxSeq := 0
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		line = strings.TrimPrefix(line, "* ")
-		line = strings.TrimPrefix(line, "+ ")
-		if m := seqRe.FindStringSubmatch(line); len(m) > 1 {
-			if n, err := strconv.Atoi(m[1]); err == nil && n > maxSeq {
-				maxSeq = n
-			}
-		}
-	}
-	return maxSeq
 }
 
 func parseBranchList(out string) []string {
@@ -142,10 +122,6 @@ func (m *Manager) ListProjectBranches() []string {
 	return parseBranchList(out)
 }
 
-func (m *Manager) ParseTaskSeqFromBranches() int {
-	out := m.gitOutput(m.ProjectDir, "branch", "--list", "ralph/"+m.ProjectName+"/*", "--sort=refname")
-	return parseTaskSeqFromOutput(out)
-}
 
 func (m *Manager) ValidateRemoteBranch(ctx context.Context) error {
 	branch := m.detectDefaultBranch()

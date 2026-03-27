@@ -288,14 +288,31 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.state.Write("last_task", nextTask)
 		l.state.Write("last_task_id", taskID)
 		if taskChanged || !l.git.BranchRenamed {
-			l.git.RenameBranchForTask(nextTask, taskID)
+			// Check metadata for a branch from a previous iteration.
+			// If the remote has that branch with work, check it out to continue.
+			checkedOut := false
+			if taskID != "" {
+				if storedBranch, _ := l.cfg.TaskBackend.GetMetadata(taskID, "branch"); storedBranch != "" {
+					_ = l.git.FetchBranch(storedBranch)
+					if l.git.RemoteBranchHasCommits(storedBranch) {
+						l.git.CheckoutRemoteBranch(storedBranch)
+						checkedOut = true
+					}
+				}
+			}
+			if !checkedOut {
+				l.git.RenameBranchForTask(nextTask, taskID)
+				if taskID != "" && l.git.WorktreeBranch != "" {
+					_ = l.cfg.TaskBackend.SetMetadata(taskID, "branch", l.git.WorktreeBranch)
+				}
+			}
 		}
 		l.writeRunBranch()
 		l.git.TagTaskStart(taskID)
 
 		l.updateStreamTask(taskID, nextTask, taskInfo.Priority)
 
-		// PR-based resume: check the bead's external-ref for a linked PR.
+		// Resume: check external-ref for a linked PR and resolve it.
 		if resumed := l.resumeViaPR(ctx, taskID, nextTask); resumed {
 			l.git.TagTaskEnd(taskID)
 			runIteration++
