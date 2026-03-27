@@ -27,17 +27,17 @@ func normalizeBranch(name string) string {
 }
 
 // BranchName returns the canonical branch name for a task.
-// With a taskID: ralph/<taskID>-<slug>
-// Without:      ralph/<slug>
-func BranchName(projectName, taskID, slug string) string {
-	if taskID != "" {
-		return normalizeBranch(taskID + "-" + slug)
+// With a beadID: ralph/<beadID>-<slug>
+// Without:       ralph/<slug>
+func BranchName(beadID, slug string) string {
+	if beadID != "" {
+		return normalizeBranch(beadID + "-" + slug)
 	}
 	return normalizeBranch(slug)
 }
 
 // WipBranchName returns the placeholder branch used before a task is assigned.
-func WipBranchName(projectName string) string {
+func WipBranchName() string {
 	return normalizeBranch("wip")
 }
 
