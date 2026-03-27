@@ -144,10 +144,15 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 		return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
 	}
 
-	// No PR — check if the remote branch exists with work.
+	// No PR — check if the remote branch exists with clean work on top of main.
 	_ = l.git.FetchBranch(branch)
 	if l.git.RemoteBranchHasCommits(branch) {
-		l.logger.Log("git", "Remote branch %s has work but no PR — creating PR", branch)
+		if !l.git.RemoteBranchIsOnMain(branch) {
+			l.logger.Warn("git", "Remote branch %s diverged from main — abandoning stale work", branch)
+			_ = l.git.DeleteRemoteBranchByName(branch)
+			return false
+		}
+		l.logger.Log("git", "Remote branch %s has clean work but no PR — creating PR", branch)
 		l.git.CheckoutRemoteBranch(branch)
 		prNum, err := l.pushAndCreatePR(ctx, taskID, nextTask, "")
 		if err == nil && prNum != "" {
@@ -192,35 +197,18 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 		return true
 
 	case "OPEN":
-		// Work is done — the PR exists. Close the bead regardless of merge outcome.
+		if ok, reason := l.prChainIsHealthy(prNumber); !ok {
+			l.logger.Warn("git", "PR #%s chain unhealthy: %s — re-running agent", prNumber, reason)
+			return false
+		}
 		if taskID != "" {
 			l.attempts.ClearMergeFailures(taskID)
+			_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: PR chain healthy")
 			if err := l.cfg.TaskBackend.CloseTask(taskID, fmt.Sprintf("Fixed in PR #%s", prNumber)); err != nil {
 				l.logger.Warn("beads", "CloseTask failed: %v", err)
 			} else {
 				l.logger.Log("beads", "Closed task %s (PR #%s)", taskID, prNumber)
 			}
-		}
-
-		// Try to merge if the PR targets the default branch directly.
-		prBase := l.getPRBase(prNumber)
-		defaultBranch := l.git.DetectDefaultBranch()
-		if prBase != "" && prBase != defaultBranch {
-			l.logger.Log("git", "PR #%s targets %s — will merge when base lands", prNumber, prBase)
-			return true
-		}
-
-		merged := false
-		if l.cfg.AutoMerge {
-			l.logger.Log("git", "PR #%s targets %s — merging", prNumber, defaultBranch)
-			var mergeErr error
-			merged, mergeErr = l.mergeWithRetry(ctx, taskID, nextTask, l.git.WorkDir, filepath.Join(l.cfg.Dirs.RalphDir, "raw.log"))
-			if mergeErr != nil {
-				l.logger.Warn("git", "Auto-merge: %v", mergeErr)
-			}
-		}
-		if merged {
-			l.git.PostMergeUpdateMain()
 		}
 		return true
 
@@ -668,6 +656,26 @@ func (l *Loop) waitForInternet(ctx context.Context) bool {
 			l.logger.Log("", "Internet still unreachable (%s elapsed)", elapsed)
 		}
 	}
+}
+
+// prChainIsHealthy checks whether the PR's head branch is still based
+// on the configured default branch. Returns false if the branch has
+// diverged (stale work from a previous run that main has moved past).
+func (l *Loop) prChainIsHealthy(prNumber string) (bool, string) {
+	gh := l.git.GH()
+	if gh == nil || !gh.Available() {
+		return false, "gh CLI not available"
+	}
+
+	headBranch, _ := gh.GetPRHead(l.git.WorkDir, prNumber)
+	if headBranch == "" {
+		return false, fmt.Sprintf("PR #%s has no head branch", prNumber)
+	}
+	_ = l.git.FetchBranch(headBranch)
+	if !l.git.RemoteBranchIsOnMain(headBranch) {
+		return false, fmt.Sprintf("branch %s diverged from %s", headBranch, l.git.DetectDefaultBranch())
+	}
+	return true, ""
 }
 
 // getPRBase returns the base branch of the given PR, or empty string on error.

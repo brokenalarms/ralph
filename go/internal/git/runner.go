@@ -164,6 +164,26 @@ func (m *Manager) RemoteBranchHasCommits(branch string) bool {
 	return count != "" && count != "0"
 }
 
+// RemoteBranchIsOnMain returns true if a remote branch is a descendant of
+// origin's default branch (i.e., main is an ancestor). Returns false if the
+// branch has diverged — caller should treat it as stale and start fresh.
+func (m *Manager) RemoteBranchIsOnMain(branch string) bool {
+	defaultBranch := m.detectDefaultBranch()
+	remote := "origin/" + branch
+
+	// Main is ancestor of branch — branch is cleanly ahead.
+	if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, remote) == nil {
+		return true
+	}
+
+	// Branch is ancestor of main — work already landed.
+	if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", remote, "origin/"+defaultBranch) == nil {
+		return true
+	}
+
+	return false
+}
+
 func (m *Manager) mRebaseInProgress() bool {
 	gitDir := m.gitOutput(m.WorkDir, "rev-parse", "--git-dir")
 	if gitDir == "" {
