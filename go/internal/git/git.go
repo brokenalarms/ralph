@@ -163,6 +163,20 @@ func (m *Manager) tryResumeWorktree() error {
 
 	m.Logger.Log("git", "Resuming worktree: %s", m.WorkDir)
 
+	defaultBranch := m.detectDefaultBranch()
+	_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch)
+
+	// If all local work is already on main, reset to latest main.
+	if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "HEAD", "origin/"+defaultBranch) == nil {
+		m.Logger.Log("git", "All local work on main — resetting to origin/%s", defaultBranch)
+		m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+defaultBranch)
+		m.BranchRenamed = false
+		if m.State != nil {
+			_ = m.State.Write("branch_renamed", "false")
+		}
+		return nil
+	}
+
 	_ = m.EnsureUpToDate(context.Background())
 	return nil
 }
