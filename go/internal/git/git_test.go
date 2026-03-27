@@ -434,7 +434,7 @@ func TestRenameBranchForTask_IncludesTaskID(t *testing.T) {
 
 	mgr.RenameBranchForTask("Fix auth bug", "ralph-abc1")
 
-	wantBranch := "ralph/" + mgr.ProjectName + "/ralph-abc1-fix-auth-bug"
+	wantBranch := "ralph/ralph-abc1-fix-auth-bug"
 	if mgr.WorktreeBranch != wantBranch {
 		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, wantBranch)
 	}
