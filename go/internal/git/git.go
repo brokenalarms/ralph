@@ -202,34 +202,38 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) error {
 		return nil
 	}
 
-	defaultBranch := m.detectDefaultBranch()
+	// Rebase onto stack head if set, otherwise the default branch.
+	baseBranch := m.detectDefaultBranch()
+	if m.PrevBranch != "" {
+		baseBranch = m.PrevBranch
+	}
 
-	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", defaultBranch); err != nil {
+	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", baseBranch); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		m.Logger.Warn("git", "Failed to fetch origin/%s: %v", defaultBranch, err)
+		m.Logger.Warn("git", "Failed to fetch origin/%s: %v", baseBranch, err)
 		return nil
 	}
 
-	if !m.refExists(m.WorkDir, "origin/"+defaultBranch) {
+	if !m.refExists(m.WorkDir, "origin/"+baseBranch) {
 		return nil
 	}
 
-	if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, "HEAD") == nil {
-		m.Logger.Log("git", "%s Already up to date with origin/%s", logging.BranchTag(defaultBranch), defaultBranch)
+	if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+baseBranch, "HEAD") == nil {
+		m.Logger.Log("git", "%s Already up to date with origin/%s", logging.BranchTag(baseBranch), baseBranch)
 		return nil
 	}
 
-	// No local commits ahead of main → safe to force-reset (fresh start).
-	localCommits := m.gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+"..HEAD")
+	// No local commits ahead of base → safe to force-reset (fresh start).
+	localCommits := m.gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+baseBranch+"..HEAD")
 	if localCommits == "" || localCommits == "0" {
-		m.Logger.Log("git", "%s Resetting to origin/%s (no local work)", logging.BranchTag(defaultBranch), defaultBranch)
-		m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+defaultBranch)
+		m.Logger.Log("git", "%s Resetting to origin/%s (no local work)", logging.BranchTag(baseBranch), baseBranch)
+		m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+baseBranch)
 		return nil
 	}
 
-	// Local commits exist — try to rebase them onto latest main.
+	// Local commits exist — try to rebase them onto latest base.
 	var result error
 	m.withStash("ralph-autostash", func() {
 		if ctx.Err() != nil {
@@ -238,12 +242,12 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) error {
 		}
 
 		// 1. Fast-forward rebase
-		if m.tryRebase(ctx, defaultBranch) {
+		if m.tryRebase(ctx, baseBranch) {
 			return
 		}
 
 		// 2. Auto-resolve mechanical conflicts
-		if m.tryAutoResolve(ctx, defaultBranch) {
+		if m.tryAutoResolve(ctx, baseBranch) {
 			return
 		}
 
@@ -330,6 +334,14 @@ func (m *Manager) RenameBranchTo(name string) {
 			_ = m.State.Write("branch_renamed", "true")
 			_ = m.State.Write("prev_branch", m.PrevBranch)
 		}
+	}
+}
+
+// SetPrevBranch sets the previous branch for stacked PR targeting.
+func (m *Manager) SetPrevBranch(branch string) {
+	m.PrevBranch = branch
+	if m.State != nil {
+		_ = m.State.Write("prev_branch", branch)
 	}
 }
 

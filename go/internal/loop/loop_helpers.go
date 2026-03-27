@@ -539,6 +539,47 @@ func (l *Loop) updateStreamTask(taskID, nextTask string, priority *int) {
 	os.WriteFile(streamTaskFile, []byte(content), 0o644)
 }
 
+// setStackHead reads the last completed bead from state.json, looks up
+// its branch from bead metadata, and sets git.PrevBranch so the next
+// task's PR targets that branch instead of main. Falls back to no
+// PrevBranch (= target main) if no completed tasks or no branch metadata.
+func (l *Loop) setStackHead() {
+	tasks, err := l.state.GetCompletedTasks()
+	if err != nil || len(tasks) == 0 {
+		return
+	}
+	gh := l.git.GH()
+
+	// Walk backwards to find the most recent unmerged PR.
+	for i := len(tasks) - 1; i >= 0; i-- {
+		id := tasks[i].ID
+		if id == "" {
+			continue
+		}
+		ref, _ := l.cfg.TaskBackend.GetExternalRef(id)
+		prNum := parsePRNumber(ref)
+		if prNum == "" {
+			continue
+		}
+		// Check PR state — if merged, its branch is gone, keep walking.
+		if gh != nil && gh.Available() {
+			prState, _ := gh.GetPRState(l.git.WorkDir, prNum)
+			if strings.ToUpper(prState) == "MERGED" {
+				continue
+			}
+		}
+		// Open PR — use its branch as stack head.
+		branch, _ := l.cfg.TaskBackend.GetMetadata(id, "branch")
+		if branch == "" {
+			continue
+		}
+		l.git.SetPrevBranch(branch)
+		l.logger.Log("git", "Stack head: %s (from %s, PR #%s)", branch, id, prNum)
+		return
+	}
+	// All completed tasks merged — start from default branch.
+}
+
 // persistCompletedTask writes a completed task record to state.json so
 // ralph-task can verify tasks weren't falsely closed.
 func (l *Loop) persistCompletedTask(taskID, title, prNumber, closeReason string) {

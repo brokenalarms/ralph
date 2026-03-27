@@ -246,6 +246,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.state.Write("last_task_id", taskID)
 
 		if taskChanged || !l.git.BranchRenamed {
+			l.setStackHead()
 			l.checkoutExistingBranch(taskID, nextTask)
 		}
 		l.writeRunBranch()
