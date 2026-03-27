@@ -34,6 +34,22 @@ var knownPrefixes = []string{
 	ComponentCommand + ":",
 }
 
+// StripComponentPrefix removes a known component prefix ("ralph loop:",
+// "ralph task:", "ralph command:") from the title, if present.
+func StripComponentPrefix(title string) string {
+	lower := strings.ToLower(title)
+	for _, prefix := range knownPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			stripped := strings.TrimSpace(title[len(prefix):])
+			if stripped != "" {
+				return stripped
+			}
+			return title
+		}
+	}
+	return title
+}
+
 // DetectComponent returns the ralph component (loop, task, command) that best
 // matches the given title and description keywords. Returns empty string if
 // no component can be determined.

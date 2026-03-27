@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
 // PushAndCreatePR pushes the current branch to remote and creates a PR if
@@ -114,7 +115,7 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body st
 }
 
 func (m *Manager) prTitle(taskID, taskDesc string) string {
-	title := taskDesc
+	title := tasks.StripComponentPrefix(taskDesc)
 	if taskID != "" {
 		title = "[" + taskID + "] " + title
 	}

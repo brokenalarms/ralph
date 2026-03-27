@@ -231,6 +231,40 @@ func TestManager_PushAndCreatePR_UpdatesTitleWhenPRExists(t *testing.T) {
 	}
 }
 
+// PushAndCreatePR strips component prefixes like "ralph loop:" from the
+// title — the bead ID already identifies the source.
+func TestManager_PushAndCreatePR_StripsComponentPrefix(t *testing.T) {
+	r := newStubRunner()
+	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
+	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	r.On("rev-list --count origin/main..HEAD", "3", nil)
+	r.On("fetch", "", nil)
+	r.On("merge-base --is-ancestor", "", nil)
+
+	gh := &stubGitHub{available: true, openPR: "42"}
+
+	dir := t.TempDir()
+	mgr := &Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir + "/worktree",
+		WorktreeBranch: "ralph/test/01-feature",
+		Runner:         r,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         discardLog{},
+	}
+
+	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "ralph loop: fix signal cleanup", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := "[ralph-abc] fix signal cleanup"
+	if gh.editPRTitle != want {
+		t.Errorf("EditPR title = %q, want %q", gh.editPRTitle, want)
+	}
+}
+
 // PushAndCreatePR does not call EditPR when no bead ID is available.
 func TestManager_PushAndCreatePR_NoEditWithoutTaskID(t *testing.T) {
 	r := newStubRunner()

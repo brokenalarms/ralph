@@ -336,9 +336,13 @@ func (m *Manager) ResetToDefaultBranch() {
 	m.Logger.Log("git", "Reset worktree to origin/%s", defaultBranch)
 }
 
-// SetPrevBranch sets the previous branch for stacked PR targeting.
+// SetPrevBranch sets the previous branch for stacked PR targeting and
+// persists it to state so it survives process restarts.
 func (m *Manager) SetPrevBranch(branch string) {
 	m.PrevBranch = branch
+	if m.State != nil {
+		_ = m.State.Write("prev_branch", branch)
+	}
 }
 
 // PrepareForNextTask resets BranchRenamed so the next task gets a new branch
