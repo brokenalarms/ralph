@@ -89,19 +89,14 @@ type Loop struct {
 }
 
 // New creates an execution loop from the given configuration. All agent
-// invocations go through the centralized agent module, which applies
-// container isolation when sandbox-exec is available on the host.
+// invocations go through the centralized agent module.
 func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *Loop {
 	signals := claude.DefaultSignalPaths(cfg.Dirs.RalphDir)
 
 	limiter := ratelimit.New(cfg.Dirs.RalphDir, cfg.CallsPerHour)
 	limiter.StopFile = filepath.Join(cfg.Dirs.RalphDir, "stop")
 
-	var sandbox *agent.Sandbox
-	if agent.Available() {
-		sandbox = agent.DefaultSandbox()
-	}
-	agentRunner := agent.New(logger, sandbox)
+	agentRunner := agent.New(logger)
 
 	l := &Loop{
 		cfg:           cfg,
