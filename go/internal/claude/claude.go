@@ -230,7 +230,6 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 		args := []string{
 			"--print", "--verbose",
 			"--output-format", "stream-json",
-			"--input-format", "stream-json",
 			"--add-dir", cfg.WorkDir,
 			"--add-dir", cfg.RalphDir,
 			"--allowedTools", strings.Join(IterationAllowedTools, ","),
@@ -239,22 +238,12 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 		}
 		cmd = exec.Command("claude", args...)
 		cmd.Dir = cfg.WorkDir
+		cmd.Stdin = nil
 		cmd.Stdout = rawLog
 		cmd.Stderr = rawLog
 		// Start in its own process group so we can signal it cleanly.
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
-
-	// Create stdin pipe for message injection. The pipe stays open for
-	// the lifetime of the process, allowing feedback and test failure
-	// output to be sent to the running agent without killing it.
-	stdinPipe, pipeErr := cmd.StdinPipe()
-	if pipeErr != nil {
-		return Result{}, fmt.Errorf("creating stdin pipe: %w", pipeErr)
-	}
-	r.mu.Lock()
-	r.stdinPipe = stdinPipe
-	r.mu.Unlock()
 
 	if err := cmd.Start(); err != nil {
 		return Result{}, fmt.Errorf("starting claude: %w", err)
