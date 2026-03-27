@@ -218,21 +218,18 @@ func TestToolBatcher_NonVerboseHidesVerboseOnlyTools(t *testing.T) {
 		t.Errorf("TodoWrite should be suppressed in non-verbose mode, got %v", out)
 	}
 
-	// Edit and Agent should pass through.
+	// Edit is now verbose-only too.
 	out = b.ProcessLine("[Edit] /path/file.go")
-	if len(out) != 1 {
-		t.Fatalf("Edit should pass through in non-verbose mode, got %d lines", len(out))
-	}
-	plain := stripANSI(out[0])
-	if !strings.Contains(plain, "[Edit]") {
-		t.Errorf("Edit line missing, got: %s", plain)
+	if len(out) != 0 {
+		t.Errorf("Edit should be suppressed in non-verbose mode, got %v", out)
 	}
 
+	// Agent should pass through.
 	out = b.ProcessLine("[Agent] exploring codebase")
 	if len(out) != 1 {
 		t.Fatalf("Agent should pass through in non-verbose mode, got %d lines", len(out))
 	}
-	plain = stripANSI(out[0])
+	plain := stripANSI(out[0])
 	if !strings.Contains(plain, "[Agent]") {
 		t.Errorf("Agent line missing, got: %s", plain)
 	}
@@ -320,7 +317,7 @@ func TestVerboseOnlyTools_SingleDefinitionPoint(t *testing.T) {
 			t.Errorf("%s should be in VerboseOnlyTools", tool)
 		}
 	}
-	notExpected := []string{"Edit", "Agent"}
+	notExpected := []string{"Agent"}
 	for _, tool := range notExpected {
 		if VerboseOnlyTools[tool] {
 			t.Errorf("%s should NOT be in VerboseOnlyTools", tool)

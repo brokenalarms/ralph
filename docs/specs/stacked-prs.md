@@ -1,137 +1,123 @@
-# Stacked Single-Commit PRs
+# Stacked Branch Workflow
 
-## Problem
+## Overview
 
-The current git strategy resets the worktree to `origin/main` after every
-squash-merge. Each task starts from scratch. If anything goes wrong (GitHub
-down, CI flaky, merge conflict from parallel pushes), the next task starts
-from a stale main and potentially conflicts with everything in between.
-
-Work is fragile: a single merge failure can cascade into repeated conflicts
-across subsequent tasks. The `RemoteBranchHasWork`, `ResetAndReplay`, and
-`PostMergeReset` machinery exists to recover from these failures — complexity
-that wouldn't be needed if tasks built on each other linearly.
-
-## Design
-
-Each task produces exactly one commit. The worktree is never reset to main.
-Tasks build linearly on each other:
+Tasks build linearly on each other. Each task gets its own branch and PR.
+When auto-merge is on and PRs merge immediately, the stack stays at depth
+0-1 and every task effectively targets the default branch. When merges are
+delayed (CI pending, stacked waiting), branches stack and merge bottom-up.
 
 ```
-main ← task-1 (1 commit) ← task-2 (1 commit) ← task-3 (1 commit)
+default ← task-1 (PR #1) ← task-2 (PR #2) ← task-3 (PR #3)
 ```
 
-Each commit gets its own PR targeting the previous PR's branch (or main
-for the first). PRs are one commit each and fast-forward mergeable.
+## Stack Head Derivation
 
-### Commit discipline
+The stack head is the branch the next task should build on. It's derived
+from the completed tasks array in state.json:
 
-The agent squashes all its work into a single commit before signaling
-completion. The orchestrator enforces this: if HEAD is more than 1 commit
-ahead of the previous task's commit, the orchestrator squashes before pushing.
+1. Walk completed tasks backwards (most recent first)
+2. For each: get its external-ref, parse the PR number
+3. If no PR → skip (work wasn't pushed)
+4. Check PR state via `gh pr view`
+5. If MERGED → skip (branch deleted by auto-delete, work is on default branch)
+6. If OPEN → verify branch exists on remote → this is the stack head
+7. If all completed tasks are merged or have no PR → stack head is empty, use default branch
 
-### PR creation
+`setStackHead()` runs:
+- On resume in `initRun`, before the first iteration
+- At the start of each iteration, before `checkoutExistingBranch`
 
+The result is stored in `git.Manager.PrevBranch` via `SetPrevBranch()`.
+This is the **only** place PrevBranch is set. Branch renames do not
+affect it.
+
+## Resume Flow
+
+1. `tryResumeWorktree` — restores worktree path and state from state.json. No git operations.
+2. `initRun` — calls `setStackHead()` to derive PrevBranch, then `EnsureUpToDate` which rebases onto PrevBranch (or default branch if no stack).
+
+## Iteration Flow
+
+1. `setStackHead()` — re-derive PrevBranch (previous task may have just merged)
+2. `checkoutExistingBranch` — check bead metadata for stored branch name:
+   - Remote has commits and branch is on default branch → check out remote branch
+   - Remote has commits but diverged → delete stale remote, start fresh with branch name
+   - No remote commits → reuse branch name locally from current HEAD
+   - No stored branch → generate name via `BranchName()`, store in bead metadata
+3. Agent runs on the branch
+4. Agent signals completion → orchestrator verifies
+5. `pushSignalPR` — push branch, create PR targeting PrevBranch (or default branch)
+6. `mergeIfEnabled` — if auto-merge and PR targets default branch, run CI-aware merge:
+   - Wait for CI
+   - CI fails → spawn fix agent → retry
+   - Fix agent exhausted → skip task
+   - CI passes → merge → `PostMergeUpdateMain`
+   - PR targets non-default (stacked) → skip merge, close bead
+7. `closeOrRetryTask` — only close if PR exists (PRNum non-empty). No PR = task stays open.
+
+## PR Targeting
+
+`PushAndCreatePR` uses `PrevBranch` for the PR base:
+- PrevBranch set (open PR in stack) → PR targets that branch
+- PrevBranch empty → PR targets default branch
+- If no commits between PrevBranch and HEAD → fall back to default branch
+
+## EnsureUpToDate
+
+Rebases onto `PrevBranch` when set, otherwise the default branch. Used:
+- On resume (via `initRun`)
+- Between tasks when the task changes (via `handleRebase` in the main loop)
+
+## Branch Naming
+
+All branch names go through `normalizeBranch()` which strips duplicate
+`ralph/` prefixes:
+
+- With taskID: `ralph/<taskID>-<slug>`
+- Without taskID: `ralph/<slug>`
+- Wip: `ralph/wip`
+
+Branch names are stored in bead metadata (`bd update --metadata`) when
+first created. On subsequent iterations for the same task, the stored
+name is reused.
+
+## resolveByPRState (Resume with Existing PR)
+
+When `resumeViaPR` finds an existing PR for a task:
+
+- **MERGED** → close bead, update main, move on
+- **OPEN** → run `prChainIsHealthy`:
+  - Check head branch exists and is on default branch
+  - If unhealthy → return false, agent re-runs task fresh
+  - If healthy → run CI-aware merge (same as post-signal), close on success
+- **CLOSED** → return false, agent re-runs task fresh
+
+## Bead Lifecycle
+
+A bead is only closed when:
+1. A PR exists (PRNum non-empty), AND
+2. Either: merge succeeded, OR auto-merge is off, OR PR is stacked (will merge when base lands)
+
+A bead is skipped when:
+- Merge failed after fix agent exhausted retries
+
+A bead stays open when:
+- No PR was created (push failed, PR creation failed)
+- PR chain is unhealthy (stale branch, diverged from default)
+
+## Completed Tasks Array
+
+`state.json` contains `completed_tasks[]` with entries added by
+`persistCompletedTask` after successful bead closure:
+
+```json
+{
+  "completed_tasks": [
+    {"id": "ralph-abc", "title": "...", "pr_number": "285", "close_reason": "Fixed in PR #285"}
+  ]
+}
 ```
-PR #1: task-1 branch → main        (1 commit ahead of main)
-PR #2: task-2 branch → task-1      (1 commit ahead of task-1)
-PR #3: task-3 branch → task-2      (1 commit ahead of task-2)
-```
 
-When PR #1 merges (fast-forward into main), PR #2's base is now main.
-GitHub auto-updates the base branch. PR #2 becomes 1 commit ahead of main.
-
-### No more PostMergeReset
-
-After a PR merges:
-1. The worktree stays where it is — on the next task's commit
-2. No `git reset --hard origin/main`
-3. No branch deletion and recreation
-4. No `RecreateFromMain`
-
-The worktree just keeps advancing linearly.
-
-### Merge order
-
-PRs merge in order: #1 before #2 before #3. The orchestrator merges the
-oldest unmerged PR first. If #1 can't merge (CI failure, conflict), #2
-and #3 wait. The agent keeps working on #4, #5 etc. — work isn't blocked,
-only merging is.
-
-### Resolving conflicts
-
-When the stack conflicts with main (someone pushed directly):
-
-1. `git rebase --update-refs origin/main` from the tip of the stack
-2. Resolve conflicts at the first conflicting commit
-3. Subsequent commits replay cleanly (they're independent changes)
-4. Force-push all branches: `git push --force-with-lease origin branch1 branch2 ...`
-5. GitHub PRs auto-update
-
-This is one rebase operation, not N separate conflict resolutions.
-
-### Failed CI
-
-If task-3's PR fails CI:
-- Task-4, task-5 etc. continue building on top (CI failure doesn't block work)
-- A fix agent (or the main agent via stdin pipe) fixes the issue
-- The fix becomes part of task-3's single commit (amend)
-- Force-push task-3's branch, CI re-runs
-- Downstream PRs are unaffected (their base is task-3's branch, not its content)
-
-### Session boundary
-
-When the loop stops and restarts:
-1. Resume from the latest commit on the stack
-2. `git rebase --update-refs origin/main` to sync with any changes merged while stopped
-3. Continue building on top
-
-No worktree recreation, no branch detection heuristics.
-
-## What gets removed
-
-- `PostMergeReset` — no reset after merge
-- `RecreateFromMain` — no worktree recreation
-- `RemoteBranchHasWork` — no stale branch detection
-- `resumeFromRemoteBranch` — no legacy resume path
-- `ResetAndReplay` — no cherry-pick replay
-- `RotateBranch` — no branch rotation to `/next`
-- `TempBranch()` / `/next` — no placeholder branch name
-- Squash-merge detection (`IsBranchSquashMerged`, `findLastSquashMergedBranch`)
-
-All replaced by: linear commits, `--update-refs` rebase, sequential PR merge.
-
-## What stays
-
-- `EnsureUpToDate` — still needed for the initial sync on startup
-- Branch naming (`ralph/<project>/<beadID>-<slug>`) — each commit gets a branch
-- `PushAndCreatePR` — still creates PRs, but targets previous branch, not main
-- `AutoMergeCurrentBranch` — still merges, but only the oldest unmerged PR
-- CI polling — unchanged
-- LLM verification — unchanged
-
-## Migration
-
-1. Current worktrees continue working — the first task after migration starts
-   a new linear chain from main
-2. Old remote branches (pre-migration) are cleaned up on first run
-3. No database migration needed — beads are unaffected
-4. The `--update-refs` flag is already used in rebase paths
-
-## Risks
-
-- **GitHub base branch updates**: When PR #1 merges, GitHub should auto-update
-  PR #2's base from `task-1` to `main`. If it doesn't, the orchestrator needs
-  to manually update the base via API.
-
-- **Long stacks**: A stack of 50 PRs is hard to manage. Consider auto-merging
-  completed PRs eagerly (as today) to keep the stack short.
-
-- **Amend + force-push**: Squashing agent work into one commit requires
-  amending. If the branch is already pushed, this needs force-push. The
-  orchestrator owns push so this is safe, but it changes the commit hash
-  which invalidates CI runs.
-
-- **Reviewer experience**: Each PR is one commit, one task — easy to review.
-  But the PR diff shows changes relative to the previous task's branch, not
-  main. Reviewers need to understand the stack context.
+Only tasks with PRs appear here. This array is the source of truth for
+stack head derivation.
