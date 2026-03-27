@@ -483,8 +483,8 @@ func TestFilterStreamJSON_NoDuplicatesFromAssistantAndDelta(t *testing.T) {
 	}
 }
 
-// Verifies that non-verbose mode hides Read/Bash/Write but keeps Edit, Agent,
-// prose, signals, and diagnosis banners visible in the filtered output.
+// Verifies that non-verbose mode hides VerboseOnlyTools while keeping
+// visible tools, prose, signals, and diagnosis banners in the filtered output.
 func TestFilterStreamJSON_NonVerboseHidesLowValueTools(t *testing.T) {
 	dir := t.TempDir()
 	rawPath := filepath.Join(dir, "raw.log")
@@ -529,22 +529,19 @@ func TestFilterStreamJSON_NonVerboseHidesLowValueTools(t *testing.T) {
 	}
 	content := ansiRe.ReplaceAllString(string(got), "")
 
-	// Hidden tools should NOT appear.
-	if strings.Contains(content, "[Read]") {
-		t.Errorf("Read should be hidden in non-verbose mode, got: %q", content)
+	// Verbose-only tools that were sent should not appear in output.
+	for _, hidden := range []string{"Read", "Bash", "Write", "Edit"} {
+		if !IsVerboseOnlyTool(hidden) {
+			t.Fatalf("test assumption: %s should be in VerboseOnlyTools", hidden)
+		}
+		if strings.Contains(content, "["+hidden+"]") {
+			t.Errorf("%s should be hidden in non-verbose mode, got: %q", hidden, content)
+		}
 	}
-	if strings.Contains(content, "[Bash] go test") {
-		t.Errorf("Bash should be hidden in non-verbose mode, got: %q", content)
+	// Agent is not verbose-only — should be visible.
+	if IsVerboseOnlyTool("Agent") {
+		t.Fatal("test assumption: Agent should not be verbose-only")
 	}
-	if strings.Contains(content, "[Write]") {
-		t.Errorf("Write should be hidden in non-verbose mode, got: %q", content)
-	}
-
-	// Edit is now verbose-only — should be hidden.
-	if strings.Contains(content, "[Edit]") {
-		t.Errorf("Edit should be hidden in non-verbose mode, got: %q", content)
-	}
-	// Agent should still be visible.
 	if !strings.Contains(content, "[Agent]") {
 		t.Errorf("Agent should be visible in non-verbose mode, got: %q", content)
 	}

@@ -51,7 +51,7 @@ func (b *ToolBatcher) ProcessLine(text string) []string {
 	m := batchableToolRe.FindStringSubmatch(text)
 	if m != nil {
 		tool, arg := m[1], m[2]
-		if b.hideVerboseOnly && VerboseOnlyTools[tool] {
+		if b.hideVerboseOnly && IsVerboseOnlyTool(tool) {
 			return flushed
 		}
 		if len(b.batches) == 0 {
