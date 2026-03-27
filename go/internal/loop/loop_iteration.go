@@ -74,14 +74,39 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 
 	headAfterSignal := l.git.HeadRev()
 	if p.headBefore != "" && headAfterSignal == p.headBefore {
-		l.logger.Log("git", "No new commits — work already on main")
+		// No new commits — check if there's a merged PR proving the work is on main.
+		l.logger.Log("git", "No new commits — checking for merged PR")
+		canClose := false
+		closeReason := "work already on main"
 		if p.taskID != "" {
-			_ = l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", "work already on main, agent confirmed")
-			if err := l.cfg.TaskBackend.CloseTask(p.taskID, "work already on main"); err != nil {
+			ref, _ := l.cfg.TaskBackend.GetExternalRef(p.taskID)
+			if prNum := parsePRNumber(ref); prNum != "" {
+				gh := l.git.GH()
+				if gh != nil {
+					if prState, _ := gh.GetPRState(l.git.WorkDir, prNum); strings.ToUpper(prState) == "MERGED" {
+						canClose = true
+						closeReason = fmt.Sprintf("PR #%s already merged", prNum)
+						l.logger.Log("git", "PR #%s confirmed merged — closing bead", prNum)
+					} else {
+						l.logger.Warn("git", "No new commits but PR #%s is %s — task stays open", prNum, prState)
+					}
+				}
+			} else {
+				// No PR reference — agent says done but no proof. Close anyway
+				// since verification passed, but log it clearly.
+				canClose = true
+				l.logger.Log("git", "No PR reference but verification passed — closing bead")
+			}
+		}
+		if canClose && p.taskID != "" {
+			_ = l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", closeReason)
+			if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
 				l.logger.Warn("beads", "CloseTask: %v", err)
 			} else {
-				l.logger.Log("beads", "Closed task %s (work already on main)", p.taskID)
+				l.logger.Log("beads", "Closed task %s (%s)", p.taskID, closeReason)
 			}
+		} else if p.taskID != "" {
+			l.logger.Warn("beads", "Task %s stays open — no merged PR to confirm work on main", p.taskID)
 		}
 		l.git.TagTaskEnd(p.taskID)
 		*runIteration++
