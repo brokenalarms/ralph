@@ -12,6 +12,11 @@ import (
 
 var Version = "0.1.0-dev"
 
+const (
+	DefaultVerifyModel           = "claude-haiku-4-5-20251001"
+	DefaultVerifyEscalationModel = "claude-sonnet-4-5-20241022"
+)
+
 // SourceDir is the root of Ralph's source repository, set at build time via
 // ldflags. Used by evolve to locate build-go.sh regardless of which project
 // ralph loop is running against.

@@ -308,7 +308,8 @@ var Flags = []FlagDef{
 	{
 		Long: "--verify-model", MetaVar: "<model>",
 		Help:      "Model for LLM verification (first attempt)",
-		Default:   "claude-haiku-4-5-20251001",
+		Default:   DefaultVerifyModel,
+		EnvVar:    "RALPH_VERIFY_MODEL",
 		ConfigKey: "verify_model",
 		Kind:      KindString, TrackCLI: true,
 		Apply: func(cfg *Config, val string) error {
@@ -320,7 +321,8 @@ var Flags = []FlagDef{
 	{
 		Long: "--verify-escalation-model", MetaVar: "<model>",
 		Help:      "Model for LLM verification escalation (subsequent attempts)",
-		Default:   "claude-sonnet-4-5-20241022",
+		Default:   DefaultVerifyEscalationModel,
+		EnvVar:    "RALPH_VERIFY_ESCALATION_MODEL",
 		ConfigKey: "verify_escalation_model",
 		Kind:      KindString, TrackCLI: true,
 		Apply: func(cfg *Config, val string) error {

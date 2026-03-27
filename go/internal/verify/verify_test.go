@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
 )
 
@@ -342,7 +343,7 @@ func TestLLMVerifyPR_AcceptsVerifyOpts(t *testing.T) {
 		BeadTitle:       "struct api test",
 		BeadDescription: "proves VerifyOpts struct works",
 		BeadAcceptance:  "accepts struct",
-		Model:           ModelHaiku,
+		Model:           config.DefaultVerifyModel,
 	})
 	if !result.Passed {
 		t.Errorf("expected pass with no diff, got: %s", result.Reason)
@@ -450,8 +451,8 @@ func TestModelShortName(t *testing.T) {
 		input string
 		want  string
 	}{
-		{ModelHaiku, "haiku"},
-		{ModelSonnet, "sonnet"},
+		{config.DefaultVerifyModel, "haiku"},
+		{config.DefaultVerifyEscalationModel, "sonnet"},
 		{"claude-opus-4-6-20260101", "opus"},
 		{"unknown-model-v1", "unknown-model-v1"},
 	}

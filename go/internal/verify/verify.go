@@ -20,12 +20,6 @@ type GitQuerier interface {
 	LogOneline(from, to string) string
 }
 
-// Model IDs used as defaults for verification escalation.
-const (
-	ModelHaiku  = "claude-haiku-4-5-20251001"
-	ModelSonnet = "claude-sonnet-4-5-20241022"
-)
-
 // ModelShortName extracts a friendly name from a model ID string.
 // "claude-sonnet-4-5-20241022" → "sonnet", "claude-haiku-4-5-20251001" → "haiku".
 // Returns the full ID if no known family is found.
@@ -228,11 +222,7 @@ func LLMVerifyPR(opts VerifyOpts) Result {
 	}
 
 	prompt := loadReviewPrompt(opts.PromptsDir, opts.BeadTitle, opts.BeadDescription, opts.BeadAcceptance, source, diff)
-	var model []string
-	if opts.Model != "" {
-		model = []string{opts.Model}
-	}
-	return callLLM(opts.Ctx, opts.WorkDir, prompt, opts.QueryFn, model...)
+	return callLLM(opts.Ctx, opts.WorkDir, prompt, opts.Model, opts.QueryFn)
 }
 
 func loadReviewPrompt(promptsDir, beadTitle, beadDescription, beadAcceptance, source, diff string) string {
@@ -286,11 +276,8 @@ func getPRDiff(_ context.Context, workDir, taskID string, gh git.GitHub) string 
 // callLLM sends a prompt to a Claude model and interprets YES/NO response.
 // When queryFn is non-nil, the call goes through the centralized agent module.
 // Falls back to direct exec.Command when queryFn is nil (tests, standalone use).
-func callLLM(ctx context.Context, workDir, prompt string, queryFn QueryFunc, model ...string) Result {
-	m := ModelHaiku
-	if len(model) > 0 && model[0] != "" {
-		m = model[0]
-	}
+func callLLM(ctx context.Context, workDir, prompt, model string, queryFn QueryFunc) Result {
+	m := model
 
 	var response string
 	var err error

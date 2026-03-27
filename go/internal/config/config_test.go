@@ -1033,6 +1033,41 @@ func TestConfigToState_ArgsFromState_Roundtrip(t *testing.T) {
 	}
 }
 
+// Verify model defaults come from config constants, not hardcoded in verify.go.
+// Env vars RALPH_VERIFY_MODEL and RALPH_VERIFY_ESCALATION_MODEL override defaults.
+func TestVerifyModelDefaults(t *testing.T) {
+	t.Setenv("RALPH_VERIFY_MODEL", "")
+	t.Setenv("RALPH_VERIFY_ESCALATION_MODEL", "")
+
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.VerifyModel != DefaultVerifyModel {
+		t.Errorf("VerifyModel = %q, want %q", cfg.VerifyModel, DefaultVerifyModel)
+	}
+	if cfg.VerifyEscalationModel != DefaultVerifyEscalationModel {
+		t.Errorf("VerifyEscalationModel = %q, want %q", cfg.VerifyEscalationModel, DefaultVerifyEscalationModel)
+	}
+}
+
+// Env var overrides the default verify model.
+func TestVerifyModelEnvVar(t *testing.T) {
+	t.Setenv("RALPH_VERIFY_MODEL", "custom-haiku-model")
+	t.Setenv("RALPH_VERIFY_ESCALATION_MODEL", "custom-sonnet-model")
+
+	cfg, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.VerifyModel != "custom-haiku-model" {
+		t.Errorf("VerifyModel = %q, want %q", cfg.VerifyModel, "custom-haiku-model")
+	}
+	if cfg.VerifyEscalationModel != "custom-sonnet-model" {
+		t.Errorf("VerifyEscalationModel = %q, want %q", cfg.VerifyEscalationModel, "custom-sonnet-model")
+	}
+}
+
 // Verifies --verify-level defaults to "fire" and accepts "fire" or "hog",
 // rejecting invalid values — controlling no-diff verification depth.
 func TestVerifyLevelFlag(t *testing.T) {

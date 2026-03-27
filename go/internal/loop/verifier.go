@@ -171,15 +171,9 @@ func (v *Verifier) ResetCounters() {
 // verifyModel returns the model for the current LLM verification attempt.
 func (v *Verifier) verifyModel() string {
 	if v.llmVerifyAttempts <= 1 {
-		if v.cfg.VerifyModel != "" {
-			return v.cfg.VerifyModel
-		}
-		return verify.ModelHaiku
+		return v.cfg.VerifyModel
 	}
-	if v.cfg.VerifyEscalationModel != "" {
-		return v.cfg.VerifyEscalationModel
-	}
-	return verify.ModelSonnet
+	return v.cfg.VerifyEscalationModel
 }
 
 // VerifyCompletion runs post-signal checks: commit presence and test suite.

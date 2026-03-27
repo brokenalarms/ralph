@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/verify"
@@ -111,11 +112,13 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		MaxIterations: 5,
-		CallsPerHour:  80,
-		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task"},
-		VerifyDir:     dir,
+		Dirs:                  workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations:         5,
+		CallsPerHour:          80,
+		TaskBackend:           &stubBackend{remaining: 1, total: 1, description: "test task"},
+		VerifyDir:             dir,
+		VerifyModel:           config.DefaultVerifyModel,
+		VerifyEscalationModel: config.DefaultVerifyEscalationModel,
 	}, st, gm, logger)
 
 	l.verifier.deps.Runner = func() claudeRunner { return &injectCapturingRunner{} }
@@ -144,14 +147,14 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	if len(modelsUsed) != 3 {
 		t.Fatalf("expected 3 LLM calls, got %d", len(modelsUsed))
 	}
-	if modelsUsed[0] != verify.ModelHaiku {
-		t.Errorf("attempt 1: expected %s, got %s", verify.ModelHaiku, modelsUsed[0])
+	if modelsUsed[0] != config.DefaultVerifyModel {
+		t.Errorf("attempt 1: expected %s, got %s", config.DefaultVerifyModel, modelsUsed[0])
 	}
-	if modelsUsed[1] != verify.ModelSonnet {
-		t.Errorf("attempt 2: expected %s, got %s", verify.ModelSonnet, modelsUsed[1])
+	if modelsUsed[1] != config.DefaultVerifyEscalationModel {
+		t.Errorf("attempt 2: expected %s, got %s", config.DefaultVerifyEscalationModel, modelsUsed[1])
 	}
-	if modelsUsed[2] != verify.ModelSonnet {
-		t.Errorf("attempt 3: expected %s, got %s", verify.ModelSonnet, modelsUsed[2])
+	if modelsUsed[2] != config.DefaultVerifyEscalationModel {
+		t.Errorf("attempt 3: expected %s, got %s", config.DefaultVerifyEscalationModel, modelsUsed[2])
 	}
 }
 

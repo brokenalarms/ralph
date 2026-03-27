@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
@@ -39,9 +40,11 @@ func newTestVerifier(t *testing.T, opts ...func(*Verifier)) *Verifier {
 	st := newTestState(t, ralphDir)
 
 	v := NewVerifier(VerifierConfig{
-		VerifyDir:  dir,
-		PromptsDir: promptsDir,
-		RalphDir:   ralphDir,
+		VerifyDir:             dir,
+		VerifyModel:           config.DefaultVerifyModel,
+		VerifyEscalationModel: config.DefaultVerifyEscalationModel,
+		PromptsDir:            promptsDir,
+		RalphDir:              ralphDir,
 	}, VerifierDeps{
 		Logger:      logging.New(nil),
 		Git:         &stubGitQuerier{headRev: "def456"},
@@ -146,11 +149,11 @@ func TestVerifier_ModelEscalation(t *testing.T) {
 	if len(modelsUsed) != 3 {
 		t.Fatalf("expected 3 LLM calls, got %d", len(modelsUsed))
 	}
-	if modelsUsed[0] != verify.ModelHaiku {
-		t.Errorf("attempt 1: expected %s, got %s", verify.ModelHaiku, modelsUsed[0])
+	if modelsUsed[0] != config.DefaultVerifyModel {
+		t.Errorf("attempt 1: expected %s, got %s", config.DefaultVerifyModel, modelsUsed[0])
 	}
-	if modelsUsed[1] != verify.ModelSonnet {
-		t.Errorf("attempt 2: expected %s, got %s", verify.ModelSonnet, modelsUsed[1])
+	if modelsUsed[1] != config.DefaultVerifyEscalationModel {
+		t.Errorf("attempt 2: expected %s, got %s", config.DefaultVerifyEscalationModel, modelsUsed[1])
 	}
 }
 
