@@ -22,6 +22,8 @@ import (
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
+const defaultWaitInterval = 5 * time.Second
+
 // Config holds all parameters needed by the execution loop.
 type Config struct {
 	Dirs                workctx.WorkContext

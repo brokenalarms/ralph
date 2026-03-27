@@ -57,7 +57,6 @@ func TestAllRegisteredFlagsAreParseable(t *testing.T) {
 	t.Setenv("RALPH_IDLE_TIMEOUT", "")
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 	t.Setenv("RALPH_BASE_BRANCH", "")
-	t.Setenv("RALPH_WAIT_INTERVAL", "")
 
 	for _, f := range Flags {
 		if f.Long == "" && f.Short == "" {
@@ -115,7 +114,6 @@ func TestDefaultsDeriveFromFlagRegistry(t *testing.T) {
 	t.Setenv("RALPH_IDLE_TIMEOUT", "")
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 	t.Setenv("RALPH_BASE_BRANCH", "")
-	t.Setenv("RALPH_WAIT_INTERVAL", "")
 
 	cfg := Defaults()
 
@@ -145,10 +143,7 @@ func TestDefaultsDeriveFromFlagRegistry(t *testing.T) {
 	if cfg.BaseBranch != check.BaseBranch {
 		t.Errorf("BaseBranch: Defaults()=%q, registry=%q", cfg.BaseBranch, check.BaseBranch)
 	}
-	if cfg.WaitInterval != check.WaitInterval {
-		t.Errorf("WaitInterval: Defaults()=%v, registry=%v", cfg.WaitInterval, check.WaitInterval)
-	}
-	if cfg.WatcherInterval != check.WatcherInterval {
+if cfg.WatcherInterval != check.WatcherInterval {
 		t.Errorf("WatcherInterval: Defaults()=%d, registry=%d", cfg.WatcherInterval, check.WatcherInterval)
 	}
 	if cfg.StuckThreshold != check.StuckThreshold {

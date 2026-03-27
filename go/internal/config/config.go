@@ -75,7 +75,7 @@ type Config struct {
 	VerifyLevel             string
 	VerifyModel             string
 	VerifyEscalationModel   string
-	WaitInterval            time.Duration
+
 
 	cliSet map[string]bool
 }
