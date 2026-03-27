@@ -19,20 +19,12 @@ import (
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
-// initRun performs the initial rebase and branch setup for worktree
-// resumption. Returns a sentinel error (*stopError) if the context was
-// cancelled during rebase (caller should return nil, not the error).
+// initRun restores worktree state on resume. No rebase or reset — the
+// correct base branch depends on which task is selected, which happens
+// later in checkoutExistingBranch.
 func (l *Loop) initRun(ctx context.Context) error {
 	if l.git.WorktreeBranch == "" || l.git.WorkDir == l.git.ProjectDir {
 		return nil
-	}
-	if err := l.handleRebase(ctx); err != nil {
-		if ctx.Err() != nil {
-			l.state.Write("status", "stopped")
-			return nil
-		}
-		l.state.Write("status", "error")
-		return fmt.Errorf("initial rebase failed: %w", err)
 	}
 	nextInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 	if !l.isNewTask(nextInfo.ID, nextInfo.Title) {
