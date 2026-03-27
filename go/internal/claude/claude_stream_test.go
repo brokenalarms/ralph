@@ -7,13 +7,14 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 )
 
-// Verifies that extractStreamText pulls text from assistant messages using
-// Claude's actual nested content array format: message.content[].text.
-func TestExtractStreamText_Assistant(t *testing.T) {
+// Verifies that text in assistant events is ignored — text comes from
+// content_block_delta events during streaming. Processing both would
+// produce duplicate log lines.
+func TestExtractStreamText_AssistantTextIgnored(t *testing.T) {
 	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"Hello world"}]}}`
 	got := extractStreamText(line)
-	if got != "Hello world" {
-		t.Errorf("extractStreamText = %q, want %q", got, "Hello world")
+	if got != "" {
+		t.Errorf("assistant text should be ignored (comes via deltas), got %q", got)
 	}
 }
 
@@ -27,12 +28,12 @@ func TestExtractStreamText_AssistantToolUse(t *testing.T) {
 	}
 }
 
-// Verifies that messages with both text and tool_use content blocks are
-// concatenated with newlines.
+// Verifies that mixed messages only extract tool_use — text is ignored
+// to prevent duplicates with content_block_delta events.
 func TestExtractStreamText_AssistantMixed(t *testing.T) {
 	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"reading file"},{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}`
 	got := extractStreamText(line)
-	want := "reading file\n[Bash] ls"
+	want := "[Bash] ls"
 	if got != want {
 		t.Errorf("extractStreamText = %q, want %q", got, want)
 	}

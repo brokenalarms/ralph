@@ -1504,10 +1504,13 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 // the loop exits with "evolve_restart" status, signaling that the
 // binary should be rebuilt and re-executed with latest main.
 func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
 
-	promptsDir := filepath.Join(dir, "prompts")
+	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &stubBackend{
@@ -1518,15 +1521,15 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	}
 
 	gm := &git.Manager{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		Logger: logging.New(nil),
+		ProjectDir: project,
+		WorkDir:    project,
+		Logger:     logging.New(nil),
 	}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
+			ProjectDir: project,
+			WorkDir:    project,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -1538,6 +1541,11 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = &stubRunner{
+		// Simulate agent work by creating a commit during the run.
+		onRun: func() {
+			writeFile(t, project, "feature.go", "package main\n")
+			run(t, "git", "-C", project, "commit", "-m", "agent work")
+		},
 		result: claude.Result{SignalDetected: true},
 	}
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
@@ -1699,9 +1707,12 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 // Verifies the close reason includes the PR number in "Fixed in PR #N" format,
 // making it traceable which PR shipped which fix.
 func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &trackingBackend{
@@ -1717,6 +1728,8 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 
 	runner := &stubRunner{
 		onRun: func() {
+			writeFile(t, project, "fix.go", "package main\n")
+			run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
 			backend.mu.Lock()
 			backend.completed = 1
 			backend.remaining = 0
@@ -1725,12 +1738,12 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
+			ProjectDir: project,
+			WorkDir:    project,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -1863,10 +1876,13 @@ func run(t *testing.T, name string, args ...string) {
 // each successful merge, so the next task starts from merged main — not stale
 // commits.
 func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(10)
 
-	promptsDir := filepath.Join(dir, "prompts")
+	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	mergeCount := 0
@@ -1883,6 +1899,11 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
+			// Create a commit so headAfterSignal != headBefore.
+			fname := fmt.Sprintf("task%d.go", iterationCount)
+			os.WriteFile(filepath.Join(project, fname), []byte("package main\n"), 0o644)
+			run(t, "git", "-C", project, "add", fname)
+			run(t, "git", "-C", project, "commit", "-m", fmt.Sprintf("task %d work", iterationCount))
 			backend.mu.Lock()
 			defer backend.mu.Unlock()
 			backend.completed = iterationCount
@@ -1903,15 +1924,15 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 	}
 
 	gm := &git.Manager{
-		ProjectDir: dir,
-		WorkDir:    dir,
+		ProjectDir: project,
+		WorkDir:    project,
 		Logger:     logging.New(nil),
 	}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
+			ProjectDir: project,
+			WorkDir:    project,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -2123,10 +2144,13 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 // is detected, regardless of whether auto-merge is enabled. This ensures the
 // Go code owns the push/PR lifecycle.
 func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(10)
 
-	promptsDir := filepath.Join(dir, "prompts")
+	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	pushPRCalls := 0
@@ -2143,6 +2167,10 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
+			fname := fmt.Sprintf("task%d.go", iterationCount)
+			os.WriteFile(filepath.Join(project, fname), []byte("package main\n"), 0o644)
+			run(t, "git", "-C", project, "add", fname)
+			run(t, "git", "-C", project, "commit", "-m", fmt.Sprintf("task %d", iterationCount))
 			if iterationCount == 1 {
 				backend.mu.Lock()
 				backend.completed = 1
@@ -2161,15 +2189,15 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 	}
 
 	gm := &git.Manager{
-		ProjectDir: dir,
-		WorkDir:    dir,
+		ProjectDir: project,
+		WorkDir:    project,
 		Logger:     logging.New(nil),
 	}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
+			ProjectDir: project,
+			WorkDir:    project,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},

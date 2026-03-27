@@ -64,8 +64,11 @@ func extractStreamText(line string) string {
 	return ""
 }
 
-// extractAssistantText extracts text and tool-use summaries from the
-// content array in an assistant message.
+// extractAssistantText extracts tool-use summaries from the content array
+// in an assistant message. Text content is deliberately skipped because
+// Claude's stream-json emits text via content_block_delta events during
+// streaming, then repeats the same text in the final assistant event.
+// Extracting text from both would produce duplicate log lines.
 func extractAssistantText(msg *streamMsg) string {
 	if msg == nil || len(msg.Content) == 0 {
 		return ""
@@ -73,12 +76,7 @@ func extractAssistantText(msg *streamMsg) string {
 
 	var parts []string
 	for _, c := range msg.Content {
-		switch c.Type {
-		case "text":
-			if c.Text != "" {
-				parts = append(parts, c.Text)
-			}
-		case "tool_use":
+		if c.Type == "tool_use" {
 			parts = append(parts, formatToolUse(c))
 		}
 	}
