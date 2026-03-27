@@ -189,6 +189,7 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 }
 
 // resolveByPRState inspects the PR's state and takes the appropriate action.
+// Delegates merge+close to finalizePR so resume and post-signal share one path.
 func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber string) bool {
 	gh := l.git.GH()
 	if gh == nil || !gh.Available() {
@@ -206,19 +207,16 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 	case "MERGED":
 		l.logger.Success("git", "PR #%s already merged — closing bead and moving on", prNumber)
 		l.attempts.Clear(taskID, nextTask)
-		l.attempts.ClearMergeFailures(taskID)
 		recordCompletedTask(l.cfg.Dirs.RalphDir, taskID, nextTask)
-		if taskID != "" {
-			closeReason := fmt.Sprintf("Fixed in PR #%s", prNumber)
-			_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: PR merged")
-			if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
-				l.logger.Warn("beads", "CloseTask failed: %v", err)
-			} else {
-				l.logger.Log("beads", "Closed task %s (PR #%s merged)", taskID, prNumber)
-				persistCompletedTask(l.state, l.logger, taskID, nextTask, prNumber, closeReason)
-			}
-		}
-		l.git.PostMergeUpdateMain()
+		l.finalizePR(finalizePRParams{
+			ctx:        ctx,
+			taskID:     taskID,
+			nextTask:   nextTask,
+			prNumber:   prNumber,
+			prState:    "MERGED",
+			workDir:    l.git.WorkDir,
+			rawLogPath: filepath.Join(l.cfg.Dirs.RalphDir, "raw.log"),
+		})
 		return true
 
 	case "OPEN":
@@ -226,42 +224,15 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 			l.logger.Warn("git", "PR #%s chain unhealthy: %s — re-running agent", prNumber, reason)
 			return false
 		}
-
-		// PR exists and branch is healthy. Try to merge (includes CI wait
-		// and fix agent on failure). Only close bead after merge succeeds.
-		if l.cfg.AutoMerge {
-			prBase := getPRBase(gh, l.git.WorkDir, prNumber)
-			defaultBranch := l.git.DetectDefaultBranch()
-			if prBase != "" && prBase != defaultBranch {
-				// Stacked PR — can't merge until base lands. Close bead,
-				// work is done from our side.
-				l.logger.Log("git", "PR #%s targets %s — stacked, closing bead", prNumber, prBase)
-			} else {
-				l.logger.Log("git", "PR #%s targets %s — merging", prNumber, defaultBranch)
-				merged, mergeErr := l.mergeWithRetry(ctx, taskID, nextTask, l.git.WorkDir, filepath.Join(l.cfg.Dirs.RalphDir, "raw.log"))
-				if mergeErr != nil {
-					l.logger.Warn("git", "Auto-merge: %v", mergeErr)
-				}
-				if !merged {
-					l.logger.Warn("git", "Merge failed for PR #%s — skipping task", prNumber)
-					skipTask(l.state, l.cfg.TaskBackend, l.logger, taskID, "merge_failed")
-					return true
-				}
-				l.git.PostMergeUpdateMain()
-			}
-		}
-
-		if taskID != "" {
-			closeReason := fmt.Sprintf("Fixed in PR #%s", prNumber)
-			l.attempts.ClearMergeFailures(taskID)
-			_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: PR merged or stacked")
-			if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
-				l.logger.Warn("beads", "CloseTask failed: %v", err)
-			} else {
-				l.logger.Log("beads", "Closed task %s (PR #%s)", taskID, prNumber)
-				persistCompletedTask(l.state, l.logger, taskID, nextTask, prNumber, closeReason)
-			}
-		}
+		l.finalizePR(finalizePRParams{
+			ctx:        ctx,
+			taskID:     taskID,
+			nextTask:   nextTask,
+			prNumber:   prNumber,
+			prState:    "OPEN",
+			workDir:    l.git.WorkDir,
+			rawLogPath: filepath.Join(l.cfg.Dirs.RalphDir, "raw.log"),
+		})
 		return true
 
 	default:
