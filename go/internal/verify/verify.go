@@ -7,9 +7,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/git"
 )
+
+// TestTimeout is the maximum duration RunTests will wait for the test
+// command to complete. Exported so tests can override it.
+var TestTimeout = 3 * time.Minute
 
 // GitQuerier abstracts the git operations that verify needs, allowing the
 // package to work without calling git package-level functions directly.
@@ -94,15 +99,26 @@ func RunTests(ctx context.Context, dir string) Result {
 		return Result{Passed: true, Reason: "no test runner detected"}
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, TestTimeout)
+	defer cancel()
+
 	cmd := exec.CommandContext(ctx, tc.Cmd, tc.Args...)
 	cmd.Dir = dir
+	cmd.WaitDelay = 3 * time.Second
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		output := string(out)
 		tail := lastNLines(output, 30)
+		reason := fmt.Sprintf("test suite failed: %v", err)
+		if ctx.Err() == context.DeadlineExceeded {
+			reason = fmt.Sprintf(
+				"test suite timed out after %s — a test may be hanging. Do not run the full suite; run individual test files to isolate",
+				TestTimeout.Truncate(time.Second),
+			)
+		}
 		return Result{
 			Passed:  false,
-			Reason:  fmt.Sprintf("test suite failed: %v", err),
+			Reason:  reason,
 			Details: tail,
 		}
 	}

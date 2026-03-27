@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/git"
 )
@@ -126,6 +127,29 @@ func TestRunTests_PassingTests(t *testing.T) {
 	result := RunTests(context.Background(), dir)
 	if !result.Passed {
 		t.Errorf("expected tests to pass, got: %s", result.Reason)
+	}
+}
+
+// RunTests fails when its internal timeout expires, proving that
+// a hanging test suite (unresolved promise, open handle) doesn't
+// block the loop indefinitely.
+func TestRunTests_Timeout(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\tsleep 600\n"), 0o644)
+
+	saved := TestTimeout
+	TestTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { TestTimeout = saved })
+
+	result := RunTests(context.Background(), dir)
+	if result.Passed {
+		t.Error("expected tests to fail when timeout expires")
+	}
+	if !strings.Contains(result.Reason, "timed out") {
+		t.Errorf("expected timeout reason, got: %s", result.Reason)
+	}
+	if !strings.Contains(result.Reason, "run individual test files to isolate") {
+		t.Errorf("expected isolation guidance in reason, got: %s", result.Reason)
 	}
 }
 
