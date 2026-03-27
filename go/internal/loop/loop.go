@@ -37,6 +37,7 @@ type Config struct {
 	IdleTimeoutProgress time.Duration
 	PostSignalTimeout   time.Duration
 	PostTask            string
+	Notify              bool
 	Wait                bool
 	WaitInterval        time.Duration
 	Verbose             bool

@@ -203,6 +203,10 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 			workDir:    l.git.WorkDir,
 			rawLogPath: filepath.Join(l.cfg.Dirs.RalphDir, "raw.log"),
 		})
+		if l.cfg.Notify {
+			notify.TaskCompleted(taskID, nextTask, "")
+		}
+		notify.TaskMerged(taskID, nextTask)
 		return true
 
 	case "OPEN":
@@ -219,6 +223,9 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 			workDir:    l.git.WorkDir,
 			rawLogPath: filepath.Join(l.cfg.Dirs.RalphDir, "raw.log"),
 		})
+		if l.cfg.Notify {
+			notify.TaskCompleted(taskID, nextTask, "")
+		}
 		return true
 
 	default:

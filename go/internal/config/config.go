@@ -77,6 +77,7 @@ type Config struct {
 	VerifyEscalationModel   string
 	PostSignalTimeout       time.Duration
 	PostTask                string
+	Notify                  bool
 	WaitInterval            time.Duration
 
 	cliSet map[string]bool
