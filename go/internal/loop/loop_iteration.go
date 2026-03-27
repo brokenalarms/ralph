@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/notify"
 )
 
@@ -56,6 +58,7 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 				"Signal received but verification failed: "+reason,
 				p.diffStat,
 				"verification_failed: fix must pass tests and produce commits before closing")
+			l.logOutcome("Retry: verification failed")
 			return signalRetry
 		}
 	}
@@ -83,6 +86,7 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 				l.logger.Log("beads", "Closed task %s (work already on main)", p.taskID)
 			}
 		}
+		l.logOutcome("Closed: work already on main")
 		l.git.TagTaskEnd(p.taskID)
 		*runIteration++
 		*iteration++
@@ -91,12 +95,16 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 
 	prNumber := l.pushSignalPR(p)
 	ct := l.buildCompletedTask(p.taskID, p.nextTask, p.result.Summary, prNumber, p.workDir)
-	merged := l.mergeIfEnabled(p, prNumber)
+	mr := l.mergeIfEnabled(p, prNumber)
 
-	l.closeOrRetryTask(p.taskID, ct, merged)
+	if mr.deferred {
+		l.logOutcome("Skipped: PR targets non-main base")
+	} else {
+		l.closeOrRetryTask(p.taskID, ct, mr.merged)
+	}
 	l.sessionTasks = append(l.sessionTasks, ct)
 
-	if merged {
+	if mr.merged {
 		l.lastTaskMerged = true
 		notify.TaskMerged(p.taskID, p.nextTask)
 		l.git.PostMergeUpdateMain()
@@ -157,15 +165,26 @@ func (l *Loop) buildCompletedTask(taskID, nextTask, summary, prNumber, workDir s
 	return ct
 }
 
+// mergeResult holds the outcome of a merge attempt.
+type mergeResult struct {
+	merged   bool
+	deferred bool // PR targets a non-default branch
+}
+
 // mergeIfEnabled attempts to auto-merge after push, including checking
 // existing PRs when no new PR was created.
-func (l *Loop) mergeIfEnabled(p postSignalParams, prNumber string) bool {
-	merged := false
+func (l *Loop) mergeIfEnabled(p postSignalParams, prNumber string) mergeResult {
+	result := mergeResult{}
 	if l.cfg.AutoMerge && prNumber != "" {
 		var mergeErr error
-		merged, mergeErr = l.mergeWithRetry(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
+		result.merged, mergeErr = l.mergeWithRetry(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
 		if mergeErr != nil {
-			l.logger.Warn("git", "Auto-merge: %v", mergeErr)
+			var deferredErr *git.DeferredMergeError
+			if errors.As(mergeErr, &deferredErr) {
+				result.deferred = true
+			} else {
+				l.logger.Warn("git", "Auto-merge: %v", mergeErr)
+			}
 		}
 	}
 
@@ -178,20 +197,25 @@ func (l *Loop) mergeIfEnabled(p postSignalParams, prNumber string) bool {
 				switch strings.ToUpper(prState) {
 				case "MERGED":
 					l.logger.Log("git", "PR #%s already merged — work is on main", existingPR)
-					merged = true
+					result.merged = true
 				case "OPEN":
 					l.logger.Log("git", "Existing PR #%s still open — attempting merge", existingPR)
 					var mergeErr error
-					merged, mergeErr = l.mergeWithRetry(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
+					result.merged, mergeErr = l.mergeWithRetry(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
 					if mergeErr != nil {
-						l.logger.Warn("git", "Auto-merge existing PR: %v", mergeErr)
+						var deferredErr *git.DeferredMergeError
+						if errors.As(mergeErr, &deferredErr) {
+							result.deferred = true
+						} else {
+							l.logger.Warn("git", "Auto-merge existing PR: %v", mergeErr)
+						}
 					}
 				}
 			}
 		}
 	}
 
-	return merged
+	return result
 }
 
 // closeOrRetryTask closes the bead after merge success, or records a merge
@@ -213,13 +237,22 @@ func (l *Loop) closeOrRetryTask(taskID string, ct CompletedTask, merged bool) {
 		} else {
 			l.logger.Log("beads", "Closed task %s (%s)", taskID, closeReason)
 		}
+		if merged && ct.PRNum != "" {
+			l.logOutcome("Merged: PR #%s", ct.PRNum)
+		} else if merged {
+			l.logOutcome("Merged: work landed on main")
+		} else {
+			l.logOutcome("Closed: %s", closeReason)
+		}
 	} else if l.cfg.AutoMerge && !merged {
 		count, _ := l.attempts.RecordMergeFailure(taskID)
 		if count >= attempts.MaxMergeFailures {
 			l.logger.Warn("git", "Merge failed %d times — skipping task %s for manual review", count, taskID)
 			l.skipTask(taskID, fmt.Sprintf("merge_failed_%d_times", count))
+			l.logOutcome("Skipped: merge failed %d times", count)
 		} else {
 			l.logger.Warn("git", "Merge failed (%d/%d) — task %s left open for retry", count, attempts.MaxMergeFailures, taskID)
+			l.logOutcome("Retry: merge failed")
 		}
 	}
 }

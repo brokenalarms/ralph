@@ -312,6 +312,10 @@ func (l *Loop) Run(ctx context.Context) error {
 			return nil
 		}
 
+		if !result.SignalDetected {
+			l.logOutcome("Agent re-run: no signal detected")
+		}
+
 		if result.SignalDetected {
 			signalAction := l.handlePostSignal(postSignalParams{
 				ctx:        ctx,

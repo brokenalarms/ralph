@@ -6087,3 +6087,319 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 		t.Errorf("branch %q must not contain sequence number prefix", gm.WorktreeBranch)
 	}
 }
+
+// Every task iteration that results in a merge logs an outcome line
+// "Merged: PR #N" so stream readers can see what happened.
+func TestLoop_OutcomeMerged(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1, total: 1,
+			nextTask: "Fix auth", nextID: "ralph-out1",
+		},
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     project,
+		WorkDir:        filepath.Join(project, "wt"),
+		WorktreeBranch: "ralph/ralph-out1-fix-auth",
+		Logger:         logging.New(nil),
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: gm.WorkDir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = &stubRunner{result: claude.Result{SignalDetected: true}}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
+
+	writeFile(t, project, "fix.go", "package main\n")
+	run(t, "git", "-C", project, "commit", "-m", "fix auth")
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Merged: PR #42") {
+		t.Errorf("expected outcome 'Merged: PR #42' in log, got:\n%s", output)
+	}
+}
+
+// When no signal is detected, the outcome logs "Agent re-run: no signal
+// detected" so the stream shows the task will be retried.
+func TestLoop_OutcomeNoSignal(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1, total: 1,
+		nextTask: "Fix bug", nextID: "ralph-out2",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = &stubRunner{result: claude.Result{SignalDetected: false}}
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Agent re-run: no signal detected") {
+		t.Errorf("expected outcome 'Agent re-run: no signal detected' in log, got:\n%s", output)
+	}
+}
+
+// When the agent signals but HEAD hasn't moved, the outcome logs
+// "Closed: work already on main" confirming the no-commits path.
+func TestLoop_OutcomeNoNewCommits(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1, total: 1,
+			nextTask: "Fix bug", nextID: "ralph-out3",
+		},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = &stubRunner{result: claude.Result{SignalDetected: true, OnSignalUsed: true}}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Closed: work already on main") {
+		t.Errorf("expected outcome 'Closed: work already on main' in log, got:\n%s", output)
+	}
+}
+
+// Verification failure logs "Retry: verification failed" so the stream
+// shows why the iteration will be retried.
+func TestLoop_OutcomeVerificationFailed(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1, total: 1,
+		nextTask: "Fix bug", nextID: "ralph-out4",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = &stubRunner{result: claude.Result{SignalDetected: true}}
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Retry: verification failed") {
+		t.Errorf("expected outcome 'Retry: verification failed' in log, got:\n%s", output)
+	}
+}
+
+// Merge failure logs "Retry: merge failed" so the stream shows the
+// task was attempted but couldn't be landed.
+func TestLoop_OutcomeMergeFailed(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1, total: 1,
+		nextTask: "Fix bug", nextID: "ralph-out5",
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "wt"),
+		WorktreeBranch: "ralph/ralph-out5-fix-bug",
+		Logger:         logging.New(nil),
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: gm.WorkDir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = &stubRunner{result: claude.Result{SignalDetected: true, OnSignalUsed: true}}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+	l.mergeFunc = func(context.Context) (bool, error) { return false, fmt.Errorf("merge conflict") }
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Retry: merge failed") {
+		t.Errorf("expected outcome 'Retry: merge failed' in log, got:\n%s", output)
+	}
+}
+
+// The outcome line appears BEFORE the health check and separator when
+// transitioning between tasks, not after.
+func TestLoop_OutcomeBeforeSeparator(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	iterationCount := 0
+	backend := &mutableBackend{
+		remaining: 1, total: 2,
+		nextTask: "task A", nextID: "ralph-aaa",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			if iterationCount == 1 {
+				backend.mu.Lock()
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+				backend.mu.Unlock()
+			} else {
+				backend.mu.Lock()
+				backend.completed = 2
+				backend.remaining = 0
+				backend.mu.Unlock()
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = runner
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+	// The outcome line must appear before the dashed separator
+	outcomeIdx := strings.Index(output, "Closed: work already on main")
+	separatorIdx := strings.Index(output, "─")
+	if outcomeIdx == -1 {
+		t.Fatalf("expected outcome line in log, got:\n%s", output)
+	}
+	if separatorIdx == -1 {
+		t.Fatalf("expected separator in log, got:\n%s", output)
+	}
+	if outcomeIdx > separatorIdx {
+		t.Errorf("outcome line (pos %d) must appear before separator (pos %d)", outcomeIdx, separatorIdx)
+	}
+}
+
+// When merge is deferred because the PR targets a non-main base branch,
+// the outcome logs "Skipped: PR targets non-main base" instead of
+// recording a merge failure.
+func TestLoop_OutcomeDeferredMerge(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1, total: 1,
+			nextTask: "Fix bug", nextID: "ralph-out6",
+		},
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "wt"),
+		WorktreeBranch: "ralph/ralph-out6-fix-bug",
+		Logger:         logging.New(nil),
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: gm.WorkDir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = &stubRunner{result: claude.Result{SignalDetected: true, OnSignalUsed: true}}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return false, &git.DeferredMergeError{PRNumber: "42", PRBase: "feature-branch"}
+	}
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Skipped: PR targets non-main base") {
+		t.Errorf("expected outcome 'Skipped: PR targets non-main base' in log, got:\n%s", output)
+	}
+	// Should NOT record a merge failure
+	if strings.Contains(output, "Merge failed") {
+		t.Errorf("deferred merge should not log merge failure, got:\n%s", output)
+	}
+}

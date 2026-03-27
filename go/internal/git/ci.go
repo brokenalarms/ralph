@@ -151,6 +151,17 @@ func (e *MergeConflictError) Error() string {
 	return fmt.Sprintf("PR #%s has merge conflicts with the base branch", e.PRNumber)
 }
 
+// DeferredMergeError indicates a PR targets a non-default branch and
+// cannot be merged until its base branch is merged first.
+type DeferredMergeError struct {
+	PRNumber string
+	PRBase   string
+}
+
+func (e *DeferredMergeError) Error() string {
+	return fmt.Sprintf("PR #%s targets %s — waiting for base PRs to merge first", e.PRNumber, e.PRBase)
+}
+
 // isCIGatedError returns true if the merge error indicates branch protection
 // is blocking the merge (typically because CI checks haven't passed yet).
 func isCIGatedError(mergeOutput string) bool {

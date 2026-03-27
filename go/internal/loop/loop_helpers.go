@@ -188,6 +188,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 				l.logger.Log("beads", "Closed task %s (PR #%s merged)", taskID, prNumber)
 			}
 		}
+		l.logOutcome("Merged: PR #%s", prNumber)
 		l.git.PostMergeUpdateMain()
 		return true
 
@@ -209,9 +210,15 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 				} else {
 					l.logger.Log("beads", "Closed task %s (PR #%s merged)", taskID, prNumber)
 				}
+				if merged {
+					l.logOutcome("Merged: PR #%s", prNumber)
+				} else {
+					l.logOutcome("Closed: Fixed in PR #%s", prNumber)
+				}
 			} else {
 				l.logger.Warn("git", "Merge failed for PR #%s — skipping task", prNumber)
 				l.skipTask(taskID, "merge_failed_open_pr")
+				l.logOutcome("Skipped: merge failed for PR #%s", prNumber)
 			}
 		}
 		if merged {
@@ -221,6 +228,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 
 	default:
 		l.logger.Warn("git", "PR #%s is %s (not merged) — re-running agent", prNumber, prState)
+		l.logOutcome("Agent re-run: PR #%s is %s", prNumber, prState)
 		return false
 	}
 }
@@ -499,6 +507,12 @@ func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, ru
 	}
 
 	return diffStat, false
+}
+
+// logOutcome emits a standardized outcome line so every task iteration
+// has a visible result in the stream log.
+func (l *Loop) logOutcome(format string, args ...any) {
+	l.logger.Log("outcome", format, args...)
 }
 
 // logIterationBanner prints the health dashboard, separator, task banner,

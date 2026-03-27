@@ -158,7 +158,7 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	prBase, _ := gh.GetPRBase(m.WorkDir, prNumber)
 	if prBase != "" && prBase != defaultBranch {
 		m.Logger.Log("git", "PR #%s targets %s (not %s) — waiting for base PRs to merge first", prNumber, prBase, defaultBranch)
-		return false, nil
+		return false, &DeferredMergeError{PRNumber: prNumber, PRBase: prBase}
 	}
 
 	m.Logger.Log("git", "%s Auto-merging PR #%s...", logging.BranchTag(defaultBranch), prNumber)
@@ -341,6 +341,12 @@ func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool
 		merged, err := m.AutoMergeCurrentBranch(ctx)
 		if err == nil {
 			return merged, nil
+		}
+
+		// Deferred merges (non-main base) are not retryable.
+		var deferredErr *DeferredMergeError
+		if errors.As(err, &deferredErr) {
+			return false, err
 		}
 
 		if attempt > 0 {
