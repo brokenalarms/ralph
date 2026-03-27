@@ -217,8 +217,6 @@ type StreamFormatter struct {
 	hideVerboseOnly  bool   // when true, suppress VerboseOnlyTools lines
 }
 
-const agentPrefix = 4 // "[r] " (4)
-
 func (f *StreamFormatter) shortenPaths(text string) string {
 	if f.workDir == "" {
 		return text
@@ -251,8 +249,7 @@ func (f *StreamFormatter) FormatLine(text string) string {
 
 // FormatOutput formats a stream text line, prepending a dim timestamp
 // only when the second changes. Diagnosis lines (ISSUE:/FIX:) get a banner
-// above the content. Prose lines (not tool calls or diagnosis) are truncated
-// to maxLineWidth to prevent terminal overflow.
+// above the content.
 func (f *StreamFormatter) FormatOutput(text string) []string {
 	text = f.shortenPaths(text)
 	if name, msg, ok := parseSignalLine(text); ok {
@@ -272,17 +269,7 @@ func (f *StreamFormatter) FormatOutput(text string) []string {
 	if f.hideVerboseOnly && isVerboseOnlyLine(text) {
 		return nil
 	}
-	text = truncateLine(text, logging.MaxLineWidth-logging.TSWidth-agentPrefix)
 	return f.emitLine(colorTags("[r] " + text))
-}
-
-// truncateLine shortens text to maxLen runes, appending "…" if truncated.
-func truncateLine(text string, maxLen int) string {
-	runes := []rune(text)
-	if len(runes) <= maxLen {
-		return text
-	}
-	return string(runes[:maxLen-1]) + "…"
 }
 
 var signalRe = regexp.MustCompile(`^\[Bash\] echo ["'](.+?)["'] > .+/\.signal_(current_task|complete|all_complete)$`)
