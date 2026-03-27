@@ -78,7 +78,6 @@ func TestAllFlags(t *testing.T) {
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
 
 	args := []string{
-		"-d", "/tmp/proj",
 		"-n", "10",
 		"-p", "fix tests",
 		"-q",
@@ -94,9 +93,6 @@ func TestAllFlags(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if cfg.ProjectDir != "/tmp/proj" {
-		t.Errorf("ProjectDir = %q, want /tmp/proj", cfg.ProjectDir)
-	}
 	if cfg.MaxIterations != 10 {
 		t.Errorf("MaxIterations = %d, want 10", cfg.MaxIterations)
 	}
@@ -938,7 +934,6 @@ func TestConfigToState_CapturesNonDefaults(t *testing.T) {
 	t.Setenv("RALPH_WAIT_INTERVAL", "")
 
 	cfg, _ := Parse([]string{
-		"--dir", "/tmp/project",
 		"--max", "20",
 		"--auto-merge",
 		"--evolve",
@@ -947,9 +942,6 @@ func TestConfigToState_CapturesNonDefaults(t *testing.T) {
 
 	m := ConfigToState(&cfg)
 
-	if m["dir"] != "/tmp/project" {
-		t.Errorf("dir = %q, want /tmp/project", m["dir"])
-	}
 	if m["max"] != "20" {
 		t.Errorf("max = %q, want 20", m["max"])
 	}
@@ -975,7 +967,6 @@ func TestConfigToState_CapturesNonDefaults(t *testing.T) {
 // only including flags the current binary recognizes.
 func TestArgsFromState_ReconstructsArgs(t *testing.T) {
 	state := map[string]string{
-		"dir":        "/tmp/project",
 		"max":        "20",
 		"auto-merge": "true",
 		"evolve":     "true",
@@ -984,7 +975,6 @@ func TestArgsFromState_ReconstructsArgs(t *testing.T) {
 
 	args := ArgsFromState(state)
 
-	// Verify the reconstructed args parse correctly.
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
 	t.Setenv("RALPH_IDLE_TIMEOUT", "")
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
@@ -993,9 +983,6 @@ func TestArgsFromState_ReconstructsArgs(t *testing.T) {
 	cfg, err := Parse(args)
 	if err != nil {
 		t.Fatalf("Parse(ArgsFromState) failed: %v", err)
-	}
-	if cfg.ProjectDir != "/tmp/project" {
-		t.Errorf("ProjectDir = %q, want /tmp/project", cfg.ProjectDir)
 	}
 	if cfg.MaxIterations != 20 {
 		t.Errorf("MaxIterations = %d, want 20", cfg.MaxIterations)

@@ -53,16 +53,6 @@ func parseBoolVal(val string) bool {
 // support, and defaults display all derive from this slice.
 var Flags = []FlagDef{
 	{
-		Short: "-d", Long: "--dir", MetaVar: "<path>",
-		Help: "Project directory", Default: "cwd",
-		Kind: KindString,
-		Apply: func(cfg *Config, val string) error {
-			cfg.ProjectDir = val
-			return nil
-		},
-		Read: func(cfg *Config) string { return cfg.ProjectDir },
-	},
-	{
 		Short: "-n", Long: "--max", MetaVar: "<N>",
 		Help: "Max iterations", Default: "50",
 		EnvVar: "RALPH_MAX_ITERATIONS", ConfigKey: "max_iterations",
@@ -433,8 +423,7 @@ func FlagUsage() string {
 // ConfigToState returns a map of config key → value for all CLI flags that
 // have both a Long name and a Read function. Bools are stored as "true" when
 // set, omitted when false. Values matching the registry default are omitted
-// to keep state.json minimal. The --dir flag is always included so evolve
-// restart knows the project directory.
+// to keep state.json minimal.
 func ConfigToState(cfg *Config) map[string]string {
 	defaults := Defaults()
 	m := make(map[string]string)
@@ -443,17 +432,14 @@ func ConfigToState(cfg *Config) map[string]string {
 		if f.Long == "" || f.Read == nil {
 			continue
 		}
-		// Use the long flag name without "--" as the state key.
 		key := strings.TrimPrefix(f.Long, "--")
 		val := f.Read(cfg)
 
-		// Skip bools that are false (empty string from boolStr).
 		if f.Kind == KindBool && val == "" {
 			continue
 		}
 
-		// Skip values that match the default (except --dir which is always needed).
-		if f.Long != "--dir" && val == f.Read(&defaults) {
+		if val == f.Read(&defaults) {
 			continue
 		}
 

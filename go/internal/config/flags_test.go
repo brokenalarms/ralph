@@ -181,3 +181,22 @@ func TestInitConfigUsesRegistry(t *testing.T) {
 func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
+
+// Verifies that the --dir flag has been removed from the flag registry:
+// it should not appear in help text and should not be parseable.
+func TestDirFlagRemoved(t *testing.T) {
+	usage := FlagUsage()
+	if strings.Contains(usage, "--dir") {
+		t.Error("--dir should not appear in FlagUsage()")
+	}
+
+	_, err := Parse([]string{"--dir", "/tmp"})
+	if err == nil {
+		t.Error("Parse should reject --dir flag")
+	}
+
+	_, err = Parse([]string{"-d", "/tmp"})
+	if err == nil {
+		t.Error("Parse should reject -d flag")
+	}
+}
