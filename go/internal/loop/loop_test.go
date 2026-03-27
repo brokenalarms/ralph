@@ -6270,48 +6270,97 @@ func TestGetPRBase_Standalone(t *testing.T) {
 	}
 }
 
-// closeOrRetryTask takes only closeTaskDeps — no Loop needed. When merge
-// fails and AutoMerge is on, the task is skipped instead of closed.
-func TestCloseOrRetryTask_Standalone(t *testing.T) {
-	_, st := setupTestDir(t)
-	var skippedID string
-	deps := closeTaskDeps{
-		AutoMerge: true,
-		Backend:   &stubBackend{},
-		Attempts:  attempts.New(t.TempDir()),
-		State:     st,
-		Logger:    logging.New(nil),
-		SkipFn:    func(id, reason string) { skippedID = id },
-	}
+// finalizePR skips merge and closes the bead when AutoMerge is off.
+func TestFinalizePR_NoAutoMerge_ClosesTask(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
 
-	closeOrRetryTask(deps, "ralph-abc",
-		CompletedTask{PRNum: "99", Title: "Fix bug"},
-		false, fmt.Errorf("merge conflict"))
-
-	if skippedID != "ralph-abc" {
-		t.Errorf("expected task to be skipped, got skippedID=%q", skippedID)
-	}
-}
-
-// closeOrRetryTask closes the task when merge succeeded.
-func TestCloseOrRetryTask_ClosesOnSuccess(t *testing.T) {
-	_, st := setupTestDir(t)
 	backend := &trackingBackend{
 		mutableBackend: mutableBackend{remaining: 1, total: 1},
 	}
-	deps := closeTaskDeps{
-		AutoMerge: true,
-		Backend:   backend,
-		Attempts:  attempts.New(t.TempDir()),
-		State:     st,
-		Logger:    logging.New(nil),
-		SkipFn:    func(id, reason string) {},
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+		AutoMerge:    false,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+
+	result := l.finalizePR(finalizePRParams{
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix auth bug",
+		prNumber: "42",
+		prState:  "OPEN",
+		workDir:  project,
+	})
+
+	if result.merged {
+		t.Error("should not merge when AutoMerge is disabled")
+	}
+	if !result.closed {
+		t.Error("task should be closed even without merge")
+	}
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-abc" {
+		t.Errorf("expected CloseTask for ralph-abc, got %v", backend.closedIDs)
+	}
+}
+
+// finalizePR merges and closes when AutoMerge is on and merge succeeds.
+func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1},
 	}
 
-	closeOrRetryTask(deps, "ralph-xyz",
-		CompletedTask{PRNum: "42", Title: "Add feature"},
-		true, nil)
+	mergeCalled := false
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+		AutoMerge:    true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.mergeFunc = func(ctx context.Context) (bool, error) {
+		mergeCalled = true
+		return true, nil
+	}
 
+	result := l.finalizePR(finalizePRParams{
+		ctx:      context.Background(),
+		taskID:   "ralph-xyz",
+		nextTask: "Add feature",
+		prNumber: "42",
+		prState:  "OPEN",
+		workDir:  project,
+	})
+
+	if !mergeCalled {
+		t.Error("merge should have been called")
+	}
+	if !result.merged {
+		t.Error("should be merged when merge returns true")
+	}
+	if !result.closed {
+		t.Error("task should be closed after merge")
+	}
 	backend.closeMu.Lock()
 	defer backend.closeMu.Unlock()
 	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-xyz" {
@@ -6319,49 +6368,147 @@ func TestCloseOrRetryTask_ClosesOnSuccess(t *testing.T) {
 	}
 }
 
-// mergeIfEnabled takes only mergeDeps — no Loop needed. When AutoMerge
-// is off, no merge is attempted.
-func TestMergeIfEnabled_Standalone_AutoMergeOff(t *testing.T) {
-	deps := mergeDeps{AutoMerge: false, Logger: logging.New(nil)}
+// finalizePR skips the task when merge fails with AutoMerge on.
+func TestFinalizePR_MergeFailure_SkipsTask(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
 
-	merged, err := mergeIfEnabled(deps, postSignalParams{
-		ctx:    context.Background(),
-		taskID: "ralph-abc",
-	}, "42")
-
-	if merged {
-		t.Error("should not merge when AutoMerge is disabled")
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1},
 	}
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+		AutoMerge:    true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.mergeFunc = func(ctx context.Context) (bool, error) {
+		return false, fmt.Errorf("merge conflict")
+	}
+
+	result := l.finalizePR(finalizePRParams{
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix bug",
+		prNumber: "99",
+		prState:  "OPEN",
+		workDir:  project,
+	})
+
+	if result.merged {
+		t.Error("should not be merged on failure")
+	}
+	if result.closed {
+		t.Error("task should not be closed on merge failure")
+	}
+	skipped, _ := st.GetSkippedTasks()
+	found := false
+	for _, id := range skipped {
+		if id == "ralph-abc" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected ralph-abc in skipped tasks after merge failure")
 	}
 }
 
-// mergeIfEnabled delegates to MergeFn when AutoMerge is on and PR exists.
-func TestMergeIfEnabled_Standalone_CallsMergeFn(t *testing.T) {
-	mergeCalled := false
-	deps := mergeDeps{
-		AutoMerge: true,
-		Logger:    logging.New(nil),
-		MergeFn: func(ctx context.Context, taskID, nextTask, workDir, rawLogPath string) (bool, error) {
-			mergeCalled = true
-			return true, nil
-		},
+// finalizePR with MERGED state closes immediately without attempting merge.
+func TestFinalizePR_AlreadyMerged_ClosesImmediately(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1},
 	}
 
-	merged, err := mergeIfEnabled(deps, postSignalParams{
-		ctx:    context.Background(),
-		taskID: "ralph-abc",
-	}, "42")
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+		AutoMerge:    true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.mergeFunc = func(ctx context.Context) (bool, error) {
+		t.Fatal("merge should not be called for already-merged PR")
+		return false, nil
+	}
 
-	if !mergeCalled {
-		t.Error("MergeFn should have been called")
+	result := l.finalizePR(finalizePRParams{
+		ctx:      context.Background(),
+		taskID:   "ralph-xyz",
+		nextTask: "Add feature",
+		prNumber: "42",
+		prState:  "MERGED",
+		workDir:  project,
+	})
+
+	if !result.merged {
+		t.Error("should report merged for MERGED state")
 	}
-	if !merged {
-		t.Error("should be merged when MergeFn returns true")
+	if !result.closed {
+		t.Error("task should be closed")
 	}
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-xyz" {
+		t.Errorf("expected CloseTask for ralph-xyz, got %v", backend.closedIDs)
+	}
+}
+
+// finalizePR uses PR URL in close reason when available.
+func TestFinalizePR_UsesURLInCloseReason(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+
+	l.finalizePR(finalizePRParams{
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix login",
+		prNumber: "55",
+		prState:  "OPEN",
+		prURL:    "https://github.com/owner/repo/pull/55",
+		workDir:  project,
+	})
+
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closeReasons) == 0 {
+		t.Fatal("expected a close reason")
+	}
+	if !strings.Contains(backend.closeReasons[0], "https://github.com/owner/repo/pull/55") {
+		t.Errorf("close reason should contain PR URL, got %q", backend.closeReasons[0])
 	}
 }
 

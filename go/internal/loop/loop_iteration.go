@@ -7,13 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/git"
-	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
-	"github.com/brokenalarms/ralph/internal/state"
-	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
 // postSignalAction describes the outcome of post-signal processing.
@@ -126,16 +121,47 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 	}
 
 	prNumber := l.pushSignalPR(p)
-	ct := l.buildCompletedTask(p.taskID, p.nextTask, p.result.Summary, prNumber, p.workDir)
-	merged, mergeErr := mergeIfEnabled(l.mergeDeps(), p, prNumber)
+	prState := "OPEN"
 
-	closeOrRetryTask(l.closeTaskDeps(), p.taskID, ct, merged, mergeErr)
+	// Recovery: if push failed but a PR already exists, use it.
+	if prNumber == "" && p.taskID != "" {
+		ref, _ := l.cfg.TaskBackend.GetExternalRef(p.taskID)
+		if existing := parsePRNumber(ref); existing != "" {
+			prNumber = existing
+			prState = "" // unknown — let finalizePR look it up
+		}
+	}
+
+	ct := l.buildCompletedTask(p.taskID, p.nextTask, p.result.Summary, prNumber, p.workDir)
+
+	// buildCompletedTask may discover a PR via findPRInfo that push missed.
+	// findPRInfo queries open PRs for the current branch, so OPEN is safe.
+	if prNumber == "" && ct.PRNum != "" {
+		prNumber = ct.PRNum
+		prState = "OPEN"
+	}
+
+	if prNumber == "" {
+		l.logger.Warn("git", "No PR created — task %s stays open", p.taskID)
+		l.sessionTasks = append(l.sessionTasks, ct)
+		return signalComplete
+	}
+
+	result := l.finalizePR(finalizePRParams{
+		ctx:        p.ctx,
+		taskID:     p.taskID,
+		nextTask:   p.nextTask,
+		prNumber:   prNumber,
+		prState:    prState,
+		prURL:      ct.PRURL,
+		workDir:    p.workDir,
+		rawLogPath: p.rawLogPath,
+	})
 	l.sessionTasks = append(l.sessionTasks, ct)
 
-	if merged {
+	if result.merged {
 		l.lastTaskMerged = true
 		notify.TaskMerged(p.taskID, p.nextTask)
-		l.git.PostMergeUpdateMain()
 		if l.cfg.Evolve {
 			l.git.TagTaskEnd(p.taskID)
 			l.logger.Phase("Evolve: restarting with latest main")
@@ -193,97 +219,96 @@ func (l *Loop) buildCompletedTask(taskID, nextTask, summary, prNumber, workDir s
 	return ct
 }
 
-// mergeDeps holds the narrow dependencies needed by mergeIfEnabled.
-type mergeDeps struct {
-	AutoMerge     bool
-	Backend       tasks.Backend
-	GitHub        git.GitHub
-	DefaultBranch string
-	WorkDir       string
-	Logger        *logging.Logger
-	MergeFn       func(ctx context.Context, taskID, nextTask, workDir, rawLogPath string) (bool, error)
+// finalizePRParams bundles the context needed to finalize a PR: merge if
+// applicable, then close the bead. Used by both the post-signal flow and
+// the resume-via-PR flow so neither duplicates merge+close logic.
+type finalizePRParams struct {
+	ctx        context.Context
+	taskID     string
+	nextTask   string
+	prNumber   string
+	prState    string // "OPEN" or "MERGED"; looked up from GH if empty
+	prURL      string
+	workDir    string
+	rawLogPath string
 }
 
-func mergeIfEnabled(deps mergeDeps, p postSignalParams, prNumber string) (bool, error) {
-	merged := false
-	var lastErr error
-	if deps.AutoMerge && prNumber != "" {
-		var mergeErr error
-		merged, mergeErr = deps.MergeFn(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
-		if mergeErr != nil {
-			deps.Logger.Warn("git", "Auto-merge: %v", mergeErr)
-			lastErr = mergeErr
-		}
+type finalizePRResult struct {
+	merged bool
+	closed bool
+}
+
+// finalizePR handles an existing PR: merges if applicable, closes the bead.
+// Returns the merge/close outcome so callers can act on it (e.g. evolve).
+func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
+	if p.prNumber == "" {
+		l.logger.Warn("git", "No PR — task %s stays open", p.taskID)
+		return finalizePRResult{}
 	}
 
-	if prNumber == "" && p.taskID != "" && deps.AutoMerge {
-		ref, _ := deps.Backend.GetExternalRef(p.taskID)
-		if existingPR := parsePRNumber(ref); existingPR != "" {
-			if deps.GitHub != nil {
-				prState, _ := deps.GitHub.GetPRState(p.workDir, existingPR)
-				switch strings.ToUpper(prState) {
-				case "MERGED":
-					deps.Logger.Log("git", "PR #%s already merged — work is on main", existingPR)
-					merged = true
-				case "OPEN":
-					prBase := getPRBase(deps.GitHub, deps.WorkDir, existingPR)
-					if prBase != "" && prBase != deps.DefaultBranch {
-						deps.Logger.Log("git", "Existing PR #%s targets %s (not %s) — stacked, skipping merge", existingPR, prBase, deps.DefaultBranch)
-					} else {
-						deps.Logger.Log("git", "Existing PR #%s still open — attempting merge", existingPR)
-						var mergeErr error
-						merged, mergeErr = deps.MergeFn(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
-						if mergeErr != nil {
-							deps.Logger.Warn("git", "Auto-merge existing PR: %v", mergeErr)
-						}
-					}
-				}
+	prState := p.prState
+	if prState == "" {
+		gh := l.git.GH()
+		if gh == nil || !gh.Available() {
+			return finalizePRResult{}
+		}
+		looked, err := gh.GetPRState(l.git.WorkDir, p.prNumber)
+		if err != nil {
+			l.logger.Warn("git", "Failed to get PR #%s state: %v", p.prNumber, err)
+			return finalizePRResult{}
+		}
+		prState = strings.ToUpper(looked)
+	}
+
+	merged := prState == "MERGED"
+
+	if prState == "OPEN" && l.cfg.AutoMerge {
+		gh := l.git.GH()
+		prBase := getPRBase(gh, l.git.WorkDir, p.prNumber)
+		defaultBranch := l.git.DetectDefaultBranch()
+		if prBase != "" && prBase != defaultBranch {
+			l.logger.Log("git", "PR #%s targets %s — stacked, closing bead", p.prNumber, prBase)
+		} else {
+			l.logger.Log("git", "PR #%s targets %s — merging", p.prNumber, defaultBranch)
+			var mergeErr error
+			merged, mergeErr = l.mergeWithRetry(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
+			if mergeErr != nil {
+				l.logger.Warn("git", "Auto-merge: %v", mergeErr)
+			}
+			if !merged {
+				l.logger.Warn("git", "Merge failed for PR #%s — skipping task", p.prNumber)
+				skipTask(l.state, l.cfg.TaskBackend, l.logger, p.taskID, "merge_failed")
+				return finalizePRResult{}
 			}
 		}
 	}
 
-	return merged, lastErr
-}
-
-// closeTaskDeps holds the narrow dependencies needed by closeOrRetryTask.
-type closeTaskDeps struct {
-	AutoMerge bool
-	Backend   tasks.Backend
-	Attempts  *attempts.Tracker
-	State     *state.Store
-	Logger    *logging.Logger
-	SkipFn    func(id, reason string)
-}
-
-func closeOrRetryTask(deps closeTaskDeps, taskID string, ct CompletedTask, merged bool, mergeErr error) {
-	if taskID == "" {
-		return
+	if merged {
+		l.git.PostMergeUpdateMain()
 	}
 
-	// No PR = not done. Work must be in a PR to close the bead.
-	if ct.PRNum == "" {
-		deps.Logger.Warn("git", "No PR created — task %s stays open", taskID)
-		return
+	if p.taskID == "" {
+		return finalizePRResult{merged: merged, closed: true}
 	}
 
-	closeReason := fmt.Sprintf("Fixed in PR #%s", ct.PRNum)
-	if ct.PRURL != "" {
-		closeReason = fmt.Sprintf("Fixed in %s", ct.PRURL)
+	closeReason := fmt.Sprintf("Fixed in PR #%s", p.prNumber)
+	if p.prURL != "" {
+		closeReason = fmt.Sprintf("Fixed in %s", p.prURL)
 	}
-
-	if !merged && deps.AutoMerge && mergeErr != nil {
-		deps.Logger.Warn("git", "Merge failed — skipping task %s (PR exists for manual review)", taskID)
-		deps.SkipFn(taskID, "merge_failed")
-		return
+	l.attempts.ClearMergeFailures(p.taskID)
+	stateReason := "ralph: PR open or stacked"
+	if merged {
+		stateReason = "ralph: PR merged"
 	}
-
-	deps.Attempts.ClearMergeFailures(taskID)
-	if err := deps.Backend.CloseTask(taskID, closeReason); err != nil {
-		deps.Logger.Warn("beads", "CloseTask failed: %v", err)
+	_ = l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", stateReason)
+	if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
+		l.logger.Warn("beads", "CloseTask failed: %v", err)
 	} else {
-		deps.Logger.Log("beads", "Closed task %s (%s)", taskID, closeReason)
-		persistCompletedTask(deps.State, deps.Logger, taskID, ct.Title, ct.PRNum, closeReason)
+		l.logger.Log("beads", "Closed task %s (%s)", p.taskID, closeReason)
+		persistCompletedTask(l.state, l.logger, p.taskID, p.nextTask, p.prNumber, closeReason)
 	}
+
+	return finalizePRResult{merged: merged, closed: true}
 }
 
 // checkoutExistingBranch checks metadata for a branch from a previous
@@ -458,27 +483,3 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 	return resultProceed
 }
 
-func (l *Loop) mergeDeps() mergeDeps {
-	return mergeDeps{
-		AutoMerge:     l.cfg.AutoMerge,
-		Backend:       l.cfg.TaskBackend,
-		GitHub:        l.git.GH(),
-		DefaultBranch: l.git.DetectDefaultBranch(),
-		WorkDir:       l.git.WorkDir,
-		Logger:        l.logger,
-		MergeFn:       l.mergeWithRetry,
-	}
-}
-
-func (l *Loop) closeTaskDeps() closeTaskDeps {
-	return closeTaskDeps{
-		AutoMerge: l.cfg.AutoMerge,
-		Backend:   l.cfg.TaskBackend,
-		Attempts:  l.attempts,
-		State:     l.state,
-		Logger:    l.logger,
-		SkipFn: func(id, reason string) {
-			skipTask(l.state, l.cfg.TaskBackend, l.logger, id, reason)
-		},
-	}
-}
