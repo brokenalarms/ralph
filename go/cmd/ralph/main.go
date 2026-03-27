@@ -182,6 +182,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		TaskBackend:         backend,
 		IdleTimeout:         cfg.IdleTimeout,
 		IdleTimeoutProgress: cfg.IdleTimeoutProgress,
+		PostSignalTimeout:   cfg.PostSignalTimeout,
 		Wait:                cfg.Wait,
 		WaitInterval:        cfg.WaitInterval,
 		Version:             config.Version,

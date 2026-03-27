@@ -38,6 +38,12 @@ type postSignalParams struct {
 // the action Run() should take. Callers pass runIteration and iteration
 // pointers so the no-commits path can increment them.
 func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int) postSignalAction {
+	if timeout := l.cfg.PostSignalTimeout; timeout > 0 {
+		ctx, cancel := context.WithTimeout(p.ctx, timeout)
+		defer cancel()
+		p.ctx = ctx
+	}
+
 	// Preflight: check bead wasn't prematurely closed by the agent.
 	if p.taskID != "" {
 		phase, _ := l.cfg.TaskBackend.GetState(p.taskID, "phase")
@@ -101,6 +107,11 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 		return signalSkipped
 	}
 
+	if p.ctx.Err() != nil {
+		l.logger.Warn("", "Post-signal timeout — aborting before push")
+		return signalComplete
+	}
+
 	prNumber := l.pushSignalPR(p)
 	prState := "OPEN"
 
@@ -120,6 +131,12 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 	if prNumber == "" && ct.PRNum != "" {
 		prNumber = ct.PRNum
 		prState = "OPEN"
+	}
+
+	if p.ctx.Err() != nil {
+		l.logger.Warn("", "Post-signal timeout — aborting before merge")
+		l.sessionTasks = append(l.sessionTasks, ct)
+		return signalComplete
 	}
 
 	if prNumber == "" {

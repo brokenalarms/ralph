@@ -324,6 +324,22 @@ var Flags = []FlagDef{
 		},
 	},
 	{
+		Long: "--post-signal-timeout", MetaVar: "<dur>",
+		Help:      "Timeout for post-signal operations (verification, push, merge)", Default: "15m",
+		EnvVar:    "RALPH_POST_SIGNAL_TIMEOUT",
+		ConfigKey: "post_signal_timeout",
+		Kind:      KindDuration,
+		Apply: func(cfg *Config, val string) error {
+			d, err := parseDuration(val)
+			if err != nil {
+				return err
+			}
+			cfg.PostSignalTimeout = d
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.PostSignalTimeout.String() },
+	},
+	{
 		Long: "--verify-level", MetaVar: "<level>",
 		Help:      "Verification level for no-diff completions: fire (trust agent) or hog (spawn verifier)",
 		Default:   "fire",

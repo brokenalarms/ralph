@@ -35,6 +35,7 @@ type Config struct {
 	TaskBackend         tasks.Backend
 	IdleTimeout         time.Duration
 	IdleTimeoutProgress time.Duration
+	PostSignalTimeout   time.Duration
 	Wait                bool
 	WaitInterval        time.Duration
 	Verbose             bool
