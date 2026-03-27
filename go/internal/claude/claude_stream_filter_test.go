@@ -117,13 +117,13 @@ func TestFilterStreamJSON_TailsFile(t *testing.T) {
 		filterStreamJSON(rawPath, logPath, "", true, stop)
 	}()
 
-	// Append a stream-json event after the filter has started.
+	// Append a stream-json delta event after the filter has started.
 	time.Sleep(200 * time.Millisecond)
 	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"hello from claude"}]}}`)
+	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"hello from claude"}}`)
 	f.Close()
 
 	// Give the filter time to process, then stop it.
@@ -205,8 +205,8 @@ func TestFilterStreamJSON_DiagnosisBanner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"ISSUE: the config is missing a required field"}]}}`)
-	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"FIX: add the default value to config.go"}]}}`)
+	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"ISSUE: the config is missing a required field"}}`)
+	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"FIX: add the default value to config.go"}}`)
 	f.Close()
 
 	time.Sleep(300 * time.Millisecond)
@@ -438,6 +438,51 @@ func TestFilterStreamJSON_MultiLineBashTruncated(t *testing.T) {
 	}
 }
 
+// Verifies that when Claude emits both content_block_delta events (streaming)
+// and a final assistant event with the same text, each line appears exactly
+// once in the filtered output — no duplicates.
+func TestFilterStreamJSON_NoDuplicatesFromAssistantAndDelta(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw.log")
+	logPath := filepath.Join(dir, "loop.log")
+
+	os.WriteFile(rawPath, nil, 0o644)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		filterStreamJSON(rawPath, logPath, "", true, stop)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate Claude's stream-json: delta events stream first, then the
+	// assistant event contains the complete text again.
+	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"hello from claude"}}`)
+	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"hello from claude"}]}}`)
+	f.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	<-done
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := ansiRe.ReplaceAllString(string(got), "")
+
+	// The text should appear exactly once.
+	count := strings.Count(content, "hello from claude")
+	if count != 1 {
+		t.Errorf("expected 'hello from claude' exactly once, got %d times in: %q", count, content)
+	}
+}
+
 // Verifies that non-verbose mode hides Read/Bash/Write but keeps Edit, Agent,
 // prose, signals, and diagnosis banners visible in the filtered output.
 func TestFilterStreamJSON_NonVerboseHidesLowValueTools(t *testing.T) {
@@ -471,7 +516,7 @@ func TestFilterStreamJSON_NonVerboseHidesLowValueTools(t *testing.T) {
 	// Signal (starts as Bash but should be converted to [signal]).
 	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo \"done\" > /path/.ralph/.signal_complete"}}]}}`)
 	// Diagnosis.
-	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"ISSUE: config is broken"}]}}`)
+	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"ISSUE: config is broken"}}`)
 	f.Close()
 
 	time.Sleep(300 * time.Millisecond)

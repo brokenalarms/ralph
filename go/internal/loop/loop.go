@@ -536,7 +536,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			// PushAndCreatePR calls EnsureUpToDate internally, which
 			// rebases onto the latest base branch before pushing.
 			headAfterSignal := l.git.HeadRev()
-			if headAfterSignal == headBefore {
+			if headBefore != "" && headAfterSignal == headBefore {
 				// No new commits — agent confirmed task is already done.
 				// Verification passed, so close the bead.
 				l.logger.Log("git", "No new commits — work already on main")
