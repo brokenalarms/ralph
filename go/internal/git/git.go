@@ -163,6 +163,22 @@ func (m *Manager) tryResumeWorktree() error {
 
 	m.Logger.Log("git", "Resuming worktree: %s", m.WorkDir)
 
+	defaultBranch := m.detectDefaultBranch()
+	_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch)
+
+	// If the worktree tree matches origin/main (no actual diff), all work
+	// is on main — even if commit SHAs differ due to squash-merge.
+	treeDiff := m.gitOutput(m.WorkDir, "diff", "--stat", "HEAD", "origin/"+defaultBranch)
+	if treeDiff == "" {
+		m.Logger.Log("git", "Worktree matches origin/%s — resetting", defaultBranch)
+		m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+defaultBranch)
+		m.BranchRenamed = false
+		if m.State != nil {
+			_ = m.State.Write("branch_renamed", "false")
+		}
+		return nil
+	}
+
 	_ = m.EnsureUpToDate(context.Background())
 	return nil
 }
