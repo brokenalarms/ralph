@@ -41,7 +41,7 @@ Include this in your reflection as well, before the learnings section.
 1. Focus ONLY on the single task described above. The Boy Scout Rule still applies to files you touch — clean up dead code, unclear names, and other issues you discover in those files as part of your work.
 2. Do NOT work on other tasks — one task per iteration.
 3. Do NOT write bd prime output or bd workflow instructions to the project's AGENTS.md, CLAUDE.md, or any other project file. bd context is for your use in this iteration only.
-4. One task = one PR, if gh is available. Multiple atomic commits are fine, but they all go in one PR — do not create a PR per commit.
+4. Multiple atomic commits per task are fine. The orchestrator groups them into a single PR.
 5. Run only scoped, relevant tests during development — not the full suite. The orchestrator runs the full test suite as the completion gate.
 6. When using the Agent tool, ALWAYS set `isolation: "worktree"` so sub-agents work in their own git worktree. Sub-agents that share the main worktree can check out ralph's branches, breaking branch cleanup during recreation.
 

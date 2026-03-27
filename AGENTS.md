@@ -3,10 +3,8 @@
 
 # Git
 - Ralph requires a git repository.
-- Never push directly to the base branch. Atomic commits comprising a feature should be pushed as a PR from the working branch. This is part of completing a task.
-- The final stage of a piece of work is always committing and pushing to a branched PR.
+- Agents commit locally on the branch the orchestrator provides. The orchestrator owns all remote operations: pushing, branch creation, PR creation, and merging.
 - The orchestrator handles rebase, conflict resolution, and merge programmatically. Agents do not need to manually rebase — the git module ensures the worktree is up to date before any outbound operation.
-- Never merge a PR to the base branch without the orchestrator's auto-merge flow.
 
 # Signal files vs state
 - **Signal files** (.signal_complete, .signal_current_task, feedback, stop): agent↔orchestrator communication and user commands (`ralph stop`, `ralph feedback`).
