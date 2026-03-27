@@ -535,6 +535,25 @@ func (l *Loop) Run(ctx context.Context) error {
 
 			// PushAndCreatePR calls EnsureUpToDate internally, which
 			// rebases onto the latest base branch before pushing.
+			headAfterSignal := l.git.HeadRev()
+			if headAfterSignal == headBefore {
+				// No new commits — agent confirmed task is already done.
+				// Verification passed, so close the bead.
+				l.logger.Log("git", "No new commits — work already on main")
+				if taskID != "" {
+					_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "work already on main, agent confirmed")
+					if err := l.cfg.TaskBackend.CloseTask(taskID, "work already on main"); err != nil {
+						l.logger.Warn("beads", "CloseTask: %v", err)
+					} else {
+						l.logger.Log("beads", "Closed task %s (work already on main)", taskID)
+					}
+				}
+				l.git.TagTaskEnd(taskID)
+				runIteration++
+				iteration++
+				continue
+			}
+
 			prBody := l.buildPRBody(taskID, result.Summary)
 			prNumber, pushErr := l.pushAndCreatePR(ctx, taskID, nextTask, prBody)
 			if pushErr != nil {
