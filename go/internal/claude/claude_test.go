@@ -1390,12 +1390,15 @@ func TestRun_WaitsForOutputAfterSignal(t *testing.T) {
 	}
 }
 
-// Verifies that git checkout and git branch are disallowed so sub-agents
-// can't check out ralph's branches, which would block RecreateFromMain.
-func TestDisallowedTools_BlocksGitCheckoutAndBranch(t *testing.T) {
+// Verifies that all orchestrator-owned git operations are disallowed:
+// checkout/branch (prevents sub-agents from interfering with ralph's branches),
+// push and gh pr create (orchestrator owns all remote operations).
+func TestDisallowedTools_BlocksOrchestratorOwnedGitOps(t *testing.T) {
 	required := map[string]bool{
 		"git checkout": false,
 		"git branch":   false,
+		"git push":     false,
+		"gh pr create": false,
 	}
 	for _, tool := range IterationDisallowedTools {
 		for key := range required {
@@ -1406,7 +1409,7 @@ func TestDisallowedTools_BlocksGitCheckoutAndBranch(t *testing.T) {
 	}
 	for key, found := range required {
 		if !found {
-			t.Errorf("IterationDisallowedTools must block %q to prevent sub-agents from interfering with ralph's branches", key)
+			t.Errorf("IterationDisallowedTools must block %q — orchestrator owns all branch and remote operations", key)
 		}
 	}
 }

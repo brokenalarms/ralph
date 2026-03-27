@@ -31,9 +31,8 @@
 - Behavioral code changes should be backed by tests. Static content, markup, and config changes don't need tests — a passing build is verification enough.
 
 ### Github
-- One task = one PR. All commits for a task go into a single pull request. Never push directly to the base branch.
-- Do not create PRs directly — the orchestrator creates and manages PRs with standardized titles. Just push your branch to the remote.
-- Do not create a PR after each commit. Finish all commits for the task, then push once.
+- One task = one PR. All commits for a task go into a single pull request.
+- The orchestrator owns all remote operations: pushing, branch creation, PR creation, and merging. Agents commit locally — do not push or create PRs.
 
 ### Boy Scout Rule
 Before committing, glance at the files you touched. If you see something genuinely worth cleaning up, do it:
