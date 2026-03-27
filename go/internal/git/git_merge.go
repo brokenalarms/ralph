@@ -71,13 +71,19 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body st
 	}
 
 	// Check there are commits between the base and HEAD.
-	// Fetch the base ref so the count is accurate.
 	_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", baseBranch)
 	baseRef := "origin/" + baseBranch
 	if !m.refExists(m.WorkDir, baseRef) {
 		baseRef = baseBranch
 	}
 	diffCount := m.gitOutput(m.WorkDir, "rev-list", "--count", baseRef+"..HEAD")
+	if (diffCount == "" || diffCount == "0") && baseBranch != defaultBranch {
+		// Stacked base has no diff — fall back to main.
+		m.Logger.Log("git", "No commits between %s and HEAD — falling back to %s", baseRef, defaultBranch)
+		baseBranch = defaultBranch
+		baseRef = "origin/" + defaultBranch
+		diffCount = m.gitOutput(m.WorkDir, "rev-list", "--count", baseRef+"..HEAD")
+	}
 	if diffCount == "" || diffCount == "0" {
 		m.Logger.Log("git", "No commits between %s and HEAD — skipping PR", baseRef)
 		return "", nil
