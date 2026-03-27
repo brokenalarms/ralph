@@ -367,45 +367,45 @@ func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 }
 
 
-// PrepareForNextTask + RenameBranchForTask produces stacked branches where
-// the second task branch tracks the first as PrevBranch.
-func TestPrepareForNextTask_TracksPrevBranch(t *testing.T) {
+// RenameBranchForTask does not set PrevBranch — that's controlled by
+// setStackHead in the loop via SetPrevBranch. Rename only changes the
+// branch name.
+func TestRenameBranchForTask_DoesNotSetPrevBranch(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	state := newMemState()
 	log := &testLog{}
 
 	mgr := &Manager{
-		ProjectDir:  project,
-		RalphDir:    ralphDir,
-				State:       state,
-		Logger:      log,
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      state,
+		Logger:     log,
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
 	mgr.RenameBranchForTask("first task", "")
-	writeFile(t, mgr.WorkDir, "first.txt", "work\n")
-	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "first task work")
-	firstBranch := mgr.WorktreeBranch
-
 	mgr.PrepareForNextTask()
 	mgr.RenameBranchForTask("second task", "")
 
-	secondBranch := mgr.WorktreeBranch
-
-	if firstBranch == secondBranch {
-		t.Errorf("branches should differ: first=%q, second=%q", firstBranch, secondBranch)
+	if mgr.PrevBranch != "" {
+		t.Errorf("PrevBranch = %q, want empty (set by setStackHead, not rename)", mgr.PrevBranch)
 	}
+}
 
-	if mgr.PrevBranch != firstBranch {
-		t.Errorf("PrevBranch = %q, want %q", mgr.PrevBranch, firstBranch)
+// SetPrevBranch explicitly sets PrevBranch and persists to state.
+func TestSetPrevBranch(t *testing.T) {
+	state := newMemState()
+	mgr := &Manager{State: state, Logger: &testLog{}}
+	mgr.SetPrevBranch("ralph/ralph-abc-task")
+	if mgr.PrevBranch != "ralph/ralph-abc-task" {
+		t.Errorf("PrevBranch = %q, want ralph/ralph-abc-task", mgr.PrevBranch)
 	}
-
-	prevFromState, _ := state.Read("prev_branch")
-	if prevFromState != firstBranch {
-		t.Errorf("state prev_branch = %q, want %q", prevFromState, firstBranch)
+	v, _ := state.Read("prev_branch")
+	if v != "ralph/ralph-abc-task" {
+		t.Errorf("state prev_branch = %q, want ralph/ralph-abc-task", v)
 	}
 }
 

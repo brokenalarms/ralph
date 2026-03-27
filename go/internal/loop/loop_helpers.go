@@ -20,12 +20,21 @@ import (
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
-// initRun restores worktree state on resume. No rebase or reset — the
-// correct base branch depends on which task is selected, which happens
-// later in checkoutExistingBranch.
+// initRun restores worktree state on resume and syncs to the correct base.
+// Derives the stack head from completed beads, then rebases onto it
+// (or the default branch if no stack exists).
 func (l *Loop) initRun(ctx context.Context) error {
 	if l.git.WorktreeBranch == "" || l.git.WorkDir == l.git.ProjectDir {
 		return nil
+	}
+	l.setStackHead()
+	if err := l.handleRebase(ctx); err != nil {
+		if ctx.Err() != nil {
+			l.state.Write("status", "stopped")
+			return nil
+		}
+		l.state.Write("status", "error")
+		return fmt.Errorf("initial rebase failed: %w", err)
 	}
 	nextInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 	if !l.isNewTask(nextInfo.ID, nextInfo.Title) {

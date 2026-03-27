@@ -293,18 +293,13 @@ func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 		return
 	}
 
-	oldBranch := m.WorktreeBranch
 	newBranch := BranchName(m.ProjectName, taskID, slug)
 	if err := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); err == nil {
-		if !strings.HasSuffix(oldBranch, "/wip") {
-			m.PrevBranch = oldBranch
-		}
 		m.WorktreeBranch = newBranch
 		m.BranchRenamed = true
 		if m.State != nil {
 			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
 			_ = m.State.Write("branch_renamed", "true")
-			_ = m.State.Write("prev_branch", m.PrevBranch)
 		}
 	}
 }
@@ -322,17 +317,12 @@ func (m *Manager) RenameBranchTo(name string) {
 		}
 		return
 	}
-	oldBranch := m.WorktreeBranch
 	if err := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, name); err == nil {
-		if !strings.HasSuffix(oldBranch, "/wip") {
-			m.PrevBranch = oldBranch
-		}
 		m.WorktreeBranch = name
 		m.BranchRenamed = true
 		if m.State != nil {
 			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
 			_ = m.State.Write("branch_renamed", "true")
-			_ = m.State.Write("prev_branch", m.PrevBranch)
 		}
 	}
 }
