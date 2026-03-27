@@ -225,16 +225,17 @@ func (l *Loop) Run(ctx context.Context) error {
 		if runIteration > 1 && taskChanged {
 			l.git.PrepareForNextTask()
 			if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
-				stackHead := resolveStackHead(l.state, l.cfg.TaskBackend)
-				if stackHead == "" || !l.git.ResetToStackHead(ctx, stackHead) {
-					if err := l.handleRebase(ctx); err != nil {
-						if ctx.Err() != nil {
-							l.state.Write("status", "stopped")
-						} else {
-							l.state.Write("status", "error")
-						}
-						break
+				l.setStackHead()
+				if l.git.PrevBranch == "" {
+					l.git.ResetToDefaultBranch()
+				}
+				if err := l.handleRebase(ctx); err != nil {
+					if ctx.Err() != nil {
+						l.state.Write("status", "stopped")
+					} else {
+						l.state.Write("status", "error")
 					}
+					break
 				}
 			}
 		}

@@ -355,31 +355,6 @@ func (m *Manager) PrepareForNextTask() {
 	}
 }
 
-// ResetToStackHead fetches the given branch from origin and hard-resets the
-// worktree to it. Sets PrevBranch so the next PR targets the stack head.
-// Returns false if the branch could not be fetched or does not exist on the
-// remote — the caller should fall back to the default branch.
-func (m *Manager) ResetToStackHead(ctx context.Context, branch string) bool {
-	if branch == "" || m.WorkDir == "" || m.WorkDir == m.ProjectDir {
-		return false
-	}
-	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", branch); err != nil {
-		m.Logger.Warn("git", "Stack head fetch failed for %s: %v", branch, err)
-		return false
-	}
-	ref := "origin/" + branch
-	if !m.refExists(m.WorkDir, ref) {
-		return false
-	}
-	m.Logger.Log("git", "Stacking on %s", branch)
-	m.gitCmd(m.WorkDir, "reset", "--hard", ref)
-	m.PrevBranch = branch
-	if m.State != nil {
-		_ = m.State.Write("prev_branch", branch)
-	}
-	return true
-}
-
 // SquashToOneCommit squashes all commits since baseSHA into a single commit
 // with the given message. No-op if there is already exactly one commit
 // ahead of base. Returns an error if there are no commits to squash.
