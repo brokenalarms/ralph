@@ -70,34 +70,41 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 		return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
 	}
 
-	// No external-ref — check if a remote branch exists for this task.
+	// No external-ref — search remote branches for work matching this task ID.
 	// The branch was pushed by a previous iteration but PR creation failed.
 	gh := l.git.GH()
 	if gh == nil || !gh.Available() {
 		return false
 	}
 	repoURL := l.git.RemoteURL()
-	branch := l.git.WorktreeBranch
-	if branch == "" || repoURL == "" {
+	if repoURL == "" {
 		return false
 	}
+
+	// Find a remote branch containing this bead ID.
+	branch := l.git.FindRemoteBranchForTask(taskID)
+	if branch == "" {
+		return false
+	}
+
+	l.logger.Log("git", "Found remote branch %s for task %s", branch, taskID)
+
+	// Check if a PR exists for this branch.
 	prNumber, _ := gh.FindOpenPR(branch, repoURL)
 	if prNumber != "" {
-		l.logger.Log("git", "Found orphaned PR #%s for %s — resolving", prNumber, branch)
-		if taskID != "" {
-			_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNumber)
-		}
+		l.logger.Log("git", "Found PR #%s for %s — resolving", prNumber, branch)
+		_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNumber)
 		return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
 	}
 
-	// No PR — check if the remote branch has commits (push succeeded, PR failed).
-	_ = l.git.FetchBranch(branch)
-	if l.git.RemoteBranchHasCommits(branch) {
-		l.logger.Log("git", "Remote branch %s has work but no PR — creating PR", branch)
-		prNum, err := l.pushAndCreatePR(ctx, taskID, nextTask)
-		if err == nil && prNum != "" {
-			return l.resolveByPRState(ctx, taskID, nextTask, prNum)
-		}
+	// No PR — create one from the existing remote branch.
+	l.logger.Log("git", "Remote branch %s has work but no PR — creating PR", branch)
+	// Switch to the remote branch so push/PR uses the right ref.
+	l.git.CheckoutRemoteBranch(branch)
+	prNum, err := l.pushAndCreatePR(ctx, taskID, nextTask)
+	if err == nil && prNum != "" {
+		_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNum)
+		return l.resolveByPRState(ctx, taskID, nextTask, prNum)
 	}
 
 	return false

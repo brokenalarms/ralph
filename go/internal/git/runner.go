@@ -101,6 +101,37 @@ func (m *Manager) remoteExists() bool {
 	return m.gitOutput(m.ProjectDir, "remote", "get-url", "origin") != ""
 }
 
+// FindRemoteBranchForTask searches remote branches for one containing the
+// given task/bead ID. Returns the branch name or empty string.
+func (m *Manager) FindRemoteBranchForTask(taskID string) string {
+	if taskID == "" {
+		return ""
+	}
+	_ = m.gitCmdErr(m.ProjectDir, "fetch", "--prune", "origin")
+	out := m.gitOutput(m.ProjectDir, "branch", "-r", "--list", "origin/ralph/"+m.ProjectName+"/*"+taskID+"*")
+	for _, line := range strings.Split(out, "\n") {
+		branch := strings.TrimSpace(line)
+		branch = strings.TrimPrefix(branch, "origin/")
+		if branch != "" {
+			return branch
+		}
+	}
+	return ""
+}
+
+// CheckoutRemoteBranch checks out a remote branch in the worktree,
+// creating a local tracking branch.
+func (m *Manager) CheckoutRemoteBranch(branch string) {
+	_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", branch)
+	_ = m.gitCmdErr(m.WorkDir, "checkout", "-B", branch, "origin/"+branch)
+	m.WorktreeBranch = branch
+	m.BranchRenamed = true
+	if m.State != nil {
+		_ = m.State.Write("worktree_branch", branch)
+		_ = m.State.Write("branch_renamed", "true")
+	}
+}
+
 // RemoteURL returns the origin remote URL.
 func (m *Manager) RemoteURL() string {
 	return m.gitOutput(m.ProjectDir, "remote", "get-url", "origin")
