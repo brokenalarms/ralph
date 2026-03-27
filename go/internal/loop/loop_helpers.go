@@ -196,10 +196,35 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 			l.logger.Warn("git", "PR #%s chain unhealthy: %s — re-running agent", prNumber, reason)
 			return false
 		}
+
+		// PR exists and branch is healthy. Try to merge (includes CI wait
+		// and fix agent on failure). Only close bead after merge succeeds.
+		if l.cfg.AutoMerge {
+			prBase := l.getPRBase(prNumber)
+			defaultBranch := l.git.DetectDefaultBranch()
+			if prBase != "" && prBase != defaultBranch {
+				// Stacked PR — can't merge until base lands. Close bead,
+				// work is done from our side.
+				l.logger.Log("git", "PR #%s targets %s — stacked, closing bead", prNumber, prBase)
+			} else {
+				l.logger.Log("git", "PR #%s targets %s — merging", prNumber, defaultBranch)
+				merged, mergeErr := l.mergeWithRetry(ctx, taskID, nextTask, l.git.WorkDir, filepath.Join(l.cfg.Dirs.RalphDir, "raw.log"))
+				if mergeErr != nil {
+					l.logger.Warn("git", "Auto-merge: %v", mergeErr)
+				}
+				if !merged {
+					l.logger.Warn("git", "Merge failed for PR #%s — skipping task", prNumber)
+					l.skipTask(taskID, "merge_failed")
+					return true
+				}
+				l.git.PostMergeUpdateMain()
+			}
+		}
+
 		if taskID != "" {
 			closeReason := fmt.Sprintf("Fixed in PR #%s", prNumber)
 			l.attempts.ClearMergeFailures(taskID)
-			_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: PR chain healthy")
+			_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: PR merged or stacked")
 			if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
 				l.logger.Warn("beads", "CloseTask failed: %v", err)
 			} else {
@@ -568,9 +593,14 @@ func (l *Loop) setStackHead() {
 				continue
 			}
 		}
-		// Open PR — use its branch as stack head.
+		// Open PR — verify its branch exists on remote before stacking.
 		branch, _ := l.cfg.TaskBackend.GetMetadata(id, "branch")
 		if branch == "" {
+			continue
+		}
+		_ = l.git.FetchBranch(branch)
+		if !l.git.RemoteBranchHasCommits(branch) {
+			l.logger.Warn("git", "PR #%s is open but branch %s missing from remote — skipping", prNum, branch)
 			continue
 		}
 		l.git.SetPrevBranch(branch)
