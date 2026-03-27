@@ -53,6 +53,22 @@ func (l *Loop) handleRebase(ctx context.Context) error {
 	return l.git.EnsureUpToDate(ctx)
 }
 
+// resolveStackHead returns the branch of the last completed task from
+// state.json by looking up the bead's branch metadata. Returns empty
+// string when no completed tasks exist or the branch is unknown.
+func resolveStackHead(st *state.Store, backend tasks.Backend) string {
+	completed, err := st.GetCompletedTasks()
+	if err != nil || len(completed) == 0 {
+		return ""
+	}
+	last := completed[len(completed)-1]
+	if last.ID == "" {
+		return ""
+	}
+	branch, _ := backend.GetMetadata(last.ID, "branch")
+	return branch
+}
+
 // mergeWithRetry delegates to git.Manager.MergeWithRetry, passing a CI fix
 // callback that spawns a fix agent. Test overrides via mergeFunc bypass the
 // git module entirely for loop-level tests that only care about the outcome.
