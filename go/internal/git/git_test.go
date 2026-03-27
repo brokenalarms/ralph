@@ -106,6 +106,60 @@ func run(t *testing.T, name string, args ...string) {
 }
 
 
+// BranchName returns a canonical branch name from project, taskID, and slug
+func TestBranchName(t *testing.T) {
+	// With task ID: ralph/<taskID>-<slug>
+	got := BranchName("myproject", "ralph-abc1", "fix-auth-bug")
+	want := "ralph/ralph-abc1-fix-auth-bug"
+	if got != want {
+		t.Errorf("BranchName with taskID = %q, want %q", got, want)
+	}
+
+	// Without task ID: ralph/<project>/<slug>
+	got = BranchName("myproject", "", "fix-auth-bug")
+	want = "ralph/myproject/fix-auth-bug"
+	if got != want {
+		t.Errorf("BranchName without taskID = %q, want %q", got, want)
+	}
+}
+
+// WipBranchName returns the placeholder branch for a project
+func TestWipBranchName(t *testing.T) {
+	got := WipBranchName("myproject")
+	want := "ralph/myproject/wip"
+	if got != want {
+		t.Errorf("WipBranchName = %q, want %q", got, want)
+	}
+}
+
+// BranchListPattern returns the glob for listing all ralph branches
+func TestBranchListPattern(t *testing.T) {
+	got := BranchListPattern()
+	want := "ralph/*"
+	if got != want {
+		t.Errorf("BranchListPattern = %q, want %q", got, want)
+	}
+}
+
+// Changing BranchName format is a one-line change (branchPrefix constant)
+func TestBranchName_UsesSharedPrefix(t *testing.T) {
+	bn := BranchName("p", "id", "slug")
+	wip := WipBranchName("p")
+	pattern := BranchListPattern()
+
+	// All three share the same prefix
+	prefix := "ralph/"
+	if !strings.HasPrefix(bn, prefix) {
+		t.Errorf("BranchName %q missing prefix %q", bn, prefix)
+	}
+	if !strings.HasPrefix(wip, prefix) {
+		t.Errorf("WipBranchName %q missing prefix %q", wip, prefix)
+	}
+	if !strings.HasPrefix(pattern, prefix) {
+		t.Errorf("BranchListPattern %q missing prefix %q", pattern, prefix)
+	}
+}
+
 // Slugify converts free-form text to a safe branch/path slug
 func TestSlugify_BasicConversion(t *testing.T) {
 	cases := []struct {

@@ -14,6 +14,28 @@ var (
 	dashTrim = regexp.MustCompile(`^-|-$`)
 )
 
+const branchPrefix = "ralph/"
+
+// BranchName returns the canonical branch name for a task.
+// With a taskID: ralph/<taskID>-<slug>
+// Without:      ralph/<project>/<slug>
+func BranchName(projectName, taskID, slug string) string {
+	if taskID != "" {
+		return branchPrefix + taskID + "-" + slug
+	}
+	return branchPrefix + projectName + "/" + slug
+}
+
+// WipBranchName returns the placeholder branch used before a task is assigned.
+func WipBranchName(projectName string) string {
+	return branchPrefix + projectName + "/wip"
+}
+
+// BranchListPattern returns the glob pattern for listing ralph branches.
+func BranchListPattern() string {
+	return branchPrefix + "*"
+}
+
 // Slugify converts a description to a URL/branch-safe slug.
 // Limited to 4 words and 50 characters to keep branch names short.
 func Slugify(s string) string {
@@ -118,7 +140,7 @@ func (m *Manager) RecentChangedFiles(n int) string {
 }
 
 func (m *Manager) ListProjectBranches() []string {
-	out := m.gitOutput(m.ProjectDir, "branch", "--list", "ralph/*", "--sort=refname")
+	out := m.gitOutput(m.ProjectDir, "branch", "--list", BranchListPattern(), "--sort=refname")
 	return parseBranchList(out)
 }
 

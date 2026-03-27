@@ -87,7 +87,7 @@ func (m *Manager) SetupWorktree(ctx context.Context) error {
 
 	// Use a placeholder branch name; RenameBranchForTask will rename it
 	// to a proper task branch before the first commit.
-	m.WorktreeBranch = fmt.Sprintf("ralph/%s/wip", m.ProjectName)
+	m.WorktreeBranch = WipBranchName(m.ProjectName)
 	m.WorkDir = filepath.Join(m.RalphDir, "worktrees", fmt.Sprintf("ralph-%s-%02d", today, runSeq))
 
 	if err := os.MkdirAll(filepath.Join(m.RalphDir, "worktrees"), 0o755); err != nil {
@@ -316,12 +316,7 @@ func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 	}
 
 	oldBranch := m.WorktreeBranch
-	var newBranch string
-	if taskID != "" {
-		newBranch = fmt.Sprintf("ralph/%s-%s", taskID, slug)
-	} else {
-		newBranch = fmt.Sprintf("ralph/%s/%s", m.ProjectName, slug)
-	}
+	newBranch := BranchName(m.ProjectName, taskID, slug)
 	if err := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); err == nil {
 		if !strings.HasSuffix(oldBranch, "/wip") {
 			m.PrevBranch = oldBranch
