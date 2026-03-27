@@ -108,6 +108,27 @@ func TestEnsureComponentPrefix_AlreadyPrefixed(t *testing.T) {
 	}
 }
 
+// Proves: StripComponentPrefix removes known prefixes so PR titles stay concise.
+func TestStripComponentPrefix(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"ralph loop: force-reset worktree", "force-reset worktree"},
+		{"ralph task: echo back beads", "echo back beads"},
+		{"ralph command: four-pane tmux", "four-pane tmux"},
+		{"Ralph Loop: mixed case prefix", "mixed case prefix"},
+		{"fix typo in README", "fix typo in README"},
+		{"ralph loop:", "ralph loop:"},
+	}
+	for _, tc := range cases {
+		got := StripComponentPrefix(tc.input)
+		if got != tc.want {
+			t.Errorf("StripComponentPrefix(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 // Proves: titles with unknown component area are returned unchanged.
 func TestEnsureComponentPrefix_UnknownComponent(t *testing.T) {
 	title := "fix typo in README"
