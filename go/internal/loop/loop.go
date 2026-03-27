@@ -42,8 +42,10 @@ type Config struct {
 	Verbose             bool
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 	Version             string
-	VerifyDir           string // project root where tests are run; empty disables verification
-	VerifyLevel         string // "fire" (default) or "hog" — controls no-diff verification depth
+	VerifyDir             string // project root where tests are run; empty disables verification
+	VerifyLevel           string // "fire" (default) or "hog" — controls no-diff verification depth
+	VerifyModel           string // model for first LLM verification attempt
+	VerifyEscalationModel string // model for subsequent LLM verification attempts
 }
 
 // claudeRunner abstracts the Claude execution interface for testability.

@@ -74,7 +74,7 @@ func (l *Loop) onSignal(p signalParams) bool {
 
 	l.llmVerifyAttempts++
 	model := l.verifyModel()
-	l.logger.Log("llm", "Running LLM verification (attempt %d/%d, model %s)...", l.llmVerifyAttempts, maxLLMVerifyAttempts, model)
+	l.logger.Log("llm", "Running LLM verification (attempt %d/%d, %s)...", l.llmVerifyAttempts, maxLLMVerifyAttempts, verify.ModelShortName(model))
 	llmResult := l.llmVerifyFunc(p.ctx, l.git, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, beadAcceptance, l.git.GitHub, l.queryFunc(), model)
 
 	if llmResult.Passed && llmResult.NoDiff && l.cfg.VerifyLevel == "hog" {
@@ -109,10 +109,17 @@ func (l *Loop) onSignal(p signalParams) bool {
 }
 
 // verifyModel returns the model to use for the current LLM verification
-// attempt. First attempt uses Haiku; subsequent attempts escalate to Sonnet.
+// attempt. First attempt uses the configured verify model; subsequent
+// attempts escalate to the configured escalation model.
 func (l *Loop) verifyModel() string {
 	if l.llmVerifyAttempts <= 1 {
+		if l.cfg.VerifyModel != "" {
+			return l.cfg.VerifyModel
+		}
 		return verify.ModelHaiku
+	}
+	if l.cfg.VerifyEscalationModel != "" {
+		return l.cfg.VerifyEscalationModel
 	}
 	return verify.ModelSonnet
 }

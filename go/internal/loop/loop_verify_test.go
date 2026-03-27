@@ -196,6 +196,67 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	}
 }
 
+// When VerifyModel and VerifyEscalationModel are set in config, verifyModel()
+// uses them instead of the hardcoded defaults, proving models are configurable.
+func TestOnSignal_ConfigDrivenModels(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	customModel := "claude-haiku-custom"
+	customEscalation := "claude-sonnet-custom"
+
+	l := New(Config{
+		Dirs:                  workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations:         5,
+		CallsPerHour:          80,
+		TaskBackend:           &stubBackend{remaining: 1, total: 1, description: "test task"},
+		VerifyDir:             dir,
+		VerifyModel:           customModel,
+		VerifyEscalationModel: customEscalation,
+	}, st, gm, logger)
+
+	l.runner = &injectCapturingRunner{}
+
+	var modelsUsed []string
+	l.llmVerifyFunc = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+		if len(model) > 0 {
+			modelsUsed = append(modelsUsed, model[0])
+		}
+		if len(modelsUsed) < 3 {
+			return verify.Result{Passed: false, Details: "needs work"}
+		}
+		return verify.Result{Passed: true, Reason: "approved"}
+	}
+
+	params := signalParams{
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID: "test-config-models", nextTask: "Config models test",
+	}
+
+	l.onSignal(params)
+	l.onSignal(params)
+	l.onSignal(params)
+
+	if len(modelsUsed) != 3 {
+		t.Fatalf("expected 3 LLM calls, got %d", len(modelsUsed))
+	}
+	if modelsUsed[0] != customModel {
+		t.Errorf("attempt 1: expected %s, got %s", customModel, modelsUsed[0])
+	}
+	if modelsUsed[1] != customEscalation {
+		t.Errorf("attempt 2: expected %s, got %s", customEscalation, modelsUsed[1])
+	}
+	if modelsUsed[2] != customEscalation {
+		t.Errorf("attempt 3: expected %s, got %s", customEscalation, modelsUsed[2])
+	}
+}
+
 // LLM rejects once, fix agent fixes, LLM approves on second attempt.
 func TestOnSignal_LLMReject_PassesOnRetry(t *testing.T) {
 	dir, st := setupTestDir(t)

@@ -186,8 +186,10 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		WaitInterval:        cfg.WaitInterval,
 		Version:             config.Version,
 		OnRebaseConflict:    autoRebaseRecovery(),
-		VerifyDir:           dirs.WorkDir,
-		VerifyLevel:         cfg.VerifyLevel,
+		VerifyDir:             dirs.WorkDir,
+		VerifyLevel:           cfg.VerifyLevel,
+		VerifyModel:           cfg.VerifyModel,
+		VerifyEscalationModel: cfg.VerifyEscalationModel,
 	}, st, gm, log)
 
 	if err := execLoop.Run(ctx); err != nil {

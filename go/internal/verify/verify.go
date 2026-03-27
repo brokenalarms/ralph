@@ -20,11 +20,23 @@ type GitQuerier interface {
 	LogOneline(from, to string) string
 }
 
-// Model IDs used for verification escalation.
+// Model IDs used as defaults for verification escalation.
 const (
 	ModelHaiku  = "claude-haiku-4-5-20251001"
 	ModelSonnet = "claude-sonnet-4-5-20241022"
 )
+
+// ModelShortName extracts a friendly name from a model ID string.
+// "claude-sonnet-4-5-20241022" → "sonnet", "claude-haiku-4-5-20251001" → "haiku".
+// Returns the full ID if no known family is found.
+func ModelShortName(model string) string {
+	for _, family := range []string{"opus", "sonnet", "haiku"} {
+		if strings.Contains(model, family) {
+			return family
+		}
+	}
+	return model
+}
 
 // QueryFunc runs a prompt through an agent and returns the response text.
 // This is injected by the orchestrator so LLM verification goes through
