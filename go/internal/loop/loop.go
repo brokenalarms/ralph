@@ -302,7 +302,9 @@ func (l *Loop) Run(ctx context.Context) error {
 			}
 			if !checkedOut {
 				l.git.RenameBranchForTask(nextTask, taskID)
-				if taskID != "" && l.git.WorktreeBranch != "" {
+				// Only store branch in metadata if the rename succeeded and
+				// the branch name actually contains this task's ID.
+				if taskID != "" && l.git.WorktreeBranch != "" && strings.Contains(l.git.WorktreeBranch, taskID) {
 					_ = l.cfg.TaskBackend.SetMetadata(taskID, "branch", l.git.WorktreeBranch)
 				}
 			}

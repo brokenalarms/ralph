@@ -96,51 +96,39 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 		return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
 	}
 
-	// No PR — check metadata for a branch that was pushed but never got a PR.
+	// Check metadata for the exact branch name stored when work started.
+	branch, _ := l.cfg.TaskBackend.GetMetadata(taskID, "branch")
+	if branch == "" || !strings.Contains(branch, taskID) {
+		return false
+	}
+
 	gh := l.git.GH()
 	if gh == nil || !gh.Available() {
 		return false
 	}
 	repoURL := l.git.RemoteURL()
-	if repoURL == "" {
-		return false
-	}
 
-	// Check metadata for a stored branch name first, fall back to remote search.
-	branch, _ := l.cfg.TaskBackend.GetMetadata(taskID, "branch")
-	if branch == "" {
-		branch = l.git.FindRemoteBranchForTask(taskID)
-	}
-	if branch == "" {
-		return false
-	}
-
-	l.logger.Log("git", "Found remote branch %s for task %s", branch, taskID)
-
-	// Check if a PR exists for this branch.
+	// Check if a PR exists for this exact branch.
 	prNumber, _ := gh.FindOpenPR(branch, repoURL)
 	if prNumber != "" {
-		l.logger.Log("git", "Found PR #%s for branch %s (task %s) — resolving", prNumber, branch, taskID)
-		l.logger.Log("git", "Setting external-ref on %s to gh-%s", taskID, prNumber)
+		l.logger.Log("git", "Found PR #%s for %s (task %s) — resolving", prNumber, branch, taskID)
 		_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNumber)
 		return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
 	}
 
-	// No PR — create one from the existing remote branch.
-	l.logger.Log("git", "Remote branch %s has work but no PR — creating PR", branch)
-	l.git.CheckoutRemoteBranch(branch)
-	prNum, err := l.pushAndCreatePR(ctx, taskID, nextTask, "")
-	if err == nil && prNum != "" {
-		l.logger.Log("git", "Created PR #%s for branch %s (task %s)", prNum, branch, taskID)
-		_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNum)
-		return l.resolveByPRState(ctx, taskID, nextTask, prNum)
+	// No PR — check if the remote branch exists with work.
+	_ = l.git.FetchBranch(branch)
+	if l.git.RemoteBranchHasCommits(branch) {
+		l.logger.Log("git", "Remote branch %s has work but no PR — creating PR", branch)
+		l.git.CheckoutRemoteBranch(branch)
+		prNum, err := l.pushAndCreatePR(ctx, taskID, nextTask, "")
+		if err == nil && prNum != "" {
+			l.logger.Log("git", "Created PR #%s for %s (task %s)", prNum, branch, taskID)
+			_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNum)
+			return l.resolveByPRState(ctx, taskID, nextTask, prNum)
+		}
 	}
 
-	// PR creation failed — the remote branch exists but has no diff.
-	// This means the branch was reset to main during a previous recovery.
-	// Delete the stale remote branch and let the agent re-run.
-	l.logger.Log("git", "Remote branch %s has no usable work — deleting stale branch", branch)
-	_ = l.git.DeleteRemoteBranchByName(branch)
 	return false
 }
 
