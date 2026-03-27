@@ -230,23 +230,44 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 		args := []string{
 			"--print", "--verbose",
 			"--output-format", "stream-json",
+			"--input-format", "stream-json",
 			"--add-dir", cfg.WorkDir,
 			"--add-dir", cfg.RalphDir,
 			"--allowedTools", strings.Join(IterationAllowedTools, ","),
 			"--disallowedTools", strings.Join(IterationDisallowedTools, ","),
-			"-p", cfg.Prompt,
 		}
 		cmd = exec.Command("claude", args...)
 		cmd.Dir = cfg.WorkDir
-		cmd.Stdin = nil
 		cmd.Stdout = rawLog
 		cmd.Stderr = rawLog
 		// Start in its own process group so we can signal it cleanly.
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
 
+	// Create stdin pipe for message injection when using the default command
+	// (not test CmdFactory path). The pipe delivers the initial prompt and
+	// stays open for feedback/verification injection during the run.
+	if r.CmdFactory == nil {
+		stdinPipe, pipeErr := cmd.StdinPipe()
+		if pipeErr != nil {
+			return Result{}, fmt.Errorf("creating stdin pipe: %w", pipeErr)
+		}
+		r.mu.Lock()
+		r.stdinPipe = stdinPipe
+		r.mu.Unlock()
+	}
+
 	if err := cmd.Start(); err != nil {
 		return Result{}, fmt.Errorf("starting claude: %w", err)
+	}
+
+	// Send initial prompt via stdin pipe (stream-json format). The -p flag
+	// conflicts with --input-format stream-json, so we deliver the prompt
+	// as the first stdin message instead.
+	if r.stdinPipe != nil {
+		if err := r.InjectMessage(cfg.Prompt); err != nil {
+			return Result{}, fmt.Errorf("sending initial prompt via stdin: %w", err)
+		}
 	}
 	r.Logger.Log("llm", "Claude started (PID: %d)", cmd.Process.Pid)
 

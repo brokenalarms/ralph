@@ -422,6 +422,64 @@ func TestPoll_FeedbackFallsBackToKillOnBrokenPipe(t *testing.T) {
 	}
 }
 
+// Verifies that Run() in the default path (no CmdFactory) starts the
+// process with --input-format stream-json, delivers the prompt via stdin
+// pipe, and keeps the pipe open for subsequent injection.
+func TestRun_DefaultCommand_SendsPromptViaStdin(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+	argsFile := filepath.Join(dir, "captured_args")
+	stdinFile := filepath.Join(dir, "captured_stdin")
+
+	// Create a fake claude that captures args and the first stdin line,
+	// then writes a completion signal and exits.
+	fakeBin := filepath.Join(dir, "bin")
+	os.Mkdir(fakeBin, 0o755)
+	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" > %s\nhead -1 > %s\nprintf 'done' > %s\nsleep 2\n",
+		argsFile, stdinFile, signals.Complete)
+	os.WriteFile(filepath.Join(fakeBin, "claude"), []byte(script), 0o755)
+	t.Setenv("PATH", fakeBin+":"+os.Getenv("PATH"))
+
+	runner := &Runner{Logger: &testLogger{}}
+	result, err := runner.Run(RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "build the feature",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if !result.SignalDetected {
+		t.Error("expected signal detection")
+	}
+
+	// Verify --input-format stream-json is in the args.
+	args, _ := os.ReadFile(argsFile)
+	argsStr := string(args)
+	if !strings.Contains(argsStr, "--input-format stream-json") {
+		t.Errorf("expected --input-format stream-json in args, got: %s", argsStr)
+	}
+	// Verify -p flag is NOT used (prompt delivered via stdin instead).
+	if strings.Contains(argsStr, " -p ") {
+		t.Errorf("expected no -p flag in args (prompt via stdin), got: %s", argsStr)
+	}
+
+	// Verify the initial prompt was sent via stdin as stream-json.
+	stdin, _ := os.ReadFile(stdinFile)
+	stdinStr := string(stdin)
+	if !strings.Contains(stdinStr, `"type":"user_input_text"`) {
+		t.Errorf("expected stream-json prompt on stdin, got: %s", stdinStr)
+	}
+	if !strings.Contains(stdinStr, "build the feature") {
+		t.Errorf("expected prompt content on stdin, got: %s", stdinStr)
+	}
+}
+
 // Verifies that readFirstLine strips JSON fragments from signal files,
 // so log messages like "Completed: <summary>" stay human-readable.
 func TestReadFirstLine_StripsJSON(t *testing.T) {
