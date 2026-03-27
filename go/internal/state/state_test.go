@@ -483,3 +483,98 @@ func TestSkippedTasks_RoundTrip(t *testing.T) {
 		t.Errorf("expected [ralph-x ralph-y], got %v", loaded.SkippedTasks)
 	}
 }
+
+// Proves: AddCompletedTask persists task records with ID, title, PR number,
+// and close reason — enabling ralph-task to verify tasks weren't falsely closed.
+func TestCompletedTasks_AddAndRetrieve(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5)
+
+	if err := st.AddCompletedTask(CompletedTask{
+		ID:          "ralph-abc",
+		Title:       "fix the widget",
+		PRNumber:    "42",
+		CloseReason: "Fixed in PR #42",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddCompletedTask(CompletedTask{
+		ID:          "ralph-def",
+		Title:       "add tests",
+		PRNumber:    "43",
+		CloseReason: "Fixed in PR #43",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := st.GetCompletedTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("expected 2 completed tasks, got %d", len(tasks))
+	}
+	if tasks[0].ID != "ralph-abc" || tasks[0].PRNumber != "42" {
+		t.Errorf("first task = %+v, want ID=ralph-abc PRNumber=42", tasks[0])
+	}
+	if tasks[1].ID != "ralph-def" || tasks[1].CloseReason != "Fixed in PR #43" {
+		t.Errorf("second task = %+v, want ID=ralph-def", tasks[1])
+	}
+}
+
+// Proves: ClearCompletedTasks removes all entries and omits the key from JSON.
+func TestCompletedTasks_Clear(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5)
+
+	st.AddCompletedTask(CompletedTask{ID: "ralph-abc"})
+	st.AddCompletedTask(CompletedTask{ID: "ralph-def"})
+
+	if err := st.ClearCompletedTasks(); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := st.GetCompletedTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 0 {
+		t.Errorf("expected empty completed tasks, got %v", tasks)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, "state.json"))
+	if strings.Contains(string(data), "completed_tasks") {
+		t.Errorf("expected completed_tasks omitted from JSON when empty, got: %s", data)
+	}
+}
+
+// Proves: completed_tasks round-trips through JSON and persists across restarts.
+func TestCompletedTasks_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+
+	s := State{
+		Iteration: 5,
+		Status:    "running",
+		CompletedTasks: []CompletedTask{
+			{ID: "ralph-x", Title: "task x", PRNumber: "10", CloseReason: "Fixed in PR #10"},
+			{ID: "ralph-y", Title: "task y", PRNumber: "11", CloseReason: "Fixed in PR #11"},
+		},
+	}
+	if err := st.Save(s); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.CompletedTasks) != 2 {
+		t.Fatalf("expected 2, got %d", len(loaded.CompletedTasks))
+	}
+	if loaded.CompletedTasks[0].ID != "ralph-x" || loaded.CompletedTasks[1].PRNumber != "11" {
+		t.Errorf("unexpected: %+v", loaded.CompletedTasks)
+	}
+}

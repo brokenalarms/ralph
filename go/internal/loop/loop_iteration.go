@@ -109,6 +109,7 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 				l.logger.Warn("beads", "CloseTask: %v", err)
 			} else {
 				l.logger.Log("beads", "Closed task %s (%s)", p.taskID, closeReason)
+				l.persistCompletedTask(p.taskID, p.nextTask, "", closeReason)
 			}
 		} else if p.taskID != "" {
 			l.logger.Warn("beads", "Task %s stays open — no merged PR to confirm work on main", p.taskID)
@@ -259,6 +260,7 @@ func (l *Loop) closeOrRetryTask(taskID string, ct CompletedTask, merged bool, me
 		l.logger.Warn("beads", "CloseTask failed: %v", err)
 	} else {
 		l.logger.Log("beads", "Closed task %s (%s)", taskID, closeReason)
+		l.persistCompletedTask(taskID, ct.Title, ct.PRNum, closeReason)
 	}
 }
 

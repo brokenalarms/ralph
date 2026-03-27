@@ -6065,3 +6065,126 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 		t.Errorf("branch %q must not contain sequence number prefix", gm.WorktreeBranch)
 	}
 }
+
+// Proves: after a successful task close, the completed task record (ID, title,
+// PR number, close reason) is persisted to state.json so ralph-task can verify
+// tasks weren't falsely closed.
+func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			completed: 0,
+			total:     1,
+			nextTask:  "Fix auth bug",
+			nextID:    "ralph-xyz",
+			label:     "beads",
+		},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			writeFile(t, project, "fix.go", "package main\n")
+			run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    project,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = runner
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.findPRInfoFunc = func(string) (string, string) { return "42", "Fix auth bug" }
+
+	_ = l.Run(context.Background())
+
+	tasks, err := st.GetCompletedTasks()
+	if err != nil {
+		t.Fatalf("GetCompletedTasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 completed task in state.json, got %d", len(tasks))
+	}
+	if tasks[0].ID != "ralph-xyz" {
+		t.Errorf("completed task ID = %q, want %q", tasks[0].ID, "ralph-xyz")
+	}
+	if tasks[0].PRNumber != "42" {
+		t.Errorf("completed task PRNumber = %q, want %q", tasks[0].PRNumber, "42")
+	}
+	if tasks[0].CloseReason == "" {
+		t.Error("completed task CloseReason should not be empty")
+	}
+}
+
+// Proves: completed_tasks in state.json persists across restarts — tasks from
+// previous runs are not cleared on a new run start.
+func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+
+	st.AddCompletedTask(state.CompletedTask{
+		ID:          "ralph-old",
+		Title:       "previous task",
+		PRNumber:    "10",
+		CloseReason: "Fixed in PR #10",
+	})
+
+	backend := &stubBackend{
+		remaining: 0,
+		completed: 1,
+		total:     1,
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    project,
+			RalphDir:   ralphDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	_ = l.Run(context.Background())
+
+	tasks, err := st.GetCompletedTasks()
+	if err != nil {
+		t.Fatalf("GetCompletedTasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 completed task preserved, got %d", len(tasks))
+	}
+	if tasks[0].ID != "ralph-old" {
+		t.Errorf("completed task ID = %q, want %q (preserved from previous run)", tasks[0].ID, "ralph-old")
+	}
+}

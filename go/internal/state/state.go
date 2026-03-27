@@ -25,9 +25,18 @@ type State struct {
 	LastTestOutput     string `json:"last_test_output,omitempty"`
 	LastTestTime       string `json:"last_test_time,omitempty"`
 	SkippedTasks   []string `json:"skipped_tasks,omitempty"`
+	CompletedTasks []CompletedTask `json:"completed_tasks,omitempty"`
 
 	// Overflow captures unknown keys so round-tripping preserves them.
 	Overflow map[string]json.RawMessage `json:"-"`
+}
+
+// CompletedTask records a task closed during the loop run.
+type CompletedTask struct {
+	ID          string `json:"id"`
+	Title       string `json:"title,omitempty"`
+	PRNumber    string `json:"pr_number,omitempty"`
+	CloseReason string `json:"close_reason,omitempty"`
 }
 
 // MarshalJSON produces JSON that merges known fields with overflow keys,
@@ -81,6 +90,7 @@ func (s *State) UnmarshalJSON(data []byte) error {
 		"task_backend": true, "max_iterations": true,
 		"last_test_result": true, "last_test_output": true, "last_test_time": true,
 		"skipped_tasks": true,
+		"completed_tasks": true,
 	}
 
 	alias.Overflow = nil
@@ -278,6 +288,35 @@ func (st *Store) GetSkippedTasks() ([]string, error) {
 		return nil, err
 	}
 	return s.SkippedTasks, nil
+}
+
+// AddCompletedTask appends a task record to the completed list.
+func (st *Store) AddCompletedTask(ct CompletedTask) error {
+	s, err := st.Load()
+	if err != nil {
+		return err
+	}
+	s.CompletedTasks = append(s.CompletedTasks, ct)
+	return st.Save(s)
+}
+
+// GetCompletedTasks returns all completed task records.
+func (st *Store) GetCompletedTasks() ([]CompletedTask, error) {
+	s, err := st.Load()
+	if err != nil {
+		return nil, err
+	}
+	return s.CompletedTasks, nil
+}
+
+// ClearCompletedTasks removes all entries from the completed tasks list.
+func (st *Store) ClearCompletedTasks() error {
+	s, err := st.Load()
+	if err != nil {
+		return err
+	}
+	s.CompletedTasks = nil
+	return st.Save(s)
 }
 
 // getField extracts a named field from State as a string.
