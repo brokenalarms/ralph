@@ -190,6 +190,25 @@ func isMergeConflictError(mergeOutput string) bool {
 // CIFetchFunc is the signature for fetching PR check status.
 type CIFetchFunc func(prNumber, repoURL string) ([]CICheckResult, error)
 
+// AwaitCI fetches CI check status for a PR and polls until checks resolve.
+// Returns the final checks, their aggregate status, and any polling error.
+// Reusable by AutoMerge, fix-CI flows, and any caller that needs to wait
+// for CI to complete on a PR.
+func (m *Manager) AwaitCI(ctx context.Context, prNumber, repoURL string) ([]CICheckResult, CIStatus, error) {
+	fetch := m.gh().ListChecks
+	checks, fetchErr := fetch(prNumber, repoURL)
+	if fetchErr != nil || len(checks) == 0 {
+		m.Logger.Log("ci", "CI checks not available yet for PR #%s — waiting...", prNumber)
+		return waitForCI(ctx, fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+	}
+	status := evaluateChecks(checks)
+	if status != CIPending {
+		return checks, status, nil
+	}
+	m.Logger.Log("ci", "CI checks pending on PR #%s — waiting for completion...", prNumber)
+	return waitForCI(ctx, fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+}
+
 // waitForCI polls PR checks until they complete or timeout is reached.
 // Uses exponential backoff starting at interval, doubling each poll up to
 // MaxCIPollInterval. Logs a single updating line showing accumulated poll

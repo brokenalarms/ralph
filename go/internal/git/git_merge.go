@@ -155,8 +155,6 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 
 	defaultBranch := m.detectDefaultBranch()
 
-	// Only merge if the PR targets the default branch. Stacked PRs
-	// targeting other task branches wait until GitHub retargets them.
 	prBase, _ := gh.GetPRBase(m.WorkDir, prNumber)
 	if prBase != "" && prBase != defaultBranch {
 		m.Logger.Log("git", "PR #%s targets %s (not %s) — waiting for base PRs to merge first", prNumber, prBase, defaultBranch)
@@ -165,64 +163,60 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 
 	m.Logger.Log("git", "%s Auto-merging PR #%s...", logging.BranchTag(defaultBranch), prNumber)
 
-	fetch := gh.ListChecks
-
-	// Poll CI status before attempting merge.
-	checks, fetchErr := fetch(prNumber, repoURL)
-	var status CIStatus
-	if fetchErr != nil || len(checks) == 0 {
-		m.Logger.Log("ci", "CI checks not available yet for PR #%s — waiting...", prNumber)
-		checks, status, err = waitForCI(ctx, fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
-		if err != nil {
-			m.Logger.Warn("ci", "CI polling failed for PR #%s: %v — attempting merge anyway", prNumber, err)
-		}
-	} else {
-		status = evaluateChecks(checks)
-		if status == CIPending {
-			m.Logger.Log("ci", "CI checks pending on PR #%s — waiting for completion...", prNumber)
-			checks, status, err = waitForCI(ctx, fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
-			if err != nil {
-				return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, err)
-			}
-		}
+	checks, status, ciErr := m.AwaitCI(ctx, prNumber, repoURL)
+	if ciErr != nil {
+		m.Logger.Warn("ci", "CI polling failed for PR #%s: %v — attempting merge anyway", prNumber, ciErr)
 	}
-
 	if status == CIFailed {
-		return false, &CIFailureError{
-			PRNumber: prNumber,
-			Failures: failedChecks(checks),
-		}
+		return false, &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
 	}
-
 	if status == CIPassed {
 		m.Logger.Log("ci", "CI passed for PR #%s — merging", prNumber)
 	}
 
-	// Update the PR branch to include any commits pushed directly to the
-	// base branch since our last rebase.
-	nwo := nwoFromRemote(repoURL)
-	if nwo != "" {
-		if updated, updateErr := gh.UpdateBranch(m.WorkDir, nwo, prNumber); updateErr != nil {
-			m.Logger.Warn("git", "PR branch update: %v", updateErr)
-		} else if updated {
-			m.Logger.Log("git", "Updated PR #%s branch with latest base", prNumber)
-			checks, status, err = waitForCI(ctx, fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
-			if err != nil {
-				m.Logger.Warn("ci", "CI polling after branch update: %v — attempting merge anyway", err)
-			}
-			if status == CIFailed {
-				return false, &CIFailureError{
-					PRNumber: prNumber,
-					Failures: failedChecks(checks),
-				}
-			}
-		}
+	if updateErr := m.updatePRBranch(ctx, prNumber, repoURL); updateErr != nil {
+		return false, updateErr
 	}
 
+	return m.executeMerge(ctx, prNumber, repoURL)
+}
+
+// updatePRBranch updates the PR branch with the latest base branch commits.
+// If the branch was updated, waits for CI to pass on the new HEAD.
+func (m *Manager) updatePRBranch(ctx context.Context, prNumber, repoURL string) error {
+	nwo := nwoFromRemote(repoURL)
+	if nwo == "" {
+		return nil
+	}
+	gh := m.gh()
+	updated, updateErr := gh.UpdateBranch(m.WorkDir, nwo, prNumber)
+	if updateErr != nil {
+		m.Logger.Warn("git", "PR branch update: %v", updateErr)
+		return nil
+	}
+	if !updated {
+		return nil
+	}
+	m.Logger.Log("git", "Updated PR #%s branch with latest base", prNumber)
+	checks, status, err := m.AwaitCI(ctx, prNumber, repoURL)
+	if err != nil {
+		m.Logger.Warn("ci", "CI polling after branch update: %v — attempting merge anyway", err)
+		return nil
+	}
+	if status == CIFailed {
+		return &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
+	}
+	return nil
+}
+
+// executeMerge attempts the squash-merge and handles CI-gated retries.
+func (m *Manager) executeMerge(ctx context.Context, prNumber, repoURL string) (bool, error) {
+	gh := m.gh()
 	opts := m.mergeOpts()
 	if _, prTitle, _, titleErr := gh.FindPR(m.WorktreeBranch, m.WorkDir); titleErr == nil && prTitle != "" {
 		opts.Subject = fmt.Sprintf("%s (#%s)", prTitle, prNumber)
 	}
+
 	mergeOutput, mergeErr := gh.MergePR(prNumber, repoURL, opts)
 	if mergeErr == nil {
 		return m.postMergeUpdate(prNumber)
@@ -235,15 +229,12 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 
 	if isCIGatedError(mergeOutput) {
 		m.Logger.Log("ci", "PR #%s blocked by branch protection — waiting for CI...", prNumber)
-		checks, status, waitErr := waitForCI(ctx, fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+		checks, status, waitErr := m.AwaitCI(ctx, prNumber, repoURL)
 		if waitErr != nil {
 			return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, waitErr)
 		}
 		if status == CIFailed {
-			return false, &CIFailureError{
-				PRNumber: prNumber,
-				Failures: failedChecks(checks),
-			}
+			return false, &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
 		}
 		if status == CIPassed {
 			m.Logger.Log("ci", "CI passed for PR #%s — retrying merge", prNumber)
