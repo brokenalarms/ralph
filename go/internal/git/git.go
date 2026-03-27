@@ -179,7 +179,18 @@ func (m *Manager) tryResumeWorktree() error {
 		return nil
 	}
 
-	_ = m.EnsureUpToDate(context.Background())
+	// On resume, try a clean rebase. If it fails for any reason, reset
+	// to main. Tasks are in beads, remote branches have the work. A fresh
+	// start is always better than a diverged stack on resume.
+	if m.gitCmdErr(m.WorkDir, "rebase", "origin/"+defaultBranch) != nil {
+		m.gitCmd(m.WorkDir, "rebase", "--abort")
+		m.Logger.Warn("git", "Rebase failed on resume — resetting to origin/%s", defaultBranch)
+		m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+defaultBranch)
+		m.BranchRenamed = false
+		if m.State != nil {
+			_ = m.State.Write("branch_renamed", "false")
+		}
+	}
 	return nil
 }
 
