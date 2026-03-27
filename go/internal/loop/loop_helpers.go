@@ -134,19 +134,11 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 		return l.resolveByPRState(ctx, taskID, nextTask, prNum)
 	}
 
-	// PR creation failed (no diff) — check if the work is already on main.
-	defaultBranch := l.git.DetectDefaultBranch()
-	_ = l.git.FetchBranch(branch)
-	remoteDiff := l.git.RemoteBranchDiffFromMain(branch, defaultBranch)
-	if remoteDiff == "" {
-		l.logger.Log("git", "Work for %s already on %s — closing bead", taskID, defaultBranch)
-		_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "work already on "+defaultBranch)
-		if err := l.cfg.TaskBackend.CloseTask(taskID, "work already on "+defaultBranch); err != nil {
-			l.logger.Warn("beads", "CloseTask: %v", err)
-		}
-		return true
-	}
-
+	// PR creation failed — the remote branch exists but has no diff.
+	// This means the branch was reset to main during a previous recovery.
+	// Delete the stale remote branch and let the agent re-run.
+	l.logger.Log("git", "Remote branch %s has no usable work — deleting stale branch", branch)
+	_ = l.git.DeleteRemoteBranchByName(branch)
 	return false
 }
 

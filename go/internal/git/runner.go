@@ -132,6 +132,11 @@ func (m *Manager) CheckoutRemoteBranch(branch string) {
 	}
 }
 
+// DeleteRemoteBranchByName deletes a specific remote branch.
+func (m *Manager) DeleteRemoteBranchByName(branch string) error {
+	return m.gitCmdErr(m.WorkDir, "push", "origin", "--delete", branch)
+}
+
 // RemoteBranchDiffFromMain returns the diff stat between origin/<branch> and
 // origin/<defaultBranch>. Empty means no difference (work is on main).
 func (m *Manager) RemoteBranchDiffFromMain(branch, defaultBranch string) string {
