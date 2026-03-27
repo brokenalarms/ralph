@@ -403,4 +403,16 @@ func (m *Manager) PostMergeUpdateMain() {
 	m.gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
 	m.gitCmd(m.ProjectDir, "reset", "--hard", "origin/"+defaultBranch)
 	m.Logger.Log("git", "Updated local %s to origin/%s", defaultBranch, defaultBranch)
+
+	// Sync worktree with updated main. If rebase conflicts, reset —
+	// the merged work is on main and stale stack commits are expendable.
+	if m.gitCmdErr(m.WorkDir, "rebase", "origin/"+defaultBranch) != nil {
+		m.gitCmd(m.WorkDir, "rebase", "--abort")
+		m.Logger.Warn("git", "Post-merge rebase failed — resetting worktree to origin/%s", defaultBranch)
+		m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+defaultBranch)
+		m.BranchRenamed = false
+		if m.State != nil {
+			_ = m.State.Write("branch_renamed", "false")
+		}
+	}
 }
