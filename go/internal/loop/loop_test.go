@@ -2088,7 +2088,7 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 				// Record task A as completed with its branch metadata and PR ref.
 				backend.metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
 				backend.externalRefs["ralph-aaa"] = "gh-100"
-				st.AddCompletedTask(state.CompletedTask{ID: "ralph-aaa"})
+				st.AddCompletedTask("ralph-aaa")
 
 				backend.completed = 1
 				backend.remaining = 1
@@ -2190,7 +2190,7 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 
 				backend.metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
 				backend.externalRefs["ralph-aaa"] = "gh-100"
-				st.AddCompletedTask(state.CompletedTask{ID: "ralph-aaa"})
+				st.AddCompletedTask("ralph-aaa")
 
 				// Simulate merge: delete task A's branch from origin.
 				run(t, "git", "-C", project, "push", "origin", "--delete", taskABranch)
@@ -6220,9 +6220,8 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 	}
 }
 
-// Proves: after a successful task close, the completed task record (ID, title,
-// PR number, close reason) is persisted to state.json so ralph-task can verify
-// tasks weren't falsely closed.
+// Proves: after a successful task close, the completed task ID is persisted to
+// state.json so ralph-task can verify tasks weren't falsely closed.
 func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 	project, _ := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
@@ -6283,14 +6282,8 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 completed task in state.json, got %d", len(tasks))
 	}
-	if tasks[0].ID != "ralph-xyz" {
-		t.Errorf("completed task ID = %q, want %q", tasks[0].ID, "ralph-xyz")
-	}
-	if tasks[0].PRNumber != "42" {
-		t.Errorf("completed task PRNumber = %q, want %q", tasks[0].PRNumber, "42")
-	}
-	if tasks[0].CloseReason == "" {
-		t.Error("completed task CloseReason should not be empty")
+	if tasks[0] != "ralph-xyz" {
+		t.Errorf("completed task ID = %q, want %q", tasks[0], "ralph-xyz")
 	}
 }
 
@@ -6303,12 +6296,7 @@ func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
 	st := state.NewStore(ralphDir)
 	st.Init(5)
 
-	st.AddCompletedTask(state.CompletedTask{
-		ID:          "ralph-old",
-		Title:       "previous task",
-		PRNumber:    "10",
-		CloseReason: "Fixed in PR #10",
-	})
+	st.AddCompletedTask("ralph-old")
 
 	backend := &stubBackend{
 		remaining: 0,
@@ -6338,8 +6326,8 @@ func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 completed task preserved, got %d", len(tasks))
 	}
-	if tasks[0].ID != "ralph-old" {
-		t.Errorf("completed task ID = %q, want %q (preserved from previous run)", tasks[0].ID, "ralph-old")
+	if tasks[0] != "ralph-old" {
+		t.Errorf("completed task ID = %q, want %q (preserved from previous run)", tasks[0], "ralph-old")
 	}
 }
 
@@ -6653,7 +6641,7 @@ func TestSkipTask_Standalone(t *testing.T) {
 func TestPersistCompletedTask_Standalone(t *testing.T) {
 	_, st := setupTestDir(t)
 
-	persistCompletedTask(st, logging.New(nil), "ralph-abc", "Fix bug", "42", "merged")
+	persistCompletedTask(st, logging.New(nil), "ralph-abc")
 
 	tasks, err := st.GetCompletedTasks()
 	if err != nil {
@@ -6662,11 +6650,8 @@ func TestPersistCompletedTask_Standalone(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 completed task, got %d", len(tasks))
 	}
-	if tasks[0].ID != "ralph-abc" {
-		t.Errorf("expected ID ralph-abc, got %q", tasks[0].ID)
-	}
-	if tasks[0].PRNumber != "42" {
-		t.Errorf("expected PR 42, got %q", tasks[0].PRNumber)
+	if tasks[0] != "ralph-abc" {
+		t.Errorf("expected ID ralph-abc, got %q", tasks[0])
 	}
 }
 

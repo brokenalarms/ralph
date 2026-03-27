@@ -25,18 +25,10 @@ type State struct {
 	LastTestOutput     string `json:"last_test_output,omitempty"`
 	LastTestTime       string `json:"last_test_time,omitempty"`
 	SkippedTasks   []string `json:"skipped_tasks,omitempty"`
-	CompletedTasks []CompletedTask `json:"completed_tasks,omitempty"`
+	CompletedTasks []string `json:"completed_tasks,omitempty"`
 
 	// Overflow captures unknown keys so round-tripping preserves them.
 	Overflow map[string]json.RawMessage `json:"-"`
-}
-
-// CompletedTask records a task closed during the loop run.
-type CompletedTask struct {
-	ID          string `json:"id"`
-	Title       string `json:"title,omitempty"`
-	PRNumber    string `json:"pr_number,omitempty"`
-	CloseReason string `json:"close_reason,omitempty"`
 }
 
 // MarshalJSON produces JSON that merges known fields with overflow keys,
@@ -72,15 +64,25 @@ func (s State) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON parses known fields and stores the rest in Overflow.
 func (s *State) UnmarshalJSON(data []byte) error {
-	type Alias State
-	var alias Alias
-	if err := json.Unmarshal(data, &alias); err != nil {
+	// Collect all keys first so we can handle migration before typed unmarshal.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 
-	// Collect all keys to find overflow.
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	// Migrate old-format completed_tasks (array of objects with "id" field)
+	// to the new format (array of ID strings) before the typed unmarshal.
+	if ct, ok := raw["completed_tasks"]; ok {
+		if migrated := migrateCompletedTasks(ct); migrated != nil {
+			rewritten, _ := json.Marshal(migrated)
+			raw["completed_tasks"] = json.RawMessage(rewritten)
+			data, _ = json.Marshal(raw)
+		}
+	}
+
+	type Alias State
+	var alias Alias
+	if err := json.Unmarshal(data, &alias); err != nil {
 		return err
 	}
 
@@ -290,18 +292,18 @@ func (st *Store) GetSkippedTasks() ([]string, error) {
 	return s.SkippedTasks, nil
 }
 
-// AddCompletedTask appends a task record to the completed list.
-func (st *Store) AddCompletedTask(ct CompletedTask) error {
+// AddCompletedTask appends a task ID to the completed list.
+func (st *Store) AddCompletedTask(id string) error {
 	s, err := st.Load()
 	if err != nil {
 		return err
 	}
-	s.CompletedTasks = append(s.CompletedTasks, ct)
+	s.CompletedTasks = append(s.CompletedTasks, id)
 	return st.Save(s)
 }
 
-// GetCompletedTasks returns all completed task records.
-func (st *Store) GetCompletedTasks() ([]CompletedTask, error) {
+// GetCompletedTasks returns all completed task IDs.
+func (st *Store) GetCompletedTasks() ([]string, error) {
 	s, err := st.Load()
 	if err != nil {
 		return nil, err
@@ -395,4 +397,32 @@ func setField(s *State, key, value string) {
 			s.Overflow[key] = json.RawMessage(data)
 		}
 	}
+}
+
+// migrateCompletedTasks converts old-format completed_tasks (array of
+// {"id":"...", ...} objects) to the new format (array of ID strings).
+// Returns nil if the data is already in the new string-array format.
+func migrateCompletedTasks(raw json.RawMessage) []string {
+	// Try new format first — if it parses as []string, no migration needed.
+	var strs []string
+	if json.Unmarshal(raw, &strs) == nil {
+		return nil
+	}
+	// Old format: array of objects with "id" field.
+	var objs []struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(raw, &objs) != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(objs))
+	for _, o := range objs {
+		if o.ID != "" {
+			ids = append(ids, o.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
 }

@@ -98,7 +98,7 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 				l.logger.Warn("beads", "CloseTask: %v", err)
 			} else {
 				l.logger.Log("beads", "Closed task %s (%s)", p.taskID, closeReason)
-				persistCompletedTask(l.state, l.logger, p.taskID, p.nextTask, "", closeReason)
+				persistCompletedTask(l.state, l.logger, p.taskID)
 			}
 		}
 		l.git.TagTaskEnd(p.taskID)
@@ -306,7 +306,7 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 		l.logger.Warn("beads", "CloseTask failed: %v", err)
 	} else {
 		l.logger.Log("beads", "Closed task %s (%s)", p.taskID, closeReason)
-		persistCompletedTask(l.state, l.logger, p.taskID, p.nextTask, p.prNumber, closeReason)
+		persistCompletedTask(l.state, l.logger, p.taskID)
 	}
 
 	return finalizePRResult{merged: merged, closed: true}
