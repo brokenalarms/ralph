@@ -28,6 +28,11 @@ func (l *Loop) initRun(ctx context.Context) error {
 		return nil
 	}
 	l.setStackHead()
+	// No stack head = all previous work merged. Reset to default branch
+	// so we don't carry stale commits that would conflict on rebase.
+	if l.git.PrevBranch == "" {
+		l.git.ResetToDefaultBranch()
+	}
 	if err := l.handleRebase(ctx); err != nil {
 		if ctx.Err() != nil {
 			l.state.Write("status", "stopped")
@@ -593,6 +598,10 @@ func updateStreamTask(ralphDir, taskID, nextTask string, priority *int) {
 // task's PR targets that branch instead of main. Falls back to no
 // PrevBranch (= target main) if no completed tasks or no branch metadata.
 func (l *Loop) setStackHead() {
+	// Always clear stale PrevBranch from previous run. Only set it
+	// if we find an active stack below.
+	l.git.SetPrevBranch("")
+
 	tasks, err := l.state.GetCompletedTasks()
 	if err != nil || len(tasks) == 0 {
 		return

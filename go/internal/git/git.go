@@ -160,10 +160,6 @@ func (m *Manager) tryResumeWorktree() error {
 		m.BranchRenamed = true
 	}
 
-	if prev, _ := m.State.Read("prev_branch"); prev != "" {
-		m.PrevBranch = prev
-	}
-
 	m.Logger.Log("git", "Resuming worktree: %s", m.WorkDir)
 	return nil
 }
@@ -327,12 +323,22 @@ func (m *Manager) RenameBranchTo(name string) {
 	}
 }
 
+// ResetToDefaultBranch resets the worktree to origin's default branch.
+// Used on resume when no stack exists — stale local commits are discarded.
+func (m *Manager) ResetToDefaultBranch() {
+	defaultBranch := m.detectDefaultBranch()
+	_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch)
+	m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+defaultBranch)
+	m.BranchRenamed = false
+	if m.State != nil {
+		_ = m.State.Write("branch_renamed", "false")
+	}
+	m.Logger.Log("git", "Reset worktree to origin/%s", defaultBranch)
+}
+
 // SetPrevBranch sets the previous branch for stacked PR targeting.
 func (m *Manager) SetPrevBranch(branch string) {
 	m.PrevBranch = branch
-	if m.State != nil {
-		_ = m.State.Write("prev_branch", branch)
-	}
 }
 
 // PrepareForNextTask resets BranchRenamed so the next task gets a new branch
