@@ -72,6 +72,7 @@ type mutableBackend struct {
 	nextPriority *int
 	label        string
 	description  string
+	metadata     map[string]map[string]string // id -> key -> value
 }
 
 func (m *mutableBackend) Init() error                          { return nil }
@@ -97,7 +98,16 @@ func (m *mutableBackend) ProjectContext() (string, error)          { return "", 
 func (m *mutableBackend) GetExternalRef(_ string) (string, error) { return "", nil }
 func (m *mutableBackend) SetExternalRef(_, _ string) error       { return nil }
 func (m *mutableBackend) SetMetadata(_, _, _ string) error         { return nil }
-func (m *mutableBackend) GetMetadata(_, _ string) (string, error)  { return "", nil }
+func (m *mutableBackend) GetMetadata(id, key string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.metadata != nil {
+		if keys, ok := m.metadata[id]; ok {
+			return keys[key], nil
+		}
+	}
+	return "", nil
+}
 func (m *mutableBackend) Label() string {
 	if m.label != "" {
 		return m.label
@@ -2017,6 +2027,104 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 
 	// With stacked PRs, the branch stays as the task branch after merge
 	// — no reset to temp branch.
+}
+
+// When completed tasks exist in state.json and the backend returns their
+// branch metadata, the next task starts from the stack head (last completed
+// task's branch) instead of origin/main — enabling stacked PRs.
+func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(10)
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	iterationCount := 0
+	var taskABranch string
+	var headAtTaskBStart string
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+		metadata:  map[string]map[string]string{},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			if iterationCount == 1 {
+				// Task A: commit work and push the branch to origin.
+				writeFile(t, gm.WorkDir, "a.txt", "task A work\n")
+				run(t, "git", "-C", gm.WorkDir, "commit", "-m", "task A")
+				taskABranch = gm.WorktreeBranch
+				run(t, "git", "-C", gm.WorkDir, "push", "-u", "origin", taskABranch)
+
+				// Record task A as completed with its branch metadata.
+				backend.metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
+				st.AddCompletedTask(state.CompletedTask{ID: "ralph-aaa"})
+
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+			} else {
+				headAtTaskBStart = gm.HeadRev()
+				backend.completed = 2
+				backend.remaining = 0
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if iterationCount != 2 {
+		t.Fatalf("expected 2 iterations, got %d", iterationCount)
+	}
+
+	// Task B should have started from task A's tip, not origin/main.
+	out, _ := exec.Command("git", "-C", gm.WorkDir, "rev-parse", "origin/"+taskABranch).Output()
+	taskATip := strings.TrimSpace(string(out))
+	if headAtTaskBStart != taskATip {
+		t.Errorf("task B should start from task A tip (%s), got %s", taskATip, headAtTaskBStart)
+	}
 }
 
 // Verifies the full post-merge branch rename cycle: task A merges →
@@ -6294,6 +6402,64 @@ func TestPersistCompletedTask_Standalone(t *testing.T) {
 	}
 	if tasks[0].PRNumber != "42" {
 		t.Errorf("expected PR 42, got %q", tasks[0].PRNumber)
+	}
+}
+
+// resolveStackHead returns the branch of the last completed task from
+// state.json, enabling stacked PRs to branch from the previous task.
+func TestResolveStackHead(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+
+	// No completed tasks — returns empty.
+	backend := &mutableBackend{
+		metadata: map[string]map[string]string{
+			"ralph-aaa": {"branch": "ralph/proj/ralph-aaa-fix-auth"},
+			"ralph-bbb": {"branch": "ralph/proj/ralph-bbb-add-logging"},
+		},
+	}
+	got := resolveStackHead(st, backend)
+	if got != "" {
+		t.Errorf("no completed tasks: want empty, got %q", got)
+	}
+
+	// One completed task — returns its branch.
+	st.AddCompletedTask(state.CompletedTask{ID: "ralph-aaa"})
+	got = resolveStackHead(st, backend)
+	if got != "ralph/proj/ralph-aaa-fix-auth" {
+		t.Errorf("one completed: want ralph/proj/ralph-aaa-fix-auth, got %q", got)
+	}
+
+	// Two completed tasks — returns the last one's branch.
+	st.AddCompletedTask(state.CompletedTask{ID: "ralph-bbb"})
+	got = resolveStackHead(st, backend)
+	if got != "ralph/proj/ralph-bbb-add-logging" {
+		t.Errorf("two completed: want ralph/proj/ralph-bbb-add-logging, got %q", got)
+	}
+
+	// Completed task with empty ID — returns empty.
+	st.AddCompletedTask(state.CompletedTask{ID: ""})
+	got = resolveStackHead(st, backend)
+	if got != "" {
+		t.Errorf("empty ID task: want empty, got %q", got)
+	}
+}
+
+// resolveStackHead returns empty when the backend has no metadata for the
+// completed task's branch — the caller falls back to the default branch.
+func TestResolveStackHead_NoMetadata(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.AddCompletedTask(state.CompletedTask{ID: "ralph-xxx"})
+
+	backend := &mutableBackend{}
+	got := resolveStackHead(st, backend)
+	if got != "" {
+		t.Errorf("no metadata: want empty, got %q", got)
 	}
 }
 
