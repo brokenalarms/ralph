@@ -194,6 +194,8 @@ func colorTag(tag string) string {
 		return logging.Cyan + tag + logging.Reset
 	case tag == "[signal]":
 		return logging.Yellow + tag + logging.Reset
+	case tag == "[thinking]":
+		return logging.Dim + tag + logging.Reset
 	default:
 		return logging.BrightBlue + tag + logging.Reset
 	}

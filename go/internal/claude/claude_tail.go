@@ -33,6 +33,7 @@ func filterStreamJSON(rawLogPath, logPath, workDir string, verbose bool, stop <-
 
 	batcher := NewToolBatcher(5*time.Second, workDir)
 	batcher.SetVerbose(verbose)
+	prose := NewProseTracker(60 * time.Second)
 
 	emitLines := func(lines []string) {
 		for _, out := range lines {
@@ -48,6 +49,7 @@ func filterStreamJSON(rawLogPath, logPath, workDir string, verbose bool, stop <-
 			}
 			line := data[:idx]
 			data = data[idx+1:]
+			prose.Observe(line)
 			if text := extractStreamText(line); text != "" {
 				for _, tl := range strings.Split(text, "\n") {
 					if tl != "" {
@@ -66,6 +68,9 @@ func filterStreamJSON(rawLogPath, logPath, workDir string, verbose bool, stop <-
 
 		if readErr != nil || n == 0 {
 			emitLines(batcher.FlushIfExpired())
+			if status := prose.StatusLine(); status != "" {
+				emitLines(batcher.fmt.FormatOutput(status))
+			}
 			select {
 			case <-stop:
 				for {
@@ -102,6 +107,7 @@ func FilterStream(rawLogPath, workDir string, verbose bool) {
 	buf := make([]byte, 64*1024)
 	batcher := NewToolBatcher(5*time.Second, workDir)
 	batcher.SetVerbose(verbose)
+	prose := NewProseTracker(60 * time.Second)
 
 	emitLines := func(lines []string) {
 		for _, out := range lines {
@@ -117,6 +123,7 @@ func FilterStream(rawLogPath, workDir string, verbose bool) {
 			}
 			line := data[:idx]
 			data = data[idx+1:]
+			prose.Observe(line)
 			if text := extractStreamText(line); text != "" {
 				for _, tl := range strings.Split(text, "\n") {
 					if tl != "" {
@@ -134,6 +141,9 @@ func FilterStream(rawLogPath, workDir string, verbose bool) {
 		}
 		if n == 0 {
 			emitLines(batcher.FlushIfExpired())
+			if status := prose.StatusLine(); status != "" {
+				emitLines(batcher.fmt.FormatOutput(status))
+			}
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
