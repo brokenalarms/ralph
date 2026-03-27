@@ -106,25 +106,25 @@ func run(t *testing.T, name string, args ...string) {
 }
 
 
-// BranchName returns a canonical branch name from project, taskID, and slug
+// BranchName returns a canonical branch name from beadID and slug
 func TestBranchName(t *testing.T) {
-	// With task ID: ralph/<taskID>-<slug>
-	got := BranchName("myproject", "ralph-abc1", "fix-auth-bug")
+	// With bead ID: ralph/<beadID>-<slug>
+	got := BranchName("ralph-abc1", "fix-auth-bug")
 	want := "ralph/ralph-abc1-fix-auth-bug"
 	if got != want {
-		t.Errorf("BranchName with taskID = %q, want %q", got, want)
+		t.Errorf("BranchName with beadID = %q, want %q", got, want)
 	}
 
-	// Without task ID: ralph/<slug>
-	got = BranchName("myproject", "", "fix-auth-bug")
+	// Without bead ID: ralph/<slug>
+	got = BranchName("", "fix-auth-bug")
 	want = "ralph/fix-auth-bug"
 	if got != want {
-		t.Errorf("BranchName without taskID = %q, want %q", got, want)
+		t.Errorf("BranchName without beadID = %q, want %q", got, want)
 	}
 }
 
 func TestWipBranchName(t *testing.T) {
-	got := WipBranchName("myproject")
+	got := WipBranchName()
 	want := "ralph/wip"
 	if got != want {
 		t.Errorf("WipBranchName = %q, want %q", got, want)
@@ -157,8 +157,8 @@ func TestBranchListPattern(t *testing.T) {
 
 // Changing BranchName format is a one-line change (branchPrefix constant)
 func TestBranchName_UsesSharedPrefix(t *testing.T) {
-	bn := BranchName("p", "id", "slug")
-	wip := WipBranchName("p")
+	bn := BranchName("id", "slug")
+	wip := WipBranchName()
 	pattern := BranchListPattern()
 
 	// All three share the same prefix
