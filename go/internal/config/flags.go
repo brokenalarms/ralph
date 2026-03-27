@@ -335,6 +335,17 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.PostTask },
 	},
 	{
+		Long:      "--notify",
+		Help:      "Send macOS notification on each task completion",
+		ConfigKey: "notify",
+		Kind:      KindBool,
+		Apply: func(cfg *Config, val string) error {
+			cfg.Notify = val == "true"
+			return nil
+		},
+		Read: func(cfg *Config) string { return fmt.Sprintf("%t", cfg.Notify) },
+	},
+	{
 		Long: "--post-signal-timeout", MetaVar: "<dur>",
 		Help:      "Timeout for post-signal operations (verification, push, merge)", Default: "15m",
 		EnvVar:    "RALPH_POST_SIGNAL_TIMEOUT",

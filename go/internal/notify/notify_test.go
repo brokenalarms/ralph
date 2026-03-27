@@ -49,3 +49,48 @@ func TestTaskMerged_Empty(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// Tests that TaskCompleted sends an OSC 9 notification with bead ID, title, and summary.
+func TestTaskCompleted_Full(t *testing.T) {
+	var buf bytes.Buffer
+	writer = &buf
+	t.Cleanup(func() { writer = nil })
+
+	TaskCompleted("ralph-abc", "Fix login bug", "Fixed auth token expiry handling")
+
+	got := buf.String()
+	want := "\033]9;Task done: [ralph-abc] Fix login bug — Fixed auth token expiry handling\007"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// Tests that TaskCompleted works with ID and title but no summary.
+func TestTaskCompleted_NoSummary(t *testing.T) {
+	var buf bytes.Buffer
+	writer = &buf
+	t.Cleanup(func() { writer = nil })
+
+	TaskCompleted("ralph-xyz", "Add caching", "")
+
+	got := buf.String()
+	want := "\033]9;Task done: [ralph-xyz] Add caching\007"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// Tests that TaskCompleted with empty fields still produces a valid notification.
+func TestTaskCompleted_Empty(t *testing.T) {
+	var buf bytes.Buffer
+	writer = &buf
+	t.Cleanup(func() { writer = nil })
+
+	TaskCompleted("", "", "")
+
+	got := buf.String()
+	want := "\033]9;Task done\007"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}

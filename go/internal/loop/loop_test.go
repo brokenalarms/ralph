@@ -16,6 +16,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/notify"
 	"github.com/brokenalarms/ralph/internal/ratelimit"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
@@ -7076,5 +7077,178 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 	want := "TASK=ralph-pt4 PR= MERGED=false"
 	if got != want {
 		t.Errorf("env vars: got %q, want %q", got, want)
+	}
+}
+
+// handlePostSignal fires a TaskCompleted notification after post-task when
+// Notify is enabled.
+func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			total:     1,
+			nextTask:  "Fix auth bug",
+			nextID:    "ralph-ntf",
+		},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Notify:        true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	var buf bytes.Buffer
+	prev := notify.SetWriter(&buf)
+	t.Cleanup(func() { notify.SetWriter(prev) })
+
+	writeFile(t, project, "fix.go", "package main\n")
+	run(t, "git", "-C", project, "add", "fix.go")
+	run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
+
+	runIter, iter := 1, 1
+	l.handlePostSignal(postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
+		headBefore: "",
+		workDir:    project,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-ntf",
+		nextTask:   "Fix auth bug",
+	}, &runIter, &iter)
+
+	got := buf.String()
+	if !strings.Contains(got, "Task done: [ralph-ntf] Fix auth bug") {
+		t.Errorf("expected TaskCompleted notification, got %q", got)
+	}
+	if !strings.Contains(got, "Fixed token expiry") {
+		t.Errorf("expected summary in notification, got %q", got)
+	}
+}
+
+// handlePostSignal does NOT send TaskCompleted when Notify is disabled.
+func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			total:     1,
+			nextTask:  "Fix auth bug",
+			nextID:    "ralph-ntf2",
+		},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Notify:        false,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	var buf bytes.Buffer
+	prev := notify.SetWriter(&buf)
+	t.Cleanup(func() { notify.SetWriter(prev) })
+
+	writeFile(t, project, "fix.go", "package main\n")
+	run(t, "git", "-C", project, "add", "fix.go")
+	run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
+
+	runIter, iter := 1, 1
+	l.handlePostSignal(postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
+		headBefore: "",
+		workDir:    project,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-ntf2",
+		nextTask:   "Fix auth bug",
+	}, &runIter, &iter)
+
+	got := buf.String()
+	if strings.Contains(got, "Task done") {
+		t.Errorf("expected no TaskCompleted notification when Notify=false, got %q", got)
+	}
+}
+
+// handlePostSignal fires TaskCompleted on the no-commits path when Notify is enabled.
+func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			total:     1,
+			nextTask:  "Update docs",
+			nextID:    "ralph-nc1",
+		},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Notify:        true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	var buf bytes.Buffer
+	prev := notify.SetWriter(&buf)
+	t.Cleanup(func() { notify.SetWriter(prev) })
+
+	headRev := gm.HeadRev()
+
+	runIter, iter := 1, 1
+	action := l.handlePostSignal(postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true, Summary: "Updated README"},
+		headBefore: headRev,
+		workDir:    project,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-nc1",
+		nextTask:   "Update docs",
+	}, &runIter, &iter)
+
+	if action != signalSkipped {
+		t.Errorf("expected signalSkipped for no-commits path, got %d", action)
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "Task done: [ralph-nc1] Update docs") {
+		t.Errorf("expected TaskCompleted on no-commits path, got %q", got)
 	}
 }
