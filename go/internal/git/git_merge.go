@@ -146,6 +146,15 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	}
 
 	defaultBranch := m.detectDefaultBranch()
+
+	// Only merge if the PR targets the default branch. Stacked PRs
+	// targeting other task branches wait until GitHub retargets them.
+	prBase, _ := gh.GetPRBase(m.WorkDir, prNumber)
+	if prBase != "" && prBase != defaultBranch {
+		m.Logger.Log("git", "PR #%s targets %s (not %s) — waiting for base PRs to merge first", prNumber, prBase, defaultBranch)
+		return false, nil
+	}
+
 	m.Logger.Log("git", "%s Auto-merging PR #%s...", logging.BranchTag(defaultBranch), prNumber)
 
 	fetch := gh.ListChecks

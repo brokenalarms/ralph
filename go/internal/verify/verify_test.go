@@ -395,6 +395,7 @@ func (s *stubGitHub) PRDiff(_ string, _ string) (string, error) {
 	return s.prDiff, nil
 }
 func (s *stubGitHub) GetPRState(string, string) (string, error) { return "", nil }
+func (s *stubGitHub) GetPRBase(string, string) (string, error)  { return "", nil }
 
 func setupGitRepo(t *testing.T) string {
 	t.Helper()

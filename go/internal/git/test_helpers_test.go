@@ -87,6 +87,9 @@ func (s *stubGitHub) PRDiff(workDir, prNumber string) (string, error) {
 func (s *stubGitHub) GetPRState(workDir, prNumber string) (string, error) {
 	return s.prState, nil
 }
+func (s *stubGitHub) GetPRBase(workDir, prNumber string) (string, error) {
+	return "", nil
+}
 
 // gitCall records a single git command invocation for assertion.
 type gitCall struct {
