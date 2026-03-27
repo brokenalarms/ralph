@@ -20,6 +20,12 @@ type GitQuerier interface {
 	LogOneline(from, to string) string
 }
 
+// Model IDs used for verification escalation.
+const (
+	ModelHaiku  = "claude-haiku-4-5-20251001"
+	ModelSonnet = "claude-sonnet-4-5-20241022"
+)
+
 // QueryFunc runs a prompt through an agent and returns the response text.
 // This is injected by the orchestrator so LLM verification goes through
 // the centralized agent module rather than directly spawning processes.
@@ -250,7 +256,7 @@ func getPRDiff(_ context.Context, workDir, taskID string, gh git.GitHub) string 
 // When queryFn is non-nil, the call goes through the centralized agent module.
 // Falls back to direct exec.Command when queryFn is nil (tests, standalone use).
 func callLLM(ctx context.Context, workDir, prompt string, queryFn QueryFunc, model ...string) Result {
-	m := "claude-haiku-4-5-20251001"
+	m := ModelHaiku
 	if len(model) > 0 && model[0] != "" {
 		m = model[0]
 	}

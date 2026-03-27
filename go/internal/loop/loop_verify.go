@@ -73,8 +73,9 @@ func (l *Loop) onSignal(p signalParams) bool {
 	beadAcceptance := l.getBeadAcceptance(p.taskID)
 
 	l.llmVerifyAttempts++
-	l.logger.Log("llm", "Running LLM verification (attempt %d/%d)...", l.llmVerifyAttempts, maxLLMVerifyAttempts)
-	llmResult := l.llmVerifyFunc(p.ctx, l.git, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, beadAcceptance, l.git.GitHub, l.queryFunc())
+	model := l.verifyModel()
+	l.logger.Log("llm", "Running LLM verification (attempt %d/%d, model %s)...", l.llmVerifyAttempts, maxLLMVerifyAttempts, model)
+	llmResult := l.llmVerifyFunc(p.ctx, l.git, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, beadAcceptance, l.git.GitHub, l.queryFunc(), model)
 
 	if llmResult.Passed && llmResult.NoDiff && l.cfg.VerifyLevel == "hog" {
 		l.logger.Log("llm", "No diff detected — spawning codebase verification agent (hog mode)")
@@ -105,6 +106,15 @@ func (l *Loop) onSignal(p signalParams) bool {
 	}
 	l.logger.Log("llm", "LLM feedback injected to agent via stdin")
 	return false
+}
+
+// verifyModel returns the model to use for the current LLM verification
+// attempt. First attempt uses Haiku; subsequent attempts escalate to Sonnet.
+func (l *Loop) verifyModel() string {
+	if l.llmVerifyAttempts <= 1 {
+		return verify.ModelHaiku
+	}
+	return verify.ModelSonnet
 }
 
 // fallbackFixTestFailures spawns a fix agent when stdin injection fails.
