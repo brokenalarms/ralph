@@ -118,7 +118,7 @@ func (m *Manager) RecentChangedFiles(n int) string {
 }
 
 func (m *Manager) ListProjectBranches() []string {
-	out := m.gitOutput(m.ProjectDir, "branch", "--list", "ralph/"+m.ProjectName+"/*", "--sort=refname")
+	out := m.gitOutput(m.ProjectDir, "branch", "--list", "ralph/*", "--sort=refname")
 	return parseBranchList(out)
 }
 

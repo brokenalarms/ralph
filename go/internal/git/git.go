@@ -318,7 +318,7 @@ func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 	oldBranch := m.WorktreeBranch
 	var newBranch string
 	if taskID != "" {
-		newBranch = fmt.Sprintf("ralph/%s/%s-%s", m.ProjectName, taskID, slug)
+		newBranch = fmt.Sprintf("ralph/%s-%s", taskID, slug)
 	} else {
 		newBranch = fmt.Sprintf("ralph/%s/%s", m.ProjectName, slug)
 	}
