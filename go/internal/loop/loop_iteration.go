@@ -98,7 +98,7 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 	mr := l.mergeIfEnabled(p, prNumber)
 
 	if mr.deferred {
-		l.logOutcome("Skipped: PR targets non-main base")
+		l.logOutcome("Task deferred — base PR not yet on main")
 	} else {
 		l.closeOrRetryTask(p.taskID, ct, mr.merged)
 	}

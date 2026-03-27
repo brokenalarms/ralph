@@ -6354,8 +6354,8 @@ func TestLoop_OutcomeBeforeSeparator(t *testing.T) {
 }
 
 // When merge is deferred because the PR targets a non-main base branch,
-// the outcome logs "Skipped: PR targets non-main base" instead of
-// recording a merge failure.
+// the outcome logs "Task deferred — base PR not yet on main" following
+// the "waiting for base PRs to merge first" message from git_merge.go.
 func TestLoop_OutcomeDeferredMerge(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -6395,8 +6395,8 @@ func TestLoop_OutcomeDeferredMerge(t *testing.T) {
 	_ = l.Run(context.Background())
 
 	output := logBuf.String()
-	if !strings.Contains(output, "Skipped: PR targets non-main base") {
-		t.Errorf("expected outcome 'Skipped: PR targets non-main base' in log, got:\n%s", output)
+	if !strings.Contains(output, "Task deferred — base PR not yet on main") {
+		t.Errorf("expected outcome 'Task deferred — base PR not yet on main' in log, got:\n%s", output)
 	}
 	// Should NOT record a merge failure
 	if strings.Contains(output, "Merge failed") {
