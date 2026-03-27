@@ -548,4 +548,32 @@ func (b *BD) SetExternalRef(id, ref string) error {
 	return err
 }
 
+func (b *BD) SetMetadata(id, key, value string) error {
+	if id == "" || key == "" {
+		return nil
+	}
+	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--set-metadata", key+"="+value)
+	return err
+}
+
+func (b *BD) GetMetadata(id, key string) (string, error) {
+	if id == "" || key == "" {
+		return "", nil
+	}
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", id, "--json")
+	if err != nil {
+		return "", err
+	}
+	var items []struct {
+		Metadata map[string]string `json:"metadata"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil || len(items) == 0 {
+		return "", nil
+	}
+	if items[0].Metadata == nil {
+		return "", nil
+	}
+	return items[0].Metadata[key], nil
+}
+
 func (b *BD) Label() string { return "beads" }

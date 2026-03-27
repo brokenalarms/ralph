@@ -4,12 +4,50 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
 
 var Version = "0.1.0-dev"
+
+// SourceDir is the root of Ralph's source repository, set at build time via
+// ldflags. Used by evolve to locate build-go.sh regardless of which project
+// ralph loop is running against.
+var SourceDir string
+
+// ResolveSourceDir returns Ralph's source directory. It prefers the build-time
+// SourceDir, then falls back to resolving the real path of the running binary
+// and walking up to find the repo root (identified by scripts/build-go.sh).
+func ResolveSourceDir() string {
+	if SourceDir != "" {
+		return SourceDir
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	real, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return ""
+	}
+
+	// Walk up from the binary's real location looking for the repo root.
+	dir := filepath.Dir(real)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "scripts", "build-go.sh")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
+}
 
 // Config holds all CLI configuration matching ralph.sh's flag interface.
 type Config struct {
@@ -33,6 +71,7 @@ type Config struct {
 	PermissionDenialThreshold  int
 	BaseBranch   string
 	Wait         bool
+	Verbose      bool
 	VerifyLevel  string
 	WaitInterval               time.Duration
 

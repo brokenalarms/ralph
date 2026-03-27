@@ -94,14 +94,19 @@ func (l *Logger) SetStreaming(on bool) {
 	l.streaming = on
 }
 
+// write outputs a pre-formatted string to both stdout and logFile,
+// respecting streaming mode. All log output flows through this method.
+func (l *Logger) write(s string) {
+	if !l.streaming {
+		fmt.Fprint(l.out, s)
+	}
+	fmt.Fprint(l.logFile, s)
+}
+
 func (l *Logger) emit(color string, domain Domain, msg string) {
 	tag := Tag(color, Orch, domain)
 	content := fmt.Sprintf("%s %s", tag, msg)
-	line := l.Fmt.FormatLine(content) + "\n"
-	if !l.streaming {
-		fmt.Fprint(l.out, line)
-	}
-	fmt.Fprint(l.logFile, line)
+	l.write(l.Fmt.Format(content) + "\n")
 }
 
 // Log writes an info-level message with cyan [o][domain] prefix.
@@ -133,11 +138,7 @@ func (l *Logger) Phase(format string, args ...any) {
 func (l *Logger) PhaseColor(color string, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	content := fmt.Sprintf("%s%s[o]%s %s%s%s", Bold, color, Reset, Bold, msg, Reset)
-	line := l.Fmt.FormatLine(content) + "\n"
-	if !l.streaming {
-		fmt.Fprint(l.out, line)
-	}
-	fmt.Fprint(l.logFile, line)
+	l.write(l.Fmt.FormatLine(content) + "\n")
 }
 
 // PriorityColor returns the ANSI color for a given priority level.
@@ -184,11 +185,10 @@ func (l *Logger) TaskBanner(taskID, title string, priority *int) {
 // DashedSeparator writes a bold, colored full-width dashed line using ─ characters.
 func (l *Logger) DashedSeparator(color string) {
 	const totalWidth = 72
-	line := fmt.Sprintf("\n%s%s%s%s\n\n", Bold, color, strings.Repeat("─", totalWidth), Reset)
-	if !l.streaming {
-		fmt.Fprint(l.out, line)
-	}
-	fmt.Fprint(l.logFile, line)
+	content := fmt.Sprintf("%s%s%s%s", Bold, color, strings.Repeat("─", totalWidth), Reset)
+	l.write("\n")
+	l.write(l.Fmt.FormatLine(content) + "\n")
+	l.write("\n")
 }
 
 // Separator writes a bold, colored full-width separator with a centered label.
@@ -200,13 +200,12 @@ func (l *Logger) Separator(color, label string) {
 	}
 	left := pad / 2
 	right := pad - left
-	line := fmt.Sprintf("\n%s%s%s %s %s%s\n\n",
+	content := fmt.Sprintf("%s%s%s %s %s%s",
 		Bold, color,
 		strings.Repeat("═", left), label, strings.Repeat("═", right),
 		Reset)
-	if !l.streaming {
-		fmt.Fprint(l.out, line)
-	}
-	fmt.Fprint(l.logFile, line)
+	l.write("\n")
+	l.write(l.Fmt.FormatLine(content) + "\n")
+	l.write("\n")
 }
 

@@ -162,17 +162,17 @@ func TestFormatOutput_TruncatesLongProse(t *testing.T) {
 	}
 	plain := ansiRe.ReplaceAllString(lines[0], "")
 	runeCount := utf8.RuneCountInString(plain)
-	if runeCount > maxLineWidth {
-		t.Errorf("prose line should be truncated to %d runes, got %d: %q", maxLineWidth, runeCount, plain)
+	if runeCount > logging.MaxLineWidth {
+		t.Errorf("prose line should be truncated to %d runes, got %d: %q", logging.MaxLineWidth, runeCount, plain)
 	}
 	if !strings.Contains(plain, "…") {
 		t.Errorf("truncated prose should contain ellipsis, got: %q", plain)
 	}
 }
 
-// Verifies that tool call lines are NOT truncated — they contain important
-// file paths, commands, and patterns that users need to see in full.
-func TestFormatOutput_DoesNotTruncateToolLines(t *testing.T) {
+// Verifies that tool call lines are truncated at the same width as prose,
+// preventing terminal overflow from long file paths or commands.
+func TestFormatOutput_TruncatesToolLines(t *testing.T) {
 	f := &StreamFormatter{}
 	longToolLine := "[Edit] " + strings.Repeat("/very/long/path/to/some/deeply/nested/", 5) + "file.go"
 	lines := f.FormatOutput(longToolLine)
@@ -181,11 +181,12 @@ func TestFormatOutput_DoesNotTruncateToolLines(t *testing.T) {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
 	plain := ansiRe.ReplaceAllString(lines[0], "")
-	if !strings.Contains(plain, "file.go") {
-		t.Errorf("tool line should not be truncated, got: %q", plain)
+	runeCount := utf8.RuneCountInString(plain)
+	if runeCount > logging.MaxLineWidth {
+		t.Errorf("tool line should be truncated to %d runes, got %d: %q", logging.MaxLineWidth, runeCount, plain)
 	}
-	if strings.HasSuffix(plain, "…") {
-		t.Errorf("tool line should not have ellipsis, got: %q", plain)
+	if !strings.HasSuffix(plain, "…") {
+		t.Errorf("long tool line should have ellipsis, got: %q", plain)
 	}
 }
 
@@ -349,6 +350,23 @@ func TestFormatOutput_NoWorkDir_PathsUnchanged(t *testing.T) {
 	plain := ansiRe.ReplaceAllString(lines[0], "")
 	if !strings.Contains(plain, "/absolute/path/to/file.go") {
 		t.Errorf("path should be unchanged when workDir empty, got: %q", plain)
+	}
+}
+
+// Verifies that StreamFormatter strips markdown via the shared Format path,
+// confirming it uses the same formatting code path as Logger.
+func TestFormatOutput_StripsMarkdown(t *testing.T) {
+	f := &StreamFormatter{}
+	lines := f.FormatOutput("Reading **important** config")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+	plain := ansiRe.ReplaceAllString(lines[0], "")
+	if strings.Contains(plain, "**important**") {
+		t.Error("FormatOutput should strip markdown via shared Format path")
+	}
+	if !strings.Contains(plain, "Reading important config") {
+		t.Errorf("stripped content missing, got: %q", plain)
 	}
 }
 

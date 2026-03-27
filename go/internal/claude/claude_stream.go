@@ -149,12 +149,35 @@ func firstMeaningfulLine(text string) string {
 	return ""
 }
 
-var mdBoldRe = regexp.MustCompile(`\*\*(.+?)\*\*`)
-
-// stripMarkdown removes markdown formatting from text for clean terminal output.
-func stripMarkdown(s string) string {
-	return mdBoldRe.ReplaceAllString(s, "$1")
+// VerboseOnlyTools lists tool names that are hidden from the stream log by
+// default and only shown with --verbose. Adding/removing a tool is a one-line
+// change in this map. This is the single source of truth for tool visibility.
+var VerboseOnlyTools = map[string]bool{
+	"Bash":       true,
+	"Read":       true,
+	"Write":      true,
+	"Grep":       true,
+	"Glob":       true,
+	"ToolSearch": true,
+	"TodoWrite":  true,
 }
+
+// toolNameRe extracts the tool name from a bracketed tool line like "[Read] foo".
+var toolNameRe = regexp.MustCompile(`^\[([A-Za-z]+)\]`)
+
+// isVerboseOnlyLine returns true if the line is a tool call for a verbose-only
+// tool. Non-tool lines (prose, diagnosis) always return false.
+func isVerboseOnlyLine(text string) bool {
+	m := toolNameRe.FindStringSubmatch(text)
+	if m == nil {
+		return false
+	}
+	return VerboseOnlyTools[m[1]]
+}
+
+// colorTags applies ANSI color to bracketed tags like [r] or [Edit].
+// This is the agent-specific coloring step applied before the shared
+// Format path (which handles markdown stripping and timestamps).
 
 // colorTag applies ANSI color to a bracketed tag like [r] or [Read].
 func colorTag(tag string) string {
@@ -172,10 +195,7 @@ func colorTag(tag string) string {
 
 var tagRe = regexp.MustCompile(`\[([A-Za-z][A-Za-z]*)\]`)
 
-// formatContent applies markdown stripping and ANSI tag coloring to text
-// without adding a timestamp prefix.
-func formatContent(text string) string {
-	text = stripMarkdown(text)
+func colorTags(text string) string {
 	return tagRe.ReplaceAllStringFunc(text, colorTag)
 }
 
@@ -183,7 +203,7 @@ func formatContent(text string) string {
 // a fully formatted output line with timestamp, ANSI colors, and markdown stripped.
 func FormatStreamLine(text string) string {
 	f := &logging.LineFormatter{}
-	return f.FormatLine(formatContent(text))
+	return f.Format(colorTags(text))
 }
 
 // StreamFormatter emits lines immediately, prepending a dim timestamp
@@ -193,13 +213,13 @@ func FormatStreamLine(text string) string {
 //	         [Edit] claude_stream.go
 //	15:57:23 [Read] claude_stream.go
 type StreamFormatter struct {
-	lastSignal string // dedup: suppress consecutive identical signal lines
-	Fmt        logging.LineFormatter
-	workDir    string // when set, strip this prefix from absolute paths
+	lastSignal       string // dedup: suppress consecutive identical signal lines
+	Fmt              logging.LineFormatter
+	workDir          string // when set, strip this prefix from absolute paths
+	hideVerboseOnly  bool   // when true, suppress VerboseOnlyTools lines
 }
 
 const agentPrefix = 4 // "[r] " (4)
-const maxLineWidth = 120
 
 func (f *StreamFormatter) shortenPaths(text string) string {
 	if f.workDir == "" {
@@ -220,15 +240,15 @@ func (f *StreamFormatter) FlushIfStale() []string {
 	return nil
 }
 
-// emitLine formats content via the shared LineFormatter, returning it as
-// a single-element slice for caller convenience.
+// emitLine formats content via the shared Format path (markdown stripping +
+// timestamp), returning it as a single-element slice for caller convenience.
 func (f *StreamFormatter) emitLine(content string) []string {
-	return []string{f.Fmt.FormatLine(content)}
+	return []string{f.Fmt.Format(content)}
 }
 
-// FormatLine formats text with a front timestamp via the shared LineFormatter.
+// FormatLine formats text with a front timestamp via the shared Format path.
 func (f *StreamFormatter) FormatLine(text string) string {
-	return f.Fmt.FormatLine(formatContent(text))
+	return f.Fmt.Format(colorTags(text))
 }
 
 // FormatOutput formats a stream text line, prepending a dim timestamp
@@ -243,27 +263,23 @@ func (f *StreamFormatter) FormatOutput(text string) []string {
 			return nil
 		}
 		f.lastSignal = key
-		return f.emitLine(formatContent("[signal] " + name + ": " + msg))
+		return f.emitLine(colorTags("[signal] " + name + ": " + msg))
 	}
 	if label, content, ok := parseDiagnosis(text); ok {
 		var result []string
 		result = append(result, diagnosisBanner(label))
-		result = append(result, f.emitLine(formatContent("[r] "+content))...)
+		result = append(result, f.emitLine(colorTags("[r] "+content))...)
 		return result
 	}
-	if !isToolLine(text) {
-		text = truncateProse(text, maxLineWidth-logging.TSWidth-agentPrefix)
+	if f.hideVerboseOnly && isVerboseOnlyLine(text) {
+		return nil
 	}
-	return f.emitLine(formatContent("[r] " + text))
+	text = truncateLine(text, logging.MaxLineWidth-logging.TSWidth-agentPrefix)
+	return f.emitLine(colorTags("[r] " + text))
 }
 
-// isToolLine returns true if the line starts with a bracketed tool name.
-func isToolLine(text string) bool {
-	return len(text) > 0 && text[0] == '['
-}
-
-// truncateProse shortens text to maxLen runes, appending "…" if truncated.
-func truncateProse(text string, maxLen int) string {
+// truncateLine shortens text to maxLen runes, appending "…" if truncated.
+func truncateLine(text string, maxLen int) string {
 	runes := []rune(text)
 	if len(runes) <= maxLen {
 		return text

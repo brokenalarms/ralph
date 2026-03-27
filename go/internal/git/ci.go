@@ -40,11 +40,21 @@ func (e *CIFailureError) Error() string {
 	return fmt.Sprintf("CI checks failed on PR #%s: %s", e.PRNumber, strings.Join(names, ", "))
 }
 
-// DefaultCIPollInterval is the time between CI status checks.
-const DefaultCIPollInterval = 15 * time.Second
+// DefaultCIPollInterval is the initial time between CI status checks.
+// Each subsequent poll doubles this interval up to MaxCIPollInterval.
+const DefaultCIPollInterval = 1 * time.Second
+
+// MaxCIPollInterval caps the exponential backoff so polls don't grow too far apart.
+const MaxCIPollInterval = 15 * time.Second
 
 // DefaultCIPollTimeout is the maximum time to wait for CI checks to complete.
 const DefaultCIPollTimeout = 10 * time.Minute
+
+// ciSleep is the function used to create timer channels in waitForCI.
+// Tests override this to avoid real sleeps.
+var ciSleep = func(d time.Duration) <-chan time.Time {
+	return time.After(d)
+}
 
 // evaluateChecks determines the overall CI status from individual check results.
 // Only required checks are blocking — non-required failures (e.g. Netlify
@@ -181,8 +191,9 @@ func isMergeConflictError(mergeOutput string) bool {
 type CIFetchFunc func(prNumber, repoURL string) ([]CICheckResult, error)
 
 // waitForCI polls PR checks until they complete or timeout is reached.
-// The fetch parameter controls how checks are retrieved — production code
-// passes fetchPRChecks; tests can inject a stub.
+// Uses exponential backoff starting at interval, doubling each poll up to
+// MaxCIPollInterval. Logs a single updating line showing accumulated poll
+// durations instead of one line per poll.
 func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL string, interval, timeout time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
 	deadline := time.Now().Add(timeout)
 
@@ -191,41 +202,69 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL string,
 		done = ctx.Done()
 	}
 
+	currentInterval := interval
+	var pollDurations []string
+
 	for {
 		checks, err := fetch(prNumber, repoURL)
 		if err != nil {
 			if time.Now().After(deadline) {
 				return nil, CIPending, fmt.Errorf("CI checks not available within %v: %w", timeout, err)
 			}
-			log.Log("ci", "CI checks not available yet for PR #%s, polling in %v...", prNumber, interval)
+			pollDurations = append(pollDurations, formatDuration(currentInterval))
 			select {
 			case <-done:
 				return nil, CIPending, fmt.Errorf("interrupted")
-			case <-time.After(interval):
+			case <-ciSleep(currentInterval):
 			}
+			currentInterval = nextBackoff(currentInterval)
 			continue
 		}
 
 		status := evaluateChecks(checks)
 		switch status {
 		case CIPassed:
+			if len(pollDurations) > 0 {
+				log.Log("ci", "CI checks pending for PR #%s (polled %s)", prNumber, strings.Join(pollDurations, ".."))
+			}
 			log.Log("ci", "CI checks passed for PR #%s", prNumber)
 			return checks, CIPassed, nil
 		case CIFailed:
+			if len(pollDurations) > 0 {
+				log.Log("ci", "CI checks pending for PR #%s (polled %s)", prNumber, strings.Join(pollDurations, ".."))
+			}
 			log.Warn("ci", "CI checks failed for PR #%s", prNumber)
 			return checks, CIFailed, nil
 		}
 
 		if time.Now().After(deadline) {
+			if len(pollDurations) > 0 {
+				log.Log("ci", "CI checks pending for PR #%s (polled %s)", prNumber, strings.Join(pollDurations, ".."))
+			}
 			log.Warn("ci", "CI poll timeout reached for PR #%s", prNumber)
 			return checks, CIPending, fmt.Errorf("CI checks did not complete within %v", timeout)
 		}
 
-		log.Log("ci", "CI checks pending for PR #%s, polling in %v...", prNumber, interval)
+		pollDurations = append(pollDurations, formatDuration(currentInterval))
 		select {
 		case <-done:
 			return nil, CIPending, fmt.Errorf("interrupted")
-		case <-time.After(interval):
+		case <-ciSleep(currentInterval):
 		}
+		currentInterval = nextBackoff(currentInterval)
 	}
+}
+
+// nextBackoff doubles the interval, capping at MaxCIPollInterval.
+func nextBackoff(current time.Duration) time.Duration {
+	next := current * 2
+	if next > MaxCIPollInterval {
+		return MaxCIPollInterval
+	}
+	return next
+}
+
+// formatDuration returns a compact human-readable duration (e.g. "1s", "2s", "15s").
+func formatDuration(d time.Duration) string {
+	return fmt.Sprintf("%ds", int(d.Seconds()))
 }

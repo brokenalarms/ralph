@@ -104,7 +104,7 @@ All replaced by: linear commits, `--update-refs` rebase, sequential PR merge.
 ## What stays
 
 - `EnsureUpToDate` — still needed for the initial sync on startup
-- Branch naming (`ralph/<project>/<seq>-<beadID>-<slug>`) — each commit gets a branch
+- Branch naming (`ralph/<project>/<beadID>-<slug>`) — each commit gets a branch
 - `PushAndCreatePR` — still creates PRs, but targets previous branch, not main
 - `AutoMergeCurrentBranch` — still merges, but only the oldest unmerged PR
 - CI polling — unchanged

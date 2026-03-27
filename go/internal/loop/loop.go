@@ -39,6 +39,7 @@ type Config struct {
 	IdleTimeoutProgress time.Duration
 	Wait                bool
 	WaitInterval        time.Duration
+	Verbose             bool
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 	Version             string
 	VerifyDir           string // project root where tests are run; empty disables verification
@@ -49,6 +50,7 @@ type Config struct {
 type claudeRunner interface {
 	Run(cfg claude.RunConfig) (claude.Result, error)
 	StopStreaming()
+	InjectMessage(msg string) error
 }
 
 // CompletedTask holds summary info for a task completed during this session.
@@ -74,7 +76,7 @@ type Loop struct {
 	logger     *logging.Logger
 	signals    claude.SignalPaths
 	mergeFunc          func(ctx context.Context) (bool, error)
-	pushPRFunc         func(ctx context.Context, taskID, taskDesc string) (string, error)
+	pushPRFunc         func(ctx context.Context, taskID, taskDesc, body string) (string, error)
 	verifyFunc      func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
 	llmVerifyFunc   func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result
 	newRunnerFunc      func() claudeRunner
@@ -82,8 +84,10 @@ type Loop struct {
 	agentRunner        *agent.Runner
 	refactorQueryFunc  func(ctx context.Context, workDir, prompt, model string) (string, error)
 	lastAction         analyzer.Action
-	lastTaskMerged  bool
-	sessionTasks    []CompletedTask
+	lastTaskMerged     bool
+	sessionTasks       []CompletedTask
+	testFixAttempts    int
+	llmVerifyAttempts  int
 }
 
 // New creates an execution loop from the given configuration. All agent
@@ -228,6 +232,10 @@ func (l *Loop) Run(ctx context.Context) error {
 		taskInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 		taskID, nextTask := taskInfo.ID, taskInfo.Title
 		taskChanged := l.isNewTask(taskID, nextTask)
+		if taskChanged {
+			l.testFixAttempts = 0
+			l.llmVerifyAttempts = 0
+		}
 
 		if runIteration > 1 && taskChanged {
 			l.git.PrepareForNextTask()
@@ -280,14 +288,31 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.state.Write("last_task", nextTask)
 		l.state.Write("last_task_id", taskID)
 		if taskChanged || !l.git.BranchRenamed {
-			l.git.RenameBranchForTask(nextTask, taskID)
+			// Check metadata for a branch from a previous iteration.
+			// If the remote has that branch with work, check it out to continue.
+			checkedOut := false
+			if taskID != "" {
+				if storedBranch, _ := l.cfg.TaskBackend.GetMetadata(taskID, "branch"); storedBranch != "" {
+					_ = l.git.FetchBranch(storedBranch)
+					if l.git.RemoteBranchHasCommits(storedBranch) {
+						l.git.CheckoutRemoteBranch(storedBranch)
+						checkedOut = true
+					}
+				}
+			}
+			if !checkedOut {
+				l.git.RenameBranchForTask(nextTask, taskID)
+				if taskID != "" && l.git.WorktreeBranch != "" {
+					_ = l.cfg.TaskBackend.SetMetadata(taskID, "branch", l.git.WorktreeBranch)
+				}
+			}
 		}
 		l.writeRunBranch()
 		l.git.TagTaskStart(taskID)
 
 		l.updateStreamTask(taskID, nextTask, taskInfo.Priority)
 
-		// PR-based resume: check the bead's external-ref for a linked PR.
+		// Resume: check external-ref for a linked PR and resolve it.
 		if resumed := l.resumeViaPR(ctx, taskID, nextTask); resumed {
 			l.git.TagTaskEnd(taskID)
 			runIteration++
@@ -355,6 +380,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			RawLog:              rawLogPath,
 			LogFile:             filepath.Join(l.cfg.Dirs.RalphDir, "loop.log"),
 			Quiet:               l.cfg.Quiet,
+			Verbose:             l.cfg.Verbose,
 			Signals:             l.signals,
 			PollInterval:        2 * time.Second,
 			IdleTimeout:         l.cfg.IdleTimeout,
@@ -387,10 +413,11 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.logger.Warn("llm", "Claude failed on iteration %d, continuing...", runIteration)
 		}
 		if result.FeedbackKill {
-			l.logger.Warn("llm", "Restarting iteration %d — user feedback received", runIteration)
+			// Fallback path: stdin injection failed, agent was killed.
+			l.logger.Warn("llm", "Restarting iteration %d — feedback injection failed, agent killed", runIteration)
 			diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
 			l.attempts.Record(taskID, nextTask,
-				"Killed: user feedback received. Feedback: "+result.FeedbackContent,
+				"Killed: feedback injection failed. Feedback: "+result.FeedbackContent,
 				diffStat,
 				"user_feedback: "+result.FeedbackContent)
 			runIteration--
@@ -506,12 +533,13 @@ func (l *Loop) Run(ctx context.Context) error {
 
 			// PushAndCreatePR calls EnsureUpToDate internally, which
 			// rebases onto the latest base branch before pushing.
-			prNumber, pushErr := l.pushAndCreatePR(ctx, taskID, nextTask)
+			prBody := l.buildPRBody(taskID, result.Summary)
+			prNumber, pushErr := l.pushAndCreatePR(ctx, taskID, nextTask, prBody)
 			if pushErr != nil {
 				if !isOnline() {
 					l.logger.Warn("git", "Push failed — internet appears down")
 					l.waitForInternet(ctx)
-					prNumber, pushErr = l.pushAndCreatePR(ctx, taskID, nextTask)
+					prNumber, pushErr = l.pushAndCreatePR(ctx, taskID, nextTask, prBody)
 				}
 				if pushErr != nil {
 					l.logger.Warn("git", "Push/PR: %v", pushErr)

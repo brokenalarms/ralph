@@ -15,6 +15,7 @@ import (
 )
 
 const maxLLMVerifyAttempts = 3
+const maxTestFixAttempts = 3
 
 // signalParams holds the context needed by onSignal, avoiding a long
 // parameter list of values captured from the iteration scope.
@@ -27,8 +28,12 @@ type signalParams struct {
 	nextTask   string
 }
 
-// onSignal runs post-signal verification: test suite, LLM review, and fix
-// agent spawning. Returns true when the work is verified and ready to merge.
+// onSignal runs post-signal verification: test suite, LLM review, and
+// message injection. Instead of spawning separate fix agents, test failures
+// and LLM rejections are injected to the running agent via stdin — the agent
+// has full context of what it built and is better positioned to fix its own
+// work. Returns true when verified, false to clear the signal and let the
+// agent continue.
 func (l *Loop) onSignal(p signalParams) bool {
 	// Step 1: Run tests (commit check is a warning, not a gate)
 	commitResult := verify.CheckCommits(l.git, p.headBefore)
@@ -38,93 +43,114 @@ func (l *Loop) onSignal(p signalParams) bool {
 
 	l.logger.Log("test", "Running post-signal test suite...")
 	testResult := verify.RunTests(p.ctx, l.cfg.VerifyDir)
-	passed := testResult.Passed
-	reason := testResult.Reason
-	if passed {
+	if testResult.Passed {
 		l.logger.Log("test", "Tests passed")
 	}
-	if !passed {
-		l.logger.Warn("test", "Tests failed: %s", reason)
-		testOutput := testResult.Details
 
-		beadDesc := l.getBeadDescription(p.taskID)
+	if !testResult.Passed {
+		l.testFixAttempts++
+		l.logger.Warn("test", "Tests failed (attempt %d/%d): %s", l.testFixAttempts, maxTestFixAttempts, testResult.Reason)
 
-		signalPath := filepath.Join(l.cfg.Dirs.RalphDir, ".signal_complete")
-		verifyPrompt := l.loadVerifyPrompt("verify-tests.md", map[string]string{
-			"{{TASK_TITLE}}":       p.nextTask,
-			"{{TASK_DESCRIPTION}}": beadDesc,
-			"{{TEST_OUTPUT}}":      testOutput,
-			"{{SIGNAL_COMPLETE}}":  signalPath,
-		})
-
-		verifyResult := l.runFixAgent(p.ctx, "test failures", verifyPrompt, p.workDir, p.rawLogPath)
-		if !verifyResult.SignalDetected {
+		if l.testFixAttempts > maxTestFixAttempts {
+			l.logger.Error("test", "Tests still failing after %d attempts — giving up", maxTestFixAttempts)
 			return false
 		}
 
-		// Re-check tests after fix agent (skip commit check — fix agent
-		// may not have new commits if it determined work was correct)
+		msg := fmt.Sprintf("Tests failed after your completion signal. Fix these failures and signal completion again.\n\nTest output:\n%s", testResult.Details)
+		if err := l.runner.InjectMessage(msg); err != nil {
+			l.logger.Warn("test", "Stdin injection failed (%v) — falling back to fix agent", err)
+			return l.fallbackFixTestFailures(p, testResult.Details)
+		}
+		l.logger.Log("test", "Test failure output injected to agent via stdin")
+		return false
+	}
 
-		testResult := verify.RunTests(p.ctx, l.cfg.VerifyDir)
-		if !testResult.Passed {
-			l.logger.Error("test", "Tests still failing after verification agent: %s", testResult.Reason)
+	// Tests passed — reset test fix counter.
+	l.testFixAttempts = 0
+
+	// Step 2: LLM verification — does the diff match the bead?
+	beadDesc := l.getBeadDescription(p.taskID)
+	beadAcceptance := l.getBeadAcceptance(p.taskID)
+
+	l.llmVerifyAttempts++
+	l.logger.Log("llm", "Running LLM verification (attempt %d/%d)...", l.llmVerifyAttempts, maxLLMVerifyAttempts)
+	llmResult := l.llmVerifyFunc(p.ctx, l.git, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, beadAcceptance, l.git.GitHub, l.queryFunc())
+
+	if llmResult.Passed && llmResult.NoDiff && l.cfg.VerifyLevel == "hog" {
+		l.logger.Log("llm", "No diff detected — spawning codebase verification agent (hog mode)")
+		if !l.verifyFeatureExists(p, beadDesc) {
 			return false
 		}
 	}
 
-	// LLM verification — does the diff match the bead?
-	// Fail-closed loop: reject → fix agent → re-verify until approved or
-	// maxLLMVerifyAttempts reached.
-	if passed {
-		beadDesc := l.getBeadDescription(p.taskID)
-		beadAcceptance := l.getBeadAcceptance(p.taskID)
-
-		for attempt := 1; attempt <= maxLLMVerifyAttempts; attempt++ {
-			l.logger.Log("llm", "Running LLM verification (attempt %d/%d)...", attempt, maxLLMVerifyAttempts)
-			llmResult := l.llmVerifyFunc(p.ctx, l.git, p.workDir, l.cfg.Dirs.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, beadAcceptance, l.git.GitHub, l.queryFunc())
-
-			if llmResult.Passed && llmResult.NoDiff && l.cfg.VerifyLevel == "hog" {
-				l.logger.Log("llm", "No diff detected — spawning codebase verification agent (hog mode)")
-				if !l.verifyFeatureExists(p, beadDesc) {
-					return false
-				}
-			}
-
-			if llmResult.Passed {
-				l.logger.Success("llm", "LLM verified: %s", llmResult.Reason)
-				return true
-			}
-
-			l.logger.Error("llm", "LLM verification rejected (attempt %d/%d): %s", attempt, maxLLMVerifyAttempts, llmResult.Details)
-
-			if attempt == maxLLMVerifyAttempts {
-				if p.taskID != "" {
-					l.skipTask(p.taskID, fmt.Sprintf("verification_rejected_%d_attempts: %s", maxLLMVerifyAttempts, llmResult.Details))
-				}
-				return false
-			}
-
-			signalPath := filepath.Join(l.cfg.Dirs.RalphDir, ".signal_complete")
-			fixPrompt := l.loadVerifyPrompt("verify-llm.md", map[string]string{
-				"{{TASK_TITLE}}":       p.nextTask,
-				"{{TASK_DESCRIPTION}}": beadDesc,
-				"{{LLM_FEEDBACK}}":     llmResult.Details,
-				"{{SIGNAL_COMPLETE}}":  signalPath,
-			})
-
-			fixResult := l.runFixAgent(p.ctx, fmt.Sprintf("LLM feedback (attempt %d)", attempt), fixPrompt, p.workDir, p.rawLogPath)
-			if !fixResult.SignalDetected {
-				return false
-			}
-
-			testResult := verify.RunTests(p.ctx, l.cfg.VerifyDir)
-			if !testResult.Passed {
-				l.logger.Error("test", "Tests failed after LLM fix agent: %s", testResult.Reason)
-				return false
-			}
-		}
+	if llmResult.Passed {
+		l.logger.Success("llm", "LLM verified: %s", llmResult.Reason)
+		l.llmVerifyAttempts = 0
+		return true
 	}
 
+	l.logger.Error("llm", "LLM verification rejected (attempt %d/%d): %s", l.llmVerifyAttempts, maxLLMVerifyAttempts, llmResult.Details)
+
+	if l.llmVerifyAttempts >= maxLLMVerifyAttempts {
+		if p.taskID != "" {
+			l.skipTask(p.taskID, fmt.Sprintf("verification_rejected_%d_attempts: %s", maxLLMVerifyAttempts, llmResult.Details))
+		}
+		return false
+	}
+
+	msg := fmt.Sprintf("LLM verification rejected your work. Fix the issues and signal completion again.\n\nFeedback:\n%s", llmResult.Details)
+	if err := l.runner.InjectMessage(msg); err != nil {
+		l.logger.Warn("llm", "Stdin injection failed (%v) — falling back to fix agent", err)
+		return l.fallbackFixLLMRejection(p, beadDesc, llmResult.Details)
+	}
+	l.logger.Log("llm", "LLM feedback injected to agent via stdin")
+	return false
+}
+
+// fallbackFixTestFailures spawns a fix agent when stdin injection fails.
+func (l *Loop) fallbackFixTestFailures(p signalParams, testOutput string) bool {
+	beadDesc := l.getBeadDescription(p.taskID)
+	signalPath := filepath.Join(l.cfg.Dirs.RalphDir, ".signal_complete")
+	verifyPrompt := l.loadVerifyPrompt("verify-tests.md", map[string]string{
+		"{{TASK_TITLE}}":       p.nextTask,
+		"{{TASK_DESCRIPTION}}": beadDesc,
+		"{{TEST_OUTPUT}}":      testOutput,
+		"{{SIGNAL_COMPLETE}}":  signalPath,
+	})
+
+	verifyResult := l.runFixAgent(p.ctx, "test failures", verifyPrompt, p.workDir, p.rawLogPath)
+	if !verifyResult.SignalDetected {
+		return false
+	}
+
+	retest := verify.RunTests(p.ctx, l.cfg.VerifyDir)
+	if !retest.Passed {
+		l.logger.Error("test", "Tests still failing after fix agent: %s", retest.Reason)
+		return false
+	}
+	return true
+}
+
+// fallbackFixLLMRejection spawns a fix agent when stdin injection fails.
+func (l *Loop) fallbackFixLLMRejection(p signalParams, beadDesc, llmFeedback string) bool {
+	signalPath := filepath.Join(l.cfg.Dirs.RalphDir, ".signal_complete")
+	fixPrompt := l.loadVerifyPrompt("verify-llm.md", map[string]string{
+		"{{TASK_TITLE}}":       p.nextTask,
+		"{{TASK_DESCRIPTION}}": beadDesc,
+		"{{LLM_FEEDBACK}}":     llmFeedback,
+		"{{SIGNAL_COMPLETE}}":  signalPath,
+	})
+
+	fixResult := l.runFixAgent(p.ctx, "LLM feedback", fixPrompt, p.workDir, p.rawLogPath)
+	if !fixResult.SignalDetected {
+		return false
+	}
+
+	testResult := verify.RunTests(p.ctx, l.cfg.VerifyDir)
+	if !testResult.Passed {
+		l.logger.Error("test", "Tests failed after LLM fix agent: %s", testResult.Reason)
+		return false
+	}
 	return true
 }
 
@@ -307,7 +333,7 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, 
 		return false
 	}
 
-	if _, pushErr := l.pushAndCreatePR(ctx, taskID, nextTask); pushErr != nil {
+	if _, pushErr := l.pushAndCreatePR(ctx, taskID, nextTask, ""); pushErr != nil {
 		l.logger.Warn("git", "Push after CI fix failed: %v", pushErr)
 		return false
 	}

@@ -100,7 +100,7 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 		if len(sub.Args) > 1 {
 			workDir = sub.Args[1]
 		}
-		claude.FilterStream(sub.Args[0], workDir)
+		claude.FilterStream(sub.Args[0], workDir, false)
 		return 0
 	}
 

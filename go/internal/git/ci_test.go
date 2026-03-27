@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -262,6 +263,87 @@ func TestWaitForCI_TimesOut(t *testing.T) {
 	}
 	if status != CIPending {
 		t.Errorf("expected CIPending on timeout, got %v", status)
+	}
+}
+
+// waitForCI uses exponential backoff, doubling the interval each poll up
+// to MaxCIPollInterval, so early polls are fast and later polls don't spam.
+func TestWaitForCI_BackoffDoubles(t *testing.T) {
+	var sleeps []time.Duration
+	origSleep := ciSleep
+	ciSleep = func(d time.Duration) <-chan time.Time {
+		sleeps = append(sleeps, d)
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+	defer func() { ciSleep = origSleep }()
+
+	callCount := 0
+	fetch := func(pr, repo string) ([]CICheckResult, error) {
+		callCount++
+		if callCount < 6 {
+			return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
+		}
+		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
+	}
+
+	_, status, err := waitForCI(context.Background(), fetch, "1", "", 1*time.Second, 5*time.Minute, discardLog{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+	// 5 pending polls → sleeps of 1s, 2s, 4s, 8s, 15s (capped)
+	if len(sleeps) != 5 {
+		t.Fatalf("expected 5 sleeps, got %d: %v", len(sleeps), sleeps)
+	}
+	want := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, MaxCIPollInterval}
+	for i, w := range want {
+		if sleeps[i] != w {
+			t.Errorf("sleep[%d] = %v, want %v", i, sleeps[i], w)
+		}
+	}
+}
+
+// waitForCI logs a single summary line per PR showing accumulated poll
+// durations, not one line per poll cycle.
+func TestWaitForCI_SingleLogLine(t *testing.T) {
+	origSleep := ciSleep
+	ciSleep = func(d time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+	defer func() { ciSleep = origSleep }()
+
+	callCount := 0
+	fetch := func(pr, repo string) ([]CICheckResult, error) {
+		callCount++
+		if callCount < 4 {
+			return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
+		}
+		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
+	}
+
+	log := &testLog{}
+	_, _, err := waitForCI(context.Background(), fetch, "42", "", 1*time.Second, 5*time.Minute, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have exactly 2 log lines: one pending summary, one passed.
+	if len(log.messages) != 2 {
+		t.Fatalf("expected 2 log messages (1 pending summary + 1 passed), got %d: %v", len(log.messages), log.messages)
+	}
+
+	// The pending line should show the full backoff schedule.
+	if !strings.Contains(log.messages[0], "polled 1s..2s..4s") {
+		t.Errorf("expected pending line with backoff schedule, got: %s", log.messages[0])
+	}
+	if !strings.Contains(log.messages[1], "passed") {
+		t.Errorf("expected passed line, got: %s", log.messages[1])
 	}
 }
 

@@ -49,16 +49,42 @@ func (l *Loop) isNewTask(taskID, taskDesc string) bool {
 	return lastTask != taskDesc
 }
 
-func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc string) (string, error) {
+func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
 	if l.pushPRFunc != nil {
-		return l.pushPRFunc(ctx, taskID, taskDesc)
+		return l.pushPRFunc(ctx, taskID, taskDesc, body)
 	}
-	return l.git.PushAndCreatePR(ctx, taskID, taskDesc)
+	return l.git.PushAndCreatePR(ctx, taskID, taskDesc, body)
 }
 
-// resumeViaPR checks the bead's external-ref for a linked PR and resolves
-// accordingly. Returns true if the task was fully handled (merged or skipped)
-// and the loop should continue to the next task; false if the agent should run.
+// buildPRBody assembles a PR description from bead context and agent summary.
+// Uses whatever context is available — bead description, acceptance criteria,
+// agent summary — and composes them into a coherent body.
+func (l *Loop) buildPRBody(taskID, summary string) string {
+	var sections []string
+
+	if taskID != "" {
+		if desc, err := l.cfg.TaskBackend.GetDescription(taskID); err == nil && desc != "" {
+			sections = append(sections, "## Description\n"+desc)
+		}
+		if ac, err := l.cfg.TaskBackend.GetAcceptance(taskID); err == nil && ac != "" {
+			sections = append(sections, "## Acceptance Criteria\n"+ac)
+		}
+	}
+
+	if summary != "" {
+		sections = append(sections, "## Summary\n"+summary)
+	}
+
+	if len(sections) == 0 {
+		return ""
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+// resumeViaPR checks the bead's metadata and external-ref for existing work
+// and resolves accordingly. Returns true if the task was fully handled (merged
+// or skipped) and the loop should continue to the next task; false if the
+// agent should run.
 func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 	if taskID == "" {
 		return false
@@ -70,8 +96,7 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 		return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
 	}
 
-	// No external-ref — search remote branches for work matching this task ID.
-	// The branch was pushed by a previous iteration but PR creation failed.
+	// No PR — check metadata for a branch that was pushed but never got a PR.
 	gh := l.git.GH()
 	if gh == nil || !gh.Available() {
 		return false
@@ -81,8 +106,11 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 		return false
 	}
 
-	// Find a remote branch containing this bead ID.
-	branch := l.git.FindRemoteBranchForTask(taskID)
+	// Check metadata for a stored branch name first, fall back to remote search.
+	branch, _ := l.cfg.TaskBackend.GetMetadata(taskID, "branch")
+	if branch == "" {
+		branch = l.git.FindRemoteBranchForTask(taskID)
+	}
 	if branch == "" {
 		return false
 	}
@@ -99,9 +127,8 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 
 	// No PR — create one from the existing remote branch.
 	l.logger.Log("git", "Remote branch %s has work but no PR — creating PR", branch)
-	// Switch to the remote branch so push/PR uses the right ref.
 	l.git.CheckoutRemoteBranch(branch)
-	prNum, err := l.pushAndCreatePR(ctx, taskID, nextTask)
+	prNum, err := l.pushAndCreatePR(ctx, taskID, nextTask, "")
 	if err == nil && prNum != "" {
 		_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNum)
 		return l.resolveByPRState(ctx, taskID, nextTask, prNum)
@@ -179,7 +206,7 @@ func (l *Loop) flushUnpushedWork(ctx context.Context) {
 	taskID, _ := l.state.Read("last_task_id")
 	taskDesc, _ := l.state.Read("last_task")
 	if l.pushPRFunc != nil || l.mergeFunc != nil {
-		if _, err := l.pushAndCreatePR(ctx, taskID, taskDesc); err != nil {
+		if _, err := l.pushAndCreatePR(ctx, taskID, taskDesc, ""); err != nil {
 			l.logger.Warn("git", "Flush push/PR: %v", err)
 			return
 		}
@@ -309,6 +336,7 @@ func (l *Loop) maybeRefactor() error {
 		RawLog:       rawLogPath,
 		LogFile:      filepath.Join(l.cfg.Dirs.RalphDir, "loop.log"),
 		Quiet:        l.cfg.Quiet,
+		Verbose:      l.cfg.Verbose,
 		Signals:      l.signals,
 		PollInterval: 2 * time.Second,
 	})

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -35,7 +34,6 @@ type Manager struct {
 	WorktreeBranch string
 	PrevBranch     string
 	Resume         bool
-	TaskSeq        int
 	BranchRenamed bool
 	BaseBranch    string
 	MergeAdmin    bool
@@ -159,12 +157,6 @@ func (m *Manager) tryResumeWorktree() error {
 		m.BranchRenamed = true
 	}
 
-	if seqStr, _ := m.State.Read("task_seq"); seqStr != "" {
-		if n, err := strconv.Atoi(seqStr); err == nil {
-			m.TaskSeq = n
-		}
-	}
-
 	if prev, _ := m.State.Read("prev_branch"); prev != "" {
 		m.PrevBranch = prev
 	}
@@ -281,8 +273,8 @@ func (m *Manager) tryAutoResolve(ctx context.Context, defaultBranch string) bool
 
 
 // RenameBranchForTask renames the current branch to include a task slug.
-// Each call increments TaskSeq and records the previous branch name for
-// stacked PR targeting. Only renames once per task (tracked by BranchRenamed).
+// Records the previous branch name for stacked PR targeting.
+// Only renames once per task (tracked by BranchRenamed).
 func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 	if m.BranchRenamed || m.WorktreeBranch == "" || taskDesc == "" {
 		return
@@ -297,16 +289,13 @@ func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 	}
 
 	oldBranch := m.WorktreeBranch
-	m.TaskSeq++
 	var newBranch string
 	if taskID != "" {
-		newBranch = fmt.Sprintf("ralph/%s/%02d-%s-%s", m.ProjectName, m.TaskSeq, taskID, slug)
+		newBranch = fmt.Sprintf("ralph/%s/%s-%s", m.ProjectName, taskID, slug)
 	} else {
-		newBranch = fmt.Sprintf("ralph/%s/%02d-%s", m.ProjectName, m.TaskSeq, slug)
+		newBranch = fmt.Sprintf("ralph/%s/%s", m.ProjectName, slug)
 	}
 	if err := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); err == nil {
-		// Track the previous named branch for stacked PR targeting.
-		// Only set PrevBranch if the old branch was a task branch (not wip).
 		if !strings.HasSuffix(oldBranch, "/wip") {
 			m.PrevBranch = oldBranch
 		}
@@ -314,7 +303,6 @@ func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 		m.BranchRenamed = true
 		if m.State != nil {
 			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
-			_ = m.State.Write("task_seq", fmt.Sprintf("%d", m.TaskSeq))
 			_ = m.State.Write("branch_renamed", "true")
 			_ = m.State.Write("prev_branch", m.PrevBranch)
 		}

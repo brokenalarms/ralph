@@ -232,6 +232,16 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.WaitInterval.String() },
 	},
 	{
+		Short: "-v", Long: "--verbose",
+		Help: "Show all tool calls in stream log (by default low-value tools are hidden)",
+		Kind: KindBool,
+		Apply: func(cfg *Config, _ string) error {
+			cfg.Verbose = true
+			return nil
+		},
+		Read: func(cfg *Config) string { return boolStr(cfg.Verbose) },
+	},
+	{
 		Short: "-h", Long: "--help",
 		Help: "Show this help",
 		Kind: KindBool,

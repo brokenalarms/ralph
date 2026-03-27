@@ -182,6 +182,152 @@ func TestToolBatcher_FlushEmpty(t *testing.T) {
 	}
 }
 
+// Non-verbose mode suppresses verbose-only tools (Bash, Read, Write, Grep, Glob,
+// ToolSearch, TodoWrite) while still passing through Edit, Agent, and prose.
+func TestToolBatcher_NonVerboseHidesVerboseOnlyTools(t *testing.T) {
+	b := NewToolBatcher(5*time.Second, "")
+	b.SetVerbose(false)
+
+	// Verbose-only tools should be suppressed.
+	out := b.ProcessLine("[Read] /path/file.go")
+	if len(out) != 0 {
+		t.Errorf("Read should be suppressed in non-verbose mode, got %v", out)
+	}
+	out = b.ProcessLine("[Bash] go test ./...")
+	if len(out) != 0 {
+		t.Errorf("Bash should be suppressed in non-verbose mode, got %v", out)
+	}
+	out = b.ProcessLine("[Write] /path/file.go")
+	if len(out) != 0 {
+		t.Errorf("Write should be suppressed in non-verbose mode, got %v", out)
+	}
+	out = b.ProcessLine("[Grep] pattern")
+	if len(out) != 0 {
+		t.Errorf("Grep should be suppressed in non-verbose mode, got %v", out)
+	}
+	out = b.ProcessLine("[Glob] **/*.go")
+	if len(out) != 0 {
+		t.Errorf("Glob should be suppressed in non-verbose mode, got %v", out)
+	}
+	out = b.ProcessLine("[ToolSearch] some query")
+	if len(out) != 0 {
+		t.Errorf("ToolSearch should be suppressed in non-verbose mode, got %v", out)
+	}
+	out = b.ProcessLine("[TodoWrite] task list")
+	if len(out) != 0 {
+		t.Errorf("TodoWrite should be suppressed in non-verbose mode, got %v", out)
+	}
+
+	// Edit and Agent should pass through.
+	out = b.ProcessLine("[Edit] /path/file.go")
+	if len(out) != 1 {
+		t.Fatalf("Edit should pass through in non-verbose mode, got %d lines", len(out))
+	}
+	plain := stripANSI(out[0])
+	if !strings.Contains(plain, "[Edit]") {
+		t.Errorf("Edit line missing, got: %s", plain)
+	}
+
+	out = b.ProcessLine("[Agent] exploring codebase")
+	if len(out) != 1 {
+		t.Fatalf("Agent should pass through in non-verbose mode, got %d lines", len(out))
+	}
+	plain = stripANSI(out[0])
+	if !strings.Contains(plain, "[Agent]") {
+		t.Errorf("Agent line missing, got: %s", plain)
+	}
+
+	// Prose should always pass through.
+	out = b.ProcessLine("analyzing the code now")
+	if len(out) != 1 {
+		t.Fatalf("prose should pass through in non-verbose mode, got %d lines", len(out))
+	}
+	plain = stripANSI(out[0])
+	if !strings.Contains(plain, "analyzing the code now") {
+		t.Errorf("prose missing, got: %s", plain)
+	}
+
+	// Flush should have nothing pending (suppressed tools don't accumulate).
+	out = b.Flush()
+	if len(out) != 0 {
+		t.Errorf("suppressed tools should not accumulate, got %v", out)
+	}
+}
+
+// Non-verbose mode still shows signal lines even though they start with [Bash].
+func TestToolBatcher_NonVerboseShowsSignals(t *testing.T) {
+	b := NewToolBatcher(5*time.Second, "")
+	b.SetVerbose(false)
+
+	out := b.ProcessLine(`[Bash] echo "Working on feature" > /path/.ralph/.signal_current_task`)
+	if len(out) == 0 {
+		t.Fatal("signal lines should always show in non-verbose mode")
+	}
+	plain := stripANSI(strings.Join(out, " "))
+	if !strings.Contains(plain, "[signal]") {
+		t.Errorf("signal should be formatted with [signal] prefix, got: %s", plain)
+	}
+}
+
+// Non-verbose mode still shows diagnosis banners (ISSUE:/FIX:).
+func TestToolBatcher_NonVerboseShowsDiagnosis(t *testing.T) {
+	b := NewToolBatcher(5*time.Second, "")
+	b.SetVerbose(false)
+
+	out := b.ProcessLine("ISSUE: the config is broken")
+	if len(out) == 0 {
+		t.Fatal("diagnosis lines should always show in non-verbose mode")
+	}
+	plain := stripANSI(strings.Join(out, " "))
+	if !strings.Contains(plain, "ISSUE") {
+		t.Errorf("ISSUE banner should appear, got: %s", plain)
+	}
+}
+
+// Verbose mode shows all tool calls including verbose-only ones.
+func TestToolBatcher_VerboseShowsEverything(t *testing.T) {
+	b := NewToolBatcher(5*time.Second, "")
+	b.SetVerbose(true)
+
+	// Batchable tools accumulate as before.
+	out := b.ProcessLine("[Read] /path/file.go")
+	if len(out) != 0 {
+		t.Errorf("Read should accumulate in verbose mode, got %v", out)
+	}
+
+	// Bash passes through in verbose mode.
+	out = b.ProcessLine("[Bash] go test ./...")
+	out = append(out, b.Flush()...)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 lines (Read flush + Bash), got %d: %v", len(out), out)
+	}
+	plain0 := stripANSI(out[0])
+	if !strings.Contains(plain0, "[Read] file.go") {
+		t.Errorf("Read should flush, got: %s", plain0)
+	}
+	plain1 := stripANSI(out[1])
+	if !strings.Contains(plain1, "[Bash]") {
+		t.Errorf("Bash should pass through in verbose mode, got: %s", plain1)
+	}
+}
+
+// Adding or removing a tool from VerboseOnlyTools is a one-line change —
+// verified by checking the set's contents against expected tools.
+func TestVerboseOnlyTools_SingleDefinitionPoint(t *testing.T) {
+	expected := []string{"Bash", "Read", "Write", "Grep", "Glob", "ToolSearch", "TodoWrite"}
+	for _, tool := range expected {
+		if !VerboseOnlyTools[tool] {
+			t.Errorf("%s should be in VerboseOnlyTools", tool)
+		}
+	}
+	notExpected := []string{"Edit", "Agent"}
+	for _, tool := range notExpected {
+		if VerboseOnlyTools[tool] {
+			t.Errorf("%s should NOT be in VerboseOnlyTools", tool)
+		}
+	}
+}
+
 // Window expiry during ProcessLine flushes old batch before accumulating new tool.
 func TestToolBatcher_WindowExpiryDuringProcess(t *testing.T) {
 	b := NewToolBatcher(50*time.Millisecond, "")

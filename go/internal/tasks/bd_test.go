@@ -1064,3 +1064,96 @@ func TestBD_SetExternalRef_EmptyID(t *testing.T) {
 	}
 }
 
+// SetMetadata calls bd update --set-metadata key=value for the given task.
+func TestBD_SetMetadata(t *testing.T) {
+	var capturedArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "update" {
+			capturedArgs = args
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SetMetadata("ralph-abc", "branch", "ralph/proj/ralph-abc-fix-bug"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "--set-metadata") {
+		t.Errorf("expected --set-metadata in args, got: %v", capturedArgs)
+	}
+	if !strings.Contains(joined, "branch=ralph/proj/ralph-abc-fix-bug") {
+		t.Errorf("expected branch=... in args, got: %v", capturedArgs)
+	}
+}
+
+// SetMetadata is a no-op when id is empty.
+func TestBD_SetMetadata_EmptyID(t *testing.T) {
+	called := false
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		called = true
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SetMetadata("", "branch", "val"); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Error("expected no bd calls with empty id")
+	}
+}
+
+// GetMetadata parses the metadata map from bd show --json output.
+func TestBD_GetMetadata(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
+			return `[{"metadata":{"branch":"ralph/proj/ralph-abc-fix-bug"}}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	val, err := b.GetMetadata("ralph-abc", "branch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val != "ralph/proj/ralph-abc-fix-bug" {
+		t.Errorf("GetMetadata = %q, want %q", val, "ralph/proj/ralph-abc-fix-bug")
+	}
+}
+
+// GetMetadata returns empty string when key is missing.
+func TestBD_GetMetadata_MissingKey(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
+			return `[{"metadata":{"other":"value"}}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	val, err := b.GetMetadata("ralph-abc", "branch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val != "" {
+		t.Errorf("GetMetadata missing key = %q, want empty", val)
+	}
+}
+
+// GetMetadata returns empty string when metadata is null/absent.
+func TestBD_GetMetadata_NoMetadata(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
+			return `[{"id":"ralph-abc"}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	val, err := b.GetMetadata("ralph-abc", "branch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val != "" {
+		t.Errorf("GetMetadata no metadata = %q, want empty", val)
+	}
+}
+

@@ -40,6 +40,8 @@ func (s *stubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
 
 func (s *stubRunner) StopStreaming() {}
 
+func (s *stubRunner) InjectMessage(_ string) error { return nil }
+
 // stubBackend implements tasks.Backend for testing without shelling out to
 // bd or reading plan files. Lets us control exactly how many tasks remain
 // and what the next task is.
@@ -52,6 +54,7 @@ type stubBackend struct {
 	nextPriority *int
 	label        string
 	description  string
+	acceptance   string
 	fullContext   string
 	skippedTask  string
 	skipReason   string
@@ -93,6 +96,8 @@ func (m *mutableBackend) GetFullContext(_ string) (string, error)  { return "", 
 func (m *mutableBackend) ProjectContext() (string, error)          { return "", nil }
 func (m *mutableBackend) GetExternalRef(_ string) (string, error) { return "", nil }
 func (m *mutableBackend) SetExternalRef(_, _ string) error       { return nil }
+func (m *mutableBackend) SetMetadata(_, _, _ string) error         { return nil }
+func (m *mutableBackend) GetMetadata(_, _ string) (string, error)  { return "", nil }
 func (m *mutableBackend) Label() string {
 	if m.label != "" {
 		return m.label
@@ -117,11 +122,13 @@ func (s *stubBackend) SetState(_, _, _, _ string) error     { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (s *stubBackend) ExecutionInstructions() (string, error) { return "", nil }
 func (s *stubBackend) GetDescription(_ string) (string, error)  { return s.description, nil }
-func (s *stubBackend) GetAcceptance(_ string) (string, error)   { return "", nil }
+func (s *stubBackend) GetAcceptance(_ string) (string, error)   { return s.acceptance, nil }
 func (s *stubBackend) GetFullContext(_ string) (string, error)  { return s.fullContext, nil }
 func (s *stubBackend) ProjectContext() (string, error)          { return "", nil }
 func (s *stubBackend) GetExternalRef(_ string) (string, error) { return "", nil }
 func (s *stubBackend) SetExternalRef(_, _ string) error       { return nil }
+func (s *stubBackend) SetMetadata(_, _, _ string) error         { return nil }
+func (s *stubBackend) GetMetadata(_, _ string) (string, error)  { return "", nil }
 func (s *stubBackend) Label() string {
 	if s.label != "" {
 		return s.label
@@ -1338,9 +1345,9 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 		t.Errorf("expected branch to contain 'fix-the-login-bug', got %q", gm.WorktreeBranch)
 	}
 
-	// TaskSeq should be 1 (only one task rename)
-	if gm.TaskSeq != 1 {
-		t.Errorf("expected TaskSeq=1 (one rename), got %d", gm.TaskSeq)
+	// Branch should have been renamed exactly once (same task)
+	if !gm.BranchRenamed {
+		t.Error("expected BranchRenamed=true after one rename")
 	}
 }
 
@@ -1408,9 +1415,9 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 		t.Errorf("expected branch for second task, got %q", gm.WorktreeBranch)
 	}
 
-	// TaskSeq should be 2 (two different tasks = two renames)
-	if gm.TaskSeq != 2 {
-		t.Errorf("expected TaskSeq=2, got %d", gm.TaskSeq)
+	// Branch should have been renamed for the second task
+	if !gm.BranchRenamed {
+		t.Error("expected BranchRenamed=true after task change")
 	}
 
 	// With stacked PRs, the branch is renamed for each task —
@@ -1476,8 +1483,8 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	}
 
 	// Only one branch rename should have happened (for the task, not refactor)
-	if gm.TaskSeq != 1 {
-		t.Errorf("expected TaskSeq=1, got %d", gm.TaskSeq)
+	if !gm.BranchRenamed {
+		t.Error("expected BranchRenamed=true after task rename")
 	}
 
 	// Only one ralph branch should exist (the task branch)
@@ -1533,7 +1540,7 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "42", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
 
 	err := l.Run(context.Background())
@@ -1674,7 +1681,7 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
@@ -1733,7 +1740,7 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.findPRInfoFunc = func(string) (string, string) { return "42", "Fix auth bug" }
 
@@ -1788,7 +1795,7 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "no commits" }
 
 	_ = l.Run(context.Background())
@@ -1914,7 +1921,7 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "99", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		mergeCount++
 		return true, nil
@@ -2172,7 +2179,7 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(_ context.Context, _, taskDesc string) (string, error) {
+	l.pushPRFunc = func(_ context.Context, _, taskDesc, _ string) (string, error) {
 		pushPRCalls++
 		return "", nil
 	}
@@ -2231,7 +2238,7 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(_ context.Context, _, taskDesc string) (string, error) {
+	l.pushPRFunc = func(_ context.Context, _, taskDesc, _ string) (string, error) {
 		pushPRCalls++
 		return "", nil
 	}
@@ -2376,7 +2383,7 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true, Summary: "task completed"},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -2606,7 +2613,7 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 		WaitInterval:  50 * time.Millisecond,
 	}, st, gm, logger)
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	// After the loop enters wait mode, inject a new task. After the Claude
 	// call completes, the loop will re-enter wait mode; cancel the context
@@ -2994,7 +3001,7 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return false, "test suite failed"
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) {
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) {
 		t.Error("push should not be called when verification fails")
 		return "", nil
 	}
@@ -3062,7 +3069,7 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) {
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) {
 		pushCalled = true
 		return "", nil
 	}
@@ -3127,7 +3134,7 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		// VerifyDir deliberately not set
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) {
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) {
 		pushCalled = true
 		return "", nil
 	}
@@ -3202,7 +3209,7 @@ func TestLoop_LifecycleStates(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -3322,7 +3329,7 @@ func TestLoop_CIFailureLeavesTaskOpenForRetry(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return false, &git.CIFailureError{
 			PRNumber: "99",
@@ -3385,7 +3392,7 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "42", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 
 	merged := false
 	l.mergeFunc = func(context.Context) (bool, error) {
@@ -3441,7 +3448,7 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) { return "", nil }
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return true, nil
@@ -3498,7 +3505,7 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 	l.newRunnerFunc = func() claudeRunner {
 		return &stubRunner{result: claude.Result{SignalDetected: true}}
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	// mergeFunc returning error means merge pipeline failed (retry exhaustion
 	// is tested in git module: TestMergeWithRetry_ExhaustsRetries).
@@ -3562,7 +3569,7 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return false, fmt.Errorf("merge failed")
@@ -3630,7 +3637,7 @@ func TestLoop_SkipsTaskAfterRepeatedMergeFailures(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return false, fmt.Errorf("push denied by sandbox")
 	}
@@ -3694,7 +3701,7 @@ func TestLoop_MergeFailureBelowThresholdLeavesTaskOpen(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return false, fmt.Errorf("merge conflict")
 	}
@@ -3762,7 +3769,7 @@ func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "42", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return true, nil
 	}
@@ -3818,7 +3825,7 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -3899,7 +3906,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		captured: &capturedPrompt,
 	}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -4015,6 +4022,10 @@ func (c *configCapturingRunner) StopStreaming() {
 	c.inner.StopStreaming()
 }
 
+func (c *configCapturingRunner) InjectMessage(msg string) error {
+	return c.inner.InjectMessage(msg)
+}
+
 // promptCapturingRunner wraps a claude runner to capture the prompt.
 type promptCapturingRunner struct {
 	inner    claudeRunner
@@ -4028,6 +4039,10 @@ func (p *promptCapturingRunner) Run(cfg claude.RunConfig) (claude.Result, error)
 
 func (p *promptCapturingRunner) StopStreaming() {
 	p.inner.StopStreaming()
+}
+
+func (p *promptCapturingRunner) InjectMessage(msg string) error {
+	return p.inner.InjectMessage(msg)
 }
 
 // Verifies that push is called after signal detection. The sync guard
@@ -4069,7 +4084,7 @@ func TestLoop_PushCalledAfterSignal(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	pushCalled := false
-	l.pushPRFunc = func(context.Context, string, string) (string, error) {
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) {
 		pushCalled = true
 		return "", nil
 	}
@@ -4175,6 +4190,14 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 	}, st, gm, logger)
+	l.runner = &stubRunner{
+		onRun: func() {
+			backend.remaining = 0
+			backend.completed = 1
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	l.Run(context.Background())
 
@@ -4229,6 +4252,14 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 	}, st, gm, logger)
+	l.runner = &stubRunner{
+		onRun: func() {
+			backend.remaining = 0
+			backend.completed = 1
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	l.Run(context.Background())
 
@@ -4296,7 +4327,7 @@ func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
 	l.runner = runner
 
 	var pushCalls int
-	l.pushPRFunc = func(_ context.Context, taskID, taskDesc string) (string, error) {
+	l.pushPRFunc = func(_ context.Context, taskID, taskDesc, _ string) (string, error) {
 		pushCalls++
 		return "", nil
 	}
@@ -4362,7 +4393,7 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 	l.runner = runner
 
 	var pushCalls int
-	l.pushPRFunc = func(_ context.Context, taskID, taskDesc string) (string, error) {
+	l.pushPRFunc = func(_ context.Context, taskID, taskDesc, _ string) (string, error) {
 		pushCalls++
 		return "", nil
 	}
@@ -4428,7 +4459,7 @@ func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) { return "", nil }
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
 	var mergeCalls int
 	l.mergeFunc = func(context.Context) (bool, error) {
@@ -4494,7 +4525,7 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) { return "", nil }
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
 	var mergeCalls int
 	l.mergeFunc = func(context.Context) (bool, error) {
@@ -4561,7 +4592,7 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) { return "", nil }
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
 	var mergeCalls int
 	l.mergeFunc = func(context.Context) (bool, error) {
@@ -4624,7 +4655,7 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) { return "", nil }
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
 	var mergeCalls int
 	l.mergeFunc = func(context.Context) (bool, error) {
@@ -4689,7 +4720,7 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) { return "", nil }
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
 	var mergeCalls int
 	l.mergeFunc = func(context.Context) (bool, error) {
@@ -4753,7 +4784,7 @@ func TestLoop_SessionTasksRecordsCompletedWork(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
-	l.pushPRFunc = func(_ context.Context, _, _ string) (string, error) { return "", nil }
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -4844,6 +4875,8 @@ func (s *signalCallingRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
 
 func (s *signalCallingRunner) StopStreaming() {}
 
+func (s *signalCallingRunner) InjectMessage(_ string) error { return nil }
+
 // Verifies that LLM verification pass logs with green (Success) color
 // and LLM verification reject logs with red (Error) color.
 func TestLoop_LLMVerificationLogColors(t *testing.T) {
@@ -4926,7 +4959,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 			l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
 				return llmResult
 			}
-			l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+			l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 			// For rejection, stub out newRunnerFunc so fix agent doesn't launch real Claude
 			if !tt.passed {
@@ -5145,7 +5178,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		backend: backend,
 		counter: &iterationCount,
 	}
-	l.pushPRFunc = func(context.Context, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.mergeFunc = func(context.Context) (bool, error) { return false, nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
@@ -5195,6 +5228,8 @@ func (r *rateLimitStubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
 }
 
 func (r *rateLimitStubRunner) StopStreaming() {}
+
+func (r *rateLimitStubRunner) InjectMessage(_ string) error { return nil }
 
 // Health dashboard is logged between iterations so operators can detect
 // process leaks, stale signal files, and growing state.json.
@@ -5324,5 +5359,541 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 	output := logBuf.String()
 	if !strings.Contains(output, "Ralph v1.2.3") {
 		t.Errorf("expected 'Ralph v1.2.3' in iteration banner, got:\n%s", output)
+	}
+}
+
+// injectCapturingRunner records messages sent via InjectMessage so tests
+// can verify that onSignal injects feedback instead of spawning fix agents.
+type injectCapturingRunner struct {
+	onRun    func()
+	result   claude.Result
+	injected []string
+}
+
+func (r *injectCapturingRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
+	if r.onRun != nil {
+		r.onRun()
+	}
+	return r.result, nil
+}
+
+func (r *injectCapturingRunner) StopStreaming() {}
+
+func (r *injectCapturingRunner) InjectMessage(msg string) error {
+	r.injected = append(r.injected, msg)
+	return nil
+}
+
+// Verifies that when post-signal tests fail, the failure output is injected
+// to the running agent via stdin instead of spawning a separate fix agent.
+// The agent has full context of what it built and can fix its own work.
+func TestLoop_onSignal_InjectsTestFailures(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	// Create a Makefile with a failing test command so verify.RunTests
+	// detects a test runner and returns a failure.
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\t@echo 'FAIL: broken test' && exit 1\n"), 0o644)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Fix something",
+		nextID:    "ralph-test1",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	runner := &injectCapturingRunner{}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logger)
+	l.runner = runner
+
+	p := signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-test1",
+		nextTask:   "Fix something",
+	}
+
+	accepted := l.onSignal(p)
+
+	if accepted {
+		t.Error("onSignal should return false when tests fail (agent continues)")
+	}
+	if len(runner.injected) == 0 {
+		t.Fatal("expected test failure to be injected to agent via stdin")
+	}
+	if !strings.Contains(runner.injected[0], "Tests failed") {
+		t.Errorf("injected message should contain test failure info, got: %q", runner.injected[0])
+	}
+
+	output := logBuf.String()
+	if !strings.Contains(output, "injected to agent via stdin") {
+		t.Errorf("expected injection log message, got:\n%s", output)
+	}
+}
+
+// Verifies that when LLM verification rejects the agent's work, the rejection
+// feedback is injected to the running agent instead of spawning a fix agent.
+func TestLoop_onSignal_InjectsLLMRejection(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Add feature",
+		nextID:    "ralph-llm1",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	runner := &injectCapturingRunner{}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logger)
+	l.runner = runner
+
+	// Tests pass but LLM rejects.
+	l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+		return verify.Result{Passed: false, Details: "missing error handling in parseConfig"}
+	}
+
+	p := signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-llm1",
+		nextTask:   "Add feature",
+	}
+
+	accepted := l.onSignal(p)
+
+	if accepted {
+		t.Error("onSignal should return false when LLM rejects (agent continues)")
+	}
+	if len(runner.injected) == 0 {
+		t.Fatal("expected LLM rejection to be injected to agent via stdin")
+	}
+	if !strings.Contains(runner.injected[0], "missing error handling") {
+		t.Errorf("injected message should contain LLM feedback, got: %q", runner.injected[0])
+	}
+}
+
+// Verifies that when stdin injection fails, onSignal falls back to spawning
+// a fix agent — the old behavior provides a safety net.
+func TestLoop_onSignal_FallsBackToFixAgentOnBrokenPipe(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Fix bug",
+		nextID:    "ralph-fb1",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	// Runner that fails injection — simulates broken pipe.
+	brokenRunner := &injectFailRunner{
+		result: claude.Result{},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logger)
+	l.runner = brokenRunner
+
+	// Tests pass, LLM rejects, injection fails → should fall back to fix agent.
+	l.llmVerifyFunc = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+		return verify.Result{Passed: false, Details: "incomplete implementation"}
+	}
+
+	fixAgentCalled := false
+	l.newRunnerFunc = func() claudeRunner {
+		fixAgentCalled = true
+		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
+	}
+
+	p := signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-fb1",
+		nextTask:   "Fix bug",
+	}
+
+	l.onSignal(p)
+
+	if !fixAgentCalled {
+		t.Error("expected fix agent to be spawned as fallback when injection fails")
+	}
+}
+
+// injectFailRunner always fails InjectMessage to test fallback behavior.
+type injectFailRunner struct {
+	result claude.Result
+}
+
+func (r *injectFailRunner) Run(_ claude.RunConfig) (claude.Result, error) {
+	return r.result, nil
+}
+
+func (r *injectFailRunner) StopStreaming() {}
+
+func (r *injectFailRunner) InjectMessage(_ string) error {
+	return fmt.Errorf("broken pipe")
+}
+
+// Verifies that test fix attempts are tracked across onSignal calls and
+// the agent is not allowed infinite retries.
+func TestLoop_onSignal_TestFixAttemptsTracked(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	// Create a Makefile with a failing test command.
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\t@echo 'FAIL: broken' && exit 1\n"), 0o644)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Fix tests",
+		nextID:    "ralph-tr1",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+	runner := &injectCapturingRunner{}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logger)
+	l.runner = runner
+
+	p := signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-tr1",
+		nextTask:   "Fix tests",
+	}
+
+	// Call onSignal maxTestFixAttempts+1 times — the last should give up.
+	for i := 0; i <= 3; i++ {
+		l.onSignal(p)
+	}
+
+	// Should have injected 3 times (the max), then given up on the 4th.
+	if len(runner.injected) != 3 {
+		t.Errorf("expected 3 injections before giving up, got %d", len(runner.injected))
+	}
+}
+
+// buildPRBody assembles description, acceptance criteria, and agent summary
+// into a structured PR body when all context is available.
+func TestBuildPRBody_FullContext(t *testing.T) {
+	backend := &stubBackend{
+		description: "Fix the auth middleware to validate tokens",
+		acceptance:  "1. Tokens are validated\n2. Invalid tokens return 401",
+	}
+
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir}
+
+	l := New(Config{
+		Dirs:         workctx.WorkContext{RalphDir: ralphDir, PromptsDir: dir},
+		TaskBackend:  backend,
+		CallsPerHour: 80,
+	}, st, gm, logging.New(nil))
+
+	body := l.buildPRBody("ralph-abc", "Fixed auth middleware token validation")
+
+	if !strings.Contains(body, "## Description") {
+		t.Error("body should contain Description section")
+	}
+	if !strings.Contains(body, "Fix the auth middleware") {
+		t.Error("body should contain bead description")
+	}
+	if !strings.Contains(body, "## Acceptance Criteria") {
+		t.Error("body should contain Acceptance Criteria section")
+	}
+	if !strings.Contains(body, "Tokens are validated") {
+		t.Error("body should contain acceptance criteria content")
+	}
+	if !strings.Contains(body, "## Summary") {
+		t.Error("body should contain Summary section")
+	}
+	if !strings.Contains(body, "Fixed auth middleware") {
+		t.Error("body should contain agent summary")
+	}
+}
+
+// buildPRBody falls back to agent summary when bead has no description.
+func TestBuildPRBody_NoBeadDescription(t *testing.T) {
+	backend := &stubBackend{}
+
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir}
+
+	l := New(Config{
+		Dirs:         workctx.WorkContext{RalphDir: ralphDir, PromptsDir: dir},
+		TaskBackend:  backend,
+		CallsPerHour: 80,
+	}, st, gm, logging.New(nil))
+
+	body := l.buildPRBody("ralph-abc", "Implemented the feature")
+
+	if strings.Contains(body, "## Description") {
+		t.Error("body should not contain Description when bead has none")
+	}
+	if !strings.Contains(body, "## Summary") {
+		t.Error("body should contain Summary section as fallback")
+	}
+	if !strings.Contains(body, "Implemented the feature") {
+		t.Error("body should contain agent summary")
+	}
+}
+
+// buildPRBody returns empty string when no context is available at all.
+func TestBuildPRBody_NoContext(t *testing.T) {
+	backend := &stubBackend{}
+
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir}
+
+	l := New(Config{
+		Dirs:         workctx.WorkContext{RalphDir: ralphDir, PromptsDir: dir},
+		TaskBackend:  backend,
+		CallsPerHour: 80,
+	}, st, gm, logging.New(nil))
+
+	body := l.buildPRBody("", "")
+
+	if body != "" {
+		t.Errorf("body should be empty when no context is available, got %q", body)
+	}
+}
+
+// PR body must never contain the old generic "Automated PR for:" text.
+func TestBuildPRBody_NeverGeneric(t *testing.T) {
+	backend := &stubBackend{
+		description: "Some task description",
+	}
+
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir}
+
+	l := New(Config{
+		Dirs:         workctx.WorkContext{RalphDir: ralphDir, PromptsDir: dir},
+		TaskBackend:  backend,
+		CallsPerHour: 80,
+	}, st, gm, logging.New(nil))
+
+	body := l.buildPRBody("ralph-abc", "completed task")
+
+	if strings.Contains(body, "Automated PR for") {
+		t.Error("body must not contain generic 'Automated PR for' text")
+	}
+	if strings.Contains(body, "Generated by ralph") {
+		t.Error("body must not contain generic 'Generated by ralph' text")
+	}
+}
+
+// metadataBackend extends stubBackend with SetMetadata/GetMetadata tracking.
+type metadataBackend struct {
+	stubBackend
+	metadata map[string]map[string]string // id -> key -> value
+}
+
+func newMetadataBackend() *metadataBackend {
+	return &metadataBackend{
+		metadata: make(map[string]map[string]string),
+	}
+}
+
+func (m *metadataBackend) SetMetadata(id, key, value string) error {
+	if m.metadata[id] == nil {
+		m.metadata[id] = make(map[string]string)
+	}
+	m.metadata[id][key] = value
+	return nil
+}
+
+func (m *metadataBackend) GetMetadata(id, key string) (string, error) {
+	if m.metadata[id] == nil {
+		return "", nil
+	}
+	return m.metadata[id][key], nil
+}
+
+// Branch name is stored in bead metadata after rename, proving the loop
+// persists the branch-to-bead mapping for future resume.
+func TestLoop_StoresBranchInMetadata(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := newMetadataBackend()
+	backend.remaining = 1
+	backend.total = 1
+	backend.nextTask = "Fix auth bug"
+	backend.nextID = "ralph-abc"
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{}
+
+	_ = l.Run(context.Background())
+
+	branch, _ := backend.GetMetadata("ralph-abc", "branch")
+	if branch == "" {
+		t.Fatal("expected branch to be stored in metadata")
+	}
+	if !strings.Contains(branch, "ralph-abc") {
+		t.Errorf("metadata branch %q should contain task ID", branch)
+	}
+	if !strings.Contains(branch, "fix-auth-bug") {
+		t.Errorf("metadata branch %q should contain slug", branch)
+	}
+}
+
+// Branch name format uses beadID-slug without sequence number,
+// proving the old TaskSeq pattern has been removed.
+func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := newMetadataBackend()
+	backend.remaining = 1
+	backend.total = 1
+	backend.nextTask = "Fix login flow"
+	backend.nextID = "ralph-xyz"
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{}
+
+	_ = l.Run(context.Background())
+
+	// Branch should be ralph/<project>/ralph-xyz-fix-login-flow (no 01- prefix)
+	wantSuffix := "ralph-xyz-fix-login-flow"
+	if !strings.HasSuffix(gm.WorktreeBranch, wantSuffix) {
+		t.Errorf("branch %q should end with %q (no sequence number)", gm.WorktreeBranch, wantSuffix)
+	}
+	// Must NOT contain a sequence number like /01- or /02-
+	if matched := strings.Contains(gm.WorktreeBranch, "/01-") || strings.Contains(gm.WorktreeBranch, "/02-"); matched {
+		t.Errorf("branch %q must not contain sequence number prefix", gm.WorktreeBranch)
 	}
 }
