@@ -484,27 +484,17 @@ func TestSkippedTasks_RoundTrip(t *testing.T) {
 	}
 }
 
-// Proves: AddCompletedTask persists task records with ID, title, PR number,
-// and close reason — enabling ralph-task to verify tasks weren't falsely closed.
+// Proves: AddCompletedTask persists task IDs — enabling ralph-task to verify
+// tasks weren't falsely closed.
 func TestCompletedTasks_AddAndRetrieve(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 	st.Init(5)
 
-	if err := st.AddCompletedTask(CompletedTask{
-		ID:          "ralph-abc",
-		Title:       "fix the widget",
-		PRNumber:    "42",
-		CloseReason: "Fixed in PR #42",
-	}); err != nil {
+	if err := st.AddCompletedTask("ralph-abc"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddCompletedTask(CompletedTask{
-		ID:          "ralph-def",
-		Title:       "add tests",
-		PRNumber:    "43",
-		CloseReason: "Fixed in PR #43",
-	}); err != nil {
+	if err := st.AddCompletedTask("ralph-def"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -515,11 +505,11 @@ func TestCompletedTasks_AddAndRetrieve(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Fatalf("expected 2 completed tasks, got %d", len(tasks))
 	}
-	if tasks[0].ID != "ralph-abc" || tasks[0].PRNumber != "42" {
-		t.Errorf("first task = %+v, want ID=ralph-abc PRNumber=42", tasks[0])
+	if tasks[0] != "ralph-abc" {
+		t.Errorf("first task = %q, want ralph-abc", tasks[0])
 	}
-	if tasks[1].ID != "ralph-def" || tasks[1].CloseReason != "Fixed in PR #43" {
-		t.Errorf("second task = %+v, want ID=ralph-def", tasks[1])
+	if tasks[1] != "ralph-def" {
+		t.Errorf("second task = %q, want ralph-def", tasks[1])
 	}
 }
 
@@ -529,8 +519,8 @@ func TestCompletedTasks_Clear(t *testing.T) {
 	st := NewStore(dir)
 	st.Init(5)
 
-	st.AddCompletedTask(CompletedTask{ID: "ralph-abc"})
-	st.AddCompletedTask(CompletedTask{ID: "ralph-def"})
+	st.AddCompletedTask("ralph-abc")
+	st.AddCompletedTask("ralph-def")
 
 	if err := st.ClearCompletedTasks(); err != nil {
 		t.Fatal(err)
@@ -556,12 +546,9 @@ func TestCompletedTasks_RoundTrip(t *testing.T) {
 	st := NewStore(dir)
 
 	s := State{
-		Iteration: 5,
-		Status:    "running",
-		CompletedTasks: []CompletedTask{
-			{ID: "ralph-x", Title: "task x", PRNumber: "10", CloseReason: "Fixed in PR #10"},
-			{ID: "ralph-y", Title: "task y", PRNumber: "11", CloseReason: "Fixed in PR #11"},
-		},
+		Iteration:      5,
+		Status:         "running",
+		CompletedTasks: []string{"ralph-x", "ralph-y"},
 	}
 	if err := st.Save(s); err != nil {
 		t.Fatal(err)
@@ -574,7 +561,38 @@ func TestCompletedTasks_RoundTrip(t *testing.T) {
 	if len(loaded.CompletedTasks) != 2 {
 		t.Fatalf("expected 2, got %d", len(loaded.CompletedTasks))
 	}
-	if loaded.CompletedTasks[0].ID != "ralph-x" || loaded.CompletedTasks[1].PRNumber != "11" {
+	if loaded.CompletedTasks[0] != "ralph-x" || loaded.CompletedTasks[1] != "ralph-y" {
 		t.Errorf("unexpected: %+v", loaded.CompletedTasks)
+	}
+}
+
+// Proves: old-format completed_tasks (array of objects) is migrated to ID-only
+// strings on load, so existing state.json files don't break after the upgrade.
+func TestCompletedTasks_MigrateOldFormat(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+
+	oldJSON := `{
+  "iteration": 3,
+  "status": "running",
+  "completed_tasks": [
+    {"id": "ralph-abc", "title": "fix widget", "pr_number": "42", "close_reason": "Fixed in PR #42"},
+    {"id": "ralph-def", "title": "add tests", "pr_number": "43", "close_reason": "Fixed in PR #43"}
+  ]
+}`
+	os.WriteFile(filepath.Join(dir, "state.json"), []byte(oldJSON), 0o644)
+
+	loaded, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.CompletedTasks) != 2 {
+		t.Fatalf("expected 2 migrated tasks, got %d", len(loaded.CompletedTasks))
+	}
+	if loaded.CompletedTasks[0] != "ralph-abc" {
+		t.Errorf("first migrated task = %q, want ralph-abc", loaded.CompletedTasks[0])
+	}
+	if loaded.CompletedTasks[1] != "ralph-def" {
+		t.Errorf("second migrated task = %q, want ralph-def", loaded.CompletedTasks[1])
 	}
 }

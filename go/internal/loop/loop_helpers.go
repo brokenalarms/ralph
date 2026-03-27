@@ -566,7 +566,7 @@ func (l *Loop) setStackHead() {
 
 	// Walk backwards to find the most recent unmerged PR.
 	for i := len(tasks) - 1; i >= 0; i-- {
-		id := tasks[i].ID
+		id := tasks[i]
 		if id == "" {
 			continue
 		}
@@ -599,19 +599,13 @@ func (l *Loop) setStackHead() {
 	// All completed tasks merged — start from default branch.
 }
 
-// persistCompletedTask writes a completed task record to state.json so
+// persistCompletedTask writes a completed task ID to state.json so
 // ralph-task can verify tasks weren't falsely closed.
-func persistCompletedTask(st *state.Store, logger *logging.Logger, taskID, title, prNumber, closeReason string) {
-	if taskID == "" && title == "" {
+func persistCompletedTask(st *state.Store, logger *logging.Logger, taskID string) {
+	if taskID == "" {
 		return
 	}
-	ct := state.CompletedTask{
-		ID:          taskID,
-		Title:       title,
-		PRNumber:    prNumber,
-		CloseReason: closeReason,
-	}
-	if err := st.AddCompletedTask(ct); err != nil {
+	if err := st.AddCompletedTask(taskID); err != nil {
 		logger.Warn("state", "AddCompletedTask: %v", err)
 	}
 }
