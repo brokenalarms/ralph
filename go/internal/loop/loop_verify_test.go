@@ -32,7 +32,7 @@ func TestOnSignal_HappyPath(t *testing.T) {
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
-	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: true, Reason: "looks good"}
 	}
 	l.verifyFunc = func(ctx context.Context, dir, headBefore string) (bool, string) {
@@ -72,7 +72,7 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	l.verifier.deps.Runner = func() claudeRunner { return &injectCapturingRunner{} }
 
 	llmCalls := 0
-	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 		llmCalls++
 		return verify.Result{Passed: false, Details: "diff doesn't match bead"}
 	}
@@ -122,11 +122,9 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 
 	var modelsUsed []string
 	llmCalls := 0
-	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 		llmCalls++
-		if len(model) > 0 {
-			modelsUsed = append(modelsUsed, model[0])
-		}
+		modelsUsed = append(modelsUsed, opts.Model)
 		if llmCalls <= 2 {
 			return verify.Result{Passed: false, Details: "needs work"}
 		}
@@ -183,10 +181,8 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 	l.verifier.deps.Runner = func() claudeRunner { return &injectCapturingRunner{} }
 
 	var modelsUsed []string
-	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
-		if len(model) > 0 {
-			modelsUsed = append(modelsUsed, model[0])
-		}
+	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+		modelsUsed = append(modelsUsed, opts.Model)
 		if len(modelsUsed) < 3 {
 			return verify.Result{Passed: false, Details: "needs work"}
 		}
@@ -238,7 +234,7 @@ func TestOnSignal_LLMReject_PassesOnRetry(t *testing.T) {
 	l.verifier.deps.Runner = func() claudeRunner { return &injectCapturingRunner{} }
 
 	llmCalls := 0
-	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 		llmCalls++
 		if llmCalls == 1 {
 			return verify.Result{Passed: false, Details: "missing error handling"}
@@ -286,7 +282,7 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_StopsLoop(t *testing.T) {
 	l.verifier.deps.Runner = func() claudeRunner { return &injectFailRunner{result: claude.Result{}} }
 
 	llmCalls := 0
-	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 		llmCalls++
 		return verify.Result{Passed: false, Details: "bad code"}
 	}
@@ -329,7 +325,7 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 		VerifyLevel:   "fire",
 	}, st, gm, logger)
 
-	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
 	}
 
@@ -372,7 +368,7 @@ func TestOnSignal_HogMode_NoDiffSpawnsVerifier_Passes(t *testing.T) {
 		VerifyLevel:   "hog",
 	}, st, gm, logger)
 
-	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
 	}
 
@@ -417,7 +413,7 @@ func TestOnSignal_HogMode_NoDiffVerifierRejects(t *testing.T) {
 		VerifyLevel:   "hog",
 	}, st, gm, logger)
 
-	l.verifier.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
 	}
 

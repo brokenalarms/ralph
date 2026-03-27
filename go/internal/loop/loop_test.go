@@ -4985,7 +4985,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				VerifyDir:     dir,
 			}, st, gm, logger)
 			l.runner = runner
-			l.verifier.deps.LLMVerify = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+			l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 				return llmResult
 			}
 			l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
@@ -4998,7 +4998,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				// After fix agent, re-verification will call llmVerifyFunc again;
 				// make it pass on second call to avoid skip-task path
 				callCount := 0
-				l.verifier.deps.LLMVerify = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+				l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 					callCount++
 					if callCount == 1 {
 						return llmResult
@@ -5210,7 +5210,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.mergeFunc = func(context.Context) (bool, error) { return false, nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.verifier.deps.LLMVerify = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: true}
 	}
 
@@ -5516,7 +5516,7 @@ func TestLoop_onSignal_InjectsLLMRejection(t *testing.T) {
 	l.runner = runner
 
 	// Tests pass but LLM rejects.
-	l.verifier.deps.LLMVerify = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: false, Details: "missing error handling in parseConfig"}
 	}
 
@@ -5580,7 +5580,7 @@ func TestLoop_onSignal_FallsBackToFixAgentOnBrokenPipe(t *testing.T) {
 	l.runner = brokenRunner
 
 	// Tests pass, LLM rejects, injection fails → should fall back to fix agent.
-	l.verifier.deps.LLMVerify = func(context.Context, verify.GitQuerier, string, string, string, string, string, string, string, git.GitHub, verify.QueryFunc, ...string) verify.Result {
+	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: false, Details: "incomplete implementation"}
 	}
 

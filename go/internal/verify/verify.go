@@ -191,17 +191,32 @@ func PreflightChecks(gq GitQuerier, headBefore string, beadStatus string) Prefli
 	}
 }
 
+// VerifyOpts holds the parameters for LLMVerifyPR.
+type VerifyOpts struct {
+	Ctx             context.Context
+	Git             GitQuerier
+	WorkDir         string
+	PromptsDir      string
+	TaskID          string
+	HeadBefore      string
+	BeadTitle       string
+	BeadDescription string
+	BeadAcceptance  string
+	GitHub          git.GitHub
+	QueryFn         QueryFunc
+	Model           string
+}
 
 // LLMVerifyPR verifies that a task's acceptance criteria are satisfied.
 // Prefers the PR diff (which covers work from prior iterations) over the
 // current iteration's diff. Falls back to iteration diff when no PR exists.
 // Uses prompts/verify-review.md as the review template when available.
-// When queryFn is non-nil, LLM calls go through the centralized agent module.
-func LLMVerifyPR(ctx context.Context, gq GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn QueryFunc, model ...string) Result {
-	diff := getPRDiff(ctx, workDir, taskID, gh)
+// When QueryFn is non-nil, LLM calls go through the centralized agent module.
+func LLMVerifyPR(opts VerifyOpts) Result {
+	diff := getPRDiff(opts.Ctx, opts.WorkDir, opts.TaskID, opts.GitHub)
 	source := "PR"
 	if diff == "" {
-		diff = gq.DiffFull(headBefore, "HEAD")
+		diff = opts.Git.DiffFull(opts.HeadBefore, "HEAD")
 		if diff == "" {
 			return Result{Passed: true, NoDiff: true, Reason: "no PR found and no new commits — agent confirms task complete"}
 		}
@@ -212,8 +227,12 @@ func LLMVerifyPR(ctx context.Context, gq GitQuerier, workDir, promptsDir, taskID
 		diff = diff[:100000] + "\n\n[diff truncated at 100000 chars]"
 	}
 
-	prompt := loadReviewPrompt(promptsDir, beadTitle, beadDescription, beadAcceptance, source, diff)
-	return callLLM(ctx, workDir, prompt, queryFn, model...)
+	prompt := loadReviewPrompt(opts.PromptsDir, opts.BeadTitle, opts.BeadDescription, opts.BeadAcceptance, source, diff)
+	var model []string
+	if opts.Model != "" {
+		model = []string{opts.Model}
+	}
+	return callLLM(opts.Ctx, opts.WorkDir, prompt, opts.QueryFn, model...)
 }
 
 func loadReviewPrompt(promptsDir, beadTitle, beadDescription, beadAcceptance, source, diff string) string {
@@ -299,7 +318,6 @@ func callLLM(ctx context.Context, workDir, prompt string, queryFn QueryFunc, mod
 
 	return Result{Passed: true, Reason: "LLM verified: " + response}
 }
-
 
 func lastNLines(s string, n int) string {
 	lines := strings.Split(s, "\n")

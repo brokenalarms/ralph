@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/verify"
@@ -49,7 +48,7 @@ func newTestVerifier(t *testing.T, opts ...func(*Verifier)) *Verifier {
 		Runner:      func() claudeRunner { return &injectCapturingRunner{} },
 		Signals:     claude.DefaultSignalPaths(ralphDir),
 		NewRunner:   func() claudeRunner { return &stubRunner{result: stubResult(false, "")} },
-		LLMVerify: func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+		LLMVerify: func(opts verify.VerifyOpts) verify.Result {
 			return verify.Result{Passed: true, Reason: "looks good"}
 		},
 		SkipTask: func(id, reason string) {},
@@ -92,7 +91,7 @@ func TestVerifier_OnSignal_HappyPath(t *testing.T) {
 func TestVerifier_OnSignal_LLMExhaustsRetries_SkipsTask(t *testing.T) {
 	var skippedID string
 	v := newTestVerifier(t, func(v *Verifier) {
-		v.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 			return verify.Result{Passed: false, Details: "diff doesn't match bead"}
 		}
 		v.deps.SkipTask = func(id, reason string) { skippedID = id }
@@ -122,11 +121,9 @@ func TestVerifier_ModelEscalation(t *testing.T) {
 	llmCalls := 0
 
 	v := newTestVerifier(t, func(v *Verifier) {
-		v.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 			llmCalls++
-			if len(model) > 0 {
-				modelsUsed = append(modelsUsed, model[0])
-			}
+			modelsUsed = append(modelsUsed, opts.Model)
 			if llmCalls <= 2 {
 				return verify.Result{Passed: false, Details: "needs work"}
 			}
@@ -175,7 +172,7 @@ func TestVerifier_HogMode_SpawnsVerifier(t *testing.T) {
 
 	v := newTestVerifier(t, func(v *Verifier) {
 		v.cfg.VerifyLevel = "hog"
-		v.deps.LLMVerify = func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result {
+		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 			return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
 		}
 		v.deps.NewRunner = func() claudeRunner {

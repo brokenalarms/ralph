@@ -41,7 +41,7 @@ type VerifierDeps struct {
 	Signals     claude.SignalPaths
 	NewRunner   func() claudeRunner // creates a new runner for fix agents
 	QueryFn     verify.QueryFunc
-	LLMVerify   func(ctx context.Context, gq verify.GitQuerier, workDir, promptsDir, taskID, headBefore, beadTitle, beadDescription, beadAcceptance string, gh git.GitHub, queryFn verify.QueryFunc, model ...string) verify.Result
+	LLMVerify   func(opts verify.VerifyOpts) verify.Result
 	SkipTask    func(id, reason string)
 }
 
@@ -116,7 +116,20 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 	v.llmVerifyAttempts++
 	model := v.verifyModel()
 	v.deps.Logger.Log("llm", "Running LLM verification (attempt %d/%d, %s)...", v.llmVerifyAttempts, maxLLMVerifyAttempts, verify.ModelShortName(model))
-	llmResult := v.deps.LLMVerify(p.ctx, v.deps.Git, p.workDir, v.cfg.PromptsDir, p.taskID, p.headBefore, p.nextTask, beadDesc, beadAcceptance, v.deps.GitHub, v.deps.QueryFn, model)
+	llmResult := v.deps.LLMVerify(verify.VerifyOpts{
+		Ctx:             p.ctx,
+		Git:             v.deps.Git,
+		WorkDir:         p.workDir,
+		PromptsDir:      v.cfg.PromptsDir,
+		TaskID:          p.taskID,
+		HeadBefore:      p.headBefore,
+		BeadTitle:       p.nextTask,
+		BeadDescription: beadDesc,
+		BeadAcceptance:  beadAcceptance,
+		GitHub:          v.deps.GitHub,
+		QueryFn:         v.deps.QueryFn,
+		Model:           model,
+	})
 
 	if llmResult.Passed && llmResult.NoDiff && v.cfg.VerifyLevel == "hog" {
 		v.deps.Logger.Log("llm", "No diff detected — spawning codebase verification agent (hog mode)")
