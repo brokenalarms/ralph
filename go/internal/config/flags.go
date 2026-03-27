@@ -324,6 +324,17 @@ var Flags = []FlagDef{
 		},
 	},
 	{
+		Long: "--post-task", MetaVar: "<script>",
+		Help:      "Run external script after each task completes",
+		ConfigKey: "post_task",
+		Kind:      KindString, TrackCLI: true,
+		Apply: func(cfg *Config, val string) error {
+			cfg.PostTask = val
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.PostTask },
+	},
+	{
 		Long: "--post-signal-timeout", MetaVar: "<dur>",
 		Help:      "Timeout for post-signal operations (verification, push, merge)", Default: "15m",
 		EnvVar:    "RALPH_POST_SIGNAL_TIMEOUT",
