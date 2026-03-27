@@ -275,10 +275,20 @@ func (l *Loop) checkoutExistingBranch(taskID, nextTask string) bool {
 	if storedBranch != "" {
 		_ = l.git.FetchBranch(storedBranch)
 		if l.git.RemoteBranchHasCommits(storedBranch) {
-			l.git.CheckoutRemoteBranch(storedBranch)
-			return true
+			if l.git.RemoteBranchRebasesCleanly(storedBranch) {
+				l.git.CheckoutRemoteBranch(storedBranch)
+				return true
+			}
+			// Stale branch diverged from main. If no open PR, clean it up.
+			l.logger.Warn("git", "Remote branch %s diverged from main — cleaning up", storedBranch)
+			ref, _ := l.cfg.TaskBackend.GetExternalRef(taskID)
+			if parsePRNumber(ref) == "" {
+				if err := l.git.DeleteRemoteBranchByName(storedBranch); err != nil {
+					l.logger.Warn("git", "Failed to delete stale remote branch: %v", err)
+				}
+			}
 		}
-		// Remote has no work but bead knows the branch name — reuse it.
+		// Reuse the branch name locally, starting from main.
 		l.git.RenameBranchTo(storedBranch)
 		return false
 	}

@@ -164,6 +164,29 @@ func (m *Manager) RemoteBranchHasCommits(branch string) bool {
 	return count != "" && count != "0"
 }
 
+// RemoteBranchRebasesCleanly checks whether a remote branch's commits
+// can land on current main without conflicts. Returns true if main is
+// an ancestor (clean fast-forward) or if the branch is already on main.
+// Returns false if the histories have diverged, meaning a rebase would
+// risk conflicts — caller should start fresh instead.
+func (m *Manager) RemoteBranchRebasesCleanly(branch string) bool {
+	defaultBranch := m.detectDefaultBranch()
+	remote := "origin/" + branch
+
+	// Main is ancestor of branch — clean fast-forward, no conflicts possible.
+	if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, remote) == nil {
+		return true
+	}
+
+	// Branch is ancestor of main — work already on main.
+	if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", remote, "origin/"+defaultBranch) == nil {
+		return true
+	}
+
+	// Diverged — don't risk conflicts.
+	return false
+}
+
 func (m *Manager) mRebaseInProgress() bool {
 	gitDir := m.gitOutput(m.WorkDir, "rev-parse", "--git-dir")
 	if gitDir == "" {

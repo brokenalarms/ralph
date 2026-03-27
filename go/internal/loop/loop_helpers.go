@@ -195,6 +195,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 		// Work is done — the PR exists. Close the bead regardless of merge outcome.
 		if taskID != "" {
 			l.attempts.ClearMergeFailures(taskID)
+			_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", "ralph: PR exists")
 			if err := l.cfg.TaskBackend.CloseTask(taskID, fmt.Sprintf("Fixed in PR #%s", prNumber)); err != nil {
 				l.logger.Warn("beads", "CloseTask failed: %v", err)
 			} else {
