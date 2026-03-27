@@ -182,50 +182,23 @@ func TestToolBatcher_FlushEmpty(t *testing.T) {
 	}
 }
 
-// Non-verbose mode suppresses verbose-only tools (Bash, Read, Write, Grep, Glob,
-// ToolSearch, TodoWrite) while still passing through Edit, Agent, and prose.
+// Non-verbose mode suppresses all VerboseOnlyTools while passing through
+// visible tools and prose. Derives expectations from the definition rather
+// than hardcoding tool names.
 func TestToolBatcher_NonVerboseHidesVerboseOnlyTools(t *testing.T) {
 	b := NewToolBatcher(5*time.Second, "")
 	b.SetVerbose(false)
 
-	// Verbose-only tools should be suppressed.
-	out := b.ProcessLine("[Read] /path/file.go")
-	if len(out) != 0 {
-		t.Errorf("Read should be suppressed in non-verbose mode, got %v", out)
-	}
-	out = b.ProcessLine("[Bash] go test ./...")
-	if len(out) != 0 {
-		t.Errorf("Bash should be suppressed in non-verbose mode, got %v", out)
-	}
-	out = b.ProcessLine("[Write] /path/file.go")
-	if len(out) != 0 {
-		t.Errorf("Write should be suppressed in non-verbose mode, got %v", out)
-	}
-	out = b.ProcessLine("[Grep] pattern")
-	if len(out) != 0 {
-		t.Errorf("Grep should be suppressed in non-verbose mode, got %v", out)
-	}
-	out = b.ProcessLine("[Glob] **/*.go")
-	if len(out) != 0 {
-		t.Errorf("Glob should be suppressed in non-verbose mode, got %v", out)
-	}
-	out = b.ProcessLine("[ToolSearch] some query")
-	if len(out) != 0 {
-		t.Errorf("ToolSearch should be suppressed in non-verbose mode, got %v", out)
-	}
-	out = b.ProcessLine("[TodoWrite] task list")
-	if len(out) != 0 {
-		t.Errorf("TodoWrite should be suppressed in non-verbose mode, got %v", out)
+	// Every tool in VerboseOnlyTools should be suppressed.
+	for tool := range VerboseOnlyTools {
+		out := b.ProcessLine("[" + tool + "] /path/arg")
+		if len(out) != 0 {
+			t.Errorf("%s should be suppressed in non-verbose mode, got %v", tool, out)
+		}
 	}
 
-	// Edit is now verbose-only too.
-	out = b.ProcessLine("[Edit] /path/file.go")
-	if len(out) != 0 {
-		t.Errorf("Edit should be suppressed in non-verbose mode, got %v", out)
-	}
-
-	// Agent should pass through.
-	out = b.ProcessLine("[Agent] exploring codebase")
+	// Agent is not verbose-only — should pass through.
+	out := b.ProcessLine("[Agent] exploring codebase")
 	if len(out) != 1 {
 		t.Fatalf("Agent should pass through in non-verbose mode, got %d lines", len(out))
 	}
@@ -308,19 +281,27 @@ func TestToolBatcher_VerboseShowsEverything(t *testing.T) {
 	}
 }
 
-// Adding or removing a tool from VerboseOnlyTools is a one-line change —
-// verified by checking the set's contents against expected tools.
-func TestVerboseOnlyTools_SingleDefinitionPoint(t *testing.T) {
-	expected := []string{"Bash", "Read", "Write", "Grep", "Glob", "ToolSearch", "TodoWrite"}
-	for _, tool := range expected {
-		if !VerboseOnlyTools[tool] {
-			t.Errorf("%s should be in VerboseOnlyTools", tool)
+// The VerboseOnlyTools set is the single source of truth for which tools are
+// hidden from the stream log by default. This test locks the exact membership
+// so any addition or removal is caught.
+func TestVerboseOnlyTools_ExactMembership(t *testing.T) {
+	expected := map[string]bool{
+		"Bash": true, "Edit": true, "Read": true, "Write": true,
+		"Grep": true, "Glob": true, "ToolSearch": true, "TodoWrite": true,
+	}
+	for tool := range expected {
+		if !IsVerboseOnlyTool(tool) {
+			t.Errorf("%s should be verbose-only", tool)
 		}
 	}
-	notExpected := []string{"Agent"}
-	for _, tool := range notExpected {
-		if VerboseOnlyTools[tool] {
-			t.Errorf("%s should NOT be in VerboseOnlyTools", tool)
+	if len(VerboseOnlyTools) != len(expected) {
+		t.Errorf("VerboseOnlyTools has %d entries, expected %d — update this test when adding/removing tools",
+			len(VerboseOnlyTools), len(expected))
+	}
+	visible := []string{"Agent"}
+	for _, tool := range visible {
+		if IsVerboseOnlyTool(tool) {
+			t.Errorf("%s should NOT be verbose-only", tool)
 		}
 	}
 }

@@ -164,6 +164,13 @@ var VerboseOnlyTools = map[string]bool{
 // toolNameRe extracts the tool name from a bracketed tool line like "[Read] foo".
 var toolNameRe = regexp.MustCompile(`^\[([A-Za-z]+)\]`)
 
+// IsVerboseOnlyTool returns true if the named tool is hidden from the stream
+// log by default (only shown with --verbose). This is the single entry point
+// for tool visibility checks — both StreamFormatter and ToolBatcher use it.
+func IsVerboseOnlyTool(name string) bool {
+	return VerboseOnlyTools[name]
+}
+
 // isVerboseOnlyLine returns true if the line is a tool call for a verbose-only
 // tool. Non-tool lines (prose, diagnosis) always return false.
 func isVerboseOnlyLine(text string) bool {
@@ -171,7 +178,7 @@ func isVerboseOnlyLine(text string) bool {
 	if m == nil {
 		return false
 	}
-	return VerboseOnlyTools[m[1]]
+	return IsVerboseOnlyTool(m[1])
 }
 
 // colorTags applies ANSI color to bracketed tags like [r] or [Edit].
