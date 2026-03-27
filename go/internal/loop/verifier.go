@@ -101,10 +101,10 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 
 		msg := fmt.Sprintf("Tests failed after your completion signal. Fix these failures and signal completion again.\n\nTest output:\n%s", testResult.Details)
 		if err := v.deps.Runner().InjectMessage(msg); err != nil {
-			v.deps.Logger.Warn("test", "Stdin injection failed (%v) — falling back to fix agent", err)
-			return v.fallbackFixTestFailures(p, testResult.Details)
+			v.deps.Logger.Warn("test", "Stdin injection failed (%v) — agent may have exited", err)
+		} else {
+			v.deps.Logger.Log("test", "Test failure output injected to agent via stdin")
 		}
-		v.deps.Logger.Log("test", "Test failure output injected to agent via stdin")
 		return false
 	}
 
@@ -155,10 +155,10 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 
 	msg := fmt.Sprintf("LLM verification rejected your work. Fix the issues and signal completion again.\n\nFeedback:\n%s", llmResult.Details)
 	if err := v.deps.Runner().InjectMessage(msg); err != nil {
-		v.deps.Logger.Warn("llm", "Stdin injection failed (%v) — falling back to fix agent", err)
-		return v.fallbackFixLLMRejection(p, beadDesc, llmResult.Details)
+		v.deps.Logger.Warn("llm", "Stdin injection failed (%v) — agent may have exited", err)
+	} else {
+		v.deps.Logger.Log("llm", "LLM feedback injected to agent via stdin")
 	}
-	v.deps.Logger.Log("llm", "LLM feedback injected to agent via stdin")
 	return false
 }
 
@@ -246,7 +246,10 @@ func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 	return msg
 }
 
-// TryFixCI spawns a fix agent to address CI failures.
+// TryFixCI spawns a fix agent to address post-merge CI failures. Unlike
+// post-signal failures (which inject feedback to the still-running main
+// agent via stdin), CI failures happen after the main agent has exited
+// and the PR has been pushed — a separate fix agent is required.
 func (v *Verifier) TryFixCI(ctx context.Context, ciLog string, ciErr *git.CIFailureError, nextTask string, workDir, rawLogPath string) bool {
 	v.deps.Logger.Log("ci", "CI failed on PR #%s — spawning fix agent", ciErr.PRNumber)
 
@@ -260,51 +263,6 @@ func (v *Verifier) TryFixCI(ctx context.Context, ciLog string, ciErr *git.CIFail
 
 	fixResult := v.runFixAgent(ctx, "CI failures", fixPrompt, workDir, rawLogPath)
 	return fixResult.SignalDetected
-}
-
-func (v *Verifier) fallbackFixTestFailures(p signalParams, testOutput string) bool {
-	beadDesc := v.getBeadDescription(p.taskID)
-	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
-	verifyPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{
-		"{{TASK_TITLE}}":       p.nextTask,
-		"{{TASK_DESCRIPTION}}": beadDesc,
-		"{{TEST_OUTPUT}}":      testOutput,
-		"{{SIGNAL_COMPLETE}}":  signalPath,
-	})
-
-	verifyResult := v.runFixAgent(p.ctx, "test failures", verifyPrompt, p.workDir, p.rawLogPath)
-	if !verifyResult.SignalDetected {
-		return false
-	}
-
-	retest := verify.RunTests(p.ctx, v.cfg.VerifyDir)
-	if !retest.Passed {
-		v.deps.Logger.Error("test", "Tests still failing after fix agent: %s", retest.Reason)
-		return false
-	}
-	return true
-}
-
-func (v *Verifier) fallbackFixLLMRejection(p signalParams, beadDesc, llmFeedback string) bool {
-	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
-	fixPrompt := v.loadVerifyPrompt("verify-llm.md", map[string]string{
-		"{{TASK_TITLE}}":       p.nextTask,
-		"{{TASK_DESCRIPTION}}": beadDesc,
-		"{{LLM_FEEDBACK}}":     llmFeedback,
-		"{{SIGNAL_COMPLETE}}":  signalPath,
-	})
-
-	fixResult := v.runFixAgent(p.ctx, "LLM feedback", fixPrompt, p.workDir, p.rawLogPath)
-	if !fixResult.SignalDetected {
-		return false
-	}
-
-	testResult := verify.RunTests(p.ctx, v.cfg.VerifyDir)
-	if !testResult.Passed {
-		v.deps.Logger.Error("test", "Tests failed after LLM fix agent: %s", testResult.Reason)
-		return false
-	}
-	return true
 }
 
 func (v *Verifier) verifyFeatureExists(p signalParams, beadDesc string) bool {
