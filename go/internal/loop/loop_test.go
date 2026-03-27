@@ -1962,7 +1962,7 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 	}
 }
 
-// Verifies that PostMergeReset actually resets the worktree branch to
+// Verifies that PostMergeUpdateMain resets the worktree branch to
 // origin/main between tasks using a real git worktree, proving each task
 // starts from merged main rather than building on stale commits.
 func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
@@ -2050,7 +2050,7 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 }
 
 // Verifies the full post-merge branch rename cycle: task A merges →
-// PostMergeReset resets to /next → next iteration renames to thematic
+// PostMergeUpdateMain resets to /next → next iteration renames to thematic
 // branch for task B. Proves each successive task gets its own descriptively
 // named branch even after the previous one is squash-merged.
 func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {

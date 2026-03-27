@@ -168,6 +168,45 @@ func TestPostMergeUpdate_TwoStepLeavesStaleIndex(t *testing.T) {
 	}
 }
 
+// PostMergeUpdateMain logs "Reset worktree to latest <branch>" — not
+// "Force-reset" or other force language — so normal operation logs are clear.
+func TestPostMergeUpdateMain_LogSaysResetWorktreeToLatest(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+	log := &testLog{}
+
+	mgr := &Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     log,
+	}
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Push a commit to origin/main so PostMergeUpdateMain has work to do
+	bare := filepath.Join(filepath.Dir(project), "bare.git")
+	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
+	run(t, "git", "clone", bare, tmpClone)
+	writeFile(t, tmpClone, "new-file.txt", "content\n")
+	run(t, "git", "-C", tmpClone, "commit", "-m", "merged PR")
+	run(t, "git", "-C", tmpClone, "push", "origin", "main")
+
+	mgr.PostMergeUpdateMain()
+
+	if !log.contains("Reset worktree to latest main") {
+		t.Errorf("expected log to contain 'Reset worktree to latest main', got: %v", log.messages)
+	}
+	for _, msg := range log.messages {
+		lower := strings.ToLower(msg)
+		if strings.Contains(lower, "force") && !strings.Contains(lower, "enforce") {
+			t.Errorf("log should not contain 'force' language in normal operation, got: %q", msg)
+		}
+	}
+}
+
 // nwoFromRemote must extract owner/repo from both SSH and HTTPS remote URLs
 // so the GitHub API update-branch endpoint gets the correct repository path.
 func TestNwoFromRemote_SSHAndHTTPS(t *testing.T) {
