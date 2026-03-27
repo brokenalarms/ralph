@@ -12,6 +12,7 @@ func (l *testLogger) Log(_ string, _ string, _ ...any)     {}
 func (l *testLogger) Warn(_ string, _ string, _ ...any)    {}
 func (l *testLogger) Error(_ string, _ string, _ ...any)   {}
 func (l *testLogger) Success(_ string, _ string, _ ...any) {}
+func (l *testLogger) AgentLog(_ string, _ string, _ ...any) {}
 
 // New should create a runner with no CmdFactory — the inner claude.Runner
 // uses its default command construction.

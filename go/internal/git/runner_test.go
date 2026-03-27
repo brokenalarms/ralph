@@ -362,8 +362,11 @@ func TestManager_PushAndCreatePR_LogsCreatedPR(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !log.contains("Created PR #99") {
-		t.Errorf("expected 'Created PR #99' log, got: %v", log.messages)
+	if !log.contains("PR #99") {
+		t.Errorf("expected 'PR #99' in log, got: %v", log.messages)
+	}
+	if !log.contains("Created") {
+		t.Errorf("expected 'Created' in log, got: %v", log.messages)
 	}
 	if log.contains("already open") {
 		t.Error("should not log 'already open' when PR was just created")

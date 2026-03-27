@@ -7,6 +7,27 @@ import (
 	"strings"
 )
 
+// Hyperlink returns an OSC 8 terminal hyperlink that renders visible as
+// the given text but links to url when clicked. Terminals that don't
+// support OSC 8 show the visible text unaltered.
+func Hyperlink(url, visible string) string {
+	return fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", url, visible)
+}
+
+// PRLink returns "PR #N" formatted as a clickable OSC 8 hyperlink
+// pointing to the GitHub PR URL. If nwo (owner/repo) is empty, returns
+// plain "PR #N" without a link.
+func PRLink(nwo, prNumber string) string {
+	if nwo == "" || prNumber == "" {
+		if prNumber != "" {
+			return "PR #" + prNumber
+		}
+		return ""
+	}
+	url := fmt.Sprintf("https://github.com/%s/pull/%s", nwo, prNumber)
+	return Hyperlink(url, "PR #"+prNumber)
+}
+
 // ANSI color codes.
 const (
 	Red     = "\033[0;31m"
@@ -112,6 +133,14 @@ func (l *Logger) emit(color string, domain Domain, msg string) {
 // Log writes an info-level message with cyan [o][domain] prefix.
 func (l *Logger) Log(domain Domain, format string, args ...any) {
 	l.emit(Cyan, domain, fmt.Sprintf(format, args...))
+}
+
+// AgentLog writes an info-level message with cyan [r] prefix, used when
+// the orchestrator relays an agent action (e.g. task pickup signal).
+func (l *Logger) AgentLog(domain Domain, format string, args ...any) {
+	tag := Tag(Cyan, AgentActor, domain)
+	content := fmt.Sprintf("%s %s", tag, fmt.Sprintf(format, args...))
+	l.write(l.Fmt.Format(content) + "\n")
 }
 
 // Success writes a success message with green [o][domain] prefix.

@@ -107,7 +107,8 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body st
 
 	newPR, _ := gh.FindOpenPR(m.WorktreeBranch, repoURL)
 	if newPR != "" {
-		m.Logger.Log("git", "Created PR #%s for %s", newPR, m.WorktreeBranch)
+		nwo := NWOFromRemote(repoURL)
+		m.Logger.Log("git", "Created %s for %s", logging.PRLink(nwo, newPR), m.WorktreeBranch)
 	} else {
 		m.Logger.Log("git", "Created PR for %s", m.WorktreeBranch)
 	}
@@ -186,7 +187,7 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 // If the branch was updated, waits for CI on the new HEAD. Returns a
 // CIFailureError when CI fails after the update.
 func (m *Manager) updatePRBranch(ctx context.Context, prNumber, repoURL string) error {
-	nwo := nwoFromRemote(repoURL)
+	nwo := NWOFromRemote(repoURL)
 	if nwo == "" {
 		return nil
 	}
@@ -259,11 +260,12 @@ func (m *Manager) GetCIFailureLog(prNumber string) string {
 	return m.gh().GetRunLog(prNumber, m.WorkDir)
 }
 
-// postMergeUpdate updates local main after a successful merge.
+// postMergeUpdate logs the merge result. PostMergeUpdateMain is NOT called
+// here — callers (finalizePR, FlushUnpushedWork) own the post-merge sync
+// to avoid double calls when they also need to update main.
 func (m *Manager) postMergeUpdate(prNumber string) (bool, error) {
 	defaultBranch := m.detectDefaultBranch()
 	m.Logger.Log("git", "%s PR #%s merged", logging.BranchTag(defaultBranch), prNumber)
-	m.PostMergeUpdateMain()
 	return true, nil
 }
 
@@ -275,8 +277,8 @@ func (m *Manager) mergeOpts() MergeOpts {
 	}
 }
 
-// nwoFromRemote extracts "owner/repo" from a GitHub remote URL.
-func nwoFromRemote(remoteURL string) string {
+// NWOFromRemote extracts "owner/repo" from a GitHub remote URL.
+func NWOFromRemote(remoteURL string) string {
 	// Handle SSH: git@github.com:owner/repo.git
 	if idx := strings.Index(remoteURL, ":"); strings.HasPrefix(remoteURL, "git@") && idx > 0 {
 		nwo := remoteURL[idx+1:]

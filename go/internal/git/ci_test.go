@@ -333,17 +333,14 @@ func TestWaitForCI_SingleLogLine(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should have exactly 2 log lines: one pending summary, one passed.
-	if len(log.messages) != 2 {
-		t.Fatalf("expected 2 log messages (1 pending summary + 1 passed), got %d: %v", len(log.messages), log.messages)
+	// Should have exactly 1 log line: the polling summary. Callers handle
+	// the "passed" line with more context (e.g. "CI passed — merging").
+	if len(log.messages) != 1 {
+		t.Fatalf("expected 1 log message (polling summary only), got %d: %v", len(log.messages), log.messages)
 	}
 
-	// The pending line should show the full backoff schedule.
 	if !strings.Contains(log.messages[0], "polled 1s..2s..4s") {
-		t.Errorf("expected pending line with backoff schedule, got: %s", log.messages[0])
-	}
-	if !strings.Contains(log.messages[1], "passed") {
-		t.Errorf("expected passed line, got: %s", log.messages[1])
+		t.Errorf("expected polling line with backoff schedule, got: %s", log.messages[0])
 	}
 }
 

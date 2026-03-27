@@ -164,7 +164,8 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 		l.git.CheckoutRemoteBranch(branch)
 		prNum, err := l.pushAndCreatePR(ctx, taskID, nextTask, "")
 		if err == nil && prNum != "" {
-			l.logger.Log("git", "Created PR #%s for %s (task %s)", prNum, branch, taskID)
+			nwo := git.NWOFromRemote(l.git.RemoteURL())
+			l.logger.Log("git", "Created %s for %s (task %s)", logging.PRLink(nwo, prNum), branch, taskID)
 			_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNum)
 			return l.resolveByPRState(ctx, taskID, nextTask, prNum)
 		}

@@ -25,6 +25,9 @@ type testLogger struct {
 func (l *testLogger) Log(_ string, format string, args ...any) {
 	l.logs = append(l.logs, fmt.Sprintf(format, args...))
 }
+func (l *testLogger) AgentLog(_ string, format string, args ...any) {
+	l.logs = append(l.logs, fmt.Sprintf(format, args...))
+}
 func (l *testLogger) Warn(_ string, _ string, _ ...any)    {}
 func (l *testLogger) Error(_ string, _ string, _ ...any)   {}
 func (l *testLogger) Success(_ string, format string, args ...any) {
