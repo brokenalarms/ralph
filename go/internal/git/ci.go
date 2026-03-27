@@ -142,6 +142,11 @@ func failedChecks(checks []CICheckResult) []CICheckResult {
 	return failed
 }
 
+// ErrStackedPRWaiting is returned when a PR targets a non-main branch
+// and must wait for the base PR to merge first. This is not a failure —
+// it's expected stacking behavior and should not count as a merge failure.
+var ErrStackedPRWaiting = fmt.Errorf("stacked PR waiting for base to merge")
+
 // MergeConflictError is returned when a PR cannot be merged due to conflicts.
 type MergeConflictError struct {
 	PRNumber string

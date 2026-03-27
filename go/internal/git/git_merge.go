@@ -158,7 +158,7 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	prBase, _ := gh.GetPRBase(m.WorkDir, prNumber)
 	if prBase != "" && prBase != defaultBranch {
 		m.Logger.Log("git", "PR #%s targets %s (not %s) — waiting for base PRs to merge first", prNumber, prBase, defaultBranch)
-		return false, nil
+		return false, ErrStackedPRWaiting
 	}
 
 	m.Logger.Log("git", "%s Auto-merging PR #%s...", logging.BranchTag(defaultBranch), prNumber)

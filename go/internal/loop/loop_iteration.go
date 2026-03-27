@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/notify"
 )
 
@@ -116,9 +118,9 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 
 	prNumber := l.pushSignalPR(p)
 	ct := l.buildCompletedTask(p.taskID, p.nextTask, p.result.Summary, prNumber, p.workDir)
-	merged := l.mergeIfEnabled(p, prNumber)
+	merged, mergeErr := l.mergeIfEnabled(p, prNumber)
 
-	l.closeOrRetryTask(p.taskID, ct, merged)
+	l.closeOrRetryTask(p.taskID, ct, merged, mergeErr)
 	l.sessionTasks = append(l.sessionTasks, ct)
 
 	if merged {
@@ -183,14 +185,17 @@ func (l *Loop) buildCompletedTask(taskID, nextTask, summary, prNumber, workDir s
 }
 
 // mergeIfEnabled attempts to auto-merge after push, including checking
-// existing PRs when no new PR was created.
-func (l *Loop) mergeIfEnabled(p postSignalParams, prNumber string) bool {
+// existing PRs when no new PR was created. Returns the merge error so
+// callers can distinguish stacked-PR-waiting from real failures.
+func (l *Loop) mergeIfEnabled(p postSignalParams, prNumber string) (bool, error) {
 	merged := false
+	var lastErr error
 	if l.cfg.AutoMerge && prNumber != "" {
 		var mergeErr error
 		merged, mergeErr = l.mergeWithRetry(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
 		if mergeErr != nil {
 			l.logger.Warn("git", "Auto-merge: %v", mergeErr)
+			lastErr = mergeErr
 		}
 	}
 
@@ -216,12 +221,12 @@ func (l *Loop) mergeIfEnabled(p postSignalParams, prNumber string) bool {
 		}
 	}
 
-	return merged
+	return merged, lastErr
 }
 
 // closeOrRetryTask closes the bead after merge success, or records a merge
 // failure for retry.
-func (l *Loop) closeOrRetryTask(taskID string, ct CompletedTask, merged bool) {
+func (l *Loop) closeOrRetryTask(taskID string, ct CompletedTask, merged bool, mergeErr error) {
 	if taskID == "" {
 		return
 	}
@@ -239,12 +244,15 @@ func (l *Loop) closeOrRetryTask(taskID string, ct CompletedTask, merged bool) {
 			l.logger.Log("beads", "Closed task %s (%s)", taskID, closeReason)
 		}
 	} else if l.cfg.AutoMerge && !merged {
-		count, _ := l.attempts.RecordMergeFailure(taskID)
-		if count >= attempts.MaxMergeFailures {
-			l.logger.Warn("git", "Merge failed %d times — skipping task %s for manual review", count, taskID)
-			l.skipTask(taskID, fmt.Sprintf("merge_failed_%d_times", count))
-		} else {
-			l.logger.Warn("git", "Merge failed (%d/%d) — task %s left open for retry", count, attempts.MaxMergeFailures, taskID)
+		// Don't count stacked PR waiting as a failure — it's expected.
+		if !errors.Is(mergeErr, git.ErrStackedPRWaiting) {
+			count, _ := l.attempts.RecordMergeFailure(taskID)
+			if count >= attempts.MaxMergeFailures {
+				l.logger.Warn("git", "Merge failed %d times — skipping task %s for manual review", count, taskID)
+				l.skipTask(taskID, fmt.Sprintf("merge_failed_%d_times", count))
+			} else {
+				l.logger.Warn("git", "Merge failed (%d/%d) — task %s left open for retry", count, attempts.MaxMergeFailures, taskID)
+			}
 		}
 	}
 }
