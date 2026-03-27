@@ -298,53 +298,6 @@ func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 	}
 }
 
-// Resume restores task_seq from state.json, not branch count.
-// Prevents sequence skips when branches are deleted after squash-merge.
-func TestSetupWorktree_ResumeRestoresTaskSeqFromState(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	state := newMemState()
-	log := &testLog{}
-
-	mgr := &Manager{
-		ProjectDir:  project,
-		RalphDir:    ralphDir,
-				State:       state,
-		Logger:      log,
-	}
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	mgr.RenameBranchForTask("first task", "")
-	mgr.PrepareForNextTask()
-	mgr.RenameBranchForTask("second task", "")
-
-	// Verify task_seq was persisted
-	storedSeq, _ := state.Read("task_seq")
-	if storedSeq != "2" {
-		t.Fatalf("stored task_seq = %q, want \"2\"", storedSeq)
-	}
-
-	// Delete a branch to simulate cleanup
-	exec.Command("git", "-C", project, "branch", "-D", "ralph/"+mgr.ProjectName+"/01-first-task").Run()
-
-	// Resume — should use persisted seq (2), not branch count (1)
-	mgr2 := &Manager{
-		ProjectDir:  project,
-		RalphDir:    ralphDir,
-				Resume:      true,
-		State:       state,
-		Logger:      log,
-	}
-	if err := mgr2.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("resume SetupWorktree: %v", err)
-	}
-
-	if mgr2.TaskSeq != 2 {
-		t.Errorf("TaskSeq = %d, want 2 (from state.json, not branch count)", mgr2.TaskSeq)
-	}
-}
 
 // PrepareForNextTask + RenameBranchForTask produces stacked branches where
 // the second task branch tracks the first as PrevBranch.
@@ -450,7 +403,7 @@ func TestRenameBranchForTask_RenamesBranch(t *testing.T) {
 
 	mgr.RenameBranchForTask("Fix auth bug", "")
 
-	wantBranch := "ralph/" + mgr.ProjectName + "/01-fix-auth-bug"
+	wantBranch := "ralph/" + mgr.ProjectName + "/fix-auth-bug"
 	if mgr.WorktreeBranch != wantBranch {
 		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, wantBranch)
 	}
@@ -458,7 +411,6 @@ func TestRenameBranchForTask_RenamesBranch(t *testing.T) {
 		t.Error("BranchRenamed should be true")
 	}
 
-	// State should be updated
 	if got, _ := state.Read("worktree_branch"); got != wantBranch {
 		t.Errorf("state worktree_branch = %q, want %q", got, wantBranch)
 	}
@@ -482,7 +434,7 @@ func TestRenameBranchForTask_IncludesTaskID(t *testing.T) {
 
 	mgr.RenameBranchForTask("Fix auth bug", "ralph-abc1")
 
-	wantBranch := "ralph/" + mgr.ProjectName + "/01-ralph-abc1-fix-auth-bug"
+	wantBranch := "ralph/" + mgr.ProjectName + "/ralph-abc1-fix-auth-bug"
 	if mgr.WorktreeBranch != wantBranch {
 		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, wantBranch)
 	}
@@ -523,40 +475,6 @@ func TestRenameBranchForTask_NoOpWithoutWorktree(t *testing.T) {
 	mgr.RenameBranchForTask("anything", "")
 	if mgr.BranchRenamed {
 		t.Error("should not rename when WorkDir == ProjectDir")
-	}
-}
-
-
-// TaskSeq increments with each branch rename, producing sequential branch names.
-// In stacked mode, BranchRenamed is reset between tasks so the next rename works.
-func TestTaskSeq_IncrementsAcrossRenames(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	state := newMemState()
-
-	mgr := &Manager{
-		ProjectDir:  project,
-		RalphDir:    ralphDir,
-				State:       state,
-		Logger:      &testLog{},
-	}
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	mgr.RenameBranchForTask("First", "")
-	if mgr.TaskSeq != 1 {
-		t.Errorf("TaskSeq = %d, want 1", mgr.TaskSeq)
-	}
-
-	// Reset BranchRenamed so next rename works (orchestrator does this between tasks)
-	mgr.BranchRenamed = false
-	mgr.RenameBranchForTask("Second", "")
-	if mgr.TaskSeq != 2 {
-		t.Errorf("TaskSeq = %d, want 2", mgr.TaskSeq)
-	}
-	if !strings.Contains(mgr.WorktreeBranch, "/02-second") {
-		t.Errorf("branch %q should contain /02-second", mgr.WorktreeBranch)
 	}
 }
 
@@ -609,8 +527,8 @@ func TestSecondRunSameDayIncrementsSuffix(t *testing.T) {
 	}
 }
 
-// Stale branches don't inflate the task sequence counter (bats test 6)
-func TestBranchSequenceResetsPerRun(t *testing.T) {
+// Stale branches don't affect new branch naming (bats test 6)
+func TestBranchNamingIgnoresStale(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	state := newMemState()
@@ -629,7 +547,7 @@ func TestBranchSequenceResetsPerRun(t *testing.T) {
 
 	mgr.RenameBranchForTask("First task", "")
 
-	want := "ralph/" + mgr.ProjectName + "/01-first-task"
+	want := "ralph/" + mgr.ProjectName + "/first-task"
 	if mgr.WorktreeBranch != want {
 		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, want)
 	}
@@ -701,52 +619,6 @@ func TestLiveRalphWorktreeRemovedWhenBranchExists(t *testing.T) {
 	}
 	if _, err := os.Stat(firstWorkDir); err == nil {
 		t.Error("old worktree dir should have been removed")
-	}
-}
-
-// Resume restores TaskSeq from branch count (bats test 11 — Go uses branch count instead of state.json)
-func TestResumeRestoresTaskSeq(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	state := newMemState()
-
-	mgr := &Manager{
-		ProjectDir:  project,
-		RalphDir:    ralphDir,
-				State:       state,
-		Logger:      &testLog{},
-	}
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	mgr.RenameBranchForTask("first task", "")
-	mgr.BranchRenamed = false
-	mgr.RenameBranchForTask("second task", "")
-
-	if mgr.TaskSeq != 2 {
-		t.Fatalf("TaskSeq = %d, want 2", mgr.TaskSeq)
-	}
-
-	// Delete a branch to simulate squash-merge cleanup
-	gitCmd(project, "branch", "-D", "ralph/"+mgr.ProjectName+"/01-first-task")
-
-	// Resume — TaskSeq should be restored from remaining branches
-	mgr2 := &Manager{
-		ProjectDir:  project,
-		RalphDir:    ralphDir,
-				Resume:      true,
-		State:       state,
-		Logger:      &testLog{},
-	}
-	if err := mgr2.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("resume SetupWorktree: %v", err)
-	}
-
-	// After deleting branch 01, only branch 02 + next remain,
-	// so countNamedBranches returns 2 (the /next and /02-second-task branches)
-	if mgr2.TaskSeq < 1 {
-		t.Errorf("TaskSeq = %d, want >= 1 (restored from branches)", mgr2.TaskSeq)
 	}
 }
 
@@ -840,9 +712,6 @@ func TestRenameBranchForTask_RenamesAndSetsFlag(t *testing.T) {
 	}
 	if !mgr.BranchRenamed {
 		t.Error("BranchRenamed should be true after rename")
-	}
-	if mgr.TaskSeq != 1 {
-		t.Errorf("TaskSeq should be 1, got %d", mgr.TaskSeq)
 	}
 }
 

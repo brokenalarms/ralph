@@ -277,8 +277,8 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 	mgr.RenameBranchForTask("Add user auth", "")
 	mgr.TagTaskStart("")
 
-	if !refExists(mgr.WorkDir, "task/01-add-user-auth/start") {
-		t.Error("expected tag task/01-add-user-auth/start to exist")
+	if !refExists(mgr.WorkDir, "task/add-user-auth/start") {
+		t.Error("expected tag task/add-user-auth/start to exist")
 	}
 }
 
