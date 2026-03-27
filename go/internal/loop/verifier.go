@@ -110,8 +110,8 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 
 	v.testFixAttempts = 0
 
-	beadDesc := v.getBeadDescription(p.taskID)
-	beadAcceptance := v.getBeadAcceptance(p.taskID)
+	beadDesc := getBeadDescription(v.deps.TaskBackend, p.taskID)
+	beadAcceptance := getBeadAcceptance(v.deps.TaskBackend, p.taskID)
 
 	v.llmVerifyAttempts++
 	model := v.verifyModel()
@@ -263,7 +263,7 @@ func (v *Verifier) TryFixCI(ctx context.Context, ciLog string, ciErr *git.CIFail
 }
 
 func (v *Verifier) fallbackFixTestFailures(p signalParams, testOutput string) bool {
-	beadDesc := v.getBeadDescription(p.taskID)
+	beadDesc := getBeadDescription(v.deps.TaskBackend, p.taskID)
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 	verifyPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{
 		"{{TASK_TITLE}}":       p.nextTask,
@@ -372,24 +372,13 @@ func (v *Verifier) loadVerifyPrompt(filename string, vars map[string]string) str
 	return s
 }
 
-func (v *Verifier) getBeadAcceptance(taskID string) string {
-	if taskID == "" || v.deps.TaskBackend == nil {
+func getBeadAcceptance(backend tasks.Backend, taskID string) string {
+	if taskID == "" || backend == nil {
 		return ""
 	}
-	ac, err := v.deps.TaskBackend.GetAcceptance(taskID)
+	ac, err := backend.GetAcceptance(taskID)
 	if err != nil {
 		return ""
 	}
 	return ac
-}
-
-func (v *Verifier) getBeadDescription(taskID string) string {
-	if taskID == "" || v.deps.TaskBackend == nil {
-		return ""
-	}
-	desc, err := v.deps.TaskBackend.GetDescription(taskID)
-	if err != nil {
-		return ""
-	}
-	return desc
 }

@@ -361,16 +361,13 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 
 // Verifies the stream task file is written with task ID and description,
 // proving the tmux pane title integration works correctly.
+// updateStreamTask is a standalone function — no Loop required.
 func TestLoop_UpdateStreamTask(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
-	l := &Loop{
-		cfg: Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}},
-	}
-
-	l.updateStreamTask("ralph-abc", "Add feature X", nil)
+	updateStreamTask(ralphDir, "ralph-abc", "Add feature X", nil)
 
 	data, err := os.ReadFile(filepath.Join(ralphDir, ".stream-task"))
 	if err != nil {
@@ -380,14 +377,14 @@ func TestLoop_UpdateStreamTask(t *testing.T) {
 		t.Errorf("expected 'ralph-abc: Add feature X', got %q", string(data))
 	}
 
-	l.updateStreamTask("", "Add feature Y", nil)
+	updateStreamTask(ralphDir, "", "Add feature Y", nil)
 	data, _ = os.ReadFile(filepath.Join(ralphDir, ".stream-task"))
 	if string(data) != "Add feature Y" {
 		t.Errorf("expected 'Add feature Y', got %q", string(data))
 	}
 
 	p := 3
-	l.updateStreamTask("ralph-xyz", "Some task", &p)
+	updateStreamTask(ralphDir, "ralph-xyz", "Some task", &p)
 	data, _ = os.ReadFile(filepath.Join(ralphDir, ".stream-task"))
 	got := string(data)
 	if !strings.Contains(got, "[P3]") {
@@ -400,17 +397,13 @@ func TestLoop_UpdateStreamTask(t *testing.T) {
 
 // Verifies writeRunBranch persists the current branch name to .run-branch
 // so the shell pane-title updater displays the correct branch.
+// writeRunBranch is a standalone function — no Loop required.
 func TestLoop_WriteRunBranch(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
-	l := &Loop{
-		cfg: Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}},
-		git: &git.Manager{WorktreeBranch: "ralph/project/01-fix-bug"},
-	}
-
-	l.writeRunBranch()
+	writeRunBranch(ralphDir, "ralph/project/01-fix-bug")
 
 	data, err := os.ReadFile(filepath.Join(ralphDir, ".run-branch"))
 	if err != nil {
@@ -421,18 +414,13 @@ func TestLoop_WriteRunBranch(t *testing.T) {
 	}
 }
 
-// Verifies writeRunBranch defaults to "ralph" when no branch is set.
+// writeRunBranch defaults to "ralph" when branch is empty.
 func TestLoop_WriteRunBranch_Default(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
-	l := &Loop{
-		cfg: Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}},
-		git: &git.Manager{},
-	}
-
-	l.writeRunBranch()
+	writeRunBranch(ralphDir, "")
 
 	data, err := os.ReadFile(filepath.Join(ralphDir, ".run-branch"))
 	if err != nil {
@@ -443,41 +431,32 @@ func TestLoop_WriteRunBranch_Default(t *testing.T) {
 	}
 }
 
-// Verifies feedback file is read without being cleared — the agent owns clearing.
+// readFeedback is a standalone function — reads file without clearing it.
 func TestLoop_FeedbackRead(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
-	l := &Loop{
-		cfg: Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}},
-	}
-
 	feedbackFile := filepath.Join(ralphDir, "feedback")
 	os.WriteFile(feedbackFile, []byte("please fix the tests"), 0o644)
 
-	got := l.readFeedback()
+	got := readFeedback(ralphDir)
 	if got != "please fix the tests" {
 		t.Errorf("expected feedback content, got %q", got)
 	}
 
-	// File persists — agent is responsible for clearing it, not the loop.
 	if _, err := os.Stat(feedbackFile); err != nil {
 		t.Error("feedback file should persist after read — agent clears it")
 	}
 }
 
-// Verifies readFeedback returns empty string when no file exists.
+// readFeedback returns empty string when no file exists.
 func TestLoop_FeedbackReadEmpty(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
-	l := &Loop{
-		cfg: Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}},
-	}
-
-	got := l.readFeedback()
+	got := readFeedback(ralphDir)
 	if got != "" {
 		t.Errorf("expected empty feedback when file missing, got %q", got)
 	}
@@ -1247,38 +1226,29 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 
 // Verifies isNewTask compares by task ID when available, falling back to
 // description, so that task identity is stable even if descriptions change.
+// isNewTask is a standalone function — takes state.Store directly, no Loop needed.
 func TestLoop_IsNewTask(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
+	_, st := setupTestDir(t)
 
-	l := &Loop{
-		cfg:   Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}},
-		state: st,
-	}
-
-	// No previous task in state — any task is new
-	if !l.isNewTask("ralph-abc", "Fix bug") {
+	if !isNewTask(st, "ralph-abc", "Fix bug") {
 		t.Error("expected new task when no last_task_id in state")
 	}
 
-	// Store a task, then compare same ID
 	st.Write("last_task_id", "ralph-abc")
 	st.Write("last_task", "Fix bug")
 
-	if l.isNewTask("ralph-abc", "Fix bug") {
+	if isNewTask(st, "ralph-abc", "Fix bug") {
 		t.Error("same task ID should not be considered new")
 	}
 
-	// Different ID → new task
-	if !l.isNewTask("ralph-xyz", "Fix bug") {
+	if !isNewTask(st, "ralph-xyz", "Fix bug") {
 		t.Error("different task ID should be considered new")
 	}
 
-	// No ID — falls back to description comparison
-	if l.isNewTask("", "Fix bug") {
+	if isNewTask(st, "", "Fix bug") {
 		t.Error("same description with no ID should not be new")
 	}
-	if !l.isNewTask("", "Different task") {
+	if !isNewTask(st, "", "Different task") {
 		t.Error("different description with no ID should be new")
 	}
 }
@@ -5660,23 +5630,14 @@ func TestLoop_onSignal_TestFixAttemptsTracked(t *testing.T) {
 
 // buildPRBody assembles description, acceptance criteria, and agent summary
 // into a structured PR body when all context is available.
+// buildPRBody is a standalone function — takes backend directly, no Loop needed.
 func TestBuildPRBody_FullContext(t *testing.T) {
 	backend := &stubBackend{
 		description: "Fix the auth middleware to validate tokens",
 		acceptance:  "1. Tokens are validated\n2. Invalid tokens return 401",
 	}
 
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir}
-
-	l := New(Config{
-		Dirs:         workctx.WorkContext{RalphDir: ralphDir, PromptsDir: dir},
-		TaskBackend:  backend,
-		CallsPerHour: 80,
-	}, st, gm, logging.New(nil))
-
-	body := l.buildPRBody("ralph-abc", "Fixed auth middleware token validation")
+	body := buildPRBody(backend, "ralph-abc", "Fixed auth middleware token validation")
 
 	if !strings.Contains(body, "## Description") {
 		t.Error("body should contain Description section")
@@ -5698,21 +5659,10 @@ func TestBuildPRBody_FullContext(t *testing.T) {
 	}
 }
 
-// buildPRBody falls back to agent summary when bead has no description.
 func TestBuildPRBody_NoBeadDescription(t *testing.T) {
 	backend := &stubBackend{}
 
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir}
-
-	l := New(Config{
-		Dirs:         workctx.WorkContext{RalphDir: ralphDir, PromptsDir: dir},
-		TaskBackend:  backend,
-		CallsPerHour: 80,
-	}, st, gm, logging.New(nil))
-
-	body := l.buildPRBody("ralph-abc", "Implemented the feature")
+	body := buildPRBody(backend, "ralph-abc", "Implemented the feature")
 
 	if strings.Contains(body, "## Description") {
 		t.Error("body should not contain Description when bead has none")
@@ -5725,44 +5675,22 @@ func TestBuildPRBody_NoBeadDescription(t *testing.T) {
 	}
 }
 
-// buildPRBody returns empty string when no context is available at all.
 func TestBuildPRBody_NoContext(t *testing.T) {
 	backend := &stubBackend{}
 
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir}
-
-	l := New(Config{
-		Dirs:         workctx.WorkContext{RalphDir: ralphDir, PromptsDir: dir},
-		TaskBackend:  backend,
-		CallsPerHour: 80,
-	}, st, gm, logging.New(nil))
-
-	body := l.buildPRBody("", "")
+	body := buildPRBody(backend, "", "")
 
 	if body != "" {
 		t.Errorf("body should be empty when no context is available, got %q", body)
 	}
 }
 
-// PR body must never contain the old generic "Automated PR for:" text.
 func TestBuildPRBody_NeverGeneric(t *testing.T) {
 	backend := &stubBackend{
 		description: "Some task description",
 	}
 
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir}
-
-	l := New(Config{
-		Dirs:         workctx.WorkContext{RalphDir: ralphDir, PromptsDir: dir},
-		TaskBackend:  backend,
-		CallsPerHour: 80,
-	}, st, gm, logging.New(nil))
-
-	body := l.buildPRBody("ralph-abc", "completed task")
+	body := buildPRBody(backend, "ralph-abc", "completed task")
 
 	if strings.Contains(body, "Automated PR for") {
 		t.Error("body must not contain generic 'Automated PR for' text")
@@ -6186,5 +6114,205 @@ func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
 	}
 	if tasks[0].ID != "ralph-old" {
 		t.Errorf("completed task ID = %q, want %q (preserved from previous run)", tasks[0].ID, "ralph-old")
+	}
+}
+
+// stubGitHub implements git.GitHub for tests that need PR state lookups.
+type stubGitHub struct {
+	available bool
+	prState   string
+	prBase    string
+	prHead    string
+}
+
+func (s *stubGitHub) Available() bool                                              { return s.available }
+func (s *stubGitHub) FindOpenPR(_, _ string) (string, error)                       { return "", nil }
+func (s *stubGitHub) CreatePR(_ git.CreatePROpts) error                            { return nil }
+func (s *stubGitHub) MergePR(_, _ string, _ git.MergeOpts) (string, error)         { return "", nil }
+func (s *stubGitHub) UpdateBranch(_, _, _ string) (bool, error)                    { return false, nil }
+func (s *stubGitHub) ListChecks(_, _ string) ([]git.CICheckResult, error)          { return nil, nil }
+func (s *stubGitHub) EditPR(_, _, _, _ string) error                               { return nil }
+func (s *stubGitHub) GetRunLog(_, _ string) string                                 { return "" }
+func (s *stubGitHub) CheckEnforceAdmins(_, _ string) (bool, error)                 { return false, nil }
+func (s *stubGitHub) PostEnforceAdmins(_, _ string) (string, error)                { return "", nil }
+func (s *stubGitHub) FindPR(_, _ string) (string, string, string, error)           { return "", "", "", nil }
+func (s *stubGitHub) SearchPR(_, _ string) (string, error)                         { return "", nil }
+func (s *stubGitHub) PRDiff(_, _ string) (string, error)                           { return "", nil }
+func (s *stubGitHub) GetPRState(_, _ string) (string, error)                       { return s.prState, nil }
+func (s *stubGitHub) GetPRBase(_, _ string) (string, error)                        { return s.prBase, nil }
+func (s *stubGitHub) GetPRHead(_, _ string) (string, error)                        { return s.prHead, nil }
+
+// getPRBase takes only a GitHub interface and workDir — no Loop needed.
+func TestGetPRBase_Standalone(t *testing.T) {
+	gh := &stubGitHub{available: true, prBase: "main"}
+	base := getPRBase(gh, "/tmp", "42")
+	if base != "main" {
+		t.Errorf("expected 'main', got %q", base)
+	}
+
+	base = getPRBase(nil, "/tmp", "42")
+	if base != "" {
+		t.Errorf("nil gh should return empty, got %q", base)
+	}
+
+	gh = &stubGitHub{available: false}
+	base = getPRBase(gh, "/tmp", "42")
+	if base != "" {
+		t.Errorf("unavailable gh should return empty, got %q", base)
+	}
+}
+
+// closeOrRetryTask takes only closeTaskDeps — no Loop needed. When merge
+// fails and AutoMerge is on, the task is skipped instead of closed.
+func TestCloseOrRetryTask_Standalone(t *testing.T) {
+	_, st := setupTestDir(t)
+	var skippedID string
+	deps := closeTaskDeps{
+		AutoMerge: true,
+		Backend:   &stubBackend{},
+		Attempts:  attempts.New(t.TempDir()),
+		State:     st,
+		Logger:    logging.New(nil),
+		SkipFn:    func(id, reason string) { skippedID = id },
+	}
+
+	closeOrRetryTask(deps, "ralph-abc",
+		CompletedTask{PRNum: "99", Title: "Fix bug"},
+		false, fmt.Errorf("merge conflict"))
+
+	if skippedID != "ralph-abc" {
+		t.Errorf("expected task to be skipped, got skippedID=%q", skippedID)
+	}
+}
+
+// closeOrRetryTask closes the task when merge succeeded.
+func TestCloseOrRetryTask_ClosesOnSuccess(t *testing.T) {
+	_, st := setupTestDir(t)
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1},
+	}
+	deps := closeTaskDeps{
+		AutoMerge: true,
+		Backend:   backend,
+		Attempts:  attempts.New(t.TempDir()),
+		State:     st,
+		Logger:    logging.New(nil),
+		SkipFn:    func(id, reason string) {},
+	}
+
+	closeOrRetryTask(deps, "ralph-xyz",
+		CompletedTask{PRNum: "42", Title: "Add feature"},
+		true, nil)
+
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-xyz" {
+		t.Errorf("expected CloseTask for ralph-xyz, got %v", backend.closedIDs)
+	}
+}
+
+// mergeIfEnabled takes only mergeDeps — no Loop needed. When AutoMerge
+// is off, no merge is attempted.
+func TestMergeIfEnabled_Standalone_AutoMergeOff(t *testing.T) {
+	deps := mergeDeps{AutoMerge: false, Logger: logging.New(nil)}
+
+	merged, err := mergeIfEnabled(deps, postSignalParams{
+		ctx:    context.Background(),
+		taskID: "ralph-abc",
+	}, "42")
+
+	if merged {
+		t.Error("should not merge when AutoMerge is disabled")
+	}
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// mergeIfEnabled delegates to MergeFn when AutoMerge is on and PR exists.
+func TestMergeIfEnabled_Standalone_CallsMergeFn(t *testing.T) {
+	mergeCalled := false
+	deps := mergeDeps{
+		AutoMerge: true,
+		Logger:    logging.New(nil),
+		MergeFn: func(ctx context.Context, taskID, nextTask, workDir, rawLogPath string) (bool, error) {
+			mergeCalled = true
+			return true, nil
+		},
+	}
+
+	merged, err := mergeIfEnabled(deps, postSignalParams{
+		ctx:    context.Background(),
+		taskID: "ralph-abc",
+	}, "42")
+
+	if !mergeCalled {
+		t.Error("MergeFn should have been called")
+	}
+	if !merged {
+		t.Error("should be merged when MergeFn returns true")
+	}
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// skipTask takes state, backend, and logger — no Loop needed.
+func TestSkipTask_Standalone(t *testing.T) {
+	_, st := setupTestDir(t)
+	backend := &stubBackend{}
+
+	skipTask(st, backend, logging.New(nil), "ralph-abc", "test reason")
+
+	skipped, _ := st.GetSkippedTasks()
+	found := false
+	for _, id := range skipped {
+		if id == "ralph-abc" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected ralph-abc in skipped tasks")
+	}
+}
+
+// persistCompletedTask takes state and logger — no Loop needed.
+func TestPersistCompletedTask_Standalone(t *testing.T) {
+	_, st := setupTestDir(t)
+
+	persistCompletedTask(st, logging.New(nil), "ralph-abc", "Fix bug", "42", "merged")
+
+	tasks, err := st.GetCompletedTasks()
+	if err != nil {
+		t.Fatalf("GetCompletedTasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 completed task, got %d", len(tasks))
+	}
+	if tasks[0].ID != "ralph-abc" {
+		t.Errorf("expected ID ralph-abc, got %q", tasks[0].ID)
+	}
+	if tasks[0].PRNumber != "42" {
+		t.Errorf("expected PR 42, got %q", tasks[0].PRNumber)
+	}
+}
+
+// getBeadDescription takes a backend — no Loop or Verifier needed.
+func TestGetBeadDescription_Standalone(t *testing.T) {
+	backend := &stubBackend{description: "Fix auth middleware"}
+
+	desc := getBeadDescription(backend, "ralph-abc")
+	if desc != "Fix auth middleware" {
+		t.Errorf("expected description, got %q", desc)
+	}
+
+	desc = getBeadDescription(backend, "")
+	if desc != "" {
+		t.Errorf("empty taskID should return empty, got %q", desc)
+	}
+
+	desc = getBeadDescription(nil, "ralph-abc")
+	if desc != "" {
+		t.Errorf("nil backend should return empty, got %q", desc)
 	}
 }
