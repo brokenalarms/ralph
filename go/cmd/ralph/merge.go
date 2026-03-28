@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -107,14 +108,15 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		gm.FetchBranch(headBranch)
 		gm.FetchBranch(baseBranch)
 
-		// Checkout head branch.
-		if err := gitCheckoutBranch(projectDir, headBranch, log); err != nil {
-			log.Error("git", "Checkout failed: %v", err)
+		// Create temp worktree for squash+push.
+		wtDir, cleanup, wtErr := createMergeWorktree(projectDir, headBranch, log)
+		if wtErr != nil {
+			log.Error("git", "Worktree failed: %v", wtErr)
 			return 1
 		}
 
-		// Set up manager for Push.
-		gm.WorkDir = projectDir
+		// Set up manager to work in the temp worktree.
+		gm.WorkDir = wtDir
 		gm.WorktreeBranch = headBranch
 		gm.SetPrevBranch("")
 		if baseBranch != gm.DetectDefaultBranch() {
@@ -123,10 +125,15 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 
 		// Squash + force-push.
 		log.Log("git", "Squashing and pushing...")
-		if err := gm.Push(ctx); err != nil {
-			log.Error("git", "Push failed: %v", err)
+		if pushErr := gm.Push(ctx); pushErr != nil {
+			cleanup()
+			log.Error("git", "Push failed: %v", pushErr)
 			return 1
 		}
+
+		// Done with worktree — clean up before CI wait.
+		cleanup()
+		gm.WorkDir = projectDir
 
 		// Wait for CI.
 		repoURL := gm.RemoteURL()
@@ -155,12 +162,8 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		// Update local main.
 		defaultBranch := gm.DetectDefaultBranch()
 		log.Log("git", "Updating local %s...", defaultBranch)
-		if err := gitRunErr(projectDir, "checkout", defaultBranch); err != nil {
-			log.Warn("git", "Checkout %s failed: %v", defaultBranch, err)
-		}
-		if err := gitRunErr(projectDir, "pull", "origin", defaultBranch); err != nil {
-			log.Warn("git", "Pull %s failed: %v", defaultBranch, err)
-		}
+		gitRunErr(projectDir, "fetch", "origin", defaultBranch)
+		gitRunErr(projectDir, "reset", "--hard", "origin/"+defaultBranch)
 
 		if !stack {
 			return 0
@@ -206,15 +209,23 @@ func logStackComplete(log *logging.Logger, merged int) int {
 	return 0
 }
 
-func gitCheckoutBranch(dir, branch string, log *logging.Logger) error {
-	// Force the local branch to match remote, then checkout.
-	exec.Command("git", "-C", dir, "branch", "-D", branch).Run()
-	cmd := exec.Command("git", "-C", dir, "checkout", "-b", branch, "origin/"+branch)
+func createMergeWorktree(projectDir, branch string, log *logging.Logger) (string, func(), error) {
+	wtDir := filepath.Join(os.TempDir(), "ralph-merge-"+branch)
+	os.RemoveAll(wtDir)
+
+	// Prune stale worktree refs.
+	exec.Command("git", "-C", projectDir, "worktree", "prune").Run()
+
+	cmd := exec.Command("git", "-C", projectDir, "worktree", "add", "--detach", wtDir, "origin/"+branch)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("checkout %s: %s", branch, string(out))
+		return "", nil, fmt.Errorf("worktree add for %s: %s", branch, string(out))
 	}
-	return nil
+
+	cleanup := func() {
+		exec.Command("git", "-C", projectDir, "worktree", "remove", "--force", wtDir).Run()
+	}
+	return wtDir, cleanup, nil
 }
 
 func gitRunErr(dir string, args ...string) error {
