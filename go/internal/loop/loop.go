@@ -38,7 +38,6 @@ type Config struct {
 	PostTask            string
 	Notify              bool
 	Wait                bool
-	WaitInterval        time.Duration
 	Verbose             bool
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 	Version             string
