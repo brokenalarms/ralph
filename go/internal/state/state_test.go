@@ -383,6 +383,58 @@ func TestLoadCLIConfig_MissingReturnsNil(t *testing.T) {
 	}
 }
 
+// Proves: ClearCLIConfig removes cli_config from state.json so stale flags
+// don't persist across manual restarts. Other state fields must be preserved.
+func TestClearCLIConfig_RemovesConfigPreservesState(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Save(State{Iteration: 3, Status: "running"})
+
+	cfg := map[string]string{"evolve": "true", "max": "10"}
+	if err := st.SaveCLIConfig(cfg); err != nil {
+		t.Fatalf("SaveCLIConfig: %v", err)
+	}
+
+	// Verify cli_config exists before clearing.
+	loaded, _ := st.LoadCLIConfig()
+	if loaded == nil {
+		t.Fatal("cli_config should exist before clear")
+	}
+
+	if err := st.ClearCLIConfig(); err != nil {
+		t.Fatalf("ClearCLIConfig: %v", err)
+	}
+
+	// cli_config must be gone.
+	loaded, err := st.LoadCLIConfig()
+	if err != nil {
+		t.Fatalf("LoadCLIConfig after clear: %v", err)
+	}
+	if loaded != nil {
+		t.Errorf("expected nil after clear, got %v", loaded)
+	}
+
+	// Other state fields preserved.
+	s, _ := st.Load()
+	if s.Iteration != 3 {
+		t.Errorf("Iteration = %d, want 3", s.Iteration)
+	}
+	if s.Status != "running" {
+		t.Errorf("Status = %q, want running", s.Status)
+	}
+}
+
+// Proves: ClearCLIConfig is safe to call when no cli_config exists.
+func TestClearCLIConfig_NoopWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Save(State{Status: "running"})
+
+	if err := st.ClearCLIConfig(); err != nil {
+		t.Fatalf("ClearCLIConfig on empty state: %v", err)
+	}
+}
+
 // Verifies that test result fields are preserved as known keys
 // (not overflow) when serialized to JSON.
 func TestState_TestResultFieldsInJSON(t *testing.T) {

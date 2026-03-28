@@ -226,6 +226,17 @@ func (st *Store) SaveCLIConfig(cfg map[string]string) error {
 	return st.Save(s)
 }
 
+// ClearCLIConfig removes cli_config from state.json so stale flags don't
+// persist across manual restarts.
+func (st *Store) ClearCLIConfig() error {
+	s, err := st.Load()
+	if err != nil {
+		return err
+	}
+	delete(s.Overflow, "cli_config")
+	return st.Save(s)
+}
+
 // LoadCLIConfig reads the "cli_config" map from state.json. Returns nil map
 // if not present.
 func (st *Store) LoadCLIConfig() (map[string]string, error) {
