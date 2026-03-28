@@ -145,9 +145,10 @@ type stackPR struct {
 // collecting the full stack in bottom-up order. Uses gh pr list --json
 // to get all open PRs in one call, then walks the base references.
 func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) []stackPR {
-	// Get all open PRs in one call.
-	cmd := exec.Command("gh", "pr", "list", "--state", "open",
-		"--json", "number,headRefName,baseRefName", "--limit", "100")
+	// Get all PRs (open + closed) to walk the full chain.
+	// Closed PRs may be links in the base chain even if they won't be merged.
+	cmd := exec.Command("gh", "pr", "list", "--state", "all",
+		"--json", "number,headRefName,baseRefName,state", "--limit", "200")
 	cmd.Dir = workDir
 	out, err := cmd.Output()
 	if err != nil {
@@ -159,32 +160,26 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) []s
 		Number int    `json:"number"`
 		Head   string `json:"headRefName"`
 		Base   string `json:"baseRefName"`
+		State  string `json:"state"`
 	}
 	if jsonErr := json.Unmarshal(out, &allPRs); jsonErr != nil {
 		log.Warn("git", "Failed to parse PR list: %v", jsonErr)
 		return nil
 	}
 
-	// Index by head branch name for chain walking.
-	byHead := make(map[string]struct {
+	// Index by head branch name for chain walking (all PRs, any state).
+	type prInfo struct {
 		number int
 		head   string
 		base   string
-	})
-	byNumber := make(map[int]struct {
-		head string
-		base string
-	})
+		state  string
+	}
+	byHead := make(map[string]prInfo)
+	byNumber := make(map[int]prInfo)
 	for _, pr := range allPRs {
-		byHead[pr.Head] = struct {
-			number int
-			head   string
-			base   string
-		}{pr.Number, pr.Head, pr.Base}
-		byNumber[pr.Number] = struct {
-			head string
-			base string
-		}{pr.Head, pr.Base}
+		info := prInfo{pr.Number, pr.Head, pr.Base, pr.State}
+		byHead[pr.Head] = info
+		byNumber[pr.Number] = info
 	}
 
 	// Find the starting PR.
@@ -196,17 +191,21 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) []s
 	}
 
 	// Walk the base chain from top down to main.
+	// Include all PRs for chain walking, but only OPEN ones for merging.
 	var chain []stackPR
-	chain = append(chain, stackPR{number: topPR, head: start.head})
+	if strings.ToUpper(start.state) == "OPEN" {
+		chain = append(chain, stackPR{number: topPR, head: start.head})
+	}
 	currentBase := start.base
 
 	for i := 0; i < 20; i++ {
-		// Find the PR whose head branch is the current base.
 		pr, found := byHead[currentBase]
 		if !found {
 			break // base is main or a branch with no PR
 		}
-		chain = append(chain, stackPR{number: fmt.Sprintf("%d", pr.number), head: pr.head})
+		if strings.ToUpper(pr.state) == "OPEN" {
+			chain = append(chain, stackPR{number: fmt.Sprintf("%d", pr.number), head: pr.head})
+		}
 		currentBase = pr.base
 	}
 
