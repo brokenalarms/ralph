@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
-
 	"github.com/brokenalarms/ralph/internal/logging"
 )
 
@@ -150,9 +148,8 @@ func TestStreamFormatter_FormatOutput_ReturnsImmediately(t *testing.T) {
 	}
 }
 
-// Verifies that long prose lines are truncated to fit terminal width,
-// preventing overflow and wrapped lines in the stream output.
-func TestFormatOutput_TruncatesLongProse(t *testing.T) {
+// Verifies that long prose lines pass through at full length — no truncation.
+func TestFormatOutput_LongProseNotTruncated(t *testing.T) {
 	f := &StreamFormatter{}
 	longProse := strings.Repeat("Now I understand the current state and will analyze ", 5)
 	lines := f.FormatOutput(longProse)
@@ -161,18 +158,16 @@ func TestFormatOutput_TruncatesLongProse(t *testing.T) {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
 	plain := ansiRe.ReplaceAllString(lines[0], "")
-	runeCount := utf8.RuneCountInString(plain)
-	if runeCount > logging.MaxLineWidth {
-		t.Errorf("prose line should be truncated to %d runes, got %d: %q", logging.MaxLineWidth, runeCount, plain)
+	if !strings.Contains(plain, longProse) {
+		t.Errorf("long prose should pass through untruncated, got: %q", plain)
 	}
-	if !strings.Contains(plain, "…") {
-		t.Errorf("truncated prose should contain ellipsis, got: %q", plain)
+	if strings.Contains(plain, "…") {
+		t.Errorf("long prose should not have ellipsis, got: %q", plain)
 	}
 }
 
-// Verifies that tool call lines are truncated at the same width as prose,
-// preventing terminal overflow from long file paths or commands.
-func TestFormatOutput_TruncatesToolLines(t *testing.T) {
+// Verifies that long tool call lines pass through at full length — no truncation.
+func TestFormatOutput_LongToolLinesNotTruncated(t *testing.T) {
 	f := &StreamFormatter{}
 	longToolLine := "[Edit] " + strings.Repeat("/very/long/path/to/some/deeply/nested/", 5) + "file.go"
 	lines := f.FormatOutput(longToolLine)
@@ -181,12 +176,11 @@ func TestFormatOutput_TruncatesToolLines(t *testing.T) {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
 	plain := ansiRe.ReplaceAllString(lines[0], "")
-	runeCount := utf8.RuneCountInString(plain)
-	if runeCount > logging.MaxLineWidth {
-		t.Errorf("tool line should be truncated to %d runes, got %d: %q", logging.MaxLineWidth, runeCount, plain)
+	if !strings.Contains(plain, "file.go") {
+		t.Errorf("long tool line should pass through untruncated, got: %q", plain)
 	}
-	if !strings.HasSuffix(plain, "…") {
-		t.Errorf("long tool line should have ellipsis, got: %q", plain)
+	if strings.Contains(plain, "…") {
+		t.Errorf("long tool line should not have ellipsis, got: %q", plain)
 	}
 }
 
