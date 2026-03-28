@@ -7598,3 +7598,66 @@ func TestSetStackHead_NoLogWhenNoCompletedTasks(t *testing.T) {
 		t.Errorf("should not log 'No stacked parents' when no completed tasks exist, got:\n%s", output)
 	}
 }
+
+// Verifies OnIterationStart is called once per iteration, so the resume
+// script is regenerated each time (not only on exit).
+func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	callCount := 0
+	iterationCount := 0
+	backend := &mutableBackend{
+		remaining: 2,
+		completed: 0,
+		total:     2,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+		label:     "beads",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			if iterationCount >= 2 {
+				backend.mu.Lock()
+				backend.remaining = 0
+				backend.completed = 2
+				backend.mu.Unlock()
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		OnIterationStart: func() {
+			callCount++
+		},
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if callCount != 2 {
+		t.Errorf("OnIterationStart called %d times, want 2", callCount)
+	}
+}

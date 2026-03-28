@@ -215,6 +215,50 @@ func TestGenerateResumeScript_Evolve(t *testing.T) {
 	}
 }
 
+// Verifies the resume script includes all non-default flags from the config,
+// specifically --evolve and --base-branch which were previously missing.
+func TestGenerateResumeScript_AllFlags(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	cfg := config.Config{
+		ProjectDir:    dir,
+		MaxIterations: 30,
+		Quiet:         true,
+		AutoMerge:     true,
+		Evolve:        true,
+		BaseBranch:    "main",
+		Wait:          true,
+		CallsPerHour:  40,
+		Verbose:       true,
+	}
+
+	log := logging.New(nil)
+	generateResumeScript(cfg, ralphDir, "/usr/local/bin/ralph", nil, log)
+
+	data, err := os.ReadFile(filepath.Join(ralphDir, "resume.sh"))
+	if err != nil {
+		t.Fatalf("resume script should exist: %v", err)
+	}
+
+	content := string(data)
+	for _, flag := range []string{
+		"--max 30",
+		"--quiet",
+		"--calls-per-hour 40",
+		"--auto-merge",
+		"--evolve",
+		"--base-branch main",
+		"--wait",
+		"--verbose",
+	} {
+		if !strings.Contains(content, flag) {
+			t.Errorf("resume script should contain %q\ngot: %s", flag, content)
+		}
+	}
+}
+
 // Verifies the summary prints correct task counts from the backend.
 func TestPrintSummary_TaskCounts(t *testing.T) {
 	dir := t.TempDir()

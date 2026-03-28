@@ -45,6 +45,7 @@ type Config struct {
 	VerifyLevel           string // "fire" (default) or "hog" — controls no-diff verification depth
 	VerifyModel           string // model for first LLM verification attempt
 	VerifyEscalationModel string // model for subsequent LLM verification attempts
+	OnIterationStart      func() // called at the start of each iteration (e.g. to regenerate resume script)
 }
 
 // claudeRunner abstracts the Claude execution interface for testability.
@@ -250,6 +251,10 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		if err := l.maybeRefactor(); err != nil {
 			l.logger.Warn("", "Refactor iteration error: %v", err)
+		}
+
+		if l.cfg.OnIterationStart != nil {
+			l.cfg.OnIterationStart()
 		}
 
 		l.logIterationBanner(runIteration, maxIter, iteration, taskID, nextTask, taskChanged, taskInfo)
