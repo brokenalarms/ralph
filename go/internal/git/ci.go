@@ -173,25 +173,37 @@ func (m *Manager) AwaitCI(ctx context.Context, prNumber, repoURL string) ([]CICh
 	return waitForCI(ctx, fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
 }
 
-// AwaitFreshCI waits for CI checks that match the given commit SHA.
-// After a force-push, old CI results are stale — this polls until checks
-// for the new HEAD appear and resolve.
-func (m *Manager) AwaitFreshCI(ctx context.Context, prNumber, repoURL, expectedSHA string) ([]CICheckResult, CIStatus, error) {
-	if expectedSHA == "" {
+// AwaitFreshCI waits for the PR HEAD to change from staleSHA, then
+// waits for CI on the new HEAD. Call GetPRHeadSHA BEFORE pushing to
+// get the stale SHA, then pass it here after push.
+func (m *Manager) AwaitFreshCI(ctx context.Context, prNumber, repoURL, staleSHA string) ([]CICheckResult, CIStatus, error) {
+	if staleSHA == "" {
 		return m.AwaitCI(ctx, prNumber, repoURL)
 	}
 	gh := m.gh()
-	fetch := func(pr, repo string) ([]CICheckResult, error) {
-		// Check if the PR's HEAD matches the expected SHA.
-		currentSHA, _ := gh.GetPRHeadSHA(m.WorkDir, pr)
-		if currentSHA != expectedSHA {
-			// GitHub hasn't registered the push yet.
-			return nil, fmt.Errorf("PR HEAD is %s, waiting for %s", currentSHA[:min(7, len(currentSHA))], expectedSHA[:min(7, len(expectedSHA))])
+
+	// Poll until SHA changes from the pre-push value.
+	m.Logger.Log("ci", "Waiting for PR #%s HEAD to update from %s...", prNumber, staleSHA[:min(7, len(staleSHA))])
+	deadline := time.Now().Add(DefaultCIPollTimeout)
+	interval := DefaultCIPollInterval
+	for {
+		if time.Now().After(deadline) {
+			return nil, CIPending, fmt.Errorf("PR HEAD did not change within %v", DefaultCIPollTimeout)
 		}
-		return gh.ListChecks(pr, repo)
+		if ctx.Err() != nil {
+			return nil, CIPending, ctx.Err()
+		}
+		currentSHA, _ := gh.GetPRHeadSHA(m.WorkDir, prNumber)
+		if currentSHA != "" && currentSHA != staleSHA {
+			m.Logger.Log("ci", "PR #%s HEAD updated to %s", prNumber, currentSHA[:min(7, len(currentSHA))])
+			break
+		}
+		<-ciSleep(interval)
+		interval = nextBackoff(interval)
 	}
-	m.Logger.Log("ci", "Waiting for fresh CI on PR #%s (commit %s)...", prNumber, expectedSHA[:min(7, len(expectedSHA))])
-	return waitForCI(ctx, fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+
+	// Now wait for CI on the new HEAD.
+	return m.AwaitCI(ctx, prNumber, repoURL)
 }
 
 func min(a, b int) int {

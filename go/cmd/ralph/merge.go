@@ -107,16 +107,17 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		gm.FetchBranch(headBranch)
 		gm.FetchBranch(baseBranch)
 
+		// Record SHA before push so we can detect when it changes.
+		preSHA, _ := gh.GetPRHeadSHA(projectDir, prNumber)
+
 		// Rebase onto latest base and squash to 1 commit if needed.
 		if code := rebaseSquashAndPush(ctx, projectDir, headBranch, baseBranch, gm, gh, prNumber, log); code != 0 {
 			return code
 		}
 
-		// Wait for CI.
+		// Wait for SHA to change from pre-push value, then wait for CI.
 		repoURL := gm.RemoteURL()
-		headSHA, _ := gh.GetPRHeadSHA(projectDir, prNumber)
-		log.Log("ci", "Waiting for CI on PR #%s (commit %s)...", prNumber, headSHA[:minInt(7, len(headSHA))])
-		_, ciStatus, ciErr := gm.AwaitFreshCI(ctx, prNumber, repoURL, headSHA)
+		_, ciStatus, ciErr := gm.AwaitFreshCI(ctx, prNumber, repoURL, preSHA)
 		if ciErr != nil {
 			log.Warn("ci", "CI polling error: %v", ciErr)
 		}
