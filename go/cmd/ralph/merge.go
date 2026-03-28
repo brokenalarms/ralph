@@ -178,8 +178,12 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) []s
 	byNumber := make(map[int]prInfo)
 	for _, pr := range allPRs {
 		info := prInfo{pr.Number, pr.Head, pr.Base, pr.State}
-		byHead[pr.Head] = info
 		byNumber[pr.Number] = info
+		// Prefer OPEN PRs over CLOSED when multiple share the same head branch.
+		existing, exists := byHead[pr.Head]
+		if !exists || strings.ToUpper(pr.State) == "OPEN" && strings.ToUpper(existing.state) != "OPEN" {
+			byHead[pr.Head] = info
+		}
 	}
 
 	// Find the starting PR.
