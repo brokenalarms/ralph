@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -78,7 +79,7 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 			if !stack {
 				return 0
 			}
-			next := findNextStackedPR(gh, gm, projectDir, prNumber, log)
+			next := findNextStackedPR(gh, projectDir, prNumber, log)
 			if next == "" {
 				return logStackComplete(log, merged)
 			}
@@ -91,7 +92,6 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 			return 1
 		}
 
-		// Get branch info.
 		headBranch, _ := gh.GetPRHead(projectDir, prNumber)
 		if headBranch == "" {
 			log.Error("", "PR #%s has no head branch", prNumber)
@@ -103,58 +103,26 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		}
 		log.Log("git", "Branch: %s → %s", headBranch, baseBranch)
 
-		// Fetch.
-		log.Log("git", "Fetching branches...")
+		// Fetch to get current state.
 		gm.FetchBranch(headBranch)
 		gm.FetchBranch(baseBranch)
 
-		// Create temp worktree for squash+push.
-		wtDir, cleanup, wtErr := createMergeWorktree(projectDir, headBranch, log)
-		if wtErr != nil {
-			log.Error("git", "Worktree failed: %v", wtErr)
-			return 1
+		// Count commits between base and head.
+		commitCount := strings.TrimSpace(cmdOutputDir(projectDir,
+			"git", "rev-list", "--count", "origin/"+baseBranch+"..origin/"+headBranch))
+		log.Log("git", "%s commits ahead of %s", commitCount, baseBranch)
+
+		// If more than 1 commit, squash in a temp worktree.
+		if commitCount != "1" && commitCount != "0" {
+			if code := squashAndPush(ctx, projectDir, headBranch, baseBranch, gm, gh, prNumber, log); code != 0 {
+				return code
+			}
 		}
 
-		// Fetch latest base and rebase onto it before squashing.
-		gitRunErr(wtDir, "fetch", "origin", baseBranch)
-		baseRef := "origin/" + baseBranch
-		if rebaseErr := gitRunErr(wtDir, "rebase", baseRef); rebaseErr != nil {
-			gitRunErr(wtDir, "rebase", "--abort")
-			cleanup()
-			log.Error("git", "Rebase onto %s failed — resolve conflicts manually", baseBranch)
-			return 1
-		}
-
-		// Squash to 1 commit.
-		baseSHA := strings.TrimSpace(cmdOutputDir(wtDir, "git", "rev-parse", baseRef))
-		if baseSHA == "" {
-			cleanup()
-			log.Error("git", "Cannot resolve %s", baseRef)
-			return 1
-		}
-		gm.WorkDir = wtDir
-		commitMsg := strings.TrimSpace(cmdOutputDir(wtDir, "git", "log", "-1", "--format=%s"))
-		if err := gm.SquashToOneCommit(baseSHA, commitMsg); err != nil {
-			log.Warn("git", "Squash: %v", err)
-		}
-
-		// Fetch the latest remote state so --force-with-lease has an up-to-date baseline.
-		gitRunErr(wtDir, "fetch", "origin", headBranch)
-		log.Log("git", "Force-pushing %s...", headBranch)
-		pushErr := gitRunErr(wtDir, "push", "--force-with-lease", "origin", "HEAD:refs/heads/"+headBranch)
-		if pushErr != nil {
-			cleanup()
-			log.Error("git", "Push failed: %v", pushErr)
-			return 1
-		}
-
-		// Done with worktree — clean up before CI wait.
-		cleanup()
-		gm.WorkDir = projectDir
-
-		// Wait for fresh CI — force-push invalidates old results.
+		// Wait for CI.
 		repoURL := gm.RemoteURL()
 		headSHA, _ := gh.GetPRHeadSHA(projectDir, prNumber)
+		log.Log("ci", "Waiting for CI on PR #%s (commit %s)...", prNumber, headSHA[:minInt(7, len(headSHA))])
 		_, ciStatus, ciErr := gm.AwaitFreshCI(ctx, prNumber, repoURL, headSHA)
 		if ciErr != nil {
 			log.Warn("ci", "CI polling error: %v", ciErr)
@@ -186,7 +154,10 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 			return 0
 		}
 
-		next := findNextStackedPR(gh, gm, projectDir, prNumber, log)
+		// Brief pause for GitHub to retarget the next PR.
+		time.Sleep(2 * time.Second)
+
+		next := findNextStackedPR(gh, projectDir, prNumber, log)
 		if next == "" {
 			return logStackComplete(log, merged)
 		}
@@ -194,12 +165,62 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 	}
 }
 
-// findNextStackedPR searches for an open PR that was targeting the merged
-// branch. After GitHub retargets it to main, we find it by searching for
-// open PRs on the repo.
-func findNextStackedPR(gh git.GitHub, gm *git.Manager, workDir, mergedPR string, log *logging.Logger) string {
-	// Search for the next sequential PR number that's open.
-	// This is a heuristic — works when PRs were created in order.
+// squashAndPush creates a temp worktree, rebases onto the base branch,
+// squashes to 1 commit, and force-pushes. Only called when a PR has
+// multiple commits.
+func squashAndPush(ctx context.Context, projectDir, headBranch, baseBranch string, gm *git.Manager, gh git.GitHub, prNumber string, log *logging.Logger) int {
+	slug := strings.ReplaceAll(headBranch, "/", "-")
+	wtDir := filepath.Join(os.TempDir(), "ralph-merge-"+slug)
+	os.RemoveAll(wtDir)
+
+	exec.Command("git", "-C", projectDir, "worktree", "prune").Run()
+	tmpBranch := "ralph-merge/" + slug
+	exec.Command("git", "-C", projectDir, "branch", "-D", tmpBranch).Run()
+
+	cmd := exec.Command("git", "-C", projectDir, "worktree", "add", "-b", tmpBranch, wtDir, "origin/"+headBranch)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Error("git", "Worktree failed: %s", string(out))
+		return 1
+	}
+	cleanup := func() {
+		exec.Command("git", "-C", projectDir, "worktree", "remove", "--force", wtDir).Run()
+		exec.Command("git", "-C", projectDir, "branch", "-D", tmpBranch).Run()
+	}
+
+	// Rebase onto latest base.
+	gitRunErr(wtDir, "fetch", "origin", baseBranch)
+	baseRef := "origin/" + baseBranch
+	if rebaseErr := gitRunErr(wtDir, "rebase", baseRef); rebaseErr != nil {
+		gitRunErr(wtDir, "rebase", "--abort")
+		cleanup()
+		log.Error("git", "Rebase onto %s failed — resolve conflicts manually", baseBranch)
+		return 1
+	}
+
+	// Squash.
+	baseSHA := strings.TrimSpace(cmdOutputDir(wtDir, "git", "rev-parse", baseRef))
+	gm.WorkDir = wtDir
+	commitMsg := strings.TrimSpace(cmdOutputDir(wtDir, "git", "log", "-1", "--format=%s"))
+	if err := gm.SquashToOneCommit(baseSHA, commitMsg); err != nil {
+		log.Warn("git", "Squash: %v", err)
+	}
+
+	// Force-push.
+	gitRunErr(wtDir, "fetch", "origin", headBranch)
+	log.Log("git", "Force-pushing %s...", headBranch)
+	if pushErr := gitRunErr(wtDir, "push", "--force-with-lease", "origin", "HEAD:refs/heads/"+headBranch); pushErr != nil {
+		cleanup()
+		log.Error("git", "Push failed: %v", pushErr)
+		return 1
+	}
+
+	cleanup()
+	gm.WorkDir = projectDir
+	return 0
+}
+
+func findNextStackedPR(gh git.GitHub, workDir, mergedPR string, log *logging.Logger) string {
 	n := 0
 	fmt.Sscanf(mergedPR, "%d", &n)
 	for offset := 1; offset <= 3; offset++ {
@@ -214,8 +235,6 @@ func findNextStackedPR(gh git.GitHub, gm *git.Manager, workDir, mergedPR string,
 			return candidate
 		case "MERGED":
 			continue
-		default:
-			continue
 		}
 	}
 	return ""
@@ -224,30 +243,6 @@ func findNextStackedPR(gh git.GitHub, gm *git.Manager, workDir, mergedPR string,
 func logStackComplete(log *logging.Logger, merged int) int {
 	log.Success("", "Stack complete — %d PRs merged", merged)
 	return 0
-}
-
-func createMergeWorktree(projectDir, branch string, log *logging.Logger) (string, func(), error) {
-	slug := strings.ReplaceAll(branch, "/", "-")
-	wtDir := filepath.Join(os.TempDir(), "ralph-merge-"+slug)
-	os.RemoveAll(wtDir)
-
-	exec.Command("git", "-C", projectDir, "worktree", "prune").Run()
-
-	// Use a temp branch name to avoid conflicts with existing worktrees.
-	tmpBranch := "ralph-merge/" + slug
-	exec.Command("git", "-C", projectDir, "branch", "-D", tmpBranch).Run()
-
-	cmd := exec.Command("git", "-C", projectDir, "worktree", "add", "-b", tmpBranch, wtDir, "origin/"+branch)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", nil, fmt.Errorf("worktree add for %s: %s", branch, string(out))
-	}
-
-	cleanup := func() {
-		exec.Command("git", "-C", projectDir, "worktree", "remove", "--force", wtDir).Run()
-		exec.Command("git", "-C", projectDir, "branch", "-D", tmpBranch).Run()
-	}
-	return wtDir, cleanup, nil
 }
 
 func cmdOutputDir(dir, name string, args ...string) string {
@@ -267,16 +262,22 @@ func gitRunErr(dir string, args ...string) error {
 	return nil
 }
 
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func printMergeUsage() {
 	fmt.Println(`Usage: ralph merge <pr-number> [--stack]
 
-Companion for ralph loop when --auto-merge is off. Squashes the PR
-branch to a single commit, force-pushes, waits for CI, and merges.
+Companion for ralph loop when --auto-merge is off. Merges a PR,
+squashing to a single commit if needed.
 
 With --stack, cascades through the stacked PR chain: after each merge,
-finds the next PR in the stack and repeats until the stack is empty
-or CI fails. This handles the squash-merge ancestry issue that causes
-merge conflicts when stacked PRs have multiple commits.
+finds the next PR and repeats until the stack is empty or CI fails.
+Stacked PRs that already have 1 commit skip the squash step.
 
 Options:
   --stack    Cascade through the entire stacked PR chain
