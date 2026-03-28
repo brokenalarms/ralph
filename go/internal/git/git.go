@@ -208,8 +208,22 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		m.Logger.Warn("git", "Failed to fetch origin/%s: %v", baseBranch, err)
-		return nil
+		if m.PrevBranch != "" {
+			// Stack head branch missing from remote — likely merged and deleted.
+			// Fall back to the default branch silently.
+			m.SetPrevBranch("")
+			baseBranch = m.detectDefaultBranch()
+			if err2 := m.gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", baseBranch); err2 != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				m.Logger.Warn("git", "Failed to fetch origin/%s: %v", baseBranch, err2)
+				return nil
+			}
+		} else {
+			m.Logger.Warn("git", "Failed to fetch origin/%s: %v", baseBranch, err)
+			return nil
+		}
 	}
 
 	if !m.refExists(m.WorkDir, "origin/"+baseBranch) {
@@ -325,15 +339,20 @@ func (m *Manager) RenameBranchTo(name string) {
 
 // ResetToDefaultBranch resets the worktree to origin's default branch.
 // Used on resume when no stack exists — stale local commits are discarded.
+// No-ops silently when the worktree is already at the target ref.
 func (m *Manager) ResetToDefaultBranch() {
 	defaultBranch := m.detectDefaultBranch()
 	_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch)
-	m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+defaultBranch)
+	target := "origin/" + defaultBranch
+	if m.refExists(m.WorkDir, target) && m.gitOutput(m.WorkDir, "rev-parse", "HEAD") == m.gitOutput(m.WorkDir, "rev-parse", target) {
+		return
+	}
+	m.gitCmd(m.WorkDir, "reset", "--hard", target)
 	m.BranchRenamed = false
 	if m.State != nil {
 		_ = m.State.Write("branch_renamed", "false")
 	}
-	m.Logger.Log("git", "Reset worktree to origin/%s", defaultBranch)
+	m.Logger.Log("git", "Reset worktree to %s", target)
 }
 
 // SetPrevBranch sets the previous branch for stacked PR targeting and

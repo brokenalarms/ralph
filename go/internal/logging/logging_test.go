@@ -490,4 +490,19 @@ func TestPRLink_NoNWO(t *testing.T) {
 	}
 }
 
+// Error log with Analyzer domain emits [o][analyzer] tag so operator can
+// distinguish analyzer-triggered halts from other error sources.
+func TestErrorWithAnalyzerDomain(t *testing.T) {
+	var buf strings.Builder
+	l := NewWithWriter(&buf)
+	l.Error(Analyzer, "Halting: %s", "stuck_loop")
+	out := buf.String()
+	if !strings.Contains(out, "[analyzer]") {
+		t.Errorf("expected [analyzer] tag in output, got: %q", out)
+	}
+	if !strings.Contains(out, "Halting: stuck_loop") {
+		t.Errorf("expected halt message in output, got: %q", out)
+	}
+}
+
 func intPtr(n int) *int { return &n }

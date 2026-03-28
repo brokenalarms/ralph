@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -345,6 +346,35 @@ func TestTagStartEnd_DifferentCommits(t *testing.T) {
 	}
 }
 
+
+// When PrevBranch is set but the branch no longer exists on the remote
+// (e.g. merged and deleted), EnsureUpToDate silently falls back to the
+// default branch instead of logging a warning — the missing branch is
+// an expected condition, not an error.
+func TestEnsureUpToDate_FallsBackSilentlyWhenPrevBranchMissing(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	mgr.PrevBranch = "nonexistent-branch"
+
+	log := mgr.Logger.(*testLog)
+	log.messages = nil
+
+	err := mgr.EnsureUpToDate(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureUpToDate should not error, got: %v", err)
+	}
+
+	if mgr.PrevBranch != "" {
+		t.Errorf("PrevBranch should be cleared after fallback, got %q", mgr.PrevBranch)
+	}
+
+	for _, msg := range log.messages {
+		if strings.Contains(strings.ToLower(msg), "fail") && strings.Contains(msg, "nonexistent") {
+			t.Errorf("should not warn about missing PrevBranch, got: %q", msg)
+		}
+	}
+}
 
 func TestRebaseOntoDefaultBranch_CancelledContextReturnsContextError(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)

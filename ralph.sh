@@ -96,6 +96,7 @@ log_warn()    { echo -e "$(_ts) ${YELLOW}[o]${NC} $*" | tee -a "$LOG_FILE"; }
 log_error()   { echo -e "$(_ts) ${RED}[o]${NC} $*" | tee -a "$LOG_FILE"; }
 log_phase()   { echo -e "$(_ts) ${BOLD}${BLUE}[o]${NC} ${BOLD}$*${NC}" | tee -a "$LOG_FILE"; }
 
+log_agent()        { echo -e "$(_ts) ${CYAN}[r]${NC} $*" | tee -a "$LOG_FILE"; }
 log_task()         { echo -e "$(_ts) ${CYAN}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
 log_task_success() { echo -e "$(_ts) ${GREEN}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
 log_task_error()   { echo -e "$(_ts) ${RED}[$(task_label)]${NC} $*" | tee -a "$LOG_FILE"; }
@@ -991,7 +992,7 @@ run_claude() {
       local task_desc
       task_desc=$(read_current_task) || true
       if [[ -n "$task_desc" ]]; then
-        log_task "Working on: $task_desc"
+        log_agent "Working on: $task_desc"
         write_state "last_task" "$task_desc"
         rename_branch_for_task "$task_desc"
         task_logged=true
