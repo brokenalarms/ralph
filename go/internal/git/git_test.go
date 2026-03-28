@@ -105,6 +105,16 @@ func run(t *testing.T, name string, args ...string) {
 	}
 }
 
+func cmdOutput(t *testing.T, name string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("%s %v failed: %v", name, args, err)
+	}
+	return string(out)
+}
+
 
 // BranchName returns a canonical branch name from beadID and slug
 func TestBranchName(t *testing.T) {

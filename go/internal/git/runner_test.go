@@ -165,14 +165,19 @@ func TestManager_PushAndCreatePR_NoRealProcesses(t *testing.T) {
 	}
 }
 
-// PushAndCreatePR skips push when the agent already pushed and a PR exists.
-func TestManager_PushAndCreatePR_SkipsPushWhenPRExists(t *testing.T) {
+// PushAndCreatePR always pushes (squash + force-push) even when a PR exists,
+// then updates the existing PR's title.
+func TestManager_PushAndCreatePR_PushesEvenWhenPRExists(t *testing.T) {
 	r := newStubRunner()
 	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
 	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	r.On("rev-list --count origin/main..HEAD", "3", nil)
+	r.On("rev-list --count", "1", nil)
+	r.On("rev-parse", "abc123", nil)
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
+	r.On("log -1 --format=%s", "test commit", nil)
+	r.On("push", "", nil)
+	r.On("ref-exists", "", nil)
 
 	gh := &stubGitHub{available: true, openPR: "42"}
 
@@ -187,13 +192,15 @@ func TestManager_PushAndCreatePR_SkipsPushWhenPRExists(t *testing.T) {
 		Logger:         discardLog{},
 	}
 
-	_, err := mgr.PushAndCreatePR(context.Background(), "test-123", "test feature", "")
+	prNum, err := mgr.PushAndCreatePR(context.Background(), "test-123", "test feature", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	if r.CalledWith("push") {
-		t.Error("push should be skipped when a PR already exists")
+	if prNum != "42" {
+		t.Errorf("expected PR 42, got %q", prNum)
+	}
+	if !r.CalledWith("push") {
+		t.Error("push should always happen — squash + force-push ensures latest code is on branch")
 	}
 }
 

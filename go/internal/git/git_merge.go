@@ -10,30 +10,48 @@ import (
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
-// PushAndCreatePR pushes the current branch to remote and creates a PR if
-// none exists. For stacked PRs, the first PR in a session targets main and
-// subsequent PRs target the previous task's branch. Returns the PR number
-// (e.g. "42") so the caller can link it to the task backend.
-func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
+// resolveBaseBranch returns PrevBranch if set, otherwise the default branch.
+// Single source of truth for "what is this branch based on."
+func (m *Manager) resolveBaseBranch() string {
+	if m.PrevBranch != "" {
+		return m.PrevBranch
+	}
+	return m.detectDefaultBranch()
+}
+
+// Push squashes all commits into one and force-pushes the branch.
+// Always uses --force-with-lease (safe — only forces if remote matches
+// last fetch). Squash ensures stacked PRs cascade cleanly on merge.
+func (m *Manager) Push(ctx context.Context) error {
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
-		return "", nil
+		return nil
 	}
 
-	defaultBranch := m.detectDefaultBranch()
-	_ = m.gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", defaultBranch)
-	if m.gitCmdErr(m.WorkDir, "rebase", "origin/"+defaultBranch) != nil {
-		m.gitCmd(m.WorkDir, "rebase", "--abort")
-		m.Logger.Warn("git", "Pre-push rebase failed — pushing without rebase, GitHub will handle conflicts")
+	baseBranch := m.resolveBaseBranch()
+	_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", baseBranch)
+	baseRef := "origin/" + baseBranch
+	if !m.refExists(m.WorkDir, baseRef) {
+		baseRef = baseBranch
 	}
 
-	repoURL := m.gitOutput(m.WorkDir, "remote", "get-url", "origin")
+	baseSHA := m.gitOutput(m.WorkDir, "rev-parse", baseRef)
+	if baseSHA != "" {
+		commitMsg := m.gitOutput(m.WorkDir, "log", "-1", "--format=%s")
+		if err := m.SquashToOneCommit(baseSHA, commitMsg); err != nil {
+			m.Logger.Warn("git", "Squash: %v", err)
+		}
+	}
+
+	m.Logger.Log("git", "Pushing %s...", m.WorktreeBranch)
+	return m.gitCmdErrCtx(ctx, m.WorkDir, "push", "--force-with-lease", "-u", "origin", m.WorktreeBranch)
+}
+
+// CreatePR ensures a PR exists for the current branch. If one is already
+// open, updates its title and body. Otherwise creates a new PR targeting
+// resolveBaseBranch. Returns the PR number.
+func (m *Manager) CreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
+	repoURL := m.RemoteURL()
 	if repoURL == "" {
-		return "", nil
-	}
-
-	revCount := m.gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+defaultBranch+"..HEAD")
-	if revCount == "" || revCount == "0" {
-		m.Logger.Log("git", "No new commits to push")
 		return "", nil
 	}
 
@@ -43,11 +61,13 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body st
 	}
 
 	nwo := NWOFromRemote(repoURL)
+	title := m.prTitle(taskID, taskDesc)
+
+	// Existing PR — update and return.
 	prNumber, _ := gh.FindOpenPR(m.WorktreeBranch, repoURL)
 	if prNumber != "" {
 		pr := logging.PRLink(nwo, prNumber)
 		if taskID != "" {
-			title := m.prTitle(taskID, taskDesc)
 			if err := gh.EditPR(prNumber, repoURL, title, body); err != nil {
 				m.Logger.Warn("git", "Failed to update %s: %v", pr, err)
 			}
@@ -56,43 +76,8 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body st
 		return prNumber, nil
 	}
 
-	m.Logger.Log("git", "Pushing %s...", m.WorktreeBranch)
-	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "push", "-u", "origin", m.WorktreeBranch); err != nil {
-		if ctx.Err() != nil {
-			return "", ctx.Err()
-		}
-		// Push failed — remote branch may already have the work.
-		// Don't force-push. Just continue to PR creation using the remote branch.
-		m.Logger.Log("git", "Push rejected — remote branch exists, continuing to PR creation")
-	}
-
-	// Stacked PRs: target previous branch if one exists, else main.
-	baseBranch := defaultBranch
-	if m.PrevBranch != "" {
-		baseBranch = m.PrevBranch
-		m.Logger.Log("git", "Stacked PR: targeting %s (previous task branch)", baseBranch)
-	}
-
-	// Check there are commits between the base and HEAD.
-	_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", baseBranch)
-	baseRef := "origin/" + baseBranch
-	if !m.refExists(m.WorkDir, baseRef) {
-		baseRef = baseBranch
-	}
-	diffCount := m.gitOutput(m.WorkDir, "rev-list", "--count", baseRef+"..HEAD")
-	if (diffCount == "" || diffCount == "0") && baseBranch != defaultBranch {
-		// Stacked base has no diff — fall back to main.
-		m.Logger.Log("git", "No commits between %s and HEAD — falling back to %s", baseRef, defaultBranch)
-		baseBranch = defaultBranch
-		baseRef = "origin/" + defaultBranch
-		diffCount = m.gitOutput(m.WorkDir, "rev-list", "--count", baseRef+"..HEAD")
-	}
-	if diffCount == "" || diffCount == "0" {
-		m.Logger.Log("git", "No commits between %s and HEAD — skipping PR", baseRef)
-		return "", nil
-	}
-
-	title := m.prTitle(taskID, taskDesc)
+	// New PR.
+	baseBranch := m.resolveBaseBranch()
 	if body == "" {
 		body = taskDesc
 	}
@@ -114,6 +99,18 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body st
 		m.Logger.Log("git", "Created PR for %s", m.WorktreeBranch)
 	}
 	return newPR, nil
+}
+
+// PushAndCreatePR composes Push and CreatePR. Squashes, force-pushes, then
+// ensures a PR exists. Returns the PR number.
+func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
+	if err := m.Push(ctx); err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		m.Logger.Warn("git", "Push failed: %v — attempting PR creation anyway", err)
+	}
+	return m.CreatePR(ctx, taskID, taskDesc, body)
 }
 
 func (m *Manager) prTitle(taskID, taskDesc string) string {
@@ -298,14 +295,10 @@ func NWOFromRemote(remoteURL string) string {
 	return ""
 }
 
-// ForcePush pushes the current branch to the remote with --force-with-lease,
-// which is needed after rebasing to resolve merge conflicts on a PR.
+// ForcePush is an alias for Push — both squash and force-push.
+// Kept for backward compatibility with callers that expect the name.
 func (m *Manager) ForcePush(ctx context.Context) error {
-	if m.WorktreeBranch == "" {
-		return nil
-	}
-	m.Logger.Log("git", "Force-pushing %s...", m.WorktreeBranch)
-	return m.gitCmdErrCtx(ctx, m.WorkDir, "push", "--force-with-lease", "origin", m.WorktreeBranch)
+	return m.Push(ctx)
 }
 
 // DeleteRemoteBranch removes the current branch from the remote. Used to
@@ -340,12 +333,8 @@ type MergeRetryOpts struct {
 // UnresolvedConflictError if the rebase couldn't resolve the divergence,
 // signaling that retrying will not help.
 func (m *Manager) ResolveConflict(ctx context.Context) error {
-	defaultBranch := m.detectDefaultBranch()
-	baseBranch := defaultBranch
-	if m.PrevBranch != "" {
-		baseBranch = m.PrevBranch
-	}
-	m.Logger.Log("git", "%s Rebasing onto %s to resolve merge conflicts...", logging.BranchTag(defaultBranch), baseBranch)
+	baseBranch := m.resolveBaseBranch()
+	m.Logger.Log("git", "%s Rebasing onto %s to resolve merge conflicts...", logging.BranchTag(baseBranch), baseBranch)
 	if err := m.EnsureUpToDate(ctx); err != nil {
 		return fmt.Errorf("conflict resolution rebase failed: %w", err)
 	}
@@ -360,8 +349,7 @@ func (m *Manager) ResolveConflict(ctx context.Context) error {
 		}
 	}
 
-	m.Logger.Log("git", "%s Force-pushing rebased branch...", logging.BranchTag(defaultBranch))
-	return m.ForcePush(ctx)
+	return m.Push(ctx)
 }
 
 // MergeWithRetry is the single merge pipeline: try merge, detect error type,

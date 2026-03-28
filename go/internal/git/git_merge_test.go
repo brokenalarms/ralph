@@ -1176,3 +1176,131 @@ func TestMergeWithRetry_SkipsAfterConflictAgentFails(t *testing.T) {
 		t.Errorf("expected 1 merge attempt, got %d", mergeCalls)
 	}
 }
+
+// Push squashes multiple commits into one and force-pushes. Verifies the
+// remote branch has exactly 1 commit after push, with identical tree content.
+func TestPush_SquashesMultipleCommits(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	wtDir := filepath.Join(t.TempDir(), "worktree")
+	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test-squash", wtDir)
+
+	// Create 3 commits on the worktree branch.
+	for i := 0; i < 3; i++ {
+		writeFile(t, wtDir, fmt.Sprintf("file%d.txt", i), fmt.Sprintf("content %d\n", i))
+		run(t, "git", "-C", wtDir, "add", "-A")
+		run(t, "git", "-C", wtDir, "commit", "-m", fmt.Sprintf("commit %d", i))
+	}
+
+	// Verify 3 commits ahead before push.
+	countBefore := strings.TrimSpace(cmdOutput(t, "git", "-C", wtDir, "rev-list", "--count", "origin/main..HEAD"))
+	if countBefore != "3" {
+		t.Fatalf("expected 3 commits before push, got %s", countBefore)
+	}
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        wtDir,
+		WorktreeBranch: "ralph/test-squash",
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	if err := mgr.Push(context.Background()); err != nil {
+		t.Fatalf("Push failed: %v", err)
+	}
+
+	// Verify 1 commit on remote.
+	countAfter := strings.TrimSpace(cmdOutput(t, "git", "-C", bare, "rev-list", "--count", "main..ralph/test-squash"))
+	if countAfter != "1" {
+		t.Errorf("expected 1 commit on remote after squash-push, got %s", countAfter)
+	}
+
+	// Verify all 3 files exist (tree content preserved).
+	for i := 0; i < 3; i++ {
+		file := fmt.Sprintf("file%d.txt", i)
+		out := strings.TrimSpace(cmdOutput(t, "git", "-C", bare, "show", "ralph/test-squash:"+file))
+		want := fmt.Sprintf("content %d", i)
+		if out != want {
+			t.Errorf("file%d.txt = %q, want %q", i, out, want)
+		}
+	}
+}
+
+// Push with a single commit is a no-op for squash — just pushes the commit.
+func TestPush_SingleCommitNoOp(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	wtDir := filepath.Join(t.TempDir(), "worktree")
+	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test-single", wtDir)
+
+	writeFile(t, wtDir, "only.txt", "content\n")
+	run(t, "git", "-C", wtDir, "add", "-A")
+	run(t, "git", "-C", wtDir, "commit", "-m", "single commit")
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        wtDir,
+		WorktreeBranch: "ralph/test-single",
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	if err := mgr.Push(context.Background()); err != nil {
+		t.Fatalf("Push failed: %v", err)
+	}
+
+	count := strings.TrimSpace(cmdOutput(t, "git", "-C", bare, "rev-list", "--count", "main..ralph/test-single"))
+	if count != "1" {
+		t.Errorf("expected 1 commit on remote, got %s", count)
+	}
+}
+
+// Push after fix agent: existing remote with 1 commit, add 2 more locally,
+// push squashes back to 1.
+func TestPush_AfterFixAgent(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	wtDir := filepath.Join(t.TempDir(), "worktree")
+	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test-fix", wtDir)
+
+	// First commit + push (initial PR).
+	writeFile(t, wtDir, "main.go", "package main\n")
+	run(t, "git", "-C", wtDir, "add", "-A")
+	run(t, "git", "-C", wtDir, "commit", "-m", "initial work")
+	run(t, "git", "-C", wtDir, "push", "-u", "origin", "ralph/test-fix")
+
+	// Fix agent adds 2 more commits locally.
+	writeFile(t, wtDir, "fix1.go", "package fix1\n")
+	run(t, "git", "-C", wtDir, "add", "-A")
+	run(t, "git", "-C", wtDir, "commit", "-m", "fix attempt 1")
+	writeFile(t, wtDir, "fix2.go", "package fix2\n")
+	run(t, "git", "-C", wtDir, "add", "-A")
+	run(t, "git", "-C", wtDir, "commit", "-m", "fix attempt 2")
+
+	// 3 commits ahead of main locally.
+	countLocal := strings.TrimSpace(cmdOutput(t, "git", "-C", wtDir, "rev-list", "--count", "origin/main..HEAD"))
+	if countLocal != "3" {
+		t.Fatalf("expected 3 local commits, got %s", countLocal)
+	}
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        wtDir,
+		WorktreeBranch: "ralph/test-fix",
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	if err := mgr.Push(context.Background()); err != nil {
+		t.Fatalf("Push failed: %v", err)
+	}
+
+	// Remote should have 1 commit with all 3 files.
+	count := strings.TrimSpace(cmdOutput(t, "git", "-C", bare, "rev-list", "--count", "main..ralph/test-fix"))
+	if count != "1" {
+		t.Errorf("expected 1 commit on remote after fix-agent squash, got %s", count)
+	}
+	for _, file := range []string{"main.go", "fix1.go", "fix2.go"} {
+		if cmdOutput(t, "git", "-C", bare, "show", "ralph/test-fix:"+file) == "" {
+			t.Errorf("expected %s on remote", file)
+		}
+	}
+}
