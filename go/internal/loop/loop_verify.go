@@ -39,12 +39,19 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, 
 		return false
 	}
 
+	// Fix agent may leave uncommitted changes — commit them before checking HEAD.
+	if l.git.HasUncommittedChanges() {
+		l.logger.Log("git", "Fix agent left uncommitted changes — auto-committing")
+		l.git.CommitAll("fix: auto-commit CI fix agent changes")
+	}
+
 	headAfter := l.git.HeadRev()
 	if headBefore == headAfter {
 		l.logger.Warn("git", "Fix agent made no new commits — nothing to push")
 		return false
 	}
 
+	l.logger.Log("git", "Fix agent committed — force-pushing")
 	if err := l.git.ForcePush(ctx); err != nil {
 		l.logger.Warn("git", "Force-push after CI fix failed: %v", err)
 		return false

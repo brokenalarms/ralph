@@ -106,6 +106,11 @@ func (m *Manager) HasUncommittedChanges() bool {
 		m.gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
 }
 
+func (m *Manager) CommitAll(message string) {
+	m.gitCmd(m.WorkDir, "add", "-A")
+	_ = m.gitCmdErr(m.WorkDir, "commit", "-m", message)
+}
+
 func (m *Manager) ChangedFiles(headBefore, headAfter string) []string {
 	seen := make(map[string]bool)
 	var result []string
