@@ -107,16 +107,9 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		gm.FetchBranch(headBranch)
 		gm.FetchBranch(baseBranch)
 
-		// Count commits between base and head.
-		commitCount := strings.TrimSpace(cmdOutputDir(projectDir,
-			"git", "rev-list", "--count", "origin/"+baseBranch+"..origin/"+headBranch))
-		log.Log("git", "%s commits ahead of %s", commitCount, baseBranch)
-
-		// If more than 1 commit, squash in a temp worktree.
-		if commitCount != "1" && commitCount != "0" {
-			if code := squashAndPush(ctx, projectDir, headBranch, baseBranch, gm, gh, prNumber, log); code != 0 {
-				return code
-			}
+		// Rebase onto latest base and squash to 1 commit if needed.
+		if code := rebaseSquashAndPush(ctx, projectDir, headBranch, baseBranch, gm, gh, prNumber, log); code != 0 {
+			return code
 		}
 
 		// Wait for CI.
@@ -165,10 +158,9 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 	}
 }
 
-// squashAndPush creates a temp worktree, rebases onto the base branch,
-// squashes to 1 commit, and force-pushes. Only called when a PR has
-// multiple commits.
-func squashAndPush(ctx context.Context, projectDir, headBranch, baseBranch string, gm *git.Manager, gh git.GitHub, prNumber string, log *logging.Logger) int {
+// rebaseSquashAndPush creates a temp worktree, rebases onto the latest
+// base branch, squashes to 1 commit if needed, and force-pushes.
+func rebaseSquashAndPush(ctx context.Context, projectDir, headBranch, baseBranch string, gm *git.Manager, gh git.GitHub, prNumber string, log *logging.Logger) int {
 	slug := strings.ReplaceAll(headBranch, "/", "-")
 	wtDir := filepath.Join(os.TempDir(), "ralph-merge-"+slug)
 	os.RemoveAll(wtDir)
