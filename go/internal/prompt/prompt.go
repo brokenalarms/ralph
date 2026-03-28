@@ -165,9 +165,12 @@ func reviewInstructions(projectDir, ralphDir, style, reflections string) string 
 
 	return fmt.Sprintf(`## Review Mode — Post-Mortem
 
-You are running an interactive post-mortem review session. Your job is to analyze
-reflections from past iterations, audit code health, and present findings to the
-user for approval before creating any tasks.
+You are running an interactive post-mortem review session.
+
+START by presenting your reflection analysis (Responsibility 1). Show the
+user what the agents learned before anything else — this is the primary
+value of the review session. Then proceed to the other responsibilities
+as the user directs.
 
 ### Context
 - Project: %s
@@ -202,9 +205,10 @@ Using the style guide above, identify:
 - Naming issues in recently changed code
 - Duplicated logic that has grown past three occurrences
 
-### Responsibility 4: Present Findings
+### How to present
 
-Present findings to the user interactively. For each finding:
+Present each responsibility's findings as you complete it — don't batch.
+For each finding:
 1. State what you found and why it matters
 2. Propose the action (add to AGENTS.md, create a bead, refactor now, delete dead code)
 3. Wait for user approval before acting
