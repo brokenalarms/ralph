@@ -7512,3 +7512,94 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 		t.Errorf("expected 'Updated local' from PostMergeUpdateMain, got:\n%s", output)
 	}
 }
+
+// setStackHead logs "No stacked parents — resetting to main" when all
+// completed tasks have merged PRs and no stack head is found.
+func TestSetStackHead_LogsNoStackedParents(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(10)
+
+	var buf bytes.Buffer
+	logger := logging.NewWithWriter(&buf)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logger,
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Add a completed task with a merged PR.
+	st.AddCompletedTask("ralph-aaa")
+	backend := &mutableBackend{
+		externalRefs: map[string]string{"ralph-aaa": "gh-100"},
+		metadata:     map[string]map[string]string{"ralph-aaa": {"branch": "some-branch"}},
+	}
+	gm.GitHub = &stubGitHub{available: true, prState: "MERGED"}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
+		TaskBackend: backend,
+	}, st, gm, logger)
+
+	l.setStackHead()
+
+	output := buf.String()
+	if !strings.Contains(output, "No stacked parents") {
+		t.Errorf("expected 'No stacked parents' log when all PRs merged, got:\n%s", output)
+	}
+	if !strings.Contains(output, "main") {
+		t.Errorf("expected default branch name 'main' in log, got:\n%s", output)
+	}
+}
+
+// setStackHead does NOT log "No stacked parents" when there are no
+// completed tasks — the early return path should be silent.
+func TestSetStackHead_NoLogWhenNoCompletedTasks(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(10)
+
+	var buf bytes.Buffer
+	logger := logging.NewWithWriter(&buf)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logger,
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	backend := &mutableBackend{}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
+		TaskBackend: backend,
+	}, st, gm, logger)
+
+	l.setStackHead()
+
+	output := buf.String()
+	if strings.Contains(output, "No stacked parents") {
+		t.Errorf("should not log 'No stacked parents' when no completed tasks exist, got:\n%s", output)
+	}
+}
