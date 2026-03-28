@@ -220,66 +220,69 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) []s
 	return chain
 }
 
-// rebaseStackAndPush creates a temp worktree on the top branch, sets up
-// local tracking for all stack branches, rebases with --update-refs onto
-// main, then force-pushes all branches.
+// rebaseStackAndPush creates a temp worktree on the top branch, rebases
+// with --update-refs onto main, then force-pushes all branches.
+// If a worktree already exists (from a previous conflict resolution),
+// skips rebase and goes straight to push.
 func rebaseStackAndPush(projectDir, defaultBranch, topBranch string, allBranches []string, gm *git.Manager, log *logging.Logger) int {
 	slug := strings.ReplaceAll(topBranch, "/", "-")
 	wtDir := filepath.Join(os.TempDir(), "ralph-merge-"+slug)
-	os.RemoveAll(wtDir)
-
-	exec.Command("git", "-C", projectDir, "worktree", "prune").Run()
 	tmpBranch := "ralph-merge/" + slug
-	exec.Command("git", "-C", projectDir, "branch", "-D", tmpBranch).Run()
 
-	// Fetch all branches.
-	log.Log("git", "Fetching %d branches...", len(allBranches)+1)
-	gitRunErr(projectDir, "fetch", "origin", defaultBranch)
-	for _, b := range allBranches {
-		gitRunErr(projectDir, "fetch", "origin", b)
+	// Check if worktree exists from a previous run (conflict was resolved manually).
+	if _, err := os.Stat(filepath.Join(wtDir, ".git")); err == nil {
+		log.Log("git", "Resuming from existing worktree: %s", wtDir)
+	} else {
+		// Fresh worktree.
+		os.RemoveAll(wtDir)
+		exec.Command("git", "-C", projectDir, "worktree", "prune").Run()
+		exec.Command("git", "-C", projectDir, "branch", "-D", tmpBranch).Run()
+
+		// Only fetch top branch + main.
+		log.Log("git", "Fetching %s and %s...", topBranch, defaultBranch)
+		gitRunErr(projectDir, "fetch", "origin", defaultBranch)
+		gitRunErr(projectDir, "fetch", "origin", topBranch)
+
+		// Create worktree on the top branch.
+		cmd := exec.Command("git", "-C", projectDir, "worktree", "add", "-b", tmpBranch, wtDir, "origin/"+topBranch)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Error("git", "Worktree failed: %s", string(out))
+			return 1
+		}
+
+		// Set up local tracking branches for --update-refs.
+		for _, b := range allBranches {
+			exec.Command("git", "-C", wtDir, "branch", "-f", b, "origin/"+b).Run()
+		}
+
+		// Rebase with --update-refs onto main.
+		log.Log("git", "Rebasing with --update-refs onto origin/%s...", defaultBranch)
+		if rebaseErr := gitRunErr(wtDir, "rebase", "--update-refs", "origin/"+defaultBranch); rebaseErr != nil {
+			log.Log("git", "Rebase conflict — attempting auto-resolve...")
+			autoCmd := exec.Command("git-rebase-continue", "--auto")
+			autoCmd.Dir = wtDir
+			autoOut, autoErr := autoCmd.CombinedOutput()
+			if autoErr != nil {
+				log.Error("git", "Rebase has conflicts — resolve manually in:\n  %s", wtDir)
+				log.Log("git", "Then run: cd %s && git-rebase-continue", wtDir)
+				log.Log("git", "Then re-run: ralph merge %s", strings.Split(allBranches[len(allBranches)-1], "/")[len(strings.Split(allBranches[len(allBranches)-1], "/"))-1])
+				log.Log("", "\n%s", string(autoOut))
+				return 1
+			}
+		}
 	}
 
-	// Create worktree on the top branch.
-	cmd := exec.Command("git", "-C", projectDir, "worktree", "add", "-b", tmpBranch, wtDir, "origin/"+topBranch)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Error("git", "Worktree failed: %s", string(out))
-		return 1
-	}
 	cleanup := func() {
 		exec.Command("git", "-C", projectDir, "worktree", "remove", "--force", wtDir).Run()
 		exec.Command("git", "-C", projectDir, "branch", "-D", tmpBranch).Run()
-		for _, b := range allBranches {
-			exec.Command("git", "-C", projectDir, "branch", "-D", b).Run()
-		}
-	}
-
-	// Set up local tracking branches for all stack branches so --update-refs finds them.
-	for _, b := range allBranches {
-		exec.Command("git", "-C", wtDir, "branch", "-f", b, "origin/"+b).Run()
-	}
-
-	// Rebase with --update-refs onto main.
-	log.Log("git", "Rebasing with --update-refs onto origin/%s...", defaultBranch)
-	if rebaseErr := gitRunErr(wtDir, "rebase", "--update-refs", "origin/"+defaultBranch); rebaseErr != nil {
-		log.Log("git", "Rebase conflict — attempting auto-resolve...")
-		autoCmd := exec.Command("git-rebase-continue", "--auto")
-		autoCmd.Dir = wtDir
-		autoOut, autoErr := autoCmd.CombinedOutput()
-		if autoErr != nil {
-			log.Error("git", "Rebase has conflicts — resolve manually in:\n  %s", wtDir)
-			log.Log("git", "Then run: cd %s && git-rebase-continue", wtDir)
-			log.Log("git", "Then re-run: ralph merge   (to continue)")
-			log.Log("", "\n%s", string(autoOut))
-			return 1
-		}
 	}
 
 	// Force-push all branches.
 	log.Log("git", "Force-pushing %d branches...", len(allBranches))
 	for _, b := range allBranches {
 		log.Log("git", "  Pushing %s", b)
-		if pushErr := gitRunErr(wtDir, "push", "--force", "origin", b+":refs/heads/"+b); pushErr != nil {
+		if pushErr := gitRunErr(wtDir, "push", "--force", "origin", b); pushErr != nil {
 			cleanup()
 			log.Error("git", "Push failed for %s: %v", b, pushErr)
 			return 1
