@@ -156,6 +156,17 @@ func (e *MergeConflictError) Error() string {
 	return fmt.Sprintf("PR #%s has merge conflicts with the base branch", e.PRNumber)
 }
 
+// UnresolvedConflictError is returned when a merge conflict could not be
+// auto-resolved by rebasing. Retrying will not help — the conflict requires
+// manual or agent-driven resolution.
+type UnresolvedConflictError struct {
+	PRNumber string
+}
+
+func (e *UnresolvedConflictError) Error() string {
+	return fmt.Sprintf("PR #%s has unresolvable merge conflicts — auto-resolve failed", e.PRNumber)
+}
+
 // isCIGatedError returns true if the merge error indicates branch protection
 // is blocking the merge (typically because CI checks haven't passed yet).
 func isCIGatedError(mergeOutput string) bool {

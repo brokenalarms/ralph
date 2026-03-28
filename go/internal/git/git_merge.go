@@ -325,14 +325,30 @@ type MergeRetryOpts struct {
 }
 
 // ResolveConflict rebases onto the default branch and force-pushes to
-// resolve PR merge conflicts before the next merge attempt. Goes through
-// EnsureUpToDate which preserves local commits on conflict.
+// resolve PR merge conflicts before the next merge attempt. Returns an
+// UnresolvedConflictError if the rebase couldn't resolve the divergence,
+// signaling that retrying will not help.
 func (m *Manager) ResolveConflict(ctx context.Context) error {
 	defaultBranch := m.detectDefaultBranch()
-	m.Logger.Log("git", "%s Rebasing onto %s to resolve merge conflicts...", logging.BranchTag(defaultBranch), defaultBranch)
+	baseBranch := defaultBranch
+	if m.PrevBranch != "" {
+		baseBranch = m.PrevBranch
+	}
+	m.Logger.Log("git", "%s Rebasing onto %s to resolve merge conflicts...", logging.BranchTag(defaultBranch), baseBranch)
 	if err := m.EnsureUpToDate(ctx); err != nil {
 		return fmt.Errorf("conflict resolution rebase failed: %w", err)
 	}
+
+	// Check if the rebase actually resolved the divergence. If origin/base
+	// is still not an ancestor of HEAD, auto-resolve failed and force-pushing
+	// would just repeat the same conflict on GitHub.
+	if m.refExists(m.WorkDir, "origin/"+baseBranch) {
+		if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+baseBranch, "HEAD") != nil {
+			m.Logger.Warn("git", "Rebase did not resolve conflicts with origin/%s — skipping force-push", baseBranch)
+			return &UnresolvedConflictError{}
+		}
+	}
+
 	m.Logger.Log("git", "%s Force-pushing rebased branch...", logging.BranchTag(defaultBranch))
 	return m.ForcePush(ctx)
 }
@@ -353,10 +369,16 @@ func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool
 
 		var conflictErr *MergeConflictError
 		if errors.As(err, &conflictErr) {
-			if resolveErr := m.ResolveConflict(ctx); resolveErr != nil {
-				return false, resolveErr
+			resolveErr := m.ResolveConflict(ctx)
+			if resolveErr == nil {
+				continue
 			}
-			continue
+			var unresolved *UnresolvedConflictError
+			if errors.As(resolveErr, &unresolved) {
+				unresolved.PRNumber = conflictErr.PRNumber
+				return false, unresolved
+			}
+			return false, resolveErr
 		}
 
 		var ciErr *CIFailureError
