@@ -586,10 +586,10 @@ func (l *Loop) setStackHead() {
 		if prNum == "" {
 			continue
 		}
-		// Check PR state — if merged, its branch is gone, keep walking.
+		// Only stack on OPEN PRs. MERGED = branch deleted, CLOSED = dead.
 		if gh != nil && gh.Available() {
 			prState, _ := gh.GetPRState(l.git.WorkDir, prNum)
-			if strings.ToUpper(prState) == "MERGED" {
+			if strings.ToUpper(prState) != "OPEN" {
 				continue
 			}
 		}
