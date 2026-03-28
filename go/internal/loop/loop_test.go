@@ -2102,8 +2102,8 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	// setStackHead checks PR state via GH — report all PRs as OPEN so stacking works.
-	gm.GitHub = &stubGitHub{available: true, prState: "OPEN"}
+	// setStackHead uses git ancestry — no GitHub stub needed. Task A's branch
+	// has work ahead of main so it's selected as stack head.
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -2191,7 +2191,11 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 				backend.externalRefs["ralph-aaa"] = "gh-100"
 				st.AddCompletedTask("ralph-aaa")
 
-				// Simulate merge: delete task A's branch from origin.
+				// Simulate merge: land task A's work on main, then delete branch.
+				run(t, "git", "-C", project, "fetch", "origin", taskABranch)
+				run(t, "git", "-C", project, "checkout", "main")
+				run(t, "git", "-C", project, "merge", "origin/"+taskABranch)
+				run(t, "git", "-C", project, "push", "origin", "main")
 				run(t, "git", "-C", project, "push", "origin", "--delete", taskABranch)
 
 				backend.completed = 1
@@ -2207,8 +2211,8 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	// Report task A's PR as MERGED so setStackHead skips it.
-	gm.GitHub = &stubGitHub{available: true, prState: "MERGED"}
+	// setStackHead uses git ancestry — no GitHub stub needed. Task A's branch
+	// is deleted from remote (simulating merge), so it's skipped.
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -2241,6 +2245,106 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 	mainRev := strings.TrimSpace(string(mainTip))
 	if headAtTaskBStart != mainRev {
 		t.Errorf("task B should start from main (%s) after merged PR, got %s", mainRev, headAtTaskBStart)
+	}
+}
+
+// setStackHead skips a branch whose work landed on main even when the
+// remote branch still exists (ancestry check, not branch deletion).
+func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(10)
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	iterationCount := 0
+	var headAtTaskBStart string
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+		metadata:  map[string]map[string]string{},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			if iterationCount == 1 {
+				writeFile(t, gm.WorkDir, "a.txt", "task A work\n")
+				run(t, "git", "-C", gm.WorkDir, "commit", "-m", "task A")
+				taskABranch := gm.WorktreeBranch
+				run(t, "git", "-C", gm.WorkDir, "push", "-u", "origin", taskABranch)
+
+				backend.metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
+				st.AddCompletedTask("ralph-aaa")
+
+				// Merge work into main but leave the branch on remote.
+				run(t, "git", "-C", project, "fetch", "origin", taskABranch)
+				run(t, "git", "-C", project, "checkout", "main")
+				run(t, "git", "-C", project, "merge", "origin/"+taskABranch)
+				run(t, "git", "-C", project, "push", "origin", "main")
+
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+			} else {
+				headAtTaskBStart = gm.HeadRev()
+				backend.completed = 2
+				backend.remaining = 0
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if iterationCount != 2 {
+		t.Fatalf("expected 2 iterations, got %d", iterationCount)
+	}
+
+	// Task B should target main: task A's branch is ancestor of main (work landed).
+	mainTip, _ := exec.Command("git", "-C", gm.WorkDir, "rev-parse", "origin/main").Output()
+	mainRev := strings.TrimSpace(string(mainTip))
+	if headAtTaskBStart != mainRev {
+		t.Errorf("task B should start from main (%s) when branch is ancestor, got %s", mainRev, headAtTaskBStart)
 	}
 }
 
@@ -2833,7 +2937,7 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Wait:          true,
-		WaitInterval:  50 * time.Millisecond,
+
 	}, st, gm, logger)
 	l.runner = runner
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
@@ -2901,7 +3005,7 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Wait:          true,
-		WaitInterval:  50 * time.Millisecond,
+
 	}, st, gm, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2946,7 +3050,7 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Wait:          true,
-		WaitInterval:  50 * time.Millisecond,
+
 	}, st, gm, logger)
 
 	go func() {
@@ -4594,7 +4698,7 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Wait:          true,
-		WaitInterval:  50 * time.Millisecond,
+
 	}, st, gm, logger)
 	l.runner = runner
 
@@ -4727,7 +4831,7 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 		TaskBackend:   backend,
 		AutoMerge:     true,
 		Wait:          true,
-		WaitInterval:  50 * time.Millisecond,
+
 	}, st, gm, logger)
 	l.runner = runner
 
@@ -5116,7 +5220,6 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 			ralphDir := filepath.Join(dir, ".ralph")
 			promptsDir := filepath.Join(dir, "prompts")
 			createPromptTemplates(t, promptsDir)
-			// verify-llm.md is needed when LLM rejects (fix agent prompt)
 			os.WriteFile(filepath.Join(promptsDir, "verify-llm.md"), []byte("fix: {{LLM_FEEDBACK}}"), 0o644)
 
 			backend := &mutableBackend{
@@ -5167,22 +5270,8 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 			}
 			l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
-			// For rejection, stub out newRunnerFunc so fix agent doesn't launch real Claude
-			if !tt.passed {
-				l.newRunnerFunc = func() claudeRunner {
-					return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
-				}
-				// After fix agent, re-verification will call llmVerifyFunc again;
-				// make it pass on second call to avoid skip-task path
-				callCount := 0
-				l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
-					callCount++
-					if callCount == 1 {
-						return llmResult
-					}
-					return verify.Result{Passed: true, Reason: "fixed"}
-				}
-			}
+			// For rejection, injection succeeds (signalCallingRunner.InjectMessage returns nil)
+			// and onSignal returns false — the agent continues with feedback injected via stdin.
 
 			_ = l.Run(context.Background())
 
@@ -5719,9 +5808,9 @@ func TestLoop_onSignal_InjectsLLMRejection(t *testing.T) {
 	}
 }
 
-// Verifies that when stdin injection fails, onSignal falls back to spawning
-// a fix agent — the old behavior provides a safety net.
-func TestLoop_onSignal_FallsBackToFixAgentOnBrokenPipe(t *testing.T) {
+// Verifies that when stdin injection fails, onSignal returns false so the
+// loop restarts the agent — no separate fix agent is spawned.
+func TestLoop_onSignal_RestartsOnBrokenPipe(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -5735,7 +5824,9 @@ func TestLoop_onSignal_FallsBackToFixAgentOnBrokenPipe(t *testing.T) {
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
-	logger := logging.New(nil)
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
 
 	// Runner that fails injection — simulates broken pipe.
 	brokenRunner := &injectFailRunner{
@@ -5756,7 +5847,7 @@ func TestLoop_onSignal_FallsBackToFixAgentOnBrokenPipe(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = brokenRunner
 
-	// Tests pass, LLM rejects, injection fails → should fall back to fix agent.
+	// Tests pass, LLM rejects, injection fails → should return false (restart).
 	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: false, Details: "incomplete implementation"}
 	}
@@ -5776,10 +5867,18 @@ func TestLoop_onSignal_FallsBackToFixAgentOnBrokenPipe(t *testing.T) {
 		nextTask:   "Fix bug",
 	}
 
-	l.onSignal(p)
+	accepted := l.onSignal(p)
 
-	if !fixAgentCalled {
-		t.Error("expected fix agent to be spawned as fallback when injection fails")
+	if accepted {
+		t.Error("onSignal should return false when injection fails (agent restarts)")
+	}
+	if fixAgentCalled {
+		t.Error("fix agent should NOT be spawned — broken pipe triggers restart, not fix agent")
+	}
+
+	output := logBuf.String()
+	if !strings.Contains(output, "agent will be restarted") {
+		t.Errorf("expected restart log message, got:\n%s", output)
 	}
 }
 
@@ -7510,5 +7609,158 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 	// Verify PostMergeUpdateMain logged its distinct message.
 	if !strings.Contains(output, "Updated local") {
 		t.Errorf("expected 'Updated local' from PostMergeUpdateMain, got:\n%s", output)
+	}
+}
+
+// setStackHead logs "No stacked parents — resetting to main" when all
+// completed tasks have merged PRs and no stack head is found.
+// setStackHead silently falls through when all completed branches are
+// gone from remote (fetch fails) — no stack head is set, PrevBranch stays empty.
+func TestSetStackHead_SkipsUnfetchableBranch(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(10)
+
+	var buf bytes.Buffer
+	logger := logging.NewWithWriter(&buf)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logger,
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	st.AddCompletedTask("ralph-aaa")
+	backend := &mutableBackend{
+		metadata: map[string]map[string]string{"ralph-aaa": {"branch": "some-branch"}},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
+		TaskBackend: backend,
+	}, st, gm, logger)
+
+	l.setStackHead()
+
+	if gm.PrevBranch != "" {
+		t.Errorf("PrevBranch should be empty when branch is unfetchable, got %q", gm.PrevBranch)
+	}
+	output := buf.String()
+	if strings.Contains(output, "Stack head") {
+		t.Errorf("should not log 'Stack head' when branch is unfetchable, got:\n%s", output)
+	}
+}
+
+// setStackHead does NOT log "No stacked parents" when there are no
+// completed tasks — the early return path should be silent.
+func TestSetStackHead_NoLogWhenNoCompletedTasks(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(10)
+
+	var buf bytes.Buffer
+	logger := logging.NewWithWriter(&buf)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logger,
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	backend := &mutableBackend{}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
+		TaskBackend: backend,
+	}, st, gm, logger)
+
+	l.setStackHead()
+
+	output := buf.String()
+	if strings.Contains(output, "No stacked parents") {
+		t.Errorf("should not log 'No stacked parents' when no completed tasks exist, got:\n%s", output)
+	}
+}
+
+// Verifies OnIterationStart is called once per iteration, so the resume
+// script is regenerated each time (not only on exit).
+func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	callCount := 0
+	iterationCount := 0
+	backend := &mutableBackend{
+		remaining: 2,
+		completed: 0,
+		total:     2,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+		label:     "beads",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			if iterationCount >= 2 {
+				backend.mu.Lock()
+				backend.remaining = 0
+				backend.completed = 2
+				backend.mu.Unlock()
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		OnIterationStart: func() {
+			callCount++
+		},
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if callCount != 2 {
+		t.Errorf("OnIterationStart called %d times, want 2", callCount)
 	}
 }

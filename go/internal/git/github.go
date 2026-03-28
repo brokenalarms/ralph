@@ -20,7 +20,6 @@ type CreatePROpts struct {
 // MergeOpts configures a PR merge operation.
 type MergeOpts struct {
 	DeleteBranch bool
-	Admin        bool
 	Subject      string
 }
 
@@ -97,9 +96,6 @@ func (g *ghCLI) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error
 	}
 	if opts.DeleteBranch {
 		args = append(args, "--delete-branch")
-	}
-	if opts.Admin {
-		args = append(args, "--admin")
 	}
 	cmd := exec.Command("gh", args...)
 	out, err := cmd.CombinedOutput()

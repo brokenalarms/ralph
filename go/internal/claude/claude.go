@@ -231,26 +231,45 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 		args := []string{
 			"--print", "--verbose",
 			"--output-format", "stream-json",
+			"--input-format", "stream-json",
 			"--permission-mode", "bypassPermissions",
 			"--add-dir", cfg.WorkDir,
 			"--add-dir", cfg.RalphDir,
 			"--allowedTools", strings.Join(IterationAllowedTools, ","),
 			"--disallowedTools", strings.Join(IterationDisallowedTools, ","),
-			"-p", cfg.Prompt,
 		}
 		cmd = exec.Command("claude", args...)
 		cmd.Dir = cfg.WorkDir
-		cmd.Stdin = nil
 		cmd.Stdout = rawLog
 		cmd.Stderr = rawLog
 		// Start in its own process group so we can signal it cleanly.
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+		// Open stdin pipe for message injection (feedback, test failures,
+		// LLM rejections). The initial prompt is sent as a stream-json
+		// message after Start() instead of via -p.
+		pipe, pipeErr := cmd.StdinPipe()
+		if pipeErr != nil {
+			return Result{}, fmt.Errorf("creating stdin pipe: %w", pipeErr)
+		}
+		r.mu.Lock()
+		r.stdinPipe = pipe
+		r.mu.Unlock()
 	}
 
 	if err := cmd.Start(); err != nil {
 		return Result{}, fmt.Errorf("starting claude: %w", err)
 	}
 	r.Logger.Log("llm", "Claude started (PID: %d)", cmd.Process.Pid)
+
+	// Send the initial prompt via stdin (stream-json mode ignores -p).
+	if r.CmdFactory == nil {
+		if err := r.InjectMessage(cfg.Prompt); err != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return Result{}, fmt.Errorf("sending initial prompt via stdin: %w", err)
+		}
+	}
 
 	// Record stream start time for the filter.
 	_ = os.WriteFile(filepath.Join(cfg.RalphDir, ".stream-start"),

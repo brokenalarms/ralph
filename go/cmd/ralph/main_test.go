@@ -215,6 +215,50 @@ func TestGenerateResumeScript_Evolve(t *testing.T) {
 	}
 }
 
+// Verifies the resume script includes all non-default flags from the config,
+// specifically --evolve and --base-branch which were previously missing.
+func TestGenerateResumeScript_AllFlags(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	cfg := config.Config{
+		ProjectDir:    dir,
+		MaxIterations: 30,
+		Quiet:         true,
+		AutoMerge:     true,
+		Evolve:        true,
+		BaseBranch:    "main",
+		Wait:          true,
+		CallsPerHour:  40,
+		Verbose:       true,
+	}
+
+	log := logging.New(nil)
+	generateResumeScript(cfg, ralphDir, "/usr/local/bin/ralph", nil, log)
+
+	data, err := os.ReadFile(filepath.Join(ralphDir, "resume.sh"))
+	if err != nil {
+		t.Fatalf("resume script should exist: %v", err)
+	}
+
+	content := string(data)
+	for _, flag := range []string{
+		"--max 30",
+		"--quiet",
+		"--calls-per-hour 40",
+		"--auto-merge",
+		"--evolve",
+		"--base-branch main",
+		"--wait",
+		"--verbose",
+	} {
+		if !strings.Contains(content, flag) {
+			t.Errorf("resume script should contain %q\ngot: %s", flag, content)
+		}
+	}
+}
+
 // Verifies the summary prints correct task counts from the backend.
 func TestPrintSummary_TaskCounts(t *testing.T) {
 	dir := t.TempDir()
@@ -546,6 +590,41 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	}
 }
 
+
+// Proves: cleanup clears cli_config from state.json so stale flags from a
+// previous run don't leak into a manual restart. Evolve restart is unaffected
+// because syscall.Exec replaces the process before cleanup runs.
+func TestCleanup_ClearsCLIConfig(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	st.SaveCLIConfig(map[string]string{"evolve": "true", "max": "20"})
+
+	// Verify cli_config exists before cleanup.
+	cfg, _ := st.LoadCLIConfig()
+	if cfg == nil {
+		t.Fatal("cli_config should exist before cleanup")
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	backend := &stubBackend{total: 1}
+	log := logging.New(nil)
+	c := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
+
+	cleanup(c, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, nil, true, log)
+
+	// cli_config must be cleared.
+	cfg, err := st.LoadCLIConfig()
+	if err != nil {
+		t.Fatalf("LoadCLIConfig after cleanup: %v", err)
+	}
+	if cfg != nil {
+		t.Errorf("expected cli_config cleared after cleanup, got %v", cfg)
+	}
+}
 
 // Verifies that --wait auto-resets when a previous run completed, skipping
 // the interactive "Run fresh?" prompt so unattended operation isn't blocked.

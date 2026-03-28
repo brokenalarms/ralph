@@ -59,7 +59,6 @@ type Config struct {
 	Refactor                   bool
 	UseTmux                    bool
 	AutoMerge                  bool
-	MergeAdmin                 bool
 	Evolve                     bool
 	IdleTimeout                time.Duration
 	IdleTimeoutProgress        time.Duration
@@ -78,7 +77,6 @@ type Config struct {
 	PostSignalTimeout       time.Duration
 	PostTask                string
 	Notify                  bool
-	WaitInterval            time.Duration
 
 	cliSet map[string]bool
 }
@@ -220,9 +218,6 @@ func (c *Config) Validate() error {
 		if c.UseTmux {
 			return fmt.Errorf("--evolve is incompatible with --tmux")
 		}
-	}
-	if c.MergeAdmin && !c.AutoMerge {
-		return fmt.Errorf("--merge-admin requires --auto-merge")
 	}
 	return nil
 }

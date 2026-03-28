@@ -177,16 +177,6 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return boolStr(cfg.AutoMerge) },
 	},
 	{
-		Long: "--merge-admin",
-		Help: "Use --admin flag on gh pr merge to bypass branch protection (requires --auto-merge)",
-		Kind: KindBool,
-		Apply: func(cfg *Config, _ string) error {
-			cfg.MergeAdmin = true
-			return nil
-		},
-		Read: func(cfg *Config) string { return boolStr(cfg.MergeAdmin) },
-	},
-	{
 		Long: "--evolve",
 		Help: "Self-improving mode: after each merged task, pull main, rebuild, restart (requires --auto-merge)",
 		Kind: KindBool,
@@ -205,21 +195,6 @@ var Flags = []FlagDef{
 			return nil
 		},
 		Read: func(cfg *Config) string { return boolStr(cfg.Wait) },
-	},
-	{
-		Long: "--wait-interval", MetaVar: "<dur>",
-		Help: "Polling interval for --wait", Default: "5s",
-		EnvVar: "RALPH_WAIT_INTERVAL", ConfigKey: "wait_interval",
-		Kind: KindDuration, TrackCLI: true,
-		Apply: func(cfg *Config, val string) error {
-			d, err := parseDuration(val)
-			if err != nil {
-				return err
-			}
-			cfg.WaitInterval = d
-			return nil
-		},
-		Read: func(cfg *Config) string { return cfg.WaitInterval.String() },
 	},
 	{
 		Short: "-v", Long: "--verbose",

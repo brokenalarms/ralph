@@ -85,7 +85,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		WorkDir:    cfg.ProjectDir,
 		RalphDir:   ralphDir,
 		BaseBranch: cfg.BaseBranch,
-		MergeAdmin: cfg.MergeAdmin,
 		Logger:     log,
 	}
 
@@ -186,13 +185,15 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		PostTask:            cfg.PostTask,
 		Notify:              cfg.Notify,
 		Wait:                cfg.Wait,
-		WaitInterval:        cfg.WaitInterval,
 		Version:             config.Version,
 		OnRebaseConflict:    autoRebaseRecovery(),
 		VerifyDir:             dirs.WorkDir,
 		VerifyLevel:           cfg.VerifyLevel,
 		VerifyModel:           cfg.VerifyModel,
 		VerifyEscalationModel: cfg.VerifyEscalationModel,
+		OnIterationStart: func() {
+			generateResumeScript(cfg, ralphDir, scriptPath, args, log)
+		},
 	}, st, gm, log)
 
 	if err := execLoop.Run(ctx); err != nil {
@@ -298,6 +299,11 @@ func initTaskBackend(cfg config.Config, promptsDir string, log *logging.Logger) 
 func cleanup(cfg config.Config, gm *git.Manager, st *state.Store, backend tasks.Backend, ralphDir, planFile, scriptPath string, args []string, sessionTasks []loop.CompletedTask, interrupted bool, log *logging.Logger) {
 	clearSignalFiles(ralphDir)
 
+	// Clear cli_config so stale flags don't persist across manual restarts.
+	// Evolve restart preserves cli_config because syscall.Exec replaces the
+	// process before cleanup runs.
+	st.ClearCLIConfig()
+
 	if interrupted {
 		st.Write("status", "stopped")
 	}
@@ -317,35 +323,16 @@ func cleanup(cfg config.Config, gm *git.Manager, st *state.Store, backend tasks.
 }
 
 // generateResumeScript writes a shell script that re-runs ralph with the same
-// flags, allowing the user to easily resume after interruption.
+// flags, allowing the user to easily resume after interruption. Flags are
+// derived from the config registry so new flags are included automatically.
 func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args []string, log *logging.Logger) {
 	resumePath := filepath.Join(ralphDir, "resume.sh")
 
-	var extraArgs []string
-	if cfg.Quiet {
-		extraArgs = append(extraArgs, "--quiet")
-	}
-	if cfg.CallsPerHour != 80 {
-		extraArgs = append(extraArgs, fmt.Sprintf("--calls-per-hour %d", cfg.CallsPerHour))
-	}
-	if cfg.AutoMerge {
-		extraArgs = append(extraArgs, "--auto-merge")
-	}
-	if cfg.MergeAdmin {
-		extraArgs = append(extraArgs, "--merge-admin")
-	}
-	if cfg.Verbose {
-		extraArgs = append(extraArgs, "--verbose")
-	}
-	if cfg.Evolve {
-		extraArgs = append(extraArgs, "--evolve")
-	}
-	if cfg.Wait {
-		extraArgs = append(extraArgs, "--wait")
-	}
+	stateMap := config.ConfigToState(&cfg)
 	if cfg.UseTmux || os.Getenv("_RALPH_TMUX_SESSION") != "" {
-		extraArgs = append(extraArgs, "--tmux")
+		stateMap["tmux"] = "true"
 	}
+	extraArgs := config.ArgsFromState(stateMap)
 
 	extra := ""
 	if len(extraArgs) > 0 {
@@ -356,9 +343,9 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 # Ralph Loop - Resume Script
 # Generated at: %s
 cd "%s"
-exec "%s" loop --max %d%s
+exec "%s" loop%s
 `, time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-		cfg.ProjectDir, scriptPath, cfg.MaxIterations, extra)
+		cfg.ProjectDir, scriptPath, extra)
 
 	os.WriteFile(resumePath, []byte(content), 0o755)
 	log.Log("", "Resume script: %s", resumePath)
