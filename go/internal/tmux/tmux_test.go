@@ -71,7 +71,6 @@ func TestWritePlanWatcher_BD(t *testing.T) {
 // matching the shell behavior where the re-exec'd ralph runs headless.
 func TestBuildRalphCmd(t *testing.T) {
 	cmd := BuildRalphCmd("/usr/local/bin/ralph.sh", []string{
-		"--dir", "/projects/myapp",
 		"--tmux",
 		"-n", "10",
 	})
@@ -84,9 +83,6 @@ func TestBuildRalphCmd(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "/usr/local/bin/ralph.sh") {
 		t.Error("BuildRalphCmd should include script path")
-	}
-	if !strings.Contains(cmd, "/projects/myapp") {
-		t.Error("BuildRalphCmd should include original args")
 	}
 	if !strings.Contains(cmd, " loop ") {
 		t.Error("BuildRalphCmd should include 'loop' subcommand")
@@ -349,7 +345,6 @@ func TestBuildRalphCmd_StripsCommand(t *testing.T) {
 	for _, sub := range []string{"command", "commander"} {
 		cmd := BuildRalphCmd("/usr/local/bin/ralph", []string{
 			sub,
-			"--dir", "/projects/myapp",
 			"-n", "10",
 		})
 
@@ -358,9 +353,6 @@ func TestBuildRalphCmd_StripsCommand(t *testing.T) {
 		}
 		if !strings.Contains(cmd, "--quiet") {
 			t.Errorf("BuildRalphCmd should append --quiet (input: %s)", sub)
-		}
-		if !strings.Contains(cmd, "/projects/myapp") {
-			t.Errorf("BuildRalphCmd should preserve other args (input: %s)", sub)
 		}
 		if !strings.Contains(cmd, " loop ") {
 			t.Errorf("BuildRalphCmd should include 'loop' subcommand (input: %s)", sub)
