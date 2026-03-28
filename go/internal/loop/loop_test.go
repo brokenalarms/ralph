@@ -7414,3 +7414,100 @@ func TestResolveByPRState_Merged_NotifyDisabled(t *testing.T) {
 		t.Errorf("expected TaskMerged even when Notify=false, got %q", got)
 	}
 }
+
+// After a merge, PostMergeUpdateMain already syncs the worktree to main.
+// The next iteration must NOT call ResetToDefaultBranch again, which would
+// produce a duplicate "Reset worktree" log line.
+func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(10)
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	var logBuf strings.Builder
+	logger := logging.NewWithWriter(&logBuf)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logger,
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	iterationCount := 0
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			// Create a commit so the signal handler takes the push/merge path
+			// instead of the no-commits shortcut.
+			f := filepath.Join(gm.WorkDir, fmt.Sprintf("file%d.txt", iterationCount))
+			os.WriteFile(f, []byte("content"), 0o644)
+			exec.Command("git", "-C", gm.WorkDir, "add", ".").Run()
+			exec.Command("git", "-C", gm.WorkDir, "commit", "-m", fmt.Sprintf("task %d", iterationCount)).Run()
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			if iterationCount == 1 {
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+			} else {
+				backend.completed = 2
+				backend.remaining = 0
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = runner
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) {
+		return "99", nil
+	}
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return true, nil
+	}
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+
+	// initRun may produce one "Reset worktree" (before any task runs).
+	// After the merge, PostMergeUpdateMain logs "Updated local" instead.
+	// A second "Reset worktree" would mean the next iteration redundantly
+	// called ResetToDefaultBranch — that's the bug this test guards against.
+	resetCount := strings.Count(output, "Reset worktree")
+	if resetCount > 1 {
+		t.Errorf("expected at most 1 'Reset worktree' (from initRun), got %d — next-task path should skip reset after merge:\n%s", resetCount, output)
+	}
+
+	// Verify PostMergeUpdateMain logged its distinct message.
+	if !strings.Contains(output, "Updated local") {
+		t.Errorf("expected 'Updated local' from PostMergeUpdateMain, got:\n%s", output)
+	}
+}
