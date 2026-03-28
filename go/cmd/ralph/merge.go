@@ -210,13 +210,15 @@ func logStackComplete(log *logging.Logger, merged int) int {
 }
 
 func createMergeWorktree(projectDir, branch string, log *logging.Logger) (string, func(), error) {
-	wtDir := filepath.Join(os.TempDir(), "ralph-merge-"+branch)
+	slug := strings.ReplaceAll(branch, "/", "-")
+	wtDir := filepath.Join(os.TempDir(), "ralph-merge-"+slug)
 	os.RemoveAll(wtDir)
 
-	// Prune stale worktree refs.
 	exec.Command("git", "-C", projectDir, "worktree", "prune").Run()
+	// Remove existing local branch so we can recreate it on the worktree.
+	exec.Command("git", "-C", projectDir, "branch", "-D", branch).Run()
 
-	cmd := exec.Command("git", "-C", projectDir, "worktree", "add", "--detach", wtDir, "origin/"+branch)
+	cmd := exec.Command("git", "-C", projectDir, "worktree", "add", "-b", branch, wtDir, "origin/"+branch)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", nil, fmt.Errorf("worktree add for %s: %s", branch, string(out))
@@ -224,6 +226,7 @@ func createMergeWorktree(projectDir, branch string, log *logging.Logger) (string
 
 	cleanup := func() {
 		exec.Command("git", "-C", projectDir, "worktree", "remove", "--force", wtDir).Run()
+		exec.Command("git", "-C", projectDir, "branch", "-D", branch).Run()
 	}
 	return wtDir, cleanup, nil
 }
