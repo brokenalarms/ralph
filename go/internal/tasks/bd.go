@@ -173,11 +173,11 @@ func gitignoreContains(content, entry string) bool {
 }
 
 func (b *BD) HasRemaining() (bool, error) {
-	n, err := b.CountRemaining()
+	issue, err := b.getNextIssue()
 	if err != nil {
 		return false, err
 	}
-	return n > 0, nil
+	return issue.ID != "" || issue.Title != "", nil
 }
 
 func (b *BD) CountCompleted() (int, error) {
@@ -238,12 +238,9 @@ func (b *BD) getNextIssue() (bdIssue, error) {
 	var inProgress, ready bdIssue
 	var hasIP, hasReady bool
 
-	out, err := run(ctx, b.ProjectDir, "list", "--status", "in_progress", "--flat", "--json", "--limit", "1")
+	out, err := run(ctx, b.ProjectDir, "list", "--status", "in_progress", "--flat", "--json")
 	if err == nil {
-		inProgress, hasIP = parseFirstIssue(out)
-		if hasIP && b.skippedIDs[inProgress.ID] {
-			hasIP = false
-		}
+		inProgress, hasIP = bestIssue(out, b.skippedIDs)
 	}
 
 	out, err = run(ctx, b.ProjectDir, "ready", "--json")
