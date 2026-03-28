@@ -6638,6 +6638,21 @@ func TestSkipTask_Standalone(t *testing.T) {
 	}
 }
 
+// skipTask records skip reason in the backend so BD has an audit trail.
+func TestSkipTask_RecordsReasonInBackend(t *testing.T) {
+	_, st := setupTestDir(t)
+	backend := &stubBackend{}
+
+	skipTask(st, backend, logging.New(nil), "ralph-xyz", "merge_failed")
+
+	if backend.skippedTask != "ralph-xyz" {
+		t.Errorf("expected backend.skippedTask=ralph-xyz, got %q", backend.skippedTask)
+	}
+	if backend.skipReason != "merge_failed" {
+		t.Errorf("expected backend.skipReason=merge_failed, got %q", backend.skipReason)
+	}
+}
+
 // persistCompletedTask takes state and logger — no Loop needed.
 func TestPersistCompletedTask_Standalone(t *testing.T) {
 	_, st := setupTestDir(t)

@@ -687,6 +687,9 @@ func skipTask(st *state.Store, backend tasks.Backend, logger *logging.Logger, id
 		return
 	}
 	logger.Warn("beads", "Skipping task %s: %s", id, reason)
+	if err := backend.SkipTask(id, reason); err != nil {
+		logger.Warn("beads", "Failed to record skip in backend for %s: %v", id, err)
+	}
 	if err := st.AddSkippedTask(id); err != nil {
 		logger.Warn("beads", "Failed to persist skip for %s: %v", id, err)
 	}

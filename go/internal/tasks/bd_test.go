@@ -389,6 +389,35 @@ func TestBD_SkipTask_SetsOpenNoDeferNoNotes(t *testing.T) {
 	}
 }
 
+// Proves: bd SkipTask adds a comment with the skip reason.
+func TestBD_SkipTask_RecordsReasonAsComment(t *testing.T) {
+	var commentArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 1 && args[0] == "comments" {
+			commentArgs = args
+			return "ok", nil
+		}
+		return "updated", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SkipTask("abc123", "merge_failed"); err != nil {
+		t.Fatal(err)
+	}
+	if len(commentArgs) == 0 {
+		t.Fatal("expected bd comments add to be called")
+	}
+	joined := strings.Join(commentArgs, " ")
+	if !strings.Contains(joined, "add") {
+		t.Errorf("expected 'add' subcommand, got: %v", commentArgs)
+	}
+	if !strings.Contains(joined, "abc123") {
+		t.Errorf("expected task ID in comment args, got: %v", commentArgs)
+	}
+	if !strings.Contains(joined, "merge_failed") {
+		t.Errorf("expected reason in comment body, got: %v", commentArgs)
+	}
+}
+
 // Proves: bd SkipTask is a no-op with empty id.
 func TestBD_SkipTask_EmptyID(t *testing.T) {
 	called := false
