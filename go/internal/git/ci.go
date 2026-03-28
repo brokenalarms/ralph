@@ -44,7 +44,7 @@ func (e *CIFailureError) Error() string {
 const DefaultCIPollInterval = 1 * time.Second
 
 // MaxCIPollInterval caps the exponential backoff so polls don't grow too far apart.
-const MaxCIPollInterval = 15 * time.Second
+const MaxCIPollInterval = 5 * time.Second
 
 // DefaultCIPollTimeout is the maximum time to wait for CI checks to complete.
 const DefaultCIPollTimeout = 10 * time.Minute

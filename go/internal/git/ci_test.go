@@ -307,11 +307,11 @@ func TestWaitForCI_BackoffDoubles(t *testing.T) {
 	if status != CIPassed {
 		t.Errorf("expected CIPassed, got %v", status)
 	}
-	// 5 pending polls → sleeps of 1s, 2s, 4s, 8s, 15s (capped)
+	// 5 pending polls → sleeps of 1s, 2s, 4s, 5s, 5s (capped)
 	if len(sleeps) != 5 {
 		t.Fatalf("expected 5 sleeps, got %d: %v", len(sleeps), sleeps)
 	}
-	want := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, MaxCIPollInterval}
+	want := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second, 5 * time.Second, 5 * time.Second}
 	for i, w := range want {
 		if sleeps[i] != w {
 			t.Errorf("sleep[%d] = %v, want %v", i, sleeps[i], w)
