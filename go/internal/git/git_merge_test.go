@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -653,10 +654,12 @@ func TestMergeWithRetry_RecoversFromConflict(t *testing.T) {
 	mgr.GitHub = gh
 
 	runner := newStubRunner()
-	// Stub git operations that ResolveConflict + AutoMerge use
+	// Stub git operations that ResolveConflict + AutoMerge use.
+	// merge-base --is-ancestor succeeds → EnsureUpToDate is a no-op,
+	// ResolveConflict sees the branch as resolved and force-pushes.
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("fetch", "", nil)
-	runner.On("merge-base --is-ancestor", "", fmt.Errorf("not ancestor"))
+	runner.On("merge-base --is-ancestor", "", nil)
 	runner.On("rebase", "", nil)
 	runner.On("diff --quiet", "", nil)
 	runner.On("diff --cached --quiet", "", nil)
@@ -779,6 +782,70 @@ func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 	}
 	if ciFixCalls != MaxMergeAttempts {
 		t.Errorf("expected %d CI fix attempts, got %d", MaxMergeAttempts, ciFixCalls)
+	}
+}
+
+// MergeWithRetry stops immediately when ResolveConflict returns an
+// UnresolvedConflictError instead of retrying force-pushes that won't help.
+func TestMergeWithRetry_StopsOnUnresolvableConflict(t *testing.T) {
+	project, _ := initBareRepo(t)
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        filepath.Join(t.TempDir(), "wt"),
+		WorktreeBranch: "ralph/test/01-unresolvable",
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	mergeCalls := 0
+	gh := &sequentialMergeGitHub{
+		stubGitHub: stubGitHub{
+			available: true,
+			openPR:    "50",
+			checks:    []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		},
+		mergeResults: []mergeResult{
+			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
+			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
+			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
+			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
+		},
+		onMerge: func() { mergeCalls++ },
+	}
+	mgr.GitHub = gh
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	// merge-base --is-ancestor returns error → still diverged after rebase
+	runner.On("merge-base --is-ancestor", "", fmt.Errorf("not ancestor"))
+	runner.On("rebase", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	mgr.Runner = runner
+
+	_, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{})
+	if err == nil {
+		t.Fatal("expected error for unresolvable conflict")
+	}
+
+	var unresolved *UnresolvedConflictError
+	if !errors.As(err, &unresolved) {
+		t.Fatalf("expected UnresolvedConflictError, got %T: %v", err, err)
+	}
+
+	// Only 1 merge attempt — should not retry after unresolvable conflict
+	if mergeCalls != 1 {
+		t.Errorf("expected exactly 1 merge attempt, got %d — retried pointlessly", mergeCalls)
+	}
+
+	// Verify no force-push was attempted
+	if runner.CalledWith("push", "--force-with-lease") {
+		t.Error("should not force-push when conflict is unresolvable")
 	}
 }
 
