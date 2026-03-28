@@ -129,9 +129,10 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 			log.Warn("git", "Squash: %v", err)
 		}
 
-		// Force-push HEAD (the squashed commit) AS the original branch name.
+		// Fetch the latest remote state so --force-with-lease has an up-to-date baseline.
+		gitRunErr(wtDir, "fetch", "origin", headBranch)
 		log.Log("git", "Force-pushing %s...", headBranch)
-		pushErr := gitRunErr(wtDir, "push", "--force", "origin", "HEAD:refs/heads/"+headBranch)
+		pushErr := gitRunErr(wtDir, "push", "--force-with-lease", "origin", "HEAD:refs/heads/"+headBranch)
 		if pushErr != nil {
 			cleanup()
 			log.Error("git", "Push failed: %v", pushErr)
