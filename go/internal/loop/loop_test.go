@@ -2833,7 +2833,7 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Wait:          true,
-		WaitInterval:  50 * time.Millisecond,
+
 	}, st, gm, logger)
 	l.runner = runner
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
@@ -2901,7 +2901,7 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Wait:          true,
-		WaitInterval:  50 * time.Millisecond,
+
 	}, st, gm, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2946,7 +2946,7 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Wait:          true,
-		WaitInterval:  50 * time.Millisecond,
+
 	}, st, gm, logger)
 
 	go func() {
@@ -4594,7 +4594,7 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Wait:          true,
-		WaitInterval:  50 * time.Millisecond,
+
 	}, st, gm, logger)
 	l.runner = runner
 
@@ -4727,7 +4727,7 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 		TaskBackend:   backend,
 		AutoMerge:     true,
 		Wait:          true,
-		WaitInterval:  50 * time.Millisecond,
+
 	}, st, gm, logger)
 	l.runner = runner
 

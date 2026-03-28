@@ -838,17 +838,12 @@ func TestBaseBranchEnvVar(t *testing.T) {
 
 // Verifies --wait defaults to false and is set when the flag is present.
 func TestWaitFlag(t *testing.T) {
-	t.Setenv("RALPH_WAIT_INTERVAL", "")
-
 	cfg, err := Parse(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg.Wait {
 		t.Error("Wait should default to false")
-	}
-	if cfg.WaitInterval != 5*time.Second {
-		t.Errorf("WaitInterval = %s, want 5s", cfg.WaitInterval)
 	}
 
 	cfg, err = Parse([]string{"--wait"})
@@ -860,37 +855,22 @@ func TestWaitFlag(t *testing.T) {
 	}
 }
 
-// Verifies --wait-interval overrides the default polling interval.
-func TestWaitIntervalFlag(t *testing.T) {
-	t.Setenv("RALPH_WAIT_INTERVAL", "")
-
-	cfg, err := Parse([]string{"--wait", "--wait-interval", "1m"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.WaitInterval != 1*time.Minute {
-		t.Errorf("WaitInterval = %s, want 1m", cfg.WaitInterval)
-	}
-
-	cfg, err = Parse([]string{"--wait-interval", "45"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.WaitInterval != 45*time.Second {
-		t.Errorf("WaitInterval = %s, want 45s for bare 45", cfg.WaitInterval)
+// Verifies --wait-interval flag was removed and is rejected by Parse.
+func TestWaitIntervalFlagRemoved(t *testing.T) {
+	_, err := Parse([]string{"--wait-interval", "1m"})
+	if err == nil {
+		t.Fatal("expected error for removed --wait-interval flag, got nil")
 	}
 }
 
-// Verifies RALPH_WAIT_INTERVAL env var overrides the hardcoded default.
-func TestWaitIntervalEnvVar(t *testing.T) {
+// Verifies RALPH_WAIT_INTERVAL env var is no longer read.
+func TestWaitIntervalEnvVarRemoved(t *testing.T) {
 	t.Setenv("RALPH_WAIT_INTERVAL", "2m")
 
-	cfg, err := Parse(nil)
+	// Parse should succeed — the env var is simply ignored.
+	_, err := Parse(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.WaitInterval != 2*time.Minute {
-		t.Errorf("WaitInterval = %s, want 2m from env", cfg.WaitInterval)
 	}
 }
 
@@ -955,7 +935,7 @@ func TestConfigToState_CapturesNonDefaults(t *testing.T) {
 	t.Setenv("RALPH_IDLE_TIMEOUT", "")
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 	t.Setenv("RALPH_BASE_BRANCH", "")
-	t.Setenv("RALPH_WAIT_INTERVAL", "")
+
 
 	cfg, _ := Parse([]string{
 		"--max", "20",
@@ -1059,7 +1039,7 @@ func TestConfigToState_ArgsFromState_Roundtrip(t *testing.T) {
 	t.Setenv("RALPH_IDLE_TIMEOUT", "")
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 	t.Setenv("RALPH_BASE_BRANCH", "")
-	t.Setenv("RALPH_WAIT_INTERVAL", "")
+
 
 	original, _ := Parse([]string{
 		"--max", "30",

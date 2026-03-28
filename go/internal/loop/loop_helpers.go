@@ -273,12 +273,13 @@ func (l *Loop) flushUnpushedWork(ctx context.Context) {
 }
 
 func (l *Loop) waitForTasks(ctx context.Context) bool {
-	l.logger.Log("beads", "Waiting for new tasks (polling every %s)...", l.cfg.WaitInterval)
+	const waitPollInterval = 5 * time.Second
+	l.logger.Log("beads", "Waiting for new tasks (polling every %s)...", waitPollInterval)
 	l.state.Write("status", "waiting")
 	updateStreamTask(l.cfg.Dirs.RalphDir, "", "Waiting for tasks...", nil)
 	touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
 
-	ticker := time.NewTicker(l.cfg.WaitInterval)
+	ticker := time.NewTicker(waitPollInterval)
 	defer ticker.Stop()
 
 	for {
