@@ -69,7 +69,7 @@ func (r *Runner) Query(ctx context.Context, workDir, prompt, model string) (stri
 // Returns the exit code. This is the single code path for all interactive
 // agent invocations that connect stdin/stdout to the terminal.
 func (r *Runner) Interactive(workDir, systemPrompt string, extraArgs ...string) (int, error) {
-	args := []string{"--system-prompt", systemPrompt}
+	args := []string{"--permission-mode", "bypassPermissions", "--system-prompt", systemPrompt}
 	args = append(args, extraArgs...)
 
 	cmd := exec.Command("claude", args...)
