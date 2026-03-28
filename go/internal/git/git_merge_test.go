@@ -1046,3 +1046,133 @@ func (c *ciRetryGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) (strin
 	*c.events = append(*c.events, "merge-retry")
 	return "merged", nil
 }
+
+// When automatic rebase fails to resolve conflicts, MergeWithRetry calls
+// the OnConflict callback to spawn a conflict resolution agent. If the
+// agent resolves the conflict, the merge is retried and succeeds.
+func TestMergeWithRetry_SpawnsConflictAgent(t *testing.T) {
+	project, _ := initBareRepo(t)
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        filepath.Join(t.TempDir(), "wt"),
+		WorktreeBranch: "ralph/test/01-conflict-agent",
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	mergeCalls := 0
+	gh := &sequentialMergeGitHub{
+		stubGitHub: stubGitHub{
+			available: true,
+			openPR:    "70",
+			checks:    []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		},
+		mergeResults: []mergeResult{
+			// First attempt: conflict
+			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
+			// Second attempt (after agent fix): success
+		},
+		onMerge: func() { mergeCalls++ },
+	}
+	mgr.GitHub = gh
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	// merge-base --is-ancestor fails → unresolvable conflict
+	runner.On("merge-base --is-ancestor", "", fmt.Errorf("not ancestor"))
+	runner.On("rebase", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	mgr.Runner = runner
+
+	conflictAgentCalled := false
+	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
+		OnConflict: func(conflictErr *UnresolvedConflictError) bool {
+			conflictAgentCalled = true
+			if conflictErr.PRNumber != "70" {
+				t.Errorf("expected PRNumber=70, got %s", conflictErr.PRNumber)
+			}
+			return true
+		},
+	})
+	if err != nil {
+		t.Fatalf("MergeWithRetry: %v", err)
+	}
+	if !merged {
+		t.Error("expected merge to succeed after conflict agent resolved")
+	}
+	if !conflictAgentCalled {
+		t.Error("expected OnConflict callback to be called")
+	}
+	if mergeCalls != 2 {
+		t.Errorf("expected 2 merge attempts (conflict + retry), got %d", mergeCalls)
+	}
+}
+
+// When the conflict resolution agent cannot resolve, MergeWithRetry returns
+// UnresolvedConflictError without further retries.
+func TestMergeWithRetry_SkipsAfterConflictAgentFails(t *testing.T) {
+	project, _ := initBareRepo(t)
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        filepath.Join(t.TempDir(), "wt"),
+		WorktreeBranch: "ralph/test/01-conflict-agent-fail",
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	mergeCalls := 0
+	gh := &sequentialMergeGitHub{
+		stubGitHub: stubGitHub{
+			available: true,
+			openPR:    "71",
+			checks:    []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		},
+		mergeResults: []mergeResult{
+			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
+			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
+		},
+		onMerge: func() { mergeCalls++ },
+	}
+	mgr.GitHub = gh
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", fmt.Errorf("not ancestor"))
+	runner.On("rebase", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	mgr.Runner = runner
+
+	conflictAgentCalled := false
+	_, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
+		OnConflict: func(conflictErr *UnresolvedConflictError) bool {
+			conflictAgentCalled = true
+			return false // agent could not resolve
+		},
+	})
+
+	if !conflictAgentCalled {
+		t.Error("expected OnConflict callback to be called")
+	}
+
+	var unresolved *UnresolvedConflictError
+	if !errors.As(err, &unresolved) {
+		t.Fatalf("expected UnresolvedConflictError, got %T: %v", err, err)
+	}
+
+	// Only 1 merge attempt — callback returned false, no retry
+	if mergeCalls != 1 {
+		t.Errorf("expected 1 merge attempt, got %d", mergeCalls)
+	}
+}

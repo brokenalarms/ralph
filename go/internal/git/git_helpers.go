@@ -150,6 +150,23 @@ func (m *Manager) DiffFull(from, to string) string {
 	return m.gitOutput(m.WorkDir, "diff", from+".."+to)
 }
 
+// ConflictDiff returns the three-way merge diff between HEAD and the base
+// branch (or the default branch), showing what diverges. Used to give a
+// conflict resolution agent context about the conflicting changes.
+func (m *Manager) ConflictDiff() string {
+	baseBranch := m.detectDefaultBranch()
+	if m.PrevBranch != "" {
+		baseBranch = m.PrevBranch
+	}
+	remote := "origin/" + baseBranch
+	files := m.gitOutput(m.WorkDir, "diff", "--name-only", remote+"...HEAD")
+	diff := m.gitOutput(m.WorkDir, "diff", remote+"...HEAD")
+	if files == "" && diff == "" {
+		return ""
+	}
+	return "Conflicting files:\n" + files + "\n\nDiff (ours vs base):\n" + diff
+}
+
 func (m *Manager) LogOneline(from, to string) string {
 	return m.gitOutput(m.WorkDir, "log", "--oneline", from+".."+to)
 }
