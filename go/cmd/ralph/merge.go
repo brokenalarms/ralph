@@ -149,31 +149,39 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) []s
 		return nil
 	}
 
-	// Walk down to find the bottom open PR.
+	// Walk down to find the bottom open PR. Skip MERGED and CLOSED.
 	bottom := topNum
+	misses := 0
 	for n := topNum - 1; n > 0; n-- {
 		num := fmt.Sprintf("%d", n)
 		prState, err := gh.GetPRState(workDir, num)
 		if err != nil {
-			break
-		}
-		if strings.ToUpper(prState) == "OPEN" {
-			bottom = n
-		} else if strings.ToUpper(prState) == "MERGED" {
+			misses++
+			if misses > 3 {
+				break
+			}
 			continue
-		} else {
-			break
+		}
+		switch strings.ToUpper(prState) {
+		case "OPEN":
+			bottom = n
+			misses = 0
+		case "MERGED", "CLOSED":
+			misses = 0
+			continue
+		default:
+			misses++
+			if misses > 3 {
+				break
+			}
 		}
 	}
 
-	// Collect upward from bottom through top.
+	// Collect upward from bottom through top, skipping non-open.
 	var prs []stackPR
 	for n := bottom; n <= topNum; n++ {
 		num := fmt.Sprintf("%d", n)
-		prState, err := gh.GetPRState(workDir, num)
-		if err != nil {
-			continue
-		}
+		prState, _ := gh.GetPRState(workDir, num)
 		if strings.ToUpper(prState) == "OPEN" {
 			head, _ := gh.GetPRHead(workDir, num)
 			if head != "" {
