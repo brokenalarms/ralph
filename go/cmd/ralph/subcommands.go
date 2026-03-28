@@ -291,7 +291,7 @@ func printUsage() {
 
 %sCOMMANDS:%s
   ralph loop [options]         Autonomous executor — picks up tasks, writes code, pushes PRs
-  ralph merge <pr> [--stack]   Squash-merge a PR (or cascade a stacked chain)
+  ralph merge <top-pr>         Rebase and merge a stacked PR chain bottom-up
   ralph task [directory]       Interactive task triage and spec session
   ralph review [directory]     Post-mortem review: reflections, test audit, refactoring
   ralph command [directory]    Full 4-pane tmux layout (loop + task manager + stream + plan)
