@@ -260,8 +260,9 @@ func TestOnSignal_LLMReject_PassesOnRetry(t *testing.T) {
 	}
 }
 
-// When the fix agent exits without signaling, the verification loop stops.
-func TestOnSignal_LLMReject_FixAgentNoSignal_StopsLoop(t *testing.T) {
+// When stdin injection fails (broken pipe), onSignal returns false to restart
+// the agent — no fix agent is spawned.
+func TestOnSignal_LLMReject_BrokenPipe_RestartsAgent(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -286,7 +287,9 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_StopsLoop(t *testing.T) {
 		return verify.Result{Passed: false, Details: "bad code"}
 	}
 
+	fixAgentCalled := false
 	l.verifier.deps.NewRunner = func() claudeRunner {
+		fixAgentCalled = true
 		return &stubRunner{result: stubResult(false, "")}
 	}
 
@@ -297,10 +300,13 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_StopsLoop(t *testing.T) {
 	})
 
 	if result {
-		t.Fatal("expected onSignal to return false when fix agent doesn't signal")
+		t.Fatal("expected onSignal to return false when injection fails (agent restarts)")
 	}
 	if llmCalls != 1 {
-		t.Fatalf("expected 1 LLM call (no retry after fix agent failure), got %d", llmCalls)
+		t.Fatalf("expected 1 LLM call, got %d", llmCalls)
+	}
+	if fixAgentCalled {
+		t.Fatal("fix agent should NOT be spawned — broken pipe triggers restart")
 	}
 }
 
