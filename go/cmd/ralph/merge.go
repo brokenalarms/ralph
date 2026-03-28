@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -137,11 +136,9 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		gm.WorkDir = projectDir
 
 		// Wait for fresh CI — force-push invalidates old results.
-		// Sleep briefly to let GitHub register the new push before polling.
 		repoURL := gm.RemoteURL()
-		log.Log("ci", "Waiting for fresh CI on PR #%s...", prNumber)
-		time.Sleep(5 * time.Second)
-		_, ciStatus, ciErr := gm.AwaitCI(ctx, prNumber, repoURL)
+		headSHA, _ := gh.GetPRHeadSHA(projectDir, prNumber)
+		_, ciStatus, ciErr := gm.AwaitFreshCI(ctx, prNumber, repoURL, headSHA)
 		if ciErr != nil {
 			log.Warn("ci", "CI polling error: %v", ciErr)
 		}

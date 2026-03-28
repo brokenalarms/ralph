@@ -173,6 +173,34 @@ func (m *Manager) AwaitCI(ctx context.Context, prNumber, repoURL string) ([]CICh
 	return waitForCI(ctx, fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
 }
 
+// AwaitFreshCI waits for CI checks that match the given commit SHA.
+// After a force-push, old CI results are stale — this polls until checks
+// for the new HEAD appear and resolve.
+func (m *Manager) AwaitFreshCI(ctx context.Context, prNumber, repoURL, expectedSHA string) ([]CICheckResult, CIStatus, error) {
+	if expectedSHA == "" {
+		return m.AwaitCI(ctx, prNumber, repoURL)
+	}
+	gh := m.gh()
+	fetch := func(pr, repo string) ([]CICheckResult, error) {
+		// Check if the PR's HEAD matches the expected SHA.
+		currentSHA, _ := gh.GetPRHeadSHA(m.WorkDir, pr)
+		if currentSHA != expectedSHA {
+			// GitHub hasn't registered the push yet.
+			return nil, fmt.Errorf("PR HEAD is %s, waiting for %s", currentSHA[:min(7, len(currentSHA))], expectedSHA[:min(7, len(expectedSHA))])
+		}
+		return gh.ListChecks(pr, repo)
+	}
+	m.Logger.Log("ci", "Waiting for fresh CI on PR #%s (commit %s)...", prNumber, expectedSHA[:min(7, len(expectedSHA))])
+	return waitForCI(ctx, fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // waitForCI polls PR checks until they complete or timeout is reached.
 // Uses exponential backoff starting at interval, doubling each poll up to
 // MaxCIPollInterval. Logs a single updating line showing accumulated poll

@@ -43,6 +43,7 @@ type GitHub interface {
 	GetPRState(workDir, prNumber string) (state string, err error)
 	GetPRBase(workDir, prNumber string) (base string, err error)
 	GetPRHead(workDir, prNumber string) (head string, err error)
+	GetPRHeadSHA(workDir, prNumber string) (sha string, err error)
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -274,6 +275,17 @@ func (g *ghCLI) GetPRBase(workDir, prNumber string) (string, error) {
 func (g *ghCLI) GetPRHead(workDir, prNumber string) (string, error) {
 	cmd := exec.Command("gh", "pr", "view", prNumber,
 		"--json", "headRefName", "--jq", ".headRefName")
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("gh pr view failed: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func (g *ghCLI) GetPRHeadSHA(workDir, prNumber string) (string, error) {
+	cmd := exec.Command("gh", "pr", "view", prNumber,
+		"--json", "headRefOid", "--jq", ".headRefOid")
 	cmd.Dir = workDir
 	out, err := cmd.Output()
 	if err != nil {
