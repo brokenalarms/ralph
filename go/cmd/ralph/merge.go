@@ -115,8 +115,17 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 			return 1
 		}
 
-		// Squash to 1 commit in the temp worktree.
+		// Fetch latest base and rebase onto it before squashing.
+		gitRunErr(wtDir, "fetch", "origin", baseBranch)
 		baseRef := "origin/" + baseBranch
+		if rebaseErr := gitRunErr(wtDir, "rebase", baseRef); rebaseErr != nil {
+			gitRunErr(wtDir, "rebase", "--abort")
+			cleanup()
+			log.Error("git", "Rebase onto %s failed — resolve conflicts manually", baseBranch)
+			return 1
+		}
+
+		// Squash to 1 commit.
 		baseSHA := strings.TrimSpace(cmdOutputDir(wtDir, "git", "rev-parse", baseRef))
 		if baseSHA == "" {
 			cleanup()
