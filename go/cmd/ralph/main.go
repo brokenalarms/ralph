@@ -299,6 +299,11 @@ func initTaskBackend(cfg config.Config, promptsDir string, log *logging.Logger) 
 func cleanup(cfg config.Config, gm *git.Manager, st *state.Store, backend tasks.Backend, ralphDir, planFile, scriptPath string, args []string, sessionTasks []loop.CompletedTask, interrupted bool, log *logging.Logger) {
 	clearSignalFiles(ralphDir)
 
+	// Clear cli_config so stale flags don't persist across manual restarts.
+	// Evolve restart preserves cli_config because syscall.Exec replaces the
+	// process before cleanup runs.
+	st.ClearCLIConfig()
+
 	if interrupted {
 		st.Write("status", "stopped")
 	}
