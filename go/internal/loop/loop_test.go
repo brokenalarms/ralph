@@ -6355,6 +6355,7 @@ func (s *stubGitHub) PRDiff(_, _ string) (string, error)                        
 func (s *stubGitHub) GetPRState(_, _ string) (string, error)                       { return s.prState, nil }
 func (s *stubGitHub) GetPRBase(_, _ string) (string, error)                        { return s.prBase, nil }
 func (s *stubGitHub) GetPRHead(_, _ string) (string, error)                        { return s.prHead, nil }
+func (s *stubGitHub) GetPRHeadSHA(_, _ string) (string, error)                     { return "", nil }
 
 // getPRBase takes only a GitHub interface and workDir — no Loop needed.
 func TestGetPRBase_Standalone(t *testing.T) {
