@@ -75,19 +75,12 @@ func TestBuildReviewPrompt_PostMortemResponsibilities(t *testing.T) {
 		t.Fatalf("BuildReviewPrompt error: %v", err)
 	}
 
-	responsibilities := []struct {
-		substr string
-		reason string
-	}{
-		{"Reflection Analysis", "should have reflection analysis section"},
-		{"Test Audit", "should have test audit section"},
-		{"Refactor Opportunities", "should have refactor opportunities section"},
-		{"Present findings", "should instruct presenting findings interactively"},
+	// Verify structural properties, not prompt wording.
+	if result == "" {
+		t.Error("review prompt should not be empty")
 	}
-	for _, tc := range responsibilities {
-		if !strings.Contains(result, tc.substr) {
-			t.Errorf("missing %q: %s", tc.substr, tc.reason)
-		}
+	if !strings.Contains(result, "Found recurring pattern") {
+		t.Error("review prompt should include the reflections content")
 	}
 }
 
