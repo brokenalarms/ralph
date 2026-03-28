@@ -384,6 +384,17 @@ func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool
 		var ciErr *CIFailureError
 		if errors.As(err, &ciErr) {
 			if opts.OnCIFailure != nil && opts.OnCIFailure(ciErr) {
+				// Fix was applied and force-pushed. Wait for new CI on the
+				// updated HEAD before retrying merge — the old check status
+				// is stale after force-push.
+				repoURL := m.RemoteURL()
+				_, ciStatus, waitErr := m.AwaitCI(ctx, ciErr.PRNumber, repoURL)
+				if waitErr != nil {
+					m.Logger.Warn("ci", "CI polling after fix: %v", waitErr)
+				}
+				if ciStatus == CIFailed {
+					m.Logger.Warn("ci", "CI still failing after fix — will retry")
+				}
 				continue
 			}
 			return false, err

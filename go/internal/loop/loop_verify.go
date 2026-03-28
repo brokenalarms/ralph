@@ -28,16 +28,25 @@ func (l *Loop) runPreIterationTests(ctx context.Context) string {
 	return l.verifier.RunPreIterationTests(ctx)
 }
 
-// tryFixCI spawns a fix agent to address CI failures, pushes the fix,
-// and returns true if the fix was applied (ready for merge retry).
+// tryFixCI spawns a fix agent to address CI failures, force-pushes the
+// new commits, and returns true if the fix was pushed (ready for merge retry).
+// Uses force-push instead of pushAndCreatePR because the PR already exists
+// and pushAndCreatePR skips the push when a PR is open.
 func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, nextTask, workDir, rawLogPath string) bool {
 	ciLog := l.getCIFailureLog(ciErr.PRNumber)
+	headBefore := l.git.HeadRev()
 	if !l.verifier.TryFixCI(ctx, ciLog, ciErr, nextTask, workDir, rawLogPath) {
 		return false
 	}
 
-	if _, pushErr := l.pushAndCreatePR(ctx, taskID, nextTask, ""); pushErr != nil {
-		l.logger.Warn("git", "Push after CI fix failed: %v", pushErr)
+	headAfter := l.git.HeadRev()
+	if headBefore == headAfter {
+		l.logger.Warn("git", "Fix agent made no new commits — nothing to push")
+		return false
+	}
+
+	if err := l.git.ForcePush(ctx); err != nil {
+		l.logger.Warn("git", "Force-push after CI fix failed: %v", err)
 		return false
 	}
 	return true
