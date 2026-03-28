@@ -21,7 +21,9 @@ func TestEmptyLogContinues(t *testing.T) {
 // sandbox or filesystem restriction.
 func TestPermissionDenialHaltsAt3(t *testing.T) {
 	a := New()
-	log := assistantTextMsg("Error: permission denied. Failed: cannot write to /foo. blocked by sandbox rule.")
+	log := toolResultMsg("Error: permission denied") + "\n" +
+		toolResultMsg("Failed: cannot write to /foo") + "\n" +
+		toolResultMsg("not allowed by policy")
 	r := a.Analyze(IterationState{IterationLog: log})
 	if r.Action != Halt || r.Reason != "permission_denied" {
 		t.Errorf("3 permission lines: got %+v, want Halt/permission_denied", r)
@@ -32,7 +34,8 @@ func TestPermissionDenialHaltsAt3(t *testing.T) {
 // permission errors may be transient and shouldn't abort the whole loop.
 func TestPermissionDenialBelowThreshold(t *testing.T) {
 	a := New()
-	log := assistantTextMsg("permission denied. cannot write.")
+	log := toolResultMsg("permission denied") + "\n" +
+		toolResultMsg("cannot write to /foo")
 	r := a.Analyze(IterationState{IterationLog: log})
 	if r.Action == Halt && r.Reason == "permission_denied" {
 		t.Errorf("2 permission lines should not halt, got %+v", r)
@@ -247,7 +250,9 @@ func TestIsTestFile(t *testing.T) {
 // matching ralph.sh's grep -i flag.
 func TestPermissionDenialCaseInsensitive(t *testing.T) {
 	a := New()
-	log := assistantTextMsg("PERMISSION DENIED. Cannot Write to disk. BLOCKED BY SANDBOX.")
+	log := toolResultMsg("PERMISSION DENIED") + "\n" +
+		toolResultMsg("Cannot Write to disk") + "\n" +
+		toolResultMsg("BLOCKED BY SANDBOX")
 	r := a.Analyze(IterationState{IterationLog: log})
 	if r.Action != Halt || r.Reason != "permission_denied" {
 		t.Errorf("case-insensitive permission: got %+v, want Halt/permission_denied", r)
@@ -258,19 +263,21 @@ func TestPermissionDenialCaseInsensitive(t *testing.T) {
 // matching ralph.sh's `head -5` on the matches.
 func TestPermissionDenialDetailCapped(t *testing.T) {
 	a := New()
-	phrases := make([]string, 10)
-	for i := range phrases {
-		phrases[i] = "permission denied"
+	var parts []string
+	for i := 0; i < 10; i++ {
+		parts = append(parts, toolResultMsg(fmt.Sprintf("Error: permission denied writing file%d.go", i)))
 	}
-	log := assistantTextMsg(strings.Join(phrases, ". "))
+	log := strings.Join(parts, "\n")
 
 	r := a.Analyze(IterationState{IterationLog: log})
 	if r.Action != Halt {
 		t.Fatalf("expected halt, got %+v", r)
 	}
+	// Detail starts with [analyzer] prefix, then up to 5 context lines
 	detailLines := strings.Split(r.Detail, "\n")
-	if len(detailLines) > 5 {
-		t.Errorf("detail has %d lines, want <= 5", len(detailLines))
+	// First line has the [analyzer] prefix, so total is 1 prefix + 4 more = 5 max
+	if len(detailLines) > 6 {
+		t.Errorf("detail has %d lines, want <= 6 (prefix + 5 matches)", len(detailLines))
 	}
 }
 
@@ -429,6 +436,45 @@ func TestErrorHashesClearedOnTaskChange(t *testing.T) {
 	r := a.Analyze(IterationState{IterationLog: log, TaskKey: "task-a"})
 	if r.Action == Halt && r.Reason == "repeated_error" {
 		t.Error("error hashes should have been cleared, but repeated_error still triggered")
+	}
+}
+
+// Proves: permission phrases in assistant text (agent prose about code) do NOT
+// trigger halts — only tool_result content counts as real permission errors.
+func TestPermissionDenialIgnoresAssistantProse(t *testing.T) {
+	a := New()
+	log := assistantTextMsg("I removed 'blocked by sandbox' from the regex. permission denied was also removed. cannot write was cleaned up. not allowed pattern deleted too.")
+	r := a.Analyze(IterationState{IterationLog: log})
+	if r.Action == Halt && r.Reason == "permission_denied" {
+		t.Errorf("permission phrases in assistant prose should not halt, got %+v", r)
+	}
+}
+
+// Proves: permission phrases in tool_result content DO trigger halts —
+// these represent real Claude Code permission denials.
+func TestPermissionDenialDetectsToolResults(t *testing.T) {
+	a := New()
+	log := toolResultMsg("permission denied: cannot write to /foo") + "\n" +
+		toolResultMsg("not allowed: Edit tool blocked by policy") + "\n" +
+		toolResultMsg("cannot write: file is read-only")
+	r := a.Analyze(IterationState{IterationLog: log})
+	if r.Action != Halt || r.Reason != "permission_denied" {
+		t.Errorf("3 permission phrases in tool results: got %+v, want Halt/permission_denied", r)
+	}
+}
+
+// Proves: halt detail shows surrounding line context, not bare matched substrings.
+func TestPermissionDenialDetailShowsContext(t *testing.T) {
+	a := New()
+	log := toolResultMsg("Error: permission denied writing /foo/bar.go") + "\n" +
+		toolResultMsg("Failed: cannot write to /baz/qux.go") + "\n" +
+		toolResultMsg("Tool blocked: not allowed by policy")
+	r := a.Analyze(IterationState{IterationLog: log})
+	if r.Action != Halt {
+		t.Fatalf("expected halt, got %+v", r)
+	}
+	if !strings.Contains(r.Detail, "/foo/bar.go") {
+		t.Errorf("detail should include surrounding context, got: %s", r.Detail)
 	}
 }
 

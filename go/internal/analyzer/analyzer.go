@@ -66,13 +66,16 @@ func (a *Analyzer) Analyze(state IterationState) Result {
 	// false positives from file contents in tool results.
 	parsed := parseLog(state.IterationLog)
 
-	// --- Permission denial: 3+ matches in assistant messages only → halt ---
-	permMatches := permissionRe.FindAllString(parsed.AssistantText, -1)
-	if len(permMatches) >= 3 {
+	// --- Permission denial: 3+ matches in tool results → halt ---
+	// Real permission denials come from tool_result content (Claude Code
+	// denied the tool call). Agent prose discussing permissions is in
+	// AssistantText and must be ignored to avoid false positives.
+	permLines := matchLinesWithContext(parsed.ToolResultText, permissionRe)
+	if len(permLines) >= 3 {
 		return Result{
 			Action: Halt,
 			Reason: "permission_denied",
-			Detail: strings.Join(firstN(permMatches, 5), "\n"),
+			Detail: "[analyzer] " + strings.Join(firstN(permLines, 5), "\n"),
 		}
 	}
 
@@ -184,8 +187,9 @@ func isTestFile(path string) bool {
 // parsedLog holds the extracted content from a JSON-lines iteration log,
 // split by source so detectors can target the right signal.
 type parsedLog struct {
-	AssistantText string   // text and thinking blocks from assistant messages
-	ToolCalls     []string // "toolName:target" signatures from tool_use blocks
+	AssistantText  string   // text and thinking blocks from assistant messages
+	ToolResultText string   // content from tool_result blocks (real errors live here)
+	ToolCalls      []string // "toolName:target" signatures from tool_use blocks
 }
 
 // parseLog walks the JSON-lines log once, extracting assistant text/thinking
@@ -193,6 +197,7 @@ type parsedLog struct {
 // AssistantText to avoid false positives from file contents in tool results.
 func parseLog(log string) parsedLog {
 	var text strings.Builder
+	var toolResults strings.Builder
 	var calls []string
 
 	for _, line := range strings.Split(log, "\n") {
@@ -206,38 +211,55 @@ func parseLog(log string) parsedLog {
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
 		}
-		if json.Unmarshal([]byte(line), &msg) != nil || msg.Type != "assistant" {
+		if json.Unmarshal([]byte(line), &msg) != nil {
 			continue
 		}
+
 		var blocks []struct {
 			Type     string          `json:"type"`
 			Text     string          `json:"text"`
 			Thinking string          `json:"thinking"`
+			Content  string          `json:"content"`
 			Name     string          `json:"name"`
 			Input    json.RawMessage `json:"input"`
 		}
 		if json.Unmarshal(msg.Message.Content, &blocks) != nil {
 			continue
 		}
-		for _, b := range blocks {
-			switch b.Type {
-			case "text":
-				if b.Text != "" {
-					text.WriteString(b.Text)
-					text.WriteByte('\n')
+
+		switch msg.Type {
+		case "assistant":
+			for _, b := range blocks {
+				switch b.Type {
+				case "text":
+					if b.Text != "" {
+						text.WriteString(b.Text)
+						text.WriteByte('\n')
+					}
+				case "thinking":
+					if b.Thinking != "" {
+						text.WriteString(b.Thinking)
+						text.WriteByte('\n')
+					}
+				case "tool_use":
+					target := extractToolTarget(b.Input)
+					calls = append(calls, b.Name+":"+target)
 				}
-			case "thinking":
-				if b.Thinking != "" {
-					text.WriteString(b.Thinking)
-					text.WriteByte('\n')
+			}
+		case "user":
+			for _, b := range blocks {
+				if b.Type == "tool_result" && b.Content != "" {
+					toolResults.WriteString(b.Content)
+					toolResults.WriteByte('\n')
 				}
-			case "tool_use":
-				target := extractToolTarget(b.Input)
-				calls = append(calls, b.Name+":"+target)
 			}
 		}
 	}
-	return parsedLog{AssistantText: text.String(), ToolCalls: calls}
+	return parsedLog{
+		AssistantText:  text.String(),
+		ToolResultText: toolResults.String(),
+		ToolCalls:      calls,
+	}
 }
 
 // extractToolTarget pulls the most identifying field from a tool_use input.
@@ -257,6 +279,21 @@ func extractToolTarget(raw json.RawMessage) string {
 		return input.FilePath
 	}
 	return input.Pattern
+}
+
+// matchLinesWithContext returns the full lines from text that match re,
+// providing surrounding context instead of bare matched substrings.
+func matchLinesWithContext(text string, re *regexp.Regexp) []string {
+	var matches []string
+	for _, line := range strings.Split(text, "\n") {
+		if re.MatchString(line) {
+			trimmed := strings.TrimSpace(line)
+			if trimmed != "" {
+				matches = append(matches, trimmed)
+			}
+		}
+	}
+	return matches
 }
 
 func firstN(s []string, n int) []string {
