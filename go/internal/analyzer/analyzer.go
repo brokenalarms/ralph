@@ -50,7 +50,6 @@ func New() *Analyzer {
 	return &Analyzer{}
 }
 
-var permissionRe = regexp.MustCompile(`(?i)(permission denied|cannot write|blocked by sandbox|not allowed)`)
 var stuckPhraseRe = regexp.MustCompile(`(?i)(I'm blocked|I cannot proceed|unable to complete)`)
 
 // Analyze inspects an iteration's output and state, updating internal counters
@@ -61,23 +60,7 @@ func (a *Analyzer) Analyze(state IterationState) Result {
 		return Result{Action: Continue}
 	}
 
-	// Parse the JSON-lines log once, extracting assistant text and tool call
-	// signatures. All text-based detectors run against assistantText to avoid
-	// false positives from file contents in tool results.
 	parsed := parseLog(state.IterationLog)
-
-	// --- Permission denial: 3+ matches in tool results → halt ---
-	// Real permission denials come from tool_result content (Claude Code
-	// denied the tool call). Agent prose discussing permissions is in
-	// AssistantText and must be ignored to avoid false positives.
-	permLines := matchLinesWithContext(parsed.BashResultText, permissionRe)
-	if len(permLines) >= 3 {
-		return Result{
-			Action: Halt,
-			Reason: "permission_denied",
-			Detail: "[analyzer] " + strings.Join(firstN(permLines, 5), "\n"),
-		}
-	}
 
 	// --- Stuck loop: skip if task completed via signal ---
 	if state.HasSignal {
@@ -187,9 +170,8 @@ func isTestFile(path string) bool {
 // parsedLog holds the extracted content from a JSON-lines iteration log,
 // split by source so detectors can target the right signal.
 type parsedLog struct {
-	AssistantText  string   // text and thinking blocks from assistant messages
-	BashResultText string   // content from Bash tool_result blocks only (actual command output)
-	ToolCalls      []string // "toolName:target" signatures from tool_use blocks
+	AssistantText string   // text and thinking blocks from assistant messages
+	ToolCalls     []string // "toolName:target" signatures from tool_use blocks
 }
 
 // parseLog walks the JSON-lines log once, extracting assistant text/thinking
@@ -197,10 +179,7 @@ type parsedLog struct {
 // AssistantText to avoid false positives from file contents in tool results.
 func parseLog(log string) parsedLog {
 	var text strings.Builder
-	var bashResults strings.Builder
 	var calls []string
-	// Track tool names by ID so we can attribute results to the right tool.
-	toolNames := make(map[string]string)
 
 	for _, line := range strings.Split(log, "\n") {
 		line = strings.TrimSpace(line)
@@ -218,14 +197,11 @@ func parseLog(log string) parsedLog {
 		}
 
 		var blocks []struct {
-			Type       string          `json:"type"`
-			Text       string          `json:"text"`
-			Thinking   string          `json:"thinking"`
-			Content    string          `json:"content"`
-			Name       string          `json:"name"`
-			ID         string          `json:"id"`
-			ToolUseID  string          `json:"tool_use_id"`
-			Input      json.RawMessage `json:"input"`
+			Type     string          `json:"type"`
+			Text     string          `json:"text"`
+			Thinking string          `json:"thinking"`
+			Name     string          `json:"name"`
+			Input    json.RawMessage `json:"input"`
 		}
 		if json.Unmarshal(msg.Message.Content, &blocks) != nil {
 			continue
@@ -246,30 +222,15 @@ func parseLog(log string) parsedLog {
 						text.WriteByte('\n')
 					}
 				case "tool_use":
-					if b.ID != "" && b.Name != "" {
-						toolNames[b.ID] = b.Name
-					}
 					target := extractToolTarget(b.Input)
 					calls = append(calls, b.Name+":"+target)
-				}
-			}
-		case "user":
-			for _, b := range blocks {
-				if b.Type == "tool_result" && b.Content != "" {
-					// Only capture Bash results — file contents from
-					// Read/Edit/Grep contain code that triggers false positives.
-					if toolNames[b.ToolUseID] == "Bash" {
-						bashResults.WriteString(b.Content)
-						bashResults.WriteByte('\n')
-					}
 				}
 			}
 		}
 	}
 	return parsedLog{
-		AssistantText:  text.String(),
-		BashResultText: bashResults.String(),
-		ToolCalls:      calls,
+		AssistantText: text.String(),
+		ToolCalls:     calls,
 	}
 }
 
@@ -290,21 +251,6 @@ func extractToolTarget(raw json.RawMessage) string {
 		return input.FilePath
 	}
 	return input.Pattern
-}
-
-// matchLinesWithContext returns the full lines from text that match re,
-// providing surrounding context instead of bare matched substrings.
-func matchLinesWithContext(text string, re *regexp.Regexp) []string {
-	var matches []string
-	for _, line := range strings.Split(text, "\n") {
-		if re.MatchString(line) {
-			trimmed := strings.TrimSpace(line)
-			if trimmed != "" {
-				matches = append(matches, trimmed)
-			}
-		}
-	}
-	return matches
 }
 
 func firstN(s []string, n int) []string {

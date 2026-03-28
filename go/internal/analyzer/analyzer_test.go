@@ -2,7 +2,6 @@ package analyzer
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 )
 
@@ -13,57 +12,6 @@ func TestEmptyLogContinues(t *testing.T) {
 	r := a.Analyze(IterationState{})
 	if r.Action != Continue {
 		t.Errorf("empty log: got action %d, want Continue", r.Action)
-	}
-}
-
-// Verifies that 3+ permission-denial phrases in assistant messages cause an
-// immediate halt, protecting the loop from burning iterations against a
-// sandbox or filesystem restriction.
-func TestPermissionDenialHaltsAt3_BashOutput(t *testing.T) {
-	a := New()
-	log := bashToolUse("t1", "cmd1") + "\n" +
-		bashResultMsg("t1", "Error: permission denied") + "\n" +
-		bashToolUse("t2", "cmd2") + "\n" +
-		bashResultMsg("t2", "Failed: cannot write to /foo") + "\n" +
-		bashToolUse("t3", "cmd3") + "\n" +
-		bashResultMsg("t3", "not allowed by policy")
-	r := a.Analyze(IterationState{IterationLog: log})
-	if r.Action != Halt || r.Reason != "permission_denied" {
-		t.Errorf("3 permission phrases in bash output: got %+v, want Halt/permission_denied", r)
-	}
-}
-
-// Verifies that fewer than 3 permission phrases in bash output do NOT halt.
-func TestPermissionDenialBelowThreshold_BashOutput(t *testing.T) {
-	a := New()
-	log := bashToolUse("t1", "some command") + "\n" +
-		bashResultMsg("t1", "permission denied. cannot write.")
-	r := a.Analyze(IterationState{IterationLog: log})
-	if r.Action == Halt && r.Reason == "permission_denied" {
-		t.Errorf("2 permission phrases in bash should not halt, got %+v", r)
-	}
-}
-
-// Verifies that permission phrases in Read tool results (file contents)
-// do NOT trigger the detector — only Bash output counts.
-func TestPermissionDenialIgnoresReadResults(t *testing.T) {
-	a := New()
-	log := toolResultMsg(`PERMISSION_DENIAL_THRESHOLD=3\npermission denied error handling\ncannot write guard\nblocked by sandbox check\nnot allowed to delete`) +
-		"\n" + assistantTextMsg("I've updated the permission checks.")
-	r := a.Analyze(IterationState{IterationLog: log})
-	if r.Action == Halt && r.Reason == "permission_denied" {
-		t.Errorf("permission phrases in Read results should not halt, got %+v", r)
-	}
-}
-
-// Verifies that permission phrases in assistant text (agent discussing code)
-// do NOT trigger the detector.
-func TestPermissionDenialIgnoresAssistantText(t *testing.T) {
-	a := New()
-	log := assistantTextMsg("I removed 'blocked by sandbox' from the regex. permission denied was also removed. cannot write was cleaned up. not allowed pattern deleted too.")
-	r := a.Analyze(IterationState{IterationLog: log})
-	if r.Action == Halt && r.Reason == "permission_denied" {
-		t.Errorf("permission phrases in assistant text should not halt, got %+v", r)
 	}
 }
 
@@ -258,43 +206,6 @@ func TestIsTestFile(t *testing.T) {
 	}
 }
 
-// Verifies that permission denial detection is case-insensitive,
-// matching ralph.sh's grep -i flag.
-func TestPermissionDenialCaseInsensitive(t *testing.T) {
-	a := New()
-	log := bashToolUse("t1", "c1") + "\n" + bashResultMsg("t1", "PERMISSION DENIED") + "\n" +
-		bashToolUse("t2", "c2") + "\n" + bashResultMsg("t2", "Cannot Write to disk") + "\n" +
-		bashToolUse("t3", "c3") + "\n" + bashResultMsg("t3", "BLOCKED BY SANDBOX")
-	r := a.Analyze(IterationState{IterationLog: log})
-	if r.Action != Halt || r.Reason != "permission_denied" {
-		t.Errorf("case-insensitive permission: got %+v, want Halt/permission_denied", r)
-	}
-}
-
-// Verifies that permission denial detail is capped at 5 lines,
-// matching ralph.sh's `head -5` on the matches.
-func TestPermissionDenialDetailCapped(t *testing.T) {
-	a := New()
-	var parts []string
-	for i := 0; i < 10; i++ {
-		id := fmt.Sprintf("t%d", i)
-		parts = append(parts, bashToolUse(id, fmt.Sprintf("cmd%d", i)))
-		parts = append(parts, bashResultMsg(id, fmt.Sprintf("Error: permission denied writing file%d.go", i)))
-	}
-	log := strings.Join(parts, "\n")
-
-	r := a.Analyze(IterationState{IterationLog: log})
-	if r.Action != Halt {
-		t.Fatalf("expected halt, got %+v", r)
-	}
-	// Detail starts with [analyzer] prefix, then up to 5 context lines
-	detailLines := strings.Split(r.Detail, "\n")
-	// First line has the [analyzer] prefix, so total is 1 prefix + 4 more = 5 max
-	if len(detailLines) > 6 {
-		t.Errorf("detail has %d lines, want <= 6 (prefix + 5 matches)", len(detailLines))
-	}
-}
-
 // Proves: no false positives on normal progress — real source file changes
 // reset both the stagnant and test-only counters to 0.
 func TestNormalProgressResetsCounters(t *testing.T) {
@@ -455,43 +366,6 @@ func TestErrorHashesClearedOnTaskChange(t *testing.T) {
 
 // Proves: permission phrases in assistant text (agent prose about code) do NOT
 // trigger halts — only tool_result content counts as real permission errors.
-func TestPermissionDenialIgnoresAssistantProse(t *testing.T) {
-	a := New()
-	log := assistantTextMsg("I removed 'blocked by sandbox' from the regex. permission denied was also removed. cannot write was cleaned up. not allowed pattern deleted too.")
-	r := a.Analyze(IterationState{IterationLog: log})
-	if r.Action == Halt && r.Reason == "permission_denied" {
-		t.Errorf("permission phrases in assistant prose should not halt, got %+v", r)
-	}
-}
-
-// Proves: permission phrases in tool_result content DO trigger halts —
-// these represent real Claude Code permission denials.
-func TestPermissionDenialDetectsBashResults(t *testing.T) {
-	a := New()
-	log := bashToolUse("t1", "c1") + "\n" + bashResultMsg("t1", "permission denied: cannot write to /foo") + "\n" +
-		bashToolUse("t2", "c2") + "\n" + bashResultMsg("t2", "not allowed: blocked by policy") + "\n" +
-		bashToolUse("t3", "c3") + "\n" + bashResultMsg("t3", "cannot write: file is read-only")
-	r := a.Analyze(IterationState{IterationLog: log})
-	if r.Action != Halt || r.Reason != "permission_denied" {
-		t.Errorf("3 permission phrases in bash results: got %+v, want Halt/permission_denied", r)
-	}
-}
-
-// Proves: halt detail shows surrounding line context, not bare matched substrings.
-func TestPermissionDenialDetailShowsContext(t *testing.T) {
-	a := New()
-	log := bashToolUse("t1", "c1") + "\n" + bashResultMsg("t1", "Error: permission denied writing /foo/bar.go") + "\n" +
-		bashToolUse("t2", "c2") + "\n" + bashResultMsg("t2", "Failed: cannot write to /baz/qux.go") + "\n" +
-		bashToolUse("t3", "c3") + "\n" + bashResultMsg("t3", "Tool blocked: not allowed by policy")
-	r := a.Analyze(IterationState{IterationLog: log})
-	if r.Action != Halt {
-		t.Fatalf("expected halt, got %+v", r)
-	}
-	if !strings.Contains(r.Detail, "/foo/bar.go") {
-		t.Errorf("detail should include surrounding context, got: %s", r.Detail)
-	}
-}
-
 // Proves: an empty task key means error fingerprinting is skipped entirely,
 // so repeated errors without a task context don't cause halts.
 func TestNoTaskKeySkipsErrorFingerprinting(t *testing.T) {

@@ -231,6 +231,7 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 		args := []string{
 			"--print", "--verbose",
 			"--output-format", "stream-json",
+			"--permission-mode", "bypassPermissions",
 			"--add-dir", cfg.WorkDir,
 			"--add-dir", cfg.RalphDir,
 			"--allowedTools", strings.Join(IterationAllowedTools, ","),
