@@ -148,13 +148,21 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 			return 0
 		}
 
-		// Brief pause for GitHub to retarget the next PR.
-		time.Sleep(2 * time.Second)
-
 		next := findNextStackedPR(gh, projectDir, prNumber, log)
 		if next == "" {
 			return logStackComplete(log, merged)
 		}
+
+		// Wait for GitHub to retarget the next PR to the default branch.
+		log.Log("git", "Waiting for PR #%s to retarget to %s...", next, defaultBranch)
+		for i := 0; i < 30; i++ {
+			nextBase, _ := gh.GetPRBase(projectDir, next)
+			if nextBase == defaultBranch {
+				break
+			}
+			time.Sleep(2 * time.Second)
+		}
+
 		prNumber = next
 	}
 }
