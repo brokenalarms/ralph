@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -140,56 +141,80 @@ type stackPR struct {
 	head   string
 }
 
-// collectStack finds all OPEN PRs in the stack. Walks down from the given
-// PR number to find the bottom (first open PR), then collects upward.
+// collectStack walks the base chain from the given PR down to main,
+// collecting the full stack in bottom-up order. Uses gh pr list --json
+// to get all open PRs in one call, then walks the base references.
 func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) []stackPR {
-	topNum := 0
-	fmt.Sscanf(topPR, "%d", &topNum)
-	if topNum == 0 {
+	// Get all open PRs in one call.
+	cmd := exec.Command("gh", "pr", "list", "--state", "open",
+		"--json", "number,headRefName,baseRefName", "--limit", "100")
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		log.Warn("git", "Failed to list PRs: %v", err)
 		return nil
 	}
 
-	// Walk down to find the bottom open PR. Skip MERGED and CLOSED.
-	bottom := topNum
-	misses := 0
-	for n := topNum - 1; n > 0; n-- {
-		num := fmt.Sprintf("%d", n)
-		prState, err := gh.GetPRState(workDir, num)
-		if err != nil {
-			misses++
-			if misses > 3 {
-				break
-			}
-			continue
-		}
-		switch strings.ToUpper(prState) {
-		case "OPEN":
-			bottom = n
-			misses = 0
-		case "MERGED", "CLOSED":
-			misses = 0
-			continue
-		default:
-			misses++
-			if misses > 3 {
-				break
-			}
-		}
+	var allPRs []struct {
+		Number int    `json:"number"`
+		Head   string `json:"headRefName"`
+		Base   string `json:"baseRefName"`
+	}
+	if jsonErr := json.Unmarshal(out, &allPRs); jsonErr != nil {
+		log.Warn("git", "Failed to parse PR list: %v", jsonErr)
+		return nil
 	}
 
-	// Collect upward from bottom through top, skipping non-open.
-	var prs []stackPR
-	for n := bottom; n <= topNum; n++ {
-		num := fmt.Sprintf("%d", n)
-		prState, _ := gh.GetPRState(workDir, num)
-		if strings.ToUpper(prState) == "OPEN" {
-			head, _ := gh.GetPRHead(workDir, num)
-			if head != "" {
-				prs = append(prs, stackPR{number: num, head: head})
-			}
-		}
+	// Index by head branch name for chain walking.
+	byHead := make(map[string]struct {
+		number int
+		head   string
+		base   string
+	})
+	byNumber := make(map[int]struct {
+		head string
+		base string
+	})
+	for _, pr := range allPRs {
+		byHead[pr.Head] = struct {
+			number int
+			head   string
+			base   string
+		}{pr.Number, pr.Head, pr.Base}
+		byNumber[pr.Number] = struct {
+			head string
+			base string
+		}{pr.Head, pr.Base}
 	}
-	return prs
+
+	// Find the starting PR.
+	topNum := 0
+	fmt.Sscanf(topPR, "%d", &topNum)
+	start, ok := byNumber[topNum]
+	if !ok {
+		return nil
+	}
+
+	// Walk the base chain from top down to main.
+	var chain []stackPR
+	chain = append(chain, stackPR{number: topPR, head: start.head})
+	currentBase := start.base
+
+	for i := 0; i < 20; i++ {
+		// Find the PR whose head branch is the current base.
+		pr, found := byHead[currentBase]
+		if !found {
+			break // base is main or a branch with no PR
+		}
+		chain = append(chain, stackPR{number: fmt.Sprintf("%d", pr.number), head: pr.head})
+		currentBase = pr.base
+	}
+
+	// Reverse to get bottom-up order.
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	return chain
 }
 
 // rebaseStackAndPush creates a temp worktree on the top branch, sets up
