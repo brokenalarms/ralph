@@ -115,17 +115,25 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 			return 1
 		}
 
-		// Set up manager to work in the temp worktree.
+		// Squash to 1 commit in the temp worktree.
+		baseRef := "origin/" + baseBranch
+		baseSHA := strings.TrimSpace(cmdOutputDir(wtDir, "git", "rev-parse", baseRef))
+		if baseSHA == "" {
+			cleanup()
+			log.Error("git", "Cannot resolve %s", baseRef)
+			return 1
+		}
 		gm.WorkDir = wtDir
-		gm.WorktreeBranch = headBranch
-		gm.SetPrevBranch("")
-		if baseBranch != gm.DetectDefaultBranch() {
-			gm.SetPrevBranch(baseBranch)
+		commitMsg := strings.TrimSpace(cmdOutputDir(wtDir, "git", "log", "-1", "--format=%s"))
+		if err := gm.SquashToOneCommit(baseSHA, commitMsg); err != nil {
+			log.Warn("git", "Squash: %v", err)
 		}
 
-		// Squash + force-push.
-		log.Log("git", "Squashing and pushing...")
-		if pushErr := gm.Push(ctx); pushErr != nil {
+		// Force-push the tmp branch AS the original branch name.
+		log.Log("git", "Force-pushing %s...", headBranch)
+		tmpBranch := "ralph-merge/" + strings.ReplaceAll(headBranch, "/", "-")
+		pushErr := gitRunErr(wtDir, "push", "--force-with-lease", "origin", tmpBranch+":"+headBranch)
+		if pushErr != nil {
 			cleanup()
 			log.Error("git", "Push failed: %v", pushErr)
 			return 1
@@ -210,13 +218,17 @@ func logStackComplete(log *logging.Logger, merged int) int {
 }
 
 func createMergeWorktree(projectDir, branch string, log *logging.Logger) (string, func(), error) {
-	wtDir := filepath.Join(os.TempDir(), "ralph-merge-"+branch)
+	slug := strings.ReplaceAll(branch, "/", "-")
+	wtDir := filepath.Join(os.TempDir(), "ralph-merge-"+slug)
 	os.RemoveAll(wtDir)
 
-	// Prune stale worktree refs.
 	exec.Command("git", "-C", projectDir, "worktree", "prune").Run()
 
-	cmd := exec.Command("git", "-C", projectDir, "worktree", "add", "--detach", wtDir, "origin/"+branch)
+	// Use a temp branch name to avoid conflicts with existing worktrees.
+	tmpBranch := "ralph-merge/" + slug
+	exec.Command("git", "-C", projectDir, "branch", "-D", tmpBranch).Run()
+
+	cmd := exec.Command("git", "-C", projectDir, "worktree", "add", "-b", tmpBranch, wtDir, "origin/"+branch)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", nil, fmt.Errorf("worktree add for %s: %s", branch, string(out))
@@ -224,8 +236,16 @@ func createMergeWorktree(projectDir, branch string, log *logging.Logger) (string
 
 	cleanup := func() {
 		exec.Command("git", "-C", projectDir, "worktree", "remove", "--force", wtDir).Run()
+		exec.Command("git", "-C", projectDir, "branch", "-D", tmpBranch).Run()
 	}
 	return wtDir, cleanup, nil
+}
+
+func cmdOutputDir(dir, name string, args ...string) string {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, _ := cmd.Output()
+	return string(out)
 }
 
 func gitRunErr(dir string, args ...string) error {
