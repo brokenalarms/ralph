@@ -932,3 +932,117 @@ func (s *sequentialMergeGitHub) ListChecks(prNumber, repoURL string) ([]CICheckR
 	}
 	return s.stubGitHub.checks, s.stubGitHub.checksErr
 }
+
+// After a fix agent commits and force-pushes, MergeWithRetry must call
+// AwaitCI to wait for fresh CI results on the new HEAD before retrying the
+// merge. This prevents the retry from seeing the old (stale) failure status.
+func TestMergeWithRetry_PushesFixAgentWorkBeforeRetry(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        filepath.Join(t.TempDir(), "wt"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/test/01-ci-push-retry",
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	// Track the order of operations to verify AwaitCI happens between
+	// OnCIFailure and the merge retry.
+	var events []string
+
+	gh := &ciRetryGitHub{
+		stubGitHub: stubGitHub{
+			available: true,
+			openPR:    "60",
+		},
+		events: &events,
+	}
+	mgr.GitHub = gh
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	mgr.Runner = runner
+
+	ciFixCalled := false
+	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
+		OnCIFailure: func(ciErr *CIFailureError) bool {
+			ciFixCalled = true
+			events = append(events, "fix-applied")
+			return true
+		},
+	})
+	if err != nil {
+		t.Fatalf("MergeWithRetry: %v", err)
+	}
+	if !merged {
+		t.Error("expected merge to succeed after CI fix")
+	}
+	if !ciFixCalled {
+		t.Error("expected OnCIFailure callback to be called")
+	}
+
+	// Verify AwaitCI was called between the fix and the merge retry.
+	fixIdx, awaitIdx, mergeRetryIdx := -1, -1, -1
+	for i, e := range events {
+		switch e {
+		case "fix-applied":
+			fixIdx = i
+		case "await-ci":
+			if fixIdx >= 0 && awaitIdx < 0 {
+				awaitIdx = i
+			}
+		case "merge-retry":
+			if awaitIdx >= 0 && mergeRetryIdx < 0 {
+				mergeRetryIdx = i
+			}
+		}
+	}
+	if fixIdx < 0 {
+		t.Fatal("fix-applied event not recorded")
+	}
+	if awaitIdx < 0 {
+		t.Fatal("AwaitCI not called after fix — new CI status would be stale")
+	}
+	if mergeRetryIdx < 0 {
+		t.Fatal("merge retry not recorded after AwaitCI")
+	}
+	if !(fixIdx < awaitIdx && awaitIdx < mergeRetryIdx) {
+		t.Errorf("wrong order: fix=%d, await=%d, merge=%d — expected fix < await < merge", fixIdx, awaitIdx, mergeRetryIdx)
+	}
+}
+
+// ciRetryGitHub tracks the order of ListChecks and MergePR calls to verify
+// that AwaitCI runs between the CI fix callback and the merge retry.
+type ciRetryGitHub struct {
+	stubGitHub
+	events     *[]string
+	checkCalls int
+	mergeCalls int
+}
+
+func (c *ciRetryGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
+	c.checkCalls++
+	// First call: CI fails (triggers OnCIFailure).
+	// Subsequent calls: CI passes (after fix + force-push).
+	if c.checkCalls == 1 {
+		return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}, nil
+	}
+	*c.events = append(*c.events, "await-ci")
+	return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}, nil
+}
+
+func (c *ciRetryGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error) {
+	c.mergeCalls++
+	*c.events = append(*c.events, "merge-retry")
+	return "merged", nil
+}
