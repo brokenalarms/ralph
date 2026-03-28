@@ -39,7 +39,6 @@ func (p *ProseTracker) Observe(rawLine string) {
 	var ev struct {
 		Type  string `json:"type"`
 		Delta *struct {
-			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"delta"`
 	}
@@ -47,7 +46,7 @@ func (p *ProseTracker) Observe(rawLine string) {
 		return
 	}
 
-	if ev.Type != "content_block_delta" || ev.Delta == nil || ev.Delta.Type != "text_delta" {
+	if ev.Type != "content_block_delta" || ev.Delta == nil || ev.Delta.Text == "" {
 		return
 	}
 
