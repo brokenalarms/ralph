@@ -79,6 +79,9 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 	case "loop":
 		return handleLoop(sub, log)
 
+	case "merge":
+		return handleMerge(sub, log)
+
 	case "review":
 		return handleReview(sub, log)
 
