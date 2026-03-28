@@ -267,9 +267,10 @@ func rebaseStackAndPush(projectDir, defaultBranch, topBranch string, allBranches
 		autoCmd.Dir = wtDir
 		autoOut, autoErr := autoCmd.CombinedOutput()
 		if autoErr != nil {
-			gitRunErr(wtDir, "rebase", "--abort")
-			cleanup()
-			log.Error("git", "Rebase failed — resolve conflicts manually\n%s", string(autoOut))
+			log.Error("git", "Rebase has conflicts — resolve manually in:\n  %s", wtDir)
+			log.Log("git", "Then run: cd %s && git-rebase-continue", wtDir)
+			log.Log("git", "Then re-run: ralph merge   (to continue)")
+			log.Log("", "\n%s", string(autoOut))
 			return 1
 		}
 	}
