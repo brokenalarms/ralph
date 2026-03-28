@@ -85,7 +85,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		WorkDir:    cfg.ProjectDir,
 		RalphDir:   ralphDir,
 		BaseBranch: cfg.BaseBranch,
-		MergeAdmin: cfg.MergeAdmin,
 		Logger:     log,
 	}
 
@@ -329,9 +328,6 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 	}
 	if cfg.AutoMerge {
 		extraArgs = append(extraArgs, "--auto-merge")
-	}
-	if cfg.MergeAdmin {
-		extraArgs = append(extraArgs, "--merge-admin")
 	}
 	if cfg.Verbose {
 		extraArgs = append(extraArgs, "--verbose")

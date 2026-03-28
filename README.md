@@ -102,7 +102,6 @@ ralph command ~/myproject
 | `--base-branch <name>` | Base branch for rebase/merge | develop |
 | `--auto-merge` | Squash-merge PRs after task completion | — |
 | `--evolve` | Self-improving: pull, rebuild, restart after each merge | — |
-| `--merge-admin` | Bypass branch protection on merge (requires `--auto-merge`) | — |
 | `--wait` | Keep running after all tasks complete, polling for new work | — |
 | `--tmux` | Run in tmux 3-pane layout | — |
 | `--refactor-every <N>` | Refactor every N iterations | 0 |
