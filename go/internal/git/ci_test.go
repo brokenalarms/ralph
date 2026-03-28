@@ -23,15 +23,27 @@ func TestEvaluateChecks_AllPassed(t *testing.T) {
 	}
 }
 
-// evaluateChecks returns CIPassed when at least one check passed and
-// none failed — pending deployment checks don't block.
-func TestEvaluateChecks_PassedWithPendingDeploy(t *testing.T) {
+// evaluateChecks returns CIPending when any check is still pending,
+// even if other checks have passed — all checks must resolve.
+func TestEvaluateChecks_PendingBlocksEvenWhenOthersPassed(t *testing.T) {
 	checks := []CICheckResult{
 		{Name: "test", State: "SUCCESS", Bucket: "pass"},
 		{Name: "deploy", State: "PENDING", Bucket: "pending"},
 	}
-	if got := evaluateChecks(checks); got != CIPassed {
-		t.Errorf("expected CIPassed (test passed, deploy pending), got %v", got)
+	if got := evaluateChecks(checks); got != CIPending {
+		t.Errorf("expected CIPending (deploy still pending), got %v", got)
+	}
+}
+
+// evaluateChecks treats non-required check failures as blocking,
+// not just required ones — all CI signals matter.
+func TestEvaluateChecks_NonRequiredFailureBlocks(t *testing.T) {
+	checks := []CICheckResult{
+		{Name: "test", State: "SUCCESS", Bucket: "pass"},
+		{Name: "netlify", State: "FAILURE", Bucket: "fail"},
+	}
+	if got := evaluateChecks(checks); got != CIFailed {
+		t.Errorf("expected CIFailed (non-required check failed), got %v", got)
 	}
 }
 
