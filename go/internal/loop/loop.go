@@ -219,6 +219,18 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		taskInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 		taskID, nextTask := taskInfo.ID, taskInfo.Title
+		if taskID == "" && nextTask == "" {
+			l.logger.Warn("beads", "Task backend returned empty — no task to run")
+			if l.cfg.Wait {
+				runIteration--
+				iteration--
+				if resumed := l.waitForTasks(ctx); !resumed {
+					break
+				}
+				continue
+			}
+			break
+		}
 		taskChanged := isNewTask(l.state, taskID, nextTask)
 		if taskChanged {
 			l.verifier.ResetCounters()
