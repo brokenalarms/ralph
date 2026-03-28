@@ -70,7 +70,7 @@ func (a *Analyzer) Analyze(state IterationState) Result {
 	// Real permission denials come from tool_result content (Claude Code
 	// denied the tool call). Agent prose discussing permissions is in
 	// AssistantText and must be ignored to avoid false positives.
-	permLines := matchLinesWithContext(parsed.ToolResultText, permissionRe)
+	permLines := matchLinesWithContext(parsed.BashResultText, permissionRe)
 	if len(permLines) >= 3 {
 		return Result{
 			Action: Halt,
@@ -188,7 +188,7 @@ func isTestFile(path string) bool {
 // split by source so detectors can target the right signal.
 type parsedLog struct {
 	AssistantText  string   // text and thinking blocks from assistant messages
-	ToolResultText string   // content from tool_result blocks (real errors live here)
+	BashResultText string   // content from Bash tool_result blocks only (actual command output)
 	ToolCalls      []string // "toolName:target" signatures from tool_use blocks
 }
 
@@ -197,8 +197,10 @@ type parsedLog struct {
 // AssistantText to avoid false positives from file contents in tool results.
 func parseLog(log string) parsedLog {
 	var text strings.Builder
-	var toolResults strings.Builder
+	var bashResults strings.Builder
 	var calls []string
+	// Track tool names by ID so we can attribute results to the right tool.
+	toolNames := make(map[string]string)
 
 	for _, line := range strings.Split(log, "\n") {
 		line = strings.TrimSpace(line)
@@ -216,12 +218,14 @@ func parseLog(log string) parsedLog {
 		}
 
 		var blocks []struct {
-			Type     string          `json:"type"`
-			Text     string          `json:"text"`
-			Thinking string          `json:"thinking"`
-			Content  string          `json:"content"`
-			Name     string          `json:"name"`
-			Input    json.RawMessage `json:"input"`
+			Type       string          `json:"type"`
+			Text       string          `json:"text"`
+			Thinking   string          `json:"thinking"`
+			Content    string          `json:"content"`
+			Name       string          `json:"name"`
+			ID         string          `json:"id"`
+			ToolUseID  string          `json:"tool_use_id"`
+			Input      json.RawMessage `json:"input"`
 		}
 		if json.Unmarshal(msg.Message.Content, &blocks) != nil {
 			continue
@@ -242,6 +246,9 @@ func parseLog(log string) parsedLog {
 						text.WriteByte('\n')
 					}
 				case "tool_use":
+					if b.ID != "" && b.Name != "" {
+						toolNames[b.ID] = b.Name
+					}
 					target := extractToolTarget(b.Input)
 					calls = append(calls, b.Name+":"+target)
 				}
@@ -249,15 +256,19 @@ func parseLog(log string) parsedLog {
 		case "user":
 			for _, b := range blocks {
 				if b.Type == "tool_result" && b.Content != "" {
-					toolResults.WriteString(b.Content)
-					toolResults.WriteByte('\n')
+					// Only capture Bash results — file contents from
+					// Read/Edit/Grep contain code that triggers false positives.
+					if toolNames[b.ToolUseID] == "Bash" {
+						bashResults.WriteString(b.Content)
+						bashResults.WriteByte('\n')
+					}
 				}
 			}
 		}
 	}
 	return parsedLog{
 		AssistantText:  text.String(),
-		ToolResultText: toolResults.String(),
+		BashResultText: bashResults.String(),
 		ToolCalls:      calls,
 	}
 }
