@@ -695,6 +695,72 @@ func TestBuildTaskManagerPrompt_ScreenshotHandling(t *testing.T) {
 	}
 }
 
+// Proves: task-manager.md requires --acceptance flag on bd create so every
+// bead has specific, testable acceptance criteria the verifier can check.
+func TestTaskManagerPrompt_RequiresAcceptanceCriteria(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	if !strings.Contains(result, "--acceptance") {
+		t.Error("task-manager.md should require --acceptance flag on bd create")
+	}
+}
+
+// Proves: task-manager.md instructs checking bead status before commenting
+// or updating, and never modifying closed beads.
+func TestTaskManagerPrompt_CheckStatusBeforeUpdate(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	lower := strings.ToLower(result)
+	if !strings.Contains(lower, "check") || !strings.Contains(lower, "status") {
+		t.Error("task-manager.md should instruct checking bead status before updates")
+	}
+	if !strings.Contains(lower, "closed") {
+		t.Error("task-manager.md should warn against modifying closed beads")
+	}
+}
+
+// Proves: execution-bd.md requires --acceptance flag on bd create so every
+// bead created by the execution agent has testable acceptance criteria.
+func TestExecutionBD_RequiresAcceptanceCriteria(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
+	if err != nil {
+		t.Fatalf("reading execution-bd.md: %v", err)
+	}
+	s := string(content)
+
+	if !strings.Contains(s, "--acceptance") {
+		t.Error("execution-bd.md should require --acceptance flag on bd create")
+	}
+	if !strings.Contains(s, "acceptance criteria") {
+		t.Error("execution-bd.md should mention acceptance criteria requirement")
+	}
+}
+
+// Proves: execution-bd.md instructs checking bead status before commenting
+// or updating, and never modifying closed beads.
+func TestExecutionBD_CheckStatusBeforeUpdate(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
+	if err != nil {
+		t.Fatalf("reading execution-bd.md: %v", err)
+	}
+	lower := strings.ToLower(string(content))
+
+	if !strings.Contains(lower, "before") || !strings.Contains(lower, "status") {
+		t.Error("execution-bd.md should instruct checking bead status before updates")
+	}
+	if !strings.Contains(lower, "closed") {
+		t.Error("execution-bd.md should warn against modifying closed beads")
+	}
+}
+
 // Proves: BuildReviewPrompt assembles the shared quality standards,
 // refactor style guide, and reflections into a post-mortem review prompt.
 func TestBuildReviewPrompt(t *testing.T) {

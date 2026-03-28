@@ -10,16 +10,27 @@
 
 ## Creating beads
 
-If you create a bead with `bd create`, echo back the details so the log
-shows what was created — not the raw command with all its flags. Show one
-concise line of the command, then echo back: ID, priority, type, labels,
-title, and description — truncate the description to ~3 lines if longer.
+If you create a bead with `bd create`, always include `--acceptance` with
+specific, testable acceptance criteria. Without acceptance criteria, the
+verifier LLM cannot reject bad work and agents take shortcuts. Be concrete:
+"No package-level git wrappers remain in runner.go" not "improve git module."
+
+Always echo back the details so the log shows what was created — not the raw
+command with all its flags. Show one concise line of the command, then echo
+back: ID, priority, type, labels, title, and description — truncate the
+description to ~3 lines if longer.
 
 Example:
 > Created **ralph-abc** · P2 task · `orchestrator` `git`
 > **ralph loop: force-reset worktree after merge**
 > Resets the worktree to origin/main after each squash-merge so stale
 > branches don't accumulate.
+
+## Updating beads
+
+Before updating or commenting on any bead, check its status first. Never
+add comments or updates to closed beads — if follow-on work is needed,
+create a new bead and reference the original.
 
 ## Invariants
 - The `.beads` directory is the project's permanent task history. Never delete, clear, or reinitialize it. Do not remove it with shell commands or force-reinitialize the task backend. Only `.ralph` state is ephemeral — `.beads` persists across all runs.
