@@ -18,6 +18,7 @@ If no acceptance criteria are listed above, evaluate the diff against the task d
 2. **Edge cases** (code changes only) — Are error paths handled? Does the code fail silently anywhere (empty catches, ignored errors, early returns that skip important work)? Are boundary conditions covered?
 3. **Tests** (code changes only) — Do code changes include tests that prove the functionality works? Reject superficial tests (assert true, always-pass stubs, testing only the happy path). Prompt, configuration, and markdown changes do not require tests. UI/UX changes that are hard to test (animations, styling, visual layout) do not require tests, but testable UI behavior (event handlers, state transitions, conditional rendering) still should be tested. Use discretion.
 4. **Silent failures** (code changes only) — Look for: errors swallowed without logging, functions that return nil on failure without signaling why, conditions that skip work without explanation.
+5. **Tests prove behavior, not plumbing** (code changes only) — Reject tests that mock the exact behavior they claim to verify. A test that stubs a callback to return true and then checks the callback was called proves nothing. Tests must exercise the real code path and verify observable outcomes: log output, file state, git status, return values from the actual implementation.
 
 If the diff is truncated, judge based on what you CAN see. Do not reject solely because the diff is truncated — if the visible portion satisfies the criteria, accept it.
 
