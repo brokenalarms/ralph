@@ -779,7 +779,7 @@ func (l *Loop) runPostTask(ctx context.Context, taskID, prNumber string, merged 
 	if l.cfg.PostTask == "" {
 		return
 	}
-	cmd := exec.CommandContext(ctx, l.cfg.PostTask)
+	cmd := exec.CommandContext(ctx, "sh", "-c", l.cfg.PostTask)
 	cmd.Dir = l.cfg.Dirs.ProjectDir
 	cmd.Env = append(os.Environ(),
 		"RALPH_TASK_ID="+taskID,
