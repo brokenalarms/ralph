@@ -285,7 +285,7 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 			}
 			if !merged {
 				l.logger.Warn("git", "Merge failed for PR #%s — skipping task", p.prNumber)
-				skipTask(l.state, l.cfg.TaskBackend, l.logger, p.taskID, "merge_failed")
+				skipTask(l.cfg.TaskBackend, l.logger, p.taskID, "merge_failed")
 				return finalizePRResult{}
 			}
 		}

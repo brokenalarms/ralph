@@ -24,7 +24,6 @@ type State struct {
 	LastTestResult     string `json:"last_test_result,omitempty"`
 	LastTestOutput     string `json:"last_test_output,omitempty"`
 	LastTestTime       string `json:"last_test_time,omitempty"`
-	SkippedTasks   []string `json:"skipped_tasks,omitempty"`
 	CompletedTasks []string `json:"completed_tasks,omitempty"`
 
 	// Overflow captures unknown keys so round-tripping preserves them.
@@ -91,7 +90,6 @@ func (s *State) UnmarshalJSON(data []byte) error {
 		"last_task": true, "worktree_dir": true, "worktree_branch": true,
 		"task_backend": true, "max_iterations": true,
 		"last_test_result": true, "last_test_output": true, "last_test_time": true,
-		"skipped_tasks": true,
 		"completed_tasks": true,
 	}
 
@@ -258,39 +256,6 @@ func (st *Store) ReadMaxIterations(defaultVal int) int {
 	return defaultVal
 }
 
-// AddSkippedTask adds a task ID to the skip list if not already present.
-func (st *Store) AddSkippedTask(id string) error {
-	s, err := st.Load()
-	if err != nil {
-		return err
-	}
-	for _, existing := range s.SkippedTasks {
-		if existing == id {
-			return nil
-		}
-	}
-	s.SkippedTasks = append(s.SkippedTasks, id)
-	return st.Save(s)
-}
-
-// ClearSkippedTasks removes all entries from the skip list.
-func (st *Store) ClearSkippedTasks() error {
-	s, err := st.Load()
-	if err != nil {
-		return err
-	}
-	s.SkippedTasks = nil
-	return st.Save(s)
-}
-
-// GetSkippedTasks returns the current skip list.
-func (st *Store) GetSkippedTasks() ([]string, error) {
-	s, err := st.Load()
-	if err != nil {
-		return nil, err
-	}
-	return s.SkippedTasks, nil
-}
 
 // AddCompletedTask appends a task ID to the completed list.
 func (st *Store) AddCompletedTask(id string) error {

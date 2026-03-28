@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/agent"
@@ -133,7 +132,7 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 		QueryFn:     l.queryFunc(),
 		LLMVerify:   verify.LLMVerifyPR,
 		SkipTask: func(id, reason string) {
-			skipTask(l.state, l.cfg.TaskBackend, l.logger, id, reason)
+			skipTask(l.cfg.TaskBackend, l.logger, id, reason)
 		},
 	})
 	return l
@@ -159,10 +158,6 @@ func (l *Loop) Run(ctx context.Context) error {
 	var runIteration int
 	st, _ := l.state.Load()
 	iteration := st.Iteration
-	if len(st.SkippedTasks) > 0 {
-		l.logger.Warn("beads", "Skipped tasks: %s", strings.Join(st.SkippedTasks, ", "))
-		l.cfg.TaskBackend.SetSkippedIDs(st.SkippedTasks)
-	}
 	os.Remove(filepath.Join(l.cfg.Dirs.RalphDir, ".completed-tasks"))
 
 	for {

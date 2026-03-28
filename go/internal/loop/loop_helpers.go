@@ -683,21 +683,16 @@ func readLogFrom(path string, startLine int) string {
 	return string(data[offset:])
 }
 
-// skipTask adds a task to the skip list in state.json and updates the
-// backend's filter so the task is excluded from future selection.
-func skipTask(st *state.Store, backend tasks.Backend, logger *logging.Logger, id, reason string) {
+// skipTask defers the task in the bd backend so it is excluded from
+// future selection by bd ready.
+func skipTask(backend tasks.Backend, logger *logging.Logger, id, reason string) {
 	if id == "" {
 		return
 	}
 	logger.Warn("beads", "Skipping task %s: %s", id, reason)
 	if err := backend.SkipTask(id, reason); err != nil {
-		logger.Warn("beads", "Failed to record skip in backend for %s: %v", id, err)
+		logger.Warn("beads", "Failed to defer task %s in backend: %v", id, err)
 	}
-	if err := st.AddSkippedTask(id); err != nil {
-		logger.Warn("beads", "Failed to persist skip for %s: %v", id, err)
-	}
-	skipped, _ := st.GetSkippedTasks()
-	backend.SetSkippedIDs(skipped)
 }
 
 // isOnline checks internet connectivity with a quick DNS lookup.
