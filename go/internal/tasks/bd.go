@@ -417,13 +417,18 @@ func (b *BD) ReopenTask(id string) error {
 	return err
 }
 
-func (b *BD) SkipTask(id string, _ string) error {
+func (b *BD) SkipTask(id string, reason string) error {
 	if id == "" {
 		return nil
 	}
-	// Ensure the task stays open so it's visible in the backlog.
-	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status", "open")
-	return err
+	if _, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status", "open"); err != nil {
+		return err
+	}
+	if reason != "" {
+		_, err := b.runner()(b.ctx(), b.ProjectDir, "comments", "add", id, "skipped: "+reason)
+		return err
+	}
+	return nil
 }
 
 func (b *BD) SetSkippedIDs(ids []string) {
