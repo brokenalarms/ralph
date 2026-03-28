@@ -134,6 +134,8 @@ func ParseSubcommand(args []string) (Subcommand, bool) {
 		return parseSubcommandWithDir(args, "loop"), true
 	case "review":
 		return parseSubcommandWithDir(args, "review"), true
+	case "merge":
+		return parseSubcommandWithDir(args, "merge"), true
 	case "filter-stream":
 		return parseFilterStream(args), true
 	default:
