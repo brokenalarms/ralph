@@ -355,9 +355,10 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 	content := fmt.Sprintf(`#!/usr/bin/env bash
 # Ralph Loop - Resume Script
 # Generated at: %s
-exec "%s" loop --dir "%s" --max %d%s
+cd "%s"
+exec "%s" loop --max %d%s
 `, time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-		scriptPath, cfg.ProjectDir, cfg.MaxIterations, extra)
+		cfg.ProjectDir, scriptPath, cfg.MaxIterations, extra)
 
 	os.WriteFile(resumePath, []byte(content), 0o755)
 	log.Log("", "Resume script: %s", resumePath)

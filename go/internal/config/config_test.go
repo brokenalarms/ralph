@@ -78,7 +78,6 @@ func TestAllFlags(t *testing.T) {
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
 
 	args := []string{
-		"-d", "/tmp/proj",
 		"-n", "10",
 		"-p", "fix tests",
 		"-q",
@@ -94,8 +93,8 @@ func TestAllFlags(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if cfg.ProjectDir != "/tmp/proj" {
-		t.Errorf("ProjectDir = %q, want /tmp/proj", cfg.ProjectDir)
+	if cfg.ProjectDir != "." {
+		t.Errorf("ProjectDir = %q, want \".\" (always cwd)", cfg.ProjectDir)
 	}
 	if cfg.MaxIterations != 10 {
 		t.Errorf("MaxIterations = %d, want 10", cfg.MaxIterations)
@@ -134,6 +133,28 @@ func TestNoWorktreeFlagRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown") {
 		t.Errorf("expected 'unknown' error, got: %v", err)
+	}
+}
+
+// Verifies that --dir/-d flags are rejected — ralph loop must run from the
+// project directory, not accept a directory override.
+func TestDirFlagRemoved(t *testing.T) {
+	for _, flag := range []string{"--dir", "-d"} {
+		_, err := Parse([]string{flag, "/tmp/proj"})
+		if err == nil {
+			t.Errorf("Parse(%q) should reject removed flag", flag)
+		}
+	}
+
+	for _, f := range Flags {
+		if f.Long == "--dir" || f.Short == "-d" {
+			t.Errorf("Flags registry should not contain %s/%s", f.Short, f.Long)
+		}
+	}
+
+	usage := FlagUsage()
+	if strings.Contains(usage, "--dir") {
+		t.Error("FlagUsage() should not contain --dir")
 	}
 }
 
@@ -192,9 +213,8 @@ func TestMergeAdminRequiresAutoMerge(t *testing.T) {
 	}
 }
 
-// Verifies that a positional directory argument is rejected — users must
-// use --dir/-d explicitly. Prevents unknown words that happen to match
-// existing directory names from silently becoming ProjectDir.
+// Verifies that a positional directory argument is rejected — ralph loop
+// uses cwd, not a positional arg.
 func TestPositionalDirectoryRejected(t *testing.T) {
 	dir := t.TempDir()
 	_, err := Parse([]string{dir})
@@ -285,7 +305,7 @@ func TestUnknownFlag(t *testing.T) {
 
 // Verifies that flags requiring a value return an error when the value is missing.
 func TestMissingArgValue(t *testing.T) {
-	for _, flag := range []string{"-d", "-n", "-p", "--calls-per-hour", "--idle-timeout", "--idle-timeout-progress"} {
+	for _, flag := range []string{"-n", "-p", "--calls-per-hour", "--idle-timeout", "--idle-timeout-progress"} {
 		_, err := Parse([]string{flag})
 		if err == nil {
 			t.Errorf("Parse(%q) should error on missing value", flag)
@@ -938,7 +958,6 @@ func TestConfigToState_CapturesNonDefaults(t *testing.T) {
 	t.Setenv("RALPH_WAIT_INTERVAL", "")
 
 	cfg, _ := Parse([]string{
-		"--dir", "/tmp/project",
 		"--max", "20",
 		"--auto-merge",
 		"--evolve",
@@ -947,9 +966,6 @@ func TestConfigToState_CapturesNonDefaults(t *testing.T) {
 
 	m := ConfigToState(&cfg)
 
-	if m["dir"] != "/tmp/project" {
-		t.Errorf("dir = %q, want /tmp/project", m["dir"])
-	}
 	if m["max"] != "20" {
 		t.Errorf("max = %q, want 20", m["max"])
 	}
@@ -975,7 +991,6 @@ func TestConfigToState_CapturesNonDefaults(t *testing.T) {
 // only including flags the current binary recognizes.
 func TestArgsFromState_ReconstructsArgs(t *testing.T) {
 	state := map[string]string{
-		"dir":        "/tmp/project",
 		"max":        "20",
 		"auto-merge": "true",
 		"evolve":     "true",
@@ -984,7 +999,6 @@ func TestArgsFromState_ReconstructsArgs(t *testing.T) {
 
 	args := ArgsFromState(state)
 
-	// Verify the reconstructed args parse correctly.
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
 	t.Setenv("RALPH_IDLE_TIMEOUT", "")
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
@@ -993,9 +1007,6 @@ func TestArgsFromState_ReconstructsArgs(t *testing.T) {
 	cfg, err := Parse(args)
 	if err != nil {
 		t.Fatalf("Parse(ArgsFromState) failed: %v", err)
-	}
-	if cfg.ProjectDir != "/tmp/project" {
-		t.Errorf("ProjectDir = %q, want /tmp/project", cfg.ProjectDir)
 	}
 	if cfg.MaxIterations != 20 {
 		t.Errorf("MaxIterations = %d, want 20", cfg.MaxIterations)
@@ -1051,7 +1062,6 @@ func TestConfigToState_ArgsFromState_Roundtrip(t *testing.T) {
 	t.Setenv("RALPH_WAIT_INTERVAL", "")
 
 	original, _ := Parse([]string{
-		"--dir", "/tmp/project",
 		"--max", "30",
 		"--auto-merge",
 		"--merge-admin",
@@ -1068,9 +1078,6 @@ func TestConfigToState_ArgsFromState_Roundtrip(t *testing.T) {
 		t.Fatalf("Parse(ArgsFromState(ConfigToState)) failed: %v", err)
 	}
 
-	if restored.ProjectDir != original.ProjectDir {
-		t.Errorf("ProjectDir = %q, want %q", restored.ProjectDir, original.ProjectDir)
-	}
 	if restored.MaxIterations != original.MaxIterations {
 		t.Errorf("MaxIterations = %d, want %d", restored.MaxIterations, original.MaxIterations)
 	}

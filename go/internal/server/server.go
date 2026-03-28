@@ -145,7 +145,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	args := []string{s.ScriptPath, "--dir", projectDir, "--max", strconv.Itoa(maxIterations)}
+	args := []string{s.ScriptPath, "loop", "--max", strconv.Itoa(maxIterations)}
 	if body.Prompt != "" {
 		args = append(args, "--prompt", body.Prompt)
 	}

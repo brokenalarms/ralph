@@ -92,7 +92,7 @@ func Defaults() Config {
 	}
 	for i := range Flags {
 		f := &Flags[i]
-		if f.Default != "" && f.Default != "cwd" {
+		if f.Default != "" {
 			_ = f.Apply(&cfg, f.Default)
 		}
 	}
@@ -180,7 +180,7 @@ func Parse(args []string) (Config, error) {
 			if len(args[i]) > 0 && args[i][0] == '-' {
 				return cfg, fmt.Errorf("unknown option: %s", args[i])
 			}
-			return cfg, fmt.Errorf("unknown argument: %s (use --dir to specify a project directory)", args[i])
+			return cfg, fmt.Errorf("unknown argument: %s", args[i])
 		}
 
 		if f.Kind == KindBool {

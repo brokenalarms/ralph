@@ -115,12 +115,7 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 
-	projectDir, _ := filepath.Abs(sub.Dir)
-	if sub.Dir != "." {
-		cfg.ProjectDir = projectDir
-	} else {
-		cfg.ProjectDir, _ = filepath.Abs(cfg.ProjectDir)
-	}
+	cfg.ProjectDir, _ = filepath.Abs(sub.Dir)
 
 	if err := cfg.Validate(); err != nil {
 		log.Error("", "%v", err)
@@ -298,7 +293,7 @@ func printUsage() {
   ralph command [directory]    Full 4-pane tmux layout (loop + task manager + stream + plan)
 
 %sEXAMPLES:%s
-  ralph loop --dir ~/myproject --max 20
+  ralph loop --max 20
   ralph loop --auto-merge --evolve
   ralph task ~/myproject
   ralph review
@@ -348,7 +343,7 @@ func printLoopUsage() {
   ralph feedback unskip      Show how to undefer skipped tasks in bd
 
 %sEXAMPLES:%s
-  ralph loop --dir ~/myproject -n 20
+  ralph loop -n 20
   ralph loop --auto-merge --evolve
   ralph loop -p "Fix all failing tests"
 `,
