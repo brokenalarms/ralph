@@ -34,7 +34,7 @@ func TestRunner_ImplementsClaudeRunnerInterface(t *testing.T) {
 	_ = r
 }
 
-// Query without a sandbox should produce a direct claude command.
+// Query should produce a direct claude command.
 func TestQuery_CallsClaude(t *testing.T) {
 	r := New(&testLogger{})
 	_ = r

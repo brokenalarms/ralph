@@ -95,14 +95,14 @@ func TestBuildReviewPrompt_PostMortemResponsibilities(t *testing.T) {
 // so the agent can analyze it.
 func TestBuildReviewPrompt_IncludesReflectionContent(t *testing.T) {
 	dir := promptsDir(t)
-	reflections := "# Task XYZ\n## What was discovered\n- Sandbox exit code issue"
+	reflections := "# Task XYZ\n## What was discovered\n- Exit code handling issue"
 
 	result, err := BuildReviewPrompt(dir, "/tmp/project", "/tmp/project/.ralph", reflections)
 	if err != nil {
 		t.Fatalf("BuildReviewPrompt error: %v", err)
 	}
 
-	if !strings.Contains(result, "Sandbox exit code issue") {
+	if !strings.Contains(result, "Exit code handling issue") {
 		t.Error("review prompt should include reflection content")
 	}
 }

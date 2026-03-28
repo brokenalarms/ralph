@@ -3855,7 +3855,7 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 	}
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
-		return false, fmt.Errorf("push denied by sandbox")
+		return false, fmt.Errorf("push denied by remote")
 	}
 
 	_ = l.Run(context.Background())
