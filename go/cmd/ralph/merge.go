@@ -129,10 +129,9 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 			log.Warn("git", "Squash: %v", err)
 		}
 
-		// Force-push the tmp branch AS the original branch name.
+		// Force-push HEAD (the squashed commit) AS the original branch name.
 		log.Log("git", "Force-pushing %s...", headBranch)
-		tmpBranch := "ralph-merge/" + strings.ReplaceAll(headBranch, "/", "-")
-		pushErr := gitRunErr(wtDir, "push", "--force-with-lease", "origin", tmpBranch+":"+headBranch)
+		pushErr := gitRunErr(wtDir, "push", "--force", "origin", "HEAD:refs/heads/"+headBranch)
 		if pushErr != nil {
 			cleanup()
 			log.Error("git", "Push failed: %v", pushErr)
