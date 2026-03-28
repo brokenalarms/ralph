@@ -70,6 +70,9 @@ func (l *Loop) mergeWithRetry(ctx context.Context, taskID, nextTask, workDir, ra
 		OnCIFailure: func(ciErr *git.CIFailureError) bool {
 			return l.tryFixCI(ctx, ciErr, taskID, nextTask, workDir, rawLogPath)
 		},
+		OnConflict: func(conflictErr *git.UnresolvedConflictError) bool {
+			return l.tryFixConflict(ctx, conflictErr, taskID, nextTask, workDir, rawLogPath)
+		},
 	})
 }
 

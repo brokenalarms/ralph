@@ -262,6 +262,23 @@ func (v *Verifier) TryFixCI(ctx context.Context, ciLog string, ciErr *git.CIFail
 	return fixResult.SignalDetected
 }
 
+// TryFixConflict spawns a conflict resolution agent when automatic rebase
+// could not resolve merge conflicts.
+func (v *Verifier) TryFixConflict(ctx context.Context, conflictDiff, beadDesc, nextTask, workDir, rawLogPath string) bool {
+	v.deps.Logger.Log("git", "Unresolvable merge conflict — spawning conflict resolution agent")
+
+	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
+	fixPrompt := v.loadVerifyPrompt("resolve-conflict.md", map[string]string{
+		"{{TASK_TITLE}}":       nextTask,
+		"{{TASK_DESCRIPTION}}": beadDesc,
+		"{{CONFLICT_DIFF}}":    conflictDiff,
+		"{{SIGNAL_COMPLETE}}":  signalPath,
+	})
+
+	fixResult := v.runFixAgent(ctx, "conflict resolution", fixPrompt, workDir, rawLogPath)
+	return fixResult.SignalDetected
+}
+
 func (v *Verifier) fallbackFixTestFailures(p signalParams, testOutput string) bool {
 	beadDesc := getBeadDescription(v.deps.TaskBackend, p.taskID)
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")

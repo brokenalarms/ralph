@@ -322,6 +322,12 @@ type MergeRetryOpts struct {
 	// to fix the failure (e.g. by spawning a fix agent) and return true if
 	// the fix was applied and a retry should be attempted.
 	OnCIFailure func(ciErr *CIFailureError) bool
+
+	// OnConflict is called when automatic rebase cannot resolve merge
+	// conflicts (UnresolvedConflictError). It should spawn a conflict
+	// resolution agent and return true if the conflict was resolved and
+	// force-pushed, ready for a merge retry.
+	OnConflict func(conflictErr *UnresolvedConflictError) bool
 }
 
 // ResolveConflict rebases onto the default branch and force-pushes to
@@ -376,6 +382,9 @@ func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool
 			var unresolved *UnresolvedConflictError
 			if errors.As(resolveErr, &unresolved) {
 				unresolved.PRNumber = conflictErr.PRNumber
+				if opts.OnConflict != nil && opts.OnConflict(unresolved) {
+					continue
+				}
 				return false, unresolved
 			}
 			return false, resolveErr

@@ -52,6 +52,30 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, 
 	return true
 }
 
+// tryFixConflict spawns a conflict resolution agent, force-pushes the
+// resolved commits, and returns true if the fix was pushed (ready for
+// merge retry). Mirrors tryFixCI.
+func (l *Loop) tryFixConflict(ctx context.Context, conflictErr *git.UnresolvedConflictError, taskID, nextTask, workDir, rawLogPath string) bool {
+	conflictDiff := l.git.ConflictDiff()
+	beadDesc := getBeadDescription(l.cfg.TaskBackend, taskID)
+	headBefore := l.git.HeadRev()
+	if !l.verifier.TryFixConflict(ctx, conflictDiff, beadDesc, nextTask, workDir, rawLogPath) {
+		return false
+	}
+
+	headAfter := l.git.HeadRev()
+	if headBefore == headAfter {
+		l.logger.Warn("git", "Conflict agent made no new commits — nothing to push")
+		return false
+	}
+
+	if err := l.git.ForcePush(ctx); err != nil {
+		l.logger.Warn("git", "Force-push after conflict resolution failed: %v", err)
+		return false
+	}
+	return true
+}
+
 // newRunner returns a claudeRunner for spawning sub-agents.
 func (l *Loop) newRunner() claudeRunner {
 	if l.newRunnerFunc != nil {
