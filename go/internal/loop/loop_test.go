@@ -88,7 +88,6 @@ func (m *mutableBackend) GetNextTaskInfo() (tasks.TaskInfo, error) { m.mu.Lock()
 func (m *mutableBackend) HasTasks() (bool, error)              { m.mu.Lock(); defer m.mu.Unlock(); return m.total > 0, nil }
 func (m *mutableBackend) CloseTask(string, string) error       { return nil }
 func (m *mutableBackend) SkipTask(string, string) error        { return nil }
-func (m *mutableBackend) SetSkippedIDs([]string)               {}
 func (m *mutableBackend) ReopenTask(string) error              { return nil }
 func (m *mutableBackend) SetState(_, _, _, _ string) error     { return nil }
 func (m *mutableBackend) GetState(_, _ string) (string, error) { return "", nil }
@@ -135,7 +134,6 @@ func (s *stubBackend) GetNextTaskInfo() (tasks.TaskInfo, error) { return tasks.T
 func (s *stubBackend) HasTasks() (bool, error)              { return s.total > 0, nil }
 func (s *stubBackend) CloseTask(string, string) error       { return nil }
 func (s *stubBackend) SkipTask(id, reason string) error     { s.skippedTask = id; s.skipReason = reason; return nil }
-func (s *stubBackend) SetSkippedIDs([]string)               {}
 func (s *stubBackend) ReopenTask(string) error              { return nil }
 func (s *stubBackend) SetState(_, _, _, _ string) error     { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error) { return "", nil }
@@ -3568,9 +3566,8 @@ func TestLoop_CIFailureStillClosesTask(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	skipped, _ := st.GetSkippedTasks()
-	if len(skipped) != 1 || skipped[0] != "ralph-ci1" {
-		t.Errorf("expected ralph-ci1 in skip list, got %v", skipped)
+	if backend.skippedTask != "ralph-ci1" {
+		t.Errorf("expected ralph-ci1 deferred in backend, got %q", backend.skippedTask)
 	}
 }
 
@@ -3863,10 +3860,11 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Task should be skipped — merge failed, PR exists for manual review.
-	skipped, _ := st.GetSkippedTasks()
-	if len(skipped) != 1 || skipped[0] != "ralph-stub" {
-		t.Errorf("expected ralph-stub in skip list, got %v", skipped)
+	// Task should be deferred in backend — merge failed, PR exists for manual review.
+	backend.skipMu.Lock()
+	defer backend.skipMu.Unlock()
+	if len(backend.skippedIDs) != 1 || backend.skippedIDs[0] != "ralph-stub" {
+		t.Errorf("expected ralph-stub deferred in backend, got %v", backend.skippedIDs)
 	}
 }
 
@@ -3920,10 +3918,11 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Task should be skipped — merge failed, PR exists for manual review.
-	skipped, _ := st.GetSkippedTasks()
-	if len(skipped) != 1 || skipped[0] != "ralph-fix" {
-		t.Errorf("expected ralph-fix in skip list, got %v", skipped)
+	// Task should be deferred in backend — merge failed, PR exists for manual review.
+	backend.skipMu.Lock()
+	defer backend.skipMu.Unlock()
+	if len(backend.skippedIDs) != 1 || backend.skippedIDs[0] != "ralph-fix" {
+		t.Errorf("expected ralph-fix deferred in backend, got %v", backend.skippedIDs)
 	}
 }
 
@@ -6516,15 +6515,16 @@ func TestFinalizePR_MergeFailure_SkipsTask(t *testing.T) {
 	if result.closed {
 		t.Error("task should not be closed on merge failure")
 	}
-	skipped, _ := st.GetSkippedTasks()
+	backend.skipMu.Lock()
+	defer backend.skipMu.Unlock()
 	found := false
-	for _, id := range skipped {
+	for _, id := range backend.skippedIDs {
 		if id == "ralph-abc" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected ralph-abc in skipped tasks after merge failure")
+		t.Error("expected ralph-abc deferred in backend after merge failure")
 	}
 }
 
@@ -6619,37 +6619,28 @@ func TestFinalizePR_UsesURLInCloseReason(t *testing.T) {
 	}
 }
 
-// skipTask takes state, backend, and logger — no Loop needed.
-func TestSkipTask_Standalone(t *testing.T) {
-	_, st := setupTestDir(t)
+// skipTask defers the task in the backend — no state.json involvement.
+func TestSkipTask_DefersInBackend(t *testing.T) {
 	backend := &stubBackend{}
 
-	skipTask(st, backend, logging.New(nil), "ralph-abc", "test reason")
-
-	skipped, _ := st.GetSkippedTasks()
-	found := false
-	for _, id := range skipped {
-		if id == "ralph-abc" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected ralph-abc in skipped tasks")
-	}
-}
-
-// skipTask records skip reason in the backend so BD has an audit trail.
-func TestSkipTask_RecordsReasonInBackend(t *testing.T) {
-	_, st := setupTestDir(t)
-	backend := &stubBackend{}
-
-	skipTask(st, backend, logging.New(nil), "ralph-xyz", "merge_failed")
+	skipTask(backend, logging.New(nil), "ralph-xyz", "merge_failed")
 
 	if backend.skippedTask != "ralph-xyz" {
 		t.Errorf("expected backend.skippedTask=ralph-xyz, got %q", backend.skippedTask)
 	}
 	if backend.skipReason != "merge_failed" {
 		t.Errorf("expected backend.skipReason=merge_failed, got %q", backend.skipReason)
+	}
+}
+
+// skipTask is a no-op with empty ID.
+func TestSkipTask_EmptyID(t *testing.T) {
+	backend := &stubBackend{}
+
+	skipTask(backend, logging.New(nil), "", "reason")
+
+	if backend.skippedTask != "" {
+		t.Error("expected no skip with empty ID")
 	}
 }
 
