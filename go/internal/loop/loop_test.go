@@ -2102,8 +2102,8 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	// setStackHead checks PR state via GH — report all PRs as OPEN so stacking works.
-	gm.GitHub = &stubGitHub{available: true, prState: "OPEN"}
+	// setStackHead uses git ancestry — no GitHub stub needed. Task A's branch
+	// has work ahead of main so it's selected as stack head.
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -2191,7 +2191,11 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 				backend.externalRefs["ralph-aaa"] = "gh-100"
 				st.AddCompletedTask("ralph-aaa")
 
-				// Simulate merge: delete task A's branch from origin.
+				// Simulate merge: land task A's work on main, then delete branch.
+				run(t, "git", "-C", project, "fetch", "origin", taskABranch)
+				run(t, "git", "-C", project, "checkout", "main")
+				run(t, "git", "-C", project, "merge", "origin/"+taskABranch)
+				run(t, "git", "-C", project, "push", "origin", "main")
 				run(t, "git", "-C", project, "push", "origin", "--delete", taskABranch)
 
 				backend.completed = 1
@@ -2207,8 +2211,8 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	// Report task A's PR as MERGED so setStackHead skips it.
-	gm.GitHub = &stubGitHub{available: true, prState: "MERGED"}
+	// setStackHead uses git ancestry — no GitHub stub needed. Task A's branch
+	// is deleted from remote (simulating merge), so it's skipped.
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -2241,6 +2245,106 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 	mainRev := strings.TrimSpace(string(mainTip))
 	if headAtTaskBStart != mainRev {
 		t.Errorf("task B should start from main (%s) after merged PR, got %s", mainRev, headAtTaskBStart)
+	}
+}
+
+// setStackHead skips a branch whose work landed on main even when the
+// remote branch still exists (ancestry check, not branch deletion).
+func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(10)
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	iterationCount := 0
+	var headAtTaskBStart string
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+		metadata:  map[string]map[string]string{},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			if iterationCount == 1 {
+				writeFile(t, gm.WorkDir, "a.txt", "task A work\n")
+				run(t, "git", "-C", gm.WorkDir, "commit", "-m", "task A")
+				taskABranch := gm.WorktreeBranch
+				run(t, "git", "-C", gm.WorkDir, "push", "-u", "origin", taskABranch)
+
+				backend.metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
+				st.AddCompletedTask("ralph-aaa")
+
+				// Merge work into main but leave the branch on remote.
+				run(t, "git", "-C", project, "fetch", "origin", taskABranch)
+				run(t, "git", "-C", project, "checkout", "main")
+				run(t, "git", "-C", project, "merge", "origin/"+taskABranch)
+				run(t, "git", "-C", project, "push", "origin", "main")
+
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+			} else {
+				headAtTaskBStart = gm.HeadRev()
+				backend.completed = 2
+				backend.remaining = 0
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if iterationCount != 2 {
+		t.Fatalf("expected 2 iterations, got %d", iterationCount)
+	}
+
+	// Task B should target main: task A's branch is ancestor of main (work landed).
+	mainTip, _ := exec.Command("git", "-C", gm.WorkDir, "rev-parse", "origin/main").Output()
+	mainRev := strings.TrimSpace(string(mainTip))
+	if headAtTaskBStart != mainRev {
+		t.Errorf("task B should start from main (%s) when branch is ancestor, got %s", mainRev, headAtTaskBStart)
 	}
 }
 
@@ -7510,7 +7614,9 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 
 // setStackHead logs "No stacked parents — resetting to main" when all
 // completed tasks have merged PRs and no stack head is found.
-func TestSetStackHead_LogsNoStackedParents(t *testing.T) {
+// setStackHead silently falls through when all completed branches are
+// gone from remote (fetch fails) — no stack head is set, PrevBranch stays empty.
+func TestSetStackHead_SkipsUnfetchableBranch(t *testing.T) {
 	project, _ := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
@@ -7530,13 +7636,10 @@ func TestSetStackHead_LogsNoStackedParents(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	// Add a completed task with a merged PR.
 	st.AddCompletedTask("ralph-aaa")
 	backend := &mutableBackend{
-		externalRefs: map[string]string{"ralph-aaa": "gh-100"},
-		metadata:     map[string]map[string]string{"ralph-aaa": {"branch": "some-branch"}},
+		metadata: map[string]map[string]string{"ralph-aaa": {"branch": "some-branch"}},
 	}
-	gm.GitHub = &stubGitHub{available: true, prState: "MERGED"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -7549,12 +7652,12 @@ func TestSetStackHead_LogsNoStackedParents(t *testing.T) {
 
 	l.setStackHead()
 
-	output := buf.String()
-	if !strings.Contains(output, "No stacked parents") {
-		t.Errorf("expected 'No stacked parents' log when all PRs merged, got:\n%s", output)
+	if gm.PrevBranch != "" {
+		t.Errorf("PrevBranch should be empty when branch is unfetchable, got %q", gm.PrevBranch)
 	}
-	if !strings.Contains(output, "main") {
-		t.Errorf("expected default branch name 'main' in log, got:\n%s", output)
+	output := buf.String()
+	if strings.Contains(output, "Stack head") {
+		t.Errorf("should not log 'Stack head' when branch is unfetchable, got:\n%s", output)
 	}
 }
 

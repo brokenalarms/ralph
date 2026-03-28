@@ -116,6 +116,38 @@ func cmdOutput(t *testing.T, name string, args ...string) string {
 }
 
 
+// BranchIsAncestorOfMain returns true when a branch's work has landed on main.
+func TestBranchIsAncestorOfMain(t *testing.T) {
+	project, _ := initBareRepo(t)
+	mgr := &Manager{
+		ProjectDir: project,
+		WorkDir:    project,
+		Logger:     &testLog{},
+	}
+
+	// Create a feature branch with work ahead of main.
+	run(t, "git", "-C", project, "checkout", "-b", "feature-ahead")
+	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "feature work")
+	run(t, "git", "-C", project, "push", "-u", "origin", "feature-ahead")
+	run(t, "git", "-C", project, "checkout", "main")
+
+	if mgr.BranchIsAncestorOfMain("feature-ahead") {
+		t.Error("feature-ahead has unmerged work, should not be ancestor of main")
+	}
+
+	// Simulate merge: fast-forward main to include the feature work.
+	run(t, "git", "-C", project, "merge", "feature-ahead")
+	run(t, "git", "-C", project, "push", "origin", "main")
+
+	if !mgr.BranchIsAncestorOfMain("feature-ahead") {
+		t.Error("feature-ahead was merged, should be ancestor of main")
+	}
+
+	if mgr.BranchIsAncestorOfMain("no-such-branch") {
+		t.Error("non-existent branch should not be ancestor of main")
+	}
+}
+
 // BranchName returns a canonical branch name from beadID and slug
 func TestBranchName(t *testing.T) {
 	// With bead ID: ralph/<beadID>-<slug>

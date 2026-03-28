@@ -186,6 +186,15 @@ func (m *Manager) RemoteBranchIsOnMain(branch string) bool {
 	return false
 }
 
+// BranchIsAncestorOfMain returns true if a remote branch's tip is an
+// ancestor of origin's default branch — meaning its work has already
+// landed on main (via merge or squash-merge).
+func (m *Manager) BranchIsAncestorOfMain(branch string) bool {
+	defaultBranch := m.detectDefaultBranch()
+	remote := "origin/" + branch
+	return m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", remote, "origin/"+defaultBranch) == nil
+}
+
 func (m *Manager) mRebaseInProgress() bool {
 	gitDir := m.gitOutput(m.WorkDir, "rev-parse", "--git-dir")
 	if gitDir == "" {

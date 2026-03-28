@@ -565,53 +565,38 @@ func updateStreamTask(ralphDir, taskID, nextTask string, priority *int) {
 	os.WriteFile(streamTaskFile, []byte(content), 0o644)
 }
 
-// setStackHead reads the last completed bead from state.json, looks up
-// its branch from bead metadata, and sets git.PrevBranch so the next
-// task's PR targets that branch instead of main. Falls back to no
-// PrevBranch (= target main) if no completed tasks or no branch metadata.
+// setStackHead walks completed beads backwards to find the most recent
+// branch with unmerged work. Uses git ancestry checks (no GitHub API):
+// if a branch is an ancestor of origin/main, its work has landed → skip.
+// Otherwise it has unmerged work → use it as stack head.
 func (l *Loop) setStackHead() {
-	// Always clear stale PrevBranch from previous run. Only set it
-	// if we find an active stack below.
 	l.git.SetPrevBranch("")
 
 	tasks, err := l.state.GetCompletedTasks()
 	if err != nil || len(tasks) == 0 {
 		return
 	}
-	gh := l.git.GH()
 
-	// Walk backwards to find the most recent unmerged PR.
 	for i := len(tasks) - 1; i >= 0; i-- {
 		id := tasks[i]
 		if id == "" {
 			continue
 		}
-		ref, _ := l.cfg.TaskBackend.GetExternalRef(id)
-		prNum := parsePRNumber(ref)
-		if prNum == "" {
-			continue
-		}
-		// Only stack on OPEN PRs. MERGED = branch deleted, CLOSED = dead.
-		if gh != nil && gh.Available() {
-			prState, _ := gh.GetPRState(l.git.WorkDir, prNum)
-			if strings.ToUpper(prState) != "OPEN" {
-				continue
-			}
-		}
-		// Open PR — verify its branch exists on remote before stacking.
 		branch, _ := l.cfg.TaskBackend.GetMetadata(id, "branch")
 		if branch == "" {
 			continue
 		}
-		_ = l.git.FetchBranch(branch)
+		if err := l.git.FetchBranch(branch); err != nil {
+			continue
+		}
 		if !l.git.RemoteBranchHasCommits(branch) {
-			nwo := git.NWOFromRemote(l.git.RemoteURL())
-			l.logger.Warn("git", "%s is open but branch %s missing from remote — skipping", logging.PRLink(nwo, prNum), branch)
+			continue
+		}
+		if l.git.BranchIsAncestorOfMain(branch) {
 			continue
 		}
 		l.git.SetPrevBranch(branch)
-		nwo := git.NWOFromRemote(l.git.RemoteURL())
-		l.logger.Log("git", "Stack head: %s (from %s, %s)", branch, id, logging.PRLink(nwo, prNum))
+		l.logger.Log("git", "Stack head: %s (from %s)", branch, id)
 		return
 	}
 	l.logger.Log("git", "No stacked parents — starting from %s", l.git.DetectDefaultBranch())
@@ -745,8 +730,8 @@ func waitForInternet(ctx context.Context, logger *logging.Logger) bool {
 // branchChecker provides the narrow git operations needed by prChainIsHealthy.
 type branchChecker interface {
 	FetchBranch(branch string) error
-	RemoteBranchIsOnMain(branch string) bool
-	DetectDefaultBranch() string
+	BranchIsAncestorOfMain(branch string) bool
+	RemoteBranchHasCommits(branch string) bool
 }
 
 func prChainIsHealthy(gh git.GitHub, workDir string, branches branchChecker, prNumber string) (bool, string) {
@@ -759,8 +744,11 @@ func prChainIsHealthy(gh git.GitHub, workDir string, branches branchChecker, prN
 		return false, fmt.Sprintf("PR #%s has no head branch", prNumber)
 	}
 	_ = branches.FetchBranch(headBranch)
-	if !branches.RemoteBranchIsOnMain(headBranch) {
-		return false, fmt.Sprintf("branch %s diverged from %s", headBranch, branches.DetectDefaultBranch())
+	if !branches.RemoteBranchHasCommits(headBranch) {
+		return false, fmt.Sprintf("branch %s missing from remote", headBranch)
+	}
+	if branches.BranchIsAncestorOfMain(headBranch) {
+		return false, fmt.Sprintf("branch %s already merged into main", headBranch)
 	}
 	return true, ""
 }
