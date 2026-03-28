@@ -181,14 +181,26 @@ func rebaseSquashAndPush(ctx context.Context, projectDir, headBranch, baseBranch
 		exec.Command("git", "-C", projectDir, "branch", "-D", tmpBranch).Run()
 	}
 
-	// Rebase onto latest base.
-	gitRunErr(wtDir, "fetch", "origin", baseBranch)
+	// Rebase onto latest base. If the base branch was deleted (merged),
+	// fall back to the default branch.
+	defaultBranch := gm.DetectDefaultBranch()
+	gitRunErr(wtDir, "fetch", "origin", defaultBranch)
+	if gitRunErr(wtDir, "fetch", "origin", baseBranch) != nil {
+		log.Log("git", "Base branch %s gone — using %s", baseBranch, defaultBranch)
+		baseBranch = defaultBranch
+	}
 	baseRef := "origin/" + baseBranch
 	if rebaseErr := gitRunErr(wtDir, "rebase", baseRef); rebaseErr != nil {
-		gitRunErr(wtDir, "rebase", "--abort")
-		cleanup()
-		log.Error("git", "Rebase onto %s failed — resolve conflicts manually", baseBranch)
-		return 1
+		// Try auto-resolve for mechanical conflicts (ours superset of theirs).
+		log.Log("git", "Rebase conflict — attempting auto-resolve...")
+		autoCmd := exec.Command("git-rebase-continue", "--auto")
+		autoCmd.Dir = wtDir
+		if autoOut, autoErr := autoCmd.CombinedOutput(); autoErr != nil {
+			gitRunErr(wtDir, "rebase", "--abort")
+			cleanup()
+			log.Error("git", "Rebase onto %s failed — resolve conflicts manually\n%s", baseBranch, string(autoOut))
+			return 1
+		}
 	}
 
 	// Squash.
