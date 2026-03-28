@@ -148,9 +148,10 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 	repoURL := l.git.RemoteURL()
 
 	// Check if a PR exists for this exact branch.
+	nwo := git.NWOFromRemote(repoURL)
 	prNumber, _ := gh.FindOpenPR(branch, repoURL)
 	if prNumber != "" {
-		l.logger.Log("git", "Found PR #%s for %s (task %s) — resolving", prNumber, branch, taskID)
+		l.logger.Log("git", "Found %s for %s (task %s) — resolving", logging.PRLink(nwo, prNumber), branch, taskID)
 		_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNumber)
 		return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
 	}
@@ -186,15 +187,18 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 		return false
 	}
 
+	nwo := git.NWOFromRemote(l.git.RemoteURL())
+	pr := logging.PRLink(nwo, prNumber)
+
 	prState, err := gh.GetPRState(l.git.WorkDir, prNumber)
 	if err != nil {
-		l.logger.Warn("git", "Failed to get PR #%s state: %v", prNumber, err)
+		l.logger.Warn("git", "Failed to get %s state: %v", pr, err)
 		return false
 	}
 
 	switch strings.ToUpper(prState) {
 	case "MERGED":
-		l.logger.Success("git", "PR #%s already merged — closing bead and moving on", prNumber)
+		l.logger.Success("git", "%s already merged — closing bead and moving on", pr)
 		l.attempts.Clear(taskID, nextTask)
 		recordCompletedTask(l.cfg.Dirs.RalphDir, taskID, nextTask)
 		l.finalizePR(finalizePRParams{
@@ -214,7 +218,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 
 	case "OPEN":
 		if ok, reason := prChainIsHealthy(gh, l.git.WorkDir, l.git, prNumber); !ok {
-			l.logger.Warn("git", "PR #%s chain unhealthy: %s — re-running agent", prNumber, reason)
+			l.logger.Warn("git", "%s chain unhealthy: %s — re-running agent", pr, reason)
 			return false
 		}
 		l.finalizePR(finalizePRParams{
@@ -232,7 +236,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 		return true
 
 	default:
-		l.logger.Warn("git", "PR #%s is %s (not merged) — re-running agent", prNumber, prState)
+		l.logger.Warn("git", "%s is %s (not merged) — re-running agent", pr, prState)
 		return false
 	}
 }
@@ -489,16 +493,16 @@ func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, ru
 
 	switch analysisResult.Action {
 	case analyzer.Halt:
-		l.logger.Error("", "Halting: %s", analysisResult.Reason)
+		l.logger.Error(logging.Analyzer, "Halting: %s", analysisResult.Reason)
 		if analysisResult.Detail != "" {
-			l.logger.Error("", "  %s", analysisResult.Detail)
+			l.logger.Error(logging.Analyzer, "  %s", analysisResult.Detail)
 		}
 		l.attempts.Record(taskID, nextTask, "Halted: "+analysisResult.Reason, diffStat, analysisResult.Detail)
 		l.state.Write("status", "halted_"+analysisResult.Reason)
 		l.git.TagTaskEnd(taskID)
 		return diffStat, true
 	case analyzer.Warn:
-		l.logger.Warn("", "Analysis: %s", analysisResult.Reason)
+		l.logger.Warn(logging.Analyzer, "Analysis: %s", analysisResult.Reason)
 		l.attempts.Record(taskID, nextTask, summary, diffStat, "warn: "+analysisDesc)
 	default:
 		if !result.SignalDetected {
@@ -600,11 +604,13 @@ func (l *Loop) setStackHead() {
 		}
 		_ = l.git.FetchBranch(branch)
 		if !l.git.RemoteBranchHasCommits(branch) {
-			l.logger.Warn("git", "PR #%s is open but branch %s missing from remote — skipping", prNum, branch)
+			nwo := git.NWOFromRemote(l.git.RemoteURL())
+			l.logger.Warn("git", "%s is open but branch %s missing from remote — skipping", logging.PRLink(nwo, prNum), branch)
 			continue
 		}
 		l.git.SetPrevBranch(branch)
-		l.logger.Log("git", "Stack head: %s (from %s, PR #%s)", branch, id, prNum)
+		nwo := git.NWOFromRemote(l.git.RemoteURL())
+		l.logger.Log("git", "Stack head: %s (from %s, %s)", branch, id, logging.PRLink(nwo, prNum))
 		return
 	}
 	// All completed tasks merged — start from default branch.

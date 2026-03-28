@@ -208,8 +208,22 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		m.Logger.Warn("git", "Failed to fetch origin/%s: %v", baseBranch, err)
-		return nil
+		if m.PrevBranch != "" {
+			// Stack head branch missing from remote — likely merged and deleted.
+			// Fall back to the default branch silently.
+			m.SetPrevBranch("")
+			baseBranch = m.detectDefaultBranch()
+			if err2 := m.gitCmdErrCtx(ctx, m.WorkDir, "fetch", "origin", baseBranch); err2 != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				m.Logger.Warn("git", "Failed to fetch origin/%s: %v", baseBranch, err2)
+				return nil
+			}
+		} else {
+			m.Logger.Warn("git", "Failed to fetch origin/%s: %v", baseBranch, err)
+			return nil
+		}
 	}
 
 	if !m.refExists(m.WorkDir, "origin/"+baseBranch) {

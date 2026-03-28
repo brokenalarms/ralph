@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
 )
 
@@ -262,7 +264,8 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 		}
 		looked, err := gh.GetPRState(l.git.WorkDir, p.prNumber)
 		if err != nil {
-			l.logger.Warn("git", "Failed to get PR #%s state: %v", p.prNumber, err)
+			nwo := git.NWOFromRemote(l.git.RemoteURL())
+			l.logger.Warn("git", "Failed to get %s state: %v", logging.PRLink(nwo, p.prNumber), err)
 			return finalizePRResult{}
 		}
 		prState = strings.ToUpper(looked)
@@ -271,20 +274,22 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 	merged := prState == "MERGED"
 
 	if prState == "OPEN" && l.cfg.AutoMerge {
+		nwo := git.NWOFromRemote(l.git.RemoteURL())
+		pr := logging.PRLink(nwo, p.prNumber)
 		gh := l.git.GH()
 		prBase := getPRBase(gh, l.git.WorkDir, p.prNumber)
 		defaultBranch := l.git.DetectDefaultBranch()
 		if prBase != "" && prBase != defaultBranch {
-			l.logger.Log("git", "PR #%s targets %s — stacked, closing bead", p.prNumber, prBase)
+			l.logger.Log("git", "%s targets %s — stacked, closing bead", pr, prBase)
 		} else {
-			l.logger.Log("git", "PR #%s targets %s — merging", p.prNumber, defaultBranch)
+			l.logger.Log("git", "%s targets %s — merging", pr, defaultBranch)
 			var mergeErr error
 			merged, mergeErr = l.mergeWithRetry(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
 			if mergeErr != nil {
 				l.logger.Warn("git", "Auto-merge: %v", mergeErr)
 			}
 			if !merged {
-				l.logger.Warn("git", "Merge failed for PR #%s — skipping task", p.prNumber)
+				l.logger.Warn("git", "Merge failed for %s — skipping task", pr)
 				skipTask(l.cfg.TaskBackend, l.logger, p.taskID, "merge_failed")
 				return finalizePRResult{}
 			}
@@ -404,7 +409,14 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 		attemptCount := strings.Count(attemptContext, "### Attempt ")
 		reflectionCount := strings.Count(attemptContext, "## Recent learnings")
 		if attemptCount > 0 || reflectionCount > 0 {
-			l.logger.Log("", "Including prior context: %d attempt(s), cross-task learnings: %v", attemptCount, reflectionCount > 0)
+			var parts []string
+			if attemptCount > 0 {
+				parts = append(parts, fmt.Sprintf("%d prior attempt(s)", attemptCount))
+			}
+			if reflectionCount > 0 {
+				parts = append(parts, "learnings from other tasks")
+			}
+			l.logger.Log("", "Including %s", strings.Join(parts, " + "))
 		}
 	}
 

@@ -55,12 +55,13 @@ const (
 type Domain = string
 
 const (
-	Git   Domain = "git"
-	CI    Domain = "ci"
-	Beads Domain = "beads"
-	Test  Domain = "test"
-	LLM   Domain = "llm"
-	Shell Domain = "bash"
+	Git      Domain = "git"
+	CI       Domain = "ci"
+	Beads    Domain = "beads"
+	Test     Domain = "test"
+	LLM      Domain = "llm"
+	Shell    Domain = "bash"
+	Analyzer Domain = "analyzer"
 )
 
 // Tag formats [actor][domain] with ANSI color. If domain is empty,

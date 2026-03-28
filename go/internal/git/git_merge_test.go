@@ -163,9 +163,9 @@ func TestPostMergeUpdate_TwoStepLeavesStaleIndex(t *testing.T) {
 	}
 }
 
-// PostMergeUpdateMain logs "Reset worktree to latest <branch>" — not
+// PostMergeUpdateMain logs "Updated local <branch> to latest origin" — not
 // "Force-reset" or other force language — so normal operation logs are clear.
-func TestPostMergeUpdateMain_LogSaysResetWorktreeToLatest(t *testing.T) {
+func TestPostMergeUpdateMain_LogSaysUpdatedLocalToLatest(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := newMemState()
@@ -191,8 +191,8 @@ func TestPostMergeUpdateMain_LogSaysResetWorktreeToLatest(t *testing.T) {
 
 	mgr.PostMergeUpdateMain()
 
-	if !log.contains("Reset worktree to latest main") {
-		t.Errorf("expected log to contain 'Reset worktree to latest main', got: %v", log.messages)
+	if !log.contains("Updated local main to latest origin") {
+		t.Errorf("expected log to contain 'Updated local main to latest origin', got: %v", log.messages)
 	}
 	for _, msg := range log.messages {
 		lower := strings.ToLower(msg)

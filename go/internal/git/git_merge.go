@@ -42,15 +42,17 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body st
 		return "", fmt.Errorf("gh CLI not found — cannot create PR")
 	}
 
+	nwo := NWOFromRemote(repoURL)
 	prNumber, _ := gh.FindOpenPR(m.WorktreeBranch, repoURL)
 	if prNumber != "" {
+		pr := logging.PRLink(nwo, prNumber)
 		if taskID != "" {
 			title := m.prTitle(taskID, taskDesc)
 			if err := gh.EditPR(prNumber, repoURL, title, body); err != nil {
-				m.Logger.Warn("git", "Failed to update PR #%s: %v", prNumber, err)
+				m.Logger.Warn("git", "Failed to update %s: %v", pr, err)
 			}
 		}
-		m.Logger.Log("git", "PR #%s already open for %s", prNumber, m.WorktreeBranch)
+		m.Logger.Log("git", "%s already open for %s", pr, m.WorktreeBranch)
 		return prNumber, nil
 	}
 
@@ -107,7 +109,6 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body st
 
 	newPR, _ := gh.FindOpenPR(m.WorktreeBranch, repoURL)
 	if newPR != "" {
-		nwo := NWOFromRemote(repoURL)
 		m.Logger.Log("git", "Created %s for %s", logging.PRLink(nwo, newPR), m.WorktreeBranch)
 	} else {
 		m.Logger.Log("git", "Created PR for %s", m.WorktreeBranch)
@@ -149,31 +150,33 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
+	nwo := NWOFromRemote(repoURL)
 	prNumber, err := gh.FindOpenPR(m.WorktreeBranch, repoURL)
 	if err != nil || prNumber == "" {
 		m.Logger.Log("git", "No open PR found for %s — skipping auto-merge", m.WorktreeBranch)
 		return false, nil
 	}
+	pr := logging.PRLink(nwo, prNumber)
 
 	defaultBranch := m.detectDefaultBranch()
 
 	prBase, _ := gh.GetPRBase(m.WorkDir, prNumber)
 	if prBase != "" && prBase != defaultBranch {
-		m.Logger.Log("git", "PR #%s targets %s (not %s) — waiting for base PRs to merge first", prNumber, prBase, defaultBranch)
+		m.Logger.Log("git", "%s targets %s (not %s) — waiting for base PRs to merge first", pr, prBase, defaultBranch)
 		return false, ErrStackedPRWaiting
 	}
 
-	m.Logger.Log("git", "%s Auto-merging PR #%s...", logging.BranchTag(defaultBranch), prNumber)
+	m.Logger.Log("git", "%s Auto-merging %s...", logging.BranchTag(defaultBranch), pr)
 
 	checks, status, ciErr := m.AwaitCI(ctx, prNumber, repoURL)
 	if ciErr != nil {
-		m.Logger.Warn("ci", "CI polling failed for PR #%s: %v — attempting merge anyway", prNumber, ciErr)
+		m.Logger.Warn("ci", "CI polling failed for %s: %v — attempting merge anyway", pr, ciErr)
 	}
 	if status == CIFailed {
 		return false, &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
 	}
 	if status == CIPassed {
-		m.Logger.Log("ci", "CI passed for PR #%s — merging", prNumber)
+		m.Logger.Log("ci", "CI passed for %s — merging", pr)
 	}
 
 	if updateErr := m.updatePRBranch(ctx, prNumber, repoURL); updateErr != nil {
@@ -200,7 +203,7 @@ func (m *Manager) updatePRBranch(ctx context.Context, prNumber, repoURL string) 
 	if !updated {
 		return nil
 	}
-	m.Logger.Log("git", "Updated PR #%s branch with latest base", prNumber)
+	m.Logger.Log("git", "Updated %s branch with latest base", logging.PRLink(nwo, prNumber))
 	checks, status, err := m.AwaitCI(ctx, prNumber, repoURL)
 	if err != nil {
 		m.Logger.Warn("ci", "CI polling after branch update: %v — attempting merge anyway", err)
@@ -214,6 +217,8 @@ func (m *Manager) updatePRBranch(ctx context.Context, prNumber, repoURL string) 
 
 // executeMerge attempts the squash-merge and handles CI-gated retries.
 func (m *Manager) executeMerge(ctx context.Context, prNumber, repoURL string) (bool, error) {
+	nwo := NWOFromRemote(repoURL)
+	pr := logging.PRLink(nwo, prNumber)
 	gh := m.gh()
 	opts := m.mergeOpts()
 
@@ -223,16 +228,16 @@ func (m *Manager) executeMerge(ctx context.Context, prNumber, repoURL string) (b
 
 	mergeOutput, mergeErr := gh.MergePR(prNumber, repoURL, opts)
 	if mergeErr == nil {
-		return m.postMergeUpdate(prNumber)
+		return m.postMergeUpdate(nwo, prNumber)
 	}
 
 	if isMergeConflictError(mergeOutput) {
-		m.Logger.Warn("git", "PR #%s has merge conflicts — attempting rebase", prNumber)
+		m.Logger.Warn("git", "%s has merge conflicts — attempting rebase", pr)
 		return false, &MergeConflictError{PRNumber: prNumber}
 	}
 
 	if isCIGatedError(mergeOutput) {
-		m.Logger.Log("ci", "PR #%s blocked by branch protection — waiting for CI...", prNumber)
+		m.Logger.Log("ci", "%s blocked by branch protection — waiting for CI...", pr)
 		checks, status, waitErr := m.AwaitCI(ctx, prNumber, repoURL)
 		if waitErr != nil {
 			return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, waitErr)
@@ -241,17 +246,17 @@ func (m *Manager) executeMerge(ctx context.Context, prNumber, repoURL string) (b
 			return false, &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
 		}
 		if status == CIPassed {
-			m.Logger.Log("ci", "CI passed for PR #%s — retrying merge", prNumber)
+			m.Logger.Log("ci", "CI passed for %s — retrying merge", pr)
 			retryOutput, retryErr := gh.MergePR(prNumber, repoURL, opts)
 			if retryErr == nil {
-				return m.postMergeUpdate(prNumber)
+				return m.postMergeUpdate(nwo, prNumber)
 			}
-			m.Logger.Warn("git", "Merge retry failed for PR #%s: %s", prNumber, retryOutput)
+			m.Logger.Warn("git", "Merge retry failed for %s: %s", pr, retryOutput)
 			return false, fmt.Errorf("merge retry failed for PR #%s after CI passed", prNumber)
 		}
 	}
 
-	m.Logger.Warn("git", "Auto-merge failed for PR #%s: %s", prNumber, mergeOutput)
+	m.Logger.Warn("git", "Auto-merge failed for %s: %s", pr, mergeOutput)
 	return false, fmt.Errorf("auto-merge failed for PR #%s", prNumber)
 }
 
@@ -263,9 +268,9 @@ func (m *Manager) GetCIFailureLog(prNumber string) string {
 // postMergeUpdate logs the merge result. PostMergeUpdateMain is NOT called
 // here — callers (finalizePR, FlushUnpushedWork) own the post-merge sync
 // to avoid double calls when they also need to update main.
-func (m *Manager) postMergeUpdate(prNumber string) (bool, error) {
+func (m *Manager) postMergeUpdate(nwo, prNumber string) (bool, error) {
 	defaultBranch := m.detectDefaultBranch()
-	m.Logger.Log("git", "%s PR #%s merged", logging.BranchTag(defaultBranch), prNumber)
+	m.Logger.Log("git", "%s %s merged", logging.BranchTag(defaultBranch), logging.PRLink(nwo, prNumber))
 	return true, nil
 }
 
@@ -440,7 +445,7 @@ func (m *Manager) PostMergeUpdateMain() {
 	defaultBranch := m.detectDefaultBranch()
 	m.gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
 	m.gitCmd(m.ProjectDir, "reset", "--hard", "origin/"+defaultBranch)
-	m.Logger.Log("git", "Reset worktree to latest %s", defaultBranch)
+	m.Logger.Log("git", "Updated local %s to latest origin", defaultBranch)
 
 	// Sync worktree with updated main. If rebase conflicts, reset —
 	// the merged work is on main and stale stack commits are expendable.

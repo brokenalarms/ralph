@@ -325,8 +325,8 @@ func TestManager_PushAndCreatePR_LogsAlreadyOpen(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !log.contains("PR #42 already open") {
-		t.Errorf("expected 'already open' log, got: %v", log.messages)
+	if !log.contains("PR #42") || !log.contains("already open") {
+		t.Errorf("expected 'PR #42' + 'already open' log, got: %v", log.messages)
 	}
 	if log.contains("Created PR") {
 		t.Error("should not log 'Created PR' when PR already exists")
