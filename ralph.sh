@@ -1258,7 +1258,7 @@ analyze_iteration() {
 
   # --- Permission denial detection (3+ in single iteration → halt) ---
   local perm_matches=""
-  perm_matches=$(grep -iE 'permission denied|cannot write|blocked by sandbox|not allowed' <<< "$assistant_text" | head -5 || true)
+  perm_matches=$(grep -iE 'permission denied|cannot write|not allowed' <<< "$assistant_text" | head -5 || true)
   local perm_count=0
   if [[ -n "$perm_matches" ]]; then
     perm_count=$(echo "$perm_matches" | wc -l | tr -d ' ')

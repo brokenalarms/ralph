@@ -10,7 +10,7 @@ After each iteration, analyze the log output and worktree state to detect proble
 
 ### Permission denials
 Claude repeatedly fails to write files. Patterns in tool_result content only:
-- "permission denied", "cannot write", "blocked by sandbox", "not allowed"
+- "permission denied", "cannot write", "not allowed"
 - Only tool_result blocks are checked — assistant text is excluded to avoid false positives from agent prose discussing permission-related code
 
 Threshold: 3+ permission failures in one iteration → halt.

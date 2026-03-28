@@ -40,10 +40,8 @@ cmd/ralph/
 internal/
   agent/
     agent.go           — centralized agent module: all agent invocations go through here
-    sandbox.go         — macOS sandbox-exec container isolation
     The agent module is the single code path for spawning agents. Loop, task,
     review, verification, and fix agents all route through agent.Runner.
-    Container isolation via sandbox-exec is applied by default when available.
 
   loop/
     loop.go            — iteration control, task selection, stop/wait
@@ -129,11 +127,11 @@ Already exists as an interface for test stubbing.
 loop.Run()
   ├── tasks: get next task + full context
   ├── prompt: assemble from templates
-  ├── agent: run iteration agent (sandboxed)
+  ├── agent: run iteration agent
   │     └── on signal:
   │           ├── verify: run test suite
-  │           ├── agent: LLM review via Query (fast model, sandboxed)
-  │           ├── agent: fix agent if rejected (sandboxed)
+  │           ├── agent: LLM review via Query (fast model)
+  │           ├── agent: fix agent if rejected
   │           └── agent: LLM review via Query (smart model escalation)
   ├── git: merge with retry
   │     ├── sync worktree to latest base branch
