@@ -11,10 +11,10 @@ func TestProseTracker_OnlyTracksTextDeltas(t *testing.T) {
 	pt := NewProseTracker(60 * time.Second)
 
 	// Text delta — should be captured.
-	pt.Observe(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"Let me read the configuration file to understand the setup"}}`)
+	pt.Observe(`{"type":"content_block_delta","delta":{"text":"Let me read the configuration file to understand the setup"}}`)
 
-	// Tool input delta — should be ignored.
-	pt.Observe(`{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"file_path\":\"/tmp/foo.go\"}"}}`)
+	// Tool input delta — should be ignored (partial_json has no "text" field).
+	pt.Observe(`{"type":"content_block_delta","delta":{"partial_json":"{\"file_path\":\"/tmp/foo.go\"}"}}`)
 
 	got := pt.lastProse
 	want := "Let me read the configuration file to understand the setup"
@@ -28,8 +28,8 @@ func TestProseTracker_OnlyTracksTextDeltas(t *testing.T) {
 func TestProseTracker_IgnoresShortText(t *testing.T) {
 	pt := NewProseTracker(60 * time.Second)
 
-	pt.Observe(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"I'll check the code now and look at the stream handling"}}`)
-	pt.Observe(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"short"}}`)
+	pt.Observe(`{"type":"content_block_delta","delta":{"text":"I'll check the code now and look at the stream handling"}}`)
+	pt.Observe(`{"type":"content_block_delta","delta":{"text":"short"}}`)
 
 	if pt.lastProse != "I'll check the code now and look at the stream handling" {
 		t.Errorf("short text should not replace lastProse, got %q", pt.lastProse)
@@ -39,7 +39,7 @@ func TestProseTracker_IgnoresShortText(t *testing.T) {
 // Verifies that StatusLine returns empty before the interval has elapsed.
 func TestProseTracker_NoStatusBeforeInterval(t *testing.T) {
 	pt := NewProseTracker(60 * time.Second)
-	pt.Observe(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"Working on the implementation now"}}`)
+	pt.Observe(`{"type":"content_block_delta","delta":{"text":"Working on the implementation now"}}`)
 
 	if got := pt.StatusLine(); got != "" {
 		t.Errorf("StatusLine should be empty before interval, got %q", got)
@@ -50,7 +50,7 @@ func TestProseTracker_NoStatusBeforeInterval(t *testing.T) {
 func TestProseTracker_EmitsAfterInterval(t *testing.T) {
 	pt := NewProseTracker(60 * time.Second)
 	pt.lastEmit = time.Now().Add(-61 * time.Second)
-	pt.Observe(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"Analyzing the test failures to find the root cause"}}`)
+	pt.Observe(`{"type":"content_block_delta","delta":{"text":"Analyzing the test failures to find the root cause"}}`)
 
 	got := pt.StatusLine()
 	if got == "" {
@@ -66,7 +66,7 @@ func TestProseTracker_EmitsAfterInterval(t *testing.T) {
 func TestProseTracker_ResetsAfterEmit(t *testing.T) {
 	pt := NewProseTracker(60 * time.Second)
 	pt.lastEmit = time.Now().Add(-61 * time.Second)
-	pt.Observe(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"First pass at the implementation"}}`)
+	pt.Observe(`{"type":"content_block_delta","delta":{"text":"First pass at the implementation"}}`)
 
 	pt.StatusLine()
 
@@ -97,7 +97,7 @@ func TestProseTracker_TruncatesLongProse(t *testing.T) {
 	pt.lastEmit = time.Now().Add(-61 * time.Second)
 
 	long := "This is a very long line of agent reasoning that goes on and on and on and describes what the agent is thinking about in great detail which should be truncated to fit in a single terminal line"
-	pt.Observe(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"` + long + `"}}`)
+	pt.Observe(`{"type":"content_block_delta","delta":{"text":"` + long + `"}}`)
 
 	got := pt.StatusLine()
 	runes := []rune(got)
@@ -114,9 +114,9 @@ func TestProseTracker_AccumulatesFragments(t *testing.T) {
 	pt.lastEmit = time.Now().Add(-61 * time.Second)
 
 	// Simulate small streaming fragments that together form a sentence.
-	pt.Observe(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"I need to "}}`)
-	pt.Observe(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"check the configuration "}}`)
-	pt.Observe(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"and verify the stream format"}}`)
+	pt.Observe(`{"type":"content_block_delta","delta":{"text":"I need to "}}`)
+	pt.Observe(`{"type":"content_block_delta","delta":{"text":"check the configuration "}}`)
+	pt.Observe(`{"type":"content_block_delta","delta":{"text":"and verify the stream format"}}`)
 
 	got := pt.StatusLine()
 	if got == "" {
@@ -126,6 +126,26 @@ func TestProseTracker_AccumulatesFragments(t *testing.T) {
 	want := "[thinking] I need to check the configuration and verify the stream format"
 	if got != want {
 		t.Errorf("StatusLine = %q, want %q", got, want)
+	}
+}
+
+// Verifies that the real Claude Code wire format (no "type" inside delta)
+// is captured correctly. This is the regression test for ralph-rioy: the
+// original code checked delta.type == "text_delta" which never matched
+// because Claude Code's stream-json omits that field.
+func TestProseTracker_RealWireFormat(t *testing.T) {
+	pt := NewProseTracker(60 * time.Second)
+	pt.lastEmit = time.Now().Add(-61 * time.Second)
+
+	// Real Claude Code format: no "type" inside delta, just "text".
+	pt.Observe(`{"type":"content_block_delta","delta":{"text":"Reading the configuration to understand the current setup"}}`)
+
+	got := pt.StatusLine()
+	if got == "" {
+		t.Fatal("StatusLine should capture text from real wire format (no delta.type field)")
+	}
+	if got != "[thinking] Reading the configuration to understand the current setup" {
+		t.Errorf("StatusLine = %q, want [thinking] prefix with captured text", got)
 	}
 }
 
