@@ -613,7 +613,7 @@ func (l *Loop) setStackHead() {
 		l.logger.Log("git", "Stack head: %s (from %s, %s)", branch, id, logging.PRLink(nwo, prNum))
 		return
 	}
-	// All completed tasks merged — start from default branch.
+	l.logger.Log("git", "No stacked parents — starting from %s", l.git.DetectDefaultBranch())
 }
 
 // persistCompletedTask writes a completed task ID to state.json so
