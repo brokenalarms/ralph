@@ -335,6 +335,58 @@ func callLLM(ctx context.Context, workDir, prompt string, queryFn QueryFunc, mod
 	return Result{Passed: true, Reason: "LLM verified: " + response}
 }
 
+// CompileCheckTimeout is the maximum duration CompileCheck will wait for the
+// compilation to complete. Exported so tests can override it.
+var CompileCheckTimeout = 60 * time.Second
+
+// CompileCheck verifies that all packages (including test files) compile
+// without running any tests. For Go projects this catches missing interface
+// implementations in test stubs across every package. Returns a passing
+// result for non-Go projects.
+func CompileCheck(ctx context.Context, dir string) Result {
+	goDir := findGoModDir(dir)
+	if goDir == "" {
+		return Result{Passed: true, Reason: "no Go module found — skipping compile check"}
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, CompileCheckTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "go", "test", "-run=^$", "-count=1", "./...")
+	cmd.Dir = goDir
+	cmd.WaitDelay = 3 * time.Second
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return Result{
+			Passed:  false,
+			Reason:  "pre-push compile check failed: not all packages compile",
+			Details: lastNLines(string(out), 30),
+		}
+	}
+	return Result{Passed: true, Reason: "all packages compile"}
+}
+
+// findGoModDir locates the directory containing go.mod by checking the given
+// directory, common subdirectories (e.g. go/), then walking up the tree.
+func findGoModDir(dir string) string {
+	if fileExists(filepath.Join(dir, "go.mod")) {
+		return dir
+	}
+	goSubdir := filepath.Join(dir, "go")
+	if fileExists(filepath.Join(goSubdir, "go.mod")) {
+		return goSubdir
+	}
+	for d := filepath.Dir(dir); ; d = filepath.Dir(d) {
+		if fileExists(filepath.Join(d, "go.mod")) {
+			return d
+		}
+		if d == filepath.Dir(d) {
+			break
+		}
+	}
+	return ""
+}
+
 func lastNLines(s string, n int) string {
 	lines := strings.Split(s, "\n")
 	if len(lines) <= n {

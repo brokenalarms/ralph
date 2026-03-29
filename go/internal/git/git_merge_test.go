@@ -1378,3 +1378,74 @@ func TestPush_StackedBranch_PreservesParent(t *testing.T) {
 		}
 	}
 }
+
+// Push calls the PrePush callback before pushing, so a compile check
+// failure aborts the push rather than sending broken code to the remote.
+func TestPush_PrePushBlocksPush(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	wtDir := filepath.Join(t.TempDir(), "worktree")
+	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test-prepush", wtDir)
+
+	writeFile(t, wtDir, "feature.go", "package main\n")
+	run(t, "git", "-C", wtDir, "add", "-A")
+	run(t, "git", "-C", wtDir, "commit", "-m", "add feature")
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        wtDir,
+		WorktreeBranch: "ralph/test-prepush",
+		State:          newMemState(),
+		Logger:         &testLog{},
+		PrePush: func(ctx context.Context) error {
+			return fmt.Errorf("compile check failed: missing interface method")
+		},
+	}
+
+	err := mgr.Push(context.Background())
+	if err == nil {
+		t.Fatal("expected Push to fail when PrePush returns error")
+	}
+	if !strings.Contains(err.Error(), "pre-push check failed") {
+		t.Errorf("expected pre-push check error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "missing interface method") {
+		t.Errorf("expected original error in chain, got: %v", err)
+	}
+
+	// Verify nothing was pushed to remote.
+	out := cmdOutput(t, "git", "-C", bare, "branch", "--list", "ralph/test-prepush")
+	if strings.TrimSpace(out) != "" {
+		t.Error("branch should not exist on remote after PrePush failure")
+	}
+}
+
+// Push proceeds when PrePush succeeds.
+func TestPush_PrePushPasses(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	wtDir := filepath.Join(t.TempDir(), "worktree")
+	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test-prepush-pass", wtDir)
+
+	writeFile(t, wtDir, "feature.go", "package main\n")
+	run(t, "git", "-C", wtDir, "add", "-A")
+	run(t, "git", "-C", wtDir, "commit", "-m", "add feature")
+
+	prePushCalled := false
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        wtDir,
+		WorktreeBranch: "ralph/test-prepush-pass",
+		State:          newMemState(),
+		Logger:         &testLog{},
+		PrePush: func(ctx context.Context) error {
+			prePushCalled = true
+			return nil
+		},
+	}
+
+	if err := mgr.Push(context.Background()); err != nil {
+		t.Fatalf("Push should succeed when PrePush passes: %v", err)
+	}
+	if !prePushCalled {
+		t.Error("PrePush callback was not invoked")
+	}
+}

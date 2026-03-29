@@ -19,6 +19,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/tmux"
+	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -142,6 +143,15 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		return 1
 	}
 	dirs.WorkDir = gm.WorkDir
+
+	gm.PrePush = func(ctx context.Context) error {
+		result := verify.CompileCheck(ctx, dirs.WorkDir)
+		if !result.Passed {
+			return fmt.Errorf("%s\n%s", result.Reason, result.Details)
+		}
+		log.Log("build", "Pre-push compile check passed")
+		return nil
+	}
 
 	// Write initial branch label for the pane title updater. On resume,
 	// the old task branch is still checked out until the loop renames it,
