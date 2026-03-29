@@ -577,18 +577,20 @@ func (l *Loop) setStackHead() {
 		return
 	}
 
-	// Build a set of branches with open PRs to avoid fetching merged/deleted
-	// branches. Falls back to checking all branches if gh is unavailable.
-	var openSet map[string]bool
+	// Only consider branches with open PRs. One gh API call replaces
+	// fetching every completed task's branch individually.
 	gh := l.git.GH()
 	repoURL := l.git.RemoteURL()
-	if repoURL != "" && gh != nil && gh.Available() {
-		if branches, err := gh.ListOpenPRBranches(repoURL); err == nil && len(branches) > 0 {
-			openSet = make(map[string]bool, len(branches))
-			for _, b := range branches {
-				openSet[b] = true
-			}
-		}
+	if repoURL == "" || gh == nil || !gh.Available() {
+		return
+	}
+	openBranches, err := gh.ListOpenPRBranches(repoURL)
+	if err != nil || len(openBranches) == 0 {
+		return
+	}
+	openSet := make(map[string]bool, len(openBranches))
+	for _, b := range openBranches {
+		openSet[b] = true
 	}
 
 	for i := len(tasks) - 1; i >= 0; i-- {
@@ -597,10 +599,7 @@ func (l *Loop) setStackHead() {
 			continue
 		}
 		branch, _ := l.cfg.TaskBackend.GetMetadata(id, "branch")
-		if branch == "" {
-			continue
-		}
-		if openSet != nil && !openSet[branch] {
+		if branch == "" || !openSet[branch] {
 			continue
 		}
 		if err := l.git.FetchBranch(branch); err != nil {

@@ -2035,6 +2035,11 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 	var taskABranch string
 	var headAtTaskBStart string
 
+	// setStackHead needs gh to list open PR branches. The stub returns
+	// task A's branch dynamically since the name is set at runtime.
+	ghStub := &stubGitHub{available: true}
+	gm.GitHub = ghStub
+
 	backend := &mutableBackend{
 		remaining:    1,
 		completed:    0,
@@ -2061,6 +2066,7 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 				backend.metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
 				backend.externalRefs["ralph-aaa"] = "gh-100"
 				st.AddCompletedTask("ralph-aaa")
+				ghStub.openPRBranches = []string{taskABranch}
 
 				backend.completed = 1
 				backend.remaining = 1
@@ -2074,9 +2080,6 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true},
 	}
-
-	// setStackHead uses git ancestry — no GitHub stub needed. Task A's branch
-	// has work ahead of main so it's selected as stack head.
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -6405,10 +6408,11 @@ func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
 
 // stubGitHub implements git.GitHub for tests that need PR state lookups.
 type stubGitHub struct {
-	available bool
-	prState   string
-	prBase    string
-	prHead    string
+	available      bool
+	prState        string
+	prBase         string
+	prHead         string
+	openPRBranches []string
 }
 
 func (s *stubGitHub) Available() bool                                              { return s.available }
@@ -6428,7 +6432,7 @@ func (s *stubGitHub) GetPRState(_, _ string) (string, error)                    
 func (s *stubGitHub) GetPRBase(_, _ string) (string, error)                        { return s.prBase, nil }
 func (s *stubGitHub) GetPRHead(_, _ string) (string, error)                        { return s.prHead, nil }
 func (s *stubGitHub) GetPRHeadSHA(_, _ string) (string, error)                     { return "", nil }
-func (s *stubGitHub) ListOpenPRBranches(_ string) ([]string, error)                { return nil, nil }
+func (s *stubGitHub) ListOpenPRBranches(_ string) ([]string, error)                { return s.openPRBranches, nil }
 
 // getPRBase takes only a GitHub interface and workDir — no Loop needed.
 func TestGetPRBase_Standalone(t *testing.T) {
