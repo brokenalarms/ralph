@@ -521,7 +521,9 @@ func (l *Loop) logIterationBanner(runIteration, maxIter, iteration int, taskID, 
 	total, _ := l.cfg.TaskBackend.CountTotal()
 
 	if runIteration > 1 {
-		health.Log(l.logger, health.Collect(l.cfg.Dirs.RalphDir, l.git.WorkDir))
+		if l.cfg.Verbose {
+			health.Log(l.logger, health.Collect(l.cfg.Dirs.RalphDir, l.git.WorkDir))
+		}
 		l.logger.DashedSeparator(logging.Yellow)
 	}
 
