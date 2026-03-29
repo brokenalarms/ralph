@@ -185,17 +185,19 @@ if [[ "${1:-}" == "feedback" ]]; then
     exit 1
   fi
   if [[ -z "$*" ]]; then
-    feedback_file="$ralph_dir/feedback"
-    if [[ -f "$feedback_file" && -s "$feedback_file" ]]; then
-      echo -e "${CYAN}[o]${NC} Queued feedback:"
-      cat "$feedback_file"
-    else
-      echo -e "${CYAN}[o]${NC} No feedback queued."
-    fi
+    echo -e "${CYAN}[o]${NC} Usage: ralph feedback <message>"
     exit 0
   fi
-  echo "$*" >> "$ralph_dir/feedback"
-  echo -e "${GREEN}[o]${NC} Feedback queued for next iteration."
+
+  task_id=$(jq -r '.last_task_id // empty' "$ralph_dir/state.json" 2>/dev/null)
+  if [[ -z "$task_id" ]]; then
+    echo -e "${RED}[o]${NC} No active task — is ralph running?"
+    exit 1
+  fi
+
+  bd update "$task_id" --append-notes "$*"
+  : > "$ralph_dir/feedback"
+  echo -e "${GREEN}[o]${NC} Feedback sent — agent will restart with updated bead notes."
   exit 0
 fi
 
@@ -616,16 +618,6 @@ clear_signal() {
   rm -f "$SIGNAL_COMPLETE_FILE" "$SIGNAL_TASK_FILE" "$SIGNAL_ALL_COMPLETE_FILE"
 }
 
-read_feedback() {
-  local feedback_file="$RALPH_DIR/feedback"
-  if [[ -f "$feedback_file" && -s "$feedback_file" ]]; then
-    cat "$feedback_file"
-  fi
-}
-
-clear_feedback() {
-  rm -f "$RALPH_DIR/feedback"
-}
 
 check_signal() {
   [[ -f "$SIGNAL_COMPLETE_FILE" ]]
@@ -932,7 +924,6 @@ wait_for_rate_reset() {
 # When the signal is detected OR claude exits, we proceed.
 run_claude() {
   local prompt="$1"
-  local feedback="${2:-}"
   local claude_pid tail_pid
   tail_pid=""
 
@@ -940,14 +931,14 @@ run_claude() {
   rm -f "$RALPH_DIR/.stream-task"
 
   # Build the prompt that includes ralph loop context
-  local raw="${3:-}"
-  local rc_task_id="${4:-}"
-  local rc_task_name="${5:-}"
+  local raw="${2:-}"
+  local rc_task_id="${3:-}"
+  local rc_task_name="${4:-}"
   local full_prompt
   if [[ "$raw" == "raw" ]]; then
     full_prompt="$prompt"
   else
-    full_prompt=$(build_prompt "$prompt" "$feedback" "$rc_task_id" "$rc_task_name")
+    full_prompt=$(build_prompt "$prompt" "$rc_task_id" "$rc_task_name")
   fi
 
   # Start the stream filter BEFORE Claude so tail -f -n 0 is already
@@ -1073,9 +1064,8 @@ run_claude() {
 # --- Build prompt for Claude ---
 build_prompt() {
   local task_prompt="$1"
-  local feedback="${2:-}"
-  local bp_task_id="${3:-}"
-  local bp_task_name="${4:-}"
+  local bp_task_id="${2:-}"
+  local bp_task_name="${3:-}"
   local template_file="$PROMPTS_DIR/internal.md"
 
   if [[ ! -f "$template_file" ]]; then
@@ -1091,13 +1081,8 @@ build_prompt() {
   result+=$(<"$PROMPTS_DIR/reflection.md")
   result+=$'\n'
   result+=$(<"$PROMPTS_DIR/signal.md")
-
-  if [[ -n "$feedback" ]]; then
-    local feedback_prompt
-    feedback_prompt=$(<"$PROMPTS_DIR/feedback.md")
-    feedback_prompt="${feedback_prompt//\{\{FEEDBACK\}\}/$feedback}"
-    result+=$'\n\n'"$feedback_prompt"
-  fi
+  result+=$'\n'
+  result+=$(<"$PROMPTS_DIR/feedback.md")
 
   local task_instructions
   task_instructions=$(task_execution_instructions)
@@ -1504,7 +1489,7 @@ run_execution() {
           fi
         fi
 
-        run_claude "$refactor_prompt" "" "raw"
+        run_claude "$refactor_prompt" "raw"
         increment_call_count
         log_task_success "Refactor iteration complete"
       else
@@ -1580,16 +1565,9 @@ run_execution() {
     local head_before
     head_before=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
 
-    # Read any queued user feedback
-    local feedback=""
-    feedback=$(read_feedback) || true
-    if [[ -n "$feedback" ]]; then
-      log_warn "[feedback] $feedback"
-    fi
-
     # Run claude for this task
     local task_start=$SECONDS
-    if ! run_claude "$task_prompt" "$feedback" "" "$task_id" "$next_task"; then
+    if ! run_claude "$task_prompt" "" "$task_id" "$next_task"; then
       log_warn "Claude failed on iteration $run_iteration, continuing..."
     fi
     local task_elapsed=$(( SECONDS - task_start ))
@@ -1600,11 +1578,6 @@ run_execution() {
       log_warn "Interrupted — stopping execution"
       write_state "status" "interrupted"
       break
-    fi
-
-    # Clear feedback after Claude completes the iteration
-    if [[ -n "$feedback" ]]; then
-      clear_feedback
     fi
 
     # Post-iteration: read signal summary

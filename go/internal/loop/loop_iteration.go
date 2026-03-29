@@ -399,16 +399,6 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	rawLogPath := filepath.Join(l.cfg.Dirs.RalphDir, "raw.log")
 	logStart := fileLineCount(rawLogPath)
 
-	feedback := readFeedback(l.cfg.Dirs.RalphDir)
-	if feedback != "" {
-		l.logger.Warn("", "[feedback] %s", feedback)
-		clearFeedback(l.cfg.Dirs.RalphDir)
-		l.attempts.Record(taskID, nextTask,
-			"User feedback (pre-iteration): "+feedback,
-			"",
-			"user_feedback: "+feedback)
-	}
-
 	attemptContext := l.buildAttemptContext(taskID, nextTask)
 	if attemptContext != "" {
 		attemptCount := strings.Count(attemptContext, "### Attempt ")
@@ -468,12 +458,12 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 		l.logger.Warn("llm", "Claude failed on iteration %d, continuing...", *runIteration)
 	}
 	if result.FeedbackKill {
-		l.logger.Warn("llm", "Restarting iteration %d — feedback injection failed, agent killed", *runIteration)
+		l.logger.Warn("llm", "Restarting iteration %d — user feedback received", *runIteration)
 		diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
 		l.attempts.Record(taskID, nextTask,
-			"Killed: feedback injection failed. Feedback: "+result.FeedbackContent,
+			"Killed: user feedback received (see bead notes for content)",
 			diffStat,
-			"user_feedback: "+result.FeedbackContent)
+			"user_feedback: check bead notes for details")
 		*runIteration--
 		*iteration--
 		return resultRetry

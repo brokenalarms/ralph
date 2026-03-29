@@ -539,6 +539,14 @@ func (b *BD) SetExternalRef(id, ref string) error {
 	return err
 }
 
+func (b *BD) AppendNotes(id, msg string) error {
+	if id == "" || msg == "" {
+		return nil
+	}
+	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--append-notes", msg)
+	return err
+}
+
 func (b *BD) SetMetadata(id, key, value string) error {
 	if id == "" || key == "" {
 		return nil
