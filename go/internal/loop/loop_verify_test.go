@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
@@ -69,7 +70,9 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
-	l.verifier.deps.Runner = func() claudeRunner { return &injectCapturingRunner{} }
+	l.verifier.deps.NewRunner = func() claudeRunner {
+		return &stubRunner{result: stubResult(false, "")}
+	}
 
 	llmCalls := 0
 	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
@@ -117,7 +120,9 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
-	l.verifier.deps.Runner = func() claudeRunner { return &injectCapturingRunner{} }
+	l.verifier.deps.NewRunner = func() claudeRunner {
+		return &stubRunner{result: stubResult(false, "")}
+	}
 
 	var modelsUsed []string
 	llmCalls := 0
@@ -177,7 +182,9 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 		VerifyEscalationModel: customEscalation,
 	}, st, gm, logger)
 
-	l.verifier.deps.Runner = func() claudeRunner { return &injectCapturingRunner{} }
+	l.verifier.deps.NewRunner = func() claudeRunner {
+		return &stubRunner{result: stubResult(false, "")}
+	}
 
 	var modelsUsed []string
 	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
@@ -212,8 +219,10 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 	}
 }
 
-// LLM rejects once, fix agent fixes, LLM approves on second attempt.
-func TestOnSignal_LLMReject_PassesOnRetry(t *testing.T) {
+// LLM rejects once, fix agent runs, LLM approves — all within a single
+// onSignal call. Proves verification rejection spawns a fix agent and
+// re-verifies within one iteration.
+func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -226,11 +235,15 @@ func TestOnSignal_LLMReject_PassesOnRetry(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task"},
+		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task", acceptance: "must handle errors"},
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
-	l.verifier.deps.Runner = func() claudeRunner { return &injectCapturingRunner{} }
+	fixAgentSpawned := false
+	l.verifier.deps.NewRunner = func() claudeRunner {
+		fixAgentSpawned = true
+		return &stubRunner{result: stubResult(true, "fixed error handling")}
+	}
 
 	llmCalls := 0
 	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
@@ -241,28 +254,77 @@ func TestOnSignal_LLMReject_PassesOnRetry(t *testing.T) {
 		return verify.Result{Passed: true, Reason: "looks good after fix"}
 	}
 
-	params := signalParams{
+	result := l.onSignal(signalParams{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-retry", nextTask: "Retry test",
-	}
+	})
 
-	result := l.onSignal(params)
-	if result {
-		t.Fatal("expected first onSignal to return false when LLM rejects")
-	}
-	result = l.onSignal(params)
 	if !result {
-		t.Fatal("expected onSignal to pass when LLM approves on retry")
+		t.Fatal("expected onSignal to return true after fix agent + re-verify")
 	}
 	if llmCalls != 2 {
-		t.Fatalf("expected 2 LLM verify calls, got %d", llmCalls)
+		t.Fatalf("expected 2 LLM verify calls within single onSignal, got %d", llmCalls)
+	}
+	if !fixAgentSpawned {
+		t.Fatal("expected fix agent to be spawned on LLM rejection")
 	}
 }
 
-// When stdin injection fails (broken pipe), onSignal returns false to restart
-// the agent — no fix agent is spawned.
-func TestOnSignal_LLMReject_BrokenPipe_RestartsAgent(t *testing.T) {
+// Fix agent receives the rejection reason in its prompt so it knows what
+// to fix. Captured via the prompt string passed to the stub runner.
+func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task", acceptance: "must handle errors"},
+		VerifyDir:     dir,
+	}, st, gm, logger)
+
+	var capturedPrompt string
+	l.verifier.deps.NewRunner = func() claudeRunner {
+		return &promptCapturingRunner{
+			inner:    &stubRunner{result: stubResult(true, "fixed")},
+			captured: &capturedPrompt,
+		}
+	}
+
+	rejectionMsg := "function foo() ignores the error return from bar()"
+	llmCalls := 0
+	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+		llmCalls++
+		if llmCalls == 1 {
+			return verify.Result{Passed: false, Details: rejectionMsg}
+		}
+		return verify.Result{Passed: true, Reason: "approved"}
+	}
+
+	l.onSignal(signalParams{
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID: "test-prompt", nextTask: "Prompt test",
+	})
+
+	if !strings.Contains(capturedPrompt, rejectionMsg) {
+		t.Fatalf("fix agent prompt should contain rejection reason %q, got:\n%s", rejectionMsg, capturedPrompt)
+	}
+	if !strings.Contains(capturedPrompt, "must handle errors") {
+		t.Fatalf("fix agent prompt should contain acceptance criteria, got:\n%s", capturedPrompt)
+	}
+}
+
+// When the fix agent exits without signaling, onSignal returns false —
+// the fix attempt failed.
+func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -279,18 +341,12 @@ func TestOnSignal_LLMReject_BrokenPipe_RestartsAgent(t *testing.T) {
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
-	l.verifier.deps.Runner = func() claudeRunner { return &injectFailRunner{result: claude.Result{}} }
-
-	llmCalls := 0
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
-		llmCalls++
-		return verify.Result{Passed: false, Details: "bad code"}
+	l.verifier.deps.NewRunner = func() claudeRunner {
+		return &stubRunner{result: stubResult(false, "")}
 	}
 
-	fixAgentCalled := false
-	l.verifier.deps.NewRunner = func() claudeRunner {
-		fixAgentCalled = true
-		return &stubRunner{result: stubResult(false, "")}
+	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+		return verify.Result{Passed: false, Details: "bad code"}
 	}
 
 	result := l.onSignal(signalParams{
@@ -300,13 +356,7 @@ func TestOnSignal_LLMReject_BrokenPipe_RestartsAgent(t *testing.T) {
 	})
 
 	if result {
-		t.Fatal("expected onSignal to return false when injection fails (agent restarts)")
-	}
-	if llmCalls != 1 {
-		t.Fatalf("expected 1 LLM call, got %d", llmCalls)
-	}
-	if fixAgentCalled {
-		t.Fatal("fix agent should NOT be spawned — broken pipe triggers restart")
+		t.Fatal("expected onSignal to return false when fix agent exits without signal")
 	}
 }
 

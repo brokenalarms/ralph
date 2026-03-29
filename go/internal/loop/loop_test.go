@@ -5634,7 +5634,7 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 }
 
 // injectCapturingRunner records messages sent via InjectMessage so tests
-// can verify that onSignal injects feedback instead of spawning fix agents.
+// can verify that test failure feedback is injected to the running agent.
 type injectCapturingRunner struct {
 	onRun    func()
 	result   claude.Result
@@ -5723,9 +5723,9 @@ func TestLoop_onSignal_InjectsTestFailures(t *testing.T) {
 	}
 }
 
-// Verifies that when LLM verification rejects the agent's work, the rejection
-// feedback is injected to the running agent instead of spawning a fix agent.
-func TestLoop_onSignal_InjectsLLMRejection(t *testing.T) {
+// LLM rejection spawns a fix agent with rejection context — no stdin
+// injection. When the fix agent fails (no signal), onSignal returns false.
+func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -5741,8 +5741,6 @@ func TestLoop_onSignal_InjectsLLMRejection(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
-	runner := &injectCapturingRunner{}
-
 	l := New(Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -5755,11 +5753,15 @@ func TestLoop_onSignal_InjectsLLMRejection(t *testing.T) {
 		TaskBackend:   backend,
 		VerifyDir:     dir,
 	}, st, gm, logger)
-	l.runner = runner
 
-	// Tests pass but LLM rejects.
 	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: false, Details: "missing error handling in parseConfig"}
+	}
+
+	fixAgentCalled := false
+	l.newRunnerFunc = func() claudeRunner {
+		fixAgentCalled = true
+		return &stubRunner{result: claude.Result{}}
 	}
 
 	p := signalParams{
@@ -5774,19 +5776,16 @@ func TestLoop_onSignal_InjectsLLMRejection(t *testing.T) {
 	accepted := l.onSignal(p)
 
 	if accepted {
-		t.Error("onSignal should return false when LLM rejects (agent continues)")
+		t.Error("onSignal should return false when fix agent exits without signal")
 	}
-	if len(runner.injected) == 0 {
-		t.Fatal("expected LLM rejection to be injected to agent via stdin")
-	}
-	if !strings.Contains(runner.injected[0], "missing error handling") {
-		t.Errorf("injected message should contain LLM feedback, got: %q", runner.injected[0])
+	if !fixAgentCalled {
+		t.Error("fix agent should be spawned on LLM rejection")
 	}
 }
 
-// Verifies that when stdin injection fails, onSignal returns false so the
-// loop restarts the agent — no separate fix agent is spawned.
-func TestLoop_onSignal_RestartsOnBrokenPipe(t *testing.T) {
+// LLM rejection spawns a fix agent. When the fix agent signals completion,
+// the verifier re-runs LLM verification within the same onSignal call.
+func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -5804,11 +5803,6 @@ func TestLoop_onSignal_RestartsOnBrokenPipe(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
 
-	// Runner that fails injection — simulates broken pipe.
-	brokenRunner := &injectFailRunner{
-		result: claude.Result{},
-	}
-
 	l := New(Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -5821,11 +5815,14 @@ func TestLoop_onSignal_RestartsOnBrokenPipe(t *testing.T) {
 		TaskBackend:   backend,
 		VerifyDir:     dir,
 	}, st, gm, logger)
-	l.runner = brokenRunner
 
-	// Tests pass, LLM rejects, injection fails → should return false (restart).
+	llmCalls := 0
 	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
-		return verify.Result{Passed: false, Details: "incomplete implementation"}
+		llmCalls++
+		if llmCalls == 1 {
+			return verify.Result{Passed: false, Details: "incomplete implementation"}
+		}
+		return verify.Result{Passed: true, Reason: "approved"}
 	}
 
 	fixAgentCalled := false
@@ -5845,32 +5842,20 @@ func TestLoop_onSignal_RestartsOnBrokenPipe(t *testing.T) {
 
 	accepted := l.onSignal(p)
 
-	if accepted {
-		t.Error("onSignal should return false when injection fails (agent restarts)")
+	if !accepted {
+		t.Error("onSignal should return true after fix agent + re-verify succeeds")
 	}
-	if fixAgentCalled {
-		t.Error("fix agent should NOT be spawned — broken pipe triggers restart, not fix agent")
+	if !fixAgentCalled {
+		t.Error("fix agent should be spawned on LLM rejection")
+	}
+	if llmCalls != 2 {
+		t.Errorf("expected 2 LLM calls (reject + approve), got %d", llmCalls)
 	}
 
 	output := logBuf.String()
-	if !strings.Contains(output, "agent will be restarted") {
-		t.Errorf("expected restart log message, got:\n%s", output)
+	if !strings.Contains(output, "Spawning fix agent for verification rejection") {
+		t.Errorf("expected fix agent spawn log, got:\n%s", output)
 	}
-}
-
-// injectFailRunner always fails InjectMessage to test fallback behavior.
-type injectFailRunner struct {
-	result claude.Result
-}
-
-func (r *injectFailRunner) Run(_ claude.RunConfig) (claude.Result, error) {
-	return r.result, nil
-}
-
-func (r *injectFailRunner) StopStreaming() {}
-
-func (r *injectFailRunner) InjectMessage(_ string) error {
-	return fmt.Errorf("broken pipe")
 }
 
 // Verifies that test fix attempts are tracked across onSignal calls and
