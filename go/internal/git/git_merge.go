@@ -147,10 +147,10 @@ func (m *Manager) prTitle(taskID, taskDesc string) string {
 	return title
 }
 
-// AutoMergeCurrentBranch squash-merges the PR for the current branch into main.
-// Returns (true, nil) when a PR was merged, (false, nil) when no PR exists or
-// no action was needed, and (false, err) on failure. Returns typed errors
-// (CIFailureError, MergeConflictError) that callers can handle.
+// AutoMergeCurrentBranch rebases onto main, pushes, waits for CI, and
+// merges. If main moves between CI passing and the merge attempt, loops
+// back to rebase+push again. Returns typed errors (CIFailureError,
+// MergeConflictError) that callers can handle.
 func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	if m.WorktreeBranch == "" || m.WorkDir == m.ProjectDir {
 		return false, nil
@@ -185,6 +185,15 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 
 	m.Logger.Log("git", "%s Auto-merging %s...", logging.BranchTag(defaultBranch), pr)
 
+	// Rebase onto latest main and push so CI runs on the final tree.
+	// This avoids the updatePRBranch round-trip and double CI wait.
+	if err := m.EnsureUpToDate(ctx); err != nil {
+		m.Logger.Warn("git", "Pre-merge rebase failed: %v", err)
+	}
+	if err := m.Push(ctx); err != nil {
+		m.Logger.Warn("git", "Pre-merge push failed: %v", err)
+	}
+
 	checks, status, ciErr := m.AwaitCI(ctx, prNumber, repoURL)
 	if ciErr != nil {
 		m.Logger.Warn("ci", "CI polling failed for %s: %v — attempting merge anyway", pr, ciErr)
@@ -196,11 +205,29 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		m.Logger.Log("ci", "CI passed for %s — merging", pr)
 	}
 
-	if updateErr := m.updatePRBranch(ctx, prNumber, repoURL); updateErr != nil {
-		return false, updateErr
+	// Check if main moved while CI was running. If the branch needs
+	// updating, return a merge conflict error so MergeWithRetry loops
+	// back through rebase+push+CI.
+	if m.branchNeedsUpdate(prNumber, repoURL) {
+		m.Logger.Log("git", "Main moved while CI was running — will rebase and retry")
+		return false, &MergeConflictError{PRNumber: prNumber}
 	}
 
 	return m.executeMerge(ctx, prNumber, repoURL)
+}
+
+// branchNeedsUpdate checks if the PR branch is behind the base branch.
+func (m *Manager) branchNeedsUpdate(prNumber, repoURL string) bool {
+	nwo := NWOFromRemote(repoURL)
+	if nwo == "" {
+		return false
+	}
+	gh := m.gh()
+	updated, err := gh.UpdateBranch(m.WorkDir, nwo, prNumber)
+	if err != nil {
+		return true
+	}
+	return updated
 }
 
 // updatePRBranch updates the PR branch with the latest base branch commits.

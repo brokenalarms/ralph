@@ -51,6 +51,13 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, 
 		return false
 	}
 
+	// Rebase onto latest main before pushing so the branch includes
+	// any commits that landed since the PR was created. This avoids
+	// the "update branch" round-trip and double CI wait during merge.
+	if err := l.git.EnsureUpToDate(ctx); err != nil {
+		l.logger.Warn("git", "Rebase before fix push failed: %v", err)
+	}
+
 	l.logger.Log("git", "Fix agent committed — force-pushing")
 	if err := l.git.ForcePush(ctx); err != nil {
 		l.logger.Warn("git", "Force-push after CI fix failed: %v", err)
@@ -74,6 +81,10 @@ func (l *Loop) tryFixConflict(ctx context.Context, conflictErr *git.UnresolvedCo
 	if headBefore == headAfter {
 		l.logger.Warn("git", "Conflict agent made no new commits — nothing to push")
 		return false
+	}
+
+	if err := l.git.EnsureUpToDate(ctx); err != nil {
+		l.logger.Warn("git", "Rebase before conflict push failed: %v", err)
 	}
 
 	if err := l.git.ForcePush(ctx); err != nil {
