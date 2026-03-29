@@ -53,12 +53,17 @@ func (m *Manager) Push(ctx context.Context) error {
 			if err := m.EnsureUpToDate(ctx); err != nil {
 				m.Logger.Warn("git", "Rebase before push failed: %v", err)
 			}
+			// Re-fetch after rebase since origin may have moved.
+			_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", baseBranch)
 			baseSHA = m.gitOutput(m.WorkDir, "rev-parse", baseRef)
 		}
-		if baseSHA != "" {
-			commitMsg := m.gitOutput(m.WorkDir, "log", "-1", "--format=%s")
-			if err := m.SquashToOneCommit(baseSHA, commitMsg); err != nil {
-				m.Logger.Warn("git", "Squash: %v", err)
+		if baseSHA != "" && m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", baseSHA, "HEAD") == nil {
+			headSHA := m.gitOutput(m.WorkDir, "rev-parse", "HEAD")
+			if headSHA != baseSHA {
+				commitMsg := m.gitOutput(m.WorkDir, "log", "-1", "--format=%s")
+				if err := m.SquashToOneCommit(baseSHA, commitMsg); err != nil {
+					m.Logger.Warn("git", "Squash: %v", err)
+				}
 			}
 		}
 	}
