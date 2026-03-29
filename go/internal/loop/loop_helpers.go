@@ -693,15 +693,24 @@ func readLogFrom(path string, startLine int) string {
 	return string(data[offset:])
 }
 
-// skipTask defers the task in the bd backend so it is excluded from
-// future selection by bd ready.
-func skipTask(backend tasks.Backend, logger *logging.Logger, id, reason string) {
+// skipTask sets the task back to open in bd, records the reason as a
+// comment, and adds the ID to both the backend's in-memory skip set
+// and the state.json skipped_tasks list so it stays excluded from
+// future selection.
+func skipTask(backend tasks.Backend, st *state.Store, logger *logging.Logger, id, reason string) {
 	if id == "" {
 		return
 	}
 	logger.Warn("beads", "Skipping task %s: %s", id, reason)
 	if err := backend.SkipTask(id, reason); err != nil {
-		logger.Warn("beads", "Failed to defer task %s in backend: %v", id, err)
+		logger.Warn("beads", "Failed to skip task %s in backend: %v", id, err)
+	}
+	if st != nil {
+		if err := st.AddSkippedTask(id); err != nil {
+			logger.Warn("beads", "Failed to persist skip for %s: %v", id, err)
+		}
+		skipped, _ := st.GetSkippedTasks()
+		backend.SetSkippedIDs(skipped)
 	}
 }
 

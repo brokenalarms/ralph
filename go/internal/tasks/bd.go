@@ -27,6 +27,14 @@ type BD struct {
 	PromptsDir string
 	RunBD      CommandRunner // injectable for testing; nil uses defaultRunBD
 	bdPath     string        // resolved absolute path to the bd binary
+	skippedIDs map[string]bool
+}
+
+func (b *BD) SetSkippedIDs(ids []string) {
+	b.skippedIDs = make(map[string]bool, len(ids))
+	for _, id := range ids {
+		b.skippedIDs[id] = true
+	}
 }
 
 func (b *BD) ctx() context.Context {
@@ -239,12 +247,12 @@ func (b *BD) getNextIssue() (bdIssue, error) {
 
 	out, err := run(ctx, b.ProjectDir, "list", "--status", "in_progress", "--flat", "--json")
 	if err == nil {
-		inProgress, hasIP = bestIssue(out)
+		inProgress, hasIP = bestIssue(out, b.skippedIDs)
 	}
 
 	out, err = run(ctx, b.ProjectDir, "ready", "--json")
 	if err == nil {
-		ready, hasReady = bestIssue(out)
+		ready, hasReady = bestIssue(out, b.skippedIDs)
 	}
 
 	if hasIP && hasReady {
@@ -300,8 +308,9 @@ func parseFirstIssue(jsonStr string) (bdIssue, bool) {
 
 // bestIssue parses all issues from JSON and returns the one with the
 // highest priority (lowest number), breaking ties by type rank
-// (bug < task < feature/enhancement).
-func bestIssue(jsonStr string) (bdIssue, bool) {
+// (bug < task < feature/enhancement). Issues whose ID appears in skip
+// are excluded from selection.
+func bestIssue(jsonStr string, skip map[string]bool) (bdIssue, bool) {
 	var issues []bdIssue
 	if err := json.Unmarshal([]byte(jsonStr), &issues); err != nil || len(issues) == 0 {
 		return bdIssue{}, false
@@ -310,6 +319,9 @@ func bestIssue(jsonStr string) (bdIssue, bool) {
 	best := -1
 	for i, issue := range issues {
 		if issue.ID == "" && issue.Title == "" {
+			continue
+		}
+		if skip[issue.ID] {
 			continue
 		}
 		if best == -1 {
@@ -417,7 +429,7 @@ func (b *BD) SkipTask(id string, reason string) error {
 	if id == "" {
 		return nil
 	}
-	if _, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status", "deferred", "--defer", "+1h"); err != nil {
+	if _, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status=open"); err != nil {
 		return err
 	}
 	if reason != "" {

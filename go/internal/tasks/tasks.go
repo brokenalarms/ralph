@@ -23,7 +23,7 @@ type Backend interface {
 	CountRemaining() (int, error)
 
 	// CountTotal returns the number of actionable tasks (remaining + completed),
-	// excluding deferred or otherwise non-actionable items.
+	// excluding skipped or otherwise non-actionable items.
 	CountTotal() (int, error)
 
 	// GetNextTask returns the description of the next task to work on.
@@ -45,8 +45,14 @@ type Backend interface {
 	// CloseTask marks a task as complete.
 	CloseTask(id string, reason string) error
 
-	// SkipTask marks a task as blocked/skipped with a reason.
+	// SkipTask marks a task as skipped — sets status back to open and
+	// adds the reason as a bd comment. The skip is tracked in state.json,
+	// not in the bd backend.
 	SkipTask(id string, reason string) error
+
+	// SetSkippedIDs configures the set of task IDs to exclude from
+	// GetNextTask/HasRemaining queries. Loaded from state.json on startup.
+	SetSkippedIDs(ids []string)
 
 	// ReopenTask sets an in-progress task back to open status so it
 	// returns to the ready queue.

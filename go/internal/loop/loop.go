@@ -132,7 +132,7 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 		QueryFn:     l.queryFunc(),
 		LLMVerify:   verify.LLMVerifyPR,
 		SkipTask: func(id, reason string) {
-			skipTask(l.cfg.TaskBackend, l.logger, id, reason)
+			skipTask(l.cfg.TaskBackend, l.state, l.logger, id, reason)
 		},
 	})
 	return l
@@ -154,6 +154,11 @@ func (l *Loop) Run(ctx context.Context) error {
 		return fmt.Errorf("rate limiter init: %w", err)
 	}
 	l.state.WriteConfig(l.cfg.MaxIterations)
+
+	if skipped, err := l.state.GetSkippedTasks(); err == nil && len(skipped) > 0 {
+		l.cfg.TaskBackend.SetSkippedIDs(skipped)
+		l.logger.Log("beads", "Loaded %d skipped tasks from state", len(skipped))
+	}
 
 	var runIteration int
 	st, _ := l.state.Load()
