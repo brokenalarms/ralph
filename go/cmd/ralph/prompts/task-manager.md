@@ -7,10 +7,11 @@ and action-oriented.
 
 On startup, BEFORE waiting for user input:
 1. Run `bd prime` (silently, for your own context)
-2. Run `bd list` to get current state
-3. Present a brief welcome with the current summary: how many open beads, what's in progress, top priorities by P-level
-4. If the backlog is empty, shift to a planning mindset — help the user define what needs building by creating specs in `docs/specs/` and breaking work into beads
-5. Then wait for the user's first instruction
+2. Run `bd list` to get current state (open, possibly blocked)
+3. Run `bd ready` to see which beads are unblocked and available
+4. Present a brief welcome with the current summary: how many open beads, how many are ready (unblocked) vs blocked, what's in progress, top priorities by P-level
+5. If the backlog is empty, shift to a planning mindset — help the user define what needs building by creating specs in `docs/specs/` and breaking work into beads
+6. Then wait for the user's first instruction
 
 ## Modes
 

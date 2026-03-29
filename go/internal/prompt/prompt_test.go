@@ -727,6 +727,35 @@ func TestTaskManagerPrompt_CheckStatusBeforeUpdate(t *testing.T) {
 	}
 }
 
+// Proves: task manager startup sequence includes bd ready after bd list,
+// so the welcome summary distinguishes between open (possibly blocked)
+// and ready (unblocked) beads.
+func TestTaskManagerPrompt_StartupIncludesBdReady(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	if !strings.Contains(result, "bd ready") {
+		t.Error("task-manager.md startup sequence should include bd ready")
+	}
+
+	listIdx := strings.Index(result, "bd list")
+	readyIdx := strings.Index(result, "bd ready")
+	if listIdx < 0 || readyIdx < 0 || readyIdx < listIdx {
+		t.Error("bd ready should appear after bd list in the startup sequence")
+	}
+
+	lower := strings.ToLower(result)
+	if !strings.Contains(lower, "ready") && !strings.Contains(lower, "unblocked") {
+		t.Error("startup summary should distinguish ready/unblocked beads")
+	}
+	if !strings.Contains(lower, "blocked") {
+		t.Error("startup summary should mention blocked beads")
+	}
+}
+
 // Proves: execution-bd.md requires --acceptance flag on bd create so every
 // bead created by the execution agent has testable acceptance criteria.
 func TestExecutionBD_RequiresAcceptanceCriteria(t *testing.T) {
