@@ -5502,8 +5502,8 @@ func (r *rateLimitStubRunner) StopStreaming() {}
 
 func (r *rateLimitStubRunner) InjectMessage(_ string) error { return nil }
 
-// Health dashboard is logged between iterations so operators can detect
-// process leaks, stale signal files, and growing state.json.
+// Health dashboard is logged between iterations in verbose mode so operators
+// can detect process leaks, stale signal files, and growing state.json.
 func TestLoop_HealthDashboardLoggedBetweenIterations(t *testing.T) {
 	project, _ := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
@@ -5547,6 +5547,7 @@ func TestLoop_HealthDashboardLoggedBetweenIterations(t *testing.T) {
 		MaxIterations: 3,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
+		Verbose:       true,
 	}, st, gm, logger)
 
 	l.runner = &stubRunner{
@@ -5573,6 +5574,71 @@ func TestLoop_HealthDashboardLoggedBetweenIterations(t *testing.T) {
 	}
 	if !strings.Contains(output, "branch:") {
 		t.Error("expected 'branch:' in health log")
+	}
+}
+
+// Health dashboard is suppressed in default (non-verbose) mode to reduce
+// diagnostic noise — only shown when --verbose is set.
+func TestLoop_HealthDashboardHiddenByDefault(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	os.WriteFile(filepath.Join(ralphDir, ".signal_current_task"), []byte("test task"), 0o644)
+
+	callCount := 0
+	backend := &mutableBackend{
+		remaining: 1,
+		total:     2,
+		nextTask:  "First task",
+		nextID:    "ralph-h1",
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 3,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Verbose:       false,
+	}, st, gm, logger)
+
+	l.runner = &stubRunner{
+		onRun: func() {
+			callCount++
+			if callCount >= 2 {
+				os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
+			}
+		},
+	}
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+
+	if strings.Contains(output, "[health]") {
+		t.Error("health log should not appear in default (non-verbose) mode")
 	}
 }
 
