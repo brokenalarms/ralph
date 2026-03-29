@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -48,29 +50,36 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 		if len(sub.Args) > 0 && sub.Args[0] == "unskip" {
 			return handleUnskip(log)
 		}
-		feedbackFile := fmt.Sprintf("%s/feedback", ralphDir)
 		if len(sub.Args) == 0 {
-			data, err := os.ReadFile(feedbackFile)
-			if err == nil && len(data) > 0 {
-				log.Log("", "Queued feedback:")
-				fmt.Print(string(data))
-			} else {
-				log.Log("", "No feedback queued.")
-			}
+			log.Log("", "Usage: ralph feedback <message>")
 			return 0
 		}
-		msg := strings.Join(sub.Args, " ") + "\n"
-		f, err := os.OpenFile(feedbackFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		msg := strings.Join(sub.Args, " ")
+
+		st := filepath.Join(ralphDir, "state.json")
+		taskID := readTaskIDFromState(st)
+		if taskID == "" {
+			log.Error("", "No active task — is ralph running?")
+			return 1
+		}
+
+		bdBin, err := findBD()
 		if err != nil {
-			log.Error("", "Failed to write feedback: %v", err)
+			log.Error("", "bd not found: %v", err)
 			return 1
 		}
-		defer f.Close()
-		if _, err := f.WriteString(msg); err != nil {
-			log.Error("", "Failed to write feedback: %v", err)
+		bdCmd := appendNotesBD(bdBin, sub.Dir, taskID, msg)
+		if out, err := bdCmd.CombinedOutput(); err != nil {
+			log.Error("", "Failed to append notes: %s", strings.TrimSpace(string(out)))
 			return 1
 		}
-		log.Success("", "Feedback sent — agent will pick it up on next tool call.")
+
+		feedbackSignal := filepath.Join(ralphDir, "feedback")
+		if err := os.WriteFile(feedbackSignal, nil, 0o644); err != nil {
+			log.Error("", "Failed to write feedback signal: %v", err)
+			return 1
+		}
+		log.Success("", "Feedback sent — agent will restart with updated bead notes.")
 		return 0
 
 	case "command":
@@ -342,8 +351,7 @@ func printLoopUsage() {
 	fmt.Printf("%sOPTIONS:%s\n%s\n", logging.Bold, logging.Reset, config.FlagUsage())
 	fmt.Printf(`%sWHILE RUNNING:%s
   ralph stop                 Halt the loop after the current iteration
-  ralph feedback             Show queued feedback for the loop
-  ralph feedback [message]   Queue a message to the loop in progress
+  ralph feedback [message]   Send feedback to the agent (appends to bead notes)
   ralph feedback unskip      Show how to undefer skipped tasks in bd
 
 %sEXAMPLES:%s
@@ -354,4 +362,43 @@ func printLoopUsage() {
 		logging.Bold, logging.Reset,
 		logging.Bold, logging.Reset,
 	)
+}
+
+func readTaskIDFromState(statePath string) string {
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		return ""
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(data, &raw) != nil {
+		return ""
+	}
+	v, ok := raw["last_task_id"]
+	if !ok {
+		return ""
+	}
+	var id string
+	if json.Unmarshal(v, &id) != nil {
+		return ""
+	}
+	return id
+}
+
+func findBD() (string, error) {
+	if p, err := exec.LookPath("bd"); err == nil {
+		return p, nil
+	}
+	if home, _ := os.UserHomeDir(); home != "" {
+		p := filepath.Join(home, ".local", "bin", "bd")
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("bd binary not found")
+}
+
+func appendNotesBD(bdBin, projectDir, taskID, msg string) *exec.Cmd {
+	cmd := exec.Command(bdBin, "update", taskID, "--append-notes", msg)
+	cmd.Dir = projectDir
+	return cmd
 }

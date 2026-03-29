@@ -81,6 +81,9 @@ type Backend interface {
 	// SetExternalRef sets the external reference on a task (e.g. "gh-123" for PR #123).
 	SetExternalRef(id, ref string) error
 
+	// AppendNotes appends a message to the task's notes field.
+	AppendNotes(id, msg string) error
+
 	// SetMetadata sets a custom metadata key-value pair on a task.
 	SetMetadata(id, key, value string) error
 

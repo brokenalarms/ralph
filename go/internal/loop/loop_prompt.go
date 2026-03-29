@@ -92,19 +92,6 @@ func (l *Loop) buildAttemptContext(taskID, taskName string) string {
 	return strings.Join(parts, "\n")
 }
 
-func readFeedback(ralphDir string) string {
-	feedbackFile := filepath.Join(ralphDir, "feedback")
-	data, err := os.ReadFile(feedbackFile)
-	if err != nil || len(data) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
-
-func clearFeedback(ralphDir string) {
-	os.Remove(filepath.Join(ralphDir, "feedback"))
-}
-
 // readReflection returns the content of a previous reflection file for a task.
 // Uses task ID if available, falls back to slugified task name.
 func readReflection(ralphDir, taskID, taskName string) string {

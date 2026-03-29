@@ -323,9 +323,10 @@ func TestInjectMessage_WritesToPipe(t *testing.T) {
 	}
 }
 
-// Verifies that feedback is injected via stdin instead of killing the agent,
-// keeping the agent alive with full context of its current work.
-func TestPoll_FeedbackInjectedViaStdin(t *testing.T) {
+// Verifies that when a feedback signal file exists, the agent is killed
+// and FeedbackKill is returned so the orchestrator can restart it.
+// Content is already on the bead — the file is a signal only.
+func TestPoll_FeedbackSignalKillsAgent(t *testing.T) {
 	dir := t.TempDir()
 	rawLog := filepath.Join(dir, "raw.log")
 	signals := DefaultSignalPaths(dir)
@@ -334,75 +335,8 @@ func TestPoll_FeedbackInjectedViaStdin(t *testing.T) {
 	log := &testLogger{}
 	runner := Runner{Logger: log}
 
-	// Set up a pipe so InjectMessage works.
-	pr, pw, _ := os.Pipe()
-	defer pr.Close()
-	runner.stdinPipe = pw
-
-	// Write feedback that should be injected (not cause a kill).
-	os.WriteFile(feedbackFile, []byte("please fix the tests"), 0o644)
-
-	// Write completion signal after a delay so the poll can detect
-	// feedback first, then detect completion.
-	go func() {
-		time.Sleep(400 * time.Millisecond)
-		tmp := signals.Complete + ".tmp"
-		os.WriteFile(tmp, []byte("done"), 0o644)
-		os.Rename(tmp, signals.Complete)
-	}()
-
-	cfg := RunConfig{
-		WorkDir:      dir,
-		RalphDir:     dir,
-		Prompt:       "test",
-		RawLog:       rawLog,
-		Quiet:        true,
-		Signals:      signals,
-		PollInterval: 100 * time.Millisecond,
-		FeedbackFile: feedbackFile,
-	}
-
-	result := runWithCommand(t, &runner, cfg, "sleep", "10")
-
-	// Agent should NOT have been killed for feedback.
-	if result.FeedbackKill {
-		t.Error("expected feedback to be injected, not kill the agent")
-	}
-	// Signal should still be detected after feedback injection.
-	if !result.SignalDetected {
-		t.Error("expected signal to be detected after feedback injection")
-	}
-	// Feedback file should be removed.
-	if _, err := os.Stat(feedbackFile); !os.IsNotExist(err) {
-		t.Error("feedback file should be removed after injection")
-	}
-	// Check that feedback was written to the pipe.
-	pw.Close()
-	buf := make([]byte, 4096)
-	n, _ := pr.Read(buf)
-	pipeContent := string(buf[:n])
-	if !strings.Contains(pipeContent, "please fix the tests") {
-		t.Errorf("expected feedback in pipe content, got: %q", pipeContent)
-	}
-}
-
-// Verifies that when stdin injection fails (broken pipe), the agent is
-// killed and FeedbackKill is returned — the fallback to the old behavior.
-func TestPoll_FeedbackFallsBackToKillOnBrokenPipe(t *testing.T) {
-	dir := t.TempDir()
-	rawLog := filepath.Join(dir, "raw.log")
-	signals := DefaultSignalPaths(dir)
-	feedbackFile := filepath.Join(dir, "feedback")
-
-	log := &testLogger{}
-	runner := Runner{Logger: log}
-
-	// Create and immediately close the write end so injection fails.
-	_, pw, _ := os.Pipe()
-	pw.Close()
-	runner.stdinPipe = pw
-
-	os.WriteFile(feedbackFile, []byte("fix this"), 0o644)
+	// Empty file — signal only, no content.
+	os.WriteFile(feedbackFile, nil, 0o644)
 
 	cfg := RunConfig{
 		WorkDir:      dir,
@@ -418,10 +352,11 @@ func TestPoll_FeedbackFallsBackToKillOnBrokenPipe(t *testing.T) {
 	result := runWithCommand(t, &runner, cfg, "sleep", "10")
 
 	if !result.FeedbackKill {
-		t.Error("expected FeedbackKill when stdin injection fails")
+		t.Error("expected FeedbackKill when feedback signal file exists")
 	}
-	if result.FeedbackContent != "fix this" {
-		t.Errorf("FeedbackContent = %q, want %q", result.FeedbackContent, "fix this")
+	// Feedback file should be removed after detection.
+	if _, err := os.Stat(feedbackFile); !os.IsNotExist(err) {
+		t.Error("feedback signal file should be removed after detection")
 	}
 }
 

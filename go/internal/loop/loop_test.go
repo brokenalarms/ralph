@@ -105,6 +105,7 @@ func (m *mutableBackend) GetExternalRef(id string) (string, error) {
 	return "", nil
 }
 func (m *mutableBackend) SetExternalRef(_, _ string) error       { return nil }
+func (m *mutableBackend) AppendNotes(_, _ string) error          { return nil }
 func (m *mutableBackend) SetMetadata(_, _, _ string) error         { return nil }
 func (m *mutableBackend) GetMetadata(id, key string) (string, error) {
 	m.mu.Lock()
@@ -144,6 +145,7 @@ func (s *stubBackend) GetFullContext(_ string) (string, error)  { return s.fullC
 func (s *stubBackend) ProjectContext() (string, error)          { return "", nil }
 func (s *stubBackend) GetExternalRef(_ string) (string, error) { return "", nil }
 func (s *stubBackend) SetExternalRef(_, _ string) error       { return nil }
+func (s *stubBackend) AppendNotes(_, _ string) error          { return nil }
 func (s *stubBackend) SetMetadata(_, _, _ string) error         { return nil }
 func (s *stubBackend) GetMetadata(_, _ string) (string, error)  { return "", nil }
 func (s *stubBackend) Label() string {
@@ -445,37 +447,6 @@ func TestLoop_WriteRunBranch_Default(t *testing.T) {
 	}
 	if string(data) != "ralph" {
 		t.Errorf("expected 'ralph', got %q", string(data))
-	}
-}
-
-// readFeedback is a standalone function — reads file without clearing it.
-func TestLoop_FeedbackRead(t *testing.T) {
-	dir := t.TempDir()
-	ralphDir := filepath.Join(dir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-
-	feedbackFile := filepath.Join(ralphDir, "feedback")
-	os.WriteFile(feedbackFile, []byte("please fix the tests"), 0o644)
-
-	got := readFeedback(ralphDir)
-	if got != "please fix the tests" {
-		t.Errorf("expected feedback content, got %q", got)
-	}
-
-	if _, err := os.Stat(feedbackFile); err != nil {
-		t.Error("feedback file should persist after read — agent clears it")
-	}
-}
-
-// readFeedback returns empty string when no file exists.
-func TestLoop_FeedbackReadEmpty(t *testing.T) {
-	dir := t.TempDir()
-	ralphDir := filepath.Join(dir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-
-	got := readFeedback(ralphDir)
-	if got != "" {
-		t.Errorf("expected empty feedback when file missing, got %q", got)
 	}
 }
 

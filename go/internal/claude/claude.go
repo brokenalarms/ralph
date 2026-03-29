@@ -93,7 +93,6 @@ type Result struct {
 	AllComplete        bool      // true if the all-complete signal was found
 	IdleTimeout        bool      // true if the session was killed due to idle timeout
 	FeedbackKill       bool      // true if killed because user feedback arrived
-	FeedbackContent    string    // the feedback that caused the kill
 	RateLimited        bool      // true if Claude reported hitting its usage limit
 	ResetAt            time.Time // when the rate limit resets (valid when RateLimited is true)
 	OnSignalUsed       bool      // true if OnSignal callback was used for verification
@@ -417,19 +416,14 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 			}
 
-			// Check for user feedback — inject via stdin pipe so the
-			// agent processes it with full context of its current work.
+			// Check for user feedback signal — content is already on the
+			// bead via bd update --append-notes, so just restart the agent.
 			if cfg.FeedbackFile != "" {
-				if data, err := os.ReadFile(cfg.FeedbackFile); err == nil && len(data) > 0 {
-					content := strings.TrimSpace(string(data))
+				if _, err := os.Stat(cfg.FeedbackFile); err == nil {
 					os.Remove(cfg.FeedbackFile)
-					if injectErr := r.InjectMessage("User feedback:\n\n" + content); injectErr != nil {
-						r.Logger.Warn("llm", "Stdin injection failed (%v) — killing agent to restart with feedback", injectErr)
-						gracefulKill(cmd, processDone)
-						return Result{FeedbackKill: true, FeedbackContent: content}
-					}
-					r.Logger.Log("llm", "User feedback injected via stdin")
-					continue
+					r.Logger.Log("llm", "Feedback signal detected — restarting agent")
+					gracefulKill(cmd, processDone)
+					return Result{FeedbackKill: true}
 				}
 			}
 
