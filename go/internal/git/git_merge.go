@@ -34,7 +34,12 @@ func (m *Manager) Push(ctx context.Context) error {
 		baseRef = baseBranch
 	}
 
-	baseSHA := m.gitOutput(m.WorkDir, "rev-parse", baseRef)
+	// Use merge-base to find where the branch diverged from base.
+	// This is stable even when base has moved forward since the branch was created.
+	baseSHA := m.gitOutput(m.WorkDir, "merge-base", baseRef, "HEAD")
+	if baseSHA == "" {
+		baseSHA = m.gitOutput(m.WorkDir, "rev-parse", baseRef)
+	}
 	if baseSHA != "" {
 		commitMsg := m.gitOutput(m.WorkDir, "log", "-1", "--format=%s")
 		if err := m.SquashToOneCommit(baseSHA, commitMsg); err != nil {
