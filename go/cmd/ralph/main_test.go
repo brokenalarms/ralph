@@ -857,3 +857,74 @@ func TestPrintSessionSummary_EmptyNoOutput(t *testing.T) {
 		t.Errorf("expected no output for empty session, got: %s", buf.String())
 	}
 }
+
+// Proves: postReviewCleanup clears completed_tasks from state.json, archives
+// reflections to reflections/archived/, clears attempt data for completed tasks,
+// and removes the .completed-tasks display file.
+func TestPostReviewCleanup(t *testing.T) {
+	ralphDir := filepath.Join(t.TempDir(), ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	// Set up state with completed tasks
+	st := state.NewStore(ralphDir)
+	st.AddCompletedTask("ralph-abc")
+	st.AddCompletedTask("ralph-def")
+
+	// Create reflection files
+	refDir := filepath.Join(ralphDir, "reflections")
+	os.MkdirAll(refDir, 0o755)
+	os.WriteFile(filepath.Join(refDir, "ralph-abc.md"), []byte("# Task ABC"), 0o644)
+	os.WriteFile(filepath.Join(refDir, "ralph-def.md"), []byte("# Task DEF"), 0o644)
+
+	// Create attempt files
+	attDir := filepath.Join(ralphDir, "attempts")
+	os.MkdirAll(attDir, 0o755)
+	os.WriteFile(filepath.Join(attDir, "ralph-abc.log"), []byte("### Attempt 1\n"), 0o644)
+	os.WriteFile(filepath.Join(attDir, "ralph-def.log"), []byte("### Attempt 1\n"), 0o644)
+	os.WriteFile(filepath.Join(attDir, "ralph-ghi.log"), []byte("### Attempt 1\n"), 0o644)
+
+	// Create .completed-tasks display file
+	os.WriteFile(filepath.Join(ralphDir, ".completed-tasks"), []byte("ralph-abc\nralph-def\n"), 0o644)
+
+	var buf strings.Builder
+	log := logging.NewWithWriter(&buf)
+
+	postReviewCleanup(ralphDir, log)
+
+	// AC1: completed_tasks cleared from state.json
+	tasks, err := st.GetCompletedTasks()
+	if err != nil {
+		t.Fatalf("GetCompletedTasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Errorf("expected 0 completed tasks, got %d", len(tasks))
+	}
+
+	// AC2: reflections archived
+	if _, err := os.Stat(filepath.Join(refDir, "ralph-abc.md")); !os.IsNotExist(err) {
+		t.Error("ralph-abc.md should be removed from reflections/")
+	}
+	if _, err := os.Stat(filepath.Join(refDir, "archived", "ralph-abc.md")); err != nil {
+		t.Error("ralph-abc.md should exist in reflections/archived/")
+	}
+	if _, err := os.Stat(filepath.Join(refDir, "archived", "ralph-def.md")); err != nil {
+		t.Error("ralph-def.md should exist in reflections/archived/")
+	}
+
+	// AC3: attempt data cleared for completed tasks
+	if _, err := os.Stat(filepath.Join(attDir, "ralph-abc.log")); !os.IsNotExist(err) {
+		t.Error("ralph-abc.log attempts should be cleared")
+	}
+	if _, err := os.Stat(filepath.Join(attDir, "ralph-def.log")); !os.IsNotExist(err) {
+		t.Error("ralph-def.log attempts should be cleared")
+	}
+	// Unrelated task's attempts should be preserved
+	if _, err := os.Stat(filepath.Join(attDir, "ralph-ghi.log")); err != nil {
+		t.Error("ralph-ghi.log should be preserved")
+	}
+
+	// .completed-tasks display file removed
+	if _, err := os.Stat(filepath.Join(ralphDir, ".completed-tasks")); !os.IsNotExist(err) {
+		t.Error(".completed-tasks should be removed")
+	}
+}
