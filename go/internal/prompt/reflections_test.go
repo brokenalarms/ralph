@@ -64,6 +64,60 @@ func TestReadReflections_SkipsNonMarkdown(t *testing.T) {
 	}
 }
 
+// Proves: ArchiveReflections moves .md files to reflections/archived/ and
+// returns the task IDs that were archived.
+func TestArchiveReflections_MovesFilesToArchived(t *testing.T) {
+	dir := t.TempDir()
+	refDir := filepath.Join(dir, "reflections")
+	os.MkdirAll(refDir, 0o755)
+
+	os.WriteFile(filepath.Join(refDir, "ralph-abc.md"), []byte("# Task ABC"), 0o644)
+	os.WriteFile(filepath.Join(refDir, "ralph-def.md"), []byte("# Task DEF"), 0o644)
+
+	archived, err := ArchiveReflections(dir)
+	if err != nil {
+		t.Fatalf("ArchiveReflections: %v", err)
+	}
+
+	if len(archived) != 2 {
+		t.Fatalf("expected 2 archived, got %d", len(archived))
+	}
+
+	// Source files should be gone
+	if _, err := os.Stat(filepath.Join(refDir, "ralph-abc.md")); !os.IsNotExist(err) {
+		t.Error("ralph-abc.md should be removed from reflections/")
+	}
+
+	// Archived files should exist
+	data, err := os.ReadFile(filepath.Join(refDir, "archived", "ralph-abc.md"))
+	if err != nil {
+		t.Fatal("ralph-abc.md should exist in archived/")
+	}
+	if string(data) != "# Task ABC" {
+		t.Error("archived content should be preserved")
+	}
+
+	// ReadReflections should return empty after archiving
+	result, err := ReadReflections(dir)
+	if err != nil {
+		t.Fatalf("ReadReflections: %v", err)
+	}
+	if result != "" {
+		t.Error("ReadReflections should return empty after archiving")
+	}
+}
+
+// Proves: ArchiveReflections is a no-op when no reflections directory exists.
+func TestArchiveReflections_NoopWhenEmpty(t *testing.T) {
+	archived, err := ArchiveReflections(t.TempDir())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(archived) != 0 {
+		t.Error("expected empty list for missing dir")
+	}
+}
+
 // Proves: BuildReviewPrompt includes the four post-mortem responsibilities
 // when reflections content is provided.
 func TestBuildReviewPrompt_PostMortemResponsibilities(t *testing.T) {

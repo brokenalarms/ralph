@@ -163,6 +163,13 @@ func (t *Tracker) Clear(taskID, taskName string) {
 	os.Remove(t.attemptFile(taskID, taskName))
 }
 
+// ClearForTasks removes attempt files for a list of task IDs.
+func (t *Tracker) ClearForTasks(taskIDs []string) {
+	for _, id := range taskIDs {
+		t.Clear(id, "")
+	}
+}
+
 const MaxMergeFailures = 3
 
 func (t *Tracker) mergeFailureFile(taskID string) string {

@@ -260,6 +260,26 @@ func TestRecordMergeFailure_EmptyTaskIDNoOp(t *testing.T) {
 	}
 }
 
+// Proves: ClearForTasks removes attempt files for multiple task IDs at once.
+func TestClearForTasks_RemovesMultiple(t *testing.T) {
+	tr := newTestTracker(t)
+	tr.Record("ralph-abc", "", "try 1", "", "continue")
+	tr.Record("ralph-def", "", "try 1", "", "continue")
+	tr.Record("ralph-ghi", "", "try 1", "", "continue")
+
+	tr.ClearForTasks([]string{"ralph-abc", "ralph-def"})
+
+	if tr.Read("ralph-abc", "") != "" {
+		t.Error("ralph-abc attempts should be cleared")
+	}
+	if tr.Read("ralph-def", "") != "" {
+		t.Error("ralph-def attempts should be cleared")
+	}
+	if tr.Read("ralph-ghi", "") == "" {
+		t.Error("ralph-ghi attempts should be preserved")
+	}
+}
+
 // Proves: clear removes the attempt file so re-attempts start fresh
 // after resolution.
 func TestClear_RemovesAttemptFile(t *testing.T) {
