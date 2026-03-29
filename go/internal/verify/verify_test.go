@@ -256,6 +256,40 @@ func TestLastNLines_ShortInput(t *testing.T) {
 	}
 }
 
+// filterFailures strips passing "ok" package lines from go test output,
+// keeping only FAIL lines and error details visible in compile check logs.
+func TestFilterFailures(t *testing.T) {
+	input := strings.Join([]string{
+		"ok \tgithub.com/example/pkg1\t0.003s",
+		"ok \tgithub.com/example/pkg2\t0.001s",
+		"FAIL\tgithub.com/example/pkg3 [build failed]",
+		"# github.com/example/pkg3",
+		"./broken.go:5:2: undefined: missing",
+		"ok \tgithub.com/example/pkg4\t0.002s",
+		"FAIL",
+	}, "\n")
+
+	got := filterFailures(input)
+	if strings.Contains(got, "ok \t") {
+		t.Errorf("expected passing packages removed, got: %q", got)
+	}
+	if !strings.Contains(got, "FAIL\tgithub.com/example/pkg3") {
+		t.Error("expected FAIL line preserved")
+	}
+	if !strings.Contains(got, "undefined: missing") {
+		t.Error("expected error detail preserved")
+	}
+}
+
+// filterFailures returns input unchanged when there are no passing packages.
+func TestFilterFailures_NoPassingLines(t *testing.T) {
+	input := "FAIL\tpkg [build failed]\n# pkg\n./x.go:1: error"
+	got := filterFailures(input)
+	if got != input {
+		t.Errorf("expected unchanged output, got: %q", got)
+	}
+}
+
 // PreflightChecks detects when files changed and new commits exist,
 // confirming the orchestrator can verify work was done before running
 // the full test suite.
@@ -518,6 +552,34 @@ func TestCompileCheck_BrokenStub(t *testing.T) {
 	}
 	if !strings.Contains(result.Reason, "compile check failed") {
 		t.Errorf("expected compile-related reason, got: %s", result.Reason)
+	}
+}
+
+// CompileCheck strips passing "ok" package lines from failure output so only
+// the broken package details appear in logs.
+func TestCompileCheck_FiltersPassingPackages(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644)
+	// good package compiles fine
+	goodDir := filepath.Join(dir, "good")
+	os.MkdirAll(goodDir, 0o755)
+	os.WriteFile(filepath.Join(goodDir, "good.go"), []byte("package good\n"), 0o644)
+	os.WriteFile(filepath.Join(goodDir, "good_test.go"), []byte("package good\nimport \"testing\"\nfunc TestOk(t *testing.T) {}\n"), 0o644)
+	// bad package has compile error
+	badDir := filepath.Join(dir, "bad")
+	os.MkdirAll(badDir, 0o755)
+	os.WriteFile(filepath.Join(badDir, "bad.go"), []byte("package bad\n"), 0o644)
+	os.WriteFile(filepath.Join(badDir, "bad_test.go"), []byte("package bad\nimport \"testing\"\nfunc TestBad(t *testing.T) { undefined() }\n"), 0o644)
+
+	result := CompileCheck(context.Background(), dir)
+	if result.Passed {
+		t.Fatal("expected compile check to fail")
+	}
+	if strings.Contains(result.Details, "ok \t") {
+		t.Errorf("expected passing packages filtered from details, got:\n%s", result.Details)
+	}
+	if !strings.Contains(result.Details, "FAIL") {
+		t.Errorf("expected FAIL line in details, got:\n%s", result.Details)
 	}
 }
 
