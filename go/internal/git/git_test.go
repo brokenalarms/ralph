@@ -148,6 +148,52 @@ func TestBranchIsAncestorOfMain(t *testing.T) {
 	}
 }
 
+// BranchIsAheadOfMain returns true only when the branch is cleanly ahead
+// (main is an ancestor). Diverged and landed branches return false.
+func TestBranchIsAheadOfMain(t *testing.T) {
+	project, _ := initBareRepo(t)
+	mgr := &Manager{
+		ProjectDir: project,
+		WorkDir:    project,
+		Logger:     &testLog{},
+	}
+
+	// Branch with work ahead of main — should return true.
+	run(t, "git", "-C", project, "checkout", "-b", "ahead-branch")
+	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "ahead work")
+	run(t, "git", "-C", project, "push", "-u", "origin", "ahead-branch")
+	run(t, "git", "-C", project, "checkout", "main")
+
+	if !mgr.BranchIsAheadOfMain("ahead-branch") {
+		t.Error("ahead-branch is cleanly ahead of main, should return true")
+	}
+
+	// Merge the branch, then advance main past it — branch is now behind.
+	run(t, "git", "-C", project, "merge", "ahead-branch")
+	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "main moves ahead")
+	run(t, "git", "-C", project, "push", "origin", "main")
+
+	if mgr.BranchIsAheadOfMain("ahead-branch") {
+		t.Error("ahead-branch is behind main (landed), should return false")
+	}
+
+	// Diverged branch: branch and main both have commits the other doesn't.
+	run(t, "git", "-C", project, "checkout", "-b", "diverged-branch")
+	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "diverged work")
+	run(t, "git", "-C", project, "push", "-u", "origin", "diverged-branch")
+	run(t, "git", "-C", project, "checkout", "main")
+	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "main diverges")
+	run(t, "git", "-C", project, "push", "origin", "main")
+
+	if mgr.BranchIsAheadOfMain("diverged-branch") {
+		t.Error("diverged-branch has diverged from main, should return false")
+	}
+
+	if mgr.BranchIsAheadOfMain("no-such-branch") {
+		t.Error("non-existent branch should return false")
+	}
+}
+
 // BranchName returns a canonical branch name from beadID and slug
 func TestBranchName(t *testing.T) {
 	// With bead ID: ralph/<beadID>-<slug>

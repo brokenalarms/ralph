@@ -195,6 +195,16 @@ func (m *Manager) BranchIsAncestorOfMain(branch string) bool {
 	return m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", remote, "origin/"+defaultBranch) == nil
 }
 
+// BranchIsAheadOfMain returns true if origin's default branch is an
+// ancestor of the remote branch — meaning the branch is cleanly ahead
+// of main with unmerged work. Returns false for landed branches (equal
+// to or behind main) and diverged branches (neither is ancestor).
+func (m *Manager) BranchIsAheadOfMain(branch string) bool {
+	defaultBranch := m.detectDefaultBranch()
+	remote := "origin/" + branch
+	return m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, remote) == nil
+}
+
 func (m *Manager) mRebaseInProgress() bool {
 	gitDir := m.gitOutput(m.WorkDir, "rev-parse", "--git-dir")
 	if gitDir == "" {

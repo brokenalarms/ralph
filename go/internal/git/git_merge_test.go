@@ -1304,3 +1304,77 @@ func TestPush_AfterFixAgent(t *testing.T) {
 		}
 	}
 }
+
+// Push in a stacked branch: child branch (bar) stacks on parent (foo).
+// Squash must only collapse bar's commits, not foo's. The result: foo has
+// 1 commit ahead of main, bar has 1 commit ahead of foo, and GitHub sees
+// a diff between them (PR creation would succeed).
+func TestPush_StackedBranch_PreservesParent(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+
+	// Create parent branch (foo) with 1 commit, push it.
+	fooDir := filepath.Join(t.TempDir(), "foo-wt")
+	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/foo", fooDir)
+	writeFile(t, fooDir, "foo.go", "package foo\n")
+	run(t, "git", "-C", fooDir, "add", "-A")
+	run(t, "git", "-C", fooDir, "commit", "-m", "foo work")
+
+	fooMgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        fooDir,
+		WorktreeBranch: "ralph/foo",
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+	if err := fooMgr.Push(context.Background()); err != nil {
+		t.Fatalf("foo Push failed: %v", err)
+	}
+
+	// Create child branch (bar) from foo, add 2 commits.
+	barDir := filepath.Join(t.TempDir(), "bar-wt")
+	run(t, "git", "-C", project, "fetch", "origin", "ralph/foo")
+	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/bar", barDir, "origin/ralph/foo")
+	writeFile(t, barDir, "bar1.go", "package bar1\n")
+	run(t, "git", "-C", barDir, "add", "-A")
+	run(t, "git", "-C", barDir, "commit", "-m", "bar work 1")
+	writeFile(t, barDir, "bar2.go", "package bar2\n")
+	run(t, "git", "-C", barDir, "add", "-A")
+	run(t, "git", "-C", barDir, "commit", "-m", "bar work 2")
+
+	barMgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        barDir,
+		WorktreeBranch: "ralph/bar",
+		PrevBranch:     "ralph/foo",
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+	if err := barMgr.Push(context.Background()); err != nil {
+		t.Fatalf("bar Push failed: %v", err)
+	}
+
+	// foo should have exactly 1 commit ahead of main.
+	fooCount := strings.TrimSpace(cmdOutput(t, "git", "-C", bare, "rev-list", "--count", "main..ralph/foo"))
+	if fooCount != "1" {
+		t.Errorf("foo: expected 1 commit ahead of main, got %s", fooCount)
+	}
+
+	// bar should have exactly 1 commit ahead of foo.
+	barAheadOfFoo := strings.TrimSpace(cmdOutput(t, "git", "-C", bare, "rev-list", "--count", "ralph/foo..ralph/bar"))
+	if barAheadOfFoo != "1" {
+		t.Errorf("bar: expected 1 commit ahead of foo, got %s", barAheadOfFoo)
+	}
+
+	// bar should have exactly 2 commits ahead of main (foo's 1 + bar's 1).
+	barAheadOfMain := strings.TrimSpace(cmdOutput(t, "git", "-C", bare, "rev-list", "--count", "main..ralph/bar"))
+	if barAheadOfMain != "2" {
+		t.Errorf("bar: expected 2 commits ahead of main, got %s", barAheadOfMain)
+	}
+
+	// bar's files should include both foo's and bar's work.
+	for _, file := range []string{"foo.go", "bar1.go", "bar2.go"} {
+		if cmdOutput(t, "git", "-C", bare, "show", "ralph/bar:"+file) == "" {
+			t.Errorf("expected %s on remote bar branch", file)
+		}
+	}
+}

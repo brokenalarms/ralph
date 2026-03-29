@@ -592,7 +592,8 @@ func (l *Loop) setStackHead() {
 		if !l.git.RemoteBranchHasCommits(branch) {
 			continue
 		}
-		if l.git.BranchIsAncestorOfMain(branch) {
+		if !l.git.BranchIsAheadOfMain(branch) {
+			l.logger.Log("git", "Branch %s not ahead of main — skipping", branch)
 			continue
 		}
 		l.git.SetPrevBranch(branch)

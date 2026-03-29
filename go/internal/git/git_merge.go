@@ -34,16 +34,26 @@ func (m *Manager) Push(ctx context.Context) error {
 		baseRef = baseBranch
 	}
 
-	// Use merge-base to find where the branch diverged from base.
-	// This is stable even when base has moved forward since the branch was created.
-	baseSHA := m.gitOutput(m.WorkDir, "merge-base", baseRef, "HEAD")
-	if baseSHA == "" {
-		baseSHA = m.gitOutput(m.WorkDir, "rev-parse", baseRef)
-	}
+	// Squash only commits ahead of the parent branch tip. Using rev-parse
+	// (not merge-base) preserves the ancestry link so each stacked PR is
+	// exactly one commit ahead of its parent — GitHub merge is a clean no-op.
+	baseSHA := m.gitOutput(m.WorkDir, "rev-parse", baseRef)
 	if baseSHA != "" {
-		commitMsg := m.gitOutput(m.WorkDir, "log", "-1", "--format=%s")
-		if err := m.SquashToOneCommit(baseSHA, commitMsg); err != nil {
-			m.Logger.Warn("git", "Squash: %v", err)
+		// Verify parent tip is an ancestor of HEAD. If not, the branch
+		// diverged from its parent (e.g. parent was squash-pushed since
+		// this branch was created) and needs rebasing first.
+		if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", baseSHA, "HEAD") != nil {
+			m.Logger.Log("git", "Branch diverged from %s — rebasing before push", baseBranch)
+			if err := m.EnsureUpToDate(ctx); err != nil {
+				m.Logger.Warn("git", "Rebase before push failed: %v", err)
+			}
+			baseSHA = m.gitOutput(m.WorkDir, "rev-parse", baseRef)
+		}
+		if baseSHA != "" {
+			commitMsg := m.gitOutput(m.WorkDir, "log", "-1", "--format=%s")
+			if err := m.SquashToOneCommit(baseSHA, commitMsg); err != nil {
+				m.Logger.Warn("git", "Squash: %v", err)
+			}
 		}
 	}
 
