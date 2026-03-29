@@ -27,6 +27,12 @@ func (m *Manager) Push(ctx context.Context) error {
 		return nil
 	}
 
+	if m.PrePush != nil {
+		if err := m.PrePush(ctx); err != nil {
+			return fmt.Errorf("pre-push check failed: %w", err)
+		}
+	}
+
 	baseBranch := m.resolveBaseBranch()
 	_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", baseBranch)
 	baseRef := "origin/" + baseBranch

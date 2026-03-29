@@ -40,6 +40,7 @@ type Manager struct {
 	Runner         Runner
 	State          StateStore
 	Logger         Log
+	PrePush        func(ctx context.Context) error
 }
 
 // GH returns the GitHub interface, using the injected stub if set (tests)

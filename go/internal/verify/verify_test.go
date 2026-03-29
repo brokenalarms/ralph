@@ -490,6 +490,92 @@ func TestModelShortName(t *testing.T) {
 	}
 }
 
+// CompileCheck passes when all Go packages compile, ensuring interface
+// stubs across every test package are up to date before pushing.
+func TestCompileCheck_PassingProject(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "main_test.go"), []byte("package main\nimport \"testing\"\nfunc TestNoop(t *testing.T) {}\n"), 0o644)
+
+	result := CompileCheck(context.Background(), dir)
+	if !result.Passed {
+		t.Errorf("expected compile check to pass, got: %s\n%s", result.Reason, result.Details)
+	}
+}
+
+// CompileCheck fails when a test file has a compilation error, catching
+// the exact scenario where an interface method is added but a stub is missing.
+func TestCompileCheck_BrokenStub(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "main_test.go"), []byte("package main\nimport \"testing\"\nfunc TestBroken(t *testing.T) { undefined() }\n"), 0o644)
+
+	result := CompileCheck(context.Background(), dir)
+	if result.Passed {
+		t.Error("expected compile check to fail for broken test file")
+	}
+	if !strings.Contains(result.Reason, "compile check failed") {
+		t.Errorf("expected compile-related reason, got: %s", result.Reason)
+	}
+}
+
+// CompileCheck finds go.mod in a go/ subdirectory, matching ralph's project
+// layout where the Go module lives under go/ rather than the repo root.
+func TestCompileCheck_GoSubdirectory(t *testing.T) {
+	dir := t.TempDir()
+	goDir := filepath.Join(dir, "go")
+	os.MkdirAll(goDir, 0o755)
+	os.WriteFile(filepath.Join(goDir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644)
+	os.WriteFile(filepath.Join(goDir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644)
+
+	result := CompileCheck(context.Background(), dir)
+	if !result.Passed {
+		t.Errorf("expected compile check to pass with go/ subdir, got: %s\n%s", result.Reason, result.Details)
+	}
+}
+
+// CompileCheck passes for non-Go projects (no go.mod found).
+func TestCompileCheck_NonGoProject(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{}`), 0o644)
+
+	result := CompileCheck(context.Background(), dir)
+	if !result.Passed {
+		t.Errorf("expected pass for non-Go project, got: %s", result.Reason)
+	}
+}
+
+// findGoModDir locates go.mod in the given directory, a go/ subdirectory,
+// or a parent directory — proving ralph's nested layout is handled.
+func TestFindGoModDir(t *testing.T) {
+	t.Run("direct", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n"), 0o644)
+		if got := findGoModDir(dir); got != dir {
+			t.Errorf("expected %s, got %s", dir, got)
+		}
+	})
+
+	t.Run("go_subdir", func(t *testing.T) {
+		dir := t.TempDir()
+		goDir := filepath.Join(dir, "go")
+		os.MkdirAll(goDir, 0o755)
+		os.WriteFile(filepath.Join(goDir, "go.mod"), []byte("module test\n"), 0o644)
+		if got := findGoModDir(dir); got != goDir {
+			t.Errorf("expected %s, got %s", goDir, got)
+		}
+	})
+
+	t.Run("not_found", func(t *testing.T) {
+		dir := t.TempDir()
+		if got := findGoModDir(dir); got != "" {
+			t.Errorf("expected empty, got %s", got)
+		}
+	})
+}
+
 func setupGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
