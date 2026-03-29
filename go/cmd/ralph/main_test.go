@@ -626,6 +626,41 @@ func TestCleanup_ClearsCLIConfig(t *testing.T) {
 	}
 }
 
+// Proves: cli_config in state.json is never read back for execution — it is
+// a write-only audit record. LoadCLIConfig must not appear in the evolve
+// restart path in main.go. If someone re-adds it, this test catches it.
+func TestCLIConfig_NeverReadForExecution(t *testing.T) {
+	mainSrc, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+
+	// The evolve_restart block must not call LoadCLIConfig or ArgsFromState.
+	// These were removed so that evolve restart passes original args through
+	// instead of reconstructing from stale state.
+	src := string(mainSrc)
+
+	// Find the evolve_restart block.
+	evolveIdx := strings.Index(src, `status == "evolve_restart"`)
+	if evolveIdx < 0 {
+		t.Fatal("could not find evolve_restart block in main.go")
+	}
+
+	// Check the block from evolve_restart to cleanup (next major section).
+	evolveBlock := src[evolveIdx:]
+	cleanupIdx := strings.Index(evolveBlock, "cleanup(")
+	if cleanupIdx > 0 {
+		evolveBlock = evolveBlock[:cleanupIdx]
+	}
+
+	if strings.Contains(evolveBlock, "LoadCLIConfig") {
+		t.Error("evolve_restart block must not call LoadCLIConfig — cli_config is a write-only audit record")
+	}
+	if strings.Contains(evolveBlock, "ArgsFromState") {
+		t.Error("evolve_restart block must not call ArgsFromState — original args should be passed through")
+	}
+}
+
 // Verifies that --wait auto-resets when a previous run completed, skipping
 // the interactive "Run fresh?" prompt so unattended operation isn't blocked.
 func TestInitRalphDir_WaitAutoResetsOnCompleted(t *testing.T) {

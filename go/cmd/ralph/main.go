@@ -108,9 +108,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		return 1
 	}
 
-	// Persist semantic config so evolve restart can reconstruct args from
-	// state.json instead of replaying raw CLI args (which may include flags
-	// that the new binary no longer recognizes).
+	// Persist semantic config as an audit record in state.json.
 	if err := st.SaveCLIConfig(config.ConfigToState(&cfg)); err != nil {
 		log.Error("", "Failed to save CLI config to state: %v", err)
 		return 1
@@ -214,13 +212,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 	if status, _ := st.Read("status"); status == "evolve_restart" {
 		printSessionSummary(sessionTasks, log)
-		// Reconstruct args from state.json so the new binary isn't passed
-		// flags it may no longer recognize (e.g. removed --no-refactor).
-		evolveArgs := args
-		if stateConfig, err := st.LoadCLIConfig(); err == nil && stateConfig != nil {
-			evolveArgs = config.ArgsFromState(stateConfig)
-		}
-		if err := evolveRestart(cfg.ProjectDir, config.ResolveSourceDir(), scriptPath, cfg.BaseBranch, evolveArgs, log); err != nil {
+		if err := evolveRestart(cfg.ProjectDir, config.ResolveSourceDir(), scriptPath, cfg.BaseBranch, args, log); err != nil {
 			log.Error("", "Evolve restart failed: %v", err)
 		}
 	}
