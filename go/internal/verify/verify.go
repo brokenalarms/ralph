@@ -360,7 +360,7 @@ func CompileCheck(ctx context.Context, dir string) Result {
 		return Result{
 			Passed:  false,
 			Reason:  "pre-push compile check failed: not all packages compile",
-			Details: lastNLines(string(out), 30),
+			Details: lastNLines(filterFailures(string(out)), 30),
 		}
 	}
 	return Result{Passed: true, Reason: "all packages compile"}
@@ -385,6 +385,17 @@ func findGoModDir(dir string) string {
 		}
 	}
 	return ""
+}
+
+func filterFailures(s string) string {
+	var kept []string
+	for _, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(line, "ok \t") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 func lastNLines(s string, n int) string {
