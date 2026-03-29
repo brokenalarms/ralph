@@ -362,15 +362,12 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 			}
 
-			// Detect task pickup.
+			// Detect task pickup — the stream formatter already emits
+			// "[signal] current_task: ..." in real-time, so we only set the
+			// flag and fire the callback here, no duplicate log line.
 			if !taskLogged && hasSignal(cfg.Signals.CurrentTask) {
 				desc := readFirstLine(cfg.Signals.CurrentTask)
 				if desc != "" {
-					if cfg.TaskID != "" {
-						r.Logger.AgentLog("", "Working on: %s (%s)", desc, cfg.TaskID)
-					} else {
-						r.Logger.AgentLog("", "Working on: %s", desc)
-					}
 					taskLogged = true
 					if r.OnTaskDetected != nil {
 						r.OnTaskDetected(desc)

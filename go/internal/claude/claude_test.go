@@ -660,8 +660,51 @@ func TestRun_CallsOnTaskDetected(t *testing.T) {
 	if detectedTask != "implement feature X" {
 		t.Errorf("OnTaskDetected got %q, want %q", detectedTask, "implement feature X")
 	}
-	if len(log.logs) == 0 {
-		t.Error("expected Log to be called for task status")
+	// The poller must NOT emit a "Working on" log line — the stream
+	// formatter already shows the signal in real-time.
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "Working on") {
+			t.Errorf("poller should not emit 'Working on' log, got: %s", msg)
+		}
+	}
+}
+
+// Verifies that the poller does not emit a duplicate "Working on" log line
+// when the agent writes .signal_current_task — the stream formatter already
+// shows the signal in real-time, so the poller only sets taskLogged and
+// fires OnTaskDetected.
+func TestPoll_NoWorkingOnLogLine(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		os.WriteFile(signals.CurrentTask, []byte("fix duplicate log"), 0o644)
+		time.Sleep(300 * time.Millisecond)
+		os.WriteFile(signals.Complete, []byte("done"), 0o644)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		TaskID:       "ralph-ez87",
+		PollInterval: 100 * time.Millisecond,
+	}
+
+	runWithCommand(t, &runner, cfg, "sleep", "10")
+
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "Working on") {
+			t.Errorf("poller emitted duplicate 'Working on' log: %s", msg)
+		}
 	}
 }
 
