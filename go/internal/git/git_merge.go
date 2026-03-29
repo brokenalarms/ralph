@@ -43,7 +43,12 @@ func (m *Manager) Push(ctx context.Context) error {
 	}
 
 	m.Logger.Log("git", "Pushing %s...", m.WorktreeBranch)
-	return m.gitCmdErrCtx(ctx, m.WorkDir, "push", "--force-with-lease", "-u", "origin", m.WorktreeBranch)
+	// Try force-with-lease first (safe update of existing branch).
+	// Fall back to regular push for new branches.
+	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "push", "--force-with-lease", "-u", "origin", m.WorktreeBranch); err != nil {
+		return m.gitCmdErrCtx(ctx, m.WorkDir, "push", "-u", "origin", m.WorktreeBranch)
+	}
+	return nil
 }
 
 // CreatePR ensures a PR exists for the current branch. If one is already
