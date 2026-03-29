@@ -203,53 +203,6 @@ func TestRecentReflections_EmptyWhenNoneExist(t *testing.T) {
 	}
 }
 
-// Proves: RecentAttemptEntries returns the last entry from each of the
-// N most recently modified attempt logs, excluding the current task.
-func TestRecentAttemptEntries_ReturnsLastEntryPerTask(t *testing.T) {
-	tr := newTestTracker(t)
-
-	// Record attempts for 3 different tasks
-	tr.Record("task-a", "Task A", "first try A", "", "continue")
-	tr.Record("task-a", "Task A", "second try A", "", "halted: stagnation")
-
-	tr.Record("task-b", "Task B", "try B", "1 file changed", "idle_timeout")
-
-	tr.Record("task-c", "Task C", "try C", "", "continue")
-
-	// Stagger mtimes so ordering is deterministic
-	base := time.Now().Add(-3 * time.Hour)
-	for i, id := range []string{"task-a", "task-b", "task-c"} {
-		path := filepath.Join(tr.attemptsDir(), id+".log")
-		mtime := base.Add(time.Duration(i) * time.Hour)
-		os.Chtimes(path, mtime, mtime)
-	}
-
-	// Request last 2, excluding task-c (current task)
-	result := tr.RecentAttemptEntries("task-c", 2)
-	if !strings.Contains(result, "task-a") {
-		t.Error("expected task-a entry")
-	}
-	if !strings.Contains(result, "task-b") {
-		t.Error("expected task-b entry")
-	}
-	if strings.Contains(result, "task-c") {
-		t.Error("should exclude current task task-c")
-	}
-	// Should contain last entry from task-a (attempt 2, not 1)
-	if !strings.Contains(result, "halted: stagnation") {
-		t.Error("expected last attempt from task-a (halted)")
-	}
-}
-
-// Proves: RecentAttemptEntries returns empty when no attempt files exist.
-func TestRecentAttemptEntries_EmptyWhenNoneExist(t *testing.T) {
-	tr := newTestTracker(t)
-	result := tr.RecentAttemptEntries("task-x", 3)
-	if result != "" {
-		t.Errorf("expected empty, got %q", result)
-	}
-}
-
 // Proves: merge failures are tracked per-task with incrementing count.
 func TestRecordMergeFailure_IncrementsCount(t *testing.T) {
 	tr := newTestTracker(t)

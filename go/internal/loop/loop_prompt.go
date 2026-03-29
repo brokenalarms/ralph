@@ -11,7 +11,6 @@ import (
 )
 
 const maxCrossTaskReflections = 3
-const maxCrossTaskAttempts = 3
 
 func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 	if taskID == "" {
@@ -81,19 +80,12 @@ func (l *Loop) buildAttemptContext(taskID, taskName string) string {
 		excludeKey = git.Slugify(taskName)
 	}
 
-	var crossParts []string
-
 	reflections := l.attempts.RecentReflections(excludeKey, maxCrossTaskReflections)
-	for _, r := range reflections {
-		crossParts = append(crossParts, fmt.Sprintf("### %s\n%s", r.TaskID, r.Content))
-	}
-
-	recentAttempts := l.attempts.RecentAttemptEntries(excludeKey, maxCrossTaskAttempts)
-	if recentAttempts != "" {
-		crossParts = append(crossParts, "### Recent attempt outcomes\n"+recentAttempts)
-	}
-
-	if len(crossParts) > 0 {
+	if len(reflections) > 0 {
+		var crossParts []string
+		for _, r := range reflections {
+			crossParts = append(crossParts, fmt.Sprintf("### %s\n%s", r.TaskID, r.Content))
+		}
 		parts = append(parts, "## Recent learnings from previous tasks\n"+strings.Join(crossParts, "\n"))
 	}
 
