@@ -2851,9 +2851,9 @@ func TestLoop_CrossTaskReflectionsFedForward(t *testing.T) {
 	}
 }
 
-// Verifies that cross-task attempt entries from halted/killed tasks are fed
-// forward so the next task knows what happened.
-func TestLoop_CrossTaskAttemptEntriesFedForward(t *testing.T) {
+// Verifies that cross-task attempt entries are NOT included in the prompt.
+// Only reflections (distilled insights) should cross task boundaries.
+func TestLoop_CrossTaskAttemptEntriesExcluded(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
@@ -2872,16 +2872,16 @@ func TestLoop_CrossTaskAttemptEntriesFedForward(t *testing.T) {
 	// Record a halt from a different task
 	l.attempts.Record("ralph-prev", "Previous task", "Halted: stagnation", "", "no code changes for 3 iterations")
 
-	// Build context for the next task
+	// Build context for the next task — should NOT include cross-task attempts
 	ctx := l.buildAttemptContext("ralph-next", "Next task")
-	if !strings.Contains(ctx, "ralph-prev") {
-		t.Error("expected cross-task attempt entry from ralph-prev")
+	if strings.Contains(ctx, "ralph-prev") {
+		t.Error("cross-task attempt entries should not appear in prompt")
 	}
-	if !strings.Contains(ctx, "stagnation") {
-		t.Error("expected halt reason in cross-task context")
+	if strings.Contains(ctx, "stagnation") {
+		t.Error("cross-task halt reasons should not appear in prompt")
 	}
-	if !strings.Contains(ctx, "Recent learnings") {
-		t.Error("expected 'Recent learnings' section header")
+	if strings.Contains(ctx, "Recent attempt outcomes") {
+		t.Error("'Recent attempt outcomes' section should not exist")
 	}
 }
 

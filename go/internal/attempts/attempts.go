@@ -157,65 +157,6 @@ func (t *Tracker) RecentReflections(excludeKey string, n int) []ReflectionEntry 
 	return result
 }
 
-// RecentAttemptEntries returns the last attempt entry from each of the n
-// most recently modified attempt logs, excluding the file matching excludeKey.
-// This provides cross-task context about recent halts, timeouts, and failures.
-func (t *Tracker) RecentAttemptEntries(excludeKey string, n int) string {
-	entries, err := os.ReadDir(t.attemptsDir())
-	if err != nil {
-		return ""
-	}
-
-	type fileEntry struct {
-		taskID string
-		path   string
-		modTime int64
-	}
-
-	var files []fileEntry
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") {
-			continue
-		}
-		taskID := strings.TrimSuffix(e.Name(), ".log")
-		if taskID == excludeKey {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		files = append(files, fileEntry{
-			taskID:  taskID,
-			path:    filepath.Join(t.attemptsDir(), e.Name()),
-			modTime: info.ModTime().UnixNano(),
-		})
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].modTime < files[j].modTime
-	})
-
-	if len(files) > n {
-		files = files[len(files)-n:]
-	}
-
-	var b strings.Builder
-	for _, f := range files {
-		data, err := os.ReadFile(f.path)
-		if err != nil {
-			continue
-		}
-		lastEntry := lastNAttempts(string(data), 1)
-		if lastEntry == "" {
-			continue
-		}
-		b.WriteString(fmt.Sprintf("#### Task: %s\n", f.taskID))
-		b.WriteString(lastEntry)
-	}
-	return b.String()
-}
-
 // Clear removes the attempt file for a task, used when a task is
 // resolved and re-attempts should start fresh.
 func (t *Tracker) Clear(taskID, taskName string) {
