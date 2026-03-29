@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // CICheckResult represents the status of a single CI check from gh pr checks.
@@ -160,17 +162,19 @@ type CIFetchFunc func(prNumber, repoURL string) ([]CICheckResult, error)
 // Reusable by AutoMerge, fix-CI flows, and any caller that needs to wait
 // for CI to complete on a PR.
 func (m *Manager) AwaitCI(ctx context.Context, prNumber, repoURL string) ([]CICheckResult, CIStatus, error) {
+	nwo := NWOFromRemote(repoURL)
+	pr := logging.PRLink(nwo, prNumber)
 	fetch := m.gh().ListChecks
 	checks, fetchErr := fetch(prNumber, repoURL)
 	if fetchErr != nil || len(checks) == 0 {
-		m.Logger.Log("ci", "CI checks not available yet for PR #%s — waiting...", prNumber)
-		return waitForCI(ctx, fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+		m.Logger.Log("ci", "CI checks not available yet for %s — waiting...", pr)
+		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
 	}
 	status := evaluateChecks(checks)
 	if status != CIPending {
 		return checks, status, nil
 	}
-	return waitForCI(ctx, fetch, prNumber, repoURL, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
 }
 
 // AwaitFreshCI waits for the PR HEAD to change from staleSHA, then
@@ -180,10 +184,12 @@ func (m *Manager) AwaitFreshCI(ctx context.Context, prNumber, repoURL, staleSHA 
 	if staleSHA == "" {
 		return m.AwaitCI(ctx, prNumber, repoURL)
 	}
+	nwo := NWOFromRemote(repoURL)
+	pr := logging.PRLink(nwo, prNumber)
 	gh := m.gh()
 
 	// Poll until SHA changes from the pre-push value.
-	m.Logger.Log("ci", "Waiting for PR #%s HEAD to update from %s...", prNumber, staleSHA[:min(7, len(staleSHA))])
+	m.Logger.Log("ci", "Waiting for %s HEAD to update from %s...", pr, staleSHA[:min(7, len(staleSHA))])
 	deadline := time.Now().Add(DefaultCIPollTimeout)
 	interval := DefaultCIPollInterval
 	for {
@@ -195,7 +201,7 @@ func (m *Manager) AwaitFreshCI(ctx context.Context, prNumber, repoURL, staleSHA 
 		}
 		currentSHA, _ := gh.GetPRHeadSHA(m.WorkDir, prNumber)
 		if currentSHA != "" && currentSHA != staleSHA {
-			m.Logger.Log("ci", "PR #%s HEAD updated to %s", prNumber, currentSHA[:min(7, len(currentSHA))])
+			m.Logger.Log("ci", "%s HEAD updated to %s", pr, currentSHA[:min(7, len(currentSHA))])
 			break
 		}
 		<-ciSleep(interval)
@@ -217,7 +223,7 @@ func min(a, b int) int {
 // Uses exponential backoff starting at interval, doubling each poll up to
 // MaxCIPollInterval. Logs a single updating line showing accumulated poll
 // durations instead of one line per poll.
-func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL string, interval, timeout time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
+func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL, nwo string, interval, timeout time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
 	deadline := time.Now().Add(timeout)
 
 	var done <-chan struct{}
@@ -248,19 +254,19 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL string,
 		switch status {
 		case CIPassed:
 			if len(pollDurations) > 0 {
-				log.Log("ci", "CI polled %s for PR #%s", strings.Join(pollDurations, ".."), prNumber)
+				log.Log("ci", "CI polled %s for %s", strings.Join(pollDurations, ".."), logging.PRLink(nwo, prNumber))
 			}
 			return checks, CIPassed, nil
 		case CIFailed:
 			if len(pollDurations) > 0 {
-				log.Log("ci", "CI polled %s for PR #%s", strings.Join(pollDurations, ".."), prNumber)
+				log.Log("ci", "CI polled %s for %s", strings.Join(pollDurations, ".."), logging.PRLink(nwo, prNumber))
 			}
 			return checks, CIFailed, nil
 		}
 
 		if time.Now().After(deadline) {
 			if len(pollDurations) > 0 {
-				log.Log("ci", "CI polled %s for PR #%s", strings.Join(pollDurations, ".."), prNumber)
+				log.Log("ci", "CI polled %s for %s", strings.Join(pollDurations, ".."), logging.PRLink(nwo, prNumber))
 			}
 			return checks, CIPending, fmt.Errorf("CI checks did not complete within %v", timeout)
 		}

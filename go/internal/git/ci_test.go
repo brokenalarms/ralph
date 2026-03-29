@@ -217,7 +217,7 @@ func TestWaitForCI_PollsUntilPassed(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
 
-	checks, status, err := waitForCI(context.Background(), fetch, "1", "", 1*time.Millisecond, 5*time.Second, discardLog{})
+	checks, status, err := waitForCI(context.Background(), fetch, "1", "", "", 1*time.Millisecond, 5*time.Second, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestWaitForCI_ReturnsFailedImmediately(t *testing.T) {
 		}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, "1", "", 1*time.Millisecond, 5*time.Second, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, "1", "", "", 1*time.Millisecond, 5*time.Second, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestWaitForCI_TimesOut(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, "1", "", 1*time.Millisecond, 5*time.Millisecond, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, "1", "", "", 1*time.Millisecond, 5*time.Millisecond, discardLog{})
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -284,7 +284,7 @@ func TestWaitForCI_BackoffDoubles(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, "1", "", 1*time.Second, 5*time.Minute, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, "1", "", "", 1*time.Second, 5*time.Minute, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestWaitForCI_SingleLogLine(t *testing.T) {
 	}
 
 	log := &testLog{}
-	_, _, err := waitForCI(context.Background(), fetch, "42", "", 1*time.Second, 5*time.Minute, log)
+	_, _, err := waitForCI(context.Background(), fetch, "42", "", "", 1*time.Second, 5*time.Minute, log)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -350,7 +350,7 @@ func TestWaitForCI_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, status, err := waitForCI(ctx, fetch, "1", "", 1*time.Second, 10*time.Second, discardLog{})
+	_, status, err := waitForCI(ctx, fetch, "1", "", "", 1*time.Second, 10*time.Second, discardLog{})
 	if err == nil {
 		t.Fatal("expected error from cancelled context")
 	}
@@ -491,11 +491,134 @@ func TestAwaitCI_PollsWhenFetchErrors(t *testing.T) {
 	}
 }
 
+// AwaitCI log output uses logging.PRLink for clickable terminal links
+// when a valid GitHub repoURL is provided.
+func TestAwaitCI_LogUsesPRLink(t *testing.T) {
+	origSleep := ciSleep
+	ciSleep = func(d time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+	defer func() { ciSleep = origSleep }()
+
+	var calls atomic.Int32
+	pollGH := &pollableGitHub{
+		stubGitHub: stubGitHub{},
+		listChecks: func(pr, repo string) ([]CICheckResult, error) {
+			n := calls.Add(1)
+			if n < 2 {
+				return nil, fmt.Errorf("no checks yet")
+			}
+			return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
+		},
+	}
+	log := &testLog{}
+	mgr := &Manager{GitHub: pollGH, Logger: log}
+
+	_, status, err := mgr.AwaitCI(context.Background(), "99", "https://github.com/owner/repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+
+	// The "CI checks not available yet" log line must contain a clickable
+	// hyperlink (OSC 8 sequence with the GitHub URL), not plain "PR #99".
+	found := false
+	for _, msg := range log.messages {
+		if strings.Contains(msg, "not available yet") {
+			if !strings.Contains(msg, "github.com/owner/repo/pull/99") {
+				t.Errorf("expected PRLink hyperlink in log, got: %s", msg)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'not available yet' log line, got: %v", log.messages)
+	}
+}
+
+// AwaitFreshCI log output uses logging.PRLink for clickable terminal links.
+func TestAwaitFreshCI_LogUsesPRLink(t *testing.T) {
+	origSleep := ciSleep
+	ciSleep = func(d time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+	defer func() { ciSleep = origSleep }()
+
+	pollGH := &pollableGitHub{
+		stubGitHub: stubGitHub{
+			checks: []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
+		},
+		listChecks: func(pr, repo string) ([]CICheckResult, error) {
+			return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
+		},
+		getPRHeadSHA: func(workDir, prNumber string) (string, error) {
+			return "newsha123", nil
+		},
+	}
+	log := &testLog{}
+	mgr := &Manager{GitHub: pollGH, Logger: log}
+
+	_, status, err := mgr.AwaitFreshCI(context.Background(), "88", "https://github.com/owner/repo", "oldshaXXX")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+
+	// "Waiting for" and "HEAD updated" lines must contain clickable links.
+	for _, msg := range log.messages {
+		if (strings.Contains(msg, "Waiting for") || strings.Contains(msg, "HEAD updated")) &&
+			!strings.Contains(msg, "github.com/owner/repo/pull/88") {
+			t.Errorf("expected PRLink hyperlink in log, got: %s", msg)
+		}
+	}
+}
+
+// waitForCI polling summary log lines use PRLink for clickable links.
+func TestWaitForCI_LogUsesPRLink(t *testing.T) {
+	origSleep := ciSleep
+	ciSleep = func(d time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+	defer func() { ciSleep = origSleep }()
+
+	callCount := 0
+	fetch := func(pr, repo string) ([]CICheckResult, error) {
+		callCount++
+		if callCount < 3 {
+			return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
+		}
+		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
+	}
+
+	log := &testLog{}
+	_, _, err := waitForCI(context.Background(), fetch, "77", "https://github.com/owner/repo", "owner/repo", 1*time.Second, 5*time.Minute, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, msg := range log.messages {
+		if strings.Contains(msg, "polled") && !strings.Contains(msg, "github.com/owner/repo/pull/77") {
+			t.Errorf("expected PRLink hyperlink in polling log, got: %s", msg)
+		}
+	}
+}
+
 // pollableGitHub wraps stubGitHub but allows overriding ListChecks
 // with a function that changes behavior across calls.
 type pollableGitHub struct {
 	stubGitHub
-	listChecks func(string, string) ([]CICheckResult, error)
+	listChecks   func(string, string) ([]CICheckResult, error)
+	getPRHeadSHA func(string, string) (string, error)
 }
 
 func (p *pollableGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
@@ -503,6 +626,13 @@ func (p *pollableGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, 
 		return p.listChecks(prNumber, repoURL)
 	}
 	return p.stubGitHub.ListChecks(prNumber, repoURL)
+}
+
+func (p *pollableGitHub) GetPRHeadSHA(workDir, prNumber string) (string, error) {
+	if p.getPRHeadSHA != nil {
+		return p.getPRHeadSHA(workDir, prNumber)
+	}
+	return p.stubGitHub.GetPRHeadSHA(workDir, prNumber)
 }
 
 // setupAutoMergeManager creates a Manager with a stubGitHub and real git repos
