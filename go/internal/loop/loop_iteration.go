@@ -185,6 +185,11 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 
 // pushSignalPR pushes the branch and creates a PR after a successful signal.
 func (l *Loop) pushSignalPR(p postSignalParams) string {
+	// Auto-commit if the agent left uncommitted changes.
+	if l.git.HasUncommittedChanges() {
+		l.logger.Log("git", "Agent left uncommitted changes — auto-committing")
+		l.git.CommitAll(fmt.Sprintf("[%s] auto-commit agent changes", p.taskID))
+	}
 	prBody := buildPRBody(l.cfg.TaskBackend, p.taskID, p.result.Summary)
 	prNumber, pushErr := l.pushAndCreatePR(p.ctx, p.taskID, p.nextTask, prBody)
 	if pushErr != nil {
