@@ -565,16 +565,30 @@ func updateStreamTask(ralphDir, taskID, nextTask string, priority *int) {
 	os.WriteFile(streamTaskFile, []byte(content), 0o644)
 }
 
-// setStackHead walks completed beads backwards to find the most recent
-// branch with unmerged work. Uses git ancestry checks (no GitHub API):
-// if a branch is an ancestor of origin/main, its work has landed → skip.
-// Otherwise it has unmerged work → use it as stack head.
+// setStackHead finds the most recent branch that's cleanly ahead of main
+// and sets it as the stack base for the next task. When gh is available,
+// fetches only branches with open PRs (one API call). Otherwise falls
+// back to checking all completed task branches.
 func (l *Loop) setStackHead() {
 	l.git.SetPrevBranch("")
 
 	tasks, err := l.state.GetCompletedTasks()
 	if err != nil || len(tasks) == 0 {
 		return
+	}
+
+	// Build a set of branches with open PRs to avoid fetching merged/deleted
+	// branches. Falls back to checking all branches if gh is unavailable.
+	var openSet map[string]bool
+	gh := l.git.GH()
+	repoURL := l.git.RemoteURL()
+	if repoURL != "" && gh != nil && gh.Available() {
+		if branches, err := gh.ListOpenPRBranches(repoURL); err == nil && len(branches) > 0 {
+			openSet = make(map[string]bool, len(branches))
+			for _, b := range branches {
+				openSet[b] = true
+			}
+		}
 	}
 
 	for i := len(tasks) - 1; i >= 0; i-- {
@@ -584,6 +598,9 @@ func (l *Loop) setStackHead() {
 		}
 		branch, _ := l.cfg.TaskBackend.GetMetadata(id, "branch")
 		if branch == "" {
+			continue
+		}
+		if openSet != nil && !openSet[branch] {
 			continue
 		}
 		if err := l.git.FetchBranch(branch); err != nil {

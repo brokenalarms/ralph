@@ -43,6 +43,7 @@ type GitHub interface {
 	GetPRBase(workDir, prNumber string) (base string, err error)
 	GetPRHead(workDir, prNumber string) (head string, err error)
 	GetPRHeadSHA(workDir, prNumber string) (sha string, err error)
+	ListOpenPRBranches(repoURL string) ([]string, error)
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -61,6 +62,20 @@ func (g *ghCLI) FindOpenPR(branch, repoURL string) (string, error) {
 		return "", fmt.Errorf("gh pr list failed: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+func (g *ghCLI) ListOpenPRBranches(repoURL string) ([]string, error) {
+	cmd := exec.Command("gh", "pr", "list", "--state", "open",
+		"--json", "headRefName", "--jq", ".[].headRefName", "-R", repoURL)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("gh pr list failed: %w", err)
+	}
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return nil, nil
+	}
+	return strings.Split(raw, "\n"), nil
 }
 
 func (g *ghCLI) CreatePR(opts CreatePROpts) error {

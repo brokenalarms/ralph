@@ -96,6 +96,9 @@ func (s *stubGitHub) GetPRHead(workDir, prNumber string) (string, error) {
 func (s *stubGitHub) GetPRHeadSHA(workDir, prNumber string) (string, error) {
 	return "", nil
 }
+func (s *stubGitHub) ListOpenPRBranches(repoURL string) ([]string, error) {
+	return nil, nil
+}
 
 // gitCall records a single git command invocation for assertion.
 type gitCall struct {
