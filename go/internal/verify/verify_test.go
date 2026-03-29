@@ -464,11 +464,11 @@ func (s *stubGitHub) PRDiff(_ string, _ string) (string, error) {
 	s.prDiffCalled = true
 	return s.prDiff, nil
 }
-func (s *stubGitHub) GetPRState(string, string) (string, error) { return "", nil }
+func (s *stubGitHub) GetPRState(string, string) (string, error)        { return "", nil }
+func (s *stubGitHub) ListOpenPRBranches(string) ([]string, error)      { return nil, nil }
 func (s *stubGitHub) GetPRBase(string, string) (string, error)  { return "", nil }
 func (s *stubGitHub) GetPRHead(string, string) (string, error)     { return "", nil }
 func (s *stubGitHub) GetPRHeadSHA(string, string) (string, error)  { return "", nil }
-func (s *stubGitHub) ListOpenPRBranches(string) ([]string, error)  { return nil, nil }
 
 // ModelShortName extracts a human-friendly name from a full model ID,
 // so log lines show "haiku" instead of "claude-haiku-4-5-20251001".

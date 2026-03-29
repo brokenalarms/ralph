@@ -48,6 +48,7 @@ func (s *stubBackend) GetNextTaskInfo() (tasks.TaskInfo, error)   { return tasks
 func (s *stubBackend) HasTasks() (bool, error)                    { return s.total > 0, nil }
 func (s *stubBackend) CloseTask(string, string) error             { return nil }
 func (s *stubBackend) SkipTask(string, string) error              { return nil }
+func (s *stubBackend) SetSkippedIDs(_ []string)                   {}
 func (s *stubBackend) ReopenTask(string) error                    { return nil }
 func (s *stubBackend) SetState(_, _, _, _ string) error           { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error)       { return "", nil }

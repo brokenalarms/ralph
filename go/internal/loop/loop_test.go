@@ -88,6 +88,7 @@ func (m *mutableBackend) GetNextTaskInfo() (tasks.TaskInfo, error) { m.mu.Lock()
 func (m *mutableBackend) HasTasks() (bool, error)              { m.mu.Lock(); defer m.mu.Unlock(); return m.total > 0, nil }
 func (m *mutableBackend) CloseTask(string, string) error       { return nil }
 func (m *mutableBackend) SkipTask(string, string) error        { return nil }
+func (m *mutableBackend) SetSkippedIDs(_ []string)             {}
 func (m *mutableBackend) ReopenTask(string) error              { return nil }
 func (m *mutableBackend) SetState(_, _, _, _ string) error     { return nil }
 func (m *mutableBackend) GetState(_, _ string) (string, error) { return "", nil }
@@ -135,6 +136,7 @@ func (s *stubBackend) GetNextTaskInfo() (tasks.TaskInfo, error) { return tasks.T
 func (s *stubBackend) HasTasks() (bool, error)              { return s.total > 0, nil }
 func (s *stubBackend) CloseTask(string, string) error       { return nil }
 func (s *stubBackend) SkipTask(id, reason string) error     { s.skippedTask = id; s.skipReason = reason; return nil }
+func (s *stubBackend) SetSkippedIDs(_ []string)             {}
 func (s *stubBackend) ReopenTask(string) error              { return nil }
 func (s *stubBackend) SetState(_, _, _, _ string) error     { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error) { return "", nil }
@@ -6691,11 +6693,12 @@ func TestFinalizePR_UsesURLInCloseReason(t *testing.T) {
 	}
 }
 
-// skipTask defers the task in the backend — no state.json involvement.
-func TestSkipTask_DefersInBackend(t *testing.T) {
+// skipTask sets status to open in backend and persists to state.json.
+func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
+	_, st := setupTestDir(t)
 	backend := &stubBackend{}
 
-	skipTask(backend, logging.New(nil), "ralph-xyz", "merge_failed")
+	skipTask(backend, st, logging.New(nil), "ralph-xyz", "merge_failed")
 
 	if backend.skippedTask != "ralph-xyz" {
 		t.Errorf("expected backend.skippedTask=ralph-xyz, got %q", backend.skippedTask)
@@ -6703,13 +6706,21 @@ func TestSkipTask_DefersInBackend(t *testing.T) {
 	if backend.skipReason != "merge_failed" {
 		t.Errorf("expected backend.skipReason=merge_failed, got %q", backend.skipReason)
 	}
+	skipped, err := st.GetSkippedTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skipped) != 1 || skipped[0] != "ralph-xyz" {
+		t.Errorf("expected [ralph-xyz] in state.json skipped_tasks, got %v", skipped)
+	}
 }
 
 // skipTask is a no-op with empty ID.
 func TestSkipTask_EmptyID(t *testing.T) {
+	_, st := setupTestDir(t)
 	backend := &stubBackend{}
 
-	skipTask(backend, logging.New(nil), "", "reason")
+	skipTask(backend, st, logging.New(nil), "", "reason")
 
 	if backend.skippedTask != "" {
 		t.Error("expected no skip with empty ID")

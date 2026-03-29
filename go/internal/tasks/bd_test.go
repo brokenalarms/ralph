@@ -113,9 +113,9 @@ func TestBD_CountTotal(t *testing.T) {
 	}
 }
 
-// Proves: CountTotal excludes deferred beads — only counts open + in_progress + closed.
-func TestBD_CountTotal_ExcludesDeferred(t *testing.T) {
-	// bare "bd count" returns 10 (includes deferred), but actionable = 3+1+4 = 8
+// Proves: CountTotal counts only actionable beads (open + in_progress + closed).
+func TestBD_CountTotal_ExcludesNonActionable(t *testing.T) {
+	// bare "bd count" returns 10, but actionable = 3+1+4 = 8
 	runner := mockBD(
 		"10",
 		map[string]string{"open": "3", "in_progress": "1", "closed": "4"},
@@ -125,7 +125,7 @@ func TestBD_CountTotal_ExcludesDeferred(t *testing.T) {
 	b := setupBD(t, runner)
 	got, _ := b.CountTotal()
 	if got != 8 {
-		t.Errorf("CountTotal = %d, want 8 (open+in_progress+closed, excluding deferred)", got)
+		t.Errorf("CountTotal = %d, want 8 (open+in_progress+closed)", got)
 	}
 }
 
@@ -360,8 +360,8 @@ func TestBD_GetNextTask_FallsBackToReady(t *testing.T) {
 	}
 }
 
-// Proves: bd SkipTask defers the task with --status deferred --defer +1h.
-func TestBD_SkipTask_DefersTask(t *testing.T) {
+// Proves: bd SkipTask sets status to open (not deferred).
+func TestBD_SkipTask_SetsStatusOpen(t *testing.T) {
 	var updateArgs []string
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "update" {
@@ -378,11 +378,11 @@ func TestBD_SkipTask_DefersTask(t *testing.T) {
 		t.Fatal("expected update to be called")
 	}
 	joined := strings.Join(updateArgs, " ")
-	if !strings.Contains(joined, "--status") || !strings.Contains(joined, "deferred") {
-		t.Errorf("expected --status deferred in update args, got: %v", updateArgs)
+	if !strings.Contains(joined, "--status=open") {
+		t.Errorf("expected --status=open in update args, got: %v", updateArgs)
 	}
-	if !strings.Contains(joined, "--defer") || !strings.Contains(joined, "+1h") {
-		t.Errorf("expected --defer +1h in update args, got: %v", updateArgs)
+	if strings.Contains(joined, "deferred") || strings.Contains(joined, "--defer") {
+		t.Errorf("should not use deferred/defer, got: %v", updateArgs)
 	}
 }
 
@@ -1136,6 +1136,67 @@ func TestBD_GetMetadata_NoMetadata(t *testing.T) {
 	}
 	if val != "" {
 		t.Errorf("GetMetadata no metadata = %q, want empty", val)
+	}
+}
+
+// Proves: SetSkippedIDs causes getNextIssue to exclude skipped tasks.
+func TestBD_SetSkippedIDs_FiltersNextIssue(t *testing.T) {
+	runner := mockBD(
+		"3",
+		map[string]string{"open": "2", "in_progress": "0", "closed": "1"},
+		"[]",
+		`[{"id":"ralph-aaa","title":"Task A","priority":0},{"id":"ralph-bbb","title":"Task B","priority":1}]`,
+	)
+	b := setupBD(t, runner)
+	b.SetSkippedIDs([]string{"ralph-aaa"})
+
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-bbb" {
+		t.Errorf("expected ralph-bbb (skipped ralph-aaa), got %q", info.ID)
+	}
+}
+
+// Proves: HasRemaining returns false when all remaining tasks are skipped.
+func TestBD_HasRemaining_ExcludesSkipped(t *testing.T) {
+	runner := mockBD(
+		"1",
+		map[string]string{"open": "1", "in_progress": "0", "closed": "0"},
+		"[]",
+		`[{"id":"ralph-only","title":"Only task"}]`,
+	)
+	b := setupBD(t, runner)
+	b.SetSkippedIDs([]string{"ralph-only"})
+
+	has, err := b.HasRemaining()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if has {
+		t.Error("HasRemaining should be false when all tasks are skipped")
+	}
+}
+
+// Proves: SetSkippedIDs with empty list clears any previous skips.
+func TestBD_SetSkippedIDs_EmptyClearsSkips(t *testing.T) {
+	runner := mockBD(
+		"1",
+		map[string]string{"open": "1", "in_progress": "0", "closed": "0"},
+		"[]",
+		`[{"id":"ralph-abc","title":"A task"}]`,
+	)
+	b := setupBD(t, runner)
+	b.SetSkippedIDs([]string{"ralph-abc"})
+	b.SetSkippedIDs([]string{})
+
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-abc" {
+		t.Errorf("expected ralph-abc after clearing skips, got %q", info.ID)
 	}
 }
 
