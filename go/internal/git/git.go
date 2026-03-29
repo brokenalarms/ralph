@@ -363,13 +363,28 @@ func (m *Manager) SetPrevBranch(branch string) {
 	}
 }
 
-// PrepareForNextTask resets BranchRenamed so the next task gets a new branch
-// name via RenameBranchForTask. Unlike the old RotateBranch, this does NOT
-// create a new branch — the worktree stays on the current commit.
+// PrepareForNextTask creates a fresh wip branch from HEAD so the next task
+// gets its own branch. RenameBranchForTask will rename it to a task-specific
+// name before the first commit.
 func (m *Manager) PrepareForNextTask() {
 	m.BranchRenamed = false
 	if m.State != nil {
 		_ = m.State.Write("branch_renamed", "false")
+	}
+
+	if m.WorkDir == m.ProjectDir || m.WorktreeBranch == "" {
+		return
+	}
+
+	newBranch := WipBranchName()
+	if m.WorktreeBranch == newBranch {
+		return
+	}
+	if err := m.gitCmdErr(m.WorkDir, "checkout", "-B", newBranch); err == nil {
+		m.WorktreeBranch = newBranch
+		if m.State != nil {
+			_ = m.State.Write("worktree_branch", newBranch)
+		}
 	}
 }
 

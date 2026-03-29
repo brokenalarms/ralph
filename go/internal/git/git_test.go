@@ -483,6 +483,47 @@ func TestRenameBranchForTask_DoesNotSetPrevBranch(t *testing.T) {
 	}
 }
 
+// PrepareForNextTask creates a fresh wip branch so the next task doesn't
+// reuse the previous task's branch name.
+func TestPrepareForNextTask_CreatesFreshBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+
+	mgr := &Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      state,
+		Logger:     &testLog{},
+	}
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("first task", "ralph-aaa")
+	firstBranch := mgr.WorktreeBranch
+	if firstBranch == "ralph/wip" {
+		t.Fatal("branch should have been renamed from ralph/wip")
+	}
+
+	mgr.PrepareForNextTask()
+
+	if mgr.WorktreeBranch != "ralph/wip" {
+		t.Errorf("after PrepareForNextTask, branch = %q, want ralph/wip", mgr.WorktreeBranch)
+	}
+	if mgr.BranchRenamed {
+		t.Error("BranchRenamed should be false after PrepareForNextTask")
+	}
+
+	mgr.RenameBranchForTask("second task", "ralph-bbb")
+	if mgr.WorktreeBranch == firstBranch {
+		t.Errorf("second task reused first task's branch %q", firstBranch)
+	}
+	if mgr.WorktreeBranch == "ralph/wip" {
+		t.Error("second task should have been renamed from ralph/wip")
+	}
+}
+
 // SetPrevBranch explicitly sets PrevBranch and persists to state.
 func TestSetPrevBranch(t *testing.T) {
 	state := newMemState()
