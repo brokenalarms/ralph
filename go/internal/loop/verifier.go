@@ -113,53 +113,84 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 	beadDesc := getBeadDescription(v.deps.TaskBackend, p.taskID)
 	beadAcceptance := getBeadAcceptance(v.deps.TaskBackend, p.taskID)
 
-	v.llmVerifyAttempts++
-	model := v.verifyModel()
-	v.deps.Logger.Log("llm", "Running LLM verification (attempt %d/%d, %s)...", v.llmVerifyAttempts, maxLLMVerifyAttempts, verify.ModelShortName(model))
-	llmResult := v.deps.LLMVerify(verify.VerifyOpts{
-		Ctx:             p.ctx,
-		Git:             v.deps.Git,
-		WorkDir:         p.workDir,
-		PromptsDir:      v.cfg.PromptsDir,
-		TaskID:          p.taskID,
-		HeadBefore:      p.headBefore,
-		BeadTitle:       p.nextTask,
-		BeadDescription: beadDesc,
-		BeadAcceptance:  beadAcceptance,
-		GitHub:          v.deps.GitHub,
-		QueryFn:         v.deps.QueryFn,
-		Model:           model,
-	})
+	return v.verifyWithFixLoop(p, beadDesc, beadAcceptance)
+}
 
-	if llmResult.Passed && llmResult.NoDiff && v.cfg.VerifyLevel == "hog" {
-		v.deps.Logger.Log("llm", "No diff detected — spawning codebase verification agent (hog mode)")
-		if !v.verifyFeatureExists(p, beadDesc) {
+// verifyWithFixLoop runs LLM verification and, on rejection, spawns a fix
+// agent within the same iteration. Loops until verified or max attempts
+// exhausted. All fix attempts happen in a single OnSignal call — no new
+// iteration is created.
+func (v *Verifier) verifyWithFixLoop(p signalParams, beadDesc, beadAcceptance string) bool {
+	for {
+		v.llmVerifyAttempts++
+		model := v.verifyModel()
+		v.deps.Logger.Log("llm", "Running LLM verification (attempt %d/%d, %s)...", v.llmVerifyAttempts, maxLLMVerifyAttempts, verify.ModelShortName(model))
+		llmResult := v.deps.LLMVerify(verify.VerifyOpts{
+			Ctx:             p.ctx,
+			Git:             v.deps.Git,
+			WorkDir:         p.workDir,
+			PromptsDir:      v.cfg.PromptsDir,
+			TaskID:          p.taskID,
+			HeadBefore:      p.headBefore,
+			BeadTitle:       p.nextTask,
+			BeadDescription: beadDesc,
+			BeadAcceptance:  beadAcceptance,
+			GitHub:          v.deps.GitHub,
+			QueryFn:         v.deps.QueryFn,
+			Model:           model,
+		})
+
+		if llmResult.Passed && llmResult.NoDiff && v.cfg.VerifyLevel == "hog" {
+			v.deps.Logger.Log("llm", "No diff detected — spawning codebase verification agent (hog mode)")
+			if !v.verifyFeatureExists(p, beadDesc) {
+				return false
+			}
+		}
+
+		if llmResult.Passed {
+			v.deps.Logger.Success("llm", "LLM verified: %s", llmResult.Reason)
+			v.llmVerifyAttempts = 0
+			return true
+		}
+
+		v.deps.Logger.Error("llm", "LLM verification rejected (attempt %d/%d): %s", v.llmVerifyAttempts, maxLLMVerifyAttempts, llmResult.Details)
+
+		if v.llmVerifyAttempts >= maxLLMVerifyAttempts {
+			if p.taskID != "" {
+				v.deps.SkipTask(p.taskID, fmt.Sprintf("verification_rejected_%d_attempts: %s", maxLLMVerifyAttempts, llmResult.Details))
+			}
 			return false
 		}
-	}
 
-	if llmResult.Passed {
-		v.deps.Logger.Success("llm", "LLM verified: %s", llmResult.Reason)
-		v.llmVerifyAttempts = 0
-		return true
-	}
-
-	v.deps.Logger.Error("llm", "LLM verification rejected (attempt %d/%d): %s", v.llmVerifyAttempts, maxLLMVerifyAttempts, llmResult.Details)
-
-	if v.llmVerifyAttempts >= maxLLMVerifyAttempts {
-		if p.taskID != "" {
-			v.deps.SkipTask(p.taskID, fmt.Sprintf("verification_rejected_%d_attempts: %s", maxLLMVerifyAttempts, llmResult.Details))
+		if !v.tryFixVerification(p, beadDesc, beadAcceptance, llmResult.Details) {
+			return false
 		}
-		return false
-	}
 
-	msg := fmt.Sprintf("LLM verification rejected your work. Fix the issues and signal completion again.\n\nFeedback:\n%s", llmResult.Details)
-	if err := v.deps.Runner().InjectMessage(msg); err != nil {
-		v.deps.Logger.Warn("llm", "Stdin injection failed (%v) — agent will be restarted", err)
-		return false
+		v.deps.Logger.Log("test", "Re-running test suite after fix agent...")
+		testResult := verify.RunTests(p.ctx, v.cfg.VerifyDir)
+		if !testResult.Passed {
+			v.deps.Logger.Error("test", "Tests failed after fix agent: %s", testResult.Reason)
+			return false
+		}
+		v.deps.Logger.Log("test", "Tests passed after fix agent")
 	}
-	v.deps.Logger.Log("llm", "LLM feedback injected to agent via stdin")
-	return false
+}
+
+// tryFixVerification spawns a fix agent to address LLM verification rejection.
+func (v *Verifier) tryFixVerification(p signalParams, beadDesc, beadAcceptance, rejectionDetails string) bool {
+	v.deps.Logger.Log("llm", "Spawning fix agent for verification rejection (attempt %d/%d)", v.llmVerifyAttempts, maxLLMVerifyAttempts)
+
+	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
+	fixPrompt := v.loadVerifyPrompt("verify-fix.md", map[string]string{
+		"{{TASK_TITLE}}":         p.nextTask,
+		"{{TASK_DESCRIPTION}}":   beadDesc,
+		"{{ACCEPTANCE_CRITERIA}}": beadAcceptance,
+		"{{REJECTION_REASON}}":   rejectionDetails,
+		"{{SIGNAL_COMPLETE}}":    signalPath,
+	})
+
+	fixResult := v.runFixAgent(p.ctx, "verification rejection", fixPrompt, p.workDir, p.rawLogPath)
+	return fixResult.SignalDetected
 }
 
 // ResetCounters resets the test and LLM verify attempt counters.
