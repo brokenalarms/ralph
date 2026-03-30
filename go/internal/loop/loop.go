@@ -85,6 +85,8 @@ type Loop struct {
 	findPRInfoFunc     func(workDir string) (number, title string)
 	agentRunner        *agent.Runner
 	refactorQueryFunc  func(ctx context.Context, workDir, prompt, model string) (string, error)
+	isOnlineFunc       func() bool
+	waitForInternetFunc func(ctx context.Context, logger *logging.Logger) bool
 	lastAction         analyzer.Action
 	lastTaskMerged     bool
 	sessionTasks       []CompletedTask
@@ -101,16 +103,18 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 	agentRunner := agent.New(logger)
 
 	l := &Loop{
-		cfg:           cfg,
-		state:         st,
-		git:           gm,
-		limiter:       limiter,
-		runner:        agentRunner,
-		analyzer:      analyzer.New(),
-		attempts:      attempts.New(cfg.Dirs.RalphDir),
-		logger:        logger,
-		signals:       signals,
-		agentRunner:   agentRunner,
+		cfg:                 cfg,
+		state:               st,
+		git:                 gm,
+		limiter:             limiter,
+		runner:              agentRunner,
+		analyzer:            analyzer.New(),
+		attempts:            attempts.New(cfg.Dirs.RalphDir),
+		logger:              logger,
+		signals:             signals,
+		agentRunner:         agentRunner,
+		isOnlineFunc:        isOnline,
+		waitForInternetFunc: waitForInternet,
 	}
 	l.verifier = NewVerifier(VerifierConfig{
 		VerifyDir:             cfg.VerifyDir,
