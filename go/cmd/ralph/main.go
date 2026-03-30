@@ -16,6 +16,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/loop"
+	"github.com/brokenalarms/ralph/internal/pidfile"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/tmux"
@@ -71,6 +72,14 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		interrupted = true
 		cancel()
 	}()
+
+	// Write PID file so other ralph instances can detect a running loop.
+	pidPath := filepath.Join(ralphDir, "loop.pid")
+	if err := pidfile.Write(pidPath); err != nil {
+		log.Error("", "Failed to write PID file: %v", err)
+		return 1
+	}
+	defer pidfile.Remove(pidPath)
 
 	// Clear stale stop file from a previous run so we don't halt immediately.
 	os.Remove(filepath.Join(ralphDir, "stop"))
@@ -424,6 +433,54 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 	if hasRemaining {
 		log.Log("", "Resume:     %s", filepath.Join(ralphDir, "resume.sh"))
 	}
+}
+
+// handleTmuxAttach creates a tmux session that attaches to an already-running
+// loop. The loop pane tails the log instead of re-executing ralph.
+func handleTmuxAttach(cfg config.Config, scriptPath string, args []string, ralphDir string, existingPID int, log *logging.Logger) int {
+	if !tmux.Available() {
+		log.Error("", "tmux not found on PATH")
+		return 1
+	}
+
+	logTailCmd := fmt.Sprintf("echo 'Attached to ralph loop (PID %d)'; tail -f '%s'",
+		existingPID, filepath.Join(ralphDir, "loop.log"))
+
+	sess := &tmux.Session{
+		Name:       tmux.SessionName(cfg.ProjectDir),
+		ProjectDir: cfg.ProjectDir,
+		RalphDir:   ralphDir,
+		RawLogPath: filepath.Join(ralphDir, "raw.log"),
+		ScriptPath: scriptPath,
+		RalphCmd:   logTailCmd,
+		Commander:  true,
+		TaskCmd:    tmux.BuildTaskCmd(scriptPath, cfg.ProjectDir),
+	}
+
+	if err := sess.Setup(); err != nil {
+		log.Error("", "Tmux setup failed: %v", err)
+		return 1
+	}
+
+	stopTitle := make(chan struct{})
+	var stopOnce sync.Once
+	closeTitle := func() { stopOnce.Do(func() { close(stopTitle) }) }
+	go sess.PaneTitle().Run(stopTitle)
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		closeTitle()
+		sess.Kill()
+	}()
+
+	if err := sess.Attach(); err != nil {
+		closeTitle()
+		return 1
+	}
+	closeTitle()
+	return 0
 }
 
 func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir string, commander bool, log *logging.Logger) int {
