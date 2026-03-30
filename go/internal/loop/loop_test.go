@@ -5699,32 +5699,10 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 	}
 }
 
-// injectCapturingRunner records messages sent via InjectMessage so tests
-// can verify that test failure feedback is injected to the running agent.
-type injectCapturingRunner struct {
-	onRun    func()
-	result   claude.Result
-	injected []string
-}
-
-func (r *injectCapturingRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
-	if r.onRun != nil {
-		r.onRun()
-	}
-	return r.result, nil
-}
-
-func (r *injectCapturingRunner) StopStreaming() {}
-
-func (r *injectCapturingRunner) InjectMessage(msg string) error {
-	r.injected = append(r.injected, msg)
-	return nil
-}
-
-// Verifies that when post-signal tests fail, the failure output is injected
-// to the running agent via stdin instead of spawning a separate fix agent.
-// The agent has full context of what it built and can fix its own work.
-func TestLoop_onSignal_InjectsTestFailures(t *testing.T) {
+// Verifies that when post-signal tests fail, a fix agent is spawned with the
+// failure output in its prompt — no stdin injection. The fix agent runs within
+// the same onSignal call.
+func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -5746,7 +5724,7 @@ func TestLoop_onSignal_InjectsTestFailures(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
 
-	runner := &injectCapturingRunner{}
+	fixAgentCalled := false
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -5760,7 +5738,13 @@ func TestLoop_onSignal_InjectsTestFailures(t *testing.T) {
 		TaskBackend:   backend,
 		VerifyDir:     dir,
 	}, st, gm, logger)
-	l.runner = runner
+
+	l.newRunnerFunc = func() claudeRunner {
+		fixAgentCalled = true
+		// Fix agent "fixes" by removing the failing Makefile
+		os.Remove(filepath.Join(dir, "Makefile"))
+		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed tests"}}
+	}
 
 	p := signalParams{
 		ctx:        context.Background(),
@@ -5773,19 +5757,19 @@ func TestLoop_onSignal_InjectsTestFailures(t *testing.T) {
 
 	accepted := l.onSignal(p)
 
-	if accepted {
-		t.Error("onSignal should return false when tests fail (agent continues)")
+	if !accepted {
+		t.Error("onSignal should return true after fix agent fixes tests")
 	}
-	if len(runner.injected) == 0 {
-		t.Fatal("expected test failure to be injected to agent via stdin")
-	}
-	if !strings.Contains(runner.injected[0], "Tests failed") {
-		t.Errorf("injected message should contain test failure info, got: %q", runner.injected[0])
+	if !fixAgentCalled {
+		t.Fatal("expected test failure to spawn a fix agent, not use stdin injection")
 	}
 
 	output := logBuf.String()
-	if !strings.Contains(output, "injected to agent via stdin") {
-		t.Errorf("expected injection log message, got:\n%s", output)
+	if strings.Contains(output, "injected to agent via stdin") {
+		t.Error("should not use stdin injection — must spawn fix agent instead")
+	}
+	if !strings.Contains(output, "Spawning fix agent") {
+		t.Errorf("expected fix agent spawn log message, got:\n%s", output)
 	}
 }
 
@@ -5924,9 +5908,9 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 	}
 }
 
-// Verifies that test fix attempts are tracked across onSignal calls and
-// the agent is not allowed infinite retries.
-func TestLoop_onSignal_TestFixAttemptsTracked(t *testing.T) {
+// Verifies that test fix attempts are exhausted within a single onSignal call
+// (fix agents loop internally) and onSignal returns false when max is reached.
+func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -5944,8 +5928,8 @@ func TestLoop_onSignal_TestFixAttemptsTracked(t *testing.T) {
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
-	runner := &injectCapturingRunner{}
 
+	fixAttempts := 0
 	l := New(Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -5958,7 +5942,12 @@ func TestLoop_onSignal_TestFixAttemptsTracked(t *testing.T) {
 		TaskBackend:   backend,
 		VerifyDir:     dir,
 	}, st, gm, logger)
-	l.runner = runner
+
+	l.newRunnerFunc = func() claudeRunner {
+		fixAttempts++
+		// Fix agent signals success but tests keep failing
+		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "attempted fix"}}
+	}
 
 	p := signalParams{
 		ctx:        context.Background(),
@@ -5969,14 +5958,14 @@ func TestLoop_onSignal_TestFixAttemptsTracked(t *testing.T) {
 		nextTask:   "Fix tests",
 	}
 
-	// Call onSignal maxTestFixAttempts+1 times — the last should give up.
-	for i := 0; i <= 3; i++ {
-		l.onSignal(p)
-	}
+	// Single onSignal call exhausts all fix attempts internally.
+	result := l.onSignal(p)
 
-	// Should have injected 3 times (the max), then given up on the 4th.
-	if len(runner.injected) != 3 {
-		t.Errorf("expected 3 injections before giving up, got %d", len(runner.injected))
+	if result {
+		t.Error("expected onSignal to return false after exhausting test fix attempts")
+	}
+	if fixAttempts != maxTestFixAttempts {
+		t.Errorf("expected %d fix agent spawns, got %d", maxTestFixAttempts, fixAttempts)
 	}
 }
 
