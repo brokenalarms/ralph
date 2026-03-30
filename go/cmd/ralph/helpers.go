@@ -75,6 +75,10 @@ func evolveRestart(projectDir, sourceDir, scriptPath, baseBranch string, args []
 		return fmt.Errorf("cannot evolve: Ralph source directory unknown (not embedded at build time and not resolvable from binary path)")
 	}
 
+	// Remove PID file before rebuild/exec so the new process (which inherits
+	// our PID via syscall.Exec) doesn't see itself as a duplicate.
+	os.Remove(filepath.Join(ralphDir, "loop.pid"))
+
 	// PostMergeReset already synced main. Just build — no git sync needed.
 	rebuildScript := filepath.Join(sourceDir, "scripts", "build-go.sh")
 	rebuildCmd := exec.Command("bash", rebuildScript)

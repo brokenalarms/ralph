@@ -503,6 +503,30 @@ func TestEvolveRestart_StopFileSkipsRestart(t *testing.T) {
 	}
 }
 
+// evolveRestart removes the PID file before attempting rebuild/exec so that
+// the new process (which inherits the same PID via syscall.Exec) doesn't
+// see its own PID and refuse to start.
+func TestEvolveRestart_RemovesPIDFile(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	pidPath := filepath.Join(ralphDir, "loop.pid")
+	if err := pidfile.Write(pidPath); err != nil {
+		t.Fatalf("Write PID file failed: %v", err)
+	}
+
+	log := logging.New(nil)
+
+	// Will fail at rebuild (nonexistent source), but PID file should already
+	// be removed by that point.
+	_ = evolveRestart(dir, "/nonexistent/source", "/nonexistent/ralph", "develop", nil, log)
+
+	if _, err := os.Stat(pidPath); !os.IsNotExist(err) {
+		t.Error("PID file should be removed before exec attempt")
+	}
+}
+
 // Verifies evolveRestart proceeds (and fails on git) when no stop file exists,
 // confirming the stop-file check only fires when the file is present.
 func TestEvolveRestart_NoStopFileProceeds(t *testing.T) {
@@ -950,7 +974,7 @@ func TestPostReviewCleanup(t *testing.T) {
 	}
 }
 
-// handleLoop refuses to start when a PID file exists for a live process.
+// handleLoop refuses to start when a PID file exists for a different live process.
 func TestHandleLoop_RefusesDuplicateLoop(t *testing.T) {
 	dir := t.TempDir()
 	runCmd(t, "git", "-C", dir, "init")
@@ -959,10 +983,15 @@ func TestHandleLoop_RefusesDuplicateLoop(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
-	pidPath := filepath.Join(ralphDir, "loop.pid")
-	if err := pidfile.Write(pidPath); err != nil {
-		t.Fatalf("failed to write PID file: %v", err)
+	// Start a child process so the PID is alive but not ours.
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start sleep: %v", err)
 	}
+	defer cmd.Process.Kill()
+
+	pidPath := filepath.Join(ralphDir, "loop.pid")
+	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0o644)
 	defer pidfile.Remove(pidPath)
 
 	log := logging.New(io.Discard)

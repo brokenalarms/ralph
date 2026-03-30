@@ -1,7 +1,9 @@
 package pidfile
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -60,8 +62,33 @@ func TestCheck_NoPIDFile(t *testing.T) {
 	}
 }
 
-// Check returns the PID when the process is alive (use own PID).
+// Check returns the PID when a different alive process owns the PID file.
 func TestCheck_AliveProcess(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "loop.pid")
+
+	// Start a long-running child process whose PID we can write.
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start sleep: %v", err)
+	}
+	defer cmd.Process.Kill()
+
+	childPID := cmd.Process.Pid
+	os.WriteFile(path, []byte(fmt.Sprintf("%d", childPID)), 0o644)
+
+	pid, err := Check(path)
+	if err != nil {
+		t.Fatalf("Check failed: %v", err)
+	}
+	if pid != childPID {
+		t.Errorf("pid = %d, want %d (alive process)", pid, childPID)
+	}
+}
+
+// Check skips self-detection: if the stored PID matches os.Getpid(), return 0.
+// This happens after syscall.Exec replaces the process in-place (same PID).
+func TestCheck_SelfPIDReturnsZero(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "loop.pid")
 
@@ -73,8 +100,12 @@ func TestCheck_AliveProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check failed: %v", err)
 	}
-	if pid != os.Getpid() {
-		t.Errorf("pid = %d, want %d (alive process)", pid, os.Getpid())
+	if pid != 0 {
+		t.Errorf("pid = %d, want 0 (self-PID should be skipped)", pid)
+	}
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("self-PID file should have been removed")
 	}
 }
 

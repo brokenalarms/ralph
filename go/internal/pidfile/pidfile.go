@@ -36,6 +36,13 @@ func Check(path string) (int, error) {
 		return 0, nil
 	}
 
+	// Self-detection: after syscall.Exec the new process inherits the same
+	// PID. Treat our own PID as stale so the new process can start cleanly.
+	if pid == os.Getpid() {
+		os.Remove(path)
+		return 0, nil
+	}
+
 	if processAlive(pid) {
 		return pid, nil
 	}
