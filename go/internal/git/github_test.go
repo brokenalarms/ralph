@@ -98,6 +98,7 @@ func TestIsHarmlessUpdateBranchError(t *testing.T) {
 func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
 	stub := &runLogGitHub{log: "test failure output line 1\nline 2"}
 	mgr := &Manager{
+		BaseBranch: "main",
 		GitHub: stub,
 	}
 

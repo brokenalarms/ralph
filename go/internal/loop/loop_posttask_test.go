@@ -43,7 +43,7 @@ func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -94,7 +94,7 @@ func TestLoop_HandlePostSignal_VerificationFailure(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-abc"}},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -139,7 +139,7 @@ func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-timeout"}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	var logBuf bytes.Buffer
 	logger := logging.New(&logBuf)
 
@@ -211,7 +211,7 @@ func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix login", NextID: "ralph-fast"}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	l := New(Config{
 		Dirs:              workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:     1,
@@ -264,7 +264,7 @@ func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Slow merge", NextID: "ralph-slow"}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	l := New(Config{
 		Dirs:              workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:     1,
@@ -327,7 +327,7 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt1"}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -385,7 +385,7 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt2"}},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -433,7 +433,7 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt3"}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logger}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logger, BaseBranch: "main"}
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -487,7 +487,7 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt4"}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	headBefore := gm.HeadRev()
 
 	l := New(Config{
@@ -548,7 +548,7 @@ func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -609,7 +609,7 @@ func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -667,7 +667,7 @@ func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -726,7 +726,7 @@ func TestResolveByPRState_Merged_NotifyEnabled(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	gm.GitHub = &git.StubGitHub{IsAvailable: true, PRState: "MERGED"}
 
 	l := New(Config{
@@ -786,7 +786,7 @@ func TestResolveByPRState_Open_NotifyEnabled(t *testing.T) {
 	run(t, "git", "-C", project, "push", "-u", "origin", branchName)
 	run(t, "git", "-C", project, "checkout", "main")
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	gm.GitHub = &git.StubGitHub{IsAvailable: true, PRState: "OPEN", PRHead: branchName}
 
 	l := New(Config{
@@ -837,7 +837,7 @@ func TestResolveByPRState_Merged_NotifyDisabled(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	gm.GitHub = &git.StubGitHub{IsAvailable: true, PRState: "MERGED"}
 
 	l := New(Config{

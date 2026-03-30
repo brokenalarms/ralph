@@ -19,10 +19,11 @@ func TestPostMergeUpdateMain_AdvancesLocalMain(t *testing.T) {
 	st := newMemState()
 
 	mgr := &Manager{
-		ProjectDir:  project,
-		RalphDir:    ralphDir,
-		State:       st,
-		Logger:      &testLog{},
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      st,
+		Logger:     &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -68,10 +69,11 @@ func TestPostMergeUpdateMain_AtomicResetNoStagedChanges(t *testing.T) {
 	log := &testLog{}
 
 	mgr := &Manager{
-		ProjectDir:  project,
-		RalphDir:    ralphDir,
-				State:       st,
-		Logger:      log,
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      st,
+		Logger:     log,
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -174,6 +176,7 @@ func TestPostMergeUpdateMain_LogSaysUpdatedLocalToLatest(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir: project,
 		RalphDir:   ralphDir,
+		BaseBranch: "main",
 		State:      st,
 		Logger:     log,
 	}
@@ -285,6 +288,62 @@ fi
 
 	if !strings.Contains(createLine, "--base develop") {
 		t.Errorf("gh pr create should include --base develop, got: %s", createLine)
+	}
+}
+
+// PR created with --base-branch main targets main, not the repo default.
+func TestPushAndCreatePR_BaseBranchMainTargetsMain(t *testing.T) {
+	project, cleanup := initBareRepoWithBranch(t, "main")
+	defer cleanup()
+
+	wtDir := filepath.Join(t.TempDir(), "worktree")
+	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
+	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
+
+	binDir := t.TempDir()
+	ghLog := filepath.Join(t.TempDir(), "gh-args.log")
+	ghScript := filepath.Join(binDir, "gh")
+	if err := os.WriteFile(ghScript, []byte(fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %s
+if [ "$2" = "list" ]; then
+  echo ""
+fi
+`, ghLog)), 0755); err != nil {
+		t.Fatalf("writing fake gh: %v", err)
+	}
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+":"+origPath)
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		WorkDir:        wtDir,
+		WorktreeBranch: "ralph/test/feature",
+		BaseBranch:     "main",
+		Logger:         &testLog{},
+	}
+
+	_, err := mgr.PushAndCreatePR(context.Background(), "", "test task", "")
+	if err != nil {
+		t.Fatalf("PushAndCreatePR failed: %v", err)
+	}
+
+	ghArgs, readErr := os.ReadFile(ghLog)
+	if readErr != nil {
+		t.Fatalf("reading gh log: %v", readErr)
+	}
+
+	var createLine string
+	for _, line := range strings.Split(strings.TrimSpace(string(ghArgs)), "\n") {
+		if strings.Contains(line, "pr create") {
+			createLine = line
+			break
+		}
+	}
+	if createLine == "" {
+		t.Fatal("expected gh pr create to be called")
+	}
+	if !strings.Contains(createLine, "--base main") {
+		t.Errorf("gh pr create should include --base main, got: %s", createLine)
 	}
 }
 
@@ -431,6 +490,7 @@ func TestPushAndCreatePR_PassesBodyToCreatePR(t *testing.T) {
 	dir := t.TempDir()
 	mgr := &Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
@@ -476,6 +536,7 @@ func TestPushAndCreatePR_FallsBackToTaskDescWhenNoBody(t *testing.T) {
 	dir := t.TempDir()
 	mgr := &Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
@@ -500,6 +561,7 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoWorktreeBranch(t *testing.T) {
 	mgr := &Manager{
 		WorkDir:    "/some/dir",
 		ProjectDir: "/some/dir",
+		BaseBranch: "main",
 		Logger:     &testLog{},
 	}
 	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
@@ -518,6 +580,7 @@ func TestAutoMergeCurrentBranch_SkipsWhenWorkDirIsProjectDir(t *testing.T) {
 		WorktreeBranch: "ralph/project/01-some-task",
 		WorkDir:        "/some/dir",
 		ProjectDir:     "/some/dir",
+		BaseBranch: "main",
 		Logger:         &testLog{},
 	}
 	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
@@ -542,6 +605,7 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       state,
 		Logger:      &testLog{},
@@ -583,10 +647,11 @@ func TestResolveConflict_RebasesAndForcePushes(t *testing.T) {
 	st := newMemState()
 
 	mgr := &Manager{
-		ProjectDir:  project,
-		RalphDir:    ralphDir,
-				State:       st,
-		Logger:      &testLog{},
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      st,
+		Logger:     &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -631,6 +696,7 @@ func TestMergeWithRetry_RecoversFromConflict(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:     project,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/test/01-merge-retry",
@@ -689,6 +755,7 @@ func TestMergeWithRetry_DelegatesCIFailure(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:     project,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/test/01-ci-retry",
@@ -745,6 +812,7 @@ func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:     project,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
 		WorktreeBranch: "ralph/test/01-exhaust",
 		State:          newMemState(),
@@ -792,6 +860,7 @@ func TestMergeWithRetry_StopsOnUnresolvableConflict(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:     project,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
 		WorktreeBranch: "ralph/test/01-unresolvable",
 		State:          newMemState(),
@@ -857,6 +926,7 @@ func TestAutoMergeCurrentBranch_PassesPRTitleAsSubject(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:     project,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
 		WorktreeBranch: "ralph/test/01-subject",
 		State:          newMemState(),
@@ -942,6 +1012,7 @@ func TestMergeWithRetry_PushesFixAgentWorkBeforeRetry(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:     project,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/test/01-ci-push-retry",
@@ -1055,6 +1126,7 @@ func TestMergeWithRetry_SpawnsConflictAgent(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:     project,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
 		WorktreeBranch: "ralph/test/01-conflict-agent",
 		State:          newMemState(),
@@ -1121,6 +1193,7 @@ func TestMergeWithRetry_SkipsAfterConflictAgentFails(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:     project,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
 		WorktreeBranch: "ralph/test/01-conflict-agent-fail",
 		State:          newMemState(),
@@ -1199,6 +1272,7 @@ func TestPush_SquashesMultipleCommits(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:     project,
+		BaseBranch: "main",
 		WorkDir:        wtDir,
 		WorktreeBranch: "ralph/test-squash",
 		State:          newMemState(),
@@ -1238,6 +1312,7 @@ func TestPush_SingleCommitNoOp(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:     project,
+		BaseBranch: "main",
 		WorkDir:        wtDir,
 		WorktreeBranch: "ralph/test-single",
 		State:          newMemState(),
@@ -1283,6 +1358,7 @@ func TestPush_AfterFixAgent(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:     project,
+		BaseBranch: "main",
 		WorkDir:        wtDir,
 		WorktreeBranch: "ralph/test-fix",
 		State:          newMemState(),
@@ -1321,6 +1397,7 @@ func TestPush_StackedBranch_PreservesParent(t *testing.T) {
 
 	fooMgr := &Manager{
 		ProjectDir:     project,
+		BaseBranch: "main",
 		WorkDir:        fooDir,
 		WorktreeBranch: "ralph/foo",
 		State:          newMemState(),
@@ -1343,6 +1420,7 @@ func TestPush_StackedBranch_PreservesParent(t *testing.T) {
 
 	barMgr := &Manager{
 		ProjectDir:     project,
+		BaseBranch: "main",
 		WorkDir:        barDir,
 		WorktreeBranch: "ralph/bar",
 		PrevBranch:     "ralph/foo",
@@ -1392,6 +1470,7 @@ func TestPush_PrePushBlocksPush(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:     project,
+		BaseBranch: "main",
 		WorkDir:        wtDir,
 		WorktreeBranch: "ralph/test-prepush",
 		State:          newMemState(),
@@ -1432,6 +1511,7 @@ func TestPush_PrePushPasses(t *testing.T) {
 	prePushCalled := false
 	mgr := &Manager{
 		ProjectDir:     project,
+		BaseBranch: "main",
 		WorkDir:        wtDir,
 		WorktreeBranch: "ralph/test-prepush-pass",
 		State:          newMemState(),

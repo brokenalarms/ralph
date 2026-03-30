@@ -39,7 +39,7 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "fixed it"},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -109,7 +109,7 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -178,7 +178,7 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -225,6 +225,7 @@ func TestLoop_CIFailureStillClosesTask(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-ci-test",
@@ -283,6 +284,7 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-conflict-test",
@@ -339,6 +341,7 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-ci-fix",
@@ -393,6 +396,7 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-ci-exhaust",
@@ -460,6 +464,7 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-mixed",
@@ -526,6 +531,7 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-stubborn",
@@ -586,6 +592,7 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-fixable",
@@ -646,6 +653,7 @@ func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-recover",
@@ -714,7 +722,7 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -832,7 +840,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 			var logBuf bytes.Buffer
 			logger := logging.NewWithWriter(&logBuf)
 
-			gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+			gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 			llmResult := verify.Result{
 				Passed:  tt.passed,

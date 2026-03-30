@@ -88,7 +88,6 @@ func initBareRepo(t *testing.T) (string, func()) {
 	run(t, "git", "-C", project, "config", "user.email", "test@test")
 	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "init")
 	run(t, "git", "-C", project, "push", "-u", "origin", "main")
-	// Set origin/HEAD so detectDefaultBranch works
 	run(t, "git", "-C", project, "remote", "set-head", "origin", "main")
 
 	return project, func() {}
@@ -121,6 +120,7 @@ func TestBranchIsAncestorOfMain(t *testing.T) {
 	project, _ := initBareRepo(t)
 	mgr := &Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		WorkDir:    project,
 		Logger:     &testLog{},
 	}
@@ -154,6 +154,7 @@ func TestBranchIsAheadOfMain(t *testing.T) {
 	project, _ := initBareRepo(t)
 	mgr := &Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		WorkDir:    project,
 		Logger:     &testLog{},
 	}
@@ -326,6 +327,7 @@ func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       state,
 		Logger:      log,
@@ -360,6 +362,7 @@ func TestSetupWorktree_NonGitDirErrors(t *testing.T) {
 	tmp := t.TempDir()
 	mgr := &Manager{
 		ProjectDir:  tmp,
+		BaseBranch: "main",
 		RalphDir:    filepath.Join(tmp, ".ralph"),
 				Logger:      &testLog{},
 	}
@@ -383,6 +386,7 @@ func TestSetupWorktree_Resume(t *testing.T) {
 	// First run: create worktree
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       state,
 		Logger:      log,
@@ -396,6 +400,7 @@ func TestSetupWorktree_Resume(t *testing.T) {
 	// Second run: resume
 	mgr2 := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				Resume:      true,
 		State:       state,
@@ -423,6 +428,7 @@ func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       state,
 		Logger:      log,
@@ -438,6 +444,7 @@ func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 
 	mgr2 := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				Resume:      true,
 		State:       state,
@@ -466,6 +473,7 @@ func TestRenameBranchForTask_DoesNotSetPrevBranch(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      state,
 		Logger:     log,
@@ -492,6 +500,7 @@ func TestPrepareForNextTask_CreatesFreshBranch(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      state,
 		Logger:     &testLog{},
@@ -549,6 +558,7 @@ func TestSetupWorktree_ResumeKeepsValidBranch(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       state,
 		Logger:      log,
@@ -564,6 +574,7 @@ func TestSetupWorktree_ResumeKeepsValidBranch(t *testing.T) {
 	// Resume without squash-merging — branch should be preserved
 	mgr2 := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				Resume:      true,
 		State:       state,
@@ -590,6 +601,7 @@ func TestRenameBranchForTask_RenamesBranch(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       state,
 		Logger:      &testLog{},
@@ -621,6 +633,7 @@ func TestRenameBranchForTask_IncludesTaskID(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       state,
 		Logger:      &testLog{},
@@ -645,6 +658,7 @@ func TestRenameBranchForTask_OnlyRenamesOnce(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       state,
 		Logger:      &testLog{},
@@ -666,6 +680,7 @@ func TestRenameBranchForTask_OnlyRenamesOnce(t *testing.T) {
 func TestRenameBranchForTask_NoOpWithoutWorktree(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir: "/some/dir",
+		BaseBranch: "main",
 		WorkDir:    "/some/dir",
 		Logger:     &testLog{},
 	}
@@ -684,6 +699,7 @@ func TestWorktreeDirUsesDateBasedName(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       state,
 		Logger:      &testLog{},
@@ -710,6 +726,7 @@ func TestSecondRunSameDayIncrementsSuffix(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       state,
 		Logger:      &testLog{},
@@ -734,6 +751,7 @@ func TestBranchNamingIgnoresStale(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       state,
 		Logger:      &testLog{},
@@ -759,6 +777,7 @@ func TestStaleWorktreeBranchCleanedUpViaPrune(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       state,
 		Logger:      &testLog{},
@@ -772,6 +791,7 @@ func TestStaleWorktreeBranchCleanedUpViaPrune(t *testing.T) {
 
 	mgr2 := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       newMemState(),
 		Logger:      &testLog{},
@@ -792,6 +812,7 @@ func TestLiveRalphWorktreeRemovedWhenBranchExists(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       state,
 		Logger:      &testLog{},
@@ -803,6 +824,7 @@ func TestLiveRalphWorktreeRemovedWhenBranchExists(t *testing.T) {
 
 	mgr2 := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       newMemState(),
 		Logger:      &testLog{},
@@ -824,13 +846,14 @@ func TestWorktreeInheritsGitignore(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	preSetupMgr := &Manager{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, Logger: &testLog{}}
+	preSetupMgr := &Manager{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}
 	preSetupMgr.EnsureGitignored(".ralph")
 	run(t, "git", "-C", project, "push", "origin", "main", "-q")
 
 	state := newMemState()
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       state,
 		Logger:      &testLog{},
@@ -856,7 +879,7 @@ func TestExistingGitignoreContentPreserved(t *testing.T) {
 	run(t, "git", "-C", project, "add", ".gitignore")
 	run(t, "git", "-C", project, "commit", "-m", "add gitignore")
 
-	mgr := &Manager{ProjectDir: project, WorkDir: project, Logger: &testLog{}}
+	mgr := &Manager{ProjectDir: project, WorkDir: project, Logger: &testLog{}, BaseBranch: "main"}
 	mgr.EnsureGitignored(".ralph")
 
 	data, err := os.ReadFile(filepath.Join(project, ".gitignore"))
@@ -879,7 +902,7 @@ func TestDirtyWorkingTreeDetected(t *testing.T) {
 	os.WriteFile(filepath.Join(project, "dirty.txt"), []byte("uncommitted\n"), 0o644)
 	run(t, "git", "-C", project, "add", "dirty.txt")
 
-	dirtyMgr := &Manager{ProjectDir: project, WorkDir: project, Logger: &testLog{}}
+	dirtyMgr := &Manager{ProjectDir: project, WorkDir: project, Logger: &testLog{}, BaseBranch: "main"}
 	if !dirtyMgr.HasUncommittedChanges() {
 		t.Error("should detect uncommitted changes")
 	}
@@ -893,6 +916,7 @@ func TestRenameBranchForTask_RenamesAndSetsFlag(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       st,
 		Logger:      &testLog{},
@@ -931,7 +955,7 @@ func TestPruneOrphanedWorktrees_RemovesOrphaned(t *testing.T) {
 	activeDir := filepath.Join(worktreeRoot, "ralph-20260322-active")
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/next", activeDir, "HEAD")
 
-	mgr := &Manager{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, Logger: log}
+	mgr := &Manager{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}
 	mgr.PruneOrphanedWorktrees()
 
 	// Orphaned directory should be removed
@@ -955,7 +979,7 @@ func TestPruneOrphanedWorktrees_NoWorktreeDir(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	log := &testLog{}
 
-	mgr := &Manager{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, Logger: log}
+	mgr := &Manager{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}
 	mgr.PruneOrphanedWorktrees()
 
 	if len(log.messages) > 0 {
@@ -974,7 +998,7 @@ func TestPruneOrphanedWorktrees_IgnoresFiles(t *testing.T) {
 	filePath := filepath.Join(worktreeRoot, "some-file.txt")
 	os.WriteFile(filePath, []byte("keep"), 0o644)
 
-	mgr := &Manager{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, Logger: log}
+	mgr := &Manager{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}
 	mgr.PruneOrphanedWorktrees()
 
 	if _, err := os.Stat(filePath); err != nil {

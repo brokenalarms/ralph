@@ -68,6 +68,7 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		WorkDir:    project,
 		Logger:     logging.New(nil),
 	}
@@ -127,6 +128,7 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: dir,
+		BaseBranch: "main",
 		WorkDir:    dir,
 		Logger:     logging.New(nil),
 	}
@@ -172,6 +174,7 @@ func TestLoop_PushCalledAfterSignal(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		RalphDir:       ralphDir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/test/01-task",
@@ -235,7 +238,7 @@ func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -301,7 +304,7 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -371,7 +374,7 @@ func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -436,7 +439,7 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -507,7 +510,7 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -572,7 +575,7 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -639,7 +642,7 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
 
 	runner := &stubRunner{
 		onRun: func() {

@@ -79,7 +79,7 @@ func TestLoop_MaybeRefactor_LLMSaysNo(t *testing.T) {
 		cfg:          Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}, Refactor: true},
 		state:        st,
 		logger:       logging.New(nil),
-		git:          &git.Manager{WorkDir: gitDir},
+		git:          &git.Manager{WorkDir: gitDir, BaseBranch: "main"},
 		sessionTasks: make([]CompletedTask, 5),
 		refactorQueryFunc: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			queryFnCalled = true
@@ -133,7 +133,7 @@ func TestLoop_MaybeRefactor_LLMSaysYes(t *testing.T) {
 		},
 		state:        st,
 		logger:       logging.New(nil),
-		git:          &git.Manager{WorkDir: gitDir},
+		git:          &git.Manager{WorkDir: gitDir, BaseBranch: "main"},
 		sessionTasks: make([]CompletedTask, 5),
 		limiter:      ratelimit.New(ralphDir, 80),
 		signals:      claude.DefaultSignalPaths(ralphDir),
@@ -182,7 +182,7 @@ func TestLoop_MaybeRefactor_TriggersAtMultiplesOf5(t *testing.T) {
 		cfg:    Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}, Refactor: true},
 		state:  st,
 		logger: logging.New(nil),
-		git:    &git.Manager{WorkDir: gitDir},
+		git:    &git.Manager{WorkDir: gitDir, BaseBranch: "main"},
 		refactorQueryFunc: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			queryCalls++
 			return "NO\nAll good.", nil
@@ -209,7 +209,7 @@ func TestLoop_MaybeRefactor_TriggersAtMultiplesOf5(t *testing.T) {
 // Proves: llmShouldRefactor correctly parses YES/NO responses in various
 // formats, including case variations and extra whitespace.
 func TestLoop_LLMShouldRefactor_ParsesResponses(t *testing.T) {
-	l := &Loop{git: &git.Manager{WorkDir: t.TempDir()}}
+	l := &Loop{git: &git.Manager{WorkDir: t.TempDir(), BaseBranch: "main"}}
 
 	tests := []struct {
 		name     string

@@ -73,6 +73,7 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		WorkDir:    project,
 		Logger:     logging.New(nil),
 	}
@@ -124,6 +125,7 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -213,6 +215,7 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -322,6 +325,7 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -431,6 +435,7 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -535,6 +540,7 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -630,6 +636,7 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logger,
@@ -728,6 +735,7 @@ func TestSetStackHead_SkipsUnfetchableBranch(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logger,
@@ -774,6 +782,7 @@ func TestSetStackHead_NoLogWhenNoCompletedTasks(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logger,

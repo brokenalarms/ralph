@@ -83,42 +83,31 @@ func TestManager_UsesInjectedRunner(t *testing.T) {
 	}
 }
 
-// Manager.detectDefaultBranch uses the Runner for the symbolic-ref lookup,
-// proving it works without shelling out to git.
-func TestManager_DetectDefaultBranch_UsesRunner(t *testing.T) {
-	r := newStubRunner()
-	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/develop", nil)
-
-	mgr := stubManager(t.TempDir(), r, nil)
-	branch := mgr.detectDefaultBranch()
-	if branch != "develop" {
-		t.Errorf("expected develop, got %q", branch)
-	}
-}
-
-// Manager.detectDefaultBranch falls back to "develop" when the runner
-// returns empty output (no remote HEAD configured).
-func TestManager_DetectDefaultBranch_Fallback(t *testing.T) {
+// detectDefaultBranch returns BaseBranch directly — no git calls, no fallback.
+func TestManager_DetectDefaultBranch_ReturnsBaseBranch(t *testing.T) {
 	r := newStubRunner()
 	mgr := stubManager(t.TempDir(), r, nil)
-	branch := mgr.detectDefaultBranch()
-	if branch != "develop" {
-		t.Errorf("expected develop fallback, got %q", branch)
-	}
-}
-
-// Manager.detectDefaultBranch returns BaseBranch when set, without
-// calling the runner at all.
-func TestManager_DetectDefaultBranch_Override(t *testing.T) {
-	r := newStubRunner()
-	mgr := stubManager(t.TempDir(), r, nil)
-	mgr.BaseBranch = "main"
+	// stubManager sets BaseBranch to "main"
 	branch := mgr.detectDefaultBranch()
 	if branch != "main" {
 		t.Errorf("expected main, got %q", branch)
 	}
 	if r.CalledWith("symbolic-ref") {
-		t.Error("should not call symbolic-ref when BaseBranch is set")
+		t.Error("should not call symbolic-ref — BaseBranch is authoritative")
+	}
+}
+
+// detectDefaultBranch with explicit --base-branch=develop returns "develop".
+func TestManager_DetectDefaultBranch_ExplicitDevelop(t *testing.T) {
+	r := newStubRunner()
+	mgr := stubManager(t.TempDir(), r, nil)
+	mgr.BaseBranch = "develop"
+	branch := mgr.detectDefaultBranch()
+	if branch != "develop" {
+		t.Errorf("expected develop, got %q", branch)
+	}
+	if r.CalledWith("symbolic-ref") {
+		t.Error("should not call symbolic-ref — BaseBranch is authoritative")
 	}
 }
 
@@ -147,6 +136,7 @@ func TestManager_PushAndCreatePR_NoRealProcesses(t *testing.T) {
 	dir := t.TempDir()
 	mgr := &Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
@@ -184,6 +174,7 @@ func TestManager_PushAndCreatePR_PushesEvenWhenPRExists(t *testing.T) {
 	dir := t.TempDir()
 	mgr := &Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
@@ -219,6 +210,7 @@ func TestManager_PushAndCreatePR_UpdatesTitleWhenPRExists(t *testing.T) {
 	dir := t.TempDir()
 	mgr := &Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
@@ -253,6 +245,7 @@ func TestManager_PushAndCreatePR_StripsComponentPrefix(t *testing.T) {
 	dir := t.TempDir()
 	mgr := &Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
@@ -286,6 +279,7 @@ func TestManager_PushAndCreatePR_NoEditWithoutTaskID(t *testing.T) {
 	dir := t.TempDir()
 	mgr := &Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
@@ -319,6 +313,7 @@ func TestManager_PushAndCreatePR_LogsAlreadyOpen(t *testing.T) {
 	log := &testLog{}
 	mgr := &Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
@@ -356,6 +351,7 @@ func TestManager_PushAndCreatePR_LogsCreatedPR(t *testing.T) {
 	log := &testLog{}
 	mgr := &Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
