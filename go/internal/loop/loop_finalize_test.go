@@ -121,7 +121,7 @@ func TestFinalizePR_NoAutoMerge_ClosesTask(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	l := New(Config{
 		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
 		CallsPerHour: 80,
@@ -167,7 +167,7 @@ func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
 	}
 
 	mergeCalled := false
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	l := New(Config{
 		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
 		CallsPerHour: 80,
@@ -219,7 +219,7 @@ func TestFinalizePR_MergeFailure_SkipsTask(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	l := New(Config{
 		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
 		CallsPerHour: 80,
@@ -273,7 +273,7 @@ func TestFinalizePR_AlreadyMerged_ClosesImmediately(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	l := New(Config{
 		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
 		CallsPerHour: 80,
@@ -322,7 +322,7 @@ func TestFinalizePR_UsesURLInCloseReason(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 	l := New(Config{
 		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
 		CallsPerHour: 80,

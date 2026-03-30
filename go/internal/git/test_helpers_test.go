@@ -144,6 +144,7 @@ func stubManager(dir string, runner *stubRunner, gh *StubGitHub) *Manager {
 	return &Manager{
 		ProjectDir: dir,
 		WorkDir:    dir,
+		BaseBranch: "main",
 		Runner:     runner,
 		GitHub:     gh,
 		State:      newMemState(),

@@ -266,6 +266,7 @@ func TestPrintSummary_TaskCounts(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: dir,
+		BaseBranch: "main",
 		WorkDir:    dir,
 	}
 
@@ -286,7 +287,7 @@ func TestInitRalphDir_CreatesDirectory(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir}
 
 	log := logging.New(nil)
-	resume, exitCode := initRalphDir(context.Background(), cfg, &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log}, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), cfg, &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue (exitCode < 0), got %d", exitCode)
@@ -353,7 +354,7 @@ func TestInitRalphDir_DirtyWorkingTreeExitsWithError(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir}
 	log := logging.New(nil)
 
-	_, exitCode := initRalphDir(context.Background(), cfg, &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log}, ralphDir, logFile, stateFile, log)
+	_, exitCode := initRalphDir(context.Background(), cfg, &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}, ralphDir, logFile, stateFile, log)
 
 	if exitCode != 1 {
 		t.Errorf("expected exit code 1, got %d", exitCode)
@@ -375,7 +376,7 @@ func TestInitRalphDir_DetectsResume(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir}
 	log := logging.New(nil)
 
-	resume, exitCode := initRalphDir(context.Background(), cfg, &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log}, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), cfg, &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue, got exit code %d", exitCode)
@@ -565,7 +566,7 @@ func TestCleanup_InterruptedWritesStopped(t *testing.T) {
 	st.Init(5)
 	st.Write("status", "halted_stagnation")
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 	backend := &testutil.StubBackend{Total: 1, Remaining: 1}
 	log := logging.New(nil)
 	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
@@ -589,7 +590,7 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	st.Init(5)
 	st.Write("status", "completed")
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 	backend := &testutil.StubBackend{Total: 3, Completed: 3}
 	log := logging.New(nil)
 	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
@@ -620,7 +621,7 @@ func TestCleanup_ClearsCLIConfig(t *testing.T) {
 		t.Fatal("cli_config should exist before cleanup")
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 	backend := &testutil.StubBackend{Total: 1}
 	log := logging.New(nil)
 	c := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
@@ -688,7 +689,7 @@ func TestInitRalphDir_WaitAutoResetsOnCompleted(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir, Wait: true}
 	log := logging.New(nil)
 
-	resume, exitCode := initRalphDir(context.Background(), cfg, &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log}, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), cfg, &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue (exitCode < 0), got %d — --wait should auto-reset", exitCode)
@@ -722,7 +723,7 @@ func TestInitRalphDir_NoWaitCompletedBlocksOnPrompt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, exitCode := initRalphDir(ctx, cfg, &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log}, ralphDir, logFile, stateFile, log)
+	_, exitCode := initRalphDir(ctx, cfg, &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}, ralphDir, logFile, stateFile, log)
 
 	if exitCode != 0 {
 		t.Errorf("expected exit code 0 (prompt cancelled), got %d", exitCode)

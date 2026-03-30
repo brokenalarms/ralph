@@ -53,7 +53,7 @@ func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 			var logBuf strings.Builder
 			logger := logging.New(&logBuf)
 
-			gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+			gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 			l := New(Config{
 				Dirs: workctx.WorkContext{
@@ -97,7 +97,7 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 		Description:  "Auth tokens are expiring too early due to clock skew",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -159,7 +159,7 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 		BackendLabel: "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -241,6 +241,7 @@ func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: dir,
+		BaseBranch: "main",
 		WorkDir:    dir,
 	}
 
@@ -302,6 +303,7 @@ func TestLoop_TaskBannerOnNewTask(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: dir,
+		BaseBranch: "main",
 		WorkDir:    dir,
 	}
 
@@ -367,7 +369,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 	var logBuf bytes.Buffer
 
 	l := New(Config{
@@ -451,6 +453,7 @@ func TestLoop_HealthDashboardLoggedBetweenIterations(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -528,6 +531,7 @@ func TestLoop_HealthDashboardHiddenByDefault(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -616,6 +620,7 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: dir,
+		BaseBranch: "main",
 		WorkDir:    dir,
 	}
 
@@ -652,7 +657,7 @@ func newHandleRunResultLoop(t *testing.T) (*Loop, string) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 	logger := logging.New(nil)
 
 	l := New(Config{

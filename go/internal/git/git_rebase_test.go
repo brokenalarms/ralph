@@ -38,6 +38,7 @@ func setupRebaseMgr(t *testing.T, project, bare string) *Manager {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       state,
 		Logger:      &testLog{},
@@ -223,6 +224,7 @@ func TestTagTaskStart_WithTaskID(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       newMemState(),
 		Logger:      &testLog{},
@@ -245,6 +247,7 @@ func TestTagTaskEnd_WithTaskID(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       newMemState(),
 		Logger:      &testLog{},
@@ -267,6 +270,7 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       newMemState(),
 		Logger:      &testLog{},
@@ -287,6 +291,7 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 func TestTagTaskStart_NoOpWithoutWorktree(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir: "/some/dir",
+		BaseBranch: "main",
 		WorkDir:    "/some/dir",
 		Logger:     &testLog{},
 	}
@@ -300,6 +305,7 @@ func TestTagTaskStart_SkipsWipBranch(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       newMemState(),
 		Logger:      &testLog{},
@@ -324,6 +330,7 @@ func TestTagStartEnd_DifferentCommits(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				State:       newMemState(),
 		Logger:      &testLog{},

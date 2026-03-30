@@ -47,7 +47,7 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -113,7 +113,7 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -170,7 +170,7 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -215,7 +215,7 @@ func TestLoop_RecordsAttemptAfterIteration(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -258,7 +258,7 @@ func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -310,7 +310,7 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 		BackendLabel: "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -346,7 +346,7 @@ func TestLoop_IncludesReflectionInAttemptContext(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -378,7 +378,7 @@ func TestLoop_CombinesAttemptsAndReflection(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -414,7 +414,7 @@ func TestLoop_EmptyAttemptContextForNewTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -438,7 +438,7 @@ func TestLoop_CrossTaskReflectionsFedForward(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -477,7 +477,7 @@ func TestLoop_CrossTaskAttemptEntriesExcluded(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -548,6 +548,7 @@ func TestLoop_RecordsCompletedTasks(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: dir,
+		BaseBranch: "main",
 		WorkDir:    dir,
 	}
 
@@ -601,6 +602,7 @@ func TestLoop_ClearsCompletedTasksOnStart(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: dir,
+		BaseBranch: "main",
 		WorkDir:    dir,
 	}
 
@@ -653,6 +655,7 @@ func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: dir,
+		BaseBranch: "main",
 		WorkDir:    dir,
 	}
 
@@ -714,7 +717,7 @@ func TestLoop_SessionTasksRecordsCompletedWork(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "added session summary before evolve"},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -770,7 +773,7 @@ func TestLoop_SessionTasksEmptyOnVerificationFailure(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "tried to fix it"},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -832,7 +835,7 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -882,7 +885,7 @@ func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
 		Total:     1,
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{

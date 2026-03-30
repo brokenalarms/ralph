@@ -43,6 +43,7 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        wtDir,
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/myproject/01-previous-task",
@@ -90,6 +91,7 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir:     dir,
+		BaseBranch: "main",
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/myproject/01-ongoing-task",
@@ -167,6 +169,7 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: dir,
+		BaseBranch: "main",
 		WorkDir:    dir,
 	}
 
@@ -212,6 +215,7 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -279,6 +283,7 @@ func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -330,6 +335,7 @@ func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -383,6 +389,7 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -480,6 +487,7 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -548,6 +556,7 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -624,6 +633,7 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -711,6 +721,7 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		WorkDir:    project,
 		Logger:     logging.New(nil),
 	}
@@ -764,6 +775,7 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -841,6 +853,7 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),
@@ -898,7 +911,7 @@ func TestLoop_CheckoutExistingBranch_NoRemote(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login"}
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
 
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
@@ -921,6 +934,7 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 
 	gm := &git.Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		State:      st,
 		Logger:     logging.New(nil),

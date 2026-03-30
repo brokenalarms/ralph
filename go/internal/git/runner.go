@@ -240,20 +240,9 @@ func parseWorktreeForBranch(porcelainOutput, branch string) string {
 	return ""
 }
 
-// detectDefaultBranch resolves the default branch, using the runner for git calls.
-// The two-arg overload (used by standalone functions) delegates to the package
-// default runner.
-func detectDefaultBranch(dir, override string, runners ...Runner) string {
-	if override != "" {
-		return override
-	}
-	r := defaultRunner
-	if len(runners) > 0 && runners[0] != nil {
-		r = runners[0]
-	}
-	ref, _ := r.Run(context.Background(), dir, "symbolic-ref", "refs/remotes/origin/HEAD")
-	if ref != "" {
-		return strings.TrimPrefix(ref, "refs/remotes/origin/")
-	}
-	return "develop"
+// detectDefaultBranch returns the configured base branch.
+// BaseBranch is always set after config parsing (--base-branch defaults to "develop"),
+// so no fallback to git symbolic-ref or hardcoded values is needed.
+func detectDefaultBranch(_, override string, _ ...Runner) string {
+	return override
 }

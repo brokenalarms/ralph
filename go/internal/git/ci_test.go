@@ -645,6 +645,7 @@ func setupAutoMergeManager(t *testing.T, gh *StubGitHub) *Manager {
 
 	mgr := &Manager{
 		ProjectDir:  project,
+		BaseBranch: "main",
 		RalphDir:    ralphDir,
 				GitHub:      gh,
 		State:       st,
@@ -802,6 +803,7 @@ func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 
 	mgr := &Manager{
 		ProjectDir: project,
+		BaseBranch: "main",
 		RalphDir:   ralphDir,
 		GitHub:     gh,
 		State:      st,
