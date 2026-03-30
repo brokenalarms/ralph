@@ -50,8 +50,14 @@ func TestWritePlanWatcher_BD(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
 	content := string(data)
 
-	if !strings.Contains(content, "bd list --status in_progress") {
-		t.Error("bd plan watcher missing in_progress query")
+	if !strings.Contains(content, "state.json") {
+		t.Error("bd plan watcher should read current task from state.json")
+	}
+	if !strings.Contains(content, "last_task_id") {
+		t.Error("bd plan watcher should read task ID from state.json last_task_id")
+	}
+	if !strings.Contains(content, "last_task") {
+		t.Error("bd plan watcher should read task title from state.json last_task")
 	}
 	if !strings.Contains(content, "bd ready --json") {
 		t.Error("bd plan watcher missing JSON-based ready queue")
@@ -141,25 +147,24 @@ func TestTouchFile_CreatesPlanRefresh(t *testing.T) {
 	}
 }
 
-// Verifies that Setup removes a stale .stream-task file from a previous run,
-// so the stream pane doesn't briefly show the old task before the loop writes
-// the current one.
-func TestSetup_ClearsStaleStreamTask(t *testing.T) {
+// Verifies that Setup preserves the .stream-task file so PaneTitle.Run()
+// can show the current task ID when attaching to a running loop session.
+func TestSetup_PreservesStreamTask(t *testing.T) {
 	dir := t.TempDir()
-	staleFile := filepath.Join(dir, ".stream-task")
-	os.WriteFile(staleFile, []byte("ralph-old: Previous task"), 0o644)
+	taskFile := filepath.Join(dir, ".stream-task")
+	os.WriteFile(taskFile, []byte("ralph-abc: Current task"), 0o644)
 
 	s := &Session{
-		Name:        "test-session",
-		RalphDir:    dir,
-			}
+		Name:     "test-session",
+		RalphDir: dir,
+	}
 
-	// Setup will fail on createSession (no tmux), but the stale file
-	// cleanup happens before that.
+	// Setup will fail on createSession (no tmux), but the file
+	// preservation happens before that.
 	_ = s.Setup()
 
-	if _, err := os.Stat(staleFile); !os.IsNotExist(err) {
-		t.Error(".stream-task should be removed on Setup to prevent showing stale task")
+	if _, err := os.Stat(taskFile); os.IsNotExist(err) {
+		t.Error(".stream-task should be preserved so PaneTitle can show task ID on attach")
 	}
 }
 
@@ -290,6 +295,33 @@ func TestApplySessionOptions_PaneDiedHook(t *testing.T) {
 		if len(args) >= 3 && args[0] == "bind-key" && args[1] == "-T" && args[2] == "root" {
 			t.Errorf("applySessionOptions must not use root-level bind-key, found: %v", args)
 		}
+	}
+}
+
+// Verifies that the plan watcher reads the current task from state.json
+// instead of bd list --status in_progress, because the loop writes task
+// info to state.json but never calls bd to set in_progress status.
+func TestWritePlanWatcher_BD_ReadsCurrentTaskFromState(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{
+		RalphDir: dir,
+	}
+
+	if err := s.writePlanWatcher(); err != nil {
+		t.Fatalf("writePlanWatcher() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
+	content := string(data)
+
+	if strings.Contains(content, "bd list --status in_progress") {
+		t.Error("plan watcher must not use bd list --status in_progress — loop never sets that status")
+	}
+	if !strings.Contains(content, "jq -r '.last_task_id // empty'") {
+		t.Error("plan watcher should read current task ID from state.json via jq")
+	}
+	if !strings.Contains(content, "jq -r '.last_task // empty'") {
+		t.Error("plan watcher should read current task title from state.json via jq")
 	}
 }
 
