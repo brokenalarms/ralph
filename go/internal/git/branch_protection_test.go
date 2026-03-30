@@ -87,10 +87,10 @@ func TestEnforceAdmins_NoRemote(t *testing.T) {
 // injected interface rather than raw exec.Command calls.
 func TestEnforceAdmins_EnablesSuccessfully(t *testing.T) {
 	mgr, log := enforceAdminsManager(t)
-	stub := &stubGitHub{
-		available:         true,
-		enforceAdmins:     false,
-		postEnforceOutput: `{"enabled":true}`,
+	stub := &StubGitHub{
+		IsAvailable:         true,
+		EnforceAdmins:     false,
+		PostEnforceOutput: `{"enabled":true}`,
 	}
 	mgr.GitHub = stub
 
@@ -98,7 +98,7 @@ func TestEnforceAdmins_EnablesSuccessfully(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !stub.postEnforceCalled {
+	if !stub.PostEnforceCalled {
 		t.Fatal("expected PostEnforceAdmins to be called via GitHub interface")
 	}
 	if !log.contains("enabled enforce_admins") {
@@ -110,9 +110,9 @@ func TestEnforceAdmins_EnablesSuccessfully(t *testing.T) {
 // avoiding unnecessary API mutations.
 func TestEnforceAdmins_AlreadyEnabled(t *testing.T) {
 	mgr, log := enforceAdminsManager(t)
-	stub := &stubGitHub{
-		available:     true,
-		enforceAdmins: true,
+	stub := &StubGitHub{
+		IsAvailable:     true,
+		EnforceAdmins: true,
 	}
 	mgr.GitHub = stub
 
@@ -120,7 +120,7 @@ func TestEnforceAdmins_AlreadyEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if stub.postEnforceCalled {
+	if stub.PostEnforceCalled {
 		t.Fatal("POST should not be called when already enabled")
 	}
 	if !log.contains("already enabled") {
@@ -132,11 +132,11 @@ func TestEnforceAdmins_AlreadyEnabled(t *testing.T) {
 // since enforce_admins requires existing branch protection to be configured.
 func TestEnforceAdmins_BranchNotProtected(t *testing.T) {
 	mgr, log := enforceAdminsManager(t)
-	stub := &stubGitHub{
-		available:         true,
-		enforceAdmins:     false,
-		postEnforceOutput: "Branch not protected",
-		postEnforceErr:    fmt.Errorf("exit status 1"),
+	stub := &StubGitHub{
+		IsAvailable:         true,
+		EnforceAdmins:     false,
+		PostEnforceOutput: "Branch not protected",
+		PostEnforceErr:    fmt.Errorf("exit status 1"),
 	}
 	mgr.GitHub = stub
 
@@ -153,9 +153,9 @@ func TestEnforceAdmins_BranchNotProtected(t *testing.T) {
 // so a transient network error doesn't block the loop.
 func TestEnforceAdmins_CheckAPIError(t *testing.T) {
 	mgr, log := enforceAdminsManager(t)
-	stub := &stubGitHub{
-		available:        true,
-		enforceAdminsErr: fmt.Errorf("network timeout"),
+	stub := &StubGitHub{
+		IsAvailable:        true,
+		EnforceAdminsErr: fmt.Errorf("network timeout"),
 	}
 	mgr.GitHub = stub
 
@@ -163,7 +163,7 @@ func TestEnforceAdmins_CheckAPIError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if stub.postEnforceCalled {
+	if stub.PostEnforceCalled {
 		t.Fatal("POST should not be called when check fails")
 	}
 	if !log.contains("Could not check enforce_admins status") {
@@ -175,11 +175,11 @@ func TestEnforceAdmins_CheckAPIError(t *testing.T) {
 // non-branch-protection error, so the caller can handle it.
 func TestEnforceAdmins_PostAPIError(t *testing.T) {
 	mgr, _ := enforceAdminsManager(t)
-	stub := &stubGitHub{
-		available:         true,
-		enforceAdmins:     false,
-		postEnforceOutput: "internal server error",
-		postEnforceErr:    fmt.Errorf("exit status 1"),
+	stub := &StubGitHub{
+		IsAvailable:         true,
+		EnforceAdmins:     false,
+		PostEnforceOutput: "internal server error",
+		PostEnforceErr:    fmt.Errorf("exit status 1"),
 	}
 	mgr.GitHub = stub
 

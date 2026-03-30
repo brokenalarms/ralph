@@ -12,6 +12,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -31,12 +32,14 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 	pushPRCalls := 0
 	iterationCount := 0
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     2,
-		nextTask:  "task A",
-		nextID:    "ralph-aaa",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining: 1,
+			Completed: 0,
+			Total:     2,
+			NextTask:  "task A",
+			NextID:    "ralph-aaa",
+		},
 	}
 
 	runner := &stubRunner{
@@ -47,17 +50,17 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 			run(t, "git", "-C", project, "add", fname)
 			run(t, "git", "-C", project, "commit", "-m", fmt.Sprintf("task %d", iterationCount))
 			if iterationCount == 1 {
-				backend.mu.Lock()
-				backend.completed = 1
-				backend.remaining = 1
-				backend.nextTask = "task B"
-				backend.nextID = "ralph-bbb"
-				backend.mu.Unlock()
+				backend.Lock()
+				backend.Completed = 1
+				backend.Remaining = 1
+				backend.NextTask = "task B"
+				backend.NextID = "ralph-bbb"
+				backend.Unlock()
 			} else {
-				backend.mu.Lock()
-				backend.completed = 2
-				backend.remaining = 0
-				backend.mu.Unlock()
+				backend.Lock()
+				backend.Completed = 2
+				backend.Remaining = 0
+				backend.Unlock()
 			}
 		},
 		result: claude.Result{SignalDetected: true},
@@ -111,11 +114,11 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 
 	pushPRCalls := 0
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "some task",
-		nextID:    "ralph-xyz",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "some task",
+		NextID:    "ralph-xyz",
 	}
 
 	runner := &stubRunner{
@@ -176,11 +179,11 @@ func TestLoop_PushCalledAfterSignal(t *testing.T) {
 		Logger:         logging.New(nil),
 	}
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Fix the bug",
-		nextID:    "ralph-fix1",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Fix the bug",
+		NextID:    "ralph-fix1",
 	}
 
 	l := New(Config{
@@ -220,13 +223,15 @@ func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "last task",
-		nextID:    "ralph-last",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "last task",
+			NextID:       "ralph-last",
+			BackendLabel: "beads",
+		},
 	}
 
 	logger := logging.New(nil)
@@ -235,10 +240,10 @@ func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
 	runner := &stubRunner{
 		onRun: func() {
 			// Simulate the task completing — no remaining tasks after this.
-			backend.mu.Lock()
-			backend.remaining = 0
-			backend.completed = 1
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Completed = 1
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true},
 	}
@@ -284,13 +289,15 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "last task",
-		nextID:    "ralph-last",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "last task",
+			NextID:       "ralph-last",
+			BackendLabel: "beads",
+		},
 	}
 
 	logger := logging.New(nil)
@@ -298,10 +305,10 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.mu.Lock()
-			backend.remaining = 0
-			backend.completed = 1
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Completed = 1
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true},
 	}
@@ -352,13 +359,15 @@ func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "last task",
-		nextID:    "ralph-last",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "last task",
+			NextID:       "ralph-last",
+			BackendLabel: "beads",
+		},
 	}
 
 	logger := logging.New(nil)
@@ -366,10 +375,10 @@ func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.mu.Lock()
-			backend.remaining = 0
-			backend.completed = 1
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Completed = 1
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true},
 	}
@@ -415,13 +424,15 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "last task",
-		nextID:    "ralph-last",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "last task",
+			NextID:       "ralph-last",
+			BackendLabel: "beads",
+		},
 	}
 
 	logger := logging.New(nil)
@@ -429,10 +440,10 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.mu.Lock()
-			backend.remaining = 0
-			backend.completed = 1
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Completed = 1
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true},
 	}
@@ -484,13 +495,15 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "last task",
-		nextID:    "ralph-last",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "last task",
+			NextID:       "ralph-last",
+			BackendLabel: "beads",
+		},
 	}
 
 	logger := logging.New(nil)
@@ -498,10 +511,10 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.mu.Lock()
-			backend.remaining = 0
-			backend.completed = 1
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Completed = 1
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true},
 	}
@@ -547,13 +560,15 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "last task",
-		nextID:    "ralph-last",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "last task",
+			NextID:       "ralph-last",
+			BackendLabel: "beads",
+		},
 	}
 
 	logger := logging.New(nil)
@@ -561,10 +576,10 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.mu.Lock()
-			backend.remaining = 0
-			backend.completed = 1
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Completed = 1
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true},
 	}
@@ -612,13 +627,15 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "last task",
-		nextID:    "ralph-last",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "last task",
+			NextID:       "ralph-last",
+			BackendLabel: "beads",
+		},
 	}
 
 	logger := logging.New(nil)
@@ -626,10 +643,10 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.mu.Lock()
-			backend.remaining = 0
-			backend.completed = 1
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Completed = 1
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: false},
 	}

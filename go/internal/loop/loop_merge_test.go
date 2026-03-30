@@ -14,6 +14,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -33,12 +34,14 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 	mergeCount := 0
 	iterationCount := 0
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     3,
-		nextTask:  "task A",
-		nextID:    "ralph-aaa",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining: 1,
+			Completed: 0,
+			Total:     3,
+			NextTask:  "task A",
+			NextID:    "ralph-aaa",
+		},
 	}
 
 	runner := &stubRunner{
@@ -49,20 +52,20 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 			os.WriteFile(filepath.Join(project, fname), []byte("package main\n"), 0o644)
 			run(t, "git", "-C", project, "add", fname)
 			run(t, "git", "-C", project, "commit", "-m", fmt.Sprintf("task %d work", iterationCount))
-			backend.mu.Lock()
-			defer backend.mu.Unlock()
-			backend.completed = iterationCount
+			backend.Lock()
+			defer backend.Unlock()
+			backend.Completed = iterationCount
 			switch iterationCount {
 			case 1:
-				backend.remaining = 1
-				backend.nextTask = "task B"
-				backend.nextID = "ralph-bbb"
+				backend.Remaining = 1
+				backend.NextTask = "task B"
+				backend.NextID = "ralph-bbb"
 			case 2:
-				backend.remaining = 1
-				backend.nextTask = "task C"
-				backend.nextID = "ralph-ccc"
+				backend.Remaining = 1
+				backend.NextTask = "task C"
+				backend.NextID = "ralph-ccc"
 			default:
-				backend.remaining = 0
+				backend.Remaining = 0
 			}
 		},
 		result: claude.Result{SignalDetected: true},
@@ -132,29 +135,31 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 	originMain := gm.HeadRev()
 	iterationCount := 0
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     2,
-		nextTask:  "task A",
-		nextID:    "ralph-aaa",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining: 1,
+			Completed: 0,
+			Total:     2,
+			NextTask:  "task A",
+			NextID:    "ralph-aaa",
+		},
 	}
 
 	var headAfterMerge string
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
-			backend.mu.Lock()
-			defer backend.mu.Unlock()
+			backend.Lock()
+			defer backend.Unlock()
 			if iterationCount == 1 {
-				backend.completed = 1
-				backend.remaining = 1
-				backend.nextTask = "task B"
-				backend.nextID = "ralph-bbb"
+				backend.Completed = 1
+				backend.Remaining = 1
+				backend.NextTask = "task B"
+				backend.NextID = "ralph-bbb"
 			} else {
 				headAfterMerge = gm.HeadRev()
-				backend.completed = 2
-				backend.remaining = 0
+				backend.Completed = 2
+				backend.Remaining = 0
 			}
 		},
 		result: claude.Result{SignalDetected: true},
@@ -222,24 +227,26 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 
 	// setStackHead needs gh to list open PR branches. The stub returns
 	// task A's branch dynamically since the name is set at runtime.
-	ghStub := &stubGitHub{available: true}
+	ghStub := &git.StubGitHub{IsAvailable: true}
 	gm.GitHub = ghStub
 
-	backend := &mutableBackend{
-		remaining:    1,
-		completed:    0,
-		total:        2,
-		nextTask:     "task A",
-		nextID:       "ralph-aaa",
-		metadata:     map[string]map[string]string{},
-		externalRefs: map[string]string{},
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        2,
+			NextTask:     "task A",
+			NextID:       "ralph-aaa",
+		},
+		Metadata:     map[string]map[string]string{},
+		ExternalRefs: map[string]string{},
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
-			backend.mu.Lock()
-			defer backend.mu.Unlock()
+			backend.Lock()
+			defer backend.Unlock()
 			if iterationCount == 1 {
 				// Task A: commit work and push the branch to origin.
 				writeFile(t, gm.WorkDir, "a.txt", "task A work\n")
@@ -248,19 +255,19 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 				run(t, "git", "-C", gm.WorkDir, "push", "-u", "origin", taskABranch)
 
 				// Record task A as completed with its branch metadata and PR ref.
-				backend.metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
-				backend.externalRefs["ralph-aaa"] = "gh-100"
+				backend.Metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
+				backend.ExternalRefs["ralph-aaa"] = "gh-100"
 				st.AddCompletedTask("ralph-aaa")
-				ghStub.openPRBranches = []string{taskABranch}
+				ghStub.OpenPRBranches = []string{taskABranch}
 
-				backend.completed = 1
-				backend.remaining = 1
-				backend.nextTask = "task B"
-				backend.nextID = "ralph-bbb"
+				backend.Completed = 1
+				backend.Remaining = 1
+				backend.NextTask = "task B"
+				backend.NextID = "ralph-bbb"
 			} else {
 				headAtTaskBStart = gm.HeadRev()
-				backend.completed = 2
-				backend.remaining = 0
+				backend.Completed = 2
+				backend.Remaining = 0
 			}
 		},
 		result: claude.Result{SignalDetected: true},
@@ -327,29 +334,31 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 	var taskABranch string
 	var headAtTaskBStart string
 
-	backend := &mutableBackend{
-		remaining:    1,
-		completed:    0,
-		total:        2,
-		nextTask:     "task A",
-		nextID:       "ralph-aaa",
-		metadata:     map[string]map[string]string{},
-		externalRefs: map[string]string{},
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        2,
+			NextTask:     "task A",
+			NextID:       "ralph-aaa",
+		},
+		Metadata:     map[string]map[string]string{},
+		ExternalRefs: map[string]string{},
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
-			backend.mu.Lock()
-			defer backend.mu.Unlock()
+			backend.Lock()
+			defer backend.Unlock()
 			if iterationCount == 1 {
 				writeFile(t, gm.WorkDir, "a.txt", "task A work\n")
 				run(t, "git", "-C", gm.WorkDir, "commit", "-m", "task A")
 				taskABranch = gm.WorktreeBranch
 				run(t, "git", "-C", gm.WorkDir, "push", "-u", "origin", taskABranch)
 
-				backend.metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
-				backend.externalRefs["ralph-aaa"] = "gh-100"
+				backend.Metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
+				backend.ExternalRefs["ralph-aaa"] = "gh-100"
 				st.AddCompletedTask("ralph-aaa")
 
 				// Simulate merge: land task A's work on main, then delete branch.
@@ -359,14 +368,14 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 				run(t, "git", "-C", project, "push", "origin", "main")
 				run(t, "git", "-C", project, "push", "origin", "--delete", taskABranch)
 
-				backend.completed = 1
-				backend.remaining = 1
-				backend.nextTask = "task B"
-				backend.nextID = "ralph-bbb"
+				backend.Completed = 1
+				backend.Remaining = 1
+				backend.NextTask = "task B"
+				backend.NextID = "ralph-bbb"
 			} else {
 				headAtTaskBStart = gm.HeadRev()
-				backend.completed = 2
-				backend.remaining = 0
+				backend.Completed = 2
+				backend.Remaining = 0
 			}
 		},
 		result: claude.Result{SignalDetected: true},
@@ -433,27 +442,29 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 	iterationCount := 0
 	var headAtTaskBStart string
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     2,
-		nextTask:  "task A",
-		nextID:    "ralph-aaa",
-		metadata:  map[string]map[string]string{},
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining: 1,
+			Completed: 0,
+			Total:     2,
+			NextTask:  "task A",
+			NextID:    "ralph-aaa",
+		},
+		Metadata:  map[string]map[string]string{},
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
-			backend.mu.Lock()
-			defer backend.mu.Unlock()
+			backend.Lock()
+			defer backend.Unlock()
 			if iterationCount == 1 {
 				writeFile(t, gm.WorkDir, "a.txt", "task A work\n")
 				run(t, "git", "-C", gm.WorkDir, "commit", "-m", "task A")
 				taskABranch := gm.WorktreeBranch
 				run(t, "git", "-C", gm.WorkDir, "push", "-u", "origin", taskABranch)
 
-				backend.metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
+				backend.Metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
 				st.AddCompletedTask("ralph-aaa")
 
 				// Merge work into main but leave the branch on remote.
@@ -462,14 +473,14 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 				run(t, "git", "-C", project, "merge", "origin/"+taskABranch)
 				run(t, "git", "-C", project, "push", "origin", "main")
 
-				backend.completed = 1
-				backend.remaining = 1
-				backend.nextTask = "task B"
-				backend.nextID = "ralph-bbb"
+				backend.Completed = 1
+				backend.Remaining = 1
+				backend.NextTask = "task B"
+				backend.NextID = "ralph-bbb"
 			} else {
 				headAtTaskBStart = gm.HeadRev()
-				backend.completed = 2
-				backend.remaining = 0
+				backend.Completed = 2
+				backend.Remaining = 0
 			}
 		},
 		result: claude.Result{SignalDetected: true},
@@ -535,12 +546,14 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 	iterationCount := 0
 	var branchDuringTaskA, branchDuringTaskB string
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     2,
-		nextTask:  "Fix tail leak",
-		nextID:    "ralph-t1",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining: 1,
+			Completed: 0,
+			Total:     2,
+			NextTask:  "Fix tail leak",
+			NextID:    "ralph-t1",
+		},
 	}
 
 	runner := &stubRunner{
@@ -549,18 +562,18 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 			switch iterationCount {
 			case 1:
 				branchDuringTaskA = gm.WorktreeBranch
-				backend.mu.Lock()
-				backend.completed = 1
-				backend.remaining = 1
-				backend.nextTask = "Add retry logic"
-				backend.nextID = "ralph-r2"
-				backend.mu.Unlock()
+				backend.Lock()
+				backend.Completed = 1
+				backend.Remaining = 1
+				backend.NextTask = "Add retry logic"
+				backend.NextID = "ralph-r2"
+				backend.Unlock()
 			case 2:
 				branchDuringTaskB = gm.WorktreeBranch
-				backend.mu.Lock()
-				backend.completed = 2
-				backend.remaining = 0
-				backend.mu.Unlock()
+				backend.Lock()
+				backend.Completed = 2
+				backend.Remaining = 0
+				backend.Unlock()
 			}
 		},
 		result: claude.Result{SignalDetected: true},
@@ -626,12 +639,14 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 	}
 
 	iterationCount := 0
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     2,
-		nextTask:  "task A",
-		nextID:    "ralph-aaa",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining: 1,
+			Completed: 0,
+			Total:     2,
+			NextTask:  "task A",
+			NextID:    "ralph-aaa",
+		},
 	}
 
 	runner := &stubRunner{
@@ -643,16 +658,16 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 			os.WriteFile(f, []byte("content"), 0o644)
 			exec.Command("git", "-C", gm.WorkDir, "add", ".").Run()
 			exec.Command("git", "-C", gm.WorkDir, "commit", "-m", fmt.Sprintf("task %d", iterationCount)).Run()
-			backend.mu.Lock()
-			defer backend.mu.Unlock()
+			backend.Lock()
+			defer backend.Unlock()
 			if iterationCount == 1 {
-				backend.completed = 1
-				backend.remaining = 1
-				backend.nextTask = "task B"
-				backend.nextID = "ralph-bbb"
+				backend.Completed = 1
+				backend.Remaining = 1
+				backend.NextTask = "task B"
+				backend.NextID = "ralph-bbb"
 			} else {
-				backend.completed = 2
-				backend.remaining = 0
+				backend.Completed = 2
+				backend.Remaining = 0
 			}
 		},
 		result: claude.Result{SignalDetected: true},
@@ -722,8 +737,7 @@ func TestSetStackHead_SkipsUnfetchableBranch(t *testing.T) {
 	}
 
 	st.AddCompletedTask("ralph-aaa")
-	backend := &mutableBackend{
-		metadata: map[string]map[string]string{"ralph-aaa": {"branch": "some-branch"}},
+	backend := &testutil.MutableBackend{
 	}
 
 	l := New(Config{
@@ -768,7 +782,7 @@ func TestSetStackHead_NoLogWhenNoCompletedTasks(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	backend := &mutableBackend{}
+	backend := &testutil.MutableBackend{}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{

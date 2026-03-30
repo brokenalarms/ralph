@@ -15,6 +15,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -31,12 +32,14 @@ func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			total:     1,
-			nextTask:  "Fix auth bug",
-			nextID:    "ralph-xyz",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:   "Fix auth bug",
+				NextID:    "ralph-xyz",
+			},
 		},
 	}
 
@@ -72,10 +75,10 @@ func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
 		t.Errorf("expected signalComplete, got %d", action)
 	}
 
-	backend.closeMu.Lock()
-	defer backend.closeMu.Unlock()
-	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-xyz" {
-		t.Errorf("expected CloseTask for ralph-xyz, got %v", backend.closedIDs)
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-xyz" {
+		t.Errorf("expected CloseTask for ralph-xyz, got %v", backend.ClosedIDs)
 	}
 }
 
@@ -87,8 +90,8 @@ func TestLoop_HandlePostSignal_VerificationFailure(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix bug", nextID: "ralph-abc"},
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-abc"}},
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -106,17 +109,17 @@ func TestLoop_HandlePostSignal_VerificationFailure(t *testing.T) {
 		ctx:      context.Background(),
 		result:   claude.Result{},
 		taskID:   "ralph-abc",
-		nextTask: "Fix bug",
+		nextTask:   "Fix bug",
 	}, &runIter, &iter)
 
 	if action != signalRetry {
 		t.Errorf("expected signalRetry, got %d", action)
 	}
 
-	backend.closeMu.Lock()
-	defer backend.closeMu.Unlock()
-	if len(backend.closedIDs) != 0 {
-		t.Errorf("task should not be closed on verification failure, got %v", backend.closedIDs)
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 0 {
+		t.Errorf("task should not be closed on verification failure, got %v", backend.ClosedIDs)
 	}
 }
 
@@ -132,8 +135,8 @@ func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix bug", nextID: "ralph-timeout"},
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-timeout"}},
 	}
 
 	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
@@ -186,10 +189,10 @@ func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 		t.Errorf("expected timeout log message, got: %s", output)
 	}
 
-	backend.closeMu.Lock()
-	defer backend.closeMu.Unlock()
-	if len(backend.closedIDs) > 0 {
-		t.Errorf("task should not be closed when timeout fires before push, got %v", backend.closedIDs)
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) > 0 {
+		t.Errorf("task should not be closed when timeout fires before push, got %v", backend.ClosedIDs)
 	}
 }
 
@@ -204,8 +207,8 @@ func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix login", nextID: "ralph-fast"},
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix login", NextID: "ralph-fast"}},
 	}
 
 	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
@@ -239,10 +242,10 @@ func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.
 		t.Errorf("expected signalComplete, got %d", action)
 	}
 
-	backend.closeMu.Lock()
-	defer backend.closeMu.Unlock()
-	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-fast" {
-		t.Errorf("expected task ralph-fast closed, got %v", backend.closedIDs)
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-fast" {
+		t.Errorf("expected task ralph-fast closed, got %v", backend.ClosedIDs)
 	}
 }
 
@@ -257,8 +260,8 @@ func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Slow merge", nextID: "ralph-slow"},
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Slow merge", NextID: "ralph-slow"}},
 	}
 
 	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
@@ -320,8 +323,8 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 	scriptPath := filepath.Join(project, "post-task.sh")
 	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\necho \"TASK=$RALPH_TASK_ID PR=$RALPH_PR_NUMBER MERGED=$RALPH_MERGED\" > %s\n", envFile)), 0o755)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix bug", nextID: "ralph-pt1"},
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt1"}},
 	}
 
 	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
@@ -378,8 +381,8 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 	scriptPath := filepath.Join(dir, "post-task.sh")
 	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\necho ran > %s\n", envFile)), 0o755)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix bug", nextID: "ralph-pt2"},
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt2"}},
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -398,7 +401,7 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 		ctx:      context.Background(),
 		result:   claude.Result{},
 		taskID:   "ralph-pt2",
-		nextTask: "Fix bug",
+		nextTask:   "Fix bug",
 	}, &runIter, &iter)
 
 	if action != signalRetry {
@@ -426,8 +429,8 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := logging.New(&logBuf)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix bug", nextID: "ralph-pt3"},
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt3"}},
 	}
 
 	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logger}
@@ -480,8 +483,8 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 	scriptPath := filepath.Join(project, "post-task.sh")
 	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\necho \"TASK=$RALPH_TASK_ID PR=$RALPH_PR_NUMBER MERGED=$RALPH_MERGED\" > %s\n", envFile)), 0o755)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix bug", nextID: "ralph-pt4"},
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt4"}},
 	}
 
 	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
@@ -534,12 +537,14 @@ func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			total:     1,
-			nextTask:  "Fix auth bug",
-			nextID:    "ralph-ntf",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:   "Fix auth bug",
+				NextID:    "ralph-ntf",
+			},
 		},
 	}
 
@@ -593,12 +598,14 @@ func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			total:     1,
-			nextTask:  "Fix auth bug",
-			nextID:    "ralph-ntf2",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:   "Fix auth bug",
+				NextID:    "ralph-ntf2",
+			},
 		},
 	}
 
@@ -649,12 +656,14 @@ func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			total:     1,
-			nextTask:  "Update docs",
-			nextID:    "ralph-nc1",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:   "Update docs",
+				NextID:    "ralph-nc1",
+			},
 		},
 	}
 
@@ -706,17 +715,19 @@ func TestResolveByPRState_Merged_NotifyEnabled(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			total:     1,
-			nextTask:  "Fix login",
-			nextID:    "ralph-rm1",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:   "Fix login",
+				NextID:    "ralph-rm1",
+			},
 		},
 	}
 
 	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
-	gm.GitHub = &stubGitHub{available: true, prState: "MERGED"}
+	gm.GitHub = &git.StubGitHub{IsAvailable: true, PRState: "MERGED"}
 
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
@@ -755,12 +766,14 @@ func TestResolveByPRState_Open_NotifyEnabled(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			total:     1,
-			nextTask:  "Add cache",
-			nextID:    "ralph-ro1",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:   "Add cache",
+				NextID:    "ralph-ro1",
+			},
 		},
 	}
 
@@ -774,7 +787,7 @@ func TestResolveByPRState_Open_NotifyEnabled(t *testing.T) {
 	run(t, "git", "-C", project, "checkout", "main")
 
 	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
-	gm.GitHub = &stubGitHub{available: true, prState: "OPEN", prHead: branchName}
+	gm.GitHub = &git.StubGitHub{IsAvailable: true, PRState: "OPEN", PRHead: branchName}
 
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
@@ -813,17 +826,19 @@ func TestResolveByPRState_Merged_NotifyDisabled(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			total:     1,
-			nextTask:  "Fix logout",
-			nextID:    "ralph-rd1",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:   "Fix logout",
+				NextID:    "ralph-rd1",
+			},
 		},
 	}
 
 	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
-	gm.GitHub = &stubGitHub{available: true, prState: "MERGED"}
+	gm.GitHub = &git.StubGitHub{IsAvailable: true, PRState: "MERGED"}
 
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},

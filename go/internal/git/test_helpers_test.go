@@ -6,100 +6,6 @@ import (
 	"sync"
 )
 
-// stubGitHub is a test double for the GitHub interface.
-// Compose into tests by embedding or assigning fields for the methods
-// under test; all methods have sensible zero-value defaults.
-type stubGitHub struct {
-	available           bool
-	openPR              string
-	findPRErr           error
-	createPRErr         error
-	editPRErr           error
-	editPRTitle         string
-	mergeOutput         string
-	mergeErr            error
-	updateResult        bool
-	updateErr           error
-	checks              []CICheckResult
-	checksErr           error
-	mergeCalls          int
-	mergeOpts           MergeOpts
-	enforceAdmins       bool
-	enforceAdminsErr    error
-	postEnforceOutput   string
-	postEnforceErr      error
-	postEnforceCalled   bool
-	checkEnforceCalled  bool
-	prNumber            string
-	prTitle             string
-	prURL               string
-	searchPRNumber      string
-	prDiff              string
-	createdPR           string
-	prState             string
-}
-
-func (s *stubGitHub) Available() bool { return s.available }
-func (s *stubGitHub) FindOpenPR(branch, repoURL string) (string, error) {
-	return s.openPR, s.findPRErr
-}
-func (s *stubGitHub) CreatePR(opts CreatePROpts) error {
-	if s.createPRErr == nil && s.createdPR != "" {
-		s.openPR = s.createdPR
-	}
-	return s.createPRErr
-}
-func (s *stubGitHub) EditPR(prNumber, repoURL, title, body string) error {
-	s.editPRTitle = title
-	return s.editPRErr
-}
-func (s *stubGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error) {
-	s.mergeCalls++
-	s.mergeOpts = opts
-	return s.mergeOutput, s.mergeErr
-}
-func (s *stubGitHub) UpdateBranch(dir, nwo, prNumber string) (bool, error) {
-	return s.updateResult, s.updateErr
-}
-func (s *stubGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
-	return s.checks, s.checksErr
-}
-func (s *stubGitHub) GetRunLog(prNumber, workDir string) string {
-	return ""
-}
-func (s *stubGitHub) CheckEnforceAdmins(nwo, branch string) (bool, error) {
-	s.checkEnforceCalled = true
-	return s.enforceAdmins, s.enforceAdminsErr
-}
-func (s *stubGitHub) PostEnforceAdmins(nwo, branch string) (string, error) {
-	s.postEnforceCalled = true
-	return s.postEnforceOutput, s.postEnforceErr
-}
-func (s *stubGitHub) FindPR(branch, workDir string) (string, string, string, error) {
-	return s.prNumber, s.prTitle, s.prURL, s.findPRErr
-}
-func (s *stubGitHub) SearchPR(workDir, query string) (string, error) {
-	return s.searchPRNumber, nil
-}
-func (s *stubGitHub) PRDiff(workDir, prNumber string) (string, error) {
-	return s.prDiff, nil
-}
-func (s *stubGitHub) GetPRState(workDir, prNumber string) (string, error) {
-	return s.prState, nil
-}
-func (s *stubGitHub) GetPRBase(workDir, prNumber string) (string, error) {
-	return "", nil
-}
-func (s *stubGitHub) GetPRHead(workDir, prNumber string) (string, error) {
-	return "", nil
-}
-func (s *stubGitHub) GetPRHeadSHA(workDir, prNumber string) (string, error) {
-	return "", nil
-}
-func (s *stubGitHub) ListOpenPRBranches(repoURL string) ([]string, error) {
-	return nil, nil
-}
-
 // gitCall records a single git command invocation for assertion.
 type gitCall struct {
 	Dir  string
@@ -205,7 +111,7 @@ func (discardLog) Error(string, string, ...any) {}
 
 // capturingGitHub captures CreatePR calls for assertion.
 type capturingGitHub struct {
-	stubGitHub
+	StubGitHub
 	createPR func(CreatePROpts) error
 }
 
@@ -218,7 +124,7 @@ func (c *capturingGitHub) CreatePR(opts CreatePROpts) error {
 
 // runLogGitHub stubs GetRunLog with a configurable return value.
 type runLogGitHub struct {
-	stubGitHub
+	StubGitHub
 	log string
 }
 
@@ -228,12 +134,12 @@ func (r *runLogGitHub) GetRunLog(prNumber, workDir string) string {
 
 // stubManager creates a Manager wired to stubs for both git commands and
 // GitHub operations. The Manager's dirs are set to the given directory.
-func stubManager(dir string, runner *stubRunner, gh *stubGitHub) *Manager {
+func stubManager(dir string, runner *stubRunner, gh *StubGitHub) *Manager {
 	if runner == nil {
 		runner = newStubRunner()
 	}
 	if gh == nil {
-		gh = &stubGitHub{}
+		gh = &StubGitHub{}
 	}
 	return &Manager{
 		ProjectDir: dir,

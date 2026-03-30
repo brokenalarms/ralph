@@ -15,6 +15,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -25,20 +26,20 @@ import (
 func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 	tests := []struct {
 		name    string
-		backend *stubBackend
+		backend *testutil.StubBackend
 		want    string // substring expected in log output
 	}{
 		{
 			name: "all tasks complete uses orchestrator actor prefix",
-			backend: &stubBackend{
-				remaining: 0, completed: 3, total: 3, label: "beads",
+			backend: &testutil.StubBackend{
+				Remaining: 0, Completed: 3, Total: 3, BackendLabel: "beads",
 			},
 			want: "[o]",
 		},
 		{
 			name: "no tasks error uses orchestrator actor prefix",
-			backend: &stubBackend{
-				remaining: 0, completed: 0, total: 0, label: "beads",
+			backend: &testutil.StubBackend{
+				Remaining: 0, Completed: 0, Total: 0, BackendLabel: "beads",
 			},
 			want: "[o]",
 		},
@@ -86,14 +87,14 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 	var logBuf strings.Builder
 	logger := logging.New(&logBuf)
 
-	backend := &stubBackend{
-		remaining:   1,
-		completed:   0,
-		total:       1,
-		nextTask:    "Fix the auth module",
-		nextID:      "ralph-abc",
-		label:       "beads",
-		description: "Auth tokens are expiring too early due to clock skew",
+	backend := &testutil.StubBackend{
+		Remaining:    1,
+		Completed:    0,
+		Total:        1,
+		NextTask:     "Fix the auth module",
+		NextID:       "ralph-abc",
+		BackendLabel: "beads",
+		Description:  "Auth tokens are expiring too early due to clock skew",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -111,8 +112,8 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = &stubRunner{
 		onRun: func() {
-			backend.remaining = 0
-			backend.completed = 1
+			backend.Remaining = 0
+			backend.Completed = 1
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
@@ -149,13 +150,13 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 	var logBuf strings.Builder
 	logger := logging.New(&logBuf)
 
-	backend := &stubBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "Fix the auth module",
-		nextID:    "ralph-abc",
-		label:     "beads",
+	backend := &testutil.StubBackend{
+		Remaining:    1,
+		Completed:    0,
+		Total:        1,
+		NextTask:     "Fix the auth module",
+		NextID:       "ralph-abc",
+		BackendLabel: "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -173,8 +174,8 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = &stubRunner{
 		onRun: func() {
-			backend.remaining = 0
-			backend.completed = 1
+			backend.Remaining = 0
+			backend.Completed = 1
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
@@ -207,30 +208,32 @@ func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	iterationCount := 0
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     2,
-		nextTask:  "task A",
-		nextID:    "ralph-aaa",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        2,
+			NextTask:     "task A",
+			NextID:       "ralph-aaa",
+			BackendLabel: "beads",
+		},
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
 			if iterationCount == 1 {
-				backend.mu.Lock()
-				backend.completed = 1
-				backend.remaining = 1
-				backend.nextTask = "task B"
-				backend.nextID = "ralph-bbb"
-				backend.mu.Unlock()
+				backend.Lock()
+				backend.Completed = 1
+				backend.Remaining = 1
+				backend.NextTask = "task B"
+				backend.NextID = "ralph-bbb"
+				backend.Unlock()
 			} else {
-				backend.mu.Lock()
-				backend.completed = 2
-				backend.remaining = 0
-				backend.mu.Unlock()
+				backend.Lock()
+				backend.Completed = 2
+				backend.Remaining = 0
+				backend.Unlock()
 			}
 		},
 		result: claude.Result{SignalDetected: true},
@@ -276,21 +279,23 @@ func TestLoop_TaskBannerOnNewTask(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "fix the thing",
-		nextID:    "ralph-l337",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "fix the thing",
+			NextID:       "ralph-l337",
+			BackendLabel: "beads",
+		},
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.mu.Lock()
-			backend.completed = 1
-			backend.remaining = 0
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true},
 	}
@@ -337,13 +342,15 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	iterationCount := 0
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "fix the bug",
-		nextID:    "ralph-rl1",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "fix the bug",
+			NextID:       "ralph-rl1",
+			BackendLabel: "beads",
+		},
 	}
 
 	// First call returns rate limited with a reset time in the past (so
@@ -352,10 +359,10 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		onRun: func() {
 			iterationCount++
 			if iterationCount >= 2 {
-				backend.mu.Lock()
-				backend.completed = 1
-				backend.remaining = 0
-				backend.mu.Unlock()
+				backend.Lock()
+				backend.Completed = 1
+				backend.Remaining = 0
+				backend.Unlock()
 			}
 		},
 	}
@@ -407,7 +414,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 }
 
 type rateLimitStubRunner struct {
-	backend *mutableBackend
+	backend *testutil.MutableBackend
 	counter *int
 	calls   int
 }
@@ -420,10 +427,10 @@ func (r *rateLimitStubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
 			ResetAt:     time.Now().Add(-1 * time.Second),
 		}, nil
 	}
-	r.backend.mu.Lock()
-	r.backend.completed = 1
-	r.backend.remaining = 0
-	r.backend.mu.Unlock()
+	r.backend.Lock()
+	r.backend.Completed = 1
+	r.backend.Remaining = 0
+	r.backend.Unlock()
 	return claude.Result{SignalDetected: true, Summary: "done"}, nil
 }
 
@@ -459,11 +466,13 @@ func TestLoop_HealthDashboardLoggedBetweenIterations(t *testing.T) {
 	os.WriteFile(filepath.Join(ralphDir, ".signal_current_task"), []byte("test task"), 0o644)
 
 	callCount := 0
-	backend := &mutableBackend{
-		remaining: 1,
-		total:     2,
-		nextTask:  "First task",
-		nextID:    "ralph-h1",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining: 1,
+			Total:     2,
+			NextTask:  "First task",
+			NextID:    "ralph-h1",
+		},
 	}
 
 	var logBuf bytes.Buffer
@@ -533,11 +542,13 @@ func TestLoop_HealthDashboardHiddenByDefault(t *testing.T) {
 	os.WriteFile(filepath.Join(ralphDir, ".signal_current_task"), []byte("test task"), 0o644)
 
 	callCount := 0
-	backend := &mutableBackend{
-		remaining: 1,
-		total:     2,
-		nextTask:  "First task",
-		nextID:    "ralph-h1",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining: 1,
+			Total:     2,
+			NextTask:  "First task",
+			NextID:    "ralph-h1",
+		},
 	}
 
 	var logBuf bytes.Buffer
@@ -582,21 +593,23 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "check version",
-		nextID:    "ralph-ver1",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "check version",
+			NextID:       "ralph-ver1",
+			BackendLabel: "beads",
+		},
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.mu.Lock()
-			backend.completed = 1
-			backend.remaining = 0
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true},
 	}
@@ -751,7 +764,7 @@ func TestHandleRunResult_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 
 	l.isOnlineFunc = func() bool { return true }
 
-	backend := &stubBackend{}
+	backend := &testutil.StubBackend{}
 	l.cfg.TaskBackend = backend
 
 	tracker := attempts.New(ralphDir)
@@ -771,8 +784,8 @@ func TestHandleRunResult_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 		t.Errorf("expected counters NOT decremented when skipping (3,5), got (%d,%d)", runIter, iter)
 	}
 
-	if backend.skippedTask != "task-it-max" {
-		t.Errorf("expected task skipped in backend, got %q", backend.skippedTask)
+	if backend.SkippedTask != "task-it-max" {
+		t.Errorf("expected task skipped in backend, got %q", backend.SkippedTask)
 	}
 }
 

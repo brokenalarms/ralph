@@ -10,6 +10,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -29,7 +30,7 @@ func TestOnSignal_HappyPath(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task"},
+		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
@@ -60,7 +61,7 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
-	backend := &stubBackend{remaining: 1, total: 1, description: "test task"}
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}
 
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
@@ -96,8 +97,8 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	if llmCalls != maxLLMVerifyAttempts {
 		t.Fatalf("expected %d LLM verify calls, got %d", maxLLMVerifyAttempts, llmCalls)
 	}
-	if backend.skippedTask != "test-123" {
-		t.Fatalf("expected test-123 deferred in backend, got %q", backend.skippedTask)
+	if backend.SkippedTask != "test-123" {
+		t.Fatalf("expected test-123 deferred in backend, got %q", backend.SkippedTask)
 	}
 }
 
@@ -116,7 +117,7 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task"},
+		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
@@ -176,7 +177,7 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 		Dirs:                  workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:         5,
 		CallsPerHour:          80,
-		TaskBackend:           &stubBackend{remaining: 1, total: 1, description: "test task"},
+		TaskBackend:           &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:             dir,
 		VerifyModel:           customModel,
 		VerifyEscalationModel: customEscalation,
@@ -235,7 +236,7 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task", acceptance: "must handle errors"},
+		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"},
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
@@ -286,7 +287,7 @@ func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task", acceptance: "must handle errors"},
+		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"},
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
@@ -337,7 +338,7 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task"},
+		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
@@ -375,7 +376,7 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task"},
+		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
 		VerifyLevel:   "fire",
 	}, st, gm, logger)
@@ -418,7 +419,7 @@ func TestOnSignal_HogMode_NoDiffSpawnsVerifier_Passes(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &stubBackend{remaining: 1, total: 1, description: "test task"},
+		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
 		VerifyLevel:   "hog",
 	}, st, gm, logger)
@@ -457,7 +458,7 @@ func TestOnSignal_HogMode_NoDiffVerifierRejects(t *testing.T) {
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
-	backend := &stubBackend{remaining: 1, total: 1, description: "test task"}
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}
 
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},

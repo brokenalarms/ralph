@@ -17,7 +17,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/loop"
 	"github.com/brokenalarms/ralph/internal/pidfile"
 	"github.com/brokenalarms/ralph/internal/state"
-	"github.com/brokenalarms/ralph/internal/tasks"
+	"github.com/brokenalarms/ralph/internal/testutil"
 )
 
 func runCmd(t *testing.T, name string, args ...string) {
@@ -30,40 +30,6 @@ func runCmd(t *testing.T, name string, args ...string) {
 		t.Fatalf("%s %v failed: %v\n%s", name, args, err, out)
 	}
 }
-
-// stubBackend implements tasks.Backend for main integration tests.
-type stubBackend struct {
-	remaining int
-	completed int
-	total     int
-}
-
-func (s *stubBackend) Init() error                                { return nil }
-func (s *stubBackend) HasRemaining() (bool, error)                { return s.remaining > 0, nil }
-func (s *stubBackend) CountCompleted() (int, error)               { return s.completed, nil }
-func (s *stubBackend) CountRemaining() (int, error)               { return s.remaining, nil }
-func (s *stubBackend) CountTotal() (int, error)                   { return s.total, nil }
-func (s *stubBackend) GetNextTask() (string, error)               { return "", nil }
-func (s *stubBackend) GetNextTaskID() (string, error)             { return "", nil }
-func (s *stubBackend) GetNextTaskInfo() (tasks.TaskInfo, error)   { return tasks.TaskInfo{}, nil }
-func (s *stubBackend) HasTasks() (bool, error)                    { return s.total > 0, nil }
-func (s *stubBackend) CloseTask(string, string) error             { return nil }
-func (s *stubBackend) SkipTask(string, string) error              { return nil }
-func (s *stubBackend) SetSkippedIDs(_ []string)                   {}
-func (s *stubBackend) ReopenTask(string) error                    { return nil }
-func (s *stubBackend) SetState(_, _, _, _ string) error           { return nil }
-func (s *stubBackend) GetState(_, _ string) (string, error)       { return "", nil }
-func (s *stubBackend) ExecutionInstructions() (string, error)     { return "", nil }
-func (s *stubBackend) ProjectContext() (string, error)            { return "", nil }
-func (s *stubBackend) GetDescription(_ string) (string, error)    { return "", nil }
-func (s *stubBackend) GetAcceptance(_ string) (string, error)     { return "", nil }
-func (s *stubBackend) GetFullContext(_ string) (string, error)    { return "", nil }
-func (s *stubBackend) GetExternalRef(_ string) (string, error)    { return "", nil }
-func (s *stubBackend) SetExternalRef(_, _ string) error           { return nil }
-func (s *stubBackend) GetMetadata(_, _ string) (string, error)    { return "", nil }
-func (s *stubBackend) SetMetadata(_, _, _ string) error           { return nil }
-func (s *stubBackend) AppendNotes(_, _ string) error              { return nil }
-func (s *stubBackend) Label() string                              { return "beads" }
 
 // Proves: bare `ralph` (no args) returns 0 and does not enter the loop,
 // ensuring users must choose an explicit subcommand.
@@ -182,7 +148,7 @@ func TestGenerateResumeScript(t *testing.T) {
 		ProjectDir:    dir,
 		MaxIterations: 20,
 		Quiet:         true,
-				AutoMerge:     true,
+		AutoMerge:     true,
 		CallsPerHour:  40,
 	}
 
@@ -219,7 +185,7 @@ func TestGenerateResumeScript_Evolve(t *testing.T) {
 	cfg := config.Config{
 		ProjectDir:    dir,
 		MaxIterations: 50,
-				AutoMerge:     true,
+		AutoMerge:     true,
 		Evolve:        true,
 		CallsPerHour:  80,
 	}
@@ -292,10 +258,10 @@ func TestPrintSummary_TaskCounts(t *testing.T) {
 	st.Write("iteration", "3")
 	st.Write("status", "completed")
 
-	backend := &stubBackend{
-		completed: 3,
-		remaining: 0,
-		total:     3,
+	backend := &testutil.StubBackend{
+		Completed: 3,
+		Remaining: 0,
+		Total:     3,
 	}
 
 	gm := &git.Manager{
@@ -600,7 +566,7 @@ func TestCleanup_InterruptedWritesStopped(t *testing.T) {
 	st.Write("status", "halted_stagnation")
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
-	backend := &stubBackend{total: 1, remaining: 1}
+	backend := &testutil.StubBackend{Total: 1, Remaining: 1}
 	log := logging.New(nil)
 	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
@@ -624,7 +590,7 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	st.Write("status", "completed")
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
-	backend := &stubBackend{total: 3, completed: 3}
+	backend := &testutil.StubBackend{Total: 3, Completed: 3}
 	log := logging.New(nil)
 	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
@@ -635,7 +601,6 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 		t.Errorf("expected status 'completed' preserved, got %q", status)
 	}
 }
-
 
 // Proves: cleanup clears cli_config from state.json so stale flags from a
 // previous run don't leak into a manual restart. Evolve restart is unaffected
@@ -656,7 +621,7 @@ func TestCleanup_ClearsCLIConfig(t *testing.T) {
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
-	backend := &stubBackend{total: 1}
+	backend := &testutil.StubBackend{Total: 1}
 	log := logging.New(nil)
 	c := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 

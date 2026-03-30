@@ -4,10 +4,10 @@ import (
 	"testing"
 )
 
-// The stubGitHub type satisfies the GitHub interface, proving that test stubs
+// The StubGitHub type satisfies the GitHub interface, proving that test stubs
 // can replace all GitHub CLI operations without shelling out.
 func TestStubGitHub_SatisfiesInterface(t *testing.T) {
-	var _ GitHub = &stubGitHub{}
+	var _ GitHub = &StubGitHub{}
 }
 
 // CreatePROpts carries all parameters in a single struct so callers avoid
@@ -39,7 +39,7 @@ func TestCreatePROpts_FieldsPreserved(t *testing.T) {
 // GetRunLog returns the stub's configured value, proving the interface method
 // can be stubbed for CI failure log testing.
 func TestGetRunLog_Stubbable(t *testing.T) {
-	stub := &stubGitHub{}
+	stub := &StubGitHub{}
 	result := stub.GetRunLog("42", "/tmp")
 	if result != "" {
 		t.Errorf("expected empty string from default stub, got %q", result)
@@ -49,8 +49,8 @@ func TestGetRunLog_Stubbable(t *testing.T) {
 // ListChecks replaces the former FetchChecks method, returning CI check results
 // that callers use to determine merge readiness.
 func TestListChecks_Stubbable(t *testing.T) {
-	stub := &stubGitHub{
-		checks: []CICheckResult{
+	stub := &StubGitHub{
+		Checks: []CICheckResult{
 			{Name: "build", State: "SUCCESS", Bucket: "pass"},
 			{Name: "lint", State: "FAILURE", Bucket: "fail"},
 		},

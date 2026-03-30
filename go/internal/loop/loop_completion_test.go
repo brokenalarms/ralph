@@ -11,6 +11,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -23,23 +24,25 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			completed: 0,
-			total:     1,
-			nextTask:  "Fix auth bug",
-			nextID:    "ralph-xyz",
-			label:     "beads",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "Fix auth bug",
+				NextID:       "ralph-xyz",
+				BackendLabel: "beads",
+			},
 		},
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.mu.Lock()
-			backend.completed = 1
-			backend.remaining = 0
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true},
 	}
@@ -64,13 +67,13 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	backend.closeMu.Lock()
-	defer backend.closeMu.Unlock()
-	if len(backend.closedIDs) != 1 {
-		t.Fatalf("expected exactly 1 CloseTask call, got %d", len(backend.closedIDs))
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 {
+		t.Fatalf("expected exactly 1 CloseTask call, got %d", len(backend.ClosedIDs))
 	}
-	if backend.closedIDs[0] != "ralph-xyz" {
-		t.Errorf("expected CloseTask for ralph-xyz, got %q", backend.closedIDs[0])
+	if backend.ClosedIDs[0] != "ralph-xyz" {
+		t.Errorf("expected CloseTask for ralph-xyz, got %q", backend.ClosedIDs[0])
 	}
 }
 
@@ -85,14 +88,16 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			completed: 0,
-			total:     1,
-			nextTask:  "Fix auth bug",
-			nextID:    "ralph-xyz",
-			label:     "beads",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "Fix auth bug",
+				NextID:       "ralph-xyz",
+				BackendLabel: "beads",
+			},
 		},
 	}
 
@@ -100,10 +105,10 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 		onRun: func() {
 			writeFile(t, project, "fix.go", "package main\n")
 			run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
-			backend.mu.Lock()
-			backend.completed = 1
-			backend.remaining = 0
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true},
 	}
@@ -129,14 +134,14 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	backend.closeMu.Lock()
-	defer backend.closeMu.Unlock()
-	if len(backend.closeReasons) != 1 {
-		t.Fatalf("expected exactly 1 CloseTask call, got %d", len(backend.closeReasons))
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.CloseReasons) != 1 {
+		t.Fatalf("expected exactly 1 CloseTask call, got %d", len(backend.CloseReasons))
 	}
 	want := "Fixed in PR #42"
-	if !strings.Contains(backend.closeReasons[0], want) {
-		t.Errorf("close reason should contain %q, got %q", want, backend.closeReasons[0])
+	if !strings.Contains(backend.CloseReasons[0], want) {
+		t.Errorf("close reason should contain %q, got %q", want, backend.CloseReasons[0])
 	}
 }
 
@@ -148,14 +153,16 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			completed: 0,
-			total:     1,
-			nextTask:  "Fix auth bug",
-			nextID:    "ralph-xyz",
-			label:     "beads",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "Fix auth bug",
+				NextID:       "ralph-xyz",
+				BackendLabel: "beads",
+			},
 		},
 	}
 
@@ -183,10 +190,10 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	backend.closeMu.Lock()
-	defer backend.closeMu.Unlock()
-	if len(backend.closedIDs) != 0 {
-		t.Errorf("expected no CloseTask calls on verification failure, got %d: %v", len(backend.closedIDs), backend.closedIDs)
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 0 {
+		t.Errorf("expected no CloseTask calls on verification failure, got %d: %v", len(backend.ClosedIDs), backend.ClosedIDs)
 	}
 }
 
@@ -198,12 +205,14 @@ func TestLoop_RecordsAttemptAfterIteration(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &mutableBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Fix the auth bug",
-		nextID:    "ralph-auth",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Total:        1,
+			NextTask:     "Fix the auth bug",
+			NextID:       "ralph-auth",
+			BackendLabel: "beads",
+		},
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -239,12 +248,14 @@ func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	callCount := 0
-	backend := &mutableBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Slow task",
-		nextID:    "ralph-slow",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Total:        1,
+			NextTask:     "Slow task",
+			NextID:       "ralph-slow",
+			BackendLabel: "beads",
+		},
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -266,10 +277,10 @@ func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
 			callCount++
 			if callCount >= 2 {
 				// Stop after the retry so we don't loop forever
-				backend.mu.Lock()
-				backend.remaining = 0
-				backend.completed = 1
-				backend.mu.Unlock()
+				backend.Lock()
+				backend.Remaining = 0
+				backend.Completed = 1
+				backend.Unlock()
 			}
 		},
 		result: claude.Result{IdleTimeout: true},
@@ -291,12 +302,12 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Done task",
-		nextID:    "ralph-done",
-		label:     "beads",
+	backend := &testutil.StubBackend{
+		Remaining:    1,
+		Total:        1,
+		NextTask:     "Done task",
+		NextID:       "ralph-done",
+		BackendLabel: "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -344,7 +355,7 @@ func TestLoop_IncludesReflectionInAttemptContext(t *testing.T) {
 			RalphDir:   ralphDir,
 		},
 		CallsPerHour: 80,
-		TaskBackend:  &stubBackend{label: "beads"},
+		TaskBackend:  &testutil.StubBackend{BackendLabel: "beads"},
 	}, st, gm, logging.New(nil))
 
 	// Write a reflection file
@@ -376,7 +387,7 @@ func TestLoop_CombinesAttemptsAndReflection(t *testing.T) {
 			RalphDir:   ralphDir,
 		},
 		CallsPerHour: 80,
-		TaskBackend:  &stubBackend{label: "beads"},
+		TaskBackend:  &testutil.StubBackend{BackendLabel: "beads"},
 	}, st, gm, logging.New(nil))
 
 	// Record an attempt
@@ -412,7 +423,7 @@ func TestLoop_EmptyAttemptContextForNewTask(t *testing.T) {
 			RalphDir:   ralphDir,
 		},
 		CallsPerHour: 80,
-		TaskBackend:  &stubBackend{label: "beads"},
+		TaskBackend:  &testutil.StubBackend{BackendLabel: "beads"},
 	}, st, gm, logging.New(nil))
 
 	ctx := l.buildAttemptContext("ralph-new", "Brand new task")
@@ -436,7 +447,7 @@ func TestLoop_CrossTaskReflectionsFedForward(t *testing.T) {
 			RalphDir:   ralphDir,
 		},
 		CallsPerHour: 80,
-		TaskBackend:  &stubBackend{label: "beads"},
+		TaskBackend:  &testutil.StubBackend{BackendLabel: "beads"},
 	}, st, gm, logging.New(nil))
 
 	// Write reflections from 2 previously completed tasks
@@ -475,7 +486,7 @@ func TestLoop_CrossTaskAttemptEntriesExcluded(t *testing.T) {
 			RalphDir:   ralphDir,
 		},
 		CallsPerHour: 80,
-		TaskBackend:  &stubBackend{label: "beads"},
+		TaskBackend:  &testutil.StubBackend{BackendLabel: "beads"},
 	}, st, gm, logging.New(nil))
 
 	// Record a halt from a different task
@@ -504,30 +515,32 @@ func TestLoop_RecordsCompletedTasks(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	iterationCount := 0
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     2,
-		nextTask:  "first task",
-		nextID:    "ralph-aaa",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        2,
+			NextTask:     "first task",
+			NextID:       "ralph-aaa",
+			BackendLabel: "beads",
+		},
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
 			if iterationCount == 1 {
-				backend.mu.Lock()
-				backend.completed = 1
-				backend.remaining = 1
-				backend.nextTask = "second task"
-				backend.nextID = "ralph-bbb"
-				backend.mu.Unlock()
+				backend.Lock()
+				backend.Completed = 1
+				backend.Remaining = 1
+				backend.NextTask = "second task"
+				backend.NextID = "ralph-bbb"
+				backend.Unlock()
 			} else if iterationCount == 2 {
-				backend.mu.Lock()
-				backend.completed = 2
-				backend.remaining = 0
-				backend.mu.Unlock()
+				backend.Lock()
+				backend.Completed = 2
+				backend.Remaining = 0
+				backend.Unlock()
 			}
 		},
 		result: claude.Result{SignalDetected: true},
@@ -580,10 +593,10 @@ func TestLoop_ClearsCompletedTasksOnStart(t *testing.T) {
 
 	os.WriteFile(filepath.Join(ralphDir, ".completed-tasks"), []byte("ralph-old\n"), 0o644)
 
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 1,
-		total:     1,
+	backend := &testutil.StubBackend{
+		Remaining: 0,
+		Completed: 1,
+		Total:     1,
 	}
 
 	gm := &git.Manager{
@@ -617,21 +630,23 @@ func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "Add dark mode",
-		nextID:    "",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "Add dark mode",
+			NextID:       "",
+			BackendLabel: "beads",
+		},
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.mu.Lock()
-			backend.completed = 1
-			backend.remaining = 0
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true},
 	}
@@ -678,21 +693,23 @@ func TestLoop_SessionTasksRecordsCompletedWork(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "fix session display",
-		nextID:    "ralph-re76",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "fix session display",
+			NextID:       "ralph-re76",
+			BackendLabel: "beads",
+		},
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.mu.Lock()
-			backend.completed = 1
-			backend.remaining = 0
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true, Summary: "added session summary before evolve"},
 	}
@@ -741,12 +758,12 @@ func TestLoop_SessionTasksEmptyOnVerificationFailure(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "broken task",
-		nextID:    "ralph-fail",
-		label:     "beads",
+	backend := &testutil.StubBackend{
+		Remaining:    1,
+		Total:        1,
+		NextTask:     "broken task",
+		NextID:       "ralph-fail",
+		BackendLabel: "beads",
 	}
 
 	runner := &stubRunner{
@@ -790,14 +807,16 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			completed: 0,
-			total:     1,
-			nextTask:  "Fix auth bug",
-			nextID:    "ralph-xyz",
-			label:     "beads",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "Fix auth bug",
+				NextID:       "ralph-xyz",
+				BackendLabel: "beads",
+			},
 		},
 	}
 
@@ -805,10 +824,10 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 		onRun: func() {
 			writeFile(t, project, "fix.go", "package main\n")
 			run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
-			backend.mu.Lock()
-			backend.completed = 1
-			backend.remaining = 0
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true},
 	}
@@ -857,10 +876,10 @@ func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
 
 	st.AddCompletedTask("ralph-old")
 
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 1,
-		total:     1,
+	backend := &testutil.StubBackend{
+		Remaining: 0,
+		Completed: 1,
+		Total:     1,
 	}
 
 	gm := &git.Manager{ProjectDir: project, WorkDir: project}

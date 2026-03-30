@@ -350,7 +350,6 @@ func TestPreflightChecks_NoChanges(t *testing.T) {
 	}
 }
 
-
 // loadReviewPrompt includes guidance that prompt/config changes are valid
 // implementations and that code-specific criteria (tests, error handling)
 // should not be required for non-code changes.
@@ -450,9 +449,10 @@ func TestLLMVerifyPR_UsesGitHubInterface(t *testing.T) {
 	gq := newQuerier(dir)
 	head := gq.HeadRev()
 
-	stub := &stubGitHub{
-		searchResult: "99",
-		prDiff:       "+new line\n",
+	stub := &git.StubGitHub{
+		IsAvailable:    true,
+		SearchPRNumber: "99",
+		PRDiffOutput:   "+new line\n",
 	}
 
 	result := LLMVerifyPR(VerifyOpts{
@@ -467,50 +467,16 @@ func TestLLMVerifyPR_UsesGitHubInterface(t *testing.T) {
 		GitHub:          stub,
 	})
 
-	if !stub.searchCalled {
+	if !stub.SearchCalled {
 		t.Error("expected SearchPR to be called via GitHub interface")
 	}
-	if !stub.prDiffCalled {
+	if !stub.PRDiffCalled {
 		t.Error("expected PRDiff to be called via GitHub interface")
 	}
 
 	// LLM call will fail (no claude binary in test), so we expect pass with skip reason
 	_ = result
 }
-
-// stubGitHub implements git.GitHub for testing that verify delegates
-// to the interface instead of calling exec.Command directly.
-type stubGitHub struct {
-	searchResult string
-	prDiff       string
-	searchCalled bool
-	prDiffCalled bool
-}
-
-func (s *stubGitHub) Available() bool                                    { return true }
-func (s *stubGitHub) FindOpenPR(string, string) (string, error)         { return "", nil }
-func (s *stubGitHub) CreatePR(git.CreatePROpts) error                   { return nil }
-func (s *stubGitHub) EditPR(string, string, string, string) error       { return nil }
-func (s *stubGitHub) MergePR(string, string, git.MergeOpts) (string, error) { return "", nil }
-func (s *stubGitHub) UpdateBranch(string, string, string) (bool, error) { return false, nil }
-func (s *stubGitHub) ListChecks(string, string) ([]git.CICheckResult, error) { return nil, nil }
-func (s *stubGitHub) GetRunLog(string, string) string                   { return "" }
-func (s *stubGitHub) CheckEnforceAdmins(string, string) (bool, error)   { return false, nil }
-func (s *stubGitHub) PostEnforceAdmins(string, string) (string, error)  { return "", nil }
-func (s *stubGitHub) FindPR(string, string) (string, string, string, error) { return "", "", "", nil }
-func (s *stubGitHub) SearchPR(_ string, _ string) (string, error) {
-	s.searchCalled = true
-	return s.searchResult, nil
-}
-func (s *stubGitHub) PRDiff(_ string, _ string) (string, error) {
-	s.prDiffCalled = true
-	return s.prDiff, nil
-}
-func (s *stubGitHub) GetPRState(string, string) (string, error)        { return "", nil }
-func (s *stubGitHub) ListOpenPRBranches(string) ([]string, error)      { return nil, nil }
-func (s *stubGitHub) GetPRBase(string, string) (string, error)  { return "", nil }
-func (s *stubGitHub) GetPRHead(string, string) (string, error)     { return "", nil }
-func (s *stubGitHub) GetPRHeadSHA(string, string) (string, error)  { return "", nil }
 
 // ModelShortName extracts a human-friendly name from a full model ID,
 // so log lines show "haiku" instead of "claude-haiku-4-5-20251001".

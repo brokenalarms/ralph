@@ -13,6 +13,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -26,12 +27,12 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "fix the bug",
-		nextID:    "ralph-bug",
-		label:     "beads",
+	backend := &testutil.StubBackend{
+		Remaining:    1,
+		Total:        1,
+		NextTask:     "fix the bug",
+		NextID:       "ralph-bug",
+		BackendLabel: "beads",
 	}
 
 	runner := &stubRunner{
@@ -87,21 +88,23 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 
 	pushCalled := false
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "add feature",
-		nextID:    "ralph-feat",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "add feature",
+			NextID:       "ralph-feat",
+			BackendLabel: "beads",
+		},
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.mu.Lock()
-			backend.completed = 1
-			backend.remaining = 0
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
@@ -154,21 +157,23 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 
 	pushCalled := false
 
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "simple task",
-		nextID:    "ralph-simple",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "simple task",
+			NextID:       "ralph-simple",
+			BackendLabel: "beads",
+		},
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.mu.Lock()
-			backend.completed = 1
-			backend.remaining = 0
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true},
 	}
@@ -211,11 +216,11 @@ func TestLoop_CIFailureStillClosesTask(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Fix CI failure",
-		nextID:    "ralph-ci1",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Fix CI failure",
+		NextID:    "ralph-ci1",
 	}
 
 	gm := &git.Manager{
@@ -255,8 +260,8 @@ func TestLoop_CIFailureStillClosesTask(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	if backend.skippedTask != "ralph-ci1" {
-		t.Errorf("expected ralph-ci1 deferred in backend, got %q", backend.skippedTask)
+	if backend.SkippedTask != "ralph-ci1" {
+		t.Errorf("expected ralph-ci1 deferred in backend, got %q", backend.SkippedTask)
 	}
 }
 
@@ -269,11 +274,11 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Add feature",
-		nextID:    "ralph-mc1",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Add feature",
+		NextID:    "ralph-mc1",
 	}
 
 	gm := &git.Manager{
@@ -325,11 +330,11 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Fix CI failure",
-		nextID:    "ralph-ci2",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Fix CI failure",
+		NextID:    "ralph-ci2",
 	}
 
 	gm := &git.Manager{
@@ -379,11 +384,11 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Retry exhaustion",
-		nextID:    "ralph-ci3",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Retry exhaustion",
+		NextID:    "ralph-ci3",
 	}
 
 	gm := &git.Manager{
@@ -446,11 +451,11 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Mixed errors",
-		nextID:    "ralph-mixed",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Mixed errors",
+		NextID:    "ralph-mixed",
 	}
 
 	gm := &git.Manager{
@@ -506,14 +511,16 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			completed: 0,
-			total:     1,
-			nextTask:  "Stubborn task",
-			nextID:    "ralph-stub",
-			label:     "beads",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "Stubborn task",
+				NextID:       "ralph-stub",
+				BackendLabel: "beads",
+			},
 		},
 	}
 
@@ -550,10 +557,10 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 	_ = l.Run(context.Background())
 
 	// Task should be deferred in backend — merge failed, PR exists for manual review.
-	backend.skipMu.Lock()
-	defer backend.skipMu.Unlock()
-	if len(backend.skippedIDs) != 1 || backend.skippedIDs[0] != "ralph-stub" {
-		t.Errorf("expected ralph-stub deferred in backend, got %v", backend.skippedIDs)
+	backend.SkipMu.Lock()
+	defer backend.SkipMu.Unlock()
+	if len(backend.SkippedIDs) != 1 || backend.SkippedIDs[0] != "ralph-stub" {
+		t.Errorf("expected ralph-stub deferred in backend, got %v", backend.SkippedIDs)
 	}
 }
 
@@ -564,14 +571,16 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			completed: 0,
-			total:     1,
-			nextTask:  "Fixable task",
-			nextID:    "ralph-fix",
-			label:     "beads",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "Fixable task",
+				NextID:       "ralph-fix",
+				BackendLabel: "beads",
+			},
 		},
 	}
 
@@ -608,10 +617,10 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 	_ = l.Run(context.Background())
 
 	// Task should be deferred in backend — merge failed, PR exists for manual review.
-	backend.skipMu.Lock()
-	defer backend.skipMu.Unlock()
-	if len(backend.skippedIDs) != 1 || backend.skippedIDs[0] != "ralph-fix" {
-		t.Errorf("expected ralph-fix deferred in backend, got %v", backend.skippedIDs)
+	backend.SkipMu.Lock()
+	defer backend.SkipMu.Unlock()
+	if len(backend.SkippedIDs) != 1 || backend.SkippedIDs[0] != "ralph-fix" {
+		t.Errorf("expected ralph-fix deferred in backend, got %v", backend.SkippedIDs)
 	}
 }
 
@@ -622,14 +631,16 @@ func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			completed: 0,
-			total:     1,
-			nextTask:  "Recovering task",
-			nextID:    "ralph-rec",
-			label:     "beads",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "Recovering task",
+				NextID:       "ralph-rec",
+				BackendLabel: "beads",
+			},
 		},
 	}
 
@@ -686,19 +697,19 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 	// Create a Makefile with passing tests so VerifyDir detects a runner
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\ttrue\n"), 0o644)
 
-	backend := &stubBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "Add feature",
-		nextID:    "ralph-pre",
-		label:     "beads",
+	backend := &testutil.StubBackend{
+		Remaining:    1,
+		Completed:    0,
+		Total:        1,
+		NextTask:     "Add feature",
+		NextID:       "ralph-pre",
+		BackendLabel: "beads",
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.remaining = 0
-			backend.completed = 1
+			backend.Remaining = 0
+			backend.Completed = 1
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
@@ -797,21 +808,23 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 			createPromptTemplates(t, promptsDir)
 			os.WriteFile(filepath.Join(promptsDir, "verify-llm.md"), []byte("fix: {{LLM_FEEDBACK}}"), 0o644)
 
-			backend := &mutableBackend{
-				remaining: 1,
-				completed: 0,
-				total:     1,
-				nextTask:  "add colored logs",
-				nextID:    "ralph-color",
-				label:     "beads",
+			backend := &testutil.MutableBackend{
+				StubBackend: testutil.StubBackend{
+					Remaining:    1,
+					Completed:    0,
+					Total:        1,
+					NextTask:     "add colored logs",
+					NextID:       "ralph-color",
+					BackendLabel: "beads",
+				},
 			}
 
 			runner := &signalCallingRunner{
 				onRun: func() {
-					backend.mu.Lock()
-					backend.completed = 1
-					backend.remaining = 0
-					backend.mu.Unlock()
+					backend.Lock()
+					backend.Completed = 1
+					backend.Remaining = 0
+					backend.Unlock()
 				},
 				result: claude.Result{Summary: "done"},
 			}

@@ -12,6 +12,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -21,10 +22,10 @@ func TestLoop_AllTasksComplete(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 3,
-		total:     3,
+	backend := &testutil.StubBackend{
+		Remaining: 0,
+		Completed: 3,
+		Total:     3,
 	}
 
 	gm := &git.Manager{
@@ -62,10 +63,10 @@ func TestLoop_NoTasksError(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 0,
-		total:     0,
+	backend := &testutil.StubBackend{
+		Remaining: 0,
+		Completed: 0,
+		Total:     0,
 	}
 
 	gm := &git.Manager{
@@ -106,10 +107,10 @@ func TestLoop_StopFileDetection(t *testing.T) {
 	// Create a stop file before the loop starts.
 	os.WriteFile(filepath.Join(ralphDir, "stop"), []byte(""), 0o644)
 
-	backend := &stubBackend{
-		remaining: 5,
-		total:     5,
-		nextTask:  "Some task",
+	backend := &testutil.StubBackend{
+		Remaining: 5,
+		Total:     5,
+		NextTask:  "Some task",
 	}
 
 	gm := &git.Manager{
@@ -152,10 +153,10 @@ func TestLoop_ContextCancellation(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	backend := &stubBackend{
-		remaining: 5,
-		total:     5,
-		nextTask:  "Some task",
+	backend := &testutil.StubBackend{
+		Remaining: 5,
+		Total:     5,
+		NextTask:  "Some task",
 	}
 
 	gm := &git.Manager{
@@ -196,10 +197,10 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 1,
-		total:     1,
+	backend := &testutil.StubBackend{
+		Remaining: 0,
+		Completed: 1,
+		Total:     1,
 	}
 
 	gm := &git.Manager{
@@ -310,13 +311,15 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &mutableBackend{
-		remaining: 0,
-		completed: 1,
-		total:     1,
-		nextTask:  "first task",
-		nextID:    "t-1",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    0,
+			Completed:    1,
+			Total:        1,
+			NextTask:     "first task",
+			NextID:       "t-1",
+			BackendLabel: "beads",
+		},
 	}
 
 	logger := logging.New(nil)
@@ -331,10 +334,10 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 			callsMu.Lock()
 			calls++
 			callsMu.Unlock()
-			backend.mu.Lock()
-			backend.remaining = 0
-			backend.completed++
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Completed++
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true},
 	}
@@ -361,12 +364,12 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 	// so the test doesn't hang.
 	go func() {
 		time.Sleep(200 * time.Millisecond)
-		backend.mu.Lock()
-		backend.remaining = 1
-		backend.total++
-		backend.nextTask = "second task"
-		backend.nextID = "t-2"
-		backend.mu.Unlock()
+		backend.Lock()
+		backend.Remaining = 1
+		backend.Total++
+		backend.NextTask = "second task"
+		backend.NextID = "t-2"
+		backend.Unlock()
 
 		for {
 			time.Sleep(50 * time.Millisecond)
@@ -399,11 +402,11 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 1,
-		total:     1,
-		label:     "beads",
+	backend := &testutil.StubBackend{
+		Remaining:    0,
+		Completed:    1,
+		Total:        1,
+		BackendLabel: "beads",
 	}
 
 	logger := logging.New(nil)
@@ -443,11 +446,11 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 1,
-		total:     1,
-		label:     "beads",
+	backend := &testutil.StubBackend{
+		Remaining:    0,
+		Completed:    1,
+		Total:        1,
+		BackendLabel: "beads",
 	}
 
 	logger := logging.New(nil)
@@ -487,11 +490,11 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 2,
-		total:     2,
-		label:     "beads",
+	backend := &testutil.StubBackend{
+		Remaining:    0,
+		Completed:    2,
+		Total:        2,
+		BackendLabel: "beads",
 	}
 
 	logger := logging.New(nil)
@@ -528,7 +531,7 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 }
 
 type stateTrackingBackend struct {
-	mutableBackend
+	testutil.MutableBackend
 	stateCalls []stateCall
 }
 
@@ -555,22 +558,24 @@ func TestLoop_LifecycleStates(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	backend := &stateTrackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			completed: 0,
-			total:     1,
-			nextTask:  "add lifecycle tracking",
-			nextID:    "ralph-lc1",
-			label:     "beads",
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "add lifecycle tracking",
+				NextID:       "ralph-lc1",
+				BackendLabel: "beads",
+			},
 		},
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.mu.Lock()
-			backend.completed = 1
-			backend.remaining = 0
-			backend.mu.Unlock()
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
@@ -620,13 +625,15 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	backend := &stateTrackingBackend{
-		mutableBackend: mutableBackend{
-			remaining: 1,
-			completed: 0,
-			total:     1,
-			nextTask:  "broken task",
-			nextID:    "ralph-brk",
-			label:     "beads",
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "broken task",
+				NextID:       "ralph-brk",
+				BackendLabel: "beads",
+			},
 		},
 	}
 
@@ -681,23 +688,25 @@ func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
 
 	callCount := 0
 	iterationCount := 0
-	backend := &mutableBackend{
-		remaining: 2,
-		completed: 0,
-		total:     2,
-		nextTask:  "task A",
-		nextID:    "ralph-aaa",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    2,
+			Completed:    0,
+			Total:        2,
+			NextTask:     "task A",
+			NextID:       "ralph-aaa",
+			BackendLabel: "beads",
+		},
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
 			if iterationCount >= 2 {
-				backend.mu.Lock()
-				backend.remaining = 0
-				backend.completed = 2
-				backend.mu.Unlock()
+				backend.Lock()
+				backend.Remaining = 0
+				backend.Completed = 2
+				backend.Unlock()
 			}
 		},
 		result: claude.Result{SignalDetected: true},

@@ -12,6 +12,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -118,11 +119,11 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 	// detects a test runner and returns a failure.
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\t@echo 'FAIL: broken test' && exit 1\n"), 0o644)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Fix something",
-		nextID:    "ralph-test1",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Fix something",
+		NextID:    "ralph-test1",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -187,11 +188,11 @@ func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Add feature",
-		nextID:    "ralph-llm1",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Add feature",
+		NextID:    "ralph-llm1",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -247,11 +248,11 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Fix bug",
-		nextID:    "ralph-fb1",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Fix bug",
+		NextID:    "ralph-fb1",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
@@ -325,11 +326,11 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 	// Create a Makefile with a failing test command.
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\t@echo 'FAIL: broken' && exit 1\n"), 0o644)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Fix tests",
-		nextID:    "ralph-tr1",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Fix tests",
+		NextID:    "ralph-tr1",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
