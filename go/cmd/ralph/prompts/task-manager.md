@@ -72,6 +72,11 @@ If you find a closed bead covering the same area, create a new bead and
 reference the original — never reopen closed beads.
 
 Every bead must have:
+- A **type** set via the `--type` flag. Valid types: **bug** (broken behavior),
+  **task** (new work or improvement), **feature** (new capability). The type
+  determines work ordering within the same priority level — bugs are worked
+  first, then tasks, then features. Never convey the type via the title text;
+  always use `--type`.
 - A clear, imperative title prefixed with its target component. Determine the
   component from the area of the codebase affected:
   - **ralph loop:** — orchestrator, iteration execution, worktree management,

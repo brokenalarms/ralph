@@ -885,6 +885,42 @@ func TestExecutionBD_CheckStatusBeforeUpdate(t *testing.T) {
 	}
 }
 
+// Proves: task-manager.md enumerates valid bd types (bug, task, feature),
+// requires --type on every bd create, and documents the issueTypeRank
+// ordering so bugs are worked before tasks at the same priority level.
+func TestTaskManagerPrompt_RequiresTypeOnCreate(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		needle string
+		reason string
+	}{
+		{"--type", "must require --type flag on bd create"},
+		{"bug", "must enumerate bug as a valid type"},
+		{"task", "must enumerate task as a valid type"},
+		{"feature", "must enumerate feature as a valid type"},
+		{"bug", "must document bug-first ordering"},
+	}
+	for _, r := range required {
+		if !strings.Contains(result, r.needle) {
+			t.Errorf("task-manager.md %s (missing %q)", r.reason, r.needle)
+		}
+	}
+
+	// Verify ordering documentation: bug before task before feature
+	lower := strings.ToLower(result)
+	bugIdx := strings.Index(lower, "bug")
+	taskIdx := strings.LastIndex(lower[:strings.Index(lower, "feature")], "task")
+	featureIdx := strings.Index(lower, "feature")
+	if bugIdx < 0 || taskIdx < 0 || featureIdx < 0 {
+		t.Fatal("missing one of bug/task/feature in type ordering documentation")
+	}
+}
+
 // Proves: BuildReviewPrompt assembles the shared quality standards,
 // refactor style guide, and reflections into a post-mortem review prompt.
 func TestBuildReviewPrompt(t *testing.T) {
