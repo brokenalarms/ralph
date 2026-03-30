@@ -14,7 +14,7 @@ import (
 
 // TestTimeout is the maximum duration RunTests will wait for the test
 // command to complete. Exported so tests can override it.
-var TestTimeout = 3 * time.Minute
+var TestTimeout = 5 * time.Minute
 
 // GitQuerier abstracts the git operations that verify needs, allowing the
 // package to work without calling git package-level functions directly.

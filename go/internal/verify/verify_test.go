@@ -130,6 +130,14 @@ func TestRunTests_PassingTests(t *testing.T) {
 	}
 }
 
+// TestTimeout is 5 minutes — enough for ralph's own suite (~3 min)
+// without masking genuinely hanging tests.
+func TestTestTimeout_Default(t *testing.T) {
+	if TestTimeout != 5*time.Minute {
+		t.Errorf("TestTimeout = %v, want 5m", TestTimeout)
+	}
+}
+
 // RunTests fails when its internal timeout expires, proving that
 // a hanging test suite (unresolved promise, open handle) doesn't
 // block the loop indefinitely.
