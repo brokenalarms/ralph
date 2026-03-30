@@ -657,7 +657,6 @@ func TestBuildTaskManagerPrompt_PhaseLifecycleTracking(t *testing.T) {
 		{"bd state", "prompt should instruct querying bd state for phase"},
 		{"phase", "prompt should reference the phase dimension"},
 		{"verified", "prompt should reference the verified phase"},
-		{"unverified", "prompt should instruct setting phase=unverified on reopen"},
 		{"set-state", "prompt should instruct using bd set-state to change phase"},
 	}
 
@@ -724,6 +723,35 @@ func TestTaskManagerPrompt_CheckStatusBeforeUpdate(t *testing.T) {
 	}
 	if !strings.Contains(lower, "closed") {
 		t.Error("task-manager.md should warn against modifying closed beads")
+	}
+}
+
+// Proves: task manager prompt requires verifying bead status with bd show
+// before referencing any bead as a future fix, and instructs creating new
+// beads instead of reopening closed ones when follow-on work is needed.
+func TestBuildTaskManagerPrompt_NeverReferenceClosedBeadsAsFutureFixes(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	lower := strings.ToLower(result)
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"bd show", "must require bd show before referencing a bead as a future fix"},
+		{"verify", "must instruct verifying bead status before citing it"},
+		{"create a new", "must instruct creating new beads instead of reopening closed ones"},
+		{"never reopen", "must explicitly prohibit reopening closed beads"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(lower, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
 	}
 }
 

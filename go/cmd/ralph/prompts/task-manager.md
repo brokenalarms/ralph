@@ -68,8 +68,8 @@ Run `bd prime` for workflow context. All `bd` commands must run from
 ## Creating beads
 
 Before creating a bead, search for an existing one (`bd search <keywords>`).
-Also check recently closed beads — if one was falsely closed (acceptance
-criteria never met), reopen it instead of creating a duplicate.
+If you find a closed bead covering the same area, create a new bead and
+reference the original — never reopen closed beads.
 
 Every bead must have:
 - A clear, imperative title prefixed with its target component. Determine the
@@ -145,15 +145,10 @@ Use `bd state <id> phase` to query the current phase of any task. This is
 your primary tool for auditing whether a task genuinely completed its
 lifecycle or was falsely closed.
 
-When reopening a falsely-closed task (fix doesn't work, acceptance criteria
-not met), reset its phase so verification runs again:
-```
-bd reopen <id>
-bd set-state <id> phase=unverified --reason "reopened: <why>"
-```
-
 When auditing closed tasks, challenge any close where the phase is not
-`verified` — this indicates the close skipped the verification gate.
+`verified` — this indicates the close skipped the verification gate. If a
+closed task's fix doesn't work or acceptance criteria were never met, create
+a new bead referencing the original rather than reopening it.
 
 ## Echo-back rule (EVERY bd operation)
 
@@ -179,12 +174,23 @@ Never show the raw bd command — only the echo-back.
 
 Before updating or commenting on any bead, check its status:
 
-- **Closed** → do not comment or modify. Instead:
-  - If the fix is completely wrong or doesn't work → `bd reopen` + `bd set-state <id> phase=unverified`, then modify
-  - If it's follow-on work or a small miss → create a new bead, reference the original
+- **Closed** → never reopen closed beads. Create a new bead and reference
+  the original. This applies whether the fix was wrong, incomplete, or
+  follow-on work is needed.
 - **in_progress** → ask the user for confirmation before modifying. Do not
   silently change tasks that the ralph loop is actively working on.
 - **Open** → modify freely.
+
+## Referencing beads
+
+Before citing any bead as "this will be fixed by ralph-xyz", always verify
+its status with `bd show <id>`. Never assume a bead is still open — it may
+have been closed since you last checked.
+
+- If the bead is **open** → safe to reference as a future fix
+- If the bead is **closed** → do not reference it as a pending fix. Either:
+  - Acknowledge the closed bead didn't fix the issue and create a new one
+  - Note that the issue was already addressed by the closed bead
 
 ## Splitting and scoping
 
