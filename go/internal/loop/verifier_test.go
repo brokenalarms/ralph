@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
@@ -11,6 +12,24 @@ import (
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/verify"
 )
+
+// promptCapturingFixRunner captures the prompt passed to Run so tests can
+// verify that fix agents receive the correct context.
+type promptCapturingFixRunner struct {
+	onPrompt func(string)
+	result   claude.Result
+}
+
+func (r *promptCapturingFixRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
+	if r.onPrompt != nil {
+		r.onPrompt(cfg.Prompt)
+	}
+	return r.result, nil
+}
+
+func (r *promptCapturingFixRunner) StopStreaming() {}
+
+func (r *promptCapturingFixRunner) InjectMessage(_ string) error { return nil }
 
 // stubGitQuerier provides a minimal GitQuerier for Verifier tests,
 // decoupling them from a real git.Manager.
@@ -45,7 +64,7 @@ func newTestVerifier(t *testing.T, opts ...func(*Verifier)) *Verifier {
 		Git:         &stubGitQuerier{headRev: "def456"},
 		State:       st,
 		TaskBackend: &stubBackend{remaining: 1, total: 1, description: "test task"},
-		Runner:      func() claudeRunner { return &injectCapturingRunner{} },
+		Runner:      func() claudeRunner { return &stubRunner{} },
 		Signals:     claude.DefaultSignalPaths(ralphDir),
 		NewRunner:   func() claudeRunner { return &stubRunner{result: stubResult(false, "")} },
 		LLMVerify: func(opts verify.VerifyOpts) verify.Result {
@@ -162,6 +181,104 @@ func TestVerifier_ResetCounters(t *testing.T) {
 
 	if v.testFixAttempts != 0 || v.llmVerifyAttempts != 0 {
 		t.Fatalf("expected counters to be 0, got test=%d llm=%d", v.testFixAttempts, v.llmVerifyAttempts)
+	}
+}
+
+// Test failures spawn a fix agent instead of using stdin injection.
+// The fix agent receives the test output in its prompt and runs within
+// the same OnSignal call.
+func TestVerifier_OnSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
+	var fixPromptReceived string
+	fixAgentCalled := false
+
+	v := newTestVerifier(t, func(v *Verifier) {
+		verifyDir := v.cfg.VerifyDir
+		os.WriteFile(filepath.Join(verifyDir, "Makefile"), []byte("test:\n\t@echo 'FAIL: widget_test.go:42 expected 3 got 5' && exit 1\n"), 0o644)
+
+		v.deps.NewRunner = func() claudeRunner {
+			fixAgentCalled = true
+			// Fix agent "fixes" the tests by removing the failing Makefile
+			os.Remove(filepath.Join(verifyDir, "Makefile"))
+			return &promptCapturingFixRunner{
+				onPrompt: func(p string) { fixPromptReceived = p },
+				result:   stubResult(true, "fixed tests"),
+			}
+		}
+	})
+
+	result := v.OnSignal(signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    t.TempDir(),
+		rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID:     "test-fix1",
+		nextTask:   "Build widget",
+	})
+
+	if !result {
+		t.Fatal("expected OnSignal to return true after fix agent fixes tests")
+	}
+	if !fixAgentCalled {
+		t.Fatal("expected test failure to spawn a fix agent, not use stdin injection")
+	}
+	if !strings.Contains(fixPromptReceived, "widget_test.go:42") {
+		t.Errorf("fix agent prompt should contain test failure output, got: %q", fixPromptReceived)
+	}
+}
+
+// Test fix agent that fails to signal causes OnSignal to return false,
+// not start a new iteration.
+func TestVerifier_OnSignal_TestFailure_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
+	v := newTestVerifier(t, func(v *Verifier) {
+		os.WriteFile(filepath.Join(v.cfg.VerifyDir, "Makefile"), []byte("test:\n\t@echo 'FAIL' && exit 1\n"), 0o644)
+
+		v.deps.NewRunner = func() claudeRunner {
+			return &stubRunner{result: stubResult(false, "")}
+		}
+	})
+
+	result := v.OnSignal(signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    t.TempDir(),
+		rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID:     "test-fix2",
+		nextTask:   "Build widget",
+	})
+
+	if result {
+		t.Fatal("expected OnSignal to return false when fix agent fails to signal")
+	}
+}
+
+// Test fix loop exhausts max attempts and returns false.
+func TestVerifier_OnSignal_TestFailure_ExhaustsRetries(t *testing.T) {
+	fixAttempts := 0
+
+	v := newTestVerifier(t, func(v *Verifier) {
+		os.WriteFile(filepath.Join(v.cfg.VerifyDir, "Makefile"), []byte("test:\n\t@echo 'FAIL' && exit 1\n"), 0o644)
+
+		v.deps.NewRunner = func() claudeRunner {
+			fixAttempts++
+			// Fix agent signals success but tests keep failing
+			return &stubRunner{result: stubResult(true, "attempted fix")}
+		}
+	})
+
+	result := v.OnSignal(signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    t.TempDir(),
+		rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID:     "test-fix3",
+		nextTask:   "Build widget",
+	})
+
+	if result {
+		t.Fatal("expected OnSignal to return false after exhausting test fix attempts")
+	}
+	if fixAttempts != maxTestFixAttempts {
+		t.Fatalf("expected %d fix attempts, got %d", maxTestFixAttempts, fixAttempts)
 	}
 }
 

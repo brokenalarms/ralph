@@ -37,7 +37,7 @@ type VerifierDeps struct {
 	GitHub      git.GitHub
 	State       *state.Store
 	TaskBackend tasks.Backend
-	Runner      func() claudeRunner // returns the current main runner (for InjectMessage)
+	Runner      func() claudeRunner // returns the current main runner (for StopStreaming before fix agents)
 	Signals     claude.SignalPaths
 	NewRunner   func() claudeRunner // creates a new runner for fix agents
 	QueryFn     verify.QueryFunc
@@ -46,7 +46,7 @@ type VerifierDeps struct {
 }
 
 // Verifier owns the full post-signal verification flow: test suite,
-// LLM review, stdin injection, retry logic, and feature-existence check.
+// LLM review, fix agent spawning, retry logic, and feature-existence check.
 type Verifier struct {
 	cfg  VerifierConfig
 	deps VerifierDeps
@@ -90,30 +90,60 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 		v.deps.Logger.Log("test", "Tests passed")
 	}
 
+	beadDesc := getBeadDescription(v.deps.TaskBackend, p.taskID)
+	beadAcceptance := getBeadAcceptance(v.deps.TaskBackend, p.taskID)
+
 	if !testResult.Passed {
+		if !v.testFixLoop(p, beadDesc, beadAcceptance, testResult.Details) {
+			return false
+		}
+	}
+
+	return v.verifyWithFixLoop(p, beadDesc, beadAcceptance)
+}
+
+// testFixLoop spawns fix agents to address test failures, re-running tests
+// after each fix attempt. Returns true when tests pass, false when attempts
+// are exhausted or the fix agent fails to signal.
+func (v *Verifier) testFixLoop(p signalParams, beadDesc, beadAcceptance, testDetails string) bool {
+	for {
 		v.testFixAttempts++
-		v.deps.Logger.Warn("test", "Tests failed (attempt %d/%d): %s", v.testFixAttempts, maxTestFixAttempts, testResult.Reason)
+		v.deps.Logger.Warn("test", "Tests failed (attempt %d/%d)", v.testFixAttempts, maxTestFixAttempts)
 
 		if v.testFixAttempts > maxTestFixAttempts {
 			v.deps.Logger.Error("test", "Tests still failing after %d attempts — giving up", maxTestFixAttempts)
 			return false
 		}
 
-		msg := fmt.Sprintf("Tests failed after your completion signal. Fix these failures and signal completion again.\n\nTest output:\n%s", testResult.Details)
-		if err := v.deps.Runner().InjectMessage(msg); err != nil {
-			v.deps.Logger.Warn("test", "Stdin injection failed (%v) — agent will be restarted", err)
+		if !v.tryFixTests(p, beadDesc, beadAcceptance, testDetails) {
 			return false
 		}
-		v.deps.Logger.Log("test", "Test failure output injected to agent via stdin")
-		return false
+
+		v.deps.Logger.Log("test", "Re-running test suite after test fix agent...")
+		rerun := verify.RunTests(p.ctx, v.cfg.VerifyDir)
+		if rerun.Passed {
+			v.deps.Logger.Log("test", "Tests passed after fix agent")
+			v.testFixAttempts = 0
+			return true
+		}
+		testDetails = rerun.Details
 	}
+}
 
-	v.testFixAttempts = 0
+// tryFixTests spawns a fix agent to address test failures.
+func (v *Verifier) tryFixTests(p signalParams, beadDesc, beadAcceptance, testDetails string) bool {
+	v.deps.Logger.Log("test", "Spawning fix agent for test failures (attempt %d/%d)", v.testFixAttempts, maxTestFixAttempts)
 
-	beadDesc := getBeadDescription(v.deps.TaskBackend, p.taskID)
-	beadAcceptance := getBeadAcceptance(v.deps.TaskBackend, p.taskID)
+	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
+	fixPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{
+		"{{TASK_TITLE}}":       p.nextTask,
+		"{{TASK_DESCRIPTION}}": fmt.Sprintf("Tests failed after completion. Fix the failures.\n\nAcceptance criteria:\n%s", beadAcceptance),
+		"{{TEST_OUTPUT}}":      testDetails,
+		"{{SIGNAL_COMPLETE}}":  signalPath,
+	})
 
-	return v.verifyWithFixLoop(p, beadDesc, beadAcceptance)
+	fixResult := v.runFixAgent(p.ctx, "test failures", fixPrompt, p.workDir, p.rawLogPath)
+	return fixResult.SignalDetected
 }
 
 // verifyWithFixLoop runs LLM verification and, on rejection, spawns a fix
