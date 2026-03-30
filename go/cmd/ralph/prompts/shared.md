@@ -15,6 +15,9 @@
 - Unit tests are the building block — prefer them for verifying logic. Visual/UI/integration/end-to-end tests are expensive and should only run when significant UI changes have been made, not as routine verification for non-UI work.
 - Always run tests in fast-fail mode with minimal output. Only show output for failing tests — passing test noise wastes context.
 - Always run tests before committing and confirm they pass.
+- Every set of acceptance criteria implicitly includes: 'All existing tests MUST continue to pass. All existing behavior MUST be preserved unless the AC explicitly says to change it.' You NEVER need to state this — it is always true. If your change breaks an unrelated test, that is a bug in your change, not a stale test.
+- When adding a method to an interface, NEVER just add a no-op stub to make the build pass. The new method exists because something calls it — write a test that exercises that call site through the real implementation. A stub that compiles but never runs is not test coverage.
+- Each module MUST have exactly one file for shared test doubles (e.g. test_helpers_test.go). NEVER duplicate stub types across test files within the same package or recreate a stub that exists in another package test helpers. If a stub needs a new field or method, update the canonical definition — do not fork a local copy.
 - Try to keep testing cycles below 20% of total work.
 - If the dev environment supports it (package.json, Makefile, cargo, xcodegen in MacOS), additionally run a build to verify compilation before committing,
   and make sure that any auto-generated project files (e.g., .xcodeproj) are up to date with the changes.
