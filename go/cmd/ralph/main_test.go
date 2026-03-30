@@ -15,6 +15,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/loop"
+	"github.com/brokenalarms/ralph/internal/pidfile"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
@@ -928,4 +929,57 @@ func TestPostReviewCleanup(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(ralphDir, ".completed-tasks")); !os.IsNotExist(err) {
 		t.Error(".completed-tasks should be removed")
 	}
+}
+
+// handleLoop refuses to start when a PID file exists for a live process.
+func TestHandleLoop_RefusesDuplicateLoop(t *testing.T) {
+	dir := t.TempDir()
+	runCmd(t, "git", "-C", dir, "init")
+	runCmd(t, "git", "-C", dir, "commit", "--allow-empty", "-m", "init")
+
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	pidPath := filepath.Join(ralphDir, "loop.pid")
+	if err := pidfile.Write(pidPath); err != nil {
+		t.Fatalf("failed to write PID file: %v", err)
+	}
+	defer pidfile.Remove(pidPath)
+
+	log := logging.New(io.Discard)
+	sub := config.Subcommand{Name: "loop", Dir: dir, Args: nil}
+	code := handleLoop(sub, log)
+	if code != 1 {
+		t.Errorf("handleLoop should exit 1 when PID file exists for alive process, got %d", code)
+	}
+}
+
+// handleLoop starts normally when a stale PID file exists (dead process).
+// Verifies stale cleanup by confirming the PID file is removed.
+func TestHandleLoop_CleansUpStalePID(t *testing.T) {
+	dir := t.TempDir()
+	runCmd(t, "git", "-C", dir, "init")
+	runCmd(t, "git", "-C", dir, "commit", "--allow-empty", "-m", "init")
+
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	pidPath := filepath.Join(ralphDir, "loop.pid")
+	os.WriteFile(pidPath, []byte("99999999"), 0o644)
+
+	log := logging.New(io.Discard)
+	sub := config.Subcommand{Name: "loop", Dir: dir, Args: nil}
+	// This will proceed past PID check but fail later (no bd, etc.) — that's fine.
+	// The point is it does NOT exit 1 with "already running".
+	code := handleLoop(sub, log)
+
+	// If PID file was cleaned up, the loop progressed past the PID check.
+	if _, err := os.Stat(pidPath); !os.IsNotExist(err) {
+		t.Error("stale PID file should have been cleaned up")
+	}
+
+	// It should fail later (bd not found, etc.) but not at the PID check.
+	// Code 1 is expected from downstream failures — we verify the PID file
+	// was removed as proof it passed the PID check.
+	_ = code
 }
