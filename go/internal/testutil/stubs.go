@@ -142,6 +142,7 @@ func (m *MutableBackend) Unlock() { m.mu.Unlock() }
 // TrackingBackend extends MutableBackend to record CloseTask and SkipTask calls.
 type TrackingBackend struct {
 	MutableBackend
+	CloseErr     error // injected error for CloseTask
 	ClosedIDs    []string
 	CloseReasons []string
 	CloseMu      sync.Mutex
@@ -154,8 +155,9 @@ func (t *TrackingBackend) CloseTask(id string, reason string) error {
 	t.CloseMu.Lock()
 	t.ClosedIDs = append(t.ClosedIDs, id)
 	t.CloseReasons = append(t.CloseReasons, reason)
+	err := t.CloseErr
 	t.CloseMu.Unlock()
-	return nil
+	return err
 }
 
 func (t *TrackingBackend) SkipTask(id string, reason string) error {

@@ -759,6 +759,19 @@ func TestBD_CloseTask_RejectsEmptyPhase(t *testing.T) {
 	}
 }
 
+// Proves: defaultRunBD includes stderr in the error when a command fails.
+func TestBD_DefaultRunBD_IncludesStderr(t *testing.T) {
+	b := &BD{bdPath: "/bin/sh"}
+	// Run a command that writes to stderr and exits non-zero.
+	_, err := b.defaultRunBD(context.Background(), t.TempDir(), "-c", "echo 'bd error detail' >&2; exit 1")
+	if err == nil {
+		t.Fatal("expected error from failing command")
+	}
+	if !strings.Contains(err.Error(), "bd error detail") {
+		t.Errorf("error should include stderr content, got: %v", err)
+	}
+}
+
 // Proves: ProjectContext assembles open beads, recently closed beads,
 // project directory, and config into a single string for prompt injection.
 func TestBD_ProjectContext_AssemblesAllSections(t *testing.T) {
