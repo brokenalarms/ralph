@@ -44,7 +44,9 @@ func Available() bool {
 func (s *Session) Setup() error {
 	// Clear stale files from a previous run so panes don't briefly show
 	// old data before the loop writes current values.
-	os.Remove(filepath.Join(s.RalphDir, ".stream-task"))
+	// Note: .stream-task is NOT removed — it contains the current task label
+	// written by the loop, and PaneTitle.Run() needs it to show the task ID
+	// in the stream pane title when attaching to a running session.
 	os.Remove(filepath.Join(s.RalphDir, ".completed-tasks"))
 	os.Remove(filepath.Join(s.RalphDir, ".stream-filter.sh"))
 
@@ -184,9 +186,9 @@ done
 }
 
 func (s *Session) bdPlanRender() string {
-	return fmt.Sprintf(`    current_json=$(bd list --status in_progress --flat --json --limit 1 2>/dev/null)
-    current_title=$(echo "$current_json" | jq -r '.[0].title // empty' 2>/dev/null)
-    current_id=$(echo "$current_json" | jq -r '.[0].id // empty' 2>/dev/null)
+	stateFile := filepath.Join(s.RalphDir, "state.json")
+	return fmt.Sprintf(`    current_id=$(jq -r '.last_task_id // empty' '%s' 2>/dev/null)
+    current_title=$(jq -r '.last_task // empty' '%s' 2>/dev/null)
     if [[ -n "$current_title" ]]; then
       printf "${BOLD}${CYAN}▶ %%s${NC} (%%s)\n" "$current_title" "$current_id"
       printf "\n"
@@ -208,12 +210,14 @@ func (s *Session) bdPlanRender() string {
     closed=$(bd count --status closed 2>/dev/null || echo 0)
     open=$(bd count --status open 2>/dev/null || echo 0)
     inp=$(bd count --status in_progress 2>/dev/null || echo 0)
-    total=$(( open + inp + closed ))
-    printf "${GREEN}%%s/%%s done${NC}\n" "$closed" "$total"
+    total=$(( closed + open + inp ))
+    if (( total > 0 )); then
+      printf "\n${GREEN}%%s/%%s done${NC}\n" "$closed" "$total"
+    fi
     if [[ -f '%s/.completed-tasks' ]]; then
       completed=$(grep -v '^$' '%s/.completed-tasks' | paste -sd ',' - | sed 's/,/, /g')
       [[ -n "$completed" ]] && printf "${DIM}Done: %%s${NC}\n" "$completed"
-    fi`, s.RalphDir, s.RalphDir)
+    fi`, stateFile, stateFile, s.RalphDir, s.RalphDir)
 }
 
 // BuildRalphCmd constructs the ralph re-exec command from the original args,
