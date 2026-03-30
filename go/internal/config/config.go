@@ -39,6 +39,7 @@ type Config struct {
 	PostSignalTimeout       time.Duration
 	PostTask                string
 	Notify                  bool
+	ExistingLoopPID         int
 
 	cliSet map[string]bool
 }

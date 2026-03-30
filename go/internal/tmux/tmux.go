@@ -47,6 +47,10 @@ type Session struct {
 	// Commander enables the 4-pane layout with a task manager pane.
 	Commander bool
 
+	// ExistingLoopPID, when non-zero, means a loop is already running.
+	// The loop pane shows a status message instead of starting a new loop.
+	ExistingLoopPID int
+
 	paneTitle *PaneTitle
 }
 
@@ -158,9 +162,15 @@ func (s *Session) createStandardSession() error {
 func (s *Session) createCommanderSession() error {
 	planWatchPath := filepath.Join(s.RalphDir, ".plan-watch.sh")
 
-	ralphCmd := fmt.Sprintf("export _RALPH_TMUX_SESSION=%s; %s", s.Name, s.RalphCmd)
+	var loopCmd string
+	if s.ExistingLoopPID > 0 {
+		loopCmd = fmt.Sprintf("echo 'Attached to existing ralph loop (PID %d)'; tail -f '%s'",
+			s.ExistingLoopPID, filepath.Join(s.RalphDir, "loop.log"))
+	} else {
+		loopCmd = fmt.Sprintf("export _RALPH_TMUX_SESSION=%s; %s", s.Name, s.RalphCmd)
+	}
 
-	if err := tmuxCmd("new-session", "-d", "-s", s.Name, "-c", s.ProjectDir, ralphCmd); err != nil {
+	if err := tmuxCmd("new-session", "-d", "-s", s.Name, "-c", s.ProjectDir, loopCmd); err != nil {
 		return err
 	}
 

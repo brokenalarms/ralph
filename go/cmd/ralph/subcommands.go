@@ -10,11 +10,12 @@ import (
 	"strings"
 
 	"github.com/brokenalarms/ralph/internal/agent"
+	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/config"
-	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/pidfile"
 	"github.com/brokenalarms/ralph/internal/prompt"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -143,6 +144,15 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 
 	scriptPath, _ := os.Executable()
 	ralphDir := filepath.Join(cfg.ProjectDir, ".ralph")
+
+	// Refuse to start if another loop is already running on this project.
+	if pid, alive, err := pidfile.Check(ralphDir); err != nil {
+		log.Error("", "PID file check failed: %v", err)
+		return 1
+	} else if alive {
+		log.Error("", "Another ralph loop is already running (PID %d). Stop it first or use 'ralph stop'.", pid)
+		return 1
+	}
 
 	promptsDir := filepath.Join(cfg.ProjectDir, "go", "cmd", "ralph", "prompts")
 	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
@@ -278,6 +288,13 @@ func handleCommander(sub config.Subcommand, log *logging.Logger) int {
 	cfg.UseTmux = true
 
 	scriptPath, _ := os.Executable()
+
+	// If a loop is already running, attach panes to its shared files
+	// without starting a second loop.
+	if pid, alive, _ := pidfile.Check(ralphDir); alive {
+		log.Log("", "Existing loop detected (PID %d) — attaching to shared files", pid)
+		cfg.ExistingLoopPID = pid
+	}
 
 	allArgs := append([]string{"command"}, sub.Args...)
 	if sub.Dir != "." {

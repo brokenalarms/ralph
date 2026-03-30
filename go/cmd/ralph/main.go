@@ -16,6 +16,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/loop"
+	"github.com/brokenalarms/ralph/internal/pidfile"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/tmux"
@@ -101,6 +102,13 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	if exitCode >= 0 {
 		return exitCode
 	}
+
+	// Write PID file and ensure cleanup on any exit path.
+	if err := pidfile.Write(ralphDir); err != nil {
+		log.Error("", "Failed to write PID file: %v", err)
+		return 1
+	}
+	defer pidfile.Remove(ralphDir)
 
 	st := state.NewStore(ralphDir)
 	if err := st.Init(cfg.MaxIterations); err != nil {
@@ -433,13 +441,14 @@ func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir st
 	}
 
 	sess := &tmux.Session{
-		Name:       tmux.SessionName(cfg.ProjectDir),
-		ProjectDir: cfg.ProjectDir,
-		RalphDir:   ralphDir,
-		RawLogPath: filepath.Join(ralphDir, "raw.log"),
-		ScriptPath: scriptPath,
-		RalphCmd:   tmux.BuildRalphCmd(scriptPath, args),
-		Commander:  commander,
+		Name:            tmux.SessionName(cfg.ProjectDir),
+		ProjectDir:      cfg.ProjectDir,
+		RalphDir:        ralphDir,
+		RawLogPath:      filepath.Join(ralphDir, "raw.log"),
+		ScriptPath:      scriptPath,
+		RalphCmd:        tmux.BuildRalphCmd(scriptPath, args),
+		Commander:       commander,
+		ExistingLoopPID: cfg.ExistingLoopPID,
 	}
 	if commander {
 		sess.TaskCmd = tmux.BuildTaskCmd(scriptPath, cfg.ProjectDir)
