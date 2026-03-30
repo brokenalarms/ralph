@@ -336,6 +336,54 @@ func TestSharedPrompt_CommitBeforeTests(t *testing.T) {
 	}
 }
 
+// Proves: shared.md Testing section states that regression is implicit in all
+// acceptance criteria — existing tests and behavior MUST be preserved.
+func TestSharedPrompt_RegressionImplicitInACs(t *testing.T) {
+	shared, err := os.ReadFile(filepath.Join(promptsDir(t), "shared.md"))
+	if err != nil {
+		t.Fatalf("reading shared.md: %v", err)
+	}
+	content := string(shared)
+	if !strings.Contains(content, "MUST continue to pass") {
+		t.Error("shared prompt missing 'MUST continue to pass' regression rule")
+	}
+	if !strings.Contains(content, "MUST be preserved") {
+		t.Error("shared prompt missing 'MUST be preserved' behavior preservation rule")
+	}
+}
+
+// Proves: shared.md Testing section requires testing the actual code path,
+// not just adding no-op stubs to satisfy compilation.
+func TestSharedPrompt_TestCodePathNotStubs(t *testing.T) {
+	shared, err := os.ReadFile(filepath.Join(promptsDir(t), "shared.md"))
+	if err != nil {
+		t.Fatalf("reading shared.md: %v", err)
+	}
+	content := string(shared)
+	if !strings.Contains(content, "NEVER just add a no-op stub") {
+		t.Error("shared prompt missing 'NEVER just add a no-op stub' rule")
+	}
+	if !strings.Contains(content, "not test coverage") {
+		t.Error("shared prompt missing 'not test coverage' stub warning")
+	}
+}
+
+// Proves: shared.md Testing section requires a single source of truth for
+// test fixtures — one canonical file per module, no duplication.
+func TestSharedPrompt_SingleSourceOfTruthFixtures(t *testing.T) {
+	shared, err := os.ReadFile(filepath.Join(promptsDir(t), "shared.md"))
+	if err != nil {
+		t.Fatalf("reading shared.md: %v", err)
+	}
+	content := string(shared)
+	if !strings.Contains(content, "MUST have exactly one file") {
+		t.Error("shared prompt missing 'MUST have exactly one file' fixture rule")
+	}
+	if !strings.Contains(content, "NEVER duplicate stub types") {
+		t.Error("shared prompt missing 'NEVER duplicate stub types' rule")
+	}
+}
+
 // Proves: execution-bd.md requires TDD — write a failing test first, then implement.
 func TestExecutionBD_RequiresTDD(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
