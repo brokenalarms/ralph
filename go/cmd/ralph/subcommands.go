@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/agent"
 	"github.com/brokenalarms/ralph/internal/attempts"
@@ -228,6 +229,10 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 		log.Error("", "Review session failed: %v", err)
 		return 1
 	}
+
+	// Let the terminal finish processing any ANSI escape sequences from
+	// the CLI's exit message before printing cleanup log lines.
+	time.Sleep(100 * time.Millisecond)
 
 	postReviewCleanup(ralphDir, log)
 	return exitCode
