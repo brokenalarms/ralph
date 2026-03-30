@@ -85,8 +85,8 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 		log.Success("", "Feedback sent — agent will restart with updated bead notes.")
 		return 0
 
-	case "command":
-		return handleCommander(sub, log)
+	case "attach":
+		return handleAttach(sub, log)
 
 	case "loop":
 		return handleLoop(sub, log)
@@ -170,7 +170,7 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 			log.Error("", "Failed to create .ralph dir: %v", err)
 			return 1
 		}
-		return handleTmux(cfg, scriptPath, sub.Args, ralphDir, false, log)
+		return handleTmux(cfg, scriptPath, sub.Args, ralphDir, log)
 	}
 
 	dirs := workctx.New(cfg.ProjectDir, promptsDir)
@@ -264,19 +264,24 @@ func postReviewCleanup(ralphDir string, log *logging.Logger) {
 	os.Remove(filepath.Join(ralphDir, ".completed-tasks"))
 }
 
-// handleCommander launches the 4-pane tmux layout with both the ralph loop
-// and an interactive task manager. Remaining args are passed through to the loop.
-func handleCommander(sub config.Subcommand, log *logging.Logger) int {
+// handleAttach attaches to an existing loop's tmux session. Requires a running
+// loop (detected via .ralph/loop.pid). Does not start a new loop.
+func handleAttach(sub config.Subcommand, log *logging.Logger) int {
 	if hasHelpFlag(sub.Args) {
-		printCommanderUsage()
+		printAttachUsage()
 		return 0
 	}
 
 	projectDir, _ := filepath.Abs(sub.Dir)
 	ralphDir := filepath.Join(projectDir, ".ralph")
 
-	if err := os.MkdirAll(ralphDir, 0o755); err != nil {
-		log.Error("", "Failed to create .ralph dir: %v", err)
+	existingPID, err := pidfile.Check(filepath.Join(ralphDir, "loop.pid"))
+	if err != nil {
+		log.Error("", "PID file check failed: %v", err)
+		return 1
+	}
+	if existingPID == 0 {
+		log.Error("", "No ralph loop running. Start one first with: ralph loop --tmux")
 		return 1
 	}
 
@@ -286,27 +291,11 @@ func handleCommander(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 	cfg.ProjectDir = projectDir
-	cfg.UseTmux = true
 
 	scriptPath, _ := os.Executable()
 
-	existingPID, err := pidfile.Check(filepath.Join(ralphDir, "loop.pid"))
-	if err != nil {
-		log.Error("", "PID file check failed: %v", err)
-		return 1
-	}
-
-	allArgs := append([]string{"command"}, sub.Args...)
-	if sub.Dir != "." {
-		allArgs = append([]string{"command", sub.Dir}, sub.Args...)
-	}
-
-	if existingPID != 0 {
-		log.Log("", "Attaching to existing ralph loop (PID %d)", existingPID)
-		return handleTmuxAttach(cfg, scriptPath, allArgs, ralphDir, existingPID, log)
-	}
-
-	return handleTmux(cfg, scriptPath, allArgs, ralphDir, true, log)
+	log.Log("", "Attaching to ralph loop (PID %d)", existingPID)
+	return handleTmuxAttach(cfg, scriptPath, ralphDir, existingPID, log)
 }
 
 // handleTask launches an interactive Claude session with the task manager prompt.
@@ -357,22 +346,22 @@ func printUsage() {
 
 %sCOMMANDS:%s
   ralph loop [options]         Autonomous executor — picks up tasks, writes code, pushes PRs
+  ralph attach [directory]     Attach to a running loop's tmux session (3-pane: loop + stream + plan)
   ralph merge <top-pr>         Rebase and merge a stacked PR chain bottom-up
   ralph task [directory]       Interactive task triage and spec session
   ralph review [directory]     Post-mortem review: reflections, test audit, refactoring
-  ralph command [directory]    Full 4-pane tmux layout (loop + task manager + stream + plan)
 
 %sEXAMPLES:%s
-  ralph loop --max 20
+  ralph loop --tmux --max 20
   ralph loop --auto-merge --evolve
+  ralph attach
   ralph task ~/myproject
-  ralph review
 
 %sHOW IT WORKS:%s
   1. Triage:   ralph task — create tasks, write specs, manage backlog
   2. Execute:  ralph loop — autonomous iteration over tasks
-  3. Review:   ralph review — post-mortem analysis of reflections, tests, and code health
-  Run task and loop in parallel: task in one window, loop in another.
+  3. Attach:   ralph attach — monitor a running loop in tmux
+  4. Review:   ralph review — post-mortem analysis of reflections, tests, and code health
 
 Use "ralph <command> --help" for more information about a command.
 `,
@@ -395,11 +384,10 @@ func printReviewUsage() {
 	fmt.Printf("Launches an interactive Claude session for reviewing reflections, auditing\ntests, and identifying refactoring opportunities.\n")
 }
 
-func printCommanderUsage() {
-	fmt.Printf("%sralph command%s - Full 4-pane tmux layout\n\n", logging.Bold, logging.Reset)
-	fmt.Printf("%sUSAGE:%s\n  ralph command [directory] [loop-options...]\n\n", logging.Bold, logging.Reset)
-	fmt.Printf("Starts a tmux session with the autonomous loop, task manager, stream log,\nand plan watcher in a 4-pane layout.\n\n")
-	fmt.Printf("%sLOOP OPTIONS:%s\n%s\n", logging.Bold, logging.Reset, config.FlagUsage())
+func printAttachUsage() {
+	fmt.Printf("%sralph attach%s - Attach to a running loop's tmux session\n\n", logging.Bold, logging.Reset)
+	fmt.Printf("%sUSAGE:%s\n  ralph attach [directory]\n\n", logging.Bold, logging.Reset)
+	fmt.Printf("Attaches to an existing ralph loop's tmux session with 3 panes:\nloop log, filtered stream, and plan watcher.\n\nRequires a running loop (started with `ralph loop --tmux`).\nDetaching (Ctrl-B d) does not kill the running loop.\n")
 }
 
 func printLoopUsage() {

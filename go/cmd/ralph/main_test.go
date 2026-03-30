@@ -116,13 +116,32 @@ func TestRun_ReviewHelp(t *testing.T) {
 	}
 }
 
-// Proves: `ralph command -h` prints help and exits 0 instead of passing -h to Claude.
-func TestRun_CommanderHelp(t *testing.T) {
+// Proves: `ralph attach -h` prints help and exits 0.
+func TestRun_AttachHelp(t *testing.T) {
 	for _, flag := range []string{"-h", "--help"} {
-		code := run([]string{"command", flag})
+		code := run([]string{"attach", flag})
 		if code != 0 {
-			t.Errorf("ralph command %s should exit 0, got %d", flag, code)
+			t.Errorf("ralph attach %s should exit 0, got %d", flag, code)
 		}
+	}
+}
+
+// Proves: `ralph attach` refuses to start when no loop is running (no PID file).
+func TestHandleAttach_RefusesWhenNoLoopRunning(t *testing.T) {
+	dir := t.TempDir()
+	log := logging.New(nil)
+	sub := config.Subcommand{Name: "attach", Dir: dir, Args: nil}
+	code := handleAttach(sub, log)
+	if code != 1 {
+		t.Errorf("ralph attach should exit 1 when no loop running, got %d", code)
+	}
+}
+
+// Proves: `ralph command` is no longer recognized as a subcommand.
+func TestRun_CommandSubcommandRemoved(t *testing.T) {
+	code := run([]string{"command"})
+	if code != 1 {
+		t.Errorf("ralph command should exit 1 as unknown command, got %d", code)
 	}
 }
 

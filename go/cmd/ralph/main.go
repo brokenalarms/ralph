@@ -437,7 +437,7 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 
 // handleTmuxAttach creates a tmux session that attaches to an already-running
 // loop. The loop pane tails the log instead of re-executing ralph.
-func handleTmuxAttach(cfg config.Config, scriptPath string, args []string, ralphDir string, existingPID int, log *logging.Logger) int {
+func handleTmuxAttach(cfg config.Config, scriptPath string, ralphDir string, existingPID int, log *logging.Logger) int {
 	if !tmux.Available() {
 		log.Error("", "tmux not found on PATH")
 		return 1
@@ -453,8 +453,6 @@ func handleTmuxAttach(cfg config.Config, scriptPath string, args []string, ralph
 		RawLogPath: filepath.Join(ralphDir, "raw.log"),
 		ScriptPath: scriptPath,
 		RalphCmd:   logTailCmd,
-		Commander:  true,
-		TaskCmd:    tmux.BuildTaskCmd(scriptPath, cfg.ProjectDir),
 	}
 
 	if err := sess.Setup(); err != nil {
@@ -483,7 +481,7 @@ func handleTmuxAttach(cfg config.Config, scriptPath string, args []string, ralph
 	return 0
 }
 
-func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir string, commander bool, log *logging.Logger) int {
+func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir string, log *logging.Logger) int {
 	if !tmux.Available() {
 		log.Error("", "tmux not found on PATH")
 		return 1
@@ -496,10 +494,6 @@ func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir st
 		RawLogPath: filepath.Join(ralphDir, "raw.log"),
 		ScriptPath: scriptPath,
 		RalphCmd:   tmux.BuildRalphCmd(scriptPath, args),
-		Commander:  commander,
-	}
-	if commander {
-		sess.TaskCmd = tmux.BuildTaskCmd(scriptPath, cfg.ProjectDir)
 	}
 
 	if err := sess.Setup(); err != nil {
