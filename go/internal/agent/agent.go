@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -17,6 +19,8 @@ import (
 type Runner struct {
 	Logger         claude.Log
 	OnTaskDetected claude.OnTaskDetected
+	Stdout         io.Writer
+	Stderr         io.Writer
 	inner          *claude.Runner
 }
 
@@ -68,21 +72,48 @@ func (r *Runner) Query(ctx context.Context, workDir, prompt, model string) (stri
 // Interactive runs an interactive agent session (review, task manager).
 // Returns the exit code. This is the single code path for all interactive
 // agent invocations that connect stdin/stdout to the terminal.
+//
+// After the subprocess exits, a trailing newline is written to stdout and
+// stderr. This prevents the caller's subsequent log output from being
+// interleaved with the CLI's exit message (e.g. "Resume this session…").
 func (r *Runner) Interactive(workDir, systemPrompt string, extraArgs ...string) (int, error) {
 	args := []string{"--permission-mode", "bypassPermissions", "--system-prompt", systemPrompt}
 	args = append(args, extraArgs...)
 
+	stdout := r.stdout()
+	stderr := r.stderr()
+
 	cmd := exec.Command("claude", args...)
 	cmd.Dir = workDir
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
+	exitCode := 0
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return exitErr.ExitCode(), nil
+			exitCode = exitErr.ExitCode()
+		} else {
+			return 1, err
 		}
-		return 1, err
 	}
-	return 0, nil
+
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stderr)
+
+	return exitCode, nil
+}
+
+func (r *Runner) stdout() io.Writer {
+	if r.Stdout != nil {
+		return r.Stdout
+	}
+	return os.Stdout
+}
+
+func (r *Runner) stderr() io.Writer {
+	if r.Stderr != nil {
+		return r.Stderr
+	}
+	return os.Stderr
 }
