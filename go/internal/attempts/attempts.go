@@ -209,3 +209,43 @@ func (t *Tracker) ClearMergeFailures(taskID string) {
 		os.Remove(t.mergeFailureFile(taskID))
 	}
 }
+
+const MaxIdleTimeoutFailures = 3
+
+func (t *Tracker) idleTimeoutFailureFile(taskID string) string {
+	return filepath.Join(t.attemptsDir(), taskID+".idle-timeout-failures")
+}
+
+// RecordIdleTimeoutFailure increments the idle timeout failure count for a task.
+func (t *Tracker) RecordIdleTimeoutFailure(taskID string) (int, error) {
+	if taskID == "" {
+		return 0, nil
+	}
+	if err := os.MkdirAll(t.attemptsDir(), 0o755); err != nil {
+		return 0, err
+	}
+	count := t.IdleTimeoutFailureCount(taskID) + 1
+	path := t.idleTimeoutFailureFile(taskID)
+	return count, os.WriteFile(path, []byte(fmt.Sprintf("%d", count)), 0o644)
+}
+
+// IdleTimeoutFailureCount returns the number of consecutive idle timeout failures for a task.
+func (t *Tracker) IdleTimeoutFailureCount(taskID string) int {
+	if taskID == "" {
+		return 0
+	}
+	data, err := os.ReadFile(t.idleTimeoutFailureFile(taskID))
+	if err != nil {
+		return 0
+	}
+	n := 0
+	fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &n)
+	return n
+}
+
+// ClearIdleTimeoutFailures removes the idle timeout failure counter for a task.
+func (t *Tracker) ClearIdleTimeoutFailures(taskID string) {
+	if taskID != "" {
+		os.Remove(t.idleTimeoutFailureFile(taskID))
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -193,9 +194,9 @@ func (l *Loop) pushSignalPR(p postSignalParams) string {
 	prBody := buildPRBody(l.cfg.TaskBackend, p.taskID, p.result.Summary)
 	prNumber, pushErr := l.pushAndCreatePR(p.ctx, p.taskID, p.nextTask, prBody)
 	if pushErr != nil {
-		if !isOnline() {
+		if !l.isOnlineFunc() {
 			l.logger.Warn("git", "Push failed — internet appears down")
-			waitForInternet(p.ctx, l.logger)
+			l.waitForInternetFunc(p.ctx, l.logger)
 			prNumber, pushErr = l.pushAndCreatePR(p.ctx, p.taskID, p.nextTask, prBody)
 		}
 		if pushErr != nil {
@@ -388,7 +389,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	taskPrompt := l.buildTaskPrompt(nextTask, taskID)
 	testStatus := l.runPreIterationTests(ctx)
 
-	if !waitForInternet(ctx, l.logger) {
+	if !l.waitForInternetFunc(ctx, l.logger) {
 		return iterationPrompt{}, false
 	}
 	if !l.waitForRate(ctx) {
@@ -446,9 +447,9 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 	taskID, nextTask, headBefore string, runIteration, iteration *int) runResultAction {
 
 	if runErr != nil {
-		if !isOnline() {
+		if !l.isOnlineFunc() {
 			l.logger.Warn("llm", "Claude failed — internet appears down")
-			if !waitForInternet(ctx, l.logger) {
+			if !l.waitForInternetFunc(ctx, l.logger) {
 				return resultBreak
 			}
 			*runIteration--
@@ -475,6 +476,12 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 			"Killed: idle timeout (no output for configured duration)",
 			diffStat,
 			"idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output")
+		count, _ := l.attempts.RecordIdleTimeoutFailure(taskID)
+		if count >= attempts.MaxIdleTimeoutFailures {
+			l.logger.Warn("llm", "Idle timeout %d times for %s — skipping task", count, taskID)
+			skipTask(l.cfg.TaskBackend, l.state, l.logger, taskID, "idle_timeout_max_failures")
+			return resultRetry
+		}
 		*runIteration--
 		*iteration--
 		return resultRetry
