@@ -142,7 +142,7 @@ func TestManager_PushAndCreatePR_NoRealProcesses(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &stubGitHub{available: true, openPR: ""}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: ""}
 
 	dir := t.TempDir()
 	mgr := &Manager{
@@ -179,7 +179,7 @@ func TestManager_PushAndCreatePR_PushesEvenWhenPRExists(t *testing.T) {
 	r.On("push", "", nil)
 	r.On("ref-exists", "", nil)
 
-	gh := &stubGitHub{available: true, openPR: "42"}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: "42"}
 
 	dir := t.TempDir()
 	mgr := &Manager{
@@ -214,7 +214,7 @@ func TestManager_PushAndCreatePR_UpdatesTitleWhenPRExists(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &stubGitHub{available: true, openPR: "42"}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: "42"}
 
 	dir := t.TempDir()
 	mgr := &Manager{
@@ -233,8 +233,8 @@ func TestManager_PushAndCreatePR_UpdatesTitleWhenPRExists(t *testing.T) {
 	}
 
 	want := "[ralph-abc] fix: some bug"
-	if gh.editPRTitle != want {
-		t.Errorf("EditPR title = %q, want %q", gh.editPRTitle, want)
+	if gh.EditPRTitle != want {
+		t.Errorf("EditPR title = %q, want %q", gh.EditPRTitle, want)
 	}
 }
 
@@ -248,7 +248,7 @@ func TestManager_PushAndCreatePR_StripsComponentPrefix(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &stubGitHub{available: true, openPR: "42"}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: "42"}
 
 	dir := t.TempDir()
 	mgr := &Manager{
@@ -267,8 +267,8 @@ func TestManager_PushAndCreatePR_StripsComponentPrefix(t *testing.T) {
 	}
 
 	want := "[ralph-abc] fix signal cleanup"
-	if gh.editPRTitle != want {
-		t.Errorf("EditPR title = %q, want %q", gh.editPRTitle, want)
+	if gh.EditPRTitle != want {
+		t.Errorf("EditPR title = %q, want %q", gh.EditPRTitle, want)
 	}
 }
 
@@ -281,7 +281,7 @@ func TestManager_PushAndCreatePR_NoEditWithoutTaskID(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &stubGitHub{available: true, openPR: "42"}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: "42"}
 
 	dir := t.TempDir()
 	mgr := &Manager{
@@ -299,8 +299,8 @@ func TestManager_PushAndCreatePR_NoEditWithoutTaskID(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if gh.editPRTitle != "" {
-		t.Errorf("EditPR should not be called without taskID, but got title %q", gh.editPRTitle)
+	if gh.EditPRTitle != "" {
+		t.Errorf("EditPR should not be called without taskID, but got title %q", gh.EditPRTitle)
 	}
 }
 
@@ -313,7 +313,7 @@ func TestManager_PushAndCreatePR_LogsAlreadyOpen(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &stubGitHub{available: true, openPR: "42"}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: "42"}
 
 	dir := t.TempDir()
 	log := &testLog{}
@@ -350,7 +350,7 @@ func TestManager_PushAndCreatePR_LogsCreatedPR(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &stubGitHub{available: true, openPR: "", createdPR: "99"}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: "", CreatedPR: "99"}
 
 	dir := t.TempDir()
 	log := &testLog{}

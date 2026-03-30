@@ -10,6 +10,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -43,7 +44,7 @@ func TestLoop_BuildTaskPrompt_WithScreenshots(t *testing.T) {
 		t.Fatalf("resolve prompts dir: %v", err)
 	}
 
-	backend := &stubBackend{nextID: "ralph-abc", nextTask: "Fix modal", fullContext: "○ ralph-abc · Fix modal [● P3 · OPEN]"}
+	backend := &testutil.StubBackend{NextID: "ralph-abc", NextTask: "Fix modal", FullContext: "○ ralph-abc · Fix modal [● P3 · OPEN]"}
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -77,7 +78,7 @@ func TestLoop_BuildTaskPrompt_NoScreenshots(t *testing.T) {
 		t.Fatalf("resolve prompts dir: %v", err)
 	}
 
-	backend := &stubBackend{nextID: "ralph-xyz", nextTask: "Fix layout", fullContext: "○ ralph-xyz · Fix layout [● P3 · OPEN]"}
+	backend := &testutil.StubBackend{NextID: "ralph-xyz", NextTask: "Fix layout", FullContext: "○ ralph-xyz · Fix layout [● P3 · OPEN]"}
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -145,18 +146,18 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\ttrue\n"), 0o644)
 
 	var capturedPrompt string
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Do task",
-		nextID:    "ralph-ts",
-		label:     "beads",
+	backend := &testutil.StubBackend{
+		Remaining:    1,
+		Total:        1,
+		NextTask:     "Do task",
+		NextID:       "ralph-ts",
+		BackendLabel: "beads",
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
-			backend.remaining = 0
-			backend.completed = 1
+			backend.Remaining = 0
+			backend.Completed = 1
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
@@ -179,8 +180,8 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	// Capture the prompt passed to Claude
 	l.runner = &stubRunner{
 		onRun: func() {
-			backend.remaining = 0
-			backend.completed = 1
+			backend.Remaining = 0
+			backend.Completed = 1
 		},
 		result: runner.result,
 	}
@@ -253,7 +254,7 @@ func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &stubBackend{remaining: 1, total: 1, nextTask: "Fix login", nextID: "ralph-xyz"}
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-xyz"}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	l := New(Config{

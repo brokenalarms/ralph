@@ -370,7 +370,7 @@ func TestGh_DefaultsToGhCLI(t *testing.T) {
 
 // gh() returns the injected GitHub interface when one is set.
 func TestGh_UsesInjectedGitHub(t *testing.T) {
-	stub := &stubGitHub{}
+	stub := &StubGitHub{}
 	mgr := &Manager{GitHub: stub}
 	if mgr.gh() != stub {
 		t.Error("gh() should return the injected GitHub interface")
@@ -381,8 +381,8 @@ func TestGh_UsesInjectedGitHub(t *testing.T) {
 // AwaitCI returns CIPassed immediately when checks already pass,
 // without entering the polling loop.
 func TestAwaitCI_PassedImmediately(t *testing.T) {
-	gh := &stubGitHub{
-		checks: []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
+	gh := &StubGitHub{
+		Checks: []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
 	}
 	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
 
@@ -401,8 +401,8 @@ func TestAwaitCI_PassedImmediately(t *testing.T) {
 // AwaitCI returns CIFailed immediately when checks have already failed,
 // without entering the polling loop.
 func TestAwaitCI_FailedImmediately(t *testing.T) {
-	gh := &stubGitHub{
-		checks: []CICheckResult{{Name: "lint", State: "FAILURE", Bucket: "fail"}},
+	gh := &StubGitHub{
+		Checks: []CICheckResult{{Name: "lint", State: "FAILURE", Bucket: "fail"}},
 	}
 	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
 
@@ -430,12 +430,12 @@ func TestAwaitCI_PollsWhenPending(t *testing.T) {
 	defer func() { ciSleep = origSleep }()
 
 	var calls atomic.Int32
-	gh := &stubGitHub{}
+	gh := &StubGitHub{}
 	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
 
 	// Override ListChecks to transition from pending to passed.
 	pollGH := &pollableGitHub{
-		stubGitHub: *gh,
+		StubGitHub: *gh,
 		listChecks: func(pr, repo string) ([]CICheckResult, error) {
 			n := calls.Add(1)
 			if n < 3 {
@@ -471,7 +471,7 @@ func TestAwaitCI_PollsWhenFetchErrors(t *testing.T) {
 
 	var calls atomic.Int32
 	pollGH := &pollableGitHub{
-		stubGitHub: stubGitHub{},
+		StubGitHub: StubGitHub{},
 		listChecks: func(pr, repo string) ([]CICheckResult, error) {
 			n := calls.Add(1)
 			if n < 2 {
@@ -504,7 +504,7 @@ func TestAwaitCI_LogUsesPRLink(t *testing.T) {
 
 	var calls atomic.Int32
 	pollGH := &pollableGitHub{
-		stubGitHub: stubGitHub{},
+		StubGitHub: StubGitHub{},
 		listChecks: func(pr, repo string) ([]CICheckResult, error) {
 			n := calls.Add(1)
 			if n < 2 {
@@ -551,8 +551,8 @@ func TestAwaitFreshCI_LogUsesPRLink(t *testing.T) {
 	defer func() { ciSleep = origSleep }()
 
 	pollGH := &pollableGitHub{
-		stubGitHub: stubGitHub{
-			checks: []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
+		StubGitHub: StubGitHub{
+			Checks: []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
 		},
 		listChecks: func(pr, repo string) ([]CICheckResult, error) {
 			return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
@@ -613,10 +613,10 @@ func TestWaitForCI_LogUsesPRLink(t *testing.T) {
 	}
 }
 
-// pollableGitHub wraps stubGitHub but allows overriding ListChecks
+// pollableGitHub wraps StubGitHub but allows overriding ListChecks
 // with a function that changes behavior across calls.
 type pollableGitHub struct {
-	stubGitHub
+	StubGitHub
 	listChecks   func(string, string) ([]CICheckResult, error)
 	getPRHeadSHA func(string, string) (string, error)
 }
@@ -625,19 +625,19 @@ func (p *pollableGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, 
 	if p.listChecks != nil {
 		return p.listChecks(prNumber, repoURL)
 	}
-	return p.stubGitHub.ListChecks(prNumber, repoURL)
+	return p.StubGitHub.ListChecks(prNumber, repoURL)
 }
 
 func (p *pollableGitHub) GetPRHeadSHA(workDir, prNumber string) (string, error) {
 	if p.getPRHeadSHA != nil {
 		return p.getPRHeadSHA(workDir, prNumber)
 	}
-	return p.stubGitHub.GetPRHeadSHA(workDir, prNumber)
+	return p.StubGitHub.GetPRHeadSHA(workDir, prNumber)
 }
 
-// setupAutoMergeManager creates a Manager with a stubGitHub and real git repos
+// setupAutoMergeManager creates a Manager with a StubGitHub and real git repos
 // so AutoMergeCurrentBranch can run without a real gh CLI.
-func setupAutoMergeManager(t *testing.T, gh *stubGitHub) *Manager {
+func setupAutoMergeManager(t *testing.T, gh *StubGitHub) *Manager {
 	t.Helper()
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
@@ -668,11 +668,11 @@ func TestUpdatePRBranch_ReturnsFailureAfterUpdate(t *testing.T) {
 	}
 	defer func() { ciSleep = origSleep }()
 
-	gh := &stubGitHub{
-		available:    true,
-		openPR:       "10",
-		updateResult: true,
-		checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
+	gh := &StubGitHub{
+		IsAvailable:  true,
+		OpenPR:       "10",
+		UpdateResult: true,
+		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 	}
 	mgr := setupAutoMergeManager(t, gh)
 
@@ -686,11 +686,11 @@ func TestUpdatePRBranch_ReturnsFailureAfterUpdate(t *testing.T) {
 // updatePRBranch returns nil without polling when the branch was
 // already up to date (no update needed).
 func TestUpdatePRBranch_NoUpdateNeeded(t *testing.T) {
-	gh := &stubGitHub{
-		available:    true,
-		openPR:       "10",
-		updateResult: false,
-		checks:       []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+	gh := &StubGitHub{
+		IsAvailable:  true,
+		OpenPR:       "10",
+		UpdateResult: false,
+		Checks:       []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}
 	mgr := setupAutoMergeManager(t, gh)
 
@@ -712,15 +712,15 @@ func TestExecuteMerge_RetriesAfterCIGate(t *testing.T) {
 	defer func() { ciSleep = origSleep }()
 
 	calls := 0
-	gh := &stubGitHub{
-		available: true,
-		openPR:    "10",
-		checks:    []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "10",
+		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}
 	mgr := setupAutoMergeManager(t, gh)
 
 	seqGH := &sequentialMergeGitHub{
-		stubGitHub: *gh,
+		StubGitHub: *gh,
 		mergeResults: []mergeResult{
 			{"Base branch policy prohibits the merge", fmt.Errorf("exit 1")},
 			{"merged", nil},
@@ -744,12 +744,12 @@ func TestExecuteMerge_RetriesAfterCIGate(t *testing.T) {
 // AutoMergeCurrentBranch returns a MergeConflictError when the gh merge
 // command reports merge conflicts, so the caller can rebase and retry.
 func TestAutoMerge_MergeConflictReturnsTypedError(t *testing.T) {
-	gh := &stubGitHub{
-		available:   true,
-		openPR:      "42",
-		checks:      []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
-		mergeOutput: "Pull request is not mergeable",
-		mergeErr:    fmt.Errorf("exit status 1"),
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "42",
+		Checks:      []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
+		MergeOutput: "Pull request is not mergeable",
+		MergeErr:    fmt.Errorf("exit status 1"),
 	}
 	mgr := setupAutoMergeManager(t, gh)
 
@@ -767,10 +767,10 @@ func TestAutoMerge_MergeConflictReturnsTypedError(t *testing.T) {
 // AutoMergeCurrentBranch returns a CIFailureError when CI checks fail,
 // so the caller can spawn a fix agent and retry.
 func TestAutoMerge_CIFailureReturnsTypedError(t *testing.T) {
-	gh := &stubGitHub{
-		available: true,
-		openPR:    "42",
-		checks: []CICheckResult{
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "42",
+		Checks: []CICheckResult{
 			{Name: "test", State: "FAILURE", Bucket: "fail"},
 		},
 	}
@@ -790,10 +790,10 @@ func TestAutoMerge_CIFailureReturnsTypedError(t *testing.T) {
 // AutoMergeCurrentBranch passes MergeOpts from Manager config to the
 // GitHub interface, so admin settings are respected and branches are deleted.
 func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
-	gh := &stubGitHub{
-		available: true,
-		openPR:    "42",
-		checks:    []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "42",
+		Checks:      []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
 	}
 
 	project, _ := initBareRepo(t)
@@ -814,7 +814,7 @@ func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 	mgr.RenameBranchForTask("test feature", "")
 	mgr.AutoMergeCurrentBranch(context.Background())
 
-	if !gh.mergeOpts.DeleteBranch {
+	if !gh.LastMergeOpts.DeleteBranch {
 		t.Error("merge should always set DeleteBranch")
 	}
 }

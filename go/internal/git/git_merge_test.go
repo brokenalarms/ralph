@@ -421,7 +421,7 @@ func TestPushAndCreatePR_PassesBodyToCreatePR(t *testing.T) {
 
 	var capturedOpts CreatePROpts
 	gh := &capturingGitHub{
-		stubGitHub: stubGitHub{available: true, createdPR: "55"},
+		StubGitHub: StubGitHub{IsAvailable: true, CreatedPR: "55"},
 		createPR: func(opts CreatePROpts) error {
 			capturedOpts = opts
 			return nil
@@ -466,7 +466,7 @@ func TestPushAndCreatePR_FallsBackToTaskDescWhenNoBody(t *testing.T) {
 
 	var capturedOpts CreatePROpts
 	gh := &capturingGitHub{
-		stubGitHub: stubGitHub{available: true, createdPR: "55"},
+		StubGitHub: StubGitHub{IsAvailable: true, CreatedPR: "55"},
 		createPR: func(opts CreatePROpts) error {
 			capturedOpts = opts
 			return nil
@@ -640,10 +640,10 @@ func TestMergeWithRetry_RecoversFromConflict(t *testing.T) {
 
 	mergeCalls := 0
 	gh := &sequentialMergeGitHub{
-		stubGitHub: stubGitHub{
-			available: true,
-			openPR:    "42",
-			checks:    []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		StubGitHub: StubGitHub{
+			IsAvailable: true,
+			OpenPR:      "42",
+			Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		},
 		mergeResults: []mergeResult{
 			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
@@ -697,10 +697,10 @@ func TestMergeWithRetry_DelegatesCIFailure(t *testing.T) {
 	}
 
 	gh := &sequentialMergeGitHub{
-		stubGitHub: stubGitHub{
-			available: true,
-			openPR:    "55",
-			checks:    []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
+		StubGitHub: StubGitHub{
+			IsAvailable: true,
+			OpenPR:      "55",
+			Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 		},
 		// First AutoMerge returns CIFailureError before reaching MergePR.
 		// After CI fix, the second AutoMerge reaches MergePR with CI passing.
@@ -751,11 +751,11 @@ func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 		Logger:         &testLog{},
 	}
 
-	gh := &stubGitHub{
-		available: true,
-		openPR:    "99",
-		checks:    []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
-		mergeErr:  fmt.Errorf("CI failed"),
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "99",
+		Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
+		MergeErr:    fmt.Errorf("CI failed"),
 	}
 	mgr.GitHub = gh
 
@@ -800,10 +800,10 @@ func TestMergeWithRetry_StopsOnUnresolvableConflict(t *testing.T) {
 
 	mergeCalls := 0
 	gh := &sequentialMergeGitHub{
-		stubGitHub: stubGitHub{
-			available: true,
-			openPR:    "50",
-			checks:    []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		StubGitHub: StubGitHub{
+			IsAvailable: true,
+			OpenPR:      "50",
+			Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		},
 		mergeResults: []mergeResult{
 			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
@@ -863,11 +863,11 @@ func TestAutoMergeCurrentBranch_PassesPRTitleAsSubject(t *testing.T) {
 		Logger:         &testLog{},
 	}
 
-	gh := &stubGitHub{
-		available: true,
-		openPR:    "77",
-		prTitle:   "[ralph-31w] Fix squash-merge subject",
-		checks:    []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "77",
+		PRTitle:     "[ralph-31w] Fix squash-merge subject",
+		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}
 	mgr.GitHub = gh
 
@@ -892,15 +892,15 @@ func TestAutoMergeCurrentBranch_PassesPRTitleAsSubject(t *testing.T) {
 	}
 
 	want := "[ralph-31w] Fix squash-merge subject (#77)"
-	if gh.mergeOpts.Subject != want {
-		t.Errorf("merge subject = %q, want %q", gh.mergeOpts.Subject, want)
+	if gh.LastMergeOpts.Subject != want {
+		t.Errorf("merge subject = %q, want %q", gh.LastMergeOpts.Subject, want)
 	}
 }
 
 // sequentialMergeGitHub returns different merge results on successive calls,
 // allowing tests to simulate conflict→success or CI-fail→success sequences.
 type sequentialMergeGitHub struct {
-	stubGitHub
+	StubGitHub
 	mergeResults []mergeResult
 	mergeIdx     int
 	checkCalls   int
@@ -927,10 +927,10 @@ func (s *sequentialMergeGitHub) MergePR(prNumber, repoURL string, opts MergeOpts
 func (s *sequentialMergeGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
 	s.checkCalls++
 	// After the first check call, CI passes (simulating a fix was applied)
-	if s.checkCalls > 1 && len(s.stubGitHub.checks) > 0 && s.stubGitHub.checks[0].State == "FAILURE" {
+	if s.checkCalls > 1 && len(s.StubGitHub.Checks) > 0 && s.StubGitHub.Checks[0].State == "FAILURE" {
 		return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
-	return s.stubGitHub.checks, s.stubGitHub.checksErr
+	return s.StubGitHub.Checks, s.StubGitHub.ChecksErr
 }
 
 // After a fix agent commits and force-pushes, MergeWithRetry must call
@@ -954,9 +954,9 @@ func TestMergeWithRetry_PushesFixAgentWorkBeforeRetry(t *testing.T) {
 	var events []string
 
 	gh := &ciRetryGitHub{
-		stubGitHub: stubGitHub{
-			available: true,
-			openPR:    "60",
+		StubGitHub: StubGitHub{
+			IsAvailable: true,
+			OpenPR:      "60",
 		},
 		events: &events,
 	}
@@ -1024,7 +1024,7 @@ func TestMergeWithRetry_PushesFixAgentWorkBeforeRetry(t *testing.T) {
 // ciRetryGitHub tracks the order of ListChecks and MergePR calls to verify
 // that AwaitCI runs between the CI fix callback and the merge retry.
 type ciRetryGitHub struct {
-	stubGitHub
+	StubGitHub
 	events     *[]string
 	checkCalls int
 	mergeCalls int
@@ -1063,10 +1063,10 @@ func TestMergeWithRetry_SpawnsConflictAgent(t *testing.T) {
 
 	mergeCalls := 0
 	gh := &sequentialMergeGitHub{
-		stubGitHub: stubGitHub{
-			available: true,
-			openPR:    "70",
-			checks:    []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		StubGitHub: StubGitHub{
+			IsAvailable: true,
+			OpenPR:      "70",
+			Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		},
 		mergeResults: []mergeResult{
 			// First attempt: conflict
@@ -1129,10 +1129,10 @@ func TestMergeWithRetry_SkipsAfterConflictAgentFails(t *testing.T) {
 
 	mergeCalls := 0
 	gh := &sequentialMergeGitHub{
-		stubGitHub: stubGitHub{
-			available: true,
-			openPR:    "71",
-			checks:    []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		StubGitHub: StubGitHub{
+			IsAvailable: true,
+			OpenPR:      "71",
+			Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		},
 		mergeResults: []mergeResult{
 			{output: "merge conflict", err: fmt.Errorf("merge conflict")},

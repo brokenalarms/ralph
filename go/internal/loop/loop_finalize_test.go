@@ -11,6 +11,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -18,9 +19,9 @@ import (
 // into a structured PR body when all context is available.
 // buildPRBody is a standalone function — takes backend directly, no Loop needed.
 func TestBuildPRBody_FullContext(t *testing.T) {
-	backend := &stubBackend{
-		description: "Fix the auth middleware to validate tokens",
-		acceptance:  "1. Tokens are validated\n2. Invalid tokens return 401",
+	backend := &testutil.StubBackend{
+		Description: "Fix the auth middleware to validate tokens",
+		Acceptance:  "1. Tokens are validated\n2. Invalid tokens return 401",
 	}
 
 	body := buildPRBody(backend, "ralph-abc", "Fixed auth middleware token validation")
@@ -46,7 +47,7 @@ func TestBuildPRBody_FullContext(t *testing.T) {
 }
 
 func TestBuildPRBody_NoBeadDescription(t *testing.T) {
-	backend := &stubBackend{}
+	backend := &testutil.StubBackend{}
 
 	body := buildPRBody(backend, "ralph-abc", "Implemented the feature")
 
@@ -62,7 +63,7 @@ func TestBuildPRBody_NoBeadDescription(t *testing.T) {
 }
 
 func TestBuildPRBody_NoContext(t *testing.T) {
-	backend := &stubBackend{}
+	backend := &testutil.StubBackend{}
 
 	body := buildPRBody(backend, "", "")
 
@@ -72,8 +73,8 @@ func TestBuildPRBody_NoContext(t *testing.T) {
 }
 
 func TestBuildPRBody_NeverGeneric(t *testing.T) {
-	backend := &stubBackend{
-		description: "Some task description",
+	backend := &testutil.StubBackend{
+		Description: "Some task description",
 	}
 
 	body := buildPRBody(backend, "ralph-abc", "completed task")
@@ -88,7 +89,7 @@ func TestBuildPRBody_NeverGeneric(t *testing.T) {
 
 // getPRBase takes only a GitHub interface and workDir — no Loop needed.
 func TestGetPRBase_Standalone(t *testing.T) {
-	gh := &stubGitHub{available: true, prBase: "main"}
+	gh := &git.StubGitHub{IsAvailable: true, PRBase: "main"}
 	base := getPRBase(gh, "/tmp", "42")
 	if base != "main" {
 		t.Errorf("expected 'main', got %q", base)
@@ -99,7 +100,7 @@ func TestGetPRBase_Standalone(t *testing.T) {
 		t.Errorf("nil gh should return empty, got %q", base)
 	}
 
-	gh = &stubGitHub{available: false}
+	gh = &git.StubGitHub{IsAvailable: false}
 	base = getPRBase(gh, "/tmp", "42")
 	if base != "" {
 		t.Errorf("unavailable gh should return empty, got %q", base)
@@ -116,8 +117,8 @@ func TestFinalizePR_NoAutoMerge_ClosesTask(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{remaining: 1, total: 1},
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
 	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
@@ -144,10 +145,10 @@ func TestFinalizePR_NoAutoMerge_ClosesTask(t *testing.T) {
 	if !result.closed {
 		t.Error("task should be closed even without merge")
 	}
-	backend.closeMu.Lock()
-	defer backend.closeMu.Unlock()
-	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-abc" {
-		t.Errorf("expected CloseTask for ralph-abc, got %v", backend.closedIDs)
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-abc" {
+		t.Errorf("expected CloseTask for ralph-abc, got %v", backend.ClosedIDs)
 	}
 }
 
@@ -161,8 +162,8 @@ func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{remaining: 1, total: 1},
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
 	mergeCalled := false
@@ -197,10 +198,10 @@ func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
 	if !result.closed {
 		t.Error("task should be closed after merge")
 	}
-	backend.closeMu.Lock()
-	defer backend.closeMu.Unlock()
-	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-xyz" {
-		t.Errorf("expected CloseTask for ralph-xyz, got %v", backend.closedIDs)
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-xyz" {
+		t.Errorf("expected CloseTask for ralph-xyz, got %v", backend.ClosedIDs)
 	}
 }
 
@@ -214,8 +215,8 @@ func TestFinalizePR_MergeFailure_SkipsTask(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{remaining: 1, total: 1},
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
 	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
@@ -245,10 +246,10 @@ func TestFinalizePR_MergeFailure_SkipsTask(t *testing.T) {
 	if result.closed {
 		t.Error("task should not be closed on merge failure")
 	}
-	backend.skipMu.Lock()
-	defer backend.skipMu.Unlock()
+	backend.SkipMu.Lock()
+	defer backend.SkipMu.Unlock()
 	found := false
-	for _, id := range backend.skippedIDs {
+	for _, id := range backend.SkippedIDs {
 		if id == "ralph-abc" {
 			found = true
 		}
@@ -268,8 +269,8 @@ func TestFinalizePR_AlreadyMerged_ClosesImmediately(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{remaining: 1, total: 1},
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
 	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
@@ -300,10 +301,10 @@ func TestFinalizePR_AlreadyMerged_ClosesImmediately(t *testing.T) {
 	if !result.closed {
 		t.Error("task should be closed")
 	}
-	backend.closeMu.Lock()
-	defer backend.closeMu.Unlock()
-	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-xyz" {
-		t.Errorf("expected CloseTask for ralph-xyz, got %v", backend.closedIDs)
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-xyz" {
+		t.Errorf("expected CloseTask for ralph-xyz, got %v", backend.ClosedIDs)
 	}
 }
 
@@ -317,8 +318,8 @@ func TestFinalizePR_UsesURLInCloseReason(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &trackingBackend{
-		mutableBackend: mutableBackend{remaining: 1, total: 1},
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
 	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
@@ -339,28 +340,28 @@ func TestFinalizePR_UsesURLInCloseReason(t *testing.T) {
 		workDir:  project,
 	})
 
-	backend.closeMu.Lock()
-	defer backend.closeMu.Unlock()
-	if len(backend.closeReasons) == 0 {
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.CloseReasons) == 0 {
 		t.Fatal("expected a close reason")
 	}
-	if !strings.Contains(backend.closeReasons[0], "https://github.com/owner/repo/pull/55") {
-		t.Errorf("close reason should contain PR URL, got %q", backend.closeReasons[0])
+	if !strings.Contains(backend.CloseReasons[0], "https://github.com/owner/repo/pull/55") {
+		t.Errorf("close reason should contain PR URL, got %q", backend.CloseReasons[0])
 	}
 }
 
 // skipTask sets status to open in backend and persists to state.json.
 func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
 	_, st := setupTestDir(t)
-	backend := &stubBackend{}
+	backend := &testutil.StubBackend{}
 
 	skipTask(backend, st, logging.New(nil), "ralph-xyz", "merge_failed")
 
-	if backend.skippedTask != "ralph-xyz" {
-		t.Errorf("expected backend.skippedTask=ralph-xyz, got %q", backend.skippedTask)
+	if backend.SkippedTask != "ralph-xyz" {
+		t.Errorf("expected backend.SkippedTask=ralph-xyz, got %q", backend.SkippedTask)
 	}
-	if backend.skipReason != "merge_failed" {
-		t.Errorf("expected backend.skipReason=merge_failed, got %q", backend.skipReason)
+	if backend.SkipReason != "merge_failed" {
+		t.Errorf("expected backend.SkipReason=merge_failed, got %q", backend.SkipReason)
 	}
 	skipped, err := st.GetSkippedTasks()
 	if err != nil {
@@ -374,11 +375,11 @@ func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
 // skipTask is a no-op with empty ID.
 func TestSkipTask_EmptyID(t *testing.T) {
 	_, st := setupTestDir(t)
-	backend := &stubBackend{}
+	backend := &testutil.StubBackend{}
 
 	skipTask(backend, st, logging.New(nil), "", "reason")
 
-	if backend.skippedTask != "" {
+	if backend.SkippedTask != "" {
 		t.Error("expected no skip with empty ID")
 	}
 }
@@ -403,7 +404,7 @@ func TestPersistCompletedTask_Standalone(t *testing.T) {
 
 // getBeadDescription takes a backend — no Loop or Verifier needed.
 func TestGetBeadDescription_Standalone(t *testing.T) {
-	backend := &stubBackend{description: "Fix auth middleware"}
+	backend := &testutil.StubBackend{Description: "Fix auth middleware"}
 
 	desc := getBeadDescription(backend, "ralph-abc")
 	if desc != "Fix auth middleware" {

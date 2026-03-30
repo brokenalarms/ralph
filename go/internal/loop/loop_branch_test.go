@@ -12,6 +12,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -25,12 +26,12 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 	st.Write("last_task", "previous task")
 	st.Write("last_task_id", "ralph-old")
 
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 1,
-		total:     1,
-		nextTask:  "new task",
-		nextID:    "ralph-new",
+	backend := &testutil.StubBackend{
+		Remaining: 0,
+		Completed: 1,
+		Total:     1,
+		NextTask:  "new task",
+		NextID:    "ralph-new",
 	}
 
 	// Set up a real git repo as the worktree
@@ -79,12 +80,12 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 	st.Write("last_task", "ongoing task")
 	st.Write("last_task_id", "ralph-same")
 
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 1,
-		total:     1,
-		nextTask:  "ongoing task",
-		nextID:    "ralph-same",
+	backend := &testutil.StubBackend{
+		Remaining: 0,
+		Completed: 1,
+		Total:     1,
+		NextTask:  "ongoing task",
+		NextID:    "ralph-same",
 	}
 
 	gm := &git.Manager{
@@ -129,13 +130,15 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	iterationCount := 0
-	backend := &mutableBackend{
-		remaining: 1,
-		completed: 0,
-		total:     1,
-		nextTask:  "task A",
-		nextID:    "ralph-aaa",
-		label:     "beads",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "task A",
+			NextID:       "ralph-aaa",
+			BackendLabel: "beads",
+		},
 	}
 
 	runner := &stubRunner{
@@ -143,20 +146,20 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 			iterationCount++
 			if iterationCount == 1 {
 				// Simulate: task A completes and a new task B is added externally
-				backend.mu.Lock()
-				backend.completed = 1
-				backend.remaining = 1
-				backend.total = 2
-				backend.nextTask = "task B"
-				backend.nextID = "ralph-bbb"
-				backend.mu.Unlock()
+				backend.Lock()
+				backend.Completed = 1
+				backend.Remaining = 1
+				backend.Total = 2
+				backend.NextTask = "task B"
+				backend.NextID = "ralph-bbb"
+				backend.Unlock()
 			} else if iterationCount == 2 {
 				// Task B completes, no more tasks
-				backend.mu.Lock()
-				backend.completed = 2
-				backend.remaining = 0
-				backend.total = 2
-				backend.mu.Unlock()
+				backend.Lock()
+				backend.Completed = 2
+				backend.Remaining = 0
+				backend.Total = 2
+				backend.Unlock()
 			}
 		},
 		result: claude.Result{SignalDetected: true},
@@ -236,10 +239,10 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 	run(t, "git", "-C", project, "commit", "-m", "divergent main change")
 	pushToOrigin(t, project)
 
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 1,
-		total:     1,
+	backend := &testutil.StubBackend{
+		Remaining: 0,
+		Completed: 1,
+		Total:     1,
 	}
 
 	handlerCalled := false
@@ -294,10 +297,10 @@ func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 	run(t, "git", "-C", project, "commit", "-m", "main change")
 	pushToOrigin(t, project)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Some task",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Some task",
 	}
 
 	l := New(Config{
@@ -345,10 +348,10 @@ func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
 	run(t, "git", "-C", project, "commit", "-m", "main change")
 	pushToOrigin(t, project)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Some task",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Some task",
 	}
 
 	l := New(Config{
@@ -398,10 +401,10 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 	run(t, "git", "-C", project, "commit", "-m", "main change")
 	pushToOrigin(t, project)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Some task",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Some task",
 	}
 
 	handlerCalled := false
@@ -492,11 +495,11 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 	// After iteration 1, the branch should be renamed for the task.
 	// After iteration 2, it should still be the SAME branch.
 	callCount := 0
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Fix the login bug",
-		nextID:    "ralph-abc",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Fix the login bug",
+		NextID:    "ralph-abc",
 	}
 
 	l := New(Config{
@@ -557,11 +560,13 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	callCount := 0
-	backend := &mutableBackend{
-		remaining: 1,
-		total:     2,
-		nextTask:  "First task",
-		nextID:    "ralph-1",
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining: 1,
+			Total:     2,
+			NextTask:  "First task",
+			NextID:    "ralph-1",
+		},
 	}
 
 	l := New(Config{
@@ -581,10 +586,10 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 			callCount++
 			if callCount == 1 {
 				// After first iteration, switch to a different task
-				backend.mu.Lock()
-				backend.nextTask = "Second task"
-				backend.nextID = "ralph-2"
-				backend.mu.Unlock()
+				backend.Lock()
+				backend.NextTask = "Second task"
+				backend.NextID = "ralph-2"
+				backend.Unlock()
 			}
 			if callCount >= 2 {
 				os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
@@ -631,11 +636,11 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	callCount := 0
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Build feature X",
-		nextID:    "ralph-feat",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Build feature X",
+		NextID:    "ralph-feat",
 	}
 
 	l := New(Config{
@@ -697,11 +702,11 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Improve feature X",
-		nextID:    "ralph-imp",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Improve feature X",
+		NextID:    "ralph-imp",
 	}
 
 	gm := &git.Manager{
@@ -767,11 +772,11 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	backend := &stubBackend{
-		remaining: 1,
-		total:     1,
-		nextTask:  "Improve feature Y",
-		nextID:    "ralph-imp2",
+	backend := &testutil.StubBackend{
+		Remaining: 1,
+		Total:     1,
+		NextTask:  "Improve feature Y",
+		NextID:    "ralph-imp2",
 	}
 
 	l := New(Config{
@@ -801,7 +806,7 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 }
 
 type metadataBackend struct {
-	stubBackend
+	testutil.StubBackend
 	metadata map[string]map[string]string // id -> key -> value
 }
 
@@ -848,10 +853,10 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	backend := newMetadataBackend()
-	backend.remaining = 1
-	backend.total = 1
-	backend.nextTask = "Fix auth bug"
-	backend.nextID = "ralph-abc"
+	backend.Remaining = 1
+	backend.Total = 1
+	backend.NextTask = "Fix auth bug"
+	backend.NextID = "ralph-abc"
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -892,7 +897,7 @@ func TestLoop_CheckoutExistingBranch_NoRemote(t *testing.T) {
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &stubBackend{remaining: 1, total: 1, nextTask: "Fix login"}
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login"}
 	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
 
 	l := New(Config{
@@ -928,10 +933,10 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	backend := newMetadataBackend()
-	backend.remaining = 1
-	backend.total = 1
-	backend.nextTask = "Fix login flow"
-	backend.nextID = "ralph-xyz"
+	backend.Remaining = 1
+	backend.Total = 1
+	backend.NextTask = "Fix login flow"
+	backend.NextID = "ralph-xyz"
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{

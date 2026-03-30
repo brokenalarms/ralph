@@ -1,0 +1,101 @@
+package git
+
+// StubGitHub is a test double for the GitHub interface, shared across all
+// packages that need to stub GitHub operations. Configure fields for the
+// methods under test; all methods have sensible zero-value defaults.
+type StubGitHub struct {
+	IsAvailable        bool
+	OpenPR             string
+	FindPRErr          error
+	CreatePRErr        error
+	EditPRErr          error
+	EditPRTitle        string
+	MergeOutput        string
+	MergeErr           error
+	UpdateResult       bool
+	UpdateErr          error
+	Checks             []CICheckResult
+	ChecksErr          error
+	MergeCalls         int
+	LastMergeOpts      MergeOpts
+	EnforceAdmins      bool
+	EnforceAdminsErr   error
+	PostEnforceOutput  string
+	PostEnforceErr     error
+	PostEnforceCalled  bool
+	CheckEnforceCalled bool
+	PRNumber           string
+	PRTitle            string
+	PRURL              string
+	SearchPRNumber     string
+	PRDiffOutput       string
+	CreatedPR          string
+	PRState            string
+	PRBase             string
+	PRHead             string
+	PRHeadSHA          string
+	OpenPRBranches     []string
+	SearchCalled       bool
+	PRDiffCalled       bool
+}
+
+func (s *StubGitHub) Available() bool { return s.IsAvailable }
+func (s *StubGitHub) FindOpenPR(branch, repoURL string) (string, error) {
+	return s.OpenPR, s.FindPRErr
+}
+func (s *StubGitHub) CreatePR(opts CreatePROpts) error {
+	if s.CreatePRErr == nil && s.CreatedPR != "" {
+		s.OpenPR = s.CreatedPR
+	}
+	return s.CreatePRErr
+}
+func (s *StubGitHub) EditPR(prNumber, repoURL, title, body string) error {
+	s.EditPRTitle = title
+	return s.EditPRErr
+}
+func (s *StubGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error) {
+	s.MergeCalls++
+	s.LastMergeOpts = opts
+	return s.MergeOutput, s.MergeErr
+}
+func (s *StubGitHub) UpdateBranch(dir, nwo, prNumber string) (bool, error) {
+	return s.UpdateResult, s.UpdateErr
+}
+func (s *StubGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
+	return s.Checks, s.ChecksErr
+}
+func (s *StubGitHub) GetRunLog(prNumber, workDir string) string { return "" }
+func (s *StubGitHub) CheckEnforceAdmins(nwo, branch string) (bool, error) {
+	s.CheckEnforceCalled = true
+	return s.EnforceAdmins, s.EnforceAdminsErr
+}
+func (s *StubGitHub) PostEnforceAdmins(nwo, branch string) (string, error) {
+	s.PostEnforceCalled = true
+	return s.PostEnforceOutput, s.PostEnforceErr
+}
+func (s *StubGitHub) FindPR(branch, workDir string) (string, string, string, error) {
+	return s.PRNumber, s.PRTitle, s.PRURL, s.FindPRErr
+}
+func (s *StubGitHub) SearchPR(workDir, query string) (string, error) {
+	s.SearchCalled = true
+	return s.SearchPRNumber, nil
+}
+func (s *StubGitHub) PRDiff(workDir, prNumber string) (string, error) {
+	s.PRDiffCalled = true
+	return s.PRDiffOutput, nil
+}
+func (s *StubGitHub) GetPRState(workDir, prNumber string) (string, error) {
+	return s.PRState, nil
+}
+func (s *StubGitHub) GetPRBase(workDir, prNumber string) (string, error) {
+	return s.PRBase, nil
+}
+func (s *StubGitHub) GetPRHead(workDir, prNumber string) (string, error) {
+	return s.PRHead, nil
+}
+func (s *StubGitHub) GetPRHeadSHA(workDir, prNumber string) (string, error) {
+	return s.PRHeadSHA, nil
+}
+func (s *StubGitHub) ListOpenPRBranches(repoURL string) ([]string, error) {
+	return s.OpenPRBranches, nil
+}
