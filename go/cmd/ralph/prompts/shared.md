@@ -29,6 +29,7 @@
 - Atomic commits: one feature or fix per commit. Multiple grouped commits with an overarching theme may together constitute a single PR if their relation is clear.
 - Every commit message needs a subject line + blank line + body. Body: concise bullets covering why, how, and test coverage.
 - Behavioral code changes should be backed by tests. Static content, markup, and config changes don't need tests — a passing build is verification enough.
+- After making code changes, you MUST commit immediately before running the full test suite. A WIP commit prevents work loss if the process is terminated. If tests fail, fix and commit again — do not amend the previous commit.
 
 ### Github
 - One task = one PR. All commits for a task go into a single pull request.

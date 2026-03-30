@@ -317,6 +317,25 @@ func TestExecutionBD_BeadEchoBack(t *testing.T) {
 	}
 }
 
+// Proves: shared.md Commits section requires committing before running the
+// full test suite so that work is not lost if the process is terminated.
+func TestSharedPrompt_CommitBeforeTests(t *testing.T) {
+	shared, err := os.ReadFile(filepath.Join(promptsDir(t), "shared.md"))
+	if err != nil {
+		t.Fatalf("reading shared.md: %v", err)
+	}
+	content := string(shared)
+	if !strings.Contains(content, "MUST commit") {
+		t.Error("shared prompt missing 'MUST commit' rule for commit-before-tests")
+	}
+	if !strings.Contains(content, "before running the full test suite") {
+		t.Error("shared prompt missing 'before running the full test suite' guidance")
+	}
+	if !strings.Contains(content, "do not amend") {
+		t.Error("shared prompt missing 'do not amend' instruction for failed-then-fixed commits")
+	}
+}
+
 // Proves: execution-bd.md requires TDD — write a failing test first, then implement.
 func TestExecutionBD_RequiresTDD(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
