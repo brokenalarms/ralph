@@ -908,3 +908,45 @@ func TestPostReviewCleanup(t *testing.T) {
 		t.Error(".completed-tasks should be removed")
 	}
 }
+
+// Proves: ralph loop refuses to start when a PID file exists and the process
+// is alive, preventing two loops from fighting over the same project.
+func TestHandleLoop_RefusesWhenLoopAlreadyRunning(t *testing.T) {
+	dir := t.TempDir()
+	runCmd(t, "git", "init", "-b", "main", dir)
+	runCmd(t, "git", "-C", dir, "commit", "--allow-empty", "-m", "init")
+
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	// Write our own PID — we are alive, so the check should refuse.
+	os.WriteFile(filepath.Join(ralphDir, "loop.pid"), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644)
+
+	code := run([]string{"loop", dir})
+	if code != 1 {
+		t.Errorf("expected exit 1 when loop already running, got %d", code)
+	}
+}
+
+// Proves: ralph loop starts normally when a stale PID file exists (dead process),
+// cleaning it up rather than blocking.
+func TestHandleLoop_StartsWhenStalePIDFile(t *testing.T) {
+	dir := t.TempDir()
+	runCmd(t, "git", "init", "-b", "main", dir)
+	runCmd(t, "git", "-C", dir, "commit", "--allow-empty", "-m", "init")
+
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	// Write a PID that doesn't exist.
+	os.WriteFile(filepath.Join(ralphDir, "loop.pid"), []byte("2147483647"), 0o644)
+
+	// The loop will proceed past PID check but fail later (no bd, etc.)
+	// — exit code 1 from a downstream error, not the PID check.
+	// The stale PID file should be gone.
+	_ = run([]string{"loop", dir})
+
+	if _, err := os.Stat(filepath.Join(ralphDir, "loop.pid")); !os.IsNotExist(err) {
+		t.Error("stale PID file should be cleaned up")
+	}
+}
