@@ -19,6 +19,9 @@ import (
 // On cancellation it returns ("", ctx.Err()). The goroutine reading stdin
 // may outlive the call but is harmless since the process is exiting.
 func readLineCtx(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	ch := make(chan string, 1)
 	go func() {
 		var s string
