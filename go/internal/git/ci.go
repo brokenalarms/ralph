@@ -2,11 +2,11 @@ package git
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // CICheckResult represents the status of a single CI check from gh pr checks.
@@ -41,47 +41,45 @@ func (e *CIFailureError) Error() string {
 	return fmt.Sprintf("CI checks failed on PR #%s: %s", e.PRNumber, strings.Join(names, ", "))
 }
 
-// DefaultCIPollInterval is the time between CI status checks.
-const DefaultCIPollInterval = 15 * time.Second
+// DefaultCIPollInterval is the initial time between CI status checks.
+// Each subsequent poll doubles this interval up to MaxCIPollInterval.
+const DefaultCIPollInterval = 1 * time.Second
+
+// MaxCIPollInterval caps the exponential backoff so polls don't grow too far apart.
+const MaxCIPollInterval = 5 * time.Second
 
 // DefaultCIPollTimeout is the maximum time to wait for CI checks to complete.
 const DefaultCIPollTimeout = 10 * time.Minute
 
-// fetchPRChecks queries gh for the current CI check status of a PR.
-func fetchPRChecks(prNumber, repoURL string) ([]CICheckResult, error) {
-	args := []string{"pr", "checks", prNumber, "--json", "name,state,bucket"}
-	if repoURL != "" {
-		args = append(args, "-R", repoURL)
-	}
-	cmd := exec.Command("gh", args...)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("gh pr checks failed: %w", err)
-	}
-
-	var checks []CICheckResult
-	if err := json.Unmarshal(out, &checks); err != nil {
-		return nil, fmt.Errorf("parsing check results: %w", err)
-	}
-	return checks, nil
+// ciSleep is the function used to create timer channels in waitForCI.
+// Tests override this to avoid real sleeps.
+var ciSleep = func(d time.Duration) <-chan time.Time {
+	return time.After(d)
 }
 
 // evaluateChecks determines the overall CI status from individual check results.
+// All checks are blocking — any failure returns CIFailed, any pending check
+// returns CIPending. CIPassed is only returned when every check has resolved
+// successfully.
 func evaluateChecks(checks []CICheckResult) CIStatus {
 	if len(checks) == 0 {
 		return CIPending
 	}
+
+	allResolved := true
 	for _, c := range checks {
 		if c.Bucket == "fail" || c.State == "FAILURE" || c.State == "CANCELLED" {
 			return CIFailed
 		}
-	}
-	for _, c := range checks {
-		if c.Bucket == "pending" || c.State == "PENDING" {
-			return CIPending
+		if c.Bucket == "pending" || c.State == "PENDING" || c.State == "IN_PROGRESS" {
+			allResolved = false
 		}
 	}
-	return CIPassed
+
+	if allResolved {
+		return CIPassed
+	}
+	return CIPending
 }
 
 // failedChecks returns only the checks that did not succeed.
@@ -95,6 +93,11 @@ func failedChecks(checks []CICheckResult) []CICheckResult {
 	return failed
 }
 
+// ErrStackedPRWaiting is returned when a PR targets a non-main branch
+// and must wait for the base PR to merge first. This is not a failure —
+// it's expected stacking behavior and should not count as a merge failure.
+var ErrStackedPRWaiting = fmt.Errorf("stacked PR waiting for base to merge")
+
 // MergeConflictError is returned when a PR cannot be merged due to conflicts.
 type MergeConflictError struct {
 	PRNumber string
@@ -102,6 +105,17 @@ type MergeConflictError struct {
 
 func (e *MergeConflictError) Error() string {
 	return fmt.Sprintf("PR #%s has merge conflicts with the base branch", e.PRNumber)
+}
+
+// UnresolvedConflictError is returned when a merge conflict could not be
+// auto-resolved by rebasing. Retrying will not help — the conflict requires
+// manual or agent-driven resolution.
+type UnresolvedConflictError struct {
+	PRNumber string
+}
+
+func (e *UnresolvedConflictError) Error() string {
+	return fmt.Sprintf("PR #%s has unresolvable merge conflicts — auto-resolve failed", e.PRNumber)
 }
 
 // isCIGatedError returns true if the merge error indicates branch protection
@@ -143,10 +157,73 @@ func isMergeConflictError(mergeOutput string) bool {
 // CIFetchFunc is the signature for fetching PR check status.
 type CIFetchFunc func(prNumber, repoURL string) ([]CICheckResult, error)
 
+// AwaitCI fetches CI check status for a PR and polls until checks resolve.
+// Returns the final checks, their aggregate status, and any polling error.
+// Reusable by AutoMerge, fix-CI flows, and any caller that needs to wait
+// for CI to complete on a PR.
+func (m *Manager) AwaitCI(ctx context.Context, prNumber, repoURL string) ([]CICheckResult, CIStatus, error) {
+	nwo := NWOFromRemote(repoURL)
+	pr := logging.PRLink(nwo, prNumber)
+	fetch := m.gh().ListChecks
+	checks, fetchErr := fetch(prNumber, repoURL)
+	if fetchErr != nil || len(checks) == 0 {
+		m.Logger.Log("ci", "CI checks not available yet for %s — waiting...", pr)
+		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+	}
+	status := evaluateChecks(checks)
+	if status != CIPending {
+		return checks, status, nil
+	}
+	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+}
+
+// AwaitFreshCI waits for the PR HEAD to change from staleSHA, then
+// waits for CI on the new HEAD. Call GetPRHeadSHA BEFORE pushing to
+// get the stale SHA, then pass it here after push.
+func (m *Manager) AwaitFreshCI(ctx context.Context, prNumber, repoURL, staleSHA string) ([]CICheckResult, CIStatus, error) {
+	if staleSHA == "" {
+		return m.AwaitCI(ctx, prNumber, repoURL)
+	}
+	nwo := NWOFromRemote(repoURL)
+	pr := logging.PRLink(nwo, prNumber)
+	gh := m.gh()
+
+	// Poll until SHA changes from the pre-push value.
+	m.Logger.Log("ci", "Waiting for %s HEAD to update from %s...", pr, staleSHA[:min(7, len(staleSHA))])
+	deadline := time.Now().Add(DefaultCIPollTimeout)
+	interval := DefaultCIPollInterval
+	for {
+		if time.Now().After(deadline) {
+			return nil, CIPending, fmt.Errorf("PR HEAD did not change within %v", DefaultCIPollTimeout)
+		}
+		if ctx.Err() != nil {
+			return nil, CIPending, ctx.Err()
+		}
+		currentSHA, _ := gh.GetPRHeadSHA(m.WorkDir, prNumber)
+		if currentSHA != "" && currentSHA != staleSHA {
+			m.Logger.Log("ci", "%s HEAD updated to %s", pr, currentSHA[:min(7, len(currentSHA))])
+			break
+		}
+		<-ciSleep(interval)
+		interval = nextBackoff(interval)
+	}
+
+	// Now wait for CI on the new HEAD.
+	return m.AwaitCI(ctx, prNumber, repoURL)
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // waitForCI polls PR checks until they complete or timeout is reached.
-// The fetch parameter controls how checks are retrieved — production code
-// passes fetchPRChecks; tests can inject a stub.
-func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL string, interval, timeout time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
+// Uses exponential backoff starting at interval, doubling each poll up to
+// MaxCIPollInterval. Logs a single updating line showing accumulated poll
+// durations instead of one line per poll.
+func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL, nwo string, interval, timeout time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
 	deadline := time.Now().Add(timeout)
 
 	var done <-chan struct{}
@@ -154,41 +231,66 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL string,
 		done = ctx.Done()
 	}
 
+	currentInterval := interval
+	var pollDurations []string
+
 	for {
 		checks, err := fetch(prNumber, repoURL)
 		if err != nil {
 			if time.Now().After(deadline) {
 				return nil, CIPending, fmt.Errorf("CI checks not available within %v: %w", timeout, err)
 			}
-			log.Log("CI checks not available yet for PR #%s, polling in %v...", prNumber, interval)
+			pollDurations = append(pollDurations, formatDuration(currentInterval))
 			select {
 			case <-done:
 				return nil, CIPending, fmt.Errorf("interrupted")
-			case <-time.After(interval):
+			case <-ciSleep(currentInterval):
 			}
+			currentInterval = nextBackoff(currentInterval)
 			continue
 		}
 
 		status := evaluateChecks(checks)
 		switch status {
 		case CIPassed:
-			log.Log("CI checks passed for PR #%s", prNumber)
+			if len(pollDurations) > 0 {
+				log.Log("ci", "CI polled %s for %s", strings.Join(pollDurations, ".."), logging.PRLink(nwo, prNumber))
+			}
 			return checks, CIPassed, nil
 		case CIFailed:
-			log.Warn("CI checks failed for PR #%s", prNumber)
+			if len(pollDurations) > 0 {
+				log.Log("ci", "CI polled %s for %s", strings.Join(pollDurations, ".."), logging.PRLink(nwo, prNumber))
+			}
 			return checks, CIFailed, nil
 		}
 
 		if time.Now().After(deadline) {
-			log.Warn("CI poll timeout reached for PR #%s", prNumber)
+			if len(pollDurations) > 0 {
+				log.Log("ci", "CI polled %s for %s", strings.Join(pollDurations, ".."), logging.PRLink(nwo, prNumber))
+			}
 			return checks, CIPending, fmt.Errorf("CI checks did not complete within %v", timeout)
 		}
 
-		log.Log("CI checks pending for PR #%s, polling in %v...", prNumber, interval)
+		pollDurations = append(pollDurations, formatDuration(currentInterval))
 		select {
 		case <-done:
 			return nil, CIPending, fmt.Errorf("interrupted")
-		case <-time.After(interval):
+		case <-ciSleep(currentInterval):
 		}
+		currentInterval = nextBackoff(currentInterval)
 	}
+}
+
+// nextBackoff doubles the interval, capping at MaxCIPollInterval.
+func nextBackoff(current time.Duration) time.Duration {
+	next := current * 2
+	if next > MaxCIPollInterval {
+		return MaxCIPollInterval
+	}
+	return next
+}
+
+// formatDuration returns a compact human-readable duration (e.g. "1s", "2s", "15s").
+func formatDuration(d time.Duration) string {
+	return fmt.Sprintf("%ds", int(d.Seconds()))
 }

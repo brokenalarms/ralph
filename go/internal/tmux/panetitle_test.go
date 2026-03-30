@@ -307,3 +307,48 @@ func TestRun_StopsOnClose(t *testing.T) {
 		t.Fatal("Run did not exit after stop channel closed")
 	}
 }
+
+// Verifies that StoppedTitle returns the stream title with "stopped" instead
+// of elapsed time, so the user can see at a glance that ralph is no longer running.
+func TestStoppedTitle_WithTask(t *testing.T) {
+	p := NewPaneTitle("test-session", "", PaneStream)
+	p.SetTask("ralph-abc: Fix auth bug")
+
+	got := p.StoppedTitle()
+	if got != "ralph-abc: Fix auth bug — stopped" {
+		t.Errorf("StoppedTitle() = %q, want %q", got, "ralph-abc: Fix auth bug — stopped")
+	}
+}
+
+// Verifies that StoppedTitle falls back to "stream — stopped" when no task is set.
+func TestStoppedTitle_NoTask(t *testing.T) {
+	p := NewPaneTitle("test-session", "", PaneStream)
+
+	got := p.StoppedTitle()
+	if got != "stream — stopped" {
+		t.Errorf("StoppedTitle() = %q, want %q", got, "stream — stopped")
+	}
+}
+
+// Verifies that StoppedRalphTitle shows the branch with "stopped" suffix.
+func TestStoppedRalphTitle_WithBranch(t *testing.T) {
+	p := NewPaneTitle("test-session", "", PaneStream)
+	p.mu.Lock()
+	p.branch = "ralph/task/fix-auth"
+	p.mu.Unlock()
+
+	got := p.StoppedRalphTitle()
+	if got != "ralph/task/fix-auth — stopped" {
+		t.Errorf("StoppedRalphTitle() = %q, want %q", got, "ralph/task/fix-auth — stopped")
+	}
+}
+
+// Verifies that StoppedRalphTitle falls back when no branch is set.
+func TestStoppedRalphTitle_NoBranch(t *testing.T) {
+	p := NewPaneTitle("test-session", "", PaneStream)
+
+	got := p.StoppedRalphTitle()
+	if got != "ralph — stopped" {
+		t.Errorf("StoppedRalphTitle() = %q, want %q", got, "ralph — stopped")
+	}
+}

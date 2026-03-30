@@ -21,11 +21,11 @@ type State struct {
 	WorktreeBranch         string `json:"worktree_branch,omitempty"`
 	TaskBackend            string `json:"task_backend,omitempty"`
 	MaxIterations      int `json:"max_iterations"`
-	QualityScore       int `json:"quality_score"`
-	RefactorEvery  int `json:"refactor_every"`
 	LastTestResult     string `json:"last_test_result,omitempty"`
 	LastTestOutput     string `json:"last_test_output,omitempty"`
 	LastTestTime       string `json:"last_test_time,omitempty"`
+	CompletedTasks []string `json:"completed_tasks,omitempty"`
+	SkippedTasks   []string `json:"skipped_tasks,omitempty"`
 
 	// Overflow captures unknown keys so round-tripping preserves them.
 	Overflow map[string]json.RawMessage `json:"-"`
@@ -64,15 +64,25 @@ func (s State) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON parses known fields and stores the rest in Overflow.
 func (s *State) UnmarshalJSON(data []byte) error {
-	type Alias State
-	var alias Alias
-	if err := json.Unmarshal(data, &alias); err != nil {
+	// Collect all keys first so we can handle migration before typed unmarshal.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 
-	// Collect all keys to find overflow.
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	// Migrate old-format completed_tasks (array of objects with "id" field)
+	// to the new format (array of ID strings) before the typed unmarshal.
+	if ct, ok := raw["completed_tasks"]; ok {
+		if migrated := migrateCompletedTasks(ct); migrated != nil {
+			rewritten, _ := json.Marshal(migrated)
+			raw["completed_tasks"] = json.RawMessage(rewritten)
+			data, _ = json.Marshal(raw)
+		}
+	}
+
+	type Alias State
+	var alias Alias
+	if err := json.Unmarshal(data, &alias); err != nil {
 		return err
 	}
 
@@ -80,8 +90,9 @@ func (s *State) UnmarshalJSON(data []byte) error {
 		"iteration": true, "status": true, "started_at": true,
 		"last_task": true, "worktree_dir": true, "worktree_branch": true,
 		"task_backend": true, "max_iterations": true,
-		"quality_score": true, "refactor_every": true,
 		"last_test_result": true, "last_test_output": true, "last_test_time": true,
+		"completed_tasks": true,
+		"skipped_tasks":   true,
 	}
 
 	alias.Overflow = nil
@@ -185,7 +196,7 @@ func (st *Store) Write(key, value string) error {
 }
 
 // Init initializes state with config values. Creates the file if missing.
-func (st *Store) Init(maxIterations, refactorEvery int) error {
+func (st *Store) Init(maxIterations int) error {
 	s, _ := st.Load()
 	if s.MaxIterations == 0 {
 		s.MaxIterations = maxIterations
@@ -193,10 +204,60 @@ func (st *Store) Init(maxIterations, refactorEvery int) error {
 	return st.Save(s)
 }
 
-// WriteConfig writes max_iterations and refactor_every to state.
-func (st *Store) WriteConfig(maxIterations, refactorEvery int) {
+// WriteConfig writes max_iterations to state.
+func (st *Store) WriteConfig(maxIterations int) {
 	st.Write("max_iterations", strconv.Itoa(maxIterations))
-	st.Write("refactor_every", strconv.Itoa(refactorEvery))
+}
+
+// SaveCLIConfig writes CLI config key-value pairs into state.json under a
+// "cli_config" key. This allows evolve restart to reconstruct args from the
+// semantic config rather than replaying raw CLI args.
+func (st *Store) SaveCLIConfig(cfg map[string]string) error {
+	s, err := st.Load()
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	if s.Overflow == nil {
+		s.Overflow = make(map[string]json.RawMessage)
+	}
+	s.Overflow["cli_config"] = json.RawMessage(data)
+	return st.Save(s)
+}
+
+// ClearCLIConfig removes cli_config from state.json so stale flags don't
+// persist across manual restarts.
+func (st *Store) ClearCLIConfig() error {
+	s, err := st.Load()
+	if err != nil {
+		return err
+	}
+	delete(s.Overflow, "cli_config")
+	return st.Save(s)
+}
+
+// LoadCLIConfig reads the "cli_config" map from state.json. Returns nil map
+// if not present.
+func (st *Store) LoadCLIConfig() (map[string]string, error) {
+	s, err := st.Load()
+	if err != nil {
+		return nil, err
+	}
+	if s.Overflow == nil {
+		return nil, nil
+	}
+	raw, ok := s.Overflow["cli_config"]
+	if !ok {
+		return nil, nil
+	}
+	var cfg map[string]string
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing cli_config: %w", err)
+	}
+	return cfg, nil
 }
 
 // ReadMaxIterations returns max_iterations from state, falling back to the given default.
@@ -208,11 +269,58 @@ func (st *Store) ReadMaxIterations(defaultVal int) int {
 	return defaultVal
 }
 
-// ReadRefactorEvery returns the refactor_every value from state.
-func (st *Store) ReadRefactorEvery() int {
-	v, _ := st.Read("refactor_every")
-	n, _ := strconv.Atoi(v)
-	return n
+
+// AddCompletedTask appends a task ID to the completed list.
+func (st *Store) AddCompletedTask(id string) error {
+	s, err := st.Load()
+	if err != nil {
+		return err
+	}
+	s.CompletedTasks = append(s.CompletedTasks, id)
+	return st.Save(s)
+}
+
+// GetCompletedTasks returns all completed task IDs.
+func (st *Store) GetCompletedTasks() ([]string, error) {
+	s, err := st.Load()
+	if err != nil {
+		return nil, err
+	}
+	return s.CompletedTasks, nil
+}
+
+// ClearCompletedTasks removes all entries from the completed tasks list.
+func (st *Store) ClearCompletedTasks() error {
+	s, err := st.Load()
+	if err != nil {
+		return err
+	}
+	s.CompletedTasks = nil
+	return st.Save(s)
+}
+
+// AddSkippedTask appends a task ID to the skipped list if not already present.
+func (st *Store) AddSkippedTask(id string) error {
+	s, err := st.Load()
+	if err != nil {
+		return err
+	}
+	for _, existing := range s.SkippedTasks {
+		if existing == id {
+			return nil
+		}
+	}
+	s.SkippedTasks = append(s.SkippedTasks, id)
+	return st.Save(s)
+}
+
+// GetSkippedTasks returns all skipped task IDs.
+func (st *Store) GetSkippedTasks() ([]string, error) {
+	s, err := st.Load()
+	if err != nil {
+		return nil, err
+	}
+	return s.SkippedTasks, nil
 }
 
 // getField extracts a named field from State as a string.
@@ -234,10 +342,6 @@ func getField(s State, key string) string {
 		return s.TaskBackend
 	case "max_iterations":
 		return strconv.Itoa(s.MaxIterations)
-	case "quality_score":
-		return strconv.Itoa(s.QualityScore)
-	case "refactor_every":
-		return strconv.Itoa(s.RefactorEvery)
 	case "last_test_result":
 		return s.LastTestResult
 	case "last_test_output":
@@ -277,10 +381,6 @@ func setField(s *State, key, value string) {
 		s.TaskBackend = value
 	case "max_iterations":
 		s.MaxIterations, _ = strconv.Atoi(value)
-	case "quality_score":
-		s.QualityScore, _ = strconv.Atoi(value)
-	case "refactor_every":
-		s.RefactorEvery, _ = strconv.Atoi(value)
 	case "last_test_result":
 		s.LastTestResult = value
 	case "last_test_output":
@@ -299,4 +399,32 @@ func setField(s *State, key, value string) {
 			s.Overflow[key] = json.RawMessage(data)
 		}
 	}
+}
+
+// migrateCompletedTasks converts old-format completed_tasks (array of
+// {"id":"...", ...} objects) to the new format (array of ID strings).
+// Returns nil if the data is already in the new string-array format.
+func migrateCompletedTasks(raw json.RawMessage) []string {
+	// Try new format first — if it parses as []string, no migration needed.
+	var strs []string
+	if json.Unmarshal(raw, &strs) == nil {
+		return nil
+	}
+	// Old format: array of objects with "id" field.
+	var objs []struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(raw, &objs) != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(objs))
+	for _, o := range objs {
+		if o.ID != "" {
+			ids = append(ids, o.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
 }

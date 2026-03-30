@@ -82,16 +82,114 @@ func TestEnforceAdmins_NoRemote(t *testing.T) {
 	}
 }
 
-func withMockAPI(t *testing.T, check func(string, string) (bool, error), post func(string, string) (string, error)) {
-	t.Helper()
-	origCheck := checkEnforceAdmins
-	origPost := postEnforceAdmins
-	checkEnforceAdmins = check
-	postEnforceAdmins = post
-	t.Cleanup(func() {
-		checkEnforceAdmins = origCheck
-		postEnforceAdmins = origPost
-	})
+// EnforceAdmins delegates to the GitHub interface's CheckEnforceAdmins and
+// PostEnforceAdmins methods, proving branch protection goes through the
+// injected interface rather than raw exec.Command calls.
+func TestEnforceAdmins_EnablesSuccessfully(t *testing.T) {
+	mgr, log := enforceAdminsManager(t)
+	stub := &stubGitHub{
+		available:         true,
+		enforceAdmins:     false,
+		postEnforceOutput: `{"enabled":true}`,
+	}
+	mgr.GitHub = stub
+
+	err := mgr.EnforceAdmins()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !stub.postEnforceCalled {
+		t.Fatal("expected PostEnforceAdmins to be called via GitHub interface")
+	}
+	if !log.contains("enabled enforce_admins") {
+		t.Fatalf("expected success log, got: %v", log.messages)
+	}
+}
+
+// EnforceAdmins skips the POST call when enforce_admins is already enabled,
+// avoiding unnecessary API mutations.
+func TestEnforceAdmins_AlreadyEnabled(t *testing.T) {
+	mgr, log := enforceAdminsManager(t)
+	stub := &stubGitHub{
+		available:     true,
+		enforceAdmins: true,
+	}
+	mgr.GitHub = stub
+
+	err := mgr.EnforceAdmins()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stub.postEnforceCalled {
+		t.Fatal("POST should not be called when already enabled")
+	}
+	if !log.contains("already enabled") {
+		t.Fatalf("expected already-enabled log, got: %v", log.messages)
+	}
+}
+
+// EnforceAdmins warns gracefully when the branch has no protection rules,
+// since enforce_admins requires existing branch protection to be configured.
+func TestEnforceAdmins_BranchNotProtected(t *testing.T) {
+	mgr, log := enforceAdminsManager(t)
+	stub := &stubGitHub{
+		available:         true,
+		enforceAdmins:     false,
+		postEnforceOutput: "Branch not protected",
+		postEnforceErr:    fmt.Errorf("exit status 1"),
+	}
+	mgr.GitHub = stub
+
+	err := mgr.EnforceAdmins()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !log.contains("No branch protection rules") {
+		t.Fatalf("expected branch-not-protected warning, got: %v", log.messages)
+	}
+}
+
+// EnforceAdmins warns and skips when the check API call fails,
+// so a transient network error doesn't block the loop.
+func TestEnforceAdmins_CheckAPIError(t *testing.T) {
+	mgr, log := enforceAdminsManager(t)
+	stub := &stubGitHub{
+		available:        true,
+		enforceAdminsErr: fmt.Errorf("network timeout"),
+	}
+	mgr.GitHub = stub
+
+	err := mgr.EnforceAdmins()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stub.postEnforceCalled {
+		t.Fatal("POST should not be called when check fails")
+	}
+	if !log.contains("Could not check enforce_admins status") {
+		t.Fatalf("expected check-error warning, got: %v", log.messages)
+	}
+}
+
+// EnforceAdmins returns an error when the POST call fails with a
+// non-branch-protection error, so the caller can handle it.
+func TestEnforceAdmins_PostAPIError(t *testing.T) {
+	mgr, _ := enforceAdminsManager(t)
+	stub := &stubGitHub{
+		available:         true,
+		enforceAdmins:     false,
+		postEnforceOutput: "internal server error",
+		postEnforceErr:    fmt.Errorf("exit status 1"),
+	}
+	mgr.GitHub = stub
+
+	err := mgr.EnforceAdmins()
+	if err == nil {
+		t.Fatal("expected error for non-branch-protection API failure")
+	}
+	if expected := "failed to enable enforce_admins"; !strings.Contains(err.Error(), expected) {
+		t.Fatalf("expected error containing %q, got: %v", expected, err)
+	}
 }
 
 func enforceAdminsManager(t *testing.T) (*Manager, *testLog) {
@@ -106,107 +204,4 @@ func enforceAdminsManager(t *testing.T) (*Manager, *testLog) {
 		Logger:     log,
 	}
 	return mgr, log
-}
-
-func TestEnforceAdmins_EnablesSuccessfully(t *testing.T) {
-	mgr, log := enforceAdminsManager(t)
-	var postCalled bool
-	withMockAPI(t,
-		func(nwo, branch string) (bool, error) { return false, nil },
-		func(nwo, branch string) (string, error) {
-			postCalled = true
-			return `{"enabled":true}`, nil
-		},
-	)
-
-	err := mgr.EnforceAdmins()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !postCalled {
-		t.Fatal("expected POST to be called")
-	}
-	if !log.contains("enabled enforce_admins") {
-		t.Fatalf("expected success log, got: %v", log.messages)
-	}
-}
-
-func TestEnforceAdmins_AlreadyEnabled(t *testing.T) {
-	mgr, log := enforceAdminsManager(t)
-	var postCalled bool
-	withMockAPI(t,
-		func(nwo, branch string) (bool, error) { return true, nil },
-		func(nwo, branch string) (string, error) {
-			postCalled = true
-			return "", nil
-		},
-	)
-
-	err := mgr.EnforceAdmins()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if postCalled {
-		t.Fatal("POST should not be called when already enabled")
-	}
-	if !log.contains("already enabled") {
-		t.Fatalf("expected already-enabled log, got: %v", log.messages)
-	}
-}
-
-func TestEnforceAdmins_BranchNotProtected(t *testing.T) {
-	mgr, log := enforceAdminsManager(t)
-	withMockAPI(t,
-		func(nwo, branch string) (bool, error) { return false, nil },
-		func(nwo, branch string) (string, error) {
-			return "Branch not protected", fmt.Errorf("exit status 1")
-		},
-	)
-
-	err := mgr.EnforceAdmins()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !log.contains("No branch protection rules") {
-		t.Fatalf("expected branch-not-protected warning, got: %v", log.messages)
-	}
-}
-
-func TestEnforceAdmins_CheckAPIError(t *testing.T) {
-	mgr, log := enforceAdminsManager(t)
-	withMockAPI(t,
-		func(nwo, branch string) (bool, error) {
-			return false, fmt.Errorf("network timeout")
-		},
-		func(nwo, branch string) (string, error) {
-			t.Fatal("POST should not be called when check fails")
-			return "", nil
-		},
-	)
-
-	err := mgr.EnforceAdmins()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !log.contains("Could not check enforce_admins status") {
-		t.Fatalf("expected check-error warning, got: %v", log.messages)
-	}
-}
-
-func TestEnforceAdmins_PostAPIError(t *testing.T) {
-	mgr, _ := enforceAdminsManager(t)
-	withMockAPI(t,
-		func(nwo, branch string) (bool, error) { return false, nil },
-		func(nwo, branch string) (string, error) {
-			return "internal server error", fmt.Errorf("exit status 1")
-		},
-	)
-
-	err := mgr.EnforceAdmins()
-	if err == nil {
-		t.Fatal("expected error for non-branch-protection API failure")
-	}
-	if expected := "failed to enable enforce_admins"; !strings.Contains(err.Error(), expected) {
-		t.Fatalf("expected error containing %q, got: %v", expected, err)
-	}
 }

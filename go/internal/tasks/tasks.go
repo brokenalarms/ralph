@@ -1,11 +1,16 @@
-// Package tasks defines the task backend interface and provides
-// implementations for different task tracking systems (checklist, bd).
+// Package tasks defines the task backend interface and the bd implementation.
 package tasks
 
-// Backend abstracts task tracking so ralph can drive iteration
-// against different storage systems (plan.md checklists, beads/bd).
+// TaskInfo holds the result of a GetNextTaskInfo call.
+type TaskInfo struct {
+	ID       string
+	Title    string
+	Priority *int
+}
+
+// Backend abstracts task tracking so ralph can drive iteration.
 type Backend interface {
-	// Init prepares the backend for use (e.g. health checks, file creation).
+	// Init prepares the backend for use (e.g. health checks).
 	Init() error
 
 	// HasRemaining reports whether uncompleted tasks exist.
@@ -17,63 +22,80 @@ type Backend interface {
 	// CountRemaining returns the number of unfinished tasks.
 	CountRemaining() (int, error)
 
-	// CountTotal returns the total number of tasks.
+	// CountTotal returns the number of actionable tasks (remaining + completed),
+	// excluding skipped or otherwise non-actionable items.
 	CountTotal() (int, error)
 
 	// GetNextTask returns the description of the next task to work on.
 	// Returns empty string when no tasks remain.
 	GetNextTask() (string, error)
 
-	// GetNextTaskID returns a backend-specific identifier for the next task.
-	// Returns empty string for backends without IDs (e.g. checklist).
+	// GetNextTaskID returns the identifier for the next task.
+	// Returns empty string when no tasks remain.
 	GetNextTaskID() (string, error)
 
-	// GetNextTaskInfo returns both the ID and description of the next task
+	// GetNextTaskInfo returns the ID, description, and priority of the next task
 	// in a single backend query, avoiding the race condition where separate
 	// GetNextTask/GetNextTaskID calls could return data from different tasks.
-	GetNextTaskInfo() (id string, title string, err error)
+	GetNextTaskInfo() (TaskInfo, error)
 
 	// HasTasks reports whether any tasks exist at all.
 	HasTasks() (bool, error)
 
-	// NeedsPlanning reports whether the planning phase should run.
-	NeedsPlanning() (bool, error)
-
-	// PlanningSucceeded checks that planning produced valid tasks.
-	PlanningSucceeded() (bool, error)
-
-	// CloseTask marks a task as complete. The id parameter is backend-specific
-	// (empty for checklist, a bd issue ID for the bd backend).
+	// CloseTask marks a task as complete.
 	CloseTask(id string, reason string) error
 
-	// SkipTask marks a task as blocked/skipped. For bd, this closes with
-	// "blocked: reason". For checklist, it replaces [ ] with [s] and appends
-	// the reason.
+	// SkipTask marks a task as skipped — sets status back to open and
+	// adds the reason as a bd comment. The skip is tracked in state.json,
+	// not in the bd backend.
 	SkipTask(id string, reason string) error
 
+	// SetSkippedIDs configures the set of task IDs to exclude from
+	// GetNextTask/HasRemaining queries. Loaded from state.json on startup.
+	SetSkippedIDs(ids []string)
+
 	// ReopenTask sets an in-progress task back to open status so it
-	// returns to the ready queue. Used when a higher-priority task
-	// preempts the current in-progress task.
+	// returns to the ready queue.
 	ReopenTask(id string) error
 
 	// ExecutionInstructions returns the prompt text for the execution phase.
 	ExecutionInstructions() (string, error)
 
-	// PlanningInstructions returns the prompt text for the planning phase.
-	PlanningInstructions() string
-
 	// SetState sets an operational state dimension on a task (e.g. phase=implementing).
-	// Backends without state support (checklist) treat this as a no-op.
 	SetState(id, dimension, value, reason string) error
 
 	// GetState returns the current value of a state dimension on a task.
-	// Returns empty string when unset or unsupported.
 	GetState(id, dimension string) (string, error)
 
 	// GetDescription returns the description/body of a task by ID.
-	// Returns empty string for backends without descriptions.
 	GetDescription(id string) (string, error)
 
-	// Label returns a human-readable name for the backend ("checklist" or "beads").
+	// GetAcceptance returns the acceptance criteria for a task by ID.
+	GetAcceptance(id string) (string, error)
+
+	// GetFullContext returns the complete human-readable task context
+	// (title, description, notes, labels, dependencies, comments).
+	GetFullContext(id string) (string, error)
+
+	// ProjectContext returns pre-assembled context about the project's task
+	// state for prompt injection (open/closed beads, config, bd prime output).
+	ProjectContext() (string, error)
+
+	// GetExternalRef returns the external reference (e.g. "gh-123") for a task.
+	GetExternalRef(id string) (string, error)
+
+	// SetExternalRef sets the external reference on a task (e.g. "gh-123" for PR #123).
+	SetExternalRef(id, ref string) error
+
+	// AppendNotes appends a message to the task's notes field.
+	AppendNotes(id, msg string) error
+
+	// SetMetadata sets a custom metadata key-value pair on a task.
+	SetMetadata(id, key, value string) error
+
+	// GetMetadata returns the value of a custom metadata key on a task.
+	GetMetadata(id, key string) (string, error)
+
+	// Label returns a human-readable name for the backend.
 	Label() string
 }

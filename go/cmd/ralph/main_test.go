@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,7 +14,9 @@ import (
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/loop"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
 func runCmd(t *testing.T, name string, args ...string) {
@@ -40,19 +44,112 @@ func (s *stubBackend) CountRemaining() (int, error)               { return s.rem
 func (s *stubBackend) CountTotal() (int, error)                   { return s.total, nil }
 func (s *stubBackend) GetNextTask() (string, error)               { return "", nil }
 func (s *stubBackend) GetNextTaskID() (string, error)             { return "", nil }
-func (s *stubBackend) GetNextTaskInfo() (string, string, error)   { return "", "", nil }
+func (s *stubBackend) GetNextTaskInfo() (tasks.TaskInfo, error)   { return tasks.TaskInfo{}, nil }
 func (s *stubBackend) HasTasks() (bool, error)                    { return s.total > 0, nil }
-func (s *stubBackend) NeedsPlanning() (bool, error)               { return false, nil }
-func (s *stubBackend) PlanningSucceeded() (bool, error)           { return true, nil }
 func (s *stubBackend) CloseTask(string, string) error             { return nil }
 func (s *stubBackend) SkipTask(string, string) error              { return nil }
+func (s *stubBackend) SetSkippedIDs(_ []string)                   {}
 func (s *stubBackend) ReopenTask(string) error                    { return nil }
 func (s *stubBackend) SetState(_, _, _, _ string) error           { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error)       { return "", nil }
 func (s *stubBackend) ExecutionInstructions() (string, error)     { return "", nil }
-func (s *stubBackend) PlanningInstructions() string               { return "" }
+func (s *stubBackend) ProjectContext() (string, error)            { return "", nil }
 func (s *stubBackend) GetDescription(_ string) (string, error)    { return "", nil }
-func (s *stubBackend) Label() string                              { return "checklist" }
+func (s *stubBackend) GetAcceptance(_ string) (string, error)     { return "", nil }
+func (s *stubBackend) GetFullContext(_ string) (string, error)    { return "", nil }
+func (s *stubBackend) GetExternalRef(_ string) (string, error)    { return "", nil }
+func (s *stubBackend) SetExternalRef(_, _ string) error           { return nil }
+func (s *stubBackend) GetMetadata(_, _ string) (string, error)    { return "", nil }
+func (s *stubBackend) SetMetadata(_, _, _ string) error           { return nil }
+func (s *stubBackend) AppendNotes(_, _ string) error              { return nil }
+func (s *stubBackend) Label() string                              { return "beads" }
+
+// Proves: bare `ralph` (no args) returns 0 and does not enter the loop,
+// ensuring users must choose an explicit subcommand.
+func TestRun_BareRalphShowsUsage(t *testing.T) {
+	code := run(nil)
+	if code != 0 {
+		t.Errorf("bare ralph should exit 0, got %d", code)
+	}
+}
+
+// Proves: `ralph loop` is recognized as a subcommand and routes to handleLoop.
+// Without a valid git repo it should fail, confirming it reached the loop path.
+func TestRun_LoopSubcommand(t *testing.T) {
+	dir := t.TempDir()
+	code := run([]string{"loop", "--dir", dir})
+	// Should fail because dir is not a git repo — but the fact it fails
+	// with exit 1 (not "unknown command") proves routing works.
+	if code != 1 {
+		t.Errorf("ralph loop in non-git dir should exit 1, got %d", code)
+	}
+}
+
+// Proves: `ralph review` is recognized as a subcommand.
+func TestRun_ReviewSubcommand(t *testing.T) {
+	dir := t.TempDir()
+	code := run([]string{"review", dir})
+	// Should fail (no git repo / no prompts) but not with "unknown command".
+	if code != 1 {
+		t.Errorf("ralph review in non-git dir should exit 1, got %d", code)
+	}
+}
+
+// Proves: `ralph task -h` prints help and exits 0 instead of passing -h to Claude.
+func TestRun_TaskHelp(t *testing.T) {
+	for _, flag := range []string{"-h", "--help"} {
+		code := run([]string{"task", flag})
+		if code != 0 {
+			t.Errorf("ralph task %s should exit 0, got %d", flag, code)
+		}
+	}
+}
+
+// Proves: `ralph review -h` prints help and exits 0 instead of passing -h to Claude.
+func TestRun_ReviewHelp(t *testing.T) {
+	for _, flag := range []string{"-h", "--help"} {
+		code := run([]string{"review", flag})
+		if code != 0 {
+			t.Errorf("ralph review %s should exit 0, got %d", flag, code)
+		}
+	}
+}
+
+// Proves: `ralph command -h` prints help and exits 0 instead of passing -h to Claude.
+func TestRun_CommanderHelp(t *testing.T) {
+	for _, flag := range []string{"-h", "--help"} {
+		code := run([]string{"command", flag})
+		if code != 0 {
+			t.Errorf("ralph command %s should exit 0, got %d", flag, code)
+		}
+	}
+}
+
+// Proves: unknown subcommand shows error and exits 1.
+func TestRun_UnknownSubcommand(t *testing.T) {
+	code := run([]string{"bogus"})
+	if code != 1 {
+		t.Errorf("unknown subcommand should exit 1, got %d", code)
+	}
+}
+
+// Proves: initTaskBackend returns an error (not a fallback) when bd is
+// unavailable. This ensures bd is a hard requirement.
+func TestInitTaskBackend_ErrorsWhenBDUnavailable(t *testing.T) {
+	// Remove bd from PATH so Init fails
+	cfg := config.Config{ProjectDir: t.TempDir()}
+	log := logging.New(nil)
+
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := initTaskBackend(cfg, t.TempDir(), log)
+	if err == nil {
+		t.Fatal("expected error when bd is unavailable, got nil")
+	}
+	if !strings.Contains(err.Error(), "bd is required") {
+		t.Errorf("error should mention bd is required, got: %v", err)
+	}
+}
 
 // Verifies the resume script contains the correct flags from the config,
 // proving that interrupted sessions can be resumed with the same parameters.
@@ -65,8 +162,7 @@ func TestGenerateResumeScript(t *testing.T) {
 		ProjectDir:    dir,
 		MaxIterations: 20,
 		Quiet:         true,
-		UseWorktree:   true,
-		AutoMerge:     true,
+				AutoMerge:     true,
 		CallsPerHour:  40,
 	}
 
@@ -92,9 +188,6 @@ func TestGenerateResumeScript(t *testing.T) {
 	if !strings.Contains(content, "--auto-merge") {
 		t.Error("resume script should contain --auto-merge")
 	}
-	if strings.Contains(content, "--no-worktree") {
-		t.Error("resume script should NOT contain --no-worktree when worktree is enabled")
-	}
 }
 
 // Verifies the resume script includes --evolve when enabled.
@@ -106,8 +199,7 @@ func TestGenerateResumeScript_Evolve(t *testing.T) {
 	cfg := config.Config{
 		ProjectDir:    dir,
 		MaxIterations: 50,
-		UseWorktree:   true,
-		AutoMerge:     true,
+				AutoMerge:     true,
 		Evolve:        true,
 		CallsPerHour:  80,
 	}
@@ -125,25 +217,47 @@ func TestGenerateResumeScript_Evolve(t *testing.T) {
 	}
 }
 
-// Verifies the resume script includes --no-worktree when worktree is disabled.
-func TestGenerateResumeScript_NoWorktree(t *testing.T) {
+// Verifies the resume script includes all non-default flags from the config,
+// specifically --evolve and --base-branch which were previously missing.
+func TestGenerateResumeScript_AllFlags(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
 	cfg := config.Config{
 		ProjectDir:    dir,
-		MaxIterations: 50,
-		UseWorktree:   false,
-		CallsPerHour:  80,
+		MaxIterations: 30,
+		Quiet:         true,
+		AutoMerge:     true,
+		Evolve:        true,
+		BaseBranch:    "main",
+		Wait:          true,
+		CallsPerHour:  40,
+		Verbose:       true,
 	}
 
 	log := logging.New(nil)
 	generateResumeScript(cfg, ralphDir, "/usr/local/bin/ralph", nil, log)
 
-	data, _ := os.ReadFile(filepath.Join(ralphDir, "resume.sh"))
-	if !strings.Contains(string(data), "--no-worktree") {
-		t.Error("resume script should contain --no-worktree")
+	data, err := os.ReadFile(filepath.Join(ralphDir, "resume.sh"))
+	if err != nil {
+		t.Fatalf("resume script should exist: %v", err)
+	}
+
+	content := string(data)
+	for _, flag := range []string{
+		"--max 30",
+		"--quiet",
+		"--calls-per-hour 40",
+		"--auto-merge",
+		"--evolve",
+		"--base-branch main",
+		"--wait",
+		"--verbose",
+	} {
+		if !strings.Contains(content, flag) {
+			t.Errorf("resume script should contain %q\ngot: %s", flag, content)
+		}
 	}
 }
 
@@ -154,7 +268,7 @@ func TestPrintSummary_TaskCounts(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 	st.Write("iteration", "3")
 	st.Write("status", "completed")
 
@@ -186,7 +300,7 @@ func TestInitRalphDir_CreatesDirectory(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir}
 
 	log := logging.New(nil)
-	resume, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), cfg, &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log}, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue (exitCode < 0), got %d", exitCode)
@@ -204,7 +318,7 @@ func TestInitRalphDir_CreatesDirectory(t *testing.T) {
 }
 
 // Verifies clearSignalFiles removes signal files but preserves state.json
-// and other .ralph contents, so evolve restart resumes instead of replanning.
+// and other .ralph contents, so evolve restart resumes correctly.
 func TestClearSignalFiles_PreservesState(t *testing.T) {
 	ralphDir := t.TempDir()
 
@@ -253,7 +367,7 @@ func TestInitRalphDir_DirtyWorkingTreeExitsWithError(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir}
 	log := logging.New(nil)
 
-	_, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
+	_, exitCode := initRalphDir(context.Background(), cfg, &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log}, ralphDir, logFile, stateFile, log)
 
 	if exitCode != 1 {
 		t.Errorf("expected exit code 1, got %d", exitCode)
@@ -269,13 +383,13 @@ func TestInitRalphDir_DetectsResume(t *testing.T) {
 	stateFile := filepath.Join(ralphDir, "state.json")
 
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 	st.Write("status", "running")
 
 	cfg := config.Config{ProjectDir: dir}
 	log := logging.New(nil)
 
-	resume, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), cfg, &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log}, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue, got exit code %d", exitCode)
@@ -344,40 +458,6 @@ func TestReadLineCtx_CancelledContext(t *testing.T) {
 
 // Verifies embedded prompts (go/cmd/ralph/prompts/) match the source prompts
 // (prompts/) so the fallback for non-self-hosted projects stays in sync.
-func TestEmbeddedPrompts_MatchSourcePrompts(t *testing.T) {
-	// go/cmd/ralph/ → project root
-	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
-	if err != nil {
-		t.Fatalf("resolve project root: %v", err)
-	}
-	sourceDir := filepath.Join(root, "prompts")
-	embeddedDir := filepath.Join(root, "go", "cmd", "ralph", "prompts")
-
-	entries, err := os.ReadDir(sourceDir)
-	if err != nil {
-		t.Fatalf("read source prompts dir: %v", err)
-	}
-
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		src, err := os.ReadFile(filepath.Join(sourceDir, name))
-		if err != nil {
-			t.Fatalf("read source %s: %v", name, err)
-		}
-		emb, err := os.ReadFile(filepath.Join(embeddedDir, name))
-		if err != nil {
-			t.Errorf("embedded prompt %s missing: %v", name, err)
-			continue
-		}
-		if string(src) != string(emb) {
-			t.Errorf("embedded prompt %s differs from source — run: cp prompts/%s go/cmd/ralph/prompts/%s", name, name, name)
-		}
-	}
-}
-
 // Verifies evolveRestart skips the pull/rebuild/exec sequence when a stop
 // file exists, so that "ralph stop" issued during an iteration is honored
 // before restarting with a new binary.
@@ -391,9 +471,9 @@ func TestEvolveRestart_StopFileSkipsRestart(t *testing.T) {
 
 	log := logging.New(nil)
 
-	// evolveRestart would fail on git fetch in a non-git temp dir,
-	// so if it returns nil, the stop file short-circuited before any git ops.
-	err := evolveRestart(dir, "/nonexistent/ralph", "develop", nil, log)
+	// evolveRestart would fail on syscall.Exec with a nonexistent binary,
+	// so if it returns nil, the stop file short-circuited before exec.
+	err := evolveRestart(dir, "/nonexistent/ralph", nil, log)
 	if err != nil {
 		t.Fatalf("expected nil error when stop file present, got: %v", err)
 	}
@@ -403,8 +483,8 @@ func TestEvolveRestart_StopFileSkipsRestart(t *testing.T) {
 	}
 }
 
-// Verifies evolveRestart proceeds (and fails on git) when no stop file exists,
-// confirming the stop-file check only fires when the file is present.
+// evolveRestart does not build — it only clears signals, kills children, and
+// re-execs the binary. With a nonexistent binary path, syscall.Exec fails.
 func TestEvolveRestart_NoStopFileProceeds(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -412,10 +492,34 @@ func TestEvolveRestart_NoStopFileProceeds(t *testing.T) {
 
 	log := logging.New(nil)
 
-	// No stop file → should attempt git fetch, which fails in a temp dir.
-	err := evolveRestart(dir, "/nonexistent/ralph", "develop", nil, log)
+	// No stop file → should attempt syscall.Exec, which fails with nonexistent binary.
+	err := evolveRestart(dir, "/nonexistent/ralph", nil, log)
 	if err == nil {
-		t.Fatal("expected error from git fetch in temp dir, got nil")
+		t.Fatal("expected error with nonexistent binary, got nil")
+	}
+}
+
+// evolveRestart clears signal files before re-exec so stale signals from the
+// previous iteration don't leak into the restarted process.
+func TestEvolveRestart_ClearsSignalFiles(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	// Create signal files that should be cleaned up.
+	for _, f := range []string{".signal_complete", ".signal_current_task", ".signal_all_complete"} {
+		os.WriteFile(filepath.Join(ralphDir, f), []byte("stale"), 0o644)
+	}
+
+	log := logging.New(nil)
+
+	// Will fail on exec, but signal files should already be cleared.
+	_ = evolveRestart(dir, "/nonexistent/ralph", nil, log)
+
+	for _, f := range []string{".signal_complete", ".signal_current_task", ".signal_all_complete"} {
+		if _, err := os.Stat(filepath.Join(ralphDir, f)); !os.IsNotExist(err) {
+			t.Errorf("signal file %s should be removed before re-exec", f)
+		}
 	}
 }
 
@@ -427,15 +531,15 @@ func TestCleanup_InterruptedWritesStopped(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 	st.Write("status", "halted_stagnation")
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	backend := &stubBackend{total: 1, remaining: 1}
 	log := logging.New(nil)
-	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, UseWorktree: true, CallsPerHour: 80}
+	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
-	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, true, log)
+	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, nil, true, log)
 
 	status, _ := st.Read("status")
 	if status != "stopped" {
@@ -451,15 +555,15 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 	st.Write("status", "completed")
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	backend := &stubBackend{total: 3, completed: 3}
 	log := logging.New(nil)
-	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, UseWorktree: true, CallsPerHour: 80}
+	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
-	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, false, log)
+	cleanup(cfg, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, nil, false, log)
 
 	status, _ := st.Read("status")
 	if status != "completed" {
@@ -467,38 +571,340 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	}
 }
 
-// Verifies that validatePlanFile rejects a nonexistent file with "not found".
-func TestValidatePlanFile_NonexistentExitsWithError(t *testing.T) {
-	err := validatePlanFile("/nonexistent/plan.md")
-	if err == nil {
-		t.Fatal("expected error for nonexistent plan file")
-	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("expected 'not found' in error, got %q", err)
-	}
-}
 
-// Verifies that validatePlanFile rejects a file without checkboxes.
-func TestValidatePlanFile_NoCheckboxesRejected(t *testing.T) {
-	badPlan := filepath.Join(t.TempDir(), "bad-plan.md")
-	os.WriteFile(badPlan, []byte("Just some text without checkboxes"), 0o644)
+// Proves: cleanup clears cli_config from state.json so stale flags from a
+// previous run don't leak into a manual restart. Evolve restart is unaffected
+// because syscall.Exec replaces the process before cleanup runs.
+func TestCleanup_ClearsCLIConfig(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
 
-	err := validatePlanFile(badPlan)
-	if err == nil {
-		t.Fatal("expected error for plan without checkboxes")
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	st.SaveCLIConfig(map[string]string{"evolve": "true", "max": "20"})
+
+	// Verify cli_config exists before cleanup.
+	cfg, _ := st.LoadCLIConfig()
+	if cfg == nil {
+		t.Fatal("cli_config should exist before cleanup")
 	}
-	if !strings.Contains(err.Error(), "Ralph format") {
-		t.Errorf("expected 'Ralph format' in error, got %q", err)
-	}
-}
 
-// Verifies that validatePlanFile accepts a valid plan with checkboxes.
-func TestValidatePlanFile_ValidPlanAccepted(t *testing.T) {
-	plan := filepath.Join(t.TempDir(), "plan.md")
-	os.WriteFile(plan, []byte("- [ ] Test task\n- [ ] Another task"), 0o644)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	backend := &stubBackend{total: 1}
+	log := logging.New(nil)
+	c := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
 
-	err := validatePlanFile(plan)
+	cleanup(c, gm, st, backend, ralphDir, filepath.Join(ralphDir, "plan.md"), "/usr/local/bin/ralph", nil, nil, true, log)
+
+	// cli_config must be cleared.
+	cfg, err := st.LoadCLIConfig()
 	if err != nil {
-		t.Errorf("expected no error for valid plan, got %v", err)
+		t.Fatalf("LoadCLIConfig after cleanup: %v", err)
+	}
+	if cfg != nil {
+		t.Errorf("expected cli_config cleared after cleanup, got %v", cfg)
+	}
+}
+
+// Proves: cli_config in state.json is never read back for execution — it is
+// a write-only audit record. LoadCLIConfig must not appear in the evolve
+// restart path in main.go. If someone re-adds it, this test catches it.
+func TestCLIConfig_NeverReadForExecution(t *testing.T) {
+	mainSrc, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+
+	// The evolve_restart block must not call LoadCLIConfig or ArgsFromState.
+	// These were removed so that evolve restart passes original args through
+	// instead of reconstructing from stale state.
+	src := string(mainSrc)
+
+	// Find the evolve_restart block.
+	evolveIdx := strings.Index(src, `status == "evolve_restart"`)
+	if evolveIdx < 0 {
+		t.Fatal("could not find evolve_restart block in main.go")
+	}
+
+	// Check the block from evolve_restart to cleanup (next major section).
+	evolveBlock := src[evolveIdx:]
+	cleanupIdx := strings.Index(evolveBlock, "cleanup(")
+	if cleanupIdx > 0 {
+		evolveBlock = evolveBlock[:cleanupIdx]
+	}
+
+	if strings.Contains(evolveBlock, "LoadCLIConfig") {
+		t.Error("evolve_restart block must not call LoadCLIConfig — cli_config is a write-only audit record")
+	}
+	if strings.Contains(evolveBlock, "ArgsFromState") {
+		t.Error("evolve_restart block must not call ArgsFromState — original args should be passed through")
+	}
+}
+
+// Verifies that --wait auto-resets when a previous run completed, skipping
+// the interactive "Run fresh?" prompt so unattended operation isn't blocked.
+func TestInitRalphDir_WaitAutoResetsOnCompleted(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	logFile := filepath.Join(ralphDir, "loop.log")
+	stateFile := filepath.Join(ralphDir, "state.json")
+
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	st.Write("status", "completed")
+
+	cfg := config.Config{ProjectDir: dir, Wait: true}
+	log := logging.New(nil)
+
+	resume, exitCode := initRalphDir(context.Background(), cfg, &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log}, ralphDir, logFile, stateFile, log)
+
+	if exitCode >= 0 {
+		t.Fatalf("expected continue (exitCode < 0), got %d — --wait should auto-reset", exitCode)
+	}
+	if resume {
+		t.Error("expected fresh start after auto-reset, not resume")
+	}
+
+	// State should be wiped (fresh .ralph dir).
+	if fileExists(stateFile) {
+		t.Error("state.json should not exist after auto-reset")
+	}
+}
+
+// Verifies that without --wait, initRalphDir blocks on the interactive prompt
+// and exits 0 when context is cancelled (simulating no user input).
+func TestInitRalphDir_NoWaitCompletedBlocksOnPrompt(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	logFile := filepath.Join(ralphDir, "loop.log")
+	stateFile := filepath.Join(ralphDir, "state.json")
+
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	st.Write("status", "completed")
+
+	cfg := config.Config{ProjectDir: dir, Wait: false}
+	log := logging.New(nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, exitCode := initRalphDir(ctx, cfg, &git.Manager{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log}, ralphDir, logFile, stateFile, log)
+
+	if exitCode != 0 {
+		t.Errorf("expected exit code 0 (prompt cancelled), got %d", exitCode)
+	}
+}
+
+// Verifies that rebase conflict always auto-chooses fresh worktree.
+func TestAutoRebaseRecovery_AlwaysChoosesFreshWorktree(t *testing.T) {
+	handler := autoRebaseRecovery()
+	result := handler(fmt.Errorf("test conflict"))
+
+	if result != git.RebaseFreshWorktree {
+		t.Errorf("expected RebaseFreshWorktree, got %v", result)
+	}
+}
+
+// Verifies printSessionSummary displays bead ID, title, agent summary, and PR
+// reference for each completed task, giving the operator a clear picture of
+// what was accomplished before evolve restart or exit.
+func TestPrintSessionSummary_FormatsCompletedTasks(t *testing.T) {
+	var buf strings.Builder
+	log := logging.NewWithWriter(&buf)
+
+	tasks := []loop.CompletedTask{
+		{
+			ID:      "ralph-5eu",
+			Title:   "[bug] Last task's work not pushed before wait mode",
+			Summary: "Track last-merged flag, skip flush when already merged",
+			PRNum:   "160",
+			PRTitle: "fix: skip redundant flush after signal-handler merge",
+		},
+		{
+			ID:      "ralph-abc",
+			Title:   "Add session summary",
+			Summary: "Show completed tasks before evolve",
+		},
+	}
+
+	printSessionSummary(tasks, log)
+	out := buf.String()
+
+	if !strings.Contains(out, "ralph-5eu") {
+		t.Error("expected bead ID ralph-5eu in output")
+	}
+	if !strings.Contains(out, "[bug] Last task's work not pushed before wait mode") {
+		t.Error("expected task title in output")
+	}
+	if !strings.Contains(out, "Track last-merged flag") {
+		t.Error("expected agent summary in output")
+	}
+	if !strings.Contains(out, "PR #160") {
+		t.Error("expected PR number in output")
+	}
+	if !strings.Contains(out, "fix: skip redundant flush") {
+		t.Error("expected PR title in output")
+	}
+	if !strings.Contains(out, "ralph-abc") {
+		t.Error("expected second task ID in output")
+	}
+	if strings.Contains(out, "PR #") && strings.Count(out, "PR #") != 1 {
+		t.Error("second task without PR should not show PR line")
+	}
+}
+
+// Proves stop and feedback appear in loop help as WHILE RUNNING commands,
+// not in the top-level help, so users discover them where they're relevant.
+func TestHelpText_StopFeedbackInLoopOnly(t *testing.T) {
+	captureStdout := func(fn func()) string {
+		t.Helper()
+		r, w, _ := os.Pipe()
+		old := os.Stdout
+		os.Stdout = w
+		fn()
+		w.Close()
+		os.Stdout = old
+		data, _ := io.ReadAll(r)
+		return string(data)
+	}
+
+	loopHelp := captureStdout(printLoopUsage)
+
+	if !strings.Contains(loopHelp, "WHILE RUNNING") {
+		t.Error("loop help should contain WHILE RUNNING section")
+	}
+	if !strings.Contains(loopHelp, "ralph stop") {
+		t.Error("loop help should list ralph stop")
+	}
+	if !strings.Contains(loopHelp, "ralph feedback [message]") {
+		t.Error("loop help should show feedback with optional [message] arg")
+	}
+	// Feedback should be a single line, not split into two commands.
+	if strings.Contains(loopHelp, "ralph feedback <message>") {
+		t.Error("feedback should be one line with [message], not separate <message> line")
+	}
+
+	topHelp := captureStdout(printUsage)
+
+	if strings.Contains(topHelp, "ralph stop") {
+		t.Error("top-level help should NOT list ralph stop")
+	}
+	if strings.Contains(topHelp, "ralph feedback") {
+		t.Error("top-level help should NOT list ralph feedback")
+	}
+}
+
+// Verifies printSessionSummary shows a clickable PR URL instead of
+// bare "PR #N" when the URL is available from GitHub.
+func TestPrintSessionSummary_ShowsPRURL(t *testing.T) {
+	var buf strings.Builder
+	log := logging.NewWithWriter(&buf)
+
+	tasks := []loop.CompletedTask{
+		{
+			ID:      "ralph-xyz",
+			Title:   "Add PR link to session summary",
+			PRNum:   "172",
+			PRTitle: "feat: clickable PR links",
+			PRURL:   "https://github.com/brokenalarms/ralph/pull/172",
+		},
+	}
+
+	printSessionSummary(tasks, log)
+	out := buf.String()
+
+	if !strings.Contains(out, "https://github.com/brokenalarms/ralph/pull/172") {
+		t.Error("expected full PR URL in output")
+	}
+	if strings.Contains(out, "PR #172") {
+		t.Error("should show URL, not bare PR #172, when URL is available")
+	}
+}
+
+// Verifies printSessionSummary produces no output when no tasks were completed,
+// keeping the log clean for sessions that didn't finish any work.
+func TestPrintSessionSummary_EmptyNoOutput(t *testing.T) {
+	var buf strings.Builder
+	log := logging.NewWithWriter(&buf)
+
+	printSessionSummary(nil, log)
+
+	if buf.Len() > 0 {
+		t.Errorf("expected no output for empty session, got: %s", buf.String())
+	}
+}
+
+// Proves: postReviewCleanup clears completed_tasks from state.json, archives
+// reflections to reflections/archived/, clears attempt data for completed tasks,
+// and removes the .completed-tasks display file.
+func TestPostReviewCleanup(t *testing.T) {
+	ralphDir := filepath.Join(t.TempDir(), ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	// Set up state with completed tasks
+	st := state.NewStore(ralphDir)
+	st.AddCompletedTask("ralph-abc")
+	st.AddCompletedTask("ralph-def")
+
+	// Create reflection files
+	refDir := filepath.Join(ralphDir, "reflections")
+	os.MkdirAll(refDir, 0o755)
+	os.WriteFile(filepath.Join(refDir, "ralph-abc.md"), []byte("# Task ABC"), 0o644)
+	os.WriteFile(filepath.Join(refDir, "ralph-def.md"), []byte("# Task DEF"), 0o644)
+
+	// Create attempt files
+	attDir := filepath.Join(ralphDir, "attempts")
+	os.MkdirAll(attDir, 0o755)
+	os.WriteFile(filepath.Join(attDir, "ralph-abc.log"), []byte("### Attempt 1\n"), 0o644)
+	os.WriteFile(filepath.Join(attDir, "ralph-def.log"), []byte("### Attempt 1\n"), 0o644)
+	os.WriteFile(filepath.Join(attDir, "ralph-ghi.log"), []byte("### Attempt 1\n"), 0o644)
+
+	// Create .completed-tasks display file
+	os.WriteFile(filepath.Join(ralphDir, ".completed-tasks"), []byte("ralph-abc\nralph-def\n"), 0o644)
+
+	var buf strings.Builder
+	log := logging.NewWithWriter(&buf)
+
+	postReviewCleanup(ralphDir, log)
+
+	// AC1: completed_tasks cleared from state.json
+	tasks, err := st.GetCompletedTasks()
+	if err != nil {
+		t.Fatalf("GetCompletedTasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Errorf("expected 0 completed tasks, got %d", len(tasks))
+	}
+
+	// AC2: reflections archived
+	if _, err := os.Stat(filepath.Join(refDir, "ralph-abc.md")); !os.IsNotExist(err) {
+		t.Error("ralph-abc.md should be removed from reflections/")
+	}
+	if _, err := os.Stat(filepath.Join(refDir, "archived", "ralph-abc.md")); err != nil {
+		t.Error("ralph-abc.md should exist in reflections/archived/")
+	}
+	if _, err := os.Stat(filepath.Join(refDir, "archived", "ralph-def.md")); err != nil {
+		t.Error("ralph-def.md should exist in reflections/archived/")
+	}
+
+	// AC3: attempt data cleared for completed tasks
+	if _, err := os.Stat(filepath.Join(attDir, "ralph-abc.log")); !os.IsNotExist(err) {
+		t.Error("ralph-abc.log attempts should be cleared")
+	}
+	if _, err := os.Stat(filepath.Join(attDir, "ralph-def.log")); !os.IsNotExist(err) {
+		t.Error("ralph-def.log attempts should be cleared")
+	}
+	// Unrelated task's attempts should be preserved
+	if _, err := os.Stat(filepath.Join(attDir, "ralph-ghi.log")); err != nil {
+		t.Error("ralph-ghi.log should be preserved")
+	}
+
+	// .completed-tasks display file removed
+	if _, err := os.Stat(filepath.Join(ralphDir, ".completed-tasks")); !os.IsNotExist(err) {
+		t.Error(".completed-tasks should be removed")
 	}
 }

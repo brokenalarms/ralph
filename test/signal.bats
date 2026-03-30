@@ -96,9 +96,8 @@ teardown() {
   _interrupted=true
   _TMUX_OUTER=false
   RESUME_SCRIPT="$RALPH_DIR/resume.sh"
-  TASK_BACKEND="checklist"
+  TASK_BACKEND="bd"
   MAX_ITERATIONS=5
-  USE_WORKTREE=true
   CALLS_PER_HOUR=80
   echo "- [ ] dummy task" > "$PLAN_FILE"
 

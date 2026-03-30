@@ -1,13 +1,14 @@
 package claude
 
 import (
+	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -17,15 +18,21 @@ var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 // testLogger discards all output but records calls for verification.
 type testLogger struct {
-	tasks    []string
+	logs      []string
 	successes []string
 }
 
-func (l *testLogger) Log(format string, args ...any)         {}
-func (l *testLogger) Warn(format string, args ...any)        {}
-func (l *testLogger) Error(format string, args ...any)       {}
-func (l *testLogger) Task(format string, args ...any)        { l.tasks = append(l.tasks, fmt.Sprintf(format, args...)) }
-func (l *testLogger) TaskSuccess(format string, args ...any) { l.successes = append(l.successes, fmt.Sprintf(format, args...)) }
+func (l *testLogger) Log(_ string, format string, args ...any) {
+	l.logs = append(l.logs, fmt.Sprintf(format, args...))
+}
+func (l *testLogger) AgentLog(_ string, format string, args ...any) {
+	l.logs = append(l.logs, fmt.Sprintf(format, args...))
+}
+func (l *testLogger) Warn(_ string, _ string, _ ...any)    {}
+func (l *testLogger) Error(_ string, _ string, _ ...any)   {}
+func (l *testLogger) Success(_ string, format string, args ...any) {
+	l.successes = append(l.successes, fmt.Sprintf(format, args...))
+}
 
 // --- Signal file tests ---
 
@@ -226,137 +233,6 @@ func TestIterationAllowedTools_JoinFormat(t *testing.T) {
 	}
 }
 
-// --- Stream text extraction tests ---
-
-// Verifies that extractStreamText pulls text from assistant messages using
-// Claude's actual nested content array format: message.content[].text.
-func TestExtractStreamText_Assistant(t *testing.T) {
-	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"Hello world"}]}}`
-	got := extractStreamText(line)
-	if got != "Hello world" {
-		t.Errorf("extractStreamText = %q, want %q", got, "Hello world")
-	}
-}
-
-// Verifies that tool_use content blocks produce a short summary with the
-// tool name and its primary target (file_path, command, etc.).
-func TestExtractStreamText_AssistantToolUse(t *testing.T) {
-	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/foo.go"}}]}}`
-	got := extractStreamText(line)
-	if got != "[Read] /tmp/foo.go" {
-		t.Errorf("extractStreamText = %q, want %q", got, "[Read] /tmp/foo.go")
-	}
-}
-
-// Verifies that messages with both text and tool_use content blocks are
-// concatenated with newlines.
-func TestExtractStreamText_AssistantMixed(t *testing.T) {
-	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"reading file"},{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}`
-	got := extractStreamText(line)
-	want := "reading file\n[Bash] ls"
-	if got != want {
-		t.Errorf("extractStreamText = %q, want %q", got, want)
-	}
-}
-
-// Verifies text extraction from content_block_delta events (the most
-// common streaming event type during Claude output).
-func TestExtractStreamText_ContentBlockDelta(t *testing.T) {
-	line := `{"type":"content_block_delta","delta":{"text":"partial output"}}`
-	got := extractStreamText(line)
-	if got != "partial output" {
-		t.Errorf("extractStreamText = %q, want %q", got, "partial output")
-	}
-}
-
-// Verifies that error responses are extracted from result events so users
-// see API errors in the log.
-func TestExtractStreamText_ResultError(t *testing.T) {
-	line := `{"type":"result","subtype":"error_response","error":"rate limited"}`
-	got := extractStreamText(line)
-	if got != "rate limited" {
-		t.Errorf("extractStreamText = %q, want %q", got, "rate limited")
-	}
-}
-
-// Verifies that non-text JSON events are silently skipped.
-func TestExtractStreamText_IgnoresNonTextEvents(t *testing.T) {
-	lines := []string{
-		`{"type":"message_start"}`,
-		`{"type":"content_block_start","index":0}`,
-		`not json at all`,
-		``,
-	}
-	for _, line := range lines {
-		if got := extractStreamText(line); got != "" {
-			t.Errorf("extractStreamText(%q) = %q, want empty", line, got)
-		}
-	}
-}
-
-// Verifies that result events produce [done] output so users can see
-// when Claude finishes processing a request.
-func TestExtractStreamText_ResultDone(t *testing.T) {
-	line := `{"type":"result","subtype":"success"}`
-	got := extractStreamText(line)
-	if got != "[done]" {
-		t.Errorf("extractStreamText = %q, want %q", got, "[done]")
-	}
-}
-
-// Verifies that markdown bold is stripped from output so the terminal
-// shows clean text without literal asterisks.
-func TestStripMarkdown(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"**bold text**", "bold text"},
-		{"normal text", "normal text"},
-		{"some **bold** and **more bold**", "some bold and more bold"},
-		{"**nested** middle **end**", "nested middle end"},
-	}
-	for _, tt := range tests {
-		got := stripMarkdown(tt.input)
-		if got != tt.want {
-			t.Errorf("stripMarkdown(%q) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}
-
-// Verifies that FormatStreamLine adds a timestamp prefix and ANSI color codes
-// so output matches the format previously provided by the bash stream filter.
-func TestFormatStreamLine(t *testing.T) {
-	line := FormatStreamLine("[claude] [Read] /tmp/foo.go")
-	plain := ansiRe.ReplaceAllString(line, "")
-
-	// Should have HH:MM:SS timestamp prefix.
-	if len(plain) < 8 || plain[2] != ':' || plain[5] != ':' {
-		t.Errorf("FormatStreamLine missing timestamp prefix, got: %q", plain)
-	}
-
-	// Should contain the text content after stripping ANSI.
-	if !strings.Contains(plain, "[claude] [Read] /tmp/foo.go") {
-		t.Errorf("FormatStreamLine should preserve content, got: %q", plain)
-	}
-
-	// Should contain ANSI color codes for [claude] and [Read].
-	if !strings.Contains(line, "\033[0;36m") {
-		t.Error("FormatStreamLine should apply cyan to [claude]")
-	}
-	if !strings.Contains(line, "\033[0;34m") {
-		t.Error("FormatStreamLine should apply blue to [Read]")
-	}
-}
-
-// Verifies that [done] gets green color in the formatted output.
-func TestFormatStreamLine_DoneColor(t *testing.T) {
-	line := FormatStreamLine("[claude] [done]")
-	if !strings.Contains(line, "\033[0;32m") {
-		t.Error("FormatStreamLine should apply green to [done]")
-	}
-}
-
 // --- JSON fragment stripping tests ---
 
 // Verifies that stripJSONFragment removes lines that are entirely JSON,
@@ -385,6 +261,105 @@ func TestStripJSONFragment_CleanText(t *testing.T) {
 	}
 }
 
+// --- Stdin injection tests ---
+
+// Verifies UserInputMessage produces valid JSON with the stream-json
+// input format expected by Claude Code's --input-format stream-json.
+func TestUserInputMessage_Format(t *testing.T) {
+	got := UserInputMessage("fix the tests")
+	want := `{"type":"user_input_text","content":"fix the tests"}`
+	if got != want {
+		t.Errorf("UserInputMessage = %q, want %q", got, want)
+	}
+}
+
+// Verifies that UserInputMessage correctly JSON-escapes multiline content
+// with special characters, which is typical for test failure output.
+func TestUserInputMessage_EscapesSpecialChars(t *testing.T) {
+	msg := "test failed:\n\texpected \"foo\"\n\tgot \"bar\""
+	got := UserInputMessage(msg)
+	// The content should be JSON-escaped inside the JSON string.
+	if !strings.Contains(got, `\n`) {
+		t.Errorf("expected JSON-escaped newlines, got: %s", got)
+	}
+	if !strings.Contains(got, `\"foo\"`) {
+		t.Errorf("expected JSON-escaped quotes, got: %s", got)
+	}
+}
+
+// Verifies that InjectMessage returns an error when no pipe is available,
+// which is the expected state before Run() is called or after it returns.
+func TestInjectMessage_NoPipe(t *testing.T) {
+	runner := &Runner{Logger: &testLogger{}}
+	err := runner.InjectMessage("hello")
+	if err == nil {
+		t.Error("InjectMessage should fail when no stdin pipe is available")
+	}
+}
+
+// Verifies that InjectMessage writes the message as a JSON line to the
+// stdin pipe, which the running agent reads as a follow-up user message.
+func TestInjectMessage_WritesToPipe(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+
+	runner := &Runner{Logger: &testLogger{}}
+	runner.stdinPipe = pw
+
+	if err := runner.InjectMessage("user feedback here"); err != nil {
+		t.Fatalf("InjectMessage failed: %v", err)
+	}
+	pw.Close()
+
+	buf := make([]byte, 4096)
+	n, _ := pr.Read(buf)
+	got := strings.TrimSpace(string(buf[:n]))
+	want := `{"type":"user_input_text","content":"user feedback here"}`
+	if got != want {
+		t.Errorf("pipe content = %q, want %q", got, want)
+	}
+}
+
+// Verifies that when a feedback signal file exists, the agent is killed
+// and FeedbackKill is returned so the orchestrator can restart it.
+// Content is already on the bead — the file is a signal only.
+func TestPoll_FeedbackSignalKillsAgent(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+	feedbackFile := filepath.Join(dir, "feedback")
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// Empty file — signal only, no content.
+	os.WriteFile(feedbackFile, nil, 0o644)
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 100 * time.Millisecond,
+		FeedbackFile: feedbackFile,
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+
+	if !result.FeedbackKill {
+		t.Error("expected FeedbackKill when feedback signal file exists")
+	}
+	// Feedback file should be removed after detection.
+	if _, err := os.Stat(feedbackFile); !os.IsNotExist(err) {
+		t.Error("feedback signal file should be removed after detection")
+	}
+}
+
 // Verifies that readFirstLine strips JSON fragments from signal files,
 // so log messages like "Completed: <summary>" stay human-readable.
 func TestReadFirstLine_StripsJSON(t *testing.T) {
@@ -395,181 +370,6 @@ func TestReadFirstLine_StripsJSON(t *testing.T) {
 	got := readFirstLine(path)
 	if got != "summary text" {
 		t.Errorf("readFirstLine = %q, want %q", got, "summary text")
-	}
-}
-
-// --- Stream filter tailing tests ---
-
-// Verifies that startTailGoroutine follows new [claude]-prefixed lines
-// appended to a file and stops cleanly when the stop channel is closed.
-// Non-[claude] lines (orchestrator messages) must NOT be forwarded to
-// stdout — the logger already writes those directly.
-func TestStartTailGoroutine_FollowsAndStops(t *testing.T) {
-	dir := t.TempDir()
-	logPath := filepath.Join(dir, "loop.log")
-	os.WriteFile(logPath, []byte("existing\n"), 0o644)
-
-	stop := make(chan struct{})
-	done := startTailGoroutine(logPath, stop)
-
-	// Append [claude]-prefixed and non-prefixed lines after goroutine starts.
-	time.Sleep(200 * time.Millisecond)
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Fprintln(f, "[claude] hello from agent")
-	fmt.Fprintln(f, "12:00:00 \033[0;36m[beads]\033[0m orchestrator message")
-	f.Close()
-
-	time.Sleep(200 * time.Millisecond)
-	close(stop)
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("startTailGoroutine did not stop within 2 seconds")
-	}
-}
-
-// Verifies that startTailGoroutine returns immediately for nonexistent files,
-// without leaving any goroutines running.
-func TestStartTailGoroutine_NonexistentFile(t *testing.T) {
-	stop := make(chan struct{})
-	done := startTailGoroutine("/nonexistent/path/log", stop)
-
-	select {
-	case <-done:
-	case <-time.After(1 * time.Second):
-		close(stop)
-		t.Fatal("startTailGoroutine should exit immediately for missing file")
-	}
-}
-
-// Verifies that startTailGoroutine only forwards [claude]-prefixed lines to
-// stdout, preventing orchestrator log messages from appearing twice (once from
-// the logger writing to stdout directly, and again from the tail goroutine).
-func TestStartTailGoroutine_FiltersNonClaudeLines(t *testing.T) {
-	dir := t.TempDir()
-	logPath := filepath.Join(dir, "loop.log")
-	os.WriteFile(logPath, nil, 0o644)
-
-	// Capture stdout by replacing os.Stdout temporarily.
-	origStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	stop := make(chan struct{})
-	done := startTailGoroutine(logPath, stop)
-
-	time.Sleep(200 * time.Millisecond)
-	f, _ := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
-	fmt.Fprintln(f, "[claude] agent output line")
-	fmt.Fprintln(f, "12:00:00 \033[0;36m[beads]\033[0m orchestrator message")
-	fmt.Fprintln(f, "[claude] second agent line")
-	f.Close()
-
-	time.Sleep(300 * time.Millisecond)
-	close(stop)
-	<-done
-
-	w.Close()
-	captured, _ := io.ReadAll(r)
-	os.Stdout = origStdout
-
-	output := string(captured)
-	if !strings.Contains(output, "[claude] agent output line") {
-		t.Errorf("expected [claude] lines to be forwarded, got: %q", output)
-	}
-	if !strings.Contains(output, "[claude] second agent line") {
-		t.Errorf("expected second [claude] line to be forwarded, got: %q", output)
-	}
-	if strings.Contains(output, "orchestrator message") {
-		t.Errorf("orchestrator messages should NOT be forwarded by tail goroutine, got: %q", output)
-	}
-}
-
-// Verifies that filterStreamJSON follows new data appended to the raw log
-// (like tail -f), rather than reading to EOF and exiting.
-func TestFilterStreamJSON_TailsFile(t *testing.T) {
-	dir := t.TempDir()
-	rawPath := filepath.Join(dir, "raw.log")
-	logPath := filepath.Join(dir, "loop.log")
-
-	// Create the raw log so the filter can open it.
-	os.WriteFile(rawPath, nil, 0o644)
-
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		filterStreamJSON(rawPath, logPath, stop)
-	}()
-
-	// Append a stream-json event after the filter has started.
-	time.Sleep(200 * time.Millisecond)
-	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"text","text":"hello from claude"}]}}`)
-	f.Close()
-
-	// Give the filter time to process, then stop it.
-	time.Sleep(300 * time.Millisecond)
-	close(stop)
-	<-done
-
-	got, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plain := ansiRe.ReplaceAllString(string(got), "")
-	if !strings.Contains(plain, "[claude] hello from claude") {
-		t.Errorf("loop.log should contain [claude]-prefixed filtered text, got: %q", string(got))
-	}
-}
-
-// Verifies that filterStreamJSON prefixes each output line with [claude]
-// so loop.log clearly distinguishes Claude's output from ralph's logger output.
-func TestFilterStreamJSON_PrefixesWithSource(t *testing.T) {
-	dir := t.TempDir()
-	rawPath := filepath.Join(dir, "raw.log")
-	logPath := filepath.Join(dir, "loop.log")
-
-	os.WriteFile(rawPath, nil, 0o644)
-
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		filterStreamJSON(rawPath, logPath, stop)
-	}()
-
-	time.Sleep(200 * time.Millisecond)
-	f, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Write a tool-use event and a text event.
-	fmt.Fprintln(f, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/foo.go"}}]}}`)
-	fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"some delta text"}}`)
-	f.Close()
-
-	time.Sleep(300 * time.Millisecond)
-	close(stop)
-	<-done
-
-	got, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	content := ansiRe.ReplaceAllString(string(got), "")
-	if !strings.Contains(content, "[claude] [Read] /tmp/foo.go") {
-		t.Errorf("tool-use line should have [claude] prefix, got: %q", content)
-	}
-	if !strings.Contains(content, "[claude] some delta text") {
-		t.Errorf("delta text should have [claude] prefix, got: %q", content)
 	}
 }
 
@@ -601,7 +401,7 @@ func TestStartStreamFilter_NoExternalProcesses(t *testing.T) {
 
 	got, _ := os.ReadFile(logPath)
 	plain := ansiRe.ReplaceAllString(string(got), "")
-	if !strings.Contains(plain, "[claude] go filter works") {
+	if !strings.Contains(plain, "[r] go filter works") {
 		t.Errorf("expected Go filter output, got: %q", string(got))
 	}
 
@@ -741,7 +541,52 @@ func TestRun_DetectsCompletionSignal(t *testing.T) {
 		t.Errorf("Summary = %q, want %q", result.Summary, "task finished")
 	}
 	if len(log.successes) == 0 {
-		t.Error("expected TaskSuccess to be called")
+		t.Error("expected Success to be called")
+	}
+}
+
+// Verifies that the completion log message includes the bead ID when TaskID
+// is set, so operators can identify which task completed.
+func TestRun_CompletionMessageIncludesBeadID(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		tmp := signals.Complete + ".tmp"
+		os.WriteFile(tmp, []byte("fixed the bug"), 0o644)
+		os.Rename(tmp, signals.Complete)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 100 * time.Millisecond,
+		TaskID:       "ralph-xyz",
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+
+	if !result.SignalDetected {
+		t.Error("expected SignalDetected to be true")
+	}
+	if len(log.successes) == 0 {
+		t.Fatal("expected Success to be called")
+	}
+	got := log.successes[0]
+	if !strings.Contains(got, "ralph-xyz") {
+		t.Errorf("completion message should include bead ID, got: %q", got)
+	}
+	if !strings.Contains(got, "fixed the bug") {
+		t.Errorf("completion message should include summary, got: %q", got)
 	}
 }
 
@@ -815,8 +660,51 @@ func TestRun_CallsOnTaskDetected(t *testing.T) {
 	if detectedTask != "implement feature X" {
 		t.Errorf("OnTaskDetected got %q, want %q", detectedTask, "implement feature X")
 	}
-	if len(log.tasks) == 0 {
-		t.Error("expected Task log to be called")
+	// The poller must NOT emit a "Working on" log line — the stream
+	// formatter already shows the signal in real-time.
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "Working on") {
+			t.Errorf("poller should not emit 'Working on' log, got: %s", msg)
+		}
+	}
+}
+
+// Verifies that the poller does not emit a duplicate "Working on" log line
+// when the agent writes .signal_current_task — the stream formatter already
+// shows the signal in real-time, so the poller only sets taskLogged and
+// fires OnTaskDetected.
+func TestPoll_NoWorkingOnLogLine(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		os.WriteFile(signals.CurrentTask, []byte("fix duplicate log"), 0o644)
+		time.Sleep(300 * time.Millisecond)
+		os.WriteFile(signals.Complete, []byte("done"), 0o644)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		TaskID:       "ralph-ez87",
+		PollInterval: 100 * time.Millisecond,
+	}
+
+	runWithCommand(t, &runner, cfg, "sleep", "10")
+
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "Working on") {
+			t.Errorf("poller emitted duplicate 'Working on' log: %s", msg)
+		}
 	}
 }
 
@@ -1211,12 +1099,287 @@ func TestDisallowedTools_ContainsBdClose(t *testing.T) {
 	}
 }
 
-// Verifies that git checkout and git branch are disallowed so sub-agents
-// can't check out ralph's branches, which would block RecreateFromMain.
-func TestDisallowedTools_BlocksGitCheckoutAndBranch(t *testing.T) {
+// --- Run() cleanup tests ---
+
+// Verifies that Run() kills the claude process and stops streaming goroutines
+// before returning. Uses a long-running process and context cancellation to
+// exercise the kill path, then checks the process is actually dead.
+func TestRun_CleansUpStreamingOnReturn(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	logFile := filepath.Join(dir, "loop.log")
+	signals := DefaultSignalPaths(dir)
+
+	runner := &Runner{
+		Logger: &testLogger{},
+		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
+			cmd := exec.Command("sleep", "60")
+			cmd.Dir = cfg.WorkDir
+			cmd.Stdout = raw
+			cmd.Stderr = raw
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			return cmd
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := runner.Run(RunConfig{
+		Ctx:          ctx,
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		LogFile:      logFile,
+		Quiet:        false,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Since Run() returned without hanging, cmd.Wait() must have completed,
+	// confirming Kill+Wait were called on the process.
+
+	// Verify streaming goroutines were cleaned up.
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if runner.filterStop != nil {
+		t.Error("filterStop should be nil after Run() returns")
+	}
+	if runner.filterDone != nil {
+		t.Error("filterDone should be nil after Run() returns")
+	}
+	if runner.tailStop != nil {
+		t.Error("tailStop should be nil after Run() returns")
+	}
+	if runner.tailDone != nil {
+		t.Error("tailDone should be nil after Run() returns")
+	}
+}
+
+// Verifies that Run() kills a long-running process and the process is actually
+// dead after Run() returns. Tracks the PID from CmdFactory and uses kill -0 to
+// confirm the process was killed.
+func TestRun_KillsProcessOnContextCancel(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	logFile := filepath.Join(dir, "loop.log")
+	signals := DefaultSignalPaths(dir)
+
+	pidFile := filepath.Join(dir, "cmd.pid")
+	runner := &Runner{
+		Logger: &testLogger{},
+		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
+			script := fmt.Sprintf(`echo $$ > %s; sleep 60`, pidFile)
+			cmd := exec.Command("bash", "-c", script)
+			cmd.Dir = cfg.WorkDir
+			cmd.Stdout = raw
+			cmd.Stderr = raw
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			return cmd
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := runner.Run(RunConfig{
+		Ctx:          ctx,
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		LogFile:      logFile,
+		Quiet:        false,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Read the captured PID.
+	pidData, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal("PID file not written — process may not have started")
+	}
+	pid := strings.TrimSpace(string(pidData))
+
+	// Verify the process is dead. kill -0 checks if a process exists.
+	time.Sleep(100 * time.Millisecond)
+	check := exec.Command("kill", "-0", pid)
+	if err := check.Run(); err == nil {
+		t.Errorf("process %s should be dead after Run() returns, but kill -0 succeeded", pid)
+	}
+}
+
+// Verifies that a second Run() call stops streaming goroutines left by the
+// first Run() before starting new ones, preventing goroutine accumulation.
+// Also verifies the second Run()'s process is killed on context cancellation.
+func TestRun_SecondCallStopsPreviousStreaming(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	logFile := filepath.Join(dir, "loop.log")
+	signals := DefaultSignalPaths(dir)
+
+	var callCount atomic.Int32
+	pidFile1 := filepath.Join(dir, "cmd1.pid")
+	pidFile2 := filepath.Join(dir, "cmd2.pid")
+
+	runner := &Runner{
+		Logger: &testLogger{},
+		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
+			n := callCount.Add(1)
+			pidFile := pidFile1
+			if n == 2 {
+				pidFile = pidFile2
+			}
+			script := fmt.Sprintf(`echo $$ > %s; sleep 60`, pidFile)
+			cmd := exec.Command("bash", "-c", script)
+			cmd.Dir = cfg.WorkDir
+			cmd.Stdout = raw
+			cmd.Stderr = raw
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			return cmd
+		},
+	}
+
+	// Simulate a previous Run() that left active streaming goroutines by
+	// manually starting them and registering on the Runner.
+	os.WriteFile(rawLog, nil, 0o644)
+	os.WriteFile(logFile, nil, 0o644)
+
+	prevFilterStop := make(chan struct{})
+	prevFilterDone := runner.startStreamFilter(RunConfig{
+		RalphDir: dir,
+		RawLog:   rawLog,
+		LogFile:  logFile,
+	}, prevFilterStop)
+	prevTailStop := make(chan struct{})
+	prevTailDone := startTailGoroutine(logFile, prevTailStop)
+
+	runner.mu.Lock()
+	runner.filterStop = prevFilterStop
+	runner.filterDone = prevFilterDone
+	runner.tailStop = prevTailStop
+	runner.tailDone = prevTailDone
+	runner.mu.Unlock()
+
+	// Run() with context cancellation so the long-running process gets killed.
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := runner.Run(RunConfig{
+		Ctx:          ctx,
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		LogFile:      logFile,
+		Quiet:        false,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Previous goroutines must have been drained.
+	select {
+	case <-prevFilterDone:
+	default:
+		t.Error("previous filter goroutine should have been stopped by second Run()")
+	}
+	select {
+	case <-prevTailDone:
+	default:
+		t.Error("previous tail goroutine should have been stopped by second Run()")
+	}
+
+	// Runner state should be clean after the second Run() completes.
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if runner.filterStop != nil || runner.tailStop != nil {
+		t.Error("streaming channels should be nil after Run() returns")
+	}
+}
+
+// Proves that after detecting a completion signal, the orchestrator waits for
+// the raw log to stop being modified before killing the agent. This prevents
+// truncation of the agent's final output (e.g., completion summary).
+func TestRun_WaitsForOutputAfterSignal(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// Simulate: signal file appears, then raw log keeps being written for 500ms.
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		tmp := signals.Complete + ".tmp"
+		os.WriteFile(tmp, []byte("task finished"), 0o644)
+		os.Rename(tmp, signals.Complete)
+
+		// Agent still writing output after signal.
+		for i := 0; i < 5; i++ {
+			time.Sleep(100 * time.Millisecond)
+			f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_WRONLY, 0o644)
+			fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"finishing up"}}`)
+			f.Close()
+		}
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 100 * time.Millisecond,
+	}
+
+	start := time.Now()
+	result := runWithCommand(t, &runner, cfg, "sleep", "30")
+	elapsed := time.Since(start)
+
+	if !result.SignalDetected {
+		t.Error("expected SignalDetected to be true")
+	}
+	// Should have waited at least 500ms after signal (5 writes * 100ms) plus
+	// the settle period, not killed immediately on signal detection.
+	if elapsed < 700*time.Millisecond {
+		t.Errorf("expected grace period after signal, but killed in %s", elapsed)
+	}
+	// But shouldn't wait forever — should finish within a few seconds.
+	if elapsed > 5*time.Second {
+		t.Errorf("grace period took too long: %s", elapsed)
+	}
+}
+
+// Verifies that all orchestrator-owned git operations are disallowed:
+// checkout/branch (prevents sub-agents from interfering with ralph's branches),
+// push and gh pr create (orchestrator owns all remote operations).
+func TestDisallowedTools_BlocksOrchestratorOwnedGitOps(t *testing.T) {
 	required := map[string]bool{
 		"git checkout": false,
 		"git branch":   false,
+		"git push":     false,
+		"gh pr create": false,
 	}
 	for _, tool := range IterationDisallowedTools {
 		for key := range required {
@@ -1227,7 +1390,7 @@ func TestDisallowedTools_BlocksGitCheckoutAndBranch(t *testing.T) {
 	}
 	for key, found := range required {
 		if !found {
-			t.Errorf("IterationDisallowedTools must block %q to prevent sub-agents from interfering with ralph's branches", key)
+			t.Errorf("IterationDisallowedTools must block %q — orchestrator owns all branch and remote operations", key)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/brokenalarms/ralph/internal/git"
@@ -93,8 +94,118 @@ func lastNAttempts(content string, n int) string {
 	return b.String()
 }
 
+// ReflectionEntry holds a single reflection file's content and identity.
+type ReflectionEntry struct {
+	TaskID  string
+	Content string
+}
+
+// RecentReflections returns the n most recent reflection files sorted by
+// modification time (oldest first), excluding the file matching excludeKey.
+func (t *Tracker) RecentReflections(excludeKey string, n int) []ReflectionEntry {
+	refDir := filepath.Join(t.RalphDir, "reflections")
+	entries, err := os.ReadDir(refDir)
+	if err != nil {
+		return nil
+	}
+
+	type fileEntry struct {
+		taskID string
+		path   string
+		modTime int64
+	}
+
+	var files []fileEntry
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		taskID := strings.TrimSuffix(e.Name(), ".md")
+		if taskID == excludeKey {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, fileEntry{
+			taskID:  taskID,
+			path:    filepath.Join(refDir, e.Name()),
+			modTime: info.ModTime().UnixNano(),
+		})
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].modTime < files[j].modTime
+	})
+
+	if len(files) > n {
+		files = files[len(files)-n:]
+	}
+
+	result := make([]ReflectionEntry, 0, len(files))
+	for _, f := range files {
+		data, err := os.ReadFile(f.path)
+		if err != nil {
+			continue
+		}
+		result = append(result, ReflectionEntry{
+			TaskID:  f.taskID,
+			Content: string(data),
+		})
+	}
+	return result
+}
+
 // Clear removes the attempt file for a task, used when a task is
 // resolved and re-attempts should start fresh.
 func (t *Tracker) Clear(taskID, taskName string) {
 	os.Remove(t.attemptFile(taskID, taskName))
+}
+
+// ClearForTasks removes attempt files for a list of task IDs.
+func (t *Tracker) ClearForTasks(taskIDs []string) {
+	for _, id := range taskIDs {
+		t.Clear(id, "")
+	}
+}
+
+const MaxMergeFailures = 3
+
+func (t *Tracker) mergeFailureFile(taskID string) string {
+	return filepath.Join(t.attemptsDir(), taskID+".merge-failures")
+}
+
+// RecordMergeFailure increments the merge failure count for a task.
+func (t *Tracker) RecordMergeFailure(taskID string) (int, error) {
+	if taskID == "" {
+		return 0, nil
+	}
+	if err := os.MkdirAll(t.attemptsDir(), 0o755); err != nil {
+		return 0, err
+	}
+	count := t.MergeFailureCount(taskID) + 1
+	path := t.mergeFailureFile(taskID)
+	return count, os.WriteFile(path, []byte(fmt.Sprintf("%d", count)), 0o644)
+}
+
+// MergeFailureCount returns the number of consecutive merge failures for a task.
+func (t *Tracker) MergeFailureCount(taskID string) int {
+	if taskID == "" {
+		return 0
+	}
+	data, err := os.ReadFile(t.mergeFailureFile(taskID))
+	if err != nil {
+		return 0
+	}
+	n := 0
+	fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &n)
+	return n
+}
+
+// ClearMergeFailures removes the merge failure counter for a task.
+func (t *Tracker) ClearMergeFailures(taskID string) {
+	if taskID != "" {
+		os.Remove(t.mergeFailureFile(taskID))
+	}
 }

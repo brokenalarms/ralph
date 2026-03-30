@@ -47,12 +47,6 @@ type Session struct {
 	// Commander enables the 4-pane layout with a task manager pane.
 	Commander bool
 
-	// TaskBackend is "bd" or "checklist", controls plan pane rendering.
-	TaskBackend string
-
-	// PlanFile is the path to plan.md for checklist backend.
-	PlanFile string
-
 	paneTitle *PaneTitle
 }
 
@@ -199,26 +193,26 @@ func (s *Session) createCommanderSession() error {
 }
 
 func (s *Session) filterStreamCmd() string {
-	return fmt.Sprintf("%s filter-stream %s", shellQuote(s.ScriptPath), shellQuote(s.RawLogPath))
+	return fmt.Sprintf("%s filter-stream %s %s", shellQuote(s.ScriptPath), shellQuote(s.RawLogPath), shellQuote(s.ProjectDir))
 }
 
 func (s *Session) applySessionOptions() {
-	tmuxCmd("set-option", "-t", s.Name, "pane-border-status", "top")                                                                    //nolint:errcheck
-	tmuxCmd("set-option", "-t", s.Name, "pane-border-format", "#{?pane_dead, #{pane_title} (dead) — press q to exit , #{pane_title} }") //nolint:errcheck
-	tmuxCmd("set-option", "-t", s.Name, "remain-on-exit", "on")                                                                         //nolint:errcheck
+	tmuxCmd("set-option", "-t", s.Name, "pane-border-status", "top")                                                  //nolint:errcheck
+	tmuxCmd("set-option", "-t", s.Name, "pane-border-format", "#{?pane_dead, #{pane_title} (dead) , #{pane_title} }") //nolint:errcheck
+	tmuxCmd("set-option", "-t", s.Name, "remain-on-exit", "on")                                                       //nolint:errcheck
+	tmuxCmd("set-option", "-t", s.Name, "set-titles", "off")                                                           //nolint:errcheck
 
-	deadCheck := fmt.Sprintf("tmux display-message -t '%s:.0' -p '#{pane_dead}' | grep -q 1", s.Name)
-	killCmd := fmt.Sprintf("kill-session -t '%s'", s.Name)
-	tmuxCmd("bind-key", "-T", "root", "q", "if-shell", deadCheck, killCmd) //nolint:errcheck
+	// Auto-kill the session when the ralph loop pane (pane 0) dies.
+	// This replaces the old root-level q binding that stole keypresses globally.
+	hookCmd := fmt.Sprintf(
+		"if-shell \"tmux display-message -t '%s:.0' -p '#{pane_dead}' | grep -q 1\" \"kill-session -t '%s'\"",
+		s.Name, s.Name,
+	)
+	tmuxCmd("set-hook", "-t", s.Name, "pane-died", hookCmd) //nolint:errcheck
 }
 
 func (s *Session) writePlanWatcher() error {
-	var renderBlock string
-	if s.TaskBackend == "bd" {
-		renderBlock = s.bdPlanRender()
-	} else {
-		renderBlock = fmt.Sprintf("      cat '%s' 2>/dev/null", s.PlanFile)
-	}
+	renderBlock := s.bdPlanRender()
 
 	script := fmt.Sprintf(`#!/usr/bin/env bash
 stty -echo 2>/dev/null
@@ -227,6 +221,8 @@ CYAN=$'\033[0;36m'
 GREEN=$'\033[0;32m'
 DIM=$'\033[2m'
 NC=$'\033[0m'
+poll_counter=0
+poll_interval=45
 while true; do
   if [[ -f '%s/.plan-flash' ]]; then
     rm -f '%s/.plan-flash'
@@ -234,11 +230,21 @@ while true; do
      sleep 3
      tmux set-option -p -u pane-border-style 2>/dev/null) &
   fi
+  needs_render=0
   if [[ -f '%s/.plan-refresh' ]]; then
     rm -f '%s/.plan-refresh'
+    needs_render=1
+    poll_counter=0
+  fi
+  if (( poll_counter >= poll_interval )); then
+    needs_render=1
+    poll_counter=0
+  fi
+  if (( needs_render )); then
     printf '\033[2J\033[H'
 %s
   fi
+  poll_counter=$((poll_counter + 1))
   sleep 1
 done
 `, s.RalphDir, s.RalphDir, s.RalphDir, s.RalphDir, renderBlock)
@@ -269,31 +275,23 @@ func (s *Session) bdPlanRender() string {
       fi
     fi
     closed=$(bd count --status closed 2>/dev/null || echo 0)
-    total=$(bd count 2>/dev/null || echo 0)
-    if [[ $total -gt 0 ]]; then
-      bar_w=20
-      filled=$((closed * bar_w / total))
-      empty=$((bar_w - filled))
-      bar=""
-      for ((i=0; i<filled; i++)); do bar+="█"; done
-      for ((i=0; i<empty; i++)); do bar+="░"; done
-      printf "${GREEN}[%%s] %%s/%%s done${NC}\n" "$bar" "$closed" "$total"
-    else
-      printf "${GREEN}0/0 done${NC}\n"
-    fi
+    open=$(bd count --status open 2>/dev/null || echo 0)
+    inp=$(bd count --status in_progress 2>/dev/null || echo 0)
+    total=$(( open + inp + closed ))
+    printf "${GREEN}%%s/%%s done${NC}\n" "$closed" "$total"
     if [[ -f '%s/.completed-tasks' ]]; then
-      while IFS= read -r ctask; do
-        [[ -n "$ctask" ]] && printf "${DIM}  ✓ %%s${NC}\n" "$ctask"
-      done < '%s/.completed-tasks'
+      completed=$(grep -v '^$' '%s/.completed-tasks' | paste -sd ',' - | sed 's/,/, /g')
+      [[ -n "$completed" ]] && printf "${DIM}Done: %%s${NC}\n" "$completed"
     fi`, s.RalphDir, s.RalphDir)
 }
 
 // BuildRalphCmd constructs the ralph re-exec command from the original args,
 // stripping --tmux and the commander subcommand, and adding --quiet.
+// Always emits the "loop" subcommand so the re-exec uses the explicit path.
 func BuildRalphCmd(scriptPath string, origArgs []string) string {
-	parts := []string{shellQuote(scriptPath)}
+	parts := []string{shellQuote(scriptPath), "loop"}
 	for _, arg := range origArgs {
-		if arg == "--tmux" || arg == "commander" {
+		if arg == "--tmux" || arg == "command" || arg == "commander" || arg == "loop" {
 			continue
 		}
 		parts = append(parts, shellQuote(arg))
@@ -308,7 +306,7 @@ func BuildTaskCmd(scriptPath, projectDir string) string {
 	return shellQuote(scriptPath) + " task " + shellQuote(projectDir)
 }
 
-func tmuxCmd(args ...string) error {
+var tmuxCmd = func(args ...string) error {
 	return exec.Command("tmux", args...).Run()
 }
 

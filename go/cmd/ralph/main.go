@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"embed"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -17,10 +16,11 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/loop"
-	"github.com/brokenalarms/ralph/internal/planning"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/tmux"
+	"github.com/brokenalarms/ralph/internal/verify"
+	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
 //go:embed prompts/*
@@ -37,58 +37,29 @@ func run(args []string) int {
 		return handleSubcommand(sub, log)
 	}
 
-	cfg, err := config.Parse(args)
-	if errors.Is(err, config.ErrHelp) {
-		printUsage()
-		return 0
-	}
-	if err != nil {
-		log.Error("%v", err)
-		printUsage()
-		return 1
-	}
-	if err := cfg.Validate(); err != nil {
-		log.Error("%v", err)
-		return 1
-	}
-
-	// Resolve project directory to absolute path.
-	cfg.ProjectDir, _ = filepath.Abs(cfg.ProjectDir)
-
-	if !git.IsGitRepo(cfg.ProjectDir) {
-		log.Error("Not a git repository: %s", cfg.ProjectDir)
-		return 1
-	}
-
-	scriptPath, _ := os.Executable()
-	ralphDir := filepath.Join(cfg.ProjectDir, ".ralph")
-
-	// Use on-disk prompts if available (running ralph on itself), otherwise
-	// extract embedded prompts to a temp dir.
-	promptsDir := filepath.Join(cfg.ProjectDir, "prompts")
-	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
-		tmpDir, err := extractEmbeddedPrompts()
-		if err != nil {
-			log.Error("Failed to extract embedded prompts: %v", err)
-			return 1
+	// No subcommand: check for help flag, otherwise show usage.
+	for _, a := range args {
+		if a == "-h" || a == "--help" {
+			printUsage()
+			return 0
 		}
-		promptsDir = tmpDir
 	}
 
-	// Tmux outer wrapper: set up tmux session, then re-exec ralph inside pane 0.
-	// Ensure .ralph dir exists before tmux setup writes scripts into it.
-	if cfg.UseTmux {
-		if err := os.MkdirAll(ralphDir, 0o755); err != nil {
-			log.Error("Failed to create .ralph dir: %v", err)
-			return 1
-		}
-		return handleTmux(cfg, scriptPath, args, ralphDir, log)
+	if len(args) > 0 {
+		log.Error("", "unknown command: %s", args[0])
+		fmt.Println()
 	}
 
-	return runMain(cfg, ralphDir, promptsDir, scriptPath, args, log)
+	printUsage()
+	if len(args) > 0 {
+		return 1
+	}
+	return 0
 }
 
-func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []string, log *logging.Logger) int {
+func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, args []string, log *logging.Logger) int {
+	ralphDir := dirs.RalphDir
+	promptsDir := dirs.PromptsDir
 	// Set up signal handling for cleanup.
 	ctx, cancel := context.WithCancel(context.Background())
 	interrupted := false
@@ -96,7 +67,7 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		log.Warn("Ctrl-C received — exiting gracefully")
+		log.Warn("", "Ctrl-C received — exiting gracefully")
 		interrupted = true
 		cancel()
 	}()
@@ -108,67 +79,76 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 	stateFile := filepath.Join(ralphDir, "state.json")
 	logFile := filepath.Join(ralphDir, "loop.log")
 
-	// Validate --plan-file early: file must exist and contain checkboxes.
-	if cfg.PlanFile != "" {
-		if err := validatePlanFile(cfg.PlanFile); err != nil {
-			log.Error("%v", err)
-			return 1
-		}
-		planFile = cfg.PlanFile
+	// Create git manager early so pre-setup calls use it instead of
+	// package-level functions. SetupWorktree is called after state init.
+	gm := &git.Manager{
+		ProjectDir: cfg.ProjectDir,
+		WorkDir:    cfg.ProjectDir,
+		RalphDir:   ralphDir,
+		BaseBranch: cfg.BaseBranch,
+		Logger:     log,
 	}
 
 	// Validate base branch before initializing state — a failed validation
 	// must not leave state that causes a false resume on retry.
-	if err := git.ValidateRemoteBranch(ctx, cfg.ProjectDir, cfg.BaseBranch); err != nil {
-		log.Error("%v", err)
+	if err := gm.ValidateRemoteBranch(ctx); err != nil {
+		log.Error("", "%v", err)
 		return 1
 	}
 
 	// Initialize .ralph directory and check for resume.
-	resume, exitCode := initRalphDir(ctx, cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(ctx, cfg, gm, ralphDir, logFile, stateFile, log)
 	if exitCode >= 0 {
 		return exitCode
 	}
 
 	st := state.NewStore(ralphDir)
-	if err := st.Init(cfg.MaxIterations, 0); err != nil {
-		log.Error("Failed to initialize state: %v", err)
+	if err := st.Init(cfg.MaxIterations); err != nil {
+		log.Error("", "Failed to initialize state: %v", err)
+		return 1
+	}
+
+	// Persist semantic config as an audit record in state.json.
+	if err := st.SaveCLIConfig(config.ConfigToState(&cfg)); err != nil {
+		log.Error("", "Failed to save CLI config to state: %v", err)
 		return 1
 	}
 
 	// Set up log file writer.
 	logFileWriter, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		log.Error("Failed to open log file: %v", err)
+		log.Error("", "Failed to open log file: %v", err)
 		return 1
 	}
 	defer logFileWriter.Close()
 	log = logging.New(logFileWriter)
 
 	// Initialize task backend.
-	backend, err := initTaskBackend(cfg, resume, st, ralphDir, planFile, promptsDir, log)
+	backend, err := initTaskBackend(cfg, promptsDir, log)
 	if err != nil {
-		log.Error("Task backend init failed: %v", err)
+		log.Error("", "Task backend init failed: %v", err)
 		return 1
 	}
 	st.Write("task_backend", backend.Label())
-	log.TaskLabel = func() string { return backend.Label() }
 
-	// Set up git manager.
-	gm := &git.Manager{
-		ProjectDir:     cfg.ProjectDir,
-		RalphDir:       ralphDir,
-		UseWorktree:    cfg.UseWorktree,
-		Resume:         resume,
-		BaseBranch:     cfg.BaseBranch,
-		BranchStrategy: git.BranchStrategy(cfg.BranchStrategy),
-		MergeAdmin:     cfg.MergeAdmin,
-		State:          st,
-		Logger:         log,
-	}
+	// Wire remaining fields now that state and logger are ready.
+	gm.Resume = resume
+	gm.State = st
+	gm.Logger = log
+
 	if err := gm.SetupWorktree(ctx); err != nil {
-		log.Error("Worktree setup failed: %v", err)
+		log.Error("", "Worktree setup failed: %v", err)
 		return 1
+	}
+	dirs.WorkDir = gm.WorkDir
+
+	gm.PrePush = func(ctx context.Context) error {
+		result := verify.CompileCheck(ctx, dirs.WorkDir)
+		if !result.Passed {
+			return fmt.Errorf("%s\n%s", result.Reason, result.Details)
+		}
+		log.Log("build", "Pre-push compile check passed")
+		return nil
 	}
 
 	// Write initial branch label for the pane title updater. On resume,
@@ -186,86 +166,66 @@ func runMain(cfg config.Config, ralphDir, promptsDir, scriptPath string, args []
 	}
 
 	log.Phase("Ralph Loop v%s (go)", config.Version)
-	log.Log("Project: %s", cfg.ProjectDir)
-	if gm.WorkDir != cfg.ProjectDir {
-		log.Log("Worktree: %s", gm.WorkDir)
+	log.Log("", "Project: %s", dirs.ProjectDir)
+	if dirs.WorkDir != dirs.ProjectDir {
+		log.Log("", "Worktree: %s", dirs.WorkDir)
 	}
-	log.Log("Task backend: %s", backend.Label())
-	log.Log("Max iterations: %d", cfg.MaxIterations)
+	log.Log("", "Task backend: %s", backend.Label())
+	log.Log("", "Max iterations: %d", cfg.MaxIterations)
 
 	st.Write("started_at", time.Now().UTC().Format("2006-01-02T15:04:05Z"))
 
-	// Planning phase.
-	planDeps := planning.Deps{
-		Ctx:          ctx,
-		Backend:      backend,
-		StateStore:   st,
-		Logger:       log,
-		PromptsDir:   promptsDir,
-		WorkDir:      gm.WorkDir,
-		RalphDir:     ralphDir,
-		PlanFile:     planFile,
-		Prompt:       cfg.Prompt,
-		SkipPlanning: cfg.SkipPlanning,
-		ForcePlan:    cfg.PlanOnly,
-	}
-
-	if err := planning.Run(planDeps); err != nil {
-		log.Error("Planning failed: %v", err)
-		cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, interrupted, log)
-		return 1
-	}
-
-	if cfg.PlanOnly {
-		log.Log("Plan-only mode, exiting")
-		cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, interrupted, log)
-		return 0
-	}
-
 	// Execution phase.
 	execLoop := loop.New(loop.Config{
-		ProjectDir:          cfg.ProjectDir,
-		WorkDir:             gm.WorkDir,
-		RalphDir:            ralphDir,
-		PromptsDir:          promptsDir,
+		Dirs:                dirs,
 		PlanFile:            planFile,
 		MaxIterations:       cfg.MaxIterations,
-		RefactorEvery:       cfg.RefactorEvery,
-		NoRefactor:          cfg.NoRefactor,
-		RefactorThreshold:   cfg.RefactorThreshold,
-		DisabledChecks:      cfg.DisabledChecks,
+		Refactor:            cfg.Refactor,
 		Quiet:               cfg.Quiet,
+		Verbose:             cfg.Verbose,
 		AutoMerge:           cfg.AutoMerge,
 		Evolve:              cfg.Evolve,
 		CallsPerHour:        cfg.CallsPerHour,
 		TaskBackend:         backend,
 		IdleTimeout:         cfg.IdleTimeout,
 		IdleTimeoutProgress: cfg.IdleTimeoutProgress,
+		PostSignalTimeout:   cfg.PostSignalTimeout,
+		PostTask:            cfg.PostTask,
+		Notify:              cfg.Notify,
 		Wait:                cfg.Wait,
-		WaitInterval:        cfg.WaitInterval,
-		OnRebaseConflict:    promptRebaseRecovery(ctx),
-		VerifyDir:           cfg.ProjectDir,
+		Version:             config.Version,
+		OnRebaseConflict:    autoRebaseRecovery(),
+		VerifyDir:             dirs.WorkDir,
+		VerifyLevel:           cfg.VerifyLevel,
+		VerifyModel:           cfg.VerifyModel,
+		VerifyEscalationModel: cfg.VerifyEscalationModel,
+		OnIterationStart: func() {
+			generateResumeScript(cfg, ralphDir, scriptPath, args, log)
+		},
 	}, st, gm, log)
 
 	if err := execLoop.Run(ctx); err != nil {
-		log.Error("Execution failed: %v", err)
+		log.Error("", "Execution failed: %v", err)
 	}
 
+	sessionTasks := execLoop.SessionTasks()
+
 	if status, _ := st.Read("status"); status == "evolve_restart" {
-		if err := evolveRestart(cfg.ProjectDir, scriptPath, cfg.BaseBranch, args, log); err != nil {
-			log.Error("Evolve restart failed: %v", err)
+		printSessionSummary(sessionTasks, log)
+		if err := evolveRestart(cfg.ProjectDir, scriptPath, args, log); err != nil {
+			log.Error("", "Evolve restart failed: %v", err)
 		}
 	}
 
-	cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, interrupted, log)
+	cleanup(cfg, gm, st, backend, ralphDir, planFile, scriptPath, args, sessionTasks, interrupted, log)
 	return 0
 }
 
 // initRalphDir creates .ralph, checks for dirty working tree, handles resume
 // detection. Returns (resume, exitCode). exitCode < 0 means continue.
-func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
+func initRalphDir(ctx context.Context, cfg config.Config, gm *git.Manager, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
 	if err := os.MkdirAll(ralphDir, 0o755); err != nil {
-		log.Error("Failed to create .ralph dir: %v", err)
+		log.Error("", "Failed to create .ralph dir: %v", err)
 		return false, 1
 	}
 
@@ -278,30 +238,37 @@ func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, sta
 
 	// Check for uncommitted changes (skip on resume).
 	if !fileExists(stateFile) {
-		if git.IsGitRepo(cfg.ProjectDir) && hasUncommittedChanges(cfg.ProjectDir) {
-			log.Error("uncommitted changes in %s — please commit or stash before running ralph.", cfg.ProjectDir)
+		if git.IsGitRepo(cfg.ProjectDir) && gm.HasUncommittedChanges() {
+			log.Error("", "uncommitted changes in %s — please commit or stash before running ralph.", cfg.ProjectDir)
 			return false, 1
 		}
 	}
 
 	// Ensure .ralph is gitignored.
-	ensureGitignored(cfg.ProjectDir, ".ralph")
+	gm.EnsureGitignored(".ralph")
 
 	// Clean up orphaned worktrees from previous runs.
-	git.PruneOrphanedWorktrees(cfg.ProjectDir, ralphDir, log)
+	gm.PruneOrphanedWorktrees()
 
 	// Check for existing state (resume detection).
 	if fileExists(stateFile) {
 		st := state.NewStore(ralphDir)
 		status, _ := st.Read("status")
 		if status == "completed" {
-			log.Task("All tasks completed from previous run.")
-			fmt.Printf("%s[ralph v%s (go)]%s Run fresh? (y/n) ", logging.Yellow, config.Version, logging.Reset)
-			answer, err := readLineCtx(ctx)
-			if err != nil {
-				return false, 0
+			log.Log("", "All tasks completed from previous run.")
+			runFresh := false
+			if cfg.Wait {
+				log.Log("", "--wait: auto-resetting for new tasks")
+				runFresh = true
+			} else {
+				fmt.Printf("%s[ralph v%s (go)]%s Run fresh? (y/n) ", logging.Yellow, config.Version, logging.Reset)
+				answer, err := readLineCtx(ctx)
+				if err != nil {
+					return false, 0
+				}
+				runFresh = answer == "y" || answer == "Y"
 			}
-			if answer == "y" || answer == "Y" {
+			if runFresh {
 				os.RemoveAll(ralphDir)
 				os.MkdirAll(ralphDir, 0o755)
 				touchFile(logFile)
@@ -310,56 +277,34 @@ func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, sta
 			}
 			return false, 0
 		}
-		log.Log("Resuming from previous state (status: %s)", status)
+		log.Log("", "Resuming from previous state (status: %s)", status)
 		return true, -1
 	}
 
 	return false, -1
 }
 
-// initTaskBackend selects and initializes the task backend. On resume,
-// restores from state. BD falls back to checklist if unavailable.
-func initTaskBackend(cfg config.Config, resume bool, st *state.Store, ralphDir, planFile, promptsDir string, log *logging.Logger) (tasks.Backend, error) {
-	backendLabel := "bd"
-
-	if resume {
-		stored, _ := st.Read("task_backend")
-		if stored == "bd" || stored == "checklist" {
-			backendLabel = stored
-		} else if fileExists(planFile) {
-			data, _ := os.ReadFile(planFile)
-			if strings.Contains(string(data), "- [") {
-				backendLabel = "checklist"
-			}
-		}
-	}
-
-	if backendLabel == "bd" {
-		bd := &tasks.BD{
-			ProjectDir: cfg.ProjectDir,
-			PromptsDir: promptsDir,
-		}
-		if err := bd.Init(); err != nil {
-			if errors.Is(err, tasks.ErrNeedsFallback) {
-				log.Warn("bd unavailable (%v), falling back to checklist", err)
-				backendLabel = "checklist"
-			} else {
-				return nil, err
-			}
-		} else {
-			return bd, nil
-		}
-	}
-
-	return &tasks.Checklist{
-		PlanFile:   planFile,
+// initTaskBackend initializes the bd task backend. BD is required — if
+// unavailable, ralph exits with an error.
+func initTaskBackend(cfg config.Config, promptsDir string, log *logging.Logger) (tasks.Backend, error) {
+	bd := &tasks.BD{
+		ProjectDir: cfg.ProjectDir,
 		PromptsDir: promptsDir,
-	}, nil
+	}
+	if err := bd.Init(); err != nil {
+		return nil, fmt.Errorf("bd is required but unavailable: %w", err)
+	}
+	return bd, nil
 }
 
 // cleanup generates resume script, prints summary, and removes unused worktrees.
-func cleanup(cfg config.Config, gm *git.Manager, st *state.Store, backend tasks.Backend, ralphDir, planFile, scriptPath string, args []string, interrupted bool, log *logging.Logger) {
+func cleanup(cfg config.Config, gm *git.Manager, st *state.Store, backend tasks.Backend, ralphDir, planFile, scriptPath string, args []string, sessionTasks []loop.CompletedTask, interrupted bool, log *logging.Logger) {
 	clearSignalFiles(ralphDir)
+
+	// Clear cli_config so stale flags don't persist across manual restarts.
+	// Evolve restart preserves cli_config because syscall.Exec replaces the
+	// process before cleanup runs.
+	st.ClearCLIConfig()
 
 	if interrupted {
 		st.Write("status", "stopped")
@@ -375,42 +320,21 @@ func cleanup(cfg config.Config, gm *git.Manager, st *state.Store, backend tasks.
 	}
 
 	generateResumeScript(cfg, ralphDir, scriptPath, args, log)
+	printSessionSummary(sessionTasks, log)
 	printSummary(cfg, gm, st, backend, ralphDir, planFile, log)
 }
 
 // generateResumeScript writes a shell script that re-runs ralph with the same
-// flags, allowing the user to easily resume after interruption.
+// flags, allowing the user to easily resume after interruption. Flags are
+// derived from the config registry so new flags are included automatically.
 func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args []string, log *logging.Logger) {
 	resumePath := filepath.Join(ralphDir, "resume.sh")
 
-	var extraArgs []string
-	if cfg.Quiet {
-		extraArgs = append(extraArgs, "--quiet")
-	}
-	if !cfg.UseWorktree {
-		extraArgs = append(extraArgs, "--no-worktree")
-	}
-	if cfg.CallsPerHour != 80 {
-		extraArgs = append(extraArgs, fmt.Sprintf("--calls-per-hour %d", cfg.CallsPerHour))
-	}
-	if cfg.AutoMerge {
-		extraArgs = append(extraArgs, "--auto-merge")
-	}
-	if cfg.MergeAdmin {
-		extraArgs = append(extraArgs, "--merge-admin")
-	}
-	if cfg.Evolve {
-		extraArgs = append(extraArgs, "--evolve")
-	}
-	if cfg.Wait {
-		extraArgs = append(extraArgs, "--wait")
-	}
-	if cfg.BranchStrategy != "single" {
-		extraArgs = append(extraArgs, fmt.Sprintf("--branch-strategy %s", cfg.BranchStrategy))
-	}
+	stateMap := config.ConfigToState(&cfg)
 	if cfg.UseTmux || os.Getenv("_RALPH_TMUX_SESSION") != "" {
-		extraArgs = append(extraArgs, "--tmux")
+		stateMap["tmux"] = "true"
 	}
+	extraArgs := config.ArgsFromState(stateMap)
 
 	extra := ""
 	if len(extraArgs) > 0 {
@@ -420,12 +344,48 @@ func generateResumeScript(cfg config.Config, ralphDir, scriptPath string, args [
 	content := fmt.Sprintf(`#!/usr/bin/env bash
 # Ralph Loop - Resume Script
 # Generated at: %s
-exec "%s" --dir "%s" --max %d%s
+cd "%s"
+exec "%s" loop%s
 `, time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-		scriptPath, cfg.ProjectDir, cfg.MaxIterations, extra)
+		cfg.ProjectDir, scriptPath, extra)
 
 	os.WriteFile(resumePath, []byte(content), 0o755)
-	log.Log("Resume script: %s", resumePath)
+	log.Log("", "Resume script: %s", resumePath)
+}
+
+// printSessionSummary shows what was accomplished this session: each completed
+// task with its bead ID, title, agent summary, and PR reference.
+func printSessionSummary(tasks []loop.CompletedTask, log *logging.Logger) {
+	if len(tasks) == 0 {
+		return
+	}
+	fmt.Println()
+	log.Phase("=== SESSION WORK ===")
+	for _, t := range tasks {
+		label := t.ID
+		if label == "" {
+			label = t.Title
+		}
+		if t.Title != "" && t.ID != "" {
+			log.Log("", "%s: %s", t.ID, t.Title)
+		} else {
+			log.Log("", "%s", label)
+		}
+		if t.Summary != "" {
+			log.Log("", "  Fix: %s", t.Summary)
+		}
+		if t.PRNum != "" {
+			pr := fmt.Sprintf("PR #%s", t.PRNum)
+			if t.PRURL != "" {
+				pr = t.PRURL
+			}
+			if t.PRTitle != "" {
+				log.Log("", "  %s: %s", pr, t.PRTitle)
+			} else {
+				log.Log("", "  %s", pr)
+			}
+		}
+	}
 }
 
 // printSummary displays the end-of-run summary.
@@ -435,74 +395,58 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 
 	iteration, _ := st.Read("iteration")
 	status, _ := st.Read("status")
-	log.Log("Status:     %s", status)
-	log.Log("Iterations: %s lifetime", iteration)
+	log.Log("", "Status:     %s", status)
+	log.Log("", "Iterations: %s lifetime", iteration)
 
 	completed, _ := backend.CountCompleted()
 	remaining, _ := backend.CountRemaining()
 	total, _ := backend.CountTotal()
-	log.Task("Tasks: %d/%d completed, %d remaining", completed, total, remaining)
+	log.Log("", "Tasks: %d/%d completed, %d remaining", completed, total, remaining)
 
-	log.Log("Log:        %s", filepath.Join(ralphDir, "loop.log"))
-	if backend.Label() == "checklist" {
-		log.Log("Plan:       %s", planFile)
-	}
+	log.Log("", "Log:        %s", filepath.Join(ralphDir, "loop.log"))
 
 	if gm.WorktreeBranch != "" && gm.ProjectName != "" {
-		log.Log("Worktree:   %s", gm.WorkDir)
+		log.Log("", "Worktree:   %s", gm.WorkDir)
 
-		branches := git.ListProjectBranches(cfg.ProjectDir, gm.ProjectName)
+		branches := gm.ListProjectBranches()
 		if len(branches) > 1 {
-			log.Log("Branches:")
+			log.Log("", "Branches:")
 			for _, b := range branches {
-				if git.IsBranchSquashMerged(cfg.ProjectDir, b, cfg.BaseBranch) {
-					log.Log("  %s [MERGED]", b)
-				} else {
-					log.Log("  %s", b)
-				}
+				log.Log("", "  %s", b)
 			}
 		} else {
-			log.Log("Branch:     %s", gm.WorktreeBranch)
+			log.Log("", "Branch:     %s", gm.WorktreeBranch)
 		}
-		log.Log("To merge:   git merge %s", gm.WorktreeBranch)
+		log.Log("", "To merge:   git merge %s", gm.WorktreeBranch)
 	}
 
 	hasRemaining, _ := backend.HasRemaining()
 	if hasRemaining {
-		log.Log("Resume:     %s", filepath.Join(ralphDir, "resume.sh"))
+		log.Log("", "Resume:     %s", filepath.Join(ralphDir, "resume.sh"))
 	}
 }
 
-func handleTmuxCommander(cfg config.Config, scriptPath string, args []string, ralphDir string, log *logging.Logger) int {
+func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir string, commander bool, log *logging.Logger) int {
 	if !tmux.Available() {
-		log.Error("tmux not found on PATH")
+		log.Error("", "tmux not found on PATH")
 		return 1
 	}
 
-	ralphCmd := tmux.BuildRalphCmd(scriptPath, args)
-	taskCmd := tmux.BuildTaskCmd(scriptPath, cfg.ProjectDir)
-	planFile := filepath.Join(ralphDir, "plan.md")
-
-	backendLabel := "bd"
-	if fileExists(planFile) {
-		backendLabel = "checklist"
-	}
-
 	sess := &tmux.Session{
-		Name:        tmux.SessionName(cfg.ProjectDir),
-		ProjectDir:  cfg.ProjectDir,
-		RalphDir:    ralphDir,
-		RawLogPath:  filepath.Join(ralphDir, "raw.log"),
-		ScriptPath:  scriptPath,
-		RalphCmd:    ralphCmd,
-		TaskCmd:     taskCmd,
-		Commander:   true,
-		TaskBackend: backendLabel,
-		PlanFile:    planFile,
+		Name:       tmux.SessionName(cfg.ProjectDir),
+		ProjectDir: cfg.ProjectDir,
+		RalphDir:   ralphDir,
+		RawLogPath: filepath.Join(ralphDir, "raw.log"),
+		ScriptPath: scriptPath,
+		RalphCmd:   tmux.BuildRalphCmd(scriptPath, args),
+		Commander:  commander,
+	}
+	if commander {
+		sess.TaskCmd = tmux.BuildTaskCmd(scriptPath, cfg.ProjectDir)
 	}
 
 	if err := sess.Setup(); err != nil {
-		log.Error("Tmux setup failed: %v", err)
+		log.Error("", "Tmux setup failed: %v", err)
 		return 1
 	}
 
@@ -526,57 +470,3 @@ func handleTmuxCommander(cfg config.Config, scriptPath string, args []string, ra
 	closeTitle()
 	return 0
 }
-
-func handleTmux(cfg config.Config, scriptPath string, args []string, ralphDir string, log *logging.Logger) int {
-	if !tmux.Available() {
-		log.Error("tmux not found on PATH")
-		return 1
-	}
-
-	ralphCmd := tmux.BuildRalphCmd(scriptPath, args)
-	planFile := filepath.Join(ralphDir, "plan.md")
-
-	backendLabel := "bd"
-	// Quick check: if checklist plan exists, use checklist rendering.
-	if fileExists(planFile) {
-		backendLabel = "checklist"
-	}
-
-	sess := &tmux.Session{
-		Name:        tmux.SessionName(cfg.ProjectDir),
-		ProjectDir:  cfg.ProjectDir,
-		RalphDir:    ralphDir,
-		RawLogPath:  filepath.Join(ralphDir, "raw.log"),
-		ScriptPath:  scriptPath,
-		RalphCmd:    ralphCmd,
-		TaskBackend: backendLabel,
-		PlanFile:    planFile,
-	}
-
-	if err := sess.Setup(); err != nil {
-		log.Error("Tmux setup failed: %v", err)
-		return 1
-	}
-
-	stopTitle := make(chan struct{})
-	var stopOnce sync.Once
-	closeTitle := func() { stopOnce.Do(func() { close(stopTitle) }) }
-	go sess.PaneTitle().Run(stopTitle)
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		closeTitle()
-		sess.Kill()
-	}()
-
-	if err := sess.Attach(); err != nil {
-		closeTitle()
-		return 1
-	}
-	closeTitle()
-	return 0
-}
-
-

@@ -50,7 +50,6 @@ func New() *Analyzer {
 	return &Analyzer{}
 }
 
-var permissionRe = regexp.MustCompile(`(?i)(permission denied|cannot write|blocked by sandbox|not allowed)`)
 var stuckPhraseRe = regexp.MustCompile(`(?i)(I'm blocked|I cannot proceed|unable to complete)`)
 
 // Analyze inspects an iteration's output and state, updating internal counters
@@ -61,20 +60,7 @@ func (a *Analyzer) Analyze(state IterationState) Result {
 		return Result{Action: Continue}
 	}
 
-	// Parse the JSON-lines log once, extracting assistant text and tool call
-	// signatures. All text-based detectors run against assistantText to avoid
-	// false positives from file contents in tool results.
 	parsed := parseLog(state.IterationLog)
-
-	// --- Permission denial: 3+ matches in assistant messages only → halt ---
-	permMatches := permissionRe.FindAllString(parsed.AssistantText, -1)
-	if len(permMatches) >= 3 {
-		return Result{
-			Action: Halt,
-			Reason: "permission_denied",
-			Detail: strings.Join(firstN(permMatches, 5), "\n"),
-		}
-	}
 
 	// --- Stuck loop: skip if task completed via signal ---
 	if state.HasSignal {
@@ -206,9 +192,10 @@ func parseLog(log string) parsedLog {
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
 		}
-		if json.Unmarshal([]byte(line), &msg) != nil || msg.Type != "assistant" {
+		if json.Unmarshal([]byte(line), &msg) != nil {
 			continue
 		}
+
 		var blocks []struct {
 			Type     string          `json:"type"`
 			Text     string          `json:"text"`
@@ -219,25 +206,32 @@ func parseLog(log string) parsedLog {
 		if json.Unmarshal(msg.Message.Content, &blocks) != nil {
 			continue
 		}
-		for _, b := range blocks {
-			switch b.Type {
-			case "text":
-				if b.Text != "" {
-					text.WriteString(b.Text)
-					text.WriteByte('\n')
+
+		switch msg.Type {
+		case "assistant":
+			for _, b := range blocks {
+				switch b.Type {
+				case "text":
+					if b.Text != "" {
+						text.WriteString(b.Text)
+						text.WriteByte('\n')
+					}
+				case "thinking":
+					if b.Thinking != "" {
+						text.WriteString(b.Thinking)
+						text.WriteByte('\n')
+					}
+				case "tool_use":
+					target := extractToolTarget(b.Input)
+					calls = append(calls, b.Name+":"+target)
 				}
-			case "thinking":
-				if b.Thinking != "" {
-					text.WriteString(b.Thinking)
-					text.WriteByte('\n')
-				}
-			case "tool_use":
-				target := extractToolTarget(b.Input)
-				calls = append(calls, b.Name+":"+target)
 			}
 		}
 	}
-	return parsedLog{AssistantText: text.String(), ToolCalls: calls}
+	return parsedLog{
+		AssistantText: text.String(),
+		ToolCalls:     calls,
+	}
 }
 
 // extractToolTarget pulls the most identifying field from a tool_use input.

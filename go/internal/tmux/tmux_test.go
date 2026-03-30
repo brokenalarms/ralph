@@ -1,7 +1,6 @@
 package tmux
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,8 +41,7 @@ func TestWritePlanWatcher_BD(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	if err := s.writePlanWatcher(); err != nil {
 		t.Fatalf("writePlanWatcher() error: %v", err)
@@ -64,27 +62,8 @@ func TestWritePlanWatcher_BD(t *testing.T) {
 	if !strings.Contains(content, "bd count --status closed") {
 		t.Error("bd plan watcher missing progress counter")
 	}
-}
-
-// Verifies that writePlanWatcher generates a checklist-style plan script
-// that cats the plan file when TaskBackend is not "bd".
-func TestWritePlanWatcher_Checklist(t *testing.T) {
-	dir := t.TempDir()
-	s := &Session{
-		RalphDir:    dir,
-		TaskBackend: "checklist",
-		PlanFile:    "/tmp/test-plan.md",
-	}
-
-	if err := s.writePlanWatcher(); err != nil {
-		t.Fatalf("writePlanWatcher() error: %v", err)
-	}
-
-	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
-	content := string(data)
-
-	if !strings.Contains(content, "cat '/tmp/test-plan.md'") {
-		t.Error("checklist plan watcher missing plan file cat")
+	if !strings.Contains(content, "bd count --status open") {
+		t.Error("bd plan watcher should compute total from status-filtered counts")
 	}
 }
 
@@ -92,7 +71,6 @@ func TestWritePlanWatcher_Checklist(t *testing.T) {
 // matching the shell behavior where the re-exec'd ralph runs headless.
 func TestBuildRalphCmd(t *testing.T) {
 	cmd := BuildRalphCmd("/usr/local/bin/ralph.sh", []string{
-		"--dir", "/projects/myapp",
 		"--tmux",
 		"-n", "10",
 	})
@@ -106,8 +84,8 @@ func TestBuildRalphCmd(t *testing.T) {
 	if !strings.Contains(cmd, "/usr/local/bin/ralph.sh") {
 		t.Error("BuildRalphCmd should include script path")
 	}
-	if !strings.Contains(cmd, "/projects/myapp") {
-		t.Error("BuildRalphCmd should include original args")
+	if !strings.Contains(cmd, " loop ") {
+		t.Error("BuildRalphCmd should include 'loop' subcommand")
 	}
 }
 
@@ -138,8 +116,7 @@ func TestWritePlanWatcher_DisablesEcho(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	if err := s.writePlanWatcher(); err != nil {
 		t.Fatalf("writePlanWatcher() error: %v", err)
@@ -175,8 +152,7 @@ func TestSetup_ClearsStaleStreamTask(t *testing.T) {
 	s := &Session{
 		Name:        "test-session",
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	// Setup will fail on createSession (no tmux), but the stale file
 	// cleanup happens before that.
@@ -223,15 +199,14 @@ func TestSanitizeSessionName(t *testing.T) {
 	}
 }
 
-// Verifies that the bd plan watcher reads .completed-tasks and renders
-// each completed task on its own line with dim styling and a checkmark,
-// so the user can see what was finished in the current run.
+// Verifies that completed tasks are rendered as a comma-separated inline
+// list with a "Done:" prefix in dim styling, providing a compact summary
+// of finished work that stays visually receded.
 func TestWritePlanWatcher_BD_ShowsCompletedTasks(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	if err := s.writePlanWatcher(); err != nil {
 		t.Fatalf("writePlanWatcher() error: %v", err)
@@ -246,6 +221,12 @@ func TestWritePlanWatcher_BD_ShowsCompletedTasks(t *testing.T) {
 	if !strings.Contains(content, "DIM") {
 		t.Error("bd plan watcher should use dim styling for completed tasks")
 	}
+	if strings.Contains(content, "while IFS= read") {
+		t.Error("completed tasks should be comma-separated inline, not one-per-line")
+	}
+	if !strings.Contains(content, "Done:") {
+		t.Error("completed tasks should be labeled with 'Done:' prefix")
+	}
 }
 
 // Verifies that Setup clears stale .completed-tasks from a previous run
@@ -258,8 +239,7 @@ func TestSetup_ClearsStaleCompletedTasks(t *testing.T) {
 	s := &Session{
 		Name:        "test-session",
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	_ = s.Setup()
 
@@ -268,34 +248,58 @@ func TestSetup_ClearsStaleCompletedTasks(t *testing.T) {
 	}
 }
 
-// Verifies that the dead-pane exit hint format string and q-binding command
-// are constructed correctly, so users see "(dead) — press q to exit" in the
-// pane border and can press q to kill the session when the ralph pane dies.
-func TestDeadPaneExitHint(t *testing.T) {
-	sessionName := "test-loop"
-
-	deadCheck := fmt.Sprintf("tmux display-message -t '%s:.0' -p '#{pane_dead}' | grep -q 1", sessionName)
-	killCmd := fmt.Sprintf("kill-session -t '%s'", sessionName)
-
-	if !strings.Contains(deadCheck, sessionName+":.0") {
-		t.Error("dead-check should target pane 0 (ralph pane)")
+// Verifies that applySessionOptions installs a pane-died hook that auto-kills
+// the session when pane 0 (ralph loop) dies, replacing the old root-level q
+// binding that stole keypresses from all panes.
+func TestApplySessionOptions_PaneDiedHook(t *testing.T) {
+	orig := tmuxCmd
+	var calls [][]string
+	tmuxCmd = func(args ...string) error {
+		calls = append(calls, args)
+		return nil
 	}
-	if !strings.Contains(deadCheck, "pane_dead") {
-		t.Error("dead-check should use tmux pane_dead variable")
+	defer func() { tmuxCmd = orig }()
+
+	s := &Session{Name: "test-loop"}
+	s.applySessionOptions()
+
+	var hookArgs []string
+	for _, args := range calls {
+		if len(args) >= 4 && args[0] == "set-hook" && args[3] == "pane-died" {
+			hookArgs = args
+			break
+		}
 	}
-	if !strings.Contains(killCmd, sessionName) {
-		t.Error("kill command should target the session")
+	if hookArgs == nil {
+		t.Fatal("applySessionOptions should install a pane-died hook")
+	}
+
+	hookCmd := strings.Join(hookArgs[4:], " ")
+	if !strings.Contains(hookCmd, "pane_dead") {
+		t.Error("pane-died hook should check #{pane_dead} on pane 0")
+	}
+	if !strings.Contains(hookCmd, "kill-session") {
+		t.Error("pane-died hook should kill the session when pane 0 is dead")
+	}
+	if !strings.Contains(hookCmd, "test-loop") {
+		t.Error("pane-died hook should target the correct session")
+	}
+
+	// Regression: root-level key bindings steal keypresses from all panes.
+	for _, args := range calls {
+		if len(args) >= 3 && args[0] == "bind-key" && args[1] == "-T" && args[2] == "root" {
+			t.Errorf("applySessionOptions must not use root-level bind-key, found: %v", args)
+		}
 	}
 }
 
-// Verifies that the bd plan watcher renders a visual progress bar showing
-// the ratio of completed to total tasks, so progress is visible at a glance.
-func TestWritePlanWatcher_BD_ProgressBar(t *testing.T) {
+// Verifies that the bd plan watcher renders a simple "X/Y done" counter
+// in green, so progress is visible at a glance without visual noise.
+func TestWritePlanWatcher_BD_DoneCounter(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	if err := s.writePlanWatcher(); err != nil {
 		t.Fatalf("writePlanWatcher() error: %v", err)
@@ -304,11 +308,11 @@ func TestWritePlanWatcher_BD_ProgressBar(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
 	content := string(data)
 
-	if !strings.Contains(content, "bar_w=20") {
-		t.Error("bd plan watcher should have a 20-character progress bar width")
+	if !strings.Contains(content, "done${NC}") {
+		t.Error("bd plan watcher should show done counter with green color reset")
 	}
-	if !strings.Contains(content, "█") || !strings.Contains(content, "░") {
-		t.Error("bd plan watcher should use filled/empty block characters for progress bar")
+	if strings.Contains(content, "bar_w=") {
+		t.Error("bd plan watcher should use simple counter, not progress bar")
 	}
 }
 
@@ -318,8 +322,7 @@ func TestWritePlanWatcher_FlashSignal(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	if err := s.writePlanWatcher(); err != nil {
 		t.Fatalf("writePlanWatcher() error: %v", err)
@@ -336,23 +339,24 @@ func TestWritePlanWatcher_FlashSignal(t *testing.T) {
 	}
 }
 
-// Verifies that BuildRalphCmd strips the "commander" subcommand from the
-// args so the re-exec'd loop pane runs the main loop, not commander again.
-func TestBuildRalphCmd_StripsCommander(t *testing.T) {
-	cmd := BuildRalphCmd("/usr/local/bin/ralph", []string{
-		"commander",
-		"--dir", "/projects/myapp",
-		"-n", "10",
-	})
+// Verifies that BuildRalphCmd strips "command" and "commander" subcommands
+// from args so the re-exec'd loop pane runs the main loop, not command again.
+func TestBuildRalphCmd_StripsCommand(t *testing.T) {
+	for _, sub := range []string{"command", "commander"} {
+		cmd := BuildRalphCmd("/usr/local/bin/ralph", []string{
+			sub,
+			"-n", "10",
+		})
 
-	if strings.Contains(cmd, "commander") {
-		t.Error("BuildRalphCmd should strip 'commander' subcommand")
-	}
-	if !strings.Contains(cmd, "--quiet") {
-		t.Error("BuildRalphCmd should append --quiet")
-	}
-	if !strings.Contains(cmd, "/projects/myapp") {
-		t.Error("BuildRalphCmd should preserve other args")
+		if strings.Contains(cmd, sub) {
+			t.Errorf("BuildRalphCmd should strip %q subcommand", sub)
+		}
+		if !strings.Contains(cmd, "--quiet") {
+			t.Errorf("BuildRalphCmd should append --quiet (input: %s)", sub)
+		}
+		if !strings.Contains(cmd, " loop ") {
+			t.Errorf("BuildRalphCmd should include 'loop' subcommand (input: %s)", sub)
+		}
 	}
 }
 
@@ -397,8 +401,7 @@ func TestSetup_CommanderStreamPaneIndex(t *testing.T) {
 	s := &Session{
 		Name:        "test-session",
 		RalphDir:    dir,
-		TaskBackend: "bd",
-		Commander:   true,
+				Commander:   true,
 		TaskCmd:     "echo task",
 	}
 
@@ -416,14 +419,64 @@ func TestSetup_CommanderStreamPaneIndex(t *testing.T) {
 	}
 }
 
+// Verifies that the plan watcher periodically re-renders the bd ready list
+// without requiring a .plan-refresh signal, so new beads added during a long
+// iteration (e.g. from ralph task in another pane) appear within ~45 seconds.
+func TestWritePlanWatcher_BD_PeriodicRefresh(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{
+		RalphDir:    dir,
+			}
+
+	if err := s.writePlanWatcher(); err != nil {
+		t.Fatalf("writePlanWatcher() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))
+	content := string(data)
+
+	if !strings.Contains(content, "poll_counter") {
+		t.Error("plan watcher should use a poll_counter for periodic refresh")
+	}
+	if !strings.Contains(content, "poll_interval") {
+		t.Error("plan watcher should define a poll_interval for the refresh period")
+	}
+}
+
+// Verifies that applySessionOptions disables set-titles so that pane border
+// title updates don't propagate to the iTerm window title, preserving
+// Claude's /rename of the terminal window.
+func TestApplySessionOptions_DisablesSetTitles(t *testing.T) {
+	orig := tmuxCmd
+	var calls [][]string
+	tmuxCmd = func(args ...string) error {
+		calls = append(calls, args)
+		return nil
+	}
+	defer func() { tmuxCmd = orig }()
+
+	s := &Session{Name: "test-loop"}
+	s.applySessionOptions()
+
+	found := false
+	for _, args := range calls {
+		if len(args) >= 5 && args[0] == "set-option" && args[3] == "set-titles" && args[4] == "off" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("applySessionOptions should set 'set-titles off' to prevent tmux from overwriting iTerm window title")
+	}
+}
+
 // Verifies that .plan-refresh signal path is correctly embedded in the
 // plan watcher script, so the pane redraws when signaled.
 func TestPlanWatcher_SignalPath(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{
 		RalphDir:    dir,
-		TaskBackend: "bd",
-	}
+			}
 
 	s.writePlanWatcher() //nolint:errcheck
 	data, _ := os.ReadFile(filepath.Join(dir, ".plan-watch.sh"))

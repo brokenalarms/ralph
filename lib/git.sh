@@ -6,12 +6,8 @@ temp_branch() { echo "ralph/$PROJECT_NAME/next"; }
 setup_worktree() {
   WORK_DIR="$PROJECT_DIR"
 
-  if [[ "$USE_WORKTREE" == false ]]; then
-    return
-  fi
-
   if ! git -C "$PROJECT_DIR" rev-parse --git-dir &>/dev/null; then
-    log_error "Not a git repo — ralph requires git. Use --no-worktree to run without git isolation."
+    log_error "Not a git repo — ralph requires git."
     exit 1
   fi
 

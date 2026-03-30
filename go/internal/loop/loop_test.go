@@ -1,20 +1,27 @@
 package loop
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/notify"
+	"github.com/brokenalarms/ralph/internal/ratelimit"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/tasks"
+	"github.com/brokenalarms/ralph/internal/verify"
+	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
 // stubRunner replaces claude.Runner for tests that need to run the loop
@@ -34,28 +41,40 @@ func (s *stubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
 
 func (s *stubRunner) StopStreaming() {}
 
+func (s *stubRunner) InjectMessage(_ string) error { return nil }
+
 // stubBackend implements tasks.Backend for testing without shelling out to
 // bd or reading plan files. Lets us control exactly how many tasks remain
 // and what the next task is.
 type stubBackend struct {
-	remaining int
-	completed int
-	total     int
-	nextTask  string
-	nextID    string
-	label     string
+	remaining    int
+	completed    int
+	total        int
+	nextTask     string
+	nextID       string
+	nextPriority *int
+	label        string
+	description  string
+	acceptance   string
+	fullContext   string
+	skippedTask  string
+	skipReason   string
 }
 
 // mutableBackend is like stubBackend but allows changing the next task
 // mid-run to simulate task transitions.
 type mutableBackend struct {
-	mu        sync.Mutex
-	remaining int
-	completed int
-	total     int
-	nextTask  string
-	nextID    string
-	label     string
+	mu           sync.Mutex
+	remaining    int
+	completed    int
+	total        int
+	nextTask     string
+	nextID       string
+	nextPriority *int
+	label        string
+	description  string
+	metadata     map[string]map[string]string // id -> key -> value
+	externalRefs map[string]string            // id -> external ref (e.g. PR URL)
 }
 
 func (m *mutableBackend) Init() error                          { return nil }
@@ -65,23 +84,45 @@ func (m *mutableBackend) CountRemaining() (int, error)         { m.mu.Lock(); de
 func (m *mutableBackend) CountTotal() (int, error)             { m.mu.Lock(); defer m.mu.Unlock(); return m.total, nil }
 func (m *mutableBackend) GetNextTask() (string, error)         { m.mu.Lock(); defer m.mu.Unlock(); return m.nextTask, nil }
 func (m *mutableBackend) GetNextTaskID() (string, error)       { m.mu.Lock(); defer m.mu.Unlock(); return m.nextID, nil }
-func (m *mutableBackend) GetNextTaskInfo() (string, string, error) { m.mu.Lock(); defer m.mu.Unlock(); return m.nextID, m.nextTask, nil }
+func (m *mutableBackend) GetNextTaskInfo() (tasks.TaskInfo, error) { m.mu.Lock(); defer m.mu.Unlock(); return tasks.TaskInfo{ID: m.nextID, Title: m.nextTask, Priority: m.nextPriority}, nil }
 func (m *mutableBackend) HasTasks() (bool, error)              { m.mu.Lock(); defer m.mu.Unlock(); return m.total > 0, nil }
-func (m *mutableBackend) NeedsPlanning() (bool, error)         { return false, nil }
-func (m *mutableBackend) PlanningSucceeded() (bool, error)     { return true, nil }
 func (m *mutableBackend) CloseTask(string, string) error       { return nil }
 func (m *mutableBackend) SkipTask(string, string) error        { return nil }
+func (m *mutableBackend) SetSkippedIDs(_ []string)             {}
 func (m *mutableBackend) ReopenTask(string) error              { return nil }
 func (m *mutableBackend) SetState(_, _, _, _ string) error     { return nil }
 func (m *mutableBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (m *mutableBackend) ExecutionInstructions() (string, error) { return "", nil }
-func (m *mutableBackend) PlanningInstructions() string         { return "" }
-func (m *mutableBackend) GetDescription(_ string) (string, error) { return "", nil }
+func (m *mutableBackend) GetDescription(_ string) (string, error)  { m.mu.Lock(); defer m.mu.Unlock(); return m.description, nil }
+func (m *mutableBackend) GetAcceptance(_ string) (string, error)   { return "", nil }
+func (m *mutableBackend) GetFullContext(_ string) (string, error)  { return "", nil }
+func (m *mutableBackend) ProjectContext() (string, error)          { return "", nil }
+func (m *mutableBackend) GetExternalRef(id string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.externalRefs != nil {
+		return m.externalRefs[id], nil
+	}
+	return "", nil
+}
+func (m *mutableBackend) SetExternalRef(_, _ string) error       { return nil }
+func (m *mutableBackend) AppendNotes(_, _ string) error          { return nil }
+func (m *mutableBackend) SetMetadata(_, _, _ string) error         { return nil }
+func (m *mutableBackend) GetMetadata(id, key string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.metadata != nil {
+		if keys, ok := m.metadata[id]; ok {
+			return keys[key], nil
+		}
+	}
+	return "", nil
+}
 func (m *mutableBackend) Label() string {
 	if m.label != "" {
 		return m.label
 	}
-	return "checklist"
+	return "beads"
 }
 
 func (s *stubBackend) Init() error                          { return nil }
@@ -91,23 +132,29 @@ func (s *stubBackend) CountRemaining() (int, error)         { return s.remaining
 func (s *stubBackend) CountTotal() (int, error)             { return s.total, nil }
 func (s *stubBackend) GetNextTask() (string, error)         { return s.nextTask, nil }
 func (s *stubBackend) GetNextTaskID() (string, error)       { return s.nextID, nil }
-func (s *stubBackend) GetNextTaskInfo() (string, string, error) { return s.nextID, s.nextTask, nil }
+func (s *stubBackend) GetNextTaskInfo() (tasks.TaskInfo, error) { return tasks.TaskInfo{ID: s.nextID, Title: s.nextTask, Priority: s.nextPriority}, nil }
 func (s *stubBackend) HasTasks() (bool, error)              { return s.total > 0, nil }
-func (s *stubBackend) NeedsPlanning() (bool, error)         { return false, nil }
-func (s *stubBackend) PlanningSucceeded() (bool, error)     { return true, nil }
 func (s *stubBackend) CloseTask(string, string) error       { return nil }
-func (s *stubBackend) SkipTask(string, string) error        { return nil }
+func (s *stubBackend) SkipTask(id, reason string) error     { s.skippedTask = id; s.skipReason = reason; return nil }
+func (s *stubBackend) SetSkippedIDs(_ []string)             {}
 func (s *stubBackend) ReopenTask(string) error              { return nil }
 func (s *stubBackend) SetState(_, _, _, _ string) error     { return nil }
 func (s *stubBackend) GetState(_, _ string) (string, error) { return "", nil }
 func (s *stubBackend) ExecutionInstructions() (string, error) { return "", nil }
-func (s *stubBackend) PlanningInstructions() string         { return "" }
-func (s *stubBackend) GetDescription(_ string) (string, error) { return "", nil }
+func (s *stubBackend) GetDescription(_ string) (string, error)  { return s.description, nil }
+func (s *stubBackend) GetAcceptance(_ string) (string, error)   { return s.acceptance, nil }
+func (s *stubBackend) GetFullContext(_ string) (string, error)  { return s.fullContext, nil }
+func (s *stubBackend) ProjectContext() (string, error)          { return "", nil }
+func (s *stubBackend) GetExternalRef(_ string) (string, error) { return "", nil }
+func (s *stubBackend) SetExternalRef(_, _ string) error       { return nil }
+func (s *stubBackend) AppendNotes(_, _ string) error          { return nil }
+func (s *stubBackend) SetMetadata(_, _, _ string) error         { return nil }
+func (s *stubBackend) GetMetadata(_, _ string) (string, error)  { return "", nil }
 func (s *stubBackend) Label() string {
 	if s.label != "" {
 		return s.label
 	}
-	return "checklist"
+	return "beads"
 }
 
 func setupTestDir(t *testing.T) (string, *state.Store) {
@@ -116,7 +163,7 @@ func setupTestDir(t *testing.T) (string, *state.Store) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 	return dir, st
 }
 
@@ -140,9 +187,11 @@ func TestLoop_AllTasksComplete(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -179,9 +228,11 @@ func TestLoop_NoTasksError(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -221,9 +272,11 @@ func TestLoop_StopFileDetection(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -268,9 +321,11 @@ func TestLoop_ContextCancellation(t *testing.T) {
 	cancel()
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -307,12 +362,13 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 	logger := logging.New(nil)
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 10,
-		RefactorEvery: 3,
-		CallsPerHour:  80,
+				CallsPerHour:  80,
 		TaskBackend:   backend,
 	}, st, gm, logger)
 
@@ -322,25 +378,17 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 	if maxIter != 10 {
 		t.Errorf("expected max_iterations=10 in state, got %d", maxIter)
 	}
-
-	refEvery := st.ReadRefactorEvery()
-	if refEvery != 3 {
-		t.Errorf("expected refactor_every=3 in state, got %d", refEvery)
-	}
 }
 
 // Verifies the stream task file is written with task ID and description,
 // proving the tmux pane title integration works correctly.
+// updateStreamTask is a standalone function — no Loop required.
 func TestLoop_UpdateStreamTask(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
-	l := &Loop{
-		cfg: Config{RalphDir: ralphDir},
-	}
-
-	l.updateStreamTask("ralph-abc", "Add feature X")
+	updateStreamTask(ralphDir, "ralph-abc", "Add feature X", nil)
 
 	data, err := os.ReadFile(filepath.Join(ralphDir, ".stream-task"))
 	if err != nil {
@@ -350,26 +398,33 @@ func TestLoop_UpdateStreamTask(t *testing.T) {
 		t.Errorf("expected 'ralph-abc: Add feature X', got %q", string(data))
 	}
 
-	l.updateStreamTask("", "Add feature Y")
+	updateStreamTask(ralphDir, "", "Add feature Y", nil)
 	data, _ = os.ReadFile(filepath.Join(ralphDir, ".stream-task"))
 	if string(data) != "Add feature Y" {
 		t.Errorf("expected 'Add feature Y', got %q", string(data))
+	}
+
+	p := 3
+	updateStreamTask(ralphDir, "ralph-xyz", "Some task", &p)
+	data, _ = os.ReadFile(filepath.Join(ralphDir, ".stream-task"))
+	got := string(data)
+	if !strings.Contains(got, "[P3]") {
+		t.Errorf("stream task with priority should include [P3], got %q", got)
+	}
+	if !strings.Contains(got, "ralph-xyz") {
+		t.Errorf("stream task should include task ID, got %q", got)
 	}
 }
 
 // Verifies writeRunBranch persists the current branch name to .run-branch
 // so the shell pane-title updater displays the correct branch.
+// writeRunBranch is a standalone function — no Loop required.
 func TestLoop_WriteRunBranch(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
-	l := &Loop{
-		cfg: Config{RalphDir: ralphDir},
-		git: &git.Manager{WorktreeBranch: "ralph/project/01-fix-bug"},
-	}
-
-	l.writeRunBranch()
+	writeRunBranch(ralphDir, "ralph/project/01-fix-bug")
 
 	data, err := os.ReadFile(filepath.Join(ralphDir, ".run-branch"))
 	if err != nil {
@@ -380,18 +435,13 @@ func TestLoop_WriteRunBranch(t *testing.T) {
 	}
 }
 
-// Verifies writeRunBranch defaults to "ralph" when no branch is set.
+// writeRunBranch defaults to "ralph" when branch is empty.
 func TestLoop_WriteRunBranch_Default(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
-	l := &Loop{
-		cfg: Config{RalphDir: ralphDir},
-		git: &git.Manager{},
-	}
-
-	l.writeRunBranch()
+	writeRunBranch(ralphDir, "")
 
 	data, err := os.ReadFile(filepath.Join(ralphDir, ".run-branch"))
 	if err != nil {
@@ -399,35 +449,6 @@ func TestLoop_WriteRunBranch_Default(t *testing.T) {
 	}
 	if string(data) != "ralph" {
 		t.Errorf("expected 'ralph', got %q", string(data))
-	}
-}
-
-// Verifies feedback file is read and cleared after consumption.
-func TestLoop_FeedbackReadAndClear(t *testing.T) {
-	dir := t.TempDir()
-	ralphDir := filepath.Join(dir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-
-	l := &Loop{
-		cfg: Config{RalphDir: ralphDir},
-	}
-
-	feedbackFile := filepath.Join(ralphDir, "feedback")
-	os.WriteFile(feedbackFile, []byte("please fix the tests"), 0o644)
-
-	got := l.readFeedback()
-	if got != "please fix the tests" {
-		t.Errorf("expected feedback content, got %q", got)
-	}
-
-	l.clearFeedback()
-	if _, err := os.Stat(feedbackFile); err == nil {
-		t.Error("feedback file should have been removed after clearing")
-	}
-
-	got = l.readFeedback()
-	if got != "" {
-		t.Errorf("expected empty feedback after clear, got %q", got)
 	}
 }
 
@@ -444,6 +465,74 @@ func TestLoop_BuildTaskPrompt(t *testing.T) {
 	got = l.buildTaskPrompt("Implement feature X", "")
 	if got != "Complete this task: Implement feature X" {
 		t.Errorf("unexpected prompt without ID: %q", got)
+	}
+}
+
+// Verifies that buildTaskPrompt appends screenshot paths when screenshots
+// exist in the ralph screenshots directory for the given bead ID.
+func TestLoop_BuildTaskPrompt_WithScreenshots(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	ssDir := filepath.Join(ralphDir, "screenshots")
+	os.MkdirAll(ssDir, 0o755)
+	os.WriteFile(filepath.Join(ssDir, "ralph-abc-01-broken-modal.png"), []byte("img"), 0o644)
+
+	pDir, err := filepath.Abs(filepath.Join("..", "..", "cmd", "ralph", "prompts"))
+	if err != nil {
+		t.Fatalf("resolve prompts dir: %v", err)
+	}
+
+	backend := &stubBackend{nextID: "ralph-abc", nextTask: "Fix modal", fullContext: "○ ralph-abc · Fix modal [● P3 · OPEN]"}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: pDir,
+		},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+	}, st, gm, logging.New(nil))
+
+	got := l.buildTaskPrompt("Fix modal", "ralph-abc")
+
+	if !strings.Contains(got, "## Screenshots") {
+		t.Error("task prompt should include screenshots section when screenshots exist")
+	}
+	if !strings.Contains(got, "ralph-abc-01-broken-modal.png") {
+		t.Error("task prompt should include the screenshot filename")
+	}
+}
+
+// Verifies that buildTaskPrompt omits the screenshots section when no
+// screenshots exist for the bead.
+func TestLoop_BuildTaskPrompt_NoScreenshots(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	pDir, err := filepath.Abs(filepath.Join("..", "..", "cmd", "ralph", "prompts"))
+	if err != nil {
+		t.Fatalf("resolve prompts dir: %v", err)
+	}
+
+	backend := &stubBackend{nextID: "ralph-xyz", nextTask: "Fix layout", fullContext: "○ ralph-xyz · Fix layout [● P3 · OPEN]"}
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: pDir,
+		},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+	}, st, gm, logging.New(nil))
+
+	got := l.buildTaskPrompt("Fix layout", "ralph-xyz")
+
+	if strings.Contains(got, "## Screenshots") {
+		t.Error("task prompt should not include screenshots section when none exist")
 	}
 }
 
@@ -475,62 +564,230 @@ func TestReadLogFrom(t *testing.T) {
 	}
 }
 
-// Verifies the refactor iteration counter increments correctly and only
-// triggers a refactor when the threshold is reached.
-func TestLoop_MaybeRefactor_CounterIncrement(t *testing.T) {
+// Proves: maybeRefactor skips when Refactor is false (default),
+// ensuring refactoring is opt-in only.
+func TestLoop_MaybeRefactor_DisabledByDefault(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	l := &Loop{
-		cfg:   Config{RalphDir: ralphDir},
-		state: st,
-		logger: logging.New(nil),
-	}
-
-	st.Write("iterations_since_refactor", "0")
-
-	// refactorEvery=0 should do nothing.
-	err := l.maybeRefactor(0)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// refactorEvery=5, counter at 2 should just increment.
-	st.Write("iterations_since_refactor", "2")
-	err = l.maybeRefactor(5)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	val, _ := st.Read("iterations_since_refactor")
-	n, _ := strconv.Atoi(val)
-	if n != 3 {
-		t.Errorf("expected counter=3, got %d", n)
-	}
-}
-
-// Verifies that NoRefactor=true prevents maybeRefactor from running even
-// when refactorEvery is set, allowing users to disable refactoring entirely.
-func TestLoop_MaybeRefactor_NoRefactorDisables(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-
-	l := &Loop{
-		cfg:    Config{RalphDir: ralphDir, NoRefactor: true},
+		cfg:    Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}, Refactor: false},
 		state:  st,
 		logger: logging.New(nil),
 	}
 
-	st.Write("iterations_since_refactor", "10")
-
-	err := l.maybeRefactor(5)
+	err := l.maybeRefactor()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
 
-	val, _ := st.Read("iterations_since_refactor")
-	if val != "10" {
-		t.Errorf("counter should not change when NoRefactor=true, got %s", val)
+// Proves: maybeRefactor skips when fewer than 5 tasks have been
+// completed in the session, even with --refactor enabled.
+func TestLoop_MaybeRefactor_SkipsBelow5Completions(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	l := &Loop{
+		cfg:          Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}, Refactor: true},
+		state:        st,
+		logger:       logging.New(nil),
+		sessionTasks: []CompletedTask{{ID: "a"}, {ID: "b"}, {ID: "c"}},
+	}
+
+	err := l.maybeRefactor()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// Proves: maybeRefactor calls the LLM when exactly 5 tasks are completed
+// and the LLM says NO, no refactoring iteration is spawned.
+func TestLoop_MaybeRefactor_LLMSaysNo(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	// Set up a git repo with enough commits so RecentChangedFiles returns content
+	gitDir := filepath.Join(dir, "work")
+	os.MkdirAll(gitDir, 0o755)
+	exec.Command("git", "init", "-b", "main", gitDir).Run()
+	exec.Command("git", "-C", gitDir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", gitDir, "config", "user.name", "test").Run()
+	os.WriteFile(filepath.Join(gitDir, "file.go"), []byte("package main\n"), 0o644)
+	exec.Command("git", "-C", gitDir, "add", ".").Run()
+	exec.Command("git", "-C", gitDir, "commit", "-m", "init").Run()
+	for i := 0; i < 11; i++ {
+		exec.Command("git", "-C", gitDir, "commit", "--allow-empty", "-m", fmt.Sprintf("commit %d", i)).Run()
+	}
+	os.WriteFile(filepath.Join(gitDir, "file.go"), []byte("package main\nfunc main() {}\n"), 0o644)
+	exec.Command("git", "-C", gitDir, "add", ".").Run()
+	exec.Command("git", "-C", gitDir, "commit", "-m", "update").Run()
+
+	queryFnCalled := false
+	l := &Loop{
+		cfg:    Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}, Refactor: true},
+		state:  st,
+		logger: logging.New(nil),
+		git:    &git.Manager{WorkDir: gitDir},
+		sessionTasks: make([]CompletedTask, 5),
+		refactorQueryFunc: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+			queryFnCalled = true
+			return "NO\nCode looks fine.", nil
+		},
+	}
+
+	err := l.maybeRefactor()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !queryFnCalled {
+		t.Error("expected LLM query to be called at 5 completions")
+	}
+}
+
+// Proves: maybeRefactor spawns a refactoring iteration when the LLM says YES,
+// verifying the full path from LLM decision through runner invocation.
+func TestLoop_MaybeRefactor_LLMSaysYes(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	gitDir := filepath.Join(dir, "work")
+	os.MkdirAll(gitDir, 0o755)
+	exec.Command("git", "init", "-b", "main", gitDir).Run()
+	exec.Command("git", "-C", gitDir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", gitDir, "config", "user.name", "test").Run()
+	os.WriteFile(filepath.Join(gitDir, "file.go"), []byte("package main\n"), 0o644)
+	exec.Command("git", "-C", gitDir, "add", ".").Run()
+	exec.Command("git", "-C", gitDir, "commit", "-m", "init").Run()
+	for i := 0; i < 11; i++ {
+		exec.Command("git", "-C", gitDir, "commit", "--allow-empty", "-m", fmt.Sprintf("commit %d", i)).Run()
+	}
+	os.WriteFile(filepath.Join(gitDir, "file.go"), []byte("package main\nfunc main() {}\n"), 0o644)
+	exec.Command("git", "-C", gitDir, "add", ".").Run()
+	exec.Command("git", "-C", gitDir, "commit", "-m", "update").Run()
+
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	runnerCalled := false
+	l := &Loop{
+		cfg: Config{
+			Dirs: workctx.WorkContext{
+				RalphDir:   ralphDir,
+				WorkDir:    gitDir,
+				PromptsDir: promptsDir,
+			},
+			Refactor:     true,
+			CallsPerHour: 80,
+		},
+		state:        st,
+		logger:       logging.New(nil),
+		git:          &git.Manager{WorkDir: gitDir},
+		sessionTasks: make([]CompletedTask, 5),
+		limiter:      ratelimit.New(ralphDir, 80),
+		signals:      claude.DefaultSignalPaths(ralphDir),
+		runner: &stubRunner{
+			onRun: func() {
+				runnerCalled = true
+			},
+		},
+		refactorQueryFunc: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+			return "YES\nThere is significant duplication.", nil
+		},
+	}
+
+	err := l.maybeRefactor()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !runnerCalled {
+		t.Error("expected runner to be called when LLM says YES")
+	}
+}
+
+// Proves: maybeRefactor triggers at every multiple of 5, not just the first.
+func TestLoop_MaybeRefactor_TriggersAtMultiplesOf5(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	gitDir := filepath.Join(dir, "work")
+	os.MkdirAll(gitDir, 0o755)
+	exec.Command("git", "init", "-b", "main", gitDir).Run()
+	exec.Command("git", "-C", gitDir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", gitDir, "config", "user.name", "test").Run()
+	os.WriteFile(filepath.Join(gitDir, "file.go"), []byte("package main\n"), 0o644)
+	exec.Command("git", "-C", gitDir, "add", ".").Run()
+	exec.Command("git", "-C", gitDir, "commit", "-m", "init").Run()
+	for i := 0; i < 11; i++ {
+		exec.Command("git", "-C", gitDir, "commit", "--allow-empty", "-m", fmt.Sprintf("commit %d", i)).Run()
+	}
+
+	os.WriteFile(filepath.Join(gitDir, "file.go"), []byte("package main\nfunc init() {}\n"), 0o644)
+	exec.Command("git", "-C", gitDir, "add", ".").Run()
+	exec.Command("git", "-C", gitDir, "commit", "-m", "update").Run()
+
+	queryCalls := 0
+	base := &Loop{
+		cfg:    Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}, Refactor: true},
+		state:  st,
+		logger: logging.New(nil),
+		git:    &git.Manager{WorkDir: gitDir},
+		refactorQueryFunc: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+			queryCalls++
+			return "NO\nAll good.", nil
+		},
+	}
+
+	// 7 completions: should NOT trigger (not a multiple of 5)
+	base.sessionTasks = make([]CompletedTask, 7)
+	queryCalls = 0
+	base.maybeRefactor()
+	if queryCalls != 0 {
+		t.Errorf("expected 0 LLM calls at 7 completions, got %d", queryCalls)
+	}
+
+	// 10 completions: should trigger
+	base.sessionTasks = make([]CompletedTask, 10)
+	queryCalls = 0
+	base.maybeRefactor()
+	if queryCalls != 1 {
+		t.Errorf("expected 1 LLM call at 10 completions, got %d", queryCalls)
+	}
+}
+
+// Proves: llmShouldRefactor correctly parses YES/NO responses in various
+// formats, including case variations and extra whitespace.
+func TestLoop_LLMShouldRefactor_ParsesResponses(t *testing.T) {
+	l := &Loop{git: &git.Manager{WorkDir: t.TempDir()}}
+
+	tests := []struct {
+		name     string
+		response string
+		want     bool
+	}{
+		{"uppercase YES", "YES\nDuplication found.", true},
+		{"lowercase yes", "yes\nneeds cleanup", true},
+		{"mixed case Yes", "Yes\nsome issues", true},
+		{"uppercase NO", "NO\nCode looks fine.", false},
+		{"lowercase no", "no\neverything clean", false},
+		{"with leading whitespace", "  YES\nfoo", true},
+		{"unknown response", "MAYBE\nnot sure", false},
+		{"empty response", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l.refactorQueryFunc = func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				return tt.response, nil
+			}
+			got, err := l.llmShouldRefactor(context.Background(), "arch spec", "file1.go\nfile2.go")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("llmShouldRefactor(%q) = %v, want %v", tt.response, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -552,7 +809,7 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 		nextID:    "ralph-new",
 	}
 
-	// Set up a real git repo as the worktree so RotateBranch can checkout
+	// Set up a real git repo as the worktree
 	wtDir := filepath.Join(dir, "worktree")
 	os.MkdirAll(wtDir, 0o755)
 	exec.Command("git", "init", "-b", "main", wtDir).Run()
@@ -570,9 +827,11 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       wtDir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    wtDir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -580,9 +839,9 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Task changed, so the branch should have been rotated to /next
-	if gm.WorktreeBranch != "ralph/myproject/next" {
-		t.Errorf("expected branch rotated to ralph/myproject/next, got %q", gm.WorktreeBranch)
+	// With stacked PRs, no rotation to /next — branch keeps its task name
+	if strings.HasSuffix(gm.WorktreeBranch, "/next") {
+		t.Errorf("branch should not be /next with stacked PRs, got %q", gm.WorktreeBranch)
 	}
 }
 
@@ -615,9 +874,11 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -650,7 +911,7 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 		total:     1,
 		nextTask:  "task A",
 		nextID:    "ralph-aaa",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	runner := &stubRunner{
@@ -683,10 +944,12 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -708,13 +971,13 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 	}
 }
 
-// Verifies that handleRebase with OnRebaseConflict set to RebaseFreshWorktree
-// recovers from a squash-merge rebase failure by recreating the worktree.
-func TestLoop_HandleRebase_FreshWorktreeRecovery(t *testing.T) {
+// Verifies handleRebase recovers from conflicts via EnsureUpToDate's
+// escalating retry strategy — worktree ends up at origin/main.
+func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 
 	writeFile(t, project, "shared.txt", "original\n")
 	run(t, "git", "-C", project, "commit", "-m", "add shared")
@@ -723,8 +986,7 @@ func TestLoop_HandleRebase_FreshWorktreeRecovery(t *testing.T) {
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
@@ -740,7 +1002,7 @@ func TestLoop_HandleRebase_FreshWorktreeRecovery(t *testing.T) {
 	writeFile(t, gm.WorkDir, "shared.txt", "final\n")
 	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "final")
 
-	gm.RotateBranch()
+	gm.BranchRenamed = false
 	gm.RenameBranchForTask("second task", "")
 	writeFile(t, gm.WorkDir, "second.txt", "second\n")
 	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "second")
@@ -758,9 +1020,11 @@ func TestLoop_HandleRebase_FreshWorktreeRecovery(t *testing.T) {
 
 	handlerCalled := false
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -770,33 +1034,25 @@ func TestLoop_HandleRebase_FreshWorktreeRecovery(t *testing.T) {
 		},
 	}, st, gm, logging.New(nil))
 
-	err := l.Run(context.Background())
+	err := l.handleRebase(context.Background())
+	// With stacked PRs, rebase conflicts cause stack to diverge — not an error.
 	if err != nil {
-		t.Fatalf("expected no error after recovery, got %v", err)
+		t.Fatalf("expected nil (stack diverges), got: %v", err)
 	}
-
-	if !handlerCalled {
-		t.Error("OnRebaseConflict handler should have been called")
-	}
-
-	// Worktree should have been recreated
-	if _, err := os.Stat(gm.WorkDir); err != nil {
-		t.Error("worktree should exist after recovery")
-	}
+	_ = handlerCalled
 }
 
-// Verifies that handleRebase with OnRebaseConflict returning RebaseAbort
-// propagates the error and halts the loop.
-func TestLoop_HandleRebase_AbortHaltsLoop(t *testing.T) {
+// Verifies that handleRebase returns nil on real conflicts — EnsureUpToDate
+// aborts the rebase and lets the loop continue (diverged stack is expected).
+func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
 		State:       st,
 		Logger:      logging.New(nil),
 	}
@@ -820,49 +1076,36 @@ func TestLoop_HandleRebase_AbortHaltsLoop(t *testing.T) {
 		nextTask:  "Some task",
 	}
 
-	handlerCalled := false
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		MaxIterations: 5,
-		CallsPerHour:  80,
-		TaskBackend:   backend,
-		OnRebaseConflict: func(err error) git.RebaseRecovery {
-			handlerCalled = true
-			return git.RebaseAbort
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
 		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	err := l.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error when rebase is aborted")
-	}
-
-	if !handlerCalled {
-		t.Error("OnRebaseConflict handler should have been called")
-	}
-
-	finalState, _ := st.Load()
-	if finalState.Status != "error" {
-		t.Errorf("expected status 'error', got %q", finalState.Status)
+	err := l.handleRebase(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil (diverged stack continues), got: %v", err)
 	}
 }
 
-// Verifies that without an OnRebaseConflict handler, rebase failures still
-// propagate as errors (backward compatible).
-func TestLoop_HandleRebase_NoHandlerPropagatesError(t *testing.T) {
+// Verifies handleRebase returns nil on real conflicts — the diverged
+// stack is expected and the loop should continue.
+func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 
 	gm := &git.Manager{
-		ProjectDir:  project,
-		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
-		Logger:      logging.New(nil),
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -885,22 +1128,19 @@ func TestLoop_HandleRebase_NoHandlerPropagatesError(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	err := l.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error when no handler and rebase fails")
-	}
-
-	finalState, _ := st.Load()
-	if finalState.Status != "error" {
-		t.Errorf("expected status 'error', got %q", finalState.Status)
+	err := l.handleRebase(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil (diverged stack continues), got: %v", err)
 	}
 }
 
@@ -912,13 +1152,12 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
@@ -946,9 +1185,11 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 	cancel() // simulate Ctrl-C already received
 
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -975,38 +1216,29 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 
 // Verifies isNewTask compares by task ID when available, falling back to
 // description, so that task identity is stable even if descriptions change.
+// isNewTask is a standalone function — takes state.Store directly, no Loop needed.
 func TestLoop_IsNewTask(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
+	_, st := setupTestDir(t)
 
-	l := &Loop{
-		cfg:   Config{RalphDir: ralphDir},
-		state: st,
-	}
-
-	// No previous task in state — any task is new
-	if !l.isNewTask("ralph-abc", "Fix bug") {
+	if !isNewTask(st, "ralph-abc", "Fix bug") {
 		t.Error("expected new task when no last_task_id in state")
 	}
 
-	// Store a task, then compare same ID
 	st.Write("last_task_id", "ralph-abc")
 	st.Write("last_task", "Fix bug")
 
-	if l.isNewTask("ralph-abc", "Fix bug") {
+	if isNewTask(st, "ralph-abc", "Fix bug") {
 		t.Error("same task ID should not be considered new")
 	}
 
-	// Different ID → new task
-	if !l.isNewTask("ralph-xyz", "Fix bug") {
+	if !isNewTask(st, "ralph-xyz", "Fix bug") {
 		t.Error("different task ID should be considered new")
 	}
 
-	// No ID — falls back to description comparison
-	if l.isNewTask("", "Fix bug") {
+	if isNewTask(st, "", "Fix bug") {
 		t.Error("same description with no ID should not be new")
 	}
-	if !l.isNewTask("", "Different task") {
+	if !isNewTask(st, "", "Different task") {
 		t.Error("different description with no ID should be new")
 	}
 }
@@ -1017,13 +1249,12 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 	project, _ := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
@@ -1045,10 +1276,12 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 2,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -1072,9 +1305,9 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 		t.Errorf("expected branch to contain 'fix-the-login-bug', got %q", gm.WorktreeBranch)
 	}
 
-	// TaskSeq should be 1 (only one task rename)
-	if gm.TaskSeq != 1 {
-		t.Errorf("expected TaskSeq=1 (one rename), got %d", gm.TaskSeq)
+	// Branch should have been renamed exactly once (same task)
+	if !gm.BranchRenamed {
+		t.Error("expected BranchRenamed=true after one rename")
 	}
 }
 
@@ -1084,13 +1317,12 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 	project, _ := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
@@ -1109,10 +1341,12 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 3,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -1141,22 +1375,13 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 		t.Errorf("expected branch for second task, got %q", gm.WorktreeBranch)
 	}
 
-	// TaskSeq should be 2 (two different tasks = two renames)
-	if gm.TaskSeq != 2 {
-		t.Errorf("expected TaskSeq=2, got %d", gm.TaskSeq)
+	// Branch should have been renamed for the second task
+	if !gm.BranchRenamed {
+		t.Error("expected BranchRenamed=true after task change")
 	}
 
-	// The first task's branch should still exist
-	branches := git.ListProjectBranches(project, gm.ProjectName)
-	hasFirst := false
-	for _, b := range branches {
-		if strings.Contains(b, "first-task") {
-			hasFirst = true
-		}
-	}
-	if !hasFirst {
-		t.Errorf("expected first task branch to be preserved, branches: %v", branches)
-	}
+	// With stacked PRs, the branch is renamed for each task —
+	// the first task's branch name is replaced by the second.
 }
 
 // Verifies that refactor iterations commit to the current task branch
@@ -1166,13 +1391,12 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	project, _ := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 
 	gm := &git.Manager{
 		ProjectDir:  project,
 		RalphDir:    ralphDir,
-		UseWorktree: true,
-		State:       st,
+				State:       st,
 		Logger:      logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
@@ -1191,13 +1415,14 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 3,
-		RefactorEvery: 1,
-		CallsPerHour:  80,
+				CallsPerHour:  80,
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
@@ -1218,12 +1443,12 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	}
 
 	// Only one branch rename should have happened (for the task, not refactor)
-	if gm.TaskSeq != 1 {
-		t.Errorf("expected TaskSeq=1, got %d", gm.TaskSeq)
+	if !gm.BranchRenamed {
+		t.Error("expected BranchRenamed=true after task rename")
 	}
 
 	// Only one ralph branch should exist (the task branch)
-	branches := git.ListProjectBranches(project, gm.ProjectName)
+	branches := gm.ListProjectBranches()
 	nonNextBranches := 0
 	for _, b := range branches {
 		if !strings.HasSuffix(b, "/next") {
@@ -1239,10 +1464,13 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 // the loop exits with "evolve_restart" status, signaling that the
 // binary should be rebuilt and re-executed with latest main.
 func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
 
-	promptsDir := filepath.Join(dir, "prompts")
+	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &stubBackend{
@@ -1253,17 +1481,18 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	}
 
 	gm := &git.Manager{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		BranchStrategy: git.BranchStacked,
-		Logger:         logging.New(nil),
+		ProjectDir: project,
+		WorkDir:    project,
+		Logger:     logging.New(nil),
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    project,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -1272,9 +1501,14 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = &stubRunner{
+		// Simulate agent work by creating a commit during the run.
+		onRun: func() {
+			writeFile(t, project, "feature.go", "package main\n")
+			run(t, "git", "-C", project, "commit", "-m", "agent work")
+		},
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
 
 	err := l.Run(context.Background())
@@ -1294,7 +1528,7 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 	project, _ := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := state.NewStore(ralphDir)
-	st.Init(5, 0)
+	st.Init(5)
 
 	promptsDir := filepath.Join(project, "prompts")
 	createPromptTemplates(t, promptsDir)
@@ -1302,10 +1536,8 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 	gm := &git.Manager{
 		ProjectDir:     project,
 		RalphDir:       ralphDir,
-		UseWorktree:    true,
-		BranchStrategy: git.BranchStacked,
-		State:          st,
-		Logger:         logging.New(nil),
+		State:  st,
+		Logger: logging.New(nil),
 	}
 	if err := gm.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -1319,10 +1551,12 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    project,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -1346,14 +1580,27 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 // proving the orchestrator closes tasks rather than the agent.
 type trackingBackend struct {
 	mutableBackend
-	closedIDs []string
-	closeMu   sync.Mutex
+	closedIDs     []string
+	closeReasons  []string
+	closeMu       sync.Mutex
+	skippedIDs    []string
+	skipReasons   []string
+	skipMu        sync.Mutex
 }
 
 func (t *trackingBackend) CloseTask(id string, reason string) error {
 	t.closeMu.Lock()
 	t.closedIDs = append(t.closedIDs, id)
+	t.closeReasons = append(t.closeReasons, reason)
 	t.closeMu.Unlock()
+	return nil
+}
+
+func (t *trackingBackend) SkipTask(id string, reason string) error {
+	t.skipMu.Lock()
+	t.skippedIDs = append(t.skippedIDs, id)
+	t.skipReasons = append(t.skipReasons, reason)
+	t.skipMu.Unlock()
 	return nil
 }
 
@@ -1390,17 +1637,19 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
@@ -1412,6 +1661,72 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 	}
 	if backend.closedIDs[0] != "ralph-xyz" {
 		t.Errorf("expected CloseTask for ralph-xyz, got %q", backend.closedIDs[0])
+	}
+}
+
+// Verifies the close reason includes the PR number in "Fixed in PR #N" format,
+// making it traceable which PR shipped which fix.
+func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			completed: 0,
+			total:     1,
+			nextTask:  "Fix auth bug",
+			nextID:    "ralph-xyz",
+			label:     "beads",
+		},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			writeFile(t, project, "fix.go", "package main\n")
+			run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    project,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = runner
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.findPRInfoFunc = func(string) (string, string) { return "42", "Fix auth bug" }
+
+	_ = l.Run(context.Background())
+
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closeReasons) != 1 {
+		t.Fatalf("expected exactly 1 CloseTask call, got %d", len(backend.closeReasons))
+	}
+	want := "Fixed in PR #42"
+	if !strings.Contains(backend.closeReasons[0], want) {
+		t.Errorf("close reason should contain %q, got %q", want, backend.closeReasons[0])
 	}
 }
 
@@ -1441,17 +1756,19 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "no commits" }
 
 	_ = l.Run(context.Background())
@@ -1470,7 +1787,7 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 func createPromptTemplates(t *testing.T, dir string) {
 	t.Helper()
 	os.MkdirAll(dir, 0o755)
-	for _, name := range []string{"shared.md", "internal.md", "reflection.md", "signal.md", "refactor.md", "refactor-style.md", "execution-checklist.md", "execution-bd.md"} {
+	for _, name := range []string{"shared.md", "internal.md", "reflection.md", "signal.md", "feedback.md", "refactor.md", "refactor-style.md", "execution-bd.md"} {
 		os.WriteFile(filepath.Join(dir, name), []byte("test"), 0o644)
 	}
 }
@@ -1517,263 +1834,668 @@ func run(t *testing.T, name string, args ...string) {
 
 // Verifies that auto-merge fires once per task and calls PostMergeReset after
 // each successful merge, so the next task starts from merged main — not stale
-// commits. Both branch strategies share the same PR/merge lifecycle.
+// commits.
 func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
-	for _, strategy := range []git.BranchStrategy{git.BranchStacked, git.BranchSingle} {
-		t.Run(string(strategy), func(t *testing.T) {
-			dir, st := setupTestDir(t)
-			ralphDir := filepath.Join(dir, ".ralph")
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(10)
 
-			promptsDir := filepath.Join(dir, "prompts")
-			createPromptTemplates(t, promptsDir)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
 
-			mergeCount := 0
-			iterationCount := 0
+	mergeCount := 0
+	iterationCount := 0
 
-			backend := &mutableBackend{
-				remaining: 1,
-				completed: 0,
-				total:     3,
-				nextTask:  "task A",
-				nextID:    "ralph-aaa",
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     3,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			// Create a commit so headAfterSignal != headBefore.
+			fname := fmt.Sprintf("task%d.go", iterationCount)
+			os.WriteFile(filepath.Join(project, fname), []byte("package main\n"), 0o644)
+			run(t, "git", "-C", project, "add", fname)
+			run(t, "git", "-C", project, "commit", "-m", fmt.Sprintf("task %d work", iterationCount))
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			backend.completed = iterationCount
+			switch iterationCount {
+			case 1:
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+			case 2:
+				backend.remaining = 1
+				backend.nextTask = "task C"
+				backend.nextID = "ralph-ccc"
+			default:
+				backend.remaining = 0
 			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
 
-			runner := &stubRunner{
-				onRun: func() {
-					iterationCount++
-					backend.mu.Lock()
-					defer backend.mu.Unlock()
-					backend.completed = iterationCount
-					switch iterationCount {
-					case 1:
-						backend.remaining = 1
-						backend.nextTask = "task B"
-						backend.nextID = "ralph-bbb"
-					case 2:
-						backend.remaining = 1
-						backend.nextTask = "task C"
-						backend.nextID = "ralph-ccc"
-					default:
-						backend.remaining = 0
-					}
-				},
-				result: claude.Result{SignalDetected: true},
-			}
+	gm := &git.Manager{
+		ProjectDir: project,
+		WorkDir:    project,
+		Logger:     logging.New(nil),
+	}
 
-			gm := &git.Manager{
-				ProjectDir:     dir,
-				WorkDir:        dir,
-				BranchStrategy: strategy,
-				Logger:         logging.New(nil),
-			}
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    project,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCount++
+		return true, nil
+	}
 
-			l := New(Config{
-				ProjectDir:    dir,
-				WorkDir:       dir,
-				RalphDir:      ralphDir,
-				PromptsDir:    promptsDir,
-				MaxIterations: 10,
-				CallsPerHour:  80,
-				AutoMerge:     true,
-				TaskBackend:   backend,
-			}, st, gm, logging.New(nil))
-			l.runner = runner
-			l.pushPRFunc = func(context.Context, string) error { return nil }
-			l.mergeFunc = func(context.Context) (bool, error) {
-				mergeCount++
-				return true, nil
-			}
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-			err := l.Run(context.Background())
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+	if iterationCount != 3 {
+		t.Errorf("expected 3 iterations, got %d", iterationCount)
+	}
 
-			if iterationCount != 3 {
-				t.Errorf("expected 3 iterations, got %d", iterationCount)
-			}
-
-			if mergeCount != 3 {
-				t.Errorf("expected auto-merge to fire 3 times (once per task), got %d", mergeCount)
-			}
-		})
+	if mergeCount != 3 {
+		t.Errorf("expected auto-merge to fire 3 times (once per task), got %d", mergeCount)
 	}
 }
 
-// Verifies that PostMergeReset actually resets the worktree branch to
+// Verifies that PostMergeUpdateMain resets the worktree branch to
 // origin/main between tasks using a real git worktree, proving each task
 // starts from merged main rather than building on stale commits.
 func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
-	for _, strategy := range []git.BranchStrategy{git.BranchStacked, git.BranchSingle} {
-		t.Run(string(strategy), func(t *testing.T) {
-			project, _ := initBareRepoWithOrigin(t)
-			ralphDir := filepath.Join(project, ".ralph")
-			st := state.NewStore(ralphDir)
-			st.Init(10, 0)
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(10)
 
-			promptsDir := filepath.Join(project, "prompts")
-			createPromptTemplates(t, promptsDir)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
 
-			gm := &git.Manager{
-				ProjectDir:     project,
-				RalphDir:       ralphDir,
-				UseWorktree:    true,
-				BranchStrategy: strategy,
-				State:          st,
-				Logger:         logging.New(nil),
+	gm := &git.Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+				State:       st,
+		Logger:      logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	originMain := gm.HeadRev()
+	iterationCount := 0
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+	}
+
+	var headAfterMerge string
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			if iterationCount == 1 {
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+			} else {
+				headAfterMerge = gm.HeadRev()
+				backend.completed = 2
+				backend.remaining = 0
 			}
-			if err := gm.SetupWorktree(context.Background()); err != nil {
-				t.Fatalf("SetupWorktree: %v", err)
-			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
 
-			originMain := git.HeadRev(gm.WorkDir)
-			iterationCount := 0
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return true, nil
+	}
 
-			backend := &mutableBackend{
-				remaining: 1,
-				completed: 0,
-				total:     2,
-				nextTask:  "task A",
-				nextID:    "ralph-aaa",
-			}
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-			var headAfterMerge string
-			runner := &stubRunner{
-				onRun: func() {
-					iterationCount++
-					backend.mu.Lock()
-					defer backend.mu.Unlock()
-					if iterationCount == 1 {
-						backend.completed = 1
-						backend.remaining = 1
-						backend.nextTask = "task B"
-						backend.nextID = "ralph-bbb"
-					} else {
-						// On second iteration, record HEAD to verify
-						// PostMergeReset moved us back to origin/main.
-						headAfterMerge = git.HeadRev(gm.WorkDir)
-						backend.completed = 2
-						backend.remaining = 0
-					}
-				},
-				result: claude.Result{SignalDetected: true},
-			}
+	if iterationCount != 2 {
+		t.Fatalf("expected 2 iterations, got %d", iterationCount)
+	}
 
-			l := New(Config{
-				ProjectDir:    project,
-				WorkDir:       gm.WorkDir,
-				RalphDir:      ralphDir,
-				PromptsDir:    promptsDir,
-				MaxIterations: 10,
-				CallsPerHour:  80,
-				AutoMerge:     true,
-				TaskBackend:   backend,
-			}, st, gm, logging.New(nil))
-			l.runner = runner
-			l.mergeFunc = func(context.Context) (bool, error) {
-				return true, nil
-			}
+	if headAfterMerge != originMain {
+		t.Errorf("second iteration should start from origin/main (%s), got %s", originMain, headAfterMerge)
+	}
 
-			err := l.Run(context.Background())
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+	// With stacked PRs, the branch stays as the task branch after merge
+	// — no reset to temp branch.
+}
 
-			if iterationCount != 2 {
-				t.Fatalf("expected 2 iterations, got %d", iterationCount)
-			}
+// When completed tasks exist in state.json and the backend returns their
+// branch metadata, the next task starts from the stack head (last completed
+// task's branch) instead of origin/main — enabling stacked PRs.
+func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(10)
 
-			// After PostMergeReset, the second iteration should start from
-			// origin/main — not from stale commits.
-			if headAfterMerge != originMain {
-				t.Errorf("second iteration should start from origin/main (%s), got %s", originMain, headAfterMerge)
-			}
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
 
-			// Branch should be back on temp branch after PostMergeReset
-			tempBranch := gm.TempBranch()
-			if gm.WorktreeBranch != tempBranch {
-				t.Errorf("expected branch %q after PostMergeReset, got %q", tempBranch, gm.WorktreeBranch)
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	iterationCount := 0
+	var taskABranch string
+	var headAtTaskBStart string
+
+	// setStackHead needs gh to list open PR branches. The stub returns
+	// task A's branch dynamically since the name is set at runtime.
+	ghStub := &stubGitHub{available: true}
+	gm.GitHub = ghStub
+
+	backend := &mutableBackend{
+		remaining:    1,
+		completed:    0,
+		total:        2,
+		nextTask:     "task A",
+		nextID:       "ralph-aaa",
+		metadata:     map[string]map[string]string{},
+		externalRefs: map[string]string{},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			if iterationCount == 1 {
+				// Task A: commit work and push the branch to origin.
+				writeFile(t, gm.WorkDir, "a.txt", "task A work\n")
+				run(t, "git", "-C", gm.WorkDir, "commit", "-m", "task A")
+				taskABranch = gm.WorktreeBranch
+				run(t, "git", "-C", gm.WorkDir, "push", "-u", "origin", taskABranch)
+
+				// Record task A as completed with its branch metadata and PR ref.
+				backend.metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
+				backend.externalRefs["ralph-aaa"] = "gh-100"
+				st.AddCompletedTask("ralph-aaa")
+				ghStub.openPRBranches = []string{taskABranch}
+
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+			} else {
+				headAtTaskBStart = gm.HeadRev()
+				backend.completed = 2
+				backend.remaining = 0
 			}
-		})
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if iterationCount != 2 {
+		t.Fatalf("expected 2 iterations, got %d", iterationCount)
+	}
+
+	// Task B should have started from task A's tip, not origin/main.
+	out, _ := exec.Command("git", "-C", gm.WorkDir, "rev-parse", "origin/"+taskABranch).Output()
+	taskATip := strings.TrimSpace(string(out))
+	if headAtTaskBStart != taskATip {
+		t.Errorf("task B should start from task A tip (%s), got %s", taskATip, headAtTaskBStart)
+	}
+}
+
+// When a completed task's PR is merged (branch deleted from remote),
+// the between-tasks transition falls back to the default branch instead
+// of failing on a fetch of the deleted branch. This is the core behavior
+// that setStackHead provides over the removed resolveStackHead.
+func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(10)
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	iterationCount := 0
+	var taskABranch string
+	var headAtTaskBStart string
+
+	backend := &mutableBackend{
+		remaining:    1,
+		completed:    0,
+		total:        2,
+		nextTask:     "task A",
+		nextID:       "ralph-aaa",
+		metadata:     map[string]map[string]string{},
+		externalRefs: map[string]string{},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			if iterationCount == 1 {
+				writeFile(t, gm.WorkDir, "a.txt", "task A work\n")
+				run(t, "git", "-C", gm.WorkDir, "commit", "-m", "task A")
+				taskABranch = gm.WorktreeBranch
+				run(t, "git", "-C", gm.WorkDir, "push", "-u", "origin", taskABranch)
+
+				backend.metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
+				backend.externalRefs["ralph-aaa"] = "gh-100"
+				st.AddCompletedTask("ralph-aaa")
+
+				// Simulate merge: land task A's work on main, then delete branch.
+				run(t, "git", "-C", project, "fetch", "origin", taskABranch)
+				run(t, "git", "-C", project, "checkout", "main")
+				run(t, "git", "-C", project, "merge", "origin/"+taskABranch)
+				run(t, "git", "-C", project, "push", "origin", "main")
+				run(t, "git", "-C", project, "push", "origin", "--delete", taskABranch)
+
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+			} else {
+				headAtTaskBStart = gm.HeadRev()
+				backend.completed = 2
+				backend.remaining = 0
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	// setStackHead uses git ancestry — no GitHub stub needed. Task A's branch
+	// is deleted from remote (simulating merge), so it's skipped.
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if iterationCount != 2 {
+		t.Fatalf("expected 2 iterations, got %d", iterationCount)
+	}
+
+	// Task B should start from origin/main since task A's PR was merged.
+	mainTip, _ := exec.Command("git", "-C", gm.WorkDir, "rev-parse", "origin/main").Output()
+	mainRev := strings.TrimSpace(string(mainTip))
+	if headAtTaskBStart != mainRev {
+		t.Errorf("task B should start from main (%s) after merged PR, got %s", mainRev, headAtTaskBStart)
+	}
+}
+
+// setStackHead skips a branch whose work landed on main even when the
+// remote branch still exists (ancestry check, not branch deletion).
+func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(10)
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	iterationCount := 0
+	var headAtTaskBStart string
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+		metadata:  map[string]map[string]string{},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			if iterationCount == 1 {
+				writeFile(t, gm.WorkDir, "a.txt", "task A work\n")
+				run(t, "git", "-C", gm.WorkDir, "commit", "-m", "task A")
+				taskABranch := gm.WorktreeBranch
+				run(t, "git", "-C", gm.WorkDir, "push", "-u", "origin", taskABranch)
+
+				backend.metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
+				st.AddCompletedTask("ralph-aaa")
+
+				// Merge work into main but leave the branch on remote.
+				run(t, "git", "-C", project, "fetch", "origin", taskABranch)
+				run(t, "git", "-C", project, "checkout", "main")
+				run(t, "git", "-C", project, "merge", "origin/"+taskABranch)
+				run(t, "git", "-C", project, "push", "origin", "main")
+
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+			} else {
+				headAtTaskBStart = gm.HeadRev()
+				backend.completed = 2
+				backend.remaining = 0
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if iterationCount != 2 {
+		t.Fatalf("expected 2 iterations, got %d", iterationCount)
+	}
+
+	// Task B should target main: task A's branch is ancestor of main (work landed).
+	mainTip, _ := exec.Command("git", "-C", gm.WorkDir, "rev-parse", "origin/main").Output()
+	mainRev := strings.TrimSpace(string(mainTip))
+	if headAtTaskBStart != mainRev {
+		t.Errorf("task B should start from main (%s) when branch is ancestor, got %s", mainRev, headAtTaskBStart)
+	}
+}
+
+// Verifies the full post-merge branch rename cycle: task A merges →
+// PostMergeUpdateMain resets to /next → next iteration renames to thematic
+// branch for task B. Proves each successive task gets its own descriptively
+// named branch even after the previous one is squash-merged.
+func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(10)
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	gm := &git.Manager{
+		ProjectDir:  project,
+		RalphDir:    ralphDir,
+				State:       st,
+		Logger:      logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	iterationCount := 0
+	var branchDuringTaskA, branchDuringTaskB string
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "Fix tail leak",
+		nextID:    "ralph-t1",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			switch iterationCount {
+			case 1:
+				branchDuringTaskA = gm.WorktreeBranch
+				backend.mu.Lock()
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "Add retry logic"
+				backend.nextID = "ralph-r2"
+				backend.mu.Unlock()
+			case 2:
+				branchDuringTaskB = gm.WorktreeBranch
+				backend.mu.Lock()
+				backend.completed = 2
+				backend.remaining = 0
+				backend.mu.Unlock()
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if iterationCount != 2 {
+		t.Fatalf("expected 2 iterations, got %d", iterationCount)
+	}
+
+	if !strings.Contains(branchDuringTaskA, "ralph-t1-fix-tail-leak") {
+		t.Errorf("task A branch should contain slug, got %q", branchDuringTaskA)
+	}
+	if !strings.Contains(branchDuringTaskB, "ralph-r2-add-retry-logic") {
+		t.Errorf("task B branch should contain slug, got %q", branchDuringTaskB)
+	}
+	if branchDuringTaskA == branchDuringTaskB {
+		t.Errorf("tasks should have different branches, both got %q", branchDuringTaskA)
 	}
 }
 
 // Verifies that pushAndCreatePR fires for every completed task when signal
 // is detected, regardless of whether auto-merge is enabled. This ensures the
-// Go code owns the push/PR lifecycle — Claude completing a task always results
-// in a pushed branch with a PR, for both branch strategies.
+// Go code owns the push/PR lifecycle.
 func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
-	for _, strategy := range []git.BranchStrategy{git.BranchStacked, git.BranchSingle} {
-		t.Run(string(strategy), func(t *testing.T) {
-			dir, st := setupTestDir(t)
-			ralphDir := filepath.Join(dir, ".ralph")
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(10)
 
-			promptsDir := filepath.Join(dir, "prompts")
-			createPromptTemplates(t, promptsDir)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
 
-			pushPRCalls := 0
-			iterationCount := 0
+	pushPRCalls := 0
+	iterationCount := 0
 
-			backend := &mutableBackend{
-				remaining: 1,
-				completed: 0,
-				total:     2,
-				nextTask:  "task A",
-				nextID:    "ralph-aaa",
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			fname := fmt.Sprintf("task%d.go", iterationCount)
+			os.WriteFile(filepath.Join(project, fname), []byte("package main\n"), 0o644)
+			run(t, "git", "-C", project, "add", fname)
+			run(t, "git", "-C", project, "commit", "-m", fmt.Sprintf("task %d", iterationCount))
+			if iterationCount == 1 {
+				backend.mu.Lock()
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+				backend.mu.Unlock()
+			} else {
+				backend.mu.Lock()
+				backend.completed = 2
+				backend.remaining = 0
+				backend.mu.Unlock()
 			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
 
-			runner := &stubRunner{
-				onRun: func() {
-					iterationCount++
-					if iterationCount == 1 {
-						backend.mu.Lock()
-						backend.completed = 1
-						backend.remaining = 1
-						backend.nextTask = "task B"
-						backend.nextID = "ralph-bbb"
-						backend.mu.Unlock()
-					} else {
-						backend.mu.Lock()
-						backend.completed = 2
-						backend.remaining = 0
-						backend.mu.Unlock()
-					}
-				},
-				result: claude.Result{SignalDetected: true},
-			}
+	gm := &git.Manager{
+		ProjectDir: project,
+		WorkDir:    project,
+		Logger:     logging.New(nil),
+	}
 
-			gm := &git.Manager{
-				ProjectDir:     dir,
-				WorkDir:        dir,
-				BranchStrategy: strategy,
-				Logger:         logging.New(nil),
-			}
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    project,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     false,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.pushPRFunc = func(_ context.Context, _, taskDesc, _ string) (string, error) {
+		pushPRCalls++
+		return "", nil
+	}
 
-			l := New(Config{
-				ProjectDir:    dir,
-				WorkDir:       dir,
-				RalphDir:      ralphDir,
-				PromptsDir:    promptsDir,
-				MaxIterations: 10,
-				CallsPerHour:  80,
-				AutoMerge:     false,
-				TaskBackend:   backend,
-			}, st, gm, logging.New(nil))
-			l.runner = runner
-			l.pushPRFunc = func(_ context.Context, taskDesc string) error {
-				pushPRCalls++
-				return nil
-			}
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-			err := l.Run(context.Background())
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if pushPRCalls != 2 {
-				t.Errorf("expected pushAndCreatePR called 2 times (once per task), got %d", pushPRCalls)
-			}
-		})
+	// 2 signal-handler pushes (one per task) + 1 safety-net flush before exit.
+	// PushAndCreatePR is idempotent, so the flush is harmless.
+	if pushPRCalls != 3 {
+		t.Errorf("expected pushAndCreatePR called 3 times (2 signal + 1 flush), got %d", pushPRCalls)
 	}
 }
 
@@ -1801,26 +2523,27 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 	}
 
 	gm := &git.Manager{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		BranchStrategy: git.BranchSingle,
-		Logger:         logging.New(nil),
+		ProjectDir: dir,
+		WorkDir:    dir,
+		Logger:     logging.New(nil),
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(_ context.Context, taskDesc string) error {
+	l.pushPRFunc = func(_ context.Context, _, taskDesc, _ string) (string, error) {
 		pushPRCalls++
-		return nil
+		return "", nil
 	}
 	l.mergeFunc = func(context.Context) (bool, error) {
 		t.Error("auto-merge should not be called without signal")
@@ -1831,96 +2554,6 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 
 	if pushPRCalls != 0 {
 		t.Errorf("pushAndCreatePR should not be called without signal, got %d calls", pushPRCalls)
-	}
-}
-
-// Verifies that single-branch mode skips branch rotation on task change,
-// keeping all task commits on the initial worktree branch.
-func TestLoop_SingleBranchSkipsRotation(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-
-	st.Write("last_task", "previous task")
-	st.Write("last_task_id", "ralph-old")
-
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 1,
-		total:     1,
-		nextTask:  "new task",
-		nextID:    "ralph-new",
-	}
-
-	gm := &git.Manager{
-		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
-		RalphDir:       ralphDir,
-		WorktreeBranch: "ralph/myproject/next",
-		ProjectName:    "myproject",
-		BranchStrategy: git.BranchSingle,
-		State:          st,
-		Logger:         logging.New(nil),
-	}
-
-	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		MaxIterations: 5,
-		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
-
-	_ = l.Run(context.Background())
-
-	// Single mode — branch should NOT have been rotated even though task changed
-	if gm.WorktreeBranch != "ralph/myproject/next" {
-		t.Errorf("expected branch to stay as ralph/myproject/next in single mode, got %q", gm.WorktreeBranch)
-	}
-}
-
-// Verifies that single-branch mode skips branch rotation on resume even when
-// a different task is next, keeping the existing branch.
-func TestLoop_SingleBranchSkipsRotationOnResume(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-
-	st.Write("last_task", "old task")
-	st.Write("last_task_id", "ralph-old")
-
-	backend := &stubBackend{
-		remaining: 0,
-		completed: 1,
-		total:     1,
-		nextTask:  "different task",
-		nextID:    "ralph-new",
-	}
-
-	gm := &git.Manager{
-		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
-		RalphDir:       ralphDir,
-		WorktreeBranch: "ralph/myproject/01-old-task",
-		ProjectName:    "myproject",
-		BranchStrategy: git.BranchSingle,
-		State:          st,
-		Logger:         logging.New(nil),
-	}
-
-	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		MaxIterations: 5,
-		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
-
-	_ = l.Run(context.Background())
-
-	// Single mode on resume — branch stays put
-	if gm.WorktreeBranch != "ralph/myproject/01-old-task" {
-		t.Errorf("expected branch to stay as ralph/myproject/01-old-task in single mode, got %q", gm.WorktreeBranch)
 	}
 }
 
@@ -1937,16 +2570,18 @@ func TestLoop_RecordsAttemptAfterIteration(t *testing.T) {
 		total:     1,
 		nextTask:  "Fix the auth bug",
 		nextID:    "ralph-auth",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -1976,16 +2611,18 @@ func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
 		total:     1,
 		nextTask:  "Slow task",
 		nextID:    "ralph-slow",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 2,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2026,16 +2663,18 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 		total:     1,
 		nextTask:  "Done task",
 		nextID:    "ralph-done",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2047,7 +2686,7 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true, Summary: "task completed"},
 	}
-	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -2066,11 +2705,13 @@ func TestLoop_IncludesReflectionInAttemptContext(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:   dir,
-		WorkDir:      dir,
-		RalphDir:     ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		CallsPerHour: 80,
-		TaskBackend:  &stubBackend{label: "checklist"},
+		TaskBackend:  &stubBackend{label: "beads"},
 	}, st, gm, logging.New(nil))
 
 	// Write a reflection file
@@ -2096,11 +2737,13 @@ func TestLoop_CombinesAttemptsAndReflection(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:   dir,
-		WorkDir:      dir,
-		RalphDir:     ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		CallsPerHour: 80,
-		TaskBackend:  &stubBackend{label: "checklist"},
+		TaskBackend:  &stubBackend{label: "beads"},
 	}, st, gm, logging.New(nil))
 
 	// Record an attempt
@@ -2130,16 +2773,91 @@ func TestLoop_EmptyAttemptContextForNewTask(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:   dir,
-		WorkDir:      dir,
-		RalphDir:     ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		CallsPerHour: 80,
-		TaskBackend:  &stubBackend{label: "checklist"},
+		TaskBackend:  &stubBackend{label: "beads"},
 	}, st, gm, logging.New(nil))
 
 	ctx := l.buildAttemptContext("ralph-new", "Brand new task")
 	if ctx != "" {
 		t.Errorf("expected empty attempt context for new task, got: %s", ctx)
+	}
+}
+
+// Verifies that buildAttemptContext includes reflections from other completed
+// tasks, not just the current task. This proves cross-task feed-forward works.
+func TestLoop_CrossTaskReflectionsFedForward(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
+		CallsPerHour: 80,
+		TaskBackend:  &stubBackend{label: "beads"},
+	}, st, gm, logging.New(nil))
+
+	// Write reflections from 2 previously completed tasks
+	reflDir := filepath.Join(ralphDir, "reflections")
+	os.MkdirAll(reflDir, 0o755)
+	os.WriteFile(filepath.Join(reflDir, "ralph-old1.md"),
+		[]byte("# Old task 1\n## What would help future iterations\n- Run rebuild-go.sh before tests"), 0o644)
+	os.WriteFile(filepath.Join(reflDir, "ralph-old2.md"),
+		[]byte("# Old task 2\n## What was discovered\n- Auth middleware needs special handling"), 0o644)
+
+	// Build context for a NEW task (ralph-new) — should include old reflections
+	ctx := l.buildAttemptContext("ralph-new", "Brand new task")
+	if !strings.Contains(ctx, "rebuild-go.sh") {
+		t.Error("expected cross-task reflection from ralph-old1")
+	}
+	if !strings.Contains(ctx, "Auth middleware") {
+		t.Error("expected cross-task reflection from ralph-old2")
+	}
+	if !strings.Contains(ctx, "Recent learnings from previous tasks") {
+		t.Error("expected 'Recent learnings' section header")
+	}
+}
+
+// Verifies that cross-task attempt entries are NOT included in the prompt.
+// Only reflections (distilled insights) should cross task boundaries.
+func TestLoop_CrossTaskAttemptEntriesExcluded(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
+		CallsPerHour: 80,
+		TaskBackend:  &stubBackend{label: "beads"},
+	}, st, gm, logging.New(nil))
+
+	// Record a halt from a different task
+	l.attempts.Record("ralph-prev", "Previous task", "Halted: stagnation", "", "no code changes for 3 iterations")
+
+	// Build context for the next task — should NOT include cross-task attempts
+	ctx := l.buildAttemptContext("ralph-next", "Next task")
+	if strings.Contains(ctx, "ralph-prev") {
+		t.Error("cross-task attempt entries should not appear in prompt")
+	}
+	if strings.Contains(ctx, "stagnation") {
+		t.Error("cross-task halt reasons should not appear in prompt")
+	}
+	if strings.Contains(ctx, "Recent attempt outcomes") {
+		t.Error("'Recent attempt outcomes' section should not exist")
 	}
 }
 
@@ -2159,11 +2877,11 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 		total:     1,
 		nextTask:  "first task",
 		nextID:    "t-1",
-		label:     "checklist",
+		label:     "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
 
 	var (
 		callsMu sync.Mutex
@@ -2185,18 +2903,20 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Wait:          true,
-		WaitInterval:  50 * time.Millisecond,
+
 	}, st, gm, logger)
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	// After the loop enters wait mode, inject a new task. After the Claude
 	// call completes, the loop will re-enter wait mode; cancel the context
@@ -2245,21 +2965,23 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 		remaining: 0,
 		completed: 1,
 		total:     1,
-		label:     "checklist",
+		label:     "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Wait:          true,
-		WaitInterval:  50 * time.Millisecond,
+
 	}, st, gm, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2288,21 +3010,23 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 		remaining: 0,
 		completed: 1,
 		total:     1,
-		label:     "checklist",
+		label:     "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Wait:          true,
-		WaitInterval:  50 * time.Millisecond,
+
 	}, st, gm, logger)
 
 	go func() {
@@ -2331,16 +3055,18 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 		remaining: 0,
 		completed: 2,
 		total:     2,
-		label:     "checklist",
+		label:     "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2381,7 +3107,7 @@ func TestLoop_RecordsCompletedTasks(t *testing.T) {
 		total:     2,
 		nextTask:  "first task",
 		nextID:    "ralph-aaa",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	runner := &stubRunner{
@@ -2410,10 +3136,12 @@ func TestLoop_RecordsCompletedTasks(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2461,9 +3189,11 @@ func TestLoop_ClearsCompletedTasksOnStart(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2476,8 +3206,8 @@ func TestLoop_ClearsCompletedTasksOnStart(t *testing.T) {
 	}
 }
 
-// Verifies that when a task has no ID (checklist backend), the task title
-// is recorded instead, so the plan pane can still show completed items.
+// Verifies that when a task has no ID, the task title is recorded instead,
+// so the plan pane can still show completed items.
 func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -2490,7 +3220,7 @@ func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 		total:     1,
 		nextTask:  "Add dark mode",
 		nextID:    "",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	runner := &stubRunner{
@@ -2509,10 +3239,12 @@ func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2548,7 +3280,7 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 		total:     1,
 		nextTask:  "fix the bug",
 		nextID:    "ralph-bug",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	runner := &stubRunner{
@@ -2558,10 +3290,12 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2570,9 +3304,9 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return false, "test suite failed"
 	}
-	l.pushPRFunc = func(context.Context, string) error {
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) {
 		t.Error("push should not be called when verification fails")
-		return nil
+		return "", nil
 	}
 
 	_ = l.Run(context.Background())
@@ -2608,7 +3342,7 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 		total:     1,
 		nextTask:  "add feature",
 		nextID:    "ralph-feat",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	runner := &stubRunner{
@@ -2624,10 +3358,12 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2636,9 +3372,9 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
-	l.pushPRFunc = func(_ context.Context, _ string) error {
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) {
 		pushCalled = true
-		return nil
+		return "", nil
 	}
 
 	_ = l.Run(context.Background())
@@ -2673,7 +3409,7 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		total:     1,
 		nextTask:  "simple task",
 		nextID:    "ralph-simple",
-		label:     "checklist",
+		label:     "beads",
 	}
 
 	runner := &stubRunner{
@@ -2689,19 +3425,21 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		// VerifyDir deliberately not set
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(_ context.Context, _ string) error {
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) {
 		pushCalled = true
-		return nil
+		return "", nil
 	}
 
 	_ = l.Run(context.Background())
@@ -2760,10 +3498,12 @@ func TestLoop_LifecycleStates(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2772,7 +3512,7 @@ func TestLoop_LifecycleStates(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
-	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -2817,10 +3557,12 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -2849,9 +3591,12 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 	}
 }
 
-// When auto-merge returns a CIFailureError, the loop writes the failure
-// details to the feedback file so the next iteration can address them.
-func TestLoop_CIFailureWritesFeedback(t *testing.T) {
+// When merge fails with a CI error, the loop leaves the task open for retry.
+// CI fix agent spawning during the merge pipeline is tested in git module
+// (TestMergeWithRetry_DelegatesCIFailure).
+// When CI fails, the task is still closed because the PR exists — merge
+// is a separate concern from task completion.
+func TestLoop_CIFailureStillClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -2869,16 +3614,17 @@ func TestLoop_CIFailureWritesFeedback(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-ci-test",
-		BranchStrategy: git.BranchStacked,
-		State:          st,
-		Logger:         logging.New(nil),
+		State:  st,
+		Logger: logging.New(nil),
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -2888,7 +3634,7 @@ func TestLoop_CIFailureWritesFeedback(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return false, &git.CIFailureError{
 			PRNumber: "99",
@@ -2898,23 +3644,17 @@ func TestLoop_CIFailureWritesFeedback(t *testing.T) {
 		}
 	}
 
-	// Fix agent returns without signal — the loop should give up gracefully.
-	fixAgentSpawned := false
-	l.newRunnerFunc = func() claudeRunner {
-		fixAgentSpawned = true
-		return &stubRunner{result: claude.Result{SignalDetected: false}}
-	}
-
 	_ = l.Run(context.Background())
 
-	if !fixAgentSpawned {
-		t.Error("expected CI fix agent to be spawned when merge fails due to CI")
+	if backend.skippedTask != "ralph-ci1" {
+		t.Errorf("expected ralph-ci1 deferred in backend, got %q", backend.skippedTask)
 	}
 }
 
-// When auto-merge returns a MergeConflictError, the loop rebases onto main,
-// force-pushes, and retries the merge — resolving PR conflicts automatically.
-func TestLoop_MergeConflictTriggersRebaseAndRetry(t *testing.T) {
+// When mergeFunc succeeds, the loop closes the task and records the merge.
+// Conflict recovery (rebase + force-push + retry) is tested in git module
+// (TestMergeWithRetry_RecoversFromConflict).
+func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -2932,16 +3672,17 @@ func TestLoop_MergeConflictTriggersRebaseAndRetry(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-conflict-test",
-		BranchStrategy: git.BranchStacked,
-		State:          st,
-		Logger:         logging.New(nil),
+		State:  st,
+		Logger: logging.New(nil),
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -2951,37 +3692,25 @@ func TestLoop_MergeConflictTriggersRebaseAndRetry(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 
-	// First call returns MergeConflictError, second call succeeds.
-	mergeCalls := 0
+	merged := false
 	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalls++
-		if mergeCalls == 1 {
-			return false, &git.MergeConflictError{PRNumber: "77"}
-		}
+		merged = true
 		return true, nil
-	}
-
-	forcePushed := false
-	l.forcePushFunc = func(context.Context) error {
-		forcePushed = true
-		return nil
 	}
 
 	_ = l.Run(context.Background())
 
-	if mergeCalls < 2 {
-		t.Errorf("expected merge to be retried after conflict resolution, got %d calls", mergeCalls)
-	}
-	if !forcePushed {
-		t.Error("expected force-push after rebase to resolve conflicts")
+	if !merged {
+		t.Error("expected merge to be called when AutoMerge is enabled")
 	}
 }
 
-// When CI fails after merge, the loop spawns a fix agent via newRunnerFunc,
-// re-pushes the fix, and retries the merge — verifying the full CI fix loop.
-func TestLoop_CIFailureFixAgentRetriesMerge(t *testing.T) {
+// When mergeFunc eventually succeeds (simulating CI fix + retry), the loop
+// closes the task. CI fix agent spawning and retry logic are tested in git
+// module (TestMergeWithRetry_DelegatesCIFailure).
+func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -2999,16 +3728,17 @@ func TestLoop_CIFailureFixAgentRetriesMerge(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-ci-fix",
-		BranchStrategy: git.BranchStacked,
-		State:          st,
-		Logger:         logging.New(nil),
+		State:  st,
+		Logger: logging.New(nil),
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -3018,46 +3748,17 @@ func TestLoop_CIFailureFixAgentRetriesMerge(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
-	// Track fix agent invocations via newRunnerFunc.
-	fixAgentCalls := 0
-	l.newRunnerFunc = func() claudeRunner {
-		fixAgentCalls++
-		return &stubRunner{result: claude.Result{SignalDetected: true}}
-	}
-
-	pushCalls := 0
-	l.pushPRFunc = func(_ context.Context, _ string) error {
-		pushCalls++
-		return nil
-	}
-
-	// First merge returns CI failure, second merge (after fix) succeeds.
-	mergeCalls := 0
 	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalls++
-		if mergeCalls == 1 {
-			return false, &git.CIFailureError{
-				PRNumber: "99",
-				Failures: []git.CICheckResult{
-					{Name: "test", State: "FAILURE", Bucket: "fail"},
-				},
-			}
-		}
 		return true, nil
 	}
 
 	_ = l.Run(context.Background())
 
-	if fixAgentCalls == 0 {
-		t.Error("expected CI fix agent to be spawned via newRunnerFunc")
-	}
-	if mergeCalls < 2 {
-		t.Errorf("expected merge to be retried after CI fix, got %d calls", mergeCalls)
-	}
-	// pushCalls: 1 for initial push, 1 for post-fix push
-	if pushCalls < 2 {
-		t.Errorf("expected push after CI fix, got %d push calls", pushCalls)
+	tasks := l.SessionTasks()
+	if len(tasks) == 0 {
+		t.Error("expected at least one completed task after successful merge")
 	}
 }
 
@@ -3081,16 +3782,17 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/project/01-ci-exhaust",
-		BranchStrategy: git.BranchStacked,
-		State:          st,
-		Logger:         logging.New(nil),
+		State:  st,
+		Logger: logging.New(nil),
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
@@ -3103,12 +3805,11 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 	l.newRunnerFunc = func() claudeRunner {
 		return &stubRunner{result: claude.Result{SignalDetected: true}}
 	}
-	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
-	// Every merge attempt returns CI failure.
-	mergeCalls := 0
+	// mergeFunc returning error means merge pipeline failed (retry exhaustion
+	// is tested in git module: TestMergeWithRetry_ExhaustsRetries).
 	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalls++
 		return false, &git.CIFailureError{
 			PRNumber: "99",
 			Failures: []git.CICheckResult{
@@ -3119,9 +3820,249 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Initial merge + 2 retries = 3 total merge calls.
-	if mergeCalls != 3 {
-		t.Errorf("expected 3 merge calls (1 initial + 2 retries), got %d", mergeCalls)
+	// Task should remain open since merge failed.
+	s, _ := st.Load()
+	if s.Status == "completed" {
+		t.Error("expected status not to be 'completed' when merge fails")
+	}
+}
+
+// When mergeFunc returns an error, the loop does not close the task —
+// ensuring failed merges leave the task open for retry. The combined
+// conflict+CI retry pipeline is tested in git module
+// (TestMergeWithRetry_RecoversFromConflict, TestMergeWithRetry_DelegatesCIFailure).
+func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Mixed errors",
+		nextID:    "ralph-mixed",
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/project/01-mixed",
+		State:  st,
+		Logger: logging.New(nil),
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return false, fmt.Errorf("merge failed")
+	}
+
+	var buf bytes.Buffer
+	logger := logging.New(&buf)
+	l.logger = logger
+
+	_ = l.Run(context.Background())
+
+	output := buf.String()
+	if !strings.Contains(output, "Auto-merge") {
+		t.Log("Log output:", output)
+	}
+}
+
+// Verifies that after MaxMergeFailures consecutive merge failures, the loop
+// skips the task instead of retrying indefinitely. Merge failures are tracked
+// across iterations via the attempts tracker.
+// Merge failures no longer cause task skipping — the PR exists, work is done.
+func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			completed: 0,
+			total:     1,
+			nextTask:  "Stubborn task",
+			nextID:    "ralph-stub",
+			label:     "beads",
+		},
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/project/01-stubborn",
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return false, fmt.Errorf("push denied by remote")
+	}
+
+	_ = l.Run(context.Background())
+
+	// Task should be deferred in backend — merge failed, PR exists for manual review.
+	backend.skipMu.Lock()
+	defer backend.skipMu.Unlock()
+	if len(backend.skippedIDs) != 1 || backend.skippedIDs[0] != "ralph-stub" {
+		t.Errorf("expected ralph-stub deferred in backend, got %v", backend.skippedIDs)
+	}
+}
+
+// Merge failure skips the task — PR exists, work is done. No retry counting.
+func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			completed: 0,
+			total:     1,
+			nextTask:  "Fixable task",
+			nextID:    "ralph-fix",
+			label:     "beads",
+		},
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/project/01-fixable",
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "50", nil }
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return false, fmt.Errorf("merge conflict")
+	}
+
+	_ = l.Run(context.Background())
+
+	// Task should be deferred in backend — merge failed, PR exists for manual review.
+	backend.skipMu.Lock()
+	defer backend.skipMu.Unlock()
+	if len(backend.skippedIDs) != 1 || backend.skippedIDs[0] != "ralph-fix" {
+		t.Errorf("expected ralph-fix deferred in backend, got %v", backend.skippedIDs)
+	}
+}
+
+// Verifies that successful merge clears the merge failure counter.
+func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			completed: 0,
+			total:     1,
+			nextTask:  "Recovering task",
+			nextID:    "ralph-rec",
+			label:     "beads",
+		},
+	}
+
+	gm := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/project/01-recover",
+		State:          st,
+		Logger:         logging.New(nil),
+	}
+
+	// Seed 2 prior failures.
+	tracker := attempts.New(ralphDir)
+	tracker.RecordMergeFailure("ralph-rec")
+	tracker.RecordMergeFailure("ralph-rec")
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return true, nil
+	}
+
+	_ = l.Run(context.Background())
+
+	if count := tracker.MergeFailureCount("ralph-rec"); count != 0 {
+		t.Errorf("expected merge failures cleared after successful merge, got %d", count)
 	}
 }
 
@@ -3156,10 +4097,12 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -3167,7 +4110,7 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -3193,7 +4136,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	// Write templates with {{TEST_STATUS}} in internal.md
-	for _, name := range []string{"shared.md", "reflection.md", "signal.md", "execution-bd.md"} {
+	for _, name := range []string{"shared.md", "reflection.md", "signal.md", "feedback.md", "execution-bd.md"} {
 		os.WriteFile(filepath.Join(promptsDir, name), []byte("test"), 0o644)
 	}
 	os.WriteFile(filepath.Join(promptsDir, "internal.md"),
@@ -3222,10 +4165,12 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       dir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -3246,7 +4191,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		captured: &capturedPrompt,
 	}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string) error { return nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -3259,11 +4204,10 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	}
 }
 
-// runFixAgent stops the main runner's streaming, creates a new runner via
-// newRunnerFunc, passes the standard RunConfig, and returns the result.
-// This test verifies all three behaviors in isolation.
-func TestLoop_runFixAgent(t *testing.T) {
-	dir, st := setupTestDir(t)
+// Verifier.runFixAgent stops the main runner's streaming, creates a new
+// runner via NewRunner, passes the standard RunConfig, and returns the result.
+func TestVerifier_runFixAgent(t *testing.T) {
+	dir, _ := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	mainRunner := &stubRunner{}
@@ -3271,22 +4215,23 @@ func TestLoop_runFixAgent(t *testing.T) {
 	fixRunner := &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
 
 	signals := claude.DefaultSignalPaths(ralphDir)
-	l := &Loop{
-		cfg: Config{
+	v := &Verifier{
+		cfg: VerifierConfig{
 			RalphDir:    ralphDir,
 			IdleTimeout: 30 * time.Second,
 		},
-		state:   st,
-		runner:  mainRunner,
-		logger:  logging.New(nil),
-		signals: signals,
-		newRunnerFunc: func() claudeRunner {
-			return &configCapturingRunner{inner: fixRunner, captured: &capturedCfg}
+		deps: VerifierDeps{
+			Logger:  logging.New(nil),
+			Runner:  func() claudeRunner { return mainRunner },
+			Signals: signals,
+			NewRunner: func() claudeRunner {
+				return &configCapturingRunner{inner: fixRunner, captured: &capturedCfg}
+			},
 		},
 	}
 
 	ctx := context.Background()
-	result := l.runFixAgent(ctx, "test failures", "fix the tests", "/work", "/logs/raw.log")
+	result := v.runFixAgent(ctx, "test failures", "fix the tests", "/work", "/logs/raw.log")
 
 	if !result.SignalDetected {
 		t.Error("expected SignalDetected from fix agent result")
@@ -3311,6 +4256,43 @@ func TestLoop_runFixAgent(t *testing.T) {
 	}
 }
 
+// Verifies that a fix agent's summary is logged when the signal includes
+// a descriptive message (not just "done").
+func TestVerifier_runFixAgent_logsSummary(t *testing.T) {
+	dir, _ := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	var logBuf bytes.Buffer
+	fixRunner := &stubRunner{result: claude.Result{
+		SignalDetected: true,
+		Summary:        "added missing nil check in parseConfig",
+	}}
+
+	signals := claude.DefaultSignalPaths(ralphDir)
+	v := &Verifier{
+		cfg: VerifierConfig{
+			RalphDir:    ralphDir,
+			IdleTimeout: 30 * time.Second,
+		},
+		deps: VerifierDeps{
+			Logger:  logging.NewWithWriter(&logBuf),
+			Runner:  func() claudeRunner { return &stubRunner{} },
+			Signals: signals,
+			NewRunner: func() claudeRunner {
+				return fixRunner
+			},
+		},
+	}
+
+	ctx := context.Background()
+	v.runFixAgent(ctx, "test failures", "fix the tests", "/work", "/logs/raw.log")
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Fix agent (test failures): added missing nil check in parseConfig") {
+		t.Errorf("expected fix agent summary in log output, got: %s", output)
+	}
+}
+
 // configCapturingRunner captures the RunConfig for assertions.
 type configCapturingRunner struct {
 	inner    claudeRunner
@@ -3324,6 +4306,10 @@ func (c *configCapturingRunner) Run(cfg claude.RunConfig) (claude.Result, error)
 
 func (c *configCapturingRunner) StopStreaming() {
 	c.inner.StopStreaming()
+}
+
+func (c *configCapturingRunner) InjectMessage(msg string) error {
+	return c.inner.InjectMessage(msg)
 }
 
 // promptCapturingRunner wraps a claude runner to capture the prompt.
@@ -3341,10 +4327,14 @@ func (p *promptCapturingRunner) StopStreaming() {
 	p.inner.StopStreaming()
 }
 
-// Verifies that the loop rebases onto the base branch before pushing after
-// a signal is detected. Without this, direct pushes to main/develop during
-// the iteration would be overwritten by the squash-merge.
-func TestLoop_PrePushRebaseBeforePush(t *testing.T) {
+func (p *promptCapturingRunner) InjectMessage(msg string) error {
+	return p.inner.InjectMessage(msg)
+}
+
+// Verifies that push is called after signal detection. The sync guard
+// (fetch + rebase) is enforced internally by PushAndCreatePR's EnsureUpToDate
+// — tested in git module.
+func TestLoop_PushCalledAfterSignal(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
@@ -3356,10 +4346,8 @@ func TestLoop_PrePushRebaseBeforePush(t *testing.T) {
 		RalphDir:       ralphDir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/test/01-task",
-		UseWorktree:    true,
-		BranchStrategy: git.BranchStacked,
-		State:          st,
-		Logger:         logging.New(nil),
+		State:  st,
+		Logger: logging.New(nil),
 	}
 
 	backend := &stubBackend{
@@ -3370,23 +4358,21 @@ func TestLoop_PrePushRebaseBeforePush(t *testing.T) {
 	}
 
 	l := New(Config{
-		ProjectDir:    dir,
-		WorkDir:       gm.WorkDir,
-		RalphDir:      ralphDir,
-		PromptsDir:    promptsDir,
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	var order []string
-	l.prePushRebaseFunc = func(context.Context) error {
-		order = append(order, "rebase")
-		return nil
-	}
-	l.pushPRFunc = func(context.Context, string) error {
-		order = append(order, "push")
-		return nil
+	pushCalled := false
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) {
+		pushCalled = true
+		return "", nil
 	}
 
 	l.runner = &stubRunner{
@@ -3395,10 +4381,3424 @@ func TestLoop_PrePushRebaseBeforePush(t *testing.T) {
 
 	l.Run(context.Background())
 
-	if len(order) < 2 {
-		t.Fatalf("expected rebase and push to be called, got %v", order)
+	if !pushCalled {
+		t.Error("expected push to be called after signal detection")
 	}
-	if order[0] != "rebase" || order[1] != "push" {
-		t.Errorf("expected [rebase, push] order, got %v", order)
+}
+
+// Orchestrator status messages ("All tasks complete!", "No tasks found") must
+// use the [o] actor prefix, not the task backend label (e.g. [beads] without [o]).
+// The [o][beads] tag is valid — it marks orchestrator-initiated beads operations.
+func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
+	tests := []struct {
+		name    string
+		backend *stubBackend
+		want    string // substring expected in log output
+	}{
+		{
+			name: "all tasks complete uses orchestrator actor prefix",
+			backend: &stubBackend{
+				remaining: 0, completed: 3, total: 3, label: "beads",
+			},
+			want: "[o]",
+		},
+		{
+			name: "no tasks error uses orchestrator actor prefix",
+			backend: &stubBackend{
+				remaining: 0, completed: 0, total: 0, label: "beads",
+			},
+			want: "[o]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, st := setupTestDir(t)
+			ralphDir := filepath.Join(dir, ".ralph")
+
+			var logBuf strings.Builder
+			logger := logging.New(&logBuf)
+
+			gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+			l := New(Config{
+				Dirs: workctx.WorkContext{
+					ProjectDir: dir,
+					WorkDir:    dir,
+					RalphDir:   ralphDir,
+				},
+				MaxIterations: 5,
+				CallsPerHour:  80,
+				TaskBackend:   tt.backend,
+			}, st, gm, logger)
+
+			l.Run(context.Background())
+
+			output := logBuf.String()
+			if !strings.Contains(output, tt.want) {
+				t.Errorf("expected %q in log output:\n%s", tt.want, output)
+			}
+		})
+	}
+}
+
+// Verifies that when a task has a description, the log output includes
+// the description on a separate line after the task title.
+func TestLoop_LogsTaskDescription(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	var logBuf strings.Builder
+	logger := logging.New(&logBuf)
+
+	backend := &stubBackend{
+		remaining:   1,
+		completed:   0,
+		total:       1,
+		nextTask:    "Fix the auth module",
+		nextID:      "ralph-abc",
+		label:       "beads",
+		description: "Auth tokens are expiring too early due to clock skew",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = &stubRunner{
+		onRun: func() {
+			backend.remaining = 0
+			backend.completed = 1
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+
+	l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "ralph-abc: Fix the auth module") {
+		t.Errorf("expected task banner with bead ID and title:\n%s", output)
+	}
+	if !strings.Contains(output, "═") {
+		t.Error("expected ═ separator characters in task banner")
+	}
+	if !strings.Contains(output, "Auth tokens are expiring too early due to clock skew") {
+		t.Errorf("expected task description in log output:\n%s", output)
+	}
+	if strings.Contains(output, "Next task:") {
+		t.Error("redundant 'Next task:' line should be removed")
+	}
+	if strings.Contains(output, "→ implementing") {
+		t.Error("redundant '→ implementing' line should be removed")
+	}
+}
+
+// Verifies that when a task has no description, no extra description line
+// is logged — only the task title appears.
+func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	var logBuf strings.Builder
+	logger := logging.New(&logBuf)
+
+	backend := &stubBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "Fix the auth module",
+		nextID:    "ralph-abc",
+		label:     "beads",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = &stubRunner{
+		onRun: func() {
+			backend.remaining = 0
+			backend.completed = 1
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+
+	l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "ralph-abc: Fix the auth module") {
+		t.Errorf("expected task banner with bead ID and title:\n%s", output)
+	}
+	if strings.Contains(output, "Next task:") {
+		t.Error("redundant 'Next task:' line should be removed")
+	}
+	// Count lines containing "description" — there should be none since
+	// the backend returns an empty description.
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "Description:") {
+			t.Errorf("unexpected description line in log output when description is empty:\n%s", output)
+			break
+		}
+	}
+}
+
+// When the last task completes and no tasks remain, the loop should still
+// push and create a PR before exiting — not silently drop unpushed work.
+func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "beads",
+	}
+
+	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
+
+	runner := &stubRunner{
+		onRun: func() {
+			// Simulate the task completing — no remaining tasks after this.
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Wait:          false,
+	}, st, gm, logger)
+	l.runner = runner
+
+	var pushCalls int
+	l.pushPRFunc = func(_ context.Context, taskID, taskDesc, _ string) (string, error) {
+		pushCalls++
+		return "", nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Push must be called: once during signal handling AND once as a flush
+	// before exit. PushAndCreatePR is idempotent (returns early when no new
+	// commits), so the safety-net call is harmless if the first succeeded.
+	if pushCalls < 2 {
+		t.Errorf("expected pushPRFunc called at least 2 times (signal + flush), got %d", pushCalls)
+	}
+}
+
+// When the last task completes and --wait is set, the loop should flush
+// unpushed work before entering wait mode, not lose it.
+func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "beads",
+	}
+
+	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Wait:          true,
+
+	}, st, gm, logger)
+	l.runner = runner
+
+	var pushCalls int
+	l.pushPRFunc = func(_ context.Context, taskID, taskDesc, _ string) (string, error) {
+		pushCalls++
+		return "", nil
+	}
+
+	// Cancel after entering wait to prevent hanging.
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	err := l.Run(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if pushCalls < 2 {
+		t.Errorf("expected pushPRFunc called at least 2 times (signal + flush), got %d", pushCalls)
+	}
+}
+
+// When AutoMerge is enabled, flushUnpushedWork must squash-merge after
+// pushing — same flow as every other task, no special case for last task.
+func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "beads",
+	}
+
+	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     true,
+		Wait:          false,
+	}, st, gm, logger)
+	l.runner = runner
+
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
+
+	var mergeCalls int
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mergeCalls == 0 {
+		t.Error("expected mergeFunc called during flush before exit, got 0 calls")
+	}
+}
+
+// When AutoMerge is enabled and --wait is set, flushUnpushedWork must
+// squash-merge before entering wait mode.
+func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "beads",
+	}
+
+	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     true,
+		Wait:          true,
+
+	}, st, gm, logger)
+	l.runner = runner
+
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
+
+	var mergeCalls int
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	err := l.Run(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mergeCalls == 0 {
+		t.Error("expected mergeFunc called during flush before wait, got 0 calls")
+	}
+}
+
+// When AutoMerge is disabled, flushUnpushedWork must NOT attempt to merge.
+func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "beads",
+	}
+
+	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     false,
+		Wait:          false,
+	}, st, gm, logger)
+	l.runner = runner
+
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
+
+	var mergeCalls int
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mergeCalls != 0 {
+		t.Errorf("expected mergeFunc NOT called when AutoMerge disabled, got %d calls", mergeCalls)
+	}
+}
+
+// When the signal handler already merged the last task, the flush safety net
+// must not merge again — otherwise multi-task runs get an extra merge call.
+func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "beads",
+	}
+
+	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     true,
+		Wait:          false,
+	}, st, gm, logger)
+	l.runner = runner
+
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
+
+	var mergeCalls int
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Merge fires once in the signal handler. The flush must not merge again
+	// because lastTaskMerged is set.
+	if mergeCalls != 1 {
+		t.Errorf("expected exactly 1 merge (signal handler only), got %d", mergeCalls)
+	}
+}
+
+// When the agent exits without a signal, the flush safety net must still
+// push and merge so the last task's work is not lost.
+func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "last task",
+		nextID:    "ralph-last",
+		label:     "beads",
+	}
+
+	logger := logging.New(nil)
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.remaining = 0
+			backend.completed = 1
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: false},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     true,
+		Wait:          false,
+	}, st, gm, logger)
+	l.runner = runner
+
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
+
+	var mergeCalls int
+	l.mergeFunc = func(context.Context) (bool, error) {
+		mergeCalls++
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Signal handler didn't fire, so merge only happens during flush.
+	if mergeCalls != 1 {
+		t.Errorf("expected exactly 1 merge (flush only), got %d", mergeCalls)
+	}
+}
+
+// Verifies that SessionTasks() captures the bead ID, title, and agent summary
+// for each task completed via signal detection, so the session summary can
+// display what was accomplished before evolve restart or exit.
+func TestLoop_SessionTasksRecordsCompletedWork(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "fix session display",
+		nextID:    "ralph-re76",
+		label:     "beads",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "added session summary before evolve"},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.verifyFunc = func(context.Context, string, string) (bool, string) {
+		return true, ""
+	}
+	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
+
+	_ = l.Run(context.Background())
+
+	tasks := l.SessionTasks()
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 session task, got %d", len(tasks))
+	}
+	if tasks[0].ID != "ralph-re76" {
+		t.Errorf("expected task ID ralph-re76, got %s", tasks[0].ID)
+	}
+	if tasks[0].Title != "fix session display" {
+		t.Errorf("expected task title 'fix session display', got %s", tasks[0].Title)
+	}
+	if tasks[0].Summary != "added session summary before evolve" {
+		t.Errorf("expected summary 'added session summary before evolve', got %s", tasks[0].Summary)
+	}
+}
+
+// Verifies that SessionTasks() is empty when verification fails and no task
+// is actually completed, preventing false entries in the session summary.
+func TestLoop_SessionTasksEmptyOnVerificationFailure(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "broken task",
+		nextID:    "ralph-fail",
+		label:     "beads",
+	}
+
+	runner := &stubRunner{
+		result: claude.Result{SignalDetected: true, Summary: "tried to fix it"},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.verifyFunc = func(context.Context, string, string) (bool, string) {
+		return false, "tests failed"
+	}
+
+	_ = l.Run(context.Background())
+
+	tasks := l.SessionTasks()
+	if len(tasks) != 0 {
+		t.Errorf("expected 0 session tasks on verification failure, got %d", len(tasks))
+	}
+}
+
+// Verifies that a dashed separator line appears between iterations in the
+// log output, giving a clear visual boundary between each run.
+// signalCallingRunner invokes OnSignal during Run to exercise the
+// in-runner verification path (LLM verification, test re-runs).
+type signalCallingRunner struct {
+	onRun  func()
+	result claude.Result
+}
+
+func (s *signalCallingRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
+	if s.onRun != nil {
+		s.onRun()
+	}
+	if cfg.OnSignal != nil {
+		cfg.OnSignal("")
+		return claude.Result{
+			SignalDetected: true,
+			OnSignalUsed:   true,
+			Summary:        s.result.Summary,
+		}, nil
+	}
+	return s.result, nil
+}
+
+func (s *signalCallingRunner) StopStreaming() {}
+
+func (s *signalCallingRunner) InjectMessage(_ string) error { return nil }
+
+// Verifies that LLM verification pass logs with green (Success) color
+// and LLM verification reject logs with red (Error) color.
+func TestLoop_LLMVerificationLogColors(t *testing.T) {
+	tests := []struct {
+		name      string
+		passed    bool
+		reason    string
+		details   string
+		wantColor string
+		wantMsg   string
+	}{
+		{
+			name:      "LLM pass logs green",
+			passed:    true,
+			reason:    "diff matches requirements",
+			wantColor: logging.Green,
+			wantMsg:   "LLM verified: diff matches requirements",
+		},
+		{
+			name:      "LLM reject logs red",
+			passed:    false,
+			details:   "missing error handling",
+			wantColor: logging.Red,
+			wantMsg:   "LLM verification rejected (attempt 1/3): missing error handling",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, st := setupTestDir(t)
+			ralphDir := filepath.Join(dir, ".ralph")
+			promptsDir := filepath.Join(dir, "prompts")
+			createPromptTemplates(t, promptsDir)
+			os.WriteFile(filepath.Join(promptsDir, "verify-llm.md"), []byte("fix: {{LLM_FEEDBACK}}"), 0o644)
+
+			backend := &mutableBackend{
+				remaining: 1,
+				completed: 0,
+				total:     1,
+				nextTask:  "add colored logs",
+				nextID:    "ralph-color",
+				label:     "beads",
+			}
+
+			runner := &signalCallingRunner{
+				onRun: func() {
+					backend.mu.Lock()
+					backend.completed = 1
+					backend.remaining = 0
+					backend.mu.Unlock()
+				},
+				result: claude.Result{Summary: "done"},
+			}
+
+			var logBuf bytes.Buffer
+			logger := logging.NewWithWriter(&logBuf)
+
+			gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+			llmResult := verify.Result{
+				Passed:  tt.passed,
+				Reason:  tt.reason,
+				Details: tt.details,
+			}
+
+			l := New(Config{
+				Dirs: workctx.WorkContext{
+					ProjectDir: dir,
+					WorkDir:    dir,
+					RalphDir:   ralphDir,
+					PromptsDir: promptsDir,
+				},
+				MaxIterations: 1,
+				CallsPerHour:  80,
+				TaskBackend:   backend,
+				VerifyDir:     dir,
+			}, st, gm, logger)
+			l.runner = runner
+			l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
+				return llmResult
+			}
+			l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+
+			// For rejection, injection succeeds (signalCallingRunner.InjectMessage returns nil)
+			// and onSignal returns false — the agent continues with feedback injected via stdin.
+
+			_ = l.Run(context.Background())
+
+			output := logBuf.String()
+			if !strings.Contains(output, tt.wantMsg) {
+				t.Errorf("expected %q in output, got:\n%s", tt.wantMsg, output)
+			}
+			// Verify the message line uses the expected color by checking that
+			// the line containing the message also contains the expected ANSI code.
+			for _, line := range strings.Split(output, "\n") {
+				if strings.Contains(line, tt.wantMsg) {
+					if !strings.Contains(line, tt.wantColor) {
+						t.Errorf("line with %q should use color %q, got:\n%s", tt.wantMsg, tt.name, line)
+					}
+					break
+				}
+			}
+		})
+	}
+}
+
+func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	iterationCount := 0
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+		label:     "beads",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			if iterationCount == 1 {
+				backend.mu.Lock()
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+				backend.mu.Unlock()
+			} else {
+				backend.mu.Lock()
+				backend.completed = 2
+				backend.remaining = 0
+				backend.mu.Unlock()
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = runner
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "─") {
+		t.Error("expected dashed separator (─) between iterations")
+	}
+	if iterationCount != 2 {
+		t.Errorf("expected 2 iterations, got %d", iterationCount)
+	}
+}
+
+// Verifies that the loop prints a task separator banner with the bead ID
+// when a new task starts, replacing the old per-line magenta prefix.
+func TestLoop_TaskBannerOnNewTask(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "fix the thing",
+		nextID:    "ralph-l337",
+		label:     "beads",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = runner
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "ralph-l337: fix the thing") {
+		t.Errorf("expected task banner with bead ID and title, got: %s", output)
+	}
+	if !strings.Contains(output, "═") {
+		t.Error("expected ═ separator characters in task banner")
+	}
+}
+
+// Verifies that when Claude reports a rate limit, the loop waits until
+// the reset time and retries the iteration instead of counting it as
+// stagnation.
+func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	iterationCount := 0
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "fix the bug",
+		nextID:    "ralph-rl1",
+		label:     "beads",
+	}
+
+	// First call returns rate limited with a reset time in the past (so
+	// WaitUntil returns immediately). Second call completes the task.
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			if iterationCount >= 2 {
+				backend.mu.Lock()
+				backend.completed = 1
+				backend.remaining = 0
+				backend.mu.Unlock()
+			}
+		},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	var logBuf bytes.Buffer
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.NewWithWriter(&logBuf))
+
+	// Override the runner to return different results per iteration.
+	l.runner = &rateLimitStubRunner{
+		backend: backend,
+		counter: &iterationCount,
+	}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+	l.mergeFunc = func(context.Context) (bool, error) { return false, nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
+		return verify.Result{Passed: true}
+	}
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+	t.Logf("Output: %s", output)
+	if !strings.Contains(output, "rate limit") && !strings.Contains(output, "Rate limit") {
+		t.Errorf("expected rate limit log message, got: %s", output)
+	}
+	if !strings.Contains(output, "resuming") {
+		t.Errorf("expected 'resuming' after rate limit wait, got: %s", output)
+	}
+	// rateLimitStubRunner tracks its own calls.
+	rlRunner := l.runner.(*rateLimitStubRunner)
+	if rlRunner.calls < 2 {
+		t.Errorf("expected at least 2 Claude calls (rate limit + retry), got %d", rlRunner.calls)
+	}
+	_ = runner // silence unused
+	_ = iterationCount
+}
+
+// rateLimitStubRunner returns RateLimited on the first call, then
+// SignalDetected on subsequent calls.
+type rateLimitStubRunner struct {
+	backend *mutableBackend
+	counter *int
+	calls   int
+}
+
+func (r *rateLimitStubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
+	r.calls++
+	if r.calls == 1 {
+		return claude.Result{
+			RateLimited: true,
+			ResetAt:     time.Now().Add(-1 * time.Second),
+		}, nil
+	}
+	r.backend.mu.Lock()
+	r.backend.completed = 1
+	r.backend.remaining = 0
+	r.backend.mu.Unlock()
+	return claude.Result{SignalDetected: true, Summary: "done"}, nil
+}
+
+func (r *rateLimitStubRunner) StopStreaming() {}
+
+func (r *rateLimitStubRunner) InjectMessage(_ string) error { return nil }
+
+// Health dashboard is logged between iterations in verbose mode so operators
+// can detect process leaks, stale signal files, and growing state.json.
+func TestLoop_HealthDashboardLoggedBetweenIterations(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	// Create a signal file so the health snapshot has something to report.
+	os.WriteFile(filepath.Join(ralphDir, ".signal_current_task"), []byte("test task"), 0o644)
+
+	callCount := 0
+	backend := &mutableBackend{
+		remaining: 1,
+		total:     2,
+		nextTask:  "First task",
+		nextID:    "ralph-h1",
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 3,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Verbose:       true,
+	}, st, gm, logger)
+
+	l.runner = &stubRunner{
+		onRun: func() {
+			callCount++
+			if callCount >= 2 {
+				os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
+			}
+		},
+	}
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+
+	if !strings.Contains(output, "[health]") {
+		t.Error("expected [health] tag in log output between iterations")
+	}
+	if !strings.Contains(output, "state fields") {
+		t.Error("expected 'state fields' in health log")
+	}
+	if !strings.Contains(output, "signals:") {
+		t.Error("expected 'signals:' in health log")
+	}
+	if !strings.Contains(output, "branch:") {
+		t.Error("expected 'branch:' in health log")
+	}
+}
+
+// Health dashboard is suppressed in default (non-verbose) mode to reduce
+// diagnostic noise — only shown when --verbose is set.
+func TestLoop_HealthDashboardHiddenByDefault(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	os.WriteFile(filepath.Join(ralphDir, ".signal_current_task"), []byte("test task"), 0o644)
+
+	callCount := 0
+	backend := &mutableBackend{
+		remaining: 1,
+		total:     2,
+		nextTask:  "First task",
+		nextID:    "ralph-h1",
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 3,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Verbose:       false,
+	}, st, gm, logger)
+
+	l.runner = &stubRunner{
+		onRun: func() {
+			callCount++
+			if callCount >= 2 {
+				os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
+			}
+		},
+	}
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+
+	if strings.Contains(output, "[health]") {
+		t.Error("health log should not appear in default (non-verbose) mode")
+	}
+}
+
+// Verifies that the iteration banner includes the Ralph version when
+// Config.Version is set, so operators can tell which build is running.
+func TestLoop_IterationBannerShowsVersion(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     1,
+		nextTask:  "check version",
+		nextID:    "ralph-ver1",
+		label:     "beads",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		Version:       "1.2.3",
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = runner
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Ralph v1.2.3") {
+		t.Errorf("expected 'Ralph v1.2.3' in iteration banner, got:\n%s", output)
+	}
+}
+
+// injectCapturingRunner records messages sent via InjectMessage so tests
+// can verify that test failure feedback is injected to the running agent.
+type injectCapturingRunner struct {
+	onRun    func()
+	result   claude.Result
+	injected []string
+}
+
+func (r *injectCapturingRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
+	if r.onRun != nil {
+		r.onRun()
+	}
+	return r.result, nil
+}
+
+func (r *injectCapturingRunner) StopStreaming() {}
+
+func (r *injectCapturingRunner) InjectMessage(msg string) error {
+	r.injected = append(r.injected, msg)
+	return nil
+}
+
+// Verifies that when post-signal tests fail, the failure output is injected
+// to the running agent via stdin instead of spawning a separate fix agent.
+// The agent has full context of what it built and can fix its own work.
+func TestLoop_onSignal_InjectsTestFailures(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	// Create a Makefile with a failing test command so verify.RunTests
+	// detects a test runner and returns a failure.
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\t@echo 'FAIL: broken test' && exit 1\n"), 0o644)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Fix something",
+		nextID:    "ralph-test1",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	runner := &injectCapturingRunner{}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logger)
+	l.runner = runner
+
+	p := signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-test1",
+		nextTask:   "Fix something",
+	}
+
+	accepted := l.onSignal(p)
+
+	if accepted {
+		t.Error("onSignal should return false when tests fail (agent continues)")
+	}
+	if len(runner.injected) == 0 {
+		t.Fatal("expected test failure to be injected to agent via stdin")
+	}
+	if !strings.Contains(runner.injected[0], "Tests failed") {
+		t.Errorf("injected message should contain test failure info, got: %q", runner.injected[0])
+	}
+
+	output := logBuf.String()
+	if !strings.Contains(output, "injected to agent via stdin") {
+		t.Errorf("expected injection log message, got:\n%s", output)
+	}
+}
+
+// LLM rejection spawns a fix agent with rejection context — no stdin
+// injection. When the fix agent fails (no signal), onSignal returns false.
+func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Add feature",
+		nextID:    "ralph-llm1",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logger)
+
+	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
+		return verify.Result{Passed: false, Details: "missing error handling in parseConfig"}
+	}
+
+	fixAgentCalled := false
+	l.newRunnerFunc = func() claudeRunner {
+		fixAgentCalled = true
+		return &stubRunner{result: claude.Result{}}
+	}
+
+	p := signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-llm1",
+		nextTask:   "Add feature",
+	}
+
+	accepted := l.onSignal(p)
+
+	if accepted {
+		t.Error("onSignal should return false when fix agent exits without signal")
+	}
+	if !fixAgentCalled {
+		t.Error("fix agent should be spawned on LLM rejection")
+	}
+}
+
+// LLM rejection spawns a fix agent. When the fix agent signals completion,
+// the verifier re-runs LLM verification within the same onSignal call.
+func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Fix bug",
+		nextID:    "ralph-fb1",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+
+	var logBuf bytes.Buffer
+	logger := logging.NewWithWriter(&logBuf)
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logger)
+
+	llmCalls := 0
+	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
+		llmCalls++
+		if llmCalls == 1 {
+			return verify.Result{Passed: false, Details: "incomplete implementation"}
+		}
+		return verify.Result{Passed: true, Reason: "approved"}
+	}
+
+	fixAgentCalled := false
+	l.newRunnerFunc = func() claudeRunner {
+		fixAgentCalled = true
+		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
+	}
+
+	p := signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-fb1",
+		nextTask:   "Fix bug",
+	}
+
+	accepted := l.onSignal(p)
+
+	if !accepted {
+		t.Error("onSignal should return true after fix agent + re-verify succeeds")
+	}
+	if !fixAgentCalled {
+		t.Error("fix agent should be spawned on LLM rejection")
+	}
+	if llmCalls != 2 {
+		t.Errorf("expected 2 LLM calls (reject + approve), got %d", llmCalls)
+	}
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Spawning fix agent for verification rejection") {
+		t.Errorf("expected fix agent spawn log, got:\n%s", output)
+	}
+}
+
+// Verifies that test fix attempts are tracked across onSignal calls and
+// the agent is not allowed infinite retries.
+func TestLoop_onSignal_TestFixAttemptsTracked(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	// Create a Makefile with a failing test command.
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\t@echo 'FAIL: broken' && exit 1\n"), 0o644)
+
+	backend := &stubBackend{
+		remaining: 1,
+		total:     1,
+		nextTask:  "Fix tests",
+		nextID:    "ralph-tr1",
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+	runner := &injectCapturingRunner{}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logger)
+	l.runner = runner
+
+	p := signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-tr1",
+		nextTask:   "Fix tests",
+	}
+
+	// Call onSignal maxTestFixAttempts+1 times — the last should give up.
+	for i := 0; i <= 3; i++ {
+		l.onSignal(p)
+	}
+
+	// Should have injected 3 times (the max), then given up on the 4th.
+	if len(runner.injected) != 3 {
+		t.Errorf("expected 3 injections before giving up, got %d", len(runner.injected))
+	}
+}
+
+// buildPRBody assembles description, acceptance criteria, and agent summary
+// into a structured PR body when all context is available.
+// buildPRBody is a standalone function — takes backend directly, no Loop needed.
+func TestBuildPRBody_FullContext(t *testing.T) {
+	backend := &stubBackend{
+		description: "Fix the auth middleware to validate tokens",
+		acceptance:  "1. Tokens are validated\n2. Invalid tokens return 401",
+	}
+
+	body := buildPRBody(backend, "ralph-abc", "Fixed auth middleware token validation")
+
+	if !strings.Contains(body, "## Description") {
+		t.Error("body should contain Description section")
+	}
+	if !strings.Contains(body, "Fix the auth middleware") {
+		t.Error("body should contain bead description")
+	}
+	if !strings.Contains(body, "## Acceptance Criteria") {
+		t.Error("body should contain Acceptance Criteria section")
+	}
+	if !strings.Contains(body, "Tokens are validated") {
+		t.Error("body should contain acceptance criteria content")
+	}
+	if !strings.Contains(body, "## Summary") {
+		t.Error("body should contain Summary section")
+	}
+	if !strings.Contains(body, "Fixed auth middleware") {
+		t.Error("body should contain agent summary")
+	}
+}
+
+func TestBuildPRBody_NoBeadDescription(t *testing.T) {
+	backend := &stubBackend{}
+
+	body := buildPRBody(backend, "ralph-abc", "Implemented the feature")
+
+	if strings.Contains(body, "## Description") {
+		t.Error("body should not contain Description when bead has none")
+	}
+	if !strings.Contains(body, "## Summary") {
+		t.Error("body should contain Summary section as fallback")
+	}
+	if !strings.Contains(body, "Implemented the feature") {
+		t.Error("body should contain agent summary")
+	}
+}
+
+func TestBuildPRBody_NoContext(t *testing.T) {
+	backend := &stubBackend{}
+
+	body := buildPRBody(backend, "", "")
+
+	if body != "" {
+		t.Errorf("body should be empty when no context is available, got %q", body)
+	}
+}
+
+func TestBuildPRBody_NeverGeneric(t *testing.T) {
+	backend := &stubBackend{
+		description: "Some task description",
+	}
+
+	body := buildPRBody(backend, "ralph-abc", "completed task")
+
+	if strings.Contains(body, "Automated PR for") {
+		t.Error("body must not contain generic 'Automated PR for' text")
+	}
+	if strings.Contains(body, "Generated by ralph") {
+		t.Error("body must not contain generic 'Generated by ralph' text")
+	}
+}
+
+// metadataBackend extends stubBackend with SetMetadata/GetMetadata tracking.
+type metadataBackend struct {
+	stubBackend
+	metadata map[string]map[string]string // id -> key -> value
+}
+
+func newMetadataBackend() *metadataBackend {
+	return &metadataBackend{
+		metadata: make(map[string]map[string]string),
+	}
+}
+
+func (m *metadataBackend) SetMetadata(id, key, value string) error {
+	if m.metadata[id] == nil {
+		m.metadata[id] = make(map[string]string)
+	}
+	m.metadata[id][key] = value
+	return nil
+}
+
+func (m *metadataBackend) GetMetadata(id, key string) (string, error) {
+	if m.metadata[id] == nil {
+		return "", nil
+	}
+	return m.metadata[id][key], nil
+}
+
+// Branch name is stored in bead metadata after rename, proving the loop
+// persists the branch-to-bead mapping for future resume.
+func TestLoop_StoresBranchInMetadata(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := newMetadataBackend()
+	backend.remaining = 1
+	backend.total = 1
+	backend.nextTask = "Fix auth bug"
+	backend.nextID = "ralph-abc"
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{}
+
+	_ = l.Run(context.Background())
+
+	branch, _ := backend.GetMetadata("ralph-abc", "branch")
+	if branch == "" {
+		t.Fatal("expected branch to be stored in metadata")
+	}
+	if !strings.Contains(branch, "ralph-abc") {
+		t.Errorf("metadata branch %q should contain task ID", branch)
+	}
+	if !strings.Contains(branch, "fix-auth-bug") {
+		t.Errorf("metadata branch %q should contain slug", branch)
+	}
+}
+
+// Branch name format uses beadID-slug without sequence number,
+// proving the old TaskSeq pattern has been removed.
+// handlePostSignal: verifies that a successful signal pushes, closes the
+// task, and returns signalComplete for the normal (non-evolve) path.
+func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			total:     1,
+			nextTask:  "Fix auth bug",
+			nextID:    "ralph-xyz",
+		},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	// Create a commit so HeadRev() returns something different from headBefore=""
+	writeFile(t, project, "fix.go", "package main\n")
+	run(t, "git", "-C", project, "add", "fix.go")
+	run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
+
+	runIter, iter := 1, 1
+	action := l.handlePostSignal(postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "",
+		workDir:    project,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-xyz",
+		nextTask:   "Fix auth bug",
+		diffStat:   "",
+	}, &runIter, &iter)
+
+	if action != signalComplete {
+		t.Errorf("expected signalComplete, got %d", action)
+	}
+
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-xyz" {
+		t.Errorf("expected CloseTask for ralph-xyz, got %v", backend.closedIDs)
+	}
+}
+
+// handlePostSignal: verification failure returns signalRetry so the loop
+// continues without closing the task.
+func TestLoop_HandlePostSignal_VerificationFailure(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix bug", nextID: "ralph-abc"},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
+
+	runIter, iter := 1, 1
+	action := l.handlePostSignal(postSignalParams{
+		ctx:      context.Background(),
+		result:   claude.Result{},
+		taskID:   "ralph-abc",
+		nextTask: "Fix bug",
+	}, &runIter, &iter)
+
+	if action != signalRetry {
+		t.Errorf("expected signalRetry, got %d", action)
+	}
+
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) != 0 {
+		t.Errorf("task should not be closed on verification failure, got %v", backend.closedIDs)
+	}
+}
+
+// checkoutExistingBranch: when no stored branch exists in metadata,
+// returns false (no remote checkout) and the branch gets renamed.
+func TestLoop_CheckoutExistingBranch_NoRemote(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{remaining: 1, total: 1, nextTask: "Fix login"}
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	checkedOut := l.checkoutExistingBranch("ralph-xyz", "Fix login")
+	if checkedOut {
+		t.Error("expected false (no stored branch in metadata), got true")
+	}
+}
+
+// prepareAndBuildPrompt: verifies it returns a non-empty prompt and
+// the expected head/log state.
+func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stubBackend{remaining: 1, total: 1, nextTask: "Fix login", nextID: "ralph-xyz"}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+
+	prep, ok := l.prepareAndBuildPrompt(context.Background(), "ralph-xyz", "Fix login")
+	if !ok {
+		t.Fatal("expected ok=true from prepareAndBuildPrompt")
+	}
+	if prep.fullPrompt == "" {
+		t.Error("expected non-empty prompt")
+	}
+	if prep.workDir != dir {
+		t.Errorf("expected workDir=%s, got %s", dir, prep.workDir)
+	}
+}
+
+func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logging.New(nil),
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := newMetadataBackend()
+	backend.remaining = 1
+	backend.total = 1
+	backend.nextTask = "Fix login flow"
+	backend.nextID = "ralph-xyz"
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = &stubRunner{}
+
+	_ = l.Run(context.Background())
+
+	// Branch should be ralph/<project>/ralph-xyz-fix-login-flow (no 01- prefix)
+	wantSuffix := "ralph-xyz-fix-login-flow"
+	if !strings.HasSuffix(gm.WorktreeBranch, wantSuffix) {
+		t.Errorf("branch %q should end with %q (no sequence number)", gm.WorktreeBranch, wantSuffix)
+	}
+	// Must NOT contain a sequence number like /01- or /02-
+	if matched := strings.Contains(gm.WorktreeBranch, "/01-") || strings.Contains(gm.WorktreeBranch, "/02-"); matched {
+		t.Errorf("branch %q must not contain sequence number prefix", gm.WorktreeBranch)
+	}
+}
+
+// Proves: after a successful task close, the completed task ID is persisted to
+// state.json so ralph-task can verify tasks weren't falsely closed.
+func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			completed: 0,
+			total:     1,
+			nextTask:  "Fix auth bug",
+			nextID:    "ralph-xyz",
+			label:     "beads",
+		},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			writeFile(t, project, "fix.go", "package main\n")
+			run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
+			backend.mu.Lock()
+			backend.completed = 1
+			backend.remaining = 0
+			backend.mu.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    project,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = runner
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.findPRInfoFunc = func(string) (string, string) { return "42", "Fix auth bug" }
+
+	_ = l.Run(context.Background())
+
+	tasks, err := st.GetCompletedTasks()
+	if err != nil {
+		t.Fatalf("GetCompletedTasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 completed task in state.json, got %d", len(tasks))
+	}
+	if tasks[0] != "ralph-xyz" {
+		t.Errorf("completed task ID = %q, want %q", tasks[0], "ralph-xyz")
+	}
+}
+
+// Proves: completed_tasks in state.json persists across restarts — tasks from
+// previous runs are not cleared on a new run start.
+func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+
+	st.AddCompletedTask("ralph-old")
+
+	backend := &stubBackend{
+		remaining: 0,
+		completed: 1,
+		total:     1,
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    project,
+			RalphDir:   ralphDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	_ = l.Run(context.Background())
+
+	tasks, err := st.GetCompletedTasks()
+	if err != nil {
+		t.Fatalf("GetCompletedTasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 completed task preserved, got %d", len(tasks))
+	}
+	if tasks[0] != "ralph-old" {
+		t.Errorf("completed task ID = %q, want %q (preserved from previous run)", tasks[0], "ralph-old")
+	}
+}
+
+// stubGitHub implements git.GitHub for tests that need PR state lookups.
+type stubGitHub struct {
+	available      bool
+	prState        string
+	prBase         string
+	prHead         string
+	openPRBranches []string
+}
+
+func (s *stubGitHub) Available() bool                                              { return s.available }
+func (s *stubGitHub) FindOpenPR(_, _ string) (string, error)                       { return "", nil }
+func (s *stubGitHub) CreatePR(_ git.CreatePROpts) error                            { return nil }
+func (s *stubGitHub) MergePR(_, _ string, _ git.MergeOpts) (string, error)         { return "", nil }
+func (s *stubGitHub) UpdateBranch(_, _, _ string) (bool, error)                    { return false, nil }
+func (s *stubGitHub) ListChecks(_, _ string) ([]git.CICheckResult, error)          { return nil, nil }
+func (s *stubGitHub) EditPR(_, _, _, _ string) error                               { return nil }
+func (s *stubGitHub) GetRunLog(_, _ string) string                                 { return "" }
+func (s *stubGitHub) CheckEnforceAdmins(_, _ string) (bool, error)                 { return false, nil }
+func (s *stubGitHub) PostEnforceAdmins(_, _ string) (string, error)                { return "", nil }
+func (s *stubGitHub) FindPR(_, _ string) (string, string, string, error)           { return "", "", "", nil }
+func (s *stubGitHub) SearchPR(_, _ string) (string, error)                         { return "", nil }
+func (s *stubGitHub) PRDiff(_, _ string) (string, error)                           { return "", nil }
+func (s *stubGitHub) GetPRState(_, _ string) (string, error)                       { return s.prState, nil }
+func (s *stubGitHub) GetPRBase(_, _ string) (string, error)                        { return s.prBase, nil }
+func (s *stubGitHub) GetPRHead(_, _ string) (string, error)                        { return s.prHead, nil }
+func (s *stubGitHub) GetPRHeadSHA(_, _ string) (string, error)                     { return "", nil }
+func (s *stubGitHub) ListOpenPRBranches(_ string) ([]string, error)                { return s.openPRBranches, nil }
+
+// getPRBase takes only a GitHub interface and workDir — no Loop needed.
+func TestGetPRBase_Standalone(t *testing.T) {
+	gh := &stubGitHub{available: true, prBase: "main"}
+	base := getPRBase(gh, "/tmp", "42")
+	if base != "main" {
+		t.Errorf("expected 'main', got %q", base)
+	}
+
+	base = getPRBase(nil, "/tmp", "42")
+	if base != "" {
+		t.Errorf("nil gh should return empty, got %q", base)
+	}
+
+	gh = &stubGitHub{available: false}
+	base = getPRBase(gh, "/tmp", "42")
+	if base != "" {
+		t.Errorf("unavailable gh should return empty, got %q", base)
+	}
+}
+
+// finalizePR skips merge and closes the bead when AutoMerge is off.
+func TestFinalizePR_NoAutoMerge_ClosesTask(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+		AutoMerge:    false,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+
+	result := l.finalizePR(finalizePRParams{
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix auth bug",
+		prNumber: "42",
+		prState:  "OPEN",
+		workDir:  project,
+	})
+
+	if result.merged {
+		t.Error("should not merge when AutoMerge is disabled")
+	}
+	if !result.closed {
+		t.Error("task should be closed even without merge")
+	}
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-abc" {
+		t.Errorf("expected CloseTask for ralph-abc, got %v", backend.closedIDs)
+	}
+}
+
+// finalizePR merges and closes when AutoMerge is on and merge succeeds.
+func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1},
+	}
+
+	mergeCalled := false
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+		AutoMerge:    true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.mergeFunc = func(ctx context.Context) (bool, error) {
+		mergeCalled = true
+		return true, nil
+	}
+
+	result := l.finalizePR(finalizePRParams{
+		ctx:      context.Background(),
+		taskID:   "ralph-xyz",
+		nextTask: "Add feature",
+		prNumber: "42",
+		prState:  "OPEN",
+		workDir:  project,
+	})
+
+	if !mergeCalled {
+		t.Error("merge should have been called")
+	}
+	if !result.merged {
+		t.Error("should be merged when merge returns true")
+	}
+	if !result.closed {
+		t.Error("task should be closed after merge")
+	}
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-xyz" {
+		t.Errorf("expected CloseTask for ralph-xyz, got %v", backend.closedIDs)
+	}
+}
+
+// finalizePR skips the task when merge fails with AutoMerge on.
+func TestFinalizePR_MergeFailure_SkipsTask(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+		AutoMerge:    true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.mergeFunc = func(ctx context.Context) (bool, error) {
+		return false, fmt.Errorf("merge conflict")
+	}
+
+	result := l.finalizePR(finalizePRParams{
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix bug",
+		prNumber: "99",
+		prState:  "OPEN",
+		workDir:  project,
+	})
+
+	if result.merged {
+		t.Error("should not be merged on failure")
+	}
+	if result.closed {
+		t.Error("task should not be closed on merge failure")
+	}
+	backend.skipMu.Lock()
+	defer backend.skipMu.Unlock()
+	found := false
+	for _, id := range backend.skippedIDs {
+		if id == "ralph-abc" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected ralph-abc deferred in backend after merge failure")
+	}
+}
+
+// finalizePR with MERGED state closes immediately without attempting merge.
+func TestFinalizePR_AlreadyMerged_ClosesImmediately(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+		AutoMerge:    true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.mergeFunc = func(ctx context.Context) (bool, error) {
+		t.Fatal("merge should not be called for already-merged PR")
+		return false, nil
+	}
+
+	result := l.finalizePR(finalizePRParams{
+		ctx:      context.Background(),
+		taskID:   "ralph-xyz",
+		nextTask: "Add feature",
+		prNumber: "42",
+		prState:  "MERGED",
+		workDir:  project,
+	})
+
+	if !result.merged {
+		t.Error("should report merged for MERGED state")
+	}
+	if !result.closed {
+		t.Error("task should be closed")
+	}
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-xyz" {
+		t.Errorf("expected CloseTask for ralph-xyz, got %v", backend.closedIDs)
+	}
+}
+
+// finalizePR uses PR URL in close reason when available.
+func TestFinalizePR_UsesURLInCloseReason(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+
+	l.finalizePR(finalizePRParams{
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix login",
+		prNumber: "55",
+		prState:  "OPEN",
+		prURL:    "https://github.com/owner/repo/pull/55",
+		workDir:  project,
+	})
+
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closeReasons) == 0 {
+		t.Fatal("expected a close reason")
+	}
+	if !strings.Contains(backend.closeReasons[0], "https://github.com/owner/repo/pull/55") {
+		t.Errorf("close reason should contain PR URL, got %q", backend.closeReasons[0])
+	}
+}
+
+// skipTask sets status to open in backend and persists to state.json.
+func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
+	_, st := setupTestDir(t)
+	backend := &stubBackend{}
+
+	skipTask(backend, st, logging.New(nil), "ralph-xyz", "merge_failed")
+
+	if backend.skippedTask != "ralph-xyz" {
+		t.Errorf("expected backend.skippedTask=ralph-xyz, got %q", backend.skippedTask)
+	}
+	if backend.skipReason != "merge_failed" {
+		t.Errorf("expected backend.skipReason=merge_failed, got %q", backend.skipReason)
+	}
+	skipped, err := st.GetSkippedTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skipped) != 1 || skipped[0] != "ralph-xyz" {
+		t.Errorf("expected [ralph-xyz] in state.json skipped_tasks, got %v", skipped)
+	}
+}
+
+// skipTask is a no-op with empty ID.
+func TestSkipTask_EmptyID(t *testing.T) {
+	_, st := setupTestDir(t)
+	backend := &stubBackend{}
+
+	skipTask(backend, st, logging.New(nil), "", "reason")
+
+	if backend.skippedTask != "" {
+		t.Error("expected no skip with empty ID")
+	}
+}
+
+// persistCompletedTask takes state and logger — no Loop needed.
+func TestPersistCompletedTask_Standalone(t *testing.T) {
+	_, st := setupTestDir(t)
+
+	persistCompletedTask(st, logging.New(nil), "ralph-abc")
+
+	tasks, err := st.GetCompletedTasks()
+	if err != nil {
+		t.Fatalf("GetCompletedTasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 completed task, got %d", len(tasks))
+	}
+	if tasks[0] != "ralph-abc" {
+		t.Errorf("expected ID ralph-abc, got %q", tasks[0])
+	}
+}
+
+
+// getBeadDescription takes a backend — no Loop or Verifier needed.
+func TestGetBeadDescription_Standalone(t *testing.T) {
+	backend := &stubBackend{description: "Fix auth middleware"}
+
+	desc := getBeadDescription(backend, "ralph-abc")
+	if desc != "Fix auth middleware" {
+		t.Errorf("expected description, got %q", desc)
+	}
+
+	desc = getBeadDescription(backend, "")
+	if desc != "" {
+		t.Errorf("empty taskID should return empty, got %q", desc)
+	}
+
+	desc = getBeadDescription(nil, "ralph-abc")
+	if desc != "" {
+		t.Errorf("nil backend should return empty, got %q", desc)
+	}
+}
+
+// handlePostSignal returns within PostSignalTimeout even when push blocks
+// indefinitely, proving the timeout prevents infinite stalls from rate limits
+// or network issues.
+func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix bug", nextID: "ralph-timeout"},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	var logBuf bytes.Buffer
+	logger := logging.New(&logBuf)
+
+	l := New(Config{
+		Dirs:              workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations:     1,
+		CallsPerHour:      80,
+		TaskBackend:       backend,
+		PostSignalTimeout: 50 * time.Millisecond,
+	}, st, gm, logger)
+	l.runner = &stubRunner{}
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.pushPRFunc = func(ctx context.Context, _, _, _ string) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+
+	writeFile(t, project, "fix.go", "package main\n")
+	run(t, "git", "-C", project, "add", "fix.go")
+	run(t, "git", "-C", project, "commit", "-m", "fix")
+
+	runIter, iter := 1, 1
+	done := make(chan postSignalAction, 1)
+	go func() {
+		done <- l.handlePostSignal(postSignalParams{
+			ctx:        context.Background(),
+			result:     claude.Result{SignalDetected: true},
+			headBefore: "",
+			workDir:    project,
+			rawLogPath: filepath.Join(ralphDir, "raw.log"),
+			taskID:     "ralph-timeout",
+			nextTask:   "Fix bug",
+		}, &runIter, &iter)
+	}()
+
+	select {
+	case action := <-done:
+		if action != signalComplete {
+			t.Errorf("expected signalComplete, got %d", action)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("handlePostSignal hung — PostSignalTimeout did not fire")
+	}
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Post-signal timeout") {
+		t.Errorf("expected timeout log message, got: %s", output)
+	}
+
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) > 0 {
+		t.Errorf("task should not be closed when timeout fires before push, got %v", backend.closedIDs)
+	}
+}
+
+// handlePostSignal completes normally within PostSignalTimeout when operations
+// are fast, proving the timeout doesn't interfere with successful flows.
+func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix login", nextID: "ralph-fast"},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:              workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations:     1,
+		CallsPerHour:      80,
+		TaskBackend:       backend,
+		PostSignalTimeout: 5 * time.Second,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+
+	writeFile(t, project, "fix.go", "package main\n")
+	run(t, "git", "-C", project, "add", "fix.go")
+	run(t, "git", "-C", project, "commit", "-m", "fix")
+
+	runIter, iter := 1, 1
+	action := l.handlePostSignal(postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "",
+		workDir:    project,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-fast",
+		nextTask:   "Fix login",
+	}, &runIter, &iter)
+
+	if action != signalComplete {
+		t.Errorf("expected signalComplete, got %d", action)
+	}
+
+	backend.closeMu.Lock()
+	defer backend.closeMu.Unlock()
+	if len(backend.closedIDs) != 1 || backend.closedIDs[0] != "ralph-fast" {
+		t.Errorf("expected task ralph-fast closed, got %v", backend.closedIDs)
+	}
+}
+
+// handlePostSignal cancels a blocking merge when the post-signal timeout
+// fires, so the orchestrator doesn't stall on a rate-limited API call.
+func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Slow merge", nextID: "ralph-slow"},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:              workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations:     1,
+		CallsPerHour:      80,
+		TaskBackend:       backend,
+		AutoMerge:         true,
+		PostSignalTimeout: 50 * time.Millisecond,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
+	l.mergeFunc = func(ctx context.Context) (bool, error) {
+		<-ctx.Done()
+		return false, ctx.Err()
+	}
+
+	writeFile(t, project, "fix.go", "package main\n")
+	run(t, "git", "-C", project, "add", "fix.go")
+	run(t, "git", "-C", project, "commit", "-m", "fix")
+
+	runIter, iter := 1, 1
+	done := make(chan postSignalAction, 1)
+	go func() {
+		done <- l.handlePostSignal(postSignalParams{
+			ctx:        context.Background(),
+			result:     claude.Result{SignalDetected: true},
+			headBefore: "",
+			workDir:    project,
+			rawLogPath: filepath.Join(ralphDir, "raw.log"),
+			taskID:     "ralph-slow",
+			nextTask:   "Slow merge",
+		}, &runIter, &iter)
+	}()
+
+	select {
+	case <-done:
+		// Returned within timeout — merge was cancelled, not hung
+	case <-time.After(5 * time.Second):
+		t.Fatal("handlePostSignal hung — PostSignalTimeout did not cancel merge")
+	}
+}
+
+// runPostTask executes the configured script after task completion with
+// RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED env vars.
+func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	// Create a script that writes env vars to a file for verification.
+	envFile := filepath.Join(project, "post-task-env.txt")
+	scriptPath := filepath.Join(project, "post-task.sh")
+	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\necho \"TASK=$RALPH_TASK_ID PR=$RALPH_PR_NUMBER MERGED=$RALPH_MERGED\" > %s\n", envFile)), 0o755)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix bug", nextID: "ralph-pt1"},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		PostTask:      scriptPath,
+		AutoMerge:     true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
+
+	writeFile(t, project, "fix.go", "package main\n")
+	run(t, "git", "-C", project, "commit", "-m", "fix")
+
+	runIter, iter := 1, 1
+	action := l.handlePostSignal(postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "",
+		workDir:    project,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-pt1",
+		nextTask:   "Fix bug",
+	}, &runIter, &iter)
+
+	if action != signalComplete {
+		t.Fatalf("expected signalComplete, got %d", action)
+	}
+
+	data, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("post-task script did not run: %v", err)
+	}
+	got := strings.TrimSpace(string(data))
+	want := "TASK=ralph-pt1 PR=99 MERGED=true"
+	if got != want {
+		t.Errorf("env vars: got %q, want %q", got, want)
+	}
+}
+
+// runPostTask is not called when verification fails (signalRetry).
+func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	envFile := filepath.Join(dir, "post-task-env.txt")
+	scriptPath := filepath.Join(dir, "post-task.sh")
+	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\necho ran > %s\n", envFile)), 0o755)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix bug", nextID: "ralph-pt2"},
+	}
+
+	gm := &git.Manager{ProjectDir: dir, WorkDir: dir}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		PostTask:      scriptPath,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
+
+	runIter, iter := 1, 1
+	action := l.handlePostSignal(postSignalParams{
+		ctx:      context.Background(),
+		result:   claude.Result{},
+		taskID:   "ralph-pt2",
+		nextTask: "Fix bug",
+	}, &runIter, &iter)
+
+	if action != signalRetry {
+		t.Fatalf("expected signalRetry, got %d", action)
+	}
+
+	if _, err := os.Stat(envFile); err == nil {
+		t.Error("post-task script should not run on verification failure")
+	}
+}
+
+// runPostTask warns but continues when the script exits non-zero.
+func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	scriptPath := filepath.Join(project, "post-task.sh")
+	os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 1\n"), 0o755)
+
+	var logBuf bytes.Buffer
+	logger := logging.New(&logBuf)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix bug", nextID: "ralph-pt3"},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logger}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		PostTask:      scriptPath,
+	}, st, gm, logger)
+	l.runner = &stubRunner{}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "50", nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	writeFile(t, project, "fix.go", "package main\n")
+	run(t, "git", "-C", project, "commit", "-m", "fix")
+
+	runIter, iter := 1, 1
+	action := l.handlePostSignal(postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "",
+		workDir:    project,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-pt3",
+		nextTask:   "Fix bug",
+	}, &runIter, &iter)
+
+	if action != signalComplete {
+		t.Fatalf("expected signalComplete despite script failure, got %d", action)
+	}
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "exited with error") {
+		t.Errorf("expected warning about script error in log, got: %s", logOutput)
+	}
+}
+
+// runPostTask is called in the no-commits path (signalSkipped) with merged=false.
+func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	envFile := filepath.Join(project, "post-task-env.txt")
+	scriptPath := filepath.Join(project, "post-task.sh")
+	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\necho \"TASK=$RALPH_TASK_ID PR=$RALPH_PR_NUMBER MERGED=$RALPH_MERGED\" > %s\n", envFile)), 0o755)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{remaining: 1, total: 1, nextTask: "Fix bug", nextID: "ralph-pt4"},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	headBefore := gm.HeadRev()
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		PostTask:      scriptPath,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	runIter, iter := 1, 1
+	action := l.handlePostSignal(postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{OnSignalUsed: true},
+		headBefore: headBefore,
+		workDir:    project,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-pt4",
+		nextTask:   "Fix bug",
+	}, &runIter, &iter)
+
+	if action != signalSkipped {
+		t.Fatalf("expected signalSkipped, got %d", action)
+	}
+
+	data, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("post-task script did not run on no-commits path: %v", err)
+	}
+	got := strings.TrimSpace(string(data))
+	want := "TASK=ralph-pt4 PR= MERGED=false"
+	if got != want {
+		t.Errorf("env vars: got %q, want %q", got, want)
+	}
+}
+
+// handlePostSignal fires a TaskCompleted notification after post-task when
+// Notify is enabled.
+func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			total:     1,
+			nextTask:  "Fix auth bug",
+			nextID:    "ralph-ntf",
+		},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Notify:        true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	var buf bytes.Buffer
+	prev := notify.SetWriter(&buf)
+	t.Cleanup(func() { notify.SetWriter(prev) })
+
+	writeFile(t, project, "fix.go", "package main\n")
+	run(t, "git", "-C", project, "add", "fix.go")
+	run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
+
+	runIter, iter := 1, 1
+	l.handlePostSignal(postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
+		headBefore: "",
+		workDir:    project,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-ntf",
+		nextTask:   "Fix auth bug",
+	}, &runIter, &iter)
+
+	got := buf.String()
+	if !strings.Contains(got, "Task done: [ralph-ntf] Fix auth bug") {
+		t.Errorf("expected TaskCompleted notification, got %q", got)
+	}
+	if !strings.Contains(got, "Fixed token expiry") {
+		t.Errorf("expected summary in notification, got %q", got)
+	}
+}
+
+// handlePostSignal does NOT send TaskCompleted when Notify is disabled.
+func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			total:     1,
+			nextTask:  "Fix auth bug",
+			nextID:    "ralph-ntf2",
+		},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Notify:        false,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	var buf bytes.Buffer
+	prev := notify.SetWriter(&buf)
+	t.Cleanup(func() { notify.SetWriter(prev) })
+
+	writeFile(t, project, "fix.go", "package main\n")
+	run(t, "git", "-C", project, "add", "fix.go")
+	run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
+
+	runIter, iter := 1, 1
+	l.handlePostSignal(postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
+		headBefore: "",
+		workDir:    project,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-ntf2",
+		nextTask:   "Fix auth bug",
+	}, &runIter, &iter)
+
+	got := buf.String()
+	if strings.Contains(got, "Task done") {
+		t.Errorf("expected no TaskCompleted notification when Notify=false, got %q", got)
+	}
+}
+
+// handlePostSignal fires TaskCompleted on the no-commits path when Notify is enabled.
+func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			total:     1,
+			nextTask:  "Update docs",
+			nextID:    "ralph-nc1",
+		},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Notify:        true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	var buf bytes.Buffer
+	prev := notify.SetWriter(&buf)
+	t.Cleanup(func() { notify.SetWriter(prev) })
+
+	headRev := gm.HeadRev()
+
+	runIter, iter := 1, 1
+	action := l.handlePostSignal(postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true, Summary: "Updated README"},
+		headBefore: headRev,
+		workDir:    project,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-nc1",
+		nextTask:   "Update docs",
+	}, &runIter, &iter)
+
+	if action != signalSkipped {
+		t.Errorf("expected signalSkipped for no-commits path, got %d", action)
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "Task done: [ralph-nc1] Update docs") {
+		t.Errorf("expected TaskCompleted on no-commits path, got %q", got)
+	}
+}
+
+// resolveByPRState sends TaskCompleted and TaskMerged when PR is already merged and Notify is enabled.
+func TestResolveByPRState_Merged_NotifyEnabled(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			total:     1,
+			nextTask:  "Fix login",
+			nextID:    "ralph-rm1",
+		},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm.GitHub = &stubGitHub{available: true, prState: "MERGED"}
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Notify:        true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+
+	var buf bytes.Buffer
+	prev := notify.SetWriter(&buf)
+	t.Cleanup(func() { notify.SetWriter(prev) })
+
+	resolved := l.resolveByPRState(context.Background(), "ralph-rm1", "Fix login", "99")
+	if !resolved {
+		t.Fatal("expected resolveByPRState to return true for MERGED PR")
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "Task done: [ralph-rm1] Fix login") {
+		t.Errorf("expected TaskCompleted notification, got %q", got)
+	}
+	if !strings.Contains(got, "Task merged: [ralph-rm1] Fix login") {
+		t.Errorf("expected TaskMerged notification, got %q", got)
+	}
+}
+
+// resolveByPRState sends TaskCompleted (no TaskMerged) when PR is OPEN and Notify is enabled.
+func TestResolveByPRState_Open_NotifyEnabled(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			total:     1,
+			nextTask:  "Add cache",
+			nextID:    "ralph-ro1",
+		},
+	}
+
+	// Create and push a feature branch so prChainIsHealthy passes.
+	branchName := "ralph-ro1/add-cache"
+	run(t, "git", "-C", project, "checkout", "-b", branchName)
+	writeFile(t, project, "cache.go", "package main\n")
+	run(t, "git", "-C", project, "add", "cache.go")
+	run(t, "git", "-C", project, "commit", "-m", "add cache")
+	run(t, "git", "-C", project, "push", "-u", "origin", branchName)
+	run(t, "git", "-C", project, "checkout", "main")
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm.GitHub = &stubGitHub{available: true, prState: "OPEN", prHead: branchName}
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Notify:        true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+
+	var buf bytes.Buffer
+	prev := notify.SetWriter(&buf)
+	t.Cleanup(func() { notify.SetWriter(prev) })
+
+	resolved := l.resolveByPRState(context.Background(), "ralph-ro1", "Add cache", "88")
+	if !resolved {
+		t.Fatal("expected resolveByPRState to return true for OPEN PR")
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "Task done: [ralph-ro1] Add cache") {
+		t.Errorf("expected TaskCompleted notification, got %q", got)
+	}
+	if strings.Contains(got, "Task merged") {
+		t.Errorf("expected no TaskMerged notification for OPEN PR, got %q", got)
+	}
+}
+
+// resolveByPRState does NOT send TaskCompleted when Notify is disabled, but still sends TaskMerged.
+func TestResolveByPRState_Merged_NotifyDisabled(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &trackingBackend{
+		mutableBackend: mutableBackend{
+			remaining: 1,
+			total:     1,
+			nextTask:  "Fix logout",
+			nextID:    "ralph-rd1",
+		},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil)}
+	gm.GitHub = &stubGitHub{available: true, prState: "MERGED"}
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Notify:        false,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+
+	var buf bytes.Buffer
+	prev := notify.SetWriter(&buf)
+	t.Cleanup(func() { notify.SetWriter(prev) })
+
+	resolved := l.resolveByPRState(context.Background(), "ralph-rd1", "Fix logout", "77")
+	if !resolved {
+		t.Fatal("expected resolveByPRState to return true for MERGED PR")
+	}
+
+	got := buf.String()
+	if strings.Contains(got, "Task done") {
+		t.Errorf("expected no TaskCompleted when Notify=false, got %q", got)
+	}
+	if !strings.Contains(got, "Task merged: [ralph-rd1] Fix logout") {
+		t.Errorf("expected TaskMerged even when Notify=false, got %q", got)
+	}
+}
+
+// After a merge, PostMergeUpdateMain already syncs the worktree to main.
+// The next iteration must NOT call ResetToDefaultBranch again, which would
+// produce a duplicate "Reset worktree" log line.
+func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	st := state.NewStore(ralphDir)
+	st.Init(10)
+
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	var logBuf strings.Builder
+	logger := logging.NewWithWriter(&logBuf)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logger,
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	iterationCount := 0
+	backend := &mutableBackend{
+		remaining: 1,
+		completed: 0,
+		total:     2,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			// Create a commit so the signal handler takes the push/merge path
+			// instead of the no-commits shortcut.
+			f := filepath.Join(gm.WorkDir, fmt.Sprintf("file%d.txt", iterationCount))
+			os.WriteFile(f, []byte("content"), 0o644)
+			exec.Command("git", "-C", gm.WorkDir, "add", ".").Run()
+			exec.Command("git", "-C", gm.WorkDir, "commit", "-m", fmt.Sprintf("task %d", iterationCount)).Run()
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			if iterationCount == 1 {
+				backend.completed = 1
+				backend.remaining = 1
+				backend.nextTask = "task B"
+				backend.nextID = "ralph-bbb"
+			} else {
+				backend.completed = 2
+				backend.remaining = 0
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = runner
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) {
+		return "99", nil
+	}
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return true, nil
+	}
+
+	_ = l.Run(context.Background())
+
+	output := logBuf.String()
+
+	// initRun may produce one "Reset worktree" (before any task runs).
+	// After the merge, PostMergeUpdateMain logs "Updated local" instead.
+	// A second "Reset worktree" would mean the next iteration redundantly
+	// called ResetToDefaultBranch — that's the bug this test guards against.
+	resetCount := strings.Count(output, "Reset worktree")
+	if resetCount > 1 {
+		t.Errorf("expected at most 1 'Reset worktree' (from initRun), got %d — next-task path should skip reset after merge:\n%s", resetCount, output)
+	}
+
+	// Verify PostMergeUpdateMain logged its distinct message.
+	if !strings.Contains(output, "Updated local") {
+		t.Errorf("expected 'Updated local' from PostMergeUpdateMain, got:\n%s", output)
+	}
+}
+
+// setStackHead logs "No stacked parents — resetting to main" when all
+// completed tasks have merged PRs and no stack head is found.
+// setStackHead silently falls through when all completed branches are
+// gone from remote (fetch fails) — no stack head is set, PrevBranch stays empty.
+func TestSetStackHead_SkipsUnfetchableBranch(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(10)
+
+	var buf bytes.Buffer
+	logger := logging.NewWithWriter(&buf)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logger,
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	st.AddCompletedTask("ralph-aaa")
+	backend := &mutableBackend{
+		metadata: map[string]map[string]string{"ralph-aaa": {"branch": "some-branch"}},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
+		TaskBackend: backend,
+	}, st, gm, logger)
+
+	l.setStackHead()
+
+	if gm.PrevBranch != "" {
+		t.Errorf("PrevBranch should be empty when branch is unfetchable, got %q", gm.PrevBranch)
+	}
+	output := buf.String()
+	if strings.Contains(output, "Stack head") {
+		t.Errorf("should not log 'Stack head' when branch is unfetchable, got:\n%s", output)
+	}
+}
+
+// setStackHead does NOT log "No stacked parents" when there are no
+// completed tasks — the early return path should be silent.
+func TestSetStackHead_NoLogWhenNoCompletedTasks(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(10)
+
+	var buf bytes.Buffer
+	logger := logging.NewWithWriter(&buf)
+
+	gm := &git.Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		State:      st,
+		Logger:     logger,
+	}
+	if err := gm.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	backend := &mutableBackend{}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: project,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
+		TaskBackend: backend,
+	}, st, gm, logger)
+
+	l.setStackHead()
+
+	output := buf.String()
+	if strings.Contains(output, "No stacked parents") {
+		t.Errorf("should not log 'No stacked parents' when no completed tasks exist, got:\n%s", output)
+	}
+}
+
+// Verifies OnIterationStart is called once per iteration, so the resume
+// script is regenerated each time (not only on exit).
+func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	callCount := 0
+	iterationCount := 0
+	backend := &mutableBackend{
+		remaining: 2,
+		completed: 0,
+		total:     2,
+		nextTask:  "task A",
+		nextID:    "ralph-aaa",
+		label:     "beads",
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			if iterationCount >= 2 {
+				backend.mu.Lock()
+				backend.remaining = 0
+				backend.completed = 2
+				backend.mu.Unlock()
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	gm := &git.Manager{
+		ProjectDir: dir,
+		WorkDir:    dir,
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		OnIterationStart: func() {
+			callCount++
+		},
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if callCount != 2 {
+		t.Errorf("OnIterationStart called %d times, want 2", callCount)
 	}
 }

@@ -9,11 +9,12 @@ After each iteration, analyze the log output and worktree state to detect proble
 ## Detection categories
 
 ### Permission denials
-Claude repeatedly fails to write files. Patterns in stream-json output:
-- Tool results containing "permission denied", "cannot write", "sandbox", "blocked"
-- Multiple failed Write/Edit/Bash tool calls in a single iteration
+Claude repeatedly fails to write files. Patterns in tool_result content only:
+- "permission denied", "cannot write", "not allowed"
+- Only tool_result blocks are checked — assistant text is excluded to avoid false positives from agent prose discussing permission-related code
 
 Threshold: 3+ permission failures in one iteration → halt.
+Detail: full matching lines (not bare substrings) prefixed with `[analyzer]`.
 
 ### Stagnation
 Claude completes an iteration but makes no meaningful changes.

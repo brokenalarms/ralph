@@ -191,13 +191,6 @@ MOCK
   [[ "$result" == "Fix the auth module" ]]
 }
 
-# Proves: checklist backend returns empty id (no bd integration)
-@test "checklist: get_next_task_id returns empty string" {
-  TASK_BACKEND="checklist"
-  result=$(get_next_task_id)
-  [[ "$result" == "" ]]
-}
-
 # Proves: init_task_backend creates .beads dir in PROJECT_DIR and updates gitignore
 @test "bd: init_task_backend initializes bd and updates gitignore" {
   init_task_backend
@@ -214,53 +207,11 @@ MOCK
   [[ $(grep -cx '.dolt' "$PROJECT_DIR/.gitignore") == "1" ]]
 }
 
-# Proves: checklist init is a no-op
-@test "checklist: init_task_backend is a no-op" {
-  TASK_BACKEND="checklist"
-  init_task_backend
-  [[ ! -d "$PROJECT_DIR/.beads" ]]
-}
-
 # Proves: bd execution instructions mention bd commands
 @test "bd: task_execution_instructions references bd" {
   result=$(task_execution_instructions)
   [[ "$result" == *"bd prime"* ]]
   [[ "$result" == *"bd close"* ]]
-}
-
-# Proves: on resume, stored task_backend=checklist is honored even when bd is available
-@test "resume preserves checklist backend when bd is available" {
-  init_ralph_dir
-  write_state "task_backend" "checklist"
-  RESUME=true
-  stored_backend=$(read_state "task_backend")
-  if [[ "$stored_backend" == "bd" || "$stored_backend" == "checklist" ]]; then
-    TASK_BACKEND="$stored_backend"
-  fi
-  [[ "$TASK_BACKEND" == "checklist" ]]
-}
-
-# Proves: migration — old state without task_backend infers checklist from plan file
-@test "resume infers checklist backend from plan file when no stored backend" {
-  init_ralph_dir
-  echo '- [ ] Do something' > "$PLAN_FILE"
-  TASK_BACKEND="bd"
-  RESUME=true
-  stored_backend=$(read_state "task_backend")
-  if [[ "$stored_backend" == "bd" || "$stored_backend" == "checklist" ]]; then
-    TASK_BACKEND="$stored_backend"
-  elif [[ -f "$PLAN_FILE" ]] && grep -qE '^\s*- \[[ x]\]' "$PLAN_FILE"; then
-    TASK_BACKEND="checklist"
-  fi
-  [[ "$TASK_BACKEND" == "checklist" ]]
-}
-
-# Proves: checklist execution instructions reference plan file
-@test "checklist: task_execution_instructions references plan file" {
-  TASK_BACKEND="checklist"
-  result=$(task_execution_instructions)
-  [[ "$result" == *"{{PLAN_FILE}}"* ]]
-  [[ "$result" == *"[x]"* ]]
 }
 
 # Proves: bd has_tasks returns true when tasks exist
@@ -281,9 +232,8 @@ MOCK
   [[ "$status" -eq 0 ]]
 }
 
-# Proves: bd_init falls back to checklist when Dolt server is unreachable
-@test "bd: init falls back to checklist when server is unhealthy" {
-  # Replace bd mock with one that fails on count (simulates bad Dolt server)
+# Proves: bd_init exits with error when Dolt server is unreachable
+@test "bd: init exits with error when server is unhealthy" {
   local mock_dir="$TEST_TMPDIR/mock_bin"
   cat > "$mock_dir/bd" <<'MOCK'
 #!/usr/bin/env bash
@@ -295,17 +245,14 @@ esac
 MOCK
   chmod +x "$mock_dir/bd"
 
-  TASK_BACKEND="bd"
-  init_task_backend
-  [[ "$TASK_BACKEND" == "checklist" ]]
+  run init_task_backend
+  [[ "$status" -ne 0 ]]
 }
 
 # Proves: bd_init retries init when .beads exists but server is stale
 @test "bd: init retries when .beads exists but health check fails initially" {
-  # Pre-create .beads to simulate a previous run
   mkdir -p "$PROJECT_DIR/.beads"
 
-  # bd mock: init reconnects (makes count work), count fails until init is called
   local mock_dir="$TEST_TMPDIR/mock_bin"
   local flag_file="$TEST_TMPDIR/bd_reinited"
   cat > "$mock_dir/bd" <<MOCK
@@ -326,9 +273,8 @@ MOCK
   [[ -f "$flag_file" ]]
 }
 
-# Proves: bd_init falls back to checklist when bd init itself fails
-@test "bd: init falls back to checklist when bd init fails" {
-  # Replace bd mock with one that always fails
+# Proves: bd_init exits with error when bd init itself fails
+@test "bd: init exits with error when bd init fails" {
   local mock_dir="$TEST_TMPDIR/mock_bin"
   cat > "$mock_dir/bd" <<'MOCK'
 #!/usr/bin/env bash
@@ -336,22 +282,9 @@ exit 1
 MOCK
   chmod +x "$mock_dir/bd"
 
-  # Remove .beads so init is attempted
   rm -rf "$PROJECT_DIR/.beads"
-  TASK_BACKEND="bd"
-  init_task_backend
-  [[ "$TASK_BACKEND" == "checklist" ]]
-}
-
-# Proves: _validate_backend catches missing functions
-@test "_validate_backend passes for valid backends" {
-  TASK_BACKEND="bd"
-  run _validate_backend
-  [[ "$status" -eq 0 ]]
-
-  TASK_BACKEND="checklist"
-  run _validate_backend
-  [[ "$status" -eq 0 ]]
+  run init_task_backend
+  [[ "$status" -ne 0 ]]
 }
 
 # Proves: bd skip_task closes the task with a blocked reason
@@ -368,16 +301,4 @@ MOCK
   skip_task "abc123" "stuck_loop"
   [[ -f "$close_log" ]]
   grep -q "blocked: stuck_loop" "$close_log"
-}
-
-# Proves: checklist skip_task marks the current task as skipped
-@test "checklist: skip_task marks task with [s]" {
-  TASK_BACKEND="checklist"
-  cat > "$PLAN_FILE" <<'EOF'
-- [ ] Fix auth bug
-- [ ] Add tests
-EOF
-  skip_task "" "stagnation"
-  grep -q '\[s\] Fix auth bug (stagnation)' "$PLAN_FILE"
-  grep -q '\[ \] Add tests' "$PLAN_FILE"
 }

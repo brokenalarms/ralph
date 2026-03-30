@@ -12,9 +12,8 @@ import (
 	"strings"
 )
 
-// ErrNeedsFallback signals that the bd backend is unavailable and the
-// caller should fall back to checklist.
-var ErrNeedsFallback = errors.New("bd unavailable, fall back to checklist")
+// ErrNeedsFallback signals that the bd backend is unavailable.
+var ErrNeedsFallback = errors.New("bd unavailable")
 
 // CommandRunner executes a bd subcommand in a directory and returns
 // combined stdout. Stderr is captured separately so callers can
@@ -28,6 +27,14 @@ type BD struct {
 	PromptsDir string
 	RunBD      CommandRunner // injectable for testing; nil uses defaultRunBD
 	bdPath     string        // resolved absolute path to the bd binary
+	skippedIDs map[string]bool
+}
+
+func (b *BD) SetSkippedIDs(ids []string) {
+	b.skippedIDs = make(map[string]bool, len(ids))
+	for _, id := range ids {
+		b.skippedIDs[id] = true
+	}
 }
 
 func (b *BD) ctx() context.Context {
@@ -173,11 +180,11 @@ func gitignoreContains(content, entry string) bool {
 }
 
 func (b *BD) HasRemaining() (bool, error) {
-	n, err := b.CountRemaining()
+	issue, err := b.getNextIssue()
 	if err != nil {
 		return false, err
 	}
-	return n > 0, nil
+	return issue.ID != "" || issue.Title != "", nil
 }
 
 func (b *BD) CountCompleted() (int, error) {
@@ -197,15 +204,15 @@ func (b *BD) CountRemaining() (int, error) {
 }
 
 func (b *BD) CountTotal() (int, error) {
-	out, err := b.runner()(b.ctx(), b.ProjectDir, "count")
+	remaining, err := b.CountRemaining()
 	if err != nil {
 		return 0, nil
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(out))
+	completed, err := b.CountCompleted()
 	if err != nil {
 		return 0, nil
 	}
-	return n, nil
+	return remaining + completed, nil
 }
 
 func (b *BD) countByStatus(status string) (int, error) {
@@ -224,6 +231,7 @@ type bdIssue struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`
 	Priority *int   `json:"priority,omitempty"`
+	Type     string `json:"type,omitempty"`
 }
 
 // getNextIssue returns the highest-priority issue across in-progress and
@@ -237,21 +245,20 @@ func (b *BD) getNextIssue() (bdIssue, error) {
 	var inProgress, ready bdIssue
 	var hasIP, hasReady bool
 
-	out, err := run(ctx, b.ProjectDir, "list", "--status", "in_progress", "--flat", "--json", "--limit", "1")
+	out, err := run(ctx, b.ProjectDir, "list", "--status", "in_progress", "--flat", "--json")
 	if err == nil {
-		inProgress, hasIP = parseFirstIssue(out)
+		inProgress, hasIP = bestIssue(out, b.skippedIDs)
 	}
 
-	out, err = run(ctx, b.ProjectDir, "ready", "--limit", "1", "--json")
+	out, err = run(ctx, b.ProjectDir, "ready", "--json")
 	if err == nil {
-		ready, hasReady = parseFirstIssue(out)
+		ready, hasReady = bestIssue(out, b.skippedIDs)
 	}
 
 	if hasIP && hasReady {
 		ipPri := issuePriority(inProgress)
 		rdPri := issuePriority(ready)
 		if rdPri < ipPri {
-			// Higher-priority ready task preempts; reopen the in-progress task.
 			_, _ = run(ctx, b.ProjectDir, "update", inProgress.ID, "--status=open")
 			return ready, nil
 		}
@@ -275,6 +282,19 @@ func issuePriority(issue bdIssue) int {
 	return 2
 }
 
+// issueTypeRank maps issue type to a sort order within the same priority.
+// Bugs are fixed first, then tasks, then features/enhancements.
+func issueTypeRank(issue bdIssue) int {
+	switch issue.Type {
+	case "bug":
+		return 0
+	case "task":
+		return 1
+	default:
+		return 2
+	}
+}
+
 func parseFirstIssue(jsonStr string) (bdIssue, bool) {
 	var issues []bdIssue
 	if err := json.Unmarshal([]byte(jsonStr), &issues); err != nil || len(issues) == 0 {
@@ -286,22 +306,59 @@ func parseFirstIssue(jsonStr string) (bdIssue, bool) {
 	return issues[0], true
 }
 
-func (b *BD) GetNextTaskInfo() (string, string, error) {
+// bestIssue parses all issues from JSON and returns the one with the
+// highest priority (lowest number), breaking ties by type rank
+// (bug < task < feature/enhancement). Issues whose ID appears in skip
+// are excluded from selection.
+func bestIssue(jsonStr string, skip map[string]bool) (bdIssue, bool) {
+	var issues []bdIssue
+	if err := json.Unmarshal([]byte(jsonStr), &issues); err != nil || len(issues) == 0 {
+		return bdIssue{}, false
+	}
+
+	best := -1
+	for i, issue := range issues {
+		if issue.ID == "" && issue.Title == "" {
+			continue
+		}
+		if skip[issue.ID] {
+			continue
+		}
+		if best == -1 {
+			best = i
+			continue
+		}
+		bp, ip := issuePriority(issues[best]), issuePriority(issue)
+		if ip < bp || (ip == bp && issueTypeRank(issue) < issueTypeRank(issues[best])) {
+			best = i
+		}
+	}
+	if best == -1 {
+		return bdIssue{}, false
+	}
+	return issues[best], true
+}
+
+func (b *BD) GetNextTaskInfo() (TaskInfo, error) {
 	issue, err := b.getNextIssue()
 	if err != nil {
-		return "", "", err
+		return TaskInfo{}, err
 	}
-	return issue.ID, issue.Title, nil
+	return TaskInfo{
+		ID:       issue.ID,
+		Title:    EnsureComponentPrefix(issue.Title, ""),
+		Priority: issue.Priority,
+	}, nil
 }
 
 func (b *BD) GetNextTask() (string, error) {
-	_, title, err := b.GetNextTaskInfo()
-	return title, err
+	info, err := b.GetNextTaskInfo()
+	return info.Title, err
 }
 
 func (b *BD) GetNextTaskID() (string, error) {
-	id, _, err := b.GetNextTaskInfo()
-	return id, err
+	info, err := b.GetNextTaskInfo()
+	return info.ID, err
 }
 
 func (b *BD) HasTasks() (bool, error) {
@@ -310,18 +367,6 @@ func (b *BD) HasTasks() (bool, error) {
 		return false, err
 	}
 	return total > 0, nil
-}
-
-func (b *BD) NeedsPlanning() (bool, error) {
-	has, err := b.HasTasks()
-	if err != nil {
-		return false, err
-	}
-	return !has, nil
-}
-
-func (b *BD) PlanningSucceeded() (bool, error) {
-	return b.HasTasks()
 }
 
 func (b *BD) SetState(id, dimension, value, reason string) error {
@@ -333,6 +378,8 @@ func (b *BD) SetState(id, dimension, value, reason string) error {
 		args = append(args, "--reason", reason)
 	}
 	_, err := b.runner()(b.ctx(), b.ProjectDir, args...)
+	if err == nil {
+		}
 	return err
 }
 
@@ -363,6 +410,8 @@ func (b *BD) CloseTask(id string, reason string) error {
 		reason = "completed by ralph"
 	}
 	_, err := run(b.ctx(), b.ProjectDir, "close", id, "--reason", reason)
+	if err == nil {
+		}
 	return err
 }
 
@@ -371,6 +420,8 @@ func (b *BD) ReopenTask(id string) error {
 		return nil
 	}
 	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status=open")
+	if err == nil {
+		}
 	return err
 }
 
@@ -378,11 +429,14 @@ func (b *BD) SkipTask(id string, reason string) error {
 	if id == "" {
 		return nil
 	}
-	if reason == "" {
-		reason = "skipped by ralph"
+	if _, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status=open"); err != nil {
+		return err
 	}
-	_, err := b.runner()(b.ctx(), b.ProjectDir, "close", id, "--reason", "blocked: "+reason)
-	return err
+	if reason != "" {
+		_, err := b.runner()(b.ctx(), b.ProjectDir, "comments", "add", id, "skipped: "+reason)
+		return err
+	}
+	return nil
 }
 
 func (b *BD) ExecutionInstructions() (string, error) {
@@ -392,10 +446,6 @@ func (b *BD) ExecutionInstructions() (string, error) {
 		return "", fmt.Errorf("reading execution instructions: %w", err)
 	}
 	return string(data), nil
-}
-
-func (b *BD) PlanningInstructions() string {
-	return "Run `bd prime` to learn the workflow, then create tasks directly in bd with dependencies. Do NOT write a plan.md file — tasks live exclusively in bd."
 }
 
 func (b *BD) GetDescription(id string) (string, error) {
@@ -414,6 +464,127 @@ func (b *BD) GetDescription(id string) (string, error) {
 		return "", nil
 	}
 	return items[0].Description, nil
+}
+
+func (b *BD) GetAcceptance(id string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	run := b.runner()
+	out, err := run(b.ctx(), b.ProjectDir, "show", id, "--json")
+	if err != nil {
+		return "", err
+	}
+	var items []struct {
+		Acceptance string `json:"acceptance_criteria"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil || len(items) == 0 {
+		return "", nil
+	}
+	return items[0].Acceptance, nil
+}
+
+func (b *BD) GetFullContext(id string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", id)
+	if err != nil {
+		return "", err
+	}
+	comments, _ := b.runner()(b.ctx(), b.ProjectDir, "comments", id)
+	if comments != "" {
+		out += "\n\nCOMMENTS\n" + comments
+	}
+	return out, nil
+}
+
+func (b *BD) ProjectContext() (string, error) {
+	ctx := b.ctx()
+	run := b.runner()
+
+	var sections []string
+
+	sections = append(sections, fmt.Sprintf("Project directory: %s", b.ProjectDir))
+
+	if configData, err := os.ReadFile(filepath.Join(b.ProjectDir, "ralph.toml")); err == nil {
+		sections = append(sections, "## Ralph config (ralph.toml)\n```\n"+strings.TrimSpace(string(configData))+"\n```")
+	}
+
+	if out, err := run(ctx, b.ProjectDir, "list", "--flat"); err == nil && out != "" {
+		sections = append(sections, "## Open beads\n```\n"+out+"\n```")
+	}
+
+	if out, err := run(ctx, b.ProjectDir, "list", "--status", "closed", "--limit", "20"); err == nil && out != "" {
+		sections = append(sections, "## Recently closed beads\n```\n"+out+"\n```")
+	}
+
+	if out, err := run(ctx, b.ProjectDir, "prime"); err == nil && out != "" {
+		sections = append(sections, "## bd workflow context\n"+out)
+	}
+
+	return strings.Join(sections, "\n\n"), nil
+}
+
+func (b *BD) GetExternalRef(id string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", id, "--json")
+	if err != nil {
+		return "", err
+	}
+	var items []struct {
+		ExternalRef string `json:"external_ref"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil || len(items) == 0 {
+		return "", nil
+	}
+	return items[0].ExternalRef, nil
+}
+
+func (b *BD) SetExternalRef(id, ref string) error {
+	if id == "" {
+		return nil
+	}
+	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--external-ref", ref)
+	return err
+}
+
+func (b *BD) AppendNotes(id, msg string) error {
+	if id == "" || msg == "" {
+		return nil
+	}
+	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--append-notes", msg)
+	return err
+}
+
+func (b *BD) SetMetadata(id, key, value string) error {
+	if id == "" || key == "" {
+		return nil
+	}
+	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--set-metadata", key+"="+value)
+	return err
+}
+
+func (b *BD) GetMetadata(id, key string) (string, error) {
+	if id == "" || key == "" {
+		return "", nil
+	}
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", id, "--json")
+	if err != nil {
+		return "", err
+	}
+	var items []struct {
+		Metadata map[string]string `json:"metadata"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil || len(items) == 0 {
+		return "", nil
+	}
+	if items[0].Metadata == nil {
+		return "", nil
+	}
+	return items[0].Metadata[key], nil
 }
 
 func (b *BD) Label() string { return "beads" }

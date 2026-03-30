@@ -1,201 +1,247 @@
 # Ralph
 
-Autonomous [Claude Code](https://docs.anthropic.com/en/docs/claude-code) task iteration loop. Runs the Claude Code CLI in fresh-context iterations against a project repo.
-
-Ralph is deliberately simple and non-opinionated. There are no wizards, no scaffolding, no framework to adopt. It's a bash script that runs Claude in a loop with a signal protocol so each iteration knows when to stop. Point it at an existing project that already has its own commit conventions, task management, and agent instructions — ralph just orchestrates the loop.
+Autonomous [Claude Code](https://docs.anthropic.com/en/docs/claude-code) task orchestrator. Picks up tasks from a backlog, works them one at a time in fresh-context iterations, verifies the result, and merges — unattended.
 
 ## How it works
 
-Claude Code has ~200k tokens of context per session. Ralph runs Claude repeatedly, one task per session, with fresh context each time. Claude signals when it's done, ralph moves to the next task.
+Ralph runs Claude Code repeatedly, one task per iteration. Each iteration gets a task from the backlog ([bd](https://github.com/brokenalarms/bd)), works it on an isolated git worktree, runs the test suite, gets the diff reviewed by a verification LLM, and the orchestrator pushes, creates a PR, and merges. Each task produces one commit that stacks linearly on the previous — no worktree reset between tasks.
 
 ```
-ralph.sh
-  ├── planning phase (optional) — Claude reads the repo + creates a task list
-  └── execution loop
-       ├── iteration 1 → Claude picks task, works, signals done
-       ├── iteration 2 → fresh context, next task
-       ├── ...
-       └── iteration N → all tasks complete (or max reached)
+ralph loop
+  ├── pick task from bd backlog
+  ├── rename branch for task
+  ├── iteration → agent works, signals done
+  │     ├── run test suite
+  │     ├── LLM verification of diff against acceptance criteria
+  │     └── fix agent if rejected (up to N retries)
+  ├── orchestrator pushes, creates PR, links to bead, merges
+  └── next task (continues from previous commit)
 ```
 
-### Two modes
+## Three subcommands
 
-**Managed mode** (default) — On the first run, ralph launches an interactive Claude session where you chat to define a spec and task plan. Once you exit, ralph takes over and works through the tasks autonomously. Use `--no-plan` to skip planning.
+| Command | Purpose |
+|---|---|
+| `ralph loop` | Autonomous executor — picks tasks, writes code, verifies, merges |
+| `ralph task` | Interactive triage session — create tasks, write specs, manage backlog |
+| `ralph command` | Full four-pane tmux layout: loop + task manager + stream filter + plan |
 
-**External plan mode** (`--plan-file`) — Your repo already has task files and agent instructions. Ralph skips planning and defers to your project's workflow. This is the mode for existing projects — point `--plan-file` at your AGENTS.md or TODO.md and ralph handles the iteration loop while your project's own rules handle everything else.
+Run `ralph task` to build up a backlog, then `ralph loop` to work through it. Or run `ralph command` to get both in a single tmux session with live log streaming.
+
+## Quick start
 
 ```bash
-# Existing project with its own AGENTS.md defining tasks and workflow
-ralph.sh --plan-file AGENTS.md -d ~/myproject
+# Install ralph and dependencies (bd, gh, tmux, Go)
+./install.sh
+
+# Create some tasks
+ralph task ~/myproject
+
+# Run the loop
+ralph loop --dir ~/myproject --auto-merge --evolve
 ```
 
-### Signal protocol
+## Install
 
-Claude communicates with ralph via signal tokens echoed to stdout (captured in the log):
-
-```
-###RALPH_CURRENT_TASK### <description>    # written when Claude picks a task
-###RALPH_TASK_COMPLETE### <summary>        # written when done — triggers next iteration
-```
-
-The signal instructions are appended to every prompt automatically. If Claude gets stuck, it still echoes the completion signal so the loop can proceed.
-
-## Requirements
-
+Requirements:
+- [Go](https://go.dev/dl/) 1.22+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- bash
 - Homebrew (for dependency installation)
-- Node.js 18+ (for the HTTP server only)
 
-The install script (`./install.sh`) will brew-install `jq`, `tmux`, and `gh` if missing.
+```bash
+./install.sh
+```
+
+This installs `bd`, `gh`, and `tmux` via Homebrew if missing, builds the Go binary, and places it at `~/.local/bin/ralph`.
+
+To build manually:
+
+```bash
+make build    # produces ./ralph binary
+make install  # copies to ~/.local/bin/ralph
+make test     # runs the test suite
+```
+
+### Build scripts
+
+| Script | Purpose |
+|---|---|
+| `scripts/build-go.sh` | Local-only build — compiles the binary, no version tagging or push |
+| `scripts/rebuild-go.sh` | Full release build — bumps patch version, tags, pushes, polls for the new tag, rebuilds with exponential backoff |
+
+`rebuild-go.sh` is used by evolve mode to self-update after each merge. `build-go.sh` is for local development.
 
 ## Usage
 
 ```bash
 # Run against current directory
-ralph.sh
+ralph loop
 
 # Specify project and iteration cap
-ralph.sh -d ~/myproject -n 20
+ralph loop --dir ~/myproject --max 20
 
-# External plan mode — use your repo's existing task file
-ralph.sh --plan-file AGENTS.md
+# Auto-merge and re-exec latest binary between iterations
+ralph loop --auto-merge --evolve
 
-# With a prompt override
-ralph.sh -p "Fix all failing tests"
+# Prompt override for one-off work
+ralph loop -p "Fix all failing tests"
 
-# Plan only — creates .ralph/plan.md, then exits
-ralph.sh --plan
-
-# Resume a previous run
-ralph.sh --resume
-
-# Tmux 3-pane layout (loop status | claude output | plan + state)
-ralph.sh --tmux
+# Four-pane tmux layout
+ralph command ~/myproject
 ```
 
-### Options
+### Loop options
 
 | Flag | Description | Default |
 |---|---|---|
 | `-d, --dir <path>` | Project directory | cwd |
 | `-n, --max <N>` | Max iterations | 50 |
 | `-p, --prompt <text>` | Prompt override | — |
-| `--plan-file <path>` | External plan file (skips planning phase) | — |
-| `--resume` | Resume from previous state | — |
-| `--plan` | Run planning phase only | — |
-| `--skip-planning` | Skip interactive planning, go straight to autonomous execution | — |
 | `-q, --quiet` | Suppress streaming output (log only) | — |
-| `--no-worktree` | Run directly in project dir (no git isolation) | — |
-| `--calls-per-hour <N>` | Rate limit Claude calls per hour | 80 |
-| `--tmux` | 3-pane tmux layout | — |
+| `--calls-per-hour <N>` | Max Claude calls per hour | 80 |
+| `--base-branch <name>` | Base branch for rebase/merge | develop |
+| `--auto-merge` | Squash-merge PRs after task completion | — |
+| `--evolve` | Re-exec ralph between iterations to incorporate the latest version | — |
+| `--wait` | Keep running after all tasks complete, polling for new work | — |
+| `--tmux` | Run in tmux 3-pane layout | — |
+| `--refactor-every <N>` | Refactor every N iterations | 0 |
+| `--idle-timeout <dur>` | Kill idle session after duration | 10m |
 
 ### Controlling a running loop
 
-- **Stop gracefully:** `touch .ralph/stop` — halts after the current iteration finishes
-- **Send feedback:** `ralph feedback "your message"` — queues feedback for the next iteration. Multiple calls stack up. Feedback is injected into Claude's prompt once, then cleared.
-- **Resume:** run the generated `.ralph/resume.sh`, or `ralph.sh --resume`
-- **Rate limiting:** ralph tracks calls per clock hour and pauses with a countdown when the cap is reached, then resumes automatically
+```bash
+ralph stop              # halt after the current iteration
+ralph feedback "msg"    # queue feedback for the next iteration
+```
 
-## Prompts
+## Architecture
 
-Ralph's prompts live in `prompts/` and are designed to be read and modified. They're short — the longest is ~20 lines. There's no hidden logic or complex prompt engineering. They provide just enough structure for the iteration loop to work, and defer to your project's own AGENTS.md / CLAUDE.md for everything else.
+See [docs/specs/architecture.md](docs/specs/architecture.md) for the full target-state architecture, package structure, and key interfaces.
 
-| File | Used when | Purpose |
+### Orchestrator-owned lifecycle
+
+The orchestrator owns the entire push/PR/merge lifecycle. The agent writes code and signals completion — it never pushes, creates PRs, or closes tasks. These operations are enforced via disallowed tools:
+
+- `git push` — orchestrator pushes after verification passes
+- `gh pr create` — orchestrator creates the PR and links it to the bead via `external-ref` (full PR URL)
+- `bd close` — orchestrator closes the bead only after successful merge
+- `git checkout` / `git branch` — prevents sub-agents from interfering with ralph's branch management
+
+### Agent constraints
+
+The agent's execution prompt makes explicit:
+- **ISSUE/FIX diagnosis format is mandatory** — every code change must be preceded by an ISSUE/FIX block explaining what's wrong and how the fix addresses it
+- **Never skip failing tests** — tests that fail must be fixed, not deleted or skipped
+- **Agent cannot push or create PRs** — the orchestrator handles all git remote operations
+
+### Feedback
+
+When a user writes feedback via `ralph feedback "msg"`, the feedback file is written to `.ralph/feedback`. The orchestrator kills the running agent and restarts it with a fresh context that includes the feedback. The agent must acknowledge feedback with a `FEEDBACK:` line before proceeding.
+
+### Verification pipeline
+
+After the agent signals completion:
+
+1. **Test suite** — full `make test` (or equivalent) must pass
+2. **LLM diff review** — a fast model reviews the diff against the bead's acceptance criteria. UI/UX concerns are flagged but left to the agent's discretion.
+3. **Fix agent** — if rejected, a fix agent is spawned to address the issues
+4. **Escalation** — unresolved rejections escalate to a smarter model
+5. **Skip after repeated failures** — tasks that fail verification N times are skipped
+
+### CI evaluation
+
+CI check polling only fails on **required checks** fetched from the branch protection API. Non-required checks (Netlify deploy previews, optional linters, etc.) are ignored. This prevents flaky optional checks from blocking the merge pipeline.
+
+### EnsureUpToDate
+
+All rebase operations go through a single `EnsureUpToDate` path that tells a story of escalating retry strategies:
+
+1. Stash agent work, fetch, attempt rebase
+2. On conflict, force-reset and replay agent commits via cherry-pick
+3. On unresolvable conflict, auto-recreate the worktree from the base branch
+
+This replaced multiple ad-hoc rebase paths (`RebaseOntoDefaultBranch`, inline rebase in merge, etc.) with one composable function.
+
+### PR-to-bead linking
+
+When the orchestrator creates a PR, it stores the full PR URL as an `external-ref` on the bead. The close reason also includes the PR URL when available. PR numbers are parsed from both URL format and legacy `gh-123` format.
+
+## Git strategy: stacked commits
+
+Each task produces one commit, stacked linearly on the previous. PRs target the previous task's branch (not main), so each PR shows only its own changes.
+
+When main moves (e.g. direct pushes), Ralph rebases onto latest main on startup. If the rebase conflicts, the stack diverges — Ralph continues building on top without trying to auto-resolve. Subsequent tasks are unaffected since they build on each other, not on main.
+
+To resolve a diverged stack later: `git rebase --update-refs origin/main` from the stack tip. Fix conflicts once at the first conflicting commit — all downstream commits replay cleanly. An automated conflict-resolution agent is planned.
+
+For rapid iteration, run the loop against `main`. For a safer workflow, use `--base-branch develop` to accumulate changes on develop and merge to main when ready.
+
+See [docs/specs/stacked-prs.md](docs/specs/stacked-prs.md) for the full design.
+
+## Evolve mode
+
+With `--auto-merge --evolve`, ralph re-execs the binary between iterations to pick up the latest version. For ralph's own development, pair with `--post-task 'scripts/build-go.sh'` to rebuild from source before each re-exec. Other projects using ralph just need `--evolve` to pick up whatever binary was last installed.
+
+## Git workflow
+
+Ralph creates a git worktree per run so the agent works on an isolated branch while the main branch stays clean. The workflow is opinionated:
+
+1. **Fresh branch per task** — each task starts on a new branch off the base
+2. **Squash-merge** — all commits for a task are squash-merged into the base branch
+3. **Reset** — after merge, the worktree is reset to the updated base branch
+
+Branch names follow the pattern `ralph/<project>/<seq>-<beadID>-<slug>`.
+
+## Task management
+
+Ralph uses [bd](https://github.com/brokenalarms/bd) as its task backend. The loop reads from the bd backlog, claims tasks, and closes them after successful merge. Use `ralph task` for interactive triage:
+
+```bash
+ralph task ~/myproject    # opens an interactive Claude session for task management
+```
+
+## Signal protocol
+
+The agent communicates with the orchestrator via signal files in `.ralph/`:
+
+| File | Direction | Purpose |
 |---|---|---|
-| `shared.md` | Always (prepended to all prompts) | Baseline quality standards: testing, commits, housekeeping |
-| `interactive-planning.md` | First run, interactive planning | System prompt for the interactive spec/plan session |
-| `planning.md` | Managed mode, autonomous planning fallback | Tells Claude to create a checkbox task list |
-| `internal.md` | Managed mode, execution | Gives Claude the task and rules for one iteration |
-| `external.md` | `--plan-file` mode | Tells Claude to read the project's own agent instructions for task selection |
-| `signal.md` | Always (appended to all prompts) | Documents the signal protocol |
-
-Placeholders like `{{WORK_DIR}}`, `{{PLAN_FILE}}`, `{{SIGNAL_TOKEN}}` are substituted at runtime. Edit the prompts to change how Claude behaves in your loops.
-
-## Git worktrees
-
-By default, ralph creates a git worktree so Claude works on an isolated branch while your main branch stays clean. Branches are named by project and task:
-
-```
-ralph/myproject/01-add-authentication
-ralph/myproject/02-fix-failing-tests
-```
-
-The branch is created with a sequence number at the start and renamed to include a task slug once Claude picks its first task. Merge when ready with `git merge ralph/myproject/01-add-authentication`.
-
-The worktree has `rebase.updateRefs` enabled, so rebasing any branch in the stack automatically updates all intermediate branch pointers. This means you can rebase the entire stack onto an updated main with a single `git rebase --update-refs origin/main` from the top branch.
-
-Use `--no-worktree` to skip this and work directly in the project directory.
-
-## Response analyzer
-
-Ralph watches for problems after each iteration and halts early rather than burning through iterations with no progress:
-
-- **Permission denials** — 3+ in a single iteration → halt
-- **Stagnation** — 3 consecutive iterations with no file changes → halt
-- **Test saturation** — 3 consecutive iterations modifying only test files → halt
-- **Stuck loops** — repeated identical tool calls or "I'm blocked" language → warn, then halt
+| `.signal_current_task` | agent → loop | Written when agent picks a task |
+| `.signal_complete` | agent → loop | Written when agent finishes — triggers verification |
+| `feedback` | user → agent | Kills running agent, restart includes feedback in context |
+| `stop` | user → loop | Halts after current iteration |
 
 ## .ralph directory
 
-Ralph stores all state in `.ralph/` inside the project directory. Add it to `.gitignore`.
+Ralph stores all runtime state in `.ralph/` inside the project directory. Add it to `.gitignore`.
 
 ```
 .ralph/
-  state.json       # iteration count, status, worktree info
-  plan.md          # task list (managed mode)
-  loop.log         # full Claude output (stream-json)
-  resume.sh        # auto-generated resume script
-  stop             # create this file to halt gracefully
-  feedback         # queued user feedback (consumed at next iteration)
-  worktrees/       # git worktree directories
+  state.json          # iteration count, status, current task, skipped tasks
+  reflections/        # post-task reflections from the agent
+  worktrees/          # git worktree directories
+  .signal_complete    # agent completion signal
+  .signal_current_task # current task signal
+  feedback            # queued user feedback
+  stop                # create to halt gracefully
 ```
 
-## HTTP server
+## Four-pane tmux layout
 
-Optional HTTP wrapper for remote monitoring and control.
+`ralph command` starts a tmux session with four panes:
 
-```bash
-node server.js
-# or: npm start
 ```
-
-| Variable | Default | Description |
-|---|---|---|
-| `RALPH_PORT` | `3411` | Server port |
-| `RALPH_HOST` | `127.0.0.1` | Bind address (localhost only) |
-
-Bind to a Tailscale IP for network access without exposing to LAN:
-
-```bash
-RALPH_HOST=$(tailscale ip -4) node server.js
-```
-
-### Endpoints
-
-| Route | Method | Description |
-|---|---|---|
-| `/` | GET | Server info |
-| `/start` | POST | Start a ralph loop |
-| `/status` | GET | Loop status and state |
-| `/stop` | POST | Graceful stop |
-| `/feedback` | POST | Queue feedback for next iteration |
-| `/kill` | POST | Kill running process |
-| `/log` | GET | Tail the log (`?lines=50`) |
-| `/plan` | GET | View the plan file |
-| `/reset` | DELETE | Clean .ralph state |
-
-```bash
-# Start a loop
-curl -X POST http://localhost:3411/start \
-  -H 'Content-Type: application/json' \
-  -d '{"dir": "/home/user/myproject", "plan_file": "AGENTS.md"}'
-
-# Check status
-curl http://localhost:3411/status
-
-# Graceful stop
-curl -X POST http://localhost:3411/stop
+┌──────────────────┬──────────────────┐
+│                  │                  │
+│   ralph loop     │  stream filter   │
+│   (orchestrator) │  (agent output)  │
+│                  │                  │
+├──────────────────┼──────────────────┤
+│                  │                  │
+│   ralph task     │  plan / state    │
+│   (triage)       │  (bd + status)   │
+│                  │                  │
+└──────────────────┴──────────────────┘
 ```
 
 ## License

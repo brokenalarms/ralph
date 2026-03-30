@@ -1,5 +1,6 @@
 .claude
 .ralph
+.ralph/screenshots/
 .beads
 
 # Dolt database files (added by bd init)
@@ -9,4 +10,3 @@
 # Go build output
 /ralph
 /go/ralph
-go/cmd/ralph/prompts

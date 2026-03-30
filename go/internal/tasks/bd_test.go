@@ -113,6 +113,22 @@ func TestBD_CountTotal(t *testing.T) {
 	}
 }
 
+// Proves: CountTotal counts only actionable beads (open + in_progress + closed).
+func TestBD_CountTotal_ExcludesNonActionable(t *testing.T) {
+	// bare "bd count" returns 10, but actionable = 3+1+4 = 8
+	runner := mockBD(
+		"10",
+		map[string]string{"open": "3", "in_progress": "1", "closed": "4"},
+		"[]",
+		`[{"id":"test-1","title":"Test task"}]`,
+	)
+	b := setupBD(t, runner)
+	got, _ := b.CountTotal()
+	if got != 8 {
+		t.Errorf("CountTotal = %d, want 8 (open+in_progress+closed)", got)
+	}
+}
+
 // Proves: bd backend picks the next ready task by title.
 func TestBD_GetNextTask_FromReady(t *testing.T) {
 	b := setupBD(t, defaultMock())
@@ -275,24 +291,6 @@ func TestBD_HasTasks(t *testing.T) {
 	}
 }
 
-// Proves: NeedsPlanning is false when tasks exist.
-func TestBD_NeedsPlanning_WithTasks(t *testing.T) {
-	b := setupBD(t, defaultMock())
-	got, _ := b.NeedsPlanning()
-	if got {
-		t.Error("expected NeedsPlanning=false when tasks exist")
-	}
-}
-
-// Proves: PlanningSucceeded is true when tasks exist.
-func TestBD_PlanningSucceeded_WithTasks(t *testing.T) {
-	b := setupBD(t, defaultMock())
-	got, _ := b.PlanningSucceeded()
-	if !got {
-		t.Error("expected PlanningSucceeded=true when tasks exist")
-	}
-}
-
 // Proves: CloseTask calls bd close for verified tasks.
 func TestBD_CloseTask(t *testing.T) {
 	closed := false
@@ -353,18 +351,6 @@ func TestBD_Label(t *testing.T) {
 	}
 }
 
-// Proves: PlanningInstructions directs to bd for task creation.
-func TestBD_PlanningInstructions(t *testing.T) {
-	b := &BD{}
-	got := b.PlanningInstructions()
-	if !strings.Contains(got, "bd") {
-		t.Error("expected planning instructions to mention bd")
-	}
-	if !strings.Contains(got, "create tasks directly in bd") {
-		t.Error("expected planning instructions to direct task creation to bd")
-	}
-}
-
 // Proves: GetNextTask falls back to ready queue when no in-progress tasks.
 func TestBD_GetNextTask_FallsBackToReady(t *testing.T) {
 	b := setupBD(t, defaultMock())
@@ -374,13 +360,13 @@ func TestBD_GetNextTask_FallsBackToReady(t *testing.T) {
 	}
 }
 
-// Proves: bd skip_task closes the task with a blocked reason.
-func TestBD_SkipTask_ClosesWithBlockedReason(t *testing.T) {
-	var closeArgs []string
+// Proves: bd SkipTask sets status to open (not deferred).
+func TestBD_SkipTask_SetsStatusOpen(t *testing.T) {
+	var updateArgs []string
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] == "close" {
-			closeArgs = args
-			return "closed", nil
+		if len(args) > 0 && args[0] == "update" {
+			updateArgs = args
+			return "updated", nil
 		}
 		return "", nil
 	}
@@ -388,12 +374,44 @@ func TestBD_SkipTask_ClosesWithBlockedReason(t *testing.T) {
 	if err := b.SkipTask("abc123", "stuck_loop"); err != nil {
 		t.Fatal(err)
 	}
-	if len(closeArgs) == 0 {
-		t.Fatal("expected close to be called")
+	if len(updateArgs) == 0 {
+		t.Fatal("expected update to be called")
 	}
-	joined := strings.Join(closeArgs, " ")
-	if !strings.Contains(joined, "blocked: stuck_loop") {
-		t.Errorf("expected blocked reason in close args, got: %v", closeArgs)
+	joined := strings.Join(updateArgs, " ")
+	if !strings.Contains(joined, "--status=open") {
+		t.Errorf("expected --status=open in update args, got: %v", updateArgs)
+	}
+	if strings.Contains(joined, "deferred") || strings.Contains(joined, "--defer") {
+		t.Errorf("should not use deferred/defer, got: %v", updateArgs)
+	}
+}
+
+// Proves: bd SkipTask adds a comment with the skip reason.
+func TestBD_SkipTask_RecordsReasonAsComment(t *testing.T) {
+	var commentArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 1 && args[0] == "comments" {
+			commentArgs = args
+			return "ok", nil
+		}
+		return "updated", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SkipTask("abc123", "merge_failed"); err != nil {
+		t.Fatal(err)
+	}
+	if len(commentArgs) == 0 {
+		t.Fatal("expected bd comments add to be called")
+	}
+	joined := strings.Join(commentArgs, " ")
+	if !strings.Contains(joined, "add") {
+		t.Errorf("expected 'add' subcommand, got: %v", commentArgs)
+	}
+	if !strings.Contains(joined, "abc123") {
+		t.Errorf("expected task ID in comment args, got: %v", commentArgs)
+	}
+	if !strings.Contains(joined, "merge_failed") {
+		t.Errorf("expected reason in comment body, got: %v", commentArgs)
 	}
 }
 
@@ -427,18 +445,6 @@ func TestBD_ExecutionInstructions_Content(t *testing.T) {
 	}
 	if !strings.Contains(got, "orchestrator closes") {
 		t.Error("expected execution instructions to tell agent that orchestrator closes tasks")
-	}
-}
-
-// Proves: Checklist Init is a no-op (does not create .beads).
-func TestChecklist_Init_IsNoOp(t *testing.T) {
-	dir := t.TempDir()
-	c := &Checklist{PlanFile: filepath.Join(dir, "plan.md")}
-	if err := c.Init(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, ".beads")); !os.IsNotExist(err) {
-		t.Error("expected .beads to not exist after checklist Init")
 	}
 }
 
@@ -521,15 +527,15 @@ func TestBD_GetNextTaskInfo_ReturnsConsistentPair(t *testing.T) {
 		return "", nil
 	}
 	b := setupBD(t, runner)
-	id, title, err := b.GetNextTaskInfo()
+	info, err := b.GetNextTaskInfo()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != "task-42" {
-		t.Errorf("id = %q, want %q", id, "task-42")
+	if info.ID != "task-42" {
+		t.Errorf("id = %q, want %q", info.ID, "task-42")
 	}
-	if title != "Implement login" {
-		t.Errorf("title = %q, want %q", title, "Implement login")
+	if info.Title != "Implement login" {
+		t.Errorf("title = %q, want %q", info.Title, "Implement login")
 	}
 	if callCount != 2 {
 		t.Errorf("expected 2 bd calls (list + ready), got %d", callCount)
@@ -545,12 +551,12 @@ func TestBD_GetNextTaskInfo_PrefersInProgressAtSamePriority(t *testing.T) {
 		`[{"id":"new-1","title":"Start fresh","priority":2}]`,
 	)
 	b := setupBD(t, runner)
-	id, title, err := b.GetNextTaskInfo()
+	info, err := b.GetNextTaskInfo()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != "wip-99" || title != "Resume this" {
-		t.Errorf("expected wip-99/Resume this, got %s/%s", id, title)
+	if info.ID != "wip-99" || info.Title != "Resume this" {
+		t.Errorf("expected wip-99/Resume this, got %s/%s", info.ID, info.Title)
 	}
 }
 
@@ -753,6 +759,89 @@ func TestBD_CloseTask_RejectsEmptyPhase(t *testing.T) {
 	}
 }
 
+// Proves: ProjectContext assembles open beads, recently closed beads,
+// project directory, and config into a single string for prompt injection.
+func TestBD_ProjectContext_AssemblesAllSections(t *testing.T) {
+	openList := "○ task-1 [● P1] - Fix auth\n○ task-2 [● P2] - Add tests"
+	closedList := "✓ task-0 ● P1 - Bootstrap project"
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case joined == "list --flat":
+			return openList, nil
+		case strings.Contains(joined, "list") && strings.Contains(joined, "closed"):
+			return closedList, nil
+		case joined == "prime":
+			return "# bd prime output", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+
+	// Write a ralph.toml so config is included.
+	os.WriteFile(filepath.Join(b.ProjectDir, "ralph.toml"), []byte("max_iterations = 10\n"), 0644)
+
+	got, err := b.ProjectContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "task-1") {
+		t.Error("expected open beads in project context")
+	}
+	if !strings.Contains(got, "task-0") {
+		t.Error("expected recently closed beads in project context")
+	}
+	if !strings.Contains(got, b.ProjectDir) {
+		t.Error("expected project directory in project context")
+	}
+	if !strings.Contains(got, "max_iterations") {
+		t.Error("expected ralph config in project context")
+	}
+	if !strings.Contains(got, "bd prime output") {
+		t.Error("expected bd prime output in project context")
+	}
+}
+
+// Proves: ProjectContext gracefully handles missing ralph.toml.
+func TestBD_ProjectContext_NoConfig(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case joined == "list --flat":
+			return "○ task-1 - Something", nil
+		case strings.Contains(joined, "list") && strings.Contains(joined, "closed"):
+			return "", nil
+		case joined == "prime":
+			return "# prime", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	got, err := b.ProjectContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "task-1") {
+		t.Error("expected open beads even without config")
+	}
+}
+
+// Proves: ProjectContext returns empty when all bd commands fail.
+func TestBD_ProjectContext_AllCommandsFail(t *testing.T) {
+	failing := func(_ context.Context, dir string, args ...string) (string, error) {
+		return "", errors.New("fail")
+	}
+	b := setupBD(t, failing)
+	got, err := b.ProjectContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Should still include project directory at minimum.
+	if !strings.Contains(got, b.ProjectDir) {
+		t.Error("expected project directory even when bd commands fail")
+	}
+}
+
 // Proves: counts return zero when bd commands fail.
 func TestBD_Counts_OnError(t *testing.T) {
 	failing := func(_ context.Context, dir string, args ...string) (string, error) {
@@ -767,3 +856,347 @@ func TestBD_Counts_OnError(t *testing.T) {
 			completed, remaining, total)
 	}
 }
+
+// Proves: GetNextTaskInfo auto-prefixes titles with the detected component
+// so the orchestrator always sees properly-prefixed task names.
+func TestBD_GetNextTaskInfo_AutoPrefixesTitle(t *testing.T) {
+	ready := `[{"id":"ralph-abc","title":"force-reset worktree after merge","priority":1}]`
+	runner := mockBD("1", map[string]string{"open": "1"}, "[]", ready)
+	b := setupBD(t, runner)
+
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-abc" {
+		t.Errorf("id = %q, want ralph-abc", info.ID)
+	}
+	if info.Title != "ralph loop: force-reset worktree after merge" {
+		t.Errorf("title = %q, want %q", info.Title, "ralph loop: force-reset worktree after merge")
+	}
+}
+
+// Proves: within the same priority, bugs are preferred over tasks, and tasks over enhancements.
+func TestBD_GetNextTask_PrefersBugsOverTasksAtSamePriority(t *testing.T) {
+	runner := mockBD(
+		"3",
+		map[string]string{"open": "3", "closed": "0", "in_progress": "0"},
+		"[]",
+		`[{"id":"enh-1","title":"Add dark mode","priority":2,"type":"feature"},{"id":"bug-1","title":"Fix crash on login","priority":2,"type":"bug"},{"id":"task-1","title":"Write docs","priority":2,"type":"task"}]`,
+	)
+	b := setupBD(t, runner)
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "bug-1" {
+		t.Errorf("expected bug-1 (bug preferred over task/feature at same priority), got %q", info.ID)
+	}
+}
+
+// Proves: tasks are preferred over features/enhancements at the same priority.
+func TestBD_GetNextTask_PrefersTasksOverEnhancementsAtSamePriority(t *testing.T) {
+	runner := mockBD(
+		"2",
+		map[string]string{"open": "2", "closed": "0", "in_progress": "0"},
+		"[]",
+		`[{"id":"enh-1","title":"Add dark mode","priority":2,"type":"feature"},{"id":"task-1","title":"Write docs","priority":2,"type":"task"}]`,
+	)
+	b := setupBD(t, runner)
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "task-1" {
+		t.Errorf("expected task-1 (task preferred over feature at same priority), got %q", info.ID)
+	}
+}
+
+// Proves: priority still trumps type — a higher-priority feature beats a lower-priority bug.
+func TestBD_GetNextTask_PriorityTrumpsType(t *testing.T) {
+	runner := mockBD(
+		"2",
+		map[string]string{"open": "2", "closed": "0", "in_progress": "0"},
+		"[]",
+		`[{"id":"bug-1","title":"Minor bug","priority":3,"type":"bug"},{"id":"feat-1","title":"Critical feature","priority":1,"type":"feature"}]`,
+	)
+	b := setupBD(t, runner)
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "feat-1" {
+		t.Errorf("expected feat-1 (P1 feature beats P3 bug), got %q", info.ID)
+	}
+}
+
+// Proves: GetNextTaskInfo does not double-prefix titles that already have a component prefix.
+func TestBD_GetNextTaskInfo_NoDoublePrefixing(t *testing.T) {
+	ready := `[{"id":"ralph-xyz","title":"ralph task: echo back beads","priority":2}]`
+	runner := mockBD("1", map[string]string{"open": "1"}, "[]", ready)
+	b := setupBD(t, runner)
+
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Title != "ralph task: echo back beads" {
+		t.Errorf("title = %q, should be unchanged", info.Title)
+	}
+}
+
+// Verifies that GetNextTaskInfo returns priority from the bd JSON response.
+func TestBD_GetNextTaskInfo_ReturnsPriority(t *testing.T) {
+	ready := `[{"id":"ralph-p1","title":"Urgent fix","priority":1}]`
+	runner := mockBD("1", map[string]string{"open": "1"}, "[]", ready)
+	b := setupBD(t, runner)
+
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Priority == nil {
+		t.Fatal("expected non-nil priority")
+	}
+	if *info.Priority != 1 {
+		t.Errorf("priority = %d, want 1", *info.Priority)
+	}
+}
+
+// Verifies that GetNextTaskInfo returns nil priority when the issue has no priority set.
+func TestBD_GetNextTaskInfo_NilPriorityWhenUnset(t *testing.T) {
+	ready := `[{"id":"ralph-np","title":"No priority task"}]`
+	runner := mockBD("1", map[string]string{"open": "1"}, "[]", ready)
+	b := setupBD(t, runner)
+
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Priority != nil {
+		t.Errorf("expected nil priority, got %d", *info.Priority)
+	}
+}
+
+func TestBD_GetExternalRef(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
+			return `[{"external_ref":"gh-42"}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	ref, err := b.GetExternalRef("abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref != "gh-42" {
+		t.Errorf("GetExternalRef = %q, want %q", ref, "gh-42")
+	}
+}
+
+func TestBD_GetExternalRef_Empty(t *testing.T) {
+	b := setupBD(t, defaultMock())
+	ref, err := b.GetExternalRef("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref != "" {
+		t.Errorf("GetExternalRef with empty id = %q, want empty", ref)
+	}
+}
+
+func TestBD_SetExternalRef(t *testing.T) {
+	var capturedArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "update" {
+			capturedArgs = args
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SetExternalRef("abc123", "gh-42"); err != nil {
+		t.Fatal(err)
+	}
+	if len(capturedArgs) == 0 {
+		t.Fatal("expected update to be called")
+	}
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "--external-ref") {
+		t.Errorf("expected --external-ref in args, got: %v", capturedArgs)
+	}
+	if !strings.Contains(joined, "gh-42") {
+		t.Errorf("expected gh-42 in args, got: %v", capturedArgs)
+	}
+}
+
+func TestBD_SetExternalRef_EmptyID(t *testing.T) {
+	called := false
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		called = true
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SetExternalRef("", "gh-42"); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Error("expected no bd calls with empty id")
+	}
+}
+
+// SetMetadata calls bd update --set-metadata key=value for the given task.
+func TestBD_SetMetadata(t *testing.T) {
+	var capturedArgs []string
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "update" {
+			capturedArgs = args
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SetMetadata("ralph-abc", "branch", "ralph/proj/ralph-abc-fix-bug"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "--set-metadata") {
+		t.Errorf("expected --set-metadata in args, got: %v", capturedArgs)
+	}
+	if !strings.Contains(joined, "branch=ralph/proj/ralph-abc-fix-bug") {
+		t.Errorf("expected branch=... in args, got: %v", capturedArgs)
+	}
+}
+
+// SetMetadata is a no-op when id is empty.
+func TestBD_SetMetadata_EmptyID(t *testing.T) {
+	called := false
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		called = true
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	if err := b.SetMetadata("", "branch", "val"); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Error("expected no bd calls with empty id")
+	}
+}
+
+// GetMetadata parses the metadata map from bd show --json output.
+func TestBD_GetMetadata(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
+			return `[{"metadata":{"branch":"ralph/proj/ralph-abc-fix-bug"}}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	val, err := b.GetMetadata("ralph-abc", "branch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val != "ralph/proj/ralph-abc-fix-bug" {
+		t.Errorf("GetMetadata = %q, want %q", val, "ralph/proj/ralph-abc-fix-bug")
+	}
+}
+
+// GetMetadata returns empty string when key is missing.
+func TestBD_GetMetadata_MissingKey(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
+			return `[{"metadata":{"other":"value"}}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	val, err := b.GetMetadata("ralph-abc", "branch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val != "" {
+		t.Errorf("GetMetadata missing key = %q, want empty", val)
+	}
+}
+
+// GetMetadata returns empty string when metadata is null/absent.
+func TestBD_GetMetadata_NoMetadata(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "show" && args[2] == "--json" {
+			return `[{"id":"ralph-abc"}]`, nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	val, err := b.GetMetadata("ralph-abc", "branch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val != "" {
+		t.Errorf("GetMetadata no metadata = %q, want empty", val)
+	}
+}
+
+// Proves: SetSkippedIDs causes getNextIssue to exclude skipped tasks.
+func TestBD_SetSkippedIDs_FiltersNextIssue(t *testing.T) {
+	runner := mockBD(
+		"3",
+		map[string]string{"open": "2", "in_progress": "0", "closed": "1"},
+		"[]",
+		`[{"id":"ralph-aaa","title":"Task A","priority":0},{"id":"ralph-bbb","title":"Task B","priority":1}]`,
+	)
+	b := setupBD(t, runner)
+	b.SetSkippedIDs([]string{"ralph-aaa"})
+
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-bbb" {
+		t.Errorf("expected ralph-bbb (skipped ralph-aaa), got %q", info.ID)
+	}
+}
+
+// Proves: HasRemaining returns false when all remaining tasks are skipped.
+func TestBD_HasRemaining_ExcludesSkipped(t *testing.T) {
+	runner := mockBD(
+		"1",
+		map[string]string{"open": "1", "in_progress": "0", "closed": "0"},
+		"[]",
+		`[{"id":"ralph-only","title":"Only task"}]`,
+	)
+	b := setupBD(t, runner)
+	b.SetSkippedIDs([]string{"ralph-only"})
+
+	has, err := b.HasRemaining()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if has {
+		t.Error("HasRemaining should be false when all tasks are skipped")
+	}
+}
+
+// Proves: SetSkippedIDs with empty list clears any previous skips.
+func TestBD_SetSkippedIDs_EmptyClearsSkips(t *testing.T) {
+	runner := mockBD(
+		"1",
+		map[string]string{"open": "1", "in_progress": "0", "closed": "0"},
+		"[]",
+		`[{"id":"ralph-abc","title":"A task"}]`,
+	)
+	b := setupBD(t, runner)
+	b.SetSkippedIDs([]string{"ralph-abc"})
+	b.SetSkippedIDs([]string{})
+
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-abc" {
+		t.Errorf("expected ralph-abc after clearing skips, got %q", info.ID)
+	}
+}
+

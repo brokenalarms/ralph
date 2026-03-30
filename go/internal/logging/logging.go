@@ -4,27 +4,88 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
+	"strings"
 )
 
-// ANSI color codes matching ralph.sh.
+// Hyperlink returns an OSC 8 terminal hyperlink that renders visible as
+// the given text but links to url when clicked. Terminals that don't
+// support OSC 8 show the visible text unaltered.
+func Hyperlink(url, visible string) string {
+	return fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", url, visible)
+}
+
+// PRLink returns "PR #N" formatted as a clickable OSC 8 hyperlink
+// pointing to the GitHub PR URL. If nwo (owner/repo) is empty, returns
+// plain "PR #N" without a link.
+func PRLink(nwo, prNumber string) string {
+	if nwo == "" || prNumber == "" {
+		if prNumber != "" {
+			return "PR #" + prNumber
+		}
+		return ""
+	}
+	url := fmt.Sprintf("https://github.com/%s/pull/%s", nwo, prNumber)
+	return Hyperlink(url, "PR #"+prNumber)
+}
+
+// ANSI color codes.
 const (
-	Red    = "\033[0;31m"
-	Green  = "\033[0;32m"
-	Yellow = "\033[0;33m"
-	Blue   = "\033[0;34m"
-	Cyan   = "\033[0;36m"
-	Bold   = "\033[1m"
-	Reset  = "\033[0m"
+	Red     = "\033[0;31m"
+	Green   = "\033[0;32m"
+	Yellow  = "\033[0;33m"
+	Blue       = "\033[0;34m"
+	Magenta    = "\033[0;35m"
+	Cyan       = "\033[0;36m"
+	BrightBlue = "\033[0;94m"
+	Orange  = "\033[0;38;5;208m"
+	Dim     = "\033[2;37m"
+	Bold    = "\033[1m"
+	Reset   = "\033[0m"
 )
 
-// Logger provides colored, timestamped logging matching ralph.sh's output.
+// Actor identifies the source of a log message.
+type Actor string
+
+const (
+	Orch       Actor = "o" // orchestrator
+	AgentActor Actor = "r" // ralph/agent
+)
+
+// Domain categorizes what a log message is about.
+type Domain = string
+
+const (
+	Git      Domain = "git"
+	CI       Domain = "ci"
+	Beads    Domain = "beads"
+	Test     Domain = "test"
+	LLM      Domain = "llm"
+	Shell    Domain = "bash"
+	Analyzer Domain = "analyzer"
+)
+
+// Tag formats [actor][domain] with ANSI color. If domain is empty,
+// only [actor] is emitted. Greppable by actor or domain independently.
+func Tag(color string, actor Actor, domain Domain) string {
+	if domain == "" {
+		return fmt.Sprintf("%s[%s]%s", color, actor, Reset)
+	}
+	return fmt.Sprintf("%s[%s][%s]%s", color, actor, domain, Reset)
+}
+
+// BranchTag formats a branch name as a colored tag for log messages,
+// e.g. "[main]" in green.
+func BranchTag(branch string) string {
+	return Green + "[" + branch + "]" + Reset
+}
+
+// Logger provides colored logging with trailing timestamps that appear
+// only when the second changes from the previous line.
 type Logger struct {
-	out     io.Writer
-	logFile io.Writer
-	// TaskLabel returns the current task label (e.g. "beads" or "checklist").
-	TaskLabel func() string
+	out       io.Writer
+	logFile   io.Writer
 	streaming bool
+	Fmt       LineFormatter
 }
 
 // New creates a Logger that writes to stdout and the given log file writer.
@@ -34,14 +95,18 @@ func New(logFile io.Writer) *Logger {
 		logFile = io.Discard
 	}
 	return &Logger{
-		out:       os.Stdout,
-		logFile:   logFile,
-		TaskLabel: func() string { return "ralph" },
+		out:     os.Stdout,
+		logFile: logFile,
 	}
 }
 
-func ts() string {
-	return time.Now().Format("15:04:05")
+// NewWithWriter creates a Logger that writes to the given writer instead of
+// stdout, useful for capturing output in tests.
+func NewWithWriter(w io.Writer) *Logger {
+	return &Logger{
+		out:     w,
+		logFile: io.Discard,
+	}
 }
 
 // SetStreaming enables or disables streaming mode. In streaming mode, the
@@ -51,32 +116,47 @@ func (l *Logger) SetStreaming(on bool) {
 	l.streaming = on
 }
 
-func (l *Logger) emit(color, prefix, msg string) {
-	line := fmt.Sprintf("%s %s[%s]%s %s\n", ts(), color, prefix, Reset, msg)
+// write outputs a pre-formatted string to both stdout and logFile,
+// respecting streaming mode. All log output flows through this method.
+func (l *Logger) write(s string) {
 	if !l.streaming {
-		fmt.Fprint(l.out, line)
+		fmt.Fprint(l.out, s)
 	}
-	fmt.Fprint(l.logFile, line)
+	fmt.Fprint(l.logFile, s)
 }
 
-// Log writes an info-level message with cyan [ralph] prefix.
-func (l *Logger) Log(format string, args ...any) {
-	l.emit(Cyan, "ralph", fmt.Sprintf(format, args...))
+func (l *Logger) emit(color string, domain Domain, msg string) {
+	tag := Tag(color, Orch, domain)
+	content := fmt.Sprintf("%s %s", tag, msg)
+	l.write(l.Fmt.Format(content) + "\n")
 }
 
-// Success writes a success message with green [ralph] prefix.
-func (l *Logger) Success(format string, args ...any) {
-	l.emit(Green, "ralph", fmt.Sprintf(format, args...))
+// Log writes an info-level message with cyan [o][domain] prefix.
+func (l *Logger) Log(domain Domain, format string, args ...any) {
+	l.emit(Cyan, domain, fmt.Sprintf(format, args...))
 }
 
-// Warn writes a warning with yellow [ralph] prefix.
-func (l *Logger) Warn(format string, args ...any) {
-	l.emit(Yellow, "ralph", fmt.Sprintf(format, args...))
+// AgentLog writes an info-level message with cyan [r] prefix, used when
+// the orchestrator relays an agent action (e.g. task pickup signal).
+func (l *Logger) AgentLog(domain Domain, format string, args ...any) {
+	tag := Tag(Cyan, AgentActor, domain)
+	content := fmt.Sprintf("%s %s", tag, fmt.Sprintf(format, args...))
+	l.write(l.Fmt.Format(content) + "\n")
 }
 
-// Error writes an error with red [ralph] prefix.
-func (l *Logger) Error(format string, args ...any) {
-	l.emit(Red, "ralph", fmt.Sprintf(format, args...))
+// Success writes a success message with green [o][domain] prefix.
+func (l *Logger) Success(domain Domain, format string, args ...any) {
+	l.emit(Green, domain, fmt.Sprintf(format, args...))
+}
+
+// Warn writes a warning with yellow [o][domain] prefix.
+func (l *Logger) Warn(domain Domain, format string, args ...any) {
+	l.emit(Yellow, domain, fmt.Sprintf(format, args...))
+}
+
+// Error writes an error with red [o][domain] prefix.
+func (l *Logger) Error(domain Domain, format string, args ...any) {
+	l.emit(Red, domain, fmt.Sprintf(format, args...))
 }
 
 // Phase writes a bold blue phase header.
@@ -87,24 +167,75 @@ func (l *Logger) Phase(format string, args ...any) {
 // PhaseColor writes a bold phase header in the given ANSI color.
 func (l *Logger) PhaseColor(color string, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	line := fmt.Sprintf("%s %s%s[ralph]%s %s%s%s\n", ts(), Bold, color, Reset, Bold, msg, Reset)
-	if !l.streaming {
-		fmt.Fprint(l.out, line)
+	content := fmt.Sprintf("%s%s[o]%s %s%s%s", Bold, color, Reset, Bold, msg, Reset)
+	l.write(l.Fmt.FormatLine(content) + "\n")
+}
+
+// PriorityColor returns the ANSI color for a given priority level.
+func PriorityColor(priority int) string {
+	switch priority {
+	case 0:
+		return Red
+	case 1:
+		return Orange
+	case 2:
+		return Yellow
+	case 3:
+		return Green
+	case 4:
+		return Dim
+	default:
+		return Reset
 	}
-	fmt.Fprint(l.logFile, line)
 }
 
-// Task writes an info message with the current task label prefix.
-func (l *Logger) Task(format string, args ...any) {
-	l.emit(Cyan, l.TaskLabel(), fmt.Sprintf(format, args...))
+// PriorityTag returns a colored "[P0]"-style tag for the given priority.
+// Returns empty string when priority is nil (unset).
+func PriorityTag(priority *int) string {
+	if priority == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s[P%d]%s", PriorityColor(*priority), *priority, Reset)
 }
 
-// TaskSuccess writes a success message with the task label prefix.
-func (l *Logger) TaskSuccess(format string, args ...any) {
-	l.emit(Green, l.TaskLabel(), fmt.Sprintf(format, args...))
+// TaskBanner writes a bold magenta separator with the task ID and title centered,
+// shown once when a new task begins. When priority is non-nil, a colored
+// priority tag is included after the separator.
+func (l *Logger) TaskBanner(taskID, title string, priority *int) {
+	label := taskID
+	if title != "" {
+		label = taskID + ": " + title
+	}
+	l.Separator(Magenta, label)
+	if priority != nil {
+		l.Log("", "%s %s", PriorityTag(priority), title)
+	}
 }
 
-// TaskError writes an error message with the task label prefix.
-func (l *Logger) TaskError(format string, args ...any) {
-	l.emit(Red, l.TaskLabel(), fmt.Sprintf(format, args...))
+// DashedSeparator writes a bold, colored full-width dashed line using ─ characters.
+func (l *Logger) DashedSeparator(color string) {
+	const totalWidth = 72
+	content := fmt.Sprintf("%s%s%s%s", Bold, color, strings.Repeat("─", totalWidth), Reset)
+	l.write("\n")
+	l.write(l.Fmt.FormatLine(content) + "\n")
+	l.write("\n")
 }
+
+// Separator writes a bold, colored full-width separator with a centered label.
+func (l *Logger) Separator(color, label string) {
+	const totalWidth = 72
+	pad := totalWidth - len(label) - 2 // 2 for spaces around label
+	if pad < 4 {
+		pad = 4
+	}
+	left := pad / 2
+	right := pad - left
+	content := fmt.Sprintf("%s%s%s %s %s%s",
+		Bold, color,
+		strings.Repeat("═", left), label, strings.Repeat("═", right),
+		Reset)
+	l.write("\n")
+	l.write(l.Fmt.FormatLine(content) + "\n")
+	l.write("\n")
+}
+

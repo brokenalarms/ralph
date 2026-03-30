@@ -2,7 +2,6 @@ package analyzer
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 )
 
@@ -13,42 +12,6 @@ func TestEmptyLogContinues(t *testing.T) {
 	r := a.Analyze(IterationState{})
 	if r.Action != Continue {
 		t.Errorf("empty log: got action %d, want Continue", r.Action)
-	}
-}
-
-// Verifies that 3+ permission-denial phrases in assistant messages cause an
-// immediate halt, protecting the loop from burning iterations against a
-// sandbox or filesystem restriction.
-func TestPermissionDenialHaltsAt3(t *testing.T) {
-	a := New()
-	log := assistantTextMsg("Error: permission denied. Failed: cannot write to /foo. blocked by sandbox rule.")
-	r := a.Analyze(IterationState{IterationLog: log})
-	if r.Action != Halt || r.Reason != "permission_denied" {
-		t.Errorf("3 permission lines: got %+v, want Halt/permission_denied", r)
-	}
-}
-
-// Verifies that fewer than 3 permission phrases do NOT halt — isolated
-// permission errors may be transient and shouldn't abort the whole loop.
-func TestPermissionDenialBelowThreshold(t *testing.T) {
-	a := New()
-	log := assistantTextMsg("permission denied. cannot write.")
-	r := a.Analyze(IterationState{IterationLog: log})
-	if r.Action == Halt && r.Reason == "permission_denied" {
-		t.Errorf("2 permission lines should not halt, got %+v", r)
-	}
-}
-
-// Verifies that permission phrases inside tool results (file contents, command
-// output) do NOT trigger the permission denial detector. This prevents false
-// positives when Claude reads/writes code containing these phrases as data.
-func TestPermissionDenialIgnoresToolResults(t *testing.T) {
-	a := New()
-	log := toolResultMsg(`PERMISSION_DENIAL_THRESHOLD=3\npermission denied error handling\ncannot write guard\nblocked by sandbox check\nnot allowed to delete`) +
-		"\n" + assistantTextMsg("I've updated the permission checks.")
-	r := a.Analyze(IterationState{IterationLog: log})
-	if r.Action == Halt && r.Reason == "permission_denied" {
-		t.Errorf("permission phrases in tool results should not halt, got %+v", r)
 	}
 }
 
@@ -243,37 +206,6 @@ func TestIsTestFile(t *testing.T) {
 	}
 }
 
-// Verifies that permission denial detection is case-insensitive,
-// matching ralph.sh's grep -i flag.
-func TestPermissionDenialCaseInsensitive(t *testing.T) {
-	a := New()
-	log := assistantTextMsg("PERMISSION DENIED. Cannot Write to disk. BLOCKED BY SANDBOX.")
-	r := a.Analyze(IterationState{IterationLog: log})
-	if r.Action != Halt || r.Reason != "permission_denied" {
-		t.Errorf("case-insensitive permission: got %+v, want Halt/permission_denied", r)
-	}
-}
-
-// Verifies that permission denial detail is capped at 5 lines,
-// matching ralph.sh's `head -5` on the matches.
-func TestPermissionDenialDetailCapped(t *testing.T) {
-	a := New()
-	phrases := make([]string, 10)
-	for i := range phrases {
-		phrases[i] = "permission denied"
-	}
-	log := assistantTextMsg(strings.Join(phrases, ". "))
-
-	r := a.Analyze(IterationState{IterationLog: log})
-	if r.Action != Halt {
-		t.Fatalf("expected halt, got %+v", r)
-	}
-	detailLines := strings.Split(r.Detail, "\n")
-	if len(detailLines) > 5 {
-		t.Errorf("detail has %d lines, want <= 5", len(detailLines))
-	}
-}
-
 // Proves: no false positives on normal progress — real source file changes
 // reset both the stagnant and test-only counters to 0.
 func TestNormalProgressResetsCounters(t *testing.T) {
@@ -432,6 +364,8 @@ func TestErrorHashesClearedOnTaskChange(t *testing.T) {
 	}
 }
 
+// Proves: permission phrases in assistant text (agent prose about code) do NOT
+// trigger halts — only tool_result content counts as real permission errors.
 // Proves: an empty task key means error fingerprinting is skipped entirely,
 // so repeated errors without a task context don't cause halts.
 func TestNoTaskKeySkipsErrorFingerprinting(t *testing.T) {
@@ -456,5 +390,13 @@ func assistantToolUseMsg(name, command string) string {
 }
 
 func toolResultMsg(content string) string {
-	return fmt.Sprintf(`{"type":"user","message":{"content":[{"type":"tool_result","content":%q}]}}`, content)
+	return fmt.Sprintf(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_read","content":%q}]}}`, content)
+}
+
+func bashToolUse(id, command string) string {
+	return fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":%q,"name":"Bash","input":{"command":%q}}]}}`, id, command)
+}
+
+func bashResultMsg(id, content string) string {
+	return fmt.Sprintf(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":%q,"content":%q}]}}`, id, content)
 }

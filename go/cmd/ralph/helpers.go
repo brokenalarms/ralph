@@ -53,91 +53,23 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func hasUncommittedChanges(dir string) bool {
-	cmd1 := exec.Command("git", "-C", dir, "diff", "--quiet")
-	cmd2 := exec.Command("git", "-C", dir, "diff", "--cached", "--quiet")
-	return cmd1.Run() != nil || cmd2.Run() != nil
-}
-
-func validatePlanFile(path string) error {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return fmt.Errorf("plan file not found: %s", path)
-	} else if err != nil {
-		return fmt.Errorf("plan file error: %w", err)
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("reading plan file: %w", err)
-	}
-
-	if !strings.Contains(string(data), "- [") {
-		return fmt.Errorf("plan file is not in Ralph format (must contain markdown checkboxes): %s", path)
-	}
-
-	return nil
-}
-
-func promptRebaseRecovery(ctx context.Context) func(err error) git.RebaseRecovery {
+func autoRebaseRecovery() func(err error) git.RebaseRecovery {
 	return func(err error) git.RebaseRecovery {
-		fmt.Printf("\n%sRebase conflict:%s %v\n\n", logging.Red, logging.Reset, err)
-		fmt.Printf("  %s1)%s Create fresh worktree from main (recommended — completed work is already merged)\n", logging.Bold, logging.Reset)
-		fmt.Printf("  %s2)%s Abort — exit so you can resolve conflicts manually\n", logging.Bold, logging.Reset)
-		fmt.Printf("  %s3)%s Skip — continue without rebasing (may cause issues)\n\n", logging.Bold, logging.Reset)
-		fmt.Printf("%sChoice [1/2/3]:%s ", logging.Yellow, logging.Reset)
-
-		answer, readErr := readLineCtx(ctx)
-		if readErr != nil {
-			return git.RebaseManualResolve
-		}
-
-		switch strings.TrimSpace(answer) {
-		case "1", "":
-			return git.RebaseFreshWorktree
-		case "2":
-			return git.RebaseManualResolve
-		default:
-			return git.RebaseAbort
-		}
+		fmt.Printf("\n%sRebase conflict:%s %v\n", logging.Red, logging.Reset, err)
+		fmt.Printf("Recreating worktree from main\n")
+		return git.RebaseFreshWorktree
 	}
 }
 
-func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log *logging.Logger) error {
+func evolveRestart(projectDir, scriptPath string, args []string, log *logging.Logger) error {
 	ralphDir := filepath.Join(projectDir, ".ralph")
 
 	stopFile := filepath.Join(ralphDir, "stop")
 	if _, err := os.Stat(stopFile); err == nil {
 		os.Remove(stopFile)
-		log.Log("Stop signal detected — skipping evolve restart")
+		log.Log("", "Stop signal detected — skipping evolve restart")
 		return nil
 	}
-
-	log.Log("Pulling latest %s...", baseBranch)
-	fetchCmd := exec.Command("git", "-C", projectDir, "fetch", "origin", baseBranch)
-	if out, err := fetchCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git fetch failed: %s", out)
-	}
-
-	checkoutCmd := exec.Command("git", "-C", projectDir, "checkout", baseBranch)
-	checkoutCmd.CombinedOutput()
-
-	pullCmd := exec.Command("git", "-C", projectDir, "merge", "--ff-only", "origin/"+baseBranch)
-	if out, err := pullCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git merge --ff-only failed: %s", out)
-	}
-
-	log.Log("Rebuilding ralph binary...")
-	goDir := filepath.Join(projectDir, "go")
-	version := gitVersion(projectDir)
-	ldflags := fmt.Sprintf("-X github.com/brokenalarms/ralph/internal/config.Version=%s", version)
-	buildCmd := exec.Command("go", "build", "-ldflags", ldflags, "-o", scriptPath, "./cmd/ralph")
-	buildCmd.Dir = goDir
-	buildCmd.Stdout = os.Stdout
-	buildCmd.Stderr = os.Stderr
-	if err := buildCmd.Run(); err != nil {
-		return fmt.Errorf("go build failed: %v", err)
-	}
-	log.Log("Installed ralph %s to %s", version, scriptPath)
 
 	clearSignalFiles(ralphDir)
 
@@ -145,20 +77,9 @@ func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log
 	// they become orphans that accumulate across evolve restarts.
 	killChildProcesses()
 
-	log.Log("Restarting ralph with new binary...")
-	execArgs := append([]string{scriptPath}, args...)
+	log.Separator(logging.Magenta, "RALPH EVOLVED")
+	execArgs := append([]string{scriptPath, "loop"}, args...)
 	return syscall.Exec(scriptPath, execArgs, os.Environ())
-}
-
-func gitVersion(projectDir string) string {
-	cmd := exec.Command("git", "-C", projectDir, "describe", "--tags",
-		"--match", "v[0-9]*.[0-9]*.[0-9]*", "--abbrev=0")
-	out, err := cmd.Output()
-	if err != nil {
-		return "0.1.0-dev"
-	}
-	v := strings.TrimSpace(string(out))
-	return strings.TrimPrefix(v, "v")
 }
 
 func extractEmbeddedPrompts() (string, error) {
@@ -212,30 +133,3 @@ func clearSignalFiles(ralphDir string) {
 	}
 }
 
-func ensureGitignored(projectDir, entry string) {
-	gitignorePath := fmt.Sprintf("%s/.gitignore", projectDir)
-	existing := ""
-	if data, err := os.ReadFile(gitignorePath); err == nil {
-		existing = string(data)
-	}
-
-	found := false
-	for _, line := range strings.Split(existing, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == entry || trimmed == entry+"/" || trimmed == entry+"/*" {
-			found = true
-			break
-		}
-	}
-	if found {
-		return
-	}
-
-	existing += entry + "\n"
-	os.WriteFile(gitignorePath, []byte(existing), 0o644)
-
-	if git.IsGitRepo(projectDir) {
-		exec.Command("git", "-C", projectDir, "add", ".gitignore").Run()
-		exec.Command("git", "-C", projectDir, "commit", "-m", "Add "+entry+" to .gitignore").Run()
-	}
-}

@@ -7,12 +7,12 @@ import (
 	"testing"
 )
 
-// promptsDir returns the absolute path to the project's prompts/ directory.
+// promptsDir returns the absolute path to the embedded prompts directory.
 // Tests read the real template files so they stay in sync with the actual prompts.
 func promptsDir(t *testing.T) string {
 	t.Helper()
-	// go/internal/prompt/ → project root
-	dir, err := filepath.Abs(filepath.Join("..", "..", "..", "prompts"))
+	// go/internal/prompt/ → go/cmd/ralph/prompts/
+	dir, err := filepath.Abs(filepath.Join("..", "..", "cmd", "ralph", "prompts"))
 	if err != nil {
 		t.Fatalf("resolve prompts dir: %v", err)
 	}
@@ -30,11 +30,11 @@ func testVars(t *testing.T) Vars {
 		WorkDir:          "/tmp/project/worktree",
 		RalphDir:         "/tmp/project/.ralph",
 		PlanFile:         "/tmp/project/.ralph/plan.md",
-		SignalToken:       "###RALPH_TASK_COMPLETE###",
-		CurrentTaskToken: "###RALPH_CURRENT_TASK###",
-		AllCompleteToken: "###RALPH_ALL_COMPLETE###",
+		SignalToken:       "/tmp/project/.ralph/.signal_complete",
+		CurrentTaskToken: "/tmp/project/.ralph/.signal_current_task",
+		AllCompleteToken: "/tmp/project/.ralph/.signal_all_complete",
 		TaskPrompt:       "Fix auth",
-		TaskBackend:      BackendChecklist,
+		TaskBackend:      BackendBD,
 	}
 }
 
@@ -47,12 +47,12 @@ func TestBuildPrompt_VariablesSubstituted(t *testing.T) {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-	for _, want := range []string{v.WorkDir, v.RalphDir, v.PlanFile} {
+	for _, want := range []string{v.WorkDir, v.RalphDir} {
 		if !strings.Contains(result, want) {
 			t.Errorf("prompt missing %q", want)
 		}
 	}
-	for _, raw := range []string{"{{WORK_DIR}}", "{{RALPH_DIR}}", "{{PLAN_FILE}}"} {
+	for _, raw := range []string{"{{WORK_DIR}}", "{{RALPH_DIR}}"} {
 		if strings.Contains(result, raw) {
 			t.Errorf("prompt still contains unsubstituted %s", raw)
 		}
@@ -91,49 +91,47 @@ func TestBuildPrompt_IncludesSharedPrompt(t *testing.T) {
 	}
 }
 
-// Proves: user feedback is injected into the prompt when provided.
-func TestBuildPrompt_FeedbackIncluded(t *testing.T) {
+// Proves: live feedback instructions are always included in the prompt,
+// telling the agent to check the feedback file between tool calls.
+func TestBuildPrompt_FeedbackInstructions(t *testing.T) {
 	v := testVars(t)
-	v.Feedback = "make it generic, use plugins"
 	result, err := BuildPrompt(v)
 	if err != nil {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
 	if !strings.Contains(result, "User feedback") {
-		t.Error("prompt missing feedback section header")
+		t.Error("prompt missing user feedback section header")
 	}
-	if !strings.Contains(result, "make it generic") {
-		t.Error("prompt missing feedback content")
+	if !strings.Contains(result, "attempt history") {
+		t.Error("prompt should explain feedback appears in attempt history")
 	}
 }
 
-// Proves: no feedback section is present when feedback is empty.
-func TestBuildPrompt_NoFeedbackWhenEmpty(t *testing.T) {
+// Proves: the feedback prompt explains the orchestrator handles feedback
+// delivery — the agent doesn't need to poll for it.
+func TestBuildPrompt_FeedbackExplainsOrchestration(t *testing.T) {
 	v := testVars(t)
-	v.Feedback = ""
 	result, err := BuildPrompt(v)
 	if err != nil {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-	if strings.Contains(result, "User feedback") {
-		t.Error("prompt should not contain feedback section when feedback is empty")
+	if !strings.Contains(result, "orchestrator") {
+		t.Error("feedback instructions should reference {{RALPH_DIR}}/feedback with substituted path")
 	}
 }
 
-// Proves: the bd backend uses execution-bd.md for task instructions.
+// Proves: the prompt uses execution-bd.md for task instructions.
 func TestBuildPrompt_BDBackend(t *testing.T) {
 	v := testVars(t)
-	v.TaskBackend = BackendBD
 	result, err := BuildPrompt(v)
 	if err != nil {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-	// bd template references bd prime; checklist template references plan file
 	if !strings.Contains(result, "bd") {
-		t.Error("bd backend prompt should reference bd")
+		t.Error("prompt should reference bd")
 	}
 }
 
@@ -263,39 +261,6 @@ func TestBuildRefactorPrompt_References500LineThreshold(t *testing.T) {
 	}
 }
 
-// Proves: refactor prompt includes quality findings section header.
-func TestBuildRefactorPrompt_IncludesQualityFindings(t *testing.T) {
-	v := testVars(t)
-	result, err := BuildRefactorPrompt(v, "src/auth.ts")
-	if err != nil {
-		t.Fatalf("BuildRefactorPrompt: %v", err)
-	}
-	if !strings.Contains(result, "Quality signals detected") {
-		t.Error("refactor prompt missing 'Quality signals detected' section")
-	}
-}
-
-// Proves: planning prompt includes debt assessment section.
-func TestPlanningPrompt_IncludesDebtAssessment(t *testing.T) {
-	planningPrompt, err := os.ReadFile(filepath.Join(promptsDir(t), "planning.md"))
-	if err != nil {
-		t.Fatalf("reading planning.md: %v", err)
-	}
-	content := string(planningPrompt)
-	if !strings.Contains(content, "Debt assessment") {
-		t.Error("planning prompt missing 'Debt assessment'")
-	}
-	if !strings.Contains(content, "Dead code") {
-		t.Error("planning prompt missing 'Dead code'")
-	}
-	if !strings.Contains(content, "500 lines") {
-		t.Error("planning prompt missing '500 lines'")
-	}
-	if !strings.Contains(content, "don't add refactor tasks just because you can") {
-		t.Error("planning prompt missing refactor restraint guidance")
-	}
-}
-
 // Proves: shared prompt includes Boy Scout Rule as a reminder.
 func TestSharedPrompt_IncludesBoyScoutRule(t *testing.T) {
 	shared, err := os.ReadFile(filepath.Join(promptsDir(t), "shared.md"))
@@ -325,6 +290,33 @@ func TestExecutionBD_ReinforcesBoyScoutRule(t *testing.T) {
 	}
 }
 
+// Proves: execution-bd.md instructs the agent to echo bead details neatly
+// after bd create — ID, priority, type, labels, title, description — instead
+// of dumping the raw command with all flags.
+func TestExecutionBD_BeadEchoBack(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
+	if err != nil {
+		t.Fatalf("reading execution-bd.md: %v", err)
+	}
+	s := string(content)
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"echo back", "should instruct echoing bead details after creation"},
+		{"priority", "echo should include priority"},
+		{"labels", "echo should include labels"},
+		{"truncat", "echo should mention truncation for long descriptions"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(s, tc.substr) {
+			t.Errorf("execution-bd.md missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
 // Proves: execution-bd.md requires TDD — write a failing test first, then implement.
 func TestExecutionBD_RequiresTDD(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
@@ -341,7 +333,7 @@ func TestExecutionBD_RequiresTDD(t *testing.T) {
 // attempts exist on the current task.
 func TestBuildPrompt_IncludesAttemptHistory(t *testing.T) {
 	v := testVars(t)
-	v.AttemptHistory = "### Attempt 1\nSummary: broke it\nChanges: none\nAnalysis: warn:stuck\n"
+	v.AttemptHistory = "## Previous attempts on this task\n### Attempt 1\nSummary: broke it\nChanges: none\nAnalysis: warn:stuck\n"
 	result, err := BuildPrompt(v)
 	if err != nil {
 		t.Fatalf("BuildPrompt: %v", err)
@@ -403,7 +395,7 @@ func TestBuildPrompt_SignalWarnsAboutTermination(t *testing.T) {
 
 // Proves: the bd execution template specifies that pushing and PR creation
 // must happen before signaling completion.
-func TestBuildPrompt_BDCompletionOrderIncludesPush(t *testing.T) {
+func TestBuildPrompt_BDCompletionOrderNoPush(t *testing.T) {
 	v := testVars(t)
 	v.TaskBackend = BackendBD
 	result, err := BuildPrompt(v)
@@ -411,50 +403,61 @@ func TestBuildPrompt_BDCompletionOrderIncludesPush(t *testing.T) {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-	pushIdx := strings.Index(result, "Push your branch")
-	signalIdx := strings.Index(result, "Signal completion by writing to the signal file")
-	if pushIdx < 0 {
-		t.Fatal("bd completion section missing push step")
+	if strings.Contains(result, "Push your branch") {
+		t.Error("completion section must not include push step — orchestrator owns push")
 	}
+	signalIdx := strings.Index(result, "Signal completion by writing to the signal file")
 	if signalIdx < 0 {
 		t.Fatal("bd completion section missing signal step")
 	}
-	if pushIdx >= signalIdx {
-		t.Error("push step must come before signal step in completion order")
-	}
 }
 
-// Proves: the checklist execution template specifies completion ordering
-// with push before signal.
-func TestBuildPrompt_ChecklistCompletionOrderIncludesPush(t *testing.T) {
+// Proves: the iteration prompt instructs the agent to be concise —
+// no narration or reasoning aloud, just state/fix/test/signal.
+func TestBuildPrompt_DemandsConciseOutput(t *testing.T) {
 	v := testVars(t)
-	v.TaskBackend = BackendChecklist
 	result, err := BuildPrompt(v)
 	if err != nil {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 
-	pushIdx := strings.Index(result, "Push your branch")
-	signalIdx := strings.Index(result, "Signal completion by writing to the signal file")
-	if pushIdx < 0 {
-		t.Fatal("checklist completion section missing push step")
+	if !strings.Contains(result, "concise") {
+		t.Error("prompt should instruct the agent to be concise")
 	}
-	if signalIdx < 0 {
-		t.Fatal("checklist completion section missing signal step")
-	}
-	if pushIdx >= signalIdx {
-		t.Error("push step must come before signal step in completion order")
+	if !strings.Contains(result, "narrat") {
+		t.Error("prompt should explicitly prohibit narration")
 	}
 }
 
-// Proves: an unknown backend returns an error instead of producing
-// a malformed prompt.
-func TestBuildPrompt_UnknownBackendErrors(t *testing.T) {
+// Proves: beads context is injected into the prompt when provided,
+// giving the agent immediate awareness of project state at startup.
+func TestBuildPrompt_BeadsContextIncluded(t *testing.T) {
 	v := testVars(t)
-	v.TaskBackend = "nonexistent"
-	_, err := BuildPrompt(v)
-	if err == nil {
-		t.Fatal("expected error for unknown backend")
+	v.TaskBackend = BackendBD
+	v.BeadsContext = "○ task-1 [● P1] - Fix auth\n✓ task-0 ● P1 - Bootstrap"
+	result, err := BuildPrompt(v)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+	if !strings.Contains(result, "task-1") {
+		t.Error("prompt missing beads context content")
+	}
+	if strings.Contains(result, "{{BEADS_CONTEXT}}") {
+		t.Error("prompt still contains unsubstituted {{BEADS_CONTEXT}}")
+	}
+}
+
+// Proves: no beads context placeholder remains when context is empty.
+func TestBuildPrompt_BeadsContextEmpty(t *testing.T) {
+	v := testVars(t)
+	v.TaskBackend = BackendBD
+	v.BeadsContext = ""
+	result, err := BuildPrompt(v)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+	if strings.Contains(result, "{{BEADS_CONTEXT}}") {
+		t.Error("prompt still contains unsubstituted {{BEADS_CONTEXT}}")
 	}
 }
 
@@ -494,6 +497,15 @@ func TestBuildTaskManagerPrompt(t *testing.T) {
 	}
 }
 
+// Proves: TaskManagerBootstrapPrompt is non-empty, so the task manager
+// Claude session receives an initial user message that triggers the startup
+// sequence (bd prime, bd list, status summary) without waiting for user input.
+func TestTaskManagerBootstrapPrompt_NonEmpty(t *testing.T) {
+	if TaskManagerBootstrapPrompt == "" {
+		t.Fatal("TaskManagerBootstrapPrompt must be non-empty to trigger startup")
+	}
+}
+
 // Proves: BuildTaskManagerPrompt returns an error when the template is missing.
 func TestBuildTaskManagerPrompt_MissingTemplate(t *testing.T) {
 	_, err := BuildTaskManagerPrompt("/nonexistent/path", "/proj", "/proj/.ralph")
@@ -502,3 +514,309 @@ func TestBuildTaskManagerPrompt_MissingTemplate(t *testing.T) {
 	}
 }
 
+// Proves: task-manager.md prompt contains all required sections so the task
+// manager pane has complete instructions for bead CRUD, triage, and constraints.
+func TestBuildTaskManagerPrompt_RequiredSections(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Welcome", "prompt should have a welcome/preamble section"},
+		{"light triage", "prompt should describe light triage mode"},
+		{"hands-on fix", "prompt should describe hands-on fix mode"},
+		{"echo back", "prompt should instruct echoing back bead details after creation"},
+		{"label", "prompt should require labels on every bead"},
+		{"screenshot", "prompt should describe screenshot handling"},
+		{"P0", "prompt should reference priority levels"},
+		{"in_progress", "prompt should warn about modifying in-progress beads"},
+		{"verbatim", "prompt should instruct including diagnostic content verbatim"},
+		{"split", "prompt should describe when to split beads"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: bead echo-back instructions require showing ID, priority, type,
+// title, and description — with truncation guidance for long descriptions —
+// so the user can review and amend before moving on.
+func TestBuildTaskManagerPrompt_EchoBackIncludesDescription(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"review and amend", "echo-back should tell user they can review and amend"},
+		{"truncat", "echo-back should mention truncation for long descriptions"},
+		{"description", "echo-back should explicitly mention showing the description"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: after echoing back a created bead, the task manager asks the user
+// to confirm or amend — so they don't have to run bd show separately.
+func TestBuildTaskManagerPrompt_ConfirmAfterCreate(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Looks good", "should ask the user to confirm the created bead"},
+		{"confirm", "should mention confirming"},
+		{"changes", "should offer the option to request changes"},
+		{"bd update", "should use bd update to apply amendments"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: task manager prompt tells the task manager that user bug reports
+// reference loop log output, so it doesn't ask for clarification about where
+// things were seen.
+func TestBuildTaskManagerPrompt_LoopLogContext(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	if !strings.Contains(result, "loop log") {
+		t.Error("task manager prompt should reference loop log as default context for bug reports")
+	}
+}
+
+// Proves: task manager prompt includes unwieldy bead detection instructions
+// so it proactively audits beads for excessive scope and suggests splitting
+// them into focused subtasks with acceptance criteria and dependencies.
+func TestBuildTaskManagerPrompt_UnwieldyBeadDetection(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"unwieldy", "prompt should name the concept of unwieldy beads"},
+		{"acceptance criteria", "split suggestions should include acceptance criteria"},
+		{"subtask", "prompt should instruct creating subtasks"},
+		{"bd show", "detection should use bd show to inspect bead details"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(strings.ToLower(result), strings.ToLower(tc.substr)) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: task manager prompt instructs the LLM to query bd state for phase
+// tracking, challenge closes that skipped the verified phase, and set
+// phase=unverified when reopening falsely-closed tasks.
+func TestBuildTaskManagerPrompt_PhaseLifecycleTracking(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"bd state", "prompt should instruct querying bd state for phase"},
+		{"phase", "prompt should reference the phase dimension"},
+		{"verified", "prompt should reference the verified phase"},
+		{"unverified", "prompt should instruct setting phase=unverified on reopen"},
+		{"set-state", "prompt should instruct using bd set-state to change phase"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(strings.ToLower(result), strings.ToLower(tc.substr)) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: task manager prompt includes detailed screenshot handling instructions:
+// describe the visual issue, save with naming convention, and reference in bead.
+func TestBuildTaskManagerPrompt_ScreenshotHandling(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Describe", "should instruct describing the visual issue"},
+		{"screenshots/", "should reference the screenshots directory path"},
+		{"slug", "should explain the naming convention with slug"},
+		{"bd update", "should instruct referencing screenshot path in the bead"},
+		{"Read tool", "should mention the fixing agent reads via multimodal Read"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: task-manager.md requires --acceptance flag on bd create so every
+// bead has specific, testable acceptance criteria the verifier can check.
+func TestTaskManagerPrompt_RequiresAcceptanceCriteria(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	if !strings.Contains(result, "--acceptance") {
+		t.Error("task-manager.md should require --acceptance flag on bd create")
+	}
+}
+
+// Proves: task-manager.md instructs checking bead status before commenting
+// or updating, and never modifying closed beads.
+func TestTaskManagerPrompt_CheckStatusBeforeUpdate(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	lower := strings.ToLower(result)
+	if !strings.Contains(lower, "check") || !strings.Contains(lower, "status") {
+		t.Error("task-manager.md should instruct checking bead status before updates")
+	}
+	if !strings.Contains(lower, "closed") {
+		t.Error("task-manager.md should warn against modifying closed beads")
+	}
+}
+
+// Proves: task manager startup sequence includes bd ready after bd list,
+// so the welcome summary distinguishes between open (possibly blocked)
+// and ready (unblocked) beads.
+func TestTaskManagerPrompt_StartupIncludesBdReady(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	if !strings.Contains(result, "bd ready") {
+		t.Error("task-manager.md startup sequence should include bd ready")
+	}
+
+	listIdx := strings.Index(result, "bd list")
+	readyIdx := strings.Index(result, "bd ready")
+	if listIdx < 0 || readyIdx < 0 || readyIdx < listIdx {
+		t.Error("bd ready should appear after bd list in the startup sequence")
+	}
+
+	lower := strings.ToLower(result)
+	if !strings.Contains(lower, "ready") && !strings.Contains(lower, "unblocked") {
+		t.Error("startup summary should distinguish ready/unblocked beads")
+	}
+	if !strings.Contains(lower, "blocked") {
+		t.Error("startup summary should mention blocked beads")
+	}
+}
+
+// Proves: execution-bd.md requires --acceptance flag on bd create so every
+// bead created by the execution agent has testable acceptance criteria.
+func TestExecutionBD_RequiresAcceptanceCriteria(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
+	if err != nil {
+		t.Fatalf("reading execution-bd.md: %v", err)
+	}
+	s := string(content)
+
+	if !strings.Contains(s, "--acceptance") {
+		t.Error("execution-bd.md should require --acceptance flag on bd create")
+	}
+	if !strings.Contains(s, "acceptance criteria") {
+		t.Error("execution-bd.md should mention acceptance criteria requirement")
+	}
+}
+
+// Proves: execution-bd.md instructs checking bead status before commenting
+// or updating, and never modifying closed beads.
+func TestExecutionBD_CheckStatusBeforeUpdate(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
+	if err != nil {
+		t.Fatalf("reading execution-bd.md: %v", err)
+	}
+	lower := strings.ToLower(string(content))
+
+	if !strings.Contains(lower, "before") || !strings.Contains(lower, "status") {
+		t.Error("execution-bd.md should instruct checking bead status before updates")
+	}
+	if !strings.Contains(lower, "closed") {
+		t.Error("execution-bd.md should warn against modifying closed beads")
+	}
+}
+
+// Proves: BuildReviewPrompt assembles the shared quality standards,
+// refactor style guide, and reflections into a post-mortem review prompt.
+func TestBuildReviewPrompt(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildReviewPrompt(dir, "/tmp/project", "/tmp/project/.ralph", "some reflections")
+	if err != nil {
+		t.Fatalf("BuildReviewPrompt error: %v", err)
+	}
+
+	if !strings.Contains(result, "Review Mode") {
+		t.Error("review prompt missing 'Review Mode' header")
+	}
+	if !strings.Contains(result, "/tmp/project") {
+		t.Error("review prompt missing project directory")
+	}
+	if !strings.Contains(result, "Commandments") {
+		t.Error("review prompt missing refactor style guide content")
+	}
+	if !strings.Contains(result, "refactor:") {
+		t.Error("review prompt should require refactor: commit prefix")
+	}
+}
+
+// Proves: BuildReviewPrompt returns an error when prompts directory is missing.
+func TestBuildReviewPrompt_MissingTemplate(t *testing.T) {
+	_, err := BuildReviewPrompt("/nonexistent", "/tmp", "/tmp/.ralph", "")
+	if err == nil {
+		t.Error("expected error for missing prompts directory")
+	}
+}

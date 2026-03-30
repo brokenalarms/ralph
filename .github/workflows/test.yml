@@ -4,7 +4,6 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main, develop]
 
 jobs:
   test:
@@ -24,10 +23,5 @@ jobs:
           git config --global user.name "CI"
           git config --global user.email "ci@test"
 
-      - name: Copy prompts for embedding
-        run: cp -r prompts go/cmd/ralph/prompts
-
       - name: Run Go tests
         run: cd go && go test ./...
-
-      # Bash tests removed — bash implementation is deprecated, Go only

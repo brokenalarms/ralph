@@ -20,9 +20,7 @@ func TestLoad_BashCompatible(t *testing.T) {
   "worktree_dir": "/tmp/worktrees/test-01",
   "worktree_branch": "ralph/test/01-state",
   "task_backend": "bd",
-  "max_iterations": 50,
-  "quality_score": 15,
-  "refactor_every": 20
+  "max_iterations": 50
 }`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(stateJSON), 0o644); err != nil {
 		t.Fatal(err)
@@ -42,12 +40,6 @@ func TestLoad_BashCompatible(t *testing.T) {
 	}
 	if s.MaxIterations != 50 {
 		t.Errorf("MaxIterations = %d, want 50", s.MaxIterations)
-	}
-	if s.QualityScore != 15 {
-		t.Errorf("QualityScore = %d, want 15", s.QualityScore)
-	}
-	if s.RefactorEvery != 20 {
-		t.Errorf("RefactorEvery = %d, want 20", s.RefactorEvery)
 	}
 	if s.TaskBackend != "bd" {
 		t.Errorf("TaskBackend = %q, want %q", s.TaskBackend, "bd")
@@ -81,10 +73,8 @@ func TestSaveAndLoad_Roundtrip(t *testing.T) {
 		Status:            "planned",
 		StartedAt:         "2026-03-20T00:00:00Z",
 		LastTask:          "test task",
-		TaskBackend:       "checklist",
+		TaskBackend:       "bd",
 		MaxIterations:     20,
-		QualityScore:      12,
-		RefactorEvery: 20,
 	}
 
 	if err := st.Save(original); err != nil {
@@ -99,8 +89,7 @@ func TestSaveAndLoad_Roundtrip(t *testing.T) {
 	if loaded.Iteration != original.Iteration ||
 		loaded.Status != original.Status ||
 		loaded.MaxIterations != original.MaxIterations ||
-		loaded.LastTask != original.LastTask ||
-		loaded.RefactorEvery != original.RefactorEvery {
+		loaded.LastTask != original.LastTask {
 		t.Errorf("Roundtrip mismatch:\n  saved:  %+v\n  loaded: %+v", original, loaded)
 	}
 }
@@ -229,7 +218,7 @@ func TestInit_CreatesFreshState(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 
-	if err := st.Init(50, 20); err != nil {
+	if err := st.Init(50); err != nil {
 		t.Fatal(err)
 	}
 
@@ -254,7 +243,7 @@ func TestInit_PreservesStateOnResume(t *testing.T) {
 
 	st.Save(State{Iteration: 3, Status: "running", MaxIterations: 50})
 
-	if err := st.Init(50, 20); err != nil {
+	if err := st.Init(50); err != nil {
 		t.Fatal(err)
 	}
 
@@ -278,44 +267,12 @@ func TestTaskBackend_WrittenToState(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 	st.Save(State{})
-	if err := st.Write("task_backend", "checklist"); err != nil {
+	if err := st.Write("task_backend", "bd"); err != nil {
 		t.Fatal(err)
 	}
 	val, _ := st.Read("task_backend")
-	if val != "checklist" {
-		t.Errorf("task_backend = %q, want %q", val, "checklist")
-	}
-}
-
-// Proves: quality_score defaults to 0 in initial state.
-func TestQualityScore_DefaultsToZero(t *testing.T) {
-	dir := t.TempDir()
-	st := NewStore(dir)
-	st.Init(5, 0)
-	st.Write("quality_score", "0")
-
-	val, err := st.Read("quality_score")
-	if err != nil {
-		t.Fatalf("Read quality_score: %v", err)
-	}
-	if val != "0" {
-		t.Errorf("quality_score = %q, want %q", val, "0")
-	}
-}
-
-// Proves: quality_score tracks across writes.
-func TestQualityScore_TracksAcrossWrites(t *testing.T) {
-	dir := t.TempDir()
-	st := NewStore(dir)
-	st.Init(5, 0)
-	st.Write("quality_score", "25")
-
-	val, err := st.Read("quality_score")
-	if err != nil {
-		t.Fatalf("Read quality_score: %v", err)
-	}
-	if val != "25" {
-		t.Errorf("quality_score = %q, want %q", val, "25")
+	if val != "bd" {
+		t.Errorf("task_backend = %q, want %q", val, "bd")
 	}
 }
 
@@ -371,6 +328,113 @@ func TestState_TestResultFieldsRoundTrip(t *testing.T) {
 	}
 }
 
+// Verifies that SaveCLIConfig/LoadCLIConfig round-trips a config map through
+// state.json, enabling evolve restart to reconstruct args from semantic config.
+func TestSaveCLIConfig_Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Save(State{Iteration: 5, Status: "running"})
+
+	cfg := map[string]string{
+		"dir":        "/tmp/project",
+		"max":        "20",
+		"auto-merge": "true",
+		"evolve":     "true",
+	}
+
+	if err := st.SaveCLIConfig(cfg); err != nil {
+		t.Fatalf("SaveCLIConfig: %v", err)
+	}
+
+	loaded, err := st.LoadCLIConfig()
+	if err != nil {
+		t.Fatalf("LoadCLIConfig: %v", err)
+	}
+
+	for k, v := range cfg {
+		if loaded[k] != v {
+			t.Errorf("key %q = %q, want %q", k, loaded[k], v)
+		}
+	}
+
+	// Verify other state fields are preserved.
+	s, _ := st.Load()
+	if s.Iteration != 5 {
+		t.Errorf("Iteration = %d, want 5 (preserved)", s.Iteration)
+	}
+	if s.Status != "running" {
+		t.Errorf("Status = %q, want running (preserved)", s.Status)
+	}
+}
+
+// Verifies that LoadCLIConfig returns nil when no cli_config exists in state,
+// so callers can fall back to raw args on first run.
+func TestLoadCLIConfig_MissingReturnsNil(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Save(State{Status: "running"})
+
+	cfg, err := st.LoadCLIConfig()
+	if err != nil {
+		t.Fatalf("LoadCLIConfig: %v", err)
+	}
+	if cfg != nil {
+		t.Errorf("expected nil map, got %v", cfg)
+	}
+}
+
+// Proves: ClearCLIConfig removes cli_config from state.json so stale flags
+// don't persist across manual restarts. Other state fields must be preserved.
+func TestClearCLIConfig_RemovesConfigPreservesState(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Save(State{Iteration: 3, Status: "running"})
+
+	cfg := map[string]string{"evolve": "true", "max": "10"}
+	if err := st.SaveCLIConfig(cfg); err != nil {
+		t.Fatalf("SaveCLIConfig: %v", err)
+	}
+
+	// Verify cli_config exists before clearing.
+	loaded, _ := st.LoadCLIConfig()
+	if loaded == nil {
+		t.Fatal("cli_config should exist before clear")
+	}
+
+	if err := st.ClearCLIConfig(); err != nil {
+		t.Fatalf("ClearCLIConfig: %v", err)
+	}
+
+	// cli_config must be gone.
+	loaded, err := st.LoadCLIConfig()
+	if err != nil {
+		t.Fatalf("LoadCLIConfig after clear: %v", err)
+	}
+	if loaded != nil {
+		t.Errorf("expected nil after clear, got %v", loaded)
+	}
+
+	// Other state fields preserved.
+	s, _ := st.Load()
+	if s.Iteration != 3 {
+		t.Errorf("Iteration = %d, want 3", s.Iteration)
+	}
+	if s.Status != "running" {
+		t.Errorf("Status = %q, want running", s.Status)
+	}
+}
+
+// Proves: ClearCLIConfig is safe to call when no cli_config exists.
+func TestClearCLIConfig_NoopWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Save(State{Status: "running"})
+
+	if err := st.ClearCLIConfig(); err != nil {
+		t.Fatalf("ClearCLIConfig on empty state: %v", err)
+	}
+}
+
 // Verifies that test result fields are preserved as known keys
 // (not overflow) when serialized to JSON.
 func TestState_TestResultFieldsInJSON(t *testing.T) {
@@ -389,5 +453,177 @@ func TestState_TestResultFieldsInJSON(t *testing.T) {
 		if !strings.Contains(raw, field) {
 			t.Errorf("expected %q in JSON output: %s", field, raw)
 		}
+	}
+}
+
+// Proves: AddCompletedTask persists task IDs — enabling ralph-task to verify
+// tasks weren't falsely closed.
+func TestCompletedTasks_AddAndRetrieve(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5)
+
+	if err := st.AddCompletedTask("ralph-abc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddCompletedTask("ralph-def"); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := st.GetCompletedTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("expected 2 completed tasks, got %d", len(tasks))
+	}
+	if tasks[0] != "ralph-abc" {
+		t.Errorf("first task = %q, want ralph-abc", tasks[0])
+	}
+	if tasks[1] != "ralph-def" {
+		t.Errorf("second task = %q, want ralph-def", tasks[1])
+	}
+}
+
+// Proves: ClearCompletedTasks removes all entries and omits the key from JSON.
+func TestCompletedTasks_Clear(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5)
+
+	st.AddCompletedTask("ralph-abc")
+	st.AddCompletedTask("ralph-def")
+
+	if err := st.ClearCompletedTasks(); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := st.GetCompletedTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 0 {
+		t.Errorf("expected empty completed tasks, got %v", tasks)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, "state.json"))
+	if strings.Contains(string(data), "completed_tasks") {
+		t.Errorf("expected completed_tasks omitted from JSON when empty, got: %s", data)
+	}
+}
+
+// Proves: completed_tasks round-trips through JSON and persists across restarts.
+func TestCompletedTasks_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+
+	s := State{
+		Iteration:      5,
+		Status:         "running",
+		CompletedTasks: []string{"ralph-x", "ralph-y"},
+	}
+	if err := st.Save(s); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.CompletedTasks) != 2 {
+		t.Fatalf("expected 2, got %d", len(loaded.CompletedTasks))
+	}
+	if loaded.CompletedTasks[0] != "ralph-x" || loaded.CompletedTasks[1] != "ralph-y" {
+		t.Errorf("unexpected: %+v", loaded.CompletedTasks)
+	}
+}
+
+// Proves: old-format completed_tasks (array of objects) is migrated to ID-only
+// strings on load, so existing state.json files don't break after the upgrade.
+func TestCompletedTasks_MigrateOldFormat(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+
+	oldJSON := `{
+  "iteration": 3,
+  "status": "running",
+  "completed_tasks": [
+    {"id": "ralph-abc", "title": "fix widget", "pr_number": "42", "close_reason": "Fixed in PR #42"},
+    {"id": "ralph-def", "title": "add tests", "pr_number": "43", "close_reason": "Fixed in PR #43"}
+  ]
+}`
+	os.WriteFile(filepath.Join(dir, "state.json"), []byte(oldJSON), 0o644)
+
+	loaded, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.CompletedTasks) != 2 {
+		t.Fatalf("expected 2 migrated tasks, got %d", len(loaded.CompletedTasks))
+	}
+	if loaded.CompletedTasks[0] != "ralph-abc" {
+		t.Errorf("first migrated task = %q, want ralph-abc", loaded.CompletedTasks[0])
+	}
+	if loaded.CompletedTasks[1] != "ralph-def" {
+		t.Errorf("second migrated task = %q, want ralph-def", loaded.CompletedTasks[1])
+	}
+}
+
+// Proves: AddSkippedTask persists IDs to state.json skipped_tasks.
+func TestAddSkippedTask_Persists(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5)
+
+	if err := st.AddSkippedTask("ralph-aaa"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSkippedTask("ralph-bbb"); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped, err := st.GetSkippedTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skipped) != 2 || skipped[0] != "ralph-aaa" || skipped[1] != "ralph-bbb" {
+		t.Errorf("expected [ralph-aaa, ralph-bbb], got %v", skipped)
+	}
+}
+
+// Proves: AddSkippedTask is idempotent — duplicate IDs are not added.
+func TestAddSkippedTask_NoDuplicates(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5)
+
+	st.AddSkippedTask("ralph-aaa")
+	st.AddSkippedTask("ralph-aaa")
+
+	skipped, _ := st.GetSkippedTasks()
+	if len(skipped) != 1 {
+		t.Errorf("expected 1 entry (no duplicate), got %d", len(skipped))
+	}
+}
+
+// Proves: skipped_tasks round-trips through JSON serialization.
+func TestSkippedTasks_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5)
+
+	st.AddSkippedTask("ralph-abc")
+	st.AddSkippedTask("ralph-def")
+
+	s, _ := st.Load()
+	data, _ := json.Marshal(s)
+	if !strings.Contains(string(data), `"skipped_tasks"`) {
+		t.Errorf("expected skipped_tasks in JSON, got %s", data)
+	}
+
+	var s2 State
+	json.Unmarshal(data, &s2)
+	if len(s2.SkippedTasks) != 2 {
+		t.Errorf("expected 2 skipped tasks after round-trip, got %d", len(s2.SkippedTasks))
 	}
 }

@@ -40,16 +40,14 @@ setup_test_repo() {
   SIGNAL_TASK_FILE="$RALPH_DIR/.signal_current_task"
   SIGNAL_ALL_COMPLETE_FILE="$RALPH_DIR/.signal_all_complete"
 
-  TASK_BACKEND="checklist"
-  PLAN_FILE_ARG=""
+  TASK_BACKEND="bd"
   RESUME=false
-  USE_WORKTREE=true
   CALLS_PER_HOUR=80
   REFACTOR_THRESHOLD=0
   QUIET=false
   AUTO_MERGE=false
 
-  PROMPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/prompts"
+  PROMPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/go/cmd/ralph/prompts"
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 }
 

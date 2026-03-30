@@ -190,10 +190,23 @@ func TestStopNoLoop(t *testing.T) {
 }
 
 // Verify /feedback appends the message to the feedback file,
-// which ralph.sh reads and injects into the next iteration's prompt.
+// which the agent checks between tool calls.
+// Proves: /feedback appends notes to bead and creates signal file.
 func TestFeedback(t *testing.T) {
 	s, dir := newTestServer(t)
 	s.projectDir = dir
+
+	rd := filepath.Join(dir, ".ralph")
+	os.MkdirAll(rd, 0o755)
+	stateJSON := `{"last_task_id": "ralph-abc"}`
+	os.WriteFile(filepath.Join(rd, "state.json"), []byte(stateJSON), 0o644)
+
+	var gotID, gotMsg string
+	s.AppendNotes = func(projectDir, taskID, msg string) error {
+		gotID = taskID
+		gotMsg = msg
+		return nil
+	}
 
 	body := `{"message": "please fix the tests"}`
 	req := httptest.NewRequest("POST", "/feedback", strings.NewReader(body))
@@ -201,42 +214,46 @@ func TestFeedback(t *testing.T) {
 	s.handleFeedback(w, req)
 
 	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d", w.Code)
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if gotID != "ralph-abc" {
+		t.Errorf("expected task ID ralph-abc, got %q", gotID)
+	}
+	if gotMsg != "please fix the tests" {
+		t.Errorf("expected message content, got %q", gotMsg)
 	}
 
-	feedbackPath := filepath.Join(dir, ".ralph", "feedback")
-	data, err := os.ReadFile(feedbackPath)
+	// Signal file should exist (empty).
+	signalPath := filepath.Join(rd, "feedback")
+	data, err := os.ReadFile(signalPath)
 	if err != nil {
-		t.Fatalf("feedback file not created: %v", err)
+		t.Fatalf("feedback signal file not created: %v", err)
 	}
-	if !strings.Contains(string(data), "please fix the tests") {
-		t.Fatalf("feedback content wrong: %s", data)
+	if len(data) != 0 {
+		t.Errorf("feedback signal should be empty, got %q", data)
 	}
 }
 
-// Verify /feedback appends (not overwrites) so multiple feedback
-// messages queue up for the next iteration.
-func TestFeedbackAppends(t *testing.T) {
+// Proves: /feedback returns 400 when no active task exists.
+func TestFeedbackNoActiveTask(t *testing.T) {
 	s, dir := newTestServer(t)
 	s.projectDir = dir
 
-	for _, msg := range []string{"first", "second"} {
-		body := `{"message": "` + msg + `"}`
-		req := httptest.NewRequest("POST", "/feedback", strings.NewReader(body))
-		w := httptest.NewRecorder()
-		s.handleFeedback(w, req)
-		if w.Code != 200 {
-			t.Fatalf("expected 200 for %s, got %d", msg, w.Code)
-		}
-	}
+	rd := filepath.Join(dir, ".ralph")
+	os.MkdirAll(rd, 0o755)
+	os.WriteFile(filepath.Join(rd, "state.json"), []byte(`{}`), 0o644)
 
-	data, _ := os.ReadFile(filepath.Join(dir, ".ralph", "feedback"))
-	if !strings.Contains(string(data), "first") || !strings.Contains(string(data), "second") {
-		t.Fatalf("expected both messages, got: %s", data)
+	body := `{"message": "fix this"}`
+	req := httptest.NewRequest("POST", "/feedback", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleFeedback(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400 for no active task, got %d", w.Code)
 	}
 }
 
-// Verify /feedback requires the message field.
+// Proves: /feedback requires the message field.
 func TestFeedbackMissingMessage(t *testing.T) {
 	s, dir := newTestServer(t)
 	s.projectDir = dir

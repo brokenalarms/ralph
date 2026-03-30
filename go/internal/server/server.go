@@ -24,6 +24,10 @@ type Server struct {
 	Port       int
 	ScriptPath string
 
+	// AppendNotes appends feedback to a bead's notes. When nil,
+	// defaults to shelling out to bd.
+	AppendNotes func(projectDir, taskID, msg string) error
+
 	mu         sync.Mutex
 	process    *Process
 	projectDir string
@@ -93,7 +97,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			"POST /start   - Start a ralph loop",
 			"GET  /status   - Get loop status",
 			"POST /stop     - Request graceful stop",
-			"POST /feedback - Queue feedback for next iteration",
+			"POST /feedback - Send live feedback to the running agent",
 			"POST /kill     - Kill the running process",
 			"GET  /log      - Tail the loop log",
 			"GET  /plan     - View the plan file",
@@ -145,7 +149,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	args := []string{s.ScriptPath, "--dir", projectDir, "--max", strconv.Itoa(maxIterations)}
+	args := []string{s.ScriptPath, "loop", "--max", strconv.Itoa(maxIterations)}
 	if body.Prompt != "" {
 		args = append(args, "--prompt", body.Prompt)
 	}
@@ -302,21 +306,29 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 	rd := ralphDir(projectDir)
 	os.MkdirAll(rd, 0o755)
 
-	f, err := os.OpenFile(filepath.Join(rd, "feedback"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
+	taskID := readTaskIDFromStateFile(filepath.Join(rd, "state.json"))
+	if taskID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No active task"})
+		return
+	}
+
+	appendFn := s.appendNotesDefault
+	if s.AppendNotes != nil {
+		appendFn = s.AppendNotes
+	}
+	if err := appendFn(projectDir, taskID, body.Message); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	defer f.Close()
 
-	if _, err := f.WriteString(body.Message + "\n"); err != nil {
+	if err := os.WriteFile(filepath.Join(rd, "feedback"), nil, 0o644); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":  "feedback_queued",
-		"message": "Feedback will be injected into the next iteration.",
+		"status":  "feedback_sent",
+		"message": "Feedback appended to bead — agent will restart.",
 	})
 }
 
@@ -520,4 +532,50 @@ func tailFile(path string, lines int) *string {
 	}
 	result := strings.Join(allLines, "\n")
 	return &result
+}
+
+func (s *Server) appendNotesDefault(projectDir, taskID, msg string) error {
+	bdBin, err := findBDBin()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(bdBin, "update", taskID, "--append-notes", msg)
+	cmd.Dir = projectDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func readTaskIDFromStateFile(statePath string) string {
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		return ""
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(data, &raw) != nil {
+		return ""
+	}
+	v, ok := raw["last_task_id"]
+	if !ok {
+		return ""
+	}
+	var id string
+	if json.Unmarshal(v, &id) != nil {
+		return ""
+	}
+	return id
+}
+
+func findBDBin() (string, error) {
+	if p, err := exec.LookPath("bd"); err == nil {
+		return p, nil
+	}
+	if home, _ := os.UserHomeDir(); home != "" {
+		p := filepath.Join(home, ".local", "bin", "bd")
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("bd binary not found")
 }

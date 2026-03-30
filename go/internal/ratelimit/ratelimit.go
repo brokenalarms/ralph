@@ -112,6 +112,38 @@ func (l *Limiter) SecondsUntilReset() int {
 	return int(nextHour.Sub(now).Seconds())
 }
 
+// WaitUntil blocks until the given time, polling at PollInterval. Returns an
+// error if the stop file is detected or context is cancelled. The onTick
+// callback receives the seconds remaining on each poll.
+func (l *Limiter) WaitUntil(ctx context.Context, target time.Time, onTick func(secondsLeft int)) error {
+	for {
+		if _, err := os.Stat(l.StopFile); err == nil {
+			os.Remove(l.StopFile)
+			return fmt.Errorf("stop file detected during rate limit wait")
+		}
+
+		now := timeNow()
+		if !now.Before(target) {
+			break
+		}
+
+		secsLeft := int(target.Sub(now).Seconds())
+		if onTick != nil {
+			onTick(secsLeft)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(l.PollInterval):
+		}
+	}
+
+	l.writeCount(0)
+	l.writeHour(l.currentHour())
+	return nil
+}
+
 // WaitForReset blocks until the rate limit resets at the top of the next hour.
 // It polls every 10 seconds and checks for a stop file. Returns an error if
 // the stop file is detected or the context is cancelled. The onTick callback

@@ -5,25 +5,23 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
-
-	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // Log is the logging interface used by Runner.
 type Log interface {
-	Log(format string, args ...any)
-	Task(format string, args ...any)
-	TaskSuccess(format string, args ...any)
-	Warn(format string, args ...any)
-	Error(format string, args ...any)
+	Log(domain string, format string, args ...any)
+	AgentLog(domain string, format string, args ...any)
+	Success(domain string, format string, args ...any)
+	Warn(domain string, format string, args ...any)
+	Error(domain string, format string, args ...any)
 }
 
 // SignalPaths holds the file paths used for inter-process signaling between
@@ -79,18 +77,29 @@ type RunConfig struct {
 	// FeedbackFile is the path where the orchestrator writes feedback for
 	// the agent to read. Used to send test failure output back to the agent.
 	FeedbackFile string
+
+	// Verbose shows all tool calls in the stream log. When false,
+	// low-value tools (Read, Bash, etc.) are hidden.
+	Verbose bool
+
+	// TaskID is the bead/task identifier (e.g. "ralph-xyz") used in
+	// completion and status log messages.
+	TaskID string
 }
 
 // Result describes the outcome of a Claude run.
 type Result struct {
-	SignalDetected     bool   // true if a completion signal was found
-	AllComplete        bool   // true if the all-complete signal was found
-	IdleTimeout        bool   // true if the session was killed due to idle timeout
-	OnSignalUsed       bool   // true if OnSignal callback was used for verification
-	VerificationFailed bool   // true if signal was detected but OnSignal rejected it
-	VerificationReason string // reason OnSignal rejected the signal
-	TaskDesc           string // task description from the current-task signal
-	Summary            string // completion summary from signal file
+	SignalDetected     bool      // true if a completion signal was found
+	AllComplete        bool      // true if the all-complete signal was found
+	IdleTimeout        bool      // true if the session was killed due to idle timeout
+	FeedbackKill       bool      // true if killed because user feedback arrived
+	RateLimited        bool      // true if Claude reported hitting its usage limit
+	ResetAt            time.Time // when the rate limit resets (valid when RateLimited is true)
+	OnSignalUsed       bool      // true if OnSignal callback was used for verification
+	VerificationFailed bool      // true if signal was detected but OnSignal rejected it
+	VerificationReason string    // reason OnSignal rejected the signal
+	TaskDesc           string    // task description from the current-task signal
+	Summary            string    // completion summary from signal file
 }
 
 // OnTaskDetected is called when a current-task signal file appears.
@@ -118,14 +127,21 @@ var IterationAllowedTools = []string{
 }
 
 // IterationDisallowedTools lists tools the agent must not use.
-// The orchestrator owns bead close — the agent must not close tasks.
-// Git checkout/branch are blocked so sub-agents can't check out ralph's
-// branches, which would prevent RecreateFromMain from deleting them.
+// The orchestrator owns bead lifecycle (bd close) and all remote git
+// operations (push, PR creation). Git checkout/branch are blocked so
+// sub-agents can't interfere with ralph's branch management.
 var IterationDisallowedTools = []string{
 	"Bash(bd close*)",
 	"Bash(git checkout*)",
 	"Bash(git branch*)",
+	"Bash(git push*)",
+	"Bash(gh pr create*)",
 }
+
+// CmdFactory builds the exec.Cmd that Run() will start. Receives the
+// RunConfig so it can set WorkDir and pipe stdout/stderr to the raw log.
+// If nil, Run() spawns "claude" with the standard iteration flags.
+type CmdFactory func(cfg RunConfig, rawLog *os.File) *exec.Cmd
 
 // Runner manages Claude process lifecycle: spawning, signal polling, and cleanup.
 // It tracks active streaming goroutines (filter and tail) so they can be
@@ -133,8 +149,10 @@ var IterationDisallowedTools = []string{
 type Runner struct {
 	Logger         Log
 	OnTaskDetected OnTaskDetected
+	CmdFactory     CmdFactory
 
 	mu         sync.Mutex
+	stdinPipe  io.WriteCloser
 	filterStop chan struct{}
 	filterDone <-chan struct{}
 	tailStop   chan struct{}
@@ -164,6 +182,29 @@ func (r *Runner) StopStreaming() {
 	}
 }
 
+// InjectMessage writes a user message to the running agent's stdin pipe using
+// the stream-json input format. Returns an error if no pipe is available (agent
+// not running) or the write fails (pipe broken — agent exited).
+func (r *Runner) InjectMessage(msg string) error {
+	r.mu.Lock()
+	pipe := r.stdinPipe
+	r.mu.Unlock()
+	if pipe == nil {
+		return fmt.Errorf("no stdin pipe available")
+	}
+	payload := UserInputMessage(msg)
+	_, err := fmt.Fprintln(pipe, payload)
+	return err
+}
+
+// UserInputMessage builds a stream-json user message for injection into a
+// running Claude process via stdin. The content is JSON-escaped to handle
+// multi-line test output, error messages, etc.
+func UserInputMessage(content string) string {
+	escaped, _ := json.Marshal(content)
+	return fmt.Sprintf(`{"type":"user_input_text","content":%s}`, string(escaped))
+}
+
 // Run spawns a Claude process, polls for signal files, and returns when the
 // process exits or a completion signal is detected. Mirrors ralph.sh run_claude.
 func (r *Runner) Run(cfg RunConfig) (Result, error) {
@@ -182,27 +223,33 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	}
 	defer rawLog.Close()
 
-	args := []string{
-		"--print", "--verbose",
-		"--output-format", "stream-json",
-		"--add-dir", cfg.WorkDir,
-		"--add-dir", cfg.RalphDir,
-		"--allowedTools", strings.Join(IterationAllowedTools, ","),
-		"--disallowedTools", strings.Join(IterationDisallowedTools, ","),
-		"-p", cfg.Prompt,
+	var cmd *exec.Cmd
+	if r.CmdFactory != nil {
+		cmd = r.CmdFactory(cfg, rawLog)
+	} else {
+		args := []string{
+			"--print", "--verbose",
+			"--output-format", "stream-json",
+			"--permission-mode", "bypassPermissions",
+			"--add-dir", cfg.WorkDir,
+			"--add-dir", cfg.RalphDir,
+			"--allowedTools", strings.Join(IterationAllowedTools, ","),
+			"--disallowedTools", strings.Join(IterationDisallowedTools, ","),
+			"-p", cfg.Prompt,
+		}
+		cmd = exec.Command("claude", args...)
+		cmd.Dir = cfg.WorkDir
+		cmd.Stdin = nil
+		cmd.Stdout = rawLog
+		cmd.Stderr = rawLog
+		// Start in its own process group so we can signal it cleanly.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
-	cmd := exec.Command("claude", args...)
-	cmd.Dir = cfg.WorkDir
-	cmd.Stdin = nil
-	cmd.Stdout = rawLog
-	cmd.Stderr = rawLog
-	// Start in its own process group so we can signal it cleanly.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
 		return Result{}, fmt.Errorf("starting claude: %w", err)
 	}
-	r.Logger.Log("Claude started (PID: %d)", cmd.Process.Pid)
+	r.Logger.Log("llm", "Claude started (PID: %d)", cmd.Process.Pid)
 
 	// Record stream start time for the filter.
 	_ = os.WriteFile(filepath.Join(cfg.RalphDir, ".stream-start"),
@@ -239,15 +286,34 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	// Stop streaming goroutines and drain remaining output.
 	r.StopStreaming()
 
+	// Close stdin pipe so the agent sees EOF. Safe to call after process exit.
+	r.mu.Lock()
+	if r.stdinPipe != nil {
+		r.stdinPipe.Close()
+		r.stdinPipe = nil
+	}
+	r.mu.Unlock()
+
 	// Final signal check — Claude may have written a signal just before exiting.
 	if !result.SignalDetected {
 		if hasSignal(cfg.Signals.Complete) || hasSignal(cfg.Signals.AllComplete) {
 			result.SignalDetected = true
 			result.AllComplete = hasSignal(cfg.Signals.AllComplete)
 			result.Summary = readSignalSummary(cfg.Signals)
-			r.Logger.TaskSuccess("Task completed via signal")
+			r.Logger.Success("llm", "Task completed via signal")
 		} else {
-			r.Logger.Log("Claude exited (no completion signal)")
+			r.Logger.Log("llm", "Claude exited (no completion signal)")
+		}
+	}
+
+	// Check for Claude rate limit in the raw log output.
+	if !result.SignalDetected && !result.IdleTimeout {
+		if logData, err := os.ReadFile(cfg.RawLog); err == nil {
+			if resetAt, found := ScanRawLogForRateLimit(string(logData), time.Now()); found {
+				result.RateLimited = true
+				result.ResetAt = resetAt
+				r.Logger.Warn("llm", "Claude rate limit detected — resets at %s", resetAt.Format("3:04pm"))
+			}
 		}
 	}
 
@@ -296,11 +362,12 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 			}
 
-			// Detect task pickup.
+			// Detect task pickup — the stream formatter already emits
+			// "[signal] current_task: ..." in real-time, so we only set the
+			// flag and fire the callback here, no duplicate log line.
 			if !taskLogged && hasSignal(cfg.Signals.CurrentTask) {
 				desc := readFirstLine(cfg.Signals.CurrentTask)
 				if desc != "" {
-					r.Logger.Task("Working on: %s", desc)
 					taskLogged = true
 					if r.OnTaskDetected != nil {
 						r.OnTaskDetected(desc)
@@ -314,17 +381,26 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				if summary == "" {
 					summary = "task done"
 				}
-				r.Logger.TaskSuccess("Completed: %s", summary)
+				if cfg.TaskID != "" {
+					r.Logger.Success("llm", "%s completed: %s", cfg.TaskID, summary)
+				} else {
+					r.Logger.Success("llm", "Completed: %s", summary)
+				}
 
 				// If OnSignal is set, let the orchestrator verify before accepting.
 				if cfg.OnSignal != nil {
 					if !cfg.OnSignal(summary) {
 						// Verification failed — clear signal, let agent continue.
-						r.Logger.Warn("Verification rejected signal — agent continues")
+						r.Logger.Warn("llm", "Verification rejected signal — agent continues")
 						clearSignals(cfg.Signals)
 						continue
 					}
 				}
+
+				// Wait for the agent to finish its final output before killing.
+				// The signal file is often written before the agent's completion
+				// message appears in the log; killing immediately truncates it.
+				waitForOutputSettle(cfg.RawLog, processDone)
 
 				gracefulKill(cmd, processDone)
 
@@ -337,6 +413,17 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 			}
 
+			// Check for user feedback signal — content is already on the
+			// bead via bd update --append-notes, so just restart the agent.
+			if cfg.FeedbackFile != "" {
+				if _, err := os.Stat(cfg.FeedbackFile); err == nil {
+					os.Remove(cfg.FeedbackFile)
+					r.Logger.Log("llm", "Feedback signal detected — restarting agent")
+					gracefulKill(cmd, processDone)
+					return Result{FeedbackKill: true}
+				}
+			}
+
 			// Check idle timeout.
 			if cfg.IdleTimeout > 0 {
 				timeout := cfg.IdleTimeout
@@ -345,7 +432,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 				idle := time.Since(lastActivity)
 				if idle >= timeout {
-					r.Logger.Warn("Idle timeout (%s with no output) — killing session", timeout)
+					r.Logger.Warn("llm", "Idle timeout (%s with no output) — killing session", timeout)
 					gracefulKill(cmd, processDone)
 					return Result{IdleTimeout: true}
 				}
@@ -369,309 +456,9 @@ func (r *Runner) startStreamFilter(cfg RunConfig, stop <-chan struct{}) <-chan s
 
 	go func() {
 		defer close(done)
-		filterStreamJSON(cfg.RawLog, cfg.LogFile, stop)
+		filterStreamJSON(cfg.RawLog, cfg.LogFile, cfg.WorkDir, cfg.Verbose, stop)
 	}()
 
-	return done
-}
-
-// filterStreamJSON tails the raw log file from its current end, extracting
-// human-readable content from Claude's stream-json format into logPath.
-// It keeps reading until stop is closed, then drains any final output.
-func filterStreamJSON(rawLogPath, logPath string, stop <-chan struct{}) {
-	logOut, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer logOut.Close()
-
-	f, err := os.Open(rawLogPath)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
-	// Start from end of file (like tail -f -n 0) so we only see new output.
-	if _, err := f.Seek(0, 2); err != nil {
-		return
-	}
-
-	var remainder string
-	buf := make([]byte, 64*1024)
-
-	processChunk := func(data string) string {
-		for {
-			idx := strings.IndexByte(data, '\n')
-			if idx < 0 {
-				return data
-			}
-			line := data[:idx]
-			data = data[idx+1:]
-			if text := extractStreamText(line); text != "" {
-				for _, tl := range strings.Split(text, "\n") {
-					if tl != "" {
-						fmt.Fprintf(logOut, "%s\n", FormatStreamLine("[claude] "+tl))
-					}
-				}
-			}
-		}
-	}
-
-	for {
-		n, readErr := f.Read(buf)
-		if n > 0 {
-			remainder = processChunk(remainder + string(buf[:n]))
-		}
-
-		if readErr != nil || n == 0 {
-			select {
-			case <-stop:
-				// Final drain — read any bytes written after the last Read.
-				for {
-					n2, _ := f.Read(buf)
-					if n2 == 0 {
-						break
-					}
-					remainder = processChunk(remainder + string(buf[:n2]))
-				}
-				return
-			default:
-				time.Sleep(100 * time.Millisecond)
-			}
-		}
-	}
-}
-
-// streamEvent is the top-level envelope for Claude's stream-json output.
-type streamEvent struct {
-	Type    string       `json:"type"`
-	Subtype string       `json:"subtype"`
-	Message *streamMsg   `json:"message"`
-	Delta   *streamDelta `json:"delta"`
-	Error   string       `json:"error"`
-}
-
-type streamMsg struct {
-	Content []streamContent `json:"content"`
-}
-
-type streamContent struct {
-	Type  string                 `json:"type"`
-	Text  string                 `json:"text"`
-	Name  string                 `json:"name"`
-	Input map[string]interface{} `json:"input"`
-}
-
-type streamDelta struct {
-	Text string `json:"text"`
-}
-
-// extractStreamText pulls human-readable text from a stream-json line.
-// Uses encoding/json to properly parse Claude's nested message format.
-func extractStreamText(line string) string {
-	if len(line) == 0 || line[0] != '{' {
-		return ""
-	}
-
-	var ev streamEvent
-	if err := json.Unmarshal([]byte(line), &ev); err != nil {
-		return ""
-	}
-
-	switch ev.Type {
-	case "assistant":
-		return extractAssistantText(ev.Message)
-
-	case "content_block_delta":
-		if ev.Delta != nil {
-			return ev.Delta.Text
-		}
-
-	case "result":
-		if ev.Subtype == "error_response" && ev.Error != "" {
-			return ev.Error
-		}
-		return "[done]"
-	}
-
-	return ""
-}
-
-// extractAssistantText extracts text and tool-use summaries from the
-// content array in an assistant message.
-func extractAssistantText(msg *streamMsg) string {
-	if msg == nil || len(msg.Content) == 0 {
-		return ""
-	}
-
-	var parts []string
-	for _, c := range msg.Content {
-		switch c.Type {
-		case "text":
-			if c.Text != "" {
-				parts = append(parts, c.Text)
-			}
-		case "tool_use":
-			parts = append(parts, formatToolUse(c))
-		}
-	}
-	return strings.Join(parts, "\n")
-}
-
-// formatToolUse returns a short summary of a tool invocation.
-func formatToolUse(c streamContent) string {
-	for _, key := range []string{
-		"file_path", "command", "pattern", "query", "url",
-		"description", "task_id", "skill", "prompt",
-	} {
-		if v, ok := c.Input[key]; ok {
-			if s, ok := v.(string); ok && s != "" {
-				return "[" + c.Name + "] " + s
-			}
-		}
-	}
-	return "[" + c.Name + "]"
-}
-
-var mdBoldRe = regexp.MustCompile(`\*\*(.+?)\*\*`)
-
-// stripMarkdown removes markdown formatting from text for clean terminal output.
-func stripMarkdown(s string) string {
-	return mdBoldRe.ReplaceAllString(s, "$1")
-}
-
-// colorTag applies ANSI color to a bracketed tag like [claude] or [Read].
-func colorTag(tag string) string {
-	switch {
-	case tag == "[done]":
-		return logging.Green + tag + logging.Reset
-	case tag == "[claude]":
-		return logging.Cyan + tag + logging.Reset
-	default:
-		return logging.Blue + tag + logging.Reset
-	}
-}
-
-var tagRe = regexp.MustCompile(`\[([A-Za-z][A-Za-z]*)\]`)
-
-// FormatStreamLine takes raw extracted text from a stream event and returns
-// a fully formatted output line with timestamp, ANSI colors, and markdown stripped.
-func FormatStreamLine(text string) string {
-	text = stripMarkdown(text)
-	text = tagRe.ReplaceAllStringFunc(text, colorTag)
-	return time.Now().Format("15:04:05") + " " + text
-}
-
-// FilterStream tails a raw log file and writes formatted, colored output to
-// stdout. Intended for use as the tmux stream pane via `ralph filter-stream`.
-// Blocks until the process is killed (tmux manages its lifecycle).
-func FilterStream(rawLogPath string) {
-	f, err := os.Open(rawLogPath)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
-	if _, err := f.Seek(0, 2); err != nil {
-		return
-	}
-
-	var remainder string
-	buf := make([]byte, 64*1024)
-
-	processChunk := func(data string) string {
-		for {
-			idx := strings.IndexByte(data, '\n')
-			if idx < 0 {
-				return data
-			}
-			line := data[:idx]
-			data = data[idx+1:]
-			if text := extractStreamText(line); text != "" {
-				for _, tl := range strings.Split(text, "\n") {
-					if tl != "" {
-						fmt.Fprintln(os.Stdout, FormatStreamLine("[claude] "+tl))
-					}
-				}
-			}
-		}
-	}
-
-	for {
-		n, _ := f.Read(buf)
-		if n > 0 {
-			remainder = processChunk(remainder + string(buf[:n]))
-		}
-		if n == 0 {
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-}
-
-// startTailGoroutine follows new data appended to path and writes it to
-// stdout, similar to tail -f -n 0. Only forwards lines prefixed with
-// "[claude] " — orchestrator messages are already written to stdout directly
-// by the logger, so forwarding them here would cause duplication.
-// Runs entirely in-process so there are no child processes to orphan.
-// Returns a channel that closes when the goroutine exits.
-func startTailGoroutine(path string, stop <-chan struct{}) <-chan struct{} {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		f, err := os.Open(path)
-		if err != nil {
-			return
-		}
-		defer f.Close()
-
-		// Start from end of file (like tail -f -n 0).
-		if _, err := f.Seek(0, 2); err != nil {
-			return
-		}
-
-		var remainder string
-		buf := make([]byte, 64*1024)
-
-		processChunk := func(data string) string {
-			for {
-				idx := strings.IndexByte(data, '\n')
-				if idx < 0 {
-					return data
-				}
-				line := data[:idx]
-				data = data[idx+1:]
-				if strings.Contains(line, "[claude]") {
-					fmt.Fprintln(os.Stdout, line)
-				}
-			}
-		}
-
-		for {
-			n, _ := f.Read(buf)
-			if n > 0 {
-				remainder = processChunk(remainder + string(buf[:n]))
-			}
-			if n == 0 {
-				select {
-				case <-stop:
-					// Final drain.
-					for {
-						n2, _ := f.Read(buf)
-						if n2 == 0 {
-							// Flush any remaining partial line.
-							if remainder != "" && strings.Contains(remainder, "[claude]") {
-								fmt.Fprintln(os.Stdout, remainder)
-							}
-							return
-						}
-						remainder = processChunk(remainder + string(buf[:n2]))
-					}
-				default:
-					time.Sleep(100 * time.Millisecond)
-				}
-			}
-		}
-	}()
 	return done
 }
 
@@ -740,6 +527,43 @@ func processAlive(cmd *exec.Cmd) bool {
 	}
 	// Signal 0 checks if process exists without sending a signal.
 	return cmd.Process.Signal(syscall.Signal(0)) == nil
+}
+
+// waitForOutputSettle waits until the raw log file has not been modified for
+// a settle period, indicating the agent has finished writing. Caps the total
+// wait to prevent hanging if the agent keeps writing indefinitely.
+func waitForOutputSettle(rawLogPath string, processDone <-chan struct{}) {
+	const (
+		settleTime = 2 * time.Second
+		maxWait    = 10 * time.Second
+		checkEvery = 250 * time.Millisecond
+	)
+
+	deadline := time.Now().Add(maxWait)
+	lastMod := time.Now()
+
+	// Snapshot current mtime as the baseline.
+	if info, err := os.Stat(rawLogPath); err == nil {
+		lastMod = info.ModTime()
+	}
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-processDone:
+			return
+		case <-time.After(checkEvery):
+		}
+
+		if info, err := os.Stat(rawLogPath); err == nil {
+			if info.ModTime().After(lastMod) {
+				lastMod = info.ModTime()
+			}
+		}
+
+		if time.Since(lastMod) >= settleTime {
+			return
+		}
+	}
 }
 
 // gracefulKill sends SIGTERM, waits briefly, then SIGKILL if needed.
