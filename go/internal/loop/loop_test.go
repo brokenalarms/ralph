@@ -3869,7 +3869,7 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
 
 	l.mergeFunc = func(context.Context) (bool, error) {
 		return false, fmt.Errorf("merge failed")
@@ -3883,7 +3883,7 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 
 	output := buf.String()
 	if !strings.Contains(output, "Auto-merge") {
-		t.Log("Log output:", output)
+		t.Errorf("expected log output to contain 'Auto-merge', got: %s", output)
 	}
 }
 

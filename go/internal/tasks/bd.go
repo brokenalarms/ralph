@@ -295,17 +295,6 @@ func issueTypeRank(issue bdIssue) int {
 	}
 }
 
-func parseFirstIssue(jsonStr string) (bdIssue, bool) {
-	var issues []bdIssue
-	if err := json.Unmarshal([]byte(jsonStr), &issues); err != nil || len(issues) == 0 {
-		return bdIssue{}, false
-	}
-	if issues[0].ID == "" && issues[0].Title == "" {
-		return bdIssue{}, false
-	}
-	return issues[0], true
-}
-
 // bestIssue parses all issues from JSON and returns the one with the
 // highest priority (lowest number), breaking ties by type rank
 // (bug < task < feature/enhancement). Issues whose ID appears in skip
