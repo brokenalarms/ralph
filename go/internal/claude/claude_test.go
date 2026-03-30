@@ -360,6 +360,147 @@ func TestPoll_FeedbackSignalKillsAgent(t *testing.T) {
 	}
 }
 
+// Verifies that a feedback file written DURING an active agent run (after
+// poll starts) is detected and produces FeedbackKill=true. This covers the
+// real-world scenario where a user sends feedback while the agent is working.
+func TestPoll_FeedbackDuringRunKillsAgent(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+	feedbackFile := filepath.Join(dir, "feedback")
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 100 * time.Millisecond,
+		FeedbackFile: feedbackFile,
+	}
+
+	// Write feedback file after a short delay, simulating user sending
+	// feedback while the agent is already running.
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		os.WriteFile(feedbackFile, nil, 0o644)
+	}()
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+
+	if !result.FeedbackKill {
+		t.Error("expected FeedbackKill when feedback file written during agent run")
+	}
+	if _, err := os.Stat(feedbackFile); !os.IsNotExist(err) {
+		t.Error("feedback signal file should be removed after detection")
+	}
+}
+
+// Verifies that feedback takes priority over a completion signal. When both
+// exist simultaneously (e.g. agent signals completion while user sends
+// feedback), the feedback file must be detected first so the agent restarts
+// with the user's corrections rather than proceeding through verification.
+func TestPoll_FeedbackTakesPriorityOverCompletion(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+	feedbackFile := filepath.Join(dir, "feedback")
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 100 * time.Millisecond,
+		FeedbackFile: feedbackFile,
+		OnSignal: func(summary string) bool {
+			t.Error("OnSignal should not be called when feedback takes priority")
+			return true
+		},
+	}
+
+	// Create both files after poll starts so clearSignals doesn't remove them.
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		os.WriteFile(feedbackFile, nil, 0o644)
+		os.WriteFile(signals.Complete, []byte("task done"), 0o644)
+	}()
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+
+	if !result.FeedbackKill {
+		t.Error("expected FeedbackKill to take priority over completion signal")
+	}
+	if result.SignalDetected {
+		t.Error("expected SignalDetected=false when feedback takes priority")
+	}
+}
+
+// Verifies that feedback is detected while OnSignal verification is running.
+// This is the regression scenario: the agent signals completion, OnSignal
+// starts running tests/LLM verification (blocking the poll loop), and the
+// user sends feedback during that blocking period. The feedback must still
+// be detected and cause the agent to restart.
+func TestPoll_FeedbackDuringOnSignalBlockKillsAgent(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+	feedbackFile := filepath.Join(dir, "feedback")
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 100 * time.Millisecond,
+		FeedbackFile: feedbackFile,
+		OnSignal: func(summary string) bool {
+			// Simulate verification blocking for several seconds.
+			// Feedback should be detected during this block.
+			time.Sleep(5 * time.Second)
+			return false
+		},
+	}
+
+	// Write completion signal after poll starts to trigger OnSignal.
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		os.WriteFile(signals.Complete, []byte("task done"), 0o644)
+	}()
+
+	// Write feedback file while OnSignal is blocking.
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.WriteFile(feedbackFile, nil, 0o644)
+	}()
+
+	start := time.Now()
+	result := runWithCommand(t, &runner, cfg, "sleep", "30")
+	elapsed := time.Since(start)
+
+	if !result.FeedbackKill {
+		t.Errorf("expected FeedbackKill when feedback written during OnSignal block, got %+v", result)
+	}
+	// Must detect feedback quickly, not wait for OnSignal to return.
+	if elapsed > 3*time.Second {
+		t.Errorf("feedback detection took %s — should be detected within ~1s, not after OnSignal returns", elapsed)
+	}
+}
+
 // Verifies that readFirstLine strips JSON fragments from signal files,
 // so log messages like "Completed: <summary>" stay human-readable.
 func TestReadFirstLine_StripsJSON(t *testing.T) {
@@ -1073,7 +1214,8 @@ func runWithCommand(t *testing.T, r *Runner, cfg RunConfig, name string, args ..
 	_ = cmd.Wait()
 
 	// Final signal check (mirrors Run behavior).
-	if !result.SignalDetected {
+	// Skip if feedback was detected — the agent should restart, not complete.
+	if !result.SignalDetected && !result.FeedbackKill {
 		if hasSignal(cfg.Signals.Complete) || hasSignal(cfg.Signals.AllComplete) {
 			result.SignalDetected = true
 			result.AllComplete = hasSignal(cfg.Signals.AllComplete)
