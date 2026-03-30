@@ -295,7 +295,8 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	r.mu.Unlock()
 
 	// Final signal check — Claude may have written a signal just before exiting.
-	if !result.SignalDetected {
+	// Skip if feedback was detected — the agent should restart, not complete.
+	if !result.SignalDetected && !result.FeedbackKill {
 		if hasSignal(cfg.Signals.Complete) || hasSignal(cfg.Signals.AllComplete) {
 			result.SignalDetected = true
 			result.AllComplete = hasSignal(cfg.Signals.AllComplete)
@@ -375,6 +376,18 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 			}
 
+			// Check for user feedback signal FIRST — it's a deliberate
+			// human override and must take priority over completion signals.
+			// Content is already on the bead via bd update --append-notes.
+			if cfg.FeedbackFile != "" {
+				if _, err := os.Stat(cfg.FeedbackFile); err == nil {
+					os.Remove(cfg.FeedbackFile)
+					r.Logger.Log("llm", "Feedback signal detected — restarting agent")
+					gracefulKill(cmd, processDone)
+					return Result{FeedbackKill: true}
+				}
+			}
+
 			// Detect completion.
 			if hasSignal(cfg.Signals.Complete) || hasSignal(cfg.Signals.AllComplete) {
 				summary := readSignalSummary(cfg.Signals)
@@ -388,9 +401,14 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 
 				// If OnSignal is set, let the orchestrator verify before accepting.
+				// Run in a goroutine so we can still detect feedback during
+				// long-running verification (tests, LLM review, fix agents).
 				if cfg.OnSignal != nil {
-					if !cfg.OnSignal(summary) {
-						// Verification failed — clear signal, let agent continue.
+					accepted := r.runOnSignalWithFeedbackWatch(cfg, cmd, processDone, summary)
+					if accepted == feedbackInterrupt {
+						return Result{FeedbackKill: true}
+					}
+					if accepted == signalRejected {
 						r.Logger.Warn("llm", "Verification rejected signal — agent continues")
 						clearSignals(cfg.Signals)
 						continue
@@ -410,17 +428,6 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 					OnSignalUsed:   cfg.OnSignal != nil,
 					TaskDesc:       readFirstLine(cfg.Signals.CurrentTask),
 					Summary:        summary,
-				}
-			}
-
-			// Check for user feedback signal — content is already on the
-			// bead via bd update --append-notes, so just restart the agent.
-			if cfg.FeedbackFile != "" {
-				if _, err := os.Stat(cfg.FeedbackFile); err == nil {
-					os.Remove(cfg.FeedbackFile)
-					r.Logger.Log("llm", "Feedback signal detected — restarting agent")
-					gracefulKill(cmd, processDone)
-					return Result{FeedbackKill: true}
 				}
 			}
 
@@ -460,6 +467,53 @@ func (r *Runner) startStreamFilter(cfg RunConfig, stop <-chan struct{}) <-chan s
 	}()
 
 	return done
+}
+
+// onSignalOutcome describes the result of running OnSignal with feedback monitoring.
+type onSignalOutcome int
+
+const (
+	signalAccepted    onSignalOutcome = iota // OnSignal returned true
+	signalRejected                           // OnSignal returned false
+	feedbackInterrupt                        // feedback file appeared during OnSignal
+)
+
+// runOnSignalWithFeedbackWatch runs the OnSignal callback in a goroutine while
+// polling for feedback. If a feedback file appears while OnSignal is executing
+// (e.g. during test suite, LLM verification, or fix agent execution), the
+// agent is killed immediately and feedbackInterrupt is returned.
+func (r *Runner) runOnSignalWithFeedbackWatch(cfg RunConfig, cmd *exec.Cmd, processDone <-chan struct{}, summary string) onSignalOutcome {
+	if cfg.FeedbackFile == "" {
+		if cfg.OnSignal(summary) {
+			return signalAccepted
+		}
+		return signalRejected
+	}
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- cfg.OnSignal(summary)
+	}()
+
+	ticker := time.NewTicker(cfg.PollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case accepted := <-done:
+			if accepted {
+				return signalAccepted
+			}
+			return signalRejected
+		case <-ticker.C:
+			if _, err := os.Stat(cfg.FeedbackFile); err == nil {
+				os.Remove(cfg.FeedbackFile)
+				r.Logger.Log("llm", "Feedback signal detected — restarting agent")
+				gracefulKill(cmd, processDone)
+				return feedbackInterrupt
+			}
+		}
+	}
 }
 
 // --- Signal file helpers ---
