@@ -320,22 +320,23 @@ func TestParseSubcommand(t *testing.T) {
 		t.Errorf("Args = %v, want [hello world]", sub.Args)
 	}
 
-	// "command" is a subcommand
-	sub, ok = ParseSubcommand([]string{"command"})
+	// "attach" is a subcommand
+	sub, ok = ParseSubcommand([]string{"attach"})
 	if !ok {
-		t.Fatal("expected subcommand for 'command'")
+		t.Fatal("expected subcommand for 'attach'")
 	}
-	if sub.Name != "command" || sub.Dir != "." {
-		t.Errorf("got %+v, want Name=command Dir=.", sub)
+	if sub.Name != "attach" || sub.Dir != "." {
+		t.Errorf("got %+v, want Name=attach Dir=.", sub)
 	}
 
-	// "commander" is accepted as an alias
-	sub, ok = ParseSubcommand([]string{"commander"})
-	if !ok {
-		t.Fatal("expected subcommand for 'commander' alias")
+	// "command" and "commander" are no longer recognized
+	_, ok = ParseSubcommand([]string{"command"})
+	if ok {
+		t.Error("'command' should no longer be a recognized subcommand")
 	}
-	if sub.Name != "command" {
-		t.Errorf("commander alias should resolve to Name=command, got %q", sub.Name)
+	_, ok = ParseSubcommand([]string{"commander"})
+	if ok {
+		t.Error("'commander' should no longer be a recognized subcommand")
 	}
 
 	// "task" is a subcommand

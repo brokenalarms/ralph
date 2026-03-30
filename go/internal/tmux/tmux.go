@@ -15,37 +15,19 @@ const (
 	PanePlan   = 2
 )
 
-// Pane indices within a commander tmux session (4-pane layout).
-// After splits: 0=loop (top-left), 1=task (bottom-left),
-// 2=stream (top-right), 3=plan (bottom-right).
-const (
-	CmdrPaneLoop   = 0
-	CmdrPaneTask   = 1
-	CmdrPaneStream = 2
-	CmdrPanePlan   = 3
-)
-
-// Session manages a tmux session with ralph's pane layout.
-// Standard mode: 3 panes (left=loop, top-right=stream, bottom-right=plan).
-// Commander mode: 4 panes (top-left=loop, bottom-left=task manager,
-// top-right=stream, bottom-right=plan).
+// Session manages a tmux session with ralph's 3-pane layout:
+// left=loop, top-right=stream, bottom-right=plan.
 type Session struct {
 	Name       string
 	ProjectDir string
 	RalphDir   string
 	RawLogPath string
 
-	// RalphCmd is the command line to re-exec ralph in the loop pane (without --tmux).
+	// RalphCmd is the command line to run in the loop pane.
 	RalphCmd string
 
 	// ScriptPath is the path to the ralph binary, used to build subcommands.
 	ScriptPath string
-
-	// TaskCmd is the command to run in the task manager pane (commander mode only).
-	TaskCmd string
-
-	// Commander enables the 4-pane layout with a task manager pane.
-	Commander bool
 
 	paneTitle *PaneTitle
 }
@@ -74,11 +56,7 @@ func (s *Session) Setup() error {
 		return fmt.Errorf("create tmux session: %w", err)
 	}
 
-	streamPane := PaneStream
-	if s.Commander {
-		streamPane = CmdrPaneStream
-	}
-	s.paneTitle = NewPaneTitle(s.Name, s.RalphDir, streamPane)
+	s.paneTitle = NewPaneTitle(s.Name, s.RalphDir, PaneStream)
 
 	// Signal the plan pane to render immediately instead of waiting for the first iteration.
 	touchFile(filepath.Join(s.RalphDir, ".plan-refresh"))
@@ -112,9 +90,6 @@ func (s *Session) PaneTitle() *PaneTitle {
 }
 
 func (s *Session) createSession() error {
-	if s.Commander {
-		return s.createCommanderSession()
-	}
 	return s.createStandardSession()
 }
 
@@ -140,50 +115,6 @@ func (s *Session) createStandardSession() error {
 	tmuxCmd("select-pane", "-t", s.Name+":.0", "-T", "(go) ralph") //nolint:errcheck
 	tmuxCmd("select-pane", "-t", s.Name+":.1", "-T", "stream") //nolint:errcheck
 	tmuxCmd("select-pane", "-t", s.Name+":.2", "-T", "plan")   //nolint:errcheck
-
-	s.applySessionOptions()
-
-	tmuxCmd("select-pane", "-t", s.Name+":.0") //nolint:errcheck
-
-	return nil
-}
-
-// createCommanderSession builds the 4-pane layout:
-//
-//	┌──────────────┬──────────────┐
-//	│ pane 0: loop │ pane 2: strm │
-//	├──────────────┤──────────────┤
-//	│ pane 1: task │ pane 3: plan │
-//	└──────────────┴──────────────┘
-func (s *Session) createCommanderSession() error {
-	planWatchPath := filepath.Join(s.RalphDir, ".plan-watch.sh")
-
-	ralphCmd := fmt.Sprintf("export _RALPH_TMUX_SESSION=%s; %s", s.Name, s.RalphCmd)
-
-	if err := tmuxCmd("new-session", "-d", "-s", s.Name, "-c", s.ProjectDir, ralphCmd); err != nil {
-		return err
-	}
-
-	streamCmd := s.filterStreamCmd()
-	if err := tmuxCmd("split-window", "-h", "-t", s.Name, streamCmd); err != nil {
-		return err
-	}
-
-	// Split left pane (0) vertically to create task manager below loop.
-	if err := tmuxCmd("split-window", "-v", "-t", s.Name+":.0", s.TaskCmd); err != nil {
-		return err
-	}
-
-	planCmd := fmt.Sprintf("bash '%s'", planWatchPath)
-	// After the split, stream is now pane 2. Split it vertically for plan.
-	if err := tmuxCmd("split-window", "-v", "-t", s.Name+":.2", planCmd); err != nil {
-		return err
-	}
-
-	tmuxCmd("select-pane", "-t", s.Name+":.0", "-T", "(go) ralph") //nolint:errcheck
-	tmuxCmd("select-pane", "-t", s.Name+":.1", "-T", "task")       //nolint:errcheck
-	tmuxCmd("select-pane", "-t", s.Name+":.2", "-T", "stream")     //nolint:errcheck
-	tmuxCmd("select-pane", "-t", s.Name+":.3", "-T", "plan")       //nolint:errcheck
 
 	s.applySessionOptions()
 
@@ -286,24 +217,18 @@ func (s *Session) bdPlanRender() string {
 }
 
 // BuildRalphCmd constructs the ralph re-exec command from the original args,
-// stripping --tmux and the commander subcommand, and adding --quiet.
+// stripping --tmux and adding --quiet.
 // Always emits the "loop" subcommand so the re-exec uses the explicit path.
 func BuildRalphCmd(scriptPath string, origArgs []string) string {
 	parts := []string{shellQuote(scriptPath), "loop"}
 	for _, arg := range origArgs {
-		if arg == "--tmux" || arg == "command" || arg == "commander" || arg == "loop" {
+		if arg == "--tmux" || arg == "loop" {
 			continue
 		}
 		parts = append(parts, shellQuote(arg))
 	}
 	parts = append(parts, "--quiet")
 	return strings.Join(parts, " ")
-}
-
-// BuildTaskCmd constructs the command to launch the task manager pane.
-// It runs `ralph task` with the project directory.
-func BuildTaskCmd(scriptPath, projectDir string) string {
-	return shellQuote(scriptPath) + " task " + shellQuote(projectDir)
 }
 
 var tmuxCmd = func(args ...string) error {

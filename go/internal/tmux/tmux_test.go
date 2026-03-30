@@ -339,83 +339,25 @@ func TestWritePlanWatcher_FlashSignal(t *testing.T) {
 	}
 }
 
-// Verifies that BuildRalphCmd strips "command" and "commander" subcommands
-// from args so the re-exec'd loop pane runs the main loop, not command again.
-func TestBuildRalphCmd_StripsCommand(t *testing.T) {
-	for _, sub := range []string{"command", "commander"} {
-		cmd := BuildRalphCmd("/usr/local/bin/ralph", []string{
-			sub,
-			"-n", "10",
-		})
+// Verifies that BuildRalphCmd strips "loop" and --tmux but preserves other args.
+func TestBuildRalphCmd_StripsLoopAndTmux(t *testing.T) {
+	cmd := BuildRalphCmd("/usr/local/bin/ralph", []string{
+		"loop",
+		"--tmux",
+		"-n", "10",
+	})
 
-		if strings.Contains(cmd, sub) {
-			t.Errorf("BuildRalphCmd should strip %q subcommand", sub)
-		}
-		if !strings.Contains(cmd, "--quiet") {
-			t.Errorf("BuildRalphCmd should append --quiet (input: %s)", sub)
-		}
-		if !strings.Contains(cmd, " loop ") {
-			t.Errorf("BuildRalphCmd should include 'loop' subcommand (input: %s)", sub)
-		}
+	if strings.Contains(cmd, "--tmux") {
+		t.Error("BuildRalphCmd should strip --tmux")
 	}
-}
-
-// Verifies that BuildTaskCmd constructs a command to run `ralph task`
-// with the project directory, so the task manager pane launches correctly.
-func TestBuildTaskCmd(t *testing.T) {
-	cmd := BuildTaskCmd("/usr/local/bin/ralph", "/home/user/project")
-
-	if !strings.Contains(cmd, "/usr/local/bin/ralph") {
-		t.Error("BuildTaskCmd should include script path")
+	if !strings.Contains(cmd, "--quiet") {
+		t.Error("BuildRalphCmd should append --quiet")
 	}
-	if !strings.Contains(cmd, "task") {
-		t.Error("BuildTaskCmd should include 'task' subcommand")
+	if !strings.Contains(cmd, " loop ") {
+		t.Error("BuildRalphCmd should include 'loop' subcommand")
 	}
-	if !strings.Contains(cmd, "/home/user/project") {
-		t.Error("BuildTaskCmd should include project directory")
-	}
-}
-
-// Verifies that the commander pane constants map to the expected positions
-// after tmux splits: loop=0, task=1 (bottom-left), stream=2 (top-right), plan=3.
-func TestCommanderPaneConstants(t *testing.T) {
-	if CmdrPaneLoop != 0 {
-		t.Errorf("CmdrPaneLoop = %d, want 0", CmdrPaneLoop)
-	}
-	if CmdrPaneTask != 1 {
-		t.Errorf("CmdrPaneTask = %d, want 1", CmdrPaneTask)
-	}
-	if CmdrPaneStream != 2 {
-		t.Errorf("CmdrPaneStream = %d, want 2", CmdrPaneStream)
-	}
-	if CmdrPanePlan != 3 {
-		t.Errorf("CmdrPanePlan = %d, want 3", CmdrPanePlan)
-	}
-}
-
-// Verifies that Session.Setup with Commander=true sets the stream pane
-// index for PaneTitle to CmdrPaneStream (2) instead of PaneStream (1).
-func TestSetup_CommanderStreamPaneIndex(t *testing.T) {
-	dir := t.TempDir()
-
-	s := &Session{
-		Name:        "test-session",
-		RalphDir:    dir,
-				Commander:   true,
-		TaskCmd:     "echo task",
-	}
-
-	// Setup will fail on createSession (no tmux), but the pane title
-	// should still be configured with the correct stream pane.
-	_ = s.Setup()
-
-	// The paneTitle should exist if setup got far enough.
-	// If it's nil (createSession failed before NewPaneTitle), that's
-	// a test limitation — skip gracefully.
-	if s.paneTitle != nil {
-		if s.paneTitle.streamPane != CmdrPaneStream {
-			t.Errorf("streamPane = %d, want %d (CmdrPaneStream)", s.paneTitle.streamPane, CmdrPaneStream)
-		}
+	if !strings.Contains(cmd, "'-n'") {
+		t.Error("BuildRalphCmd should preserve -n flag")
 	}
 }
 
