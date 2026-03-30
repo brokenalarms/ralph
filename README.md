@@ -101,7 +101,8 @@ ralph command ~/myproject
 | `--calls-per-hour <N>` | Max Claude calls per hour | 80 |
 | `--base-branch <name>` | Base branch for rebase/merge | develop |
 | `--auto-merge` | Squash-merge PRs after task completion | — |
-| `--evolve` | Re-exec ralph between iterations to incorporate the latest version | — |
+| `--evolve` | Re-exec ralph between iterations to incorporate the latest version. Use with --post-task to rebuild before re-exec. | — |
+| `--post-task <script>` | Run a command after each task completes, before evolve re-exec. Receives RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED env vars. | — |
 | `--wait` | Keep running after all tasks complete, polling for new work | — |
 | `--tmux` | Run in tmux 3-pane layout | — |
 | `--refactor-every <N>` | Refactor every N iterations | 0 |
