@@ -558,61 +558,103 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	}, true
 }
 
+// handleRunResultParams bundles the inputs and dependencies for handleRunResult.
+type handleRunResultParams struct {
+	result       claude.Result
+	runErr       error
+	taskID       string
+	nextTask     string
+	headBefore   string
+	runIteration int
+
+	isOnlineFunc        func() bool
+	waitForInternetFunc func(context.Context, *logging.Logger) bool
+	logger              *logging.Logger
+	git                 git.GitOps
+	attempts            *attempts.Tracker
+	limiter             interface {
+		WaitUntil(ctx context.Context, target time.Time, onTick func(int)) error
+	}
+	backend  tasks.Backend
+	state    *state.Store
+	skipTask func(backend tasks.Backend, st *state.Store, logger *logging.Logger, id, reason string)
+}
+
 // handleRunResult processes errors and retryable conditions from a Claude
 // run (offline, feedback kill, idle timeout, rate limit). Returns the
 // loopAction Run() should take. When actionRetry is returned, the caller
 // is responsible for not counting this iteration.
-func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr error,
-	taskID, nextTask, headBefore string, runIteration int) loopAction {
-
-	if runErr != nil {
-		if !l.isOnlineFunc() {
-			l.logger.Warn("llm", "Claude failed — internet appears down")
-			if !l.waitForInternetFunc(ctx, l.logger) {
+func handleRunResult(ctx context.Context, p handleRunResultParams) loopAction {
+	if p.runErr != nil {
+		if !p.isOnlineFunc() {
+			p.logger.Warn("llm", "Claude failed — internet appears down")
+			if !p.waitForInternetFunc(ctx, p.logger) {
 				return actionDone
 			}
 			return actionRetry
 		}
-		l.logger.Warn("llm", "Claude failed on iteration %d, continuing...", runIteration)
+		p.logger.Warn("llm", "Claude failed on iteration %d, continuing...", p.runIteration)
 	}
-	if result.FeedbackKill {
-		l.logger.Warn("llm", "Restarting iteration %d — user feedback received", runIteration)
-		diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
-		l.attempts.Record(taskID, nextTask,
+	if p.result.FeedbackKill {
+		p.logger.Warn("llm", "Restarting iteration %d — user feedback received", p.runIteration)
+		diffStat := p.git.DiffStatRange(p.headBefore, p.git.HeadRev())
+		p.attempts.Record(p.taskID, p.nextTask,
 			"Killed: user feedback received (see bead notes for content)",
 			diffStat,
 			"user_feedback: check bead notes for details")
 		return actionRetry
 	}
-	if result.IdleTimeout {
-		l.logger.Warn("llm", "Restarting iteration %d after idle timeout", runIteration)
-		diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
-		l.attempts.Record(taskID, nextTask,
+	if p.result.IdleTimeout {
+		p.logger.Warn("llm", "Restarting iteration %d after idle timeout", p.runIteration)
+		diffStat := p.git.DiffStatRange(p.headBefore, p.git.HeadRev())
+		p.attempts.Record(p.taskID, p.nextTask,
 			"Killed: idle timeout (no output for configured duration)",
 			diffStat,
 			"idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output")
-		count, _ := l.attempts.RecordIdleTimeoutFailure(taskID)
+		count, _ := p.attempts.RecordIdleTimeoutFailure(p.taskID)
 		if count >= attempts.MaxIdleTimeoutFailures {
-			l.logger.Warn("llm", "Idle timeout %d times for %s — skipping task", count, taskID)
-			skipTask(l.cfg.TaskBackend, l.state, l.logger, taskID, "idle_timeout_max_failures")
+			p.logger.Warn("llm", "Idle timeout %d times for %s — skipping task", count, p.taskID)
+			p.skipTask(p.backend, p.state, p.logger, p.taskID, "idle_timeout_max_failures")
 			return actionRetry
 		}
 		return actionRetry
 	}
-	if result.RateLimited {
-		waitDur := claude.FormatWaitDuration(time.Until(result.ResetAt))
-		l.logger.Warn("llm", "Claude rate limit — waiting %s until %s", waitDur, result.ResetAt.Format("3:04pm"))
-		err := l.limiter.WaitUntil(ctx, result.ResetAt, func(secs int) {
-			l.logger.Log("llm", "Rate limit: %ds until reset", secs)
+	if p.result.RateLimited {
+		waitDur := claude.FormatWaitDuration(time.Until(p.result.ResetAt))
+		p.logger.Warn("llm", "Claude rate limit — waiting %s until %s", waitDur, p.result.ResetAt.Format("3:04pm"))
+		err := p.limiter.WaitUntil(ctx, p.result.ResetAt, func(secs int) {
+			p.logger.Log("llm", "Rate limit: %ds until reset", secs)
 		})
 		if err != nil {
-			l.logger.Warn("llm", "Rate limit wait interrupted: %v", err)
+			p.logger.Warn("llm", "Rate limit wait interrupted: %v", err)
 			return actionDone
 		}
-		l.logger.Success("llm", "Rate limit reset — resuming")
+		p.logger.Success("llm", "Rate limit reset — resuming")
 		return actionRetry
 	}
 
 	return actionProceed
+}
+
+// handleRunResult delegates to the package-level handleRunResult function.
+func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr error,
+	taskID, nextTask, headBefore string, runIteration int) loopAction {
+	return handleRunResult(ctx, handleRunResultParams{
+		result:              result,
+		runErr:              runErr,
+		taskID:              taskID,
+		nextTask:            nextTask,
+		headBefore:          headBefore,
+		runIteration:        runIteration,
+		isOnlineFunc:        l.isOnlineFunc,
+		waitForInternetFunc: l.waitForInternetFunc,
+		logger:              l.logger,
+		git:                 l.git,
+		attempts:            l.attempts,
+		limiter:             l.limiter,
+		backend:             l.cfg.TaskBackend,
+		state:               l.state,
+		skipTask:            skipTask,
+	})
 }
 
