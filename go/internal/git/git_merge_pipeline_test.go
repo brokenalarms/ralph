@@ -236,14 +236,11 @@ func TestAutoMerge_InfraFailureBypass_MergesWhenLocalTestsPassed(t *testing.T) {
 	}
 
 	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
-	if err != nil {
-		t.Fatalf("expected merge to proceed despite CI infra failure, got: %v", err)
+	if !errors.Is(err, ErrMergeBlockedByInfra) {
+		t.Fatalf("expected ErrMergeBlockedByInfra, got: %v", err)
 	}
-	if !merged {
-		t.Error("expected merged=true when local tests passed and CI is infra failure")
-	}
-	if gh.MergeCalls == 0 {
-		t.Error("expected MergePR to be called (merge should proceed)")
+	if merged {
+		t.Error("expected merged=false — PR stays open during infra failure")
 	}
 }
 

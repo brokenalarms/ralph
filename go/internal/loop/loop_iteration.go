@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -364,10 +365,12 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 			l.logger.Emit(logging.Opts{Domain: "git", Link: l.prLink(p.prNumber)}, "targets %s — merging", defaultBranch)
 			var mergeErr error
 			merged, mergeErr = l.mergeWithRetry(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
-			if mergeErr != nil {
+			if errors.Is(mergeErr, git.ErrMergeBlockedByInfra) {
+				l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(p.prNumber)}, "Merge blocked by CI infra — PR stays open, closing bead")
+			} else if mergeErr != nil {
 				l.logger.Warn("git", "Auto-merge: %v", mergeErr)
 			}
-			if !merged {
+			if !merged && !errors.Is(mergeErr, git.ErrMergeBlockedByInfra) {
 				l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(p.prNumber)}, "Merge failed — skipping task")
 				skipTask(l.cfg.TaskBackend, l.state, l.logger, p.taskID, "merge_failed")
 				return finalizePRResult{}
