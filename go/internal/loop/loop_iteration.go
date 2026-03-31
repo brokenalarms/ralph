@@ -12,6 +12,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
+	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
@@ -113,109 +114,133 @@ type postSignalParams struct {
 	diffStat   string
 }
 
+// handlePostSignalOpts bundles all dependencies for the handlePostSignal package function.
+type handlePostSignalOpts struct {
+	postSignalTimeout time.Duration
+	autoMerge         bool
+	evolve            bool
+	notify            bool
+	ralphDir          string
+	git               git.GitOps
+	backend           tasks.Backend
+	state             *state.Store
+	logger            *logging.Logger
+	attempts          *attempts.Tracker
+	verifyFn          func(ctx context.Context, headBefore string) (bool, string)
+	pushSignalPRFn    func(p postSignalParams) (string, string)
+	finalizePRFn      func(p finalizePRParams) finalizePRResult
+	buildCTFn         func(taskID, nextTask, summary, prNumber, workDir string) CompletedTask
+	runPostTaskFn     func(ctx context.Context, taskID, prNumber string, merged bool)
+}
+
+// handlePostSignalOut carries the results of handlePostSignal back to the method wrapper.
+type handlePostSignalOut struct {
+	action postSignalAction
+	ct     *CompletedTask // non-nil if a CompletedTask was produced and should be appended
+	merged bool           // true if the task was merged (caller should set lastTaskMerged)
+}
+
 // handlePostSignal runs after the agent signals completion: verifies the
-// work, pushes a PR, merges if configured, and closes the bead. Returns
-// the action Run() should take. Callers pass runIteration and iteration
-// pointers so the no-commits path can increment them.
-func (l *Loop) handlePostSignal(p postSignalParams) postSignalAction {
-	if timeout := l.cfg.PostSignalTimeout; timeout > 0 {
-		ctx, cancel := context.WithTimeout(p.ctx, timeout)
+// work, pushes a PR, merges if configured, and closes the bead.
+func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostSignalOut {
+	if opts.postSignalTimeout > 0 {
+		ctx, cancel := context.WithTimeout(p.ctx, opts.postSignalTimeout)
 		defer cancel()
 		p.ctx = ctx
 	}
 
 	// Preflight: check bead wasn't prematurely closed by the agent.
 	if p.taskID != "" {
-		phase, _ := l.cfg.TaskBackend.GetState(p.taskID, "phase")
+		phase, _ := opts.backend.GetState(p.taskID, "phase")
 		if phase != "implementing" {
-			l.logger.Warn("beads", "Task %s phase is %q (expected implementing) — agent may have tampered with task state", p.taskID, phase)
+			opts.logger.Warn("beads", "Task %s phase is %q (expected implementing) — agent may have tampered with task state", p.taskID, phase)
 		}
 	}
 
 	// If OnSignal was set, verification already passed in the runner.
 	// If not (legacy/test path), run verification here as fallback.
 	if !p.result.OnSignalUsed {
-		if passed, reason := l.verifyCompletion(p.ctx, p.headBefore); !passed {
-			l.logger.Warn("test", "Verification failed: %s", reason)
-			l.attempts.Record(p.taskID, p.nextTask,
+		if passed, reason := opts.verifyFn(p.ctx, p.headBefore); !passed {
+			opts.logger.Warn("test", "Verification failed: %s", reason)
+			opts.attempts.Record(p.taskID, p.nextTask,
 				"Signal received but verification failed: "+reason,
 				p.diffStat,
 				"verification_failed: fix must pass tests and produce commits before closing")
-			return signalRetry
+			return handlePostSignalOut{action: signalRetry}
 		}
 	}
 
 	if p.taskID != "" {
-		if err := l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", "ralph: tests passed, commits present"); err != nil {
-			l.logger.Warn("beads", "SetState phase=verified: %v", err)
+		if err := opts.backend.SetState(p.taskID, "phase", "verified", "ralph: tests passed, commits present"); err != nil {
+			opts.logger.Warn("beads", "SetState phase=verified: %v", err)
 		} else {
-			l.logger.Log("beads", "%s → verified", p.taskID)
+			opts.logger.Log("beads", "%s → verified", p.taskID)
 		}
 	}
 
-	l.attempts.Clear(p.taskID, p.nextTask)
-	recordCompletedTask(l.cfg.Dirs.RalphDir, p.taskID, p.nextTask)
-	touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-flash"))
+	opts.attempts.Clear(p.taskID, p.nextTask)
+	recordCompletedTask(opts.ralphDir, p.taskID, p.nextTask)
+	touchFile(filepath.Join(opts.ralphDir, ".plan-flash"))
 
-	headAfterSignal := l.git.HeadRev()
+	headAfterSignal := opts.git.HeadRev()
 	if p.headBefore != "" && headAfterSignal == p.headBefore {
 		// No new commits but verification passed (agent + LLM + tests agree).
 		// That's sufficient proof the work is on main — close the bead.
-		l.logger.Log("git", "No new commits — verified complete, closing bead")
+		opts.logger.Log("git", "No new commits — verified complete, closing bead")
 		if p.taskID != "" {
 			closeReason := "verified complete (no new commits)"
-			ref, _ := l.cfg.TaskBackend.GetExternalRef(p.taskID)
+			ref, _ := opts.backend.GetExternalRef(p.taskID)
 			if prNum := parsePRNumber(ref); prNum != "" {
-				if prState, _ := l.git.GetPRState(prNum); strings.ToUpper(prState) == "MERGED" {
+				if prState, _ := opts.git.GetPRState(prNum); strings.ToUpper(prState) == "MERGED" {
 					closeReason = fmt.Sprintf("PR #%s already merged", prNum)
 				}
 			}
-			_ = l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", closeReason)
-			if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
+			_ = opts.backend.SetState(p.taskID, "phase", "verified", closeReason)
+			if err := opts.backend.CloseTask(p.taskID, closeReason); err != nil {
 				skipReason := "close_failed"
 				if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
-					l.logger.Warn("beads", "CloseTask: %s blocked by %v", p.taskID, blockers)
+					opts.logger.Warn("beads", "CloseTask: %s blocked by %v", p.taskID, blockers)
 					skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
 				} else {
-					l.logger.Warn("beads", "CloseTask: %v", err)
+					opts.logger.Warn("beads", "CloseTask: %v", err)
 				}
-				skipTask(l.cfg.TaskBackend, l.state, l.logger, p.taskID, skipReason)
+				skipTask(opts.backend, opts.state, opts.logger, p.taskID, skipReason)
 			} else {
-				l.logger.Log("beads", "Closed task %s (%s)", p.taskID, closeReason)
-				persistCompletedTask(l.state, l.logger, p.taskID, false)
+				opts.logger.Log("beads", "Closed task %s (%s)", p.taskID, closeReason)
+				persistCompletedTask(opts.state, opts.logger, p.taskID, false)
 			}
 		}
-		l.git.TagTaskEnd(p.taskID)
-		l.runPostTask(p.ctx, p.taskID, "", false)
-		if l.cfg.Notify {
+		opts.git.TagTaskEnd(p.taskID)
+		opts.runPostTaskFn(p.ctx, p.taskID, "", false)
+		if opts.notify {
 			notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
 		}
-		return signalSkipped
+		return handlePostSignalOut{action: signalSkipped}
 	}
 
 	if p.ctx.Err() != nil {
-		l.logger.Warn("", "Post-signal timeout — aborting before push")
-		return signalComplete
+		opts.logger.Warn("", "Post-signal timeout — aborting before push")
+		return handlePostSignalOut{action: signalComplete}
 	}
 
-	prNumber, shipURL := l.pushSignalPR(p)
+	prNumber, shipURL := opts.pushSignalPRFn(p)
 	prState := "OPEN"
 
 	// Recovery: if push failed but a PR already exists, use it.
 	if prNumber == "" && p.taskID != "" {
-		ref, _ := l.cfg.TaskBackend.GetExternalRef(p.taskID)
+		ref, _ := opts.backend.GetExternalRef(p.taskID)
 		if existing := parsePRNumber(ref); existing != "" {
 			prNumber = existing
 			prState = "" // unknown — let finalizePR look it up
 		}
 	}
 
-	ct := l.buildCompletedTask(p.taskID, p.nextTask, p.result.Summary, prNumber, p.workDir)
+	ct := opts.buildCTFn(p.taskID, p.nextTask, p.result.Summary, prNumber, p.workDir)
 	if shipURL != "" {
 		ct.PRURL = shipURL
 	}
 
-	// buildCompletedTask may discover a PR via findPRInfo that push missed.
+	// buildCTFn may discover a PR via findPRInfo that push missed.
 	// findPRInfo queries open PRs for the current branch, so OPEN is safe.
 	if prNumber == "" && ct.PRNum != "" {
 		prNumber = ct.PRNum
@@ -223,18 +248,16 @@ func (l *Loop) handlePostSignal(p postSignalParams) postSignalAction {
 	}
 
 	if p.ctx.Err() != nil {
-		l.logger.Warn("", "Post-signal timeout — aborting before merge")
-		l.sessionTasks = append(l.sessionTasks, ct)
-		return signalComplete
+		opts.logger.Warn("", "Post-signal timeout — aborting before merge")
+		return handlePostSignalOut{action: signalComplete, ct: &ct}
 	}
 
 	if prNumber == "" {
-		l.logger.Warn("git", "No PR created — task %s stays open", p.taskID)
-		l.sessionTasks = append(l.sessionTasks, ct)
-		return signalComplete
+		opts.logger.Warn("git", "No PR created — task %s stays open", p.taskID)
+		return handlePostSignalOut{action: signalComplete, ct: &ct}
 	}
 
-	result := l.finalizePR(finalizePRParams{
+	finalResult := opts.finalizePRFn(finalizePRParams{
 		ctx:        p.ctx,
 		taskID:     p.taskID,
 		nextTask:   p.nextTask,
@@ -244,58 +267,110 @@ func (l *Loop) handlePostSignal(p postSignalParams) postSignalAction {
 		workDir:    p.workDir,
 		rawLogPath: p.rawLogPath,
 	})
-	l.sessionTasks = append(l.sessionTasks, ct)
 
-	l.runPostTask(p.ctx, p.taskID, prNumber, result.merged)
+	opts.runPostTaskFn(p.ctx, p.taskID, prNumber, finalResult.merged)
 
-	if l.cfg.Notify {
+	if opts.notify {
 		notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
 	}
 
-	if result.merged {
-		l.lastTaskMerged = true
+	if finalResult.merged {
 		notify.TaskMerged(p.taskID, p.nextTask)
-		if l.cfg.Evolve {
-			l.git.TagTaskEnd(p.taskID)
-			l.logger.Phase("Evolve: restarting with latest main")
-			l.state.Write("status", "evolve_restart")
-			return signalEvolve
+		if opts.evolve {
+			opts.git.TagTaskEnd(p.taskID)
+			opts.logger.Phase("Evolve: restarting with latest main")
+			opts.state.Write("status", "evolve_restart")
+			return handlePostSignalOut{action: signalEvolve, ct: &ct, merged: true}
 		}
 	}
 
-	return signalComplete
+	return handlePostSignalOut{action: signalComplete, ct: &ct, merged: finalResult.merged}
+}
+
+// handlePostSignal delegates to the package-level handlePostSignal function,
+// collecting side-effect mutations to sessionTasks and lastTaskMerged.
+func (l *Loop) handlePostSignal(p postSignalParams) postSignalAction {
+	opts := handlePostSignalOpts{
+		postSignalTimeout: l.cfg.PostSignalTimeout,
+		autoMerge:         l.cfg.AutoMerge,
+		evolve:            l.cfg.Evolve,
+		notify:            l.cfg.Notify,
+		ralphDir:          l.cfg.Dirs.RalphDir,
+		git:               l.git,
+		backend:           l.cfg.TaskBackend,
+		state:             l.state,
+		logger:            l.logger,
+		attempts:          l.attempts,
+		verifyFn: func(ctx context.Context, headBefore string) (bool, string) {
+			return l.verifyCompletion(ctx, headBefore)
+		},
+		pushSignalPRFn: l.pushSignalPR,
+		finalizePRFn:   l.finalizePR,
+		buildCTFn:      l.buildCompletedTask,
+		runPostTaskFn:  l.runPostTask,
+	}
+	out := handlePostSignal(p, opts)
+	if out.ct != nil {
+		l.sessionTasks = append(l.sessionTasks, *out.ct)
+	}
+	if out.merged {
+		l.lastTaskMerged = true
+	}
+	return out.action
+}
+
+// pushSignalPROpts bundles the dependencies for the pushSignalPR package function.
+type pushSignalPROpts struct {
+	git                 git.GitOps
+	backend             tasks.Backend
+	logger              *logging.Logger
+	isOnlineFunc        func() bool
+	waitForInternetFunc func(context.Context, *logging.Logger) bool
+	shipFn              func(context.Context, git.ShipOpts) (git.ShipResult, error)
 }
 
 // pushSignalPR pushes the branch and creates a PR after a successful signal.
-func (l *Loop) pushSignalPR(p postSignalParams) (string, string) {
-	prBody := buildPRBody(l.cfg.TaskBackend, p.taskID, p.result.Summary)
+func pushSignalPR(ctx context.Context, p postSignalParams, opts pushSignalPROpts) (string, string) {
+	prBody := buildPRBody(opts.backend, p.taskID, p.result.Summary)
 	shipOpts := git.ShipOpts{TaskID: p.taskID, TaskTitle: p.nextTask, Body: prBody}
 
-	result, shipErr := l.shipWork(p.ctx, shipOpts)
+	result, shipErr := opts.shipFn(ctx, shipOpts)
 	if shipErr != nil {
-		if !l.isOnlineFunc() {
-			l.logger.Warn("git", "Ship failed — internet appears down")
-			l.waitForInternetFunc(p.ctx, l.logger)
-			result, shipErr = l.shipWork(p.ctx, shipOpts)
+		if !opts.isOnlineFunc() {
+			opts.logger.Warn("git", "Ship failed — internet appears down")
+			opts.waitForInternetFunc(ctx, opts.logger)
+			result, shipErr = opts.shipFn(ctx, shipOpts)
 		}
 		if shipErr != nil {
-			l.logger.Warn("git", "Ship: %v", shipErr)
+			opts.logger.Warn("git", "Ship: %v", shipErr)
 		}
 	}
 
 	if result.PRNumber != "" && p.taskID != "" {
 		ref := result.PRURL
 		if ref == "" {
-			ref = prURL(l.git.RemoteURL(), result.PRNumber)
+			ref = prURL(opts.git.RemoteURL(), result.PRNumber)
 		}
 		if ref != "" {
-			l.logger.Log("git", "Linking task %s to %s (branch: %s)", p.taskID, ref, l.git.GetWorktreeBranch())
-			if refErr := l.cfg.TaskBackend.SetExternalRef(p.taskID, ref); refErr != nil {
-				l.logger.Warn("beads", "SetExternalRef: %v", refErr)
+			opts.logger.Log("git", "Linking task %s to %s (branch: %s)", p.taskID, ref, opts.git.GetWorktreeBranch())
+			if refErr := opts.backend.SetExternalRef(p.taskID, ref); refErr != nil {
+				opts.logger.Warn("beads", "SetExternalRef: %v", refErr)
 			}
 		}
 	}
 	return result.PRNumber, result.PRURL
+}
+
+// pushSignalPR delegates to the package-level pushSignalPR function.
+func (l *Loop) pushSignalPR(p postSignalParams) (string, string) {
+	return pushSignalPR(p.ctx, p, pushSignalPROpts{
+		git:                 l.git,
+		backend:             l.cfg.TaskBackend,
+		logger:              l.logger,
+		isOnlineFunc:        l.isOnlineFunc,
+		waitForInternetFunc: l.waitForInternetFunc,
+		shipFn:              l.shipWork,
+	})
 }
 
 // buildCompletedTask assembles the CompletedTask record for a signal.
