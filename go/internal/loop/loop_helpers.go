@@ -21,9 +21,11 @@ func (l *Loop) initRun(ctx context.Context) error {
 	if l.git.GetWorktreeBranch() == "" || l.git.GetWorkDir() == l.git.GetProjectDir() {
 		return nil
 	}
+
+	// One-time sync: rebase onto latest base so the first iteration
+	// starts from a clean state. prepareBranch handles this on subsequent
+	// iterations, but we need it here before the loop starts.
 	l.setStackHead()
-	// No stack head = all previous work merged. Reset to default branch
-	// so we don't carry stale commits that would conflict on rebase.
 	if l.git.GetPrevBranch() == "" {
 		l.git.ResetToDefaultBranch()
 	}
@@ -35,15 +37,17 @@ func (l *Loop) initRun(ctx context.Context) error {
 		l.state.Write("status", "error")
 		return fmt.Errorf("initial rebase failed: %w", err)
 	}
+
+	// If resuming the same task, mark the branch as already renamed so
+	// prepareBranch doesn't re-rename it on the first iteration.
 	if lastID, _ := l.state.Read("last_task_id"); lastID != "" {
 		l.cfg.TaskBackend.SetResumeTaskID(lastID)
 	}
 	nextInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 	if !isNewTask(l.state, nextInfo.ID, nextInfo.Title) {
 		l.git.SetBranchRenamed(true)
-	} else {
-		l.git.PrepareForNextTask()
 	}
+
 	l.logger.Log("git", "Branch: %s", l.git.GetWorktreeBranch())
 	writeRunBranch(l.cfg.Dirs.RalphDir, l.git.GetWorktreeBranch())
 	return nil

@@ -265,21 +265,14 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.verifier.ResetCounters()
 		}
 
-		if runIteration > 1 && taskChanged {
-			l.git.PrepareForNextTask()
-			if l.git.GetWorktreeBranch() != "" && l.git.GetWorkDir() != l.git.GetProjectDir() {
-				l.setStackHead()
-				if l.git.GetPrevBranch() == "" {
-					l.git.ResetToDefaultBranch()
+		if taskChanged || !l.git.IsBranchRenamed() {
+			if err := l.prepareBranch(ctx, taskID, nextTask); err != nil {
+				if ctx.Err() != nil {
+					l.state.Write("status", "stopped")
+				} else {
+					l.state.Write("status", "error")
 				}
-				if err := l.handleRebase(ctx); err != nil {
-					if ctx.Err() != nil {
-						l.state.Write("status", "stopped")
-					} else {
-						l.state.Write("status", "error")
-					}
-					break
-				}
+				break
 			}
 		}
 
@@ -298,12 +291,6 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.state.Write("status", "running")
 		l.state.Write("last_task", nextTask)
 		l.state.Write("last_task_id", taskID)
-
-		if taskChanged || !l.git.IsBranchRenamed() {
-			l.setStackHead()
-			l.checkoutExistingBranch(taskID, nextTask)
-		}
-		writeRunBranch(l.cfg.Dirs.RalphDir, l.git.GetWorktreeBranch())
 		l.git.TagTaskStart(taskID)
 		updateStreamTask(l.cfg.Dirs.RalphDir, taskID, nextTask, taskInfo.Priority)
 

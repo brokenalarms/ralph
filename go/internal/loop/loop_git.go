@@ -18,6 +18,34 @@ func (l *Loop) handleRebase(ctx context.Context) error {
 	return l.git.EnsureUpToDate(ctx)
 }
 
+// prepareBranch consolidates all branch setup for a task: find stack head,
+// reset to correct base if no stack, rebase onto latest, and checkout or
+// rename the branch for this task. Called once per task change by Run().
+// Also called by initRun for the first iteration on resume.
+//
+// isFirstIteration controls whether PrepareForNextTask is called (skipped
+// on first iteration since initRun handles the resume-vs-new-task logic).
+func (l *Loop) prepareBranch(ctx context.Context, taskID, nextTask string) error {
+	l.git.PrepareForNextTask()
+
+	// Rebase onto latest base when running in a worktree.
+	if l.git.GetWorktreeBranch() != "" && l.git.GetWorkDir() != l.git.GetProjectDir() {
+		l.setStackHead()
+		if l.git.GetPrevBranch() == "" {
+			l.git.ResetToDefaultBranch()
+		}
+		if err := l.handleRebase(ctx); err != nil {
+			return err
+		}
+	} else {
+		l.setStackHead()
+	}
+
+	l.checkoutExistingBranch(taskID, nextTask)
+	writeRunBranch(l.cfg.Dirs.RalphDir, l.git.GetWorktreeBranch())
+	return nil
+}
+
 // mergeWithRetry delegates to git.Manager.MergeWithRetry, passing a CI fix
 // callback that spawns a fix agent. Test overrides via mergeFunc bypass the
 // git module entirely for loop-level tests that only care about the outcome.
