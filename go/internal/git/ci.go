@@ -131,6 +131,11 @@ func RequiredFailedChecks(checks []CICheckResult) []CICheckResult {
 // it's expected stacking behavior and should not count as a merge failure.
 var ErrStackedPRWaiting = fmt.Errorf("stacked PR waiting for base to merge")
 
+// ErrMergeBlockedByInfra is returned when the merge is blocked by branch
+// protection during a CI infrastructure failure. The work is done and the
+// PR is open — the user merges manually when CI recovers.
+var ErrMergeBlockedByInfra = fmt.Errorf("merge blocked by branch protection during CI infrastructure failure")
+
 // MergeConflictError is returned when a PR cannot be merged due to conflicts.
 type MergeConflictError struct {
 	PRNumber string

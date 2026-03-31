@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -165,11 +166,8 @@ func (l *Loop) handlePostSignal(p postSignalParams) postSignalAction {
 			closeReason := "verified complete (no new commits)"
 			ref, _ := l.cfg.TaskBackend.GetExternalRef(p.taskID)
 			if prNum := parsePRNumber(ref); prNum != "" {
-				gh := l.git.GH()
-				if gh != nil {
-					if prState, _ := gh.GetPRState(l.git.GetWorkDir(), prNum); strings.ToUpper(prState) == "MERGED" {
-						closeReason = fmt.Sprintf("PR #%s already merged", prNum)
-					}
+				if prState, _ := l.git.GetPRState(prNum); strings.ToUpper(prState) == "MERGED" {
+					closeReason = fmt.Sprintf("PR #%s already merged", prNum)
 				}
 			}
 			_ = l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", closeReason)
@@ -347,12 +345,8 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 
 	prState := p.prState
 	if prState == "" {
-		gh := l.git.GH()
-		if gh == nil || !gh.Available() {
-			return finalizePRResult{}
-		}
-		looked, err := gh.GetPRState(l.git.GetWorkDir(), p.prNumber)
-		if err != nil {
+		looked, err := l.git.GetPRState(p.prNumber)
+		if err != nil || looked == "" {
 			l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(p.prNumber)}, "Failed to get state: %v", err)
 			return finalizePRResult{}
 		}
@@ -363,8 +357,7 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 
 	if prState == "OPEN" && l.cfg.AutoMerge {
 		l.git.SetLocalTestsPassed(true)
-		gh := l.git.GH()
-		prBase := getPRBase(gh, l.git.GetWorkDir(), p.prNumber)
+		prBase := l.git.GetPRBase(p.prNumber)
 		defaultBranch := l.git.DetectDefaultBranch()
 		if prBase != "" && prBase != defaultBranch {
 			l.logger.Emit(logging.Opts{Domain: "git", Link: l.prLink(p.prNumber)}, "targets %s — stacked, closing bead", prBase)
@@ -372,10 +365,12 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 			l.logger.Emit(logging.Opts{Domain: "git", Link: l.prLink(p.prNumber)}, "targets %s — merging", defaultBranch)
 			var mergeErr error
 			merged, mergeErr = l.mergeWithRetry(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
-			if mergeErr != nil {
+			if errors.Is(mergeErr, git.ErrMergeBlockedByInfra) {
+				l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(p.prNumber)}, "Merge blocked by CI infra — PR stays open, closing bead")
+			} else if mergeErr != nil {
 				l.logger.Warn("git", "Auto-merge: %v", mergeErr)
 			}
-			if !merged {
+			if !merged && !errors.Is(mergeErr, git.ErrMergeBlockedByInfra) {
 				l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(p.prNumber)}, "Merge failed — skipping task")
 				skipTask(l.cfg.TaskBackend, l.state, l.logger, p.taskID, "merge_failed")
 				return finalizePRResult{}

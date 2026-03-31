@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/brokenalarms/ralph/internal/git"
 )
 
 // TestTimeout is the maximum duration RunTests will wait for the test
@@ -218,7 +217,7 @@ type VerifyOpts struct {
 	BeadTitle       string
 	BeadDescription string
 	BeadAcceptance  string
-	GitHub          git.GitHub
+	PRDiff          string // pre-fetched PR diff; empty falls back to iteration diff
 	QueryFn         QueryFunc
 	Model           string
 }
@@ -229,7 +228,7 @@ type VerifyOpts struct {
 // Uses prompts/verify-review.md as the review template when available.
 // When QueryFn is non-nil, LLM calls go through the centralized agent module.
 func LLMVerifyPR(opts VerifyOpts) Result {
-	diff := getPRDiff(opts.Ctx, opts.WorkDir, opts.TaskID, opts.GitHub)
+	diff := opts.PRDiff
 	source := "PR"
 	if diff == "" {
 		diff = opts.Git.DiffFull(opts.HeadBefore, "HEAD")
@@ -283,21 +282,6 @@ Some tasks are implemented through prompt or configuration changes (markdown fil
 Reply with exactly one line: YES or NO followed by a one-sentence reason.`, beadTitle, beadDescription, source, diff)
 }
 
-// getPRDiff finds a PR matching the task ID and returns its diff.
-func getPRDiff(_ context.Context, workDir, taskID string, gh git.GitHub) string {
-	if gh == nil {
-		return ""
-	}
-	prNumber, err := gh.SearchPR(workDir, taskID)
-	if err != nil || prNumber == "" {
-		return ""
-	}
-	diff, err := gh.PRDiff(workDir, prNumber)
-	if err != nil {
-		return ""
-	}
-	return diff
-}
 
 // callLLM sends a prompt to a Claude model and interprets YES/NO response.
 // When queryFn is non-nil, the call goes through the centralized agent module.

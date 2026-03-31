@@ -33,19 +33,6 @@ func (r *promptCapturingFixRunner) StopStreaming() {}
 
 func (r *promptCapturingFixRunner) InjectMessage(_ string) error { return nil }
 
-// stubGitQuerier provides a minimal GitQuerier for Verifier tests,
-// decoupling them from a real git.Manager.
-type stubGitQuerier struct {
-	headRev    string
-	diffStat   string
-	diffFull   string
-	logOneline string
-}
-
-func (s *stubGitQuerier) HeadRev() string                  { return s.headRev }
-func (s *stubGitQuerier) DiffStatRange(_, _ string) string { return s.diffStat }
-func (s *stubGitQuerier) DiffFull(_, _ string) string      { return s.diffFull }
-func (s *stubGitQuerier) LogOneline(_, _ string) string    { return s.logOneline }
 
 func newTestVerifier(t *testing.T, opts ...func(*Verifier)) *Verifier {
 	t.Helper()
@@ -63,7 +50,7 @@ func newTestVerifier(t *testing.T, opts ...func(*Verifier)) *Verifier {
 		RalphDir:   ralphDir,
 	}, VerifierDeps{
 		Logger:      logging.New(nil),
-		Git:         &stubGitQuerier{headRev: "def456"},
+		Git:         &testutil.StubGit{HeadRevValue: "def456"},
 		State:       st,
 		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		Runner:      func() claudeRunner { return &stubRunner{} },

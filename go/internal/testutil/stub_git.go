@@ -48,6 +48,19 @@ type StubGit struct {
 
 	GitHubStub git.GitHub
 
+	// PR stub values.
+	OpenPR       string
+	OpenPRErr    error
+	PRState      string
+	PRStateErr   error
+	OpenBranches []string
+	PRBase       string
+	PRNumber     string
+	PRTitle      string
+	PRURL        string
+	PRHealthy    bool
+	PRHealthMsg  string
+
 	// Call tracking.
 	CommitMessages      []string
 	TagsCreated         []string
@@ -69,8 +82,59 @@ func (s *StubGit) IsBranchRenamed() bool      { return s.BranchRenamed }
 func (s *StubGit) SetBranchRenamed(v bool)    { s.BranchRenamed = v }
 func (s *StubGit) SetLocalTestsPassed(v bool) {}
 
-func (s *StubGit) GH() git.GitHub {
-	return s.GitHubStub
+func (s *StubGit) FindOpenPRForBranch(branch string) (string, error) {
+	if s.OpenPR != "" {
+		return s.OpenPR, s.OpenPRErr
+	}
+	if gh, ok := s.GitHubStub.(*git.StubGitHub); ok && gh != nil {
+		return gh.FindOpenPR(branch, s.RemoteURLValue)
+	}
+	return "", nil
+}
+func (s *StubGit) GetPRState(prNumber string) (string, error) {
+	if s.PRState != "" {
+		return s.PRState, s.PRStateErr
+	}
+	if gh, ok := s.GitHubStub.(*git.StubGitHub); ok && gh != nil {
+		return gh.GetPRState("", prNumber)
+	}
+	return "", nil
+}
+func (s *StubGit) ListOpenPRBranches() ([]string, error) {
+	if len(s.OpenBranches) > 0 {
+		return s.OpenBranches, nil
+	}
+	if gh, ok := s.GitHubStub.(*git.StubGitHub); ok && gh != nil {
+		return gh.ListOpenPRBranches(s.RemoteURLValue)
+	}
+	return nil, nil
+}
+func (s *StubGit) GetPRBase(prNumber string) string {
+	if s.PRBase != "" {
+		return s.PRBase
+	}
+	if gh, ok := s.GitHubStub.(*git.StubGitHub); ok && gh != nil {
+		base, _ := gh.GetPRBase("", prNumber)
+		return base
+	}
+	return ""
+}
+func (s *StubGit) FindPRForBranch(branch string) (string, string, string, error) {
+	if s.PRNumber != "" {
+		return s.PRNumber, s.PRTitle, s.PRURL, nil
+	}
+	if gh, ok := s.GitHubStub.(*git.StubGitHub); ok && gh != nil {
+		return gh.FindPR(branch, "")
+	}
+	return "", "", "", nil
+}
+func (s *StubGit) PRDiffForTask(_ string) string { return "" }
+func (s *StubGit) PRChainIsHealthy(prNumber string) (bool, string) {
+	if s.PRHealthMsg != "" {
+		return s.PRHealthy, s.PRHealthMsg
+	}
+	// Default: healthy
+	return true, ""
 }
 
 func (s *StubGit) HeadRev() string                                    { return s.HeadRevValue }

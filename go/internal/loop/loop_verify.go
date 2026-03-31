@@ -122,11 +122,7 @@ func (l *Loop) findPRInfo(workDir string) (number, title, url string) {
 		n, t := l.findPRInfoFunc(workDir)
 		return n, t, ""
 	}
-	gh := l.git.GH()
-	if gh == nil {
-		return "", "", ""
-	}
-	num, t, u, err := gh.FindPR(l.git.GetWorktreeBranch(), workDir)
+	num, t, u, err := l.git.FindPRForBranch(l.git.GetWorktreeBranch())
 	if err != nil {
 		return "", "", ""
 	}

@@ -341,18 +341,15 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	}
 	if status == CIFailed {
 		if m.LocalTestsPassed && m.isInfrastructureFailure(ctx, prNumber) {
-			m.Logger.Log("ci", "CI infrastructure failure on %s — local tests passed, merging anyway", pr)
-		} else {
-			return false, &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
+			m.Logger.Log("ci", "CI infrastructure failure on %s — local tests passed, PR stays open", pr)
+			return false, ErrMergeBlockedByInfra
 		}
+		return false, &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
 	}
 	if status == CIPassed {
 		m.Logger.Log("ci", "CI passed for %s — merging", pr)
 	}
 
-	// Check if main moved while CI was running. If the branch needs
-	// updating, return a merge conflict error so MergeWithRetry loops
-	// back through rebase+push+CI.
 	if m.branchNeedsUpdate(prNumber, repoURL) {
 		m.Logger.Log("git", "Main moved while CI was running — will rebase and retry")
 		return false, &MergeConflictError{PRNumber: prNumber}
@@ -466,15 +463,18 @@ func (m *Manager) executeMerge(ctx context.Context, prNumber, repoURL string) (b
 		opts.Subject = fmt.Sprintf("%s (#%s)", prTitle, prNumber)
 	}
 
-	mergeOutput, mergeErr := gh.MergePR(prNumber, repoURL, opts)
-	if mergeErr == nil {
+	result := gh.MergePR(prNumber, repoURL, opts)
+	if result.Merged {
 		return m.postMergeUpdate(nwo, prNumber)
 	}
 
-	// Check CI-gated errors before merge conflicts: "not mergeable" can
-	// mean either, but CI-gated is more specific and actionable.
-	if isCIGatedError(mergeOutput) {
-		m.Logger.Log("ci", "%s blocked by branch protection — waiting for CI...", pr)
+	if result.Conflict {
+		m.Logger.Warn("git", "%s has merge conflicts — attempting rebase", pr)
+		return false, &MergeConflictError{PRNumber: prNumber}
+	}
+
+	if result.Blocked {
+		m.Logger.Log("ci", "%s blocked by branch protection: %s — waiting for CI...", pr, result.Message)
 		checks, status, waitErr := m.AwaitCI(ctx, prNumber, repoURL, "")
 		if waitErr != nil {
 			return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, waitErr)
@@ -484,22 +484,17 @@ func (m *Manager) executeMerge(ctx context.Context, prNumber, repoURL string) (b
 		}
 		if status == CIPassed {
 			m.Logger.Log("ci", "CI passed for %s — retrying merge", pr)
-			retryOutput, retryErr := gh.MergePR(prNumber, repoURL, opts)
-			if retryErr == nil {
+			retry := gh.MergePR(prNumber, repoURL, opts)
+			if retry.Merged {
 				return m.postMergeUpdate(nwo, prNumber)
 			}
-			m.Logger.Warn("git", "Merge retry failed for %s: %s", pr, retryOutput)
-			return false, fmt.Errorf("merge retry failed for PR #%s after CI passed", prNumber)
+			m.Logger.Warn("git", "Merge retry failed for %s: %s", pr, retry.Message)
+			return false, fmt.Errorf("merge retry failed for PR #%s after CI passed: %s", prNumber, retry.Message)
 		}
 	}
 
-	if isMergeConflictError(mergeOutput) {
-		m.Logger.Warn("git", "%s has merge conflicts — attempting rebase", pr)
-		return false, &MergeConflictError{PRNumber: prNumber}
-	}
-
-	m.Logger.Warn("git", "Auto-merge failed for %s: %s", pr, mergeOutput)
-	return false, fmt.Errorf("auto-merge failed for PR #%s", prNumber)
+	m.Logger.Warn("git", "Auto-merge failed for %s: %s", pr, result.Message)
+	return false, fmt.Errorf("auto-merge failed for PR #%s: %s", prNumber, result.Message)
 }
 
 // GetCIFailureLog retrieves the failed CI run's log output for the given PR.
@@ -627,6 +622,11 @@ func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool
 		merged, err := m.AutoMergeCurrentBranch(ctx)
 		if err == nil {
 			return merged, nil
+		}
+
+		// Infra failure: PR stays open, don't retry — move to next task.
+		if errors.Is(err, ErrMergeBlockedByInfra) {
+			return false, err
 		}
 
 		if attempt > 0 {
