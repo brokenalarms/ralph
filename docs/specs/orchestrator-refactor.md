@@ -331,6 +331,24 @@ This is a sequential refactor — each step changes interfaces the next depends 
 8. **Delete dead code.** Remove functions, methods, and interface members
    that no longer have callers.
 
+## Follow-up: State Module Owns All .ralph/ File Management
+
+The orchestrator currently makes bare `os.WriteFile`, `touchFile`,
+`updateStreamTask`, `writeRunBranch`, `recordCompletedTask`, and
+`checkStopFile` calls directly. These are all state transitions persisted
+as files in `.ralph/`. The state module should own all of them.
+
+From the orchestrator's perspective, there is no difference between
+writing `state.json` and writing `.signal_complete` — both are state
+transitions. The orchestrator says "task started" or "signal complete"
+and the state module handles the concrete file operations.
+
+Signals (`.signal_complete`, `feedback`, `stop`) are IPC between the
+agent subprocess and the orchestrator. They can be composed internally
+by the state module — the orchestrator calls `state.CheckStop()` not
+`checkStopFile()`, calls `state.BeginIteration()` not `touchFile` +
+`updateStreamTask` + `writeRunBranch` separately.
+
 ## Follow-up: Module Boundary Enforcement
 
 Every module currently uses a god object pattern (e.g. `git.Manager`,
