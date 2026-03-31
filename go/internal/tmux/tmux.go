@@ -82,7 +82,7 @@ func (s *Session) Kill() {
 
 // HasSession returns true if the tmux session still exists.
 func (s *Session) HasSession() bool {
-	return exec.Command("tmux", "has-session", "-t", s.Name).Run() == nil
+	return sessionExists(s.Name)
 }
 
 // PaneTitle returns the PaneTitle manager for the stream pane.
@@ -250,12 +250,20 @@ func touchFile(path string) {
 	}
 }
 
+// BaseSessionName returns the canonical session name for a project directory:
+// "{basename}-loop" with dots and colons replaced by hyphens. This is the
+// name used by `ralph loop --tmux` and what `ralph attach` should look for
+// when deciding whether to reuse an existing session.
+func BaseSessionName(projectDir string) string {
+	return sanitizeSessionName(filepath.Base(projectDir)) + "-loop"
+}
+
 // SessionName builds a tmux-safe session name from a project directory path.
 // The base name is "{basename}-loop". Characters invalid in tmux session names
 // (dots and colons) are replaced with hyphens. If a session with that name
 // already exists, a numeric suffix is appended (e.g. "ralph-loop-2").
 func SessionName(projectDir string) string {
-	base := sanitizeSessionName(filepath.Base(projectDir)) + "-loop"
+	base := BaseSessionName(projectDir)
 	if !sessionExists(base) {
 		return base
 	}

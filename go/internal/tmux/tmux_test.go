@@ -183,6 +183,67 @@ func TestSessionName_BasenameLoop(t *testing.T) {
 	}
 }
 
+// Verifies that BaseSessionName always returns the same canonical name
+// regardless of whether that session already exists, so ralph attach never
+// creates ralph-loop-2 etc. when the loop session is already running.
+func TestBaseSessionName_ConsistentRegardlessOfExistence(t *testing.T) {
+	orig := sessionExists
+	defer func() { sessionExists = orig }()
+
+	sessionExists = func(string) bool { return false }
+	nameWhenAbsent := BaseSessionName("/home/user/projects/ralph")
+
+	sessionExists = func(string) bool { return true }
+	nameWhenPresent := BaseSessionName("/home/user/projects/ralph")
+
+	if nameWhenAbsent != "ralph-loop" {
+		t.Errorf("BaseSessionName with absent session = %q, want %q", nameWhenAbsent, "ralph-loop")
+	}
+	if nameWhenPresent != "ralph-loop" {
+		t.Errorf("BaseSessionName with existing session = %q, want %q", nameWhenPresent, "ralph-loop")
+	}
+}
+
+// Verifies that HasSession delegates to the sessionExists stub, so callers
+// (including ralph attach) can detect a running --tmux loop without invoking tmux.
+func TestHasSession_UsesSessionExistsStub(t *testing.T) {
+	orig := sessionExists
+	defer func() { sessionExists = orig }()
+
+	s := &Session{Name: "ralph-loop"}
+
+	sessionExists = func(name string) bool { return name == "ralph-loop" }
+	if !s.HasSession() {
+		t.Error("HasSession should return true when sessionExists confirms the session exists")
+	}
+
+	sessionExists = func(string) bool { return false }
+	if s.HasSession() {
+		t.Error("HasSession should return false when sessionExists reports no session")
+	}
+}
+
+// Verifies that SessionName increments the suffix when the base name is taken,
+// but BaseSessionName never increments — proving that ralph attach will always
+// look for the same name that ralph loop --tmux created.
+func TestSessionName_IncrementsWhereBaseSessionNameDoesNot(t *testing.T) {
+	orig := sessionExists
+	defer func() { sessionExists = orig }()
+
+	// Simulate base name already taken (loop is running with --tmux).
+	sessionExists = func(name string) bool { return name == "myproject-loop" }
+
+	suffixed := SessionName("/projects/myproject")
+	if suffixed != "myproject-loop-2" {
+		t.Errorf("SessionName with existing base = %q, want %q", suffixed, "myproject-loop-2")
+	}
+
+	base := BaseSessionName("/projects/myproject")
+	if base != "myproject-loop" {
+		t.Errorf("BaseSessionName with existing base = %q, want %q", base, "myproject-loop")
+	}
+}
+
 // Verifies that sanitizeSessionName replaces dots and colons (which are
 // invalid in tmux session names) with hyphens.
 func TestSanitizeSessionName(t *testing.T) {
