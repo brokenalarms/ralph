@@ -335,8 +335,8 @@ func TestVerifier_TryFixCI_PromptContainsCILogAndCheckNames(t *testing.T) {
 	ciErr := &git.CIFailureError{
 		PRNumber: "42",
 		Failures: []git.CICheckResult{
-			{Name: "typecheck", State: "FAILURE", Bucket: "fail"},
-			{Name: "test", State: "FAILURE", Bucket: "fail"},
+			{Name: "typecheck", State: "FAILURE", Bucket: "fail", IsRequired: true},
+			{Name: "test", State: "FAILURE", Bucket: "fail", IsRequired: true},
 		},
 	}
 	ciLog := "src/app.tsx(3,1): error TS2307: Cannot find module './MissingSVG'"
@@ -368,12 +368,82 @@ func TestVerifier_TryFixCI_NoSignal_ReturnsFalse(t *testing.T) {
 
 	ciErr := &git.CIFailureError{
 		PRNumber: "42",
-		Failures: []git.CICheckResult{{Name: "build", State: "FAILURE", Bucket: "fail"}},
+		Failures: []git.CICheckResult{{Name: "build", State: "FAILURE", Bucket: "fail", IsRequired: true}},
 	}
 
 	result := v.TryFixCI(context.Background(), "build failed", ciErr, "Build app", t.TempDir(), filepath.Join(t.TempDir(), "raw.log"))
 
 	if result {
 		t.Fatal("expected TryFixCI to return false when fix agent doesn't signal")
+	}
+}
+
+// TryFixCI filters out optional/deploy checks and only passes required
+// check names to the fix agent prompt.
+func TestVerifier_TryFixCI_OnlyPassesRequiredChecks(t *testing.T) {
+	var capturedPrompt string
+	v := newTestVerifier(t, func(v *Verifier) {
+		ciTemplate := "CHECKS: {{FAILED_CHECKS}}\nLOG: {{CI_LOG}}\nSIGNAL: {{SIGNAL_COMPLETE}}\nTASK: {{TASK_TITLE}}"
+		os.WriteFile(filepath.Join(v.cfg.PromptsDir, "verify-ci.md"), []byte(ciTemplate), 0o644)
+
+		v.deps.NewRunner = func() claudeRunner {
+			return &promptCapturingFixRunner{
+				onPrompt: func(p string) { capturedPrompt = p },
+				result:   stubResult(true, "fixed"),
+			}
+		}
+	})
+
+	ciErr := &git.CIFailureError{
+		PRNumber: "42",
+		Failures: []git.CICheckResult{
+			{Name: "typecheck", State: "FAILURE", Bucket: "fail", IsRequired: true},
+			{Name: "deploy/netlify", State: "FAILURE", Bucket: "fail", IsRequired: false},
+			{Name: "Header rules", State: "FAILURE", Bucket: "fail", IsRequired: false},
+		},
+	}
+
+	result := v.TryFixCI(context.Background(), "error log", ciErr, "Build app", t.TempDir(), filepath.Join(t.TempDir(), "raw.log"))
+
+	if !result {
+		t.Fatal("expected TryFixCI to return true when fix agent signals")
+	}
+	if !strings.Contains(capturedPrompt, "typecheck") {
+		t.Errorf("prompt should contain required check name, got: %s", capturedPrompt)
+	}
+	if strings.Contains(capturedPrompt, "deploy/netlify") {
+		t.Errorf("prompt should NOT contain optional check names, got: %s", capturedPrompt)
+	}
+	if strings.Contains(capturedPrompt, "Header rules") {
+		t.Errorf("prompt should NOT contain optional check names, got: %s", capturedPrompt)
+	}
+}
+
+// TryFixCI returns false without spawning a fix agent when only optional
+// checks failed — there's nothing the fix agent can fix.
+func TestVerifier_TryFixCI_OnlyOptionalFailed_SkipsAgent(t *testing.T) {
+	agentSpawned := false
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.deps.NewRunner = func() claudeRunner {
+			agentSpawned = true
+			return &stubRunner{result: stubResult(true, "fixed")}
+		}
+	})
+
+	ciErr := &git.CIFailureError{
+		PRNumber: "42",
+		Failures: []git.CICheckResult{
+			{Name: "deploy/netlify", State: "FAILURE", Bucket: "fail", IsRequired: false},
+			{Name: "Pages changed", State: "FAILURE", Bucket: "fail", IsRequired: false},
+		},
+	}
+
+	result := v.TryFixCI(context.Background(), "deploy log", ciErr, "Build app", t.TempDir(), filepath.Join(t.TempDir(), "raw.log"))
+
+	if result {
+		t.Fatal("expected TryFixCI to return false when only optional checks failed")
+	}
+	if agentSpawned {
+		t.Fatal("fix agent should not be spawned when only optional checks failed")
 	}
 }
