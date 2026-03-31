@@ -15,7 +15,25 @@ import (
 // initRun restores worktree state on resume and syncs to the correct base.
 // Derives the stack head from completed beads, then rebases onto it
 // (or the default branch if no stack exists).
-func (l *Loop) initRun(ctx context.Context) error {
+// initialize performs all one-time setup: worktree sync, limiter init,
+// skipped task loading, and cleanup of stale files.
+func (l *Loop) initialize(ctx context.Context) error {
+	if err := l.limiter.Init(); err != nil {
+		return fmt.Errorf("rate limiter init: %w", err)
+	}
+	l.state.WriteConfig(l.cfg.MaxIterations)
+
+	if skipped, err := l.state.GetSkippedTasks(); err == nil && len(skipped) > 0 {
+		l.cfg.TaskBackend.SetSkippedIDs(skipped)
+		l.logger.Log("beads", "Loaded %d skipped tasks from state", len(skipped))
+	}
+
+	os.Remove(filepath.Join(l.cfg.Dirs.RalphDir, ".completed-tasks"))
+
+	return l.initWorktree(ctx)
+}
+
+func (l *Loop) initWorktree(ctx context.Context) error {
 	if l.git.GetWorktreeBranch() == "" || l.git.GetWorkDir() == l.git.GetProjectDir() {
 		return nil
 	}

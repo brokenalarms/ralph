@@ -15,6 +15,81 @@ import (
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
+// runAndComplete builds the prompt, runs the agent, handles retryable
+// failures, analyzes the outcome, and processes the signal. Returns the
+// loopAction Run() should take.
+func (l *Loop) runAndComplete(ctx context.Context, task taskContext, runIteration int) loopAction {
+	prep, ok := l.prepareAndBuildPrompt(ctx, task.id, task.title)
+	if !ok {
+		return actionDone
+	}
+
+	taskStart := time.Now()
+	result, runErr := l.runner.Run(claude.RunConfig{
+		Ctx:                 ctx,
+		WorkDir:             prep.workDir,
+		RalphDir:            l.cfg.Dirs.RalphDir,
+		Prompt:              prep.fullPrompt,
+		TaskID:              task.id,
+		RawLog:              prep.rawLogPath,
+		LogFile:             filepath.Join(l.cfg.Dirs.RalphDir, "loop.log"),
+		Quiet:               l.cfg.Quiet,
+		Verbose:             l.cfg.Verbose,
+		Signals:             l.signals,
+		PollInterval:        2 * time.Second,
+		IdleTimeout:         l.cfg.IdleTimeout,
+		IdleTimeoutProgress: l.cfg.IdleTimeoutProgress,
+		HasProgress: func() bool {
+			return l.git.HasDiff() || l.git.HeadRev() != prep.headBefore
+		},
+		OnSignal: func(summary string) bool {
+			return l.onSignal(signalParams{
+				ctx:        ctx,
+				headBefore: prep.headBefore,
+				workDir:    prep.workDir,
+				rawLogPath: prep.rawLogPath,
+				taskID:     task.id,
+				nextTask:   task.title,
+			})
+		},
+		FeedbackFile: filepath.Join(l.cfg.Dirs.RalphDir, "feedback"),
+	})
+
+	runAction := l.handleRunResult(ctx, result, runErr, task.id, task.title, prep.headBefore, runIteration)
+	if runAction != actionProceed {
+		return runAction
+	}
+	elapsed := time.Since(taskStart)
+	l.limiter.Increment()
+
+	diffStat, halt := l.processRunOutcome(result, elapsed, runIteration, prep, task.id, task.title)
+	if halt {
+		return actionDone
+	}
+
+	if result.SignalDetected {
+		signalAction := l.handlePostSignal(postSignalParams{
+			ctx:        ctx,
+			result:     result,
+			headBefore: prep.headBefore,
+			workDir:    prep.workDir,
+			rawLogPath: prep.rawLogPath,
+			taskID:     task.id,
+			nextTask:   task.title,
+			diffStat:   diffStat,
+		})
+		switch signalAction {
+		case signalRetry, signalSkipped:
+			return actionRetry
+		case signalEvolve:
+			return actionDone
+		}
+	}
+
+	l.git.TagTaskEnd(task.id)
+	return actionProceed
+}
+
 // postSignalAction describes the outcome of post-signal processing.
 type postSignalAction int
 

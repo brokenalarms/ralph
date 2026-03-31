@@ -2,8 +2,6 @@ package loop
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -164,23 +162,13 @@ func (l *Loop) wasCompletedThisSession(taskID string) bool {
 // (all tasks done, max iterations reached, or stopped). Returns an error
 // for unrecoverable failures.
 func (l *Loop) Run(ctx context.Context) error {
-	if err := l.initRun(ctx); err != nil {
+	if err := l.initialize(ctx); err != nil {
 		return err
-	}
-	if err := l.limiter.Init(); err != nil {
-		return fmt.Errorf("rate limiter init: %w", err)
-	}
-	l.state.WriteConfig(l.cfg.MaxIterations)
-
-	if skipped, err := l.state.GetSkippedTasks(); err == nil && len(skipped) > 0 {
-		l.cfg.TaskBackend.SetSkippedIDs(skipped)
-		l.logger.Log("beads", "Loaded %d skipped tasks from state", len(skipped))
 	}
 
 	var runIteration int
 	st, _ := l.state.Load()
 	iteration := st.Iteration
-	os.Remove(filepath.Join(l.cfg.Dirs.RalphDir, ".completed-tasks"))
 
 	for {
 		// ── Task selection ──
@@ -221,90 +209,19 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.beginIteration(task, iteration)
 
 		// ── Resume check: does a PR already exist for this task? ──
-		if resumed := l.resumeViaPR(ctx, task.id, task.title); resumed {
+		if l.resumeViaPR(ctx, task.id, task.title) {
 			l.git.TagTaskEnd(task.id)
-			runIteration++
-			iteration++
 			continue
 		}
 
-		// ── Build prompt and run agent ──
-		prep, ok := l.prepareAndBuildPrompt(ctx, task.id, task.title)
-		if !ok {
-			break
-		}
-
-		taskStart := time.Now()
-		result, runErr := l.runner.Run(claude.RunConfig{
-			Ctx:                 ctx,
-			WorkDir:             prep.workDir,
-			RalphDir:            l.cfg.Dirs.RalphDir,
-			Prompt:              prep.fullPrompt,
-			TaskID:              task.id,
-			RawLog:              prep.rawLogPath,
-			LogFile:             filepath.Join(l.cfg.Dirs.RalphDir, "loop.log"),
-			Quiet:               l.cfg.Quiet,
-			Verbose:             l.cfg.Verbose,
-			Signals:             l.signals,
-			PollInterval:        2 * time.Second,
-			IdleTimeout:         l.cfg.IdleTimeout,
-			IdleTimeoutProgress: l.cfg.IdleTimeoutProgress,
-			HasProgress: func() bool {
-				return l.git.HasDiff() || l.git.HeadRev() != prep.headBefore
-			},
-			OnSignal: func(summary string) bool {
-				return l.onSignal(signalParams{
-					ctx:        ctx,
-					headBefore: prep.headBefore,
-					workDir:    prep.workDir,
-					rawLogPath: prep.rawLogPath,
-					taskID:     task.id,
-					nextTask:   task.title,
-				})
-			},
-			FeedbackFile: filepath.Join(l.cfg.Dirs.RalphDir, "feedback"),
-		})
-
-		// ── Handle retryable failures (offline, rate limit, idle, feedback) ──
-		runAction := l.handleRunResult(ctx, result, runErr, task.id, task.title, prep.headBefore, runIteration)
-		if runAction == actionRetry {
+		// ── Run agent and handle outcome ──
+		action = l.runAndComplete(ctx, task, runIteration)
+		if action == actionRetry {
 			continue
 		}
-		if runAction == actionDone {
+		if action == actionDone {
 			break
 		}
-		elapsed := time.Since(taskStart)
-		l.limiter.Increment()
-
-		// ── Post-completion: analyze, verify, push, merge, close ──
-		diffStat, halt := l.processRunOutcome(result, elapsed, runIteration, prep, task.id, task.title)
-		if halt {
-			return nil
-		}
-
-		if result.SignalDetected {
-			signalAction := l.handlePostSignal(postSignalParams{
-				ctx:        ctx,
-				result:     result,
-				headBefore: prep.headBefore,
-				workDir:    prep.workDir,
-				rawLogPath: prep.rawLogPath,
-				taskID:     task.id,
-				nextTask:   task.title,
-				diffStat:   diffStat,
-			})
-
-			switch signalAction {
-			case signalSkipped:
-				continue
-			case signalRetry:
-				continue
-			case signalEvolve:
-				return nil
-			}
-		}
-
-		l.git.TagTaskEnd(task.id)
 	}
 
 	return nil
