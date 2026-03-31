@@ -664,6 +664,49 @@ func TestAwaitCI_EmptySHASkipsVerification(t *testing.T) {
 	}
 }
 
+// awaitHeadSHA logs progress messages while polling when the SHA does not
+// match immediately, so long-running retarget waits are not silent.
+func TestAwaitHeadSHA_LogsProgressWhilePolling(t *testing.T) {
+	stubCISleep(t)
+
+	origInterval := awaitHeadSHAProgressInterval
+	awaitHeadSHAProgressInterval = 0 // trigger progress log on every poll
+	t.Cleanup(func() { awaitHeadSHAProgressInterval = origInterval })
+
+	var shaCalls atomic.Int32
+	pollGH := &pollableGitHub{
+		StubGitHub: StubGitHub{
+			Checks: []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		},
+		listChecks: func(pr, repo string) ([]CICheckResult, error) {
+			return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}, nil
+		},
+		getPRHeadSHA: func(workDir, prNumber string) (string, error) {
+			n := shaCalls.Add(1)
+			if n < 3 {
+				return "stalesha", nil
+			}
+			return "targetsha", nil
+		},
+	}
+	log := &testLog{}
+	mgr := &Manager{GitHub: pollGH, Logger: log}
+
+	_, status, err := mgr.AwaitCI(context.Background(), "55", "https://github.com/owner/repo", "targetsha")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+
+	// At least one "Still waiting" progress log must appear — the SHA polling
+	// loop is not silent during a long retarget wait.
+	if !log.contains("Still waiting") {
+		t.Errorf("expected progress log during SHA polling, got: %v", log.messages)
+	}
+}
+
 // pollableGitHub wraps StubGitHub but allows overriding ListChecks
 // with a function that changes behavior across calls.
 type pollableGitHub struct {

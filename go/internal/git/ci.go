@@ -183,12 +183,19 @@ func (m *Manager) AwaitCI(ctx context.Context, prNumber, repoURL, expectedSHA st
 	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
 }
 
+// awaitHeadSHAProgressInterval controls how often awaitHeadSHA emits a
+// progress log while polling. Tests override this to trigger logging
+// without waiting for real wall time.
+var awaitHeadSHAProgressInterval = 10 * time.Second
+
 // awaitHeadSHA polls until the PR HEAD SHA matches expectedSHA.
 func (m *Manager) awaitHeadSHA(ctx context.Context, gh GitHub, prNumber, nwo, expectedSHA string) error {
 	pr := logging.PRLink(nwo, prNumber)
 	m.Logger.Log("ci", "Waiting for %s HEAD to reach %s...", pr, expectedSHA[:min(7, len(expectedSHA))])
 	deadline := time.Now().Add(DefaultCIPollTimeout)
+	start := time.Now()
 	interval := DefaultCIPollInterval
+	lastProgress := time.Now()
 	for {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("PR HEAD did not reach %s within %v", expectedSHA[:min(7, len(expectedSHA))], DefaultCIPollTimeout)
@@ -203,6 +210,10 @@ func (m *Manager) awaitHeadSHA(ctx context.Context, gh GitHub, prNumber, nwo, ex
 		}
 		<-ciSleep(interval)
 		interval = nextBackoff(interval)
+		if time.Since(lastProgress) >= awaitHeadSHAProgressInterval {
+			m.Logger.Log("ci", "Still waiting for %s HEAD... (%s elapsed)", pr, time.Since(start).Round(time.Second))
+			lastProgress = time.Now()
+		}
 	}
 }
 

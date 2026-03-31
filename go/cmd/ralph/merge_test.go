@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -258,5 +259,77 @@ func TestRunMerge_BypassRulesAdminFallbackOn405(t *testing.T) {
 	code := runMerge(context.Background(), []stackPR{{number: "1", head: "pr1"}}, workDir, "main", gm, true, logging.New(nil))
 	if code != 0 {
 		t.Errorf("runMerge with bypassRules+Blocked returned %d, expected 0 (admin fallback)", code)
+	}
+}
+
+// Proves: when MergeResult.Blocked=true without --bypass-rules, runMerge returns
+// non-zero and logs the block message so the user knows why the merge stopped.
+func TestRunMerge_BlockedWithoutBypassLogs(t *testing.T) {
+	workDir, _ := setupStackRepo(t)
+
+	var logBuf bytes.Buffer
+	ghStub := &trackingGH{
+		StubGitHub: &git.StubGitHub{
+			IsAvailable: true,
+			MergeResult: git.MergeResult{Blocked: true, Message: "requires admin approval"},
+			Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
+		},
+	}
+
+	ralphDir := filepath.Join(workDir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	gm := &git.Manager{
+		ProjectDir: workDir,
+		WorkDir:    workDir,
+		RalphDir:   ralphDir,
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.NewWithWriter(&logBuf),
+		GitHub:     ghStub,
+		BaseBranch: "main",
+	}
+
+	code := runMerge(context.Background(), []stackPR{{number: "1", head: "pr1"}}, workDir, "main", gm, false, logging.NewWithWriter(&logBuf))
+	if code == 0 {
+		t.Errorf("runMerge with Blocked should return non-zero, got 0")
+	}
+	if !strings.Contains(logBuf.String(), "requires admin approval") {
+		t.Errorf("expected Blocked message in output, got: %s", logBuf.String())
+	}
+}
+
+// Proves: when MergeResult.Conflict=true, runMerge returns non-zero with a
+// conflict-specific error message rather than a generic merge failure.
+func TestRunMerge_ConflictLogsDistinctMessage(t *testing.T) {
+	workDir, _ := setupStackRepo(t)
+
+	var logBuf bytes.Buffer
+	ghStub := &trackingGH{
+		StubGitHub: &git.StubGitHub{
+			IsAvailable: true,
+			MergeResult: git.MergeResult{Conflict: true},
+			Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
+		},
+	}
+
+	ralphDir := filepath.Join(workDir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	gm := &git.Manager{
+		ProjectDir: workDir,
+		WorkDir:    workDir,
+		RalphDir:   ralphDir,
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.NewWithWriter(&logBuf),
+		GitHub:     ghStub,
+		BaseBranch: "main",
+	}
+
+	code := runMerge(context.Background(), []stackPR{{number: "1", head: "pr1"}}, workDir, "main", gm, false, logging.NewWithWriter(&logBuf))
+	if code == 0 {
+		t.Errorf("runMerge with Conflict should return non-zero, got 0")
+	}
+	if !strings.Contains(logBuf.String(), "merge conflicts") {
+		t.Errorf("expected conflict-specific message in output, got: %s", logBuf.String())
 	}
 }
