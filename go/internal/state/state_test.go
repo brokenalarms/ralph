@@ -310,7 +310,6 @@ func TestState_TestResultFieldsRoundTrip(t *testing.T) {
 	st := NewStore(dir)
 
 	st.Write("last_test_result", "pass")
-	st.Write("last_test_output", "all 42 tests passed")
 	st.Write("last_test_time", "2026-03-22T10:00:00Z")
 
 	s, err := st.Load()
@@ -319,9 +318,6 @@ func TestState_TestResultFieldsRoundTrip(t *testing.T) {
 	}
 	if s.LastTestResult != "pass" {
 		t.Errorf("LastTestResult = %q, want %q", s.LastTestResult, "pass")
-	}
-	if s.LastTestOutput != "all 42 tests passed" {
-		t.Errorf("LastTestOutput = %q, want %q", s.LastTestOutput, "all 42 tests passed")
 	}
 	if s.LastTestTime != "2026-03-22T10:00:00Z" {
 		t.Errorf("LastTestTime = %q, want %q", s.LastTestTime, "2026-03-22T10:00:00Z")
@@ -441,7 +437,6 @@ func TestState_TestResultFieldsInJSON(t *testing.T) {
 	s := State{
 		Status:         "running",
 		LastTestResult: "fail",
-		LastTestOutput: "FAIL: TestFoo",
 		LastTestTime:   "2026-03-22T11:00:00Z",
 	}
 	data, err := json.Marshal(s)
@@ -449,10 +444,13 @@ func TestState_TestResultFieldsInJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := string(data)
-	for _, field := range []string{"last_test_result", "last_test_output", "last_test_time"} {
+	for _, field := range []string{"last_test_result", "last_test_time"} {
 		if !strings.Contains(raw, field) {
 			t.Errorf("expected %q in JSON output: %s", field, raw)
 		}
+	}
+	if strings.Contains(raw, "last_test_output") {
+		t.Errorf("last_test_output should not appear in JSON output: %s", raw)
 	}
 }
 
