@@ -950,7 +950,7 @@ func TestHandleLoop_RefusesDuplicateLoop(t *testing.T) {
 	os.MkdirAll(ralphDir, 0o755)
 
 	// Start a child process so the PID is alive but not ours.
-	cmd := exec.Command("sleep", "60")
+	cmd := exec.Command("sleep", "1")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start sleep: %v", err)
 	}

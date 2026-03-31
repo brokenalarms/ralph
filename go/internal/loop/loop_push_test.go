@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -317,9 +316,11 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 		return "", nil
 	}
 
-	// Cancel after entering wait to prevent hanging.
+	waitEntered := make(chan struct{}, 1)
+	l.onWaitFunc = func() { waitEntered <- struct{}{} }
+
 	go func() {
-		time.Sleep(2 * time.Second)
+		<-waitEntered
 		cancel()
 	}()
 
@@ -457,8 +458,11 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 		return true, nil
 	}
 
+	waitEntered := make(chan struct{}, 1)
+	l.onWaitFunc = func() { waitEntered <- struct{}{} }
+
 	go func() {
-		time.Sleep(2 * time.Second)
+		<-waitEntered
 		cancel()
 	}()
 
