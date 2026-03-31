@@ -41,7 +41,7 @@ type postSignalParams struct {
 // work, pushes a PR, merges if configured, and closes the bead. Returns
 // the action Run() should take. Callers pass runIteration and iteration
 // pointers so the no-commits path can increment them.
-func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int) postSignalAction {
+func (l *Loop) handlePostSignal(p postSignalParams) postSignalAction {
 	if timeout := l.cfg.PostSignalTimeout; timeout > 0 {
 		ctx, cancel := context.WithTimeout(p.ctx, timeout)
 		defer cancel()
@@ -117,8 +117,6 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 		if l.cfg.Notify {
 			notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
 		}
-		*runIteration++
-		*iteration++
 		return signalSkipped
 	}
 
@@ -447,45 +445,34 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 }
 
 // runResultAction describes what Run() should do after handling the Claude result.
-type runResultAction int
-
-const (
-	resultProceed   runResultAction = iota // normal: continue to signal check
-	resultRetry                            // decrement counters and continue
-	resultBreak                            // break out of loop
-)
-
 // handleRunResult processes errors and retryable conditions from a Claude
 // run (offline, feedback kill, idle timeout, rate limit). Returns the
-// action Run() should take.
+// loopAction Run() should take. When actionRetry is returned, the caller
+// is responsible for not counting this iteration.
 func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr error,
-	taskID, nextTask, headBefore string, runIteration, iteration *int) runResultAction {
+	taskID, nextTask, headBefore string, runIteration int) loopAction {
 
 	if runErr != nil {
 		if !l.isOnlineFunc() {
 			l.logger.Warn("llm", "Claude failed — internet appears down")
 			if !l.waitForInternetFunc(ctx, l.logger) {
-				return resultBreak
+				return actionDone
 			}
-			*runIteration--
-			*iteration--
-			return resultRetry
+			return actionRetry
 		}
-		l.logger.Warn("llm", "Claude failed on iteration %d, continuing...", *runIteration)
+		l.logger.Warn("llm", "Claude failed on iteration %d, continuing...", runIteration)
 	}
 	if result.FeedbackKill {
-		l.logger.Warn("llm", "Restarting iteration %d — user feedback received", *runIteration)
+		l.logger.Warn("llm", "Restarting iteration %d — user feedback received", runIteration)
 		diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
 		l.attempts.Record(taskID, nextTask,
 			"Killed: user feedback received (see bead notes for content)",
 			diffStat,
 			"user_feedback: check bead notes for details")
-		*runIteration--
-		*iteration--
-		return resultRetry
+		return actionRetry
 	}
 	if result.IdleTimeout {
-		l.logger.Warn("llm", "Restarting iteration %d after idle timeout", *runIteration)
+		l.logger.Warn("llm", "Restarting iteration %d after idle timeout", runIteration)
 		diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
 		l.attempts.Record(taskID, nextTask,
 			"Killed: idle timeout (no output for configured duration)",
@@ -495,11 +482,9 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 		if count >= attempts.MaxIdleTimeoutFailures {
 			l.logger.Warn("llm", "Idle timeout %d times for %s — skipping task", count, taskID)
 			skipTask(l.cfg.TaskBackend, l.state, l.logger, taskID, "idle_timeout_max_failures")
-			return resultRetry
+			return actionRetry
 		}
-		*runIteration--
-		*iteration--
-		return resultRetry
+		return actionRetry
 	}
 	if result.RateLimited {
 		waitDur := claude.FormatWaitDuration(time.Until(result.ResetAt))
@@ -509,14 +494,12 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 		})
 		if err != nil {
 			l.logger.Warn("llm", "Rate limit wait interrupted: %v", err)
-			return resultBreak
+			return actionDone
 		}
 		l.logger.Success("llm", "Rate limit reset — resuming")
-		*runIteration--
-		*iteration--
-		return resultRetry
+		return actionRetry
 	}
 
-	return resultProceed
+	return actionProceed
 }
 

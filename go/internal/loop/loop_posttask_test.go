@@ -50,7 +50,6 @@ func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	runIter, iter := 1, 1
 	action := l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
@@ -60,7 +59,7 @@ func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
 		taskID:     "ralph-xyz",
 		nextTask:   "Fix auth bug",
 		diffStat:   "",
-	}, &runIter, &iter)
+	})
 
 	if action != signalComplete {
 		t.Errorf("expected signalComplete, got %d", action)
@@ -95,13 +94,12 @@ func TestLoop_HandlePostSignal_VerificationFailure(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
-	runIter, iter := 1, 1
 	action := l.handlePostSignal(postSignalParams{
 		ctx:      context.Background(),
 		result:   claude.Result{},
 		taskID:   "ralph-abc",
 		nextTask:   "Fix bug",
-	}, &runIter, &iter)
+	})
 
 	if action != signalRetry {
 		t.Errorf("expected signalRetry, got %d", action)
@@ -145,7 +143,6 @@ func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 		return "", ctx.Err()
 	}
 
-	runIter, iter := 1, 1
 	done := make(chan postSignalAction, 1)
 	go func() {
 		done <- l.handlePostSignal(postSignalParams{
@@ -156,7 +153,7 @@ func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 			rawLogPath: filepath.Join(ralphDir, "raw.log"),
 			taskID:     "ralph-timeout",
 			nextTask:   "Fix bug",
-		}, &runIter, &iter)
+		})
 	}()
 
 	select {
@@ -204,7 +201,6 @@ func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 
-	runIter, iter := 1, 1
 	action := l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
@@ -213,7 +209,7 @@ func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-fast",
 		nextTask:   "Fix login",
-	}, &runIter, &iter)
+	})
 
 	if action != signalComplete {
 		t.Errorf("expected signalComplete, got %d", action)
@@ -255,7 +251,6 @@ func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
 		return false, ctx.Err()
 	}
 
-	runIter, iter := 1, 1
 	done := make(chan postSignalAction, 1)
 	go func() {
 		done <- l.handlePostSignal(postSignalParams{
@@ -266,7 +261,7 @@ func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
 			rawLogPath: filepath.Join(ralphDir, "raw.log"),
 			taskID:     "ralph-slow",
 			nextTask:   "Slow merge",
-		}, &runIter, &iter)
+		})
 	}()
 
 	select {
@@ -308,7 +303,6 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
 
-	runIter, iter := 1, 1
 	action := l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
@@ -317,7 +311,7 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-pt1",
 		nextTask:   "Fix bug",
-	}, &runIter, &iter)
+	})
 
 	if action != signalComplete {
 		t.Fatalf("expected signalComplete, got %d", action)
@@ -360,13 +354,12 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
-	runIter, iter := 1, 1
 	action := l.handlePostSignal(postSignalParams{
 		ctx:      context.Background(),
 		result:   claude.Result{},
 		taskID:   "ralph-pt2",
 		nextTask:   "Fix bug",
-	}, &runIter, &iter)
+	})
 
 	if action != signalRetry {
 		t.Fatalf("expected signalRetry, got %d", action)
@@ -406,7 +399,6 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "50", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	runIter, iter := 1, 1
 	action := l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
@@ -415,7 +407,7 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-pt3",
 		nextTask:   "Fix bug",
-	}, &runIter, &iter)
+	})
 
 	if action != signalComplete {
 		t.Fatalf("expected signalComplete despite script failure, got %d", action)
@@ -454,7 +446,6 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	runIter, iter := 1, 1
 	action := l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{OnSignalUsed: true},
@@ -463,7 +454,7 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-pt4",
 		nextTask:   "Fix bug",
-	}, &runIter, &iter)
+	})
 
 	if action != signalSkipped {
 		t.Fatalf("expected signalSkipped, got %d", action)
@@ -515,7 +506,6 @@ func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	runIter, iter := 1, 1
 	l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
@@ -524,7 +514,7 @@ func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-ntf",
 		nextTask:   "Fix auth bug",
-	}, &runIter, &iter)
+	})
 
 	got := buf.String()
 	if !strings.Contains(got, "Task done: [ralph-ntf] Fix auth bug") {
@@ -569,7 +559,6 @@ func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	runIter, iter := 1, 1
 	l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
@@ -578,7 +567,7 @@ func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-ntf2",
 		nextTask:   "Fix auth bug",
-	}, &runIter, &iter)
+	})
 
 	got := buf.String()
 	if strings.Contains(got, "Task done") {
@@ -619,7 +608,6 @@ func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	runIter, iter := 1, 1
 	action := l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true, Summary: "Updated README"},
@@ -628,7 +616,7 @@ func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-nc1",
 		nextTask:   "Update docs",
-	}, &runIter, &iter)
+	})
 
 	if action != signalSkipped {
 		t.Errorf("expected signalSkipped for no-commits path, got %d", action)

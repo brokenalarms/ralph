@@ -515,59 +515,53 @@ func newHandleRunResultLoop(t *testing.T) (*Loop, string) {
 }
 
 // Verifies that when Claude returns an error and the machine is offline,
-// handleRunResult waits for internet and returns resultRetry with decremented counters.
+// handleRunResult waits for internet and returns actionRetry with decremented counters.
 func TestHandleRunResult_OfflineReturnsRetry(t *testing.T) {
 	l, _ := newHandleRunResultLoop(t)
 
 	l.isOnlineFunc = func() bool { return false }
 	l.waitForInternetFunc = func(_ context.Context, _ *logging.Logger) bool { return true }
 
-	runIter, iter := 3, 5
+	runIter := 3
 	action := l.handleRunResult(context.Background(), claude.Result{}, fmt.Errorf("connection refused"),
-		"task-1", "Do stuff", "abc123", &runIter, &iter)
+		"task-1", "Do stuff", "abc123", runIter)
 
-	if action != resultRetry {
-		t.Fatalf("expected resultRetry, got %d", action)
-	}
-	if runIter != 2 || iter != 4 {
-		t.Errorf("expected counters decremented to (2,4), got (%d,%d)", runIter, iter)
+	if action != actionRetry {
+		t.Fatalf("expected actionRetry, got %d", action)
 	}
 }
 
 // Verifies that when offline and the context is cancelled while waiting,
-// handleRunResult returns resultBreak.
+// handleRunResult returns actionDone.
 func TestHandleRunResult_OfflineContextCancelledReturnsBreak(t *testing.T) {
 	l, _ := newHandleRunResultLoop(t)
 
 	l.isOnlineFunc = func() bool { return false }
 	l.waitForInternetFunc = func(_ context.Context, _ *logging.Logger) bool { return false }
 
-	runIter, iter := 3, 5
+	runIter := 3
 	action := l.handleRunResult(context.Background(), claude.Result{}, fmt.Errorf("connection refused"),
-		"task-1", "Do stuff", "abc123", &runIter, &iter)
+		"task-1", "Do stuff", "abc123", runIter)
 
-	if action != resultBreak {
-		t.Fatalf("expected resultBreak, got %d", action)
+	if action != actionDone {
+		t.Fatalf("expected actionDone, got %d", action)
 	}
 }
 
-// Verifies that the FeedbackKill path records an attempt and returns resultRetry
+// Verifies that the FeedbackKill path records an attempt and returns actionRetry
 // with decremented counters.
 func TestHandleRunResult_FeedbackKillReturnsRetry(t *testing.T) {
 	l, ralphDir := newHandleRunResultLoop(t)
 
 	l.isOnlineFunc = func() bool { return true }
 
-	runIter, iter := 3, 5
+	runIter := 3
 	result := claude.Result{FeedbackKill: true}
 	action := l.handleRunResult(context.Background(), result, nil,
-		"task-fk", "Feedback task", "abc123", &runIter, &iter)
+		"task-fk", "Feedback task", "abc123", runIter)
 
-	if action != resultRetry {
-		t.Fatalf("expected resultRetry, got %d", action)
-	}
-	if runIter != 2 || iter != 4 {
-		t.Errorf("expected counters decremented to (2,4), got (%d,%d)", runIter, iter)
+	if action != actionRetry {
+		t.Fatalf("expected actionRetry, got %d", action)
 	}
 
 	tracker := attempts.New(ralphDir)
@@ -577,23 +571,20 @@ func TestHandleRunResult_FeedbackKillReturnsRetry(t *testing.T) {
 	}
 }
 
-// Verifies that the IdleTimeout path records an attempt and returns resultRetry
+// Verifies that the IdleTimeout path records an attempt and returns actionRetry
 // with decremented counters.
 func TestHandleRunResult_IdleTimeoutReturnsRetry(t *testing.T) {
 	l, ralphDir := newHandleRunResultLoop(t)
 
 	l.isOnlineFunc = func() bool { return true }
 
-	runIter, iter := 3, 5
+	runIter := 3
 	result := claude.Result{IdleTimeout: true}
 	action := l.handleRunResult(context.Background(), result, nil,
-		"task-it", "Idle task", "abc123", &runIter, &iter)
+		"task-it", "Idle task", "abc123", runIter)
 
-	if action != resultRetry {
-		t.Fatalf("expected resultRetry, got %d", action)
-	}
-	if runIter != 2 || iter != 4 {
-		t.Errorf("expected counters decremented to (2,4), got (%d,%d)", runIter, iter)
+	if action != actionRetry {
+		t.Fatalf("expected actionRetry, got %d", action)
 	}
 
 	tracker := attempts.New(ralphDir)
@@ -618,16 +609,13 @@ func TestHandleRunResult_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 		tracker.RecordIdleTimeoutFailure("task-it-max")
 	}
 
-	runIter, iter := 3, 5
+	runIter := 3
 	result := claude.Result{IdleTimeout: true}
 	action := l.handleRunResult(context.Background(), result, nil,
-		"task-it-max", "Idle task", "abc123", &runIter, &iter)
+		"task-it-max", "Idle task", "abc123", runIter)
 
-	if action != resultRetry {
-		t.Fatalf("expected resultRetry, got %d", action)
-	}
-	if runIter != 3 || iter != 5 {
-		t.Errorf("expected counters NOT decremented when skipping (3,5), got (%d,%d)", runIter, iter)
+	if action != actionRetry {
+		t.Fatalf("expected actionRetry, got %d", action)
 	}
 
 	if backend.SkippedTask != "task-it-max" {
@@ -636,28 +624,25 @@ func TestHandleRunResult_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 }
 
 // Verifies the RateLimited path calls WaitUntil on the limiter and returns
-// resultRetry with decremented counters.
+// actionRetry with decremented counters.
 func TestHandleRunResult_RateLimitedReturnsRetry(t *testing.T) {
 	l, _ := newHandleRunResultLoop(t)
 
 	l.isOnlineFunc = func() bool { return true }
 
 	resetAt := time.Now().Add(-1 * time.Second)
-	runIter, iter := 3, 5
+	runIter := 3
 	result := claude.Result{RateLimited: true, ResetAt: resetAt}
 	action := l.handleRunResult(context.Background(), result, nil,
-		"task-rl", "Rate limited task", "abc123", &runIter, &iter)
+		"task-rl", "Rate limited task", "abc123", runIter)
 
-	if action != resultRetry {
-		t.Fatalf("expected resultRetry, got %d", action)
-	}
-	if runIter != 2 || iter != 4 {
-		t.Errorf("expected counters decremented to (2,4), got (%d,%d)", runIter, iter)
+	if action != actionRetry {
+		t.Fatalf("expected actionRetry, got %d", action)
 	}
 }
 
 // Verifies that when the rate limit wait is interrupted by context cancellation,
-// handleRunResult returns resultBreak.
+// handleRunResult returns actionDone.
 func TestHandleRunResult_RateLimitedContextCancelledReturnsBreak(t *testing.T) {
 	l, _ := newHandleRunResultLoop(t)
 
@@ -667,31 +652,28 @@ func TestHandleRunResult_RateLimitedContextCancelledReturnsBreak(t *testing.T) {
 	cancel()
 
 	resetAt := time.Now().Add(10 * time.Minute)
-	runIter, iter := 3, 5
+	runIter := 3
 	result := claude.Result{RateLimited: true, ResetAt: resetAt}
 	action := l.handleRunResult(ctx, result, nil,
-		"task-rl", "Rate limited task", "abc123", &runIter, &iter)
+		"task-rl", "Rate limited task", "abc123", runIter)
 
-	if action != resultBreak {
-		t.Fatalf("expected resultBreak, got %d", action)
+	if action != actionDone {
+		t.Fatalf("expected actionDone, got %d", action)
 	}
 }
 
-// Verifies that a normal successful result returns resultProceed without
+// Verifies that a normal successful result returns actionProceed without
 // modifying the iteration counters.
 func TestHandleRunResult_NormalReturnsResultProceed(t *testing.T) {
 	l, _ := newHandleRunResultLoop(t)
 
 	l.isOnlineFunc = func() bool { return true }
 
-	runIter, iter := 3, 5
+	runIter := 3
 	action := l.handleRunResult(context.Background(), claude.Result{}, nil,
-		"task-ok", "Normal task", "abc123", &runIter, &iter)
+		"task-ok", "Normal task", "abc123", runIter)
 
-	if action != resultProceed {
-		t.Fatalf("expected resultProceed, got %d", action)
-	}
-	if runIter != 3 || iter != 5 {
-		t.Errorf("expected counters unchanged at (3,5), got (%d,%d)", runIter, iter)
+	if action != actionProceed {
+		t.Fatalf("expected actionProceed, got %d", action)
 	}
 }
