@@ -68,7 +68,13 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		log.Log("git", "  PR #%s: %s", pr.number, pr.head)
 	}
 
-	// Step 1: Rebase entire stack with --update-refs in a temp worktree.
+	return runMerge(ctx, prs, projectDir, defaultBranch, gm, log)
+}
+
+// runMerge rebases the stack onto defaultBranch, then merges PRs bottom-up.
+// For each PR after the first, it rebases the branch onto updated main and
+// waits for fresh CI on the new HEAD before merging.
+func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch string, gm *git.Manager, log *logging.Logger) int {
 	topBranch := prs[len(prs)-1].head
 	allBranches := make([]string, len(prs))
 	for i, pr := range prs {
@@ -80,8 +86,7 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		return code
 	}
 
-	// Step 2: Merge bottom-up. After each merge, main moves forward.
-	// Subsequent PRs must be rebased onto the new main before merging.
+	gh := gm.GH()
 	merged := 0
 	repoURL := gm.RemoteURL()
 	for _, pr := range prs {
