@@ -300,36 +300,45 @@ exists in `ci_test.go` documenting the current behavior.
 The logger change (PR formatting owned by logger, not call sites) eliminates
 this entire class of bugs. The bead was closed as superseded.
 
-## Execution Order
+## Execution Status
 
-This is a sequential refactor — each step changes interfaces the next depends on.
+1. ✅ **Git: `Push` internalizes rebase + squash.** `ForcePush` removed from
+   `GitOps`. Loop uses `Push` directly. (#378)
 
-1. **Git: `Push` internalizes rebase + squash.** Remove `EnsureUpToDate` and
-   `ForcePush` from `GitOps`. Update callers.
+2. ✅ **Branch setup: `prepareBranch`.** Consolidates stack head + rebase +
+   checkout/rename into one call. `initRun` stripped to one-time setup. (#378)
 
-2. **Git: `SwitchTask`.** Consolidate stack head + rebase + checkout/rename.
-   Remove `PrepareForNextTask`, `ResetToDefaultBranch`, `setStackHead`,
-   `checkoutExistingBranch` as separate orchestrator concerns.
+3. ✅ **Git: `Ship`.** Auto-commit + push + PR create + URL lookup.
+   `PushAndCreatePR` delegates to `Ship`. Loop migrated. (#379)
 
-3. **Git: `Ship`.** Compose auto-commit + push + PR create + merge. Remove
-   `PushAndCreatePR`, `CommitAll`, `PostMergeUpdateMain`, `GH()` from
-   `GitOps`. `Ship` writes external ref as URL.
+4. ✅ **Logger: structured `Emit` with generic `Link`.** Logger renders
+   clickable hyperlinks from URL+text. No PR knowledge in logger. All
+   `logging.PRLink` calls eliminated from loop. (#380)
 
-4. **Logger: PR formatting.** Initialize with `nwo`. Make `PRLink` internal.
-   Update all call sites to pass raw PR numbers.
+5. ✅ **External refs: always URLs.** `prURL` helper builds canonical URLs.
+   `gh-` prefix eliminated as write path. (#378)
 
-5. **External refs: always URLs.** Update `FindOpenPR` to return URL.
-   Remove `gh-` prefix handling. Replace `parsePRNumber` with URL parsing.
+6. Not done: **Fix loop.** Extract generic `fixLoop` with `FixValidator`.
 
-6. **Fix loop.** Extract generic `fixLoop` with `FixValidator`. Replace
-   `testFixLoop`, `verifyWithFixLoop`, CI fix, conflict resolution.
+7. ✅ **Orchestrator rewrite.** `Run()` is 65 lines. `selectNextTask`,
+   `runAndComplete`, `initialize`. `loopAction` replaces `*int` pointer
+   manipulation. (#380, #382, #384)
 
-7. **Orchestrator rewrite.** `Run()` becomes flat. `selectNextTask`,
-   `completeTask`, `resumeExistingWork`. Delete `handlePostSignal`,
-   `finalizePR`, `pushSignalPR`, `handleRunResult`, `processRunOutcome`.
+8. Partially done: **Dead code cleanup.** Health package deleted. Hog mode
+   deleted. Stale types removed. `handlePostSignal`, `finalizePR`,
+   `pushSignalPR` still exist (called by `runAndComplete`).
 
-8. **Delete dead code.** Remove functions, methods, and interface members
-   that no longer have callers.
+## Remaining Work
+
+- **Fix loop extraction**: `testFixLoop`, `verifyWithFixLoop`, CI fix, and
+  conflict resolution share the same structure. Extract generic `fixLoop`
+  with `FixValidator` callback.
+- **Collapse handlePostSignal + finalizePR into completeTask**: Single
+  post-completion pipeline replacing the current two-layer delegation.
+- **Remove GH() from GitOps**: The loop still reaches through to GitHub
+  via `l.git.GH()` in 7 places. PR operations should be git-internal.
+- **Migrate remaining Log/Warn/Error/Success to Emit**: ~150 call sites
+  outside the loop still use the old API.
 
 ## Follow-up: State Module Owns All .ralph/ File Management
 

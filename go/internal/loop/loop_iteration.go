@@ -514,7 +514,6 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	}, true
 }
 
-// runResultAction describes what Run() should do after handling the Claude result.
 // handleRunResult processes errors and retryable conditions from a Claude
 // run (offline, feedback kill, idle timeout, rate limit). Returns the
 // loopAction Run() should take. When actionRetry is returned, the caller
