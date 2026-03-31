@@ -266,11 +266,11 @@ func (l *Loop) Run(ctx context.Context) error {
 		})
 
 		// ── Handle retryable failures (offline, rate limit, idle, feedback) ──
-		runAction := l.handleRunResult(ctx, result, runErr, task.id, task.title, prep.headBefore, &runIteration, &iteration)
-		if runAction == resultRetry {
+		runAction := l.handleRunResult(ctx, result, runErr, task.id, task.title, prep.headBefore, runIteration)
+		if runAction == actionRetry {
 			continue
 		}
-		if runAction == resultBreak {
+		if runAction == actionDone {
 			break
 		}
 		elapsed := time.Since(taskStart)
@@ -292,10 +292,12 @@ func (l *Loop) Run(ctx context.Context) error {
 				taskID:     task.id,
 				nextTask:   task.title,
 				diffStat:   diffStat,
-			}, &runIteration, &iteration)
+			})
 
 			switch signalAction {
-			case signalRetry, signalSkipped:
+			case signalSkipped:
+				continue
+			case signalRetry:
 				continue
 			case signalEvolve:
 				return nil
