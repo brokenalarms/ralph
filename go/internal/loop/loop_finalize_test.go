@@ -350,6 +350,72 @@ func TestFinalizePR_UsesURLInCloseReason(t *testing.T) {
 	}
 }
 
+// CloseTask failure after merge skips the task so the loop doesn't retry it.
+func TestFinalizePR_CloseTaskFailure_SkipsTask(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		CloseErr:       fmt.Errorf("exit status 1"),
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
+	l := New(Config{
+		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+		AutoMerge:    true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.mergeFunc = func(ctx context.Context) (bool, error) {
+		return true, nil
+	}
+
+	result := l.finalizePR(finalizePRParams{
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix auth bug",
+		prNumber: "42",
+		prState:  "OPEN",
+		workDir:  project,
+	})
+
+	if !result.merged {
+		t.Error("PR should still report merged")
+	}
+	if !result.closed {
+		t.Error("closed should be true even on CloseTask failure (task was skipped)")
+	}
+
+	// The task must be skipped so the loop doesn't retry it.
+	backend.SkipMu.Lock()
+	defer backend.SkipMu.Unlock()
+	found := false
+	for _, id := range backend.SkippedIDs {
+		if id == "ralph-abc" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("task should be skipped after CloseTask failure, skipped=%v", backend.SkippedIDs)
+	}
+
+	// Verify the skip reason mentions close failure.
+	for i, id := range backend.SkippedIDs {
+		if id == "ralph-abc" {
+			if !strings.Contains(backend.SkipReasons[i], "close_failed") {
+				t.Errorf("skip reason should contain 'close_failed', got %q", backend.SkipReasons[i])
+			}
+		}
+	}
+}
+
 // skipTask sets status to open in backend and persists to state.json.
 func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
 	_, st := setupTestDir(t)

@@ -81,6 +81,12 @@ func (b *BD) defaultRunBD(ctx context.Context, dir string, args ...string) (stri
 	cmd := exec.CommandContext(ctx, b.bdPath, args...)
 	cmd.Dir = dir
 	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(exitErr.Stderr)))
+		}
+	}
 	return strings.TrimSpace(string(out)), err
 }
 
