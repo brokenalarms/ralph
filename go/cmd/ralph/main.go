@@ -205,7 +205,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		Version:             config.Version,
 		OnRebaseConflict:    autoRebaseRecovery(),
 		VerifyDir:             dirs.WorkDir,
-		VerifyLevel:           cfg.VerifyLevel,
 		VerifyModel:           cfg.VerifyModel,
 		VerifyEscalationModel: cfg.VerifyEscalationModel,
 		OnIterationStart: func() {

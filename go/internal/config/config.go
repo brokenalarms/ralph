@@ -71,7 +71,6 @@ type Config struct {
 	BaseBranch              string
 	Wait                    bool
 	Verbose                 bool
-	VerifyLevel             string
 	VerifyModel             string
 	VerifyEscalationModel   string
 	PostSignalTimeout       time.Duration

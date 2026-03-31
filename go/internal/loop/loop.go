@@ -42,7 +42,6 @@ type Config struct {
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 	Version             string
 	VerifyDir             string // project root where tests are run; empty disables verification
-	VerifyLevel           string // "fire" (default) or "hog" — controls no-diff verification depth
 	VerifyModel           string // model for first LLM verification attempt
 	VerifyEscalationModel string // model for subsequent LLM verification attempts
 	OnIterationStart      func() // called at the start of each iteration (e.g. to regenerate resume script)
@@ -119,7 +118,6 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 	}
 	l.verifier = NewVerifier(VerifierConfig{
 		VerifyDir:             cfg.VerifyDir,
-		VerifyLevel:           cfg.VerifyLevel,
 		VerifyModel:           cfg.VerifyModel,
 		VerifyEscalationModel: cfg.VerifyEscalationModel,
 		PromptsDir:            cfg.Dirs.PromptsDir,
@@ -265,21 +263,14 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.verifier.ResetCounters()
 		}
 
-		if runIteration > 1 && taskChanged {
-			l.git.PrepareForNextTask()
-			if l.git.GetWorktreeBranch() != "" && l.git.GetWorkDir() != l.git.GetProjectDir() {
-				l.setStackHead()
-				if l.git.GetPrevBranch() == "" {
-					l.git.ResetToDefaultBranch()
+		if taskChanged || !l.git.IsBranchRenamed() {
+			if err := l.prepareBranch(ctx, taskID, nextTask); err != nil {
+				if ctx.Err() != nil {
+					l.state.Write("status", "stopped")
+				} else {
+					l.state.Write("status", "error")
 				}
-				if err := l.handleRebase(ctx); err != nil {
-					if ctx.Err() != nil {
-						l.state.Write("status", "stopped")
-					} else {
-						l.state.Write("status", "error")
-					}
-					break
-				}
+				break
 			}
 		}
 
@@ -298,12 +289,6 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.state.Write("status", "running")
 		l.state.Write("last_task", nextTask)
 		l.state.Write("last_task_id", taskID)
-
-		if taskChanged || !l.git.IsBranchRenamed() {
-			l.setStackHead()
-			l.checkoutExistingBranch(taskID, nextTask)
-		}
-		writeRunBranch(l.cfg.Dirs.RalphDir, l.git.GetWorktreeBranch())
 		l.git.TagTaskStart(taskID)
 		updateStreamTask(l.cfg.Dirs.RalphDir, taskID, nextTask, taskInfo.Priority)
 

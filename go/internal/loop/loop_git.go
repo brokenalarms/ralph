@@ -18,6 +18,34 @@ func (l *Loop) handleRebase(ctx context.Context) error {
 	return l.git.EnsureUpToDate(ctx)
 }
 
+// prepareBranch consolidates all branch setup for a task: find stack head,
+// reset to correct base if no stack, rebase onto latest, and checkout or
+// rename the branch for this task. Called once per task change by Run().
+// Also called by initRun for the first iteration on resume.
+//
+// isFirstIteration controls whether PrepareForNextTask is called (skipped
+// on first iteration since initRun handles the resume-vs-new-task logic).
+func (l *Loop) prepareBranch(ctx context.Context, taskID, nextTask string) error {
+	l.git.PrepareForNextTask()
+
+	// Rebase onto latest base when running in a worktree.
+	if l.git.GetWorktreeBranch() != "" && l.git.GetWorkDir() != l.git.GetProjectDir() {
+		l.setStackHead()
+		if l.git.GetPrevBranch() == "" {
+			l.git.ResetToDefaultBranch()
+		}
+		if err := l.handleRebase(ctx); err != nil {
+			return err
+		}
+	} else {
+		l.setStackHead()
+	}
+
+	l.checkoutExistingBranch(taskID, nextTask)
+	writeRunBranch(l.cfg.Dirs.RalphDir, l.git.GetWorktreeBranch())
+	return nil
+}
+
 // mergeWithRetry delegates to git.Manager.MergeWithRetry, passing a CI fix
 // callback that spawns a fix agent. Test overrides via mergeFunc bypass the
 // git module entirely for loop-level tests that only care about the outcome.
@@ -100,7 +128,7 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 	prNumber, _ := gh.FindOpenPR(branch, repoURL)
 	if prNumber != "" {
 		l.logger.Log("git", "Found %s for %s (task %s) — resolving", logging.PRLink(nwo, prNumber), branch, taskID)
-		_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNumber)
+		_ = l.cfg.TaskBackend.SetExternalRef(taskID, prURL(repoURL, prNumber))
 		return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
 	}
 
@@ -118,7 +146,7 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 		if err == nil && prNum != "" {
 			nwo := git.NWOFromRemote(l.git.RemoteURL())
 			l.logger.Log("git", "Created %s for %s (task %s)", logging.PRLink(nwo, prNum), branch, taskID)
-			_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNum)
+			_ = l.cfg.TaskBackend.SetExternalRef(taskID, prURL(l.git.RemoteURL(), prNum))
 			return l.resolveByPRState(ctx, taskID, nextTask, prNum)
 		}
 	}
@@ -316,7 +344,17 @@ func getPRBase(gh git.GitHub, workDir, prNumber string) string {
 	return base
 }
 
-// parsePRNumber extracts a PR number from either a URL
+// prURL builds the canonical PR URL from the remote URL and PR number.
+// Always returns a full URL; never returns a "gh-" prefixed string.
+func prURL(remoteURL, prNumber string) string {
+	nwo := git.NWOFromRemote(remoteURL)
+	if nwo == "" || prNumber == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://github.com/%s/pull/%s", nwo, prNumber)
+}
+
+// parsePRNumber extracts a PR number from a URL
 // (https://github.com/owner/repo/pull/123) or a legacy gh-123 ref.
 func parsePRNumber(ref string) string {
 	if strings.HasPrefix(ref, "gh-") {

@@ -1051,27 +1051,3 @@ func TestConfigToState_ArgsFromState_Roundtrip(t *testing.T) {
 	}
 }
 
-// Verifies --verify-level defaults to "fire" and accepts "fire" or "hog",
-// rejecting invalid values — controlling no-diff verification depth.
-func TestVerifyLevelFlag(t *testing.T) {
-	cfg, err := Parse(nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.VerifyLevel != "fire" {
-		t.Errorf("VerifyLevel = %q, want %q (default)", cfg.VerifyLevel, "fire")
-	}
-
-	cfg, err = Parse([]string{"--verify-level", "hog"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.VerifyLevel != "hog" {
-		t.Errorf("VerifyLevel = %q, want %q", cfg.VerifyLevel, "hog")
-	}
-
-	_, err = Parse([]string{"--verify-level", "invalid"})
-	if err == nil {
-		t.Fatal("expected error for invalid verify-level")
-	}
-}

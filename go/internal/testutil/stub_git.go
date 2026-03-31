@@ -30,7 +30,7 @@ type StubGit struct {
 	CIFailureLogValue   string
 
 	EnsureUpToDateErr    error
-	ForcePushErr         error
+	PushErr              error
 	PushPRNumber         string
 	PushPRErr            error
 	MergeRetryResult     bool
@@ -142,7 +142,7 @@ func (s *StubGit) CommitAll(message string) {
 }
 
 func (s *StubGit) EnsureUpToDate(_ context.Context) error  { return s.EnsureUpToDateErr }
-func (s *StubGit) ForcePush(_ context.Context) error        { return s.ForcePushErr }
+func (s *StubGit) Push(_ context.Context) error             { return s.PushErr }
 
 func (s *StubGit) PushAndCreatePR(_ context.Context, _, _, _ string) (string, error) {
 	return s.PushPRNumber, s.PushPRErr

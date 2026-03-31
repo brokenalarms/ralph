@@ -212,14 +212,16 @@ func (l *Loop) pushSignalPR(p postSignalParams) string {
 		}
 	}
 	if prNumber != "" && p.taskID != "" {
-		_, _, prURL := l.findPRInfo(p.workDir)
-		ref := prURL
+		ref := prURL(l.git.RemoteURL(), prNumber)
 		if ref == "" {
-			ref = "gh-" + prNumber
+			// Fallback: try to get URL from PR info
+			_, _, ref = l.findPRInfo(p.workDir)
 		}
-		l.logger.Log("git", "Linking task %s to %s (branch: %s)", p.taskID, ref, l.git.GetWorktreeBranch())
-		if refErr := l.cfg.TaskBackend.SetExternalRef(p.taskID, ref); refErr != nil {
-			l.logger.Warn("beads", "SetExternalRef: %v", refErr)
+		if ref != "" {
+			l.logger.Log("git", "Linking task %s to %s (branch: %s)", p.taskID, ref, l.git.GetWorktreeBranch())
+			if refErr := l.cfg.TaskBackend.SetExternalRef(p.taskID, ref); refErr != nil {
+				l.logger.Warn("beads", "SetExternalRef: %v", refErr)
+			}
 		}
 	}
 	return prNumber

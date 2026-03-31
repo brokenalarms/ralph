@@ -480,11 +480,6 @@ func NWOFromRemote(remoteURL string) string {
 	return ""
 }
 
-// ForcePush is an alias for Push — both squash and force-push.
-// Kept for backward compatibility with callers that expect the name.
-func (m *Manager) ForcePush(ctx context.Context) error {
-	return m.Push(ctx)
-}
 
 // DeleteRemoteBranch removes the current branch from the remote. Used to
 // clean up after a PR has been merged externally.
