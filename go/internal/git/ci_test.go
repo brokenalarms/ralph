@@ -415,7 +415,7 @@ func TestAwaitCI_PassedImmediately(t *testing.T) {
 	}
 	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
 
-	checks, status, err := mgr.AwaitCI(context.Background(), "1", "repo")
+	checks, status, err := mgr.AwaitCI(context.Background(), "1", "repo", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestAwaitCI_FailedImmediately(t *testing.T) {
 	}
 	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
 
-	checks, status, err := mgr.AwaitCI(context.Background(), "1", "repo")
+	checks, status, err := mgr.AwaitCI(context.Background(), "1", "repo", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -475,7 +475,7 @@ func TestAwaitCI_PollsWhenPending(t *testing.T) {
 	}
 	mgr.GitHub = pollGH
 
-	_, status, err := mgr.AwaitCI(context.Background(), "1", "repo")
+	_, status, err := mgr.AwaitCI(context.Background(), "1", "repo", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -511,7 +511,7 @@ func TestAwaitCI_PollsWhenFetchErrors(t *testing.T) {
 	}
 	mgr := &Manager{GitHub: pollGH, Logger: &testLog{}}
 
-	_, status, err := mgr.AwaitCI(context.Background(), "1", "repo")
+	_, status, err := mgr.AwaitCI(context.Background(), "1", "repo", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -545,7 +545,7 @@ func TestAwaitCI_LogUsesPRLink(t *testing.T) {
 	log := &testLog{}
 	mgr := &Manager{GitHub: pollGH, Logger: log}
 
-	_, status, err := mgr.AwaitCI(context.Background(), "99", "https://github.com/owner/repo")
+	_, status, err := mgr.AwaitCI(context.Background(), "99", "https://github.com/owner/repo", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -569,8 +569,8 @@ func TestAwaitCI_LogUsesPRLink(t *testing.T) {
 	}
 }
 
-// AwaitFreshCI log output uses logging.PRLink for clickable terminal links.
-func TestAwaitFreshCI_LogUsesPRLink(t *testing.T) {
+// AwaitCI with expectedSHA logs PRLink clickable terminal links during SHA polling.
+func TestAwaitCI_SHAPollLogUsesPRLink(t *testing.T) {
 	origSleep := ciSleep
 	ciSleep = func(d time.Duration) <-chan time.Time {
 		ch := make(chan time.Time, 1)
@@ -593,7 +593,7 @@ func TestAwaitFreshCI_LogUsesPRLink(t *testing.T) {
 	log := &testLog{}
 	mgr := &Manager{GitHub: pollGH, Logger: log}
 
-	_, status, err := mgr.AwaitFreshCI(context.Background(), "88", "https://github.com/owner/repo", "oldshaXXX")
+	_, status, err := mgr.AwaitCI(context.Background(), "88", "https://github.com/owner/repo", "newsha123")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -601,9 +601,9 @@ func TestAwaitFreshCI_LogUsesPRLink(t *testing.T) {
 		t.Errorf("expected CIPassed, got %v", status)
 	}
 
-	// "Waiting for" and "HEAD updated" lines must contain clickable links.
+	// "Waiting for" and "HEAD confirmed" lines must contain clickable links.
 	for _, msg := range log.messages {
-		if (strings.Contains(msg, "Waiting for") || strings.Contains(msg, "HEAD updated")) &&
+		if (strings.Contains(msg, "Waiting for") || strings.Contains(msg, "HEAD confirmed")) &&
 			!strings.Contains(msg, "github.com/owner/repo/pull/88") {
 			t.Errorf("expected PRLink hyperlink in log, got: %s", msg)
 		}
@@ -639,6 +639,72 @@ func TestWaitForCI_LogUsesPRLink(t *testing.T) {
 		if strings.Contains(msg, "polled") && !strings.Contains(msg, "github.com/owner/repo/pull/77") {
 			t.Errorf("expected PRLink hyperlink in polling log, got: %s", msg)
 		}
+	}
+}
+
+// AwaitCI with an expected SHA polls until the PR HEAD matches that SHA
+// before returning CI results, preventing stale results after a push.
+func TestAwaitCI_WaitsForExpectedSHA(t *testing.T) {
+	origSleep := ciSleep
+	ciSleep = func(d time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+	defer func() { ciSleep = origSleep }()
+
+	var shaCalls atomic.Int32
+	pollGH := &pollableGitHub{
+		StubGitHub: StubGitHub{
+			Checks: []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
+		},
+		listChecks: func(pr, repo string) ([]CICheckResult, error) {
+			return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
+		},
+		getPRHeadSHA: func(workDir, prNumber string) (string, error) {
+			n := shaCalls.Add(1)
+			if n < 3 {
+				return "stalesha", nil
+			}
+			return "expectedsha", nil
+		},
+	}
+	log := &testLog{}
+	mgr := &Manager{GitHub: pollGH, Logger: log}
+
+	checks, status, err := mgr.AwaitCI(context.Background(), "1", "repo", "expectedsha")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+	if len(checks) != 1 || checks[0].Name != "test" {
+		t.Errorf("unexpected checks: %v", checks)
+	}
+	// Must have polled GetPRHeadSHA at least 3 times (2 stale + 1 match).
+	if shaCalls.Load() < 3 {
+		t.Errorf("expected at least 3 SHA polls, got %d", shaCalls.Load())
+	}
+}
+
+// AwaitCI with empty expectedSHA skips SHA verification and returns
+// results immediately when checks are already resolved.
+func TestAwaitCI_EmptySHASkipsVerification(t *testing.T) {
+	gh := &StubGitHub{
+		Checks: []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
+	}
+	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
+
+	checks, status, err := mgr.AwaitCI(context.Background(), "1", "repo", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+	if len(checks) != 1 {
+		t.Errorf("unexpected checks: %v", checks)
 	}
 }
 
@@ -684,6 +750,9 @@ func setupAutoMergeManager(t *testing.T, gh *StubGitHub) *Manager {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 	mgr.RenameBranchForTask("test feature", "")
+	// Set PRHeadSHA to match the worktree HEAD so AwaitCI's SHA verification
+	// doesn't block forever in tests.
+	gh.PRHeadSHA = mgr.gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
 	return mgr
 }
 
@@ -843,6 +912,7 @@ func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 	}
 
 	mgr.RenameBranchForTask("test feature", "")
+	gh.PRHeadSHA = mgr.gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
 	mgr.AutoMergeCurrentBranch(context.Background())
 
 	if !gh.LastMergeOpts.DeleteBranch {

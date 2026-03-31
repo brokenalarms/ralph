@@ -263,7 +263,8 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		m.Logger.Warn("git", "Pre-merge push failed: %v", err)
 	}
 
-	checks, status, ciErr := m.AwaitCI(ctx, prNumber, repoURL)
+	headSHA := m.gitOutput(m.WorkDir, "rev-parse", "HEAD")
+	checks, status, ciErr := m.AwaitCI(ctx, prNumber, repoURL, headSHA)
 	if ciErr != nil {
 		m.Logger.Warn("ci", "CI polling failed for %s: %v — attempting merge anyway", pr, ciErr)
 	}
@@ -372,7 +373,7 @@ func (m *Manager) updatePRBranch(ctx context.Context, prNumber, repoURL string) 
 		return nil
 	}
 	m.Logger.Log("git", "Updated %s branch with latest base", logging.PRLink(nwo, prNumber))
-	checks, status, err := m.AwaitCI(ctx, prNumber, repoURL)
+	checks, status, err := m.AwaitCI(ctx, prNumber, repoURL, "")
 	if err != nil {
 		m.Logger.Warn("ci", "CI polling after branch update: %v — attempting merge anyway", err)
 		return nil
@@ -406,7 +407,7 @@ func (m *Manager) executeMerge(ctx context.Context, prNumber, repoURL string) (b
 
 	if isCIGatedError(mergeOutput) {
 		m.Logger.Log("ci", "%s blocked by branch protection — waiting for CI...", pr)
-		checks, status, waitErr := m.AwaitCI(ctx, prNumber, repoURL)
+		checks, status, waitErr := m.AwaitCI(ctx, prNumber, repoURL, "")
 		if waitErr != nil {
 			return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, waitErr)
 		}
@@ -560,7 +561,8 @@ func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool
 				// updated HEAD before retrying merge — the old check status
 				// is stale after force-push.
 				repoURL := m.RemoteURL()
-				_, ciStatus, waitErr := m.AwaitCI(ctx, ciErr.PRNumber, repoURL)
+				fixHeadSHA := m.gitOutput(m.WorkDir, "rev-parse", "HEAD")
+				_, ciStatus, waitErr := m.AwaitCI(ctx, ciErr.PRNumber, repoURL, fixHeadSHA)
 				if waitErr != nil {
 					m.Logger.Warn("ci", "CI polling after fix: %v", waitErr)
 				}

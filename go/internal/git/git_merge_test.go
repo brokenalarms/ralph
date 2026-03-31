@@ -872,6 +872,7 @@ func TestMergeWithRetry_StopsOnUnresolvableConflict(t *testing.T) {
 		StubGitHub: StubGitHub{
 			IsAvailable: true,
 			OpenPR:      "50",
+			PRHeadSHA:   "abc123",
 			Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		},
 		mergeResults: []mergeResult{

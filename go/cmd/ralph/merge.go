@@ -102,11 +102,11 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 			}
 		}
 
-		// Record pre-push SHA for fresh CI detection.
-		preSHA, _ := gh.GetPRHeadSHA(projectDir, pr.number)
+		// Get expected HEAD SHA after rebase+push for fresh CI detection.
+		expectedSHA, _ := gh.GetPRHeadSHA(projectDir, pr.number)
 
-		// Wait for fresh CI.
-		_, ciStatus, ciErr := gm.AwaitFreshCI(ctx, pr.number, repoURL, preSHA)
+		// Wait for CI on the current HEAD.
+		_, ciStatus, ciErr := gm.AwaitCI(ctx, pr.number, repoURL, expectedSHA)
 		if ciErr != nil {
 			log.Warn("ci", "CI polling error: %v", ciErr)
 		}
