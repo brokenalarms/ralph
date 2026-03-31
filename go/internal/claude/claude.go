@@ -360,6 +360,13 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 			// Check if process already exited (channel may not fire instantly).
 			if !processAlive(cmd) {
 				<-processDone
+				if cfg.FeedbackFile != "" {
+					if _, err := os.Stat(cfg.FeedbackFile); err == nil {
+						os.Remove(cfg.FeedbackFile)
+						r.Logger.Log("llm", "Feedback signal detected — restarting agent")
+						return Result{FeedbackKill: true}
+					}
+				}
 				return Result{}
 			}
 

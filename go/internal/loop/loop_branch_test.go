@@ -676,12 +676,14 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 
 type metadataBackend struct {
 	testutil.StubBackend
-	metadata map[string]map[string]string // id -> key -> value
+	metadata     map[string]map[string]string // id -> key -> value
+	externalRefs map[string]string            // id -> ref
 }
 
 func newMetadataBackend() *metadataBackend {
 	return &metadataBackend{
-		metadata: make(map[string]map[string]string),
+		metadata:     make(map[string]map[string]string),
+		externalRefs: make(map[string]string),
 	}
 }
 
@@ -698,6 +700,15 @@ func (m *metadataBackend) GetMetadata(id, key string) (string, error) {
 		return "", nil
 	}
 	return m.metadata[id][key], nil
+}
+
+func (m *metadataBackend) SetExternalRef(id, ref string) error {
+	m.externalRefs[id] = ref
+	return nil
+}
+
+func (m *metadataBackend) GetExternalRef(id string) (string, error) {
+	return m.externalRefs[id], nil
 }
 
 // Branch name is stored in bead metadata after rename, proving the loop
@@ -818,5 +829,68 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 	// Must NOT contain a sequence number like /01- or /02-
 	if matched := strings.Contains(gm.WorktreeBranch, "/01-") || strings.Contains(gm.WorktreeBranch, "/02-"); matched {
 		t.Errorf("branch %q must not contain sequence number prefix", gm.WorktreeBranch)
+	}
+}
+
+// Closed PR re-run renames the branch from ralph/wip to a task-specific name
+// and clears the stale external-ref so the agent pushes to the correct branch.
+func TestResolveByPRState_ClosedPR_RenamesBranch(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := newMetadataBackend()
+	backend.Remaining = 1
+	backend.Total = 1
+	backend.NextTask = "Fix auth bug"
+	backend.NextID = "ralph-cdr3"
+	// Simulate a closed PR linked to this task.
+	backend.externalRefs["ralph-cdr3"] = "gh-439"
+
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		WorktreeBranch: "ralph/wip",
+		BranchRenamed:  true, // Stale from previous run
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		GitHubStub:     &git.StubGitHub{IsAvailable: true, PRState: "CLOSED"},
+	}
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: gm.WorkDir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	resolved := l.resolveByPRState(context.Background(), "ralph-cdr3", "Fix auth bug", "439")
+	if resolved {
+		t.Fatal("expected resolveByPRState to return false for CLOSED PR")
+	}
+
+	// Branch must be renamed from ralph/wip to a task-specific name.
+	if gm.WorktreeBranch == "ralph/wip" {
+		t.Error("branch should be renamed from ralph/wip, still ralph/wip")
+	}
+	if !strings.Contains(gm.WorktreeBranch, "ralph-cdr3") {
+		t.Errorf("branch %q should contain task ID ralph-cdr3", gm.WorktreeBranch)
+	}
+
+	// External-ref must be cleared so the closed PR isn't re-discovered.
+	ref, _ := backend.GetExternalRef("ralph-cdr3")
+	if ref != "" {
+		t.Errorf("external-ref should be cleared, got %q", ref)
+	}
+
+	// Branch metadata should be updated with the new task-specific name.
+	branch, _ := backend.GetMetadata("ralph-cdr3", "branch")
+	if !strings.Contains(branch, "ralph-cdr3") {
+		t.Errorf("branch metadata should contain task ID, got %q", branch)
+	}
+
+	// PrepareForNextTask must have been called to reset branch state.
+	if gm.PrepareForNextCalls == 0 {
+		t.Error("PrepareForNextTask should have been called")
 	}
 }
