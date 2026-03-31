@@ -1213,3 +1213,38 @@ func TestBD_SetSkippedIDs_EmptyClearsSkips(t *testing.T) {
 	}
 }
 
+// ParseDependencyBlock extracts blocking task IDs from bd close errors.
+func TestParseDependencyBlock_SingleBlocker(t *testing.T) {
+	err := fmt.Errorf("exit status 1: cannot close ralph-qyoz: blocked by open issues [ralph-l2yh] (use --force to override)")
+	blockers := ParseDependencyBlock(err)
+	if len(blockers) != 1 || blockers[0] != "ralph-l2yh" {
+		t.Errorf("expected [ralph-l2yh], got %v", blockers)
+	}
+}
+
+// ParseDependencyBlock handles multiple blockers in a single error.
+func TestParseDependencyBlock_MultipleBlockers(t *testing.T) {
+	err := fmt.Errorf("cannot close ralph-abc: blocked by open issues [ralph-x1 ralph-x2] (use --force to override)")
+	blockers := ParseDependencyBlock(err)
+	if len(blockers) != 2 || blockers[0] != "ralph-x1" || blockers[1] != "ralph-x2" {
+		t.Errorf("expected [ralph-x1 ralph-x2], got %v", blockers)
+	}
+}
+
+// ParseDependencyBlock returns nil for non-dependency errors.
+func TestParseDependencyBlock_NonDependencyError(t *testing.T) {
+	err := fmt.Errorf("exit status 1: some other error")
+	blockers := ParseDependencyBlock(err)
+	if blockers != nil {
+		t.Errorf("expected nil for non-dependency error, got %v", blockers)
+	}
+}
+
+// ParseDependencyBlock returns nil for nil error.
+func TestParseDependencyBlock_NilError(t *testing.T) {
+	blockers := ParseDependencyBlock(nil)
+	if blockers != nil {
+		t.Errorf("expected nil for nil error, got %v", blockers)
+	}
+}
+

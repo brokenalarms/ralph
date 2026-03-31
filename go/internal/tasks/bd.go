@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -405,9 +406,24 @@ func (b *BD) CloseTask(id string, reason string) error {
 		reason = "completed by ralph"
 	}
 	_, err := run(b.ctx(), b.ProjectDir, "close", id, "--reason", reason)
-	if err == nil {
-		}
 	return err
+}
+
+// depBlockRe matches the bd close error format:
+//   "cannot close <id>: blocked by open issues [id1 id2] (use --force to override)"
+var depBlockRe = regexp.MustCompile(`blocked by open issues \[([^\]]+)\]`)
+
+// ParseDependencyBlock checks whether an error from CloseTask indicates a
+// dependency block. Returns the blocking task IDs if so.
+func ParseDependencyBlock(err error) []string {
+	if err == nil {
+		return nil
+	}
+	m := depBlockRe.FindStringSubmatch(err.Error())
+	if m == nil {
+		return nil
+	}
+	return strings.Fields(m[1])
 }
 
 func (b *BD) ReopenTask(id string) error {
@@ -415,8 +431,6 @@ func (b *BD) ReopenTask(id string) error {
 		return nil
 	}
 	_, err := b.runner()(b.ctx(), b.ProjectDir, "update", id, "--status=open")
-	if err == nil {
-		}
 	return err
 }
 
