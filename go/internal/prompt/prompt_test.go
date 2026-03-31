@@ -989,3 +989,86 @@ func TestBuildReviewPrompt_MissingTemplate(t *testing.T) {
 		t.Error("expected error for missing prompts directory")
 	}
 }
+
+// Proves: BuildReviewPrompt includes bead creation guidance so the review agent
+// knows how to create well-formed beads with acceptance criteria and labels.
+func TestBuildReviewPrompt_IncludesBeadCreationGuidance(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildReviewPrompt(dir, "/tmp/project", "/tmp/project/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildReviewPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"How to work with issues", "review prompt must include shared bead creation section header"},
+		{"--acceptance", "review prompt must include acceptance criteria requirement"},
+		{"verbatim", "review prompt must include diagnostic content verbatim rule"},
+		{"echo back", "review prompt must include echo-back rule"},
+		{"never reopen", "review prompt must include rule against reopening closed beads"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(strings.ToLower(result), strings.ToLower(tc.substr)) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: BuildReviewPrompt includes task creation quality guidelines so
+// the review agent creates beads with sufficient detail for loop agents to
+// execute without needing to infer architectural intent.
+func TestBuildReviewPrompt_IncludesQualityGuidelines(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildReviewPrompt(dir, "/tmp/project", "/tmp/project/.ralph", "")
+	if err != nil {
+		t.Fatalf("BuildReviewPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Task creation quality guidelines", "review prompt must include quality guidelines section"},
+		{"higher reasoning instructs lower reasoning", "must include detail principle"},
+		{"Concrete task patterns", "must include concrete task patterns section"},
+		{"regression guards", "must include acceptance criteria as regression guards"},
+		{"Anti-pattern", "must name anti-patterns explicitly"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: BuildTaskManagerPrompt includes task creation quality guidelines
+// from the shared bead-creation.md file so the task manager creates beads
+// with detail sufficient for loop agents to execute mechanically.
+func TestBuildTaskManagerPrompt_IncludesQualityGuidelines(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Task creation quality guidelines", "task manager must include quality guidelines section"},
+		{"higher reasoning instructs lower reasoning", "must include detail principle"},
+		{"Concrete task patterns", "must include concrete task patterns section"},
+		{"regression guards", "must include acceptance criteria as regression guards"},
+		{"Anti-pattern", "must name anti-patterns explicitly"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(result, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}

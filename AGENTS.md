@@ -15,6 +15,7 @@
 
 # Prompts
 - Instructions and text for the agent belong in `.md` template files under `go/cmd/ralph/prompts/`, not hardcoded in Go. Go code assembles and interpolates templates but should not contain instructional prose.
+- Bead creation guidance (how to create well-formed beads, quality guidelines, anti-patterns) lives in `go/cmd/ralph/prompts/bead-creation.md`. Both the task manager and review agent prompts include this shared section. When adding or updating bead creation rules, edit that file — not the individual prompt files.
 
 # Beads / bd
 - We use `bd` as the sole task backend for dependency management and issue tracking.
