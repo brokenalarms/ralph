@@ -1969,3 +1969,92 @@ func TestMergeWithRetry_InfraFailureRecovery(t *testing.T) {
 		t.Errorf("expected 1 infra retry before recovery, got %d", callCount)
 	}
 }
+
+// When Admin=false (default), MergePR on StubGitHub returns Blocked when
+// configured to do so — non-admin merges obey branch protection.
+func TestMergeOpts_NonAdminReturnsBlocked(t *testing.T) {
+	gh := &StubGitHub{
+		IsAvailable: true,
+		MergeResult: MergeResult{Blocked: true, Message: "branch protection rules"},
+	}
+	result := gh.MergePR("42", "https://github.com/test/repo.git", MergeOpts{DeleteBranch: true})
+	if result.Merged {
+		t.Error("expected non-admin merge to not succeed when branch protection blocks")
+	}
+	if !result.Blocked {
+		t.Error("expected non-admin merge to return Blocked=true")
+	}
+	if gh.LastMergeOpts.Admin {
+		t.Error("expected LastMergeOpts.Admin to be false for non-admin merge")
+	}
+}
+
+// When Admin=true, MergePR on StubGitHub returns Merged=true even when
+// branch protection would block a normal merge — admin flag bypasses protection.
+func TestMergeOpts_AdminMergeReturnsMerged(t *testing.T) {
+	gh := &StubGitHub{
+		IsAvailable: true,
+		MergeResult: MergeResult{Merged: true},
+	}
+	result := gh.MergePR("42", "https://github.com/test/repo.git", MergeOpts{DeleteBranch: true, Admin: true})
+	if !result.Merged {
+		t.Error("expected admin merge to succeed")
+	}
+	if result.Blocked {
+		t.Error("expected admin merge to not return Blocked")
+	}
+	if !gh.LastMergeOpts.Admin {
+		t.Error("expected LastMergeOpts.Admin to be true for admin merge")
+	}
+}
+
+// When CI fails due to infrastructure (zero job steps) and local tests passed,
+// AutoMergeCurrentBranch sets Admin=true and retries the merge instead of
+// returning ErrMergeBlockedByInfra. This allows ralph loop to bypass branch
+// protection when CI is broken at the infrastructure level.
+func TestAutoMergeCurrentBranch_InfraFailureWithLocalTestsUsesAdminMerge(t *testing.T) {
+	project, _ := initBareRepo(t)
+	stubCISleep(t)
+
+	mgr := &Manager{
+		ProjectDir:       project,
+		BaseBranch:       "main",
+		WorkDir:          filepath.Join(t.TempDir(), "wt"),
+		WorktreeBranch:   "ralph/test/01-infra-admin",
+		State:            newMemState(),
+		Logger:           &testLog{},
+		LocalTestsPassed: true,
+	}
+
+	gh := &StubGitHub{
+		IsAvailable:  true,
+		OpenPR:       "55",
+		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
+		JobStepCount: 0, // zero steps = infrastructure failure
+		MergeResult:  MergeResult{Merged: true},
+	}
+	mgr.GitHub = gh
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("reset --hard", "", nil)
+	mgr.Runner = runner
+
+	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("expected admin merge to succeed, got: %v", err)
+	}
+	if !merged {
+		t.Error("expected merge to succeed via admin bypass")
+	}
+	if !gh.LastMergeOpts.Admin {
+		t.Error("expected MergeOpts.Admin=true when bypassing branch protection after infra failure")
+	}
+}

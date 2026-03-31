@@ -198,9 +198,9 @@ func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 	}
 }
 
-// AutoMergeCurrentBranch bypasses CI failure and proceeds to merge when
-// local tests passed and CI failed due to infrastructure (zero steps executed),
-// so billing outages don't block merges.
+// AutoMergeCurrentBranch bypasses branch protection via admin merge when
+// local tests passed and CI failed due to infrastructure (zero steps executed).
+// Admin merge is used so billing outages don't block merges indefinitely.
 func TestAutoMerge_InfraFailureBypass_MergesWhenLocalTestsPassed(t *testing.T) {
 	stubCISleep(t)
 
@@ -239,11 +239,14 @@ func TestAutoMerge_InfraFailureBypass_MergesWhenLocalTestsPassed(t *testing.T) {
 	}
 
 	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
-	if !errors.Is(err, ErrMergeBlockedByInfra) {
-		t.Fatalf("expected ErrMergeBlockedByInfra, got: %v", err)
+	if err != nil {
+		t.Fatalf("expected admin merge to succeed after infra failure, got: %v", err)
 	}
-	if merged {
-		t.Error("expected merged=false — PR stays open during infra failure")
+	if !merged {
+		t.Error("expected merged=true — admin merge bypasses branch protection")
+	}
+	if !gh.LastMergeOpts.Admin {
+		t.Error("expected MergeOpts.Admin=true when bypassing after infra failure")
 	}
 }
 

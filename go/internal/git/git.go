@@ -42,6 +42,7 @@ type Manager struct {
 	Logger         Log
 	PrePush          func(ctx context.Context) error
 	LocalTestsPassed bool
+	BypassRules      bool
 }
 
 // GH returns the GitHub interface, using the injected stub if set (tests)

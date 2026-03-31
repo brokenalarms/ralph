@@ -22,7 +22,12 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 	}
 
 	var prNumber string
+	bypassRules := false
 	for _, arg := range sub.Args {
+		if arg == "--bypass-rules" {
+			bypassRules = true
+			continue
+		}
 		if !strings.HasPrefix(arg, "-") && prNumber == "" {
 			prNumber = arg
 		}
@@ -68,13 +73,13 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		log.Log("git", "  PR #%s: %s", pr.number, pr.head)
 	}
 
-	return runMerge(ctx, prs, projectDir, defaultBranch, gm, log)
+	return runMerge(ctx, prs, projectDir, defaultBranch, gm, bypassRules, log)
 }
 
 // runMerge rebases the stack onto defaultBranch, then merges PRs bottom-up.
 // For each PR after the first, it rebases the branch onto updated main and
 // waits for fresh CI on the new HEAD before merging.
-func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch string, gm *git.Manager, log *logging.Logger) int {
+func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch string, gm *git.Manager, bypassRules bool, log *logging.Logger) int {
 	topBranch := prs[len(prs)-1].head
 	allBranches := make([]string, len(prs))
 	for i, pr := range prs {
@@ -134,7 +139,7 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 
 		// Merge.
 		log.Log("git", "Merging PR #%s...", pr.number)
-		opts := git.MergeOpts{DeleteBranch: true}
+		opts := git.MergeOpts{DeleteBranch: true, Admin: bypassRules}
 		result := gh.MergePR(pr.number, repoURL, opts)
 		if !result.Merged {
 			log.Error("git", "Merge failed for PR #%s: %s", pr.number, result.Message)
@@ -330,7 +335,7 @@ func gitRunErr(dir string, args ...string) error {
 }
 
 func printMergeUsage() {
-	fmt.Println(`Usage: ralph merge <top-pr-number>
+	fmt.Println(`Usage: ralph merge <top-pr-number> [--bypass-rules]
 
 Companion for ralph loop when --auto-merge is off. Give it any PR
 in the stack — it finds the bottom, rebases the entire chain onto
@@ -339,7 +344,11 @@ bottom-up waiting for CI between each merge.
 
 Uses git-rebase-continue --auto for mechanical conflict resolution.
 
+Flags:
+  --bypass-rules  Bypass branch protection using gh pr merge --admin
+
 Examples:
   ralph merge 321              Merge the stack from bottom to PR #321
-  ralph merge 314              Merge just PR #314 if it's the only open one`)
+  ralph merge 314              Merge just PR #314 if it's the only open one
+  ralph merge 321 --bypass-rules  Merge bypassing branch protection`)
 }
