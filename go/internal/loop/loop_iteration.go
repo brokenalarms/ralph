@@ -127,7 +127,7 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 		return signalComplete
 	}
 
-	prNumber := l.pushSignalPR(p)
+	prNumber, shipURL := l.pushSignalPR(p)
 	prState := "OPEN"
 
 	// Recovery: if push failed but a PR already exists, use it.
@@ -140,6 +140,9 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 	}
 
 	ct := l.buildCompletedTask(p.taskID, p.nextTask, p.result.Summary, prNumber, p.workDir)
+	if shipURL != "" {
+		ct.PRURL = shipURL
+	}
 
 	// buildCompletedTask may discover a PR via findPRInfo that push missed.
 	// findPRInfo queries open PRs for the current branch, so OPEN is safe.
@@ -193,29 +196,26 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 }
 
 // pushSignalPR pushes the branch and creates a PR after a successful signal.
-func (l *Loop) pushSignalPR(p postSignalParams) string {
-	// Auto-commit if the agent left uncommitted changes.
-	if l.git.HasUncommittedChanges() {
-		l.logger.Log("git", "Agent left uncommitted changes — auto-committing")
-		l.git.CommitAll(fmt.Sprintf("[%s] auto-commit agent changes", p.taskID))
-	}
+func (l *Loop) pushSignalPR(p postSignalParams) (string, string) {
 	prBody := buildPRBody(l.cfg.TaskBackend, p.taskID, p.result.Summary)
-	prNumber, pushErr := l.pushAndCreatePR(p.ctx, p.taskID, p.nextTask, prBody)
-	if pushErr != nil {
+	shipOpts := git.ShipOpts{TaskID: p.taskID, TaskDesc: p.nextTask, Body: prBody}
+
+	result, shipErr := l.shipWork(p.ctx, shipOpts)
+	if shipErr != nil {
 		if !l.isOnlineFunc() {
-			l.logger.Warn("git", "Push failed — internet appears down")
+			l.logger.Warn("git", "Ship failed — internet appears down")
 			l.waitForInternetFunc(p.ctx, l.logger)
-			prNumber, pushErr = l.pushAndCreatePR(p.ctx, p.taskID, p.nextTask, prBody)
+			result, shipErr = l.shipWork(p.ctx, shipOpts)
 		}
-		if pushErr != nil {
-			l.logger.Warn("git", "Push/PR: %v", pushErr)
+		if shipErr != nil {
+			l.logger.Warn("git", "Ship: %v", shipErr)
 		}
 	}
-	if prNumber != "" && p.taskID != "" {
-		ref := prURL(l.git.RemoteURL(), prNumber)
+
+	if result.PRNumber != "" && p.taskID != "" {
+		ref := result.PRURL
 		if ref == "" {
-			// Fallback: try to get URL from PR info
-			_, _, ref = l.findPRInfo(p.workDir)
+			ref = prURL(l.git.RemoteURL(), result.PRNumber)
 		}
 		if ref != "" {
 			l.logger.Log("git", "Linking task %s to %s (branch: %s)", p.taskID, ref, l.git.GetWorktreeBranch())
@@ -224,7 +224,7 @@ func (l *Loop) pushSignalPR(p postSignalParams) string {
 			}
 		}
 	}
-	return prNumber
+	return result.PRNumber, result.PRURL
 }
 
 // buildCompletedTask assembles the CompletedTask record for a signal.
