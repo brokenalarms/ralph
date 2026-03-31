@@ -268,7 +268,7 @@ but each transition happens in exactly one place:
 | `loop_refactor.go` | Unchanged |
 | `git/gitops.go` | Remove `GH()`, `EnsureUpToDate`, `ForcePush`, `PostMergeUpdateMain`, `CommitAll`. Add `SwitchTask`, `Ship`. |
 | `git/git_merge.go` | `Push` internalizes rebase+squash. `Ship` added. `FlushUnpushedWork` uses `Ship`. |
-| `git/github.go` | `FindOpenPR` returns URL. |
+| `git/github.go` | `FindOpenPR` returns URL. Merge uses `gh api` for structured responses (follow-up). |
 | `logging/logging.go` | `PRLink` becomes internal. Logger initialized with `nwo`, formats PR refs automatically. |
 
 ## Testing Strategy
