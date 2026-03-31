@@ -309,13 +309,18 @@ func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 	}
 
 	newBranch := BranchName(taskID, slug)
-	if err := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); err == nil {
-		m.WorktreeBranch = newBranch
-		m.BranchRenamed = true
-		if m.State != nil {
-			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
-			_ = m.State.Write("branch_renamed", "true")
+	if err := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); err != nil {
+		_ = m.gitCmdErr(m.WorkDir, "branch", "-D", newBranch)
+		if retryErr := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); retryErr != nil {
+			m.Logger.Warn("git", "Failed to rename branch %s → %s: %v", m.WorktreeBranch, newBranch, retryErr)
+			return
 		}
+	}
+	m.WorktreeBranch = newBranch
+	m.BranchRenamed = true
+	if m.State != nil {
+		_ = m.State.Write("worktree_branch", m.WorktreeBranch)
+		_ = m.State.Write("branch_renamed", "true")
 	}
 }
 
@@ -332,13 +337,20 @@ func (m *Manager) RenameBranchTo(name string) {
 		}
 		return
 	}
-	if err := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, name); err == nil {
-		m.WorktreeBranch = name
-		m.BranchRenamed = true
-		if m.State != nil {
-			_ = m.State.Write("worktree_branch", m.WorktreeBranch)
-			_ = m.State.Write("branch_renamed", "true")
+	if err := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, name); err != nil {
+		// Target branch may exist locally as a stale leftover. Delete it
+		// and retry — the local branch is expendable since work is on the remote.
+		_ = m.gitCmdErr(m.WorkDir, "branch", "-D", name)
+		if retryErr := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, name); retryErr != nil {
+			m.Logger.Warn("git", "Failed to rename branch %s → %s: %v", m.WorktreeBranch, name, retryErr)
+			return
 		}
+	}
+	m.WorktreeBranch = name
+	m.BranchRenamed = true
+	if m.State != nil {
+		_ = m.State.Write("worktree_branch", m.WorktreeBranch)
+		_ = m.State.Write("branch_renamed", "true")
 	}
 }
 
