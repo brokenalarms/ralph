@@ -9,9 +9,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/analyzer"
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/health"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
 // initRun restores worktree state on resume and syncs to the correct base.
@@ -108,6 +106,14 @@ func (l *Loop) pollForTasks() (found, done bool) {
 	return false, false
 }
 
+// beginIteration records that a task iteration is starting.
+func (l *Loop) beginIteration(task taskContext, iteration int) {
+	touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
+	l.state.BeginIteration(task.id, task.title, iteration)
+	l.git.TagTaskStart(task.id)
+	updateStreamTask(l.cfg.Dirs.RalphDir, task.id, task.title, task.info.Priority)
+}
+
 func (l *Loop) waitForRate(ctx context.Context) bool {
 	if l.limiter.Allowed() {
 		return true
@@ -195,34 +201,27 @@ func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, ru
 	return diffStat, false
 }
 
-// logIterationBanner prints the health dashboard, separator, task banner,
-// and iteration phase line between iterations.
-func (l *Loop) logIterationBanner(runIteration, maxIter, iteration int, taskID, nextTask string, taskChanged bool, taskInfo tasks.TaskInfo) {
+// logIterationBanner gathers context and delegates to the logger.
+func (l *Loop) logIterationBanner(runIteration, maxIter, iteration int, task taskContext) {
 	completed, _ := l.cfg.TaskBackend.CountCompleted()
 	total, _ := l.cfg.TaskBackend.CountTotal()
 
 	if runIteration > 1 {
-		if l.cfg.Verbose {
-			health.Log(l.logger, health.Collect(l.cfg.Dirs.RalphDir, l.git.GetWorkDir()))
-		}
 		l.logger.DashedSeparator(logging.Yellow)
 	}
 
-	if taskID != "" && taskChanged {
-		l.logger.TaskBanner(taskID, nextTask, taskInfo.Priority)
-	}
-
-	phaseColor := logging.Green
-	if l.lastAction == analyzer.Warn {
-		phaseColor = logging.Yellow
-	}
-	versionTag := ""
-	if l.cfg.Version != "" {
-		versionTag = fmt.Sprintf(" | Ralph v%s", l.cfg.Version)
-	}
-	l.logger.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done]%s ---",
-		runIteration, maxIter, iteration, completed, total, versionTag)
-	if desc := getBeadDescription(l.cfg.TaskBackend, taskID); desc != "" {
-		l.logger.Log("beads", "  %s", desc)
-	}
+	l.logger.IterationBanner(logging.BannerOpts{
+		RunIteration: runIteration,
+		MaxIteration: maxIter,
+		Lifetime:     iteration,
+		Completed:    completed,
+		Total:        total,
+		TaskID:       task.id,
+		TaskTitle:    task.title,
+		TaskChanged:  task.changed,
+		Priority:     task.info.Priority,
+		Version:      l.cfg.Version,
+		WarnPhase:    l.lastAction == analyzer.Warn,
+		Description:  getBeadDescription(l.cfg.TaskBackend, task.id),
+	})
 }

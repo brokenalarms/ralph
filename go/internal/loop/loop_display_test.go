@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -435,126 +434,6 @@ func (r *rateLimitStubRunner) InjectMessage(_ string) error { return nil }
 
 // Health dashboard is logged between iterations in verbose mode so operators
 // can detect process leaks, stale signal files, and growing state.json.
-func TestLoop_HealthDashboardLoggedBetweenIterations(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
-
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, WorktreeBranch: "ralph/wip-test"}
-
-	// Create a signal file so the health snapshot has something to report.
-	os.WriteFile(filepath.Join(ralphDir, ".signal_current_task"), []byte("test task"), 0o644)
-
-	callCount := 0
-	backend := &testutil.MutableBackend{
-		StubBackend: testutil.StubBackend{
-			Remaining: 1,
-			Total:     2,
-			NextTask:  "First task",
-			NextID:    "ralph-h1",
-		},
-	}
-
-	var logBuf bytes.Buffer
-	logger := logging.NewWithWriter(&logBuf)
-
-	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
-			RalphDir:   ralphDir,
-			PromptsDir: promptsDir,
-		},
-		MaxIterations: 3,
-		CallsPerHour:  80,
-		TaskBackend:   backend,
-		Verbose:       true,
-	}, st, gm, logger)
-
-	l.runner = &stubRunner{
-		onRun: func() {
-			callCount++
-			if callCount >= 2 {
-				os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
-			}
-		},
-	}
-
-	_ = l.Run(context.Background())
-
-	output := logBuf.String()
-
-	if !strings.Contains(output, "[health]") {
-		t.Error("expected [health] tag in log output between iterations")
-	}
-	if !strings.Contains(output, "state fields") {
-		t.Error("expected 'state fields' in health log")
-	}
-	if !strings.Contains(output, "signals:") {
-		t.Error("expected 'signals:' in health log")
-	}
-	if !strings.Contains(output, "branch:") {
-		t.Error("expected 'branch:' in health log")
-	}
-}
-
-// Health dashboard is suppressed in default (non-verbose) mode to reduce
-// diagnostic noise — only shown when --verbose is set.
-func TestLoop_HealthDashboardHiddenByDefault(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
-
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, WorktreeBranch: "ralph/wip-test"}
-
-	os.WriteFile(filepath.Join(ralphDir, ".signal_current_task"), []byte("test task"), 0o644)
-
-	callCount := 0
-	backend := &testutil.MutableBackend{
-		StubBackend: testutil.StubBackend{
-			Remaining: 1,
-			Total:     2,
-			NextTask:  "First task",
-			NextID:    "ralph-h1",
-		},
-	}
-
-	var logBuf bytes.Buffer
-	logger := logging.NewWithWriter(&logBuf)
-
-	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
-			RalphDir:   ralphDir,
-			PromptsDir: promptsDir,
-		},
-		MaxIterations: 3,
-		CallsPerHour:  80,
-		TaskBackend:   backend,
-		Verbose:       false,
-	}, st, gm, logger)
-
-	l.runner = &stubRunner{
-		onRun: func() {
-			callCount++
-			if callCount >= 2 {
-				os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
-			}
-		},
-	}
-
-	_ = l.Run(context.Background())
-
-	output := logBuf.String()
-
-	if strings.Contains(output, "[health]") {
-		t.Error("health log should not appear in default (non-verbose) mode")
-	}
-}
-
 // Verifies that the iteration banner includes the Ralph version when
 // Config.Version is set, so operators can tell which build is running.
 func TestLoop_IterationBannerShowsVersion(t *testing.T) {

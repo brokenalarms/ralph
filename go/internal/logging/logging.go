@@ -79,6 +79,43 @@ func BranchTag(branch string) string {
 	return Green + "[" + branch + "]" + Reset
 }
 
+// Level controls the severity and color of a log message.
+type Level int
+
+const (
+	Info    Level = iota // cyan
+	Success             // green
+	Warn                // yellow
+	Error               // red
+)
+
+func (lv Level) color() string {
+	switch lv {
+	case Success:
+		return Green
+	case Warn:
+		return Yellow
+	case Error:
+		return Red
+	default:
+		return Cyan
+	}
+}
+
+// Link is a clickable reference appended to a log line.
+type Link struct {
+	Text string // visible text, e.g. "PR #42"
+	URL  string // click target, e.g. "https://github.com/owner/repo/pull/42"
+}
+
+// Opts is the structured parameter for Emit. All log context is a field.
+type Opts struct {
+	Domain Domain
+	Level  Level
+	Link   *Link  // clickable reference appended at end of line
+	Branch string // appended as colored tag
+}
+
 // Logger provides colored logging with trailing timestamps that appear
 // only when the second changes from the previous line.
 type Logger struct {
@@ -109,6 +146,25 @@ func NewWithWriter(w io.Writer) *Logger {
 	}
 }
 
+// Emit writes a log message with structured options. This is the single
+// log method — Level controls severity/color, Domain controls the tag,
+// PR and Branch are appended as formatted suffixes.
+func (l *Logger) Emit(o Opts, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+
+	// Append structured fields as suffixes.
+	if o.Link != nil {
+		msg += "  " + Hyperlink(o.Link.URL, o.Link.Text)
+	}
+	if o.Branch != "" {
+		msg += "  " + BranchTag(o.Branch)
+	}
+
+	tag := Tag(o.Level.color(), Orch, o.Domain)
+	content := fmt.Sprintf("%s %s", tag, msg)
+	l.write(l.Fmt.Format(content) + "\n")
+}
+
 // SetStreaming enables or disables streaming mode. In streaming mode, the
 // logger writes only to the log file — stdout is handled by a single tail
 // goroutine to prevent duplicate output.
@@ -131,30 +187,29 @@ func (l *Logger) emit(color string, domain Domain, msg string) {
 	l.write(l.Fmt.Format(content) + "\n")
 }
 
-// Log writes an info-level message with cyan [o][domain] prefix.
+// Log writes an info-level message. Deprecated: use Emit.
 func (l *Logger) Log(domain Domain, format string, args ...any) {
 	l.emit(Cyan, domain, fmt.Sprintf(format, args...))
 }
 
-// AgentLog writes an info-level message with cyan [r] prefix, used when
-// the orchestrator relays an agent action (e.g. task pickup signal).
+// AgentLog writes an info-level message with [r] actor prefix.
 func (l *Logger) AgentLog(domain Domain, format string, args ...any) {
 	tag := Tag(Cyan, AgentActor, domain)
 	content := fmt.Sprintf("%s %s", tag, fmt.Sprintf(format, args...))
 	l.write(l.Fmt.Format(content) + "\n")
 }
 
-// Success writes a success message with green [o][domain] prefix.
+// Success writes a success message. Deprecated: use Emit with Level: Success.
 func (l *Logger) Success(domain Domain, format string, args ...any) {
 	l.emit(Green, domain, fmt.Sprintf(format, args...))
 }
 
-// Warn writes a warning with yellow [o][domain] prefix.
+// Warn writes a warning. Deprecated: use Emit with Level: Warn.
 func (l *Logger) Warn(domain Domain, format string, args ...any) {
 	l.emit(Yellow, domain, fmt.Sprintf(format, args...))
 }
 
-// Error writes an error with red [o][domain] prefix.
+// Error writes an error. Deprecated: use Emit with Level: Error.
 func (l *Logger) Error(domain Domain, format string, args ...any) {
 	l.emit(Red, domain, fmt.Sprintf(format, args...))
 }
@@ -209,6 +264,44 @@ func (l *Logger) TaskBanner(taskID, title string, priority *int) {
 	l.Separator(Magenta, label)
 	if priority != nil {
 		l.Log("", "%s %s", PriorityTag(priority), title)
+	}
+}
+
+// BannerOpts holds the data for an iteration banner.
+type BannerOpts struct {
+	RunIteration int
+	MaxIteration int
+	Lifetime     int
+	Completed    int
+	Total        int
+	TaskID       string
+	TaskTitle    string
+	TaskChanged  bool
+	Priority     *int
+	Version      string
+	WarnPhase    bool
+	Description  string
+}
+
+// IterationBanner renders the task banner and phase line between iterations.
+func (l *Logger) IterationBanner(o BannerOpts) {
+	if o.TaskID != "" && o.TaskChanged {
+		l.TaskBanner(o.TaskID, o.TaskTitle, o.Priority)
+	}
+
+	phaseColor := Green
+	if o.WarnPhase {
+		phaseColor = Yellow
+	}
+	versionTag := ""
+	if o.Version != "" {
+		versionTag = fmt.Sprintf(" | Ralph v%s", o.Version)
+	}
+	l.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done]%s ---",
+		o.RunIteration, o.MaxIteration, o.Lifetime, o.Completed, o.Total, versionTag)
+
+	if o.Description != "" {
+		l.Log("beads", "  %s", o.Description)
 	}
 }
 
