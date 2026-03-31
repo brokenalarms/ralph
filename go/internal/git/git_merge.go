@@ -197,9 +197,9 @@ func (m *Manager) reopenClosedPR(gh GitHub, repoURL, title, body string) (string
 
 // ShipOpts configures the Ship pipeline.
 type ShipOpts struct {
-	TaskID   string
-	TaskDesc string
-	Body     string
+	TaskID    string
+	TaskTitle string
+	Body      string
 }
 
 // ShipResult is the outcome of the Ship pipeline.
@@ -229,7 +229,7 @@ func (m *Manager) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 		m.Logger.Warn("git", "Push failed: %v — attempting PR creation anyway", err)
 	}
 
-	prNumber, err := m.CreatePR(ctx, opts.TaskID, opts.TaskDesc, opts.Body)
+	prNumber, err := m.CreatePR(ctx, opts.TaskID, opts.TaskTitle, opts.Body)
 	if err != nil {
 		return ShipResult{PRNumber: prNumber}, err
 	}
@@ -260,7 +260,7 @@ func (m *Manager) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 // PushAndCreatePR composes Push and CreatePR. Squashes, force-pushes, then
 // ensures a PR exists. Returns the PR number.
 func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
-	result, err := m.Ship(ctx, ShipOpts{TaskID: taskID, TaskDesc: taskDesc, Body: body})
+	result, err := m.Ship(ctx, ShipOpts{TaskID: taskID, TaskTitle: taskDesc, Body: body})
 	return result.PRNumber, err
 }
 

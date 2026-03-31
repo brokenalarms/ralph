@@ -198,7 +198,7 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 // pushSignalPR pushes the branch and creates a PR after a successful signal.
 func (l *Loop) pushSignalPR(p postSignalParams) (string, string) {
 	prBody := buildPRBody(l.cfg.TaskBackend, p.taskID, p.result.Summary)
-	shipOpts := git.ShipOpts{TaskID: p.taskID, TaskDesc: p.nextTask, Body: prBody}
+	shipOpts := git.ShipOpts{TaskID: p.taskID, TaskTitle: p.nextTask, Body: prBody}
 
 	result, shipErr := l.shipWork(p.ctx, shipOpts)
 	if shipErr != nil {
