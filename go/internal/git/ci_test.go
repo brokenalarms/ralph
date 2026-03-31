@@ -202,10 +202,10 @@ func TestIsMergeConflictError_Matches(t *testing.T) {
 		msg  string
 		want bool
 	}{
-		{"Pull request is not mergeable", true},
+		{"Pull request is not mergeable", false}, // ambiguous — excluded after ralph-laun fix
 		{"Merge conflict in the base branch", true},
 		{"There is a merge conflict", true},
-		{"not mergeable: the head branch was out of date", true},
+		{"not mergeable: the head branch was out of date", false}, // ambiguous — excluded after ralph-laun fix
 		{"Head branch was behind the base branch", true},
 		{"required status check \"test\" is expected", false},
 		{"some other error", false},
@@ -847,7 +847,7 @@ func TestAutoMerge_MergeConflictReturnsTypedError(t *testing.T) {
 		IsAvailable: true,
 		OpenPR:      "42",
 		Checks:      []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
-		MergeOutput: "Pull request is not mergeable",
+		MergeOutput: "merge conflict in file.go",
 		MergeErr:    fmt.Errorf("exit status 1"),
 	}
 	mgr := setupAutoMergeManager(t, gh)
@@ -920,24 +920,14 @@ func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 	}
 }
 
-// BUG ralph-laun: When GitHub returns "not mergeable" because CI failed (billing,
-// runner issues), executeMerge checks isMergeConflictError before isCIGatedError.
-// "not mergeable" matches the merge conflict pattern, so the loop tries a
-// pointless rebase instead of recognizing a CI-gated block.
-// This test documents the current (buggy) behavior and will be fixed during
-// the orchestrator refactor.
-func TestIsMergeConflictError_NotMergeableIsAmbiguous(t *testing.T) {
-	// "not mergeable" matches merge conflict patterns today.
-	// After the fix, it should NOT match — it should fall through to CI-gated.
+// "not mergeable" is ambiguous — it can mean CI-gated or merge conflict.
+// After ralph-laun fix, "not mergeable" no longer matches isMergeConflictError
+// so executeMerge falls through to the CI-gated check or the generic error.
+func TestIsMergeConflictError_NotMergeableExcluded(t *testing.T) {
 	output := "Pull request is not mergeable"
-
-	if !isMergeConflictError(output) {
-		t.Error("current code: 'not mergeable' should match merge conflict pattern (this is the bug)")
+	if isMergeConflictError(output) {
+		t.Error("'not mergeable' should not match merge conflict — it's ambiguous")
 	}
-	// This is also a CI-gated pattern in some contexts, but executeMerge
-	// checks merge conflict first, so CI-gated never fires for this string.
-	// The fix: check isCIGatedError first, or remove "not mergeable" from
-	// isMergeConflictError since it's ambiguous.
 }
 
 // CI-gated errors should be distinguishable from merge conflicts.

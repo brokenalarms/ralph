@@ -414,11 +414,8 @@ func (m *Manager) executeMerge(ctx context.Context, prNumber, repoURL string) (b
 		return m.postMergeUpdate(nwo, prNumber)
 	}
 
-	if isMergeConflictError(mergeOutput) {
-		m.Logger.Warn("git", "%s has merge conflicts — attempting rebase", pr)
-		return false, &MergeConflictError{PRNumber: prNumber}
-	}
-
+	// Check CI-gated errors before merge conflicts: "not mergeable" can
+	// mean either, but CI-gated is more specific and actionable.
 	if isCIGatedError(mergeOutput) {
 		m.Logger.Log("ci", "%s blocked by branch protection — waiting for CI...", pr)
 		checks, status, waitErr := m.AwaitCI(ctx, prNumber, repoURL, "")
@@ -437,6 +434,11 @@ func (m *Manager) executeMerge(ctx context.Context, prNumber, repoURL string) (b
 			m.Logger.Warn("git", "Merge retry failed for %s: %s", pr, retryOutput)
 			return false, fmt.Errorf("merge retry failed for PR #%s after CI passed", prNumber)
 		}
+	}
+
+	if isMergeConflictError(mergeOutput) {
+		m.Logger.Warn("git", "%s has merge conflicts — attempting rebase", pr)
+		return false, &MergeConflictError{PRNumber: prNumber}
 	}
 
 	m.Logger.Warn("git", "Auto-merge failed for %s: %s", pr, mergeOutput)
