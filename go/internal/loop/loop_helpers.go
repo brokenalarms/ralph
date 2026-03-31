@@ -11,7 +11,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/health"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
 // initRun restores worktree state on resume and syncs to the correct base.
@@ -197,7 +196,8 @@ func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, ru
 
 // logIterationBanner prints the health dashboard, separator, task banner,
 // and iteration phase line between iterations.
-func (l *Loop) logIterationBanner(runIteration, maxIter, iteration int, taskID, nextTask string, taskChanged bool, taskInfo tasks.TaskInfo) {
+func (l *Loop) logIterationBanner(runIteration, maxIter, iteration int, task taskContext) {
+	taskID, nextTask, taskChanged, taskInfo := task.id, task.title, task.changed, task.info
 	completed, _ := l.cfg.TaskBackend.CountCompleted()
 	total, _ := l.cfg.TaskBackend.CountTotal()
 

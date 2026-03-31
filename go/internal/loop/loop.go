@@ -218,7 +218,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.cfg.OnIterationStart()
 		}
 
-		l.logIterationBanner(runIteration, l.state.ReadMaxIterations(l.cfg.MaxIterations), iteration, task.id, task.title, task.changed, task.info)
+		l.logIterationBanner(runIteration, l.state.ReadMaxIterations(l.cfg.MaxIterations), iteration, task)
 		touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
 
 		l.state.Write("iteration", strconv.Itoa(iteration))
