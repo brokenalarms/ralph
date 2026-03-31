@@ -9,7 +9,6 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/analyzer"
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/health"
 	"github.com/brokenalarms/ralph/internal/logging"
 )
 
@@ -200,9 +199,6 @@ func (l *Loop) logIterationBanner(runIteration, maxIter, iteration int, task tas
 	total, _ := l.cfg.TaskBackend.CountTotal()
 
 	if runIteration > 1 {
-		if l.cfg.Verbose {
-			health.Log(l.logger, health.Collect(l.cfg.Dirs.RalphDir, l.git.GetWorkDir()))
-		}
 		l.logger.DashedSeparator(logging.Yellow)
 	}
 
