@@ -18,4 +18,14 @@ Use this structure:
 - Patterns or conventions discovered that other tasks should follow
 ```
 
+### Attempt handoff
+
+As the very first line of the reflection (before the `#` title), write a single-line status summary for the next attempt:
+
+```
+STATUS: <what was done> | <what remains> | <whether tests pass>
+```
+
+This line is the breadcrumb trail — if the next attempt picks up this task, it reads this line to know exactly where things stand without re-verifying from scratch.
+
 Create the `reflections/` directory if it doesn't exist. Keep each section to 2-4 bullets. Skip a section if nothing applies.
