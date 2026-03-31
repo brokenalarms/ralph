@@ -54,9 +54,9 @@ func TestPostMergeUpdateMain_AdvancesLocalMain(t *testing.T) {
 		t.Errorf("local main should match origin/main: got %s, want %s", localAfter, originMain)
 	}
 
-	// Worktree branch should be unchanged
-	if !strings.Contains(mgr.WorktreeBranch, "completed-task") {
-		t.Errorf("worktree branch should still be the task branch, got %q", mgr.WorktreeBranch)
+	// After cleanup the worktree moves to ralph/next (the task branch was deleted).
+	if mgr.WorktreeBranch != "ralph/next" {
+		t.Errorf("worktree branch should be ralph/next after task branch cleanup, got %q", mgr.WorktreeBranch)
 	}
 }
 
@@ -203,6 +203,115 @@ func TestPostMergeUpdateMain_LogSaysUpdatedLocalToLatest(t *testing.T) {
 		if strings.Contains(lower, "force") && !strings.Contains(lower, "enforce") {
 			t.Errorf("log should not contain 'force' language in normal operation, got: %q", msg)
 		}
+	}
+}
+
+// PostMergeUpdateMain deletes the local task branch after rebasing onto main,
+// so completed task branches don't accumulate in the local repo over time.
+func TestPostMergeUpdateMain_DeletesLocalTaskBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+	bare := filepath.Join(filepath.Dir(project), "bare.git")
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      st,
+		Logger:     &testLog{},
+	}
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("delete local branch", "ralph-4l32")
+	taskBranch := mgr.WorktreeBranch
+
+	// Commit on the task branch so it has a distinct local ref.
+	writeFile(t, mgr.WorkDir, "task-work.txt", "work\n")
+	run(t, "git", "-C", mgr.WorkDir, "add", "task-work.txt")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "task work")
+
+	// Push a squash-merge commit to origin/main (simulating a merged PR).
+	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
+	run(t, "git", "clone", bare, tmpClone)
+	writeFile(t, tmpClone, "merged-work.txt", "merged\n")
+	run(t, "git", "-C", tmpClone, "commit", "-m", "merged PR")
+	run(t, "git", "-C", tmpClone, "push", "origin", "main")
+
+	mgr.PostMergeUpdateMain()
+
+	// The task branch must no longer exist as a local ref.
+	branches := gitOutput(project, "branch", "--list")
+	if strings.Contains(branches, taskBranch) {
+		t.Errorf("local task branch %q should have been deleted after merge, but still listed in: %s", taskBranch, branches)
+	}
+}
+
+// PostMergeUpdateMain moves the worktree to ralph/next before deleting the task
+// branch when the worktree is currently checked out on that branch, so git
+// does not refuse the deletion.
+func TestPostMergeUpdateMain_MovesToNextBranchWhenOnTaskBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+	bare := filepath.Join(filepath.Dir(project), "bare.git")
+	ralphDir := filepath.Join(project, ".ralph")
+	st := newMemState()
+
+	mgr := &Manager{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      st,
+		Logger:     &testLog{},
+	}
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("move to next", "ralph-4l32")
+	taskBranch := mgr.WorktreeBranch
+
+	// Commit on the task branch.
+	writeFile(t, mgr.WorkDir, "task-work.txt", "work\n")
+	run(t, "git", "-C", mgr.WorkDir, "add", "task-work.txt")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "task work")
+
+	// Verify the worktree is on the task branch before PostMergeUpdateMain.
+	checkedOutBefore := gitOutput(mgr.WorkDir, "symbolic-ref", "--short", "HEAD")
+	if checkedOutBefore != taskBranch {
+		t.Fatalf("expected worktree on %q, got %q", taskBranch, checkedOutBefore)
+	}
+
+	// Push a squash-merge commit to origin/main.
+	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
+	run(t, "git", "clone", bare, tmpClone)
+	writeFile(t, tmpClone, "merged-work.txt", "merged\n")
+	run(t, "git", "-C", tmpClone, "commit", "-m", "merged PR")
+	run(t, "git", "-C", tmpClone, "push", "origin", "main")
+
+	mgr.PostMergeUpdateMain()
+
+	// Worktree must now be on ralph/next (not the deleted task branch).
+	checkedOutAfter := gitOutput(mgr.WorkDir, "symbolic-ref", "--short", "HEAD")
+	if checkedOutAfter != "ralph/next" {
+		t.Errorf("worktree should be on ralph/next after branch cleanup, got %q", checkedOutAfter)
+	}
+
+	// WorktreeBranch field must reflect the new branch.
+	if mgr.WorktreeBranch != "ralph/next" {
+		t.Errorf("WorktreeBranch should be ralph/next, got %q", mgr.WorktreeBranch)
+	}
+
+	// Old task branch must be gone.
+	branches := gitOutput(project, "branch", "--list")
+	if strings.Contains(branches, taskBranch) {
+		t.Errorf("old task branch %q should be deleted, still listed in: %s", taskBranch, branches)
+	}
+
+	// BranchRenamed must be false so the next task can rename ralph/next.
+	if mgr.BranchRenamed {
+		t.Error("BranchRenamed should be false after moving to ralph/next")
 	}
 }
 
