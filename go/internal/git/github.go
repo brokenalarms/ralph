@@ -44,6 +44,7 @@ type GitHub interface {
 	GetPRHead(workDir, prNumber string) (head string, err error)
 	GetPRHeadSHA(workDir, prNumber string) (sha string, err error)
 	ListOpenPRBranches(repoURL string) ([]string, error)
+	ReopenPR(prNumber, repoURL string) error
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -259,6 +260,18 @@ func (g *ghCLI) PRDiff(workDir, prNumber string) (string, error) {
 		return "", fmt.Errorf("gh pr diff failed: %w", err)
 	}
 	return string(out), nil
+}
+
+func (g *ghCLI) ReopenPR(prNumber, repoURL string) error {
+	args := []string{"pr", "reopen", prNumber}
+	if repoURL != "" {
+		args = append(args, "-R", repoURL)
+	}
+	cmd := exec.Command("gh", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("gh pr reopen failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func (g *ghCLI) GetPRState(workDir, prNumber string) (string, error) {
