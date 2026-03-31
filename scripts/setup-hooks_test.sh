@@ -11,7 +11,7 @@ trap 'rm -rf "$tmp"' EXIT
 git -C "$tmp" init --quiet
 mkdir -p "$tmp/scripts"
 cp "$(dirname "$0")/setup-hooks.sh" "$tmp/scripts/"
-cp "$(dirname "$0")/rebuild-go.sh" "$tmp/scripts/"
+cp "$(dirname "$0")/build-go.sh" "$tmp/scripts/"
 
 (cd "$tmp" && bash scripts/setup-hooks.sh)
 
@@ -21,9 +21,9 @@ cp "$(dirname "$0")/rebuild-go.sh" "$tmp/scripts/"
 # post-rewrite hook exists and is executable
 [[ -x "$tmp/.git/hooks/post-rewrite" ]] || fail "post-rewrite hook missing or not executable"
 
-# Both hooks invoke rebuild-go.sh
-grep -q 'rebuild-go.sh' "$tmp/.git/hooks/post-merge" || fail "post-merge doesn't call rebuild-go.sh"
-grep -q 'rebuild-go.sh' "$tmp/.git/hooks/post-rewrite" || fail "post-rewrite doesn't call rebuild-go.sh"
+# Both hooks invoke build-go.sh
+grep -q 'build-go.sh' "$tmp/.git/hooks/post-merge" || fail "post-merge doesn't call build-go.sh"
+grep -q 'build-go.sh' "$tmp/.git/hooks/post-rewrite" || fail "post-rewrite doesn't call build-go.sh"
 
 # post-rewrite only fires on rebase, not amend
 grep -q 'rebase' "$tmp/.git/hooks/post-rewrite" || fail "post-rewrite doesn't check for rebase argument"
