@@ -165,11 +165,8 @@ func (l *Loop) handlePostSignal(p postSignalParams) postSignalAction {
 			closeReason := "verified complete (no new commits)"
 			ref, _ := l.cfg.TaskBackend.GetExternalRef(p.taskID)
 			if prNum := parsePRNumber(ref); prNum != "" {
-				gh := l.git.GH()
-				if gh != nil {
-					if prState, _ := gh.GetPRState(l.git.GetWorkDir(), prNum); strings.ToUpper(prState) == "MERGED" {
-						closeReason = fmt.Sprintf("PR #%s already merged", prNum)
-					}
+				if prState, _ := l.git.GetPRState(prNum); strings.ToUpper(prState) == "MERGED" {
+					closeReason = fmt.Sprintf("PR #%s already merged", prNum)
 				}
 			}
 			_ = l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", closeReason)
@@ -347,12 +344,8 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 
 	prState := p.prState
 	if prState == "" {
-		gh := l.git.GH()
-		if gh == nil || !gh.Available() {
-			return finalizePRResult{}
-		}
-		looked, err := gh.GetPRState(l.git.GetWorkDir(), p.prNumber)
-		if err != nil {
+		looked, err := l.git.GetPRState(p.prNumber)
+		if err != nil || looked == "" {
 			l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(p.prNumber)}, "Failed to get state: %v", err)
 			return finalizePRResult{}
 		}
@@ -363,8 +356,7 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 
 	if prState == "OPEN" && l.cfg.AutoMerge {
 		l.git.SetLocalTestsPassed(true)
-		gh := l.git.GH()
-		prBase := getPRBase(gh, l.git.GetWorkDir(), p.prNumber)
+		prBase := l.git.GetPRBase(p.prNumber)
 		defaultBranch := l.git.DetectDefaultBranch()
 		if prBase != "" && prBase != defaultBranch {
 			l.logger.Emit(logging.Opts{Domain: "git", Link: l.prLink(p.prNumber)}, "targets %s — stacked, closing bead", prBase)

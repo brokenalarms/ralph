@@ -1,6 +1,9 @@
 package git
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // GitOps abstracts the git operations that the execution loop needs.
 // Production code uses *Manager; tests use testutil.StubGit.
@@ -13,7 +16,15 @@ type GitOps interface {
 	IsBranchRenamed() bool
 	SetBranchRenamed(v bool)
 
-	// GitHub access.
+	// PR operations — delegated to GitHub internally.
+	FindOpenPRForBranch(branch string) (string, error)
+	GetPRState(prNumber string) (string, error)
+	ListOpenPRBranches() ([]string, error)
+	GetPRBase(prNumber string) string
+	FindPRForBranch(branch string) (number, title, url string, err error)
+	PRChainIsHealthy(prNumber string) (bool, string)
+
+	// Deprecated — remove once all callers migrate to typed PR methods above.
 	GH() GitHub
 
 	// CI bypass flag.
@@ -90,3 +101,71 @@ func (m *Manager) IsBranchRenamed() bool { return m.BranchRenamed }
 
 // SetBranchRenamed sets the branch renamed state.
 func (m *Manager) SetBranchRenamed(v bool) { m.BranchRenamed = v }
+
+// FindOpenPRForBranch finds an open PR for the given branch.
+func (m *Manager) FindOpenPRForBranch(branch string) (string, error) {
+	gh := m.gh()
+	if !gh.Available() {
+		return "", nil
+	}
+	return gh.FindOpenPR(branch, m.RemoteURL())
+}
+
+// GetPRState returns the state (OPEN/CLOSED/MERGED) of a PR.
+func (m *Manager) GetPRState(prNumber string) (string, error) {
+	gh := m.gh()
+	if !gh.Available() {
+		return "", nil
+	}
+	return gh.GetPRState(m.WorkDir, prNumber)
+}
+
+// ListOpenPRBranches returns branch names that have open PRs.
+func (m *Manager) ListOpenPRBranches() ([]string, error) {
+	gh := m.gh()
+	repoURL := m.RemoteURL()
+	if repoURL == "" || !gh.Available() {
+		return nil, nil
+	}
+	return gh.ListOpenPRBranches(repoURL)
+}
+
+// GetPRBase returns the base branch of a PR.
+func (m *Manager) GetPRBase(prNumber string) string {
+	gh := m.gh()
+	if !gh.Available() {
+		return ""
+	}
+	base, _ := gh.GetPRBase(m.WorkDir, prNumber)
+	return base
+}
+
+// FindPRForBranch finds any PR (open or closed) for the given branch.
+func (m *Manager) FindPRForBranch(branch string) (string, string, string, error) {
+	gh := m.gh()
+	if !gh.Available() {
+		return "", "", "", nil
+	}
+	return gh.FindPR(branch, m.WorkDir)
+}
+
+// PRChainIsHealthy checks that the PR's head branch exists on the remote
+// and hasn't been merged into main already.
+func (m *Manager) PRChainIsHealthy(prNumber string) (bool, string) {
+	gh := m.gh()
+	if !gh.Available() {
+		return false, "gh CLI not available"
+	}
+	headBranch, _ := gh.GetPRHead(m.WorkDir, prNumber)
+	if headBranch == "" {
+		return false, fmt.Sprintf("PR #%s has no head branch", prNumber)
+	}
+	_ = m.FetchBranch(headBranch)
+	if !m.RemoteBranchHasCommits(headBranch) {
+		return false, fmt.Sprintf("branch %s missing from remote", headBranch)
+	}
+	if m.BranchIsAncestorOfMain(headBranch) {
+		return false, fmt.Sprintf("branch %s already merged into main", headBranch)
+	}
+	return true, ""
+}

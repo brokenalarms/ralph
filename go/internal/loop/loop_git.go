@@ -132,18 +132,11 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 		return false
 	}
 
-	gh := l.git.GH()
-	if gh == nil || !gh.Available() {
-		return false
-	}
-	repoURL := l.git.RemoteURL()
-
-
 	// Check if a PR exists for this exact branch.
-	prNumber, _ := gh.FindOpenPR(branch, repoURL)
+	prNumber, _ := l.git.FindOpenPRForBranch(branch)
 	if prNumber != "" {
 		l.logger.Emit(logging.Opts{Domain: "git", Link: l.prLink(prNumber)}, "Found for %s (task %s) — resolving", branch, taskID)
-		_ = l.cfg.TaskBackend.SetExternalRef(taskID, prURL(repoURL, prNumber))
+		_ = l.cfg.TaskBackend.SetExternalRef(taskID, prURL(l.git.RemoteURL(), prNumber))
 		return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
 	}
 
@@ -171,13 +164,7 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 // resolveByPRState inspects the PR's state and takes the appropriate action.
 // Delegates merge+close to finalizePR so resume and post-signal share one path.
 func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber string) bool {
-	gh := l.git.GH()
-	if gh == nil || !gh.Available() {
-		l.logger.Warn("git", "gh CLI not available — cannot check PR state")
-		return false
-	}
-
-	prState, err := gh.GetPRState(l.git.GetWorkDir(), prNumber)
+	prState, err := l.git.GetPRState(prNumber)
 	if err != nil {
 		l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(prNumber)}, "Failed to get state: %v", err)
 		return false
@@ -204,7 +191,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 		return true
 
 	case "OPEN":
-		if ok, reason := prChainIsHealthy(gh, l.git.GetWorkDir(), l.git, prNumber); !ok {
+		if ok, reason := l.git.PRChainIsHealthy(prNumber); !ok {
 			l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(prNumber)}, "chain unhealthy: %s — re-running agent", reason)
 			return false
 		}
@@ -281,12 +268,7 @@ func (l *Loop) setStackHead() {
 
 	// Only consider branches with open PRs. One gh API call replaces
 	// fetching every completed task's branch individually.
-	gh := l.git.GH()
-	repoURL := l.git.RemoteURL()
-	if repoURL == "" || gh == nil || !gh.Available() {
-		return
-	}
-	openBranches, err := gh.ListOpenPRBranches(repoURL)
+	openBranches, err := l.git.ListOpenPRBranches()
 	if err != nil || len(openBranches) == 0 {
 		return
 	}
@@ -321,39 +303,7 @@ func (l *Loop) setStackHead() {
 	l.logger.Log("git", "No stacked parents — starting from %s", l.git.DetectDefaultBranch())
 }
 
-// branchChecker provides the narrow git operations needed by prChainIsHealthy.
-type branchChecker interface {
-	FetchBranch(branch string) error
-	BranchIsAncestorOfMain(branch string) bool
-	RemoteBranchHasCommits(branch string) bool
-}
 
-func prChainIsHealthy(gh git.GitHub, workDir string, branches branchChecker, prNumber string) (bool, string) {
-	if gh == nil || !gh.Available() {
-		return false, "gh CLI not available"
-	}
-
-	headBranch, _ := gh.GetPRHead(workDir, prNumber)
-	if headBranch == "" {
-		return false, fmt.Sprintf("PR #%s has no head branch", prNumber)
-	}
-	_ = branches.FetchBranch(headBranch)
-	if !branches.RemoteBranchHasCommits(headBranch) {
-		return false, fmt.Sprintf("branch %s missing from remote", headBranch)
-	}
-	if branches.BranchIsAncestorOfMain(headBranch) {
-		return false, fmt.Sprintf("branch %s already merged into main", headBranch)
-	}
-	return true, ""
-}
-
-func getPRBase(gh git.GitHub, workDir, prNumber string) string {
-	if gh == nil || !gh.Available() {
-		return ""
-	}
-	base, _ := gh.GetPRBase(workDir, prNumber)
-	return base
-}
 
 // prURL builds the canonical PR URL from the remote URL and PR number.
 // Always returns a full URL; never returns a "gh-" prefixed string.
