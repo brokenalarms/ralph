@@ -26,7 +26,7 @@ func (l *Loop) mergeWithRetry(ctx context.Context, taskID, nextTask, workDir, ra
 		return l.mergeFunc(ctx)
 	}
 	return l.git.MergeWithRetry(ctx, git.MergeRetryOpts{
-		OnCIFailure: func(ciErr *git.CIFailureError) bool {
+		OnCIFailure: func(ciErr *git.CIFailureError) git.CIFixResult {
 			return l.tryFixCI(ctx, ciErr, taskID, nextTask, workDir, rawLogPath)
 		},
 		OnConflict: func(conflictErr *git.UnresolvedConflictError) bool {
