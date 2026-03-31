@@ -25,3 +25,13 @@
 - Tests lock in features and prevent regressions.
 - Each test should explain in a comment why it exists and what user functionality it proves — not just assert correctness mechanically.
 - Do not write tests that assert specific strings from prompt templates. Prompts are natural-language guidance — test behavior, not prose.
+
+## Go test package naming
+Go test files declare either the **internal** package (`package foo`) or the **external** package (`package foo_test`).
+
+- **Internal** (`package foo`): can access unexported symbols. Use this when the test needs unexported functions, structs, or fields. Most tests in this project use internal naming.
+- **External** (`package foo_test`): can only use the public API. Use this when the test should verify exported behavior without relying on internals, or when importing test helpers from a package that also imports `foo` (internal naming would create a circular import).
+
+When consolidating test helpers:
+- A helper in `test_helpers_test.go` with `package foo` is only visible to other `_test.go` files that also declare `package foo`. It cannot be imported by test files in other packages.
+- If multiple packages need the same test double, promote it to an exported helper in a dedicated `testing.go` file (non-test, exported API) or a `testutil` package. Do not duplicate stubs across packages.
