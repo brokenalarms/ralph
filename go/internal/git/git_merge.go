@@ -423,63 +423,101 @@ func (m *Manager) branchNeedsUpdate() bool {
 	return m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+baseBranch, "HEAD") != nil
 }
 
-// executeMerge attempts the squash-merge and handles CI-gated retries.
-func (m *Manager) executeMerge(ctx context.Context, prNumber, repoURL string) (bool, error) {
-	nwo := NWOFromRemote(repoURL)
-	pr := logging.PRLink(nwo, prNumber)
-	gh := m.gh()
-	opts := m.mergeOpts()
+// ExecuteMergeOpts holds all parameters for the executeMerge package function.
+type ExecuteMergeOpts struct {
+	PRNumber       string
+	RepoURL        string
+	WorktreeBranch string
+	WorkDir        string
+	DefaultBranch  string
+	MergeOpts      MergeOpts
+	// AwaitCI polls CI check status for the PR. Required for the Blocked path.
+	AwaitCI func(ctx context.Context, prNumber, repoURL, expectedSHA string) ([]CICheckResult, CIStatus, error)
+}
 
-	if _, prTitle, _, titleErr := gh.FindPR(m.WorktreeBranch, m.WorkDir); titleErr == nil && prTitle != "" {
-		opts.Subject = fmt.Sprintf("%s (#%s)", prTitle, prNumber)
+// executeMerge attempts the squash-merge and handles CI-gated retries.
+// It is a package function — callers compose it without a Manager receiver.
+// Manager.executeMerge delegates here.
+func executeMerge(ctx context.Context, gh GitHub, opts ExecuteMergeOpts, logger Log) (bool, error) {
+	nwo := NWOFromRemote(opts.RepoURL)
+	pr := logging.PRLink(nwo, opts.PRNumber)
+	mergeOpts := opts.MergeOpts
+
+	if _, prTitle, _, titleErr := gh.FindPR(opts.WorktreeBranch, opts.WorkDir); titleErr == nil && prTitle != "" {
+		mergeOpts.Subject = fmt.Sprintf("%s (#%s)", prTitle, opts.PRNumber)
 	}
 
-	result := gh.MergePR(prNumber, repoURL, opts)
+	result := gh.MergePR(opts.PRNumber, opts.RepoURL, mergeOpts)
 	if result.Merged {
-		return m.postMergeUpdate(nwo, prNumber)
+		return postMergeLog(nwo, opts.PRNumber, opts.DefaultBranch, logger)
 	}
 
 	if result.Conflict {
-		m.Logger.Warn("git", "%s has merge conflicts — attempting rebase", pr)
-		return false, &MergeConflictError{PRNumber: prNumber}
+		if logger != nil {
+			logger.Warn("git", "%s has merge conflicts — attempting rebase", pr)
+		}
+		return false, &MergeConflictError{PRNumber: opts.PRNumber}
 	}
 
 	if result.Blocked {
-		m.Logger.Log("ci", "%s blocked by branch protection: %s — waiting for CI...", pr, result.Message)
-		checks, status, waitErr := m.AwaitCI(ctx, prNumber, repoURL, "")
+		if logger != nil {
+			logger.Log("ci", "%s blocked by branch protection: %s — waiting for CI...", pr, result.Message)
+		}
+		if opts.AwaitCI == nil {
+			return false, fmt.Errorf("auto-merge blocked for PR #%s: %s", opts.PRNumber, result.Message)
+		}
+		checks, status, waitErr := opts.AwaitCI(ctx, opts.PRNumber, opts.RepoURL, "")
 		if waitErr != nil {
-			return false, fmt.Errorf("CI polling failed for PR #%s: %w", prNumber, waitErr)
+			return false, fmt.Errorf("CI polling failed for PR #%s: %w", opts.PRNumber, waitErr)
 		}
 		if status == CIFailed {
-			return false, &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
+			return false, &CIFailureError{PRNumber: opts.PRNumber, Failures: failedChecks(checks)}
 		}
 		if status == CIPassed {
-			m.Logger.Log("ci", "CI passed for %s — retrying merge", pr)
-			retry := gh.MergePR(prNumber, repoURL, opts)
-			if retry.Merged {
-				return m.postMergeUpdate(nwo, prNumber)
+			if logger != nil {
+				logger.Log("ci", "CI passed for %s — retrying merge", pr)
 			}
-			m.Logger.Warn("git", "Merge retry failed for %s: %s", pr, retry.Message)
-			return false, fmt.Errorf("merge retry failed for PR #%s after CI passed: %s", prNumber, retry.Message)
+			retry := gh.MergePR(opts.PRNumber, opts.RepoURL, mergeOpts)
+			if retry.Merged {
+				return postMergeLog(nwo, opts.PRNumber, opts.DefaultBranch, logger)
+			}
+			if logger != nil {
+				logger.Warn("git", "Merge retry failed for %s: %s", pr, retry.Message)
+			}
+			return false, fmt.Errorf("merge retry failed for PR #%s after CI passed: %s", opts.PRNumber, retry.Message)
 		}
 	}
 
-	m.Logger.Warn("git", "Auto-merge failed for %s: %s", pr, result.Message)
-	return false, fmt.Errorf("auto-merge failed for PR #%s: %s", prNumber, result.Message)
+	if logger != nil {
+		logger.Warn("git", "Auto-merge failed for %s: %s", pr, result.Message)
+	}
+	return false, fmt.Errorf("auto-merge failed for PR #%s: %s", opts.PRNumber, result.Message)
+}
+
+// postMergeLog logs the merge completion.
+func postMergeLog(nwo, prNumber, defaultBranch string, logger Log) (bool, error) {
+	if logger != nil {
+		logger.Log("git", "%s %s merged", logging.BranchTag(defaultBranch), logging.PRLink(nwo, prNumber))
+	}
+	return true, nil
+}
+
+// Manager.executeMerge delegates to the package-level executeMerge function.
+func (m *Manager) executeMerge(ctx context.Context, prNumber, repoURL string) (bool, error) {
+	return executeMerge(ctx, m.gh(), ExecuteMergeOpts{
+		PRNumber:       prNumber,
+		RepoURL:        repoURL,
+		WorktreeBranch: m.WorktreeBranch,
+		WorkDir:        m.WorkDir,
+		DefaultBranch:  m.detectDefaultBranch(),
+		MergeOpts:      m.mergeOpts(),
+		AwaitCI:        m.AwaitCI,
+	}, m.Logger)
 }
 
 // GetCIFailureLog retrieves the failed CI run's log output for the given PR.
 func (m *Manager) GetCIFailureLog(prNumber string) string {
 	return m.gh().GetRunLog(prNumber, m.WorkDir)
-}
-
-// postMergeUpdate logs the merge result. PostMergeUpdateMain is NOT called
-// here — callers (finalizePR, FlushUnpushedWork) own the post-merge sync
-// to avoid double calls when they also need to update main.
-func (m *Manager) postMergeUpdate(nwo, prNumber string) (bool, error) {
-	defaultBranch := m.detectDefaultBranch()
-	m.Logger.Log("git", "%s %s merged", logging.BranchTag(defaultBranch), logging.PRLink(nwo, prNumber))
-	return true, nil
 }
 
 // mergeOpts returns the merge options for the current Manager configuration.
@@ -551,6 +589,26 @@ type MergeRetryOpts struct {
 
 	// SleepFunc is used for infrastructure backoff delays. Defaults to time.Sleep.
 	SleepFunc func(time.Duration)
+
+	// The following fields are filled by Manager.MergeWithRetry before delegating
+	// to the package-level MergeWithRetry function. They enable callers to compose
+	// the retry pipeline without a Manager receiver.
+
+	// ResolveConflict is called to rebase and force-push when a merge conflict
+	// is detected. Defaults to Manager.ResolveConflict when nil.
+	ResolveConflict func(ctx context.Context) error
+
+	// AwaitCI polls CI status after a fix agent pushes. Used for CIFixApplied.
+	AwaitCI func(ctx context.Context, prNumber, repoURL, sha string) ([]CICheckResult, CIStatus, error)
+
+	// Logger receives progress and warning messages. Logging is skipped when nil.
+	Logger Log
+
+	// RemoteURL is the repository remote URL, used for AwaitCI after a fix.
+	RemoteURL string
+
+	// HeadSHAFn returns the current HEAD SHA, used for AwaitCI after a fix.
+	HeadSHAFn func() string
 }
 
 // ResolveConflict rebases onto the default branch and force-pushes to
@@ -577,12 +635,15 @@ func (m *Manager) ResolveConflict(ctx context.Context) error {
 	return m.Push(ctx)
 }
 
-// MergeWithRetry is the single merge pipeline: try merge, detect error type,
-// handle it, retry. Conflicts trigger rebase + force-push; CI failures
-// delegate to the OnCIFailure callback. Code fix retries share the main
-// attempt budget. Infrastructure failures (no commits) use a separate
-// retry counter with exponential backoff.
-func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, error) {
+// MergeWithRetry is the single merge pipeline: try mergeFunc, detect error
+// type, handle it, retry. Conflicts trigger ResolveConflict from opts; CI
+// failures delegate to the OnCIFailure callback. Code fix retries share the
+// main attempt budget. Infrastructure failures use a separate retry counter
+// with exponential backoff.
+//
+// It is a package function — callers compose it without a Manager receiver.
+// Manager.MergeWithRetry delegates here after filling in infrastructure callbacks.
+func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, error), opts MergeRetryOpts) (bool, error) {
 	sleepFn := opts.SleepFunc
 	if sleepFn == nil {
 		sleepFn = time.Sleep
@@ -591,18 +652,21 @@ func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool
 	infraRetries := 0
 
 	for attempt := 0; attempt < MaxMergeAttempts; attempt++ {
-		merged, err := m.AutoMergeCurrentBranch(ctx)
+		merged, err := mergeFunc(ctx)
 		if err == nil {
 			return merged, nil
 		}
 
-		if attempt > 0 {
-			m.Logger.Warn("git", "Merge attempt %d failed: %v", attempt+1, err)
+		if attempt > 0 && opts.Logger != nil {
+			opts.Logger.Warn("git", "Merge attempt %d failed: %v", attempt+1, err)
 		}
 
 		var conflictErr *MergeConflictError
 		if errors.As(err, &conflictErr) {
-			resolveErr := m.ResolveConflict(ctx)
+			if opts.ResolveConflict == nil {
+				return false, err
+			}
+			resolveErr := opts.ResolveConflict(ctx)
 			if resolveErr == nil {
 				continue
 			}
@@ -628,25 +692,34 @@ func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool
 				// Fix was applied and force-pushed. Wait for new CI on the
 				// updated HEAD before retrying merge — the old check status
 				// is stale after force-push.
-				repoURL := m.RemoteURL()
-				fixHeadSHA := m.gitOutput(m.WorkDir, "rev-parse", "HEAD")
-				_, ciStatus, waitErr := m.AwaitCI(ctx, ciErr.PRNumber, repoURL, fixHeadSHA)
-				if waitErr != nil {
-					m.Logger.Warn("ci", "CI polling after fix: %v", waitErr)
-				}
-				if ciStatus == CIFailed {
-					m.Logger.Warn("ci", "CI still failing after fix — will retry")
+				if opts.AwaitCI != nil {
+					repoURL := opts.RemoteURL
+					fixHeadSHA := ""
+					if opts.HeadSHAFn != nil {
+						fixHeadSHA = opts.HeadSHAFn()
+					}
+					_, ciStatus, waitErr := opts.AwaitCI(ctx, ciErr.PRNumber, repoURL, fixHeadSHA)
+					if waitErr != nil && opts.Logger != nil {
+						opts.Logger.Warn("ci", "CI polling after fix: %v", waitErr)
+					}
+					if ciStatus == CIFailed && opts.Logger != nil {
+						opts.Logger.Warn("ci", "CI still failing after fix — will retry")
+					}
 				}
 				continue
 			case CIFixNoCommits:
 				// Infrastructure failure — fix agent found no code issue.
 				// Retry with backoff instead of giving up.
 				if infraRetries >= MaxInfraRetries {
-					m.Logger.Warn("ci", "Infrastructure retries exhausted (%d) — giving up", MaxInfraRetries)
+					if opts.Logger != nil {
+						opts.Logger.Warn("ci", "Infrastructure retries exhausted (%d) — giving up", MaxInfraRetries)
+					}
 					return false, err
 				}
 				delay := infraBackoff(infraRetries)
-				m.Logger.Log("ci", "CI infrastructure failure — retrying in %s (%d/%d)", delay, infraRetries+1, MaxInfraRetries)
+				if opts.Logger != nil {
+					opts.Logger.Log("ci", "CI infrastructure failure — retrying in %s (%d/%d)", delay, infraRetries+1, MaxInfraRetries)
+				}
 				sleepFn(delay)
 				infraRetries++
 				// Don't consume the code-fix attempt budget for infra retries.
@@ -660,6 +733,27 @@ func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool
 		return false, err
 	}
 	return false, fmt.Errorf("merge failed after %d attempts", MaxMergeAttempts)
+}
+
+// Manager.MergeWithRetry delegates to the package-level MergeWithRetry function
+// after filling in infrastructure callbacks from Manager fields.
+func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, error) {
+	if opts.ResolveConflict == nil {
+		opts.ResolveConflict = m.ResolveConflict
+	}
+	if opts.AwaitCI == nil {
+		opts.AwaitCI = m.AwaitCI
+	}
+	if opts.Logger == nil {
+		opts.Logger = m.Logger
+	}
+	if opts.RemoteURL == "" {
+		opts.RemoteURL = m.RemoteURL()
+	}
+	if opts.HeadSHAFn == nil {
+		opts.HeadSHAFn = func() string { return m.gitOutput(m.WorkDir, "rev-parse", "HEAD") }
+	}
+	return MergeWithRetry(ctx, m.AutoMergeCurrentBranch, opts)
 }
 
 // FlushUnpushedWork pushes any unpushed commits and optionally merges

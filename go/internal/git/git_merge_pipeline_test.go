@@ -563,6 +563,94 @@ func TestMergeWithRetry_InfraRetryBackoff(t *testing.T) {
 	}
 }
 
+// executeMerge works as a standalone package function without a Manager,
+// proving the merge pipeline can be composed without coupling to Manager fields.
+func TestExecuteMerge_PackageFunc_MergesSuccessfully(t *testing.T) {
+	stubCISleep(t)
+
+	gh := &StubGitHub{
+		IsAvailable: true,
+		PRTitle:     "test PR",
+		PRNumber:    "42",
+		MergeResult: MergeResult{Merged: true},
+	}
+	opts := ExecuteMergeOpts{
+		PRNumber:       "42",
+		RepoURL:        "https://github.com/test/repo.git",
+		WorktreeBranch: "ralph/test-pkg-func",
+		WorkDir:        "/tmp/workdir",
+		DefaultBranch:  "main",
+		MergeOpts:      MergeOpts{DeleteBranch: true},
+		AwaitCI: func(_ context.Context, _, _, _ string) ([]CICheckResult, CIStatus, error) {
+			return nil, CIPassed, nil
+		},
+	}
+
+	merged, err := executeMerge(context.Background(), gh, opts, discardLog{})
+	if err != nil {
+		t.Fatalf("executeMerge: %v", err)
+	}
+	if !merged {
+		t.Error("expected merged=true")
+	}
+}
+
+// MergeWithRetry works as a standalone package function without a Manager,
+// proving the retry pipeline can be composed without coupling to Manager fields.
+func TestMergeWithRetry_PackageFunc_MergesSuccessfully(t *testing.T) {
+	callCount := 0
+	mergeFunc := func(_ context.Context) (bool, error) {
+		callCount++
+		return true, nil
+	}
+
+	merged, err := MergeWithRetry(context.Background(), mergeFunc, MergeRetryOpts{
+		Logger: discardLog{},
+	})
+	if err != nil {
+		t.Fatalf("MergeWithRetry: %v", err)
+	}
+	if !merged {
+		t.Error("expected merged=true")
+	}
+	if callCount != 1 {
+		t.Errorf("expected 1 merge call, got %d", callCount)
+	}
+}
+
+// MergeWithRetry package function invokes ResolveConflict from opts when
+// a MergeConflictError occurs, without needing a Manager receiver.
+func TestMergeWithRetry_PackageFunc_InvokesResolveConflictFromOpts(t *testing.T) {
+	attempts := 0
+	resolveConflictCalled := false
+
+	mergeFunc := func(_ context.Context) (bool, error) {
+		attempts++
+		if attempts == 1 {
+			return false, &MergeConflictError{PRNumber: "77"}
+		}
+		return true, nil
+	}
+	resolveConflict := func(_ context.Context) error {
+		resolveConflictCalled = true
+		return nil
+	}
+
+	merged, err := MergeWithRetry(context.Background(), mergeFunc, MergeRetryOpts{
+		Logger:          discardLog{},
+		ResolveConflict: resolveConflict,
+	})
+	if err != nil {
+		t.Fatalf("MergeWithRetry: %v", err)
+	}
+	if !merged {
+		t.Error("expected merged=true after conflict resolution")
+	}
+	if !resolveConflictCalled {
+		t.Error("expected ResolveConflict to be called from opts")
+	}
+}
+
 // infraRetryGitHub returns dynamic CI results to simulate infrastructure retries.
 type infraRetryGitHub struct {
 	StubGitHub
