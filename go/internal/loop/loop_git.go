@@ -100,7 +100,7 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 	prNumber, _ := gh.FindOpenPR(branch, repoURL)
 	if prNumber != "" {
 		l.logger.Log("git", "Found %s for %s (task %s) — resolving", logging.PRLink(nwo, prNumber), branch, taskID)
-		_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNumber)
+		_ = l.cfg.TaskBackend.SetExternalRef(taskID, prURL(repoURL, prNumber))
 		return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
 	}
 
@@ -118,7 +118,7 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 		if err == nil && prNum != "" {
 			nwo := git.NWOFromRemote(l.git.RemoteURL())
 			l.logger.Log("git", "Created %s for %s (task %s)", logging.PRLink(nwo, prNum), branch, taskID)
-			_ = l.cfg.TaskBackend.SetExternalRef(taskID, "gh-"+prNum)
+			_ = l.cfg.TaskBackend.SetExternalRef(taskID, prURL(l.git.RemoteURL(), prNum))
 			return l.resolveByPRState(ctx, taskID, nextTask, prNum)
 		}
 	}
@@ -316,7 +316,17 @@ func getPRBase(gh git.GitHub, workDir, prNumber string) string {
 	return base
 }
 
-// parsePRNumber extracts a PR number from either a URL
+// prURL builds the canonical PR URL from the remote URL and PR number.
+// Always returns a full URL; never returns a "gh-" prefixed string.
+func prURL(remoteURL, prNumber string) string {
+	nwo := git.NWOFromRemote(remoteURL)
+	if nwo == "" || prNumber == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://github.com/%s/pull/%s", nwo, prNumber)
+}
+
+// parsePRNumber extracts a PR number from a URL
 // (https://github.com/owner/repo/pull/123) or a legacy gh-123 ref.
 func parsePRNumber(ref string) string {
 	if strings.HasPrefix(ref, "gh-") {
