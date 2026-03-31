@@ -112,20 +112,33 @@ func (m *Manager) CreatePR(ctx context.Context, taskID, taskDesc, body string) (
 	if body == "" {
 		body = taskDesc
 	}
-	createErr := gh.CreatePR(CreatePROpts{
+	createOpts := CreatePROpts{
 		Head:  m.WorktreeBranch,
 		Base:  baseBranch,
 		Title: title,
 		Body:  body,
 		Repo:  repoURL,
 		Dir:   m.WorkDir,
-	})
+	}
+	createErr := gh.CreatePR(createOpts)
 	if createErr != nil {
 		// Creation may fail if a closed PR exists for this head:base.
 		// Try to find and reopen it instead.
 		if prNumber, reopenErr := m.reopenClosedPR(gh, repoURL, title, body); reopenErr == nil && prNumber != "" {
 			return prNumber, nil
 		}
+
+		// Reopen failed (e.g. branch diverged from old PR history).
+		// The old PR is dead — create a fresh PR via the REST API,
+		// bypassing gh pr create's client-side checks.
+		nwo := NWOFromRemote(repoURL)
+		if nwo != "" {
+			if apiPR, apiErr := gh.CreatePRViaAPI(nwo, createOpts); apiErr == nil && apiPR != "" {
+				m.Logger.Log("git", "Created %s for %s (via API fallback)", logging.PRLink(nwo, apiPR), m.WorktreeBranch)
+				return apiPR, nil
+			}
+		}
+
 		return "", createErr
 	}
 
@@ -301,7 +314,19 @@ func (m *Manager) resolveClosedPR(gh GitHub, repoURL string) (string, error) {
 	case "CLOSED":
 		m.Logger.Log("git", "%s is closed — reopening", pr)
 		if err := gh.ReopenPR(number, repoURL); err != nil {
-			m.Logger.Warn("git", "Failed to reopen %s: %v", pr, err)
+			m.Logger.Warn("git", "Failed to reopen %s: %v — creating new PR", pr, err)
+			nwo := NWOFromRemote(repoURL)
+			baseBranch := m.resolveBaseBranch()
+			opts := CreatePROpts{
+				Head: m.WorktreeBranch,
+				Base: baseBranch,
+				Repo: repoURL,
+				Dir:  m.WorkDir,
+			}
+			if apiPR, apiErr := gh.CreatePRViaAPI(nwo, opts); apiErr == nil && apiPR != "" {
+				m.Logger.Log("git", "Created %s for %s (via API fallback)", logging.PRLink(nwo, apiPR), m.WorktreeBranch)
+				return apiPR, nil
+			}
 			return "", nil
 		}
 		m.Logger.Log("git", "%s reopened", pr)

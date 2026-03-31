@@ -45,6 +45,7 @@ type GitHub interface {
 	GetPRHeadSHA(workDir, prNumber string) (sha string, err error)
 	ListOpenPRBranches(repoURL string) ([]string, error)
 	ReopenPR(prNumber, repoURL string) error
+	CreatePRViaAPI(nwo string, opts CreatePROpts) (prNumber string, err error)
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -272,6 +273,28 @@ func (g *ghCLI) ReopenPR(prNumber, repoURL string) error {
 		return fmt.Errorf("gh pr reopen failed: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func (g *ghCLI) CreatePRViaAPI(nwo string, opts CreatePROpts) (string, error) {
+	body := fmt.Sprintf(`{"title":%q,"body":%q,"head":%q,"base":%q}`,
+		opts.Title, opts.Body, opts.Head, opts.Base)
+	endpoint := fmt.Sprintf("repos/%s/pulls", nwo)
+	cmd := exec.Command("gh", "api", endpoint, "--method", "POST", "--input", "-")
+	cmd.Stdin = strings.NewReader(body)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("API PR creation failed: %s", strings.TrimSpace(string(out)))
+	}
+	var resp struct {
+		Number int `json:"number"`
+	}
+	if jsonErr := json.Unmarshal(out, &resp); jsonErr != nil {
+		return "", fmt.Errorf("parsing PR API response: %w", jsonErr)
+	}
+	if resp.Number == 0 {
+		return "", fmt.Errorf("API PR creation returned no number")
+	}
+	return fmt.Sprintf("%d", resp.Number), nil
 }
 
 func (g *ghCLI) GetPRState(workDir, prNumber string) (string, error) {

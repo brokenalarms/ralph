@@ -1621,6 +1621,50 @@ func TestAutoMergeCurrentBranch_ReopensClosedPR(t *testing.T) {
 	}
 }
 
+// CreatePR falls back to the REST API when both gh pr create and reopen fail.
+// This covers the diverged-branch scenario: the old closed PR can't be reopened
+// because the branch history diverged, so a fresh PR is created via the API.
+func TestCreatePR_APIFallbackWhenReopenFails(t *testing.T) {
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+
+	gh := &StubGitHub{
+		IsAvailable:          true,
+		OpenPR:               "",
+		CreatePRErr:          fmt.Errorf("a pull request already exists for branch"),
+		PRNumber:             "438",
+		PRState:              "CLOSED",
+		ReopenPRErr:          fmt.Errorf("Could not open the pull request"),
+		CreatePRViaAPIResult: "500",
+	}
+
+	mgr := &Manager{
+		ProjectDir:     "/project",
+		WorkDir:        "/project/wt",
+		WorktreeBranch: "ralph/test/diverged-branch",
+		BaseBranch:     "main",
+		Runner:         runner,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	prNumber, err := mgr.CreatePR(context.Background(), "ralph-test", "Fix diverged", "body")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if prNumber != "500" {
+		t.Errorf("expected new PR 500 from API fallback, got %q", prNumber)
+	}
+	if !gh.ReopenPRCalled {
+		t.Error("expected ReopenPR to be called before API fallback")
+	}
+	if !gh.CreatePRViaAPICalled {
+		t.Error("expected CreatePRViaAPI to be called as fallback")
+	}
+}
+
 // CreatePR reopens a closed PR when gh pr create fails because a PR already
 // exists for the branch, rather than returning an error.
 func TestCreatePR_ReopensClosedPROnCreateFailure(t *testing.T) {
