@@ -919,3 +919,43 @@ func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 		t.Error("merge should always set DeleteBranch")
 	}
 }
+
+// BUG ralph-laun: When GitHub returns "not mergeable" because CI failed (billing,
+// runner issues), executeMerge checks isMergeConflictError before isCIGatedError.
+// "not mergeable" matches the merge conflict pattern, so the loop tries a
+// pointless rebase instead of recognizing a CI-gated block.
+// This test documents the current (buggy) behavior and will be fixed during
+// the orchestrator refactor.
+func TestIsMergeConflictError_NotMergeableIsAmbiguous(t *testing.T) {
+	// "not mergeable" matches merge conflict patterns today.
+	// After the fix, it should NOT match — it should fall through to CI-gated.
+	output := "Pull request is not mergeable"
+
+	if !isMergeConflictError(output) {
+		t.Error("current code: 'not mergeable' should match merge conflict pattern (this is the bug)")
+	}
+	// This is also a CI-gated pattern in some contexts, but executeMerge
+	// checks merge conflict first, so CI-gated never fires for this string.
+	// The fix: check isCIGatedError first, or remove "not mergeable" from
+	// isMergeConflictError since it's ambiguous.
+}
+
+// CI-gated errors should be distinguishable from merge conflicts.
+// "base branch policy prohibits the merge" is unambiguously CI-gated.
+func TestIsCIGatedError_PolicyProhibitsMerge(t *testing.T) {
+	output := "base branch policy prohibits the merge"
+	if !isCIGatedError(output) {
+		t.Error("'base branch policy prohibits the merge' should be CI-gated")
+	}
+	if isMergeConflictError(output) {
+		t.Error("'base branch policy prohibits the merge' should not match merge conflict")
+	}
+}
+
+// "merge requirements were not satisfied" is unambiguously CI-gated.
+func TestIsCIGatedError_MergeRequirementsNotSatisfied(t *testing.T) {
+	output := "merge requirements were not satisfied"
+	if !isCIGatedError(output) {
+		t.Error("'merge requirements were not satisfied' should be CI-gated")
+	}
+}

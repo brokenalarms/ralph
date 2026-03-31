@@ -677,12 +677,17 @@ func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
+			backend.Lock()
+			if iterationCount == 1 {
+				// Switch to a different task for the second iteration
+				backend.NextID = "ralph-bbb"
+				backend.NextTask = "task B"
+			}
 			if iterationCount >= 2 {
-				backend.Lock()
 				backend.Remaining = 0
 				backend.Completed = 2
-				backend.Unlock()
 			}
+			backend.Unlock()
 		},
 		result: claude.Result{SignalDetected: true},
 	}
