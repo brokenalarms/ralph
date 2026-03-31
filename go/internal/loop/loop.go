@@ -42,7 +42,6 @@ type Config struct {
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 	Version             string
 	VerifyDir             string // project root where tests are run; empty disables verification
-	VerifyLevel           string // "fire" (default) or "hog" — controls no-diff verification depth
 	VerifyModel           string // model for first LLM verification attempt
 	VerifyEscalationModel string // model for subsequent LLM verification attempts
 	OnIterationStart      func() // called at the start of each iteration (e.g. to regenerate resume script)
@@ -119,7 +118,6 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 	}
 	l.verifier = NewVerifier(VerifierConfig{
 		VerifyDir:             cfg.VerifyDir,
-		VerifyLevel:           cfg.VerifyLevel,
 		VerifyModel:           cfg.VerifyModel,
 		VerifyEscalationModel: cfg.VerifyEscalationModel,
 		PromptsDir:            cfg.Dirs.PromptsDir,

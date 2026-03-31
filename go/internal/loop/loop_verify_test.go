@@ -377,7 +377,6 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
-		VerifyLevel:   "fire",
 	}, st, gm, logger)
 
 	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
@@ -404,88 +403,6 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 	}
 }
 
-// In hog mode, a no-diff LLM result spawns a verification agent.
-func TestOnSignal_HogMode_NoDiffSpawnsVerifier_Passes(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	os.MkdirAll(promptsDir, 0o755)
-
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-	logger := logging.New(nil)
-
-	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		MaxIterations: 5,
-		CallsPerHour:  80,
-		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
-		VerifyDir:     dir,
-		VerifyLevel:   "hog",
-	}, st, gm, logger)
-
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
-		return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
-	}
-
-	runnerSpawned := false
-	l.verifier.deps.NewRunner = func() claudeRunner {
-		runnerSpawned = true
-		return &stubRunner{result: stubResult(true, "feature exists")}
-	}
-
-	result := l.onSignal(signalParams{
-		ctx: context.Background(), headBefore: "abc123",
-		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
-		taskID: "test-hog", nextTask: "Hog test",
-	})
-
-	if !result {
-		t.Fatal("hog mode should pass when verification agent confirms feature exists")
-	}
-	if !runnerSpawned {
-		t.Fatal("hog mode should spawn a verification agent on no-diff")
-	}
-}
-
-// In hog mode, when the verification agent exits without signaling,
-// onSignal rejects and the task is skipped.
-func TestOnSignal_HogMode_NoDiffVerifierRejects(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	os.MkdirAll(promptsDir, 0o755)
-
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-	logger := logging.New(nil)
-	backend := &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}
-
-	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		MaxIterations: 5,
-		CallsPerHour:  80,
-		TaskBackend:   backend,
-		VerifyDir:     dir,
-		VerifyLevel:   "hog",
-	}, st, gm, logger)
-
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
-		return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
-	}
-
-	l.verifier.deps.NewRunner = func() claudeRunner {
-		return &stubRunner{result: stubResult(false, "")}
-	}
-
-	result := l.onSignal(signalParams{
-		ctx: context.Background(), headBefore: "abc123",
-		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
-		taskID: "test-hog-reject", nextTask: "Hog reject test",
-	})
-
-	if result {
-		t.Fatal("hog mode should reject when verification agent does not confirm")
-	}
-}
 
 func stubResult(signal bool, summary string) claude.Result {
 	return claude.Result{

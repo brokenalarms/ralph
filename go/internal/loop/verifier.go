@@ -22,7 +22,6 @@ const maxTestFixAttempts = 3
 // VerifierConfig holds the configuration needed by the Verifier.
 type VerifierConfig struct {
 	VerifyDir             string
-	VerifyLevel           string
 	VerifyModel           string
 	VerifyEscalationModel string
 	PromptsDir            string
@@ -169,13 +168,6 @@ func (v *Verifier) verifyWithFixLoop(p signalParams, beadDesc, beadAcceptance st
 			QueryFn:         v.deps.QueryFn,
 			Model:           model,
 		})
-
-		if llmResult.Passed && llmResult.NoDiff && v.cfg.VerifyLevel == "hog" {
-			v.deps.Logger.Log("llm", "No diff detected — spawning codebase verification agent (hog mode)")
-			if !v.verifyFeatureExists(p, beadDesc) {
-				return false
-			}
-		}
 
 		if llmResult.Passed {
 			v.deps.Logger.Success("llm", "LLM verified: %s", llmResult.Reason)
@@ -364,27 +356,6 @@ func (v *Verifier) TryFixConflict(ctx context.Context, conflictDiff, beadDesc, n
 	return fixResult.SignalDetected
 }
 
-func (v *Verifier) verifyFeatureExists(p signalParams, beadDesc string) bool {
-	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
-	prompt := v.loadVerifyPrompt("verify-exists.md", map[string]string{
-		"{{TASK_TITLE}}":       p.nextTask,
-		"{{TASK_DESCRIPTION}}": beadDesc,
-		"{{WORK_DIR}}":         p.workDir,
-		"{{SIGNAL_COMPLETE}}":  signalPath,
-	})
-
-	result := v.runFixAgent(p.ctx, "feature existence check", prompt, p.workDir, p.rawLogPath)
-	if !result.SignalDetected {
-		v.deps.Logger.Warn("llm", "Verification agent exited without signal — treating as rejection")
-		if p.taskID != "" {
-			v.deps.SkipTask(p.taskID, "verification_no_signal: agent could not confirm feature exists")
-		}
-		return false
-	}
-
-	v.deps.Logger.Success("llm", "Verification agent confirmed feature exists")
-	return true
-}
 
 func (v *Verifier) runFixAgent(ctx context.Context, description, prompt, workDir, rawLogPath string) claude.Result {
 	v.deps.Runner().StopStreaming()

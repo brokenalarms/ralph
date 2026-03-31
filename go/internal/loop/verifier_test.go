@@ -284,36 +284,6 @@ func TestVerifier_OnSignal_TestFailure_ExhaustsRetries(t *testing.T) {
 	}
 }
 
-// Hog mode delegates to fix agent when LLM returns NoDiff, proving
-// the feature-existence path goes through the Verifier.
-func TestVerifier_HogMode_SpawnsVerifier(t *testing.T) {
-	runnerSpawned := false
-
-	v := newTestVerifier(t, func(v *Verifier) {
-		v.cfg.VerifyLevel = "hog"
-		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
-			return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
-		}
-		v.deps.NewRunner = func() claudeRunner {
-			runnerSpawned = true
-			return &stubRunner{result: stubResult(true, "feature exists")}
-		}
-	})
-
-	result := v.OnSignal(signalParams{
-		ctx: context.Background(), headBefore: "abc123",
-		workDir: t.TempDir(), rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
-		taskID: "test-hog", nextTask: "Hog test",
-	})
-
-	if !result {
-		t.Fatal("hog mode should pass when verification agent confirms feature exists")
-	}
-	if !runnerSpawned {
-		t.Fatal("hog mode should spawn a verification agent on no-diff")
-	}
-}
-
 // TryFixCI passes failed check names and CI log output as separate fields
 // in the fix agent prompt, so the agent can read the error literally
 // instead of guessing from check names alone.

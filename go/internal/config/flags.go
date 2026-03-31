@@ -327,23 +327,6 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.PostSignalTimeout.String() },
 	},
 	{
-		Long: "--verify-level", MetaVar: "<level>",
-		Help:      "Verification level for no-diff completions: fire (trust agent) or hog (spawn verifier)",
-		Default:   "fire",
-		ConfigKey: "verify_level",
-		Kind:      KindString,
-		Apply: func(cfg *Config, val string) error {
-			switch val {
-			case "fire", "hog":
-				cfg.VerifyLevel = val
-			default:
-				return fmt.Errorf("verify-level must be fire or hog, got %q", val)
-			}
-			return nil
-		},
-		Read: func(cfg *Config) string { return cfg.VerifyLevel },
-	},
-	{
 		Long: "--verify-model", MetaVar: "<model>",
 		Help:      "Model for LLM verification (first attempt)",
 		Default:   "claude-haiku-4-5-20251001",
