@@ -13,9 +13,10 @@ import (
 // gh pr checks --json returns: name, state (SUCCESS/FAILURE/PENDING/CANCELLED),
 // bucket (pass/fail/pending).
 type CICheckResult struct {
-	Name   string `json:"name"`
-	State  string `json:"state"`
-	Bucket string `json:"bucket"`
+	Name       string `json:"name"`
+	State      string `json:"state"`
+	Bucket     string `json:"bucket"`
+	IsRequired bool   `json:"isRequired"`
 }
 
 // CIStatus summarizes the overall state of all CI checks on a PR.
@@ -91,6 +92,18 @@ func failedChecks(checks []CICheckResult) []CICheckResult {
 		}
 	}
 	return failed
+}
+
+// requiredFailedChecks returns only the required checks that failed.
+// Optional/deploy checks are excluded so fix agents don't waste time on them.
+func RequiredFailedChecks(checks []CICheckResult) []CICheckResult {
+	var required []CICheckResult
+	for _, c := range checks {
+		if c.IsRequired {
+			required = append(required, c)
+		}
+	}
+	return required
 }
 
 // ErrStackedPRWaiting is returned when a PR targets a non-main branch

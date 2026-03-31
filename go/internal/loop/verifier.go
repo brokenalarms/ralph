@@ -307,12 +307,31 @@ func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 	return msg
 }
 
-// TryFixCI spawns a fix agent to address CI failures.
+// TryFixCI spawns a fix agent to address CI failures. Only required check
+// failures are passed to the agent; optional/deploy checks are logged but
+// filtered out. Returns false without spawning if only optional checks failed.
 func (v *Verifier) TryFixCI(ctx context.Context, ciLog string, ciErr *git.CIFailureError, nextTask string, workDir, rawLogPath string) bool {
-	v.deps.Logger.Log("ci", "CI failed on PR #%s — spawning fix agent", ciErr.PRNumber)
+	required := git.RequiredFailedChecks(ciErr.Failures)
+
+	var optionalNames []string
+	for _, f := range ciErr.Failures {
+		if !f.IsRequired {
+			optionalNames = append(optionalNames, f.Name)
+		}
+	}
+	if len(optionalNames) > 0 {
+		v.deps.Logger.Log("ci", "Ignoring optional/deploy check failures: %s", strings.Join(optionalNames, ", "))
+	}
+
+	if len(required) == 0 {
+		v.deps.Logger.Log("ci", "Only optional checks failed on PR #%s — skipping fix agent", ciErr.PRNumber)
+		return false
+	}
+
+	v.deps.Logger.Log("ci", "CI failed on PR #%s — spawning fix agent for required checks", ciErr.PRNumber)
 
 	var checkNames []string
-	for _, f := range ciErr.Failures {
+	for _, f := range required {
 		checkNames = append(checkNames, f.Name)
 	}
 

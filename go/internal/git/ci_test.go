@@ -129,6 +129,37 @@ func TestFailedChecks_FiltersCorrectly(t *testing.T) {
 	}
 }
 
+// RequiredFailedChecks returns only failures marked as required by branch
+// protection, filtering out optional/deploy checks that fix agents can't fix.
+func TestRequiredFailedChecks_FiltersToRequiredOnly(t *testing.T) {
+	checks := []CICheckResult{
+		{Name: "test", State: "FAILURE", Bucket: "fail", IsRequired: true},
+		{Name: "lint", State: "FAILURE", Bucket: "fail", IsRequired: true},
+		{Name: "deploy/netlify", State: "FAILURE", Bucket: "fail", IsRequired: false},
+		{Name: "Pages changed", State: "FAILURE", Bucket: "fail", IsRequired: false},
+	}
+	required := RequiredFailedChecks(checks)
+	if len(required) != 2 {
+		t.Fatalf("expected 2 required failed checks, got %d", len(required))
+	}
+	if required[0].Name != "test" || required[1].Name != "lint" {
+		t.Errorf("unexpected required checks: %v", required)
+	}
+}
+
+// RequiredFailedChecks returns empty when all failures are optional,
+// so the caller knows not to spawn a fix agent.
+func TestRequiredFailedChecks_AllOptional_ReturnsEmpty(t *testing.T) {
+	checks := []CICheckResult{
+		{Name: "deploy/netlify", State: "FAILURE", Bucket: "fail", IsRequired: false},
+		{Name: "Header rules", State: "FAILURE", Bucket: "fail", IsRequired: false},
+	}
+	required := RequiredFailedChecks(checks)
+	if len(required) != 0 {
+		t.Fatalf("expected 0 required checks, got %d", len(required))
+	}
+}
+
 // isCIGatedError recognizes the standard GitHub branch protection error
 // message that indicates CI checks are blocking the merge.
 func TestIsCIGatedError_Matches(t *testing.T) {
