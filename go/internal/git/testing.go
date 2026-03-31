@@ -11,9 +11,14 @@ type StubGitHub struct {
 	EditPRErr          error
 	EditPRTitle        string
 	MergeResult        MergeResult
+	MergeResults       []MergeResult // sequential results; takes precedence over MergeResult
+	OnMerge            func()        // called on each MergePR call
+	mergeIdx           int
 	UpdateResult       bool
 	UpdateErr          error
 	Checks             []CICheckResult
+	ChecksFunc         func(call int) []CICheckResult // sequential checks; takes precedence
+	checkCalls         int
 	ChecksErr          error
 	MergeCalls         int
 	LastMergeOpts      MergeOpts
@@ -62,6 +67,15 @@ func (s *StubGitHub) EditPR(prNumber, repoURL, title, body string) error {
 func (s *StubGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
 	s.MergeCalls++
 	s.LastMergeOpts = opts
+	if s.OnMerge != nil {
+		s.OnMerge()
+	}
+	// Sequential results take precedence.
+	if s.mergeIdx < len(s.MergeResults) {
+		r := s.MergeResults[s.mergeIdx]
+		s.mergeIdx++
+		return r
+	}
 	r := s.MergeResult
 	// Default to success when no explicit result is configured.
 	if !r.Merged && !r.Blocked && !r.Conflict && r.Message == "" {
@@ -73,6 +87,10 @@ func (s *StubGitHub) UpdateBranch(dir, nwo, prNumber string) (bool, error) {
 	return s.UpdateResult, s.UpdateErr
 }
 func (s *StubGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
+	s.checkCalls++
+	if s.ChecksFunc != nil {
+		return s.ChecksFunc(s.checkCalls), nil
+	}
 	return s.Checks, s.ChecksErr
 }
 func (s *StubGitHub) GetRunLog(prNumber, workDir string) string { return s.RunLogValue }
