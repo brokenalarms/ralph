@@ -26,9 +26,10 @@ type BD struct {
 	Ctx        context.Context
 	ProjectDir string
 	PromptsDir string
-	RunBD      CommandRunner // injectable for testing; nil uses defaultRunBD
-	bdPath     string        // resolved absolute path to the bd binary
-	skippedIDs map[string]bool
+	RunBD        CommandRunner // injectable for testing; nil uses defaultRunBD
+	bdPath       string        // resolved absolute path to the bd binary
+	skippedIDs   map[string]bool
+	resumeTaskID string
 }
 
 func (b *BD) SetSkippedIDs(ids []string) {
@@ -36,6 +37,10 @@ func (b *BD) SetSkippedIDs(ids []string) {
 	for _, id := range ids {
 		b.skippedIDs[id] = true
 	}
+}
+
+func (b *BD) SetResumeTaskID(id string) {
+	b.resumeTaskID = id
 }
 
 func (b *BD) ctx() context.Context {
@@ -242,10 +247,14 @@ type bdIssue struct {
 	Status   string `json:"status,omitempty"`
 }
 
-// getNextIssue returns the highest-priority issue from bd ready.
-// Within the same priority and type rank, in_progress tasks are preferred
-// so interrupted work is resumed first.
+// getNextIssue returns the highest-priority issue to work on. If a resume
+// task ID is set and that task is still open/in_progress, it is returned
+// directly. Otherwise falls through to bd ready.
 func (b *BD) getNextIssue() (bdIssue, error) {
+	if issue, ok := b.resumeTask(); ok {
+		return issue, nil
+	}
+
 	out, err := b.runner()(b.ctx(), b.ProjectDir, "ready", "--json")
 	if err != nil {
 		return bdIssue{}, nil
@@ -255,6 +264,27 @@ func (b *BD) getNextIssue() (bdIssue, error) {
 		return bdIssue{}, nil
 	}
 	return issue, nil
+}
+
+// resumeTask checks whether the resumeTaskID points to a task that is
+// still open or in_progress. Returns the issue and true if so.
+func (b *BD) resumeTask() (bdIssue, bool) {
+	if b.resumeTaskID == "" || b.skippedIDs[b.resumeTaskID] {
+		return bdIssue{}, false
+	}
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "show", b.resumeTaskID, "--json")
+	if err != nil {
+		return bdIssue{}, false
+	}
+	var items []bdIssue
+	if jsonErr := json.Unmarshal([]byte(out), &items); jsonErr != nil || len(items) == 0 {
+		return bdIssue{}, false
+	}
+	issue := items[0]
+	if issue.Status == "open" || issue.Status == "in_progress" {
+		return issue, true
+	}
+	return bdIssue{}, false
 }
 
 // issuePriority returns the numeric priority, defaulting to 2 (medium)

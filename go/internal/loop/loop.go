@@ -221,6 +221,9 @@ func (l *Loop) Run(ctx context.Context) error {
 		iteration++
 		l.lastTaskMerged = false
 
+		if lastID, _ := l.state.Read("last_task_id"); lastID != "" {
+			l.cfg.TaskBackend.SetResumeTaskID(lastID)
+		}
 		taskInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 		taskID, nextTask := taskInfo.ID, taskInfo.Title
 		if taskID == "" && nextTask == "" {

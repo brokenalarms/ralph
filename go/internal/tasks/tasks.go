@@ -54,6 +54,11 @@ type Backend interface {
 	// GetNextTask/HasRemaining queries. Loaded from state.json on startup.
 	SetSkippedIDs(ids []string)
 
+	// SetResumeTaskID tells the backend to check this task first before
+	// falling through to the ready queue. If the task is still
+	// open/in_progress, it is returned by GetNextTaskInfo.
+	SetResumeTaskID(id string)
+
 	// ReopenTask sets an in-progress task back to open status so it
 	// returns to the ready queue.
 	ReopenTask(id string) error
