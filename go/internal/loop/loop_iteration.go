@@ -494,43 +494,6 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 	return finalizePRResult{merged: merged, closed: true}
 }
 
-// checkoutExistingBranch checks metadata for a branch from a previous
-// iteration. If the remote has that branch with work, it checks it out.
-// Otherwise, it renames the current branch for the task and stores the
-// new name in metadata. Returns true if an existing remote branch was
-// checked out.
-func (l *Loop) checkoutExistingBranch(taskID, nextTask string) bool {
-	storedBranch := ""
-	if taskID != "" {
-		storedBranch, _ = l.cfg.TaskBackend.GetMetadata(taskID, "branch")
-	}
-	if storedBranch != "" {
-		_ = l.git.FetchBranch(storedBranch)
-		if l.git.RemoteBranchHasCommits(storedBranch) {
-			if l.git.RemoteBranchIsOnMain(storedBranch) {
-				l.git.CheckoutRemoteBranch(storedBranch)
-				return true
-			}
-			// Stale branch diverged from main. If no open PR, clean it up.
-			l.logger.Warn("git", "Remote branch %s diverged from main — cleaning up", storedBranch)
-			ref, _ := l.cfg.TaskBackend.GetExternalRef(taskID)
-			if parsePRNumber(ref) == "" {
-				if err := l.git.DeleteRemoteBranchByName(storedBranch); err != nil {
-					l.logger.Warn("git", "Failed to delete stale remote branch: %v", err)
-				}
-			}
-		}
-		// Reuse the branch name locally, starting from main.
-		l.git.RenameBranchTo(storedBranch)
-		return false
-	}
-	l.git.RenameBranchForTask(nextTask, taskID)
-	if taskID != "" && l.git.GetWorktreeBranch() != "" && strings.Contains(l.git.GetWorktreeBranch(), taskID) {
-		_ = l.cfg.TaskBackend.SetMetadata(taskID, "branch", l.git.GetWorktreeBranch())
-	}
-	return false
-}
-
 // iterationPrompt holds the prepared prompt and context needed to invoke Claude.
 type iterationPrompt struct {
 	fullPrompt string
