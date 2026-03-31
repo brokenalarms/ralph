@@ -94,6 +94,25 @@ func failedChecks(checks []CICheckResult) []CICheckResult {
 	return failed
 }
 
+// isInfrastructureFailure checks the GitHub Actions API to determine if CI
+// failed due to infrastructure (billing, runner allocation) rather than actual
+// test failures. A job with zero steps executed indicates it never ran.
+func (m *Manager) isInfrastructureFailure(ctx context.Context, prNumber string) bool {
+	nwo := NWOFromRemote(m.RemoteURL())
+	if nwo == "" {
+		return false
+	}
+	gh := m.gh()
+	if gh == nil || !gh.Available() {
+		return false
+	}
+	steps, err := gh.GetJobStepCount(nwo, prNumber)
+	if err != nil {
+		return false
+	}
+	return steps == 0
+}
+
 // RequiredFailedChecks returns failed checks that the fix agent should address.
 // Currently returns all failed checks — gh pr checks does not expose an
 // isRequired field, so we treat every check as required.

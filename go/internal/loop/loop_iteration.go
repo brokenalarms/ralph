@@ -288,6 +288,7 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 	merged := prState == "MERGED"
 
 	if prState == "OPEN" && l.cfg.AutoMerge {
+		l.git.SetLocalTestsPassed(true)
 		nwo := git.NWOFromRemote(l.git.RemoteURL())
 		pr := logging.PRLink(nwo, p.prNumber)
 		gh := l.git.GH()

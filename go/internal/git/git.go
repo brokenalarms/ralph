@@ -40,7 +40,8 @@ type Manager struct {
 	Runner         Runner
 	State          StateStore
 	Logger         Log
-	PrePush        func(ctx context.Context) error
+	PrePush          func(ctx context.Context) error
+	LocalTestsPassed bool
 }
 
 // GH returns the GitHub interface, using the injected stub if set (tests)
@@ -54,6 +55,10 @@ func (m *Manager) GH() GitHub {
 
 func (m *Manager) gh() GitHub {
 	return m.GH()
+}
+
+func (m *Manager) SetLocalTestsPassed(v bool) {
+	m.LocalTestsPassed = v
 }
 
 

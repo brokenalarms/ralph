@@ -16,6 +16,9 @@ type GitOps interface {
 	// GitHub access.
 	GH() GitHub
 
+	// CI bypass flag.
+	SetLocalTestsPassed(v bool)
+
 	// Diff and status queries.
 	HeadRev() string
 	HasDiff() bool

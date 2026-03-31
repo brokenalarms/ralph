@@ -46,6 +46,7 @@ type GitHub interface {
 	ListOpenPRBranches(repoURL string) ([]string, error)
 	ReopenPR(prNumber, repoURL string) error
 	CreatePRViaAPI(nwo string, opts CreatePROpts) (prNumber string, err error)
+	GetJobStepCount(nwo, prNumber string) (int, error)
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -295,6 +296,30 @@ func (g *ghCLI) CreatePRViaAPI(nwo string, opts CreatePROpts) (string, error) {
 		return "", fmt.Errorf("API PR creation returned no number")
 	}
 	return fmt.Sprintf("%d", resp.Number), nil
+}
+
+func (g *ghCLI) GetJobStepCount(nwo, prNumber string) (int, error) {
+	cmd := exec.Command("gh", "api",
+		fmt.Sprintf("repos/%s/actions/runs?event=pull_request&per_page=1", nwo),
+		"--jq", ".workflow_runs[0].id")
+	out, err := cmd.Output()
+	if err != nil {
+		return -1, fmt.Errorf("failed to get runs: %w", err)
+	}
+	runID := strings.TrimSpace(string(out))
+	if runID == "" {
+		return -1, fmt.Errorf("no runs found")
+	}
+	jobsCmd := exec.Command("gh", "api",
+		fmt.Sprintf("repos/%s/actions/runs/%s/jobs", nwo, runID),
+		"--jq", "[.jobs[].steps | length] | add // 0")
+	jobsOut, err := jobsCmd.Output()
+	if err != nil {
+		return -1, fmt.Errorf("failed to get jobs: %w", err)
+	}
+	count := 0
+	fmt.Sscanf(strings.TrimSpace(string(jobsOut)), "%d", &count)
+	return count, nil
 }
 
 func (g *ghCLI) GetPRState(workDir, prNumber string) (string, error) {

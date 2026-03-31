@@ -65,6 +65,7 @@ func (s *StubGit) GetWorktreeBranch() string  { return s.WorktreeBranch }
 func (s *StubGit) GetPrevBranch() string      { return s.PrevBranch }
 func (s *StubGit) IsBranchRenamed() bool      { return s.BranchRenamed }
 func (s *StubGit) SetBranchRenamed(v bool)    { s.BranchRenamed = v }
+func (s *StubGit) SetLocalTestsPassed(v bool) {}
 
 func (s *StubGit) GH() git.GitHub {
 	return s.GitHubStub

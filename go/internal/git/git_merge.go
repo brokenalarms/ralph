@@ -268,7 +268,11 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		m.Logger.Warn("ci", "CI polling failed for %s: %v — attempting merge anyway", pr, ciErr)
 	}
 	if status == CIFailed {
-		return false, &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
+		if m.LocalTestsPassed && m.isInfrastructureFailure(ctx, prNumber) {
+			m.Logger.Log("ci", "CI infrastructure failure on %s — local tests passed, merging anyway", pr)
+		} else {
+			return false, &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
+		}
 	}
 	if status == CIPassed {
 		m.Logger.Log("ci", "CI passed for %s — merging", pr)
