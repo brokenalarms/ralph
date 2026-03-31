@@ -712,49 +712,6 @@ func setupAutoMergeManager(t *testing.T, gh *StubGitHub) *Manager {
 	return mgr
 }
 
-// updatePRBranch returns a CIFailureError when CI fails after the
-// branch is updated with the latest base.
-func TestUpdatePRBranch_ReturnsFailureAfterUpdate(t *testing.T) {
-	origSleep := ciSleep
-	ciSleep = func(d time.Duration) <-chan time.Time {
-		ch := make(chan time.Time, 1)
-		ch <- time.Now()
-		return ch
-	}
-	defer func() { ciSleep = origSleep }()
-
-	gh := &StubGitHub{
-		IsAvailable:  true,
-		OpenPR:       "10",
-		UpdateResult: true,
-		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
-	}
-	mgr := setupAutoMergeManager(t, gh)
-
-	err := mgr.updatePRBranch(context.Background(), "10", "https://github.com/test/repo.git")
-	var ciErr *CIFailureError
-	if !errors.As(err, &ciErr) {
-		t.Errorf("expected CIFailureError after branch update with failing CI, got %T: %v", err, err)
-	}
-}
-
-// updatePRBranch returns nil without polling when the branch was
-// already up to date (no update needed).
-func TestUpdatePRBranch_NoUpdateNeeded(t *testing.T) {
-	gh := &StubGitHub{
-		IsAvailable:  true,
-		OpenPR:       "10",
-		UpdateResult: false,
-		Checks:       []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
-	}
-	mgr := setupAutoMergeManager(t, gh)
-
-	err := mgr.updatePRBranch(context.Background(), "10", "https://github.com/test/repo.git")
-	if err != nil {
-		t.Fatalf("expected nil when no update needed, got: %v", err)
-	}
-}
-
 // executeMerge retries the merge after CI passes when the initial merge
 // is blocked by branch protection.
 func TestExecuteMerge_RetriesAfterCIGate(t *testing.T) {

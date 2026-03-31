@@ -889,9 +889,20 @@ func TestMergeWithRetry_StopsOnUnresolvableConflict(t *testing.T) {
 	runner := newStubRunner()
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("fetch", "", nil)
-	// merge-base --is-ancestor returns error → still diverged after rebase
-	runner.On("merge-base --is-ancestor", "", fmt.Errorf("not ancestor"))
-	runner.On("rebase", "", nil)
+	// Sequence for merge-base --is-ancestor:
+	//   1. EnsureUpToDate: nil (up to date)
+	//   2-3. Push (baseSHA="abc123"): nil, nil (no divergence, squash check)
+	//   4. branchNeedsUpdate: nil (no update needed → proceed to executeMerge)
+	//   5. ResolveConflict EnsureUpToDate: nil (up to date)
+	//   6. ResolveConflict ancestry check: error (still diverged → UnresolvedConflictError)
+	runner.OnSequence("merge-base --is-ancestor", []stubResponse{
+		{"", nil},
+		{"", nil},
+		{"", nil},
+		{"", nil},
+		{"", nil},
+		{"", fmt.Errorf("not ancestor")},
+	})
 	runner.On("rev-list --count", "1", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 	runner.On("rev-parse", "abc123", nil)
@@ -1150,9 +1161,21 @@ func TestMergeWithRetry_SpawnsConflictAgent(t *testing.T) {
 	runner := newStubRunner()
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("fetch", "", nil)
-	// merge-base --is-ancestor fails → unresolvable conflict
-	runner.On("merge-base --is-ancestor", "", fmt.Errorf("not ancestor"))
-	runner.On("rebase", "", nil)
+	// Sequence (no plain "rev-parse" stub → Push skips merge-base, baseSHA=""):
+	//   1. Attempt 1 EnsureUpToDate: nil (up to date)
+	//   2. Attempt 1 branchNeedsUpdate: nil (no update) → executeMerge → Conflict
+	//   3. ResolveConflict EnsureUpToDate: nil
+	//   4. ResolveConflict ancestry check: error → UnresolvedConflictError → OnConflict(true) → retry
+	//   5. Attempt 2 EnsureUpToDate: nil
+	//   6. Attempt 2 branchNeedsUpdate: nil → executeMerge → Merged
+	runner.OnSequence("merge-base --is-ancestor", []stubResponse{
+		{"", nil},
+		{"", nil},
+		{"", nil},
+		{"", fmt.Errorf("not ancestor")},
+		{"", nil},
+		{"", nil},
+	})
 	runner.On("rev-list --count", "1", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 	runner.On("rev-parse --verify", "", nil)
@@ -1216,8 +1239,17 @@ func TestMergeWithRetry_SkipsAfterConflictAgentFails(t *testing.T) {
 	runner := newStubRunner()
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("fetch", "", nil)
-	runner.On("merge-base --is-ancestor", "", fmt.Errorf("not ancestor"))
-	runner.On("rebase", "", nil)
+	// Sequence (no plain "rev-parse" stub → Push skips merge-base, baseSHA=""):
+	//   1. Attempt 1 EnsureUpToDate: nil (up to date)
+	//   2. Attempt 1 branchNeedsUpdate: nil (no update) → executeMerge → Conflict
+	//   3. ResolveConflict EnsureUpToDate: nil
+	//   4. ResolveConflict ancestry check: error → UnresolvedConflictError → OnConflict(false) → return
+	runner.OnSequence("merge-base --is-ancestor", []stubResponse{
+		{"", nil},
+		{"", nil},
+		{"", nil},
+		{"", fmt.Errorf("not ancestor")},
+	})
 	runner.On("rev-list --count", "1", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 	runner.On("rev-parse --verify", "", nil)

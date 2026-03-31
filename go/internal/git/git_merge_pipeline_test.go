@@ -89,7 +89,13 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 	runner := newStubRunner()
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("fetch", "", nil)
-	runner.On("merge-base --is-ancestor", "", nil)
+	// Sequence: EnsureUpToDate succeeds (up to date), then branchNeedsUpdate
+	// detects main moved (not ancestor) → MergeConflictError.
+	// No plain "rev-parse" stub → Push skips merge-base (baseSHA="").
+	runner.OnSequence("merge-base --is-ancestor", []stubResponse{
+		{"", nil},                            // EnsureUpToDate: already up to date
+		{"", errors.New("not ancestor")},     // branchNeedsUpdate: main moved
+	})
 	runner.On("rev-list --count", "1", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 	runner.On("rev-parse --verify", "", nil)
@@ -98,12 +104,11 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 	runner.On("rev-parse HEAD", "abc123", nil)
 
 	gh := &StubGitHub{
-		IsAvailable:  true,
-		OpenPR:       "42",
-		PRTitle:      "some PR",
-		PRHeadSHA:    "abc123",
-		Checks:       []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
-		UpdateResult: true, // branch needs update → main moved
+		IsAvailable: true,
+		OpenPR:      "42",
+		PRTitle:     "some PR",
+		PRHeadSHA:   "abc123",
+		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}
 
 	mgr := &Manager{
@@ -162,13 +167,12 @@ func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 	runner.On("rev-parse HEAD", "abc123", nil)
 
 	gh := &StubGitHub{
-		IsAvailable:  true,
-		OpenPR:       "88",
-		PRTitle:      "some PR",
-		PRHeadSHA:    "abc123",
-		MergeResult:  MergeResult{Blocked: true, Message: "Pull request is not mergeable"},
-		Checks:       []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
-		UpdateResult: false,
+		IsAvailable: true,
+		OpenPR:      "88",
+		PRTitle:     "some PR",
+		PRHeadSHA:   "abc123",
+		MergeResult: MergeResult{Blocked: true, Message: "Pull request is not mergeable"},
+		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}
 
 	mgr := &Manager{
@@ -219,7 +223,6 @@ func TestAutoMerge_InfraFailureBypass_MergesWhenLocalTestsPassed(t *testing.T) {
 		PRHeadSHA:    "abc123",
 		MergeResult:  MergeResult{Merged: true},
 		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
-		UpdateResult: false,
 		JobStepCount: 0,
 	}
 
@@ -592,11 +595,10 @@ func TestExecuteMerge_CIGatedRetryPath(t *testing.T) {
 	mergeCalls := 0
 	gh := &ciGatedMergeGitHub{
 		StubGitHub: StubGitHub{
-			IsAvailable:  true,
-			OpenPR:       "120",
-			PRTitle:      "CI gated test",
-			PRHeadSHA:    "abc123",
-			UpdateResult: false,
+			IsAvailable: true,
+			OpenPR:      "120",
+			PRTitle:     "CI gated test",
+			PRHeadSHA:   "abc123",
 		},
 		mergeFunc: func() MergeResult {
 			mergeCalls++
@@ -612,7 +614,6 @@ func TestExecuteMerge_CIGatedRetryPath(t *testing.T) {
 			return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 		},
 	}
-
 	mgr := &Manager{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
@@ -685,5 +686,54 @@ func TestAutoMerge_StackedPR_WaitsForBase(t *testing.T) {
 
 	if gh.MergeCalls > 0 {
 		t.Error("should not attempt merge when base PR hasn't merged")
+	}
+}
+
+// branchNeedsUpdate returns true when origin/main is not an ancestor of HEAD,
+// proving that a local ancestry check (not a GitHub API call) detects when
+// main has moved ahead of the PR branch.
+func TestBranchNeedsUpdate_ReturnsTrueWhenMainNotAncestorOfHEAD(t *testing.T) {
+	runner := newStubRunner()
+	runner.On("fetch", "", nil)
+	runner.On("rev-parse --verify", "", nil)
+	// merge-base --is-ancestor fails → origin/main is NOT an ancestor of HEAD
+	runner.On("merge-base --is-ancestor", "", errors.New("not ancestor"))
+
+	mgr := &Manager{
+		ProjectDir:     "/project",
+		WorkDir:        "/project/wt",
+		WorktreeBranch: "ralph/test/01-needs-update",
+		BaseBranch:     "main",
+		Runner:         runner,
+		State:          newMemState(),
+		Logger:         discardLog{},
+	}
+
+	if !mgr.branchNeedsUpdate() {
+		t.Error("branchNeedsUpdate should return true when origin/main is not an ancestor of HEAD")
+	}
+}
+
+// branchNeedsUpdate returns false when origin/main is an ancestor of HEAD,
+// meaning the branch already includes all base branch changes.
+func TestBranchNeedsUpdate_ReturnsFalseWhenMainIsAncestorOfHEAD(t *testing.T) {
+	runner := newStubRunner()
+	runner.On("fetch", "", nil)
+	runner.On("rev-parse --verify", "", nil)
+	// merge-base --is-ancestor succeeds → origin/main IS an ancestor of HEAD
+	runner.On("merge-base --is-ancestor", "", nil)
+
+	mgr := &Manager{
+		ProjectDir:     "/project",
+		WorkDir:        "/project/wt",
+		WorktreeBranch: "ralph/test/01-up-to-date",
+		BaseBranch:     "main",
+		Runner:         runner,
+		State:          newMemState(),
+		Logger:         discardLog{},
+	}
+
+	if mgr.branchNeedsUpdate() {
+		t.Error("branchNeedsUpdate should return false when origin/main is an ancestor of HEAD")
 	}
 }

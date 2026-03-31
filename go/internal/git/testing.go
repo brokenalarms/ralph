@@ -14,8 +14,6 @@ type StubGitHub struct {
 	MergeResults       []MergeResult // sequential results; takes precedence over MergeResult
 	OnMerge            func()        // called on each MergePR call
 	mergeIdx           int
-	UpdateResult       bool
-	UpdateErr          error
 	Checks             []CICheckResult
 	ChecksFunc         func(call int) []CICheckResult // sequential checks; takes precedence
 	checkCalls         int
@@ -82,9 +80,6 @@ func (s *StubGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResu
 		r.Merged = true
 	}
 	return r
-}
-func (s *StubGitHub) UpdateBranch(dir, nwo, prNumber string) (bool, error) {
-	return s.UpdateResult, s.UpdateErr
 }
 func (s *StubGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
 	s.checkCalls++
