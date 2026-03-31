@@ -205,22 +205,24 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 	}
 }
 
-// When merge fails with a CI error, the loop leaves the task open for retry.
-// CI fix agent spawning during the merge pipeline is tested in git module
-// (TestMergeWithRetry_DelegatesCIFailure).
-// When CI fails, the task is still closed because the PR exists — merge
-// is a separate concern from task completion.
+// When CI fails during merge, the task is closed (not skipped) because the
+// work is verified — the PR exists for manual review. Merge is a separate
+// concern from task completion.
 func TestLoop_CIFailureStillClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &testutil.StubBackend{
-		Remaining: 1,
-		Total:     1,
-		NextTask:  "Fix CI failure",
-		NextID:    "ralph-ci1",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:  "Fix CI failure",
+				NextID:    "ralph-ci1",
+			},
+		},
 	}
 
 	gm := &testutil.StubGit{
@@ -257,8 +259,13 @@ func TestLoop_CIFailureStillClosesTask(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	if backend.SkippedTask != "ralph-ci1" {
-		t.Errorf("expected ralph-ci1 deferred in backend, got %q", backend.SkippedTask)
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-ci1" {
+		t.Errorf("expected ralph-ci1 closed in backend, got %v", backend.ClosedIDs)
+	}
+	if backend.SkippedTask != "" {
+		t.Errorf("task should not be skipped when CI fails during merge, got %q", backend.SkippedTask)
 	}
 }
 
@@ -487,9 +494,8 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 }
 
 // Verifies that after MaxMergeFailures consecutive merge failures, the loop
-// skips the task instead of retrying indefinitely. Merge failures are tracked
-// across iterations via the attempts tracker.
-// Merge failures no longer cause task skipping — the PR exists, work is done.
+// When merge fails, the task is closed (not skipped) — the PR exists, work is
+// verified done. setStackHead can find the unmerged branch for the next task.
 func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -538,15 +544,21 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Task should be deferred in backend — merge failed, PR exists for manual review.
+	// Task should be closed — merge failed but PR exists, work is done.
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-stub" {
+		t.Errorf("expected ralph-stub closed in backend, got %v", backend.ClosedIDs)
+	}
 	backend.SkipMu.Lock()
 	defer backend.SkipMu.Unlock()
-	if len(backend.SkippedIDs) != 1 || backend.SkippedIDs[0] != "ralph-stub" {
-		t.Errorf("expected ralph-stub deferred in backend, got %v", backend.SkippedIDs)
+	if len(backend.SkippedIDs) != 0 {
+		t.Errorf("task should not be skipped when merge fails, got %v", backend.SkippedIDs)
 	}
 }
 
-// Merge failure skips the task — PR exists, work is done. No retry counting.
+// Merge failure closes the task without incrementing the retry counter — the
+// work is verified done, this is not a failure that needs retrying.
 func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -595,11 +607,16 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Task should be deferred in backend — merge failed, PR exists for manual review.
+	// Task should be closed — merge failed but PR exists, work is done. No retrying.
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-fix" {
+		t.Errorf("expected ralph-fix closed in backend, got %v", backend.ClosedIDs)
+	}
 	backend.SkipMu.Lock()
 	defer backend.SkipMu.Unlock()
-	if len(backend.SkippedIDs) != 1 || backend.SkippedIDs[0] != "ralph-fix" {
-		t.Errorf("expected ralph-fix deferred in backend, got %v", backend.SkippedIDs)
+	if len(backend.SkippedIDs) != 0 {
+		t.Errorf("task should not be skipped when merge fails, got %v", backend.SkippedIDs)
 	}
 }
 

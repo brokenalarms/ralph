@@ -176,8 +176,10 @@ func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
 	}
 }
 
-// finalizePR skips the task when merge fails with AutoMerge on.
-func TestFinalizePR_MergeFailure_SkipsTask(t *testing.T) {
+// finalizePR closes the bead (not skips) when merge fails with AutoMerge on.
+// Work is verified — it should land in completed_tasks so setStackHead can find
+// the branch for the next task to stack on.
+func TestFinalizePR_MergeFailure_ClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -211,19 +213,65 @@ func TestFinalizePR_MergeFailure_SkipsTask(t *testing.T) {
 	if result.merged {
 		t.Error("should not be merged on failure")
 	}
-	if result.closed {
-		t.Error("task should not be closed on merge failure")
+	if !result.closed {
+		t.Error("task should be closed (not skipped) after merge failure — work is verified")
 	}
-	backend.SkipMu.Lock()
-	defer backend.SkipMu.Unlock()
-	found := false
-	for _, id := range backend.SkippedIDs {
-		if id == "ralph-abc" {
-			found = true
-		}
+
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-abc" {
+		t.Errorf("expected CloseTask for ralph-abc, got %v", backend.ClosedIDs)
 	}
-	if !found {
-		t.Error("expected ralph-abc deferred in backend after merge failure")
+	if len(backend.CloseReasons) == 0 || !strings.Contains(backend.CloseReasons[0], "merge pending") {
+		t.Errorf("close reason should indicate merge pending, got %v", backend.CloseReasons)
+	}
+}
+
+// finalizePR with merge failure records merged:false in completed_tasks so
+// setStackHead can find the unmerged branch for the next task to stack on.
+func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	l := New(Config{
+		Dirs:         workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+		AutoMerge:    true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.mergeFunc = func(ctx context.Context) (bool, error) {
+		return false, fmt.Errorf("CI check failed")
+	}
+
+	l.finalizePR(finalizePRParams{
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix bug",
+		prNumber: "99",
+		prState:  "OPEN",
+		workDir:  dir,
+	})
+
+	tasks, err := st.GetCompletedTasks()
+	if err != nil {
+		t.Fatalf("GetCompletedTasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 entry in completed_tasks, got %d", len(tasks))
+	}
+	if tasks[0].ID != "ralph-abc" {
+		t.Errorf("completed task ID = %q, want ralph-abc", tasks[0].ID)
+	}
+	if tasks[0].Merged {
+		t.Error("merged should be false for unmerged PR")
 	}
 }
 
@@ -462,7 +510,7 @@ func TestSkipTask_EmptyID(t *testing.T) {
 func TestPersistCompletedTask_Standalone(t *testing.T) {
 	_, st := setupTestDir(t)
 
-	persistCompletedTask(st, logging.New(nil), "ralph-abc")
+	persistCompletedTask(st, logging.New(nil), "ralph-abc", true)
 
 	tasks, err := st.GetCompletedTasks()
 	if err != nil {
@@ -471,8 +519,11 @@ func TestPersistCompletedTask_Standalone(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 completed task, got %d", len(tasks))
 	}
-	if tasks[0] != "ralph-abc" {
-		t.Errorf("expected ID ralph-abc, got %q", tasks[0])
+	if tasks[0].ID != "ralph-abc" {
+		t.Errorf("expected ID ralph-abc, got %q", tasks[0].ID)
+	}
+	if !tasks[0].Merged {
+		t.Error("merged should be true")
 	}
 }
 

@@ -456,17 +456,17 @@ func TestState_TestResultFieldsInJSON(t *testing.T) {
 	}
 }
 
-// Proves: AddCompletedTask persists task IDs — enabling ralph-task to verify
-// tasks weren't falsely closed.
+// Proves: AddCompletedTask persists task entries — enabling ralph-task to verify
+// tasks weren't falsely closed and setStackHead to find unmerged branches.
 func TestCompletedTasks_AddAndRetrieve(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 	st.Init(5)
 
-	if err := st.AddCompletedTask("ralph-abc"); err != nil {
+	if err := st.AddCompletedTask("ralph-abc", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddCompletedTask("ralph-def"); err != nil {
+	if err := st.AddCompletedTask("ralph-def", false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -477,11 +477,11 @@ func TestCompletedTasks_AddAndRetrieve(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Fatalf("expected 2 completed tasks, got %d", len(tasks))
 	}
-	if tasks[0] != "ralph-abc" {
-		t.Errorf("first task = %q, want ralph-abc", tasks[0])
+	if tasks[0].ID != "ralph-abc" || !tasks[0].Merged {
+		t.Errorf("first task = %+v, want {ralph-abc, true}", tasks[0])
 	}
-	if tasks[1] != "ralph-def" {
-		t.Errorf("second task = %q, want ralph-def", tasks[1])
+	if tasks[1].ID != "ralph-def" || tasks[1].Merged {
+		t.Errorf("second task = %+v, want {ralph-def, false}", tasks[1])
 	}
 }
 
@@ -491,8 +491,8 @@ func TestCompletedTasks_Clear(t *testing.T) {
 	st := NewStore(dir)
 	st.Init(5)
 
-	st.AddCompletedTask("ralph-abc")
-	st.AddCompletedTask("ralph-def")
+	st.AddCompletedTask("ralph-abc", true)
+	st.AddCompletedTask("ralph-def", false)
 
 	if err := st.ClearCompletedTasks(); err != nil {
 		t.Fatal(err)
@@ -518,9 +518,12 @@ func TestCompletedTasks_RoundTrip(t *testing.T) {
 	st := NewStore(dir)
 
 	s := State{
-		Iteration:      5,
-		Status:         "running",
-		CompletedTasks: []string{"ralph-x", "ralph-y"},
+		Iteration: 5,
+		Status:    "running",
+		CompletedTasks: []CompletedTaskEntry{
+			{ID: "ralph-x", Merged: true},
+			{ID: "ralph-y", Merged: false},
+		},
 	}
 	if err := st.Save(s); err != nil {
 		t.Fatal(err)
@@ -533,24 +536,24 @@ func TestCompletedTasks_RoundTrip(t *testing.T) {
 	if len(loaded.CompletedTasks) != 2 {
 		t.Fatalf("expected 2, got %d", len(loaded.CompletedTasks))
 	}
-	if loaded.CompletedTasks[0] != "ralph-x" || loaded.CompletedTasks[1] != "ralph-y" {
-		t.Errorf("unexpected: %+v", loaded.CompletedTasks)
+	if loaded.CompletedTasks[0].ID != "ralph-x" || !loaded.CompletedTasks[0].Merged {
+		t.Errorf("first entry unexpected: %+v", loaded.CompletedTasks[0])
+	}
+	if loaded.CompletedTasks[1].ID != "ralph-y" || loaded.CompletedTasks[1].Merged {
+		t.Errorf("second entry unexpected: %+v", loaded.CompletedTasks[1])
 	}
 }
 
-// Proves: old-format completed_tasks (array of objects) is migrated to ID-only
-// strings on load, so existing state.json files don't break after the upgrade.
-func TestCompletedTasks_MigrateOldFormat(t *testing.T) {
+// Proves: old string-array completed_tasks is migrated to [{id, merged:true}]
+// on load, so existing state.json files don't break after the upgrade.
+func TestCompletedTasks_MigrateOldStringFormat(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
 
 	oldJSON := `{
   "iteration": 3,
   "status": "running",
-  "completed_tasks": [
-    {"id": "ralph-abc", "title": "fix widget", "pr_number": "42", "close_reason": "Fixed in PR #42"},
-    {"id": "ralph-def", "title": "add tests", "pr_number": "43", "close_reason": "Fixed in PR #43"}
-  ]
+  "completed_tasks": ["ralph-abc", "ralph-def"]
 }`
 	os.WriteFile(filepath.Join(dir, "state.json"), []byte(oldJSON), 0o644)
 
@@ -561,11 +564,11 @@ func TestCompletedTasks_MigrateOldFormat(t *testing.T) {
 	if len(loaded.CompletedTasks) != 2 {
 		t.Fatalf("expected 2 migrated tasks, got %d", len(loaded.CompletedTasks))
 	}
-	if loaded.CompletedTasks[0] != "ralph-abc" {
-		t.Errorf("first migrated task = %q, want ralph-abc", loaded.CompletedTasks[0])
+	if loaded.CompletedTasks[0].ID != "ralph-abc" || !loaded.CompletedTasks[0].Merged {
+		t.Errorf("first migrated task = %+v, want {ralph-abc, merged:true}", loaded.CompletedTasks[0])
 	}
-	if loaded.CompletedTasks[1] != "ralph-def" {
-		t.Errorf("second migrated task = %q, want ralph-def", loaded.CompletedTasks[1])
+	if loaded.CompletedTasks[1].ID != "ralph-def" || !loaded.CompletedTasks[1].Merged {
+		t.Errorf("second migrated task = %+v, want {ralph-def, merged:true}", loaded.CompletedTasks[1])
 	}
 }
 

@@ -224,7 +224,7 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 			if iterationCount == 1 {
 				backend.Metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
 				backend.ExternalRefs["ralph-aaa"] = "gh-100"
-				st.AddCompletedTask("ralph-aaa")
+				st.AddCompletedTask("ralph-aaa", true)
 
 				backend.Completed = 1
 				backend.Remaining = 1
@@ -326,7 +326,7 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 			if iterationCount == 1 {
 				backend.Metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
 				backend.ExternalRefs["ralph-aaa"] = "gh-100"
-				st.AddCompletedTask("ralph-aaa")
+				st.AddCompletedTask("ralph-aaa", true)
 
 				backend.Completed = 1
 				backend.Remaining = 1
@@ -420,7 +420,7 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 			defer backend.Unlock()
 			if iterationCount == 1 {
 				backend.Metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
-				st.AddCompletedTask("ralph-aaa")
+				st.AddCompletedTask("ralph-aaa", true)
 
 				backend.Completed = 1
 				backend.Remaining = 1
@@ -653,7 +653,7 @@ func TestSetStackHead_SkipsUnfetchableBranch(t *testing.T) {
 		WorkDir:    dir,
 	}
 
-	st.AddCompletedTask("ralph-aaa")
+	st.AddCompletedTask("ralph-aaa", true)
 	backend := &testutil.MutableBackend{}
 
 	l := New(Config{

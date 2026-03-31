@@ -278,7 +278,7 @@ func (l *Loop) setStackHead() {
 	}
 
 	for i := len(tasks) - 1; i >= 0; i-- {
-		id := tasks[i]
+		id := tasks[i].ID
 		if id == "" {
 			continue
 		}
