@@ -214,18 +214,25 @@ resolution retry logic in `MergeWithRetry`. Callers pass their validator:
 
 ## Logger Changes
 
-The logger is initialized with `nwo` (from remote URL, resolved once). PR
-number formatting is internal to the logger. Call sites write:
+Log methods accept a structured `Opts` value. All context (domain, PR
+number, branch) is a field on `Opts`. The logger appends rendered fields
+after the message — PR becomes a clickable hyperlink at the end of the
+line, branch gets a colored tag.
 
 ```go
-l.logger.Log("git", "Merged PR #%s", prNumber)
+l.logger.Log(logging.Opts{
+    Domain: "git",
+    PR:     prNumber,
+    Branch: branch,
+}, "Found PR — resolving")
+// renders: [o][git] Found PR — resolving  PR #42
+//                                         ^^^^^^ clickable link
 ```
 
-The logger detects `PR #N` patterns and renders OSC 8 hyperlinks. No
-`logging.PRLink()` public API. No `NWOFromRemote` calls at log sites.
-
-`logging.PRLink` becomes unexported or removed. The `nwo` is set once via
-`logger.SetRepo(nwo string)` or equivalent.
+The logger is initialized with `nwo` (from remote URL, set once via
+`SetRepo`). `logging.PRLink` becomes unexported. No `NWOFromRemote` at
+call sites. This is a large API migration best done as a clean pass after
+the structural refactor.
 
 ## External Refs
 
