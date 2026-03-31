@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -63,19 +62,6 @@ func (s *Server) ListenAndServe() error {
 	log.Printf("[ralph-server] Listening on http://%s", addr)
 	log.Printf("[ralph-server] Ralph script: %s", s.ScriptPath)
 	return s.httpServer.ListenAndServe()
-}
-
-func (s *Server) Shutdown() {
-	s.mu.Lock()
-	proc := s.process
-	s.mu.Unlock()
-
-	if proc != nil && proc.Cmd.Process != nil {
-		proc.Cmd.Process.Signal(os.Interrupt)
-	}
-	if s.httpServer != nil {
-		s.httpServer.Close()
-	}
 }
 
 func (s *Server) handleCORS(w http.ResponseWriter, r *http.Request) {
