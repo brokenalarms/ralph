@@ -51,7 +51,7 @@ type GitOps interface {
 	EnsureUpToDate(ctx context.Context) error
 
 	// Push operations.
-	ForcePush(ctx context.Context) error
+	Push(ctx context.Context) error
 	PushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error)
 
 	// Merge operations.
