@@ -173,10 +173,10 @@ func isCIGatedError(mergeOutput string) bool {
 // has conflicts with the base branch that prevent merging.
 func isMergeConflictError(mergeOutput string) bool {
 	lower := strings.ToLower(mergeOutput)
-	// "not mergeable" is intentionally excluded — it's ambiguous and can
-	// mean CI-gated block. isCIGatedError is checked first in executeMerge.
 	patterns := []string{
 		"merge conflict",
+		"not mergeable",
+		"pull request is not mergeable",
 		"head branch was behind the base branch",
 	}
 	for _, p := range patterns {

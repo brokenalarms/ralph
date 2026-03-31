@@ -202,10 +202,10 @@ func TestIsMergeConflictError_Matches(t *testing.T) {
 		msg  string
 		want bool
 	}{
-		{"Pull request is not mergeable", false}, // ambiguous — excluded after ralph-laun fix
+		{"Pull request is not mergeable", true},
 		{"Merge conflict in the base branch", true},
 		{"There is a merge conflict", true},
-		{"not mergeable: the head branch was out of date", false}, // ambiguous — excluded after ralph-laun fix
+		{"not mergeable: the head branch was out of date", true},
 		{"Head branch was behind the base branch", true},
 		{"required status check \"test\" is expected", false},
 		{"some other error", false},
@@ -847,7 +847,7 @@ func TestAutoMerge_MergeConflictReturnsTypedError(t *testing.T) {
 		IsAvailable: true,
 		OpenPR:      "42",
 		Checks:      []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
-		MergeOutput: "merge conflict in file.go",
+		MergeOutput: "Pull request is not mergeable",
 		MergeErr:    fmt.Errorf("exit status 1"),
 	}
 	mgr := setupAutoMergeManager(t, gh)
@@ -920,13 +920,14 @@ func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 	}
 }
 
-// "not mergeable" is ambiguous — it can mean CI-gated or merge conflict.
-// After ralph-laun fix, "not mergeable" no longer matches isMergeConflictError
-// so executeMerge falls through to the CI-gated check or the generic error.
-func TestIsMergeConflictError_NotMergeableExcluded(t *testing.T) {
+// "not mergeable" matches both isMergeConflictError and could indicate
+// CI-gated. The ralph-laun fix ensures executeMerge checks isCIGatedError
+// first, so CI-gated catches it before merge conflict when both apply.
+// isMergeConflictError still matches — it's the fallback for genuine conflicts.
+func TestIsMergeConflictError_NotMergeableStillMatches(t *testing.T) {
 	output := "Pull request is not mergeable"
-	if isMergeConflictError(output) {
-		t.Error("'not mergeable' should not match merge conflict — it's ambiguous")
+	if !isMergeConflictError(output) {
+		t.Error("'not mergeable' should match merge conflict as fallback")
 	}
 }
 
