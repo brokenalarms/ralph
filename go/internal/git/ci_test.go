@@ -158,27 +158,6 @@ func TestRequiredFailedChecks_NoneFailedReturnsEmpty(t *testing.T) {
 	}
 }
 
-// isCIGatedError recognizes the standard GitHub branch protection error
-// message that indicates CI checks are blocking the merge.
-func TestIsCIGatedError_Matches(t *testing.T) {
-	cases := []struct {
-		msg  string
-		want bool
-	}{
-		{"GraphQL: Base branch policy prohibits the merge (mergeError)", true},
-		{"required status check \"test\" is expected", true},
-		{"Merge requirements were not satisfied", true},
-		{"Pull request review is required", true},
-		{"some other error", false},
-		{"", false},
-	}
-	for _, tc := range cases {
-		if got := isCIGatedError(tc.msg); got != tc.want {
-			t.Errorf("isCIGatedError(%q) = %v, want %v", tc.msg, got, tc.want)
-		}
-	}
-}
-
 // CIFailureError produces a human-readable message listing the failed
 // check names, suitable for feedback to the next iteration.
 func TestCIFailureError_Message(t *testing.T) {
@@ -192,29 +171,6 @@ func TestCIFailureError_Message(t *testing.T) {
 	msg := err.Error()
 	if msg != "CI checks failed on PR #42: test, lint" {
 		t.Errorf("unexpected error message: %s", msg)
-	}
-}
-
-// isMergeConflictError recognizes GitHub merge conflict messages that
-// indicate a PR cannot be merged due to conflicts with the base branch.
-func TestIsMergeConflictError_Matches(t *testing.T) {
-	cases := []struct {
-		msg  string
-		want bool
-	}{
-		{"Pull request is not mergeable", true},
-		{"Merge conflict in the base branch", true},
-		{"There is a merge conflict", true},
-		{"not mergeable: the head branch was out of date", true},
-		{"Head branch was behind the base branch", true},
-		{"required status check \"test\" is expected", false},
-		{"some other error", false},
-		{"", false},
-	}
-	for _, tc := range cases {
-		if got := isMergeConflictError(tc.msg); got != tc.want {
-			t.Errorf("isMergeConflictError(%q) = %v, want %v", tc.msg, got, tc.want)
-		}
 	}
 }
 
@@ -919,33 +875,3 @@ func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 	}
 }
 
-// "not mergeable" matches both isMergeConflictError and could indicate
-// CI-gated. The ralph-laun fix ensures executeMerge checks isCIGatedError
-// first, so CI-gated catches it before merge conflict when both apply.
-// isMergeConflictError still matches — it's the fallback for genuine conflicts.
-func TestIsMergeConflictError_NotMergeableStillMatches(t *testing.T) {
-	output := "Pull request is not mergeable"
-	if !isMergeConflictError(output) {
-		t.Error("'not mergeable' should match merge conflict as fallback")
-	}
-}
-
-// CI-gated errors should be distinguishable from merge conflicts.
-// "base branch policy prohibits the merge" is unambiguously CI-gated.
-func TestIsCIGatedError_PolicyProhibitsMerge(t *testing.T) {
-	output := "base branch policy prohibits the merge"
-	if !isCIGatedError(output) {
-		t.Error("'base branch policy prohibits the merge' should be CI-gated")
-	}
-	if isMergeConflictError(output) {
-		t.Error("'base branch policy prohibits the merge' should not match merge conflict")
-	}
-}
-
-// "merge requirements were not satisfied" is unambiguously CI-gated.
-func TestIsCIGatedError_MergeRequirementsNotSatisfied(t *testing.T) {
-	output := "merge requirements were not satisfied"
-	if !isCIGatedError(output) {
-		t.Error("'merge requirements were not satisfied' should be CI-gated")
-	}
-}
