@@ -185,6 +185,14 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 
 	default:
 		l.logger.Warn("git", "%s is %s (not merged) — re-running agent", pr, prState)
+		// Clear stale refs so the closed PR isn't re-discovered on the
+		// next iteration and the agent pushes to a fresh branch.
+		if taskID != "" {
+			_ = l.cfg.TaskBackend.SetExternalRef(taskID, "")
+			_ = l.cfg.TaskBackend.SetMetadata(taskID, "branch", "")
+		}
+		l.git.PrepareForNextTask()
+		l.checkoutExistingBranch(taskID, nextTask)
 		return false
 	}
 }
