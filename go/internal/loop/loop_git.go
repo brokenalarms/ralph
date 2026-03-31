@@ -15,11 +15,10 @@ import (
 
 // branchParams bundles the dependencies needed by prepareBranch and its helpers.
 type branchParams struct {
-	git      git.GitOps
-	backend  tasks.Backend
-	state    *state.Store
-	logger   *logging.Logger
-	ralphDir string
+	git     git.GitOps
+	backend tasks.Backend
+	state   *state.Store
+	logger  *logging.Logger
 }
 
 // prepareBranch is the package-level implementation of branch setup for a task.
@@ -40,7 +39,7 @@ func prepareBranch(ctx context.Context, p branchParams, taskID, title string) er
 	}
 
 	checkoutExistingBranch(p.git, p.backend, p.logger, taskID, title)
-	writeRunBranch(p.ralphDir, p.git.GetWorktreeBranch())
+	p.state.WriteRunBranch(p.git.GetWorktreeBranch())
 	return nil
 }
 
@@ -143,11 +142,10 @@ func (l *Loop) handleRebase(ctx context.Context) error {
 
 func (l *Loop) prepareBranch(ctx context.Context, taskID, nextTask string) error {
 	return prepareBranch(ctx, branchParams{
-		git:      l.git,
-		backend:  l.cfg.TaskBackend,
-		state:    l.state,
-		logger:   l.logger,
-		ralphDir: l.cfg.Dirs.RalphDir,
+		git:     l.git,
+		backend: l.cfg.TaskBackend,
+		state:   l.state,
+		logger:  l.logger,
 	}, taskID, nextTask)
 }
 
@@ -270,7 +268,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 	case "MERGED":
 		l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Success, Link: l.prLink(prNumber)}, "already merged — closing bead and moving on")
 		l.attempts.Clear(taskID, nextTask)
-		recordCompletedTask(l.cfg.Dirs.RalphDir, taskID, nextTask)
+		l.state.RecordCompletedTask(taskID, nextTask)
 		l.finalizePR(finalizePRParams{
 			ctx:        ctx,
 			taskID:     taskID,

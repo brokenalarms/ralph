@@ -628,3 +628,141 @@ func TestSkippedTasks_RoundTrip(t *testing.T) {
 		t.Errorf("expected 2 skipped tasks after round-trip, got %d", len(s2.SkippedTasks))
 	}
 }
+
+// Verifies CheckStop returns true when the stop file exists and removes it,
+// proving the graceful shutdown signal is consumed exactly once.
+func TestStore_CheckStop(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+
+	if st.CheckStop() {
+		t.Error("CheckStop should return false when stop file absent")
+	}
+
+	stopFile := filepath.Join(dir, "stop")
+	if err := os.WriteFile(stopFile, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if !st.CheckStop() {
+		t.Error("CheckStop should return true after stop file created")
+	}
+
+	if _, err := os.Stat(stopFile); !os.IsNotExist(err) {
+		t.Error("CheckStop should remove the stop file after returning true")
+	}
+
+	if st.CheckStop() {
+		t.Error("CheckStop should return false after stop file has been removed")
+	}
+}
+
+// Verifies WriteRunBranch writes the branch name to .run-branch and defaults
+// to "ralph" when the branch string is empty, proving the pane-title updater
+// integration is consistent.
+func TestStore_WriteRunBranch(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+
+	st.WriteRunBranch("ralph/project/01-fix-bug")
+	data, err := os.ReadFile(filepath.Join(dir, ".run-branch"))
+	if err != nil {
+		t.Fatalf("expected .run-branch file: %v", err)
+	}
+	if string(data) != "ralph/project/01-fix-bug" {
+		t.Errorf("got %q, want %q", string(data), "ralph/project/01-fix-bug")
+	}
+
+	st.WriteRunBranch("")
+	data, _ = os.ReadFile(filepath.Join(dir, ".run-branch"))
+	if string(data) != "ralph" {
+		t.Errorf("empty branch should default to %q, got %q", "ralph", string(data))
+	}
+}
+
+// Verifies UpdateStreamTask writes the formatted task string to .stream-task
+// so the tmux pane title integration receives the correct content.
+func TestStore_UpdateStreamTask(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+
+	st.UpdateStreamTask("ralph-abc", "Add feature X", nil)
+	data, err := os.ReadFile(filepath.Join(dir, ".stream-task"))
+	if err != nil {
+		t.Fatalf("expected .stream-task file: %v", err)
+	}
+	if string(data) != "ralph-abc: Add feature X" {
+		t.Errorf("got %q, want %q", string(data), "ralph-abc: Add feature X")
+	}
+
+	st.UpdateStreamTask("", "Add feature Y", nil)
+	data, _ = os.ReadFile(filepath.Join(dir, ".stream-task"))
+	if string(data) != "Add feature Y" {
+		t.Errorf("got %q, want %q", string(data), "Add feature Y")
+	}
+
+	p := 3
+	st.UpdateStreamTask("ralph-xyz", "Some task", &p)
+	data, _ = os.ReadFile(filepath.Join(dir, ".stream-task"))
+	got := string(data)
+	if !strings.Contains(got, "[P3]") {
+		t.Errorf("stream task with priority should include [P3], got %q", got)
+	}
+	if !strings.Contains(got, "ralph-xyz") {
+		t.Errorf("stream task should include task ID, got %q", got)
+	}
+}
+
+// Verifies RecordCompletedTask appends labels to .completed-tasks, proving
+// the plan pane can show cumulative session completions.
+func TestStore_RecordCompletedTask(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+
+	st.RecordCompletedTask("ralph-abc", "Add feature X")
+	st.RecordCompletedTask("ralph-def", "Fix bug Y")
+
+	data, err := os.ReadFile(filepath.Join(dir, ".completed-tasks"))
+	if err != nil {
+		t.Fatalf("expected .completed-tasks file: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) != 2 || lines[0] != "ralph-abc" || lines[1] != "ralph-def" {
+		t.Errorf("unexpected .completed-tasks content: %q", string(data))
+	}
+}
+
+// Verifies ClearCompletedTasksFile removes .completed-tasks so the plan pane
+// shows only the current session's completions after a fresh start.
+func TestStore_ClearCompletedTasksFile(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+
+	path := filepath.Join(dir, ".completed-tasks")
+	if err := os.WriteFile(path, []byte("ralph-abc\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st.ClearCompletedTasksFile()
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("ClearCompletedTasksFile should remove .completed-tasks")
+	}
+}
+
+// Verifies TouchPlanFlash and TouchPlanRefresh create their respective signal
+// files, proving the UI flash and refresh triggers reach the plan pane.
+func TestStore_TouchPlanFiles(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+
+	st.TouchPlanFlash()
+	if _, err := os.Stat(filepath.Join(dir, ".plan-flash")); err != nil {
+		t.Error("TouchPlanFlash should create .plan-flash")
+	}
+
+	st.TouchPlanRefresh()
+	if _, err := os.Stat(filepath.Join(dir, ".plan-refresh")); err != nil {
+		t.Error("TouchPlanRefresh should create .plan-refresh")
+	}
+}

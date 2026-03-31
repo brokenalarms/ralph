@@ -29,7 +29,6 @@ type taskContext struct {
 type selectNextTaskParams struct {
 	runIteration  int
 	maxIterations int
-	ralphDir      string
 	backend       tasks.Backend
 	wait          bool
 	state         *state.Store
@@ -73,7 +72,7 @@ func selectNextTaskInner(ctx context.Context, p selectNextTaskParams, attempts i
 		return taskContext{}, actionDone
 	}
 
-	if checkStopFile(p.ralphDir) {
+	if p.state.CheckStop() {
 		p.logger.Warn("", "Stop file detected - halting")
 		p.state.Write("status", "stopped")
 		return taskContext{}, actionDone
@@ -150,7 +149,6 @@ func (l *Loop) selectNextTask(ctx context.Context, runIteration int) (taskContex
 	return selectNextTask(ctx, selectNextTaskParams{
 		runIteration:      runIteration,
 		maxIterations:     l.cfg.MaxIterations,
-		ralphDir:          l.cfg.Dirs.RalphDir,
 		backend:           l.cfg.TaskBackend,
 		wait:              l.cfg.Wait,
 		state:             l.state,

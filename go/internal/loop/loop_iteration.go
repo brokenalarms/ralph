@@ -120,7 +120,6 @@ type handlePostSignalOpts struct {
 	autoMerge         bool
 	evolve            bool
 	notify            bool
-	ralphDir          string
 	git               git.GitOps
 	backend           tasks.Backend
 	state             *state.Store
@@ -179,8 +178,8 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 	}
 
 	opts.attempts.Clear(p.taskID, p.nextTask)
-	recordCompletedTask(opts.ralphDir, p.taskID, p.nextTask)
-	touchFile(filepath.Join(opts.ralphDir, ".plan-flash"))
+	opts.state.RecordCompletedTask(p.taskID, p.nextTask)
+	opts.state.TouchPlanFlash()
 
 	headAfterSignal := opts.git.HeadRev()
 	if p.headBefore != "" && headAfterSignal == p.headBefore {
@@ -295,7 +294,6 @@ func (l *Loop) handlePostSignal(p postSignalParams) postSignalAction {
 		autoMerge:         l.cfg.AutoMerge,
 		evolve:            l.cfg.Evolve,
 		notify:            l.cfg.Notify,
-		ralphDir:          l.cfg.Dirs.RalphDir,
 		git:               l.git,
 		backend:           l.cfg.TaskBackend,
 		state:             l.state,

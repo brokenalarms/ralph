@@ -13,6 +13,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verify"
@@ -92,19 +93,19 @@ func (b *integrationBackend) GetState(id, key string) (string, error) {
 }
 
 // setupIntegrationTest creates a temp dir, state store, and prompt templates.
-func setupIntegrationTest(t *testing.T) (dir, ralphDir, promptsDir string) {
+func setupIntegrationTest(t *testing.T) (dir, ralphDir, promptsDir string, st *state.Store) {
 	t.Helper()
-	dir, _ = setupTestDir(t)
+	dir, st = setupTestDir(t)
 	ralphDir = filepath.Join(dir, ".ralph")
 	promptsDir = filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
-	return dir, ralphDir, promptsDir
+	return dir, ralphDir, promptsDir, st
 }
 
 // Scenario 1: Happy path — task signals completion, verification passes,
 // push creates a PR, merge succeeds, bead is closed with PR reference.
 func TestIntegration_HappyPath_SignalVerifyPushMergeClose(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -134,23 +135,6 @@ func TestIntegration_HappyPath_SignalVerifyPushMergeClose(t *testing.T) {
 	}
 
 	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
-			RalphDir:   ralphDir,
-			PromptsDir: promptsDir,
-		},
-		MaxIterations: 5,
-		CallsPerHour:  80,
-		AutoMerge:     true,
-		TaskBackend:   backend,
-	}, nil, gm, logging.New(nil))
-	// Re-create state store from setupTestDir
-	_, st := setupTestDir(t)
-	ralphDir2 := filepath.Join(t.TempDir(), ".ralph")
-	os.MkdirAll(ralphDir2, 0o755)
-	// Use the original dir's state
-	l = New(Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -226,8 +210,7 @@ func TestIntegration_HappyPath_SignalVerifyPushMergeClose(t *testing.T) {
 // Scenario 2: Resume via existing PR that is already MERGED.
 // The bead is closed without running the agent.
 func TestIntegration_ResumeViaPR_Merged(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -305,8 +288,7 @@ func TestIntegration_ResumeViaPR_Merged(t *testing.T) {
 // Scenario 3: Resume via existing PR that is OPEN with auto-merge enabled.
 // Merge is attempted and bead is closed after merge.
 func TestIntegration_ResumeViaPR_OpenAutoMerge(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -376,8 +358,7 @@ func TestIntegration_ResumeViaPR_OpenAutoMerge(t *testing.T) {
 // Scenario 4: Resume via existing PR that is CLOSED.
 // External ref and branch metadata are cleared, agent runs.
 func TestIntegration_ResumeViaPR_Closed(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -459,8 +440,7 @@ func TestIntegration_ResumeViaPR_Closed(t *testing.T) {
 // Uses onSignal path with a Makefile-based test runner. First test run
 // fails, fix agent runs, second test run passes — task completes.
 func TestIntegration_TestFailureThenFixAgentPasses(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	// Create a Makefile that fails on first call but passes after fix.
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\t@echo 'FAIL: broken' && exit 1\n"), 0o644)
@@ -527,8 +507,7 @@ func TestIntegration_TestFailureThenFixAgentPasses(t *testing.T) {
 // Scenario 6: CI failure -> fix agent -> CI passes -> merge.
 // mergeFunc returns CIFailureError on first call, then succeeds.
 func TestIntegration_CIFailureThenFixThenMerge(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -607,8 +586,7 @@ func TestIntegration_CIFailureThenFixThenMerge(t *testing.T) {
 
 // Scenario 7: Max iterations reached — loop exits after the configured limit.
 func TestIntegration_MaxIterationsReached(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	iterationCount := 0
 	backend := &testutil.MutableBackend{
@@ -665,8 +643,7 @@ func TestIntegration_MaxIterationsReached(t *testing.T) {
 // the external ref written to the backend should be a full URL.
 // Current code may write "gh-N" format when findPRInfo returns no URL.
 func TestIntegration_ExternalRefFormat(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -750,8 +727,7 @@ func TestIntegration_ExternalRefFormat(t *testing.T) {
 // Scenario 9: Push always goes through pushPRFunc (which internally squashes).
 // Verifies that pushPRFunc is called in the signal -> push flow.
 func TestIntegration_PushCalledOnSignal(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -816,8 +792,7 @@ func TestIntegration_PushCalledOnSignal(t *testing.T) {
 // Starts with no remaining tasks, Wait=true. Uses onWaitFunc to add a task,
 // then the loop picks it up and runs it.
 func TestIntegration_WaitModePicksUpNewTask(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := &testutil.MutableBackend{
 		StubBackend: testutil.StubBackend{
@@ -902,8 +877,7 @@ func TestIntegration_WaitModePicksUpNewTask(t *testing.T) {
 // using the onSignal-based verification flow with a signalCallingRunner
 // that triggers verification.
 func TestIntegration_TestFailureFixedByAgent(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	// Create a Makefile that fails.
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\t@echo 'FAIL: broken' && exit 1\n"), 0o644)
@@ -1008,8 +982,7 @@ func TestIntegration_ResolveByPRState_AllStates(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir, ralphDir, promptsDir := setupIntegrationTest(t)
-			_, st := setupTestDir(t)
+			dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 			backend := newIntegrationBackend()
 			backend.Remaining = 1
@@ -1072,8 +1045,7 @@ func TestIntegration_ResolveByPRState_AllStates(t *testing.T) {
 
 // Scenario: Full end-to-end with two tasks completing in sequence.
 func TestIntegration_TwoTasksCompleteSequentially(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	iterationCount := 0
 	backend := newIntegrationBackend()
@@ -1157,8 +1129,7 @@ func TestIntegration_TwoTasksCompleteSequentially(t *testing.T) {
 // Scenario: finalizePR with a stacked PR (base != default branch) skips
 // merge but still closes the task.
 func TestIntegration_StackedPRSkipsMergeButCloses(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -1217,8 +1188,7 @@ func TestIntegration_StackedPRSkipsMergeButCloses(t *testing.T) {
 // When mergeFunc returns an error on first call (simulating conflict/rebase),
 // the loop should retry and succeed on the second call.
 func TestIntegration_MergeConflictThenRetrySucceeds(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -1296,8 +1266,7 @@ func TestIntegration_MergeConflictThenRetrySucceeds(t *testing.T) {
 // An agent that exits without signaling made no verifiable progress.
 // The loop should retry on the next iteration, not treat it as completion.
 func TestIntegration_AgentExitsWithoutSignal_Retries(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -1343,8 +1312,7 @@ func TestIntegration_AgentExitsWithoutSignal_Retries(t *testing.T) {
 // If the backend keeps returning the same ID after close, the loop should skip
 // it rather than processing it again.
 func TestIntegration_CompletedTaskNotReselected(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -1409,8 +1377,7 @@ func TestIntegration_CompletedTaskNotReselected(t *testing.T) {
 // If the agent times out repeatedly without progress, the loop should
 // skip the task rather than retrying forever.
 func TestIntegration_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -1452,8 +1419,7 @@ func TestIntegration_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 
 // Feedback kill restarts the iteration — the agent is killed and retried.
 func TestIntegration_FeedbackKillRestartsIteration(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -1512,8 +1478,7 @@ func TestIntegration_FeedbackKillRestartsIteration(t *testing.T) {
 
 // Stop file halts the loop cleanly between iterations.
 func TestIntegration_StopFileHaltsLoop(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -1561,8 +1526,7 @@ func TestIntegration_StopFileHaltsLoop(t *testing.T) {
 
 // Evolve mode: after successful merge, loop returns (signals restart).
 func TestIntegration_EvolveExitsAfterMerge(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -1621,8 +1585,7 @@ func TestIntegration_EvolveExitsAfterMerge(t *testing.T) {
 // Pre-iteration tests run before agent, post-signal tests run after.
 // The verification flow is: pre-iteration tests → agent runs → post-signal tests.
 func TestIntegration_TestsRunBeforeAndAfterAgent(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -1695,8 +1658,7 @@ func TestIntegration_TestsRunBeforeAndAfterAgent(t *testing.T) {
 
 // Task close blocked by dependency is skipped, not retried forever.
 func TestIntegration_DependencyBlockedTaskIsSkipped(t *testing.T) {
-	dir, ralphDir, promptsDir := setupIntegrationTest(t)
-	_, st := setupTestDir(t)
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
