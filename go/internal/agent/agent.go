@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/config"
 )
 
 // Runner is the centralized agent module. All agent invocations in Ralph —
@@ -16,9 +17,16 @@ import (
 // through this type. It wraps the underlying CLI and provides the foundation
 // for agent-agnosticism: swapping Claude for another agent becomes a
 // configuration change, not a refactor.
+// Re-export model constants from config for convenience.
+const (
+	ModelSonnet = config.ModelSonnet
+	ModelOpus   = config.ModelOpus
+)
+
 type Runner struct {
 	Logger         claude.Log
 	OnTaskDetected claude.OnTaskDetected
+	Model          string
 	Stdout         io.Writer
 	Stderr         io.Writer
 	inner          *claude.Runner
@@ -78,6 +86,9 @@ func (r *Runner) Query(ctx context.Context, workDir, prompt, model string) (stri
 // interleaved with the CLI's exit message (e.g. "Resume this session…").
 func (r *Runner) Interactive(workDir, systemPrompt string, extraArgs ...string) (int, error) {
 	args := []string{"--permission-mode", "bypassPermissions", "--system-prompt", systemPrompt}
+	if r.Model != "" {
+		args = append(args, "--model", r.Model)
+	}
 	args = append(args, extraArgs...)
 
 	stdout := r.stdout()

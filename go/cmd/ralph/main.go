@@ -202,6 +202,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		PostTask:            cfg.PostTask,
 		Notify:              cfg.Notify,
 		Wait:                cfg.Wait,
+		Model:               cfg.Model,
 		Version:             config.Version,
 		OnRebaseConflict:    autoRebaseRecovery(),
 		VerifyDir:             dirs.WorkDir,

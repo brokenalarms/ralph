@@ -24,8 +24,10 @@ import (
 
 // newInteractiveAgent creates a centralized agent runner for interactive
 // sessions (review, task manager).
-func newInteractiveAgent(log *logging.Logger) *agent.Runner {
-	return agent.New(log)
+func newInteractiveAgent(log *logging.Logger, model string) *agent.Runner {
+	r := agent.New(log)
+	r.Model = model
+	return r
 }
 
 func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
@@ -223,7 +225,7 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 
-	r := newInteractiveAgent(log)
+	r := newInteractiveAgent(log, agent.ModelOpus)
 	exitCode, err := r.Interactive(projectDir, systemPrompt, prompt.ReviewBootstrapPrompt)
 	if err != nil {
 		log.Error("", "Review session failed: %v", err)
@@ -330,7 +332,7 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 
-	r := newInteractiveAgent(log)
+	r := newInteractiveAgent(log, agent.ModelOpus)
 	exitCode, err := r.Interactive(projectDir, systemPrompt, prompt.TaskManagerBootstrapPrompt)
 	if err != nil {
 		log.Error("", "Task manager failed: %v", err)

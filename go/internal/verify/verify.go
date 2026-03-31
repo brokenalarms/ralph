@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brokenalarms/ralph/internal/config"
 )
 
 // TestTimeout is the maximum duration RunTests will wait for the test
@@ -26,8 +27,8 @@ type GitQuerier interface {
 
 // Model IDs used as defaults for verification escalation.
 const (
-	ModelHaiku  = "claude-haiku-4-5-20251001"
-	ModelSonnet = "claude-sonnet-4-5-20241022"
+	ModelHaiku  = config.ModelHaiku
+	ModelSonnet = config.ModelSonnet
 )
 
 // ModelShortName extracts a friendly name from a model ID string.

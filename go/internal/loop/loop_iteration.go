@@ -36,6 +36,7 @@ func (l *Loop) runAndComplete(ctx context.Context, task taskContext, runIteratio
 		LogFile:             filepath.Join(l.cfg.Dirs.RalphDir, "loop.log"),
 		Quiet:               l.cfg.Quiet,
 		Verbose:             l.cfg.Verbose,
+		Model:               l.cfg.Model,
 		Signals:             l.signals,
 		PollInterval:        2 * time.Second,
 		IdleTimeout:         l.cfg.IdleTimeout,

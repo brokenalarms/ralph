@@ -82,6 +82,10 @@ type RunConfig struct {
 	// low-value tools (Read, Bash, etc.) are hidden.
 	Verbose bool
 
+	// Model is the Claude model to use (e.g. "claude-sonnet-4-5-20241022").
+	// If empty, the CLI default is used.
+	Model string
+
 	// TaskID is the bead/task identifier (e.g. "ralph-xyz") used in
 	// completion and status log messages.
 	TaskID string
@@ -235,8 +239,11 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 			"--add-dir", cfg.RalphDir,
 			"--allowedTools", strings.Join(IterationAllowedTools, ","),
 			"--disallowedTools", strings.Join(IterationDisallowedTools, ","),
-			"-p", cfg.Prompt,
 		}
+		if cfg.Model != "" {
+			args = append(args, "--model", cfg.Model)
+		}
+		args = append(args, "-p", cfg.Prompt)
 		cmd = exec.Command("claude", args...)
 		cmd.Dir = cfg.WorkDir
 		cmd.Stdin = nil

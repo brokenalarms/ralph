@@ -36,6 +36,7 @@ type Config struct {
 	Notify              bool
 	Wait                bool
 	Verbose             bool
+	Model               string
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 	Version             string
 	VerifyDir             string // project root where tests are run; empty disables verification

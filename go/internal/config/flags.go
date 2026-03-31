@@ -327,9 +327,21 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.PostSignalTimeout.String() },
 	},
 	{
+		Long: "--model", MetaVar: "<model>",
+		Help:      "Model for loop agent",
+		Default:   ModelSonnet,
+		ConfigKey: "model",
+		Kind:      KindString, TrackCLI: true,
+		Apply: func(cfg *Config, val string) error {
+			cfg.Model = val
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.Model },
+	},
+	{
 		Long: "--verify-model", MetaVar: "<model>",
 		Help:      "Model for LLM verification (first attempt)",
-		Default:   "claude-haiku-4-5-20251001",
+		Default:   ModelHaiku,
 		ConfigKey: "verify_model",
 		Kind:      KindString, TrackCLI: true,
 		Apply: func(cfg *Config, val string) error {
@@ -341,7 +353,7 @@ var Flags = []FlagDef{
 	{
 		Long: "--verify-escalation-model", MetaVar: "<model>",
 		Help:      "Model for LLM verification escalation (subsequent attempts)",
-		Default:   "claude-sonnet-4-5-20241022",
+		Default:   ModelSonnet,
 		ConfigKey: "verify_escalation_model",
 		Kind:      KindString, TrackCLI: true,
 		Apply: func(cfg *Config, val string) error {

@@ -12,6 +12,12 @@ import (
 
 var Version = "0.1.0-dev"
 
+const (
+	ModelHaiku  = "claude-haiku-4-5-20251001"
+	ModelSonnet = "claude-sonnet-4-6"
+	ModelOpus   = "claude-opus-4-6"
+)
+
 // SourceDir is the root of Ralph's source repository, set at build time via
 // ldflags. Used by evolve to locate build-go.sh regardless of which project
 // ralph loop is running against.
@@ -71,6 +77,7 @@ type Config struct {
 	BaseBranch              string
 	Wait                    bool
 	Verbose                 bool
+	Model                   string
 	VerifyModel             string
 	VerifyEscalationModel   string
 	PostSignalTimeout       time.Duration
