@@ -112,15 +112,21 @@ func (m *Manager) CreatePR(ctx context.Context, taskID, taskDesc, body string) (
 	if body == "" {
 		body = taskDesc
 	}
-	if err := gh.CreatePR(CreatePROpts{
+	createErr := gh.CreatePR(CreatePROpts{
 		Head:  m.WorktreeBranch,
 		Base:  baseBranch,
 		Title: title,
 		Body:  body,
 		Repo:  repoURL,
 		Dir:   m.WorkDir,
-	}); err != nil {
-		return "", err
+	})
+	if createErr != nil {
+		// Creation may fail if a closed PR exists for this head:base.
+		// Try to find and reopen it instead.
+		if prNumber, reopenErr := m.reopenClosedPR(gh, repoURL, title, body); reopenErr == nil && prNumber != "" {
+			return prNumber, nil
+		}
+		return "", createErr
 	}
 
 	newPR, _ := gh.FindOpenPR(m.WorktreeBranch, repoURL)
@@ -130,6 +136,36 @@ func (m *Manager) CreatePR(ctx context.Context, taskID, taskDesc, body string) (
 		m.Logger.Log("git", "Created PR for %s", m.WorktreeBranch)
 	}
 	return newPR, nil
+}
+
+// reopenClosedPR finds a closed (not merged) PR for the current branch and
+// reopens it. Returns the PR number on success or empty string if no closed
+// PR was found or reopen failed.
+func (m *Manager) reopenClosedPR(gh GitHub, repoURL, title, body string) (string, error) {
+	number, _, _, findErr := gh.FindPR(m.WorktreeBranch, m.WorkDir)
+	if findErr != nil || number == "" {
+		return "", findErr
+	}
+	state, stateErr := gh.GetPRState(m.WorkDir, number)
+	if stateErr != nil || strings.ToUpper(state) != "CLOSED" {
+		return "", stateErr
+	}
+
+	nwo := NWOFromRemote(repoURL)
+	pr := logging.PRLink(nwo, number)
+
+	if err := gh.ReopenPR(number, repoURL); err != nil {
+		m.Logger.Warn("git", "Failed to reopen %s: %v", pr, err)
+		return "", err
+	}
+	m.Logger.Log("git", "Reopened %s for %s", pr, m.WorktreeBranch)
+
+	if title != "" {
+		if err := gh.EditPR(number, repoURL, title, body); err != nil {
+			m.Logger.Warn("git", "Failed to update %s: %v", pr, err)
+		}
+	}
+	return number, nil
 }
 
 // PushAndCreatePR composes Push and CreatePR. Squashes, force-pushes, then
@@ -181,8 +217,17 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	nwo := NWOFromRemote(repoURL)
 	prNumber, err := gh.FindOpenPR(m.WorktreeBranch, repoURL)
 	if err != nil || prNumber == "" {
-		m.Logger.Log("git", "No open PR found for %s — skipping auto-merge", m.WorktreeBranch)
-		return false, nil
+		prNumber, err = m.resolveClosedPR(gh, repoURL)
+		if errors.Is(err, ErrPRAlreadyMerged) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if prNumber == "" {
+			m.Logger.Log("git", "No PR found for %s — skipping auto-merge", m.WorktreeBranch)
+			return false, nil
+		}
 	}
 	pr := logging.PRLink(nwo, prNumber)
 
@@ -225,6 +270,45 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	}
 
 	return m.executeMerge(ctx, prNumber, repoURL)
+}
+
+// ErrPRAlreadyMerged is returned when the PR for the branch is already merged.
+// Callers should skip push and close the bead.
+var ErrPRAlreadyMerged = fmt.Errorf("PR already merged")
+
+// resolveClosedPR handles the case where no open PR exists for the branch.
+// It checks whether a PR exists in another state (merged or closed). If
+// merged, returns ErrPRAlreadyMerged. If closed, reopens and returns the
+// PR number so the caller can proceed with the normal merge flow.
+func (m *Manager) resolveClosedPR(gh GitHub, repoURL string) (string, error) {
+	number, _, _, findErr := gh.FindPR(m.WorktreeBranch, m.WorkDir)
+	if findErr != nil || number == "" {
+		return "", nil
+	}
+
+	state, stateErr := gh.GetPRState(m.WorkDir, number)
+	if stateErr != nil {
+		return "", nil
+	}
+
+	nwo := NWOFromRemote(repoURL)
+	pr := logging.PRLink(nwo, number)
+
+	switch strings.ToUpper(state) {
+	case "MERGED":
+		m.Logger.Log("git", "%s already merged — nothing to do", pr)
+		return "", ErrPRAlreadyMerged
+	case "CLOSED":
+		m.Logger.Log("git", "%s is closed — reopening", pr)
+		if err := gh.ReopenPR(number, repoURL); err != nil {
+			m.Logger.Warn("git", "Failed to reopen %s: %v", pr, err)
+			return "", nil
+		}
+		m.Logger.Log("git", "%s reopened", pr)
+		return number, nil
+	default:
+		return "", nil
+	}
 }
 
 // branchNeedsUpdate checks if the PR branch is behind the base branch.

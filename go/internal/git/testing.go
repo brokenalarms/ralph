@@ -38,6 +38,8 @@ type StubGitHub struct {
 	SearchCalled       bool
 	PRDiffCalled       bool
 	RunLogValue        string
+	ReopenPRErr        error
+	ReopenPRCalled     bool
 }
 
 func (s *StubGitHub) Available() bool { return s.IsAvailable }
@@ -99,4 +101,12 @@ func (s *StubGitHub) GetPRHeadSHA(workDir, prNumber string) (string, error) {
 }
 func (s *StubGitHub) ListOpenPRBranches(repoURL string) ([]string, error) {
 	return s.OpenPRBranches, nil
+}
+func (s *StubGitHub) ReopenPR(prNumber, repoURL string) error {
+	s.ReopenPRCalled = true
+	if s.ReopenPRErr == nil {
+		s.OpenPR = prNumber
+		s.PRState = "OPEN"
+	}
+	return s.ReopenPRErr
 }

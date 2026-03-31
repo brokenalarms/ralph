@@ -592,7 +592,7 @@ func TestAutoMergeCurrentBranch_SkipsWhenWorkDirIsProjectDir(t *testing.T) {
 	}
 }
 
-// AutoMergeCurrentBranch returns 0 and logs "No open PR found" when no PR
+// AutoMergeCurrentBranch returns 0 and logs "No PR found" when no PR
 // exists for the branch, so an unpushed branch doesn't cause a failure.
 func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 	if _, err := exec.LookPath("gh"); err != nil {
@@ -625,8 +625,8 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 	}
 
 	log := mgr.Logger.(*testLog)
-	if !log.contains("No open PR found") {
-		t.Error("expected 'No open PR found' log message")
+	if !log.contains("No PR found") {
+		t.Error("expected 'No PR found' log message")
 	}
 }
 
@@ -1527,5 +1527,134 @@ func TestPush_PrePushPasses(t *testing.T) {
 	}
 	if !prePushCalled {
 		t.Error("PrePush callback was not invoked")
+	}
+}
+
+// AutoMergeCurrentBranch returns merged=true without pushing when the PR
+// for the branch is already merged, so the caller can close the bead.
+func TestAutoMergeCurrentBranch_ReturnsMergedForAlreadyMergedPR(t *testing.T) {
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "",       // no open PR
+		PRNumber:    "438",    // FindPR returns this
+		PRState:     "MERGED", // GetPRState returns this
+	}
+
+	mgr := &Manager{
+		ProjectDir:     "/project",
+		WorkDir:        "/project/wt",
+		WorktreeBranch: "ralph/test/01-merged",
+		BaseBranch:     "main",
+		Runner:         runner,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !merged {
+		t.Fatal("expected merged=true for already-merged PR")
+	}
+
+	// Push should NOT have been called — no git push in the runner calls.
+	if runner.CalledWith("push") {
+		t.Error("should not push to an already-merged PR")
+	}
+	// Merge should NOT have been called.
+	if gh.MergeCalls > 0 {
+		t.Error("should not attempt merge on an already-merged PR")
+	}
+}
+
+// AutoMergeCurrentBranch reopens a closed PR and proceeds to merge it,
+// preventing the indefinite CI wait that occurs on closed PRs.
+func TestAutoMergeCurrentBranch_ReopensClosedPR(t *testing.T) {
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("reset --hard", "", nil)
+
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "",       // no open PR initially
+		PRNumber:    "438",    // FindPR returns this
+		PRState:     "CLOSED", // GetPRState returns this
+		PRTitle:     "[ralph-rvta] Fix closed PR",
+		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+	}
+
+	mgr := &Manager{
+		ProjectDir:     "/project",
+		WorkDir:        "/project/wt",
+		WorktreeBranch: "ralph/test/01-reopen",
+		BaseBranch:     "main",
+		Runner:         runner,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !merged {
+		t.Fatal("expected merged=true after reopening closed PR")
+	}
+	if !gh.ReopenPRCalled {
+		t.Error("expected ReopenPR to be called for the closed PR")
+	}
+	if gh.MergeCalls == 0 {
+		t.Error("expected merge to be attempted after reopening")
+	}
+}
+
+// CreatePR reopens a closed PR when gh pr create fails because a PR already
+// exists for the branch, rather than returning an error.
+func TestCreatePR_ReopensClosedPROnCreateFailure(t *testing.T) {
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "",                                                     // no open PR
+		CreatePRErr: fmt.Errorf("a pull request already exists for branch"), // create fails
+		PRNumber:    "438",                                                  // FindPR returns this
+		PRState:     "CLOSED",                                               // GetPRState returns this
+	}
+
+	mgr := &Manager{
+		ProjectDir:     "/project",
+		WorkDir:        "/project/wt",
+		WorktreeBranch: "ralph/test/01-reopen-create",
+		BaseBranch:     "main",
+		Runner:         runner,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	prNumber, err := mgr.CreatePR(context.Background(), "ralph-test", "Fix bug", "body")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if prNumber != "438" {
+		t.Errorf("expected reopened PR number 438, got %q", prNumber)
+	}
+	if !gh.ReopenPRCalled {
+		t.Error("expected ReopenPR to be called")
 	}
 }
