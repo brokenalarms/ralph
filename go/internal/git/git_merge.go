@@ -91,64 +91,103 @@ func (m *Manager) Push(ctx context.Context) error {
 	return nil
 }
 
-// CreatePR ensures a PR exists for the current branch. If one is already
-// open, updates its title and body. Otherwise creates a new PR targeting
-// resolveBaseBranch. Returns the PR number.
-func (m *Manager) CreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
-	repoURL := m.RemoteURL()
-	if repoURL == "" {
-		return "", nil
+// reopenClosedPR finds a closed (not merged) PR for the given branch and
+// reopens it. Returns the PR number on success or empty string if no closed
+// PR was found or reopen failed.
+func reopenClosedPR(gh GitHub, workDir, branch, nwo, repoURL, title, body string, logger Log) (string, error) {
+	number, _, _, findErr := gh.FindPR(branch, workDir)
+	if findErr != nil || number == "" {
+		return "", findErr
+	}
+	state, stateErr := gh.GetPRState(workDir, number)
+	if stateErr != nil || strings.ToUpper(state) != "CLOSED" {
+		return "", stateErr
 	}
 
-	gh := m.gh()
+	pr := logging.PRLink(nwo, number)
+
+	if err := gh.ReopenPR(number, repoURL); err != nil {
+		logger.Warn("git", "Failed to reopen %s: %v", pr, err)
+		return "", err
+	}
+	logger.Log("git", "Reopened %s for %s", pr, branch)
+
+	if title != "" {
+		if err := gh.EditPR(number, repoURL, title, body); err != nil {
+			logger.Warn("git", "Failed to update %s: %v", pr, err)
+		}
+	}
+	return number, nil
+}
+
+func (m *Manager) reopenClosedPR(gh GitHub, repoURL, title, body string) (string, error) {
+	nwo := NWOFromRemote(repoURL)
+	return reopenClosedPR(gh, m.WorkDir, m.WorktreeBranch, nwo, repoURL, title, body, m.Logger)
+}
+
+// EnsurePROpts configures the CreatePR package function.
+type EnsurePROpts struct {
+	TaskID     string
+	TaskDesc   string
+	Body       string
+	BaseBranch string
+	Logger     Log
+}
+
+// CreatePR ensures a PR exists for the given branch. If one is already open,
+// updates its title and body. Otherwise creates a new PR targeting BaseBranch.
+// Returns the PR number.
+func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string, opts EnsurePROpts) (string, error) {
+	if remoteURL == "" {
+		return "", nil
+	}
 	if !gh.Available() {
 		return "", fmt.Errorf("gh CLI not found — cannot create PR")
 	}
 
-	nwo := NWOFromRemote(repoURL)
-	title := m.prTitle(taskID, taskDesc)
+	nwo := NWOFromRemote(remoteURL)
+	title := prTitle(opts.TaskID, opts.TaskDesc, branch)
 
 	// Existing PR — update and return.
-	prNumber, _ := gh.FindOpenPR(m.WorktreeBranch, repoURL)
+	prNumber, _ := gh.FindOpenPR(branch, remoteURL)
 	if prNumber != "" {
 		pr := logging.PRLink(nwo, prNumber)
-		if taskID != "" {
-			if err := gh.EditPR(prNumber, repoURL, title, body); err != nil {
-				m.Logger.Warn("git", "Failed to update %s: %v", pr, err)
+		if opts.TaskID != "" {
+			if err := gh.EditPR(prNumber, remoteURL, title, opts.Body); err != nil {
+				opts.Logger.Warn("git", "Failed to update %s: %v", pr, err)
 			}
 		}
-		m.Logger.Log("git", "%s already open for %s", pr, m.WorktreeBranch)
+		opts.Logger.Log("git", "%s already open for %s", pr, branch)
 		return prNumber, nil
 	}
 
 	// New PR.
-	baseBranch := m.resolveBaseBranch()
+	body := opts.Body
 	if body == "" {
-		body = taskDesc
+		body = opts.TaskDesc
 	}
 	createOpts := CreatePROpts{
-		Head:  m.WorktreeBranch,
-		Base:  baseBranch,
+		Head:  branch,
+		Base:  opts.BaseBranch,
 		Title: title,
 		Body:  body,
-		Repo:  repoURL,
-		Dir:   m.WorkDir,
+		Repo:  remoteURL,
+		Dir:   workDir,
 	}
 	createErr := gh.CreatePR(createOpts)
 	if createErr != nil {
 		// Creation may fail if a closed PR exists for this head:base.
 		// Try to find and reopen it instead.
-		if prNumber, reopenErr := m.reopenClosedPR(gh, repoURL, title, body); reopenErr == nil && prNumber != "" {
+		if prNumber, reopenErr := reopenClosedPR(gh, workDir, branch, nwo, remoteURL, title, body, opts.Logger); reopenErr == nil && prNumber != "" {
 			return prNumber, nil
 		}
 
 		// Reopen failed (e.g. branch diverged from old PR history).
 		// The old PR is dead — create a fresh PR via the REST API,
 		// bypassing gh pr create's client-side checks.
-		nwo := NWOFromRemote(repoURL)
 		if nwo != "" {
 			if apiPR, apiErr := gh.CreatePRViaAPI(nwo, createOpts); apiErr == nil && apiPR != "" {
-				m.Logger.Log("git", "Created %s for %s (via API fallback)", logging.PRLink(nwo, apiPR), m.WorktreeBranch)
+				opts.Logger.Log("git", "Created %s for %s (via API fallback)", logging.PRLink(nwo, apiPR), branch)
 				return apiPR, nil
 			}
 		}
@@ -156,43 +195,24 @@ func (m *Manager) CreatePR(ctx context.Context, taskID, taskDesc, body string) (
 		return "", createErr
 	}
 
-	newPR, _ := gh.FindOpenPR(m.WorktreeBranch, repoURL)
+	newPR, _ := gh.FindOpenPR(branch, remoteURL)
 	if newPR != "" {
-		m.Logger.Log("git", "Created %s for %s", logging.PRLink(nwo, newPR), m.WorktreeBranch)
+		opts.Logger.Log("git", "Created %s for %s", logging.PRLink(nwo, newPR), branch)
 	} else {
-		m.Logger.Log("git", "Created PR for %s", m.WorktreeBranch)
+		opts.Logger.Log("git", "Created PR for %s", branch)
 	}
 	return newPR, nil
 }
 
-// reopenClosedPR finds a closed (not merged) PR for the current branch and
-// reopens it. Returns the PR number on success or empty string if no closed
-// PR was found or reopen failed.
-func (m *Manager) reopenClosedPR(gh GitHub, repoURL, title, body string) (string, error) {
-	number, _, _, findErr := gh.FindPR(m.WorktreeBranch, m.WorkDir)
-	if findErr != nil || number == "" {
-		return "", findErr
-	}
-	state, stateErr := gh.GetPRState(m.WorkDir, number)
-	if stateErr != nil || strings.ToUpper(state) != "CLOSED" {
-		return "", stateErr
-	}
-
-	nwo := NWOFromRemote(repoURL)
-	pr := logging.PRLink(nwo, number)
-
-	if err := gh.ReopenPR(number, repoURL); err != nil {
-		m.Logger.Warn("git", "Failed to reopen %s: %v", pr, err)
-		return "", err
-	}
-	m.Logger.Log("git", "Reopened %s for %s", pr, m.WorktreeBranch)
-
-	if title != "" {
-		if err := gh.EditPR(number, repoURL, title, body); err != nil {
-			m.Logger.Warn("git", "Failed to update %s: %v", pr, err)
-		}
-	}
-	return number, nil
+// Manager.CreatePR delegates to the package function.
+func (m *Manager) CreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
+	return CreatePR(ctx, m.gh(), m.WorkDir, m.WorktreeBranch, m.RemoteURL(), EnsurePROpts{
+		TaskID:     taskID,
+		TaskDesc:   taskDesc,
+		Body:       body,
+		BaseBranch: m.resolveBaseBranch(),
+		Logger:     m.Logger,
+	})
 }
 
 // ShipOpts configures the Ship pipeline.
@@ -200,6 +220,12 @@ type ShipOpts struct {
 	TaskID    string
 	TaskTitle string
 	Body      string
+	// Infrastructure — Manager fills these before delegating.
+	PushFn                  func(ctx context.Context) error
+	HasUncommittedChangesFn func() bool
+	CommitAllFn             func(message string)
+	BaseBranch              string
+	Logger                  Log
 }
 
 // ShipResult is the outcome of the Ship pipeline.
@@ -212,24 +238,58 @@ type ShipResult struct {
 // Ship is the single "get work into a PR" pipeline: auto-commit any
 // uncommitted changes, push (squash + rebase + force-push), and create
 // or update a PR. Returns the PR number and URL.
-func (m *Manager) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
-	// Auto-commit uncommitted agent changes.
-	if m.HasUncommittedChanges() {
+func Ship(ctx context.Context, runner Runner, gh GitHub, workDir, branch, remoteURL string, opts ShipOpts) (ShipResult, error) {
+	hasChanges := opts.HasUncommittedChangesFn
+	if hasChanges == nil {
+		r := runner
+		if r == nil {
+			r = defaultRunner
+		}
+		hasChanges = func() bool {
+			_, err1 := r.Run(context.Background(), workDir, "diff", "--quiet")
+			_, err2 := r.Run(context.Background(), workDir, "diff", "--cached", "--quiet")
+			return err1 != nil || err2 != nil
+		}
+	}
+
+	commitAll := opts.CommitAllFn
+	if commitAll == nil {
+		r := runner
+		if r == nil {
+			r = defaultRunner
+		}
+		commitAll = func(msg string) {
+			r.Run(context.Background(), workDir, "add", "-A")
+			r.Run(context.Background(), workDir, "commit", "-m", msg)
+		}
+	}
+
+	if hasChanges() {
 		msg := "auto-commit agent changes"
 		if opts.TaskID != "" {
 			msg = fmt.Sprintf("[%s] %s", opts.TaskID, msg)
 		}
-		m.CommitAll(msg)
+		commitAll(msg)
 	}
 
-	if err := m.Push(ctx); err != nil {
-		if ctx.Err() != nil {
-			return ShipResult{}, ctx.Err()
+	if opts.PushFn != nil {
+		if err := opts.PushFn(ctx); err != nil {
+			if ctx.Err() != nil {
+				return ShipResult{}, ctx.Err()
+			}
+			if opts.Logger != nil {
+				opts.Logger.Warn("git", "Push failed: %v — attempting PR creation anyway", err)
+			}
 		}
-		m.Logger.Warn("git", "Push failed: %v — attempting PR creation anyway", err)
 	}
 
-	prNumber, err := m.CreatePR(ctx, opts.TaskID, opts.TaskTitle, opts.Body)
+	prNumber, err := CreatePR(ctx, gh, workDir, branch, remoteURL, EnsurePROpts{
+		TaskID:     opts.TaskID,
+		TaskDesc:   opts.TaskTitle,
+		Body:       opts.Body,
+		BaseBranch: opts.BaseBranch,
+		Logger:     opts.Logger,
+	})
 	if err != nil {
 		return ShipResult{PRNumber: prNumber}, err
 	}
@@ -237,13 +297,12 @@ func (m *Manager) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 	// Look up the PR URL for the external ref.
 	var prURL, prTitle string
 	if prNumber != "" {
-		gh := m.gh()
-		if _, t, u, findErr := gh.FindPR(m.WorktreeBranch, m.WorkDir); findErr == nil {
+		if _, t, u, findErr := gh.FindPR(branch, workDir); findErr == nil {
 			prURL = u
 			prTitle = t
 		}
 		if prURL == "" {
-			nwo := NWOFromRemote(m.RemoteURL())
+			nwo := NWOFromRemote(remoteURL)
 			if nwo != "" {
 				prURL = fmt.Sprintf("https://github.com/%s/pull/%s", nwo, prNumber)
 			}
@@ -257,6 +316,16 @@ func (m *Manager) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 	}, nil
 }
 
+// Manager.Ship delegates to the package function.
+func (m *Manager) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
+	opts.PushFn = m.Push
+	opts.HasUncommittedChangesFn = m.HasUncommittedChanges
+	opts.CommitAllFn = m.CommitAll
+	opts.BaseBranch = m.resolveBaseBranch()
+	opts.Logger = m.Logger
+	return Ship(ctx, m.run(), m.gh(), m.WorkDir, m.WorktreeBranch, m.RemoteURL(), opts)
+}
+
 // PushAndCreatePR composes Push and CreatePR. Squashes, force-pushes, then
 // ensures a PR exists. Returns the PR number.
 func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
@@ -264,7 +333,7 @@ func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body st
 	return result.PRNumber, err
 }
 
-func (m *Manager) prTitle(taskID, taskDesc string) string {
+func prTitle(taskID, taskDesc, fallback string) string {
 	title := tasks.StripComponentPrefix(taskDesc)
 	if taskID != "" {
 		title = "[" + taskID + "] " + title
@@ -273,9 +342,13 @@ func (m *Manager) prTitle(taskID, taskDesc string) string {
 		title = title[:67] + "..."
 	}
 	if title == "" {
-		title = m.WorktreeBranch
+		title = fallback
 	}
 	return title
+}
+
+func (m *Manager) prTitle(taskID, taskDesc string) string {
+	return prTitle(taskID, taskDesc, m.WorktreeBranch)
 }
 
 // AutoMergeCurrentBranch rebases onto main, pushes, waits for CI, and

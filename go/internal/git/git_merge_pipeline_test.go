@@ -198,6 +198,44 @@ func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 	}
 }
 
+// Ship package function creates a PR via gh interface without accessing Manager.
+// Proves AC #1: Ship(ctx, runner, gh, workDir, branch, remoteURL, opts) is a
+// callable package function independent of Manager.
+func TestShip_PackageFunction_CreatesPR(t *testing.T) {
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "77",
+		PRTitle:     "fix: ship as package fn",
+		PRURL:       "https://github.com/test/repo/pull/77",
+	}
+
+	pushedCalled := false
+	opts := ShipOpts{
+		TaskID:    "ralph-gmxa",
+		TaskTitle: "ship as package fn",
+		Body:      "extracted ship body",
+		PushFn: func(ctx context.Context) error {
+			pushedCalled = true
+			return nil
+		},
+		HasUncommittedChangesFn: func() bool { return false },
+		CommitAllFn:             func(string) {},
+		BaseBranch:              "main",
+		Logger:                  discardLog{},
+	}
+
+	result, err := Ship(context.Background(), nil, gh, "/wt", "ralph/gmxa-ship", "https://github.com/test/repo.git", opts)
+	if err != nil {
+		t.Fatalf("Ship package function failed: %v", err)
+	}
+	if !pushedCalled {
+		t.Error("expected PushFn to be called")
+	}
+	if result.PRNumber != "77" {
+		t.Errorf("PRNumber = %q, want %q", result.PRNumber, "77")
+	}
+}
+
 // AutoMergeCurrentBranch bypasses branch protection via admin merge when
 // local tests passed and CI failed due to infrastructure (zero steps executed).
 // Admin merge is used so billing outages don't block merges indefinitely.
