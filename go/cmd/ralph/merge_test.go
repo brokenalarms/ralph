@@ -125,7 +125,7 @@ func TestRunMerge_SecondPRWaitsForFreshCI(t *testing.T) {
 		{number: "2", head: "pr2"},
 	}
 
-	code := runMerge(context.Background(), prs, workDir, "main", gm, logging.New(nil))
+	code := runMerge(context.Background(), prs, workDir, "main", gm, false, logging.New(nil))
 	if code != 0 {
 		t.Errorf("runMerge returned %d, expected 0 (success)", code)
 	}
@@ -185,11 +185,46 @@ func TestRunMerge_SinglePRMergesSuccessfully(t *testing.T) {
 		BaseBranch: "main",
 	}
 
-	code := runMerge(context.Background(), []stackPR{{number: "1", head: "pr1"}}, workDir, "main", gm, logging.New(nil))
+	code := runMerge(context.Background(), []stackPR{{number: "1", head: "pr1"}}, workDir, "main", gm, false, logging.New(nil))
 	if code != 0 {
 		t.Errorf("runMerge returned %d, expected 0", code)
 	}
 	if ghStub.MergeCalls != 1 {
 		t.Errorf("expected 1 MergePR call, got %d", ghStub.MergeCalls)
+	}
+}
+
+// Proves: --bypass-rules sets Admin=true on each MergePR call, allowing
+// branch protection to be bypassed when the flag is explicitly passed.
+func TestRunMerge_BypassRulesSetsAdminOnMergeOpts(t *testing.T) {
+	workDir, _ := setupStackRepo(t)
+
+	ghStub := &trackingGH{
+		StubGitHub: &git.StubGitHub{
+			IsAvailable: true,
+			MergeResult: git.MergeResult{Merged: true},
+			Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
+		},
+	}
+
+	ralphDir := filepath.Join(workDir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	gm := &git.Manager{
+		ProjectDir: workDir,
+		WorkDir:    workDir,
+		RalphDir:   ralphDir,
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.New(nil),
+		GitHub:     ghStub,
+		BaseBranch: "main",
+	}
+
+	code := runMerge(context.Background(), []stackPR{{number: "1", head: "pr1"}}, workDir, "main", gm, true, logging.New(nil))
+	if code != 0 {
+		t.Errorf("runMerge with bypassRules returned %d, expected 0", code)
+	}
+	if !ghStub.LastMergeOpts.Admin {
+		t.Error("expected MergeOpts.Admin=true when --bypass-rules is set")
 	}
 }

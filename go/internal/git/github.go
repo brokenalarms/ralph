@@ -21,6 +21,10 @@ type CreatePROpts struct {
 type MergeOpts struct {
 	DeleteBranch bool
 	Subject      string
+	// Admin bypasses branch protection rules using gh pr merge --admin.
+	// Only set when the caller has explicitly opted in (infrastructure failure
+	// with local tests passing, or --bypass-rules flag).
+	Admin bool
 }
 
 // MergeResult is the structured outcome of a merge attempt.
@@ -123,6 +127,10 @@ func (g *ghCLI) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
 		return MergeResult{Message: "cannot determine owner/repo from remote URL"}
 	}
 
+	if opts.Admin {
+		return g.mergeAdmin(prNumber, repoURL, nwo, opts)
+	}
+
 	reqBody := fmt.Sprintf(`{"merge_method":"squash"`)
 	if opts.Subject != "" {
 		reqBody += fmt.Sprintf(`,"commit_title":%q`, opts.Subject)
@@ -159,6 +167,21 @@ func (g *ghCLI) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
 	default:
 		return MergeResult{Message: msg}
 	}
+}
+
+// mergeAdmin uses gh pr merge --admin to bypass branch protection rules.
+// Used when the caller explicitly opts in via MergeOpts.Admin.
+func (g *ghCLI) mergeAdmin(prNumber, repoURL, nwo string, opts MergeOpts) MergeResult {
+	args := []string{"pr", "merge", prNumber, "--admin", "--squash", "-R", repoURL}
+	if opts.DeleteBranch {
+		args = append(args, "--delete-branch")
+	}
+	cmd := exec.Command("gh", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return MergeResult{Message: strings.TrimSpace(string(out))}
+	}
+	return MergeResult{Merged: true, Message: "merged (admin)"}
 }
 
 // parseHTTPStatus extracts the status code from the first line of
