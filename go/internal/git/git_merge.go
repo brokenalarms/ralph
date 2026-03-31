@@ -195,16 +195,73 @@ func (m *Manager) reopenClosedPR(gh GitHub, repoURL, title, body string) (string
 	return number, nil
 }
 
-// PushAndCreatePR composes Push and CreatePR. Squashes, force-pushes, then
-// ensures a PR exists. Returns the PR number.
-func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
+// ShipOpts configures the Ship pipeline.
+type ShipOpts struct {
+	TaskID   string
+	TaskDesc string
+	Body     string
+}
+
+// ShipResult is the outcome of the Ship pipeline.
+type ShipResult struct {
+	PRNumber string
+	PRURL    string
+	PRTitle  string
+}
+
+// Ship is the single "get work into a PR" pipeline: auto-commit any
+// uncommitted changes, push (squash + rebase + force-push), and create
+// or update a PR. Returns the PR number and URL.
+func (m *Manager) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
+	// Auto-commit uncommitted agent changes.
+	if m.HasUncommittedChanges() {
+		msg := "auto-commit agent changes"
+		if opts.TaskID != "" {
+			msg = fmt.Sprintf("[%s] %s", opts.TaskID, msg)
+		}
+		m.CommitAll(msg)
+	}
+
 	if err := m.Push(ctx); err != nil {
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return ShipResult{}, ctx.Err()
 		}
 		m.Logger.Warn("git", "Push failed: %v — attempting PR creation anyway", err)
 	}
-	return m.CreatePR(ctx, taskID, taskDesc, body)
+
+	prNumber, err := m.CreatePR(ctx, opts.TaskID, opts.TaskDesc, opts.Body)
+	if err != nil {
+		return ShipResult{PRNumber: prNumber}, err
+	}
+
+	// Look up the PR URL for the external ref.
+	var prURL, prTitle string
+	if prNumber != "" {
+		gh := m.gh()
+		if _, t, u, findErr := gh.FindPR(m.WorktreeBranch, m.WorkDir); findErr == nil {
+			prURL = u
+			prTitle = t
+		}
+		if prURL == "" {
+			nwo := NWOFromRemote(m.RemoteURL())
+			if nwo != "" {
+				prURL = fmt.Sprintf("https://github.com/%s/pull/%s", nwo, prNumber)
+			}
+		}
+	}
+
+	return ShipResult{
+		PRNumber: prNumber,
+		PRURL:    prURL,
+		PRTitle:  prTitle,
+	}, nil
+}
+
+// PushAndCreatePR composes Push and CreatePR. Squashes, force-pushes, then
+// ensures a PR exists. Returns the PR number.
+func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
+	result, err := m.Ship(ctx, ShipOpts{TaskID: taskID, TaskDesc: taskDesc, Body: body})
+	return result.PRNumber, err
 }
 
 func (m *Manager) prTitle(taskID, taskDesc string) string {

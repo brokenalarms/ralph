@@ -52,6 +52,7 @@ type GitOps interface {
 
 	// Push operations.
 	Push(ctx context.Context) error
+	Ship(ctx context.Context, opts ShipOpts) (ShipResult, error)
 	PushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error)
 
 	// Merge operations.

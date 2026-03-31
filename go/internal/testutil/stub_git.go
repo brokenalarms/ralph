@@ -31,6 +31,8 @@ type StubGit struct {
 
 	EnsureUpToDateErr    error
 	PushErr              error
+	ShipResult           git.ShipResult
+	ShipErr              error
 	PushPRNumber         string
 	PushPRErr            error
 	MergeRetryResult     bool
@@ -143,6 +145,10 @@ func (s *StubGit) CommitAll(message string) {
 
 func (s *StubGit) EnsureUpToDate(_ context.Context) error  { return s.EnsureUpToDateErr }
 func (s *StubGit) Push(_ context.Context) error             { return s.PushErr }
+
+func (s *StubGit) Ship(_ context.Context, _ git.ShipOpts) (git.ShipResult, error) {
+	return s.ShipResult, s.ShipErr
+}
 
 func (s *StubGit) PushAndCreatePR(_ context.Context, _, _, _ string) (string, error) {
 	return s.PushPRNumber, s.PushPRErr
