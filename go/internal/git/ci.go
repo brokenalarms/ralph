@@ -191,13 +191,20 @@ func isMergeConflictError(mergeOutput string) bool {
 type CIFetchFunc func(prNumber, repoURL string) ([]CICheckResult, error)
 
 // AwaitCI fetches CI check status for a PR and polls until checks resolve.
-// Returns the final checks, their aggregate status, and any polling error.
-// Reusable by AutoMerge, fix-CI flows, and any caller that needs to wait
-// for CI to complete on a PR.
-func (m *Manager) AwaitCI(ctx context.Context, prNumber, repoURL string) ([]CICheckResult, CIStatus, error) {
+// When expectedSHA is non-empty, polls until the PR HEAD matches that SHA
+// before reading CI results — preventing stale results after a push.
+func (m *Manager) AwaitCI(ctx context.Context, prNumber, repoURL, expectedSHA string) ([]CICheckResult, CIStatus, error) {
 	nwo := NWOFromRemote(repoURL)
 	pr := logging.PRLink(nwo, prNumber)
-	fetch := m.gh().ListChecks
+	gh := m.gh()
+
+	if expectedSHA != "" {
+		if err := m.awaitHeadSHA(ctx, gh, prNumber, nwo, expectedSHA); err != nil {
+			return nil, CIPending, err
+		}
+	}
+
+	fetch := gh.ListChecks
 	checks, fetchErr := fetch(prNumber, repoURL)
 	if fetchErr != nil || len(checks) == 0 {
 		m.Logger.Log("ci", "CI checks not available yet for %s — waiting...", pr)
@@ -210,46 +217,27 @@ func (m *Manager) AwaitCI(ctx context.Context, prNumber, repoURL string) ([]CICh
 	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
 }
 
-// AwaitFreshCI waits for the PR HEAD to change from staleSHA, then
-// waits for CI on the new HEAD. Call GetPRHeadSHA BEFORE pushing to
-// get the stale SHA, then pass it here after push.
-func (m *Manager) AwaitFreshCI(ctx context.Context, prNumber, repoURL, staleSHA string) ([]CICheckResult, CIStatus, error) {
-	if staleSHA == "" {
-		return m.AwaitCI(ctx, prNumber, repoURL)
-	}
-	nwo := NWOFromRemote(repoURL)
+// awaitHeadSHA polls until the PR HEAD SHA matches expectedSHA.
+func (m *Manager) awaitHeadSHA(ctx context.Context, gh GitHub, prNumber, nwo, expectedSHA string) error {
 	pr := logging.PRLink(nwo, prNumber)
-	gh := m.gh()
-
-	// Poll until SHA changes from the pre-push value.
-	m.Logger.Log("ci", "Waiting for %s HEAD to update from %s...", pr, staleSHA[:min(7, len(staleSHA))])
+	m.Logger.Log("ci", "Waiting for %s HEAD to reach %s...", pr, expectedSHA[:min(7, len(expectedSHA))])
 	deadline := time.Now().Add(DefaultCIPollTimeout)
 	interval := DefaultCIPollInterval
 	for {
 		if time.Now().After(deadline) {
-			return nil, CIPending, fmt.Errorf("PR HEAD did not change within %v", DefaultCIPollTimeout)
+			return fmt.Errorf("PR HEAD did not reach %s within %v", expectedSHA[:min(7, len(expectedSHA))], DefaultCIPollTimeout)
 		}
 		if ctx.Err() != nil {
-			return nil, CIPending, ctx.Err()
+			return ctx.Err()
 		}
 		currentSHA, _ := gh.GetPRHeadSHA(m.WorkDir, prNumber)
-		if currentSHA != "" && currentSHA != staleSHA {
-			m.Logger.Log("ci", "%s HEAD updated to %s", pr, currentSHA[:min(7, len(currentSHA))])
-			break
+		if currentSHA == expectedSHA {
+			m.Logger.Log("ci", "%s HEAD confirmed at %s", pr, expectedSHA[:min(7, len(expectedSHA))])
+			return nil
 		}
 		<-ciSleep(interval)
 		interval = nextBackoff(interval)
 	}
-
-	// Now wait for CI on the new HEAD.
-	return m.AwaitCI(ctx, prNumber, repoURL)
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // waitForCI polls PR checks until they complete or timeout is reached.
