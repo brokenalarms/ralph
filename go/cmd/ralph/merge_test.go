@@ -228,3 +228,35 @@ func TestRunMerge_BypassRulesSetsAdminOnMergeOpts(t *testing.T) {
 		t.Error("expected MergeOpts.Admin=true when --bypass-rules is set")
 	}
 }
+
+// Proves: --bypass-rules with REST returning 405 triggers the admin fallback
+// and still merges successfully (end-to-end through runMerge).
+func TestRunMerge_BypassRulesAdminFallbackOn405(t *testing.T) {
+	workDir, _ := setupStackRepo(t)
+
+	ghStub := &trackingGH{
+		StubGitHub: &git.StubGitHub{
+			IsAvailable: true,
+			MergeResult: git.MergeResult{Blocked: true, Message: "branch protection"},
+			Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
+		},
+	}
+
+	ralphDir := filepath.Join(workDir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	gm := &git.Manager{
+		ProjectDir: workDir,
+		WorkDir:    workDir,
+		RalphDir:   ralphDir,
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.New(nil),
+		GitHub:     ghStub,
+		BaseBranch: "main",
+	}
+
+	code := runMerge(context.Background(), []stackPR{{number: "1", head: "pr1"}}, workDir, "main", gm, true, logging.New(nil))
+	if code != 0 {
+		t.Errorf("runMerge with bypassRules+Blocked returned %d, expected 0 (admin fallback)", code)
+	}
+}
