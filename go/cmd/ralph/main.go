@@ -435,25 +435,35 @@ func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend t
 	}
 }
 
-// handleTmuxAttach creates a tmux session that attaches to an already-running
-// loop. The loop pane tails the log instead of re-executing ralph.
+// handleTmuxAttach attaches to an already-running loop's tmux session.
+// If the loop was started with --tmux the session already exists; attach to it
+// directly without creating a new one. Otherwise create a new session whose
+// loop pane tails the log.
 func handleTmuxAttach(cfg config.Config, scriptPath string, ralphDir string, existingPID int, log *logging.Logger) int {
 	if !tmux.Available() {
 		log.Error("", "tmux not found on PATH")
 		return 1
 	}
 
-	logTailCmd := fmt.Sprintf("echo 'Attached to ralph loop (PID %d)'; tail -f '%s'",
-		existingPID, filepath.Join(ralphDir, "loop.log"))
-
 	sess := &tmux.Session{
-		Name:       tmux.SessionName(cfg.ProjectDir),
+		Name:       tmux.BaseSessionName(cfg.ProjectDir),
 		ProjectDir: cfg.ProjectDir,
 		RalphDir:   ralphDir,
 		RawLogPath: filepath.Join(ralphDir, "raw.log"),
 		ScriptPath: scriptPath,
-		RalphCmd:   logTailCmd,
 	}
+
+	if sess.HasSession() {
+		// Loop was started with --tmux; reuse the existing session.
+		if err := sess.Attach(); err != nil {
+			return 1
+		}
+		return 0
+	}
+
+	// Loop is running without --tmux; create a new session that tails the log.
+	sess.RalphCmd = fmt.Sprintf("echo 'Attached to ralph loop (PID %d)'; tail -f '%s'",
+		existingPID, filepath.Join(ralphDir, "loop.log"))
 
 	if err := sess.Setup(); err != nil {
 		log.Error("", "Tmux setup failed: %v", err)
