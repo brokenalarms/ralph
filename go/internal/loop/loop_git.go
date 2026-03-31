@@ -158,10 +158,10 @@ func (l *Loop) mergeWithRetry(ctx context.Context, taskID, nextTask, workDir, ra
 	}
 	return l.git.MergeWithRetry(ctx, git.MergeRetryOpts{
 		OnCIFailure: func(ciErr *git.CIFailureError) git.CIFixResult {
-			return l.tryFixCI(ctx, ciErr, taskID, nextTask, workDir, rawLogPath)
+			return tryFixCI(ctx, l.git, l.verifier, l.logger, ciErr, nextTask, workDir, rawLogPath)
 		},
 		OnConflict: func(conflictErr *git.UnresolvedConflictError) bool {
-			return l.tryFixConflict(ctx, conflictErr, taskID, nextTask, workDir, rawLogPath)
+			return tryFixConflict(ctx, l.git, l.verifier, l.logger, l.cfg.TaskBackend, taskID, nextTask, workDir, rawLogPath)
 		},
 	})
 }
