@@ -127,10 +127,6 @@ func (g *ghCLI) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
 		return MergeResult{Message: "cannot determine owner/repo from remote URL"}
 	}
 
-	if opts.Admin {
-		return g.mergeAdmin(prNumber, repoURL, nwo, opts)
-	}
-
 	reqBody := fmt.Sprintf(`{"merge_method":"squash"`)
 	if opts.Subject != "" {
 		reqBody += fmt.Sprintf(`,"commit_title":%q`, opts.Subject)
@@ -159,7 +155,11 @@ func (g *ghCLI) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
 
 	switch statusCode {
 	case 405:
-		// Method Not Allowed: branch protection blocks, not mergeable
+		// Method Not Allowed: branch protection blocks merge via REST API.
+		// If caller opted in to admin bypass, fall back to gh pr merge --admin.
+		if opts.Admin {
+			return g.mergeAdmin(prNumber, repoURL, nwo, opts)
+		}
 		return MergeResult{Blocked: true, Message: msg}
 	case 409:
 		// Conflict: head was modified (SHA mismatch)

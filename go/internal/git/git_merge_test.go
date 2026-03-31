@@ -1989,8 +1989,8 @@ func TestMergeOpts_NonAdminReturnsBlocked(t *testing.T) {
 	}
 }
 
-// When Admin=true, MergePR on StubGitHub returns Merged=true even when
-// branch protection would block a normal merge — admin flag bypasses protection.
+// When Admin=true and REST succeeds (not Blocked), MergePR returns Merged
+// without needing the admin fallback path.
 func TestMergeOpts_AdminMergeReturnsMerged(t *testing.T) {
 	gh := &StubGitHub{
 		IsAvailable: true,
@@ -2005,6 +2005,52 @@ func TestMergeOpts_AdminMergeReturnsMerged(t *testing.T) {
 	}
 	if !gh.LastMergeOpts.Admin {
 		t.Error("expected LastMergeOpts.Admin to be true for admin merge")
+	}
+}
+
+// When Admin=true and REST returns Blocked (405), MergePR falls back to
+// gh pr merge --admin instead of returning Blocked to the caller.
+// Admin fallback is only triggered by Blocked, never by other failures.
+func TestMergeOpts_AdminFallback_OnlyWhenRESTReturnsBlocked(t *testing.T) {
+	// Admin=true + REST returns Blocked → admin fallback succeeds.
+	ghBlocked := &StubGitHub{
+		IsAvailable: true,
+		MergeResult: MergeResult{Blocked: true, Message: "branch protection rules"},
+	}
+	result := ghBlocked.MergePR("42", "https://github.com/test/repo.git", MergeOpts{Admin: true})
+	if !result.Merged {
+		t.Errorf("expected admin fallback to succeed when REST returns Blocked, got: %+v", result)
+	}
+	if result.Blocked {
+		t.Error("expected admin fallback to clear Blocked=true")
+	}
+
+	// Admin=false + REST returns Blocked → stays Blocked (no fallback).
+	ghNoAdmin := &StubGitHub{
+		IsAvailable: true,
+		MergeResult: MergeResult{Blocked: true, Message: "branch protection rules"},
+	}
+	resultNoAdmin := ghNoAdmin.MergePR("42", "https://github.com/test/repo.git", MergeOpts{Admin: false})
+	if resultNoAdmin.Merged {
+		t.Error("expected non-admin merge to stay Blocked when REST returns Blocked")
+	}
+	if !resultNoAdmin.Blocked {
+		t.Error("expected Blocked=true when Admin=false and REST returns Blocked")
+	}
+
+	// Admin=true + AdminMergeResult configured → uses configured result.
+	adminFail := MergeResult{Message: "admin merge failed: not permitted"}
+	ghAdminFail := &StubGitHub{
+		IsAvailable:      true,
+		MergeResult:      MergeResult{Blocked: true},
+		AdminMergeResult: &adminFail,
+	}
+	resultFail := ghAdminFail.MergePR("42", "https://github.com/test/repo.git", MergeOpts{Admin: true})
+	if resultFail.Merged {
+		t.Error("expected configured AdminMergeResult to be used, not default success")
+	}
+	if resultFail.Message != adminFail.Message {
+		t.Errorf("expected AdminMergeResult message %q, got %q", adminFail.Message, resultFail.Message)
 	}
 }
 
@@ -2056,5 +2102,55 @@ func TestAutoMergeCurrentBranch_InfraFailureWithLocalTestsUsesAdminMerge(t *test
 	}
 	if !gh.LastMergeOpts.Admin {
 		t.Error("expected MergeOpts.Admin=true when bypassing branch protection after infra failure")
+	}
+}
+
+// When ralph loop detects an infrastructure failure (zero job steps) and local
+// tests passed, Admin=true is set. If the REST merge returns 405 (Blocked),
+// the admin fallback kicks in and the merge succeeds.
+func TestAutoMergeCurrentBranch_InfraBypassAdminFallbackOn405(t *testing.T) {
+	project, _ := initBareRepo(t)
+	stubCISleep(t)
+
+	mgr := &Manager{
+		ProjectDir:       project,
+		BaseBranch:       "main",
+		WorkDir:          filepath.Join(t.TempDir(), "wt"),
+		WorktreeBranch:   "ralph/test/01-infra-admin-405",
+		State:            newMemState(),
+		Logger:           &testLog{},
+		LocalTestsPassed: true,
+	}
+
+	gh := &StubGitHub{
+		IsAvailable:  true,
+		OpenPR:       "55",
+		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
+		JobStepCount: 0, // zero steps = infrastructure failure
+		MergeResult:  MergeResult{Blocked: true, Message: "branch protection"},
+	}
+	mgr.GitHub = gh
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("reset --hard", "", nil)
+	mgr.Runner = runner
+
+	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("expected admin fallback to succeed on 405, got: %v", err)
+	}
+	if !merged {
+		t.Error("expected merge to succeed via admin fallback after infra failure + 405")
+	}
+	if !gh.LastMergeOpts.Admin {
+		t.Error("expected MergeOpts.Admin=true for infra bypass path")
 	}
 }
