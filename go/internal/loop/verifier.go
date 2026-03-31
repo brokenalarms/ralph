@@ -311,12 +311,17 @@ func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 func (v *Verifier) TryFixCI(ctx context.Context, ciLog string, ciErr *git.CIFailureError, nextTask string, workDir, rawLogPath string) bool {
 	v.deps.Logger.Log("ci", "CI failed on PR #%s — spawning fix agent", ciErr.PRNumber)
 
+	var checkNames []string
+	for _, f := range ciErr.Failures {
+		checkNames = append(checkNames, f.Name)
+	}
+
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
-	fixPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{
-		"{{TASK_TITLE}}":       nextTask,
-		"{{TASK_DESCRIPTION}}": "CI checks failed after push. Fix the failures so CI passes.",
-		"{{TEST_OUTPUT}}":      ciErr.Error() + "\n\n" + ciLog,
-		"{{SIGNAL_COMPLETE}}":  signalPath,
+	fixPrompt := v.loadVerifyPrompt("verify-ci.md", map[string]string{
+		"{{TASK_TITLE}}":      nextTask,
+		"{{FAILED_CHECKS}}":   strings.Join(checkNames, ", "),
+		"{{CI_LOG}}":          ciLog,
+		"{{SIGNAL_COMPLETE}}": signalPath,
 	})
 
 	fixResult := v.runFixAgent(ctx, "CI failures", fixPrompt, workDir, rawLogPath)

@@ -211,8 +211,8 @@ func (g *ghCLI) GetRunLog(prNumber, workDir string) string {
 	}
 
 	lines := strings.Split(string(logOut), "\n")
-	if len(lines) > 50 {
-		lines = lines[len(lines)-50:]
+	if len(lines) > 200 {
+		lines = lines[len(lines)-200:]
 	}
 	return strings.Join(lines, "\n")
 }

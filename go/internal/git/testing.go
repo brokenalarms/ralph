@@ -37,6 +37,7 @@ type StubGitHub struct {
 	OpenPRBranches     []string
 	SearchCalled       bool
 	PRDiffCalled       bool
+	RunLogValue        string
 }
 
 func (s *StubGitHub) Available() bool { return s.IsAvailable }
@@ -64,7 +65,7 @@ func (s *StubGitHub) UpdateBranch(dir, nwo, prNumber string) (bool, error) {
 func (s *StubGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
 	return s.Checks, s.ChecksErr
 }
-func (s *StubGitHub) GetRunLog(prNumber, workDir string) string { return "" }
+func (s *StubGitHub) GetRunLog(prNumber, workDir string) string { return s.RunLogValue }
 func (s *StubGitHub) CheckEnforceAdmins(nwo, branch string) (bool, error) {
 	s.CheckEnforceCalled = true
 	return s.EnforceAdmins, s.EnforceAdminsErr

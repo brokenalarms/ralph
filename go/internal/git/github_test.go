@@ -36,13 +36,17 @@ func TestCreatePROpts_FieldsPreserved(t *testing.T) {
 	}
 }
 
-// GetRunLog returns the stub's configured value, proving the interface method
-// can be stubbed for CI failure log testing.
+// GetRunLog returns the stub's configured RunLogValue, proving the interface
+// method can be stubbed for CI failure log testing.
 func TestGetRunLog_Stubbable(t *testing.T) {
 	stub := &StubGitHub{}
-	result := stub.GetRunLog("42", "/tmp")
-	if result != "" {
+	if result := stub.GetRunLog("42", "/tmp"); result != "" {
 		t.Errorf("expected empty string from default stub, got %q", result)
+	}
+
+	stub.RunLogValue = "error TS2307: Cannot find module './Missing'"
+	if result := stub.GetRunLog("42", "/tmp"); result != stub.RunLogValue {
+		t.Errorf("expected configured RunLogValue, got %q", result)
 	}
 }
 
@@ -96,7 +100,7 @@ func TestIsHarmlessUpdateBranchError(t *testing.T) {
 // Manager.GetCIFailureLog delegates to the injected GitHub interface's GetRunLog,
 // confirming that loop code can get CI logs without shelling out.
 func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
-	stub := &runLogGitHub{log: "test failure output line 1\nline 2"}
+	stub := &StubGitHub{RunLogValue: "test failure output line 1\nline 2"}
 	mgr := &Manager{
 		BaseBranch: "main",
 		GitHub: stub,
