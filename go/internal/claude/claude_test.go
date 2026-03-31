@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -22,16 +24,16 @@ type testLogger struct {
 	successes []string
 }
 
-func (l *testLogger) Log(_ string, format string, args ...any) {
-	l.logs = append(l.logs, fmt.Sprintf(format, args...))
+func (l *testLogger) Emit(o logging.Opts, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if o.Level == logging.Success {
+		l.successes = append(l.successes, msg)
+	} else {
+		l.logs = append(l.logs, msg)
+	}
 }
-func (l *testLogger) AgentLog(_ string, format string, args ...any) {
+func (l *testLogger) AgentLog(_ logging.Domain, format string, args ...any) {
 	l.logs = append(l.logs, fmt.Sprintf(format, args...))
-}
-func (l *testLogger) Warn(_ string, _ string, _ ...any)    {}
-func (l *testLogger) Error(_ string, _ string, _ ...any)   {}
-func (l *testLogger) Success(_ string, format string, args ...any) {
-	l.successes = append(l.successes, fmt.Sprintf(format, args...))
 }
 
 // --- Signal file tests ---

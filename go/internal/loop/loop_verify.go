@@ -5,6 +5,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/agent"
 	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/verify"
 )
@@ -42,19 +43,19 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, 
 
 	// Fix agent may leave uncommitted changes — commit them before checking HEAD.
 	if l.git.HasUncommittedChanges() {
-		l.logger.Log("git", "Fix agent left uncommitted changes — auto-committing")
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent left uncommitted changes — auto-committing")
 		l.git.CommitAll("fix: auto-commit CI fix agent changes")
 	}
 
 	headAfter := l.git.HeadRev()
 	if headBefore == headAfter {
-		l.logger.Warn("git", "Fix agent made no new commits — likely infrastructure failure")
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Fix agent made no new commits — likely infrastructure failure")
 		return git.CIFixNoCommits
 	}
 
-	l.logger.Log("git", "Fix agent committed — pushing")
+	l.logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent committed — pushing")
 	if err := l.git.Push(ctx); err != nil {
-		l.logger.Warn("git", "Push after CI fix failed: %v", err)
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after CI fix failed: %v", err)
 		return git.CIFixFailed
 	}
 	return git.CIFixApplied
@@ -73,12 +74,12 @@ func (l *Loop) tryFixConflict(ctx context.Context, conflictErr *git.UnresolvedCo
 
 	headAfter := l.git.HeadRev()
 	if headBefore == headAfter {
-		l.logger.Warn("git", "Conflict agent made no new commits — nothing to push")
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Conflict agent made no new commits — nothing to push")
 		return false
 	}
 
 	if err := l.git.Push(ctx); err != nil {
-		l.logger.Warn("git", "Push after conflict resolution failed: %v", err)
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after conflict resolution failed: %v", err)
 		return false
 	}
 	return true

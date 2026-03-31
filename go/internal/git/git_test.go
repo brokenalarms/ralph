@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // memState is an in-memory StateStore for tests.
@@ -36,14 +38,22 @@ type testLog struct {
 	messages []string
 }
 
-func (l *testLog) Log(_ string, format string, args ...any) {
-	l.messages = append(l.messages, fmt.Sprintf(format, args...))
-}
-func (l *testLog) Warn(_ string, format string, args ...any) {
-	l.messages = append(l.messages, "WARN: "+fmt.Sprintf(format, args...))
-}
-func (l *testLog) Error(_ string, format string, args ...any) {
-	l.messages = append(l.messages, "ERROR: "+fmt.Sprintf(format, args...))
+func (l *testLog) Emit(o logging.Opts, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if o.Link != nil {
+		msg += " " + o.Link.URL + " " + o.Link.Text
+	}
+	if o.Branch != "" {
+		msg += " " + o.Branch
+	}
+	switch o.Level {
+	case logging.Warn:
+		l.messages = append(l.messages, "WARN: "+msg)
+	case logging.Error:
+		l.messages = append(l.messages, "ERROR: "+msg)
+	default:
+		l.messages = append(l.messages, msg)
+	}
 }
 
 func (l *testLog) contains(substr string) bool {

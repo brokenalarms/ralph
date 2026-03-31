@@ -33,7 +33,7 @@ func persistCompletedTask(st *state.Store, logger *logging.Logger, taskID string
 		return
 	}
 	if err := st.AddCompletedTask(taskID, merged); err != nil {
-		logger.Warn("state", "AddCompletedTask: %v", err)
+		logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
 	}
 }
 
@@ -81,13 +81,13 @@ func skipTask(backend tasks.Backend, st *state.Store, logger *logging.Logger, id
 	if id == "" {
 		return
 	}
-	logger.Warn("beads", "Skipping task %s: %s", id, reason)
+	logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Skipping task %s: %s", id, reason)
 	if err := backend.SkipTask(id, reason); err != nil {
-		logger.Warn("beads", "Failed to skip task %s in backend: %v", id, err)
+		logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to skip task %s in backend: %v", id, err)
 	}
 	if st != nil {
 		if err := st.AddSkippedTask(id); err != nil {
-			logger.Warn("beads", "Failed to persist skip for %s: %v", id, err)
+			logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to persist skip for %s: %v", id, err)
 		}
 		skipped, _ := st.GetSkippedTasks()
 		backend.SetSkippedIDs(skipped)
@@ -113,7 +113,7 @@ func waitForInternet(ctx context.Context, logger *logging.Logger) bool {
 	}
 
 	start := time.Now()
-	logger.Warn("", "Internet unreachable — waiting for connectivity...")
+	logger.Emit(logging.Opts{Level: logging.Warn}, "Internet unreachable — waiting for connectivity...")
 
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -125,11 +125,11 @@ func waitForInternet(ctx context.Context, logger *logging.Logger) bool {
 		case <-ticker.C:
 			if isOnline() {
 				elapsed := time.Since(start).Truncate(time.Second)
-				logger.Success("", "Internet restored after %s", elapsed)
+				logger.Emit(logging.Opts{Level: logging.Success}, "Internet restored after %s", elapsed)
 				return true
 			}
 			elapsed := time.Since(start).Truncate(time.Second)
-			logger.Log("", "Internet still unreachable (%s elapsed)", elapsed)
+			logger.Emit(logging.Opts{}, "Internet still unreachable (%s elapsed)", elapsed)
 		}
 	}
 }
@@ -150,8 +150,8 @@ func (l *Loop) runPostTask(ctx context.Context, taskID, prNumber string, merged 
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	l.logger.Log("post-task", "Running %s (task=%s pr=%s merged=%t)", l.cfg.PostTask, taskID, prNumber, merged)
+	l.logger.Emit(logging.Opts{Domain: "post-task"}, "Running %s (task=%s pr=%s merged=%t)", l.cfg.PostTask, taskID, prNumber, merged)
 	if err := cmd.Run(); err != nil {
-		l.logger.Warn("post-task", "Script exited with error: %v", err)
+		l.logger.Emit(logging.Opts{Domain: "post-task", Level: logging.Warn}, "Script exited with error: %v", err)
 	}
 }

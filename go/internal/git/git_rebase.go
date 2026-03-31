@@ -3,6 +3,8 @@ package git
 import (
 	"context"
 	"strings"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // RebaseRecovery represents the user's chosen recovery action when rebase
@@ -57,29 +59,29 @@ func (m *Manager) autoResolveAndContinue(ctx context.Context, defaultBranch stri
 			base := m.gitOutput(m.WorkDir, "show", ":1:"+f)
 
 			if ours == theirs {
-				m.Logger.Log("git", "Auto-resolved (identical): %s", f)
+				m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (identical): %s", f)
 				m.gitCmd(m.WorkDir, "checkout", "--theirs", f)
 				m.gitCmd(m.WorkDir, "add", f)
 				resolvedAny = true
 			} else if ours == base {
-				m.Logger.Log("git", "Auto-resolved (only theirs changed): %s", f)
+				m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (only theirs changed): %s", f)
 				m.gitCmd(m.WorkDir, "checkout", "--theirs", f)
 				m.gitCmd(m.WorkDir, "add", f)
 				resolvedAny = true
 			} else if theirs == base {
-				m.Logger.Log("git", "Auto-resolved (only ours changed): %s", f)
+				m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (only ours changed): %s", f)
 				m.gitCmd(m.WorkDir, "checkout", "--ours", f)
 				m.gitCmd(m.WorkDir, "add", f)
 				resolvedAny = true
 			} else {
 				// Both changed — check if ours is subset of theirs
 				if strings.Contains(theirs, ours) || isSubsetByLines(base, ours, theirs) {
-					m.Logger.Log("git", "Auto-resolved (ours is subset of theirs): %s", f)
+					m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (ours is subset of theirs): %s", f)
 					m.gitCmd(m.WorkDir, "checkout", "--theirs", f)
 					m.gitCmd(m.WorkDir, "add", f)
 					resolvedAny = true
 				} else {
-					m.Logger.Warn("git", "Real conflict in %s — cannot auto-resolve", f)
+					m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Real conflict in %s — cannot auto-resolve", f)
 					return false
 				}
 			}
