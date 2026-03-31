@@ -67,9 +67,10 @@ func (s *StubBackend) Label() string {
 // embedded StubBackend; only Metadata and ExternalRefs are additions.
 type MutableBackend struct {
 	StubBackend
-	mu           sync.Mutex
-	Metadata     map[string]map[string]string
-	ExternalRefs map[string]string
+	mu             sync.Mutex
+	Metadata       map[string]map[string]string
+	ExternalRefs   map[string]string
+	LastSkippedIDs [][]string
 }
 
 func (m *MutableBackend) HasRemaining() (bool, error) {
@@ -134,6 +135,12 @@ func (m *MutableBackend) GetMetadata(id, key string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+func (m *MutableBackend) SetSkippedIDs(ids []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.LastSkippedIDs = append(m.LastSkippedIDs, ids)
 }
 
 // Lock exposes the mutex for tests that need to modify fields atomically.

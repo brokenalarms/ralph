@@ -70,6 +70,9 @@ func (l *Loop) waitForTasks(ctx context.Context) bool {
 				l.state.Write("status", "stopped")
 				return false
 			}
+			if skipped, err := l.state.GetSkippedTasks(); err == nil {
+				l.cfg.TaskBackend.SetSkippedIDs(skipped)
+			}
 			hasRemaining, err := l.cfg.TaskBackend.HasRemaining()
 			if err != nil {
 				l.logger.Warn("beads", "Task check error during wait: %v", err)

@@ -723,3 +723,68 @@ func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
 		t.Errorf("OnIterationStart called %d times, want 2", callCount)
 	}
 }
+
+// Clearing skipped_tasks from state.json during wait-mode polling causes the
+// loop to refresh the backend's skip set, making previously-skipped tasks
+// eligible for selection without restarting the loop.
+func TestLoop_WaitMode_ReReadsSkippedTasksOnTick(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	// Seed state.json with a skipped task.
+	st.AddSkippedTask("ralph-xyz")
+
+	backend := &testutil.MutableBackend{}
+	backend.Remaining = 0
+	backend.Completed = 1
+	backend.Total = 1
+	backend.BackendLabel = "beads"
+
+	logger := logging.New(nil)
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Wait:          true,
+	}, st, gm, logger)
+
+	// After a short delay, clear skipped_tasks in state.json and make tasks
+	// available so the poll tick picks them up.
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		s, _ := st.Load()
+		s.SkippedTasks = nil
+		st.Save(s)
+		backend.Lock()
+		backend.Remaining = 1
+		backend.Unlock()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	got := l.waitForTasks(ctx)
+	if !got {
+		t.Fatal("waitForTasks should return true after skipped tasks cleared")
+	}
+
+	backend.Lock()
+	calls := backend.LastSkippedIDs
+	backend.Unlock()
+
+	if len(calls) == 0 {
+		t.Fatal("expected SetSkippedIDs to be called during wait polling")
+	}
+	// The last call should be an empty slice (skipped_tasks cleared).
+	last := calls[len(calls)-1]
+	if len(last) != 0 {
+		t.Errorf("expected empty skip list after clearing, got %v", last)
+	}
+}
