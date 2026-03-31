@@ -194,10 +194,8 @@ func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, ru
 	return diffStat, false
 }
 
-// logIterationBanner prints the health dashboard, separator, task banner,
-// and iteration phase line between iterations.
+// logIterationBanner gathers context and delegates to the logger.
 func (l *Loop) logIterationBanner(runIteration, maxIter, iteration int, task taskContext) {
-	taskID, nextTask, taskChanged, taskInfo := task.id, task.title, task.changed, task.info
 	completed, _ := l.cfg.TaskBackend.CountCompleted()
 	total, _ := l.cfg.TaskBackend.CountTotal()
 
@@ -208,21 +206,18 @@ func (l *Loop) logIterationBanner(runIteration, maxIter, iteration int, task tas
 		l.logger.DashedSeparator(logging.Yellow)
 	}
 
-	if taskID != "" && taskChanged {
-		l.logger.TaskBanner(taskID, nextTask, taskInfo.Priority)
-	}
-
-	phaseColor := logging.Green
-	if l.lastAction == analyzer.Warn {
-		phaseColor = logging.Yellow
-	}
-	versionTag := ""
-	if l.cfg.Version != "" {
-		versionTag = fmt.Sprintf(" | Ralph v%s", l.cfg.Version)
-	}
-	l.logger.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done]%s ---",
-		runIteration, maxIter, iteration, completed, total, versionTag)
-	if desc := getBeadDescription(l.cfg.TaskBackend, taskID); desc != "" {
-		l.logger.Log("beads", "  %s", desc)
-	}
+	l.logger.IterationBanner(logging.BannerOpts{
+		RunIteration: runIteration,
+		MaxIteration: maxIter,
+		Lifetime:     iteration,
+		Completed:    completed,
+		Total:        total,
+		TaskID:       task.id,
+		TaskTitle:    task.title,
+		TaskChanged:  task.changed,
+		Priority:     task.info.Priority,
+		Version:      l.cfg.Version,
+		WarnPhase:    l.lastAction == analyzer.Warn,
+		Description:  getBeadDescription(l.cfg.TaskBackend, task.id),
+	})
 }

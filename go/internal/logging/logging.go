@@ -267,6 +267,44 @@ func (l *Logger) TaskBanner(taskID, title string, priority *int) {
 	}
 }
 
+// BannerOpts holds the data for an iteration banner.
+type BannerOpts struct {
+	RunIteration int
+	MaxIteration int
+	Lifetime     int
+	Completed    int
+	Total        int
+	TaskID       string
+	TaskTitle    string
+	TaskChanged  bool
+	Priority     *int
+	Version      string
+	WarnPhase    bool
+	Description  string
+}
+
+// IterationBanner renders the task banner and phase line between iterations.
+func (l *Logger) IterationBanner(o BannerOpts) {
+	if o.TaskID != "" && o.TaskChanged {
+		l.TaskBanner(o.TaskID, o.TaskTitle, o.Priority)
+	}
+
+	phaseColor := Green
+	if o.WarnPhase {
+		phaseColor = Yellow
+	}
+	versionTag := ""
+	if o.Version != "" {
+		versionTag = fmt.Sprintf(" | Ralph v%s", o.Version)
+	}
+	l.PhaseColor(phaseColor, "--- Run iteration %d/%d | %d lifetime [%d/%d done]%s ---",
+		o.RunIteration, o.MaxIteration, o.Lifetime, o.Completed, o.Total, versionTag)
+
+	if o.Description != "" {
+		l.Log("beads", "  %s", o.Description)
+	}
+}
+
 // DashedSeparator writes a bold, colored full-width dashed line using ─ characters.
 func (l *Logger) DashedSeparator(color string) {
 	const totalWidth = 72
