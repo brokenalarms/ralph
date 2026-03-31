@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/prompt"
 )
 
@@ -38,7 +39,7 @@ func (l *Loop) maybeRefactor() error {
 	}
 
 	if !shouldRefactor {
-		l.logger.Log("refactor", "LLM says no refactoring needed — skipping")
+		l.logger.Emit(logging.Opts{Domain: "refactor"}, "LLM says no refactoring needed — skipping")
 		return nil
 	}
 
@@ -56,9 +57,9 @@ func (l *Loop) maybeRefactor() error {
 	}
 
 	if !l.limiter.Allowed() {
-		l.logger.Warn("llm", "Rate limit hit before refactor — waiting for reset")
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Rate limit hit before refactor — waiting for reset")
 		if err := l.limiter.WaitForReset(context.Background(), func(secs int) {
-			l.logger.Log("llm", "Rate limit: %ds until reset", secs)
+			l.logger.Emit(logging.Opts{Domain: logging.LLM}, "Rate limit: %ds until reset", secs)
 		}); err != nil {
 			return err
 		}
@@ -78,7 +79,7 @@ func (l *Loop) maybeRefactor() error {
 	})
 	l.limiter.Increment()
 
-	l.logger.Success("", "Refactor iteration complete")
+	l.logger.Emit(logging.Opts{Level: logging.Success}, "Refactor iteration complete")
 
 	return err
 }

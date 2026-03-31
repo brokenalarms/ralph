@@ -36,28 +36,28 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 	switch sub.Name {
 	case "stop":
 		if _, err := os.Stat(ralphDir); os.IsNotExist(err) {
-			log.Error("", "No .ralph directory found. Is ralph running here?")
+			log.Emit(logging.Opts{Level: logging.Error}, "No .ralph directory found. Is ralph running here?")
 			return 1
 		}
 		stopFile := fmt.Sprintf("%s/stop", ralphDir)
 		if err := os.WriteFile(stopFile, nil, 0o644); err != nil {
-			log.Error("", "Failed to create stop file: %v", err)
+			log.Emit(logging.Opts{Level: logging.Error}, "Failed to create stop file: %v", err)
 			return 1
 		}
-		log.Warn("", "Stop requested — ralph will halt after the current iteration.")
-		log.Warn("", "Ctrl+C to kill immediately if you don't need iteration results.")
+		log.Emit(logging.Opts{Level: logging.Warn}, "Stop requested — ralph will halt after the current iteration.")
+		log.Emit(logging.Opts{Level: logging.Warn}, "Ctrl+C to kill immediately if you don't need iteration results.")
 		return 0
 
 	case "feedback":
 		if _, err := os.Stat(ralphDir); os.IsNotExist(err) {
-			log.Error("", "No .ralph directory found. Is ralph running here?")
+			log.Emit(logging.Opts{Level: logging.Error}, "No .ralph directory found. Is ralph running here?")
 			return 1
 		}
 		if len(sub.Args) > 0 && sub.Args[0] == "unskip" {
 			return handleUnskip(log)
 		}
 		if len(sub.Args) == 0 {
-			log.Log("", "Usage: ralph feedback <message>")
+			log.Emit(logging.Opts{}, "Usage: ralph feedback <message>")
 			return 0
 		}
 		msg := strings.Join(sub.Args, " ")
@@ -65,27 +65,27 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 		st := filepath.Join(ralphDir, "state.json")
 		taskID := readTaskIDFromState(st)
 		if taskID == "" {
-			log.Error("", "No active task — is ralph running?")
+			log.Emit(logging.Opts{Level: logging.Error}, "No active task — is ralph running?")
 			return 1
 		}
 
 		bdBin, err := findBD()
 		if err != nil {
-			log.Error("", "bd not found: %v", err)
+			log.Emit(logging.Opts{Level: logging.Error}, "bd not found: %v", err)
 			return 1
 		}
 		bdCmd := appendNotesBD(bdBin, sub.Dir, taskID, msg)
 		if out, err := bdCmd.CombinedOutput(); err != nil {
-			log.Error("", "Failed to append notes: %s", strings.TrimSpace(string(out)))
+			log.Emit(logging.Opts{Level: logging.Error}, "Failed to append notes: %s", strings.TrimSpace(string(out)))
 			return 1
 		}
 
 		feedbackSignal := filepath.Join(ralphDir, "feedback")
 		if err := os.WriteFile(feedbackSignal, nil, 0o644); err != nil {
-			log.Error("", "Failed to write feedback signal: %v", err)
+			log.Emit(logging.Opts{Level: logging.Error}, "Failed to write feedback signal: %v", err)
 			return 1
 		}
-		log.Success("", "Feedback sent — agent will restart with updated bead notes.")
+		log.Emit(logging.Opts{Level: logging.Success}, "Feedback sent — agent will restart with updated bead notes.")
 		return 0
 
 	case "attach":
@@ -105,7 +105,7 @@ func handleSubcommand(sub config.Subcommand, log *logging.Logger) int {
 
 	case "filter-stream":
 		if len(sub.Args) == 0 {
-			log.Error("", "Usage: ralph filter-stream <rawlog> [workdir]")
+			log.Emit(logging.Opts{Level: logging.Error}, "Usage: ralph filter-stream <rawlog> [workdir]")
 			return 1
 		}
 		var workDir string
@@ -128,7 +128,7 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 		return 0
 	}
 	if err != nil {
-		log.Error("", "%v", err)
+		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
 		printLoopUsage()
 		return 1
 	}
@@ -136,12 +136,12 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 	cfg.ProjectDir, _ = filepath.Abs(sub.Dir)
 
 	if err := cfg.Validate(); err != nil {
-		log.Error("", "%v", err)
+		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
 		return 1
 	}
 
 	if !git.IsGitRepo(cfg.ProjectDir) {
-		log.Error("", "Not a git repository: %s", cfg.ProjectDir)
+		log.Emit(logging.Opts{Level: logging.Error}, "Not a git repository: %s", cfg.ProjectDir)
 		return 1
 	}
 
@@ -150,11 +150,11 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 
 	existingPID, err := pidfile.Check(filepath.Join(ralphDir, "loop.pid"))
 	if err != nil {
-		log.Error("", "PID file check failed: %v", err)
+		log.Emit(logging.Opts{Level: logging.Error}, "PID file check failed: %v", err)
 		return 1
 	}
 	if existingPID != 0 {
-		log.Error("", "ralph loop is already running (PID %d)", existingPID)
+		log.Emit(logging.Opts{Level: logging.Error}, "ralph loop is already running (PID %d)", existingPID)
 		return 1
 	}
 
@@ -162,7 +162,7 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
 		tmpDir, extractErr := extractEmbeddedPrompts()
 		if extractErr != nil {
-			log.Error("", "Failed to extract embedded prompts: %v", extractErr)
+			log.Emit(logging.Opts{Level: logging.Error}, "Failed to extract embedded prompts: %v", extractErr)
 			return 1
 		}
 		promptsDir = tmpDir
@@ -170,7 +170,7 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 
 	if cfg.UseTmux {
 		if err := os.MkdirAll(ralphDir, 0o755); err != nil {
-			log.Error("", "Failed to create .ralph dir: %v", err)
+			log.Emit(logging.Opts{Level: logging.Error}, "Failed to create .ralph dir: %v", err)
 			return 1
 		}
 		return handleTmux(cfg, scriptPath, sub.Args, ralphDir, log)
@@ -198,7 +198,7 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 	projectDir, _ := filepath.Abs(sub.Dir)
 
 	if !git.IsGitRepo(projectDir) {
-		log.Error("", "Not a git repository: %s", projectDir)
+		log.Emit(logging.Opts{Level: logging.Error}, "Not a git repository: %s", projectDir)
 		return 1
 	}
 
@@ -208,7 +208,7 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
 		tmpDir, extractErr := extractEmbeddedPrompts()
 		if extractErr != nil {
-			log.Error("", "Failed to extract embedded prompts: %v", extractErr)
+			log.Emit(logging.Opts{Level: logging.Error}, "Failed to extract embedded prompts: %v", extractErr)
 			return 1
 		}
 		promptsDir = tmpDir
@@ -216,19 +216,19 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 
 	reflections, err := prompt.ReadReflections(ralphDir)
 	if err != nil {
-		log.Warn("", "Failed to read reflections: %v", err)
+		log.Emit(logging.Opts{Level: logging.Warn}, "Failed to read reflections: %v", err)
 	}
 
 	systemPrompt, err := prompt.BuildReviewPrompt(promptsDir, projectDir, ralphDir, reflections)
 	if err != nil {
-		log.Error("", "Failed to build review prompt: %v", err)
+		log.Emit(logging.Opts{Level: logging.Error}, "Failed to build review prompt: %v", err)
 		return 1
 	}
 
 	r := newInteractiveAgent(log, agent.ModelOpus)
 	exitCode, err := r.Interactive(projectDir, systemPrompt, prompt.ReviewBootstrapPrompt)
 	if err != nil {
-		log.Error("", "Review session failed: %v", err)
+		log.Emit(logging.Opts{Level: logging.Error}, "Review session failed: %v", err)
 		return 1
 	}
 
@@ -246,14 +246,14 @@ func postReviewCleanup(ralphDir string, log *logging.Logger) {
 	st := state.NewStore(ralphDir)
 	tasks, err := st.GetCompletedTasks()
 	if err != nil {
-		log.Warn("review", "Failed to read completed tasks: %v", err)
+		log.Emit(logging.Opts{Domain: "review", Level: logging.Warn}, "Failed to read completed tasks: %v", err)
 	}
 
 	archived, err := prompt.ArchiveReflections(ralphDir)
 	if err != nil {
-		log.Warn("review", "Failed to archive reflections: %v", err)
+		log.Emit(logging.Opts{Domain: "review", Level: logging.Warn}, "Failed to archive reflections: %v", err)
 	} else if len(archived) > 0 {
-		log.Log("review", "Archived %d reflections", len(archived))
+		log.Emit(logging.Opts{Domain: "review"}, "Archived %d reflections", len(archived))
 	}
 
 	if len(tasks) > 0 {
@@ -263,13 +263,13 @@ func postReviewCleanup(ralphDir string, log *logging.Logger) {
 		}
 		tracker := attempts.New(ralphDir)
 		tracker.ClearForTasks(ids)
-		log.Log("review", "Cleared attempt data for %d tasks", len(tasks))
+		log.Emit(logging.Opts{Domain: "review"}, "Cleared attempt data for %d tasks", len(tasks))
 	}
 
 	if err := st.ClearCompletedTasks(); err != nil {
-		log.Warn("review", "Failed to clear completed tasks: %v", err)
+		log.Emit(logging.Opts{Domain: "review", Level: logging.Warn}, "Failed to clear completed tasks: %v", err)
 	} else {
-		log.Log("review", "Cleared completed_tasks from state")
+		log.Emit(logging.Opts{Domain: "review"}, "Cleared completed_tasks from state")
 	}
 
 	os.Remove(filepath.Join(ralphDir, ".completed-tasks"))
@@ -288,24 +288,24 @@ func handleAttach(sub config.Subcommand, log *logging.Logger) int {
 
 	existingPID, err := pidfile.Check(filepath.Join(ralphDir, "loop.pid"))
 	if err != nil {
-		log.Error("", "PID file check failed: %v", err)
+		log.Emit(logging.Opts{Level: logging.Error}, "PID file check failed: %v", err)
 		return 1
 	}
 	if existingPID == 0 {
-		log.Error("", "No ralph loop running. Start one first with: ralph loop --tmux")
+		log.Emit(logging.Opts{Level: logging.Error}, "No ralph loop running. Start one first with: ralph loop --tmux")
 		return 1
 	}
 
 	cfg, err := config.Parse(sub.Args)
 	if err != nil {
-		log.Error("", "%v", err)
+		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
 		return 1
 	}
 	cfg.ProjectDir = projectDir
 
 	scriptPath, _ := os.Executable()
 
-	log.Log("", "Attaching to ralph loop (PID %d)", existingPID)
+	log.Emit(logging.Opts{}, "Attaching to ralph loop (PID %d)", existingPID)
 	return handleTmuxAttach(cfg, scriptPath, ralphDir, existingPID, log)
 }
 
@@ -324,7 +324,7 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 	if _, err := os.Stat(promptsDir); os.IsNotExist(err) {
 		tmpDir, extractErr := extractEmbeddedPrompts()
 		if extractErr != nil {
-			log.Error("", "Failed to extract embedded prompts: %v", extractErr)
+			log.Emit(logging.Opts{Level: logging.Error}, "Failed to extract embedded prompts: %v", extractErr)
 			return 1
 		}
 		promptsDir = tmpDir
@@ -332,21 +332,21 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 
 	systemPrompt, err := prompt.BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir)
 	if err != nil {
-		log.Error("", "Failed to build task manager prompt: %v", err)
+		log.Emit(logging.Opts{Level: logging.Error}, "Failed to build task manager prompt: %v", err)
 		return 1
 	}
 
 	r := newInteractiveAgent(log, agent.ModelOpus)
 	exitCode, err := r.Interactive(projectDir, systemPrompt, prompt.TaskManagerBootstrapPrompt)
 	if err != nil {
-		log.Error("", "Task manager failed: %v", err)
+		log.Emit(logging.Opts{Level: logging.Error}, "Task manager failed: %v", err)
 		return 1
 	}
 	return exitCode
 }
 
 func handleUnskip(log *logging.Logger) int {
-	log.Log("", "Skipped tasks are now deferred in bd. Use 'bd list --status=deferred' to see them and 'bd update <id> --status=open' to undefer.")
+	log.Emit(logging.Opts{}, "Skipped tasks are now deferred in bd. Use 'bd list --status=deferred' to see them and 'bd update <id> --status=open' to undefer.")
 	return 0
 }
 

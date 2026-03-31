@@ -183,7 +183,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		if err := l.maybeRefactor(); err != nil {
-			l.logger.Warn("", "Refactor iteration error: %v", err)
+			l.logger.Emit(logging.Opts{Level: logging.Warn}, "Refactor iteration error: %v", err)
 		}
 
 		if l.cfg.OnIterationStart != nil {

@@ -152,7 +152,7 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 	if p.taskID != "" {
 		phase, _ := opts.backend.GetState(p.taskID, "phase")
 		if phase != "implementing" {
-			opts.logger.Warn("beads", "Task %s phase is %q (expected implementing) — agent may have tampered with task state", p.taskID, phase)
+			opts.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s phase is %q (expected implementing) — agent may have tampered with task state", p.taskID, phase)
 		}
 	}
 
@@ -160,7 +160,7 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 	// If not (legacy/test path), run verification here as fallback.
 	if !p.result.OnSignalUsed {
 		if passed, reason := opts.verifyFn(p.ctx, p.headBefore); !passed {
-			opts.logger.Warn("test", "Verification failed: %s", reason)
+			opts.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Verification failed: %s", reason)
 			opts.attempts.Record(p.taskID, p.nextTask,
 				"Signal received but verification failed: "+reason,
 				p.diffStat,
@@ -171,9 +171,9 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 
 	if p.taskID != "" {
 		if err := opts.backend.SetState(p.taskID, "phase", "verified", "ralph: tests passed, commits present"); err != nil {
-			opts.logger.Warn("beads", "SetState phase=verified: %v", err)
+			opts.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=verified: %v", err)
 		} else {
-			opts.logger.Log("beads", "%s → verified", p.taskID)
+			opts.logger.Emit(logging.Opts{Domain: logging.Beads}, "%s → verified", p.taskID)
 		}
 	}
 
@@ -185,7 +185,7 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 	if p.headBefore != "" && headAfterSignal == p.headBefore {
 		// No new commits but verification passed (agent + LLM + tests agree).
 		// That's sufficient proof the work is on main — close the bead.
-		opts.logger.Log("git", "No new commits — verified complete, closing bead")
+		opts.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits — verified complete, closing bead")
 		if p.taskID != "" {
 			closeReason := "verified complete (no new commits)"
 			ref, _ := opts.backend.GetExternalRef(p.taskID)
@@ -198,14 +198,14 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 			if err := opts.backend.CloseTask(p.taskID, closeReason); err != nil {
 				skipReason := "close_failed"
 				if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
-					opts.logger.Warn("beads", "CloseTask: %s blocked by %v", p.taskID, blockers)
+					opts.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
 					skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
 				} else {
-					opts.logger.Warn("beads", "CloseTask: %v", err)
+					opts.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
 				}
 				skipTask(opts.backend, opts.state, opts.logger, p.taskID, skipReason)
 			} else {
-				opts.logger.Log("beads", "Closed task %s (%s)", p.taskID, closeReason)
+				opts.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
 				persistCompletedTask(opts.state, opts.logger, p.taskID, false)
 			}
 		}
@@ -218,7 +218,7 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 	}
 
 	if p.ctx.Err() != nil {
-		opts.logger.Warn("", "Post-signal timeout — aborting before push")
+		opts.logger.Emit(logging.Opts{Level: logging.Warn}, "Post-signal timeout — aborting before push")
 		return handlePostSignalOut{action: signalComplete}
 	}
 
@@ -247,12 +247,12 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 	}
 
 	if p.ctx.Err() != nil {
-		opts.logger.Warn("", "Post-signal timeout — aborting before merge")
+		opts.logger.Emit(logging.Opts{Level: logging.Warn}, "Post-signal timeout — aborting before merge")
 		return handlePostSignalOut{action: signalComplete, ct: &ct}
 	}
 
 	if prNumber == "" {
-		opts.logger.Warn("git", "No PR created — task %s stays open", p.taskID)
+		opts.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No PR created — task %s stays open", p.taskID)
 		return handlePostSignalOut{action: signalComplete, ct: &ct}
 	}
 
@@ -335,12 +335,12 @@ func pushSignalPR(ctx context.Context, p postSignalParams, opts pushSignalPROpts
 	result, shipErr := opts.shipFn(ctx, shipOpts)
 	if shipErr != nil {
 		if !opts.isOnlineFunc() {
-			opts.logger.Warn("git", "Ship failed — internet appears down")
+			opts.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed — internet appears down")
 			opts.waitForInternetFunc(ctx, opts.logger)
 			result, shipErr = opts.shipFn(ctx, shipOpts)
 		}
 		if shipErr != nil {
-			opts.logger.Warn("git", "Ship: %v", shipErr)
+			opts.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship: %v", shipErr)
 		}
 	}
 
@@ -350,9 +350,9 @@ func pushSignalPR(ctx context.Context, p postSignalParams, opts pushSignalPROpts
 			ref = prURL(opts.git.RemoteURL(), result.PRNumber)
 		}
 		if ref != "" {
-			opts.logger.Log("git", "Linking task %s to %s (branch: %s)", p.taskID, ref, opts.git.GetWorktreeBranch())
+			opts.logger.Emit(logging.Opts{Domain: logging.Git}, "Linking task %s to %s (branch: %s)", p.taskID, ref, opts.git.GetWorktreeBranch())
 			if refErr := opts.backend.SetExternalRef(p.taskID, ref); refErr != nil {
-				opts.logger.Warn("beads", "SetExternalRef: %v", refErr)
+				opts.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetExternalRef: %v", refErr)
 			}
 		}
 	}
@@ -412,7 +412,7 @@ type finalizePRResult struct {
 // Returns the merge/close outcome so callers can act on it (e.g. evolve).
 func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 	if p.prNumber == "" {
-		l.logger.Warn("git", "No PR — task %s stays open", p.taskID)
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No PR — task %s stays open", p.taskID)
 		return finalizePRResult{}
 	}
 
@@ -440,7 +440,7 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 			var mergeErr error
 			merged, mergeErr = l.mergeWithRetry(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
 			if mergeErr != nil {
-				l.logger.Warn("git", "Auto-merge: %v", mergeErr)
+				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Auto-merge: %v", mergeErr)
 			}
 			if !merged {
 				mergeFailed = true
@@ -478,14 +478,14 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 	if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
 		skipReason := "close_failed"
 		if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
-			l.logger.Warn("beads", "CloseTask: %s blocked by %v", p.taskID, blockers)
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
 			skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
 		} else {
-			l.logger.Warn("beads", "CloseTask failed: %v", err)
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
 		}
 		skipTask(l.cfg.TaskBackend, l.state, l.logger, p.taskID, skipReason)
 	} else {
-		l.logger.Log("beads", "Closed task %s (%s)", p.taskID, closeReason)
+		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
 		persistCompletedTask(l.state, l.logger, p.taskID, merged)
 	}
 
@@ -507,7 +507,7 @@ type iterationPrompt struct {
 func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask string) (iterationPrompt, bool) {
 	if taskID != "" {
 		if err := l.cfg.TaskBackend.SetState(taskID, "phase", "implementing", "ralph: starting task"); err != nil {
-			l.logger.Warn("beads", "SetState phase=implementing: %v", err)
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=implementing: %v", err)
 		}
 	}
 
@@ -537,13 +537,13 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 			if reflectionCount > 0 {
 				parts = append(parts, "learnings from other tasks")
 			}
-			l.logger.Log("", "Including %s", strings.Join(parts, " + "))
+			l.logger.Emit(logging.Opts{}, "Including %s", strings.Join(parts, " + "))
 		}
 	}
 
 	fullPrompt, err := l.buildPrompt(taskPrompt, attemptContext, testStatus)
 	if err != nil {
-		l.logger.Error("", "Prompt build failed: %v", err)
+		l.logger.Emit(logging.Opts{Level: logging.Error}, "Prompt build failed: %v", err)
 		return iterationPrompt{}, false
 	}
 
@@ -585,16 +585,16 @@ type handleRunResultParams struct {
 func handleRunResult(ctx context.Context, p handleRunResultParams) loopAction {
 	if p.runErr != nil {
 		if !p.isOnlineFunc() {
-			p.logger.Warn("llm", "Claude failed — internet appears down")
+			p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Claude failed — internet appears down")
 			if !p.waitForInternetFunc(ctx, p.logger) {
 				return actionDone
 			}
 			return actionRetry
 		}
-		p.logger.Warn("llm", "Claude failed on iteration %d, continuing...", p.runIteration)
+		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Claude failed on iteration %d, continuing...", p.runIteration)
 	}
 	if p.result.FeedbackKill {
-		p.logger.Warn("llm", "Restarting iteration %d — user feedback received", p.runIteration)
+		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Restarting iteration %d — user feedback received", p.runIteration)
 		diffStat := p.git.DiffStatRange(p.headBefore, p.git.HeadRev())
 		p.attempts.Record(p.taskID, p.nextTask,
 			"Killed: user feedback received (see bead notes for content)",
@@ -603,7 +603,7 @@ func handleRunResult(ctx context.Context, p handleRunResultParams) loopAction {
 		return actionRetry
 	}
 	if p.result.IdleTimeout {
-		p.logger.Warn("llm", "Restarting iteration %d after idle timeout", p.runIteration)
+		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Restarting iteration %d after idle timeout", p.runIteration)
 		diffStat := p.git.DiffStatRange(p.headBefore, p.git.HeadRev())
 		p.attempts.Record(p.taskID, p.nextTask,
 			"Killed: idle timeout (no output for configured duration)",
@@ -611,7 +611,7 @@ func handleRunResult(ctx context.Context, p handleRunResultParams) loopAction {
 			"idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output")
 		count, _ := p.attempts.RecordIdleTimeoutFailure(p.taskID)
 		if count >= attempts.MaxIdleTimeoutFailures {
-			p.logger.Warn("llm", "Idle timeout %d times for %s — skipping task", count, p.taskID)
+			p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Idle timeout %d times for %s — skipping task", count, p.taskID)
 			p.skipTask(p.backend, p.state, p.logger, p.taskID, "idle_timeout_max_failures")
 			return actionRetry
 		}
@@ -619,15 +619,15 @@ func handleRunResult(ctx context.Context, p handleRunResultParams) loopAction {
 	}
 	if p.result.RateLimited {
 		waitDur := claude.FormatWaitDuration(time.Until(p.result.ResetAt))
-		p.logger.Warn("llm", "Claude rate limit — waiting %s until %s", waitDur, p.result.ResetAt.Format("3:04pm"))
+		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Claude rate limit — waiting %s until %s", waitDur, p.result.ResetAt.Format("3:04pm"))
 		err := p.limiter.WaitUntil(ctx, p.result.ResetAt, func(secs int) {
-			p.logger.Log("llm", "Rate limit: %ds until reset", secs)
+			p.logger.Emit(logging.Opts{Domain: logging.LLM}, "Rate limit: %ds until reset", secs)
 		})
 		if err != nil {
-			p.logger.Warn("llm", "Rate limit wait interrupted: %v", err)
+			p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Rate limit wait interrupted: %v", err)
 			return actionDone
 		}
-		p.logger.Success("llm", "Rate limit reset — resuming")
+		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success}, "Rate limit reset — resuming")
 		return actionRetry
 	}
 

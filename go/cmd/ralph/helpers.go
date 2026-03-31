@@ -70,7 +70,7 @@ func evolveRestart(projectDir, sourceDir, scriptPath, baseBranch string, args []
 	stopFile := filepath.Join(ralphDir, "stop")
 	if _, err := os.Stat(stopFile); err == nil {
 		os.Remove(stopFile)
-		log.Log("", "Stop signal detected — skipping evolve restart")
+		log.Emit(logging.Opts{}, "Stop signal detected — skipping evolve restart")
 		return nil
 	}
 

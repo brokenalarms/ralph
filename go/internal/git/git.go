@@ -17,12 +17,9 @@ type StateStore interface {
 	Write(key, value string) error
 }
 
-// Log is the logging interface used by Manager, matching the subset of
-// logging.Logger that git operations need.
+// Log is the logging interface used by Manager.
 type Log interface {
-	Log(domain string, format string, args ...any)
-	Warn(domain string, format string, args ...any)
-	Error(domain string, format string, args ...any)
+	Emit(o logging.Opts, format string, args ...any)
 }
 
 // Manager handles git worktree creation, branch naming, and sync.
@@ -120,7 +117,7 @@ func (m *Manager) SetupWorktree(ctx context.Context) error {
 	if !m.refExists(m.ProjectDir, "origin/"+defaultBranch) &&
 		m.refExists(m.ProjectDir, "HEAD") &&
 		m.remoteExists() {
-		m.Logger.Log("git", "Pushing %s to origin (empty remote — ensures correct default branch)", defaultBranch)
+		m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Pushing %s to origin (empty remote — ensures correct default branch)", defaultBranch)
 		m.gitCmdCtx(ctx, m.ProjectDir, "push", "-u", "origin", defaultBranch)
 	}
 
@@ -131,7 +128,7 @@ func (m *Manager) SetupWorktree(ctx context.Context) error {
 	}
 
 	m.gitCmd(m.WorkDir, "config", "rebase.updateRefs", "true")
-	m.Logger.Log("git", "Worktree: %s (branch: %s)", m.WorkDir, m.WorktreeBranch)
+	m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Worktree: %s (branch: %s)", m.WorkDir, m.WorktreeBranch)
 
 	if m.State != nil {
 		_ = m.State.Write("worktree_dir", m.WorkDir)
@@ -166,7 +163,7 @@ func (m *Manager) tryResumeWorktree() error {
 		m.BranchRenamed = true
 	}
 
-	m.Logger.Log("git", "Resuming worktree: %s", m.WorkDir)
+	m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Resuming worktree: %s", m.WorkDir)
 	return nil
 }
 
@@ -177,7 +174,7 @@ func (m *Manager) withStash(stashMsg string, fn func()) {
 	dirty := m.gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
 		m.gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
 	if dirty {
-		m.Logger.Log("git", "Stashing uncommitted changes before rebase...")
+		m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Stashing uncommitted changes before rebase...")
 		m.gitCmd(m.WorkDir, "stash", "push", "-m", stashMsg)
 	}
 
@@ -185,12 +182,12 @@ func (m *Manager) withStash(stashMsg string, fn func()) {
 
 	if dirty {
 		if err := m.gitCmdErr(m.WorkDir, "stash", "pop"); err != nil {
-			m.Logger.Warn("git", "Stash pop conflict — committing stash as WIP")
+			m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Stash pop conflict — committing stash as WIP")
 			m.gitCmd(m.WorkDir, "checkout", "--theirs", ".")
 			m.gitCmd(m.WorkDir, "add", "-A")
 			m.gitCmd(m.WorkDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
 		} else {
-			m.Logger.Log("git", "Re-applied stashed changes")
+			m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Re-applied stashed changes")
 		}
 	}
 }
@@ -223,11 +220,11 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) error {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				m.Logger.Warn("git", "Failed to fetch origin/%s: %v", baseBranch, err2)
+				m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to fetch origin/%s: %v", baseBranch, err2)
 				return nil
 			}
 		} else {
-			m.Logger.Warn("git", "Failed to fetch origin/%s: %v", baseBranch, err)
+			m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to fetch origin/%s: %v", baseBranch, err)
 			return nil
 		}
 	}
@@ -237,14 +234,14 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) error {
 	}
 
 	if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+baseBranch, "HEAD") == nil {
-		m.Logger.Log("git", "%s Already up to date with origin/%s", logging.BranchTag(baseBranch), baseBranch)
+		m.Logger.Emit(logging.Opts{Domain: logging.Git, Branch: baseBranch}, "Already up to date with origin/%s", baseBranch)
 		return nil
 	}
 
 	// No local commits ahead of base → safe to force-reset (fresh start).
 	localCommits := m.gitOutput(m.WorkDir, "rev-list", "--count", "origin/"+baseBranch+"..HEAD")
 	if localCommits == "" || localCommits == "0" {
-		m.Logger.Log("git", "%s Resetting to origin/%s (no local work)", logging.BranchTag(baseBranch), baseBranch)
+		m.Logger.Emit(logging.Opts{Domain: logging.Git, Branch: baseBranch}, "Resetting to origin/%s (no local work)", baseBranch)
 		m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+baseBranch)
 		return nil
 	}
@@ -268,7 +265,7 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) error {
 		}
 
 		// Stack diverges — abort rebase, keep local commits, let merge handle it.
-		m.Logger.Warn("git", "Rebase conflict with local work — stack diverged, continuing")
+		m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Rebase conflict with local work — stack diverged, continuing")
 		m.gitCmd(m.WorkDir, "rebase", "--abort")
 		result = nil // not an error — diverged stack is expected
 	})
@@ -277,7 +274,7 @@ func (m *Manager) EnsureUpToDate(ctx context.Context) error {
 
 func (m *Manager) tryRebase(ctx context.Context, defaultBranch string) bool {
 	if m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--update-refs", "origin/"+defaultBranch) == nil {
-		m.Logger.Log("git", "%s Rebased onto origin/%s", logging.BranchTag(defaultBranch), defaultBranch)
+		m.Logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch}, "Rebased onto origin/%s", defaultBranch)
 		return true
 	}
 	return false
@@ -285,7 +282,7 @@ func (m *Manager) tryRebase(ctx context.Context, defaultBranch string) bool {
 
 func (m *Manager) tryAutoResolve(ctx context.Context, defaultBranch string) bool {
 	if m.autoResolveAndContinue(ctx, defaultBranch) {
-		m.Logger.Log("git", "%s Rebased onto origin/%s (auto-resolved)", logging.BranchTag(defaultBranch), defaultBranch)
+		m.Logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch}, "Rebased onto origin/%s (auto-resolved)", defaultBranch)
 		return true
 	}
 	m.gitCmd(m.WorkDir, "rebase", "--abort")
@@ -313,7 +310,7 @@ func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 	if err := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); err != nil {
 		_ = m.gitCmdErr(m.WorkDir, "branch", "-D", newBranch)
 		if retryErr := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); retryErr != nil {
-			m.Logger.Warn("git", "Failed to rename branch %s → %s: %v", m.WorktreeBranch, newBranch, retryErr)
+			m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to rename branch %s → %s: %v", m.WorktreeBranch, newBranch, retryErr)
 			return
 		}
 	}
@@ -343,7 +340,7 @@ func (m *Manager) RenameBranchTo(name string) {
 		// and retry — the local branch is expendable since work is on the remote.
 		_ = m.gitCmdErr(m.WorkDir, "branch", "-D", name)
 		if retryErr := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, name); retryErr != nil {
-			m.Logger.Warn("git", "Failed to rename branch %s → %s: %v", m.WorktreeBranch, name, retryErr)
+			m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to rename branch %s → %s: %v", m.WorktreeBranch, name, retryErr)
 			return
 		}
 	}
@@ -370,7 +367,7 @@ func (m *Manager) ResetToDefaultBranch() {
 	if m.State != nil {
 		_ = m.State.Write("branch_renamed", "false")
 	}
-	m.Logger.Log("git", "Reset worktree to %s", target)
+	m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Reset worktree to %s", target)
 }
 
 // SetPrevBranch sets the previous branch for stacked PR targeting and
@@ -422,7 +419,7 @@ func (m *Manager) SquashToOneCommit(baseSHA, message string) error {
 	if count == 1 {
 		return nil
 	}
-	m.Logger.Log("git", "Squashing %d commits into one", count)
+	m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Squashing %d commits into one", count)
 	m.gitCmd(m.WorkDir, "reset", "--soft", baseSHA)
 	return m.gitCmdErr(m.WorkDir, "commit", "-m", message)
 }
@@ -442,7 +439,7 @@ func (m *Manager) TagTaskStart(taskID string) {
 		return
 	}
 	if err := m.gitCmdErr(m.WorkDir, "tag", "-f", tag); err == nil {
-		m.Logger.Log("git", "Tag: %s", tag)
+		m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Tag: %s", tag)
 	}
 }
 
@@ -453,7 +450,7 @@ func (m *Manager) TagTaskEnd(taskID string) {
 		return
 	}
 	if err := m.gitCmdErr(m.WorkDir, "tag", "-f", tag); err == nil {
-		m.Logger.Log("git", "Tag: %s", tag)
+		m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Tag: %s", tag)
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // gitCall records a single git command invocation for assertion.
@@ -129,9 +131,7 @@ func (s *stubRunner) OnSequence(key string, responses []stubResponse) *stubRunne
 // discardLog silences log output during tests.
 type discardLog struct{}
 
-func (discardLog) Log(string, string, ...any)   {}
-func (discardLog) Warn(string, string, ...any)  {}
-func (discardLog) Error(string, string, ...any) {}
+func (discardLog) Emit(logging.Opts, string, ...any) {}
 
 // capturingGitHub captures CreatePR calls for assertion.
 type capturingGitHub struct {

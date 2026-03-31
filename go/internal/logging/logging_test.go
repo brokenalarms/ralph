@@ -25,10 +25,10 @@ func TestLogLevelColors(t *testing.T) {
 		wantColor string
 		wantTag   string
 	}{
-		{"Log", func(l *Logger) { l.Log(Git, "msg") }, Cyan, "[o][git]"},
-		{"Success", func(l *Logger) { l.Success(Git, "msg") }, Green, "[o][git]"},
-		{"Warn", func(l *Logger) { l.Warn(Git, "msg") }, Yellow, "[o][git]"},
-		{"Error", func(l *Logger) { l.Error(Git, "msg") }, Red, "[o][git]"},
+		{"Log", func(l *Logger) { l.Emit(Opts{Domain: Git}, "msg") }, Cyan, "[o][git]"},
+		{"Success", func(l *Logger) { l.Emit(Opts{Domain: Git, Level: Success}, "msg") }, Green, "[o][git]"},
+		{"Warn", func(l *Logger) { l.Emit(Opts{Domain: Git, Level: Warn}, "msg") }, Yellow, "[o][git]"},
+		{"Error", func(l *Logger) { l.Emit(Opts{Domain: Git, Level: Error}, "msg") }, Red, "[o][git]"},
 	}
 
 	for _, tt := range tests {
@@ -103,7 +103,7 @@ func TestTimestampAtFrontOfLine(t *testing.T) {
 	l := &Logger{out: &buf, logFile: &buf}
 	l.Fmt.Clock = func() time.Time { return fixed }
 
-	l.Log("", "first message")
+	l.Emit(Opts{}, "first message")
 	got := buf.String()
 	plain := ansiRe.ReplaceAllString(got, "")
 
@@ -116,7 +116,7 @@ func TestTimestampAtFrontOfLine(t *testing.T) {
 
 	// Second line at same second: padded, no timestamp.
 	buf.Reset()
-	l.Log("", "second message")
+	l.Emit(Opts{}, "second message")
 	got = buf.String()
 	plain = ansiRe.ReplaceAllString(got, "")
 	if strings.Contains(plain, "14:30:45") {
@@ -130,7 +130,7 @@ func TestTimestampAtFrontOfLine(t *testing.T) {
 	buf.Reset()
 	next := fixed.Add(time.Second)
 	l.Fmt.Clock = func() time.Time { return next }
-	l.Log("", "third message")
+	l.Emit(Opts{}, "third message")
 	got = buf.String()
 	plain = ansiRe.ReplaceAllString(got, "")
 	if !strings.HasPrefix(plain, "14:30:46 ") {
@@ -161,7 +161,7 @@ func TestPhaseTimestampAtFront(t *testing.T) {
 func TestDualOutput(t *testing.T) {
 	var stdout, logFile bytes.Buffer
 	l := &Logger{out: &stdout, logFile: &logFile}
-	l.Log("", "dual")
+	l.Emit(Opts{}, "dual")
 	if !strings.Contains(stdout.String(), "dual") {
 		t.Error("message missing from stdout")
 	}
@@ -174,7 +174,7 @@ func TestDualOutput(t *testing.T) {
 func TestFormatArgs(t *testing.T) {
 	var buf bytes.Buffer
 	l := &Logger{out: &buf, logFile: &buf}
-	l.Log("", "count=%d name=%s", 42, "test")
+	l.Emit(Opts{}, "count=%d name=%s", 42, "test")
 	got := buf.String()
 	if !strings.Contains(got, "count=42 name=test") {
 		t.Errorf("format interpolation failed: %s", got)
@@ -189,7 +189,7 @@ func TestStreamingModeSuppressesStdout(t *testing.T) {
 	l := &Logger{out: &stdout, logFile: &logFile}
 
 	l.SetStreaming(true)
-	l.Log("", "streamed message")
+	l.Emit(Opts{}, "streamed message")
 	l.Phase("streamed phase")
 
 	if stdout.Len() != 0 {
@@ -203,7 +203,7 @@ func TestStreamingModeSuppressesStdout(t *testing.T) {
 	}
 
 	l.SetStreaming(false)
-	l.Log("", "normal message")
+	l.Emit(Opts{}, "normal message")
 
 	if !strings.Contains(stdout.String(), "normal message") {
 		t.Error("after disabling streaming, stdout should resume")
@@ -321,7 +321,7 @@ func TestBranchTag(t *testing.T) {
 func TestNoPerLineTaskIDPrefix(t *testing.T) {
 	var buf bytes.Buffer
 	l := &Logger{out: &buf, logFile: &buf}
-	l.Log("", "doing work")
+	l.Emit(Opts{}, "doing work")
 	got := buf.String()
 
 	if strings.Contains(got, Magenta+"[") {
@@ -426,7 +426,7 @@ func TestPriorityTag(t *testing.T) {
 func TestLoggerStripsMarkdown(t *testing.T) {
 	var buf bytes.Buffer
 	l := &Logger{out: &buf, logFile: &buf}
-	l.Log("", "hello **world**")
+	l.Emit(Opts{}, "hello **world**")
 	got := buf.String()
 	if strings.Contains(got, "**world**") {
 		t.Error("Logger should strip markdown via shared Format path")
@@ -495,7 +495,7 @@ func TestPRLink_NoNWO(t *testing.T) {
 func TestErrorWithAnalyzerDomain(t *testing.T) {
 	var buf strings.Builder
 	l := NewWithWriter(&buf)
-	l.Error(Analyzer, "Halting: %s", "stuck_loop")
+	l.Emit(Opts{Domain: Analyzer, Level: Error}, "Halting: %s", "stuck_loop")
 	out := buf.String()
 	if !strings.Contains(out, "[analyzer]") {
 		t.Errorf("expected [analyzer] tag in output, got: %q", out)

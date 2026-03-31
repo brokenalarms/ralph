@@ -80,14 +80,14 @@ func setStackHead(g git.GitOps, backend tasks.Backend, st *state.Store, logger *
 			continue
 		}
 		if !g.BranchIsAheadOfMain(branch) {
-			logger.Log("git", "Branch %s not ahead of main — skipping", branch)
+			logger.Emit(logging.Opts{Domain: logging.Git}, "Branch %s not ahead of main — skipping", branch)
 			continue
 		}
 		g.SetPrevBranch(branch)
-		logger.Log("git", "Stack head: %s (from %s)", branch, id)
+		logger.Emit(logging.Opts{Domain: logging.Git}, "Stack head: %s (from %s)", branch, id)
 		return
 	}
-	logger.Log("git", "No stacked parents — starting from %s", g.DetectDefaultBranch())
+	logger.Emit(logging.Opts{Domain: logging.Git}, "No stacked parents — starting from %s", g.DetectDefaultBranch())
 }
 
 // checkoutExistingBranch checks metadata for a branch from a previous
@@ -107,11 +107,11 @@ func checkoutExistingBranch(g git.GitOps, backend tasks.Backend, logger *logging
 				g.CheckoutRemoteBranch(storedBranch)
 				return true
 			}
-			logger.Warn("git", "Remote branch %s diverged from main — cleaning up", storedBranch)
+			logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Remote branch %s diverged from main — cleaning up", storedBranch)
 			ref, _ := backend.GetExternalRef(taskID)
 			if parsePRNumber(ref) == "" {
 				if err := g.DeleteRemoteBranchByName(storedBranch); err != nil {
-					logger.Warn("git", "Failed to delete stale remote branch: %v", err)
+					logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to delete stale remote branch: %v", err)
 				}
 			}
 		}
@@ -238,11 +238,11 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 	_ = l.git.FetchBranch(branch)
 	if l.git.RemoteBranchHasCommits(branch) {
 		if !l.git.RemoteBranchIsOnMain(branch) {
-			l.logger.Warn("git", "Remote branch %s diverged from main — abandoning stale work", branch)
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Remote branch %s diverged from main — abandoning stale work", branch)
 			_ = l.git.DeleteRemoteBranchByName(branch)
 			return false
 		}
-		l.logger.Log("git", "Remote branch %s has clean work but no PR — creating PR", branch)
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "Remote branch %s has clean work but no PR — creating PR", branch)
 		l.git.CheckoutRemoteBranch(branch)
 		prNum, err := l.pushAndCreatePR(ctx, taskID, nextTask, "")
 		if err == nil && prNum != "" {
@@ -322,14 +322,14 @@ func (l *Loop) flushUnpushedWork(ctx context.Context) {
 	taskDesc, _ := l.state.Read("last_task")
 	if l.pushPRFunc != nil || l.mergeFunc != nil {
 		if _, err := l.pushAndCreatePR(ctx, taskID, taskDesc, ""); err != nil {
-			l.logger.Warn("git", "Flush push/PR: %v", err)
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Flush push/PR: %v", err)
 			return
 		}
 		if l.cfg.AutoMerge && !l.lastTaskMerged {
 			if l.mergeFunc != nil {
 				merged, err := l.mergeFunc(ctx)
 				if err != nil {
-					l.logger.Warn("git", "Flush merge: %v", err)
+					l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Flush merge: %v", err)
 				}
 				if merged {
 					notify.TaskMerged(taskID, taskDesc)
@@ -341,7 +341,7 @@ func (l *Loop) flushUnpushedWork(ctx context.Context) {
 	}
 	merged, err := l.git.FlushUnpushedWork(ctx, taskID, taskDesc, l.cfg.AutoMerge && !l.lastTaskMerged)
 	if err != nil {
-		l.logger.Warn("git", "Flush: %v", err)
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Flush: %v", err)
 	}
 	if merged {
 		notify.TaskMerged(taskID, taskDesc)

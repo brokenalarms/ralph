@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/prompt"
 )
 
@@ -38,7 +39,7 @@ func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 func (l *Loop) buildPrompt(taskPrompt, attemptHistory, testStatus string) (string, error) {
 	beadsContext, err := l.cfg.TaskBackend.ProjectContext()
 	if err != nil {
-		l.logger.Warn("beads", "ProjectContext: %v", err)
+		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ProjectContext: %v", err)
 	}
 
 	return prompt.BuildPrompt(prompt.Vars{

@@ -52,7 +52,7 @@ const (
 )
 
 // Domain categorizes what a log message is about.
-type Domain = string
+type Domain string
 
 const (
 	Git      Domain = "git"
@@ -154,7 +154,11 @@ func (l *Logger) Emit(o Opts, format string, args ...any) {
 
 	// Append structured fields as suffixes.
 	if o.Link != nil {
-		msg += "  " + Hyperlink(o.Link.URL, o.Link.Text)
+		if o.Link.URL != "" {
+			msg += "  (" + Hyperlink(o.Link.URL, o.Link.Text) + ")"
+		} else if o.Link.Text != "" {
+			msg += "  (" + o.Link.Text + ")"
+		}
 	}
 	if o.Branch != "" {
 		msg += "  " + BranchTag(o.Branch)
@@ -181,17 +185,6 @@ func (l *Logger) write(s string) {
 	fmt.Fprint(l.logFile, s)
 }
 
-func (l *Logger) emit(color string, domain Domain, msg string) {
-	tag := Tag(color, Orch, domain)
-	content := fmt.Sprintf("%s %s", tag, msg)
-	l.write(l.Fmt.Format(content) + "\n")
-}
-
-// Log writes an info-level message. Deprecated: use Emit.
-func (l *Logger) Log(domain Domain, format string, args ...any) {
-	l.emit(Cyan, domain, fmt.Sprintf(format, args...))
-}
-
 // AgentLog writes an info-level message with [r] actor prefix.
 func (l *Logger) AgentLog(domain Domain, format string, args ...any) {
 	tag := Tag(Cyan, AgentActor, domain)
@@ -199,20 +192,6 @@ func (l *Logger) AgentLog(domain Domain, format string, args ...any) {
 	l.write(l.Fmt.Format(content) + "\n")
 }
 
-// Success writes a success message. Deprecated: use Emit with Level: Success.
-func (l *Logger) Success(domain Domain, format string, args ...any) {
-	l.emit(Green, domain, fmt.Sprintf(format, args...))
-}
-
-// Warn writes a warning. Deprecated: use Emit with Level: Warn.
-func (l *Logger) Warn(domain Domain, format string, args ...any) {
-	l.emit(Yellow, domain, fmt.Sprintf(format, args...))
-}
-
-// Error writes an error. Deprecated: use Emit with Level: Error.
-func (l *Logger) Error(domain Domain, format string, args ...any) {
-	l.emit(Red, domain, fmt.Sprintf(format, args...))
-}
 
 // Phase writes a bold blue phase header.
 func (l *Logger) Phase(format string, args ...any) {
@@ -263,7 +242,7 @@ func (l *Logger) TaskBanner(taskID, title string, priority *int) {
 	}
 	l.Separator(Magenta, label)
 	if priority != nil {
-		l.Log("", "%s %s", PriorityTag(priority), title)
+		l.Emit(Opts{}, "%s %s", PriorityTag(priority), title)
 	}
 }
 
@@ -301,7 +280,7 @@ func (l *Logger) IterationBanner(o BannerOpts) {
 		o.RunIteration, o.MaxIteration, o.Lifetime, o.Completed, o.Total, versionTag)
 
 	if o.Description != "" {
-		l.Log("beads", "  %s", o.Description)
+		l.Emit(Opts{Domain: Beads}, "  %s", o.Description)
 	}
 }
 

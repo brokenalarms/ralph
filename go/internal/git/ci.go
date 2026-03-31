@@ -161,7 +161,6 @@ type CIFetchFunc func(prNumber, repoURL string) ([]CICheckResult, error)
 // before reading CI results — preventing stale results after a push.
 func (m *Manager) AwaitCI(ctx context.Context, prNumber, repoURL, expectedSHA string) ([]CICheckResult, CIStatus, error) {
 	nwo := NWOFromRemote(repoURL)
-	pr := logging.PRLink(nwo, prNumber)
 	gh := m.gh()
 
 	if expectedSHA != "" {
@@ -173,7 +172,7 @@ func (m *Manager) AwaitCI(ctx context.Context, prNumber, repoURL, expectedSHA st
 	fetch := gh.ListChecks
 	checks, fetchErr := fetch(prNumber, repoURL)
 	if fetchErr != nil || len(checks) == 0 {
-		m.Logger.Log("ci", "CI checks not available yet for %s — waiting...", pr)
+		m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: &logging.Link{Text: "PR #" + prNumber, URL: "https://github.com/" + nwo + "/pull/" + prNumber}}, "CI checks not available yet — waiting...")
 		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
 	}
 	status := evaluateChecks(checks)
@@ -190,8 +189,8 @@ var awaitHeadSHAProgressInterval = 10 * time.Second
 
 // awaitHeadSHA polls until the PR HEAD SHA matches expectedSHA.
 func (m *Manager) awaitHeadSHA(ctx context.Context, gh GitHub, prNumber, nwo, expectedSHA string) error {
-	pr := logging.PRLink(nwo, prNumber)
-	m.Logger.Log("ci", "Waiting for %s HEAD to reach %s...", pr, expectedSHA[:min(7, len(expectedSHA))])
+	prLink := &logging.Link{Text: "PR #" + prNumber, URL: "https://github.com/" + nwo + "/pull/" + prNumber}
+	m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "Waiting for HEAD to reach %s...", expectedSHA[:min(7, len(expectedSHA))])
 	deadline := time.Now().Add(DefaultCIPollTimeout)
 	start := time.Now()
 	interval := DefaultCIPollInterval
@@ -205,13 +204,13 @@ func (m *Manager) awaitHeadSHA(ctx context.Context, gh GitHub, prNumber, nwo, ex
 		}
 		currentSHA, _ := gh.GetPRHeadSHA(m.WorkDir, prNumber)
 		if currentSHA == expectedSHA {
-			m.Logger.Log("ci", "%s HEAD confirmed at %s", pr, expectedSHA[:min(7, len(expectedSHA))])
+			m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "HEAD confirmed at %s", expectedSHA[:min(7, len(expectedSHA))])
 			return nil
 		}
 		<-ciSleep(interval)
 		interval = nextBackoff(interval)
 		if time.Since(lastProgress) >= awaitHeadSHAProgressInterval {
-			m.Logger.Log("ci", "Still waiting for %s HEAD... (%s elapsed)", pr, time.Since(start).Round(time.Second))
+			m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "Still waiting for HEAD... (%s elapsed)", time.Since(start).Round(time.Second))
 			lastProgress = time.Now()
 		}
 	}
@@ -252,19 +251,19 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL, nwo st
 		switch status {
 		case CIPassed:
 			if len(pollDurations) > 0 {
-				log.Log("ci", "CI polled %s for %s", strings.Join(pollDurations, ".."), logging.PRLink(nwo, prNumber))
+				log.Emit(logging.Opts{Domain: logging.CI, Link: &logging.Link{Text: "PR #" + prNumber, URL: "https://github.com/" + nwo + "/pull/" + prNumber}}, "CI polled %s", strings.Join(pollDurations, ".."))
 			}
 			return checks, CIPassed, nil
 		case CIFailed:
 			if len(pollDurations) > 0 {
-				log.Log("ci", "CI polled %s for %s", strings.Join(pollDurations, ".."), logging.PRLink(nwo, prNumber))
+				log.Emit(logging.Opts{Domain: logging.CI, Link: &logging.Link{Text: "PR #" + prNumber, URL: "https://github.com/" + nwo + "/pull/" + prNumber}}, "CI polled %s", strings.Join(pollDurations, ".."))
 			}
 			return checks, CIFailed, nil
 		}
 
 		if time.Now().After(deadline) {
 			if len(pollDurations) > 0 {
-				log.Log("ci", "CI polled %s for %s", strings.Join(pollDurations, ".."), logging.PRLink(nwo, prNumber))
+				log.Emit(logging.Opts{Domain: logging.CI, Link: &logging.Link{Text: "PR #" + prNumber, URL: "https://github.com/" + nwo + "/pull/" + prNumber}}, "CI polled %s", strings.Join(pollDurations, ".."))
 			}
 			return checks, CIPending, fmt.Errorf("CI checks did not complete within %v", timeout)
 		}

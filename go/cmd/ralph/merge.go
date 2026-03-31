@@ -33,13 +33,13 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		}
 	}
 	if prNumber == "" {
-		log.Error("", "Usage: ralph merge <top-pr-number>")
+		log.Emit(logging.Opts{Level: logging.Error}, "Usage: ralph merge <top-pr-number>")
 		return 1
 	}
 
 	projectDir, _ := filepath.Abs(sub.Dir)
 	if !git.IsGitRepo(projectDir) {
-		log.Error("", "Not a git repository: %s", projectDir)
+		log.Emit(logging.Opts{Level: logging.Error}, "Not a git repository: %s", projectDir)
 		return 1
 	}
 
@@ -54,7 +54,7 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 	}
 	gh := gm.GH()
 	if gh == nil || !gh.Available() {
-		log.Error("", "gh CLI not available")
+		log.Emit(logging.Opts{Level: logging.Error}, "gh CLI not available")
 		return 1
 	}
 	ctx := context.Background()
@@ -64,13 +64,13 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 	// find the bottom, then collecting upward.
 	prs := collectStack(gh, projectDir, prNumber, log)
 	if len(prs) == 0 {
-		log.Error("", "No open PRs found starting from #%s", prNumber)
+		log.Emit(logging.Opts{Level: logging.Error}, "No open PRs found starting from #%s", prNumber)
 		return 1
 	}
 
 	log.Phase("Stack: %d PRs to merge", len(prs))
 	for _, pr := range prs {
-		log.Log("git", "  PR #%s: %s", pr.number, pr.head)
+		log.Emit(logging.Opts{Domain: logging.Git}, "  PR #%s: %s", pr.number, pr.head)
 	}
 
 	return runMerge(ctx, prs, projectDir, defaultBranch, gm, bypassRules, log)
@@ -103,19 +103,19 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 		if merged > 0 {
 			// Main moved after previous merge. Rebase this branch onto
 			// the new main and force-push so CI runs against the correct base.
-			log.Log("git", "Rebasing %s onto updated %s...", pr.head, defaultBranch)
+			log.Emit(logging.Opts{Domain: logging.Git}, "Rebasing %s onto updated %s...", pr.head, defaultBranch)
 			gitRunErr(projectDir, "fetch", "origin", defaultBranch)
 			gitRunErr(projectDir, "fetch", "origin", pr.head)
 
 			// Rebase in a detached state to avoid needing a worktree.
 			gitRunErr(projectDir, "checkout", "origin/"+pr.head)
 			if rebaseErr := gitRunErr(projectDir, "rebase", "origin/"+defaultBranch); rebaseErr != nil {
-				log.Error("git", "Rebase failed for %s: %v", pr.head, rebaseErr)
+				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Rebase failed for %s: %v", pr.head, rebaseErr)
 				gitRunErr(projectDir, "rebase", "--abort")
 				return 1
 			}
 			if pushErr := gitRunErr(projectDir, "push", "--force-with-lease", "origin", "HEAD:"+pr.head); pushErr != nil {
-				log.Error("git", "Force-push failed for %s: %v", pr.head, pushErr)
+				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Force-push failed for %s: %v", pr.head, pushErr)
 				return 1
 			}
 			// Return to default branch.
@@ -126,35 +126,35 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 		expectedSHA, _ := gh.GetPRHeadSHA(projectDir, pr.number)
 
 		// Wait for CI on the current HEAD.
-		log.Log("ci", "Waiting for CI on PR #%s...", pr.number)
+		log.Emit(logging.Opts{Domain: logging.CI}, "Waiting for CI on PR #%s...", pr.number)
 		_, ciStatus, ciErr := gm.AwaitCI(ctx, pr.number, repoURL, expectedSHA)
 		if ciErr != nil {
-			log.Warn("ci", "CI polling error: %v", ciErr)
+			log.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "CI polling error: %v", ciErr)
 		}
 		if ciStatus == git.CIFailed {
-			log.Error("ci", "CI failed on PR #%s — stopping", pr.number)
+			log.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI failed on PR #%s — stopping", pr.number)
 			return 1
 		}
-		log.Success("ci", "CI passed for PR #%s", pr.number)
+		log.Emit(logging.Opts{Domain: logging.CI, Level: logging.Success}, "CI passed for PR #%s", pr.number)
 
 		// Merge.
-		log.Log("git", "Merging PR #%s...", pr.number)
+		log.Emit(logging.Opts{Domain: logging.Git}, "Merging PR #%s...", pr.number)
 		opts := git.MergeOpts{DeleteBranch: true, Admin: bypassRules}
 		result := gh.MergePR(pr.number, repoURL, opts)
 		if !result.Merged {
 			if result.Conflict {
-				log.Error("git", "PR #%s has merge conflicts — cannot merge", pr.number)
+				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "PR #%s has merge conflicts — cannot merge", pr.number)
 				return 1
 			}
 			if result.Blocked {
-				log.Warn("git", "PR #%s blocked by branch protection: %s", pr.number, result.Message)
+				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "PR #%s blocked by branch protection: %s", pr.number, result.Message)
 				return 1
 			}
-			log.Error("git", "Merge failed for PR #%s: %s", pr.number, result.Message)
+			log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Merge failed for PR #%s: %s", pr.number, result.Message)
 			return 1
 		}
 		merged++
-		log.Success("git", "PR #%s merged (%d/%d)", pr.number, merged, len(prs))
+		log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Success}, "PR #%s merged (%d/%d)", pr.number, merged, len(prs))
 
 		// Update local main to include the merge.
 		gitRunErr(projectDir, "fetch", "origin", defaultBranch)
@@ -162,7 +162,7 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 		gitRunErr(projectDir, "reset", "--hard", "origin/"+defaultBranch)
 	}
 
-	log.Success("", "Stack complete — %d PRs merged", merged)
+	log.Emit(logging.Opts{Level: logging.Success}, "Stack complete — %d PRs merged", merged)
 	return 0
 }
 
@@ -182,7 +182,7 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) []s
 	cmd.Dir = workDir
 	out, err := cmd.Output()
 	if err != nil {
-		log.Warn("git", "Failed to list PRs: %v", err)
+		log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to list PRs: %v", err)
 		return nil
 	}
 
@@ -193,7 +193,7 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) []s
 		State  string `json:"state"`
 	}
 	if jsonErr := json.Unmarshal(out, &allPRs); jsonErr != nil {
-		log.Warn("git", "Failed to parse PR list: %v", jsonErr)
+		log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to parse PR list: %v", jsonErr)
 		return nil
 	}
 
@@ -261,7 +261,7 @@ func rebaseStackAndPush(projectDir, defaultBranch, topBranch string, allBranches
 
 	// Check if worktree exists from a previous run (conflict was resolved manually).
 	if _, err := os.Stat(filepath.Join(wtDir, ".git")); err == nil {
-		log.Log("git", "Resuming from existing worktree: %s", wtDir)
+		log.Emit(logging.Opts{Domain: logging.Git}, "Resuming from existing worktree: %s", wtDir)
 	} else {
 		// Fresh worktree.
 		os.RemoveAll(wtDir)
@@ -269,7 +269,7 @@ func rebaseStackAndPush(projectDir, defaultBranch, topBranch string, allBranches
 		exec.Command("git", "-C", projectDir, "branch", "-D", tmpBranch).Run()
 
 		// Only fetch top branch + main.
-		log.Log("git", "Fetching %s and %s...", topBranch, defaultBranch)
+		log.Emit(logging.Opts{Domain: logging.Git}, "Fetching %s and %s...", topBranch, defaultBranch)
 		gitRunErr(projectDir, "fetch", "origin", defaultBranch)
 		gitRunErr(projectDir, "fetch", "origin", topBranch)
 
@@ -277,7 +277,7 @@ func rebaseStackAndPush(projectDir, defaultBranch, topBranch string, allBranches
 		cmd := exec.Command("git", "-C", projectDir, "worktree", "add", "-b", tmpBranch, wtDir, "origin/"+topBranch)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			log.Error("git", "Worktree failed: %s", string(out))
+			log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Worktree failed: %s", string(out))
 			return 1
 		}
 
@@ -287,17 +287,17 @@ func rebaseStackAndPush(projectDir, defaultBranch, topBranch string, allBranches
 		}
 
 		// Rebase with --update-refs onto main.
-		log.Log("git", "Rebasing with --update-refs onto origin/%s...", defaultBranch)
+		log.Emit(logging.Opts{Domain: logging.Git}, "Rebasing with --update-refs onto origin/%s...", defaultBranch)
 		if rebaseErr := gitRunErr(wtDir, "rebase", "--update-refs", "origin/"+defaultBranch); rebaseErr != nil {
-			log.Log("git", "Rebase conflict — attempting auto-resolve...")
+			log.Emit(logging.Opts{Domain: logging.Git}, "Rebase conflict — attempting auto-resolve...")
 			autoCmd := exec.Command("git-rebase-continue", "--auto")
 			autoCmd.Dir = wtDir
 			autoOut, autoErr := autoCmd.CombinedOutput()
 			if autoErr != nil {
-				log.Error("git", "Rebase has conflicts — resolve manually in:\n  %s", wtDir)
-				log.Log("git", "Then run: cd %s && git-rebase-continue", wtDir)
-				log.Log("git", "Then re-run: ralph merge %s", strings.Split(allBranches[len(allBranches)-1], "/")[len(strings.Split(allBranches[len(allBranches)-1], "/"))-1])
-				log.Log("", "\n%s", string(autoOut))
+				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Rebase has conflicts — resolve manually in:\n  %s", wtDir)
+				log.Emit(logging.Opts{Domain: logging.Git}, "Then run: cd %s && git-rebase-continue", wtDir)
+				log.Emit(logging.Opts{Domain: logging.Git}, "Then re-run: ralph merge %s", strings.Split(allBranches[len(allBranches)-1], "/")[len(strings.Split(allBranches[len(allBranches)-1], "/"))-1])
+				log.Emit(logging.Opts{}, "\n%s", string(autoOut))
 				return 1
 			}
 		}
@@ -309,19 +309,19 @@ func rebaseStackAndPush(projectDir, defaultBranch, topBranch string, allBranches
 	}
 
 	// Force-push all branches.
-	log.Log("git", "Force-pushing %d branches...", len(allBranches))
+	log.Emit(logging.Opts{Domain: logging.Git}, "Force-pushing %d branches...", len(allBranches))
 	for _, b := range allBranches {
-		log.Log("git", "  Pushing %s", b)
+		log.Emit(logging.Opts{Domain: logging.Git}, "  Pushing %s", b)
 		if pushErr := gitRunErr(wtDir, "push", "--force", "origin", b); pushErr != nil {
 			cleanup()
-			log.Error("git", "Push failed for %s: %v", b, pushErr)
+			log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Push failed for %s: %v", b, pushErr)
 			return 1
 		}
 	}
 
 	cleanup()
 	gm.WorkDir = projectDir
-	log.Success("git", "All branches rebased and pushed")
+	log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Success}, "All branches rebased and pushed")
 	return 0
 }
 

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 var (
@@ -256,7 +258,7 @@ func (m *Manager) PruneOrphanedWorktrees() {
 			continue
 		}
 		if m.Logger != nil {
-			m.Logger.Log("git", "Removing orphaned worktree directory: %s", dirPath)
+			m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Removing orphaned worktree directory: %s", dirPath)
 		}
 		os.RemoveAll(dirPath)
 	}
