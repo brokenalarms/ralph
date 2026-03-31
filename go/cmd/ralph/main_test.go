@@ -878,8 +878,8 @@ func TestPostReviewCleanup(t *testing.T) {
 
 	// Set up state with completed tasks
 	st := state.NewStore(ralphDir)
-	st.AddCompletedTask("ralph-abc")
-	st.AddCompletedTask("ralph-def")
+	st.AddCompletedTask("ralph-abc", true)
+	st.AddCompletedTask("ralph-def", true)
 
 	// Create reflection files
 	refDir := filepath.Join(ralphDir, "reflections")

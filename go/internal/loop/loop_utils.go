@@ -56,13 +56,14 @@ func updateStreamTask(ralphDir, taskID, nextTask string, priority *int) {
 	os.WriteFile(streamTaskFile, []byte(content), 0o644)
 }
 
-// persistCompletedTask writes a completed task ID to state.json so
-// ralph-task can verify tasks weren't falsely closed.
-func persistCompletedTask(st *state.Store, logger *logging.Logger, taskID string) {
+// persistCompletedTask writes a completed task entry to state.json so
+// ralph-task can verify tasks weren't falsely closed and setStackHead can
+// find unmerged branches for stacking.
+func persistCompletedTask(st *state.Store, logger *logging.Logger, taskID string, merged bool) {
 	if taskID == "" {
 		return
 	}
-	if err := st.AddCompletedTask(taskID); err != nil {
+	if err := st.AddCompletedTask(taskID, merged); err != nil {
 		logger.Warn("state", "AddCompletedTask: %v", err)
 	}
 }

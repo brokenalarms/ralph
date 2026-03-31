@@ -8,6 +8,14 @@ import (
 	"strconv"
 )
 
+// CompletedTaskEntry records a task that completed (or was verified) during a
+// loop run. Merged is true when the PR was successfully merged; false when the
+// work is verified but the PR is still open.
+type CompletedTaskEntry struct {
+	ID     string `json:"id"`
+	Merged bool   `json:"merged"`
+}
+
 // State represents the ralph loop state persisted in .ralph/state.json.
 // Fields use interface{} values for numeric/string flexibility — the bash
 // implementation stores numbers as JSON numbers and strings as JSON strings,
@@ -24,8 +32,8 @@ type State struct {
 	LastTestResult     string `json:"last_test_result,omitempty"`
 	LastTestOutput     string `json:"last_test_output,omitempty"`
 	LastTestTime       string `json:"last_test_time,omitempty"`
-	CompletedTasks []string `json:"completed_tasks,omitempty"`
-	SkippedTasks   []string `json:"skipped_tasks,omitempty"`
+	CompletedTasks []CompletedTaskEntry `json:"completed_tasks,omitempty"`
+	SkippedTasks   []string             `json:"skipped_tasks,omitempty"`
 
 	// Overflow captures unknown keys so round-tripping preserves them.
 	Overflow map[string]json.RawMessage `json:"-"`
@@ -70,8 +78,8 @@ func (s *State) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	// Migrate old-format completed_tasks (array of objects with "id" field)
-	// to the new format (array of ID strings) before the typed unmarshal.
+	// Migrate old-format completed_tasks (string array) to the new
+	// [{id, merged}] object format before the typed unmarshal.
 	if ct, ok := raw["completed_tasks"]; ok {
 		if migrated := migrateCompletedTasks(ct); migrated != nil {
 			rewritten, _ := json.Marshal(migrated)
@@ -280,18 +288,20 @@ func (st *Store) ReadMaxIterations(defaultVal int) int {
 }
 
 
-// AddCompletedTask appends a task ID to the completed list.
-func (st *Store) AddCompletedTask(id string) error {
+// AddCompletedTask appends a task entry to the completed list.
+// merged is true when the PR was successfully merged; false when the work is
+// verified but the PR is still open (merge pending).
+func (st *Store) AddCompletedTask(id string, merged bool) error {
 	s, err := st.Load()
 	if err != nil {
 		return err
 	}
-	s.CompletedTasks = append(s.CompletedTasks, id)
+	s.CompletedTasks = append(s.CompletedTasks, CompletedTaskEntry{ID: id, Merged: merged})
 	return st.Save(s)
 }
 
-// GetCompletedTasks returns all completed task IDs.
-func (st *Store) GetCompletedTasks() ([]string, error) {
+// GetCompletedTasks returns all completed task entries.
+func (st *Store) GetCompletedTasks() ([]CompletedTaskEntry, error) {
 	s, err := st.Load()
 	if err != nil {
 		return nil, err
@@ -411,30 +421,32 @@ func setField(s *State, key, value string) {
 	}
 }
 
-// migrateCompletedTasks converts old-format completed_tasks (array of
-// {"id":"...", ...} objects) to the new format (array of ID strings).
-// Returns nil if the data is already in the new string-array format.
-func migrateCompletedTasks(raw json.RawMessage) []string {
-	// Try new format first — if it parses as []string, no migration needed.
+// migrateCompletedTasks converts old-format completed_tasks to the new
+// [{id, merged}] object format. Returns nil if already in the new format.
+//
+// Handled formats:
+//   - New: [{id, merged}] — no migration needed
+//   - Old: ["id1", "id2"] — string array, treated as merged:true
+func migrateCompletedTasks(raw json.RawMessage) []CompletedTaskEntry {
+	// New format: array of {id, merged} objects — strings can't unmarshal as
+	// objects so this only succeeds for the new format. No migration needed.
+	var entries []CompletedTaskEntry
+	if json.Unmarshal(raw, &entries) == nil {
+		return nil
+	}
+	// Old format: string array — migrate to [{id, merged:true}].
 	var strs []string
-	if json.Unmarshal(raw, &strs) == nil {
+	if json.Unmarshal(raw, &strs) != nil {
 		return nil
 	}
-	// Old format: array of objects with "id" field.
-	var objs []struct {
-		ID string `json:"id"`
-	}
-	if json.Unmarshal(raw, &objs) != nil {
-		return nil
-	}
-	ids := make([]string, 0, len(objs))
-	for _, o := range objs {
-		if o.ID != "" {
-			ids = append(ids, o.ID)
+	result := make([]CompletedTaskEntry, 0, len(strs))
+	for _, id := range strs {
+		if id != "" {
+			result = append(result, CompletedTaskEntry{ID: id, Merged: true})
 		}
 	}
-	if len(ids) == 0 {
+	if len(result) == 0 {
 		return nil
 	}
-	return ids
+	return result
 }

@@ -850,8 +850,8 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 completed task in state.json, got %d", len(tasks))
 	}
-	if tasks[0] != "ralph-xyz" {
-		t.Errorf("completed task ID = %q, want %q", tasks[0], "ralph-xyz")
+	if tasks[0].ID != "ralph-xyz" {
+		t.Errorf("completed task ID = %q, want %q", tasks[0].ID, "ralph-xyz")
 	}
 }
 
@@ -861,7 +861,7 @@ func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	st.AddCompletedTask("ralph-old")
+	st.AddCompletedTask("ralph-old", true)
 
 	backend := &testutil.StubBackend{
 		Remaining: 0,
@@ -891,7 +891,7 @@ func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 completed task preserved, got %d", len(tasks))
 	}
-	if tasks[0] != "ralph-old" {
-		t.Errorf("completed task ID = %q, want %q (preserved from previous run)", tasks[0], "ralph-old")
+	if tasks[0].ID != "ralph-old" {
+		t.Errorf("completed task ID = %q, want %q (preserved from previous run)", tasks[0].ID, "ralph-old")
 	}
 }

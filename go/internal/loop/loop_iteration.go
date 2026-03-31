@@ -2,7 +2,6 @@ package loop
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -183,7 +182,7 @@ func (l *Loop) handlePostSignal(p postSignalParams) postSignalAction {
 				skipTask(l.cfg.TaskBackend, l.state, l.logger, p.taskID, skipReason)
 			} else {
 				l.logger.Log("beads", "Closed task %s (%s)", p.taskID, closeReason)
-				persistCompletedTask(l.state, l.logger, p.taskID)
+				persistCompletedTask(l.state, l.logger, p.taskID, false)
 			}
 		}
 		l.git.TagTaskEnd(p.taskID)
@@ -355,6 +354,7 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 	}
 
 	merged := prState == "MERGED"
+	mergeFailed := false
 
 	if prState == "OPEN" && l.cfg.AutoMerge {
 		l.git.SetLocalTestsPassed(true)
@@ -366,15 +366,12 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 			l.logger.Emit(logging.Opts{Domain: "git", Link: l.prLink(p.prNumber)}, "targets %s — merging", defaultBranch)
 			var mergeErr error
 			merged, mergeErr = l.mergeWithRetry(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
-			if errors.Is(mergeErr, git.ErrMergeBlockedByInfra) {
-				l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(p.prNumber)}, "Merge blocked by CI infra — PR stays open, closing bead")
-			} else if mergeErr != nil {
+			if mergeErr != nil {
 				l.logger.Warn("git", "Auto-merge: %v", mergeErr)
 			}
-			if !merged && !errors.Is(mergeErr, git.ErrMergeBlockedByInfra) {
-				l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(p.prNumber)}, "Merge failed — skipping task")
-				skipTask(l.cfg.TaskBackend, l.state, l.logger, p.taskID, "merge_failed")
-				return finalizePRResult{}
+			if !merged {
+				mergeFailed = true
+				l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(p.prNumber)}, "Merge pending — closing bead")
 			}
 		}
 	}
@@ -387,9 +384,17 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 		return finalizePRResult{merged: merged, closed: true}
 	}
 
-	closeReason := fmt.Sprintf("Fixed in PR #%s", p.prNumber)
-	if p.prURL != "" {
-		closeReason = fmt.Sprintf("Fixed in %s", p.prURL)
+	var closeReason string
+	if mergeFailed {
+		closeReason = fmt.Sprintf("Verified — PR #%s open, merge pending", p.prNumber)
+		if p.prURL != "" {
+			closeReason = fmt.Sprintf("Verified — %s open, merge pending", p.prURL)
+		}
+	} else {
+		closeReason = fmt.Sprintf("Fixed in PR #%s", p.prNumber)
+		if p.prURL != "" {
+			closeReason = fmt.Sprintf("Fixed in %s", p.prURL)
+		}
 	}
 	l.attempts.ClearMergeFailures(p.taskID)
 	stateReason := "ralph: PR open or stacked"
@@ -408,7 +413,7 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 		skipTask(l.cfg.TaskBackend, l.state, l.logger, p.taskID, skipReason)
 	} else {
 		l.logger.Log("beads", "Closed task %s (%s)", p.taskID, closeReason)
-		persistCompletedTask(l.state, l.logger, p.taskID)
+		persistCompletedTask(l.state, l.logger, p.taskID, merged)
 	}
 
 	return finalizePRResult{merged: merged, closed: true}
