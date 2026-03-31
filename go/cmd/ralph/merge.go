@@ -142,6 +142,14 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 		opts := git.MergeOpts{DeleteBranch: true, Admin: bypassRules}
 		result := gh.MergePR(pr.number, repoURL, opts)
 		if !result.Merged {
+			if result.Conflict {
+				log.Error("git", "PR #%s has merge conflicts — cannot merge", pr.number)
+				return 1
+			}
+			if result.Blocked {
+				log.Warn("git", "PR #%s blocked by branch protection: %s", pr.number, result.Message)
+				return 1
+			}
 			log.Error("git", "Merge failed for PR #%s: %s", pr.number, result.Message)
 			return 1
 		}
