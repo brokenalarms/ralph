@@ -520,7 +520,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 		}
 	}
 
-	taskPrompt := l.buildTaskPrompt(nextTask, taskID)
+	taskPrompt := buildTaskPrompt(nextTask, taskID, l.cfg.TaskBackend, l.cfg.Dirs.PromptsDir, l.cfg.Dirs.RalphDir)
 	testStatus := l.verifier.RunPreIterationTests(ctx)
 
 	if !l.waitForInternetFunc(ctx, l.logger) {
@@ -534,7 +534,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	rawLogPath := filepath.Join(l.cfg.Dirs.RalphDir, "raw.log")
 	logStart := fileLineCount(rawLogPath)
 
-	attemptContext := l.buildAttemptContext(taskID, nextTask)
+	attemptContext := buildAttemptContext(taskID, nextTask, l.attempts, l.cfg.Dirs.RalphDir)
 	if attemptContext != "" {
 		attemptCount := strings.Count(attemptContext, "### Attempt ")
 		reflectionCount := strings.Count(attemptContext, "## Recent learnings")
@@ -550,7 +550,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 		}
 	}
 
-	fullPrompt, err := l.buildPrompt(taskPrompt, attemptContext, testStatus)
+	fullPrompt, err := buildPrompt(taskPrompt, attemptContext, testStatus, l.cfg.TaskBackend, l.cfg.Dirs.PromptsDir, l.cfg.Dirs.ProjectDir, l.git.GetWorkDir(), l.cfg.Dirs.RalphDir, l.cfg.PlanFile, l.signals, l.logger)
 	if err != nil {
 		l.logger.Emit(logging.Opts{Level: logging.Error}, "Prompt build failed: %v", err)
 		return iterationPrompt{}, false
