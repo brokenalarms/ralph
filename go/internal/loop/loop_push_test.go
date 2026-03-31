@@ -331,6 +331,8 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 		Wait:          true,
 	}, st, gm, logger)
 	l.runner = runner
+	l.isOnlineFunc = func() bool { return true }
+	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
 
 	var pushCalls int
 	l.pushPRFunc = func(_ context.Context, taskID, taskDesc, _ string) (string, error) {
@@ -340,7 +342,7 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 
 	// Cancel after entering wait to prevent hanging.
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(2 * time.Second)
 		cancel()
 	}()
 
@@ -467,6 +469,8 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 		Wait:          true,
 	}, st, gm, logger)
 	l.runner = runner
+	l.isOnlineFunc = func() bool { return true }
+	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
 
 	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
@@ -477,7 +481,7 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 	}
 
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(2 * time.Second)
 		cancel()
 	}()
 

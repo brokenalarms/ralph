@@ -2,32 +2,6 @@
 
 Autonomous [Claude Code](https://docs.anthropic.com/en/docs/claude-code) task orchestrator. Picks up tasks from a backlog, works them one at a time in fresh-context iterations, verifies the result, and merges — unattended.
 
-## How it works
-
-Ralph runs Claude Code repeatedly, one task per iteration. Each iteration gets a task from the backlog ([bd](https://github.com/brokenalarms/bd)), works it on an isolated git worktree, runs the test suite, gets the diff reviewed by a verification LLM, and the orchestrator pushes, creates a PR, and merges. Each task produces one commit that stacks linearly on the previous — no worktree reset between tasks.
-
-```
-ralph loop
-  ├── pick task from bd backlog
-  ├── rename branch for task
-  ├── iteration → agent works, signals done
-  │     ├── run test suite
-  │     ├── LLM verification of diff against acceptance criteria
-  │     └── fix agent if rejected (up to N retries)
-  ├── orchestrator pushes, creates PR, links to bead, merges
-  └── next task (continues from previous commit)
-```
-
-## Three subcommands
-
-| Command | Purpose |
-|---|---|
-| `ralph loop` | Autonomous executor — picks tasks, writes code, verifies, merges |
-| `ralph task` | Interactive triage session — create tasks, write specs, manage backlog |
-| `ralph command` | Full four-pane tmux layout: loop + task manager + stream filter + plan |
-
-Run `ralph task` to build up a backlog, then `ralph loop` to work through it. Or run `ralph command` to get both in a single tmux session with live log streaming.
-
 ## Quick start
 
 ```bash
@@ -40,6 +14,126 @@ ralph task ~/myproject
 # Run the loop
 ralph loop --dir ~/myproject --auto-merge --evolve
 ```
+
+## How it works
+
+Ralph runs Claude Code repeatedly, one task per iteration. Each iteration gets a task from the backlog ([bd](https://github.com/brokenalarms/bd)), works it on an isolated git worktree, runs a verification pipeline, and the orchestrator pushes, creates a PR, and merges. Each task produces one commit that stacks linearly on the previous.
+
+```
+ralph loop
+  │
+  ├─ pick next task from bd backlog
+  ├─ create branch, start agent
+  │
+  │   ┌──────────────────────────────────────────┐
+  │   │  agent works → signals complete          │
+  │   │         ↓                                │
+  │   │  test suite                              │
+  │   │         ↓                                │
+  │   │  fails? → fix agent → re-test (×3)       │
+  │   │         ↓                                │
+  │   │  LLM verification against criteria       │
+  │   │         ↓                                │
+  │   │  rejected? → fix agent → re-verify (×3)  │
+  │   └──────────────────────────────────────────┘
+  │
+  │   ┌──────────────────────────────────────────┐
+  │   │  rebase onto latest base                 │
+  │   │         ↓                                │
+  │   │  squash to one commit, push              │
+  │   │         ↓                                │
+  │   │  wait for CI                             │
+  │   │         ↓                                │
+  │   │  CI fails? → fix agent → loop (×4)       │
+  │   │  base moved? → loop                      │
+  │   │         ↓                                │
+  │   │  merge PR                                │
+  │   └──────────────────────────────────────────┘
+  │
+  └─ next task (stacks on previous commit)
+```
+
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `ralph loop` | Autonomous executor — picks tasks, writes code, verifies, merges |
+| `ralph task` | Interactive triage session — create tasks, write specs, manage backlog |
+| `ralph command` | Full four-pane tmux layout: loop + task manager + stream filter + plan |
+| `ralph stop` | Halt after the current iteration |
+| `ralph feedback` | Append feedback to bead notes and restart the agent |
+| `ralph attach` | Attach to a running loop's tmux session |
+| `ralph review` | Post-mortem review of reflections, tests, and refactoring opportunities |
+| `ralph merge` | Rebase and merge a stacked PR chain bottom-up |
+
+Run `ralph task` to build up a backlog, then `ralph loop` to work through it. Or run `ralph command` to get both in a single tmux session with live log streaming.
+
+## Loop flags
+
+| Flag | Description | Default | Env var |
+|---|---|---|---|
+| `-d, --dir <path>` | Project directory | cwd | |
+| `-n, --max <N>` | Max iterations | 50 | `RALPH_MAX_ITERATIONS` |
+| `-p, --prompt <text>` | Prompt override | — | |
+| `-q, --quiet` | Suppress streaming output (log only) | — | |
+| `-v, --verbose` | Show all tool calls in stream log | — | |
+| `--calls-per-hour <N>` | Max Claude calls per hour | 80 | |
+| `--base-branch <name>` | Base branch for rebase/merge | main | `RALPH_BASE_BRANCH` |
+| `--auto-merge` | Squash-merge PRs after task completion | — | |
+| `--evolve` | Re-exec ralph between iterations to incorporate the latest version. Use with `--post-task` to rebuild before re-exec. | — | |
+| `--post-task <script>` | Run a command after each task completes, before evolve re-exec. Receives `RALPH_TASK_ID`, `RALPH_PR_NUMBER`, and `RALPH_MERGED` env vars. | — | |
+| `--wait` | Keep running after all tasks complete, polling for new work | — | |
+| `--notify` | Send macOS notification on each task completion | — | |
+| `--tmux` | Run in tmux 3-pane layout | — | |
+| `--idle-timeout <dur>` | Kill idle session after duration | 10m | `RALPH_IDLE_TIMEOUT` |
+| `--idle-timeout-progress <dur>` | Shorter idle timeout when progress detected | 5m | `RALPH_IDLE_TIMEOUT_PROGRESS` |
+| `--post-signal-timeout <dur>` | Timeout for post-signal operations | 15m | `RALPH_POST_SIGNAL_TIMEOUT` |
+| `--verify-level <level>` | Verification level for no-diff completions (`fire` or `hog`) | fire | |
+| `--verify-model <model>` | Model for LLM verification | claude-haiku-4-5 | |
+| `--verify-escalation-model <model>` | Model for verification escalation | claude-sonnet-4-5 | |
+| `--refactor` | Enable LLM-based adaptive refactoring | — | |
+
+## Architecture
+
+### Orchestrator-owned lifecycle
+
+The orchestrator owns the entire push/PR/merge lifecycle. The agent writes code and signals completion — it never pushes, creates PRs, or closes tasks. These operations are enforced via disallowed tools:
+
+- `git push` — orchestrator pushes after verification passes
+- `gh pr create` — orchestrator creates the PR and links it to the bead via `external-ref`
+- `bd close` — orchestrator closes the bead only after successful merge
+- `git checkout` / `git branch` — prevents sub-agents from interfering with branch management
+
+### Verification pipeline
+
+After the agent signals completion:
+
+1. **Test suite** — full `make test` (or equivalent) must pass. If it fails, a fix agent is spawned to address the failures (up to 3 retries).
+2. **LLM diff review** — a fast model reviews the diff against the bead's acceptance criteria. If rejected, a fix agent addresses the issues (up to 3 retries, escalating to a stronger model).
+
+### Merge pipeline
+
+After verification passes:
+
+1. **Rebase** onto the latest base branch
+2. **Squash** to a single commit and push
+3. **Wait for CI** — only required checks from branch protection are evaluated
+4. **CI fix loop** — if CI fails, a fix agent patches, force-pushes, and re-checks (up to 4 retries). If the base moved during the loop, rebase and retry.
+5. **Merge** the PR
+
+### Feedback
+
+When a user writes feedback via `ralph feedback "msg"`, the message is appended to the bead's notes via `bd update --append-notes`. The orchestrator kills the running agent and restarts it with a fresh context. The bead notes — including the feedback — are included in the new iteration's prompt. The agent must acknowledge feedback with a `FEEDBACK:` line before proceeding.
+
+### Git strategy: stacked single-commit PRs
+
+Each task produces one commit, stacked linearly on the previous. PRs target the previous task's branch (not the base), so each PR shows only its own changes.
+
+When the base moves (e.g. direct pushes), Ralph rebases onto the latest base on startup. If the rebase conflicts, the stack diverges — Ralph continues building on top without trying to auto-resolve. To resolve a diverged stack later: `git rebase --update-refs origin/main` from the stack tip.
+
+### Evolve mode
+
+With `--evolve`, ralph re-execs itself after each successful merge to pick up the latest binary. This means ralph can work on its own codebase — improvements to prompts, verification logic, or merge behavior take effect on the next iteration. Use `--post-task` to run a rebuild script before the re-exec.
 
 ## Install
 
@@ -62,154 +156,13 @@ make install  # copies to ~/.local/bin/ralph
 make test     # runs the test suite
 ```
 
-### Build scripts
-
-| Script | Purpose |
-|---|---|
-| `scripts/build-go.sh` | Local-only build — compiles the binary, no version tagging or push |
-| `scripts/rebuild-go.sh` | Full release build — bumps patch version, tags, pushes, polls for the new tag, rebuilds with exponential backoff |
-
-`rebuild-go.sh` is used by evolve mode to self-update after each merge. `build-go.sh` is for local development.
-
-## Usage
-
-```bash
-# Run against current directory
-ralph loop
-
-# Specify project and iteration cap
-ralph loop --dir ~/myproject --max 20
-
-# Auto-merge completed tasks and self-update after each merge
-ralph loop --auto-merge --evolve
-
-# Prompt override for one-off work
-ralph loop -p "Fix all failing tests"
-
-# Four-pane tmux layout
-ralph command ~/myproject
-```
-
-### Loop options
-
-| Flag | Description | Default |
-|---|---|---|
-| `-d, --dir <path>` | Project directory | cwd |
-| `-n, --max <N>` | Max iterations | 50 |
-| `-p, --prompt <text>` | Prompt override | — |
-| `-q, --quiet` | Suppress streaming output (log only) | — |
-| `--calls-per-hour <N>` | Max Claude calls per hour | 80 |
-| `--base-branch <name>` | Base branch for rebase/merge | develop |
-| `--auto-merge` | Squash-merge PRs after task completion | — |
-| `--evolve` | Self-improving: pull, rebuild, restart after each merge | — |
-| `--wait` | Keep running after all tasks complete, polling for new work | — |
-| `--tmux` | Run in tmux 3-pane layout | — |
-| `--refactor-every <N>` | Refactor every N iterations | 0 |
-| `--idle-timeout <dur>` | Kill idle session after duration | 10m |
-
-### Controlling a running loop
-
-```bash
-ralph stop              # halt after the current iteration
-ralph feedback "msg"    # queue feedback for the next iteration
-```
-
-## Architecture
-
-See [docs/specs/architecture.md](docs/specs/architecture.md) for the full target-state architecture, package structure, and key interfaces.
-
-### Orchestrator-owned lifecycle
-
-The orchestrator owns the entire push/PR/merge lifecycle. The agent writes code and signals completion — it never pushes, creates PRs, or closes tasks. These operations are enforced via disallowed tools:
-
-- `git push` — orchestrator pushes after verification passes
-- `gh pr create` — orchestrator creates the PR and links it to the bead via `external-ref` (full PR URL)
-- `bd close` — orchestrator closes the bead only after successful merge
-- `git checkout` / `git branch` — prevents sub-agents from interfering with ralph's branch management
-
-### Agent constraints
-
-The agent's execution prompt makes explicit:
-- **ISSUE/FIX diagnosis format is mandatory** — every code change must be preceded by an ISSUE/FIX block explaining what's wrong and how the fix addresses it
-- **Never skip failing tests** — tests that fail must be fixed, not deleted or skipped
-- **Agent cannot push or create PRs** — the orchestrator handles all git remote operations
-
-### Feedback
-
-When a user writes feedback via `ralph feedback "msg"`, the feedback file is written to `.ralph/feedback`. The orchestrator kills the running agent and restarts it with a fresh context that includes the feedback. The agent must acknowledge feedback with a `FEEDBACK:` line before proceeding.
-
-### Verification pipeline
-
-After the agent signals completion:
-
-1. **Test suite** — full `make test` (or equivalent) must pass
-2. **LLM diff review** — a fast model reviews the diff against the bead's acceptance criteria. UI/UX concerns are flagged but left to the agent's discretion.
-3. **Fix agent** — if rejected, a fix agent is spawned to address the issues
-4. **Escalation** — unresolved rejections escalate to a smarter model
-5. **Skip after repeated failures** — tasks that fail verification N times are skipped
-
-### CI evaluation
-
-CI check polling only fails on **required checks** fetched from the branch protection API. Non-required checks (Netlify deploy previews, optional linters, etc.) are ignored. This prevents flaky optional checks from blocking the merge pipeline.
-
-### EnsureUpToDate
-
-All rebase operations go through a single `EnsureUpToDate` path that tells a story of escalating retry strategies:
-
-1. Stash agent work, fetch, attempt rebase
-2. On conflict, force-reset and replay agent commits via cherry-pick
-3. On unresolvable conflict, auto-recreate the worktree from the base branch
-
-This replaced multiple ad-hoc rebase paths (`RebaseOntoDefaultBranch`, inline rebase in merge, etc.) with one composable function.
-
-### PR-to-bead linking
-
-When the orchestrator creates a PR, it stores the full PR URL as an `external-ref` on the bead. The close reason also includes the PR URL when available. PR numbers are parsed from both URL format and legacy `gh-123` format.
-
-## Git strategy: stacked commits
-
-Each task produces one commit, stacked linearly on the previous. PRs target the previous task's branch (not main), so each PR shows only its own changes.
-
-When main moves (e.g. direct pushes), Ralph rebases onto latest main on startup. If the rebase conflicts, the stack diverges — Ralph continues building on top without trying to auto-resolve. Subsequent tasks are unaffected since they build on each other, not on main.
-
-To resolve a diverged stack later: `git rebase --update-refs origin/main` from the stack tip. Fix conflicts once at the first conflicting commit — all downstream commits replay cleanly. An automated conflict-resolution agent is planned.
-
-For rapid iteration, run the loop against `main`. For a safer workflow, use `--base-branch develop` to accumulate changes on develop and merge to main when ready.
-
-See [docs/specs/stacked-prs.md](docs/specs/stacked-prs.md) for the full design.
-
-## Evolve mode
-
-With `--auto-merge --evolve`, ralph enters a self-improving cycle: after each successful squash-merge, it pulls the updated base branch, rebuilds itself from source (`scripts/rebuild-go.sh`), and restarts the loop with the new binary. This means ralph can work on its own codebase — improvements to prompts, verification logic, or merge behavior take effect on the next iteration.
-
-## Git workflow
-
-Ralph creates a git worktree per run so the agent works on an isolated branch while the main branch stays clean. The workflow is opinionated:
-
-1. **Fresh branch per task** — each task starts on a new branch off the base
-2. **Squash-merge** — all commits for a task are squash-merged into the base branch
-3. **Reset** — after merge, the worktree is reset to the updated base branch
-
-Branch names follow the pattern `ralph/<project>/<seq>-<beadID>-<slug>`.
-
-## Task management
+## Task backend
 
 Ralph uses [bd](https://github.com/brokenalarms/bd) as its task backend. The loop reads from the bd backlog, claims tasks, and closes them after successful merge. Use `ralph task` for interactive triage:
 
 ```bash
-ralph task ~/myproject    # opens an interactive Claude session for task management
+ralph task ~/myproject
 ```
-
-## Signal protocol
-
-The agent communicates with the orchestrator via signal files in `.ralph/`:
-
-| File | Direction | Purpose |
-|---|---|---|
-| `.signal_current_task` | agent → loop | Written when agent picks a task |
-| `.signal_complete` | agent → loop | Written when agent finishes — triggers verification |
-| `feedback` | user → agent | Kills running agent, restart includes feedback in context |
-| `stop` | user → loop | Halts after current iteration |
 
 ## .ralph directory
 
@@ -226,7 +179,7 @@ Ralph stores all runtime state in `.ralph/` inside the project directory. Add it
   stop                # create to halt gracefully
 ```
 
-## Four-pane tmux layout
+## Tmux layout
 
 `ralph command` starts a tmux session with four panes:
 
