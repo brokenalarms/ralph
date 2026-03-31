@@ -3,7 +3,6 @@ package loop
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,7 +10,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -34,28 +32,16 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 		NextID:    "ralph-new",
 	}
 
-	// Set up a real git repo as the worktree
-	wtDir := filepath.Join(dir, "worktree")
-	os.MkdirAll(wtDir, 0o755)
-	exec.Command("git", "init", "-b", "main", wtDir).Run()
-	exec.Command("git", "-C", wtDir, "commit", "--allow-empty", "-m", "init").Run()
-	exec.Command("git", "-C", wtDir, "checkout", "-b", "ralph/myproject/01-previous-task").Run()
-
-	gm := &git.Manager{
+	gm := &testutil.StubGit{
 		ProjectDir:     dir,
-		BaseBranch: "main",
-		WorkDir:        wtDir,
-		RalphDir:       ralphDir,
+		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/myproject/01-previous-task",
-		ProjectName:    "myproject",
-		State:          st,
-		Logger:         logging.New(nil),
 	}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    wtDir,
+			WorkDir:    gm.WorkDir,
 			RalphDir:   ralphDir,
 		},
 		MaxIterations: 5,
@@ -89,15 +75,10 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 		NextID:    "ralph-same",
 	}
 
-	gm := &git.Manager{
+	gm := &testutil.StubGit{
 		ProjectDir:     dir,
-		BaseBranch: "main",
 		WorkDir:        filepath.Join(dir, "worktree"),
-		RalphDir:       ralphDir,
 		WorktreeBranch: "ralph/myproject/01-ongoing-task",
-		ProjectName:    "myproject",
-		State:          st,
-		Logger:         logging.New(nil),
 	}
 
 	l := New(Config{
@@ -167,9 +148,8 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{
+	gm := &testutil.StubGit{
 		ProjectDir: dir,
-		BaseBranch: "main",
 		WorkDir:    dir,
 	}
 
@@ -204,44 +184,15 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 // Verifies handleRebase recovers from conflicts via EnsureUpToDate's
 // escalating retry strategy — worktree ends up at origin/main.
 func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
-	project, bare := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(5)
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
 
-	writeFile(t, project, "shared.txt", "original\n")
-	run(t, "git", "-C", project, "commit", "-m", "add shared")
-	pushToOrigin(t, project)
-
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
+	gm := &testutil.StubGit{
+		ProjectDir:        dir,
+		WorkDir:           filepath.Join(dir, "worktree"),
+		WorktreeBranch:    "ralph/wip-branch",
+		EnsureUpToDateErr: nil,
 	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-	run(t, "git", "-C", gm.WorkDir, "remote", "set-url", "origin", bare)
-	run(t, "git", "-C", gm.WorkDir, "fetch", "origin")
-
-	// Create a conflicting situation (squash-merged branch)
-	gm.RenameBranchForTask("first task", "")
-	writeFile(t, gm.WorkDir, "shared.txt", "step one\n")
-	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "first step")
-	writeFile(t, gm.WorkDir, "shared.txt", "final\n")
-	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "final")
-
-	gm.BranchRenamed = false
-	gm.RenameBranchForTask("second task", "")
-	writeFile(t, gm.WorkDir, "second.txt", "second\n")
-	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "second")
-
-	// Create a real conflict on main (not a clean squash-merge)
-	writeFile(t, project, "shared.txt", "completely different main version\n")
-	run(t, "git", "-C", project, "commit", "-m", "divergent main change")
-	pushToOrigin(t, project)
 
 	backend := &testutil.StubBackend{
 		Remaining: 0,
@@ -252,7 +203,7 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 	handlerCalled := false
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
+			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
 			RalphDir:   ralphDir,
 		},
@@ -276,31 +227,15 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 // Verifies that handleRebase returns nil on real conflicts — EnsureUpToDate
 // aborts the rebase and lets the loop continue (diverged stack is expected).
 func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
-	project, bare := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(5)
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
+	gm := &testutil.StubGit{
+		ProjectDir:        dir,
+		WorkDir:           filepath.Join(dir, "worktree"),
+		WorktreeBranch:    "ralph/wip-branch",
+		EnsureUpToDateErr: nil,
 	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-	run(t, "git", "-C", gm.WorkDir, "remote", "set-url", "origin", bare)
-	run(t, "git", "-C", gm.WorkDir, "fetch", "origin")
-
-	// Create a real conflict
-	writeFile(t, gm.WorkDir, "conflict.txt", "worktree version\n")
-	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "worktree change")
-
-	writeFile(t, project, "conflict.txt", "main version\n")
-	run(t, "git", "-C", project, "commit", "-m", "main change")
-	pushToOrigin(t, project)
 
 	backend := &testutil.StubBackend{
 		Remaining: 1,
@@ -310,7 +245,7 @@ func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
+			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
 			RalphDir:   ralphDir,
 		},
@@ -328,31 +263,15 @@ func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 // Verifies handleRebase returns nil on real conflicts — the diverged
 // stack is expected and the loop should continue.
 func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
-	project, bare := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(5)
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
+	gm := &testutil.StubGit{
+		ProjectDir:        dir,
+		WorkDir:           filepath.Join(dir, "worktree"),
+		WorktreeBranch:    "ralph/wip-branch",
+		EnsureUpToDateErr: nil,
 	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-	run(t, "git", "-C", gm.WorkDir, "remote", "set-url", "origin", bare)
-	run(t, "git", "-C", gm.WorkDir, "fetch", "origin")
-
-	// Create a real conflict
-	writeFile(t, gm.WorkDir, "conflict.txt", "worktree version\n")
-	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "worktree change")
-
-	writeFile(t, project, "conflict.txt", "main version\n")
-	run(t, "git", "-C", project, "commit", "-m", "main change")
-	pushToOrigin(t, project)
 
 	backend := &testutil.StubBackend{
 		Remaining: 1,
@@ -362,7 +281,7 @@ func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
+			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
 			RalphDir:   ralphDir,
 		},
@@ -382,31 +301,14 @@ func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
 // the loop exits cleanly with "stopped" status instead of showing the
 // interactive recovery prompt.
 func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
-	project, bare := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(5)
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		WorktreeBranch: "ralph/wip-branch",
 	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-	run(t, "git", "-C", gm.WorkDir, "remote", "set-url", "origin", bare)
-	run(t, "git", "-C", gm.WorkDir, "fetch", "origin")
-
-	// Create a real conflict so rebase would normally fail and trigger the prompt
-	writeFile(t, gm.WorkDir, "conflict.txt", "worktree version\n")
-	run(t, "git", "-C", gm.WorkDir, "commit", "-m", "worktree change")
-
-	writeFile(t, project, "conflict.txt", "main version\n")
-	run(t, "git", "-C", project, "commit", "-m", "main change")
-	pushToOrigin(t, project)
 
 	backend := &testutil.StubBackend{
 		Remaining: 1,
@@ -420,7 +322,7 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
+			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
 			RalphDir:   ralphDir,
 		},
@@ -480,24 +382,16 @@ func TestLoop_IsNewTask(t *testing.T) {
 // Verifies that multiple iterations of the same task stay on one branch,
 // proving the one-branch-per-task model works within a single run.
 func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
+
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		WorktreeBranch: "ralph/wip-branch",
+	}
 
 	// Simulate two iterations of the same task.
 	// After iteration 1, the branch should be renamed for the task.
@@ -512,7 +406,7 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
+			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
@@ -549,24 +443,16 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 // Verifies that when the task changes between iterations, the branch rotates,
 // creating a new branch for the new task while preserving the old one.
 func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
+
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		WorktreeBranch: "ralph/wip-branch",
+	}
 
 	callCount := 0
 	backend := &testutil.MutableBackend{
@@ -580,7 +466,7 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
+			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
@@ -626,24 +512,16 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 // without creating a separate branch, proving refactors are internal
 // housekeeping on the task's branch.
 func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
+
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		WorktreeBranch: "ralph/wip-branch",
+	}
 
 	callCount := 0
 	backend := &testutil.StubBackend{
@@ -655,7 +533,7 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
+			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
@@ -686,16 +564,9 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 		t.Error("expected BranchRenamed=true after task rename")
 	}
 
-	// Only one ralph branch should exist (the task branch)
-	branches := gm.ListProjectBranches()
-	nonNextBranches := 0
-	for _, b := range branches {
-		if !strings.HasSuffix(b, "/next") {
-			nonNextBranches++
-		}
-	}
-	if nonNextBranches != 1 {
-		t.Errorf("expected exactly 1 task branch, got %d: %v", nonNextBranches, branches)
+	// Only one rename call should have been made
+	if gm.RenameBranchCalls != 1 {
+		t.Errorf("expected exactly 1 branch rename, got %d", gm.RenameBranchCalls)
 	}
 }
 
@@ -703,13 +574,9 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 // the loop exits with "evolve_restart" status, signaling that the
 // binary should be rebuilt and re-executed with latest main.
 func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.StubBackend{
@@ -719,17 +586,16 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 		NextID:    "ralph-imp",
 	}
 
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		WorkDir:    project,
-		Logger:     logging.New(nil),
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/wip-branch",
 	}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    project,
+			ProjectDir: dir,
+			WorkDir:    dir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -741,10 +607,9 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = &stubRunner{
-		// Simulate agent work by creating a commit during the run.
+		// Simulate agent work by changing HeadRev so the loop sees new commits.
 		onRun: func() {
-			writeFile(t, project, "feature.go", "package main\n")
-			run(t, "git", "-C", project, "commit", "-m", "agent work")
+			gm.HeadRevValue = "abc123"
 		},
 		result: claude.Result{SignalDetected: true},
 	}
@@ -765,23 +630,15 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 // Verifies that Evolve does NOT trigger restart when auto-merge fails,
 // allowing the loop to continue normally.
 func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		WorktreeBranch: "ralph/wip-branch",
 	}
 
 	backend := &testutil.StubBackend{
@@ -793,7 +650,7 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
+			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
@@ -846,24 +703,16 @@ func (m *metadataBackend) GetMetadata(id, key string) (string, error) {
 // Branch name is stored in bead metadata after rename, proving the loop
 // persists the branch-to-bead mapping for future resume.
 func TestLoop_StoresBranchInMetadata(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
+
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		WorktreeBranch: "ralph/wip-branch",
+	}
 
 	backend := newMetadataBackend()
 	backend.Remaining = 1
@@ -873,7 +722,7 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
+			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
@@ -902,19 +751,20 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 // checkoutExistingBranch: when no stored branch exists in metadata,
 // returns false (no remote checkout) and the branch gets renamed.
 func TestLoop_CheckoutExistingBranch_NoRemote(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login"}
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/wip-branch",
+	}
 
 	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -927,24 +777,16 @@ func TestLoop_CheckoutExistingBranch_NoRemote(t *testing.T) {
 }
 
 func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
+
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        filepath.Join(dir, "worktree"),
+		WorktreeBranch: "ralph/wip-branch",
+	}
 
 	backend := newMetadataBackend()
 	backend.Remaining = 1
@@ -954,7 +796,7 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
+			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,

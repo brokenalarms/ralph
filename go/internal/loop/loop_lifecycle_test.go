@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -28,11 +27,7 @@ func TestLoop_AllTasksComplete(t *testing.T) {
 		Total:     3,
 	}
 
-	gm := &git.Manager{
-		ProjectDir: dir,
-		BaseBranch: "main",
-		WorkDir:    dir,
-	}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
 
@@ -70,11 +65,7 @@ func TestLoop_NoTasksError(t *testing.T) {
 		Total:     0,
 	}
 
-	gm := &git.Manager{
-		ProjectDir: dir,
-		BaseBranch: "main",
-		WorkDir:    dir,
-	}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
 
@@ -115,11 +106,7 @@ func TestLoop_StopFileDetection(t *testing.T) {
 		NextTask:  "Some task",
 	}
 
-	gm := &git.Manager{
-		ProjectDir: dir,
-		BaseBranch: "main",
-		WorkDir:    dir,
-	}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
 
@@ -162,11 +149,7 @@ func TestLoop_ContextCancellation(t *testing.T) {
 		NextTask:  "Some task",
 	}
 
-	gm := &git.Manager{
-		ProjectDir: dir,
-		BaseBranch: "main",
-		WorkDir:    dir,
-	}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
 
@@ -207,11 +190,7 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 		Total:     1,
 	}
 
-	gm := &git.Manager{
-		ProjectDir: dir,
-		BaseBranch: "main",
-		WorkDir:    dir,
-	}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
 
@@ -328,7 +307,7 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	var (
 		callsMu sync.Mutex
@@ -415,7 +394,7 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -459,7 +438,7 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -503,7 +482,7 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -585,7 +564,7 @@ func TestLoop_LifecycleStates(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -646,7 +625,7 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -717,11 +696,7 @@ func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{
-		ProjectDir: dir,
-		BaseBranch: "main",
-		WorkDir:    dir,
-	}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{

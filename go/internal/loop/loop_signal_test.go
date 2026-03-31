@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verify"
@@ -126,7 +125,7 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 		NextID:    "ralph-test1",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
@@ -195,7 +194,7 @@ func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		NextID:    "ralph-llm1",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
 	l := New(Config{
@@ -255,7 +254,7 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 		NextID:    "ralph-fb1",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
@@ -333,7 +332,7 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 		NextID:    "ralph-tr1",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
 	fixAttempts := 0

@@ -18,13 +18,13 @@ import (
 // Derives the stack head from completed beads, then rebases onto it
 // (or the default branch if no stack exists).
 func (l *Loop) initRun(ctx context.Context) error {
-	if l.git.WorktreeBranch == "" || l.git.WorkDir == l.git.ProjectDir {
+	if l.git.GetWorktreeBranch() == "" || l.git.GetWorkDir() == l.git.GetProjectDir() {
 		return nil
 	}
 	l.setStackHead()
 	// No stack head = all previous work merged. Reset to default branch
 	// so we don't carry stale commits that would conflict on rebase.
-	if l.git.PrevBranch == "" {
+	if l.git.GetPrevBranch() == "" {
 		l.git.ResetToDefaultBranch()
 	}
 	if err := l.handleRebase(ctx); err != nil {
@@ -37,12 +37,12 @@ func (l *Loop) initRun(ctx context.Context) error {
 	}
 	nextInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 	if !isNewTask(l.state, nextInfo.ID, nextInfo.Title) {
-		l.git.BranchRenamed = true
+		l.git.SetBranchRenamed(true)
 	} else {
 		l.git.PrepareForNextTask()
 	}
-	l.logger.Log("git", "Branch: %s", l.git.WorktreeBranch)
-	writeRunBranch(l.cfg.Dirs.RalphDir, l.git.WorktreeBranch)
+	l.logger.Log("git", "Branch: %s", l.git.GetWorktreeBranch())
+	writeRunBranch(l.cfg.Dirs.RalphDir, l.git.GetWorktreeBranch())
 	return nil
 }
 
@@ -176,7 +176,7 @@ func (l *Loop) logIterationBanner(runIteration, maxIter, iteration int, taskID, 
 
 	if runIteration > 1 {
 		if l.cfg.Verbose {
-			health.Log(l.logger, health.Collect(l.cfg.Dirs.RalphDir, l.git.WorkDir))
+			health.Log(l.logger, health.Collect(l.cfg.Dirs.RalphDir, l.git.GetWorkDir()))
 		}
 		l.logger.DashedSeparator(logging.Yellow)
 	}

@@ -30,7 +30,7 @@ func (l *Loop) maybeRefactor() error {
 		return nil
 	}
 
-	archSpec := readArchSpec(l.git.WorkDir)
+	archSpec := readArchSpec(l.git.GetWorkDir())
 
 	shouldRefactor, err := l.llmShouldRefactor(context.Background(), archSpec, recentFiles)
 	if err != nil {
@@ -46,7 +46,7 @@ func (l *Loop) maybeRefactor() error {
 
 	refactorPrompt, err := prompt.BuildRefactorPrompt(prompt.Vars{
 		PromptsDir:       l.cfg.Dirs.PromptsDir,
-		WorkDir:          l.git.WorkDir,
+		WorkDir:          l.git.GetWorkDir(),
 		SignalToken:      l.signals.Complete,
 		CurrentTaskToken: l.signals.CurrentTask,
 		AllCompleteToken: l.signals.AllComplete,
@@ -66,7 +66,7 @@ func (l *Loop) maybeRefactor() error {
 
 	rawLogPath := filepath.Join(l.cfg.Dirs.RalphDir, "raw.log")
 	_, err = l.runner.Run(claude.RunConfig{
-		WorkDir:      l.git.WorkDir,
+		WorkDir:      l.git.GetWorkDir(),
 		RalphDir:     l.cfg.Dirs.RalphDir,
 		Prompt:       refactorPrompt,
 		RawLog:       rawLogPath,
@@ -114,7 +114,7 @@ func (l *Loop) llmShouldRefactor(ctx context.Context, archSpec, recentFiles stri
 	prompt += "Consider: code duplication, unclear naming, files growing too large, architectural drift from the spec, dead code.\n"
 	prompt += "Reply with exactly YES or NO on the first line, followed by a brief explanation."
 
-	response, err := queryFn(ctx, l.git.WorkDir, prompt, "")
+	response, err := queryFn(ctx, l.git.GetWorkDir(), prompt, "")
 	if err != nil {
 		return false, err
 	}

@@ -12,9 +12,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -53,7 +51,7 @@ func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 			var logBuf strings.Builder
 			logger := logging.New(&logBuf)
 
-			gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+			gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 			l := New(Config{
 				Dirs: workctx.WorkContext{
@@ -97,7 +95,7 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 		Description:  "Auth tokens are expiring too early due to clock skew",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -159,7 +157,7 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 		BackendLabel: "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -239,11 +237,7 @@ func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{
-		ProjectDir: dir,
-		BaseBranch: "main",
-		WorkDir:    dir,
-	}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
@@ -301,11 +295,7 @@ func TestLoop_TaskBannerOnNewTask(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{
-		ProjectDir: dir,
-		BaseBranch: "main",
-		WorkDir:    dir,
-	}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
@@ -369,7 +359,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	var logBuf bytes.Buffer
 
 	l := New(Config{
@@ -446,24 +436,12 @@ func (r *rateLimitStubRunner) InjectMessage(_ string) error { return nil }
 // Health dashboard is logged between iterations in verbose mode so operators
 // can detect process leaks, stale signal files, and growing state.json.
 func TestLoop_HealthDashboardLoggedBetweenIterations(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, WorktreeBranch: "ralph/wip-test"}
 
 	// Create a signal file so the health snapshot has something to report.
 	os.WriteFile(filepath.Join(ralphDir, ".signal_current_task"), []byte("test task"), 0o644)
@@ -483,8 +461,8 @@ func TestLoop_HealthDashboardLoggedBetweenIterations(t *testing.T) {
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    gm.WorkDir,
+			ProjectDir: dir,
+			WorkDir:    dir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -524,24 +502,12 @@ func TestLoop_HealthDashboardLoggedBetweenIterations(t *testing.T) {
 // Health dashboard is suppressed in default (non-verbose) mode to reduce
 // diagnostic noise — only shown when --verbose is set.
 func TestLoop_HealthDashboardHiddenByDefault(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, WorktreeBranch: "ralph/wip-test"}
 
 	os.WriteFile(filepath.Join(ralphDir, ".signal_current_task"), []byte("test task"), 0o644)
 
@@ -560,8 +526,8 @@ func TestLoop_HealthDashboardHiddenByDefault(t *testing.T) {
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    gm.WorkDir,
+			ProjectDir: dir,
+			WorkDir:    dir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -618,11 +584,7 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{
-		ProjectDir: dir,
-		BaseBranch: "main",
-		WorkDir:    dir,
-	}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
@@ -657,7 +619,7 @@ func newHandleRunResultLoop(t *testing.T) (*Loop, string) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
 	l := New(Config{

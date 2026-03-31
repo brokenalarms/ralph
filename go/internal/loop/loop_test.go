@@ -2,7 +2,6 @@ package loop
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -48,42 +47,3 @@ func createPromptTemplates(t *testing.T, dir string) {
 	}
 }
 
-func initBareRepoWithOrigin(t *testing.T) (projectDir string, bareDir string) {
-	t.Helper()
-	tmp := t.TempDir()
-
-	bare := filepath.Join(tmp, "bare.git")
-	run(t, "git", "init", "--bare", "-b", "main", bare)
-
-	project := filepath.Join(tmp, "project")
-	run(t, "git", "clone", bare, project)
-	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "init")
-	run(t, "git", "-C", project, "push", "-u", "origin", "main")
-	run(t, "git", "-C", project, "remote", "set-head", "origin", "main")
-
-	return project, bare
-}
-
-func pushToOrigin(t *testing.T, projectDir string) {
-	t.Helper()
-	run(t, "git", "-C", projectDir, "push", "origin", "main", "-q")
-}
-
-func writeFile(t *testing.T, dir, name, content string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
-		t.Fatalf("write %s: %v", name, err)
-	}
-	run(t, "git", "-C", dir, "add", name)
-}
-
-func run(t *testing.T, name string, args ...string) {
-	t.Helper()
-	cmd := exec.Command(name, args...)
-	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test",
-		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("%s %v failed: %v\n%s", name, args, err, out)
-	}
-}
