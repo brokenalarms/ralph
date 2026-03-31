@@ -9,8 +9,122 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
+	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
+
+// branchParams bundles the dependencies needed by prepareBranch and its helpers.
+type branchParams struct {
+	git      git.GitOps
+	backend  tasks.Backend
+	state    *state.Store
+	logger   *logging.Logger
+	ralphDir string
+}
+
+// prepareBranch is the package-level implementation of branch setup for a task.
+// Called by the Loop method wrapper which passes its fields as a branchParams.
+func prepareBranch(ctx context.Context, p branchParams, taskID, title string) error {
+	p.git.PrepareForNextTask()
+
+	if p.git.GetWorktreeBranch() != "" && p.git.GetWorkDir() != p.git.GetProjectDir() {
+		setStackHead(p.git, p.backend, p.state, p.logger)
+		if p.git.GetPrevBranch() == "" {
+			p.git.ResetToDefaultBranch()
+		}
+		if err := p.git.EnsureUpToDate(ctx); err != nil {
+			return err
+		}
+	} else {
+		setStackHead(p.git, p.backend, p.state, p.logger)
+	}
+
+	checkoutExistingBranch(p.git, p.backend, p.logger, taskID, title)
+	writeRunBranch(p.ralphDir, p.git.GetWorktreeBranch())
+	return nil
+}
+
+// setStackHead finds the most recent branch that's cleanly ahead of main
+// and sets it as the stack base for the next task. When gh is available,
+// fetches only branches with open PRs (one API call). Otherwise falls
+// back to checking all completed task branches.
+func setStackHead(g git.GitOps, backend tasks.Backend, st *state.Store, logger *logging.Logger) {
+	g.SetPrevBranch("")
+
+	completedTasks, err := st.GetCompletedTasks()
+	if err != nil || len(completedTasks) == 0 {
+		return
+	}
+
+	openBranches, err := g.ListOpenPRBranches()
+	if err != nil || len(openBranches) == 0 {
+		return
+	}
+	openSet := make(map[string]bool, len(openBranches))
+	for _, b := range openBranches {
+		openSet[b] = true
+	}
+
+	for i := len(completedTasks) - 1; i >= 0; i-- {
+		id := completedTasks[i].ID
+		if id == "" {
+			continue
+		}
+		branch, _ := backend.GetMetadata(id, "branch")
+		if branch == "" || !openSet[branch] {
+			continue
+		}
+		if err := g.FetchBranch(branch); err != nil {
+			continue
+		}
+		if !g.RemoteBranchHasCommits(branch) {
+			continue
+		}
+		if !g.BranchIsAheadOfMain(branch) {
+			logger.Log("git", "Branch %s not ahead of main — skipping", branch)
+			continue
+		}
+		g.SetPrevBranch(branch)
+		logger.Log("git", "Stack head: %s (from %s)", branch, id)
+		return
+	}
+	logger.Log("git", "No stacked parents — starting from %s", g.DetectDefaultBranch())
+}
+
+// checkoutExistingBranch checks metadata for a branch from a previous
+// iteration. If the remote has that branch with work, it checks it out.
+// Otherwise, it renames the current branch for the task and stores the
+// new name in metadata. Returns true if an existing remote branch was
+// checked out.
+func checkoutExistingBranch(g git.GitOps, backend tasks.Backend, logger *logging.Logger, taskID, nextTask string) bool {
+	storedBranch := ""
+	if taskID != "" {
+		storedBranch, _ = backend.GetMetadata(taskID, "branch")
+	}
+	if storedBranch != "" {
+		_ = g.FetchBranch(storedBranch)
+		if g.RemoteBranchHasCommits(storedBranch) {
+			if g.RemoteBranchIsOnMain(storedBranch) {
+				g.CheckoutRemoteBranch(storedBranch)
+				return true
+			}
+			logger.Warn("git", "Remote branch %s diverged from main — cleaning up", storedBranch)
+			ref, _ := backend.GetExternalRef(taskID)
+			if parsePRNumber(ref) == "" {
+				if err := g.DeleteRemoteBranchByName(storedBranch); err != nil {
+					logger.Warn("git", "Failed to delete stale remote branch: %v", err)
+				}
+			}
+		}
+		g.RenameBranchTo(storedBranch)
+		return false
+	}
+	g.RenameBranchForTask(nextTask, taskID)
+	if taskID != "" && g.GetWorktreeBranch() != "" && strings.Contains(g.GetWorktreeBranch(), taskID) {
+		_ = backend.SetMetadata(taskID, "branch", g.GetWorktreeBranch())
+	}
+	return false
+}
 
 // prLink builds a logging.Link for a PR number using the remote URL.
 func (l *Loop) prLink(prNumber string) *logging.Link {
@@ -27,32 +141,14 @@ func (l *Loop) handleRebase(ctx context.Context) error {
 	return l.git.EnsureUpToDate(ctx)
 }
 
-// prepareBranch consolidates all branch setup for a task: find stack head,
-// reset to correct base if no stack, rebase onto latest, and checkout or
-// rename the branch for this task. Called once per task change by Run().
-// Also called by initRun for the first iteration on resume.
-//
-// isFirstIteration controls whether PrepareForNextTask is called (skipped
-// on first iteration since initRun handles the resume-vs-new-task logic).
 func (l *Loop) prepareBranch(ctx context.Context, taskID, nextTask string) error {
-	l.git.PrepareForNextTask()
-
-	// Rebase onto latest base when running in a worktree.
-	if l.git.GetWorktreeBranch() != "" && l.git.GetWorkDir() != l.git.GetProjectDir() {
-		l.setStackHead()
-		if l.git.GetPrevBranch() == "" {
-			l.git.ResetToDefaultBranch()
-		}
-		if err := l.handleRebase(ctx); err != nil {
-			return err
-		}
-	} else {
-		l.setStackHead()
-	}
-
-	l.checkoutExistingBranch(taskID, nextTask)
-	writeRunBranch(l.cfg.Dirs.RalphDir, l.git.GetWorktreeBranch())
-	return nil
+	return prepareBranch(ctx, branchParams{
+		git:      l.git,
+		backend:  l.cfg.TaskBackend,
+		state:    l.state,
+		logger:   l.logger,
+		ralphDir: l.cfg.Dirs.RalphDir,
+	}, taskID, nextTask)
 }
 
 // mergeWithRetry delegates to git.Manager.MergeWithRetry, passing a CI fix
@@ -254,56 +350,13 @@ func (l *Loop) flushUnpushedWork(ctx context.Context) {
 	}
 }
 
-// setStackHead finds the most recent branch that's cleanly ahead of main
-// and sets it as the stack base for the next task. When gh is available,
-// fetches only branches with open PRs (one API call). Otherwise falls
-// back to checking all completed task branches.
 func (l *Loop) setStackHead() {
-	l.git.SetPrevBranch("")
-
-	tasks, err := l.state.GetCompletedTasks()
-	if err != nil || len(tasks) == 0 {
-		return
-	}
-
-	// Only consider branches with open PRs. One gh API call replaces
-	// fetching every completed task's branch individually.
-	openBranches, err := l.git.ListOpenPRBranches()
-	if err != nil || len(openBranches) == 0 {
-		return
-	}
-	openSet := make(map[string]bool, len(openBranches))
-	for _, b := range openBranches {
-		openSet[b] = true
-	}
-
-	for i := len(tasks) - 1; i >= 0; i-- {
-		id := tasks[i].ID
-		if id == "" {
-			continue
-		}
-		branch, _ := l.cfg.TaskBackend.GetMetadata(id, "branch")
-		if branch == "" || !openSet[branch] {
-			continue
-		}
-		if err := l.git.FetchBranch(branch); err != nil {
-			continue
-		}
-		if !l.git.RemoteBranchHasCommits(branch) {
-			continue
-		}
-		if !l.git.BranchIsAheadOfMain(branch) {
-			l.logger.Log("git", "Branch %s not ahead of main — skipping", branch)
-			continue
-		}
-		l.git.SetPrevBranch(branch)
-		l.logger.Log("git", "Stack head: %s (from %s)", branch, id)
-		return
-	}
-	l.logger.Log("git", "No stacked parents — starting from %s", l.git.DetectDefaultBranch())
+	setStackHead(l.git, l.cfg.TaskBackend, l.state, l.logger)
 }
 
-
+func (l *Loop) checkoutExistingBranch(taskID, nextTask string) bool {
+	return checkoutExistingBranch(l.git, l.cfg.TaskBackend, l.logger, taskID, nextTask)
+}
 
 // prURL builds the canonical PR URL from the remote URL and PR number.
 // Always returns a full URL; never returns a "gh-" prefixed string.
