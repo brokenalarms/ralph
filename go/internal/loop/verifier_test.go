@@ -380,7 +380,9 @@ func TestVerifier_TryFixCI_NoSignal_ReturnsFalse(t *testing.T) {
 
 // TryFixCI filters out optional/deploy checks and only passes required
 // check names to the fix agent prompt.
-func TestVerifier_TryFixCI_OnlyPassesRequiredChecks(t *testing.T) {
+// TryFixCI passes all failed checks to the fix agent since gh pr checks
+// does not expose isRequired.
+func TestVerifier_TryFixCI_PassesAllFailedChecks(t *testing.T) {
 	var capturedPrompt string
 	v := newTestVerifier(t, func(v *Verifier) {
 		ciTemplate := "CHECKS: {{FAILED_CHECKS}}\nLOG: {{CI_LOG}}\nSIGNAL: {{SIGNAL_COMPLETE}}\nTASK: {{TASK_TITLE}}"
@@ -397,9 +399,8 @@ func TestVerifier_TryFixCI_OnlyPassesRequiredChecks(t *testing.T) {
 	ciErr := &git.CIFailureError{
 		PRNumber: "42",
 		Failures: []git.CICheckResult{
-			{Name: "typecheck", State: "FAILURE", Bucket: "fail", IsRequired: true},
-			{Name: "deploy/netlify", State: "FAILURE", Bucket: "fail", IsRequired: false},
-			{Name: "Header rules", State: "FAILURE", Bucket: "fail", IsRequired: false},
+			{Name: "typecheck", State: "FAILURE", Bucket: "fail"},
+			{Name: "deploy/netlify", State: "FAILURE", Bucket: "fail"},
 		},
 	}
 
@@ -409,19 +410,15 @@ func TestVerifier_TryFixCI_OnlyPassesRequiredChecks(t *testing.T) {
 		t.Fatal("expected TryFixCI to return true when fix agent signals")
 	}
 	if !strings.Contains(capturedPrompt, "typecheck") {
-		t.Errorf("prompt should contain required check name, got: %s", capturedPrompt)
+		t.Errorf("prompt should contain typecheck, got: %s", capturedPrompt)
 	}
-	if strings.Contains(capturedPrompt, "deploy/netlify") {
-		t.Errorf("prompt should NOT contain optional check names, got: %s", capturedPrompt)
-	}
-	if strings.Contains(capturedPrompt, "Header rules") {
-		t.Errorf("prompt should NOT contain optional check names, got: %s", capturedPrompt)
+	if !strings.Contains(capturedPrompt, "deploy/netlify") {
+		t.Errorf("prompt should contain deploy/netlify, got: %s", capturedPrompt)
 	}
 }
 
-// TryFixCI returns false without spawning a fix agent when only optional
-// checks failed — there's nothing the fix agent can fix.
-func TestVerifier_TryFixCI_OnlyOptionalFailed_SkipsAgent(t *testing.T) {
+// TryFixCI returns false when no checks have bucket=fail — nothing to fix.
+func TestVerifier_TryFixCI_NoneFailedSkipsAgent(t *testing.T) {
 	agentSpawned := false
 	v := newTestVerifier(t, func(v *Verifier) {
 		v.deps.NewRunner = func() claudeRunner {
@@ -433,17 +430,17 @@ func TestVerifier_TryFixCI_OnlyOptionalFailed_SkipsAgent(t *testing.T) {
 	ciErr := &git.CIFailureError{
 		PRNumber: "42",
 		Failures: []git.CICheckResult{
-			{Name: "deploy/netlify", State: "FAILURE", Bucket: "fail", IsRequired: false},
-			{Name: "Pages changed", State: "FAILURE", Bucket: "fail", IsRequired: false},
+			{Name: "deploy/netlify", State: "SUCCESS", Bucket: "pass"},
+			{Name: "Pages changed", State: "SUCCESS", Bucket: "pass"},
 		},
 	}
 
 	result := v.TryFixCI(context.Background(), "deploy log", ciErr, "Build app", t.TempDir(), filepath.Join(t.TempDir(), "raw.log"))
 
 	if result {
-		t.Fatal("expected TryFixCI to return false when only optional checks failed")
+		t.Fatal("expected TryFixCI to return false when no checks failed")
 	}
 	if agentSpawned {
-		t.Fatal("fix agent should not be spawned when only optional checks failed")
+		t.Fatal("fix agent should not be spawned when no checks failed")
 	}
 }

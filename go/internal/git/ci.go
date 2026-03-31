@@ -94,16 +94,17 @@ func failedChecks(checks []CICheckResult) []CICheckResult {
 	return failed
 }
 
-// requiredFailedChecks returns only the required checks that failed.
-// Optional/deploy checks are excluded so fix agents don't waste time on them.
+// RequiredFailedChecks returns failed checks that the fix agent should address.
+// Currently returns all failed checks — gh pr checks does not expose an
+// isRequired field, so we treat every check as required.
 func RequiredFailedChecks(checks []CICheckResult) []CICheckResult {
-	var required []CICheckResult
+	var failed []CICheckResult
 	for _, c := range checks {
-		if c.IsRequired {
-			required = append(required, c)
+		if c.Bucket == "fail" {
+			failed = append(failed, c)
 		}
 	}
-	return required
+	return failed
 }
 
 // ErrStackedPRWaiting is returned when a PR targets a non-main branch

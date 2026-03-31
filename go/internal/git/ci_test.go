@@ -131,32 +131,30 @@ func TestFailedChecks_FiltersCorrectly(t *testing.T) {
 
 // RequiredFailedChecks returns only failures marked as required by branch
 // protection, filtering out optional/deploy checks that fix agents can't fix.
-func TestRequiredFailedChecks_FiltersToRequiredOnly(t *testing.T) {
+// RequiredFailedChecks returns all checks with bucket=fail since gh pr checks
+// does not expose isRequired.
+func TestRequiredFailedChecks_ReturnsAllFailed(t *testing.T) {
 	checks := []CICheckResult{
-		{Name: "test", State: "FAILURE", Bucket: "fail", IsRequired: true},
-		{Name: "lint", State: "FAILURE", Bucket: "fail", IsRequired: true},
-		{Name: "deploy/netlify", State: "FAILURE", Bucket: "fail", IsRequired: false},
-		{Name: "Pages changed", State: "FAILURE", Bucket: "fail", IsRequired: false},
+		{Name: "test", State: "FAILURE", Bucket: "fail"},
+		{Name: "lint", State: "FAILURE", Bucket: "fail"},
+		{Name: "deploy/netlify", State: "SUCCESS", Bucket: "pass"},
+		{Name: "Pages changed", State: "FAILURE", Bucket: "fail"},
 	}
 	required := RequiredFailedChecks(checks)
-	if len(required) != 2 {
-		t.Fatalf("expected 2 required failed checks, got %d", len(required))
-	}
-	if required[0].Name != "test" || required[1].Name != "lint" {
-		t.Errorf("unexpected required checks: %v", required)
+	if len(required) != 3 {
+		t.Fatalf("expected 3 failed checks, got %d", len(required))
 	}
 }
 
-// RequiredFailedChecks returns empty when all failures are optional,
-// so the caller knows not to spawn a fix agent.
-func TestRequiredFailedChecks_AllOptional_ReturnsEmpty(t *testing.T) {
+// RequiredFailedChecks returns empty when no checks have bucket=fail.
+func TestRequiredFailedChecks_NoneFailedReturnsEmpty(t *testing.T) {
 	checks := []CICheckResult{
-		{Name: "deploy/netlify", State: "FAILURE", Bucket: "fail", IsRequired: false},
-		{Name: "Header rules", State: "FAILURE", Bucket: "fail", IsRequired: false},
+		{Name: "deploy/netlify", State: "SUCCESS", Bucket: "pass"},
+		{Name: "Header rules", State: "SUCCESS", Bucket: "pass"},
 	}
 	required := RequiredFailedChecks(checks)
 	if len(required) != 0 {
-		t.Fatalf("expected 0 required checks, got %d", len(required))
+		t.Fatalf("expected 0 failed checks, got %d", len(required))
 	}
 }
 
