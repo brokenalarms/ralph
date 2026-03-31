@@ -184,87 +184,23 @@ func (l *Loop) Run(ctx context.Context) error {
 	os.Remove(filepath.Join(l.cfg.Dirs.RalphDir, ".completed-tasks"))
 
 	for {
-		maxIter := l.state.ReadMaxIterations(l.cfg.MaxIterations)
-
-		if runIteration >= maxIter {
-			l.logger.Warn("", "Max iterations (%d) reached", maxIter)
-			l.state.Write("status", "max_iterations_reached")
+		// ── Task selection ──
+		task, action := l.selectNextTask(ctx, runIteration)
+		if action == actionDone {
 			break
-		}
-
-		if err := ctx.Err(); err != nil {
-			l.logger.Warn("", "Interrupted — stopping")
-			l.state.Write("status", "stopped")
-			return nil
-		}
-
-		if checkStopFile(l.cfg.Dirs.RalphDir) {
-			l.logger.Warn("", "Stop file detected - halting")
-			l.state.Write("status", "stopped")
-			break
-		}
-
-		hasRemaining, err := l.cfg.TaskBackend.HasRemaining()
-		if err != nil {
-			l.logger.Warn("beads", "Task check error: %v", err)
-		}
-		if !hasRemaining {
-			if runIteration == 0 {
-				hasTasks, _ := l.cfg.TaskBackend.HasTasks()
-				if !hasTasks && !l.cfg.Wait {
-					l.logger.Error("beads", "No tasks found — run ralph task to create tasks")
-					l.state.Write("status", "error")
-					break
-				}
-			}
-			if runIteration > 0 {
-				l.flushUnpushedWork(ctx)
-			}
-			if !l.cfg.Wait {
-				l.logger.Success("beads", "All tasks complete!")
-				l.state.Write("status", "completed")
-				break
-			}
-			if resumed := l.waitForTasks(ctx); !resumed {
-				break
-			}
-			continue
 		}
 
 		runIteration++
 		iteration++
 		l.lastTaskMerged = false
 
-		if lastID, _ := l.state.Read("last_task_id"); lastID != "" {
-			l.cfg.TaskBackend.SetResumeTaskID(lastID)
-		}
-		taskInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
-		taskID, nextTask := taskInfo.ID, taskInfo.Title
-		if taskID == "" && nextTask == "" {
-			l.logger.Warn("beads", "Task backend returned empty — no task to run")
-			if l.cfg.Wait {
-				runIteration--
-				iteration--
-				if resumed := l.waitForTasks(ctx); !resumed {
-					break
-				}
-				continue
-			}
-			break
-		}
-		if l.wasCompletedThisSession(taskID) {
-			l.logger.Warn("beads", "Task %s already completed this session — skipping", taskID)
-			skipTask(l.cfg.TaskBackend, l.state, l.logger, taskID, "already_completed_this_session")
-			continue
-		}
-
-		taskChanged := isNewTask(l.state, taskID, nextTask)
-		if taskChanged {
+		if task.changed {
 			l.verifier.ResetCounters()
 		}
 
-		if taskChanged || !l.git.IsBranchRenamed() {
-			if err := l.prepareBranch(ctx, taskID, nextTask); err != nil {
+		// ── Branch setup ──
+		if task.changed || !l.git.IsBranchRenamed() {
+			if err := l.prepareBranch(ctx, task.id, task.title); err != nil {
 				if ctx.Err() != nil {
 					l.state.Write("status", "stopped")
 				} else {
@@ -282,24 +218,26 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.cfg.OnIterationStart()
 		}
 
-		l.logIterationBanner(runIteration, maxIter, iteration, taskID, nextTask, taskChanged, taskInfo)
+		l.logIterationBanner(runIteration, l.state.ReadMaxIterations(l.cfg.MaxIterations), iteration, task.id, task.title, task.changed, task.info)
 		touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
 
 		l.state.Write("iteration", strconv.Itoa(iteration))
 		l.state.Write("status", "running")
-		l.state.Write("last_task", nextTask)
-		l.state.Write("last_task_id", taskID)
-		l.git.TagTaskStart(taskID)
-		updateStreamTask(l.cfg.Dirs.RalphDir, taskID, nextTask, taskInfo.Priority)
+		l.state.Write("last_task", task.title)
+		l.state.Write("last_task_id", task.id)
+		l.git.TagTaskStart(task.id)
+		updateStreamTask(l.cfg.Dirs.RalphDir, task.id, task.title, task.info.Priority)
 
-		if resumed := l.resumeViaPR(ctx, taskID, nextTask); resumed {
-			l.git.TagTaskEnd(taskID)
+		// ── Resume check: does a PR already exist for this task? ──
+		if resumed := l.resumeViaPR(ctx, task.id, task.title); resumed {
+			l.git.TagTaskEnd(task.id)
 			runIteration++
 			iteration++
 			continue
 		}
 
-		prep, ok := l.prepareAndBuildPrompt(ctx, taskID, nextTask)
+		// ── Build prompt and run agent ──
+		prep, ok := l.prepareAndBuildPrompt(ctx, task.id, task.title)
 		if !ok {
 			break
 		}
@@ -310,7 +248,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			WorkDir:             prep.workDir,
 			RalphDir:            l.cfg.Dirs.RalphDir,
 			Prompt:              prep.fullPrompt,
-			TaskID:              taskID,
+			TaskID:              task.id,
 			RawLog:              prep.rawLogPath,
 			LogFile:             filepath.Join(l.cfg.Dirs.RalphDir, "loop.log"),
 			Quiet:               l.cfg.Quiet,
@@ -328,24 +266,26 @@ func (l *Loop) Run(ctx context.Context) error {
 					headBefore: prep.headBefore,
 					workDir:    prep.workDir,
 					rawLogPath: prep.rawLogPath,
-					taskID:     taskID,
-					nextTask:   nextTask,
+					taskID:     task.id,
+					nextTask:   task.title,
 				})
 			},
 			FeedbackFile: filepath.Join(l.cfg.Dirs.RalphDir, "feedback"),
 		})
 
-		action := l.handleRunResult(ctx, result, runErr, taskID, nextTask, prep.headBefore, &runIteration, &iteration)
-		if action == resultRetry {
+		// ── Handle retryable failures (offline, rate limit, idle, feedback) ──
+		runAction := l.handleRunResult(ctx, result, runErr, task.id, task.title, prep.headBefore, &runIteration, &iteration)
+		if runAction == resultRetry {
 			continue
 		}
-		if action == resultBreak {
+		if runAction == resultBreak {
 			break
 		}
 		elapsed := time.Since(taskStart)
 		l.limiter.Increment()
 
-		diffStat, halt := l.processRunOutcome(result, elapsed, runIteration, prep, taskID, nextTask)
+		// ── Post-completion: analyze, verify, push, merge, close ──
+		diffStat, halt := l.processRunOutcome(result, elapsed, runIteration, prep, task.id, task.title)
 		if halt {
 			return nil
 		}
@@ -357,8 +297,8 @@ func (l *Loop) Run(ctx context.Context) error {
 				headBefore: prep.headBefore,
 				workDir:    prep.workDir,
 				rawLogPath: prep.rawLogPath,
-				taskID:     taskID,
-				nextTask:   nextTask,
+				taskID:     task.id,
+				nextTask:   task.title,
 				diffStat:   diffStat,
 			}, &runIteration, &iteration)
 
@@ -370,7 +310,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			}
 		}
 
-		l.git.TagTaskEnd(taskID)
+		l.git.TagTaskEnd(task.id)
 	}
 
 	return nil
