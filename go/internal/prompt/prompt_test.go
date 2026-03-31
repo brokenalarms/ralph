@@ -938,6 +938,27 @@ func TestTaskManagerPrompt_ReferenceBehaviorsNotLines(t *testing.T) {
 	}
 }
 
+// Proves: the reflection template includes an attempt-handoff status line
+// so subsequent attempts can immediately see what was done, what remains,
+// and whether tests pass — without re-verifying from scratch.
+func TestReflection_AttemptHandoffStatus(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "reflection.md"))
+	if err != nil {
+		t.Fatalf("reading reflection.md: %v", err)
+	}
+	s := string(content)
+
+	if !strings.Contains(s, "what was done") {
+		t.Error("reflection.md should instruct noting what was done")
+	}
+	if !strings.Contains(s, "what remains") {
+		t.Error("reflection.md should instruct noting what remains")
+	}
+	if !strings.Contains(s, "tests pass") {
+		t.Error("reflection.md should instruct noting whether tests pass")
+	}
+}
+
 // Proves: BuildReviewPrompt assembles the shared quality standards,
 // refactor style guide, and reflections into a post-mortem review prompt.
 func TestBuildReviewPrompt(t *testing.T) {
