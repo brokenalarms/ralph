@@ -704,4 +704,26 @@ func (m *Manager) PostMergeUpdateMain() {
 			_ = m.State.Write("branch_renamed", "false")
 		}
 	}
+
+	// Delete the stale local task branch. The squash-merge already deleted the
+	// remote branch; this removes the local ref so branches don't accumulate.
+	if m.WorktreeBranch != "" && m.WorktreeBranch != WipBranchName() {
+		oldBranch := m.WorktreeBranch
+		currentBranch := m.gitOutput(m.WorkDir, "symbolic-ref", "--short", "HEAD")
+		if currentBranch == oldBranch {
+			// Worktree is checked out on the branch we're about to delete.
+			// Move to ralph/next so git allows the deletion.
+			nextBranch := normalizeBranch("next")
+			m.gitCmd(m.WorkDir, "checkout", "-b", nextBranch)
+			m.WorktreeBranch = nextBranch
+			m.BranchRenamed = false
+			if m.State != nil {
+				_ = m.State.Write("worktree_branch", nextBranch)
+				_ = m.State.Write("branch_renamed", "false")
+			}
+		}
+		if err := m.gitCmdErr(m.ProjectDir, "branch", "-D", oldBranch); err == nil {
+			m.Logger.Log("git", "Deleted local branch %s", oldBranch)
+		}
+	}
 }
