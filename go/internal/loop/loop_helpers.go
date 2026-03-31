@@ -106,6 +106,14 @@ func (l *Loop) pollForTasks() (found, done bool) {
 	return false, false
 }
 
+// beginIteration records that a task iteration is starting.
+func (l *Loop) beginIteration(task taskContext, iteration int) {
+	touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
+	l.state.BeginIteration(task.id, task.title, iteration)
+	l.git.TagTaskStart(task.id)
+	updateStreamTask(l.cfg.Dirs.RalphDir, task.id, task.title, task.info.Priority)
+}
+
 func (l *Loop) waitForRate(ctx context.Context) bool {
 	if l.limiter.Allowed() {
 		return true

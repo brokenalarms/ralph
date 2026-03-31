@@ -195,6 +195,16 @@ func (st *Store) Write(key, value string) error {
 	return st.Save(s)
 }
 
+// BeginIteration records that a new iteration is starting for the given task.
+func (st *Store) BeginIteration(taskID, taskTitle string, iteration int) {
+	s, _ := st.Load()
+	s.Iteration = iteration
+	s.Status = "running"
+	s.LastTask = taskTitle
+	setField(&s, "last_task_id", taskID)
+	st.Save(s)
+}
+
 // Init initializes state with config values. Creates the file if missing.
 func (st *Store) Init(maxIterations int) error {
 	s, _ := st.Load()

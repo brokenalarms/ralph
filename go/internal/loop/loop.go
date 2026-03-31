@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/agent"
@@ -219,14 +218,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		l.logIterationBanner(runIteration, l.state.ReadMaxIterations(l.cfg.MaxIterations), iteration, task)
-		touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
-
-		l.state.Write("iteration", strconv.Itoa(iteration))
-		l.state.Write("status", "running")
-		l.state.Write("last_task", task.title)
-		l.state.Write("last_task_id", task.id)
-		l.git.TagTaskStart(task.id)
-		updateStreamTask(l.cfg.Dirs.RalphDir, task.id, task.title, task.info.Priority)
+		l.beginIteration(task, iteration)
 
 		// ── Resume check: does a PR already exist for this task? ──
 		if resumed := l.resumeViaPR(ctx, task.id, task.title); resumed {
