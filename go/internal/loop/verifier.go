@@ -249,7 +249,6 @@ func (v *Verifier) VerifyCompletion(ctx context.Context, workDir, headBefore str
 	now := time.Now().Format(time.RFC3339)
 	if !testResult.Passed {
 		v.deps.State.Write("last_test_result", "fail")
-		v.deps.State.Write("last_test_output", testResult.Details)
 		v.deps.State.Write("last_test_time", now)
 		if testResult.Details != "" {
 			v.deps.Logger.Error("test", "Test output:\n%s", testResult.Details)
@@ -258,7 +257,6 @@ func (v *Verifier) VerifyCompletion(ctx context.Context, workDir, headBefore str
 	}
 
 	v.deps.State.Write("last_test_result", "pass")
-	v.deps.State.Write("last_test_output", "")
 	v.deps.State.Write("last_test_time", now)
 	return true, ""
 }
@@ -276,14 +274,12 @@ func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 
 	if result.Passed {
 		v.deps.State.Write("last_test_result", "pass")
-		v.deps.State.Write("last_test_output", "")
 		v.deps.State.Write("last_test_time", now)
 		v.deps.Logger.Success("test", "Pre-iteration tests: all passing")
 		return "\n- Test suite status: all tests passing as of start."
 	}
 
 	v.deps.State.Write("last_test_result", "fail")
-	v.deps.State.Write("last_test_output", result.Details)
 	v.deps.State.Write("last_test_time", now)
 	v.deps.Logger.Warn("test", "Pre-iteration tests: failures detected")
 	msg := "\n- Test suite status: some tests are FAILING. Fix them before your task. If the tests pass when you run them, they were fixed externally — proceed with your task."
