@@ -32,8 +32,7 @@ type VerifierConfig struct {
 // VerifierDeps holds the injected dependencies for the Verifier.
 type VerifierDeps struct {
 	Logger      *logging.Logger
-	Git         verify.GitQuerier
-	GitHub      git.GitHub
+	Git         git.GitOps
 	State       *state.Store
 	TaskBackend tasks.Backend
 	Runner      func() claudeRunner // returns the current main runner (for StopStreaming before fix agents)
@@ -164,7 +163,7 @@ func (v *Verifier) verifyWithFixLoop(p signalParams, beadDesc, beadAcceptance st
 			BeadTitle:       p.nextTask,
 			BeadDescription: beadDesc,
 			BeadAcceptance:  beadAcceptance,
-			GitHub:          v.deps.GitHub,
+			PRDiff:          v.deps.Git.PRDiffForTask(p.taskID),
 			QueryFn:         v.deps.QueryFn,
 			Model:           model,
 		})

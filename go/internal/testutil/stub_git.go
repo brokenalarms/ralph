@@ -82,10 +82,6 @@ func (s *StubGit) IsBranchRenamed() bool      { return s.BranchRenamed }
 func (s *StubGit) SetBranchRenamed(v bool)    { s.BranchRenamed = v }
 func (s *StubGit) SetLocalTestsPassed(v bool) {}
 
-func (s *StubGit) GH() git.GitHub {
-	return s.GitHubStub
-}
-
 func (s *StubGit) FindOpenPRForBranch(branch string) (string, error) {
 	if s.OpenPR != "" {
 		return s.OpenPR, s.OpenPRErr
@@ -132,6 +128,7 @@ func (s *StubGit) FindPRForBranch(branch string) (string, string, string, error)
 	}
 	return "", "", "", nil
 }
+func (s *StubGit) PRDiffForTask(_ string) string { return "" }
 func (s *StubGit) PRChainIsHealthy(prNumber string) (bool, string) {
 	if s.PRHealthMsg != "" {
 		return s.PRHealthy, s.PRHealthMsg

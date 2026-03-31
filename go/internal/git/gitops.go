@@ -23,9 +23,7 @@ type GitOps interface {
 	GetPRBase(prNumber string) string
 	FindPRForBranch(branch string) (number, title, url string, err error)
 	PRChainIsHealthy(prNumber string) (bool, string)
-
-	// Deprecated — remove once all callers migrate to typed PR methods above.
-	GH() GitHub
+	PRDiffForTask(taskID string) string
 
 	// CI bypass flag.
 	SetLocalTestsPassed(v bool)
@@ -168,4 +166,21 @@ func (m *Manager) PRChainIsHealthy(prNumber string) (bool, string) {
 		return false, fmt.Sprintf("branch %s already merged into main", headBranch)
 	}
 	return true, ""
+}
+
+// PRDiffForTask searches for a PR matching the task ID and returns its diff.
+func (m *Manager) PRDiffForTask(taskID string) string {
+	gh := m.gh()
+	if !gh.Available() {
+		return ""
+	}
+	prNumber, err := gh.SearchPR(m.WorkDir, taskID)
+	if err != nil || prNumber == "" {
+		return ""
+	}
+	diff, err := gh.PRDiff(m.WorkDir, prNumber)
+	if err != nil {
+		return ""
+	}
+	return diff
 }

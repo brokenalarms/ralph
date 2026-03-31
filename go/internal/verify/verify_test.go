@@ -441,19 +441,12 @@ func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
 	}
 }
 
-// LLMVerifyPR delegates PR lookup to the GitHub interface rather than
-// shelling out to gh directly, proving git/gh exec.Command calls are
-// routed through the git module.
-func TestLLMVerifyPR_UsesGitHubInterface(t *testing.T) {
+// LLMVerifyPR uses the pre-fetched PRDiff field when available,
+// preferring it over the iteration diff.
+func TestLLMVerifyPR_UsesPRDiffField(t *testing.T) {
 	dir := setupGitRepo(t)
 	gq := newQuerier(dir)
 	head := gq.HeadRev()
-
-	stub := &git.StubGitHub{
-		IsAvailable:    true,
-		SearchPRNumber: "99",
-		PRDiffOutput:   "+new line\n",
-	}
 
 	result := LLMVerifyPR(VerifyOpts{
 		Ctx:             context.Background(),
@@ -464,15 +457,8 @@ func TestLLMVerifyPR_UsesGitHubInterface(t *testing.T) {
 		HeadBefore:      head,
 		BeadTitle:       "test",
 		BeadDescription: "test desc",
-		GitHub:          stub,
+		PRDiff:          "+new line from PR\n",
 	})
-
-	if !stub.SearchCalled {
-		t.Error("expected SearchPR to be called via GitHub interface")
-	}
-	if !stub.PRDiffCalled {
-		t.Error("expected PRDiff to be called via GitHub interface")
-	}
 
 	// LLM call will fail (no claude binary in test), so we expect pass with skip reason
 	_ = result

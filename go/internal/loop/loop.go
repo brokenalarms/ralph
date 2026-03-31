@@ -123,7 +123,6 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 	}, VerifierDeps{
 		Logger:      logger,
 		Git:         gm,
-		GitHub:      gm.GH(),
 		State:       st,
 		TaskBackend: cfg.TaskBackend,
 		Runner:      func() claudeRunner { return l.runner },
