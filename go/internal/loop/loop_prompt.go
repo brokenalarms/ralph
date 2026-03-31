@@ -6,27 +6,30 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/brokenalarms/ralph/internal/attempts"
+	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/prompt"
+	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
 const maxCrossTaskReflections = 3
 
-func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
+func buildTaskPrompt(nextTask, taskID string, backend tasks.Backend, promptsDir, ralphDir string) string {
 	if taskID == "" {
 		return fmt.Sprintf("Complete this task: %s", nextTask)
 	}
-	if l.cfg.TaskBackend != nil {
-		full, err := l.cfg.TaskBackend.GetFullContext(taskID)
+	if backend != nil {
+		full, err := backend.GetFullContext(taskID)
 		if err == nil && full != "" {
-			tmplPath := filepath.Join(l.cfg.Dirs.PromptsDir, "task-assignment.md")
+			tmplPath := filepath.Join(promptsDir, "task-assignment.md")
 			if data, readErr := os.ReadFile(tmplPath); readErr == nil {
 				p := string(data)
 				p = strings.ReplaceAll(p, "{{TASK_ID}}", taskID)
 				p = strings.ReplaceAll(p, "{{TASK_CONTEXT}}", full)
 
-				screenshots := prompt.ScreenshotsForBead(l.cfg.Dirs.RalphDir, taskID)
+				screenshots := prompt.ScreenshotsForBead(ralphDir, taskID)
 				p += prompt.FormatScreenshotContext(screenshots)
 
 				return p
@@ -36,21 +39,21 @@ func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 	return fmt.Sprintf("Complete this task (bd id: %s): %s", taskID, nextTask)
 }
 
-func (l *Loop) buildPrompt(taskPrompt, attemptHistory, testStatus string) (string, error) {
-	beadsContext, err := l.cfg.TaskBackend.ProjectContext()
+func buildPrompt(taskPrompt, attemptHistory, testStatus string, backend tasks.Backend, promptsDir, projectDir, workDir, ralphDir, planFile string, signals claude.SignalPaths, logger *logging.Logger) (string, error) {
+	beadsContext, err := backend.ProjectContext()
 	if err != nil {
-		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ProjectContext: %v", err)
+		logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ProjectContext: %v", err)
 	}
 
 	return prompt.BuildPrompt(prompt.Vars{
-		PromptsDir:       l.cfg.Dirs.PromptsDir,
-		ProjectDir:       l.cfg.Dirs.ProjectDir,
-		WorkDir:          l.git.GetWorkDir(),
-		RalphDir:         l.cfg.Dirs.RalphDir,
-		PlanFile:         l.cfg.PlanFile,
-		SignalToken:      l.signals.Complete,
-		CurrentTaskToken: l.signals.CurrentTask,
-		AllCompleteToken: l.signals.AllComplete,
+		PromptsDir:       promptsDir,
+		ProjectDir:       projectDir,
+		WorkDir:          workDir,
+		RalphDir:         ralphDir,
+		PlanFile:         planFile,
+		SignalToken:      signals.Complete,
+		CurrentTaskToken: signals.CurrentTask,
+		AllCompleteToken: signals.AllComplete,
 		TaskPrompt:       taskPrompt,
 		AttemptHistory:   attemptHistory,
 		TestStatus:       testStatus,
@@ -62,16 +65,16 @@ func (l *Loop) buildPrompt(taskPrompt, attemptHistory, testStatus string) (strin
 // buildAttemptContext assembles attempt history, reflections, and cross-task
 // learnings into a single block for the prompt. Returns empty string if no
 // prior context exists.
-func (l *Loop) buildAttemptContext(taskID, taskName string) string {
+func buildAttemptContext(taskID, taskName string, tracker *attempts.Tracker, ralphDir string) string {
 	var parts []string
 
 	// Same-task attempt history (retries of this specific task)
-	if history := l.attempts.Read(taskID, taskName); history != "" {
+	if history := tracker.Read(taskID, taskName); history != "" {
 		parts = append(parts, "## Previous attempts on this task\n"+history)
 	}
 
 	// Same-task reflection
-	if reflection := readReflection(l.cfg.Dirs.RalphDir, taskID, taskName); reflection != "" {
+	if reflection := readReflection(ralphDir, taskID, taskName); reflection != "" {
 		parts = append(parts, "### Previous reflection\n"+reflection)
 	}
 
@@ -81,7 +84,7 @@ func (l *Loop) buildAttemptContext(taskID, taskName string) string {
 		excludeKey = git.Slugify(taskName)
 	}
 
-	reflections := l.attempts.RecentReflections(excludeKey, maxCrossTaskReflections)
+	reflections := tracker.RecentReflections(excludeKey, maxCrossTaskReflections)
 	if len(reflections) > 0 {
 		var crossParts []string
 		for _, r := range reflections {

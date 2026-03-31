@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
@@ -337,20 +338,8 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 // Verifies that reflections from previous iterations are included in the
 // attempt context fed to the prompt.
 func TestLoop_IncludesReflectionInAttemptContext(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
-
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
-			RalphDir:   ralphDir,
-		},
-		CallsPerHour: 80,
-		TaskBackend:  &testutil.StubBackend{BackendLabel: "beads"},
-	}, st, gm, logging.New(nil))
 
 	// Write a reflection file
 	reflDir := filepath.Join(ralphDir, "reflections")
@@ -358,7 +347,8 @@ func TestLoop_IncludesReflectionInAttemptContext(t *testing.T) {
 	os.WriteFile(filepath.Join(reflDir, "ralph-abc.md"),
 		[]byte("# Fix the bug\n## What was discovered\n- The root cause was X"), 0o644)
 
-	ctx := l.buildAttemptContext("ralph-abc", "Fix the bug")
+	tracker := attempts.New(ralphDir)
+	ctx := buildAttemptContext("ralph-abc", "Fix the bug", tracker, ralphDir)
 	if !strings.Contains(ctx, "root cause was X") {
 		t.Errorf("expected reflection content in attempt context, got: %s", ctx)
 	}
@@ -369,23 +359,11 @@ func TestLoop_IncludesReflectionInAttemptContext(t *testing.T) {
 
 // Verifies that attempt history and reflections are combined when both exist.
 func TestLoop_CombinesAttemptsAndReflection(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
-			RalphDir:   ralphDir,
-		},
-		CallsPerHour: 80,
-		TaskBackend:  &testutil.StubBackend{BackendLabel: "beads"},
-	}, st, gm, logging.New(nil))
-
-	// Record an attempt
-	l.attempts.Record("ralph-combo", "Combo task", "tried approach A", "", "halted: stagnation")
+	tracker := attempts.New(ralphDir)
+	tracker.Record("ralph-combo", "Combo task", "tried approach A", "", "halted: stagnation")
 
 	// Write a reflection
 	reflDir := filepath.Join(ralphDir, "reflections")
@@ -393,7 +371,7 @@ func TestLoop_CombinesAttemptsAndReflection(t *testing.T) {
 	os.WriteFile(filepath.Join(reflDir, "ralph-combo.md"),
 		[]byte("# Combo task\n## What was discovered\n- approach A doesn't work"), 0o644)
 
-	ctx := l.buildAttemptContext("ralph-combo", "Combo task")
+	ctx := buildAttemptContext("ralph-combo", "Combo task", tracker, ralphDir)
 	if !strings.Contains(ctx, "### Attempt 1") {
 		t.Error("expected attempt history in combined context")
 	}
@@ -405,22 +383,11 @@ func TestLoop_CombinesAttemptsAndReflection(t *testing.T) {
 // Verifies that buildAttemptContext returns empty string when no prior
 // context exists, so the prompt doesn't get polluted with empty sections.
 func TestLoop_EmptyAttemptContextForNewTask(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
-			RalphDir:   ralphDir,
-		},
-		CallsPerHour: 80,
-		TaskBackend:  &testutil.StubBackend{BackendLabel: "beads"},
-	}, st, gm, logging.New(nil))
-
-	ctx := l.buildAttemptContext("ralph-new", "Brand new task")
+	tracker := attempts.New(ralphDir)
+	ctx := buildAttemptContext("ralph-new", "Brand new task", tracker, ralphDir)
 	if ctx != "" {
 		t.Errorf("expected empty attempt context for new task, got: %s", ctx)
 	}
@@ -429,20 +396,8 @@ func TestLoop_EmptyAttemptContextForNewTask(t *testing.T) {
 // Verifies that buildAttemptContext includes reflections from other completed
 // tasks, not just the current task. This proves cross-task feed-forward works.
 func TestLoop_CrossTaskReflectionsFedForward(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
-
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
-			RalphDir:   ralphDir,
-		},
-		CallsPerHour: 80,
-		TaskBackend:  &testutil.StubBackend{BackendLabel: "beads"},
-	}, st, gm, logging.New(nil))
 
 	// Write reflections from 2 previously completed tasks
 	reflDir := filepath.Join(ralphDir, "reflections")
@@ -453,7 +408,8 @@ func TestLoop_CrossTaskReflectionsFedForward(t *testing.T) {
 		[]byte("# Old task 2\n## What was discovered\n- Auth middleware needs special handling"), 0o644)
 
 	// Build context for a NEW task (ralph-new) — should include old reflections
-	ctx := l.buildAttemptContext("ralph-new", "Brand new task")
+	tracker := attempts.New(ralphDir)
+	ctx := buildAttemptContext("ralph-new", "Brand new task", tracker, ralphDir)
 	if !strings.Contains(ctx, "rebuild-go.sh") {
 		t.Error("expected cross-task reflection from ralph-old1")
 	}
@@ -468,26 +424,14 @@ func TestLoop_CrossTaskReflectionsFedForward(t *testing.T) {
 // Verifies that cross-task attempt entries are NOT included in the prompt.
 // Only reflections (distilled insights) should cross task boundaries.
 func TestLoop_CrossTaskAttemptEntriesExcluded(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
-			RalphDir:   ralphDir,
-		},
-		CallsPerHour: 80,
-		TaskBackend:  &testutil.StubBackend{BackendLabel: "beads"},
-	}, st, gm, logging.New(nil))
-
-	// Record a halt from a different task
-	l.attempts.Record("ralph-prev", "Previous task", "Halted: stagnation", "", "no code changes for 3 iterations")
+	tracker := attempts.New(ralphDir)
+	tracker.Record("ralph-prev", "Previous task", "Halted: stagnation", "", "no code changes for 3 iterations")
 
 	// Build context for the next task — should NOT include cross-task attempts
-	ctx := l.buildAttemptContext("ralph-next", "Next task")
+	ctx := buildAttemptContext("ralph-next", "Next task", tracker, ralphDir)
 	if strings.Contains(ctx, "ralph-prev") {
 		t.Error("cross-task attempt entries should not appear in prompt")
 	}

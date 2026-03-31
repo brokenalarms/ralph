@@ -16,14 +16,12 @@ import (
 // Verifies that buildTaskPrompt includes the bd ID when one is present,
 // matching the shell's task prompt format.
 func TestLoop_BuildTaskPrompt(t *testing.T) {
-	l := &Loop{}
-
-	got := l.buildTaskPrompt("Implement feature X", "ralph-abc")
+	got := buildTaskPrompt("Implement feature X", "ralph-abc", nil, "", "")
 	if got != "Complete this task (bd id: ralph-abc): Implement feature X" {
 		t.Errorf("unexpected prompt with ID: %q", got)
 	}
 
-	got = l.buildTaskPrompt("Implement feature X", "")
+	got = buildTaskPrompt("Implement feature X", "", nil, "", "")
 	if got != "Complete this task: Implement feature X" {
 		t.Errorf("unexpected prompt without ID: %q", got)
 	}
@@ -32,7 +30,7 @@ func TestLoop_BuildTaskPrompt(t *testing.T) {
 // Verifies that buildTaskPrompt appends screenshot paths when screenshots
 // exist in the ralph screenshots directory for the given bead ID.
 func TestLoop_BuildTaskPrompt_WithScreenshots(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	ssDir := filepath.Join(ralphDir, "screenshots")
 	os.MkdirAll(ssDir, 0o755)
@@ -44,19 +42,8 @@ func TestLoop_BuildTaskPrompt_WithScreenshots(t *testing.T) {
 	}
 
 	backend := &testutil.StubBackend{NextID: "ralph-abc", NextTask: "Fix modal", FullContext: "○ ralph-abc · Fix modal [● P3 · OPEN]"}
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
-			RalphDir:   ralphDir,
-			PromptsDir: pDir,
-		},
-		CallsPerHour: 80,
-		TaskBackend:  backend,
-	}, st, gm, logging.New(nil))
 
-	got := l.buildTaskPrompt("Fix modal", "ralph-abc")
+	got := buildTaskPrompt("Fix modal", "ralph-abc", backend, pDir, ralphDir)
 
 	if !strings.Contains(got, "## Screenshots") {
 		t.Error("task prompt should include screenshots section when screenshots exist")
@@ -69,7 +56,7 @@ func TestLoop_BuildTaskPrompt_WithScreenshots(t *testing.T) {
 // Verifies that buildTaskPrompt omits the screenshots section when no
 // screenshots exist for the bead.
 func TestLoop_BuildTaskPrompt_NoScreenshots(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	pDir, err := filepath.Abs(filepath.Join("..", "..", "cmd", "ralph", "prompts"))
@@ -78,19 +65,8 @@ func TestLoop_BuildTaskPrompt_NoScreenshots(t *testing.T) {
 	}
 
 	backend := &testutil.StubBackend{NextID: "ralph-xyz", NextTask: "Fix layout", FullContext: "○ ralph-xyz · Fix layout [● P3 · OPEN]"}
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
-			RalphDir:   ralphDir,
-			PromptsDir: pDir,
-		},
-		CallsPerHour: 80,
-		TaskBackend:  backend,
-	}, st, gm, logging.New(nil))
 
-	got := l.buildTaskPrompt("Fix layout", "ralph-xyz")
+	got := buildTaskPrompt("Fix layout", "ralph-xyz", backend, pDir, ralphDir)
 
 	if strings.Contains(got, "## Screenshots") {
 		t.Error("task prompt should not include screenshots section when none exist")
