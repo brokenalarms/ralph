@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -81,31 +80,43 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		return code
 	}
 
-	// Step 2: Merge bottom-up.
+	// Step 2: Merge bottom-up. After each merge, main moves forward.
+	// Subsequent PRs must be rebased onto the new main before merging.
 	merged := 0
 	repoURL := gm.RemoteURL()
 	for _, pr := range prs {
 		if merged > 0 {
 			log.DashedSeparator(logging.Cyan)
 		}
-		log.Phase("Merging PR #%s", pr.number)
+		log.Phase("Merging PR #%s (%d/%d)", pr.number, merged+1, len(prs))
 
-		// Wait for GitHub to retarget if needed.
 		if merged > 0 {
-			log.Log("git", "Waiting for PR #%s to retarget to %s...", pr.number, defaultBranch)
-			for i := 0; i < 30; i++ {
-				base, _ := gh.GetPRBase(projectDir, pr.number)
-				if base == defaultBranch {
-					break
-				}
-				time.Sleep(2 * time.Second)
+			// Main moved after previous merge. Rebase this branch onto
+			// the new main and force-push so CI runs against the correct base.
+			log.Log("git", "Rebasing %s onto updated %s...", pr.head, defaultBranch)
+			gitRunErr(projectDir, "fetch", "origin", defaultBranch)
+			gitRunErr(projectDir, "fetch", "origin", pr.head)
+
+			// Rebase in a detached state to avoid needing a worktree.
+			gitRunErr(projectDir, "checkout", "origin/"+pr.head)
+			if rebaseErr := gitRunErr(projectDir, "rebase", "origin/"+defaultBranch); rebaseErr != nil {
+				log.Error("git", "Rebase failed for %s: %v", pr.head, rebaseErr)
+				gitRunErr(projectDir, "rebase", "--abort")
+				return 1
 			}
+			if pushErr := gitRunErr(projectDir, "push", "--force-with-lease", "origin", "HEAD:"+pr.head); pushErr != nil {
+				log.Error("git", "Force-push failed for %s: %v", pr.head, pushErr)
+				return 1
+			}
+			// Return to default branch.
+			gitRunErr(projectDir, "checkout", defaultBranch)
 		}
 
-		// Get expected HEAD SHA after rebase+push for fresh CI detection.
+		// Get the HEAD SHA after push for fresh CI detection.
 		expectedSHA, _ := gh.GetPRHeadSHA(projectDir, pr.number)
 
 		// Wait for CI on the current HEAD.
+		log.Log("ci", "Waiting for CI on PR #%s...", pr.number)
 		_, ciStatus, ciErr := gm.AwaitCI(ctx, pr.number, repoURL, expectedSHA)
 		if ciErr != nil {
 			log.Warn("ci", "CI polling error: %v", ciErr)
@@ -127,8 +138,9 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		merged++
 		log.Success("git", "PR #%s merged (%d/%d)", pr.number, merged, len(prs))
 
-		// Update local main.
+		// Update local main to include the merge.
 		gitRunErr(projectDir, "fetch", "origin", defaultBranch)
+		gitRunErr(projectDir, "checkout", defaultBranch)
 		gitRunErr(projectDir, "reset", "--hard", "origin/"+defaultBranch)
 	}
 
