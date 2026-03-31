@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
@@ -310,5 +311,69 @@ func TestVerifier_HogMode_SpawnsVerifier(t *testing.T) {
 	}
 	if !runnerSpawned {
 		t.Fatal("hog mode should spawn a verification agent on no-diff")
+	}
+}
+
+// TryFixCI passes failed check names and CI log output as separate fields
+// in the fix agent prompt, so the agent can read the error literally
+// instead of guessing from check names alone.
+func TestVerifier_TryFixCI_PromptContainsCILogAndCheckNames(t *testing.T) {
+	var capturedPrompt string
+	v := newTestVerifier(t, func(v *Verifier) {
+		// Write the verify-ci.md template so loadVerifyPrompt uses it.
+		ciTemplate := "CHECKS: {{FAILED_CHECKS}}\nLOG: {{CI_LOG}}\nSIGNAL: {{SIGNAL_COMPLETE}}\nTASK: {{TASK_TITLE}}"
+		os.WriteFile(filepath.Join(v.cfg.PromptsDir, "verify-ci.md"), []byte(ciTemplate), 0o644)
+
+		v.deps.NewRunner = func() claudeRunner {
+			return &promptCapturingFixRunner{
+				onPrompt: func(p string) { capturedPrompt = p },
+				result:   stubResult(true, "fixed import"),
+			}
+		}
+	})
+
+	ciErr := &git.CIFailureError{
+		PRNumber: "42",
+		Failures: []git.CICheckResult{
+			{Name: "typecheck", State: "FAILURE", Bucket: "fail"},
+			{Name: "test", State: "FAILURE", Bucket: "fail"},
+		},
+	}
+	ciLog := "src/app.tsx(3,1): error TS2307: Cannot find module './MissingSVG'"
+
+	result := v.TryFixCI(context.Background(), ciLog, ciErr, "Build app", t.TempDir(), filepath.Join(t.TempDir(), "raw.log"))
+
+	if !result {
+		t.Fatal("expected TryFixCI to return true when fix agent signals")
+	}
+	if !strings.Contains(capturedPrompt, "typecheck, test") {
+		t.Errorf("prompt should contain failed check names, got: %s", capturedPrompt)
+	}
+	if !strings.Contains(capturedPrompt, "Cannot find module './MissingSVG'") {
+		t.Errorf("prompt should contain CI error log, got: %s", capturedPrompt)
+	}
+	if !strings.Contains(capturedPrompt, "Build app") {
+		t.Errorf("prompt should contain task title, got: %s", capturedPrompt)
+	}
+}
+
+// TryFixCI returns false when the fix agent exits without signaling,
+// proving the orchestrator won't force-push stale code.
+func TestVerifier_TryFixCI_NoSignal_ReturnsFalse(t *testing.T) {
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.deps.NewRunner = func() claudeRunner {
+			return &stubRunner{result: stubResult(false, "")}
+		}
+	})
+
+	ciErr := &git.CIFailureError{
+		PRNumber: "42",
+		Failures: []git.CICheckResult{{Name: "build", State: "FAILURE", Bucket: "fail"}},
+	}
+
+	result := v.TryFixCI(context.Background(), "build failed", ciErr, "Build app", t.TempDir(), filepath.Join(t.TempDir(), "raw.log"))
+
+	if result {
+		t.Fatal("expected TryFixCI to return false when fix agent doesn't signal")
 	}
 }

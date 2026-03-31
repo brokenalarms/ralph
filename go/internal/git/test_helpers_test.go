@@ -122,16 +122,6 @@ func (c *capturingGitHub) CreatePR(opts CreatePROpts) error {
 	return nil
 }
 
-// runLogGitHub stubs GetRunLog with a configurable return value.
-type runLogGitHub struct {
-	StubGitHub
-	log string
-}
-
-func (r *runLogGitHub) GetRunLog(prNumber, workDir string) string {
-	return r.log
-}
-
 // stubManager creates a Manager wired to stubs for both git commands and
 // GitHub operations. The Manager's dirs are set to the given directory.
 func stubManager(dir string, runner *stubRunner, gh *StubGitHub) *Manager {
