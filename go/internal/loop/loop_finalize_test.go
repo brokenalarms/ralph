@@ -416,6 +416,58 @@ func TestFinalizePR_CloseTaskFailure_SkipsTask(t *testing.T) {
 	}
 }
 
+// Dependency-blocked CloseTask failure includes blocker IDs in skip reason.
+func TestFinalizePR_DependencyBlockedClose_SkipsWithBlockerIDs(t *testing.T) {
+	project, _ := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	st := state.NewStore(ralphDir)
+	st.Init(5)
+	promptsDir := filepath.Join(project, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		CloseErr:       fmt.Errorf("exit status 1: cannot close ralph-abc: blocked by open issues [ralph-dep1] (use --force to override)"),
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
+	l := New(Config{
+		Dirs:         workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		CallsPerHour: 80,
+		TaskBackend:  backend,
+		AutoMerge:    true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.mergeFunc = func(ctx context.Context) (bool, error) {
+		return true, nil
+	}
+
+	l.finalizePR(finalizePRParams{
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix auth bug",
+		prNumber: "42",
+		prState:  "OPEN",
+		workDir:  project,
+	})
+
+	backend.SkipMu.Lock()
+	defer backend.SkipMu.Unlock()
+	found := false
+	for i, id := range backend.SkippedIDs {
+		if id == "ralph-abc" {
+			found = true
+			if !strings.Contains(backend.SkipReasons[i], "dependency_blocked_by:ralph-dep1") {
+				t.Errorf("skip reason should contain blocker ID, got %q", backend.SkipReasons[i])
+			}
+		}
+	}
+	if !found {
+		t.Errorf("task should be skipped, skipped=%v", backend.SkippedIDs)
+	}
+}
+
 // skipTask sets status to open in backend and persists to state.json.
 func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
 	_, st := setupTestDir(t)

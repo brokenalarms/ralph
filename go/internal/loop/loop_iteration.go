@@ -12,6 +12,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
+	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
 // postSignalAction describes the outcome of post-signal processing.
@@ -98,8 +99,14 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 			}
 			_ = l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", closeReason)
 			if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
-				l.logger.Warn("beads", "CloseTask: %v", err)
-				skipTask(l.cfg.TaskBackend, l.state, l.logger, p.taskID, "close_failed")
+				skipReason := "close_failed"
+				if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
+					l.logger.Warn("beads", "CloseTask: %s blocked by %v", p.taskID, blockers)
+					skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
+				} else {
+					l.logger.Warn("beads", "CloseTask: %v", err)
+				}
+				skipTask(l.cfg.TaskBackend, l.state, l.logger, p.taskID, skipReason)
 			} else {
 				l.logger.Log("beads", "Closed task %s (%s)", p.taskID, closeReason)
 				persistCompletedTask(l.state, l.logger, p.taskID)
@@ -322,8 +329,14 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 	}
 	_ = l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", stateReason)
 	if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
-		l.logger.Warn("beads", "CloseTask failed: %v", err)
-		skipTask(l.cfg.TaskBackend, l.state, l.logger, p.taskID, "close_failed")
+		skipReason := "close_failed"
+		if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
+			l.logger.Warn("beads", "CloseTask: %s blocked by %v", p.taskID, blockers)
+			skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
+		} else {
+			l.logger.Warn("beads", "CloseTask failed: %v", err)
+		}
+		skipTask(l.cfg.TaskBackend, l.state, l.logger, p.taskID, skipReason)
 	} else {
 		l.logger.Log("beads", "Closed task %s (%s)", p.taskID, closeReason)
 		persistCompletedTask(l.state, l.logger, p.taskID)
