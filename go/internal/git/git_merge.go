@@ -350,7 +350,7 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		m.Logger.Log("ci", "CI passed for %s — merging", pr)
 	}
 
-	if m.branchNeedsUpdate(prNumber, repoURL) {
+	if m.branchNeedsUpdate() {
 		m.Logger.Log("git", "Main moved while CI was running — will rebase and retry")
 		return false, &MergeConflictError{PRNumber: prNumber}
 	}
@@ -409,47 +409,17 @@ func (m *Manager) resolveClosedPR(gh GitHub, repoURL string) (string, error) {
 	}
 }
 
-// branchNeedsUpdate checks if the PR branch is behind the base branch.
-func (m *Manager) branchNeedsUpdate(prNumber, repoURL string) bool {
-	nwo := NWOFromRemote(repoURL)
-	if nwo == "" {
+// branchNeedsUpdate checks if the base branch has moved ahead of HEAD since
+// the last push. Returns true when origin/<base> is not an ancestor of HEAD,
+// meaning main moved while CI was running and the branch must be rebased
+// before merging. Uses a local ancestry check to avoid creating merge commits.
+func (m *Manager) branchNeedsUpdate() bool {
+	baseBranch := m.resolveBaseBranch()
+	_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", baseBranch)
+	if !m.refExists(m.WorkDir, "origin/"+baseBranch) {
 		return false
 	}
-	gh := m.gh()
-	updated, err := gh.UpdateBranch(m.WorkDir, nwo, prNumber)
-	if err != nil {
-		return true
-	}
-	return updated
-}
-
-// updatePRBranch updates the PR branch with the latest base branch commits.
-// If the branch was updated, waits for CI on the new HEAD. Returns a
-// CIFailureError when CI fails after the update.
-func (m *Manager) updatePRBranch(ctx context.Context, prNumber, repoURL string) error {
-	nwo := NWOFromRemote(repoURL)
-	if nwo == "" {
-		return nil
-	}
-	gh := m.gh()
-	updated, updateErr := gh.UpdateBranch(m.WorkDir, nwo, prNumber)
-	if updateErr != nil {
-		m.Logger.Warn("git", "PR branch update: %v", updateErr)
-		return nil
-	}
-	if !updated {
-		return nil
-	}
-	m.Logger.Log("git", "Updated %s branch with latest base", logging.PRLink(nwo, prNumber))
-	checks, status, err := m.AwaitCI(ctx, prNumber, repoURL, "")
-	if err != nil {
-		m.Logger.Warn("ci", "CI polling after branch update: %v — attempting merge anyway", err)
-		return nil
-	}
-	if status == CIFailed {
-		return &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
-	}
-	return nil
+	return m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+baseBranch, "HEAD") != nil
 }
 
 // executeMerge attempts the squash-merge and handles CI-gated retries.

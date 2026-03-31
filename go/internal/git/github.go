@@ -41,7 +41,6 @@ type GitHub interface {
 	FindOpenPR(branch, repoURL string) (prNumber string, err error)
 	CreatePR(opts CreatePROpts) error
 	MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult
-	UpdateBranch(dir, nwo, prNumber string) (updated bool, err error)
 	ListChecks(prNumber, repoURL string) ([]CICheckResult, error)
 	EditPR(prNumber, repoURL, title, body string) error
 	GetRunLog(prNumber, workDir string) string
@@ -216,27 +215,6 @@ func (g *ghCLI) deleteBranch(nwo, prNumber string) {
 		fmt.Sprintf("repos/%s/git/refs/heads/%s", nwo, branch),
 		"--method", "DELETE")
 	delCmd.CombinedOutput() // best-effort
-}
-
-func isHarmlessUpdateBranchError(output string) bool {
-	return strings.Contains(output, "already up to date") ||
-		strings.Contains(output, "expected_head_sha") ||
-		strings.Contains(output, "no new commits")
-}
-
-func (g *ghCLI) UpdateBranch(dir, nwo, prNumber string) (bool, error) {
-	endpoint := fmt.Sprintf("repos/%s/pulls/%s/update-branch", nwo, prNumber)
-	cmd := exec.Command("gh", "api", endpoint, "--method", "PUT")
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		output := strings.TrimSpace(string(out))
-		if isHarmlessUpdateBranchError(output) {
-			return false, nil
-		}
-		return false, fmt.Errorf("update-branch API: %s", output)
-	}
-	return true, nil
 }
 
 func (g *ghCLI) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {

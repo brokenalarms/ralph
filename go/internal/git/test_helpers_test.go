@@ -20,6 +20,7 @@ type stubRunner struct {
 	mu        sync.Mutex
 	calls     []gitCall
 	responses map[string]stubResponse
+	sequences map[string]*seqState
 }
 
 type stubResponse struct {
@@ -27,9 +28,16 @@ type stubResponse struct {
 	Err    error
 }
 
+// seqState tracks sequential responses for a given key.
+type seqState struct {
+	responses []stubResponse
+	idx       int
+}
+
 func newStubRunner() *stubRunner {
 	return &stubRunner{
 		responses: make(map[string]stubResponse),
+		sequences: make(map[string]*seqState),
 	}
 }
 
@@ -51,6 +59,12 @@ func (s *stubRunner) Run(_ context.Context, dir string, args ...string) (string,
 				key += " "
 			}
 			key += args[j]
+		}
+		// Check sequential responses first — they take precedence over static ones.
+		if seq, ok := s.sequences[key]; ok && seq.idx < len(seq.responses) {
+			resp := seq.responses[seq.idx]
+			seq.idx++
+			return resp.Output, resp.Err
 		}
 		if resp, ok := s.responses[key]; ok {
 			return resp.Output, resp.Err
@@ -99,6 +113,16 @@ func (s *stubRunner) On(key string, output string, err error) *stubRunner {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.responses[key] = stubResponse{Output: output, Err: err}
+	return s
+}
+
+// OnSequence registers sequential responses for calls matching the given key.
+// Each call consumes the next response in order. Falls back to the On response
+// (or "", nil) once the sequence is exhausted.
+func (s *stubRunner) OnSequence(key string, responses []stubResponse) *stubRunner {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sequences[key] = &seqState{responses: responses}
 	return s
 }
 
