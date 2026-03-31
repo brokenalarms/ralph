@@ -342,7 +342,14 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 	for {
 		select {
 		case <-processDone:
-			// Process exited on its own — return, let caller do final signal check.
+			// Process exited — check for feedback signal before returning.
+			if cfg.FeedbackFile != "" {
+				if _, err := os.Stat(cfg.FeedbackFile); err == nil {
+					os.Remove(cfg.FeedbackFile)
+					r.Logger.Log("llm", "Feedback signal detected — restarting agent")
+					return Result{FeedbackKill: true}
+				}
+			}
 			return Result{}
 
 		case <-cfg.Ctx.Done():

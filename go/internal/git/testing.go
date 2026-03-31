@@ -38,8 +38,11 @@ type StubGitHub struct {
 	SearchCalled       bool
 	PRDiffCalled       bool
 	RunLogValue        string
-	ReopenPRErr        error
-	ReopenPRCalled     bool
+	ReopenPRErr           error
+	ReopenPRCalled        bool
+	CreatePRViaAPIResult  string
+	CreatePRViaAPIErr     error
+	CreatePRViaAPICalled  bool
 }
 
 func (s *StubGitHub) Available() bool { return s.IsAvailable }
@@ -109,4 +112,11 @@ func (s *StubGitHub) ReopenPR(prNumber, repoURL string) error {
 		s.PRState = "OPEN"
 	}
 	return s.ReopenPRErr
+}
+func (s *StubGitHub) CreatePRViaAPI(nwo string, opts CreatePROpts) (string, error) {
+	s.CreatePRViaAPICalled = true
+	if s.CreatePRViaAPIErr == nil && s.CreatePRViaAPIResult != "" {
+		s.OpenPR = s.CreatePRViaAPIResult
+	}
+	return s.CreatePRViaAPIResult, s.CreatePRViaAPIErr
 }
