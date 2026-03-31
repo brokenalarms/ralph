@@ -41,6 +41,7 @@ func (s *StubBackend) SkipTask(id, reason string) error {
 	return nil
 }
 func (s *StubBackend) SetSkippedIDs(_ []string)                   {}
+func (s *StubBackend) SetResumeTaskID(_ string)                   {}
 func (s *StubBackend) ReopenTask(string) error                    { return nil }
 func (s *StubBackend) SetState(_, _, _, _ string) error           { return nil }
 func (s *StubBackend) GetState(_, _ string) (string, error)       { return "", nil }

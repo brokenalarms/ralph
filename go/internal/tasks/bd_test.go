@@ -1275,6 +1275,95 @@ func TestBD_GetNextTask_NoBDListCalls(t *testing.T) {
 	}
 }
 
+// Proves: when resumeTaskID is set and the task is still in_progress, it is
+// returned directly without falling through to bd ready.
+func TestBD_GetNextTaskInfo_ResumesLastTaskID(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		switch args[0] {
+		case "show":
+			if len(args) >= 2 && args[1] == "ralph-resume" {
+				return `[{"id":"ralph-resume","title":"Resumed task","priority":1,"status":"in_progress","type":"bug"}]`, nil
+			}
+		case "ready":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[{"id":"ralph-other","title":"Other task","priority":2,"status":"open"}]`, nil
+			}
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.SetResumeTaskID("ralph-resume")
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-resume" {
+		t.Errorf("expected resume task ralph-resume, got %q", info.ID)
+	}
+	if info.Title != "Resumed task" {
+		t.Errorf("expected title %q, got %q", "Resumed task", info.Title)
+	}
+}
+
+// Proves: when resumeTaskID points to a closed task, it falls through to
+// bd ready for new work.
+func TestBD_GetNextTaskInfo_ClosedResumeTaskFallsThrough(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		switch args[0] {
+		case "show":
+			if len(args) >= 2 && args[1] == "ralph-done" {
+				return `[{"id":"ralph-done","title":"Done task","priority":1,"status":"closed"}]`, nil
+			}
+		case "ready":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[{"id":"ralph-new","title":"New task","priority":2,"status":"open"}]`, nil
+			}
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.SetResumeTaskID("ralph-done")
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-new" {
+		t.Errorf("expected fallthrough to ralph-new, got %q", info.ID)
+	}
+}
+
+// Proves: when resumeTaskID is in the skipped set, it is not resumed.
+func TestBD_GetNextTaskInfo_SkippedResumeTaskFallsThrough(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		switch args[0] {
+		case "ready":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[{"id":"ralph-new","title":"New task","priority":2,"status":"open"}]`, nil
+			}
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.SetSkippedIDs([]string{"ralph-skip"})
+	b.SetResumeTaskID("ralph-skip")
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "ralph-new" {
+		t.Errorf("expected fallthrough to ralph-new, got %q", info.ID)
+	}
+}
+
 // ParseDependencyBlock extracts blocking task IDs from bd close errors.
 func TestParseDependencyBlock_SingleBlocker(t *testing.T) {
 	err := fmt.Errorf("exit status 1: cannot close ralph-qyoz: blocked by open issues [ralph-l2yh] (use --force to override)")

@@ -35,6 +35,9 @@ func (l *Loop) initRun(ctx context.Context) error {
 		l.state.Write("status", "error")
 		return fmt.Errorf("initial rebase failed: %w", err)
 	}
+	if lastID, _ := l.state.Read("last_task_id"); lastID != "" {
+		l.cfg.TaskBackend.SetResumeTaskID(lastID)
+	}
 	nextInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
 	if !isNewTask(l.state, nextInfo.ID, nextInfo.Title) {
 		l.git.SetBranchRenamed(true)
