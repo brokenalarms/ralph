@@ -774,13 +774,15 @@ func TestExecuteMerge_RetriesAfterCIGate(t *testing.T) {
 	}
 	mgr := setupAutoMergeManager(t, gh)
 
-	seqGH := &sequentialMergeGitHub{
-		StubGitHub: *gh,
-		mergeResults: []MergeResult{
+	seqGH := &StubGitHub{
+		IsAvailable: gh.IsAvailable,
+		OpenPR:      gh.OpenPR,
+		Checks:      gh.Checks,
+		MergeResults: []MergeResult{
 			{Blocked: true, Message: "Base branch policy prohibits the merge"},
 			{Merged: true},
 		},
-		onMerge: func() { calls++ },
+		OnMerge: func() { calls++ },
 	}
 	mgr.GitHub = seqGH
 

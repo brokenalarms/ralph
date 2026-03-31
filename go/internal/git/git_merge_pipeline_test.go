@@ -542,17 +542,13 @@ func TestMergeWithRetry_InfraRetryBackoff(t *testing.T) {
 	runner.On("rev-parse HEAD", "abc123", nil)
 	runner.On("reset --hard", "", nil)
 
-	ciCallCount := 0
-	gh := &infraRetryGitHub{
-		StubGitHub: StubGitHub{
-			IsAvailable: true,
-			OpenPR:      "101",
-			PRTitle:     "infra retry",
-			PRHeadSHA:   "abc123",
-		},
-		ciResults: func() []CICheckResult {
-			ciCallCount++
-			if ciCallCount <= 3 {
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "101",
+		PRTitle:     "infra retry",
+		PRHeadSHA:   "abc123",
+		ChecksFunc: func(call int) []CICheckResult {
+			if call <= 3 {
 				return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
 			}
 			return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
@@ -689,21 +685,6 @@ func TestMergeWithRetry_PackageFunc_InvokesResolveConflictFromOpts(t *testing.T)
 	}
 }
 
-// infraRetryGitHub returns dynamic CI results to simulate infrastructure retries.
-type infraRetryGitHub struct {
-	StubGitHub
-	ciResults func() []CICheckResult
-}
-
-func (g *infraRetryGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
-	return g.ciResults(), nil
-}
-
-func (g *infraRetryGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
-	g.StubGitHub.MergeCalls++
-	return MergeResult{Merged: true}
-}
-
 // executeMerge handles the CI-gated retry path: when MergePR returns a branch
 // protection error, it waits for CI then retries the merge.
 func TestExecuteMerge_CIGatedRetryPath(t *testing.T) {
@@ -721,22 +702,16 @@ func TestExecuteMerge_CIGatedRetryPath(t *testing.T) {
 	runner.On("rev-parse HEAD", "abc123", nil)
 	runner.On("reset --hard", "", nil)
 
-	mergeCalls := 0
-	gh := &ciGatedMergeGitHub{
-		StubGitHub: StubGitHub{
-			IsAvailable: true,
-			OpenPR:      "120",
-			PRTitle:     "CI gated test",
-			PRHeadSHA:   "abc123",
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "120",
+		PRTitle:     "CI gated test",
+		PRHeadSHA:   "abc123",
+		MergeResults: []MergeResult{
+			{Blocked: true, Message: "Base branch policy prohibits the merge"},
+			{Merged: true},
 		},
-		mergeFunc: func() MergeResult {
-			mergeCalls++
-			if mergeCalls == 1 {
-				return MergeResult{Blocked: true, Message: "Base branch policy prohibits the merge"}
-			}
-			return MergeResult{Merged: true}
-		},
-		checksFunc: func(call int) []CICheckResult {
+		ChecksFunc: func(call int) []CICheckResult {
 			if call <= 1 {
 				return []CICheckResult{{Name: "ci", State: "PENDING", Bucket: "pending"}}
 			}
@@ -761,27 +736,9 @@ func TestExecuteMerge_CIGatedRetryPath(t *testing.T) {
 	if !merged {
 		t.Error("expected merged=true")
 	}
-	if mergeCalls != 2 {
-		t.Errorf("expected 2 merge calls (blocked + retry), got %d", mergeCalls)
+	if gh.MergeCalls != 2 {
+		t.Errorf("expected 2 merge calls (blocked + retry), got %d", gh.MergeCalls)
 	}
-}
-
-// ciGatedMergeGitHub simulates a merge blocked by branch protection that
-// succeeds after CI passes.
-type ciGatedMergeGitHub struct {
-	StubGitHub
-	mergeFunc  func() MergeResult
-	checksFunc func(call int) []CICheckResult
-	checkCalls int
-}
-
-func (g *ciGatedMergeGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
-	return g.mergeFunc()
-}
-
-func (g *ciGatedMergeGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
-	g.checkCalls++
-	return g.checksFunc(g.checkCalls), nil
 }
 
 // AutoMergeCurrentBranch skips merge and returns ErrStackedPRWaiting when the

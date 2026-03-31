@@ -815,17 +815,15 @@ func TestMergeWithRetry_RecoversFromConflict(t *testing.T) {
 	}
 
 	mergeCalls := 0
-	gh := &sequentialMergeGitHub{
-		StubGitHub: StubGitHub{
-			IsAvailable: true,
-			OpenPR:      "42",
-			Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
-		},
-		mergeResults: []MergeResult{
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "42",
+		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		MergeResults: []MergeResult{
 			{Conflict: true, Message: "merge conflict"},
 			{Merged: true},
 		},
-		onMerge: func() { mergeCalls++ },
+		OnMerge: func() { mergeCalls++ },
 	}
 	mgr.GitHub = gh
 
@@ -873,15 +871,18 @@ func TestMergeWithRetry_DelegatesCIFailure(t *testing.T) {
 		Logger:         &testLog{},
 	}
 
-	gh := &sequentialMergeGitHub{
-		StubGitHub: StubGitHub{
-			IsAvailable: true,
-			OpenPR:      "55",
-			Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "55",
+		// First AwaitCI returns failure (triggers OnCIFailure). After CI fix,
+		// subsequent checks return success so the merge retry proceeds.
+		ChecksFunc: func(call int) []CICheckResult {
+			if call == 1 {
+				return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
+			}
+			return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 		},
-		// First AutoMerge returns CIFailureError before reaching MergePR.
-		// After CI fix, the second AutoMerge reaches MergePR with CI passing.
-		mergeResults: []MergeResult{
+		MergeResults: []MergeResult{
 			{Merged: true},
 		},
 	}
@@ -978,20 +979,18 @@ func TestMergeWithRetry_StopsOnUnresolvableConflict(t *testing.T) {
 	}
 
 	mergeCalls := 0
-	gh := &sequentialMergeGitHub{
-		StubGitHub: StubGitHub{
-			IsAvailable: true,
-			OpenPR:      "50",
-			PRHeadSHA:   "abc123",
-			Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
-		},
-		mergeResults: []MergeResult{
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "50",
+		PRHeadSHA:   "abc123",
+		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		MergeResults: []MergeResult{
 			{Conflict: true, Message: "merge conflict"},
 			{Conflict: true, Message: "merge conflict"},
 			{Conflict: true, Message: "merge conflict"},
 			{Conflict: true, Message: "merge conflict"},
 		},
-		onMerge: func() { mergeCalls++ },
+		OnMerge: func() { mergeCalls++ },
 	}
 	mgr.GitHub = gh
 
@@ -1089,38 +1088,6 @@ func TestAutoMergeCurrentBranch_PassesPRTitleAsSubject(t *testing.T) {
 	}
 }
 
-// sequentialMergeGitHub returns different merge results on successive calls,
-// allowing tests to simulate conflict→success or CI-fail→success sequences.
-type sequentialMergeGitHub struct {
-	StubGitHub
-	mergeResults []MergeResult
-	mergeIdx     int
-	checkCalls   int
-	onMerge      func()
-}
-
-
-func (s *sequentialMergeGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
-	if s.onMerge != nil {
-		s.onMerge()
-	}
-	if s.mergeIdx < len(s.mergeResults) {
-		r := s.mergeResults[s.mergeIdx]
-		s.mergeIdx++
-		return r
-	}
-	return MergeResult{Merged: true}
-}
-
-func (s *sequentialMergeGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
-	s.checkCalls++
-	// After the first check call, CI passes (simulating a fix was applied)
-	if s.checkCalls > 1 && len(s.StubGitHub.Checks) > 0 && s.StubGitHub.Checks[0].State == "FAILURE" {
-		return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}, nil
-	}
-	return s.StubGitHub.Checks, s.StubGitHub.ChecksErr
-}
-
 // After a fix agent commits and force-pushes, MergeWithRetry must call
 // AwaitCI to wait for fresh CI results on the new HEAD before retrying the
 // merge. This prevents the retry from seeing the old (stale) failure status.
@@ -1142,12 +1109,19 @@ func TestMergeWithRetry_PushesFixAgentWorkBeforeRetry(t *testing.T) {
 	// OnCIFailure and the merge retry.
 	var events []string
 
-	gh := &ciRetryGitHub{
-		StubGitHub: StubGitHub{
-			IsAvailable: true,
-			OpenPR:      "60",
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "60",
+		ChecksFunc: func(call int) []CICheckResult {
+			if call == 1 {
+				return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
+			}
+			events = append(events, "await-ci")
+			return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 		},
-		events: &events,
+		OnMerge: func() {
+			events = append(events, "merge-retry")
+		},
 	}
 	mgr.GitHub = gh
 
@@ -1210,32 +1184,6 @@ func TestMergeWithRetry_PushesFixAgentWorkBeforeRetry(t *testing.T) {
 	}
 }
 
-// ciRetryGitHub tracks the order of ListChecks and MergePR calls to verify
-// that AwaitCI runs between the CI fix callback and the merge retry.
-type ciRetryGitHub struct {
-	StubGitHub
-	events     *[]string
-	checkCalls int
-	mergeCalls int
-}
-
-func (c *ciRetryGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
-	c.checkCalls++
-	// First call: CI fails (triggers OnCIFailure).
-	// Subsequent calls: CI passes (after fix + force-push).
-	if c.checkCalls == 1 {
-		return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}, nil
-	}
-	*c.events = append(*c.events, "await-ci")
-	return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}, nil
-}
-
-func (c *ciRetryGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
-	c.mergeCalls++
-	*c.events = append(*c.events, "merge-retry")
-	return MergeResult{Merged: true}
-}
-
 // When automatic rebase fails to resolve conflicts, MergeWithRetry calls
 // the OnConflict callback to spawn a conflict resolution agent. If the
 // agent resolves the conflict, the merge is retried and succeeds.
@@ -1252,18 +1200,14 @@ func TestMergeWithRetry_SpawnsConflictAgent(t *testing.T) {
 	}
 
 	mergeCalls := 0
-	gh := &sequentialMergeGitHub{
-		StubGitHub: StubGitHub{
-			IsAvailable: true,
-			OpenPR:      "70",
-			Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
-		},
-		mergeResults: []MergeResult{
-			// First attempt: conflict
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "70",
+		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		MergeResults: []MergeResult{
 			{Conflict: true, Message: "merge conflict"},
-			// Second attempt (after agent fix): success
 		},
-		onMerge: func() { mergeCalls++ },
+		OnMerge: func() { mergeCalls++ },
 	}
 	mgr.GitHub = gh
 
@@ -1331,17 +1275,15 @@ func TestMergeWithRetry_SkipsAfterConflictAgentFails(t *testing.T) {
 	}
 
 	mergeCalls := 0
-	gh := &sequentialMergeGitHub{
-		StubGitHub: StubGitHub{
-			IsAvailable: true,
-			OpenPR:      "71",
-			Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
-		},
-		mergeResults: []MergeResult{
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "71",
+		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		MergeResults: []MergeResult{
 			{Conflict: true, Message: "merge conflict"},
 			{Conflict: true, Message: "merge conflict"},
 		},
-		onMerge: func() { mergeCalls++ },
+		OnMerge: func() { mergeCalls++ },
 	}
 	mgr.GitHub = gh
 
@@ -1928,13 +1870,16 @@ func TestMergeWithRetry_InfraFailureRecovery(t *testing.T) {
 	}
 
 	callCount := 0
-	gh := &sequentialMergeGitHub{
-		StubGitHub: StubGitHub{
-			IsAvailable: true,
-			OpenPR:      "88",
-			Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "88",
+		ChecksFunc: func(call int) []CICheckResult {
+			if call == 1 {
+				return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
+			}
+			return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 		},
-		mergeResults: []MergeResult{
+		MergeResults: []MergeResult{
 			{Merged: true},
 		},
 	}
