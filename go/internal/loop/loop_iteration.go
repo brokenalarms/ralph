@@ -280,7 +280,7 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 		}
 		looked, err := gh.GetPRState(l.git.GetWorkDir(), p.prNumber)
 		if err != nil {
-			l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, PR: p.prNumber}, "Failed to get state: %v", err)
+			l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(p.prNumber)}, "Failed to get state: %v", err)
 			return finalizePRResult{}
 		}
 		prState = strings.ToUpper(looked)
@@ -294,16 +294,16 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 		prBase := getPRBase(gh, l.git.GetWorkDir(), p.prNumber)
 		defaultBranch := l.git.DetectDefaultBranch()
 		if prBase != "" && prBase != defaultBranch {
-			l.logger.Emit(logging.Opts{Domain: "git", PR: p.prNumber}, "targets %s — stacked, closing bead", prBase)
+			l.logger.Emit(logging.Opts{Domain: "git", Link: l.prLink(p.prNumber)}, "targets %s — stacked, closing bead", prBase)
 		} else {
-			l.logger.Emit(logging.Opts{Domain: "git", PR: p.prNumber}, "targets %s — merging", defaultBranch)
+			l.logger.Emit(logging.Opts{Domain: "git", Link: l.prLink(p.prNumber)}, "targets %s — merging", defaultBranch)
 			var mergeErr error
 			merged, mergeErr = l.mergeWithRetry(p.ctx, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
 			if mergeErr != nil {
 				l.logger.Warn("git", "Auto-merge: %v", mergeErr)
 			}
 			if !merged {
-				l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, PR: p.prNumber}, "Merge failed — skipping task")
+				l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(p.prNumber)}, "Merge failed — skipping task")
 				skipTask(l.cfg.TaskBackend, l.state, l.logger, p.taskID, "merge_failed")
 				return finalizePRResult{}
 			}

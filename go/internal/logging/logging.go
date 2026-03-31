@@ -102,11 +102,17 @@ func (lv Level) color() string {
 	}
 }
 
+// Link is a clickable reference appended to a log line.
+type Link struct {
+	Text string // visible text, e.g. "PR #42"
+	URL  string // click target, e.g. "https://github.com/owner/repo/pull/42"
+}
+
 // Opts is the structured parameter for Emit. All log context is a field.
 type Opts struct {
 	Domain Domain
 	Level  Level
-	PR     string // appended as clickable hyperlink
+	Link   *Link  // clickable reference appended at end of line
 	Branch string // appended as colored tag
 }
 
@@ -116,7 +122,6 @@ type Logger struct {
 	out       io.Writer
 	logFile   io.Writer
 	streaming bool
-	nwo       string // owner/repo for PR hyperlinks
 	Fmt       LineFormatter
 }
 
@@ -141,11 +146,6 @@ func NewWithWriter(w io.Writer) *Logger {
 	}
 }
 
-// SetRepo sets the owner/repo (nwo) for automatic PR hyperlinks.
-func (l *Logger) SetRepo(nwo string) {
-	l.nwo = nwo
-}
-
 // Emit writes a log message with structured options. This is the single
 // log method — Level controls severity/color, Domain controls the tag,
 // PR and Branch are appended as formatted suffixes.
@@ -153,8 +153,8 @@ func (l *Logger) Emit(o Opts, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 
 	// Append structured fields as suffixes.
-	if o.PR != "" {
-		msg += "  " + PRLink(l.nwo, o.PR)
+	if o.Link != nil {
+		msg += "  " + Hyperlink(o.Link.URL, o.Link.Text)
 	}
 	if o.Branch != "" {
 		msg += "  " + BranchTag(o.Branch)

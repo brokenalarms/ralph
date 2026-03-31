@@ -12,6 +12,15 @@ import (
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
+// prLink builds a logging.Link for a PR number using the remote URL.
+func (l *Loop) prLink(prNumber string) *logging.Link {
+	url := prURL(l.git.RemoteURL(), prNumber)
+	if url == "" {
+		return nil
+	}
+	return &logging.Link{Text: "PR #" + prNumber, URL: url}
+}
+
 // handleRebase syncs the worktree to the latest default branch via
 // EnsureUpToDate, which handles all conflict resolution internally.
 func (l *Loop) handleRebase(ctx context.Context) error {
@@ -133,7 +142,7 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 	// Check if a PR exists for this exact branch.
 	prNumber, _ := gh.FindOpenPR(branch, repoURL)
 	if prNumber != "" {
-		l.logger.Emit(logging.Opts{Domain: "git", PR: prNumber}, "Found for %s (task %s) — resolving", branch, taskID)
+		l.logger.Emit(logging.Opts{Domain: "git", Link: l.prLink(prNumber)}, "Found for %s (task %s) — resolving", branch, taskID)
 		_ = l.cfg.TaskBackend.SetExternalRef(taskID, prURL(repoURL, prNumber))
 		return l.resolveByPRState(ctx, taskID, nextTask, prNumber)
 	}
@@ -150,7 +159,7 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 		l.git.CheckoutRemoteBranch(branch)
 		prNum, err := l.pushAndCreatePR(ctx, taskID, nextTask, "")
 		if err == nil && prNum != "" {
-			l.logger.Emit(logging.Opts{Domain: "git", PR: prNum}, "Created for %s (task %s)", branch, taskID)
+			l.logger.Emit(logging.Opts{Domain: "git", Link: l.prLink(prNum)}, "Created for %s (task %s)", branch, taskID)
 			_ = l.cfg.TaskBackend.SetExternalRef(taskID, prURL(l.git.RemoteURL(), prNum))
 			return l.resolveByPRState(ctx, taskID, nextTask, prNum)
 		}
@@ -170,13 +179,13 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 
 	prState, err := gh.GetPRState(l.git.GetWorkDir(), prNumber)
 	if err != nil {
-		l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, PR: prNumber}, "Failed to get state: %v", err)
+		l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(prNumber)}, "Failed to get state: %v", err)
 		return false
 	}
 
 	switch strings.ToUpper(prState) {
 	case "MERGED":
-		l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Success, PR: prNumber}, "already merged — closing bead and moving on")
+		l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Success, Link: l.prLink(prNumber)}, "already merged — closing bead and moving on")
 		l.attempts.Clear(taskID, nextTask)
 		recordCompletedTask(l.cfg.Dirs.RalphDir, taskID, nextTask)
 		l.finalizePR(finalizePRParams{
@@ -196,7 +205,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 
 	case "OPEN":
 		if ok, reason := prChainIsHealthy(gh, l.git.GetWorkDir(), l.git, prNumber); !ok {
-			l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, PR: prNumber}, "chain unhealthy: %s — re-running agent", reason)
+			l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(prNumber)}, "chain unhealthy: %s — re-running agent", reason)
 			return false
 		}
 		l.finalizePR(finalizePRParams{
@@ -214,7 +223,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 		return true
 
 	default:
-		l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, PR: prNumber}, "is %s (not merged) — re-running agent", prState)
+		l.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: l.prLink(prNumber)}, "is %s (not merged) — re-running agent", prState)
 		// Clear stale refs so the closed PR isn't re-discovered on the
 		// next iteration and the agent pushes to a fresh branch.
 		if taskID != "" {

@@ -165,9 +165,6 @@ func (l *Loop) wasCompletedThisSession(taskID string) bool {
 // (all tasks done, max iterations reached, or stopped). Returns an error
 // for unrecoverable failures.
 func (l *Loop) Run(ctx context.Context) error {
-	if nwo := git.NWOFromRemote(l.git.RemoteURL()); nwo != "" {
-		l.logger.SetRepo(nwo)
-	}
 	if err := l.initRun(ctx); err != nil {
 		return err
 	}
