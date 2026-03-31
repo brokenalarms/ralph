@@ -143,21 +143,6 @@ func (l *Loop) SessionTasks() []CompletedTask {
 	return l.sessionTasks
 }
 
-// wasCompletedThisSession returns true if the given task ID was already
-// completed in this session. Prevents the loop from re-selecting a task
-// that the backend keeps returning after close.
-func (l *Loop) wasCompletedThisSession(taskID string) bool {
-	if taskID == "" {
-		return false
-	}
-	for _, ct := range l.sessionTasks {
-		if ct.ID == taskID {
-			return true
-		}
-	}
-	return false
-}
-
 // Run executes the full iteration loop. Returns nil on normal completion
 // (all tasks done, max iterations reached, or stopped). Returns an error
 // for unrecoverable failures.
