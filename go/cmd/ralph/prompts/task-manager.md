@@ -125,6 +125,12 @@ related beads, always check if one depends on or blocks another and link
 them with `bd dep add <issue> <depends-on>`. Missing dependencies cause
 tasks to be worked out of order.
 
+Reference functions and behaviors in bead descriptions, not line numbers.
+Lines shift between bead creation and agent execution — a reference like
+"line 42 of runner.go" will be wrong by the time the agent reads it. Use
+"the `RunIteration` function in runner.go" or "the retry logic in CloseTask"
+instead.
+
 When the user pastes DOM fragments, logs, stack traces, or other diagnostic
 content, include it verbatim and unedited in the bead description. This is
 diagnostic evidence — do not summarize, reformat, or strip it.
