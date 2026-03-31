@@ -921,6 +921,23 @@ func TestTaskManagerPrompt_RequiresTypeOnCreate(t *testing.T) {
 	}
 }
 
+// Proves: task-manager.md instructs using function/behavior references in bead
+// descriptions instead of line numbers, which go stale between creation and execution.
+func TestTaskManagerPrompt_ReferenceBehaviorsNotLines(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	if !strings.Contains(result, "line numbers") {
+		t.Error("task-manager.md should warn against using line numbers in bead descriptions")
+	}
+	if !strings.Contains(result, "functions") || !strings.Contains(result, "behaviors") {
+		t.Error("task-manager.md should instruct referencing functions and behaviors instead of line numbers")
+	}
+}
+
 // Proves: BuildReviewPrompt assembles the shared quality standards,
 // refactor style guide, and reflections into a post-mortem review prompt.
 func TestBuildReviewPrompt(t *testing.T) {
