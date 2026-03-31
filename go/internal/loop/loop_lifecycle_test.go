@@ -343,11 +343,15 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 	l.runner = runner
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
-	// After the loop enters wait mode, inject a new task. After the Claude
-	// call completes, the loop will re-enter wait mode; cancel the context
-	// so the test doesn't hang.
+	waitCount := 0
+	waitEntered := make(chan struct{}, 2)
+	l.onWaitFunc = func() {
+		waitCount++
+		waitEntered <- struct{}{}
+	}
+
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		<-waitEntered
 		backend.Lock()
 		backend.Remaining = 1
 		backend.Total++
@@ -355,17 +359,8 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 		backend.NextID = "t-2"
 		backend.Unlock()
 
-		for {
-			time.Sleep(50 * time.Millisecond)
-			callsMu.Lock()
-			c := calls
-			callsMu.Unlock()
-			if c >= 1 {
-				time.Sleep(100 * time.Millisecond)
-				cancel()
-				return
-			}
-		}
+		<-waitEntered
+		cancel()
 	}()
 
 	err := l.Run(ctx)
@@ -409,10 +404,7 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 	}, st, gm, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(150 * time.Millisecond)
-		cancel()
-	}()
+	l.onWaitFunc = func() { cancel() }
 
 	err := l.Run(ctx)
 	if err != nil {
@@ -452,10 +444,9 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 		Wait:          true,
 	}, st, gm, logger)
 
-	go func() {
-		time.Sleep(150 * time.Millisecond)
+	l.onWaitFunc = func() {
 		os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
-	}()
+	}
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -755,17 +746,14 @@ func TestLoop_WaitMode_ReReadsSkippedTasksOnTick(t *testing.T) {
 		Wait:          true,
 	}, st, gm, logger)
 
-	// After a short delay, clear skipped_tasks in state.json and make tasks
-	// available so the poll tick picks them up.
-	go func() {
-		time.Sleep(200 * time.Millisecond)
+	l.onWaitFunc = func() {
 		s, _ := st.Load()
 		s.SkippedTasks = nil
 		st.Save(s)
 		backend.Lock()
 		backend.Remaining = 1
 		backend.Unlock()
-	}()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()

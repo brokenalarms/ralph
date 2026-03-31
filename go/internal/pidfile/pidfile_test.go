@@ -68,7 +68,7 @@ func TestCheck_AliveProcess(t *testing.T) {
 	path := filepath.Join(dir, "loop.pid")
 
 	// Start a long-running child process whose PID we can write.
-	cmd := exec.Command("sleep", "60")
+	cmd := exec.Command("sleep", "1")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start sleep: %v", err)
 	}

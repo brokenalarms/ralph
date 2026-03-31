@@ -87,6 +87,7 @@ type Loop struct {
 	refactorQueryFunc  func(ctx context.Context, workDir, prompt, model string) (string, error)
 	isOnlineFunc       func() bool
 	waitForInternetFunc func(ctx context.Context, logger *logging.Logger) bool
+	onWaitFunc         func() // called when the loop enters waitForTasks (test hook)
 	lastAction         analyzer.Action
 	lastTaskMerged     bool
 	sessionTasks       []CompletedTask

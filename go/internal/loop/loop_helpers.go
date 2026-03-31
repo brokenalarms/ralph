@@ -55,6 +55,9 @@ func (l *Loop) waitForTasks(ctx context.Context) bool {
 	l.state.Write("status", "waiting")
 	updateStreamTask(l.cfg.Dirs.RalphDir, "", "Waiting for tasks...", nil)
 	touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
+	if l.onWaitFunc != nil {
+		l.onWaitFunc()
+	}
 
 	ticker := time.NewTicker(waitPollInterval)
 	defer ticker.Stop()

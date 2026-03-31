@@ -349,7 +349,7 @@ func TestPoll_FeedbackSignalKillsAgent(t *testing.T) {
 		FeedbackFile: feedbackFile,
 	}
 
-	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+	result := runWithCommand(t, &runner, cfg, "sleep", "0.1")
 
 	if !result.FeedbackKill {
 		t.Error("expected FeedbackKill when feedback signal file exists")
@@ -390,7 +390,7 @@ func TestPoll_FeedbackDuringRunKillsAgent(t *testing.T) {
 		os.WriteFile(feedbackFile, nil, 0o644)
 	}()
 
-	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+	result := runWithCommand(t, &runner, cfg, "sleep", "1")
 
 	if !result.FeedbackKill {
 		t.Error("expected FeedbackKill when feedback file written during agent run")
@@ -435,7 +435,7 @@ func TestPoll_FeedbackTakesPriorityOverCompletion(t *testing.T) {
 		os.WriteFile(signals.Complete, []byte("task done"), 0o644)
 	}()
 
-	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+	result := runWithCommand(t, &runner, cfg, "sleep", "1")
 
 	if !result.FeedbackKill {
 		t.Error("expected FeedbackKill to take priority over completion signal")
@@ -469,8 +469,8 @@ func TestPoll_FeedbackDuringOnSignalBlockKillsAgent(t *testing.T) {
 		PollInterval: 100 * time.Millisecond,
 		FeedbackFile: feedbackFile,
 		OnSignal: func(summary string) bool {
-			// Simulate verification blocking for several seconds.
-			// Feedback should be detected during this block.
+			// 5s sleep validates that feedback detection interrupts a blocking
+			// OnSignal callback rather than waiting for it to return.
 			time.Sleep(5 * time.Second)
 			return false
 		},
@@ -489,7 +489,7 @@ func TestPoll_FeedbackDuringOnSignalBlockKillsAgent(t *testing.T) {
 	}()
 
 	start := time.Now()
-	result := runWithCommand(t, &runner, cfg, "sleep", "30")
+	result := runWithCommand(t, &runner, cfg, "sleep", "1")
 	elapsed := time.Since(start)
 
 	if !result.FeedbackKill {
@@ -673,7 +673,7 @@ func TestRun_DetectsCompletionSignal(t *testing.T) {
 	}
 
 	// Use sleep as a long-running stand-in for claude.
-	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+	result := runWithCommand(t, &runner, cfg, "sleep", "1")
 
 	if !result.SignalDetected {
 		t.Error("expected SignalDetected to be true")
@@ -714,7 +714,7 @@ func TestRun_CompletionMessageIncludesBeadID(t *testing.T) {
 		TaskID:       "ralph-xyz",
 	}
 
-	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+	result := runWithCommand(t, &runner, cfg, "sleep", "1")
 
 	if !result.SignalDetected {
 		t.Error("expected SignalDetected to be true")
@@ -756,7 +756,7 @@ func TestRun_DetectsAllCompleteSignal(t *testing.T) {
 		PollInterval: 100 * time.Millisecond,
 	}
 
-	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+	result := runWithCommand(t, &runner, cfg, "sleep", "1")
 
 	if !result.AllComplete {
 		t.Error("expected AllComplete to be true")
@@ -796,7 +796,7 @@ func TestRun_CallsOnTaskDetected(t *testing.T) {
 		PollInterval: 100 * time.Millisecond,
 	}
 
-	runWithCommand(t, &runner, cfg, "sleep", "10")
+	runWithCommand(t, &runner, cfg, "sleep", "1")
 
 	if detectedTask != "implement feature X" {
 		t.Errorf("OnTaskDetected got %q, want %q", detectedTask, "implement feature X")
@@ -840,7 +840,7 @@ func TestPoll_NoWorkingOnLogLine(t *testing.T) {
 		PollInterval: 100 * time.Millisecond,
 	}
 
-	runWithCommand(t, &runner, cfg, "sleep", "10")
+	runWithCommand(t, &runner, cfg, "sleep", "1")
 
 	for _, msg := range log.logs {
 		if strings.Contains(msg, "Working on") {
@@ -933,7 +933,7 @@ func TestPoll_IdleTimeoutKillsSession(t *testing.T) {
 		IdleTimeout:  200 * time.Millisecond,
 	}
 
-	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+	result := runWithCommand(t, &runner, cfg, "sleep", "1")
 
 	if !result.IdleTimeout {
 		t.Error("expected IdleTimeout to be true")
@@ -987,7 +987,7 @@ func TestPoll_ActivityResetsIdleTimer(t *testing.T) {
 		IdleTimeout:  200 * time.Millisecond,
 	}
 
-	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+	result := runWithCommand(t, &runner, cfg, "sleep", "1")
 
 	if result.IdleTimeout {
 		t.Error("expected IdleTimeout to be false when activity resets timer")
@@ -1021,7 +1021,7 @@ func TestPoll_ProgressTimeoutShorterThanDefault(t *testing.T) {
 	}
 
 	start := time.Now()
-	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+	result := runWithCommand(t, &runner, cfg, "sleep", "1")
 	elapsed := time.Since(start)
 
 	if !result.IdleTimeout {
@@ -1058,7 +1058,7 @@ func TestPoll_ZeroIdleTimeoutDisablesDetection(t *testing.T) {
 		IdleTimeout:  0,
 	}
 
-	result := runWithCommand(t, &runner, cfg, "sleep", "10")
+	result := runWithCommand(t, &runner, cfg, "sleep", "1")
 
 	if result.IdleTimeout {
 		t.Error("expected no idle timeout when IdleTimeout is 0")
@@ -1079,7 +1079,7 @@ func TestStopProcessGroup_KillsChildProcesses(t *testing.T) {
 	dir := t.TempDir()
 	childPidFile := filepath.Join(dir, "child.pid")
 
-	script := fmt.Sprintf(`sleep 60 & echo $! > %s; wait`, childPidFile)
+	script := fmt.Sprintf(`sleep 1 & echo $! > %s; wait`, childPidFile)
 	cmd := exec.Command("bash", "-c", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
@@ -1129,7 +1129,7 @@ func TestStopProcessGroup_KillsPipelineProcesses(t *testing.T) {
 	// Simulate the stream filter: a bash pipeline where each stage writes
 	// its PID to a file, then blocks on read so it stays alive.
 	script := fmt.Sprintf(`set +m
-(echo $$ >> %s; sleep 60) | (echo $$ >> %s; sleep 60) | (echo $$ >> %s; sleep 60)
+(echo $$ >> %s; sleep 1) | (echo $$ >> %s; sleep 1) | (echo $$ >> %s; sleep 1)
 `, pidFile, pidFile, pidFile)
 
 	cmd := exec.Command("bash", "-c", script)
@@ -1255,7 +1255,7 @@ func TestRun_CleansUpStreamingOnReturn(t *testing.T) {
 	runner := &Runner{
 		Logger: &testLogger{},
 		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
-			cmd := exec.Command("sleep", "60")
+			cmd := exec.Command("sleep", "1")
 			cmd.Dir = cfg.WorkDir
 			cmd.Stdout = raw
 			cmd.Stderr = raw
@@ -1318,7 +1318,7 @@ func TestRun_KillsProcessOnContextCancel(t *testing.T) {
 	runner := &Runner{
 		Logger: &testLogger{},
 		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
-			script := fmt.Sprintf(`echo $$ > %s; sleep 60`, pidFile)
+			script := fmt.Sprintf(`echo $$ > %s; sleep 1`, pidFile)
 			cmd := exec.Command("bash", "-c", script)
 			cmd.Dir = cfg.WorkDir
 			cmd.Stdout = raw
@@ -1385,7 +1385,7 @@ func TestRun_SecondCallStopsPreviousStreaming(t *testing.T) {
 			if n == 2 {
 				pidFile = pidFile2
 			}
-			script := fmt.Sprintf(`echo $$ > %s; sleep 60`, pidFile)
+			script := fmt.Sprintf(`echo $$ > %s; sleep 1`, pidFile)
 			cmd := exec.Command("bash", "-c", script)
 			cmd.Dir = cfg.WorkDir
 			cmd.Stdout = raw
@@ -1496,7 +1496,7 @@ func TestRun_WaitsForOutputAfterSignal(t *testing.T) {
 	}
 
 	start := time.Now()
-	result := runWithCommand(t, &runner, cfg, "sleep", "30")
+	result := runWithCommand(t, &runner, cfg, "sleep", "1")
 	elapsed := time.Since(start)
 
 	if !result.SignalDetected {

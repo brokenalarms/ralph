@@ -143,7 +143,7 @@ func TestTestTimeout_Default(t *testing.T) {
 // block the loop indefinitely.
 func TestRunTests_Timeout(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\tsleep 600\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\tsleep 1\n"), 0o644)
 
 	saved := TestTimeout
 	TestTimeout = 50 * time.Millisecond
@@ -165,7 +165,7 @@ func TestRunTests_Timeout(t *testing.T) {
 // stops a long-running test suite instead of blocking indefinitely.
 func TestRunTests_CancelledContext(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\tsleep 60\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\tsleep 1\n"), 0o644)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
