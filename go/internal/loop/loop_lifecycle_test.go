@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -210,78 +209,6 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 	maxIter := st.ReadMaxIterations(0)
 	if maxIter != 10 {
 		t.Errorf("expected max_iterations=10 in state, got %d", maxIter)
-	}
-}
-
-// Verifies the stream task file is written with task ID and description,
-// proving the tmux pane title integration works correctly.
-// updateStreamTask is a standalone function — no Loop required.
-func TestLoop_UpdateStreamTask(t *testing.T) {
-	dir := t.TempDir()
-	ralphDir := filepath.Join(dir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-
-	updateStreamTask(ralphDir, "ralph-abc", "Add feature X", nil)
-
-	data, err := os.ReadFile(filepath.Join(ralphDir, ".stream-task"))
-	if err != nil {
-		t.Fatalf("expected stream task file, got error: %v", err)
-	}
-	if string(data) != "ralph-abc: Add feature X" {
-		t.Errorf("expected 'ralph-abc: Add feature X', got %q", string(data))
-	}
-
-	updateStreamTask(ralphDir, "", "Add feature Y", nil)
-	data, _ = os.ReadFile(filepath.Join(ralphDir, ".stream-task"))
-	if string(data) != "Add feature Y" {
-		t.Errorf("expected 'Add feature Y', got %q", string(data))
-	}
-
-	p := 3
-	updateStreamTask(ralphDir, "ralph-xyz", "Some task", &p)
-	data, _ = os.ReadFile(filepath.Join(ralphDir, ".stream-task"))
-	got := string(data)
-	if !strings.Contains(got, "[P3]") {
-		t.Errorf("stream task with priority should include [P3], got %q", got)
-	}
-	if !strings.Contains(got, "ralph-xyz") {
-		t.Errorf("stream task should include task ID, got %q", got)
-	}
-}
-
-// Verifies writeRunBranch persists the current branch name to .run-branch
-// so the shell pane-title updater displays the correct branch.
-// writeRunBranch is a standalone function — no Loop required.
-func TestLoop_WriteRunBranch(t *testing.T) {
-	dir := t.TempDir()
-	ralphDir := filepath.Join(dir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-
-	writeRunBranch(ralphDir, "ralph/project/01-fix-bug")
-
-	data, err := os.ReadFile(filepath.Join(ralphDir, ".run-branch"))
-	if err != nil {
-		t.Fatalf("expected .run-branch file, got error: %v", err)
-	}
-	if string(data) != "ralph/project/01-fix-bug" {
-		t.Errorf("expected 'ralph/project/01-fix-bug', got %q", string(data))
-	}
-}
-
-// writeRunBranch defaults to "ralph" when branch is empty.
-func TestLoop_WriteRunBranch_Default(t *testing.T) {
-	dir := t.TempDir()
-	ralphDir := filepath.Join(dir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-
-	writeRunBranch(ralphDir, "")
-
-	data, err := os.ReadFile(filepath.Join(ralphDir, ".run-branch"))
-	if err != nil {
-		t.Fatalf("expected .run-branch file, got error: %v", err)
-	}
-	if string(data) != "ralph" {
-		t.Errorf("expected 'ralph', got %q", string(data))
 	}
 }
 

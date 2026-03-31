@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -26,36 +25,6 @@ func isNewTask(st *state.Store, taskID, taskDesc string) bool {
 	return lastTask != taskDesc
 }
 
-func checkStopFile(ralphDir string) bool {
-	stopFile := filepath.Join(ralphDir, "stop")
-	if _, err := os.Stat(stopFile); err == nil {
-		os.Remove(stopFile)
-		return true
-	}
-	return false
-}
-
-func writeRunBranch(ralphDir, branch string) {
-	if branch == "" {
-		branch = "ralph"
-	}
-	os.WriteFile(filepath.Join(ralphDir, ".run-branch"), []byte(branch), 0o644)
-}
-
-func updateStreamTask(ralphDir, taskID, nextTask string, priority *int) {
-	streamTaskFile := filepath.Join(ralphDir, ".stream-task")
-	content := nextTask
-	if taskID != "" {
-		tag := logging.PriorityTag(priority)
-		if tag != "" {
-			content = taskID + ": " + tag + " " + nextTask
-		} else {
-			content = taskID + ": " + nextTask
-		}
-	}
-	os.WriteFile(streamTaskFile, []byte(content), 0o644)
-}
-
 // persistCompletedTask writes a completed task entry to state.json so
 // ralph-task can verify tasks weren't falsely closed and setStackHead can
 // find unmerged branches for stacking.
@@ -65,32 +34,6 @@ func persistCompletedTask(st *state.Store, logger *logging.Logger, taskID string
 	}
 	if err := st.AddCompletedTask(taskID, merged); err != nil {
 		logger.Warn("state", "AddCompletedTask: %v", err)
-	}
-}
-
-// recordCompletedTask appends a completed task label to .completed-tasks
-// so the plan pane can show which tasks were finished in this run.
-func recordCompletedTask(ralphDir, taskID, taskTitle string) {
-	label := taskID
-	if label == "" {
-		label = taskTitle
-	}
-	if label == "" {
-		return
-	}
-	path := filepath.Join(ralphDir, ".completed-tasks")
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	f.WriteString(label + "\n")
-}
-
-func touchFile(path string) {
-	f, err := os.Create(path)
-	if err == nil {
-		f.Close()
 	}
 }
 

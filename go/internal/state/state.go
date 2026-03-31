@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // CompletedTaskEntry records a task that completed (or was verified) during a
@@ -413,6 +415,85 @@ func setField(s *State, key, value string) {
 			data, _ := json.Marshal(value)
 			s.Overflow[key] = json.RawMessage(data)
 		}
+	}
+}
+
+// CheckStop returns true if a stop file exists in the ralph directory,
+// removing it afterward so the loop halts exactly once per signal.
+func (st *Store) CheckStop() bool {
+	stopFile := filepath.Join(filepath.Dir(st.path), "stop")
+	if _, err := os.Stat(stopFile); err == nil {
+		os.Remove(stopFile)
+		return true
+	}
+	return false
+}
+
+// WriteRunBranch writes the current branch name to .run-branch so the shell
+// pane-title updater can display it. Defaults to "ralph" when branch is empty.
+func (st *Store) WriteRunBranch(branch string) {
+	if branch == "" {
+		branch = "ralph"
+	}
+	os.WriteFile(filepath.Join(filepath.Dir(st.path), ".run-branch"), []byte(branch), 0o644)
+}
+
+// UpdateStreamTask writes the current task to .stream-task for the tmux pane
+// title integration. Formats as "taskID: [Pn] title" when ID and priority
+// are present.
+func (st *Store) UpdateStreamTask(taskID, nextTask string, priority *int) {
+	content := nextTask
+	if taskID != "" {
+		tag := logging.PriorityTag(priority)
+		if tag != "" {
+			content = taskID + ": " + tag + " " + nextTask
+		} else {
+			content = taskID + ": " + nextTask
+		}
+	}
+	os.WriteFile(filepath.Join(filepath.Dir(st.path), ".stream-task"), []byte(content), 0o644)
+}
+
+// RecordCompletedTask appends a completed task label to .completed-tasks so
+// the plan pane can show which tasks were finished in this run.
+func (st *Store) RecordCompletedTask(taskID, taskTitle string) {
+	label := taskID
+	if label == "" {
+		label = taskTitle
+	}
+	if label == "" {
+		return
+	}
+	path := filepath.Join(filepath.Dir(st.path), ".completed-tasks")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.WriteString(label + "\n")
+}
+
+// ClearCompletedTasksFile removes .completed-tasks at the start of each run
+// so the plan pane shows only the current session's completions.
+func (st *Store) ClearCompletedTasksFile() {
+	os.Remove(filepath.Join(filepath.Dir(st.path), ".completed-tasks"))
+}
+
+// TouchPlanFlash touches .plan-flash to trigger a UI flash refresh.
+func (st *Store) TouchPlanFlash() {
+	touch(filepath.Join(filepath.Dir(st.path), ".plan-flash"))
+}
+
+// TouchPlanRefresh touches .plan-refresh to trigger a plan UI refresh.
+func (st *Store) TouchPlanRefresh() {
+	touch(filepath.Join(filepath.Dir(st.path), ".plan-refresh"))
+}
+
+// touch creates or updates the modification time of a file.
+func touch(path string) {
+	f, err := os.Create(path)
+	if err == nil {
+		f.Close()
 	}
 }
 

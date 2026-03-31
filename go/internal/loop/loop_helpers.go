@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/analyzer"
@@ -28,7 +27,7 @@ func (l *Loop) initialize(ctx context.Context) error {
 		l.logger.Log("beads", "Loaded %d skipped tasks from state", len(skipped))
 	}
 
-	os.Remove(filepath.Join(l.cfg.Dirs.RalphDir, ".completed-tasks"))
+	l.state.ClearCompletedTasksFile()
 
 	return l.initWorktree(ctx)
 }
@@ -65,7 +64,7 @@ func (l *Loop) initWorktree(ctx context.Context) error {
 	}
 
 	l.logger.Log("git", "Branch: %s", l.git.GetWorktreeBranch())
-	writeRunBranch(l.cfg.Dirs.RalphDir, l.git.GetWorktreeBranch())
+	l.state.WriteRunBranch(l.git.GetWorktreeBranch())
 	return nil
 }
 
@@ -73,8 +72,8 @@ func (l *Loop) waitForTasks(ctx context.Context) bool {
 	const waitPollInterval = 5 * time.Second
 	l.logger.Log("beads", "Waiting for new tasks (polling every %s)...", waitPollInterval)
 	l.state.Write("status", "waiting")
-	updateStreamTask(l.cfg.Dirs.RalphDir, "", "Waiting for tasks...", nil)
-	touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
+	l.state.UpdateStreamTask("", "Waiting for tasks...", nil)
+	l.state.TouchPlanRefresh()
 	if l.onWaitFunc != nil {
 		l.onWaitFunc()
 	}
@@ -103,7 +102,7 @@ func (l *Loop) waitForTasks(ctx context.Context) bool {
 // pollForTasks checks once for new tasks. Returns (found=true, _) if tasks
 // are available, (false, done=true) if a stop condition was hit.
 func (l *Loop) pollForTasks() (found, done bool) {
-	if checkStopFile(l.cfg.Dirs.RalphDir) {
+	if l.state.CheckStop() {
 		l.logger.Warn("", "Stop file detected - halting")
 		l.state.Write("status", "stopped")
 		return false, true
@@ -118,7 +117,7 @@ func (l *Loop) pollForTasks() (found, done bool) {
 	}
 	if hasRemaining {
 		l.logger.Success("beads", "New tasks detected!")
-		touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
+		l.state.TouchPlanRefresh()
 		return true, false
 	}
 	return false, false
@@ -126,10 +125,10 @@ func (l *Loop) pollForTasks() (found, done bool) {
 
 // beginIteration records that a task iteration is starting.
 func (l *Loop) beginIteration(task taskContext, iteration int) {
-	touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
+	l.state.TouchPlanRefresh()
 	l.state.BeginIteration(task.id, task.title, iteration)
 	l.git.TagTaskStart(task.id)
-	updateStreamTask(l.cfg.Dirs.RalphDir, task.id, task.title, task.info.Priority)
+	l.state.UpdateStreamTask(task.id, task.title, task.info.Priority)
 }
 
 func (l *Loop) waitForRate(ctx context.Context) bool {

@@ -14,12 +14,10 @@ func newSelectionParams(t *testing.T, backend *testutil.StubBackend) (selectNext
 	t.Helper()
 	dir, st := setupTestDir(t)
 	logger := logging.New(nil)
-	ralphDir := dir + "/.ralph"
 	return selectNextTaskParams{
 		backend:           backend,
 		state:             st,
 		logger:            logger,
-		ralphDir:          ralphDir,
 		completedIDs:      map[string]bool{},
 		waitForTasks:      func(_ context.Context) bool { return false },
 		flushUnpushedWork: func(_ context.Context) {},
