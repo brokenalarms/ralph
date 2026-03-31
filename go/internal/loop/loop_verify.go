@@ -29,14 +29,15 @@ func (l *Loop) runPreIterationTests(ctx context.Context) string {
 }
 
 // tryFixCI spawns a fix agent to address CI failures, force-pushes the
-// new commits, and returns true if the fix was pushed (ready for merge retry).
-// Uses force-push instead of pushAndCreatePR because the PR already exists
-// and pushAndCreatePR skips the push when a PR is open.
-func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, nextTask, workDir, rawLogPath string) bool {
+// new commits, and returns a CIFixResult:
+//   - CIFixApplied:   fix was pushed, ready for merge retry
+//   - CIFixNoCommits: agent ran but made no commits (infrastructure failure)
+//   - CIFixFailed:    agent error or push failure
+func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, nextTask, workDir, rawLogPath string) git.CIFixResult {
 	ciLog := l.getCIFailureLog(ciErr.PRNumber)
 	headBefore := l.git.HeadRev()
 	if !l.verifier.TryFixCI(ctx, ciLog, ciErr, nextTask, workDir, rawLogPath) {
-		return false
+		return git.CIFixFailed
 	}
 
 	// Fix agent may leave uncommitted changes — commit them before checking HEAD.
@@ -47,8 +48,8 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, 
 
 	headAfter := l.git.HeadRev()
 	if headBefore == headAfter {
-		l.logger.Warn("git", "Fix agent made no new commits — nothing to push")
-		return false
+		l.logger.Warn("git", "Fix agent made no new commits — likely infrastructure failure")
+		return git.CIFixNoCommits
 	}
 
 	// Rebase onto latest main before pushing so the branch includes
@@ -61,9 +62,9 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, taskID, 
 	l.logger.Log("git", "Fix agent committed — force-pushing")
 	if err := l.git.ForcePush(ctx); err != nil {
 		l.logger.Warn("git", "Force-push after CI fix failed: %v", err)
-		return false
+		return git.CIFixFailed
 	}
-	return true
+	return git.CIFixApplied
 }
 
 // tryFixConflict spawns a conflict resolution agent, force-pushes the

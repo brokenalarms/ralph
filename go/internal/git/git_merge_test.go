@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // PostMergeUpdateMain updates local main to match origin/main after a merge,
@@ -790,9 +791,9 @@ func TestMergeWithRetry_DelegatesCIFailure(t *testing.T) {
 
 	ciFixCalled := false
 	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
-		OnCIFailure: func(ciErr *CIFailureError) bool {
+		OnCIFailure: func(ciErr *CIFailureError) CIFixResult {
 			ciFixCalled = true
-			return true
+			return CIFixApplied
 		},
 	})
 	if err != nil {
@@ -840,9 +841,9 @@ func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 
 	ciFixCalls := 0
 	_, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
-		OnCIFailure: func(ciErr *CIFailureError) bool {
+		OnCIFailure: func(ciErr *CIFailureError) CIFixResult {
 			ciFixCalls++
-			return true
+			return CIFixApplied
 		},
 	})
 	if err == nil {
@@ -1047,10 +1048,10 @@ func TestMergeWithRetry_PushesFixAgentWorkBeforeRetry(t *testing.T) {
 
 	ciFixCalled := false
 	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
-		OnCIFailure: func(ciErr *CIFailureError) bool {
+		OnCIFailure: func(ciErr *CIFailureError) CIFixResult {
 			ciFixCalled = true
 			events = append(events, "fix-applied")
-			return true
+			return CIFixApplied
 		},
 	})
 	if err != nil {
@@ -1701,5 +1702,133 @@ func TestCreatePR_ReopensClosedPROnCreateFailure(t *testing.T) {
 	}
 	if !gh.ReopenPRCalled {
 		t.Error("expected ReopenPR to be called")
+	}
+}
+
+// When the fix agent makes no commits (CIFixNoCommits), MergeWithRetry retries
+// with exponential backoff instead of immediately giving up. After MaxInfraRetries,
+// it returns the CI error. This covers the case where CI fails due to infrastructure
+// issues (billing, runner allocation) rather than actual test failures.
+func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
+	project, _ := initBareRepo(t)
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		BaseBranch:     "main",
+		WorkDir:        filepath.Join(t.TempDir(), "wt"),
+		WorktreeBranch: "ralph/test/01-infra",
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      "77",
+		Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
+		MergeErr:    fmt.Errorf("CI failed"),
+	}
+	mgr.GitHub = gh
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	mgr.Runner = runner
+
+	noCommitCalls := 0
+	var sleepDelays []time.Duration
+	_, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
+		OnCIFailure: func(ciErr *CIFailureError) CIFixResult {
+			noCommitCalls++
+			return CIFixNoCommits
+		},
+		SleepFunc: func(d time.Duration) {
+			sleepDelays = append(sleepDelays, d)
+		},
+	})
+
+	if err == nil {
+		t.Fatal("expected error after exhausting infrastructure retries")
+	}
+
+	if noCommitCalls != MaxInfraRetries+1 {
+		t.Errorf("expected %d CI fix calls (initial + %d retries), got %d", MaxInfraRetries+1, MaxInfraRetries, noCommitCalls)
+	}
+
+	if len(sleepDelays) != MaxInfraRetries {
+		t.Fatalf("expected %d backoff sleeps, got %d", MaxInfraRetries, len(sleepDelays))
+	}
+
+	// Verify exponential backoff: 30s, 60s, 120s
+	expectedDelays := []time.Duration{30 * time.Second, 60 * time.Second, 120 * time.Second}
+	for i, want := range expectedDelays {
+		if sleepDelays[i] != want {
+			t.Errorf("backoff[%d] = %s, want %s", i, sleepDelays[i], want)
+		}
+	}
+}
+
+// When the fix agent returns CIFixNoCommits but CI eventually passes on retry,
+// the merge succeeds. Infrastructure issues are transient — backoff gives CI
+// time to recover.
+func TestMergeWithRetry_InfraFailureRecovery(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	mgr := &Manager{
+		ProjectDir:     project,
+		BaseBranch:     "main",
+		WorkDir:        filepath.Join(t.TempDir(), "wt"),
+		RalphDir:       ralphDir,
+		WorktreeBranch: "ralph/test/01-infra-recover",
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	callCount := 0
+	gh := &sequentialMergeGitHub{
+		StubGitHub: StubGitHub{
+			IsAvailable: true,
+			OpenPR:      "88",
+			Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
+		},
+		mergeResults: []mergeResult{
+			{output: "merged", err: nil},
+		},
+	}
+	mgr.GitHub = gh
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	mgr.Runner = runner
+
+	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
+		OnCIFailure: func(ciErr *CIFailureError) CIFixResult {
+			callCount++
+			return CIFixNoCommits
+		},
+		SleepFunc: func(d time.Duration) {},
+	})
+
+	if err != nil {
+		t.Fatalf("expected merge to succeed after infra recovery, got: %v", err)
+	}
+	if !merged {
+		t.Error("expected merge to succeed")
+	}
+	if callCount != 1 {
+		t.Errorf("expected 1 infra retry before recovery, got %d", callCount)
 	}
 }

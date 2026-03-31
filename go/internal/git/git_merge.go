@@ -5,9 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/tasks"
+)
+
+// CIFixResult describes the outcome of a CI fix attempt.
+type CIFixResult int
+
+const (
+	// CIFixFailed means the fix agent ran but could not fix the issue.
+	CIFixFailed CIFixResult = iota
+	// CIFixApplied means the fix agent pushed new commits.
+	CIFixApplied
+	// CIFixNoCommits means the fix agent ran but made no commits,
+	// indicating an infrastructure failure rather than a code issue.
+	CIFixNoCommits
 )
 
 // resolveBaseBranch returns PrevBranch if set, otherwise the default branch.
@@ -485,18 +499,37 @@ func (m *Manager) DeleteRemoteBranch() {
 // after conflict resolution and CI fixes.
 const MaxMergeAttempts = 4
 
+// MaxInfraRetries is the number of times to retry when CI fails due to
+// infrastructure issues (fix agent ran but made no commits).
+const MaxInfraRetries = 3
+
+// infraBackoff returns the delay before retrying after an infrastructure failure.
+// Uses exponential backoff: 30s, 60s, 120s.
+func infraBackoff(attempt int) time.Duration {
+	d := 30 * time.Second
+	for i := 0; i < attempt; i++ {
+		d *= 2
+	}
+	return d
+}
+
 // MergeRetryOpts configures the merge-with-retry pipeline.
 type MergeRetryOpts struct {
 	// OnCIFailure is called when CI checks fail on the PR. It should attempt
-	// to fix the failure (e.g. by spawning a fix agent) and return true if
-	// the fix was applied and a retry should be attempted.
-	OnCIFailure func(ciErr *CIFailureError) bool
+	// to fix the failure (e.g. by spawning a fix agent) and return a result:
+	//   CIFixApplied   — fix was pushed, retry merge after waiting for CI
+	//   CIFixNoCommits — no commits (infrastructure failure), retry with backoff
+	//   CIFixFailed    — agent couldn't fix, stop retrying
+	OnCIFailure func(ciErr *CIFailureError) CIFixResult
 
 	// OnConflict is called when automatic rebase cannot resolve merge
 	// conflicts (UnresolvedConflictError). It should spawn a conflict
 	// resolution agent and return true if the conflict was resolved and
 	// force-pushed, ready for a merge retry.
 	OnConflict func(conflictErr *UnresolvedConflictError) bool
+
+	// SleepFunc is used for infrastructure backoff delays. Defaults to time.Sleep.
+	SleepFunc func(time.Duration)
 }
 
 // ResolveConflict rebases onto the default branch and force-pushes to
@@ -525,8 +558,17 @@ func (m *Manager) ResolveConflict(ctx context.Context) error {
 
 // MergeWithRetry is the single merge pipeline: try merge, detect error type,
 // handle it, retry. Conflicts trigger rebase + force-push; CI failures
-// delegate to the OnCIFailure callback. Both share a single retry budget.
+// delegate to the OnCIFailure callback. Code fix retries share the main
+// attempt budget. Infrastructure failures (no commits) use a separate
+// retry counter with exponential backoff.
 func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, error) {
+	sleepFn := opts.SleepFunc
+	if sleepFn == nil {
+		sleepFn = time.Sleep
+	}
+
+	infraRetries := 0
+
 	for attempt := 0; attempt < MaxMergeAttempts; attempt++ {
 		merged, err := m.AutoMergeCurrentBranch(ctx)
 		if err == nil {
@@ -556,7 +598,12 @@ func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool
 
 		var ciErr *CIFailureError
 		if errors.As(err, &ciErr) {
-			if opts.OnCIFailure != nil && opts.OnCIFailure(ciErr) {
+			if opts.OnCIFailure == nil {
+				return false, err
+			}
+			result := opts.OnCIFailure(ciErr)
+			switch result {
+			case CIFixApplied:
 				// Fix was applied and force-pushed. Wait for new CI on the
 				// updated HEAD before retrying merge — the old check status
 				// is stale after force-push.
@@ -570,8 +617,23 @@ func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool
 					m.Logger.Warn("ci", "CI still failing after fix — will retry")
 				}
 				continue
+			case CIFixNoCommits:
+				// Infrastructure failure — fix agent found no code issue.
+				// Retry with backoff instead of giving up.
+				if infraRetries >= MaxInfraRetries {
+					m.Logger.Warn("ci", "Infrastructure retries exhausted (%d) — giving up", MaxInfraRetries)
+					return false, err
+				}
+				delay := infraBackoff(infraRetries)
+				m.Logger.Log("ci", "CI infrastructure failure — retrying in %s (%d/%d)", delay, infraRetries+1, MaxInfraRetries)
+				sleepFn(delay)
+				infraRetries++
+				// Don't consume the code-fix attempt budget for infra retries.
+				attempt--
+				continue
+			default:
+				return false, err
 			}
-			return false, err
 		}
 
 		return false, err
