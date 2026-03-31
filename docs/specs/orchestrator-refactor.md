@@ -349,6 +349,22 @@ by the state module — the orchestrator calls `state.CheckStop()` not
 `checkStopFile()`, calls `state.BeginIteration()` not `touchFile` +
 `updateStreamTask` + `writeRunBranch` separately.
 
+## Follow-up: Loop Struct Is a God Object
+
+The `Loop` struct holds references to every module (git, state, tasks,
+limiter, runner, verifier, analyzer, attempts, logger, signals) plus
+11 function overrides for testing. Every method on `Loop` can reach into
+any module through `l.`. There are no boundaries between concerns —
+`handlePostSignal` can call `l.git`, `l.cfg.TaskBackend`, `l.state`,
+`l.logger`, `l.attempts` in a single function.
+
+The orchestrator now reads linearly and each function has a clear
+responsibility, but the god object means any function *could* reach
+anywhere. The fix: `Run()` composes functions that take what they need
+as parameters, not methods on a struct that connects everything. Test
+function overrides (mergeFunc, pushPRFunc, etc.) become interface
+injections or functional options on the methods that use them.
+
 ## Follow-up: Module Boundary Enforcement
 
 Every module currently uses a god object pattern (e.g. `git.Manager`,
@@ -362,8 +378,7 @@ need as parameters and return results. Private functions compose internally.
 No struct that connects everything. The package itself is the encapsulation
 boundary — lowercase functions are private, uppercase are the API.
 
-This applies to: git, tasks, verify, logging, claude/agent. It's a
-separate phase that follows the orchestrator refactor.
+This applies to: loop, git, tasks, verify, logging, claude/agent.
 
 ## What This Does NOT Change
 
