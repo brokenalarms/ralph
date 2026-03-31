@@ -59,6 +59,11 @@ func (l *Loop) waitForTasks(ctx context.Context) bool {
 		l.onWaitFunc()
 	}
 
+	// Check immediately before waiting for the first tick.
+	if found, done := l.pollForTasks(); found || done {
+		return found
+	}
+
 	ticker := time.NewTicker(waitPollInterval)
 	defer ticker.Stop()
 
@@ -68,26 +73,35 @@ func (l *Loop) waitForTasks(ctx context.Context) bool {
 			l.state.Write("status", "stopped")
 			return false
 		case <-ticker.C:
-			if checkStopFile(l.cfg.Dirs.RalphDir) {
-				l.logger.Warn("", "Stop file detected - halting")
-				l.state.Write("status", "stopped")
-				return false
-			}
-			if skipped, err := l.state.GetSkippedTasks(); err == nil {
-				l.cfg.TaskBackend.SetSkippedIDs(skipped)
-			}
-			hasRemaining, err := l.cfg.TaskBackend.HasRemaining()
-			if err != nil {
-				l.logger.Warn("beads", "Task check error during wait: %v", err)
-				continue
-			}
-			if hasRemaining {
-				l.logger.Success("beads", "New tasks detected!")
-				touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
-				return true
+			if found, done := l.pollForTasks(); found || done {
+				return found
 			}
 		}
 	}
+}
+
+// pollForTasks checks once for new tasks. Returns (found=true, _) if tasks
+// are available, (false, done=true) if a stop condition was hit.
+func (l *Loop) pollForTasks() (found, done bool) {
+	if checkStopFile(l.cfg.Dirs.RalphDir) {
+		l.logger.Warn("", "Stop file detected - halting")
+		l.state.Write("status", "stopped")
+		return false, true
+	}
+	if skipped, err := l.state.GetSkippedTasks(); err == nil {
+		l.cfg.TaskBackend.SetSkippedIDs(skipped)
+	}
+	hasRemaining, err := l.cfg.TaskBackend.HasRemaining()
+	if err != nil {
+		l.logger.Warn("beads", "Task check error during wait: %v", err)
+		return false, false
+	}
+	if hasRemaining {
+		l.logger.Success("beads", "New tasks detected!")
+		touchFile(filepath.Join(l.cfg.Dirs.RalphDir, ".plan-refresh"))
+		return true, false
+	}
+	return false, false
 }
 
 func (l *Loop) waitForRate(ctx context.Context) bool {
