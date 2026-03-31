@@ -153,13 +153,13 @@ func TestBD_GetNextTaskID_FromReady(t *testing.T) {
 	}
 }
 
-// Proves: in-progress tasks are resumed when priority is equal to ready tasks.
+// Proves: in-progress tasks from bd ready are resumed when priority is equal.
 func TestBD_GetNextTask_PrefersInProgressAtSamePriority(t *testing.T) {
 	runner := mockBD(
 		"5",
 		map[string]string{"open": "3", "closed": "2", "in_progress": "1"},
-		`[{"id":"wip-42","title":"Half-done feature","priority":2}]`,
-		`[{"id":"abc123","title":"Fix the auth module","priority":2}]`,
+		"[]",
+		`[{"id":"abc123","title":"Fix the auth module","priority":2,"status":"open"},{"id":"wip-42","title":"Half-done feature","priority":2,"status":"in_progress"}]`,
 	)
 	b := setupBD(t, runner)
 	got, _ := b.GetNextTask()
@@ -173,8 +173,8 @@ func TestBD_GetNextTaskID_PrefersInProgressAtSamePriority(t *testing.T) {
 	runner := mockBD(
 		"5",
 		map[string]string{"open": "3", "closed": "2", "in_progress": "1"},
-		`[{"id":"wip-42","title":"Half-done feature","priority":2}]`,
-		`[{"id":"abc123","title":"Fix the auth module","priority":2}]`,
+		"[]",
+		`[{"id":"abc123","title":"Fix the auth module","priority":2,"status":"open"},{"id":"wip-42","title":"Half-done feature","priority":2,"status":"in_progress"}]`,
 	)
 	b := setupBD(t, runner)
 	got, _ := b.GetNextTaskID()
@@ -510,13 +510,6 @@ func TestBD_GetNextTaskInfo_ReturnsConsistentPair(t *testing.T) {
 			return "", errors.New("no args")
 		}
 		switch args[0] {
-		case "list":
-			callCount++
-			joined := strings.Join(args, " ")
-			if strings.Contains(joined, "in_progress") && strings.Contains(joined, "--json") {
-				return "[]", nil
-			}
-			return "[]", nil
 		case "ready":
 			callCount++
 			if strings.Contains(strings.Join(args, " "), "--json") {
@@ -537,8 +530,8 @@ func TestBD_GetNextTaskInfo_ReturnsConsistentPair(t *testing.T) {
 	if info.Title != "Implement login" {
 		t.Errorf("title = %q, want %q", info.Title, "Implement login")
 	}
-	if callCount != 2 {
-		t.Errorf("expected 2 bd calls (list + ready), got %d", callCount)
+	if callCount != 1 {
+		t.Errorf("expected 1 bd call (ready only), got %d", callCount)
 	}
 }
 
@@ -547,8 +540,8 @@ func TestBD_GetNextTaskInfo_PrefersInProgressAtSamePriority(t *testing.T) {
 	runner := mockBD(
 		"3",
 		map[string]string{"open": "1", "closed": "1", "in_progress": "1"},
-		`[{"id":"wip-99","title":"Resume this","priority":2}]`,
-		`[{"id":"new-1","title":"Start fresh","priority":2}]`,
+		"[]",
+		`[{"id":"new-1","title":"Start fresh","priority":2,"status":"open"},{"id":"wip-99","title":"Resume this","priority":2,"status":"in_progress"}]`,
 	)
 	b := setupBD(t, runner)
 	info, err := b.GetNextTaskInfo()
@@ -560,50 +553,30 @@ func TestBD_GetNextTaskInfo_PrefersInProgressAtSamePriority(t *testing.T) {
 	}
 }
 
-// Proves: a higher-priority ready task preempts a lower-priority in-progress
-// task, and the in-progress task is reopened via bd update.
+// Proves: a higher-priority task is selected over a lower-priority in-progress
+// task from the same ready set.
 func TestBD_GetNextTask_HigherPriorityReadyPreempts(t *testing.T) {
-	var reopenedID string
-	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) == 0 {
-			return "", errors.New("no args")
-		}
-		switch args[0] {
-		case "list":
-			joined := strings.Join(args, " ")
-			if strings.Contains(joined, "in_progress") && strings.Contains(joined, "--json") {
-				return `[{"id":"wip-1","title":"P3 feature","priority":3}]`, nil
-			}
-			return "[]", nil
-		case "ready":
-			if strings.Contains(strings.Join(args, " "), "--json") {
-				return `[{"id":"hot-1","title":"P0 critical bug","priority":0}]`, nil
-			}
-			return "", nil
-		case "update":
-			reopenedID = args[1]
-			return "", nil
-		}
-		return "", nil
-	}
+	runner := mockBD(
+		"5",
+		map[string]string{"open": "1", "closed": "2", "in_progress": "1"},
+		"[]",
+		`[{"id":"wip-1","title":"P3 feature","priority":3,"status":"in_progress"},{"id":"hot-1","title":"P0 critical bug","priority":0,"status":"open"}]`,
+	)
 	b := setupBD(t, runner)
 	got, _ := b.GetNextTask()
 	if got != "P0 critical bug" {
 		t.Errorf("GetNextTask = %q, want %q", got, "P0 critical bug")
 	}
-	if reopenedID != "wip-1" {
-		t.Errorf("expected in-progress task wip-1 to be reopened, got %q", reopenedID)
-	}
 }
 
-// Proves: a lower-priority ready task does not preempt a higher-priority
-// in-progress task.
+// Proves: a higher-priority in-progress task is selected over a lower-priority
+// open task from the same ready set.
 func TestBD_GetNextTask_LowerPriorityReadyDoesNotPreempt(t *testing.T) {
 	runner := mockBD(
 		"5",
 		map[string]string{"open": "1", "closed": "2", "in_progress": "1"},
-		`[{"id":"wip-1","title":"P1 important","priority":1}]`,
-		`[{"id":"new-1","title":"P3 backlog","priority":3}]`,
+		"[]",
+		`[{"id":"wip-1","title":"P1 important","priority":1,"status":"in_progress"},{"id":"new-1","title":"P3 backlog","priority":3,"status":"open"}]`,
 	)
 	b := setupBD(t, runner)
 	got, _ := b.GetNextTask()
@@ -612,14 +585,14 @@ func TestBD_GetNextTask_LowerPriorityReadyDoesNotPreempt(t *testing.T) {
 	}
 }
 
-// Proves: when in-progress task has no explicit priority, default (2) is used
+// Proves: when a task has no explicit priority, default (2) is used
 // for comparison.
 func TestBD_GetNextTask_DefaultPriorityComparison(t *testing.T) {
 	runner := mockBD(
 		"5",
 		map[string]string{"open": "1", "closed": "2", "in_progress": "1"},
-		`[{"id":"wip-1","title":"No priority set"}]`,
-		`[{"id":"hot-1","title":"P0 urgent","priority":0}]`,
+		"[]",
+		`[{"id":"wip-1","title":"No priority set","status":"in_progress"},{"id":"hot-1","title":"P0 urgent","priority":0}]`,
 	)
 	b := setupBD(t, runner)
 	got, _ := b.GetNextTask()
@@ -1210,6 +1183,95 @@ func TestBD_SetSkippedIDs_EmptyClearsSkips(t *testing.T) {
 	}
 	if info.ID != "ralph-abc" {
 		t.Errorf("expected ralph-abc after clearing skips, got %q", info.ID)
+	}
+}
+
+// Proves: in_progress task NOT in bd ready is not selected (AC #5, #6).
+func TestBD_GetNextTask_InProgressNotInReadyIsSkipped(t *testing.T) {
+	// bd list --status in_progress returns a task, but bd ready does NOT
+	// include it (e.g. it has unsatisfied dependencies). getNextIssue must
+	// not select it.
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		switch args[0] {
+		case "list":
+			joined := strings.Join(args, " ")
+			if strings.Contains(joined, "in_progress") && strings.Contains(joined, "--json") {
+				return `[{"id":"stuck-1","title":"Stuck task","priority":0,"status":"in_progress"}]`, nil
+			}
+			return "[]", nil
+		case "ready":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[{"id":"ok-1","title":"Ready task","priority":2,"status":"open"}]`, nil
+			}
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	got, _ := b.GetNextTask()
+	if got == "Stuck task" {
+		t.Error("getNextIssue selected in_progress task not in bd ready — should only use bd ready")
+	}
+	if got != "Ready task" {
+		t.Errorf("GetNextTask = %q, want %q", got, "Ready task")
+	}
+}
+
+// Proves: from the ready set, in_progress tasks are preferred over open tasks
+// at the same priority.
+func TestBD_GetNextTask_ReadyPrefersInProgress(t *testing.T) {
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		switch args[0] {
+		case "ready":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[
+					{"id":"open-1","title":"Open task","priority":2,"status":"open"},
+					{"id":"wip-1","title":"WIP task","priority":2,"status":"in_progress"}
+				]`, nil
+			}
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	info, err := b.GetNextTaskInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != "wip-1" {
+		t.Errorf("expected wip-1 (in_progress preferred), got %q", info.ID)
+	}
+}
+
+// Proves: no bd list calls remain in getNextIssue — only bd ready is used.
+func TestBD_GetNextTask_NoBDListCalls(t *testing.T) {
+	var listCalled bool
+	runner := func(_ context.Context, dir string, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", errors.New("no args")
+		}
+		switch args[0] {
+		case "list":
+			listCalled = true
+			return "[]", nil
+		case "ready":
+			if strings.Contains(strings.Join(args, " "), "--json") {
+				return `[{"id":"t-1","title":"A task"}]`, nil
+			}
+			return "", nil
+		}
+		return "", nil
+	}
+	b := setupBD(t, runner)
+	b.GetNextTask()
+	if listCalled {
+		t.Error("getNextIssue must not call bd list — only bd ready")
 	}
 }
 
