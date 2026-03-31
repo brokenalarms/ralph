@@ -239,45 +239,22 @@ type bdIssue struct {
 	Title    string `json:"title"`
 	Priority *int   `json:"priority,omitempty"`
 	Type     string `json:"type,omitempty"`
+	Status   string `json:"status,omitempty"`
 }
 
-// getNextIssue returns the highest-priority issue across in-progress and
-// ready queues. If a ready task has strictly higher priority (lower number)
-// than the in-progress task, the in-progress task is reopened and the ready
-// task is returned instead.
+// getNextIssue returns the highest-priority issue from bd ready.
+// Within the same priority and type rank, in_progress tasks are preferred
+// so interrupted work is resumed first.
 func (b *BD) getNextIssue() (bdIssue, error) {
-	ctx := b.ctx()
-	run := b.runner()
-
-	var inProgress, ready bdIssue
-	var hasIP, hasReady bool
-
-	out, err := run(ctx, b.ProjectDir, "list", "--status", "in_progress", "--flat", "--json")
-	if err == nil {
-		inProgress, hasIP = bestIssue(out, b.skippedIDs)
+	out, err := b.runner()(b.ctx(), b.ProjectDir, "ready", "--json")
+	if err != nil {
+		return bdIssue{}, nil
 	}
-
-	out, err = run(ctx, b.ProjectDir, "ready", "--json")
-	if err == nil {
-		ready, hasReady = bestIssue(out, b.skippedIDs)
+	issue, ok := bestIssue(out, b.skippedIDs)
+	if !ok {
+		return bdIssue{}, nil
 	}
-
-	if hasIP && hasReady {
-		ipPri := issuePriority(inProgress)
-		rdPri := issuePriority(ready)
-		if rdPri < ipPri {
-			_, _ = run(ctx, b.ProjectDir, "update", inProgress.ID, "--status=open")
-			return ready, nil
-		}
-		return inProgress, nil
-	}
-	if hasIP {
-		return inProgress, nil
-	}
-	if hasReady {
-		return ready, nil
-	}
-	return bdIssue{}, nil
+	return issue, nil
 }
 
 // issuePriority returns the numeric priority, defaulting to 2 (medium)
@@ -304,8 +281,8 @@ func issueTypeRank(issue bdIssue) int {
 
 // bestIssue parses all issues from JSON and returns the one with the
 // highest priority (lowest number), breaking ties by type rank
-// (bug < task < feature/enhancement). Issues whose ID appears in skip
-// are excluded from selection.
+// (bug < task < feature/enhancement), then by status (in_progress before
+// open). Issues whose ID appears in skip are excluded from selection.
 func bestIssue(jsonStr string, skip map[string]bool) (bdIssue, bool) {
 	var issues []bdIssue
 	if err := json.Unmarshal([]byte(jsonStr), &issues); err != nil || len(issues) == 0 {
@@ -325,7 +302,13 @@ func bestIssue(jsonStr string, skip map[string]bool) (bdIssue, bool) {
 			continue
 		}
 		bp, ip := issuePriority(issues[best]), issuePriority(issue)
-		if ip < bp || (ip == bp && issueTypeRank(issue) < issueTypeRank(issues[best])) {
+		bt, it := issueTypeRank(issues[best]), issueTypeRank(issue)
+		switch {
+		case ip < bp:
+			best = i
+		case ip == bp && it < bt:
+			best = i
+		case ip == bp && it == bt && issue.Status == "in_progress" && issues[best].Status != "in_progress":
 			best = i
 		}
 	}
