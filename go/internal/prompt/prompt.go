@@ -133,16 +133,20 @@ func BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir string) (string, er
 	if err != nil {
 		return "", err
 	}
+	beadCreation, err := readTemplate(promptsDir, "bead-creation.md")
+	if err != nil {
+		return "", err
+	}
 	r := strings.NewReplacer(
 		"{{PROJECT_DIR}}", projectDir,
 		"{{RALPH_DIR}}", ralphDir,
 	)
-	return r.Replace(tmpl), nil
+	return r.Replace(tmpl + "\n" + beadCreation), nil
 }
 
 // BuildReviewPrompt assembles the system prompt for the interactive review
-// session, combining the shared quality standards with the refactor style guide
-// and post-mortem reflection analysis.
+// session, combining the shared quality standards with the refactor style guide,
+// post-mortem reflection analysis, and shared bead creation guidance.
 func BuildReviewPrompt(promptsDir, projectDir, ralphDir, reflections string) (string, error) {
 	shared, err := readTemplate(promptsDir, "shared.md")
 	if err != nil {
@@ -152,8 +156,12 @@ func BuildReviewPrompt(promptsDir, projectDir, ralphDir, reflections string) (st
 	if err != nil {
 		return "", err
 	}
+	beadCreation, err := readTemplate(promptsDir, "bead-creation.md")
+	if err != nil {
+		return "", err
+	}
 
-	tmpl := shared + "\n" + reviewInstructions(projectDir, ralphDir, style, reflections)
+	tmpl := shared + "\n" + reviewInstructions(projectDir, ralphDir, style, reflections) + "\n" + beadCreation
 	return tmpl, nil
 }
 
@@ -213,10 +221,8 @@ For each finding:
 2. Propose the action (add to AGENTS.md, create a bead, refactor now, delete dead code)
 3. Wait for user approval before acting
 
-For approved actions that are too large to do in this session, create a bead:
-` + "```" + `
-bd create --title="..." --description="..." --type=task --priority=3
-` + "```" + `
+For approved actions that are too large to do in this session, create a bead
+using the bead creation guidance below.
 
 ### Rules
 - This is an interactive session — present, discuss, then act. Do not silently make changes.
