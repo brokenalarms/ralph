@@ -63,11 +63,18 @@ func (l *Loop) mergeWithRetry(ctx context.Context, taskID, nextTask, workDir, ra
 	})
 }
 
-func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
+func (l *Loop) shipWork(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error) {
 	if l.pushPRFunc != nil {
-		return l.pushPRFunc(ctx, taskID, taskDesc, body)
+		// Test path: delegate to legacy pushPRFunc stub.
+		prNumber, err := l.pushPRFunc(ctx, opts.TaskID, opts.TaskTitle, opts.Body)
+		return git.ShipResult{PRNumber: prNumber}, err
 	}
-	return l.git.PushAndCreatePR(ctx, taskID, taskDesc, body)
+	return l.git.Ship(ctx, opts)
+}
+
+func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
+	result, err := l.shipWork(ctx, git.ShipOpts{TaskID: taskID, TaskTitle: taskDesc, Body: body})
+	return result.PRNumber, err
 }
 
 // buildPRBody assembles a PR description from bead context and agent summary.

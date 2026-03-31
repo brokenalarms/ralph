@@ -920,24 +920,15 @@ func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 	}
 }
 
-// BUG ralph-laun: When GitHub returns "not mergeable" because CI failed (billing,
-// runner issues), executeMerge checks isMergeConflictError before isCIGatedError.
-// "not mergeable" matches the merge conflict pattern, so the loop tries a
-// pointless rebase instead of recognizing a CI-gated block.
-// This test documents the current (buggy) behavior and will be fixed during
-// the orchestrator refactor.
-func TestIsMergeConflictError_NotMergeableIsAmbiguous(t *testing.T) {
-	// "not mergeable" matches merge conflict patterns today.
-	// After the fix, it should NOT match — it should fall through to CI-gated.
+// "not mergeable" matches both isMergeConflictError and could indicate
+// CI-gated. The ralph-laun fix ensures executeMerge checks isCIGatedError
+// first, so CI-gated catches it before merge conflict when both apply.
+// isMergeConflictError still matches — it's the fallback for genuine conflicts.
+func TestIsMergeConflictError_NotMergeableStillMatches(t *testing.T) {
 	output := "Pull request is not mergeable"
-
 	if !isMergeConflictError(output) {
-		t.Error("current code: 'not mergeable' should match merge conflict pattern (this is the bug)")
+		t.Error("'not mergeable' should match merge conflict as fallback")
 	}
-	// This is also a CI-gated pattern in some contexts, but executeMerge
-	// checks merge conflict first, so CI-gated never fires for this string.
-	// The fix: check isCIGatedError first, or remove "not mergeable" from
-	// isMergeConflictError since it's ambiguous.
 }
 
 // CI-gated errors should be distinguishable from merge conflicts.

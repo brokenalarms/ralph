@@ -268,7 +268,7 @@ but each transition happens in exactly one place:
 | `loop_refactor.go` | Unchanged |
 | `git/gitops.go` | Remove `GH()`, `EnsureUpToDate`, `ForcePush`, `PostMergeUpdateMain`, `CommitAll`. Add `SwitchTask`, `Ship`. |
 | `git/git_merge.go` | `Push` internalizes rebase+squash. `Ship` added. `FlushUnpushedWork` uses `Ship`. |
-| `git/github.go` | `FindOpenPR` returns URL. |
+| `git/github.go` | `FindOpenPR` returns URL. Merge uses `gh api` for structured responses (follow-up). |
 | `logging/logging.go` | `PRLink` becomes internal. Logger initialized with `nwo`, formats PR refs automatically. |
 
 ## Testing Strategy
@@ -330,6 +330,22 @@ This is a sequential refactor — each step changes interfaces the next depends 
 
 8. **Delete dead code.** Remove functions, methods, and interface members
    that no longer have callers.
+
+## Follow-up: Module Boundary Enforcement
+
+Every module currently uses a god object pattern (e.g. `git.Manager`,
+`tasks.BD`) where all methods hang off a struct that holds shared state.
+Any method can reach into any other method's concerns through the shared
+struct. This defeats encapsulation — the module boundary exists in name
+only.
+
+The target state: each module exposes public functions that take what they
+need as parameters and return results. Private functions compose internally.
+No struct that connects everything. The package itself is the encapsulation
+boundary — lowercase functions are private, uppercase are the API.
+
+This applies to: git, tasks, verify, logging, claude/agent. It's a
+separate phase that follows the orchestrator refactor.
 
 ## What This Does NOT Change
 

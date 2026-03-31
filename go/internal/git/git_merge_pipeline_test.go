@@ -142,7 +142,11 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 // are treated as conflicts. After the orchestrator refactor, this should be
 // reconsidered — the "not mergeable" error from GitHub often means CI hasn't
 // passed, not that there's a content conflict.
-func TestExecuteMerge_NotMergeableClassifiedAsConflict(t *testing.T) {
+// After ralph-laun fix, executeMerge checks CI-gated first. "not mergeable"
+// still matches isMergeConflictError but only fires if isCIGatedError didn't
+// match first. This test has no CI-gated patterns, so it falls through to
+// merge conflict.
+func TestExecuteMerge_NotMergeableClassifiedAsConflictWhenNotCIGated(t *testing.T) {
 	stubCISleep(t)
 
 	runner := newStubRunner()
@@ -185,7 +189,7 @@ func TestExecuteMerge_NotMergeableClassifiedAsConflict(t *testing.T) {
 
 	var conflictErr *MergeConflictError
 	if !errors.As(err, &conflictErr) {
-		t.Fatalf("current behavior: 'not mergeable' should be classified as MergeConflictError (checked before CI gate), got %T: %v", err, err)
+		t.Fatalf("'not mergeable' should be MergeConflictError when CI-gated doesn't match first, got %T: %v", err, err)
 	}
 }
 
