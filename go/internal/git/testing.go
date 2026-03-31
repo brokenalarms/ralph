@@ -10,8 +10,7 @@ type StubGitHub struct {
 	CreatePRErr        error
 	EditPRErr          error
 	EditPRTitle        string
-	MergeOutput        string
-	MergeErr           error
+	MergeResult        MergeResult
 	UpdateResult       bool
 	UpdateErr          error
 	Checks             []CICheckResult
@@ -60,10 +59,15 @@ func (s *StubGitHub) EditPR(prNumber, repoURL, title, body string) error {
 	s.EditPRTitle = title
 	return s.EditPRErr
 }
-func (s *StubGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error) {
+func (s *StubGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
 	s.MergeCalls++
 	s.LastMergeOpts = opts
-	return s.MergeOutput, s.MergeErr
+	r := s.MergeResult
+	// Default to success when no explicit result is configured.
+	if !r.Merged && !r.Blocked && !r.Conflict && r.Message == "" {
+		r.Merged = true
+	}
+	return r
 }
 func (s *StubGitHub) UpdateBranch(dir, nwo, prNumber string) (bool, error) {
 	return s.UpdateResult, s.UpdateErr

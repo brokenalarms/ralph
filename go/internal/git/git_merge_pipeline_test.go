@@ -3,7 +3,6 @@ package git
 import (
 	"context"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -146,7 +145,9 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 // still matches isMergeConflictError but only fires if isCIGatedError didn't
 // match first. This test has no CI-gated patterns, so it falls through to
 // merge conflict.
-func TestExecuteMerge_NotMergeableClassifiedAsConflictWhenNotCIGated(t *testing.T) {
+// With structured MergeResult, "not mergeable" is classified as Blocked
+// (branch protection), not Conflict. executeMerge waits for CI then retries.
+func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 	stubCISleep(t)
 
 	runner := newStubRunner()
@@ -165,8 +166,7 @@ func TestExecuteMerge_NotMergeableClassifiedAsConflictWhenNotCIGated(t *testing.
 		OpenPR:       "88",
 		PRTitle:      "some PR",
 		PRHeadSHA:    "abc123",
-		MergeOutput:  "Pull request is not mergeable",
-		MergeErr:     fmt.Errorf("merge failed"),
+		MergeResult:  MergeResult{Blocked: true, Message: "Pull request is not mergeable"},
 		Checks:       []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		UpdateResult: false,
 	}
@@ -187,9 +187,10 @@ func TestExecuteMerge_NotMergeableClassifiedAsConflictWhenNotCIGated(t *testing.
 		t.Fatal("expected error for non-mergeable PR")
 	}
 
-	var conflictErr *MergeConflictError
-	if !errors.As(err, &conflictErr) {
-		t.Fatalf("'not mergeable' should be MergeConflictError when CI-gated doesn't match first, got %T: %v", err, err)
+	// With structured MergeResult, Blocked triggers CI-gated path (wait + retry).
+	// The retry also returns Blocked, so we get "merge retry failed."
+	if !strings.Contains(err.Error(), "merge retry failed") {
+		t.Fatalf("expected merge retry failure for blocked PR, got: %v", err)
 	}
 }
 
@@ -216,6 +217,7 @@ func TestAutoMerge_InfraFailureBypass_MergesWhenLocalTestsPassed(t *testing.T) {
 		OpenPR:       "99",
 		PRTitle:      "infra failure test",
 		PRHeadSHA:    "abc123",
+		MergeResult:  MergeResult{Merged: true},
 		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 		UpdateResult: false,
 		JobStepCount: 0,
@@ -568,9 +570,9 @@ func (g *infraRetryGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult
 	return g.ciResults(), nil
 }
 
-func (g *infraRetryGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error) {
+func (g *infraRetryGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
 	g.StubGitHub.MergeCalls++
-	return "merged", nil
+	return MergeResult{Merged: true}
 }
 
 // executeMerge handles the CI-gated retry path: when MergePR returns a branch
@@ -599,12 +601,12 @@ func TestExecuteMerge_CIGatedRetryPath(t *testing.T) {
 			PRHeadSHA:    "abc123",
 			UpdateResult: false,
 		},
-		mergeFunc: func() (string, error) {
+		mergeFunc: func() MergeResult {
 			mergeCalls++
 			if mergeCalls == 1 {
-				return "Base branch policy prohibits the merge", fmt.Errorf("merge blocked")
+				return MergeResult{Blocked: true, Message: "Base branch policy prohibits the merge"}
 			}
-			return "merged", nil
+			return MergeResult{Merged: true}
 		},
 		checksFunc: func(call int) []CICheckResult {
 			if call <= 1 {
@@ -641,12 +643,12 @@ func TestExecuteMerge_CIGatedRetryPath(t *testing.T) {
 // succeeds after CI passes.
 type ciGatedMergeGitHub struct {
 	StubGitHub
-	mergeFunc  func() (string, error)
+	mergeFunc  func() MergeResult
 	checksFunc func(call int) []CICheckResult
 	checkCalls int
 }
 
-func (g *ciGatedMergeGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error) {
+func (g *ciGatedMergeGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
 	return g.mergeFunc()
 }
 

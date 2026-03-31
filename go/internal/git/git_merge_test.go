@@ -712,9 +712,9 @@ func TestMergeWithRetry_RecoversFromConflict(t *testing.T) {
 			OpenPR:      "42",
 			Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		},
-		mergeResults: []mergeResult{
-			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
-			{output: "merged", err: nil},
+		mergeResults: []MergeResult{
+			{Conflict: true, Message: "merge conflict"},
+			{Merged: true},
 		},
 		onMerge: func() { mergeCalls++ },
 	}
@@ -772,8 +772,8 @@ func TestMergeWithRetry_DelegatesCIFailure(t *testing.T) {
 		},
 		// First AutoMerge returns CIFailureError before reaching MergePR.
 		// After CI fix, the second AutoMerge reaches MergePR with CI passing.
-		mergeResults: []mergeResult{
-			{output: "merged", err: nil},
+		mergeResults: []MergeResult{
+			{Merged: true},
 		},
 	}
 	mgr.GitHub = gh
@@ -824,7 +824,7 @@ func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 		IsAvailable: true,
 		OpenPR:      "99",
 		Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
-		MergeErr:    fmt.Errorf("CI failed"),
+		MergeResult: MergeResult{Blocked: true, Message: "CI failed"},
 	}
 	mgr.GitHub = gh
 
@@ -876,11 +876,11 @@ func TestMergeWithRetry_StopsOnUnresolvableConflict(t *testing.T) {
 			PRHeadSHA:   "abc123",
 			Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		},
-		mergeResults: []mergeResult{
-			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
-			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
-			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
-			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
+		mergeResults: []MergeResult{
+			{Conflict: true, Message: "merge conflict"},
+			{Conflict: true, Message: "merge conflict"},
+			{Conflict: true, Message: "merge conflict"},
+			{Conflict: true, Message: "merge conflict"},
 		},
 		onMerge: func() { mergeCalls++ },
 	}
@@ -973,27 +973,23 @@ func TestAutoMergeCurrentBranch_PassesPRTitleAsSubject(t *testing.T) {
 // allowing tests to simulate conflict→success or CI-fail→success sequences.
 type sequentialMergeGitHub struct {
 	StubGitHub
-	mergeResults []mergeResult
+	mergeResults []MergeResult
 	mergeIdx     int
 	checkCalls   int
 	onMerge      func()
 }
 
-type mergeResult struct {
-	output string
-	err    error
-}
 
-func (s *sequentialMergeGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error) {
+func (s *sequentialMergeGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
 	if s.onMerge != nil {
 		s.onMerge()
 	}
 	if s.mergeIdx < len(s.mergeResults) {
 		r := s.mergeResults[s.mergeIdx]
 		s.mergeIdx++
-		return r.output, r.err
+		return r
 	}
-	return "merged", nil
+	return MergeResult{Merged: true}
 }
 
 func (s *sequentialMergeGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
@@ -1114,10 +1110,10 @@ func (c *ciRetryGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, e
 	return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}, nil
 }
 
-func (c *ciRetryGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error) {
+func (c *ciRetryGitHub) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
 	c.mergeCalls++
 	*c.events = append(*c.events, "merge-retry")
-	return "merged", nil
+	return MergeResult{Merged: true}
 }
 
 // When automatic rebase fails to resolve conflicts, MergeWithRetry calls
@@ -1142,9 +1138,9 @@ func TestMergeWithRetry_SpawnsConflictAgent(t *testing.T) {
 			OpenPR:      "70",
 			Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		},
-		mergeResults: []mergeResult{
+		mergeResults: []MergeResult{
 			// First attempt: conflict
-			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
+			{Conflict: true, Message: "merge conflict"},
 			// Second attempt (after agent fix): success
 		},
 		onMerge: func() { mergeCalls++ },
@@ -1209,9 +1205,9 @@ func TestMergeWithRetry_SkipsAfterConflictAgentFails(t *testing.T) {
 			OpenPR:      "71",
 			Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		},
-		mergeResults: []mergeResult{
-			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
-			{output: "merge conflict", err: fmt.Errorf("merge conflict")},
+		mergeResults: []MergeResult{
+			{Conflict: true, Message: "merge conflict"},
+			{Conflict: true, Message: "merge conflict"},
 		},
 		onMerge: func() { mergeCalls++ },
 	}
@@ -1725,7 +1721,7 @@ func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
 		IsAvailable: true,
 		OpenPR:      "77",
 		Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
-		MergeErr:    fmt.Errorf("CI failed"),
+		MergeResult: MergeResult{Blocked: true, Message: "CI failed"},
 	}
 	mgr.GitHub = gh
 
@@ -1797,8 +1793,8 @@ func TestMergeWithRetry_InfraFailureRecovery(t *testing.T) {
 			OpenPR:      "88",
 			Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 		},
-		mergeResults: []mergeResult{
-			{output: "merged", err: nil},
+		mergeResults: []MergeResult{
+			{Merged: true},
 		},
 	}
 	mgr.GitHub = gh

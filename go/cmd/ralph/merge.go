@@ -119,9 +119,9 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		// Merge.
 		log.Log("git", "Merging PR #%s...", pr.number)
 		opts := git.MergeOpts{DeleteBranch: true}
-		output, mergeErr := gh.MergePR(pr.number, repoURL, opts)
-		if mergeErr != nil {
-			log.Error("git", "Merge failed for PR #%s: %s", pr.number, output)
+		result := gh.MergePR(pr.number, repoURL, opts)
+		if !result.Merged {
+			log.Error("git", "Merge failed for PR #%s: %s", pr.number, result.Message)
 			return 1
 		}
 		merged++

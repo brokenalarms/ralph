@@ -820,9 +820,9 @@ func TestExecuteMerge_RetriesAfterCIGate(t *testing.T) {
 
 	seqGH := &sequentialMergeGitHub{
 		StubGitHub: *gh,
-		mergeResults: []mergeResult{
-			{"Base branch policy prohibits the merge", fmt.Errorf("exit 1")},
-			{"merged", nil},
+		mergeResults: []MergeResult{
+			{Blocked: true, Message: "Base branch policy prohibits the merge"},
+			{Merged: true},
 		},
 		onMerge: func() { calls++ },
 	}
@@ -847,8 +847,7 @@ func TestAutoMerge_MergeConflictReturnsTypedError(t *testing.T) {
 		IsAvailable: true,
 		OpenPR:      "42",
 		Checks:      []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
-		MergeOutput: "Pull request is not mergeable",
-		MergeErr:    fmt.Errorf("exit status 1"),
+		MergeResult: MergeResult{Conflict: true, Message: "merge conflict"},
 	}
 	mgr := setupAutoMergeManager(t, gh)
 

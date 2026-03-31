@@ -23,13 +23,24 @@ type MergeOpts struct {
 	Subject      string
 }
 
+// MergeResult is the structured outcome of a merge attempt.
+type MergeResult struct {
+	Merged  bool
+	Message string
+	// Blocked is true when branch protection prevents the merge
+	// (required checks pending, review required, etc.)
+	Blocked bool
+	// Conflict is true when there are merge conflicts.
+	Conflict bool
+}
+
 // GitHub abstracts GitHub CLI operations for testability. Production code
 // uses ghCLI; tests inject stubs to avoid shelling out to gh.
 type GitHub interface {
 	Available() bool
 	FindOpenPR(branch, repoURL string) (prNumber string, err error)
 	CreatePR(opts CreatePROpts) error
-	MergePR(prNumber, repoURL string, opts MergeOpts) (output string, err error)
+	MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult
 	UpdateBranch(dir, nwo, prNumber string) (updated bool, err error)
 	ListChecks(prNumber, repoURL string) ([]CICheckResult, error)
 	EditPR(prNumber, repoURL, title, body string) error
@@ -107,17 +118,104 @@ func (g *ghCLI) EditPR(prNumber, repoURL, title, body string) error {
 	return nil
 }
 
-func (g *ghCLI) MergePR(prNumber, repoURL string, opts MergeOpts) (string, error) {
-	args := []string{"pr", "merge", prNumber, "--squash", "-R", repoURL}
+func (g *ghCLI) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
+	nwo := NWOFromRemote(repoURL)
+	if nwo == "" {
+		return MergeResult{Message: "cannot determine owner/repo from remote URL"}
+	}
+
+	reqBody := fmt.Sprintf(`{"merge_method":"squash"`)
 	if opts.Subject != "" {
-		args = append(args, "--subject", opts.Subject)
+		reqBody += fmt.Sprintf(`,"commit_title":%q`, opts.Subject)
 	}
-	if opts.DeleteBranch {
-		args = append(args, "--delete-branch")
-	}
-	cmd := exec.Command("gh", args...)
+	reqBody += "}"
+
+	endpoint := fmt.Sprintf("repos/%s/pulls/%s/merge", nwo, prNumber)
+	cmd := exec.Command("gh", "api", endpoint, "--method", "PUT", "--include", "--input", "-")
+	cmd.Stdin = strings.NewReader(reqBody)
 	out, err := cmd.CombinedOutput()
-	return string(out), err
+
+	output := string(out)
+	statusCode := parseHTTPStatus(output)
+
+	// 200 = merged
+	if err == nil || statusCode == 200 {
+		result := MergeResult{Merged: true, Message: "merged"}
+		if opts.DeleteBranch {
+			g.deleteBranch(nwo, prNumber)
+		}
+		return result
+	}
+
+	// Parse JSON message from the response body (after the headers).
+	msg := parseAPIMessage(output)
+
+	switch statusCode {
+	case 405:
+		// Method Not Allowed: branch protection blocks, not mergeable
+		return MergeResult{Blocked: true, Message: msg}
+	case 409:
+		// Conflict: head was modified (SHA mismatch)
+		return MergeResult{Conflict: true, Message: msg}
+	default:
+		return MergeResult{Message: msg}
+	}
+}
+
+// parseHTTPStatus extracts the status code from the first line of
+// gh api --include output (e.g. "HTTP/2.0 200 OK\n...").
+func parseHTTPStatus(output string) int {
+	firstLine := output
+	if idx := strings.IndexByte(output, '\n'); idx > 0 {
+		firstLine = output[:idx]
+	}
+	parts := strings.Fields(firstLine)
+	if len(parts) >= 2 {
+		var code int
+		if _, err := fmt.Sscanf(parts[1], "%d", &code); err == nil {
+			return code
+		}
+	}
+	return 0
+}
+
+// parseAPIMessage extracts the "message" field from a GitHub API JSON
+// response. The response body follows HTTP headers (separated by blank line)
+// in gh api --include output.
+func parseAPIMessage(output string) string {
+	// Find the blank line separating headers from body.
+	body := output
+	if idx := strings.Index(output, "\r\n\r\n"); idx > 0 {
+		body = output[idx+4:]
+	} else if idx := strings.Index(output, "\n\n"); idx > 0 {
+		body = output[idx+2:]
+	}
+
+	var resp struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(body)), &resp); err == nil && resp.Message != "" {
+		return resp.Message
+	}
+	return strings.TrimSpace(body)
+}
+
+// deleteBranch deletes the PR's head branch after a successful merge.
+func (g *ghCLI) deleteBranch(nwo, prNumber string) {
+	// Look up the head branch name from the PR.
+	cmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s/pulls/%s", nwo, prNumber), "--jq", ".head.ref")
+	out, err := cmd.Output()
+	if err != nil {
+		return
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch == "" {
+		return
+	}
+	delCmd := exec.Command("gh", "api",
+		fmt.Sprintf("repos/%s/git/refs/heads/%s", nwo, branch),
+		"--method", "DELETE")
+	delCmd.CombinedOutput() // best-effort
 }
 
 func isHarmlessUpdateBranchError(output string) bool {
