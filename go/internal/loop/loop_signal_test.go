@@ -161,7 +161,7 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 		nextTask:   "Fix something",
 	}
 
-	accepted := l.onSignal(p)
+	accepted := l.verifier.OnSignal(p)
 
 	if !accepted {
 		t.Error("onSignal should return true after fix agent fixes tests")
@@ -229,7 +229,7 @@ func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		nextTask:   "Add feature",
 	}
 
-	accepted := l.onSignal(p)
+	accepted := l.verifier.OnSignal(p)
 
 	if accepted {
 		t.Error("onSignal should return false when fix agent exits without signal")
@@ -296,7 +296,7 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 		nextTask:   "Fix bug",
 	}
 
-	accepted := l.onSignal(p)
+	accepted := l.verifier.OnSignal(p)
 
 	if !accepted {
 		t.Error("onSignal should return true after fix agent + re-verify succeeds")
@@ -365,7 +365,7 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 	}
 
 	// Single onSignal call exhausts all fix attempts internally.
-	result := l.onSignal(p)
+	result := l.verifier.OnSignal(p)
 
 	if result {
 		t.Error("expected onSignal to return false after exhausting test fix attempts")

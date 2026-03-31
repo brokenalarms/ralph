@@ -40,7 +40,7 @@ func TestOnSignal_HappyPath(t *testing.T) {
 		return true, ""
 	}
 
-	result := l.onSignal(signalParams{
+	result := l.verifier.OnSignal(signalParams{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-123", nextTask: "Test task",
@@ -88,7 +88,7 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 
 	var result bool
 	for i := 0; i < maxLLMVerifyAttempts; i++ {
-		result = l.onSignal(params)
+		result = l.verifier.OnSignal(params)
 	}
 	if result {
 		t.Fatal("expected onSignal to return false when LLM verification exhausts retries")
@@ -141,9 +141,9 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 		taskID: "test-escalation", nextTask: "Escalation test",
 	}
 
-	l.onSignal(params)
-	l.onSignal(params)
-	l.onSignal(params)
+	l.verifier.OnSignal(params)
+	l.verifier.OnSignal(params)
+	l.verifier.OnSignal(params)
 
 	if len(modelsUsed) != 3 {
 		t.Fatalf("expected 3 LLM calls, got %d", len(modelsUsed))
@@ -201,9 +201,9 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 		taskID: "test-config-models", nextTask: "Config models test",
 	}
 
-	l.onSignal(params)
-	l.onSignal(params)
-	l.onSignal(params)
+	l.verifier.OnSignal(params)
+	l.verifier.OnSignal(params)
+	l.verifier.OnSignal(params)
 
 	if len(modelsUsed) != 3 {
 		t.Fatalf("expected 3 LLM calls, got %d", len(modelsUsed))
@@ -254,7 +254,7 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 		return verify.Result{Passed: true, Reason: "looks good after fix"}
 	}
 
-	result := l.onSignal(signalParams{
+	result := l.verifier.OnSignal(signalParams{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-retry", nextTask: "Retry test",
@@ -308,7 +308,7 @@ func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
 		return verify.Result{Passed: true, Reason: "approved"}
 	}
 
-	l.onSignal(signalParams{
+	l.verifier.OnSignal(signalParams{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-prompt", nextTask: "Prompt test",
@@ -349,7 +349,7 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		return verify.Result{Passed: false, Details: "bad code"}
 	}
 
-	result := l.onSignal(signalParams{
+	result := l.verifier.OnSignal(signalParams{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-nosignal", nextTask: "No signal test",
@@ -389,7 +389,7 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 		return &stubRunner{result: stubResult(true, "confirmed")}
 	}
 
-	result := l.onSignal(signalParams{
+	result := l.verifier.OnSignal(signalParams{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-fire", nextTask: "Fire test",

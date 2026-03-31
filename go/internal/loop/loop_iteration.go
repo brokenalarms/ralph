@@ -45,7 +45,7 @@ func (l *Loop) runAndComplete(ctx context.Context, task taskContext, runIteratio
 			return l.git.HasDiff() || l.git.HeadRev() != prep.headBefore
 		},
 		OnSignal: func(summary string) bool {
-			return l.onSignal(signalParams{
+			return l.verifier.OnSignal(signalParams{
 				ctx:        ctx,
 				headBefore: prep.headBefore,
 				workDir:    prep.workDir,
@@ -300,7 +300,10 @@ func (l *Loop) handlePostSignal(p postSignalParams) postSignalAction {
 		logger:            l.logger,
 		attempts:          l.attempts,
 		verifyFn: func(ctx context.Context, headBefore string) (bool, string) {
-			return l.verifyCompletion(ctx, headBefore)
+			if l.verifyFunc != nil {
+				return l.verifyFunc(ctx, l.git.GetWorkDir(), headBefore)
+			}
+			return l.verifier.VerifyCompletion(ctx, l.git.GetWorkDir(), headBefore)
 		},
 		pushSignalPRFn: l.pushSignalPR,
 		finalizePRFn:   l.finalizePR,
@@ -379,7 +382,13 @@ func (l *Loop) buildCompletedTask(taskID, nextTask, summary, prNumber, workDir s
 		Summary: summary,
 		PRNum:   prNumber,
 	}
-	if prNum, prTitle, prURL := l.findPRInfo(workDir); prNum != "" {
+	var prNum, prTitle, prURL string
+	if l.findPRInfoFunc != nil {
+		prNum, prTitle = l.findPRInfoFunc(workDir)
+	} else if num, t, u, err := l.git.FindPRForBranch(l.git.GetWorktreeBranch()); err == nil {
+		prNum, prTitle, prURL = num, t, u
+	}
+	if prNum != "" {
 		ct.PRNum = prNum
 		ct.PRTitle = prTitle
 		ct.PRURL = prURL
@@ -512,7 +521,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	}
 
 	taskPrompt := l.buildTaskPrompt(nextTask, taskID)
-	testStatus := l.runPreIterationTests(ctx)
+	testStatus := l.verifier.RunPreIterationTests(ctx)
 
 	if !l.waitForInternetFunc(ctx, l.logger) {
 		return iterationPrompt{}, false

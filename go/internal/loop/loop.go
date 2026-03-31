@@ -128,8 +128,13 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 		TaskBackend: cfg.TaskBackend,
 		Runner:      func() claudeRunner { return l.runner },
 		Signals:     signals,
-		NewRunner:   l.newRunner,
-		QueryFn:     l.queryFunc(),
+		NewRunner: func() claudeRunner {
+			if l.newRunnerFunc != nil {
+				return l.newRunnerFunc()
+			}
+			return agent.New(l.logger)
+		},
+		QueryFn: l.agentRunner.Query,
 		LLMVerify:   verify.LLMVerifyPR,
 		SkipTask: func(id, reason string) {
 			skipTask(l.cfg.TaskBackend, l.state, l.logger, id, reason)
