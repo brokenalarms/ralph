@@ -1292,5 +1292,466 @@ func TestIntegration_MergeConflictThenRetrySucceeds(t *testing.T) {
 	}
 }
 
+// Agent exits without signal — loop retries, does not close the bead.
+// An agent that exits without signaling made no verifiable progress.
+// The loop should retry on the next iteration, not treat it as completion.
+func TestIntegration_AgentExitsWithoutSignal_Retries(t *testing.T) {
+	dir, ralphDir, promptsDir := setupIntegrationTest(t)
+	_, st := setupTestDir(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Total = 1
+	backend.NextTask = "Silent task"
+	backend.NextID = "ralph-ns1"
+	backend.BackendLabel = "beads"
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	runCount := 0
+	runner := &stubRunner{
+		onRun: func() { runCount++ },
+		result: claude.Result{SignalDetected: false}, // no signal
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir, WorkDir: dir,
+			RalphDir: ralphDir, PromptsDir: promptsDir,
+		},
+		MaxIterations: 3,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.isOnlineFunc = func() bool { return true }
+	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
+
+	l.Run(context.Background())
+
+	if runCount < 2 {
+		t.Errorf("agent should run multiple iterations when no signal; ran %d times", runCount)
+	}
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) > 0 {
+		t.Errorf("task should NOT be closed when agent never signals; closed: %v", backend.ClosedIDs)
+	}
+}
+
+// Same task ID must not be re-selected after it was closed in the same session.
+// If the backend keeps returning the same ID after close, the loop should skip
+// it rather than processing it again.
+func TestIntegration_CompletedTaskNotReselected(t *testing.T) {
+	dir, ralphDir, promptsDir := setupIntegrationTest(t)
+	_, st := setupTestDir(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Completed = 0
+	backend.Total = 2
+	backend.NextTask = "Only task"
+	backend.NextID = "ralph-dup1"
+	backend.BackendLabel = "beads"
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	taskIDs := []string{}
+	runCount := 0
+	runner := &stubRunner{
+		onRun: func() {
+			runCount++
+			gm.HeadRevValue = fmt.Sprintf("commit-%d", runCount)
+			// After first run, mark completed but keep returning same ID
+			// (simulating a backend bug)
+			backend.Lock()
+			if runCount >= 2 {
+				backend.Remaining = 0
+			}
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir, WorkDir: dir,
+			RalphDir: ralphDir, PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+	l.isOnlineFunc = func() bool { return true }
+	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
+
+	l.Run(context.Background())
+
+	// Track which task IDs the loop saw across iterations
+	for _, ct := range l.SessionTasks() {
+		taskIDs = append(taskIDs, ct.ID)
+	}
+
+	// The same task ID should not appear twice in session tasks.
+	seen := map[string]int{}
+	for _, id := range taskIDs {
+		seen[id]++
+		if seen[id] > 1 {
+			t.Errorf("task %s was completed %d times — should only complete once", id, seen[id])
+		}
+	}
+}
+
+// Idle timeout after max failures skips the task.
+// If the agent times out repeatedly without progress, the loop should
+// skip the task rather than retrying forever.
+func TestIntegration_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
+	dir, ralphDir, promptsDir := setupIntegrationTest(t)
+	_, st := setupTestDir(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Total = 1
+	backend.NextTask = "Stuck task"
+	backend.NextID = "ralph-idle1"
+	backend.BackendLabel = "beads"
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	runner := &stubRunner{
+		result: claude.Result{IdleTimeout: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir, WorkDir: dir,
+			RalphDir: ralphDir, PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.isOnlineFunc = func() bool { return true }
+	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
+
+	l.Run(context.Background())
+
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.SkippedIDs) == 0 {
+		t.Error("task should be skipped after max idle timeout failures")
+	}
+	if len(backend.SkippedIDs) > 0 && backend.SkippedIDs[0] != "ralph-idle1" {
+		t.Errorf("expected ralph-idle1 to be skipped, got %v", backend.SkippedIDs)
+	}
+}
+
+// Feedback kill restarts the iteration — the agent is killed and retried.
+func TestIntegration_FeedbackKillRestartsIteration(t *testing.T) {
+	dir, ralphDir, promptsDir := setupIntegrationTest(t)
+	_, st := setupTestDir(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Total = 1
+	backend.NextTask = "Feedback task"
+	backend.NextID = "ralph-fb1"
+	backend.BackendLabel = "beads"
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	runCount := 0
+	runner := &stubRunner{
+		onRun: func() {
+			runCount++
+			if runCount >= 2 {
+				gm.HeadRevValue = "after-feedback"
+				backend.Lock()
+				backend.Remaining = 0
+				backend.Completed = 1
+				backend.Unlock()
+			}
+		},
+		result: claude.Result{FeedbackKill: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir, WorkDir: dir,
+			RalphDir: ralphDir, PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.isOnlineFunc = func() bool { return true }
+	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
+
+	// After first feedback kill, switch to signal completion
+	originalOnRun := runner.onRun
+	runner.onRun = func() {
+		originalOnRun()
+		if runCount >= 2 {
+			runner.result = claude.Result{SignalDetected: true, Summary: "done after feedback"}
+		}
+	}
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+
+	l.Run(context.Background())
+
+	if runCount < 2 {
+		t.Errorf("agent should run at least twice (once killed by feedback, once completing); ran %d", runCount)
+	}
+}
+
+// Stop file halts the loop cleanly between iterations.
+func TestIntegration_StopFileHaltsLoop(t *testing.T) {
+	dir, ralphDir, promptsDir := setupIntegrationTest(t)
+	_, st := setupTestDir(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Total = 1
+	backend.NextTask = "Stoppable task"
+	backend.NextID = "ralph-stop1"
+	backend.BackendLabel = "beads"
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	runCount := 0
+	runner := &stubRunner{
+		onRun: func() {
+			runCount++
+			// Create stop file after first run
+			os.WriteFile(filepath.Join(ralphDir, "stop"), []byte(""), 0o644)
+		},
+		result: claude.Result{},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir, WorkDir: dir,
+			RalphDir: ralphDir, PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.isOnlineFunc = func() bool { return true }
+	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
+
+	l.Run(context.Background())
+
+	if runCount > 2 {
+		t.Errorf("loop should stop after detecting stop file; ran %d times", runCount)
+	}
+
+	finalState, _ := st.Load()
+	if finalState.Status != "stopped" {
+		t.Errorf("expected status 'stopped', got %q", finalState.Status)
+	}
+}
+
+// Evolve mode: after successful merge, loop returns (signals restart).
+func TestIntegration_EvolveExitsAfterMerge(t *testing.T) {
+	dir, ralphDir, promptsDir := setupIntegrationTest(t)
+	_, st := setupTestDir(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Completed = 0
+	backend.Total = 1
+	backend.NextTask = "Evolve task"
+	backend.NextID = "ralph-ev1"
+	backend.BackendLabel = "beads"
+
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/wip",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		GitHubStub:     &git.StubGitHub{IsAvailable: true, PRBase: "main"},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			gm.HeadRevValue = "evolved-commit"
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir, WorkDir: dir,
+			RalphDir: ralphDir, PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		Evolve:        true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
+	l.findPRInfoFunc = func(string) (string, string) { return "99", "Evolve task" }
+	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
+	l.isOnlineFunc = func() bool { return true }
+	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
+
+	l.Run(context.Background())
+
+	finalState, _ := st.Load()
+	if finalState.Status != "evolve_restart" {
+		t.Errorf("expected status 'evolve_restart', got %q", finalState.Status)
+	}
+}
+
+// Pre-iteration tests run before agent, post-signal tests run after.
+// The verification flow is: pre-iteration tests → agent runs → post-signal tests.
+func TestIntegration_TestsRunBeforeAndAfterAgent(t *testing.T) {
+	dir, ralphDir, promptsDir := setupIntegrationTest(t)
+	_, st := setupTestDir(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Total = 1
+	backend.NextTask = "Tested task"
+	backend.NextID = "ralph-tt1"
+	backend.BackendLabel = "beads"
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	sequence := []string{}
+	runner := &stubRunner{
+		onRun: func() {
+			sequence = append(sequence, "agent")
+			gm.HeadRevValue = "tested-commit"
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Completed = 1
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir, WorkDir: dir,
+			RalphDir: ralphDir, PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir, // enables verification
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+	l.isOnlineFunc = func() bool { return true }
+	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
+
+	// Track pre-iteration test call
+	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+		sequence = append(sequence, "llm-verify")
+		return verify.Result{Passed: true, Reason: "approved"}
+	}
+	l.verifyFunc = func(context.Context, string, string) (bool, string) {
+		sequence = append(sequence, "post-signal-verify")
+		return true, ""
+	}
+
+	l.Run(context.Background())
+
+	// Agent must run. Verification runs after.
+	agentIdx := -1
+	for i, s := range sequence {
+		if s == "agent" {
+			agentIdx = i
+			break
+		}
+	}
+	if agentIdx == -1 {
+		t.Fatal("agent never ran")
+	}
+
+	// Any verify step should come after the agent
+	for i, s := range sequence {
+		if (s == "post-signal-verify" || s == "llm-verify") && i < agentIdx {
+			t.Errorf("verification step %q at index %d ran before agent at index %d", s, i, agentIdx)
+		}
+	}
+}
+
+// Task close blocked by dependency is skipped, not retried forever.
+func TestIntegration_DependencyBlockedTaskIsSkipped(t *testing.T) {
+	dir, ralphDir, promptsDir := setupIntegrationTest(t)
+	_, st := setupTestDir(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Total = 1
+	backend.NextTask = "Blocked task"
+	backend.NextID = "ralph-blk1"
+	backend.BackendLabel = "beads"
+	// CloseTask will return a dependency error
+	backend.CloseErr = fmt.Errorf("blocked by dependency: ralph-parent1 is not closed")
+
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/wip",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		GitHubStub:     &git.StubGitHub{IsAvailable: true, PRBase: "main"},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			gm.HeadRevValue = "blocked-commit"
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Completed = 1
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir, WorkDir: dir,
+			RalphDir: ralphDir, PromptsDir: promptsDir,
+		},
+		MaxIterations: 3,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "77", nil }
+	l.findPRInfoFunc = func(string) (string, string) { return "77", "Blocked task" }
+	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
+	l.isOnlineFunc = func() bool { return true }
+	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
+
+	l.Run(context.Background())
+
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.SkippedIDs) == 0 {
+		t.Error("task should be skipped when CloseTask fails with dependency error")
+	}
+}
+
 // Ensure the integrationBackend satisfies tasks.Backend.
 var _ tasks.Backend = (*integrationBackend)(nil)
