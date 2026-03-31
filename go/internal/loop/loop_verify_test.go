@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verify"
@@ -23,7 +22,7 @@ func TestOnSignal_HappyPath(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
 	l := New(Config{
@@ -59,7 +58,7 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}
 
@@ -110,7 +109,7 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
 	l := New(Config{
@@ -167,7 +166,7 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
 	customModel := "claude-haiku-custom"
@@ -229,7 +228,7 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
 	l := New(Config{
@@ -280,7 +279,7 @@ func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
 	l := New(Config{
@@ -331,7 +330,7 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
 	l := New(Config{
@@ -369,7 +368,7 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
 	l := New(Config{
@@ -412,7 +411,7 @@ func TestOnSignal_HogMode_NoDiffSpawnsVerifier_Passes(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
 	l := New(Config{
@@ -456,7 +455,7 @@ func TestOnSignal_HogMode_NoDiffVerifierRejects(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}
 

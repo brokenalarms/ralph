@@ -2,16 +2,13 @@ package loop
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/ratelimit"
+	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -58,28 +55,12 @@ func TestLoop_MaybeRefactor_LLMSaysNo(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	// Set up a git repo with enough commits so RecentChangedFiles returns content
-	gitDir := filepath.Join(dir, "work")
-	os.MkdirAll(gitDir, 0o755)
-	exec.Command("git", "init", "-b", "main", gitDir).Run()
-	exec.Command("git", "-C", gitDir, "config", "user.email", "test@test.com").Run()
-	exec.Command("git", "-C", gitDir, "config", "user.name", "test").Run()
-	os.WriteFile(filepath.Join(gitDir, "file.go"), []byte("package main\n"), 0o644)
-	exec.Command("git", "-C", gitDir, "add", ".").Run()
-	exec.Command("git", "-C", gitDir, "commit", "-m", "init").Run()
-	for i := 0; i < 11; i++ {
-		exec.Command("git", "-C", gitDir, "commit", "--allow-empty", "-m", fmt.Sprintf("commit %d", i)).Run()
-	}
-	os.WriteFile(filepath.Join(gitDir, "file.go"), []byte("package main\nfunc main() {}\n"), 0o644)
-	exec.Command("git", "-C", gitDir, "add", ".").Run()
-	exec.Command("git", "-C", gitDir, "commit", "-m", "update").Run()
-
 	queryFnCalled := false
 	l := &Loop{
 		cfg:          Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}, Refactor: true},
 		state:        st,
 		logger:       logging.New(nil),
-		git:          &git.Manager{WorkDir: gitDir, BaseBranch: "main"},
+		git:          &testutil.StubGit{WorkDir: dir, RecentFilesValue: "file.go\nother.go"},
 		sessionTasks: make([]CompletedTask, 5),
 		refactorQueryFunc: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			queryFnCalled = true
@@ -102,21 +83,6 @@ func TestLoop_MaybeRefactor_LLMSaysYes(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gitDir := filepath.Join(dir, "work")
-	os.MkdirAll(gitDir, 0o755)
-	exec.Command("git", "init", "-b", "main", gitDir).Run()
-	exec.Command("git", "-C", gitDir, "config", "user.email", "test@test.com").Run()
-	exec.Command("git", "-C", gitDir, "config", "user.name", "test").Run()
-	os.WriteFile(filepath.Join(gitDir, "file.go"), []byte("package main\n"), 0o644)
-	exec.Command("git", "-C", gitDir, "add", ".").Run()
-	exec.Command("git", "-C", gitDir, "commit", "-m", "init").Run()
-	for i := 0; i < 11; i++ {
-		exec.Command("git", "-C", gitDir, "commit", "--allow-empty", "-m", fmt.Sprintf("commit %d", i)).Run()
-	}
-	os.WriteFile(filepath.Join(gitDir, "file.go"), []byte("package main\nfunc main() {}\n"), 0o644)
-	exec.Command("git", "-C", gitDir, "add", ".").Run()
-	exec.Command("git", "-C", gitDir, "commit", "-m", "update").Run()
-
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
@@ -125,7 +91,7 @@ func TestLoop_MaybeRefactor_LLMSaysYes(t *testing.T) {
 		cfg: Config{
 			Dirs: workctx.WorkContext{
 				RalphDir:   ralphDir,
-				WorkDir:    gitDir,
+				WorkDir:    dir,
 				PromptsDir: promptsDir,
 			},
 			Refactor:     true,
@@ -133,7 +99,7 @@ func TestLoop_MaybeRefactor_LLMSaysYes(t *testing.T) {
 		},
 		state:        st,
 		logger:       logging.New(nil),
-		git:          &git.Manager{WorkDir: gitDir, BaseBranch: "main"},
+		git:          &testutil.StubGit{WorkDir: dir, RecentFilesValue: "file.go\nother.go"},
 		sessionTasks: make([]CompletedTask, 5),
 		limiter:      ratelimit.New(ralphDir, 80),
 		signals:      claude.DefaultSignalPaths(ralphDir),
@@ -161,28 +127,12 @@ func TestLoop_MaybeRefactor_TriggersAtMultiplesOf5(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gitDir := filepath.Join(dir, "work")
-	os.MkdirAll(gitDir, 0o755)
-	exec.Command("git", "init", "-b", "main", gitDir).Run()
-	exec.Command("git", "-C", gitDir, "config", "user.email", "test@test.com").Run()
-	exec.Command("git", "-C", gitDir, "config", "user.name", "test").Run()
-	os.WriteFile(filepath.Join(gitDir, "file.go"), []byte("package main\n"), 0o644)
-	exec.Command("git", "-C", gitDir, "add", ".").Run()
-	exec.Command("git", "-C", gitDir, "commit", "-m", "init").Run()
-	for i := 0; i < 11; i++ {
-		exec.Command("git", "-C", gitDir, "commit", "--allow-empty", "-m", fmt.Sprintf("commit %d", i)).Run()
-	}
-
-	os.WriteFile(filepath.Join(gitDir, "file.go"), []byte("package main\nfunc init() {}\n"), 0o644)
-	exec.Command("git", "-C", gitDir, "add", ".").Run()
-	exec.Command("git", "-C", gitDir, "commit", "-m", "update").Run()
-
 	queryCalls := 0
 	base := &Loop{
 		cfg:    Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}, Refactor: true},
 		state:  st,
 		logger: logging.New(nil),
-		git:    &git.Manager{WorkDir: gitDir, BaseBranch: "main"},
+		git:    &testutil.StubGit{WorkDir: dir, RecentFilesValue: "file.go\nother.go"},
 		refactorQueryFunc: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			queryCalls++
 			return "NO\nAll good.", nil
@@ -209,7 +159,7 @@ func TestLoop_MaybeRefactor_TriggersAtMultiplesOf5(t *testing.T) {
 // Proves: llmShouldRefactor correctly parses YES/NO responses in various
 // formats, including case variations and extra whitespace.
 func TestLoop_LLMShouldRefactor_ParsesResponses(t *testing.T) {
-	l := &Loop{git: &git.Manager{WorkDir: t.TempDir(), BaseBranch: "main"}}
+	l := &Loop{git: &testutil.StubGit{WorkDir: t.TempDir()}}
 
 	tests := []struct {
 		name     string

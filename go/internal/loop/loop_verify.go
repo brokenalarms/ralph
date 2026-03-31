@@ -18,9 +18,9 @@ func (l *Loop) onSignal(p signalParams) bool {
 // Test overrides via verifyFunc bypass the Verifier entirely.
 func (l *Loop) verifyCompletion(ctx context.Context, headBefore string) (bool, string) {
 	if l.verifyFunc != nil {
-		return l.verifyFunc(ctx, l.git.WorkDir, headBefore)
+		return l.verifyFunc(ctx, l.git.GetWorkDir(), headBefore)
 	}
-	return l.verifier.VerifyCompletion(ctx, l.git.WorkDir, headBefore)
+	return l.verifier.VerifyCompletion(ctx, l.git.GetWorkDir(), headBefore)
 }
 
 // runPreIterationTests delegates to the Verifier.
@@ -132,11 +132,11 @@ func (l *Loop) findPRInfo(workDir string) (number, title, url string) {
 		n, t := l.findPRInfoFunc(workDir)
 		return n, t, ""
 	}
-	gh := l.git.GitHub
+	gh := l.git.GH()
 	if gh == nil {
 		return "", "", ""
 	}
-	num, t, u, err := gh.FindPR(l.git.WorktreeBranch, workDir)
+	num, t, u, err := gh.FindPR(l.git.GetWorktreeBranch(), workDir)
 	if err != nil {
 		return "", "", ""
 	}

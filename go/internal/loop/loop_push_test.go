@@ -3,15 +3,12 @@ package loop
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -20,13 +17,10 @@ import (
 // is detected, regardless of whether auto-merge is enabled. This ensures the
 // Go code owns the push/PR lifecycle.
 func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(10)
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
 
-	promptsDir := filepath.Join(project, "prompts")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	pushPRCalls := 0
@@ -42,13 +36,12 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 		},
 	}
 
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
-			fname := fmt.Sprintf("task%d.go", iterationCount)
-			os.WriteFile(filepath.Join(project, fname), []byte("package main\n"), 0o644)
-			run(t, "git", "-C", project, "add", fname)
-			run(t, "git", "-C", project, "commit", "-m", fmt.Sprintf("task %d", iterationCount))
+			gm.HeadRevValue = fmt.Sprintf("commit%d", iterationCount)
 			if iterationCount == 1 {
 				backend.Lock()
 				backend.Completed = 1
@@ -66,17 +59,10 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		WorkDir:    project,
-		Logger:     logging.New(nil),
-	}
-
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    project,
+			ProjectDir: dir,
+			WorkDir:    dir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -126,12 +112,7 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 		result: claude.Result{SignalDetected: false},
 	}
 
-	gm := &git.Manager{
-		ProjectDir: dir,
-		BaseBranch: "main",
-		WorkDir:    dir,
-		Logger:     logging.New(nil),
-	}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -172,14 +153,10 @@ func TestLoop_PushCalledAfterSignal(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &git.Manager{
+	gm := &testutil.StubGit{
 		ProjectDir:     dir,
-		BaseBranch: "main",
-		RalphDir:       ralphDir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/test/01-task",
-		State:          st,
-		Logger:         logging.New(nil),
 	}
 
 	backend := &testutil.StubBackend{
@@ -238,7 +215,7 @@ func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -304,7 +281,7 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -376,7 +353,7 @@ func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -441,7 +418,7 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -514,7 +491,7 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -579,7 +556,7 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -646,7 +623,7 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, Logger: logger, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {

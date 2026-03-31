@@ -70,7 +70,7 @@ type CompletedTask struct {
 type Loop struct {
 	cfg        Config
 	state      *state.Store
-	git        *git.Manager
+	git        git.GitOps
 	limiter    *ratelimit.Limiter
 	runner     claudeRunner
 	verifier   *Verifier
@@ -94,7 +94,7 @@ type Loop struct {
 
 // New creates an execution loop from the given configuration. All agent
 // invocations go through the centralized agent module.
-func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *Loop {
+func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Loop {
 	signals := claude.DefaultSignalPaths(cfg.Dirs.RalphDir)
 
 	limiter := ratelimit.New(cfg.Dirs.RalphDir, cfg.CallsPerHour)
@@ -127,7 +127,7 @@ func New(cfg Config, st *state.Store, gm *git.Manager, logger *logging.Logger) *
 	}, VerifierDeps{
 		Logger:      logger,
 		Git:         gm,
-		GitHub:      gm.GitHub,
+		GitHub:      gm.GH(),
 		State:       st,
 		TaskBackend: cfg.TaskBackend,
 		Runner:      func() claudeRunner { return l.runner },
@@ -242,9 +242,9 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		if runIteration > 1 && taskChanged {
 			l.git.PrepareForNextTask()
-			if l.git.WorktreeBranch != "" && l.git.WorkDir != l.git.ProjectDir {
+			if l.git.GetWorktreeBranch() != "" && l.git.GetWorkDir() != l.git.GetProjectDir() {
 				l.setStackHead()
-				if l.git.PrevBranch == "" {
+				if l.git.GetPrevBranch() == "" {
 					l.git.ResetToDefaultBranch()
 				}
 				if err := l.handleRebase(ctx); err != nil {
@@ -274,11 +274,11 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.state.Write("last_task", nextTask)
 		l.state.Write("last_task_id", taskID)
 
-		if taskChanged || !l.git.BranchRenamed {
+		if taskChanged || !l.git.IsBranchRenamed() {
 			l.setStackHead()
 			l.checkoutExistingBranch(taskID, nextTask)
 		}
-		writeRunBranch(l.cfg.Dirs.RalphDir, l.git.WorktreeBranch)
+		writeRunBranch(l.cfg.Dirs.RalphDir, l.git.GetWorktreeBranch())
 		l.git.TagTaskStart(taskID)
 		updateStreamTask(l.cfg.Dirs.RalphDir, taskID, nextTask, taskInfo.Priority)
 

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -45,7 +44,7 @@ func TestLoop_BuildTaskPrompt_WithScreenshots(t *testing.T) {
 	}
 
 	backend := &testutil.StubBackend{NextID: "ralph-abc", NextTask: "Fix modal", FullContext: "○ ralph-abc · Fix modal [● P3 · OPEN]"}
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	l := New(Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -79,7 +78,7 @@ func TestLoop_BuildTaskPrompt_NoScreenshots(t *testing.T) {
 	}
 
 	backend := &testutil.StubBackend{NextID: "ralph-xyz", NextTask: "Fix layout", FullContext: "○ ralph-xyz · Fix layout [● P3 · OPEN]"}
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	l := New(Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -162,7 +161,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -256,7 +255,7 @@ func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
 
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-xyz"}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,

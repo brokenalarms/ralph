@@ -14,7 +14,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
-	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -24,12 +23,9 @@ import (
 // handlePostSignal: verifies that a successful signal pushes, closes the
 // task, and returns signalComplete for the normal (non-evolve) path.
 func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
@@ -43,9 +39,9 @@ func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -54,17 +50,12 @@ func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	// Create a commit so HeadRev() returns something different from headBefore=""
-	writeFile(t, project, "fix.go", "package main\n")
-	run(t, "git", "-C", project, "add", "fix.go")
-	run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
-
 	runIter, iter := 1, 1
 	action := l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
-		workDir:    project,
+		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-xyz",
 		nextTask:   "Fix auth bug",
@@ -94,7 +85,7 @@ func TestLoop_HandlePostSignal_VerificationFailure(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-abc"}},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -127,24 +118,21 @@ func TestLoop_HandlePostSignal_VerificationFailure(t *testing.T) {
 // indefinitely, proving the timeout prevents infinite stalls from rate limits
 // or network issues.
 func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-timeout"}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	var logBuf bytes.Buffer
 	logger := logging.New(&logBuf)
 
 	l := New(Config{
-		Dirs:              workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:     1,
 		CallsPerHour:      80,
 		TaskBackend:       backend,
@@ -157,10 +145,6 @@ func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 		return "", ctx.Err()
 	}
 
-	writeFile(t, project, "fix.go", "package main\n")
-	run(t, "git", "-C", project, "add", "fix.go")
-	run(t, "git", "-C", project, "commit", "-m", "fix")
-
 	runIter, iter := 1, 1
 	done := make(chan postSignalAction, 1)
 	go func() {
@@ -168,7 +152,7 @@ func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 			ctx:        context.Background(),
 			result:     claude.Result{SignalDetected: true},
 			headBefore: "",
-			workDir:    project,
+			workDir:    dir,
 			rawLogPath: filepath.Join(ralphDir, "raw.log"),
 			taskID:     "ralph-timeout",
 			nextTask:   "Fix bug",
@@ -199,21 +183,18 @@ func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 // handlePostSignal completes normally within PostSignalTimeout when operations
 // are fast, proving the timeout doesn't interfere with successful flows.
 func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix login", NextID: "ralph-fast"}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	l := New(Config{
-		Dirs:              workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:     1,
 		CallsPerHour:      80,
 		TaskBackend:       backend,
@@ -223,16 +204,12 @@ func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 
-	writeFile(t, project, "fix.go", "package main\n")
-	run(t, "git", "-C", project, "add", "fix.go")
-	run(t, "git", "-C", project, "commit", "-m", "fix")
-
 	runIter, iter := 1, 1
 	action := l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
-		workDir:    project,
+		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-fast",
 		nextTask:   "Fix login",
@@ -252,21 +229,18 @@ func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.
 // handlePostSignal cancels a blocking merge when the post-signal timeout
 // fires, so the orchestrator doesn't stall on a rate-limited API call.
 func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Slow merge", NextID: "ralph-slow"}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	l := New(Config{
-		Dirs:              workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:     1,
 		CallsPerHour:      80,
 		TaskBackend:       backend,
@@ -281,10 +255,6 @@ func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
 		return false, ctx.Err()
 	}
 
-	writeFile(t, project, "fix.go", "package main\n")
-	run(t, "git", "-C", project, "add", "fix.go")
-	run(t, "git", "-C", project, "commit", "-m", "fix")
-
 	runIter, iter := 1, 1
 	done := make(chan postSignalAction, 1)
 	go func() {
@@ -292,7 +262,7 @@ func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
 			ctx:        context.Background(),
 			result:     claude.Result{SignalDetected: true},
 			headBefore: "",
-			workDir:    project,
+			workDir:    dir,
 			rawLogPath: filepath.Join(ralphDir, "raw.log"),
 			taskID:     "ralph-slow",
 			nextTask:   "Slow merge",
@@ -310,26 +280,23 @@ func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
 // runPostTask executes the configured script after task completion with
 // RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED env vars.
 func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	// Create a script that writes env vars to a file for verification.
-	envFile := filepath.Join(project, "post-task-env.txt")
-	scriptPath := filepath.Join(project, "post-task.sh")
+	envFile := filepath.Join(dir, "post-task-env.txt")
+	scriptPath := filepath.Join(dir, "post-task.sh")
 	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\necho \"TASK=$RALPH_TASK_ID PR=$RALPH_PR_NUMBER MERGED=$RALPH_MERGED\" > %s\n", envFile)), 0o755)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt1"}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -341,15 +308,12 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
 
-	writeFile(t, project, "fix.go", "package main\n")
-	run(t, "git", "-C", project, "commit", "-m", "fix")
-
 	runIter, iter := 1, 1
 	action := l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
-		workDir:    project,
+		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-pt1",
 		nextTask:   "Fix bug",
@@ -385,7 +349,7 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt2"}},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -415,15 +379,12 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 
 // runPostTask warns but continues when the script exits non-zero.
 func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	scriptPath := filepath.Join(project, "post-task.sh")
+	scriptPath := filepath.Join(dir, "post-task.sh")
 	os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 1\n"), 0o755)
 
 	var logBuf bytes.Buffer
@@ -433,9 +394,9 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt3"}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logger, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -445,15 +406,12 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "50", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	writeFile(t, project, "fix.go", "package main\n")
-	run(t, "git", "-C", project, "commit", "-m", "fix")
-
 	runIter, iter := 1, 1
 	action := l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
-		workDir:    project,
+		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-pt3",
 		nextTask:   "Fix bug",
@@ -471,27 +429,23 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 
 // runPostTask is called in the no-commits path (signalSkipped) with merged=false.
 func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	envFile := filepath.Join(project, "post-task-env.txt")
-	scriptPath := filepath.Join(project, "post-task.sh")
+	envFile := filepath.Join(dir, "post-task-env.txt")
+	scriptPath := filepath.Join(dir, "post-task.sh")
 	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\necho \"TASK=$RALPH_TASK_ID PR=$RALPH_PR_NUMBER MERGED=$RALPH_MERGED\" > %s\n", envFile)), 0o755)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt4"}},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
-	headBefore := gm.HeadRev()
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before"}
 
 	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -504,8 +458,8 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 	action := l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{OnSignalUsed: true},
-		headBefore: headBefore,
-		workDir:    project,
+		headBefore: "before",
+		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-pt4",
 		nextTask:   "Fix bug",
@@ -529,12 +483,9 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 // handlePostSignal fires a TaskCompleted notification after post-task when
 // Notify is enabled.
 func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
@@ -548,9 +499,9 @@ func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -564,16 +515,12 @@ func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	writeFile(t, project, "fix.go", "package main\n")
-	run(t, "git", "-C", project, "add", "fix.go")
-	run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
-
 	runIter, iter := 1, 1
 	l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
 		headBefore: "",
-		workDir:    project,
+		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-ntf",
 		nextTask:   "Fix auth bug",
@@ -590,12 +537,9 @@ func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 
 // handlePostSignal does NOT send TaskCompleted when Notify is disabled.
 func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
@@ -609,9 +553,9 @@ func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -625,16 +569,12 @@ func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	writeFile(t, project, "fix.go", "package main\n")
-	run(t, "git", "-C", project, "add", "fix.go")
-	run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
-
 	runIter, iter := 1, 1
 	l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
 		headBefore: "",
-		workDir:    project,
+		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-ntf2",
 		nextTask:   "Fix auth bug",
@@ -648,12 +588,9 @@ func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
 
 // handlePostSignal fires TaskCompleted on the no-commits path when Notify is enabled.
 func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
@@ -667,9 +604,9 @@ func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before"}
 	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -682,14 +619,12 @@ func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	headRev := gm.HeadRev()
-
 	runIter, iter := 1, 1
 	action := l.handlePostSignal(postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true, Summary: "Updated README"},
-		headBefore: headRev,
-		workDir:    project,
+		headBefore: "before",
+		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-nc1",
 		nextTask:   "Update docs",
@@ -707,12 +642,9 @@ func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
 
 // resolveByPRState sends TaskCompleted and TaskMerged when PR is already merged and Notify is enabled.
 func TestResolveByPRState_Merged_NotifyEnabled(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
@@ -726,11 +658,14 @@ func TestResolveByPRState_Merged_NotifyEnabled(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
-	gm.GitHub = &git.StubGitHub{IsAvailable: true, PRState: "MERGED"}
+	gm := &testutil.StubGit{
+		ProjectDir:  dir,
+		WorkDir:     dir,
+		GitHubStub: &git.StubGitHub{IsAvailable: true, PRState: "MERGED"},
+	}
 
 	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -758,12 +693,9 @@ func TestResolveByPRState_Merged_NotifyEnabled(t *testing.T) {
 
 // resolveByPRState sends TaskCompleted (no TaskMerged) when PR is OPEN and Notify is enabled.
 func TestResolveByPRState_Open_NotifyEnabled(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
@@ -777,20 +709,16 @@ func TestResolveByPRState_Open_NotifyEnabled(t *testing.T) {
 		},
 	}
 
-	// Create and push a feature branch so prChainIsHealthy passes.
 	branchName := "ralph-ro1/add-cache"
-	run(t, "git", "-C", project, "checkout", "-b", branchName)
-	writeFile(t, project, "cache.go", "package main\n")
-	run(t, "git", "-C", project, "add", "cache.go")
-	run(t, "git", "-C", project, "commit", "-m", "add cache")
-	run(t, "git", "-C", project, "push", "-u", "origin", branchName)
-	run(t, "git", "-C", project, "checkout", "main")
-
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
-	gm.GitHub = &git.StubGitHub{IsAvailable: true, PRState: "OPEN", PRHead: branchName}
+	gm := &testutil.StubGit{
+		ProjectDir:          dir,
+		WorkDir:             dir,
+		RemoteBranchCommits: true,
+		GitHubStub:          &git.StubGitHub{IsAvailable: true, PRState: "OPEN", PRHead: branchName},
+	}
 
 	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
@@ -818,12 +746,9 @@ func TestResolveByPRState_Open_NotifyEnabled(t *testing.T) {
 
 // resolveByPRState does NOT send TaskCompleted when Notify is disabled, but still sends TaskMerged.
 func TestResolveByPRState_Merged_NotifyDisabled(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
@@ -837,11 +762,14 @@ func TestResolveByPRState_Merged_NotifyDisabled(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
-	gm.GitHub = &git.StubGitHub{IsAvailable: true, PRState: "MERGED"}
+	gm := &testutil.StubGit{
+		ProjectDir:  dir,
+		WorkDir:     dir,
+		GitHubStub: &git.StubGitHub{IsAvailable: true, PRState: "MERGED"},
+	}
 
 	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,

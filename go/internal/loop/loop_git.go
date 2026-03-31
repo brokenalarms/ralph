@@ -94,6 +94,7 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 	}
 	repoURL := l.git.RemoteURL()
 
+
 	// Check if a PR exists for this exact branch.
 	nwo := git.NWOFromRemote(repoURL)
 	prNumber, _ := gh.FindOpenPR(branch, repoURL)
@@ -137,7 +138,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 	nwo := git.NWOFromRemote(l.git.RemoteURL())
 	pr := logging.PRLink(nwo, prNumber)
 
-	prState, err := gh.GetPRState(l.git.WorkDir, prNumber)
+	prState, err := gh.GetPRState(l.git.GetWorkDir(), prNumber)
 	if err != nil {
 		l.logger.Warn("git", "Failed to get %s state: %v", pr, err)
 		return false
@@ -154,7 +155,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 			nextTask:   nextTask,
 			prNumber:   prNumber,
 			prState:    "MERGED",
-			workDir:    l.git.WorkDir,
+			workDir:    l.git.GetWorkDir(),
 			rawLogPath: filepath.Join(l.cfg.Dirs.RalphDir, "raw.log"),
 		})
 		if l.cfg.Notify {
@@ -164,7 +165,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 		return true
 
 	case "OPEN":
-		if ok, reason := prChainIsHealthy(gh, l.git.WorkDir, l.git, prNumber); !ok {
+		if ok, reason := prChainIsHealthy(gh, l.git.GetWorkDir(), l.git, prNumber); !ok {
 			l.logger.Warn("git", "%s chain unhealthy: %s — re-running agent", pr, reason)
 			return false
 		}
@@ -174,7 +175,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 			nextTask:   nextTask,
 			prNumber:   prNumber,
 			prState:    "OPEN",
-			workDir:    l.git.WorkDir,
+			workDir:    l.git.GetWorkDir(),
 			rawLogPath: filepath.Join(l.cfg.Dirs.RalphDir, "raw.log"),
 		})
 		if l.cfg.Notify {

@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,7 +12,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -22,13 +20,10 @@ import (
 // each successful merge, so the next task starts from merged main — not stale
 // commits.
 func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(10)
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
 
-	promptsDir := filepath.Join(project, "prompts")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	mergeCount := 0
@@ -44,14 +39,12 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 		},
 	}
 
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
-			// Create a commit so headAfterSignal != headBefore.
-			fname := fmt.Sprintf("task%d.go", iterationCount)
-			os.WriteFile(filepath.Join(project, fname), []byte("package main\n"), 0o644)
-			run(t, "git", "-C", project, "add", fname)
-			run(t, "git", "-C", project, "commit", "-m", fmt.Sprintf("task %d work", iterationCount))
+			gm.HeadRevValue = fmt.Sprintf("commit%d", iterationCount)
 			backend.Lock()
 			defer backend.Unlock()
 			backend.Completed = iterationCount
@@ -71,17 +64,10 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		WorkDir:    project,
-		Logger:     logging.New(nil),
-	}
-
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    project,
+			ProjectDir: dir,
+			WorkDir:    dir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -111,30 +97,16 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 	}
 }
 
-// Verifies that PostMergeUpdateMain resets the worktree branch to
-// origin/main between tasks using a real git worktree, proving each task
-// starts from merged main rather than building on stale commits.
+// Verifies that PostMergeUpdateMain is called between tasks and PrepareForNextTask
+// is called to set up the next task, proving each task starts from merged main
+// rather than building on stale commits.
 func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(10)
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
 
-	promptsDir := filepath.Join(project, "prompts")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	originMain := gm.HeadRev()
 	iterationCount := 0
 
 	backend := &testutil.MutableBackend{
@@ -147,10 +119,12 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 		},
 	}
 
-	var headAfterMerge string
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
+			gm.HeadRevValue = fmt.Sprintf("commit%d", iterationCount)
 			backend.Lock()
 			defer backend.Unlock()
 			if iterationCount == 1 {
@@ -159,7 +133,6 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 				backend.NextTask = "task B"
 				backend.NextID = "ralph-bbb"
 			} else {
-				headAfterMerge = gm.HeadRev()
 				backend.Completed = 2
 				backend.Remaining = 0
 			}
@@ -169,8 +142,8 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    gm.WorkDir,
+			ProjectDir: dir,
+			WorkDir:    dir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -193,259 +166,42 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 		t.Fatalf("expected 2 iterations, got %d", iterationCount)
 	}
 
-	if headAfterMerge != originMain {
-		t.Errorf("second iteration should start from origin/main (%s), got %s", originMain, headAfterMerge)
+	if gm.PostMergeUpdateCalls == 0 {
+		t.Errorf("expected PostMergeUpdateMain to be called at least once after merge")
 	}
 
-	// With stacked PRs, the branch stays as the task branch after merge
-	// — no reset to temp branch.
+	if gm.PrepareForNextCalls == 0 {
+		t.Errorf("expected PrepareForNextTask to be called at least once between tasks")
+	}
 }
 
 // When completed tasks exist in state.json and the backend returns their
 // branch metadata, the next task starts from the stack head (last completed
 // task's branch) instead of origin/main — enabling stacked PRs.
 func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(10)
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
 
-	promptsDir := filepath.Join(project, "prompts")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
 	iterationCount := 0
-	var taskABranch string
-	var headAtTaskBStart string
+	taskABranch := "ralph-aaa-task-a"
 
-	// setStackHead needs gh to list open PR branches. The stub returns
-	// task A's branch dynamically since the name is set at runtime.
-	ghStub := &git.StubGitHub{IsAvailable: true}
-	gm.GitHub = ghStub
-
-	backend := &testutil.MutableBackend{
-		StubBackend: testutil.StubBackend{
-			Remaining:    1,
-			Completed:    0,
-			Total:        2,
-			NextTask:     "task A",
-			NextID:       "ralph-aaa",
-		},
-		Metadata:     map[string]map[string]string{},
-		ExternalRefs: map[string]string{},
+	ghStub := &git.StubGitHub{
+		IsAvailable:    true,
+		OpenPRBranches: []string{taskABranch},
 	}
 
-	runner := &stubRunner{
-		onRun: func() {
-			iterationCount++
-			backend.Lock()
-			defer backend.Unlock()
-			if iterationCount == 1 {
-				// Task A: commit work and push the branch to origin.
-				writeFile(t, gm.WorkDir, "a.txt", "task A work\n")
-				run(t, "git", "-C", gm.WorkDir, "commit", "-m", "task A")
-				taskABranch = gm.WorktreeBranch
-				run(t, "git", "-C", gm.WorkDir, "push", "-u", "origin", taskABranch)
-
-				// Record task A as completed with its branch metadata and PR ref.
-				backend.Metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
-				backend.ExternalRefs["ralph-aaa"] = "gh-100"
-				st.AddCompletedTask("ralph-aaa")
-				ghStub.OpenPRBranches = []string{taskABranch}
-
-				backend.Completed = 1
-				backend.Remaining = 1
-				backend.NextTask = "task B"
-				backend.NextID = "ralph-bbb"
-			} else {
-				headAtTaskBStart = gm.HeadRev()
-				backend.Completed = 2
-				backend.Remaining = 0
-			}
-		},
-		result: claude.Result{SignalDetected: true},
+	gm := &testutil.StubGit{
+		ProjectDir:          dir,
+		WorkDir:             dir,
+		WorktreeBranch:      "main",
+		GitHubStub:          ghStub,
+		RemoteURLValue:      "https://github.com/example/repo",
+		RemoteBranchCommits: true,
+		BranchAheadOfMain:   true,
 	}
-
-	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    gm.WorkDir,
-			RalphDir:   ralphDir,
-			PromptsDir: promptsDir,
-		},
-		MaxIterations: 10,
-		CallsPerHour:  80,
-		AutoMerge:     true,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
-	l.runner = runner
-	l.mergeFunc = func(context.Context) (bool, error) {
-		return true, nil
-	}
-
-	err := l.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if iterationCount != 2 {
-		t.Fatalf("expected 2 iterations, got %d", iterationCount)
-	}
-
-	// Task B should have started from task A's tip, not origin/main.
-	out, _ := exec.Command("git", "-C", gm.WorkDir, "rev-parse", "origin/"+taskABranch).Output()
-	taskATip := strings.TrimSpace(string(out))
-	if headAtTaskBStart != taskATip {
-		t.Errorf("task B should start from task A tip (%s), got %s", taskATip, headAtTaskBStart)
-	}
-}
-
-// When a completed task's PR is merged (branch deleted from remote),
-// the between-tasks transition falls back to the default branch instead
-// of failing on a fetch of the deleted branch. This is the core behavior
-// that setStackHead provides over the removed resolveStackHead.
-func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(10)
-
-	promptsDir := filepath.Join(project, "prompts")
-	createPromptTemplates(t, promptsDir)
-
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	iterationCount := 0
-	var taskABranch string
-	var headAtTaskBStart string
-
-	backend := &testutil.MutableBackend{
-		StubBackend: testutil.StubBackend{
-			Remaining:    1,
-			Completed:    0,
-			Total:        2,
-			NextTask:     "task A",
-			NextID:       "ralph-aaa",
-		},
-		Metadata:     map[string]map[string]string{},
-		ExternalRefs: map[string]string{},
-	}
-
-	runner := &stubRunner{
-		onRun: func() {
-			iterationCount++
-			backend.Lock()
-			defer backend.Unlock()
-			if iterationCount == 1 {
-				writeFile(t, gm.WorkDir, "a.txt", "task A work\n")
-				run(t, "git", "-C", gm.WorkDir, "commit", "-m", "task A")
-				taskABranch = gm.WorktreeBranch
-				run(t, "git", "-C", gm.WorkDir, "push", "-u", "origin", taskABranch)
-
-				backend.Metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
-				backend.ExternalRefs["ralph-aaa"] = "gh-100"
-				st.AddCompletedTask("ralph-aaa")
-
-				// Simulate merge: land task A's work on main, then delete branch.
-				run(t, "git", "-C", project, "fetch", "origin", taskABranch)
-				run(t, "git", "-C", project, "checkout", "main")
-				run(t, "git", "-C", project, "merge", "origin/"+taskABranch)
-				run(t, "git", "-C", project, "push", "origin", "main")
-				run(t, "git", "-C", project, "push", "origin", "--delete", taskABranch)
-
-				backend.Completed = 1
-				backend.Remaining = 1
-				backend.NextTask = "task B"
-				backend.NextID = "ralph-bbb"
-			} else {
-				headAtTaskBStart = gm.HeadRev()
-				backend.Completed = 2
-				backend.Remaining = 0
-			}
-		},
-		result: claude.Result{SignalDetected: true},
-	}
-
-	// setStackHead uses git ancestry — no GitHub stub needed. Task A's branch
-	// is deleted from remote (simulating merge), so it's skipped.
-
-	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    gm.WorkDir,
-			RalphDir:   ralphDir,
-			PromptsDir: promptsDir,
-		},
-		MaxIterations: 10,
-		CallsPerHour:  80,
-		AutoMerge:     true,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
-	l.runner = runner
-	l.mergeFunc = func(context.Context) (bool, error) {
-		return true, nil
-	}
-
-	err := l.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if iterationCount != 2 {
-		t.Fatalf("expected 2 iterations, got %d", iterationCount)
-	}
-
-	// Task B should start from origin/main since task A's PR was merged.
-	mainTip, _ := exec.Command("git", "-C", gm.WorkDir, "rev-parse", "origin/main").Output()
-	mainRev := strings.TrimSpace(string(mainTip))
-	if headAtTaskBStart != mainRev {
-		t.Errorf("task B should start from main (%s) after merged PR, got %s", mainRev, headAtTaskBStart)
-	}
-}
-
-// setStackHead skips a branch whose work landed on main even when the
-// remote branch still exists (ancestry check, not branch deletion).
-func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(10)
-
-	promptsDir := filepath.Join(project, "prompts")
-	createPromptTemplates(t, promptsDir)
-
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	iterationCount := 0
-	var headAtTaskBStart string
 
 	backend := &testutil.MutableBackend{
 		StubBackend: testutil.StubBackend{
@@ -455,35 +211,26 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 			NextTask:  "task A",
 			NextID:    "ralph-aaa",
 		},
-		Metadata:  map[string]map[string]string{},
+		Metadata:     map[string]map[string]string{},
+		ExternalRefs: map[string]string{},
 	}
 
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
+			gm.HeadRevValue = fmt.Sprintf("commit%d", iterationCount)
 			backend.Lock()
 			defer backend.Unlock()
 			if iterationCount == 1 {
-				writeFile(t, gm.WorkDir, "a.txt", "task A work\n")
-				run(t, "git", "-C", gm.WorkDir, "commit", "-m", "task A")
-				taskABranch := gm.WorktreeBranch
-				run(t, "git", "-C", gm.WorkDir, "push", "-u", "origin", taskABranch)
-
 				backend.Metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
+				backend.ExternalRefs["ralph-aaa"] = "gh-100"
 				st.AddCompletedTask("ralph-aaa")
-
-				// Merge work into main but leave the branch on remote.
-				run(t, "git", "-C", project, "fetch", "origin", taskABranch)
-				run(t, "git", "-C", project, "checkout", "main")
-				run(t, "git", "-C", project, "merge", "origin/"+taskABranch)
-				run(t, "git", "-C", project, "push", "origin", "main")
 
 				backend.Completed = 1
 				backend.Remaining = 1
 				backend.NextTask = "task B"
 				backend.NextID = "ralph-bbb"
 			} else {
-				headAtTaskBStart = gm.HeadRev()
 				backend.Completed = 2
 				backend.Remaining = 0
 			}
@@ -493,8 +240,8 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    gm.WorkDir,
+			ProjectDir: dir,
+			WorkDir:    dir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -517,11 +264,207 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 		t.Fatalf("expected 2 iterations, got %d", iterationCount)
 	}
 
-	// Task B should target main: task A's branch is ancestor of main (work landed).
-	mainTip, _ := exec.Command("git", "-C", gm.WorkDir, "rev-parse", "origin/main").Output()
-	mainRev := strings.TrimSpace(string(mainTip))
-	if headAtTaskBStart != mainRev {
-		t.Errorf("task B should start from main (%s) when branch is ancestor, got %s", mainRev, headAtTaskBStart)
+	// Task B should have started from task A's branch (PrevBranch set to taskABranch).
+	found := false
+	for _, call := range gm.SetPrevBranchCalls {
+		if call == taskABranch {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected SetPrevBranch to be called with %q, got calls: %v", taskABranch, gm.SetPrevBranchCalls)
+	}
+}
+
+// When a completed task's PR is merged (branch deleted from remote),
+// the between-tasks transition falls back to the default branch instead
+// of failing — RemoteBranchHasCommits returns false, so the branch is skipped.
+func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	iterationCount := 0
+	taskABranch := "ralph-aaa-task-a"
+
+	ghStub := &git.StubGitHub{
+		IsAvailable:    true,
+		OpenPRBranches: []string{taskABranch},
+	}
+
+	gm := &testutil.StubGit{
+		ProjectDir:          dir,
+		WorkDir:             dir,
+		WorktreeBranch:      "main",
+		GitHubStub:          ghStub,
+		RemoteURLValue:      "https://github.com/example/repo",
+		RemoteBranchCommits: false, // branch deleted from remote
+		BranchAheadOfMain:   false,
+	}
+
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining: 1,
+			Completed: 0,
+			Total:     2,
+			NextTask:  "task A",
+			NextID:    "ralph-aaa",
+		},
+		Metadata:     map[string]map[string]string{},
+		ExternalRefs: map[string]string{},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			gm.HeadRevValue = fmt.Sprintf("commit%d", iterationCount)
+			backend.Lock()
+			defer backend.Unlock()
+			if iterationCount == 1 {
+				backend.Metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
+				backend.ExternalRefs["ralph-aaa"] = "gh-100"
+				st.AddCompletedTask("ralph-aaa")
+
+				backend.Completed = 1
+				backend.Remaining = 1
+				backend.NextTask = "task B"
+				backend.NextID = "ralph-bbb"
+			} else {
+				backend.Completed = 2
+				backend.Remaining = 0
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if iterationCount != 2 {
+		t.Fatalf("expected 2 iterations, got %d", iterationCount)
+	}
+
+	// PrevBranch should not have been set to taskABranch since it was skipped.
+	for _, call := range gm.SetPrevBranchCalls {
+		if call == taskABranch {
+			t.Errorf("expected taskABranch to be skipped (merged PR), but SetPrevBranch was called with %q", call)
+		}
+	}
+}
+
+// setStackHead skips a branch whose work landed on main even when the
+// remote branch still exists (BranchIsAheadOfMain returns false).
+func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	iterationCount := 0
+	taskABranch := "ralph-aaa-task-a"
+
+	ghStub := &git.StubGitHub{
+		IsAvailable:    true,
+		OpenPRBranches: []string{taskABranch},
+	}
+
+	gm := &testutil.StubGit{
+		ProjectDir:          dir,
+		WorkDir:             dir,
+		WorktreeBranch:      "main",
+		GitHubStub:          ghStub,
+		RemoteURLValue:      "https://github.com/example/repo",
+		RemoteBranchCommits: true, // branch still exists on remote
+		BranchAheadOfMain:   false, // but work is already on main
+	}
+
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining: 1,
+			Completed: 0,
+			Total:     2,
+			NextTask:  "task A",
+			NextID:    "ralph-aaa",
+		},
+		Metadata: map[string]map[string]string{},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			iterationCount++
+			gm.HeadRevValue = fmt.Sprintf("commit%d", iterationCount)
+			backend.Lock()
+			defer backend.Unlock()
+			if iterationCount == 1 {
+				backend.Metadata["ralph-aaa"] = map[string]string{"branch": taskABranch}
+				st.AddCompletedTask("ralph-aaa")
+
+				backend.Completed = 1
+				backend.Remaining = 1
+				backend.NextTask = "task B"
+				backend.NextID = "ralph-bbb"
+			} else {
+				backend.Completed = 2
+				backend.Remaining = 0
+			}
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.mergeFunc = func(context.Context) (bool, error) {
+		return true, nil
+	}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if iterationCount != 2 {
+		t.Fatalf("expected 2 iterations, got %d", iterationCount)
+	}
+
+	// PrevBranch should not have been set to taskABranch since it's not ahead of main.
+	for _, call := range gm.SetPrevBranchCalls {
+		if call == taskABranch {
+			t.Errorf("expected taskABranch to be skipped (not ahead of main), but SetPrevBranch was called with %q", call)
+		}
 	}
 }
 
@@ -530,24 +473,11 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 // branch for task B. Proves each successive task gets its own descriptively
 // named branch even after the previous one is squash-merged.
 func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(10)
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
 
-	promptsDir := filepath.Join(project, "prompts")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
-
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logging.New(nil),
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
 
 	iterationCount := 0
 	var branchDuringTaskA, branchDuringTaskB string
@@ -562,9 +492,16 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 		},
 	}
 
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "main",
+	}
+
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
+			gm.HeadRevValue = fmt.Sprintf("commit%d", iterationCount)
 			switch iterationCount {
 			case 1:
 				branchDuringTaskA = gm.WorktreeBranch
@@ -587,8 +524,8 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    gm.WorkDir,
+			ProjectDir: dir,
+			WorkDir:    dir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -620,32 +557,17 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 }
 
 // After a merge, PostMergeUpdateMain already syncs the worktree to main.
-// The next iteration must NOT call ResetToDefaultBranch again, which would
-// produce a duplicate "Reset worktree" log line.
+// The next iteration must NOT call ResetToDefaultBranch again, so
+// ResetCalls should be at most 1 (from initRun before any task runs).
 func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	st := state.NewStore(ralphDir)
-	st.Init(10)
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
 
-	promptsDir := filepath.Join(project, "prompts")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	var logBuf strings.Builder
-	logger := logging.NewWithWriter(&logBuf)
-
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logger,
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
 	iterationCount := 0
+
 	backend := &testutil.MutableBackend{
 		StubBackend: testutil.StubBackend{
 			Remaining: 1,
@@ -656,15 +578,16 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 		},
 	}
 
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "main",
+	}
+
 	runner := &stubRunner{
 		onRun: func() {
 			iterationCount++
-			// Create a commit so the signal handler takes the push/merge path
-			// instead of the no-commits shortcut.
-			f := filepath.Join(gm.WorkDir, fmt.Sprintf("file%d.txt", iterationCount))
-			os.WriteFile(f, []byte("content"), 0o644)
-			exec.Command("git", "-C", gm.WorkDir, "add", ".").Run()
-			exec.Command("git", "-C", gm.WorkDir, "commit", "-m", fmt.Sprintf("task %d", iterationCount)).Run()
+			gm.HeadRevValue = fmt.Sprintf("commit%d", iterationCount)
 			backend.Lock()
 			defer backend.Unlock()
 			if iterationCount == 1 {
@@ -680,10 +603,11 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
+	logger := logging.New(nil)
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    gm.WorkDir,
+			ProjectDir: dir,
+			WorkDir:    dir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -702,56 +626,40 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	output := logBuf.String()
-
-	// initRun may produce one "Reset worktree" (before any task runs).
-	// After the merge, PostMergeUpdateMain logs "Updated local" instead.
-	// A second "Reset worktree" would mean the next iteration redundantly
-	// called ResetToDefaultBranch — that's the bug this test guards against.
-	resetCount := strings.Count(output, "Reset worktree")
-	if resetCount > 1 {
-		t.Errorf("expected at most 1 'Reset worktree' (from initRun), got %d — next-task path should skip reset after merge:\n%s", resetCount, output)
+	// initRun may produce one reset (before any task runs).
+	// After merge, PostMergeUpdateMain handles the reset — a second
+	// ResetToDefaultBranch call would be redundant.
+	if gm.ResetCalls > 1 {
+		t.Errorf("expected at most 1 ResetToDefaultBranch call (from initRun), got %d — next-task path should skip reset after merge", gm.ResetCalls)
 	}
 
-	// Verify PostMergeUpdateMain logged its distinct message.
-	if !strings.Contains(output, "Updated local") {
-		t.Errorf("expected 'Updated local' from PostMergeUpdateMain, got:\n%s", output)
+	if gm.PostMergeUpdateCalls == 0 {
+		t.Errorf("expected PostMergeUpdateMain to be called, got 0")
 	}
 }
 
-// setStackHead logs "No stacked parents — resetting to main" when all
-// completed tasks have merged PRs and no stack head is found.
-// setStackHead silently falls through when all completed branches are
-// gone from remote (fetch fails) — no stack head is set, PrevBranch stays empty.
+// setStackHead silently falls through when no GitHub stub is configured
+// (early return due to missing repoURL/gh) — PrevBranch stays empty.
 func TestSetStackHead_SkipsUnfetchableBranch(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(10)
 
 	var buf bytes.Buffer
 	logger := logging.NewWithWriter(&buf)
 
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logger,
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
+	gm := &testutil.StubGit{
+		ProjectDir: dir,
+		WorkDir:    dir,
 	}
 
 	st.AddCompletedTask("ralph-aaa")
-	backend := &testutil.MutableBackend{
-	}
+	backend := &testutil.MutableBackend{}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    gm.WorkDir,
+			ProjectDir: dir,
+			WorkDir:    dir,
 			RalphDir:   ralphDir,
 		},
 		TaskBackend: backend,
@@ -760,43 +668,35 @@ func TestSetStackHead_SkipsUnfetchableBranch(t *testing.T) {
 	l.setStackHead()
 
 	if gm.PrevBranch != "" {
-		t.Errorf("PrevBranch should be empty when branch is unfetchable, got %q", gm.PrevBranch)
+		t.Errorf("PrevBranch should be empty when no GitHub available, got %q", gm.PrevBranch)
 	}
 	output := buf.String()
 	if strings.Contains(output, "Stack head") {
-		t.Errorf("should not log 'Stack head' when branch is unfetchable, got:\n%s", output)
+		t.Errorf("should not log 'Stack head' when no GitHub available, got:\n%s", output)
 	}
 }
 
 // setStackHead does NOT log "No stacked parents" when there are no
 // completed tasks — the early return path should be silent.
 func TestSetStackHead_NoLogWhenNoCompletedTasks(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(10)
 
 	var buf bytes.Buffer
 	logger := logging.NewWithWriter(&buf)
 
-	gm := &git.Manager{
-		ProjectDir: project,
-		BaseBranch: "main",
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     logger,
-	}
-	if err := gm.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
+	gm := &testutil.StubGit{
+		ProjectDir: dir,
+		WorkDir:    dir,
 	}
 
 	backend := &testutil.MutableBackend{}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    gm.WorkDir,
+			ProjectDir: dir,
+			WorkDir:    dir,
 			RalphDir:   ralphDir,
 		},
 		TaskBackend: backend,

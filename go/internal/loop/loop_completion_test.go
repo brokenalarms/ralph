@@ -8,9 +8,7 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -47,7 +45,7 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -80,12 +78,9 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 // Verifies the close reason includes the PR number in "Fixed in PR #N" format,
 // making it traceable which PR shipped which fix.
 func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
@@ -101,10 +96,11 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 		},
 	}
 
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
 	runner := &stubRunner{
 		onRun: func() {
-			writeFile(t, project, "fix.go", "package main\n")
-			run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
+			gm.HeadRevValue = "abc123"
 			backend.Lock()
 			backend.Completed = 1
 			backend.Remaining = 0
@@ -113,12 +109,10 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
-
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    project,
+			ProjectDir: dir,
+			WorkDir:    dir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -170,7 +164,7 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -215,7 +209,7 @@ func TestLoop_RecordsAttemptAfterIteration(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -258,7 +252,7 @@ func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
 		},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -310,7 +304,7 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 		BackendLabel: "beads",
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -346,7 +340,7 @@ func TestLoop_IncludesReflectionInAttemptContext(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -378,7 +372,7 @@ func TestLoop_CombinesAttemptsAndReflection(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -414,7 +408,7 @@ func TestLoop_EmptyAttemptContextForNewTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -438,7 +432,7 @@ func TestLoop_CrossTaskReflectionsFedForward(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -477,7 +471,7 @@ func TestLoop_CrossTaskAttemptEntriesExcluded(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -546,9 +540,8 @@ func TestLoop_RecordsCompletedTasks(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{
+	gm := &testutil.StubGit{
 		ProjectDir: dir,
-		BaseBranch: "main",
 		WorkDir:    dir,
 	}
 
@@ -600,9 +593,8 @@ func TestLoop_ClearsCompletedTasksOnStart(t *testing.T) {
 		Total:     1,
 	}
 
-	gm := &git.Manager{
+	gm := &testutil.StubGit{
 		ProjectDir: dir,
-		BaseBranch: "main",
 		WorkDir:    dir,
 	}
 
@@ -653,9 +645,8 @@ func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{
+	gm := &testutil.StubGit{
 		ProjectDir: dir,
-		BaseBranch: "main",
 		WorkDir:    dir,
 	}
 
@@ -717,7 +708,7 @@ func TestLoop_SessionTasksRecordsCompletedWork(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "added session summary before evolve"},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -773,7 +764,7 @@ func TestLoop_SessionTasksEmptyOnVerificationFailure(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "tried to fix it"},
 	}
 
-	gm := &git.Manager{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -802,12 +793,9 @@ func TestLoop_SessionTasksEmptyOnVerificationFailure(t *testing.T) {
 // Proves: after a successful task close, the completed task ID is persisted to
 // state.json so ralph-task can verify tasks weren't falsely closed.
 func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
-	promptsDir := filepath.Join(project, "prompts")
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
@@ -823,10 +811,11 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 		},
 	}
 
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
 	runner := &stubRunner{
 		onRun: func() {
-			writeFile(t, project, "fix.go", "package main\n")
-			run(t, "git", "-C", project, "commit", "-m", "fix auth bug")
+			gm.HeadRevValue = "abc123"
 			backend.Lock()
 			backend.Completed = 1
 			backend.Remaining = 0
@@ -835,12 +824,10 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, Logger: logging.New(nil), BaseBranch: "main"}
-
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    project,
+			ProjectDir: dir,
+			WorkDir:    dir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -871,11 +858,8 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 // Proves: completed_tasks in state.json persists across restarts — tasks from
 // previous runs are not cleared on a new run start.
 func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	st := state.NewStore(ralphDir)
-	st.Init(5)
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
 
 	st.AddCompletedTask("ralph-old")
 
@@ -885,12 +869,12 @@ func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
 		Total:     1,
 	}
 
-	gm := &git.Manager{ProjectDir: project, WorkDir: project, BaseBranch: "main"}
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
-			ProjectDir: project,
-			WorkDir:    project,
+			ProjectDir: dir,
+			WorkDir:    dir,
 			RalphDir:   ralphDir,
 		},
 		MaxIterations: 5,

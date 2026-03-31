@@ -92,7 +92,7 @@ func (l *Loop) handlePostSignal(p postSignalParams, runIteration, iteration *int
 			if prNum := parsePRNumber(ref); prNum != "" {
 				gh := l.git.GH()
 				if gh != nil {
-					if prState, _ := gh.GetPRState(l.git.WorkDir, prNum); strings.ToUpper(prState) == "MERGED" {
+					if prState, _ := gh.GetPRState(l.git.GetWorkDir(), prNum); strings.ToUpper(prState) == "MERGED" {
 						closeReason = fmt.Sprintf("PR #%s already merged", prNum)
 					}
 				}
@@ -217,7 +217,7 @@ func (l *Loop) pushSignalPR(p postSignalParams) string {
 		if ref == "" {
 			ref = "gh-" + prNumber
 		}
-		l.logger.Log("git", "Linking task %s to %s (branch: %s)", p.taskID, ref, l.git.WorktreeBranch)
+		l.logger.Log("git", "Linking task %s to %s (branch: %s)", p.taskID, ref, l.git.GetWorktreeBranch())
 		if refErr := l.cfg.TaskBackend.SetExternalRef(p.taskID, ref); refErr != nil {
 			l.logger.Warn("beads", "SetExternalRef: %v", refErr)
 		}
@@ -276,7 +276,7 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 		if gh == nil || !gh.Available() {
 			return finalizePRResult{}
 		}
-		looked, err := gh.GetPRState(l.git.WorkDir, p.prNumber)
+		looked, err := gh.GetPRState(l.git.GetWorkDir(), p.prNumber)
 		if err != nil {
 			nwo := git.NWOFromRemote(l.git.RemoteURL())
 			l.logger.Warn("git", "Failed to get %s state: %v", logging.PRLink(nwo, p.prNumber), err)
@@ -291,7 +291,7 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 		nwo := git.NWOFromRemote(l.git.RemoteURL())
 		pr := logging.PRLink(nwo, p.prNumber)
 		gh := l.git.GH()
-		prBase := getPRBase(gh, l.git.WorkDir, p.prNumber)
+		prBase := getPRBase(gh, l.git.GetWorkDir(), p.prNumber)
 		defaultBranch := l.git.DetectDefaultBranch()
 		if prBase != "" && prBase != defaultBranch {
 			l.logger.Log("git", "%s targets %s — stacked, closing bead", pr, prBase)
@@ -376,8 +376,8 @@ func (l *Loop) checkoutExistingBranch(taskID, nextTask string) bool {
 		return false
 	}
 	l.git.RenameBranchForTask(nextTask, taskID)
-	if taskID != "" && l.git.WorktreeBranch != "" && strings.Contains(l.git.WorktreeBranch, taskID) {
-		_ = l.cfg.TaskBackend.SetMetadata(taskID, "branch", l.git.WorktreeBranch)
+	if taskID != "" && l.git.GetWorktreeBranch() != "" && strings.Contains(l.git.GetWorktreeBranch(), taskID) {
+		_ = l.cfg.TaskBackend.SetMetadata(taskID, "branch", l.git.GetWorktreeBranch())
 	}
 	return false
 }
@@ -442,7 +442,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 		headBefore: headBefore,
 		rawLogPath: rawLogPath,
 		logStart:   logStart,
-		workDir:    l.git.WorkDir,
+		workDir:    l.git.GetWorkDir(),
 	}, true
 }
 

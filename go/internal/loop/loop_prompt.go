@@ -44,7 +44,7 @@ func (l *Loop) buildPrompt(taskPrompt, attemptHistory, testStatus string) (strin
 	return prompt.BuildPrompt(prompt.Vars{
 		PromptsDir:       l.cfg.Dirs.PromptsDir,
 		ProjectDir:       l.cfg.Dirs.ProjectDir,
-		WorkDir:          l.git.WorkDir,
+		WorkDir:          l.git.GetWorkDir(),
 		RalphDir:         l.cfg.Dirs.RalphDir,
 		PlanFile:         l.cfg.PlanFile,
 		SignalToken:      l.signals.Complete,
