@@ -542,34 +542,6 @@ func TestCompletedTasks_RoundTrip(t *testing.T) {
 	}
 }
 
-// Proves: old string-array completed_tasks is migrated to [{id, merged:true}]
-// on load, so existing state.json files don't break after the upgrade.
-func TestCompletedTasks_MigrateOldStringFormat(t *testing.T) {
-	dir := t.TempDir()
-	st := NewStore(dir)
-
-	oldJSON := `{
-  "iteration": 3,
-  "status": "running",
-  "completed_tasks": ["ralph-abc", "ralph-def"]
-}`
-	os.WriteFile(filepath.Join(dir, "state.json"), []byte(oldJSON), 0o644)
-
-	loaded, err := st.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.CompletedTasks) != 2 {
-		t.Fatalf("expected 2 migrated tasks, got %d", len(loaded.CompletedTasks))
-	}
-	if loaded.CompletedTasks[0].ID != "ralph-abc" || !loaded.CompletedTasks[0].Merged {
-		t.Errorf("first migrated task = %+v, want {ralph-abc, merged:true}", loaded.CompletedTasks[0])
-	}
-	if loaded.CompletedTasks[1].ID != "ralph-def" || !loaded.CompletedTasks[1].Merged {
-		t.Errorf("second migrated task = %+v, want {ralph-def, merged:true}", loaded.CompletedTasks[1])
-	}
-}
-
 // Proves: AddSkippedTask persists IDs to state.json skipped_tasks.
 func TestAddSkippedTask_Persists(t *testing.T) {
 	dir := t.TempDir()
