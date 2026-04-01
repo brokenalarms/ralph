@@ -10,6 +10,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/git/rebasecontinue"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 )
@@ -294,14 +295,11 @@ func rebaseStackAndPush(ctx context.Context, runner git.Runner, projectDir, defa
 		log.Emit(logging.Opts{Domain: logging.Git}, "Rebasing with --update-refs onto origin/%s...", defaultBranch)
 		if _, rebaseErr := runner.Run(ctx, wtDir, "rebase", "--update-refs", "origin/"+defaultBranch); rebaseErr != nil {
 			log.Emit(logging.Opts{Domain: logging.Git}, "Rebase conflict — attempting auto-resolve...")
-			autoCmd := exec.Command("git-rebase-continue", "--auto")
-			autoCmd.Dir = wtDir
-			autoOut, autoErr := autoCmd.CombinedOutput()
-			if autoErr != nil {
+			if autoErr := rebasecontinue.Run(wtDir, rebasecontinue.Options{Auto: true}); autoErr != nil {
 				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Rebase has conflicts — resolve manually in:\n  %s", wtDir)
 				log.Emit(logging.Opts{Domain: logging.Git}, "Then run: cd %s && git-rebase-continue", wtDir)
 				log.Emit(logging.Opts{Domain: logging.Git}, "Then re-run: ralph merge %s", topPR)
-				log.Emit(logging.Opts{}, "\n%s", string(autoOut))
+				log.Emit(logging.Opts{}, "\n%s", autoErr.Error())
 				return 1
 			}
 		}
@@ -344,7 +342,7 @@ in the stack — it finds the bottom, rebases the entire chain onto
 main using --update-refs, force-pushes all branches, then merges
 bottom-up waiting for CI between each merge.
 
-Uses git-rebase-continue --auto for mechanical conflict resolution.
+Uses rebasecontinue.Run --auto for mechanical conflict resolution.
 
 Flags:
   --bypass-rules  Bypass branch protection using gh pr merge --admin
