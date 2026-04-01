@@ -133,17 +133,24 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 
-	cfg.ProjectDir, _ = filepath.Abs(sub.Dir)
+	absDir, _ := filepath.Abs(sub.Dir)
 
 	if err := cfg.Validate(); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
 		return 1
 	}
 
-	if !git.IsGitRepo(cfg.ProjectDir) {
-		log.Emit(logging.Opts{Level: logging.Error}, "Not a git repository: %s", cfg.ProjectDir)
+	if !git.IsGitRepo(absDir) {
+		log.Emit(logging.Opts{Level: logging.Error}, "Not a git repository: %s", absDir)
 		return 1
 	}
+
+	repoRoot, err := git.RepoRoot(absDir)
+	if err != nil {
+		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
+		return 1
+	}
+	cfg.ProjectDir = repoRoot
 
 	scriptPath, _ := os.Executable()
 	ralphDir := filepath.Join(cfg.ProjectDir, ".ralph")
@@ -195,10 +202,16 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 		return 0
 	}
 
-	projectDir, _ := filepath.Abs(sub.Dir)
+	absDir, _ := filepath.Abs(sub.Dir)
 
-	if !git.IsGitRepo(projectDir) {
-		log.Emit(logging.Opts{Level: logging.Error}, "Not a git repository: %s", projectDir)
+	if !git.IsGitRepo(absDir) {
+		log.Emit(logging.Opts{Level: logging.Error}, "Not a git repository: %s", absDir)
+		return 1
+	}
+
+	projectDir, err := git.RepoRoot(absDir)
+	if err != nil {
+		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
 		return 1
 	}
 
@@ -317,7 +330,19 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 		return 0
 	}
 
-	projectDir, _ := filepath.Abs(sub.Dir)
+	absDir, _ := filepath.Abs(sub.Dir)
+
+	if !git.IsGitRepo(absDir) {
+		log.Emit(logging.Opts{Level: logging.Error}, "Not a git repository: %s", absDir)
+		return 1
+	}
+
+	projectDir, err := git.RepoRoot(absDir)
+	if err != nil {
+		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
+		return 1
+	}
+
 	ralphDir := filepath.Join(projectDir, ".ralph")
 
 	promptsDir := filepath.Join(projectDir, "go", "cmd", "ralph", "prompts")
