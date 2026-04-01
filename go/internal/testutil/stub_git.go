@@ -62,13 +62,14 @@ type StubGit struct {
 	PRHealthMsg  string
 
 	// Call tracking.
-	CommitMessages      []string
-	TagsCreated         []string
-	PrepareForNextCalls int
-	ResetCalls          int
-	PostMergeUpdateCalls int
-	RenameBranchCalls   int
-	SetPrevBranchCalls  []string
+	CommitMessages        []string
+	TagsCreated           []string
+	PrepareForNextCalls   int
+	PrepareForNextTaskIDs []string
+	ResetCalls            int
+	PostMergeUpdateCalls  int
+	RenameBranchCalls     int
+	SetPrevBranchCalls    []string
 }
 
 // Compile-time check that StubGit satisfies git.GitOps.
@@ -155,8 +156,9 @@ func (s *StubGit) DetectDefaultBranch() string {
 func (s *StubGit) RecentChangedFiles(_ int) string                    { return s.RecentFilesValue }
 func (s *StubGit) GetCIFailureLog(_ string) string                    { return s.CIFailureLogValue }
 
-func (s *StubGit) PrepareForNextTask() {
+func (s *StubGit) PrepareForNextTask(nextTaskID string) {
 	s.PrepareForNextCalls++
+	s.PrepareForNextTaskIDs = append(s.PrepareForNextTaskIDs, nextTaskID)
 	s.BranchRenamed = false
 }
 

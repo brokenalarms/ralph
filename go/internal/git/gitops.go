@@ -43,7 +43,7 @@ type GitOps interface {
 	GetCIFailureLog(prNumber string) string
 
 	// Branch lifecycle.
-	PrepareForNextTask()
+	PrepareForNextTask(nextTaskID string)
 	ResetToDefaultBranch()
 	RenameBranchForTask(taskDesc, taskID string)
 	RenameBranchTo(name string)
