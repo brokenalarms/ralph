@@ -58,22 +58,22 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 	ctx := context.Background()
-	defaultBranch := gm.DetectDefaultBranch()
 
 	// Collect all PRs in the stack, walking down from the given PR to
 	// find the bottom, then collecting upward.
-	prs := collectStack(gh, projectDir, prNumber, log)
-	if len(prs) == 0 {
+	stack := collectStack(gh, projectDir, prNumber, log)
+	if len(stack.prs) == 0 {
 		log.Emit(logging.Opts{Level: logging.Error}, "No open PRs found starting from #%s", prNumber)
 		return 1
 	}
 
-	log.Phase("Stack: %d PRs to merge", len(prs))
-	for _, pr := range prs {
+	defaultBranch := stack.baseBranch
+	log.Phase("Stack: %d PRs to merge", len(stack.prs))
+	for _, pr := range stack.prs {
 		log.Emit(logging.Opts{Domain: logging.Git}, "  PR #%s: %s", pr.number, pr.head)
 	}
 
-	return runMerge(ctx, prs, projectDir, defaultBranch, gm, bypassRules, log)
+	return runMerge(ctx, stack.prs, projectDir, defaultBranch, gm, bypassRules, log)
 }
 
 // runMerge rebases the stack onto defaultBranch, then merges PRs bottom-up.
@@ -87,7 +87,8 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 	}
 
 	log.Phase("Rebasing stack onto %s", defaultBranch)
-	if code := rebaseStackAndPush(projectDir, defaultBranch, topBranch, allBranches, gm, log); code != 0 {
+	topPR := prs[len(prs)-1].number
+	if code := rebaseStackAndPush(projectDir, defaultBranch, topBranch, topPR, allBranches, gm, log); code != 0 {
 		return code
 	}
 
@@ -171,10 +172,15 @@ type stackPR struct {
 	head   string
 }
 
+type stackResult struct {
+	prs        []stackPR
+	baseBranch string // what the bottom PR targets (e.g. "main")
+}
+
 // collectStack walks the base chain from the given PR down to main,
 // collecting the full stack in bottom-up order. Uses gh pr list --json
 // to get all open PRs in one call, then walks the base references.
-func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) []stackPR {
+func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) stackResult {
 	// Get all PRs (open + closed) to walk the full chain.
 	// Closed PRs may be links in the base chain even if they won't be merged.
 	cmd := exec.Command("gh", "pr", "list", "--state", "all",
@@ -183,7 +189,7 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) []s
 	out, err := cmd.Output()
 	if err != nil {
 		log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to list PRs: %v", err)
-		return nil
+		return stackResult{}
 	}
 
 	var allPRs []struct {
@@ -194,7 +200,7 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) []s
 	}
 	if jsonErr := json.Unmarshal(out, &allPRs); jsonErr != nil {
 		log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to parse PR list: %v", jsonErr)
-		return nil
+		return stackResult{}
 	}
 
 	// Index by head branch name for chain walking (all PRs, any state).
@@ -221,7 +227,7 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) []s
 	fmt.Sscanf(topPR, "%d", &topNum)
 	start, ok := byNumber[topNum]
 	if !ok {
-		return nil
+		return stackResult{}
 	}
 
 	// Walk the base chain from top down to main.
@@ -247,31 +253,44 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) []s
 	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
 		chain[i], chain[j] = chain[j], chain[i]
 	}
-	return chain
+	return stackResult{prs: chain, baseBranch: currentBase}
 }
 
 // rebaseStackAndPush creates a temp worktree on the top branch, rebases
 // with --update-refs onto main, then force-pushes all branches.
 // If a worktree already exists (from a previous conflict resolution),
 // skips rebase and goes straight to push.
-func rebaseStackAndPush(projectDir, defaultBranch, topBranch string, allBranches []string, gm *git.Manager, log *logging.Logger) int {
+func rebaseStackAndPush(projectDir, defaultBranch, topBranch, topPR string, allBranches []string, gm *git.Manager, log *logging.Logger) int {
 	slug := strings.ReplaceAll(topBranch, "/", "-")
-	wtDir := filepath.Join(os.TempDir(), "ralph-merge-"+slug)
+	wtDir := filepath.Join(gm.RalphDir, "worktrees", "merge-"+slug)
 	tmpBranch := "ralph-merge/" + slug
 
 	// Check if worktree exists from a previous run (conflict was resolved manually).
+	// Verify the branches are actually rebased — if not, the worktree is stale
+	// (e.g. from a ctrl-c'd or failed run) and must be recreated.
 	if _, err := os.Stat(filepath.Join(wtDir, ".git")); err == nil {
-		log.Emit(logging.Opts{Domain: logging.Git}, "Resuming from existing worktree: %s", wtDir)
-	} else {
+		bottomBranch := allBranches[0]
+		ancestryErr := gitRunErr(wtDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, bottomBranch)
+		if ancestryErr != nil {
+			log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Stale worktree found — branches not rebased onto %s, recreating", defaultBranch)
+			exec.Command("git", "-C", projectDir, "worktree", "remove", "--force", wtDir).Run()
+			exec.Command("git", "-C", projectDir, "worktree", "prune").Run()
+		} else {
+			log.Emit(logging.Opts{Domain: logging.Git}, "Resuming from existing worktree: %s", wtDir)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(wtDir, ".git")); err != nil {
 		// Fresh worktree.
 		os.RemoveAll(wtDir)
 		exec.Command("git", "-C", projectDir, "worktree", "prune").Run()
 		exec.Command("git", "-C", projectDir, "branch", "-D", tmpBranch).Run()
 
-		// Only fetch top branch + main.
-		log.Emit(logging.Opts{Domain: logging.Git}, "Fetching %s and %s...", topBranch, defaultBranch)
+		// Fetch main and all stack branches so --update-refs has current refs.
+		log.Emit(logging.Opts{Domain: logging.Git}, "Fetching %s and %d stack branches...", defaultBranch, len(allBranches))
 		gitRunErr(projectDir, "fetch", "origin", defaultBranch)
-		gitRunErr(projectDir, "fetch", "origin", topBranch)
+		for _, b := range allBranches {
+			gitRunErr(projectDir, "fetch", "origin", b)
+		}
 
 		// Create worktree on the top branch.
 		cmd := exec.Command("git", "-C", projectDir, "worktree", "add", "-b", tmpBranch, wtDir, "origin/"+topBranch)
@@ -296,7 +315,7 @@ func rebaseStackAndPush(projectDir, defaultBranch, topBranch string, allBranches
 			if autoErr != nil {
 				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Rebase has conflicts — resolve manually in:\n  %s", wtDir)
 				log.Emit(logging.Opts{Domain: logging.Git}, "Then run: cd %s && git-rebase-continue", wtDir)
-				log.Emit(logging.Opts{Domain: logging.Git}, "Then re-run: ralph merge %s", strings.Split(allBranches[len(allBranches)-1], "/")[len(strings.Split(allBranches[len(allBranches)-1], "/"))-1])
+				log.Emit(logging.Opts{Domain: logging.Git}, "Then re-run: ralph merge %s", topPR)
 				log.Emit(logging.Opts{}, "\n%s", string(autoOut))
 				return 1
 			}
