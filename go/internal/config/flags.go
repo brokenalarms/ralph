@@ -339,7 +339,7 @@ var Flags = []FlagDef{
 	},
 	{
 		Long: "--model", MetaVar: "<model>",
-		Help:      "Model for loop agent",
+		Help:      "Model ceiling for all LLM interactions (loop agent, fix agents, verification, task, review). When set, no LLM call may use a higher-tier model.",
 		Default:   ModelSonnet,
 		ConfigKey: "model",
 		Kind:      KindString, TrackCLI: true,

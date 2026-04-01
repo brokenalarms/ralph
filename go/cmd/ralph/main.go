@@ -58,6 +58,16 @@ func run(args []string) int {
 	return 0
 }
 
+// modelCap returns the model ceiling for all LLM interactions when --model
+// was explicitly set via the CLI. An empty string means no cap (full
+// escalation ladder applies).
+func modelCap(cfg config.Config) string {
+	if cfg.CLISet("model") {
+		return cfg.Model
+	}
+	return ""
+}
+
 func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, args []string, log *logging.Logger) int {
 	ralphDir := dirs.RalphDir
 	promptsDir := dirs.PromptsDir
@@ -204,6 +214,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		Notify:              cfg.Notify,
 		Wait:                cfg.Wait,
 		Model:               cfg.Model,
+		ModelCap:            modelCap(cfg),
 		Version:             config.Version,
 		OnRebaseConflict:    autoRebaseRecovery(),
 		VerifyDir:             dirs.WorkDir,

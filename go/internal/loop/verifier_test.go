@@ -578,3 +578,68 @@ func TestVerifier_TryFixCI_NoneFailedSkipsAgent(t *testing.T) {
 		t.Fatal("fix agent should not be spawned when no checks failed")
 	}
 }
+
+// TestVerifier_ModelCap_FixAgent verifies that ModelCap clamps fix agents
+// below Opus when --model is set to a lower tier.
+func TestVerifier_ModelCap_FixAgent(t *testing.T) {
+	var capturedModel string
+
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.cfg.ModelCap = verify.ModelSonnet
+		llmCalls := 0
+		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+			llmCalls++
+			if llmCalls == 1 {
+				return verify.Result{Passed: false, Details: "incomplete"}
+			}
+			return verify.Result{Passed: true, Reason: "approved"}
+		}
+		v.deps.NewRunner = func() claudeRunner {
+			return &promptCapturingFixRunner{
+				onModel: func(m string) { capturedModel = m },
+				result:  stubResult(true, "fixed"),
+			}
+		}
+	})
+	v.OnSignal(signalParams{
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: t.TempDir(), rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID: "cap-test", nextTask: "Extract Push",
+	})
+	if capturedModel != verify.ModelSonnet {
+		t.Errorf("fix agent with ModelCap=sonnet: expected %s, got %s", verify.ModelSonnet, capturedModel)
+	}
+}
+
+// TestVerifier_ModelCap_OpusUnchanged verifies that ModelCap=opus does not
+// restrict fix agents (opus is the ceiling, so the full escalation ladder
+// remains intact).
+func TestVerifier_ModelCap_OpusUnchanged(t *testing.T) {
+	var capturedModel string
+
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.cfg.ModelCap = verify.ModelOpus
+		llmCalls := 0
+		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+			llmCalls++
+			if llmCalls == 1 {
+				return verify.Result{Passed: false, Details: "incomplete"}
+			}
+			return verify.Result{Passed: true, Reason: "approved"}
+		}
+		v.deps.NewRunner = func() claudeRunner {
+			return &promptCapturingFixRunner{
+				onModel: func(m string) { capturedModel = m },
+				result:  stubResult(true, "fixed"),
+			}
+		}
+	})
+	v.OnSignal(signalParams{
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: t.TempDir(), rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID: "cap-opus-test", nextTask: "Extract Push",
+	})
+	if capturedModel != verify.ModelOpus {
+		t.Errorf("fix agent with ModelCap=opus: expected %s, got %s", verify.ModelOpus, capturedModel)
+	}
+}
