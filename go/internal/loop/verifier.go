@@ -25,6 +25,7 @@ type VerifierConfig struct {
 	VerifyModel           string
 	VerifyEscalationModel string
 	FixModel              string // model used by all fix agents; defaults to ModelOpus
+	ModelCap              string // maximum model tier ceiling from --model flag; empty means no cap
 	PromptsDir            string
 	RalphDir              string
 	IdleTimeout           time.Duration
@@ -224,26 +225,34 @@ func (v *Verifier) ResetCounters() {
 	v.llmVerifyAttempts = 0
 }
 
-// verifyModel returns the model for the current LLM verification attempt.
+// verifyModel returns the model for the current LLM verification attempt,
+// capped by ModelCap when set.
 func (v *Verifier) verifyModel() string {
+	var model string
 	if v.llmVerifyAttempts <= 1 {
 		if v.cfg.VerifyModel != "" {
-			return v.cfg.VerifyModel
+			model = v.cfg.VerifyModel
+		} else {
+			model = verify.ModelHaiku
 		}
-		return verify.ModelHaiku
+	} else {
+		if v.cfg.VerifyEscalationModel != "" {
+			model = v.cfg.VerifyEscalationModel
+		} else {
+			model = verify.ModelSonnet
+		}
 	}
-	if v.cfg.VerifyEscalationModel != "" {
-		return v.cfg.VerifyEscalationModel
-	}
-	return verify.ModelSonnet
+	return verify.CapModel(v.cfg.ModelCap, model)
 }
 
-// fixModel returns the model to use for all fix agents.
+// fixModel returns the model to use for all fix agents, capped by ModelCap
+// when set.
 func (v *Verifier) fixModel() string {
-	if v.cfg.FixModel != "" {
-		return v.cfg.FixModel
+	base := v.cfg.FixModel
+	if base == "" {
+		base = verify.ModelOpus
 	}
-	return verify.ModelOpus
+	return verify.CapModel(v.cfg.ModelCap, base)
 }
 
 // VerifyCompletion runs post-signal checks: commit presence and test suite.

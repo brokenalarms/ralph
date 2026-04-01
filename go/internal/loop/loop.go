@@ -38,6 +38,7 @@ type Config struct {
 	Wait                bool
 	Verbose             bool
 	Model               string
+	ModelCap            string // maximum model tier for all LLM calls; empty means no cap
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 	Version             string
 	VerifyDir             string // project root where tests are run; empty disables verification
@@ -119,6 +120,7 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 		VerifyDir:             cfg.VerifyDir,
 		VerifyModel:           cfg.VerifyModel,
 		VerifyEscalationModel: cfg.VerifyEscalationModel,
+		ModelCap:              cfg.ModelCap,
 		PromptsDir:            cfg.Dirs.PromptsDir,
 		RalphDir:              cfg.Dirs.RalphDir,
 		IdleTimeout:           cfg.IdleTimeout,

@@ -19,6 +19,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/pidfile"
 	"github.com/brokenalarms/ralph/internal/prompt"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -202,6 +203,9 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 		return 0
 	}
 
+	reviewCfg, _ := config.Parse(sub.Args)
+	reviewModel := verify.CapModel(modelCap(reviewCfg), agent.ModelOpus)
+
 	absDir, _ := filepath.Abs(sub.Dir)
 
 	if !git.IsGitRepo(absDir) {
@@ -238,7 +242,7 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 
-	r := newInteractiveAgent(log, agent.ModelOpus)
+	r := newInteractiveAgent(log, reviewModel)
 	exitCode, err := r.Interactive(projectDir, systemPrompt, prompt.ReviewBootstrapPrompt)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Review session failed: %v", err)
@@ -330,6 +334,9 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 		return 0
 	}
 
+	taskCfg, _ := config.Parse(sub.Args)
+	taskModel := verify.CapModel(modelCap(taskCfg), agent.ModelOpus)
+
 	absDir, _ := filepath.Abs(sub.Dir)
 
 	if !git.IsGitRepo(absDir) {
@@ -361,7 +368,7 @@ func handleTask(sub config.Subcommand, log *logging.Logger) int {
 		return 1
 	}
 
-	r := newInteractiveAgent(log, agent.ModelOpus)
+	r := newInteractiveAgent(log, taskModel)
 	exitCode, err := r.Interactive(projectDir, systemPrompt, prompt.TaskManagerBootstrapPrompt)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Task manager failed: %v", err)

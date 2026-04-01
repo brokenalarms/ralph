@@ -668,6 +668,35 @@ func TestFindGoModDir(t *testing.T) {
 	})
 }
 
+func TestCapModel(t *testing.T) {
+	tests := []struct {
+		cap, model, want string
+	}{
+		// No cap: model passes through unchanged.
+		{"", ModelOpus, ModelOpus},
+		{"", ModelSonnet, ModelSonnet},
+		{"", ModelHaiku, ModelHaiku},
+		// Cap=opus: no restriction (opus is the ceiling).
+		{ModelOpus, ModelOpus, ModelOpus},
+		{ModelOpus, ModelSonnet, ModelSonnet},
+		{ModelOpus, ModelHaiku, ModelHaiku},
+		// Cap=sonnet: opus clamped to sonnet, haiku passes through.
+		{ModelSonnet, ModelOpus, ModelSonnet},
+		{ModelSonnet, ModelSonnet, ModelSonnet},
+		{ModelSonnet, ModelHaiku, ModelHaiku},
+		// Cap=haiku: everything clamped to haiku.
+		{ModelHaiku, ModelOpus, ModelHaiku},
+		{ModelHaiku, ModelSonnet, ModelHaiku},
+		{ModelHaiku, ModelHaiku, ModelHaiku},
+	}
+	for _, tc := range tests {
+		got := CapModel(tc.cap, tc.model)
+		if got != tc.want {
+			t.Errorf("CapModel(%q, %q) = %q, want %q", tc.cap, tc.model, got, tc.want)
+		}
+	}
+}
+
 func setupGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
