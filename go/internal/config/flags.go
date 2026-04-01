@@ -300,6 +300,17 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.PostTask },
 	},
 	{
+		Long: "--verify-build", MetaVar: "<script>",
+		Help:      "Run external script before pre-iteration tests to check project-level build health",
+		ConfigKey: "verify_build",
+		Kind:      KindString, TrackCLI: true,
+		Apply: func(cfg *Config, val string) error {
+			cfg.VerifyBuild = val
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.VerifyBuild },
+	},
+	{
 		Long:      "--notify",
 		Help:      "Send macOS notification on each task completion",
 		ConfigKey: "notify",

@@ -528,7 +528,8 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	}
 
 	taskPrompt := buildTaskPrompt(nextTask, taskID, l.cfg.TaskBackend, l.cfg.Dirs.PromptsDir, l.cfg.Dirs.RalphDir)
-	testStatus := l.verifier.RunPreIterationTests(ctx)
+	buildStatus := l.runVerifyBuild(ctx)
+	testStatus := buildStatus + l.verifier.RunPreIterationTests(ctx)
 
 	if !l.waitForInternetFunc(ctx, l.logger) {
 		return iterationPrompt{}, false

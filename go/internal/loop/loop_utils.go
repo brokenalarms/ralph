@@ -6,11 +6,13 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
+	"github.com/brokenalarms/ralph/internal/verify"
 )
 
 // isNewTask returns true when the next task differs from the last one stored
@@ -132,6 +134,33 @@ func waitForInternet(ctx context.Context, logger *logging.Logger) bool {
 			logger.Emit(logging.Opts{}, "Internet still unreachable (%s elapsed)", elapsed)
 		}
 	}
+}
+
+// runVerifyBuild executes the --verify-build script if configured. Runs in
+// the project directory with a timeout matching the test suite timeout.
+// Returns empty string if the script passes or is not configured.
+// Returns a build failure message (stdout+stderr) if the script exits non-zero.
+func (l *Loop) runVerifyBuild(ctx context.Context) string {
+	if l.cfg.VerifyBuild == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, verify.TestTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-c", l.cfg.VerifyBuild)
+	cmd.Dir = l.cfg.Dirs.ProjectDir
+	l.logger.Emit(logging.Opts{Domain: "build"}, "Running verify-build: %s", l.cfg.VerifyBuild)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		l.logger.Emit(logging.Opts{Domain: "build", Level: logging.Success}, "Build health check passed")
+		return ""
+	}
+	output := strings.TrimSpace(string(out))
+	l.logger.Emit(logging.Opts{Domain: "build", Level: logging.Warn}, "Build health check failed: %v", err)
+	msg := "\n- BUILD IS BROKEN. Fix the build before working on your task. Do not start the task until the build is healthy."
+	if output != "" {
+		msg += "\n  Build failure output:\n  " + strings.ReplaceAll(output, "\n", "\n  ")
+	}
+	return msg
 }
 
 // runPostTask executes the --post-task script if configured. Runs in the

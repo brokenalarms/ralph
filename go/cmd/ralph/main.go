@@ -200,6 +200,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		IdleTimeoutProgress: cfg.IdleTimeoutProgress,
 		PostSignalTimeout:   cfg.PostSignalTimeout,
 		PostTask:            cfg.PostTask,
+		VerifyBuild:         cfg.VerifyBuild,
 		Notify:              cfg.Notify,
 		Wait:                cfg.Wait,
 		Model:               cfg.Model,
