@@ -29,6 +29,7 @@ type GitQuerier interface {
 const (
 	ModelHaiku  = config.ModelHaiku
 	ModelSonnet = config.ModelSonnet
+	ModelOpus   = config.ModelOpus
 )
 
 // ModelShortName extracts a friendly name from a model ID string.

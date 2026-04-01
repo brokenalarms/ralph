@@ -15,16 +15,20 @@ import (
 	"github.com/brokenalarms/ralph/internal/verify"
 )
 
-// promptCapturingFixRunner captures the prompt passed to Run so tests can
-// verify that fix agents receive the correct context.
+// promptCapturingFixRunner captures the prompt and model passed to Run so
+// tests can verify that fix agents receive the correct context and model.
 type promptCapturingFixRunner struct {
 	onPrompt func(string)
+	onModel  func(string)
 	result   claude.Result
 }
 
 func (r *promptCapturingFixRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
 	if r.onPrompt != nil {
 		r.onPrompt(cfg.Prompt)
+	}
+	if r.onModel != nil {
+		r.onModel(cfg.Model)
 	}
 	return r.result, nil
 }
@@ -371,6 +375,77 @@ func TestVerifier_TryFixCI_PassesAllFailedChecks(t *testing.T) {
 	}
 	if !strings.Contains(capturedPrompt, "deploy/netlify") {
 		t.Errorf("prompt should contain deploy/netlify, got: %s", capturedPrompt)
+	}
+}
+
+// Fix agents (verification and CI) always use Opus so they can understand
+// abstract feedback that Sonnet repeatedly fails to resolve.
+func TestVerifier_FixAgents_UseOpusModel(t *testing.T) {
+	var verifyFixModel, ciFixModel, testFixModel string
+
+	// Verification fix agent: LLM rejects once, fix agent spawns.
+	v := newTestVerifier(t, func(v *Verifier) {
+		llmCalls := 0
+		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+			llmCalls++
+			if llmCalls == 1 {
+				return verify.Result{Passed: false, Details: "Push wasn't extracted"}
+			}
+			return verify.Result{Passed: true, Reason: "approved"}
+		}
+		v.deps.NewRunner = func() claudeRunner {
+			return &promptCapturingFixRunner{
+				onModel: func(m string) { verifyFixModel = m },
+				result:  stubResult(true, "fixed"),
+			}
+		}
+	})
+	v.OnSignal(signalParams{
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: t.TempDir(), rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID: "test-opus", nextTask: "Extract Push",
+	})
+	if verifyFixModel != verify.ModelOpus {
+		t.Errorf("verification fix agent: expected %s, got %s", verify.ModelOpus, verifyFixModel)
+	}
+
+	// CI fix agent.
+	vCI := newTestVerifier(t, func(v *Verifier) {
+		v.deps.NewRunner = func() claudeRunner {
+			return &promptCapturingFixRunner{
+				onModel: func(m string) { ciFixModel = m },
+				result:  stubResult(true, "fixed"),
+			}
+		}
+	})
+	ciErr := &git.CIFailureError{
+		PRNumber: "42",
+		Failures: []git.CICheckResult{{Name: "build", State: "FAILURE", Bucket: "fail", IsRequired: true}},
+	}
+	vCI.TryFixCI(context.Background(), "build failed", ciErr, "Build app", t.TempDir(), filepath.Join(t.TempDir(), "raw.log"))
+	if ciFixModel != verify.ModelOpus {
+		t.Errorf("CI fix agent: expected %s, got %s", verify.ModelOpus, ciFixModel)
+	}
+
+	// Test fix agent.
+	vTest := newTestVerifier(t, func(v *Verifier) {
+		verifyDir := v.cfg.VerifyDir
+		os.WriteFile(filepath.Join(verifyDir, "Makefile"), []byte("test:\n\t@echo 'FAIL' && exit 1\n"), 0o644)
+		v.deps.NewRunner = func() claudeRunner {
+			os.Remove(filepath.Join(verifyDir, "Makefile"))
+			return &promptCapturingFixRunner{
+				onModel: func(m string) { testFixModel = m },
+				result:  stubResult(true, "fixed"),
+			}
+		}
+	})
+	vTest.OnSignal(signalParams{
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: t.TempDir(), rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID: "test-opus-test", nextTask: "Fix tests",
+	})
+	if testFixModel != verify.ModelOpus {
+		t.Errorf("test fix agent: expected %s, got %s", verify.ModelOpus, testFixModel)
 	}
 }
 
