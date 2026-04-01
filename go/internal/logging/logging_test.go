@@ -530,4 +530,60 @@ func TestErrorWithAnalyzerDomain(t *testing.T) {
 	}
 }
 
+// EmitInPlace writes to stdout only using a carriage return (no newline),
+// so the terminal line is overwritten on each call. The log file receives
+// nothing — only EmitFinalInPlace commits to the log file (AC8, AC9).
+func TestEmitInPlace_WritesToStdoutOnly(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile}
+	l.EmitInPlace(Opts{Domain: CI}, "CI polled 1s")
+	l.EmitInPlace(Opts{Domain: CI}, "CI polled 1s..2s")
+
+	if logFile.Len() != 0 {
+		t.Errorf("EmitInPlace should not write to log file, got: %q", logFile.String())
+	}
+	if !strings.Contains(stdout.String(), "\r") {
+		t.Errorf("EmitInPlace should write carriage return, got: %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "CI polled") {
+		t.Errorf("EmitInPlace should contain message, got: %q", stdout.String())
+	}
+}
+
+// EmitFinalInPlace overwrites the current terminal line (via \r) and advances
+// to a new line on stdout, while writing the final line once to the log file
+// without a carriage return — file gets the final state, not every intermediate
+// update (AC9).
+func TestEmitFinalInPlace_FinalizesToBothOutputs(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile}
+	l.EmitInPlace(Opts{Domain: CI}, "CI polled 1s")
+	l.EmitFinalInPlace(Opts{Domain: CI}, "CI polled 1s..2s")
+
+	if !strings.Contains(stdout.String(), "CI polled 1s..2s") {
+		t.Errorf("EmitFinalInPlace should write final message to stdout, got: %q", stdout.String())
+	}
+	if !strings.Contains(logFile.String(), "CI polled 1s..2s") {
+		t.Errorf("EmitFinalInPlace should write final message to log file, got: %q", logFile.String())
+	}
+	if strings.Contains(logFile.String(), "\r") {
+		t.Errorf("log file should not contain carriage return, got: %q", logFile.String())
+	}
+	if !strings.HasSuffix(logFile.String(), "\n") {
+		t.Errorf("log file line should end with newline, got: %q", logFile.String())
+	}
+}
+
+// EmitInPlace suppresses stdout in streaming mode, same as Emit — the tail
+// goroutine owns stdout when streaming is active.
+func TestEmitInPlace_RespectsStreamingMode(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile}
+	l.SetStreaming(true)
+	l.EmitInPlace(Opts{Domain: CI}, "CI polled 1s")
+	if stdout.Len() != 0 {
+		t.Errorf("EmitInPlace in streaming mode should not write to stdout, got: %q", stdout.String())
+	}
+}
+
 func intPtr(n int) *int { return &n }
