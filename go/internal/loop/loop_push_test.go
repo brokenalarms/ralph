@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -22,7 +23,6 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	pushPRCalls := 0
 	iterationCount := 0
 
 	backend := &testutil.MutableBackend{
@@ -71,10 +71,6 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(_ context.Context, _, taskDesc, _ string) (string, error) {
-		pushPRCalls++
-		return "", nil
-	}
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -82,9 +78,9 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 	}
 
 	// 2 signal-handler pushes (one per task) + 1 safety-net flush before exit.
-	// PushAndCreatePR is idempotent, so the flush is harmless.
-	if pushPRCalls != 3 {
-		t.Errorf("expected pushAndCreatePR called 3 times (2 signal + 1 flush), got %d", pushPRCalls)
+	// Ship is idempotent, so the flush is harmless.
+	if gm.ShipCalls+gm.FlushUnpushedCalls != 3 {
+		t.Errorf("expected Ship+Flush called 3 times (2 signal + 1 flush), got Ship=%d Flush=%d", gm.ShipCalls, gm.FlushUnpushedCalls)
 	}
 }
 
@@ -97,8 +93,6 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
-
-	pushPRCalls := 0
 
 	backend := &testutil.StubBackend{
 		Remaining: 1,
@@ -126,19 +120,11 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(_ context.Context, _, taskDesc, _ string) (string, error) {
-		pushPRCalls++
-		return "", nil
-	}
-	l.mergeFunc = func(context.Context) (bool, error) {
-		t.Error("auto-merge should not be called without signal")
-		return false, nil
-	}
 
 	_ = l.Run(context.Background())
 
-	if pushPRCalls != 0 {
-		t.Errorf("pushAndCreatePR should not be called without signal, got %d calls", pushPRCalls)
+	if gm.ShipCalls != 0 {
+		t.Errorf("Ship should not be called without signal, got %d calls", gm.ShipCalls)
 	}
 }
 
@@ -177,19 +163,13 @@ func TestLoop_PushCalledAfterSignal(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	pushCalled := false
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) {
-		pushCalled = true
-		return "", nil
-	}
-
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true, OnSignalUsed: true},
 	}
 
 	l.Run(context.Background())
 
-	if !pushCalled {
+	if gm.ShipCalls == 0 {
 		t.Error("expected push to be called after signal detection")
 	}
 }
@@ -241,22 +221,15 @@ func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
-	var pushCalls int
-	l.pushPRFunc = func(_ context.Context, taskID, taskDesc, _ string) (string, error) {
-		pushCalls++
-		return "", nil
-	}
-
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Push must be called: once during signal handling AND once as a flush
-	// before exit. PushAndCreatePR is idempotent (returns early when no new
-	// commits), so the safety-net call is harmless if the first succeeded.
-	if pushCalls < 2 {
-		t.Errorf("expected pushPRFunc called at least 2 times (signal + flush), got %d", pushCalls)
+	// Ship must be called during signal handling AND FlushUnpushedWork as a
+	// safety net before exit. Both are idempotent, so the flush is harmless.
+	if gm.ShipCalls+gm.FlushUnpushedCalls < 2 {
+		t.Errorf("expected Ship+Flush called at least 2 times (signal + flush), got Ship=%d Flush=%d", gm.ShipCalls, gm.FlushUnpushedCalls)
 	}
 }
 
@@ -310,12 +283,6 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
 
-	var pushCalls int
-	l.pushPRFunc = func(_ context.Context, taskID, taskDesc, _ string) (string, error) {
-		pushCalls++
-		return "", nil
-	}
-
 	waitEntered := make(chan struct{}, 1)
 	l.onWaitFunc = func() { waitEntered <- struct{}{} }
 
@@ -329,8 +296,8 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if pushCalls < 2 {
-		t.Errorf("expected pushPRFunc called at least 2 times (signal + flush), got %d", pushCalls)
+	if gm.ShipCalls+gm.FlushUnpushedCalls < 2 {
+		t.Errorf("expected Ship+Flush called at least 2 times (signal + flush), got Ship=%d Flush=%d", gm.ShipCalls, gm.FlushUnpushedCalls)
 	}
 }
 
@@ -381,21 +348,13 @@ func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
-	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
-
-	var mergeCalls int
-	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalls++
-		return true, nil
-	}
-
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if mergeCalls == 0 {
-		t.Error("expected mergeFunc called during flush before exit, got 0 calls")
+	if gm.FlushUnpushedCalls == 0 || !gm.LastFlushAutoMerge {
+		t.Error("expected FlushUnpushedWork called with autoMerge=true during flush before exit")
 	}
 }
 
@@ -450,14 +409,6 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
 
-	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
-
-	var mergeCalls int
-	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalls++
-		return true, nil
-	}
-
 	waitEntered := make(chan struct{}, 1)
 	l.onWaitFunc = func() { waitEntered <- struct{}{} }
 
@@ -471,8 +422,8 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if mergeCalls == 0 {
-		t.Error("expected mergeFunc called during flush before wait, got 0 calls")
+	if gm.FlushUnpushedCalls == 0 || !gm.LastFlushAutoMerge {
+		t.Error("expected FlushUnpushedWork called with autoMerge=true during flush before wait")
 	}
 }
 
@@ -522,21 +473,16 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
-	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
-
-	var mergeCalls int
-	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalls++
-		return true, nil
-	}
-
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if mergeCalls != 0 {
-		t.Errorf("expected mergeFunc NOT called when AutoMerge disabled, got %d calls", mergeCalls)
+	if gm.FlushUnpushedCalls == 0 {
+		t.Error("expected FlushUnpushedWork to be called")
+	}
+	if gm.LastFlushAutoMerge {
+		t.Error("expected FlushUnpushedWork called with autoMerge=false when AutoMerge disabled")
 	}
 }
 
@@ -586,24 +532,21 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 		Wait:          false,
 	}, st, gm, logger)
 	l.runner = runner
-
-	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
-
-	var mergeCalls int
-	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalls++
-		return true, nil
-	}
+	gm.ShipResult = git.ShipResult{PRNumber: "last"}
+	gm.MergeRetryResult = true
 
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Merge fires once in the signal handler. The flush must not merge again
-	// because lastTaskMerged is set.
-	if mergeCalls != 1 {
-		t.Errorf("expected exactly 1 merge (signal handler only), got %d", mergeCalls)
+	// MergeWithRetry fires once in the signal handler. The flush must not
+	// merge again because lastTaskMerged is set.
+	if gm.MergeRetryCalls != 1 {
+		t.Errorf("expected exactly 1 merge (signal handler only), got %d", gm.MergeRetryCalls)
+	}
+	if gm.LastFlushAutoMerge {
+		t.Error("expected flush to skip merge (autoMerge=false) when last task already merged")
 	}
 }
 
@@ -654,21 +597,13 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
-	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
-
-	var mergeCalls int
-	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalls++
-		return true, nil
-	}
-
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Signal handler didn't fire, so merge only happens during flush.
-	if mergeCalls != 1 {
-		t.Errorf("expected exactly 1 merge (flush only), got %d", mergeCalls)
+	if gm.FlushUnpushedCalls != 1 || !gm.LastFlushAutoMerge {
+		t.Errorf("expected exactly 1 flush with autoMerge=true, got FlushCalls=%d LastAutoMerge=%v", gm.FlushUnpushedCalls, gm.LastFlushAutoMerge)
 	}
 }

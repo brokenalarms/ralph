@@ -114,8 +114,6 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
-
 	l.Run(context.Background())
 
 	output := logBuf.String()
@@ -176,8 +174,6 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
-
 	l.Run(context.Background())
 
 	output := logBuf.String()
@@ -378,8 +374,6 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		backend: backend,
 		counter: &iterationCount,
 	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
-	l.mergeFunc = func(context.Context) (bool, error) { return false, nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: true}

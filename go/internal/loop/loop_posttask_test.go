@@ -19,7 +19,7 @@ import (
 )
 
 // handlePostSignalCall invokes the package-level handlePostSignal using l's dependencies,
-// and applies the session-task and merge-flag side effects back onto l.
+// and applies the session-task side effects back onto l.
 func handlePostSignalCall(l *Loop, p postSignalParams) postSignalAction {
 	opts := handlePostSignalOpts{
 		postSignalTimeout: l.cfg.PostSignalTimeout,
@@ -45,24 +45,28 @@ func handlePostSignalCall(l *Loop, p postSignalParams) postSignalAction {
 				isOnlineFunc:        l.isOnlineFunc,
 				waitForInternetFunc: l.waitForInternetFunc,
 				shipFn: func(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error) {
-					if l.pushPRFunc != nil {
-						prNum, err := l.pushPRFunc(ctx, opts.TaskID, opts.TaskTitle, opts.Body)
-						return git.ShipResult{PRNumber: prNum}, err
-					}
 					return l.git.Ship(ctx, opts)
 				},
 			})
 		},
-		finalizePRFn:  l.finalizePR,
-		buildCTFn:     l.buildCompletedTask,
+		finalizePRFn: func(fp finalizePRParams) finalizePRResult {
+			fp.autoMerge = l.cfg.AutoMerge
+			fp.git = l.git
+			fp.logger = l.logger
+			fp.backend = l.cfg.TaskBackend
+			fp.state = l.state
+			fp.attempts = l.attempts
+			fp.verifier = l.verifier
+			return finalizePR(fp)
+		},
+		buildCTFn: func(taskID, nextTask, summary, prNumber, _ string) CompletedTask {
+			return buildCompletedTask(taskID, nextTask, summary, prNumber, l.git)
+		},
 		runPostTaskFn: l.runPostTask,
 	}
 	out := handlePostSignal(p, opts)
 	if out.ct != nil {
 		l.sessionTasks = append(l.sessionTasks, *out.ct)
-	}
-	if out.merged {
-		l.lastTaskMerged = true
 	}
 	return out.action
 }
@@ -96,7 +100,7 @@ func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+	gm.ShipResult = git.ShipResult{PRNumber: "42"}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	action := handlePostSignalCall(l, postSignalParams{
@@ -187,9 +191,9 @@ func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = &stubRunner{}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(ctx context.Context, _, _, _ string) (string, error) {
+	gm.ShipFunc = func(ctx context.Context, _ git.ShipOpts) (git.ShipResult, error) {
 		<-ctx.Done()
-		return "", ctx.Err()
+		return git.ShipResult{}, ctx.Err()
 	}
 
 	done := make(chan postSignalAction, 1)
@@ -248,7 +252,7 @@ func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+	gm.ShipResult = git.ShipResult{PRNumber: "42"}
 
 	action := handlePostSignalCall(l, postSignalParams{
 		ctx:        context.Background(),
@@ -294,8 +298,8 @@ func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
-	l.mergeFunc = func(ctx context.Context) (bool, error) {
+	gm.ShipResult = git.ShipResult{PRNumber: "99"}
+	gm.MergeRetryFunc = func(ctx context.Context) (bool, error) {
 		<-ctx.Done()
 		return false, ctx.Err()
 	}
@@ -348,9 +352,9 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 		AutoMerge:     true,
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
+	gm.ShipResult = git.ShipResult{PRNumber: "99"}
+	gm.MergeRetryResult = true
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
 
 	action := handlePostSignalCall(l, postSignalParams{
 		ctx:        context.Background(),
@@ -445,7 +449,7 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 		PostTask:      scriptPath,
 	}, st, gm, logger)
 	l.runner = &stubRunner{}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "50", nil }
+	gm.ShipResult = git.ShipResult{PRNumber: "50"}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	action := handlePostSignalCall(l, postSignalParams{
@@ -548,7 +552,7 @@ func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 		Notify:        true,
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+	gm.ShipResult = git.ShipResult{PRNumber: "42"}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	var buf bytes.Buffer
@@ -601,7 +605,7 @@ func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
 		Notify:        false,
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
+	gm.ShipResult = git.ShipResult{PRNumber: "42"}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	var buf bytes.Buffer
@@ -714,7 +718,19 @@ func TestResolveByPRState_Merged_NotifyEnabled(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	resolved := l.resolveByPRState(context.Background(), "ralph-rm1", "Fix login", "99")
+	resolved := resolveByPRState(context.Background(), resolveByPRStateParams{
+		taskID:   "ralph-rm1",
+		nextTask: "Fix login",
+		prNumber: "99",
+		backend:  backend,
+		git:      gm,
+		logger:   l.logger,
+		attempts: l.attempts,
+		state:    l.state,
+		notify:   l.cfg.Notify,
+		ralphDir: ralphDir,
+		verifier: l.verifier,
+	})
 	if !resolved {
 		t.Fatal("expected resolveByPRState to return true for MERGED PR")
 	}
@@ -767,7 +783,19 @@ func TestResolveByPRState_Open_NotifyEnabled(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	resolved := l.resolveByPRState(context.Background(), "ralph-ro1", "Add cache", "88")
+	resolved := resolveByPRState(context.Background(), resolveByPRStateParams{
+		taskID:   "ralph-ro1",
+		nextTask: "Add cache",
+		prNumber: "88",
+		backend:  backend,
+		git:      gm,
+		logger:   l.logger,
+		attempts: l.attempts,
+		state:    l.state,
+		notify:   l.cfg.Notify,
+		ralphDir: ralphDir,
+		verifier: l.verifier,
+	})
 	if !resolved {
 		t.Fatal("expected resolveByPRState to return true for OPEN PR")
 	}
@@ -818,7 +846,19 @@ func TestResolveByPRState_Merged_NotifyDisabled(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	resolved := l.resolveByPRState(context.Background(), "ralph-rd1", "Fix logout", "77")
+	resolved := resolveByPRState(context.Background(), resolveByPRStateParams{
+		taskID:   "ralph-rd1",
+		nextTask: "Fix logout",
+		prNumber: "77",
+		backend:  backend,
+		git:      gm,
+		logger:   l.logger,
+		attempts: l.attempts,
+		state:    l.state,
+		notify:   l.cfg.Notify,
+		ralphDir: ralphDir,
+		verifier: l.verifier,
+	})
 	if !resolved {
 		t.Fatal("expected resolveByPRState to return true for MERGED PR")
 	}

@@ -177,7 +177,7 @@ func TestLoop_selectNextTask_DelegatesToPackageFunc(t *testing.T) {
 					backend: l.cfg.TaskBackend,
 				})
 			},
-		flushUnpushedWork: l.flushUnpushedWork,
+		flushUnpushedWork: func(_ context.Context) {},
 	})
 
 	if action != actionProceed {

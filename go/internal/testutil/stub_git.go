@@ -70,6 +70,15 @@ type StubGit struct {
 	PostMergeUpdateCalls  int
 	RenameBranchCalls     int
 	SetPrevBranchCalls    []string
+	MergeRetryCalls       int
+	ShipCalls             int
+	LastShipOpts          git.ShipOpts
+	FlushUnpushedCalls    int
+	LastFlushAutoMerge    bool
+
+	// Optional func overrides for fine-grained test control.
+	ShipFunc        func(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error)
+	MergeRetryFunc  func(ctx context.Context) (bool, error)
 }
 
 // Compile-time check that StubGit satisfies git.GitOps.
@@ -212,7 +221,12 @@ func (s *StubGit) CommitAll(message string) {
 func (s *StubGit) EnsureUpToDate(_ context.Context) error  { return s.EnsureUpToDateErr }
 func (s *StubGit) Push(_ context.Context) error             { return s.PushErr }
 
-func (s *StubGit) Ship(_ context.Context, _ git.ShipOpts) (git.ShipResult, error) {
+func (s *StubGit) Ship(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error) {
+	s.ShipCalls++
+	s.LastShipOpts = opts
+	if s.ShipFunc != nil {
+		return s.ShipFunc(ctx, opts)
+	}
 	return s.ShipResult, s.ShipErr
 }
 
@@ -220,11 +234,17 @@ func (s *StubGit) PushAndCreatePR(_ context.Context, _, _, _ string) (string, er
 	return s.PushPRNumber, s.PushPRErr
 }
 
-func (s *StubGit) MergeWithRetry(_ context.Context, _ git.MergeRetryOpts) (bool, error) {
+func (s *StubGit) MergeWithRetry(ctx context.Context, _ git.MergeRetryOpts) (bool, error) {
+	s.MergeRetryCalls++
+	if s.MergeRetryFunc != nil {
+		return s.MergeRetryFunc(ctx)
+	}
 	return s.MergeRetryResult, s.MergeRetryErr
 }
 
-func (s *StubGit) FlushUnpushedWork(_ context.Context, _, _ string, _ bool) (bool, error) {
+func (s *StubGit) FlushUnpushedWork(_ context.Context, _, _ string, autoMerge bool) (bool, error) {
+	s.FlushUnpushedCalls++
+	s.LastFlushAutoMerge = autoMerge
 	return s.FlushMerged, s.FlushErr
 }
 

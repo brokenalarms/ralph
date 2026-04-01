@@ -66,7 +66,6 @@ func TestLoop_VerifyBuild_FailureInjectedIntoPrompt(t *testing.T) {
 	}
 	l.runner = &promptCapturingRunner{inner: inner, captured: &capturedPrompt}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -128,7 +127,6 @@ func TestLoop_VerifyBuild_PassDoesNotInjectContext(t *testing.T) {
 	}
 	l.runner = &promptCapturingRunner{inner: inner, captured: &capturedPrompt}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -182,7 +180,6 @@ func TestLoop_VerifyBuild_NotConfigured_NoEffect(t *testing.T) {
 	}
 	l.runner = &promptCapturingRunner{inner: inner, captured: &capturedPrompt}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -245,7 +242,6 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 	}
 	l.runner = &promptCapturingRunner{inner: inner, captured: &capturedPrompt}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 

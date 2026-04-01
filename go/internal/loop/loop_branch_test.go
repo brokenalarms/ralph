@@ -216,7 +216,7 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 		},
 	}, st, gm, logging.New(nil))
 
-	err := l.handleRebase(context.Background())
+	err := l.git.EnsureUpToDate(context.Background())
 	// With stacked PRs, rebase conflicts cause stack to diverge — not an error.
 	if err != nil {
 		t.Fatalf("expected nil (stack diverges), got: %v", err)
@@ -254,7 +254,7 @@ func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	err := l.handleRebase(context.Background())
+	err := l.git.EnsureUpToDate(context.Background())
 	if err != nil {
 		t.Fatalf("expected nil (diverged stack continues), got: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	err := l.handleRebase(context.Background())
+	err := l.git.EnsureUpToDate(context.Background())
 	if err != nil {
 		t.Fatalf("expected nil (diverged stack continues), got: %v", err)
 	}
@@ -613,8 +613,8 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true},
 	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
-	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
+	gm.ShipResult = git.ShipResult{PRNumber: "42"}
+	gm.MergeRetryResult = true
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -864,7 +864,17 @@ func TestResolveByPRState_ClosedPR_RenamesBranch(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	resolved := l.resolveByPRState(context.Background(), "ralph-cdr3", "Fix auth bug", "439")
+	resolved := resolveByPRState(context.Background(), resolveByPRStateParams{
+		taskID:   "ralph-cdr3",
+		nextTask: "Fix auth bug",
+		prNumber: "439",
+		backend:  backend,
+		git:      gm,
+		logger:   l.logger,
+		attempts: l.attempts,
+		state:    l.state,
+		ralphDir: ralphDir,
+	})
 	if resolved {
 		t.Fatal("expected resolveByPRState to return false for CLOSED PR")
 	}

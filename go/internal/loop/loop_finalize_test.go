@@ -3,13 +3,12 @@ package loop
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
-	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
 // buildPRBody assembles description, acceptance criteria, and agent summary
@@ -87,30 +86,26 @@ func TestBuildPRBody_NeverGeneric(t *testing.T) {
 // finalizePR skips merge and closes the bead when AutoMerge is off.
 func TestFinalizePR_NoAutoMerge_ClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
-		Dirs:         workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		CallsPerHour: 80,
-		TaskBackend:  backend,
-		AutoMerge:    false,
-	}, st, gm, logging.New(nil))
-	l.runner = &stubRunner{}
 
-	result := l.finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-abc",
-		nextTask: "Fix auth bug",
-		prNumber: "42",
-		prState:  "OPEN",
-		workDir:  dir,
+	result := finalizePR(finalizePRParams{
+		ctx:       context.Background(),
+		taskID:    "ralph-abc",
+		nextTask:  "Fix auth bug",
+		prNumber:  "42",
+		prState:   "OPEN",
+		workDir:   dir,
+		autoMerge: false,
+		git:       gm,
+		logger:    logging.New(nil),
+		backend:   backend,
+		state:     st,
+		attempts:  attempts.New(dir),
 	})
 
 	if result.merged {
@@ -129,9 +124,6 @@ func TestFinalizePR_NoAutoMerge_ClosesTask(t *testing.T) {
 // finalizePR merges and closes when AutoMerge is on and merge succeeds.
 func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
 	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
@@ -139,25 +131,24 @@ func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
 
 	mergeCalled := false
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
-		Dirs:         workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		CallsPerHour: 80,
-		TaskBackend:  backend,
-		AutoMerge:    true,
-	}, st, gm, logging.New(nil))
-	l.runner = &stubRunner{}
-	l.mergeFunc = func(ctx context.Context) (bool, error) {
-		mergeCalled = true
-		return true, nil
-	}
 
-	result := l.finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-xyz",
-		nextTask: "Add feature",
-		prNumber: "42",
-		prState:  "OPEN",
-		workDir:  dir,
+	result := finalizePR(finalizePRParams{
+		ctx:       context.Background(),
+		taskID:    "ralph-xyz",
+		nextTask:  "Add feature",
+		prNumber:  "42",
+		prState:   "OPEN",
+		workDir:   dir,
+		autoMerge: true,
+		git:       gm,
+		logger:    logging.New(nil),
+		backend:   backend,
+		state:     st,
+		attempts:  attempts.New(dir),
+		mergeFunc: func(ctx context.Context) (bool, error) {
+			mergeCalled = true
+			return true, nil
+		},
 	})
 
 	if !mergeCalled {
@@ -181,33 +172,29 @@ func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
 // the branch for the next task to stack on.
 func TestFinalizePR_MergeFailure_ClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
-		Dirs:         workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		CallsPerHour: 80,
-		TaskBackend:  backend,
-		AutoMerge:    true,
-	}, st, gm, logging.New(nil))
-	l.runner = &stubRunner{}
-	l.mergeFunc = func(ctx context.Context) (bool, error) {
-		return false, fmt.Errorf("merge conflict")
-	}
 
-	result := l.finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-abc",
-		nextTask: "Fix bug",
-		prNumber: "99",
-		prState:  "OPEN",
-		workDir:  dir,
+	result := finalizePR(finalizePRParams{
+		ctx:       context.Background(),
+		taskID:    "ralph-abc",
+		nextTask:  "Fix bug",
+		prNumber:  "99",
+		prState:   "OPEN",
+		workDir:   dir,
+		autoMerge: true,
+		git:       gm,
+		logger:    logging.New(nil),
+		backend:   backend,
+		state:     st,
+		attempts:  attempts.New(dir),
+		mergeFunc: func(ctx context.Context) (bool, error) {
+			return false, fmt.Errorf("merge conflict")
+		},
 	})
 
 	if result.merged {
@@ -231,33 +218,29 @@ func TestFinalizePR_MergeFailure_ClosesTask(t *testing.T) {
 // setStackHead can find the unmerged branch for the next task to stack on.
 func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testing.T) {
 	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
-		Dirs:         workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		CallsPerHour: 80,
-		TaskBackend:  backend,
-		AutoMerge:    true,
-	}, st, gm, logging.New(nil))
-	l.runner = &stubRunner{}
-	l.mergeFunc = func(ctx context.Context) (bool, error) {
-		return false, fmt.Errorf("CI check failed")
-	}
 
-	l.finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-abc",
-		nextTask: "Fix bug",
-		prNumber: "99",
-		prState:  "OPEN",
-		workDir:  dir,
+	finalizePR(finalizePRParams{
+		ctx:       context.Background(),
+		taskID:    "ralph-abc",
+		nextTask:  "Fix bug",
+		prNumber:  "99",
+		prState:   "OPEN",
+		workDir:   dir,
+		autoMerge: true,
+		git:       gm,
+		logger:    logging.New(nil),
+		backend:   backend,
+		state:     st,
+		attempts:  attempts.New(dir),
+		mergeFunc: func(ctx context.Context) (bool, error) {
+			return false, fmt.Errorf("CI check failed")
+		},
 	})
 
 	tasks, err := st.GetCompletedTasks()
@@ -278,34 +261,30 @@ func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testi
 // finalizePR with MERGED state closes immediately without attempting merge.
 func TestFinalizePR_AlreadyMerged_ClosesImmediately(t *testing.T) {
 	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
-		Dirs:         workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		CallsPerHour: 80,
-		TaskBackend:  backend,
-		AutoMerge:    true,
-	}, st, gm, logging.New(nil))
-	l.runner = &stubRunner{}
-	l.mergeFunc = func(ctx context.Context) (bool, error) {
-		t.Fatal("merge should not be called for already-merged PR")
-		return false, nil
-	}
 
-	result := l.finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-xyz",
-		nextTask: "Add feature",
-		prNumber: "42",
-		prState:  "MERGED",
-		workDir:  dir,
+	result := finalizePR(finalizePRParams{
+		ctx:       context.Background(),
+		taskID:    "ralph-xyz",
+		nextTask:  "Add feature",
+		prNumber:  "42",
+		prState:   "MERGED",
+		workDir:   dir,
+		autoMerge: true,
+		git:       gm,
+		logger:    logging.New(nil),
+		backend:   backend,
+		state:     st,
+		attempts:  attempts.New(dir),
+		mergeFunc: func(ctx context.Context) (bool, error) {
+			t.Fatal("merge should not be called for already-merged PR")
+			return false, nil
+		},
 	})
 
 	if !result.merged {
@@ -324,30 +303,26 @@ func TestFinalizePR_AlreadyMerged_ClosesImmediately(t *testing.T) {
 // finalizePR uses PR URL in close reason when available.
 func TestFinalizePR_UsesURLInCloseReason(t *testing.T) {
 	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
-		Dirs:         workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		CallsPerHour: 80,
-		TaskBackend:  backend,
-	}, st, gm, logging.New(nil))
-	l.runner = &stubRunner{}
 
-	l.finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-abc",
-		nextTask: "Fix login",
-		prNumber: "55",
-		prState:  "OPEN",
-		prURL:    "https://github.com/owner/repo/pull/55",
-		workDir:  dir,
+	finalizePR(finalizePRParams{
+		ctx:       context.Background(),
+		taskID:    "ralph-abc",
+		nextTask:  "Fix login",
+		prNumber:  "55",
+		prState:   "OPEN",
+		prURL:     "https://github.com/owner/repo/pull/55",
+		workDir:   dir,
+		git:       gm,
+		logger:    logging.New(nil),
+		backend:   backend,
+		state:     st,
+		attempts:  attempts.New(dir),
 	})
 
 	backend.CloseMu.Lock()
@@ -363,9 +338,6 @@ func TestFinalizePR_UsesURLInCloseReason(t *testing.T) {
 // CloseTask failure after merge skips the task so the loop doesn't retry it.
 func TestFinalizePR_CloseTaskFailure_SkipsTask(t *testing.T) {
 	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
 		CloseErr:       fmt.Errorf("exit status 1"),
@@ -373,24 +345,23 @@ func TestFinalizePR_CloseTaskFailure_SkipsTask(t *testing.T) {
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
-		Dirs:         workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		CallsPerHour: 80,
-		TaskBackend:  backend,
-		AutoMerge:    true,
-	}, st, gm, logging.New(nil))
-	l.runner = &stubRunner{}
-	l.mergeFunc = func(ctx context.Context) (bool, error) {
-		return true, nil
-	}
 
-	result := l.finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-abc",
-		nextTask: "Fix auth bug",
-		prNumber: "42",
-		prState:  "OPEN",
-		workDir:  dir,
+	result := finalizePR(finalizePRParams{
+		ctx:       context.Background(),
+		taskID:    "ralph-abc",
+		nextTask:  "Fix auth bug",
+		prNumber:  "42",
+		prState:   "OPEN",
+		workDir:   dir,
+		autoMerge: true,
+		git:       gm,
+		logger:    logging.New(nil),
+		backend:   backend,
+		state:     st,
+		attempts:  attempts.New(dir),
+		mergeFunc: func(ctx context.Context) (bool, error) {
+			return true, nil
+		},
 	})
 
 	if !result.merged {
@@ -426,9 +397,6 @@ func TestFinalizePR_CloseTaskFailure_SkipsTask(t *testing.T) {
 // Dependency-blocked CloseTask failure includes blocker IDs in skip reason.
 func TestFinalizePR_DependencyBlockedClose_SkipsWithBlockerIDs(t *testing.T) {
 	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
 		CloseErr:       fmt.Errorf("exit status 1: cannot close ralph-abc: blocked by open issues [ralph-dep1] (use --force to override)"),
@@ -436,24 +404,23 @@ func TestFinalizePR_DependencyBlockedClose_SkipsWithBlockerIDs(t *testing.T) {
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
-		Dirs:         workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		CallsPerHour: 80,
-		TaskBackend:  backend,
-		AutoMerge:    true,
-	}, st, gm, logging.New(nil))
-	l.runner = &stubRunner{}
-	l.mergeFunc = func(ctx context.Context) (bool, error) {
-		return true, nil
-	}
 
-	l.finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-abc",
-		nextTask: "Fix auth bug",
-		prNumber: "42",
-		prState:  "OPEN",
-		workDir:  dir,
+	finalizePR(finalizePRParams{
+		ctx:       context.Background(),
+		taskID:    "ralph-abc",
+		nextTask:  "Fix auth bug",
+		prNumber:  "42",
+		prState:   "OPEN",
+		workDir:   dir,
+		autoMerge: true,
+		git:       gm,
+		logger:    logging.New(nil),
+		backend:   backend,
+		state:     st,
+		attempts:  attempts.New(dir),
+		mergeFunc: func(ctx context.Context) (bool, error) {
+			return true, nil
+		},
 	})
 
 	backend.SkipMu.Lock()
