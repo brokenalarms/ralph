@@ -781,7 +781,7 @@ func TestLoop_CheckoutExistingBranch_NoRemote(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	checkedOut := l.checkoutExistingBranch("ralph-xyz", "Fix login")
+	checkedOut := checkoutExistingBranch(l.git, l.cfg.TaskBackend, l.logger, "ralph-xyz", "Fix login")
 	if checkedOut {
 		t.Error("expected false (no stored branch in metadata), got true")
 	}

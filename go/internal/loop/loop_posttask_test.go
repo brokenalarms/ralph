@@ -18,6 +18,55 @@ import (
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
+// handlePostSignalCall invokes the package-level handlePostSignal using l's dependencies,
+// and applies the session-task and merge-flag side effects back onto l.
+func handlePostSignalCall(l *Loop, p postSignalParams) postSignalAction {
+	opts := handlePostSignalOpts{
+		postSignalTimeout: l.cfg.PostSignalTimeout,
+		autoMerge:         l.cfg.AutoMerge,
+		evolve:            l.cfg.Evolve,
+		notify:            l.cfg.Notify,
+		git:               l.git,
+		backend:           l.cfg.TaskBackend,
+		state:             l.state,
+		logger:            l.logger,
+		attempts:          l.attempts,
+		verifyFn: func(ctx context.Context, headBefore string) (bool, string) {
+			if l.verifyFunc != nil {
+				return l.verifyFunc(ctx, l.git.GetWorkDir(), headBefore)
+			}
+			return l.verifier.VerifyCompletion(ctx, l.git.GetWorkDir(), headBefore)
+		},
+		pushSignalPRFn: func(p postSignalParams) (string, string) {
+			return pushSignalPR(p.ctx, p, pushSignalPROpts{
+				git:                 l.git,
+				backend:             l.cfg.TaskBackend,
+				logger:              l.logger,
+				isOnlineFunc:        l.isOnlineFunc,
+				waitForInternetFunc: l.waitForInternetFunc,
+				shipFn: func(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error) {
+					if l.pushPRFunc != nil {
+						prNum, err := l.pushPRFunc(ctx, opts.TaskID, opts.TaskTitle, opts.Body)
+						return git.ShipResult{PRNumber: prNum}, err
+					}
+					return l.git.Ship(ctx, opts)
+				},
+			})
+		},
+		finalizePRFn:  l.finalizePR,
+		buildCTFn:     l.buildCompletedTask,
+		runPostTaskFn: l.runPostTask,
+	}
+	out := handlePostSignal(p, opts)
+	if out.ct != nil {
+		l.sessionTasks = append(l.sessionTasks, *out.ct)
+	}
+	if out.merged {
+		l.lastTaskMerged = true
+	}
+	return out.action
+}
+
 // Branch name format uses beadID-slug without sequence number,
 // proving the old TaskSeq pattern has been removed.
 // handlePostSignal: verifies that a successful signal pushes, closes the
@@ -50,7 +99,7 @@ func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	action := l.handlePostSignal(postSignalParams{
+	action := handlePostSignalCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
@@ -94,7 +143,7 @@ func TestLoop_HandlePostSignal_VerificationFailure(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
-	action := l.handlePostSignal(postSignalParams{
+	action := handlePostSignalCall(l, postSignalParams{
 		ctx:      context.Background(),
 		result:   claude.Result{},
 		taskID:   "ralph-abc",
@@ -145,7 +194,7 @@ func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 
 	done := make(chan postSignalAction, 1)
 	go func() {
-		done <- l.handlePostSignal(postSignalParams{
+		done <- handlePostSignalCall(l, postSignalParams{
 			ctx:        context.Background(),
 			result:     claude.Result{SignalDetected: true},
 			headBefore: "",
@@ -201,7 +250,7 @@ func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
 
-	action := l.handlePostSignal(postSignalParams{
+	action := handlePostSignalCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
@@ -253,7 +302,7 @@ func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
 
 	done := make(chan postSignalAction, 1)
 	go func() {
-		done <- l.handlePostSignal(postSignalParams{
+		done <- handlePostSignalCall(l, postSignalParams{
 			ctx:        context.Background(),
 			result:     claude.Result{SignalDetected: true},
 			headBefore: "",
@@ -303,7 +352,7 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
 
-	action := l.handlePostSignal(postSignalParams{
+	action := handlePostSignalCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
@@ -354,7 +403,7 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
-	action := l.handlePostSignal(postSignalParams{
+	action := handlePostSignalCall(l, postSignalParams{
 		ctx:      context.Background(),
 		result:   claude.Result{},
 		taskID:   "ralph-pt2",
@@ -399,7 +448,7 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "50", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	action := l.handlePostSignal(postSignalParams{
+	action := handlePostSignalCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
@@ -446,7 +495,7 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	action := l.handlePostSignal(postSignalParams{
+	action := handlePostSignalCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{OnSignalUsed: true},
 		headBefore: "before",
@@ -506,7 +555,7 @@ func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	l.handlePostSignal(postSignalParams{
+	handlePostSignalCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
 		headBefore: "",
@@ -559,7 +608,7 @@ func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	l.handlePostSignal(postSignalParams{
+	handlePostSignalCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
 		headBefore: "",
@@ -608,7 +657,7 @@ func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	action := l.handlePostSignal(postSignalParams{
+	action := handlePostSignalCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true, Summary: "Updated README"},
 		headBefore: "before",

@@ -40,7 +40,7 @@ func (l *Loop) initWorktree(ctx context.Context) error {
 	// One-time sync: rebase onto latest base so the first iteration
 	// starts from a clean state. prepareBranch handles this on subsequent
 	// iterations, but we need it here before the loop starts.
-	l.setStackHead()
+	setStackHead(l.git, l.cfg.TaskBackend, l.state, l.logger)
 	if l.git.GetPrevBranch() == "" {
 		l.git.ResetToDefaultBranch()
 	}
