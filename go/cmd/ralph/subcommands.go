@@ -391,14 +391,13 @@ func printUsage() {
   ralph loop [options]         Autonomous executor — picks up tasks, writes code, pushes PRs
   ralph attach [directory]     Attach to a running loop's tmux session (3-pane: loop + stream + plan)
   ralph merge <top-pr>         Rebase and merge a stacked PR chain bottom-up
-  ralph task [directory]       Interactive task triage and spec session
+  ralph task                   Interactive task triage and spec session
   ralph review [directory]     Post-mortem review: reflections, test audit, refactoring
 
 %sEXAMPLES:%s
   ralph loop --tmux --max 20
   ralph loop --auto-merge --evolve
   ralph attach
-  ralph task ~/myproject
 
 %sHOW IT WORKS:%s
   1. Triage:   ralph task — create tasks, write specs, manage backlog
@@ -417,7 +416,7 @@ Use "ralph <command> --help" for more information about a command.
 
 func printTaskUsage() {
 	fmt.Printf("%sralph task%s - Interactive task triage and spec session\n\n", logging.Bold, logging.Reset)
-	fmt.Printf("%sUSAGE:%s\n  ralph task [directory] [--model <model>]\n\n", logging.Bold, logging.Reset)
+	fmt.Printf("%sUSAGE:%s\n  ralph task [--model <model>]\n\n", logging.Bold, logging.Reset)
 	fmt.Printf("Launches an interactive Claude session for creating tasks, writing specs,\nand managing the project backlog.\n\n")
 	fmt.Printf("%sOPTIONS:%s\n  --model <model>    Model ceiling for the session (e.g. claude-sonnet-4-6, claude-haiku-4-5-20251001)\n", logging.Bold, logging.Reset)
 }
