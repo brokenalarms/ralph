@@ -73,20 +73,10 @@ func (s State) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON parses known fields and stores the rest in Overflow.
 func (s *State) UnmarshalJSON(data []byte) error {
-	// Collect all keys first so we can handle migration before typed unmarshal.
+	// Collect all keys first so we can populate Overflow below.
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
-	}
-
-	// Migrate old-format completed_tasks (string array) to the new
-	// [{id, merged}] object format before the typed unmarshal.
-	if ct, ok := raw["completed_tasks"]; ok {
-		if migrated := migrateCompletedTasks(ct); migrated != nil {
-			rewritten, _ := json.Marshal(migrated)
-			raw["completed_tasks"] = json.RawMessage(rewritten)
-			data, _ = json.Marshal(raw)
-		}
 	}
 
 	type Alias State
@@ -495,34 +485,4 @@ func touch(path string) {
 	if err == nil {
 		f.Close()
 	}
-}
-
-// migrateCompletedTasks converts old-format completed_tasks to the new
-// [{id, merged}] object format. Returns nil if already in the new format.
-//
-// Handled formats:
-//   - New: [{id, merged}] — no migration needed
-//   - Old: ["id1", "id2"] — string array, treated as merged:true
-func migrateCompletedTasks(raw json.RawMessage) []CompletedTaskEntry {
-	// New format: array of {id, merged} objects — strings can't unmarshal as
-	// objects so this only succeeds for the new format. No migration needed.
-	var entries []CompletedTaskEntry
-	if json.Unmarshal(raw, &entries) == nil {
-		return nil
-	}
-	// Old format: string array — migrate to [{id, merged:true}].
-	var strs []string
-	if json.Unmarshal(raw, &strs) != nil {
-		return nil
-	}
-	result := make([]CompletedTaskEntry, 0, len(strs))
-	for _, id := range strs {
-		if id != "" {
-			result = append(result, CompletedTaskEntry{ID: id, Merged: true})
-		}
-	}
-	if len(result) == 0 {
-		return nil
-	}
-	return result
 }
