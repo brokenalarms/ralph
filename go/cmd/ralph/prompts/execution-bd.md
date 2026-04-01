@@ -26,12 +26,6 @@ Example:
 > Resets the worktree to origin/main after each squash-merge so stale
 > branches don't accumulate.
 
-## Updating beads
-
-Before updating or commenting on any bead, check its status first. Never
-add comments or updates to closed beads — if follow-on work is needed,
-create a new bead and reference the original.
-
 ## Invariants
 - The `.beads` directory is the project's permanent task history. Never delete, clear, or reinitialize it. Do not remove it with shell commands or force-reinitialize the task backend. Only `.ralph` state is ephemeral — `.beads` persists across all runs.
 - NEVER run `bd init` — ralph handles backend initialization. Running `bd init` from the wrong directory creates orphan databases.

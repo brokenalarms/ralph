@@ -24,7 +24,7 @@ func TestLoop_VerifyBuild_FailureInjectedIntoPrompt(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	// Write templates with {{TEST_STATUS}} so the build failure context lands in the prompt.
-	for _, name := range []string{"shared.md", "reflection.md", "signal.md", "feedback.md", "execution-bd.md"} {
+	for _, name := range []string{"shared.md", "reflection.md", "signal.md", "feedback.md", "execution-bd.md", "bead-creation.md"} {
 		os.WriteFile(filepath.Join(promptsDir, name), []byte("test"), 0o644)
 	}
 	os.WriteFile(filepath.Join(promptsDir, "internal.md"),
@@ -86,7 +86,7 @@ func TestLoop_VerifyBuild_PassDoesNotInjectContext(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	for _, name := range []string{"shared.md", "reflection.md", "signal.md", "feedback.md", "execution-bd.md"} {
+	for _, name := range []string{"shared.md", "reflection.md", "signal.md", "feedback.md", "execution-bd.md", "bead-creation.md"} {
 		os.WriteFile(filepath.Join(promptsDir, name), []byte("test"), 0o644)
 	}
 	os.WriteFile(filepath.Join(promptsDir, "internal.md"),
@@ -144,7 +144,7 @@ func TestLoop_VerifyBuild_NotConfigured_NoEffect(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	for _, name := range []string{"shared.md", "reflection.md", "signal.md", "feedback.md", "execution-bd.md"} {
+	for _, name := range []string{"shared.md", "reflection.md", "signal.md", "feedback.md", "execution-bd.md", "bead-creation.md"} {
 		os.WriteFile(filepath.Join(promptsDir, name), []byte("test"), 0o644)
 	}
 	os.WriteFile(filepath.Join(promptsDir, "internal.md"),
@@ -199,7 +199,7 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	for _, name := range []string{"shared.md", "reflection.md", "signal.md", "feedback.md", "execution-bd.md"} {
+	for _, name := range []string{"shared.md", "reflection.md", "signal.md", "feedback.md", "execution-bd.md", "bead-creation.md"} {
 		os.WriteFile(filepath.Join(promptsDir, name), []byte("test"), 0o644)
 	}
 	os.WriteFile(filepath.Join(promptsDir, "internal.md"),

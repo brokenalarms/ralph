@@ -111,7 +111,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	// Write templates with {{TEST_STATUS}} in internal.md
-	for _, name := range []string{"shared.md", "reflection.md", "signal.md", "feedback.md", "execution-bd.md"} {
+	for _, name := range []string{"shared.md", "reflection.md", "signal.md", "feedback.md", "execution-bd.md", "bead-creation.md"} {
 		os.WriteFile(filepath.Join(promptsDir, name), []byte("test"), 0o644)
 	}
 	os.WriteFile(filepath.Join(promptsDir, "internal.md"),

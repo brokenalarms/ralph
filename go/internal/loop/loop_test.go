@@ -46,7 +46,7 @@ func setupTestDir(t *testing.T) (string, *state.Store) {
 func createPromptTemplates(t *testing.T, dir string) {
 	t.Helper()
 	os.MkdirAll(dir, 0o755)
-	for _, name := range []string{"shared.md", "internal.md", "reflection.md", "signal.md", "feedback.md", "refactor.md", "refactor-style.md", "execution-bd.md"} {
+	for _, name := range []string{"shared.md", "internal.md", "reflection.md", "signal.md", "feedback.md", "refactor.md", "refactor-style.md", "execution-bd.md", "bead-creation.md"} {
 		os.WriteFile(filepath.Join(dir, name), []byte("test"), 0o644)
 	}
 }

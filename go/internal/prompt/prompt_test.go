@@ -793,6 +793,32 @@ func TestTaskManagerPrompt_CheckStatusBeforeUpdate(t *testing.T) {
 	}
 }
 
+// Proves: bead-creation.md explicitly requires bd show before any bd update
+// and prohibits both updating and reopening closed beads, so agents cannot
+// silently mutate closed beads (bd update on closed beads succeeds without error).
+func TestBeadCreation_ExplicitUpdateGuard(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "bead-creation.md"))
+	if err != nil {
+		t.Fatalf("reading bead-creation.md: %v", err)
+	}
+	lower := strings.ToLower(string(content))
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"bd show", "must require bd show check before any bd update"},
+		{"never update or reopen", "must explicitly prohibit both update and reopen on closed beads"},
+		{"silently succeeds", "must explain why the check is necessary — bd update gives no error on closed beads"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(lower, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
 // Proves: task manager prompt requires verifying bead status with bd show
 // before referencing any bead as a future fix, and instructs creating new
 // beads instead of reopening closed ones when follow-on work is needed.
@@ -812,7 +838,7 @@ func TestBuildTaskManagerPrompt_NeverReferenceClosedBeadsAsFutureFixes(t *testin
 		{"bd show", "must require bd show before referencing a bead as a future fix"},
 		{"verify", "must instruct verifying bead status before citing it"},
 		{"create a new", "must instruct creating new beads instead of reopening closed ones"},
-		{"never reopen", "must explicitly prohibit reopening closed beads"},
+		{"never update or reopen", "must explicitly prohibit both updating and reopening closed beads"},
 	}
 
 	for _, tc := range required {
@@ -868,20 +894,41 @@ func TestExecutionBD_RequiresAcceptanceCriteria(t *testing.T) {
 	}
 }
 
-// Proves: execution-bd.md instructs checking bead status before commenting
-// or updating, and never modifying closed beads.
-func TestExecutionBD_CheckStatusBeforeUpdate(t *testing.T) {
+// Proves: the assembled loop-agent prompt includes bead update guard guidance
+// from bead-creation.md so loop agents must check status before any bd update.
+func TestBuildPrompt_IncludesBeadUpdateGuard(t *testing.T) {
+	v := testVars(t)
+	result, err := BuildPrompt(v)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+	lower := strings.ToLower(result)
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"bd show", "loop agent must run bd show before any bd update"},
+		{"never update or reopen", "loop agent must be told update and reopen are both prohibited on closed beads"},
+		{"closed", "loop agent must be warned against modifying closed beads"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(lower, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: bead-creation.md is the single source of bead update guard guidance —
+// execution-bd.md must not contain a duplicate "Updating beads" section.
+func TestExecutionBD_NoDuplicateUpdateGuidance(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
 	if err != nil {
 		t.Fatalf("reading execution-bd.md: %v", err)
 	}
-	lower := strings.ToLower(string(content))
-
-	if !strings.Contains(lower, "before") || !strings.Contains(lower, "status") {
-		t.Error("execution-bd.md should instruct checking bead status before updates")
-	}
-	if !strings.Contains(lower, "closed") {
-		t.Error("execution-bd.md should warn against modifying closed beads")
+	if strings.Contains(string(content), "## Updating beads") {
+		t.Error("execution-bd.md must not contain an 'Updating beads' section — bead-creation.md is the single source")
 	}
 }
 
@@ -1007,7 +1054,7 @@ func TestBuildReviewPrompt_IncludesBeadCreationGuidance(t *testing.T) {
 		{"--acceptance", "review prompt must include acceptance criteria requirement"},
 		{"verbatim", "review prompt must include diagnostic content verbatim rule"},
 		{"echo back", "review prompt must include echo-back rule"},
-		{"never reopen", "review prompt must include rule against reopening closed beads"},
+		{"never update or reopen", "review prompt must include rule against updating or reopening closed beads"},
 	}
 
 	for _, tc := range required {
