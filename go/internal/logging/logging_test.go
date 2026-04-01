@@ -586,4 +586,71 @@ func TestEmitInPlace_RespectsStreamingMode(t *testing.T) {
 	}
 }
 
+// ModelTag returns a color-coded [short-name] tag for each supported model family,
+// with distinct colors for haiku, sonnet, and opus.
+func TestModelTag(t *testing.T) {
+	tests := []struct {
+		model     string
+		wantName  string
+		wantColor string
+	}{
+		{"claude-haiku-4-5-20251001", "haiku", BrightBlue},
+		{"claude-sonnet-4-5-20241022", "sonnet", Yellow},
+		{"claude-opus-4-6", "opus", Magenta},
+		{"unknown-model", "unknown-model", Cyan},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.wantName, func(t *testing.T) {
+			got := ModelTag(tt.model)
+			if !strings.Contains(got, "["+tt.wantName+"]") {
+				t.Errorf("ModelTag(%q) = %q, want to contain [%s]", tt.model, got, tt.wantName)
+			}
+			if !strings.Contains(got, tt.wantColor) {
+				t.Errorf("ModelTag(%q) = %q, want color %q", tt.model, got, tt.wantColor)
+			}
+		})
+	}
+
+	// Each model family gets a distinct color.
+	haikuColor := strings.Split(ModelTag("claude-haiku-4-5"), "[haiku]")[0]
+	sonnetColor := strings.Split(ModelTag("claude-sonnet-4-5"), "[sonnet]")[0]
+	opusColor := strings.Split(ModelTag("claude-opus-4"), "[opus]")[0]
+	if haikuColor == sonnetColor || sonnetColor == opusColor || haikuColor == opusColor {
+		t.Errorf("model families must have distinct colors: haiku=%q sonnet=%q opus=%q", haikuColor, sonnetColor, opusColor)
+	}
+}
+
+// Emit with Opts.Model set renders a color-coded [model] sub-tag between the
+// domain tag and the message body, so operators can scan which model is active.
+func TestEmit_WithModel_ShowsSubTag(t *testing.T) {
+	var buf bytes.Buffer
+	l := &Logger{out: &buf, logFile: &buf}
+	l.Emit(Opts{Domain: LLM, Model: "claude-haiku-4-5-20251001"}, "Running verification")
+
+	got := buf.String()
+	if !strings.Contains(got, "[llm]") {
+		t.Errorf("expected [llm] domain tag in output, got: %q", got)
+	}
+	if !strings.Contains(got, "[haiku]") {
+		t.Errorf("expected [haiku] model sub-tag in output, got: %q", got)
+	}
+	if !strings.Contains(got, "Running verification") {
+		t.Errorf("expected message body in output, got: %q", got)
+	}
+	// Model sub-tag appears after domain tag and before the message body.
+	llmIdx := strings.Index(got, "[llm]")
+	haikuIdx := strings.Index(got, "[haiku]")
+	msgIdx := strings.Index(got, "Running verification")
+	if llmIdx < 0 || haikuIdx < 0 || msgIdx < 0 {
+		t.Fatal("missing expected content")
+	}
+	if haikuIdx < llmIdx {
+		t.Errorf("[haiku] sub-tag should appear after [llm] domain tag")
+	}
+	if msgIdx < haikuIdx {
+		t.Errorf("message body should appear after [haiku] sub-tag")
+	}
+}
+
 func intPtr(n int) *int { return &n }

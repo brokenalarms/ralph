@@ -134,7 +134,7 @@ func (v *Verifier) testFixLoop(p signalParams, beadDesc, beadAcceptance, testDet
 
 // tryFixTests spawns a fix agent to address test failures.
 func (v *Verifier) tryFixTests(p signalParams, beadDesc, beadAcceptance, testDetails string) bool {
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Spawning fix agent for test failures (attempt %d/%d)", v.testFixAttempts, maxTestFixAttempts)
+	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Model: v.fixModel()}, "Spawning fix agent for test failures (attempt %d/%d)", v.testFixAttempts, maxTestFixAttempts)
 
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 	fixPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{
@@ -156,7 +156,7 @@ func (v *Verifier) verifyWithFixLoop(p signalParams, beadDesc, beadAcceptance st
 	for {
 		v.llmVerifyAttempts++
 		model := v.verifyModel()
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM}, "Running LLM verification (attempt %d/%d, %s)...", v.llmVerifyAttempts, maxLLMVerifyAttempts, verify.ModelShortName(model))
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Running LLM verification (attempt %d/%d)...", v.llmVerifyAttempts, maxLLMVerifyAttempts)
 		llmResult := v.deps.LLMVerify(verify.VerifyOpts{
 			Ctx:             p.ctx,
 			Git:             v.deps.Git,
@@ -203,7 +203,7 @@ func (v *Verifier) verifyWithFixLoop(p signalParams, beadDesc, beadAcceptance st
 
 // tryFixVerification spawns a fix agent to address LLM verification rejection.
 func (v *Verifier) tryFixVerification(p signalParams, beadDesc, beadAcceptance, rejectionDetails string) bool {
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM}, "Spawning fix agent for verification rejection (attempt %d/%d)", v.llmVerifyAttempts, maxLLMVerifyAttempts)
+	v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: v.fixModel()}, "Spawning fix agent for verification rejection (attempt %d/%d)", v.llmVerifyAttempts, maxLLMVerifyAttempts)
 
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 	fixPrompt := v.loadVerifyPrompt("verify-fix.md", map[string]string{
@@ -366,7 +366,7 @@ func (v *Verifier) TryFixConflict(ctx context.Context, conflictDiff, beadDesc, n
 
 func (v *Verifier) runFixAgent(ctx context.Context, description, prompt, workDir, rawLogPath string) claude.Result {
 	v.deps.Runner().StopStreaming()
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM}, "Spawning fix agent: %s", description)
+	v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: v.fixModel()}, "Spawning fix agent: %s", description)
 
 	runner := v.deps.NewRunner()
 	result, _ := runner.Run(claude.RunConfig{

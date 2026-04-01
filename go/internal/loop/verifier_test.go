@@ -482,6 +482,75 @@ func TestVerifier_OnSignal_ResetsAttemptsEachIteration(t *testing.T) {
 	}
 }
 
+// Verification log lines emit the model as a colored [model] sub-tag (not in the
+// message body), so operators can visually scan which model is running.
+func TestVerifier_VerificationLog_ShowsModelSubTag(t *testing.T) {
+	var logOut strings.Builder
+	logger := logging.NewWithWriter(&logOut)
+
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.deps.Logger = logger
+		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+			return verify.Result{Passed: true, Reason: "looks good"}
+		}
+	})
+
+	v.OnSignal(signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    t.TempDir(),
+		rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID:     "test-model-tag",
+		nextTask:   "Model tag test",
+	})
+
+	got := logOut.String()
+	if !strings.Contains(got, "[haiku]") {
+		t.Errorf("verification log should contain [haiku] model sub-tag, got:\n%s", got)
+	}
+	// Model name must NOT appear parenthesized in message body.
+	if strings.Contains(got, "(haiku)") {
+		t.Errorf("model name must not appear as '(haiku)' in message body, got:\n%s", got)
+	}
+}
+
+// Fix agent spawn log lines emit the model as a [model] sub-tag, not in the
+// message body.
+func TestVerifier_FixAgentSpawnLog_ShowsModelSubTag(t *testing.T) {
+	var logOut strings.Builder
+	logger := logging.NewWithWriter(&logOut)
+
+	llmCalls := 0
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.deps.Logger = logger
+		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+			llmCalls++
+			if llmCalls == 1 {
+				return verify.Result{Passed: false, Details: "needs work"}
+			}
+			return verify.Result{Passed: true, Reason: "approved"}
+		}
+		v.deps.NewRunner = func() claudeRunner {
+			return &stubRunner{result: stubResult(true, "fixed")}
+		}
+	})
+
+	v.OnSignal(signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    t.TempDir(),
+		rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID:     "test-fix-tag",
+		nextTask:   "Fix agent tag test",
+	})
+
+	got := logOut.String()
+	// The fix agent spawn line should show the opus model sub-tag.
+	if !strings.Contains(got, "[opus]") {
+		t.Errorf("fix agent spawn log should contain [opus] model sub-tag, got:\n%s", got)
+	}
+}
+
 // TryFixCI returns false when no checks have bucket=fail — nothing to fix.
 func TestVerifier_TryFixCI_NoneFailedSkipsAgent(t *testing.T) {
 	agentSpawned := false

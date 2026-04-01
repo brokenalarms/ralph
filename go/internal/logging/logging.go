@@ -126,6 +126,35 @@ type Opts struct {
 	Level  Level
 	Link   *Link  // clickable reference appended at end of line
 	Branch string // appended as colored tag
+	Model  string // when set, appended as a color-coded [model] sub-tag after the domain tag
+}
+
+// ModelTag returns a color-coded [model-short-name] sub-tag for the given model ID.
+// "claude-haiku-…" → bright-blue [haiku], "claude-sonnet-…" → yellow [sonnet],
+// "claude-opus-…" → magenta [opus].
+func ModelTag(model string) string {
+	short := modelShortName(model)
+	var color string
+	switch short {
+	case "haiku":
+		color = BrightBlue
+	case "sonnet":
+		color = Yellow
+	case "opus":
+		color = Magenta
+	default:
+		color = Cyan
+	}
+	return fmt.Sprintf("%s[%s]%s", color, short, Reset)
+}
+
+func modelShortName(model string) string {
+	for _, family := range []string{"opus", "sonnet", "haiku"} {
+		if strings.Contains(model, family) {
+			return family
+		}
+	}
+	return model
 }
 
 // Logger provides colored logging with trailing timestamps that appear
@@ -177,6 +206,9 @@ func (l *Logger) Emit(o Opts, format string, args ...any) {
 	}
 
 	tag := Tag(o.Level.color(), Orch, o.Domain)
+	if o.Model != "" {
+		tag += ModelTag(o.Model)
+	}
 	content := fmt.Sprintf("%s %s", tag, msg)
 	l.write(l.Fmt.Format(content) + "\n")
 }
@@ -210,6 +242,9 @@ func (l *Logger) EmitInPlace(o Opts, format string, args ...any) {
 		}
 	}
 	tag := Tag(o.Level.color(), Orch, o.Domain)
+	if o.Model != "" {
+		tag += ModelTag(o.Model)
+	}
 	content := fmt.Sprintf("%s %s", tag, msg)
 	formatted := l.Fmt.Format(content)
 	if !l.streaming {
@@ -230,6 +265,9 @@ func (l *Logger) EmitFinalInPlace(o Opts, format string, args ...any) {
 		}
 	}
 	tag := Tag(o.Level.color(), Orch, o.Domain)
+	if o.Model != "" {
+		tag += ModelTag(o.Model)
+	}
 	content := fmt.Sprintf("%s %s", tag, msg)
 	formatted := l.Fmt.Format(content)
 	if !l.streaming {
