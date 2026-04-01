@@ -288,9 +288,9 @@ func TestWaitForCI_BackoffDoubles(t *testing.T) {
 	}
 }
 
-// waitForCI logs a single summary line per PR showing accumulated poll
-// durations, not one line per poll cycle.
-func TestWaitForCI_SingleLogLine(t *testing.T) {
+// waitForCI emits a real-time log line per pending poll showing elapsed time and
+// check status, plus a summary line with accumulated durations on completion.
+func TestWaitForCI_LogsProgressPerPoll(t *testing.T) {
 	origSleep := ciSleep
 	ciSleep = func(d time.Duration) <-chan time.Time {
 		ch := make(chan time.Time, 1)
@@ -314,14 +314,25 @@ func TestWaitForCI_SingleLogLine(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should have exactly 1 log line: the polling summary. Callers handle
-	// the "passed" line with more context (e.g. "CI passed — merging").
-	if len(log.messages) != 1 {
-		t.Fatalf("expected 1 log message (polling summary only), got %d: %v", len(log.messages), log.messages)
+	// 3 pending polls each emit a progress line, then 1 summary line on completion.
+	// Total: 4 log messages.
+	if len(log.messages) != 4 {
+		t.Fatalf("expected 4 log messages (3 progress + 1 summary), got %d: %v", len(log.messages), log.messages)
 	}
 
-	if !strings.Contains(log.messages[0], "polled 1s..2s..4s") {
-		t.Errorf("expected polling line with backoff schedule, got: %s", log.messages[0])
+	// Each of the first 3 lines shows pending state with elapsed time.
+	for i := 0; i < 3; i++ {
+		if !strings.Contains(log.messages[i], "pending") {
+			t.Errorf("progress line %d missing 'pending': %s", i, log.messages[i])
+		}
+		if !strings.Contains(log.messages[i], "elapsed") {
+			t.Errorf("progress line %d missing elapsed time: %s", i, log.messages[i])
+		}
+	}
+
+	// Last line is the summary with accumulated poll durations.
+	if !strings.Contains(log.messages[3], "polled 1s..2s..4s") {
+		t.Errorf("expected polling summary with backoff schedule, got: %s", log.messages[3])
 	}
 }
 
