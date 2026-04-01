@@ -78,6 +78,9 @@ type signalParams struct {
 // message injection. Returns true when verified, false to clear the signal
 // and let the agent continue.
 func (v *Verifier) OnSignal(p signalParams) bool {
+	v.llmVerifyAttempts = 0
+	v.testFixAttempts = 0
+
 	commitResult := verify.CheckCommits(v.deps.Git, p.headBefore)
 	if !commitResult.Passed {
 		v.deps.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No new commits — will verify via LLM if work is already on main")

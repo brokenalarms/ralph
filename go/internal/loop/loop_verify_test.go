@@ -71,7 +71,7 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	}, st, gm, logger)
 
 	l.verifier.deps.NewRunner = func() claudeRunner {
-		return &stubRunner{result: stubResult(false, "")}
+		return &stubRunner{result: stubResult(true, "attempted fix")}
 	}
 
 	llmCalls := 0
@@ -80,16 +80,11 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 		return verify.Result{Passed: false, Details: "diff doesn't match bead"}
 	}
 
-	params := signalParams{
+	result := l.verifier.OnSignal(signalParams{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-123", nextTask: "Test task",
-	}
-
-	var result bool
-	for i := 0; i < maxLLMVerifyAttempts; i++ {
-		result = l.verifier.OnSignal(params)
-	}
+	})
 	if result {
 		t.Fatal("expected onSignal to return false when LLM verification exhausts retries")
 	}
@@ -121,7 +116,7 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	}, st, gm, logger)
 
 	l.verifier.deps.NewRunner = func() claudeRunner {
-		return &stubRunner{result: stubResult(false, "")}
+		return &stubRunner{result: stubResult(true, "attempted fix")}
 	}
 
 	var modelsUsed []string
@@ -135,15 +130,11 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 		return verify.Result{Passed: true, Reason: "approved"}
 	}
 
-	params := signalParams{
+	l.verifier.OnSignal(signalParams{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-escalation", nextTask: "Escalation test",
-	}
-
-	l.verifier.OnSignal(params)
-	l.verifier.OnSignal(params)
-	l.verifier.OnSignal(params)
+	})
 
 	if len(modelsUsed) != 3 {
 		t.Fatalf("expected 3 LLM calls, got %d", len(modelsUsed))
@@ -183,7 +174,7 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 	}, st, gm, logger)
 
 	l.verifier.deps.NewRunner = func() claudeRunner {
-		return &stubRunner{result: stubResult(false, "")}
+		return &stubRunner{result: stubResult(true, "attempted fix")}
 	}
 
 	var modelsUsed []string
@@ -195,15 +186,11 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 		return verify.Result{Passed: true, Reason: "approved"}
 	}
 
-	params := signalParams{
+	l.verifier.OnSignal(signalParams{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-config-models", nextTask: "Config models test",
-	}
-
-	l.verifier.OnSignal(params)
-	l.verifier.OnSignal(params)
-	l.verifier.OnSignal(params)
+	})
 
 	if len(modelsUsed) != 3 {
 		t.Fatalf("expected 3 LLM calls, got %d", len(modelsUsed))
