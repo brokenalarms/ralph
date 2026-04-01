@@ -213,6 +213,10 @@ Anti-patterns:
   is preserved")
 - Each criterion should be independently verifiable by the LLM verifier — vague
   criteria means the verifier can't reject bad work
+- Prefer positive constraints ("use function X") over negative constraints
+  ("don't assemble X manually"). Negative constraints leave room for creative
+  compliance — the agent may satisfy the letter while missing the intent. When
+  an existing helper or pattern should be used, name it explicitly in the AC.
 
 ### Scope discipline
 
