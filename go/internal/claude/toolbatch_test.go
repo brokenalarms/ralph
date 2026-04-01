@@ -287,7 +287,7 @@ func TestToolBatcher_VerboseShowsEverything(t *testing.T) {
 func TestVerboseOnlyTools_ExactMembership(t *testing.T) {
 	expected := map[string]bool{
 		"Bash": true, "Edit": true, "Read": true, "Write": true,
-		"Grep": true, "Glob": true, "ToolSearch": true, "TodoWrite": true,
+		"Grep": true, "Glob": true, "ToolSearch": true, "TodoWrite": true, "TaskOutput": true,
 	}
 	for tool := range expected {
 		if !IsVerboseOnlyTool(tool) {
