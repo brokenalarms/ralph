@@ -19,6 +19,10 @@ import (
 const maxLLMVerifyAttempts = 3
 const maxTestFixAttempts = 3
 
+// HeartbeatInterval is how often a heartbeat line is emitted while tests run.
+// Exported so tests can override it.
+var HeartbeatInterval = 30 * time.Second
+
 // VerifierConfig holds the configuration needed by the Verifier.
 type VerifierConfig struct {
 	VerifyDir             string
@@ -88,9 +92,9 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 	}
 
 	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Running post-signal test suite...")
-	testResult := verify.RunTests(p.ctx, v.cfg.VerifyDir)
+	testResult, elapsed := v.runTestsWithHeartbeat(p.ctx, v.cfg.VerifyDir)
 	if testResult.Passed {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed")
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed (%s)", elapsed)
 	}
 
 	beadDesc := getBeadDescription(v.deps.TaskBackend, p.taskID)
@@ -123,9 +127,9 @@ func (v *Verifier) testFixLoop(p signalParams, beadDesc, beadAcceptance, testDet
 		}
 
 		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Re-running test suite after test fix agent...")
-		rerun := verify.RunTests(p.ctx, v.cfg.VerifyDir)
+		rerun, rerunElapsed := v.runTestsWithHeartbeat(p.ctx, v.cfg.VerifyDir)
 		if rerun.Passed {
-			v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed after fix agent")
+			v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed after fix agent (%s)", rerunElapsed)
 			v.testFixAttempts = 0
 			return true
 		}
@@ -193,12 +197,12 @@ func (v *Verifier) verifyWithFixLoop(p signalParams, beadDesc, beadAcceptance st
 		}
 
 		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Re-running test suite after fix agent...")
-		testResult := verify.RunTests(p.ctx, v.cfg.VerifyDir)
+		testResult, testElapsed := v.runTestsWithHeartbeat(p.ctx, v.cfg.VerifyDir)
 		if !testResult.Passed {
-			v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "Tests failed after fix agent: %s", testResult.Reason)
+			v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "Tests failed after fix agent (%s): %s", testElapsed, testResult.Reason)
 			return false
 		}
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed after fix agent")
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed after fix agent (%s)", testElapsed)
 	}
 }
 
@@ -223,6 +227,33 @@ func (v *Verifier) tryFixVerification(p signalParams, beadDesc, beadAcceptance, 
 func (v *Verifier) ResetCounters() {
 	v.testFixAttempts = 0
 	v.llmVerifyAttempts = 0
+}
+
+// runTestsWithHeartbeat calls verify.RunTests and emits a periodic heartbeat
+// log line every HeartbeatInterval while waiting, so loop.log stays alive
+// during long test suites. The goroutine is cancelled as soon as RunTests
+// returns. Returns the test result and elapsed duration.
+func (v *Verifier) runTestsWithHeartbeat(ctx context.Context, dir string) (verify.Result, time.Duration) {
+	start := time.Now()
+	done := make(chan struct{})
+	defer close(done)
+
+	go func() {
+		ticker := time.NewTicker(HeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				v.deps.Logger.Emit(logging.Opts{Domain: logging.Test},
+					"Tests still running... (%s elapsed)", time.Since(start).Truncate(time.Millisecond))
+			}
+		}
+	}()
+
+	result := verify.RunTests(ctx, dir)
+	return result, time.Since(start).Truncate(time.Millisecond)
 }
 
 // verifyModel returns the model for the current LLM verification attempt,
