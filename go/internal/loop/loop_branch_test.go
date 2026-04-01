@@ -832,7 +832,7 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 	}
 }
 
-// Closed PR re-run renames the branch from ralph/wip to a task-specific name
+// Closed PR re-run renames the branch from ralph/next to a task-specific name
 // and clears the stale external-ref so the agent pushes to the correct branch.
 func TestResolveByPRState_ClosedPR_RenamesBranch(t *testing.T) {
 	dir, st := setupTestDir(t)
@@ -851,7 +851,7 @@ func TestResolveByPRState_ClosedPR_RenamesBranch(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
-		WorktreeBranch: "ralph/wip",
+		WorktreeBranch: "ralph/next",
 		BranchRenamed:  true, // Stale from previous run
 		RemoteURLValue: "https://github.com/owner/repo.git",
 		GitHubStub:     &git.StubGitHub{IsAvailable: true, PRState: "CLOSED"},
@@ -869,9 +869,9 @@ func TestResolveByPRState_ClosedPR_RenamesBranch(t *testing.T) {
 		t.Fatal("expected resolveByPRState to return false for CLOSED PR")
 	}
 
-	// Branch must be renamed from ralph/wip to a task-specific name.
-	if gm.WorktreeBranch == "ralph/wip" {
-		t.Error("branch should be renamed from ralph/wip, still ralph/wip")
+	// Branch must be renamed from ralph/next to a task-specific name.
+	if gm.WorktreeBranch == "ralph/next" {
+		t.Error("branch should be renamed from ralph/next, still ralph/next")
 	}
 	if !strings.Contains(gm.WorktreeBranch, "ralph-cdr3") {
 		t.Errorf("branch %q should contain task ID ralph-cdr3", gm.WorktreeBranch)

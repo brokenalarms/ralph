@@ -409,13 +409,17 @@ func (m *Manager) PrepareForNextTask(nextTaskID string) {
 	}
 
 	newBranch := WipBranchName()
-	if m.WorktreeBranch == newBranch {
+	oldBranch := m.WorktreeBranch
+	if oldBranch == newBranch {
 		return
 	}
 	if err := m.gitCmdErr(m.WorkDir, "checkout", "-B", newBranch); err == nil {
 		m.WorktreeBranch = newBranch
 		if m.State != nil {
 			_ = m.State.Write("worktree_branch", newBranch)
+		}
+		if err := m.gitCmdErr(m.ProjectDir, "branch", "-D", oldBranch); err == nil {
+			m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Deleted local branch %s", oldBranch)
 		}
 	}
 }

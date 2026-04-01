@@ -118,7 +118,7 @@ func TestIntegration_HappyPath_SignalVerifyPushMergeClose(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        dir,
-		WorktreeBranch: "ralph/wip",
+		WorktreeBranch: "ralph/next",
 		RemoteURLValue: "https://github.com/owner/repo.git",
 		GitHubStub:     &git.StubGitHub{IsAvailable: true, PRBase: "main"},
 	}
@@ -230,7 +230,7 @@ func TestIntegration_ResumeViaPR_Merged(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        dir,
-		WorktreeBranch: "ralph/wip",
+		WorktreeBranch: "ralph/next",
 		RemoteURLValue: "https://github.com/owner/repo.git",
 		GitHubStub:     ghStub,
 	}
@@ -309,7 +309,7 @@ func TestIntegration_ResumeViaPR_OpenAutoMerge(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir:          dir,
 		WorkDir:             dir,
-		WorktreeBranch:      "ralph/wip",
+		WorktreeBranch:      "ralph/next",
 		RemoteURLValue:      "https://github.com/owner/repo.git",
 		GitHubStub:          ghStub,
 		RemoteBranchCommits: true,
@@ -378,7 +378,7 @@ func TestIntegration_ResumeViaPR_Closed(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        dir,
-		WorktreeBranch: "ralph/wip",
+		WorktreeBranch: "ralph/next",
 		RemoteURLValue: "https://github.com/owner/repo.git",
 		GitHubStub:     ghStub,
 	}
@@ -520,7 +520,7 @@ func TestIntegration_CIFailureThenFixThenMerge(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        dir,
-		WorktreeBranch: "ralph/wip",
+		WorktreeBranch: "ralph/next",
 		RemoteURLValue: "https://github.com/owner/repo.git",
 		GitHubStub:     &git.StubGitHub{IsAvailable: true, PRBase: "main"},
 	}
@@ -656,7 +656,7 @@ func TestIntegration_ExternalRefFormat(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        dir,
-		WorktreeBranch: "ralph/wip",
+		WorktreeBranch: "ralph/next",
 		RemoteURLValue: "https://github.com/owner/repo.git",
 		GitHubStub: &git.StubGitHub{
 			IsAvailable: true,
@@ -740,7 +740,7 @@ func TestIntegration_PushCalledOnSignal(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        dir,
-		WorktreeBranch: "ralph/wip",
+		WorktreeBranch: "ralph/next",
 	}
 
 	pushCalled := false
@@ -1001,7 +1001,7 @@ func TestIntegration_ResolveByPRState_AllStates(t *testing.T) {
 			gm := &testutil.StubGit{
 				ProjectDir:          dir,
 				WorkDir:             dir,
-				WorktreeBranch:      "ralph/wip",
+				WorktreeBranch:      "ralph/next",
 				RemoteURLValue:      "https://github.com/owner/repo.git",
 				GitHubStub:          ghStub,
 				RemoteBranchCommits: true,
@@ -1059,7 +1059,7 @@ func TestIntegration_TwoTasksCompleteSequentially(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        dir,
-		WorktreeBranch: "ralph/wip",
+		WorktreeBranch: "ralph/next",
 	}
 
 	runner := &stubRunner{
@@ -1201,7 +1201,7 @@ func TestIntegration_MergeConflictThenRetrySucceeds(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        dir,
-		WorktreeBranch: "ralph/wip",
+		WorktreeBranch: "ralph/next",
 		RemoteURLValue: "https://github.com/owner/repo.git",
 		GitHubStub:     &git.StubGitHub{IsAvailable: true, PRBase: "main"},
 	}
@@ -1539,7 +1539,7 @@ func TestIntegration_EvolveExitsAfterMerge(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        dir,
-		WorktreeBranch: "ralph/wip",
+		WorktreeBranch: "ralph/next",
 		RemoteURLValue: "https://github.com/owner/repo.git",
 		GitHubStub:     &git.StubGitHub{IsAvailable: true, PRBase: "main"},
 	}
@@ -1672,7 +1672,7 @@ func TestIntegration_DependencyBlockedTaskIsSkipped(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        dir,
-		WorktreeBranch: "ralph/wip",
+		WorktreeBranch: "ralph/next",
 		RemoteURLValue: "https://github.com/owner/repo.git",
 		GitHubStub:     &git.StubGitHub{IsAvailable: true, PRBase: "main"},
 	}

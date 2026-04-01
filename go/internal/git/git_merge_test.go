@@ -2099,3 +2099,23 @@ func TestAutoMergeCurrentBranch_InfraBypassAdminFallbackOn405(t *testing.T) {
 		t.Error("expected MergeOpts.Admin=true for infra bypass path")
 	}
 }
+
+// FlushUnpushedWork on the placeholder branch does not attempt push or PR
+// creation — there is no task work to flush.
+func TestFlushUnpushedWork_SkipsOnPlaceholderBranch(t *testing.T) {
+	dir := t.TempDir()
+	runner := newStubRunner()
+	mgr := stubManager(dir, runner, nil)
+	mgr.WorktreeBranch = WipBranchName()
+
+	merged, err := mgr.FlushUnpushedWork(context.Background(), "ralph-test", "test task", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if merged {
+		t.Error("FlushUnpushedWork on placeholder branch should return merged=false")
+	}
+	if runner.CalledWith("push") {
+		t.Error("FlushUnpushedWork on placeholder branch must not attempt git push")
+	}
+}

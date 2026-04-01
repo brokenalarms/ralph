@@ -38,9 +38,9 @@ func BranchName(beadID, slug string) string {
 	return normalizeBranch(slug)
 }
 
-// WipBranchName returns the placeholder branch used before a task is assigned.
+// WipBranchName returns the placeholder branch used between tasks.
 func WipBranchName() string {
-	return normalizeBranch("wip")
+	return normalizeBranch("next")
 }
 
 // BranchListPattern returns the glob pattern for listing ralph branches.

@@ -831,6 +831,9 @@ func (m *Manager) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool
 // FlushUnpushedWork pushes any unpushed commits and optionally merges
 // the PR. This is the safety net called before exiting or entering wait mode.
 func (m *Manager) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, autoMerge bool) (merged bool, err error) {
+	if m.WorktreeBranch == WipBranchName() {
+		return false, nil
+	}
 	if _, pushErr := m.PushAndCreatePR(ctx, taskID, taskDesc, ""); pushErr != nil {
 		return false, pushErr
 	}
@@ -847,9 +850,9 @@ func (m *Manager) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string
 	return merged, nil
 }
 
-// PostMergeUpdateMain fetches and fast-forwards local main in the project
-// directory after a PR is merged. Does NOT touch the worktree — the next
-// task commits on top of the current HEAD.
+// PostMergeUpdateMain fetches and fast-forwards local main after a PR is
+// merged, then moves the worktree to the placeholder branch and deletes
+// the stale task branch.
 func (m *Manager) PostMergeUpdateMain() {
 	defaultBranch := m.detectDefaultBranch()
 	m.gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
@@ -862,31 +865,8 @@ func (m *Manager) PostMergeUpdateMain() {
 		m.gitCmd(m.WorkDir, "rebase", "--abort")
 		m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Post-merge rebase failed — resetting worktree to origin/%s", defaultBranch)
 		m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+defaultBranch)
-		m.BranchRenamed = false
-		if m.State != nil {
-			_ = m.State.Write("branch_renamed", "false")
-		}
 	}
 
-	// Delete the stale local task branch. The squash-merge already deleted the
-	// remote branch; this removes the local ref so branches don't accumulate.
-	if m.WorktreeBranch != "" && m.WorktreeBranch != WipBranchName() {
-		oldBranch := m.WorktreeBranch
-		currentBranch := m.gitOutput(m.WorkDir, "symbolic-ref", "--short", "HEAD")
-		if currentBranch == oldBranch {
-			// Worktree is checked out on the branch we're about to delete.
-			// Move to ralph/next so git allows the deletion.
-			nextBranch := normalizeBranch("next")
-			m.gitCmd(m.WorkDir, "checkout", "-b", nextBranch)
-			m.WorktreeBranch = nextBranch
-			m.BranchRenamed = false
-			if m.State != nil {
-				_ = m.State.Write("worktree_branch", nextBranch)
-				_ = m.State.Write("branch_renamed", "false")
-			}
-		}
-		if err := m.gitCmdErr(m.ProjectDir, "branch", "-D", oldBranch); err == nil {
-			m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Deleted local branch %s", oldBranch)
-		}
-	}
+	// Move worktree to placeholder branch and delete the stale task branch.
+	m.PrepareForNextTask("")
 }
