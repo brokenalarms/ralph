@@ -87,7 +87,6 @@ type Loop struct {
 	isOnlineFunc       func() bool
 	waitForInternetFunc func(ctx context.Context, logger *logging.Logger) bool
 	onWaitFunc         func() // called when the loop enters waitForTasks (test hook)
-	lastAction         analyzer.Action
 	lastTaskMerged     bool
 	sessionTasks       []CompletedTask
 }
@@ -167,8 +166,16 @@ func (l *Loop) Run(ctx context.Context) error {
 	}
 
 	var runIteration int
+	var lastAction analyzer.Action
 	st, _ := l.state.Load()
 	iteration := st.Iteration
+
+	wtParams := waitForTasksParams{
+		logger:     l.logger,
+		state:      l.state,
+		backend:    l.cfg.TaskBackend,
+		onWaitFunc: l.onWaitFunc,
+	}
 
 	for {
 		// ── Task selection ──
@@ -184,7 +191,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			state:             l.state,
 			logger:            l.logger,
 			completedIDs:      completedIDs,
-			waitForTasks:      l.waitForTasks,
+			waitForTasks:      func(ctx context.Context) bool { return waitForTasks(ctx, wtParams) },
 			flushUnpushedWork: l.flushUnpushedWork,
 		})
 		if action == actionDone {
@@ -224,8 +231,16 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.cfg.OnIterationStart()
 		}
 
-		l.logIterationBanner(runIteration, l.state.ReadMaxIterations(l.cfg.MaxIterations), iteration, task)
-		l.beginIteration(task, iteration)
+		logIterationBanner(logIterationBannerParams{
+			backend: l.cfg.TaskBackend,
+			state:   l.state,
+			logger:  l.logger,
+			version: l.cfg.Version,
+		}, runIteration, l.state.ReadMaxIterations(l.cfg.MaxIterations), iteration, task, lastAction)
+		beginIteration(beginIterationParams{
+			state: l.state,
+			git:   l.git,
+		}, task, iteration)
 
 		// ── Resume check: does a PR already exist for this task? ──
 		if l.resumeViaPR(ctx, task.id, task.title) {
@@ -234,7 +249,9 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		// ── Run agent and handle outcome ──
-		action = l.runAndComplete(ctx, task, runIteration)
+		var iterAction analyzer.Action
+		action, iterAction = l.runAndComplete(ctx, task, runIteration)
+		lastAction = iterAction
 		if action == actionRetry {
 			continue
 		}

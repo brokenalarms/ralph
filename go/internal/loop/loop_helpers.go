@@ -95,81 +95,6 @@ func initWorktree(ctx context.Context, p initWorktreeParams) error {
 	return nil
 }
 
-func (l *Loop) waitForTasks(ctx context.Context) bool {
-	const waitPollInterval = 5 * time.Second
-	l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Waiting for new tasks (polling every %s)...", waitPollInterval)
-	l.state.Write("status", "waiting")
-	l.state.UpdateStreamTask("", "Waiting for tasks...", nil)
-	l.state.TouchPlanRefresh()
-	if l.onWaitFunc != nil {
-		l.onWaitFunc()
-	}
-
-	// Check immediately before waiting for the first tick.
-	if found, done := l.pollForTasks(); found || done {
-		return found
-	}
-
-	ticker := time.NewTicker(waitPollInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			l.state.Write("status", "stopped")
-			return false
-		case <-ticker.C:
-			if found, done := l.pollForTasks(); found || done {
-				return found
-			}
-		}
-	}
-}
-
-// pollForTasks checks once for new tasks. Returns (found=true, _) if tasks
-// are available, (false, done=true) if a stop condition was hit.
-func (l *Loop) pollForTasks() (found, done bool) {
-	if l.state.CheckStop() {
-		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Stop file detected - halting")
-		l.state.Write("status", "stopped")
-		return false, true
-	}
-	if skipped, err := l.state.GetSkippedTasks(); err == nil {
-		l.cfg.TaskBackend.SetSkippedIDs(skipped)
-	}
-	hasRemaining, err := l.cfg.TaskBackend.HasRemaining()
-	if err != nil {
-		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task check error during wait: %v", err)
-		return false, false
-	}
-	if hasRemaining {
-		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Success}, "New tasks detected!")
-		l.state.TouchPlanRefresh()
-		return true, false
-	}
-	return false, false
-}
-
-// beginIteration records that a task iteration is starting.
-func (l *Loop) beginIteration(task taskContext, iteration int) {
-	l.state.TouchPlanRefresh()
-	l.state.BeginIteration(task.id, task.title, iteration)
-	l.git.TagTaskStart(task.id)
-	l.state.UpdateStreamTask(task.id, task.title, task.info.Priority)
-}
-
-func (l *Loop) waitForRate(ctx context.Context) bool {
-	if l.limiter.Allowed() {
-		return true
-	}
-
-	l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Rate limit reached (%d/%d calls this hour)", l.limiter.Count(), l.cfg.CallsPerHour)
-
-	err := l.limiter.WaitForReset(ctx, func(secs int) {
-		l.logger.Emit(logging.Opts{Domain: logging.LLM}, "Rate limit: %ds until reset", secs)
-	})
-	return err == nil
-}
 
 func (l *Loop) analyzeIteration(rawLogPath string, logStart int, headBefore, headAfter, taskKey string) analyzer.Result {
 	iterLog := readLogFrom(rawLogPath, logStart)
@@ -198,7 +123,7 @@ func (l *Loop) analyzeIteration(rawLogPath string, logStart int, headBefore, hea
 // processRunOutcome logs the Claude result, analyzes the iteration, and
 // records attempts. Returns the diffStat (needed by signal handling) and
 // halt=true if the analyzer says to stop (caller should return nil).
-func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, runIteration int, prep iterationPrompt, taskID, nextTask string) (string, bool) {
+func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, runIteration int, prep iterationPrompt, taskID, nextTask string) (string, bool, analyzer.Action) {
 	if result.Summary != "" {
 		l.logger.Emit(logging.Opts{Domain: logging.LLM}, "Summary: %s", result.Summary)
 	}
@@ -221,8 +146,6 @@ func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, ru
 		analysisDesc = "continue"
 	}
 
-	l.lastAction = analysisResult.Action
-
 	switch analysisResult.Action {
 	case analyzer.Halt:
 		l.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Error}, "Halting: %s", analysisResult.Reason)
@@ -232,7 +155,7 @@ func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, ru
 		l.attempts.Record(taskID, nextTask, "Halted: "+analysisResult.Reason, diffStat, analysisResult.Detail)
 		l.state.Write("status", "halted_"+analysisResult.Reason)
 		l.git.TagTaskEnd(taskID)
-		return diffStat, true
+		return diffStat, true, analysisResult.Action
 	case analyzer.Warn:
 		l.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Warn}, "Analysis: %s", analysisResult.Reason)
 		l.attempts.Record(taskID, nextTask, summary, diffStat, "warn: "+analysisDesc)
@@ -242,30 +165,6 @@ func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, ru
 		}
 	}
 
-	return diffStat, false
+	return diffStat, false, analysisResult.Action
 }
 
-// logIterationBanner gathers context and delegates to the logger.
-func (l *Loop) logIterationBanner(runIteration, maxIter, iteration int, task taskContext) {
-	completed, _ := l.cfg.TaskBackend.CountCompleted()
-	total, _ := l.cfg.TaskBackend.CountTotal()
-
-	if runIteration > 1 {
-		l.logger.DashedSeparator(logging.Yellow)
-	}
-
-	l.logger.IterationBanner(logging.BannerOpts{
-		RunIteration: runIteration,
-		MaxIteration: maxIter,
-		Lifetime:     iteration,
-		Completed:    completed,
-		Total:        total,
-		TaskID:       task.id,
-		TaskTitle:    task.title,
-		TaskChanged:  task.changed,
-		Priority:     task.info.Priority,
-		Version:      l.cfg.Version,
-		WarnPhase:    l.lastAction == analyzer.Warn,
-		Description:  getBeadDescription(l.cfg.TaskBackend, task.id),
-	})
-}
