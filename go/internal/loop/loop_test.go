@@ -10,13 +10,17 @@ import (
 )
 
 type stubRunner struct {
-	onRun  func()
-	result claude.Result
+	onRun    func()
+	onRunCfg func(cfg claude.RunConfig)
+	result   claude.Result
 }
 
 func (s *stubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
 	if s.onRun != nil {
 		s.onRun()
+	}
+	if s.onRunCfg != nil {
+		s.onRunCfg(cfg)
 	}
 	return s.result, nil
 }
