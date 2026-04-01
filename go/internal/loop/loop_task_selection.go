@@ -106,8 +106,14 @@ func selectNextTaskInner(ctx context.Context, p selectNextTaskParams, attempts i
 		return selectNextTaskInner(ctx, p, attempts+1)
 	}
 
-	if lastID, _ := p.state.Read("last_task_id"); lastID != "" {
-		p.backend.SetResumeTaskID(lastID)
+	// Only resume to the last task when starting fresh (first iteration of
+	// this session). Mid-session, the agent exited without a completion
+	// signal, so forcing a resume to the same task causes back-to-back
+	// retries on the same ID. Let the backend pick by priority instead.
+	if p.runIteration == 0 {
+		if lastID, _ := p.state.Read("last_task_id"); lastID != "" {
+			p.backend.SetResumeTaskID(lastID)
+		}
 	}
 	taskInfo, _ := p.backend.GetNextTaskInfo()
 	taskID, nextTask := taskInfo.ID, taskInfo.Title

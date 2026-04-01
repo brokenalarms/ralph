@@ -167,3 +167,36 @@ func TestLoop_selectNextTask_DelegatesToPackageFunc(t *testing.T) {
 		t.Errorf("expected ralph-new, got %q", tc.id)
 	}
 }
+
+// selectNextTask calls SetResumeTaskID on the first iteration (runIteration==0)
+// so a fresh start or resume picks up where it left off.
+func TestSelectNextTask_SetResumeIDOnFirstIteration(t *testing.T) {
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-abc", NextTask: "Fix login"}
+	p, dir := newSelectionParams(t, backend)
+	p.runIteration = 0
+	p.state.Write("last_task_id", "ralph-abc")
+	_ = dir
+
+	selectNextTask(context.Background(), p)
+
+	if backend.ResumeIDSet != "ralph-abc" {
+		t.Errorf("expected SetResumeTaskID(ralph-abc) on first iteration, got %q", backend.ResumeIDSet)
+	}
+}
+
+// selectNextTask does NOT call SetResumeTaskID on subsequent iterations
+// (runIteration > 0) to prevent back-to-back retries on the same task after
+// a no-signal exit.
+func TestSelectNextTask_NoResumeIDOnSubsequentIterations(t *testing.T) {
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-abc", NextTask: "Fix login"}
+	p, dir := newSelectionParams(t, backend)
+	p.runIteration = 1
+	p.state.Write("last_task_id", "ralph-abc")
+	_ = dir
+
+	selectNextTask(context.Background(), p)
+
+	if backend.ResumeIDSet != "" {
+		t.Errorf("expected no SetResumeTaskID call on iteration > 0, got %q", backend.ResumeIDSet)
+	}
+}

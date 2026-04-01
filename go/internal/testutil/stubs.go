@@ -19,8 +19,9 @@ type StubBackend struct {
 	Description  string
 	Acceptance   string
 	FullContext   string
-	SkippedTask  string
-	SkipReason   string
+	SkippedTask   string
+	SkipReason    string
+	ResumeIDSet   string // last value passed to SetResumeTaskID
 }
 
 func (s *StubBackend) Init() error                    { return nil }
@@ -40,8 +41,10 @@ func (s *StubBackend) SkipTask(id, reason string) error {
 	s.SkipReason = reason
 	return nil
 }
-func (s *StubBackend) SetSkippedIDs(_ []string)                   {}
-func (s *StubBackend) SetResumeTaskID(_ string)                   {}
+func (s *StubBackend) SetSkippedIDs(_ []string) {}
+func (s *StubBackend) SetResumeTaskID(id string) {
+	s.ResumeIDSet = id
+}
 func (s *StubBackend) ReopenTask(string) error                    { return nil }
 func (s *StubBackend) SetState(_, _, _, _ string) error           { return nil }
 func (s *StubBackend) GetState(_, _ string) (string, error)       { return "", nil }
