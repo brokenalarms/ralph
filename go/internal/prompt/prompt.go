@@ -63,8 +63,12 @@ func BuildPrompt(v Vars) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	beadCreation, err := readTemplate(v.PromptsDir, "bead-creation.md")
+	if err != nil {
+		return "", err
+	}
 
-	result := shared + "\n" + internal + "\n" + reflection + "\n" + signal + "\n" + feedback
+	result := shared + "\n" + internal + "\n" + reflection + "\n" + signal + "\n" + feedback + "\n" + beadCreation
 
 	taskInstructions, err := executionInstructions(v)
 	if err != nil {

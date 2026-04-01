@@ -118,11 +118,13 @@ Never show the raw bd command — only the echo-back.
 
 ### Updating beads
 
-Before updating or commenting on any bead, check its status:
+Before any `bd update`, run `bd show <id>` to verify the bead is not
+closed. `bd update` on a closed bead silently succeeds — there is no error
+to catch. You must check status explicitly before every update.
 
-- **Closed** → never reopen closed beads. Create a new bead and reference
-  the original. This applies whether the fix was wrong, incomplete, or
-  follow-on work is needed.
+- **Closed** → never update or reopen closed beads. Create a new bead and
+  reference the original. This applies whether the fix was wrong,
+  incomplete, or follow-on work is needed.
 - **in_progress** → ask the user for confirmation before modifying. Do not
   silently change tasks that the ralph loop is actively working on.
 - **Open** → modify freely.
