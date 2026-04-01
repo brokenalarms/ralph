@@ -20,6 +20,12 @@ type StateStore interface {
 // Log is the logging interface used by Manager.
 type Log interface {
 	Emit(o logging.Opts, format string, args ...any)
+	// EmitInPlace writes a message using carriage return, overwriting the
+	// current terminal line without advancing. Does not write to the log file.
+	EmitInPlace(o logging.Opts, format string, args ...any)
+	// EmitFinalInPlace finalizes an in-place line: advances the terminal line
+	// and writes the final state to the log file.
+	EmitFinalInPlace(o logging.Opts, format string, args ...any)
 }
 
 // Manager handles git worktree creation, branch naming, and sync.

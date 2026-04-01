@@ -35,10 +35,11 @@ func (s *memState) Write(key, value string) error {
 
 // testLog captures log output for assertion.
 type testLog struct {
-	messages []string
+	messages     []string
+	lastInPlace  string
 }
 
-func (l *testLog) Emit(o logging.Opts, format string, args ...any) {
+func (l *testLog) format(o logging.Opts, format string, args ...any) string {
 	msg := fmt.Sprintf(format, args...)
 	if o.Link != nil {
 		msg += " " + o.Link.URL + " " + o.Link.Text
@@ -48,12 +49,27 @@ func (l *testLog) Emit(o logging.Opts, format string, args ...any) {
 	}
 	switch o.Level {
 	case logging.Warn:
-		l.messages = append(l.messages, "WARN: "+msg)
+		return "WARN: " + msg
 	case logging.Error:
-		l.messages = append(l.messages, "ERROR: "+msg)
+		return "ERROR: " + msg
 	default:
-		l.messages = append(l.messages, msg)
+		return msg
 	}
+}
+
+func (l *testLog) Emit(o logging.Opts, format string, args ...any) {
+	l.messages = append(l.messages, l.format(o, format, args...))
+}
+
+// EmitInPlace records the latest in-place message without appending to messages.
+func (l *testLog) EmitInPlace(o logging.Opts, format string, args ...any) {
+	l.lastInPlace = l.format(o, format, args...)
+}
+
+// EmitFinalInPlace commits the final in-place message to messages.
+func (l *testLog) EmitFinalInPlace(o logging.Opts, format string, args ...any) {
+	l.messages = append(l.messages, l.format(o, format, args...))
+	l.lastInPlace = ""
 }
 
 func (l *testLog) contains(substr string) bool {

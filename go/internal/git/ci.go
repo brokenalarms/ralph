@@ -218,12 +218,11 @@ func (m *Manager) awaitHeadSHA(ctx context.Context, gh GitHub, prNumber, nwo, ex
 
 // waitForCI polls PR checks until they complete or timeout is reached.
 // Uses exponential backoff starting at interval, doubling each poll up to
-// MaxCIPollInterval. Emits a progress log line after each pending poll showing
-// elapsed time and check status, then a summary line with all poll durations
-// on completion.
+// MaxCIPollInterval. Emits a single in-place log line that grows as polls
+// accumulate (e.g. "CI polled 1s..2s..4s"), finalizing it to the log file
+// on completion. Emits nothing when CI resolves on the first fetch.
 func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL, nwo string, interval, timeout time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
 	deadline := time.Now().Add(timeout)
-	start := time.Now()
 	prLink := logging.PRLinkOpt(nwo, prNumber)
 
 	var done <-chan struct{}
@@ -234,9 +233,9 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL, nwo st
 	currentInterval := interval
 	var pollDurations []string
 
-	emitSummary := func() {
+	finalize := func() {
 		if len(pollDurations) > 0 {
-			log.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "CI polled %s", strings.Join(pollDurations, ".."))
+			log.EmitFinalInPlace(logging.Opts{Domain: logging.CI, Link: prLink}, "CI polled %s", strings.Join(pollDurations, ".."))
 		}
 	}
 
@@ -244,11 +243,14 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL, nwo st
 		checks, err := fetch(prNumber, repoURL)
 		if err != nil {
 			if time.Now().After(deadline) {
+				finalize()
 				return nil, CIPending, fmt.Errorf("CI checks not available within %v: %w", timeout, err)
 			}
 			pollDurations = append(pollDurations, formatDuration(currentInterval))
+			log.EmitInPlace(logging.Opts{Domain: logging.CI, Link: prLink}, "CI polled %s", strings.Join(pollDurations, ".."))
 			select {
 			case <-done:
+				finalize()
 				return nil, CIPending, fmt.Errorf("interrupted")
 			case <-ciSleep(currentInterval):
 			}
@@ -259,42 +261,28 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL, nwo st
 		status := evaluateChecks(checks)
 		switch status {
 		case CIPassed:
-			emitSummary()
+			finalize()
 			return checks, CIPassed, nil
 		case CIFailed:
-			emitSummary()
+			finalize()
 			return checks, CIFailed, nil
 		}
 
-		// Pending: emit real-time progress line before sleeping.
-		pending := countPending(checks)
-		elapsed := time.Since(start).Round(time.Second)
-		log.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "CI pending — %d/%d checks running (%s elapsed)", pending, len(checks), elapsed)
-
 		if time.Now().After(deadline) {
-			emitSummary()
+			finalize()
 			return checks, CIPending, fmt.Errorf("CI checks did not complete within %v", timeout)
 		}
 
 		pollDurations = append(pollDurations, formatDuration(currentInterval))
+		log.EmitInPlace(logging.Opts{Domain: logging.CI, Link: prLink}, "CI polled %s", strings.Join(pollDurations, ".."))
 		select {
 		case <-done:
+			finalize()
 			return nil, CIPending, fmt.Errorf("interrupted")
 		case <-ciSleep(currentInterval):
 		}
 		currentInterval = nextBackoff(currentInterval)
 	}
-}
-
-// countPending returns the number of checks that have not yet resolved.
-func countPending(checks []CICheckResult) int {
-	n := 0
-	for _, c := range checks {
-		if c.Bucket == "pending" || c.State == "PENDING" || c.State == "IN_PROGRESS" {
-			n++
-		}
-	}
-	return n
 }
 
 // nextBackoff doubles the interval, capping at MaxCIPollInterval.

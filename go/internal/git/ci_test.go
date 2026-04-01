@@ -288,9 +288,11 @@ func TestWaitForCI_BackoffDoubles(t *testing.T) {
 	}
 }
 
-// waitForCI emits a real-time log line per pending poll showing elapsed time and
-// check status, plus a summary line with accumulated durations on completion.
-func TestWaitForCI_LogsProgressPerPoll(t *testing.T) {
+// waitForCI emits exactly one log line for the entire polling duration.
+// The line is updated in-place as durations accumulate, and only the final
+// state is written to the log (via EmitFinalInPlace). N pending polls produce
+// exactly one "CI polled" entry in the log, not N+1 lines.
+func TestWaitForCI_SingleLogLine(t *testing.T) {
 	origSleep := ciSleep
 	ciSleep = func(d time.Duration) <-chan time.Time {
 		ch := make(chan time.Time, 1)
@@ -314,25 +316,32 @@ func TestWaitForCI_LogsProgressPerPoll(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// 3 pending polls each emit a progress line, then 1 summary line on completion.
-	// Total: 4 log messages.
-	if len(log.messages) != 4 {
-		t.Fatalf("expected 4 log messages (3 progress + 1 summary), got %d: %v", len(log.messages), log.messages)
+	// 3 pending polls produce exactly one final "CI polled" line in the log.
+	if len(log.messages) != 1 {
+		t.Fatalf("expected exactly 1 log message, got %d: %v", len(log.messages), log.messages)
+	}
+	if !strings.Contains(log.messages[0], "polled 1s..2s..4s") {
+		t.Errorf("expected polling summary with backoff schedule, got: %s", log.messages[0])
+	}
+}
+
+// waitForCI emits no log line when CI resolves on the first fetch
+// without any polling being needed.
+func TestWaitForCI_NoLogLineWhenResolvedImmediately(t *testing.T) {
+	fetch := func(pr, repo string) ([]CICheckResult, error) {
+		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
 
-	// Each of the first 3 lines shows pending state with elapsed time.
-	for i := 0; i < 3; i++ {
-		if !strings.Contains(log.messages[i], "pending") {
-			t.Errorf("progress line %d missing 'pending': %s", i, log.messages[i])
-		}
-		if !strings.Contains(log.messages[i], "elapsed") {
-			t.Errorf("progress line %d missing elapsed time: %s", i, log.messages[i])
-		}
+	log := &testLog{}
+	_, status, err := waitForCI(context.Background(), fetch, "42", "", "", 1*time.Second, 5*time.Minute, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-
-	// Last line is the summary with accumulated poll durations.
-	if !strings.Contains(log.messages[3], "polled 1s..2s..4s") {
-		t.Errorf("expected polling summary with backoff schedule, got: %s", log.messages[3])
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+	if len(log.messages) != 0 {
+		t.Fatalf("expected no log messages when resolved immediately, got %d: %v", len(log.messages), log.messages)
 	}
 }
 
