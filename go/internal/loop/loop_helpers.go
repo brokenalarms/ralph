@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/analyzer"
+	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -96,21 +97,27 @@ func initWorktree(ctx context.Context, p initWorktreeParams) error {
 }
 
 
-func (l *Loop) analyzeIteration(rawLogPath string, logStart int, headBefore, headAfter, taskKey string) analyzer.Result {
+type analyzeIterationParams struct {
+	git      git.GitOps
+	analyzer *analyzer.Analyzer
+	signals  claude.SignalPaths
+}
+
+func analyzeIteration(p analyzeIterationParams, rawLogPath string, logStart int, headBefore, headAfter, taskKey string) analyzer.Result {
 	iterLog := readLogFrom(rawLogPath, logStart)
-	hasDiff := l.git.HasDiff()
+	hasDiff := p.git.HasDiff()
 	newCommits := headBefore != "" && headAfter != "" && headBefore != headAfter
-	changedFiles := l.git.ChangedFiles(headBefore, headAfter)
+	changedFiles := p.git.ChangedFiles(headBefore, headAfter)
 
 	hasSignal := false
-	if _, err := os.Stat(l.signals.Complete); err == nil {
+	if _, err := os.Stat(p.signals.Complete); err == nil {
 		hasSignal = true
 	}
-	if _, err := os.Stat(l.signals.AllComplete); err == nil {
+	if _, err := os.Stat(p.signals.AllComplete); err == nil {
 		hasSignal = true
 	}
 
-	return l.analyzer.Analyze(analyzer.IterationState{
+	return p.analyzer.Analyze(analyzer.IterationState{
 		HasDiff:      hasDiff,
 		NewCommits:   newCommits,
 		HasSignal:    hasSignal,
@@ -120,22 +127,36 @@ func (l *Loop) analyzeIteration(rawLogPath string, logStart int, headBefore, hea
 	})
 }
 
+type processRunOutcomeParams struct {
+	backend  tasks.Backend
+	git      git.GitOps
+	logger   *logging.Logger
+	state    *state.Store
+	attempts *attempts.Tracker
+	analyzer *analyzer.Analyzer
+	signals  claude.SignalPaths
+}
+
 // processRunOutcome logs the Claude result, analyzes the iteration, and
 // records attempts. Returns the diffStat (needed by signal handling) and
 // halt=true if the analyzer says to stop (caller should return nil).
-func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, runIteration int, prep iterationPrompt, taskID, nextTask string) (string, bool, analyzer.Action) {
+func processRunOutcome(p processRunOutcomeParams, result claude.Result, elapsed time.Duration, runIteration int, prep iterationPrompt, taskID, nextTask string) (string, bool, analyzer.Action) {
 	if result.Summary != "" {
-		l.logger.Emit(logging.Opts{Domain: logging.LLM}, "Summary: %s", result.Summary)
+		p.logger.Emit(logging.Opts{Domain: logging.LLM}, "Summary: %s", result.Summary)
 	}
 
-	completed, _ := l.cfg.TaskBackend.CountCompleted()
-	total, _ := l.cfg.TaskBackend.CountTotal()
-	l.logger.Emit(logging.Opts{}, "Run iteration %d complete (%dm%ds). %d/%d tasks done.",
+	completed, _ := p.backend.CountCompleted()
+	total, _ := p.backend.CountTotal()
+	p.logger.Emit(logging.Opts{}, "Run iteration %d complete (%dm%ds). %d/%d tasks done.",
 		runIteration, int(elapsed.Minutes()), int(elapsed.Seconds())%60, completed, total)
 
-	headAfter := l.git.HeadRev()
-	diffStat := l.git.DiffStatRange(prep.headBefore, headAfter)
-	analysisResult := l.analyzeIteration(prep.rawLogPath, prep.logStart, prep.headBefore, headAfter, taskID)
+	headAfter := p.git.HeadRev()
+	diffStat := p.git.DiffStatRange(prep.headBefore, headAfter)
+	analysisResult := analyzeIteration(analyzeIterationParams{
+		git:      p.git,
+		analyzer: p.analyzer,
+		signals:  p.signals,
+	}, prep.rawLogPath, prep.logStart, prep.headBefore, headAfter, taskID)
 
 	summary := result.Summary
 	if summary == "" {
@@ -148,20 +169,20 @@ func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, ru
 
 	switch analysisResult.Action {
 	case analyzer.Halt:
-		l.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Error}, "Halting: %s", analysisResult.Reason)
+		p.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Error}, "Halting: %s", analysisResult.Reason)
 		if analysisResult.Detail != "" {
-			l.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Error}, "  %s", analysisResult.Detail)
+			p.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Error}, "  %s", analysisResult.Detail)
 		}
-		l.attempts.Record(taskID, nextTask, "Halted: "+analysisResult.Reason, diffStat, analysisResult.Detail)
-		l.state.Write("status", "halted_"+analysisResult.Reason)
-		l.git.TagTaskEnd(taskID)
+		p.attempts.Record(taskID, nextTask, "Halted: "+analysisResult.Reason, diffStat, analysisResult.Detail)
+		p.state.Write("status", "halted_"+analysisResult.Reason)
+		p.git.TagTaskEnd(taskID)
 		return diffStat, true, analysisResult.Action
 	case analyzer.Warn:
-		l.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Warn}, "Analysis: %s", analysisResult.Reason)
-		l.attempts.Record(taskID, nextTask, summary, diffStat, "warn: "+analysisDesc)
+		p.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Warn}, "Analysis: %s", analysisResult.Reason)
+		p.attempts.Record(taskID, nextTask, summary, diffStat, "warn: "+analysisDesc)
 	default:
 		if !result.SignalDetected {
-			l.attempts.Record(taskID, nextTask, summary, diffStat, analysisDesc)
+			p.attempts.Record(taskID, nextTask, summary, diffStat, analysisDesc)
 		}
 	}
 
