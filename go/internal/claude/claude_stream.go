@@ -159,6 +159,7 @@ var VerboseOnlyTools = map[string]bool{
 	"Glob":       true,
 	"ToolSearch": true,
 	"TodoWrite":  true,
+	"TaskOutput": true,
 }
 
 // toolNameRe extracts the tool name from a bracketed tool line like "[Read] foo".
