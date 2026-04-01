@@ -569,6 +569,76 @@ func TestCompileCheck_NonGoProject(t *testing.T) {
 	}
 }
 
+// CompileCheck passes for a TypeScript project whose typecheck succeeds,
+// proving type-correct TS code clears the pre-push gate.
+func TestCompileCheck_TypeScriptPasses(t *testing.T) {
+	dir := t.TempDir()
+	binDir := t.TempDir()
+	os.WriteFile(filepath.Join(binDir, "tsc"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(`{}`), 0o644)
+
+	result := CompileCheck(context.Background(), dir)
+	if !result.Passed {
+		t.Errorf("expected TypeScript compile check to pass, got: %s\n%s", result.Reason, result.Details)
+	}
+}
+
+// CompileCheck fails for a TypeScript project with a type error, blocking
+// push before CI catches it (e.g. TS2552 missing import).
+func TestCompileCheck_TypeScriptFails(t *testing.T) {
+	dir := t.TempDir()
+	binDir := t.TempDir()
+	os.WriteFile(filepath.Join(binDir, "tsc"), []byte("#!/bin/sh\necho 'error TS2552: Cannot find name'\nexit 1\n"), 0o755)
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(`{}`), 0o644)
+
+	result := CompileCheck(context.Background(), dir)
+	if result.Passed {
+		t.Error("expected TypeScript compile check to fail for type error")
+	}
+	if !strings.Contains(result.Reason, "TypeScript") {
+		t.Errorf("expected TypeScript-related reason, got: %s", result.Reason)
+	}
+	if !strings.Contains(result.Details, "TS2552") {
+		t.Errorf("expected error detail in output, got: %s", result.Details)
+	}
+}
+
+// CompileCheck uses npm run typecheck when package.json has a typecheck script,
+// matching what CI runs instead of invoking tsc directly.
+func TestCompileCheck_TypeScriptNPMTypecheck(t *testing.T) {
+	dir := t.TempDir()
+	binDir := t.TempDir()
+	// Fake npm that exits 0 when called as "npm run typecheck"
+	os.WriteFile(filepath.Join(binDir, "npm"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(`{}`), 0o644)
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"typecheck":"tsc --noEmit"}}`), 0o644)
+
+	result := CompileCheck(context.Background(), dir)
+	if !result.Passed {
+		t.Errorf("expected npm run typecheck to pass, got: %s\n%s", result.Reason, result.Details)
+	}
+}
+
+// CompileCheck runs both Go and TypeScript checks when a project has both
+// go.mod and tsconfig.json, so neither language escapes compile verification.
+func TestCompileCheck_BothGoAndTypeScript(t *testing.T) {
+	dir := t.TempDir()
+	binDir := t.TempDir()
+	os.WriteFile(filepath.Join(binDir, "tsc"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(`{}`), 0o644)
+
+	result := CompileCheck(context.Background(), dir)
+	if !result.Passed {
+		t.Errorf("expected both checks to pass, got: %s\n%s", result.Reason, result.Details)
+	}
+}
+
 // findGoModDir locates go.mod in the given directory, a go/ subdirectory,
 // or a parent directory — proving ralph's nested layout is handled.
 func TestFindGoModDir(t *testing.T) {
