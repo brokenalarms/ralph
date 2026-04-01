@@ -490,6 +490,31 @@ func TestPRLink_NoNWO(t *testing.T) {
 	}
 }
 
+// PRLinkOpt returns a *Link with Text "PR #N" and the GitHub URL, for use
+// in Opts.Link without inline struct construction at each call site.
+func TestPRLinkOpt(t *testing.T) {
+	link := PRLinkOpt("alice/repo", "42")
+	if link == nil {
+		t.Fatal("PRLinkOpt should return non-nil for valid inputs")
+	}
+	if link.Text != "PR #42" {
+		t.Errorf("PRLinkOpt Text = %q, want %q", link.Text, "PR #42")
+	}
+	if link.URL != "https://github.com/alice/repo/pull/42" {
+		t.Errorf("PRLinkOpt URL = %q, want %q", link.URL, "https://github.com/alice/repo/pull/42")
+	}
+}
+
+// PRLinkOpt returns nil when either argument is empty.
+func TestPRLinkOpt_EmptyArgs(t *testing.T) {
+	if PRLinkOpt("", "42") != nil {
+		t.Error("PRLinkOpt with empty nwo should return nil")
+	}
+	if PRLinkOpt("alice/repo", "") != nil {
+		t.Error("PRLinkOpt with empty prNumber should return nil")
+	}
+}
+
 // Error log with Analyzer domain emits [o][analyzer] tag so operator can
 // distinguish analyzer-triggered halts from other error sources.
 func TestErrorWithAnalyzerDomain(t *testing.T) {

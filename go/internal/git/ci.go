@@ -172,7 +172,7 @@ func (m *Manager) AwaitCI(ctx context.Context, prNumber, repoURL, expectedSHA st
 	fetch := gh.ListChecks
 	checks, fetchErr := fetch(prNumber, repoURL)
 	if fetchErr != nil || len(checks) == 0 {
-		m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: &logging.Link{Text: "PR #" + prNumber, URL: "https://github.com/" + nwo + "/pull/" + prNumber}}, "CI checks not available yet — waiting...")
+		m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "CI checks not available yet — waiting...")
 		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
 	}
 	status := evaluateChecks(checks)
@@ -189,7 +189,7 @@ var awaitHeadSHAProgressInterval = 10 * time.Second
 
 // awaitHeadSHA polls until the PR HEAD SHA matches expectedSHA.
 func (m *Manager) awaitHeadSHA(ctx context.Context, gh GitHub, prNumber, nwo, expectedSHA string) error {
-	prLink := &logging.Link{Text: "PR #" + prNumber, URL: "https://github.com/" + nwo + "/pull/" + prNumber}
+	prLink := logging.PRLinkOpt(nwo, prNumber)
 	m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "Waiting for HEAD to reach %s...", expectedSHA[:min(7, len(expectedSHA))])
 	deadline := time.Now().Add(DefaultCIPollTimeout)
 	start := time.Now()
@@ -251,19 +251,19 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL, nwo st
 		switch status {
 		case CIPassed:
 			if len(pollDurations) > 0 {
-				log.Emit(logging.Opts{Domain: logging.CI, Link: &logging.Link{Text: "PR #" + prNumber, URL: "https://github.com/" + nwo + "/pull/" + prNumber}}, "CI polled %s", strings.Join(pollDurations, ".."))
+				log.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "CI polled %s", strings.Join(pollDurations, ".."))
 			}
 			return checks, CIPassed, nil
 		case CIFailed:
 			if len(pollDurations) > 0 {
-				log.Emit(logging.Opts{Domain: logging.CI, Link: &logging.Link{Text: "PR #" + prNumber, URL: "https://github.com/" + nwo + "/pull/" + prNumber}}, "CI polled %s", strings.Join(pollDurations, ".."))
+				log.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "CI polled %s", strings.Join(pollDurations, ".."))
 			}
 			return checks, CIFailed, nil
 		}
 
 		if time.Now().After(deadline) {
 			if len(pollDurations) > 0 {
-				log.Emit(logging.Opts{Domain: logging.CI, Link: &logging.Link{Text: "PR #" + prNumber, URL: "https://github.com/" + nwo + "/pull/" + prNumber}}, "CI polled %s", strings.Join(pollDurations, ".."))
+				log.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "CI polled %s", strings.Join(pollDurations, ".."))
 			}
 			return checks, CIPending, fmt.Errorf("CI checks did not complete within %v", timeout)
 		}

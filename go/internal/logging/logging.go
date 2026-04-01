@@ -28,6 +28,18 @@ func PRLink(nwo, prNumber string) string {
 	return Hyperlink(url, "PR #"+prNumber)
 }
 
+// PRLinkOpt returns a *Link for use in Opts.Link, pointing to the GitHub
+// PR URL. If either argument is empty, returns nil.
+func PRLinkOpt(nwo, prNumber string) *Link {
+	if nwo == "" || prNumber == "" {
+		return nil
+	}
+	return &Link{
+		Text: "PR #" + prNumber,
+		URL:  fmt.Sprintf("https://github.com/%s/pull/%s", nwo, prNumber),
+	}
+}
+
 // ANSI color codes.
 const (
 	Red     = "\033[0;31m"

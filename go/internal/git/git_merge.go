@@ -104,7 +104,7 @@ func reopenClosedPR(gh GitHub, workDir, branch, nwo, repoURL, title, body string
 		return "", stateErr
 	}
 
-	prLink := &logging.Link{Text: "PR #" + number, URL: "https://github.com/" + nwo + "/pull/" + number}
+	prLink := logging.PRLinkOpt(nwo, number)
 
 	if err := gh.ReopenPR(number, repoURL); err != nil {
 		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "Failed to reopen: %v", err)
@@ -151,7 +151,7 @@ func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string,
 	// Existing PR — update and return.
 	prNumber, _ := gh.FindOpenPR(branch, remoteURL)
 	if prNumber != "" {
-		prLink := &logging.Link{Text: "PR #" + prNumber, URL: "https://github.com/" + nwo + "/pull/" + prNumber}
+		prLink := logging.PRLinkOpt(nwo, prNumber)
 		if opts.TaskID != "" {
 			if err := gh.EditPR(prNumber, remoteURL, title, opts.Body); err != nil {
 				opts.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "Failed to update: %v", err)
@@ -187,7 +187,7 @@ func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string,
 		// bypassing gh pr create's client-side checks.
 		if nwo != "" {
 			if apiPR, apiErr := gh.CreatePRViaAPI(nwo, createOpts); apiErr == nil && apiPR != "" {
-				opts.Logger.Emit(logging.Opts{Domain: logging.Git, Link: &logging.Link{Text: "PR #" + apiPR, URL: "https://github.com/" + nwo + "/pull/" + apiPR}}, "Created for %s (via API fallback)", branch)
+				opts.Logger.Emit(logging.Opts{Domain: logging.Git, Link: logging.PRLinkOpt(nwo, apiPR)}, "Created for %s (via API fallback)", branch)
 				return apiPR, nil
 			}
 		}
@@ -197,7 +197,7 @@ func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string,
 
 	newPR, _ := gh.FindOpenPR(branch, remoteURL)
 	if newPR != "" {
-		opts.Logger.Emit(logging.Opts{Domain: logging.Git, Link: &logging.Link{Text: "PR #" + newPR, URL: "https://github.com/" + nwo + "/pull/" + newPR}}, "Created for %s", branch)
+		opts.Logger.Emit(logging.Opts{Domain: logging.Git, Link: logging.PRLinkOpt(nwo, newPR)}, "Created for %s", branch)
 	} else {
 		opts.Logger.Emit(logging.Opts{Domain: logging.Git}, "Created PR for %s", branch)
 	}
@@ -386,7 +386,7 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 			return false, nil
 		}
 	}
-	prLink := &logging.Link{Text: "PR #" + prNumber, URL: "https://github.com/" + nwo + "/pull/" + prNumber}
+	prLink := logging.PRLinkOpt(nwo, prNumber)
 
 	defaultBranch := m.detectDefaultBranch()
 
@@ -452,7 +452,7 @@ func (m *Manager) resolveClosedPR(gh GitHub, repoURL string) (string, error) {
 	}
 
 	nwo := NWOFromRemote(repoURL)
-	prLink := &logging.Link{Text: "PR #" + number, URL: "https://github.com/" + nwo + "/pull/" + number}
+	prLink := logging.PRLinkOpt(nwo, number)
 
 	switch strings.ToUpper(state) {
 	case "MERGED":
@@ -470,7 +470,7 @@ func (m *Manager) resolveClosedPR(gh GitHub, repoURL string) (string, error) {
 				Dir:  m.WorkDir,
 			}
 			if apiPR, apiErr := gh.CreatePRViaAPI(nwo, opts); apiErr == nil && apiPR != "" {
-				m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: &logging.Link{Text: "PR #" + apiPR, URL: "https://github.com/" + nwo + "/pull/" + apiPR}}, "Created for %s (via API fallback)", m.WorktreeBranch)
+				m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: logging.PRLinkOpt(nwo, apiPR)}, "Created for %s (via API fallback)", m.WorktreeBranch)
 				return apiPR, nil
 			}
 			return "", nil
@@ -512,7 +512,7 @@ type ExecuteMergeOpts struct {
 // Manager.executeMerge delegates here.
 func executeMerge(ctx context.Context, gh GitHub, opts ExecuteMergeOpts, logger Log) (bool, error) {
 	nwo := NWOFromRemote(opts.RepoURL)
-	prLink := &logging.Link{Text: "PR #" + opts.PRNumber, URL: "https://github.com/" + nwo + "/pull/" + opts.PRNumber}
+	prLink := logging.PRLinkOpt(nwo, opts.PRNumber)
 	mergeOpts := opts.MergeOpts
 
 	if _, prTitle, _, titleErr := gh.FindPR(opts.WorktreeBranch, opts.WorkDir); titleErr == nil && prTitle != "" {
@@ -569,7 +569,7 @@ func executeMerge(ctx context.Context, gh GitHub, opts ExecuteMergeOpts, logger 
 // postMergeLog logs the merge completion.
 func postMergeLog(nwo, prNumber, defaultBranch string, logger Log) (bool, error) {
 	if logger != nil {
-		logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch, Link: &logging.Link{Text: "PR #" + prNumber, URL: "https://github.com/" + nwo + "/pull/" + prNumber}}, "merged")
+		logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch, Link: logging.PRLinkOpt(nwo, prNumber)}, "merged")
 	}
 	return true, nil
 }
