@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -608,6 +609,66 @@ func TestVerifier_ModelCap_FixAgent(t *testing.T) {
 	})
 	if capturedModel != verify.ModelSonnet {
 		t.Errorf("fix agent with ModelCap=sonnet: expected %s, got %s", verify.ModelSonnet, capturedModel)
+	}
+}
+
+// runTestsWithHeartbeat emits periodic [test] lines while RunTests is in
+// progress, so operators can confirm the loop is alive during long test suites.
+func TestVerifier_RunTestsWithHeartbeat_EmitsHeartbeat(t *testing.T) {
+	var logOut strings.Builder
+	logger := logging.NewWithWriter(&logOut)
+
+	orig := HeartbeatInterval
+	HeartbeatInterval = 10 * time.Millisecond
+	defer func() { HeartbeatInterval = orig }()
+
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.deps.Logger = logger
+		os.WriteFile(filepath.Join(v.cfg.VerifyDir, "Makefile"), []byte("test:\n\t@sleep 0.1\n"), 0o644)
+	})
+
+	result, elapsed := v.runTestsWithHeartbeat(context.Background(), v.cfg.VerifyDir)
+
+	if !result.Passed {
+		t.Fatalf("expected tests to pass, got: %s", result.Reason)
+	}
+	if !strings.Contains(logOut.String(), "Tests still running") {
+		t.Errorf("expected heartbeat lines in log output, got:\n%s", logOut.String())
+	}
+	if elapsed <= 0 {
+		t.Errorf("expected positive elapsed duration, got %s", elapsed)
+	}
+}
+
+// OnSignal includes elapsed duration in the final Tests passed/failed log line
+// so operators can see how long the test suite took without digging in logs.
+func TestVerifier_OnSignal_ElapsedInFinalLine(t *testing.T) {
+	var logOut strings.Builder
+	logger := logging.NewWithWriter(&logOut)
+
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.deps.Logger = logger
+		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+			return verify.Result{Passed: true, Reason: "looks good"}
+		}
+	})
+
+	v.OnSignal(signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    t.TempDir(),
+		rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID:     "test-elapsed",
+		nextTask:   "Elapsed test",
+	})
+
+	got := logOut.String()
+	if !strings.Contains(got, "Tests passed") {
+		t.Fatalf("expected 'Tests passed' in log, got:\n%s", got)
+	}
+	// The final Tests passed line must include an elapsed duration in parentheses.
+	if !strings.Contains(got, "(") || !strings.Contains(got, "s)") {
+		t.Errorf("expected elapsed duration in 'Tests passed' line, got:\n%s", got)
 	}
 }
 
