@@ -392,6 +392,9 @@ func (m *Manager) PrepareForNextTask() {
 		return
 	}
 
+	m.gitCmdErr(m.WorkDir, "checkout", ".")
+	m.gitCmdErr(m.WorkDir, "clean", "-fd", "--exclude=.ralph/")
+
 	newBranch := WipBranchName()
 	if m.WorktreeBranch == newBranch {
 		return
