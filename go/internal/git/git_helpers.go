@@ -73,6 +73,16 @@ func IsGitRepo(dir string) bool {
 	return gitCmdErr(dir, "rev-parse", "--git-dir") == nil
 }
 
+// RepoRoot returns the absolute path of the root of the git repository
+// containing dir. Returns an error if dir is not inside a git repository.
+func RepoRoot(dir string) (string, error) {
+	out, err := defaultRunner.Run(context.Background(), dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", fmt.Errorf("not a git repository: %s", dir)
+	}
+	return out, nil
+}
+
 func parseBranchList(out string) []string {
 	if out == "" {
 		return nil

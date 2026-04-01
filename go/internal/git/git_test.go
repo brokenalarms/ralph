@@ -1223,3 +1223,45 @@ func TestPruneOrphanedWorktrees_IgnoresFiles(t *testing.T) {
 	}
 }
 
+// RepoRoot called on the project root returns the project dir itself.
+func TestRepoRoot_ReturnsProjectRoot(t *testing.T) {
+	project, _ := initBareRepo(t)
+	want, _ := filepath.EvalSymlinks(project)
+
+	got, err := RepoRoot(project)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != want {
+		t.Errorf("RepoRoot = %q, want %q", got, want)
+	}
+}
+
+// RepoRoot called on a subdirectory resolves to the repo root, not the subdir.
+func TestRepoRoot_SubdirResolvesToRoot(t *testing.T) {
+	project, _ := initBareRepo(t)
+	want, _ := filepath.EvalSymlinks(project)
+	subdir := filepath.Join(project, "nested", "deep")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := RepoRoot(subdir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != want {
+		t.Errorf("RepoRoot = %q, want %q", got, want)
+	}
+}
+
+// RepoRoot returns an error when called outside any git repository.
+func TestRepoRoot_NonGitDirErrors(t *testing.T) {
+	tmp := t.TempDir()
+
+	_, err := RepoRoot(tmp)
+	if err == nil {
+		t.Fatal("expected error for non-git dir, got nil")
+	}
+}
+
