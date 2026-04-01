@@ -240,7 +240,7 @@ func TestBranchName(t *testing.T) {
 
 func TestWipBranchName(t *testing.T) {
 	got := WipBranchName()
-	want := "ralph/wip"
+	want := "ralph/next"
 	if got != want {
 		t.Errorf("WipBranchName = %q, want %q", got, want)
 	}
@@ -376,8 +376,8 @@ func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 		t.Errorf("state worktree_branch = %q, want %q", got, mgr.WorktreeBranch)
 	}
 
-	// Branch name must be exactly ralph/<projectName>/wip
-	wantBranch := "ralph/wip"
+	// Branch name must be exactly ralph/next (placeholder between tasks)
+	wantBranch := "ralph/next"
 	if mgr.WorktreeBranch != wantBranch {
 		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, wantBranch)
 	}
@@ -537,14 +537,14 @@ func TestPrepareForNextTask_CreatesFreshBranch(t *testing.T) {
 
 	mgr.RenameBranchForTask("first task", "ralph-aaa")
 	firstBranch := mgr.WorktreeBranch
-	if firstBranch == "ralph/wip" {
-		t.Fatal("branch should have been renamed from ralph/wip")
+	if firstBranch == "ralph/next" {
+		t.Fatal("branch should have been renamed from ralph/next")
 	}
 
 	mgr.PrepareForNextTask("ralph-bbb")
 
-	if mgr.WorktreeBranch != "ralph/wip" {
-		t.Errorf("after PrepareForNextTask, branch = %q, want ralph/wip", mgr.WorktreeBranch)
+	if mgr.WorktreeBranch != "ralph/next" {
+		t.Errorf("after PrepareForNextTask, branch = %q, want ralph/next", mgr.WorktreeBranch)
 	}
 	if mgr.BranchRenamed {
 		t.Error("BranchRenamed should be false after PrepareForNextTask")
@@ -554,8 +554,8 @@ func TestPrepareForNextTask_CreatesFreshBranch(t *testing.T) {
 	if mgr.WorktreeBranch == firstBranch {
 		t.Errorf("second task reused first task's branch %q", firstBranch)
 	}
-	if mgr.WorktreeBranch == "ralph/wip" {
-		t.Error("second task should have been renamed from ralph/wip")
+	if mgr.WorktreeBranch == "ralph/next" {
+		t.Error("second task should have been renamed from ralph/next")
 	}
 }
 
@@ -610,6 +610,45 @@ func TestPrepareForNextTask_DiscardsUncommittedChanges(t *testing.T) {
 	// Untracked file must be removed.
 	if _, err := os.Stat(untrackedFile); !os.IsNotExist(err) {
 		t.Error("untracked file should have been removed by PrepareForNextTask")
+	}
+}
+
+// PrepareForNextTask deletes the old task branch after moving to the
+// placeholder, so completed task branches don't accumulate locally.
+func TestPrepareForNextTask_DeletesOldBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	mgr := &Manager{
+		ProjectDir: project,
+		BaseBranch: "main",
+		RalphDir:   ralphDir,
+		State:      newMemState(),
+		Logger:     &testLog{},
+	}
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("task to clean up", "ralph-del1")
+	taskBranch := mgr.WorktreeBranch
+
+	// Commit so the task branch has history and can be deleted.
+	writeFile(t, mgr.WorkDir, "work.txt", "done\n")
+	run(t, "git", "-C", mgr.WorkDir, "add", "work.txt")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "task work")
+
+	mgr.PrepareForNextTask("ralph-next1")
+
+	// Worktree must be on the placeholder branch.
+	if mgr.WorktreeBranch != WipBranchName() {
+		t.Errorf("WorktreeBranch = %q, want %q", mgr.WorktreeBranch, WipBranchName())
+	}
+
+	// Old task branch must no longer exist.
+	branches := gitOutput(project, "branch", "--list")
+	if strings.Contains(branches, taskBranch) {
+		t.Errorf("old task branch %q should be deleted after PrepareForNextTask, still in: %s", taskBranch, branches)
 	}
 }
 
