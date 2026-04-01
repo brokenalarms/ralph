@@ -12,7 +12,7 @@ Autonomous [Claude Code](https://docs.anthropic.com/en/docs/claude-code) task or
 ralph task ~/myproject
 
 # Run the loop
-ralph loop --dir ~/myproject --auto-merge --evolve
+ralph loop --auto-merge --evolve
 ```
 
 ## How it works
@@ -59,38 +59,37 @@ ralph loop
 |---|---|
 | `ralph loop` | Autonomous executor — picks tasks, writes code, verifies, merges |
 | `ralph task` | Interactive triage session — create tasks, write specs, manage backlog |
-| `ralph command` | Full four-pane tmux layout: loop + task manager + stream filter + plan |
 | `ralph stop` | Halt after the current iteration |
 | `ralph feedback` | Append feedback to bead notes and restart the agent |
 | `ralph attach` | Attach to a running loop's tmux session |
 | `ralph review` | Post-mortem review of reflections, tests, and refactoring opportunities |
 | `ralph merge` | Rebase and merge a stacked PR chain bottom-up |
 
-Run `ralph task` to build up a backlog, then `ralph loop` to work through it. Or run `ralph command` to get both in a single tmux session with live log streaming.
+Run `ralph task` to build up a backlog, then `ralph loop` to work through it.
 
 ## Loop flags
 
 | Flag | Description | Default | Env var |
 |---|---|---|---|
-| `-d, --dir <path>` | Project directory | cwd | |
 | `-n, --max <N>` | Max iterations | 50 | `RALPH_MAX_ITERATIONS` |
 | `-p, --prompt <text>` | Prompt override | — | |
 | `-q, --quiet` | Suppress streaming output (log only) | — | |
 | `-v, --verbose` | Show all tool calls in stream log | — | |
 | `--calls-per-hour <N>` | Max Claude calls per hour | 80 | |
-| `--base-branch <name>` | Base branch for rebase/merge | main | `RALPH_BASE_BRANCH` |
+| `--base-branch <name>` | Base branch for rebase/merge | develop | `RALPH_BASE_BRANCH` |
 | `--auto-merge` | Squash-merge PRs after task completion | — | |
-| `--evolve` | Re-exec ralph between iterations to incorporate the latest version. Use with `--post-task` to rebuild before re-exec. | — | |
+| `--evolve` | Re-exec ralph after each merged task to incorporate the latest version. Requires `--auto-merge`. Use with `--post-task` to rebuild before re-exec. | — | |
 | `--post-task <script>` | Run a command after each task completes, before evolve re-exec. Receives `RALPH_TASK_ID`, `RALPH_PR_NUMBER`, and `RALPH_MERGED` env vars. | — | |
+| `--verify-build <script>` | Run external script before pre-iteration tests to check project-level build health | — | |
 | `--wait` | Keep running after all tasks complete, polling for new work | — | |
 | `--notify` | Send macOS notification on each task completion | — | |
-| `--tmux` | Run in tmux 3-pane layout | — | |
+| `--tmux` | Run in tmux 3-pane layout (status / output / plan) | — | |
 | `--idle-timeout <dur>` | Kill idle session after duration | 10m | `RALPH_IDLE_TIMEOUT` |
 | `--idle-timeout-progress <dur>` | Shorter idle timeout when progress detected | 5m | `RALPH_IDLE_TIMEOUT_PROGRESS` |
 | `--post-signal-timeout <dur>` | Timeout for post-signal operations | 15m | `RALPH_POST_SIGNAL_TIMEOUT` |
-| `--verify-level <level>` | Verification level for no-diff completions (`fire` or `hog`) | fire | |
-| `--verify-model <model>` | Model for LLM verification | claude-haiku-4-5 | |
-| `--verify-escalation-model <model>` | Model for verification escalation | claude-sonnet-4-5 | |
+| `--model <model>` | Model for loop agent | claude-sonnet-4-6 | |
+| `--verify-model <model>` | Model for LLM verification (first attempt) | claude-haiku-4-5-20251001 | |
+| `--verify-escalation-model <model>` | Model for verification escalation (subsequent attempts) | claude-sonnet-4-6 | |
 | `--refactor` | Enable LLM-based adaptive refactoring | — | |
 
 ## Architecture
@@ -138,7 +137,7 @@ With `--evolve`, ralph re-execs itself after each successful merge to pick up th
 ## Install
 
 Requirements:
-- [Go](https://go.dev/dl/) 1.22+
+- [Go](https://go.dev/dl/) 1.26+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 - Homebrew (for dependency installation)
 
@@ -181,7 +180,7 @@ Ralph stores all runtime state in `.ralph/` inside the project directory. Add it
 
 ## Tmux layout
 
-`ralph command` starts a tmux session with four panes:
+`ralph loop --tmux` starts a tmux session with three panes:
 
 ```
 ┌──────────────────┬──────────────────┐
@@ -189,13 +188,14 @@ Ralph stores all runtime state in `.ralph/` inside the project directory. Add it
 │   ralph loop     │  stream filter   │
 │   (orchestrator) │  (agent output)  │
 │                  │                  │
-├──────────────────┼──────────────────┤
-│                  │                  │
-│   ralph task     │  plan / state    │
-│   (triage)       │  (bd + status)   │
-│                  │                  │
-└──────────────────┴──────────────────┘
+├──────────────────┴──────────────────┤
+│                                     │
+│   plan / state watcher              │
+│                                     │
+└─────────────────────────────────────┘
 ```
+
+Use `ralph attach` to connect to a running loop's session from another terminal.
 
 ## License
 
