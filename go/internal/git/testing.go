@@ -47,6 +47,8 @@ type StubGitHub struct {
 	CreatePRViaAPIErr     error
 	CreatePRViaAPICalled  bool
 	JobStepCount          int
+	AllPRs                []PRInfo
+	AllPRsErr             error
 }
 
 func (s *StubGitHub) Available() bool { return s.IsAvailable }
@@ -156,4 +158,7 @@ func (s *StubGitHub) CreatePRViaAPI(nwo string, opts CreatePROpts) (string, erro
 }
 func (s *StubGitHub) GetJobStepCount(nwo, prNumber string) (int, error) {
 	return s.JobStepCount, nil
+}
+func (s *StubGitHub) ListAllPRs(workDir string) ([]PRInfo, error) {
+	return s.AllPRs, s.AllPRsErr
 }

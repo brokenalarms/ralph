@@ -58,6 +58,13 @@ func (m *Manager) run() Runner {
 	return defaultRunner
 }
 
+// GetRunner returns the injected Runner, or the package default if none is set.
+// Used by cmd/ralph functions that need to route git commands through the same
+// runner as the Manager for testability.
+func (m *Manager) GetRunner() Runner {
+	return m.run()
+}
+
 func (m *Manager) gitCmd(dir string, args ...string) {
 	m.run().Run(context.Background(), dir, args...)
 }

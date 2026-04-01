@@ -7,6 +7,14 @@ import (
 	"strings"
 )
 
+// PRInfo holds basic metadata about a GitHub pull request.
+type PRInfo struct {
+	Number int
+	Head   string
+	Base   string
+	State  string
+}
+
 // CreatePROpts configures a PR creation operation.
 type CreatePROpts struct {
 	Head string
@@ -61,6 +69,8 @@ type GitHub interface {
 	ReopenPR(prNumber, repoURL string) error
 	CreatePRViaAPI(nwo string, opts CreatePROpts) (prNumber string, err error)
 	GetJobStepCount(nwo, prNumber string) (int, error)
+	// ListAllPRs returns all PRs (open and closed) for chain-walking during stack merge.
+	ListAllPRs(workDir string) ([]PRInfo, error)
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -463,4 +473,28 @@ func (g *ghCLI) GetPRHeadSHA(workDir, prNumber string) (string, error) {
 		return "", fmt.Errorf("gh pr view failed: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+func (g *ghCLI) ListAllPRs(workDir string) ([]PRInfo, error) {
+	cmd := exec.Command("gh", "pr", "list", "--state", "all",
+		"--json", "number,headRefName,baseRefName,state", "--limit", "200")
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("gh pr list: %w", err)
+	}
+	var raw []struct {
+		Number int    `json:"number"`
+		Head   string `json:"headRefName"`
+		Base   string `json:"baseRefName"`
+		State  string `json:"state"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return nil, fmt.Errorf("parse PR list: %w", err)
+	}
+	prs := make([]PRInfo, len(raw))
+	for i, r := range raw {
+		prs[i] = PRInfo{Number: r.Number, Head: r.Head, Base: r.Base, State: r.State}
+	}
+	return prs, nil
 }
