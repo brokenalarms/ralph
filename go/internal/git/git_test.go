@@ -543,6 +543,60 @@ func TestPrepareForNextTask_CreatesFreshBranch(t *testing.T) {
 	}
 }
 
+// PrepareForNextTask discards uncommitted changes so dirty files from a
+// previous task don't carry over into the next task's branch.
+func TestPrepareForNextTask_DiscardsUncommittedChanges(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	mgr := &Manager{
+		ProjectDir: project,
+		BaseBranch: "main",
+		RalphDir:   ralphDir,
+		State:      newMemState(),
+		Logger:     &testLog{},
+	}
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("first task", "ralph-aaa")
+
+	// Simulate dirty state: tracked modification and untracked file.
+	trackedFile := filepath.Join(mgr.WorkDir, "tracked.txt")
+	if err := os.WriteFile(trackedFile, []byte("initial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, "git", "-C", mgr.WorkDir, "add", "tracked.txt")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add tracked")
+
+	// Modify the tracked file without committing.
+	if err := os.WriteFile(trackedFile, []byte("dirty"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Create an untracked file.
+	untrackedFile := filepath.Join(mgr.WorkDir, "untracked.txt")
+	if err := os.WriteFile(untrackedFile, []byte("untracked"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr.PrepareForNextTask()
+
+	// Tracked file must be restored to its committed content.
+	got, err := os.ReadFile(trackedFile)
+	if err != nil {
+		t.Fatalf("reading tracked file: %v", err)
+	}
+	if string(got) != "initial" {
+		t.Errorf("tracked file content = %q, want %q", string(got), "initial")
+	}
+
+	// Untracked file must be removed.
+	if _, err := os.Stat(untrackedFile); !os.IsNotExist(err) {
+		t.Error("untracked file should have been removed by PrepareForNextTask")
+	}
+}
+
 // SetPrevBranch explicitly sets PrevBranch and persists to state.
 func TestSetPrevBranch(t *testing.T) {
 	state := newMemState()
