@@ -56,12 +56,12 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return false, "test suite failed"
 	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) {
-		t.Error("push should not be called when verification fails")
-		return "", nil
-	}
 
 	_ = l.Run(context.Background())
+
+	if gm.ShipCalls > 0 {
+		t.Error("push should not be called when verification fails")
+	}
 
 	// Task should NOT be recorded as completed
 	if _, err := os.Stat(filepath.Join(ralphDir, ".completed-tasks")); !os.IsNotExist(err) {
@@ -86,8 +86,6 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	pushCalled := false
-
 	backend := &testutil.MutableBackend{
 		StubBackend: testutil.StubBackend{
 			Remaining:    1,
@@ -109,7 +107,12 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &testutil.StubGit{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		ShipResult: git.ShipResult{PRNumber: "42"},
+		PRState:    "OPEN",
+	}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -126,14 +129,10 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
-	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) {
-		pushCalled = true
-		return "", nil
-	}
 
 	_ = l.Run(context.Background())
 
-	if !pushCalled {
+	if gm.ShipCalls == 0 {
 		t.Error("push should be called when verification passes")
 	}
 
@@ -154,8 +153,6 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
-
-	pushCalled := false
 
 	backend := &testutil.MutableBackend{
 		StubBackend: testutil.StubBackend{
@@ -178,7 +175,12 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &testutil.StubGit{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		ShipResult: git.ShipResult{PRNumber: "99"},
+		PRState:    "OPEN",
+	}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -193,14 +195,10 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		// VerifyDir deliberately not set
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) {
-		pushCalled = true
-		return "", nil
-	}
 
 	_ = l.Run(context.Background())
 
-	if !pushCalled {
+	if gm.ShipCalls == 0 {
 		t.Error("push should be called when no verification is configured")
 	}
 }
@@ -229,6 +227,16 @@ func TestLoop_CIFailureStillClosesTask(t *testing.T) {
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-ci-test",
+		ShipResult:     git.ShipResult{PRNumber: "99"},
+		PRState:        "OPEN",
+	}
+	gm.MergeRetryFunc = func(ctx context.Context) (bool, error) {
+		return false, &git.CIFailureError{
+			PRNumber: "99",
+			Failures: []git.CICheckResult{
+				{Name: "test", State: "FAILURE", Bucket: "fail"},
+			},
+		}
 	}
 
 	l := New(Config{
@@ -246,15 +254,6 @@ func TestLoop_CIFailureStillClosesTask(t *testing.T) {
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
-	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
-	l.mergeFunc = func(context.Context) (bool, error) {
-		return false, &git.CIFailureError{
-			PRNumber: "99",
-			Failures: []git.CICheckResult{
-				{Name: "test", State: "FAILURE", Bucket: "fail"},
-			},
-		}
 	}
 
 	_ = l.Run(context.Background())
@@ -289,6 +288,14 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-conflict-test",
+		ShipResult:     git.ShipResult{PRNumber: "42"},
+		PRState:        "OPEN",
+	}
+
+	merged := false
+	gm.MergeRetryFunc = func(ctx context.Context) (bool, error) {
+		merged = true
+		return true, nil
 	}
 
 	l := New(Config{
@@ -306,13 +313,6 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
-	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
-
-	merged := false
-	l.mergeFunc = func(context.Context) (bool, error) {
-		merged = true
-		return true, nil
 	}
 
 	_ = l.Run(context.Background())
@@ -339,9 +339,12 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 	}
 
 	gm := &testutil.StubGit{
-		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
-		WorktreeBranch: "ralph/project/01-ci-fix",
+		ProjectDir:          dir,
+		WorkDir:             filepath.Join(dir, "worktree"),
+		WorktreeBranch:      "ralph/project/01-ci-fix",
+		ShipResult:          git.ShipResult{PRNumber: "42"},
+		PRState:             "OPEN",
+		MergeRetryResult:    true,
 	}
 
 	l := New(Config{
@@ -359,11 +362,6 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
-	}
-	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
-
-	l.mergeFunc = func(context.Context) (bool, error) {
-		return true, nil
 	}
 
 	_ = l.Run(context.Background())
@@ -408,23 +406,22 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	l.runner = &stubRunner{
-		result: claude.Result{SignalDetected: true},
-	}
-	l.newRunnerFunc = func() claudeRunner {
-		return &stubRunner{result: claude.Result{SignalDetected: true}}
-	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
-
-	// mergeFunc returning error means merge pipeline failed (retry exhaustion
-	// is tested in git module: TestMergeWithRetry_ExhaustsRetries).
-	l.mergeFunc = func(context.Context) (bool, error) {
+	gm.ShipResult = git.ShipResult{PRNumber: "99"}
+	gm.PRState = "OPEN"
+	gm.MergeRetryFunc = func(ctx context.Context) (bool, error) {
 		return false, &git.CIFailureError{
 			PRNumber: "99",
 			Failures: []git.CICheckResult{
 				{Name: "test", State: "FAILURE", Bucket: "fail"},
 			},
 		}
+	}
+
+	l.runner = &stubRunner{
+		result: claude.Result{SignalDetected: true},
+	}
+	l.newRunnerFunc = func() claudeRunner {
+		return &stubRunner{result: claude.Result{SignalDetected: true}}
 	}
 
 	_ = l.Run(context.Background())
@@ -472,13 +469,12 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
+	gm.ShipResult = git.ShipResult{PRNumber: "99"}
+	gm.PRState = "OPEN"
+	gm.MergeRetryErr = fmt.Errorf("merge failed")
+
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
-	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
-
-	l.mergeFunc = func(context.Context) (bool, error) {
-		return false, fmt.Errorf("merge failed")
 	}
 
 	var buf bytes.Buffer
@@ -534,12 +530,12 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
+	gm.ShipResult = git.ShipResult{PRNumber: "42"}
+	gm.PRState = "OPEN"
+	gm.MergeRetryErr = fmt.Errorf("push denied by remote")
+
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
-	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
-	l.mergeFunc = func(context.Context) (bool, error) {
-		return false, fmt.Errorf("push denied by remote")
 	}
 
 	_ = l.Run(context.Background())
@@ -597,12 +593,12 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
+	gm.ShipResult = git.ShipResult{PRNumber: "50"}
+	gm.PRState = "OPEN"
+	gm.MergeRetryErr = fmt.Errorf("merge conflict")
+
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
-	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "50", nil }
-	l.mergeFunc = func(context.Context) (bool, error) {
-		return false, fmt.Errorf("merge conflict")
 	}
 
 	_ = l.Run(context.Background())
@@ -664,12 +660,12 @@ func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
+	gm.ShipResult = git.ShipResult{PRNumber: "42"}
+	gm.PRState = "OPEN"
+	gm.MergeRetryResult = true
+
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
-	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "42", nil }
-	l.mergeFunc = func(context.Context) (bool, error) {
-		return true, nil
 	}
 
 	_ = l.Run(context.Background())
@@ -723,7 +719,6 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -849,7 +844,6 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 			l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 				return llmResult
 			}
-			l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 			l.newRunnerFunc = func() claudeRunner {
 				return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
 			}

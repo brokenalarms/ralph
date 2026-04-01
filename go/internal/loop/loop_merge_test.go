@@ -26,7 +26,6 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	mergeCount := 0
 	iterationCount := 0
 
 	backend := &testutil.MutableBackend{
@@ -77,11 +76,8 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
-	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCount++
-		return true, nil
-	}
+	gm.ShipResult = git.ShipResult{PRNumber: "99"}
+	gm.MergeRetryResult = true
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -92,8 +88,8 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 		t.Errorf("expected 3 iterations, got %d", iterationCount)
 	}
 
-	if mergeCount != 3 {
-		t.Errorf("expected auto-merge to fire 3 times (once per task), got %d", mergeCount)
+	if gm.MergeRetryCalls != 3 {
+		t.Errorf("expected auto-merge to fire 3 times (once per task), got %d", gm.MergeRetryCalls)
 	}
 }
 
@@ -153,9 +149,9 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.mergeFunc = func(context.Context) (bool, error) {
-		return true, nil
-	}
+	gm.MergeRetryResult = true
+	gm.ShipResult = git.ShipResult{PRNumber: "99"}
+	gm.PRState = "OPEN"
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -251,9 +247,7 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.mergeFunc = func(context.Context) (bool, error) {
-		return true, nil
-	}
+	gm.MergeRetryResult = true
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -353,9 +347,7 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.mergeFunc = func(context.Context) (bool, error) {
-		return true, nil
-	}
+	gm.MergeRetryResult = true
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -447,9 +439,7 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.mergeFunc = func(context.Context) (bool, error) {
-		return true, nil
-	}
+	gm.MergeRetryResult = true
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -535,7 +525,7 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
+	gm.MergeRetryResult = true
 
 	if err := l.Run(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -617,12 +607,8 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logger)
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) {
-		return "99", nil
-	}
-	l.mergeFunc = func(context.Context) (bool, error) {
-		return true, nil
-	}
+	gm.ShipResult = git.ShipResult{PRNumber: "99"}
+	gm.MergeRetryResult = true
 
 	_ = l.Run(context.Background())
 

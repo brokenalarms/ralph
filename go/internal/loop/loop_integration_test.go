@@ -149,9 +149,9 @@ func TestIntegration_HappyPath_SignalVerifyPushMergeClose(t *testing.T) {
 
 	l.runner = runner
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "42", nil }
-	l.findPRInfoFunc = func(string) (string, string) { return "42", "Fix auth middleware" }
-	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
+	gm.ShipResult = git.ShipResult{PRNumber: "42"}
+	gm.PRNumber = "42"
+	gm.MergeRetryResult = true
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
 
@@ -257,14 +257,6 @@ func TestIntegration_ResumeViaPR_Merged(t *testing.T) {
 	l.runner = runner
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) {
-		t.Error("push should not be called for already-merged PR")
-		return "", nil
-	}
-	l.mergeFunc = func(context.Context) (bool, error) {
-		t.Error("merge should not be called for already-merged PR")
-		return false, nil
-	}
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -273,6 +265,12 @@ func TestIntegration_ResumeViaPR_Merged(t *testing.T) {
 
 	if agentCalled {
 		t.Error("agent should not run when PR is already merged")
+	}
+	if gm.ShipCalls > 0 {
+		t.Error("push should not be called for already-merged PR")
+	}
+	if gm.MergeRetryCalls > 0 {
+		t.Error("merge should not be called for already-merged PR")
 	}
 
 	backend.CloseMu.Lock()
@@ -315,7 +313,6 @@ func TestIntegration_ResumeViaPR_OpenAutoMerge(t *testing.T) {
 		RemoteBranchCommits: true,
 	}
 
-	mergeCalled := false
 	l := New(Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -331,17 +328,14 @@ func TestIntegration_ResumeViaPR_OpenAutoMerge(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
-	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalled = true
-		return true, nil
-	}
+	gm.MergeRetryResult = true
 
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !mergeCalled {
+	if gm.MergeRetryCalls == 0 {
 		t.Error("merge should be attempted for OPEN PR with auto-merge")
 	}
 
@@ -473,7 +467,6 @@ func TestIntegration_TestFailureThenFixAgentPasses(t *testing.T) {
 		VerifyDir:     dir,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
 
@@ -536,7 +529,6 @@ func TestIntegration_CIFailureThenFixThenMerge(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "implemented feature"},
 	}
 
-	mergeCalls := 0
 	l := New(Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -551,23 +543,11 @@ func TestIntegration_CIFailureThenFixThenMerge(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "55", nil }
-	l.findPRInfoFunc = func(string) (string, string) { return "55", "CI fix task" }
+	gm.ShipResult = git.ShipResult{PRNumber: "55"}
+	gm.PRNumber = "55"
+	gm.MergeRetryResult = true
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
-
-	// mergeFunc: first call fails with CI error, second succeeds.
-	// Note: the loop calls mergeWithRetry which delegates to mergeFunc.
-	// For this test, we simulate the retry happening internally.
-	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalls++
-		if mergeCalls == 1 {
-			// Simulate CI failure then fix applied internally (mergeWithRetry handles this).
-			// Since we're using mergeFunc directly, just simulate eventual success.
-			return true, nil
-		}
-		return true, nil
-	}
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -691,7 +671,7 @@ func TestIntegration_ExternalRefFormat(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "77", nil }
+	gm.ShipResult = git.ShipResult{PRNumber: "77"}
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
 
@@ -743,7 +723,6 @@ func TestIntegration_PushCalledOnSignal(t *testing.T) {
 		WorktreeBranch: "ralph/next",
 	}
 
-	pushCalled := false
 	runner := &stubRunner{
 		onRun: func() {
 			gm.HeadRevValue = "push123"
@@ -768,13 +747,6 @@ func TestIntegration_PushCalledOnSignal(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(_ context.Context, taskID, _, _ string) (string, error) {
-		pushCalled = true
-		if taskID != "ralph-push1" {
-			t.Errorf("pushPRFunc received wrong taskID: %q", taskID)
-		}
-		return "", nil
-	}
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
 
@@ -783,8 +755,11 @@ func TestIntegration_PushCalledOnSignal(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !pushCalled {
-		t.Error("pushPRFunc should be called after signal detection with new commits")
+	if gm.ShipCalls == 0 {
+		t.Error("Ship should be called after signal detection with new commits")
+	}
+	if gm.LastShipOpts.TaskID != "ralph-push1" {
+		t.Errorf("Ship received wrong taskID: %q", gm.LastShipOpts.TaskID)
 	}
 }
 
@@ -833,7 +808,6 @@ func TestIntegration_WaitModePicksUpNewTask(t *testing.T) {
 		Wait:          true,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
 
@@ -909,7 +883,6 @@ func TestIntegration_TestFailureFixedByAgent(t *testing.T) {
 	l.runner = &signalCallingRunner{
 		result: claude.Result{Summary: "done"},
 	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
 
@@ -1015,9 +988,21 @@ func TestIntegration_ResolveByPRState_AllStates(t *testing.T) {
 				TaskBackend:   backend,
 			}, st, gm, logging.New(nil))
 			l.runner = &stubRunner{}
-			l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
+			gm.MergeRetryResult = true
 
-			resolved := l.resolveByPRState(context.Background(), "ralph-test", "test task", "99")
+			resolved := resolveByPRState(context.Background(), resolveByPRStateParams{
+				taskID:    "ralph-test",
+				nextTask:  "test task",
+				prNumber:  "99",
+				backend:   backend,
+				git:       gm,
+				logger:    l.logger,
+				attempts:  l.attempts,
+				state:     l.state,
+				autoMerge: true,
+				ralphDir:  ralphDir,
+				verifier:  l.verifier,
+			})
 			if resolved != tc.wantResolved {
 				t.Errorf("resolved = %v, want %v", resolved, tc.wantResolved)
 			}
@@ -1094,7 +1079,6 @@ func TestIntegration_TwoTasksCompleteSequentially(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
 
@@ -1149,7 +1133,6 @@ func TestIntegration_StackedPRSkipsMergeButCloses(t *testing.T) {
 		GitHubStub:     ghStub,
 	}
 
-	mergeCalled := false
 	l := New(Config{
 		Dirs:         workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		CallsPerHour: 80,
@@ -1157,21 +1140,25 @@ func TestIntegration_StackedPRSkipsMergeButCloses(t *testing.T) {
 		TaskBackend:  backend,
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
-	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalled = true
-		return true, nil
-	}
+	gm.MergeRetryResult = true
 
-	result := l.finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-stk1",
-		nextTask: "Stacked task",
-		prNumber: "88",
-		prState:  "OPEN",
-		workDir:  dir,
+	result := finalizePR(finalizePRParams{
+		ctx:       context.Background(),
+		taskID:    "ralph-stk1",
+		nextTask:  "Stacked task",
+		prNumber:  "88",
+		prState:   "OPEN",
+		workDir:   dir,
+		autoMerge: true,
+		git:       gm,
+		logger:    l.logger,
+		backend:   backend,
+		state:     l.state,
+		attempts:  l.attempts,
+		verifier:  l.verifier,
 	})
 
-	if mergeCalled {
+	if gm.MergeRetryCalls > 0 {
 		t.Error("merge should not be called for stacked PR (base != default branch)")
 	}
 	if !result.closed {
@@ -1217,7 +1204,6 @@ func TestIntegration_MergeConflictThenRetrySucceeds(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	mergeCalls := 0
 	l := New(Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -1232,32 +1218,21 @@ func TestIntegration_MergeConflictThenRetrySucceeds(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "60", nil }
-	l.findPRInfoFunc = func(string) (string, string) { return "60", "Conflict task" }
+	gm.ShipResult = git.ShipResult{PRNumber: "60"}
+	gm.PRNumber = "60"
+	gm.MergeRetryResult = true
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
-
-	// First call fails (simulating conflict that gets resolved internally
-	// by MergeWithRetry in production). Second call succeeds.
-	l.mergeFunc = func(context.Context) (bool, error) {
-		mergeCalls++
-		if mergeCalls == 1 {
-			return false, fmt.Errorf("merge conflict (simulated)")
-		}
-		return true, nil
-	}
 
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// With mergeFunc stubbed, the loop treats merge failure as non-retryable
-	// at the loop level (retries happen inside MergeWithRetry in production).
-	// The task should still be processed — either closed or skipped.
+	// Retries happen inside MergeWithRetry in production; we verify merge was attempted.
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
-	if mergeCalls == 0 {
+	if gm.MergeRetryCalls == 0 {
 		t.Error("merge should have been attempted")
 	}
 }
@@ -1352,7 +1327,6 @@ func TestIntegration_CompletedTaskNotReselected(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
 
@@ -1467,7 +1441,6 @@ func TestIntegration_FeedbackKillRestartsIteration(t *testing.T) {
 		}
 	}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	l.Run(context.Background())
 
@@ -1568,9 +1541,9 @@ func TestIntegration_EvolveExitsAfterMerge(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
-	l.findPRInfoFunc = func(string) (string, string) { return "99", "Evolve task" }
-	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
+	gm.ShipResult = git.ShipResult{PRNumber: "99"}
+	gm.PRNumber = "99"
+	gm.MergeRetryResult = true
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
 
@@ -1620,7 +1593,6 @@ func TestIntegration_TestsRunBeforeAndAfterAgent(t *testing.T) {
 		VerifyDir:     dir, // enables verification
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
 
@@ -1700,9 +1672,9 @@ func TestIntegration_DependencyBlockedTaskIsSkipped(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "77", nil }
-	l.findPRInfoFunc = func(string) (string, string) { return "77", "Blocked task" }
-	l.mergeFunc = func(context.Context) (bool, error) { return true, nil }
+	gm.ShipResult = git.ShipResult{PRNumber: "77"}
+	gm.PRNumber = "77"
+	gm.MergeRetryResult = true
 	l.isOnlineFunc = func() bool { return true }
 	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
 

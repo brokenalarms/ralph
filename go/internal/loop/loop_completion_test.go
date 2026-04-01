@@ -9,6 +9,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -61,7 +62,7 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "99", nil }
+	gm.ShipResult = git.ShipResult{PRNumber: "99"}
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
@@ -123,9 +124,8 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+	gm.PRNumber = "42"
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.findPRInfoFunc = func(string) (string, string) { return "42", "Fix auth bug" }
 
 	_ = l.Run(context.Background())
 
@@ -180,7 +180,6 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "no commits" }
 
 	_ = l.Run(context.Background())
@@ -325,7 +324,6 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true, Summary: "task completed"},
 	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -669,7 +667,6 @@ func TestLoop_SessionTasksRecordsCompletedWork(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
-	l.pushPRFunc = func(_ context.Context, _, _, _ string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 
@@ -781,9 +778,8 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
+	gm.PRNumber = "42"
 	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.findPRInfoFunc = func(string) (string, string) { return "42", "Fix auth bug" }
 
 	_ = l.Run(context.Background())
 

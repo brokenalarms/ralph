@@ -268,7 +268,6 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 		Wait:          true,
 	}, st, gm, logger)
 	l.runner = runner
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	waitCount := 0
 	waitEntered := make(chan struct{}, 2)
@@ -499,7 +498,6 @@ func TestLoop_LifecycleStates(t *testing.T) {
 	l.verifyFunc = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
-	l.pushPRFunc = func(context.Context, string, string, string) (string, error) { return "", nil }
 
 	_ = l.Run(context.Background())
 

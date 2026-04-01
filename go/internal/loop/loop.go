@@ -77,18 +77,14 @@ type Loop struct {
 	attempts   *attempts.Tracker
 	logger     *logging.Logger
 	signals    claude.SignalPaths
-	mergeFunc          func(ctx context.Context) (bool, error)
-	pushPRFunc         func(ctx context.Context, taskID, taskDesc, body string) (string, error)
-	verifyFunc      func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
-	newRunnerFunc      func() claudeRunner
-	findPRInfoFunc     func(workDir string) (number, title string)
-	agentRunner        *agent.Runner
-	refactorQueryFunc  func(ctx context.Context, workDir, prompt, model string) (string, error)
-	isOnlineFunc       func() bool
+	verifyFunc          func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
+	newRunnerFunc       func() claudeRunner
+	agentRunner         *agent.Runner
+	refactorQueryFunc   func(ctx context.Context, workDir, prompt, model string) (string, error)
+	isOnlineFunc        func() bool
 	waitForInternetFunc func(ctx context.Context, logger *logging.Logger) bool
-	onWaitFunc         func() // called when the loop enters waitForTasks (test hook)
-	lastTaskMerged     bool
-	sessionTasks       []CompletedTask
+	onWaitFunc          func() // called when the loop enters waitForTasks (test hook)
+	sessionTasks        []CompletedTask
 }
 
 // New creates an execution loop from the given configuration. All agent
@@ -167,6 +163,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 	var runIteration int
 	var lastAction analyzer.Action
+	var lastTaskMerged bool
 	st, _ := l.state.Load()
 	iteration := st.Iteration
 
@@ -184,15 +181,23 @@ func (l *Loop) Run(ctx context.Context) error {
 			completedIDs[ct.ID] = true
 		}
 		task, action := selectNextTask(ctx, selectNextTaskParams{
-			runIteration:      runIteration,
-			maxIterations:     l.cfg.MaxIterations,
-			backend:           l.cfg.TaskBackend,
-			wait:              l.cfg.Wait,
-			state:             l.state,
-			logger:            l.logger,
-			completedIDs:      completedIDs,
-			waitForTasks:      func(ctx context.Context) bool { return waitForTasks(ctx, wtParams) },
-			flushUnpushedWork: l.flushUnpushedWork,
+			runIteration:  runIteration,
+			maxIterations: l.cfg.MaxIterations,
+			backend:       l.cfg.TaskBackend,
+			wait:          l.cfg.Wait,
+			state:         l.state,
+			logger:        l.logger,
+			completedIDs:  completedIDs,
+			waitForTasks:  func(ctx context.Context) bool { return waitForTasks(ctx, wtParams) },
+			flushUnpushedWork: func(ctx context.Context) {
+				flushUnpushedWork(ctx, flushUnpushedWorkParams{
+					autoMerge:      l.cfg.AutoMerge,
+					lastTaskMerged: lastTaskMerged,
+					state:          l.state,
+					git:            l.git,
+					logger:         l.logger,
+				})
+			},
 		})
 		if action == actionDone {
 			break
@@ -200,7 +205,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		runIteration++
 		iteration++
-		l.lastTaskMerged = false
+		lastTaskMerged = false
 
 		if task.changed {
 			l.verifier.ResetCounters()
@@ -243,14 +248,30 @@ func (l *Loop) Run(ctx context.Context) error {
 		}, task, iteration)
 
 		// ── Resume check: does a PR already exist for this task? ──
-		if l.resumeViaPR(ctx, task.id, task.title) {
+		if resumeViaPR(ctx, resumeViaPRParams{
+			taskID:    task.id,
+			nextTask:  task.title,
+			backend:   l.cfg.TaskBackend,
+			git:       l.git,
+			logger:    l.logger,
+			attempts:  l.attempts,
+			state:     l.state,
+			autoMerge: l.cfg.AutoMerge,
+			notify:    l.cfg.Notify,
+			ralphDir:  l.cfg.Dirs.RalphDir,
+			verifier:  l.verifier,
+		}) {
 			l.git.TagTaskEnd(task.id)
 			continue
 		}
 
 		// ── Run agent and handle outcome ──
 		var iterAction analyzer.Action
-		action, iterAction = l.runAndComplete(ctx, task, runIteration)
+		var merged bool
+		action, iterAction, merged = l.runAndComplete(ctx, task, runIteration)
+		if merged {
+			lastTaskMerged = true
+		}
 		lastAction = iterAction
 		if action == actionRetry {
 			continue
