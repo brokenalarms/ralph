@@ -155,7 +155,14 @@ func (l *Loop) SessionTasks() []CompletedTask {
 // (all tasks done, max iterations reached, or stopped). Returns an error
 // for unrecoverable failures.
 func (l *Loop) Run(ctx context.Context) error {
-	if err := l.initialize(ctx); err != nil {
+	if err := initialize(ctx, initParams{
+		limiter: l.limiter,
+		maxIter: l.cfg.MaxIterations,
+		state:   l.state,
+		backend: l.cfg.TaskBackend,
+		logger:  l.logger,
+		git:     l.git,
+	}); err != nil {
 		return err
 	}
 
