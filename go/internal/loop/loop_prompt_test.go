@@ -251,3 +251,85 @@ func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
 		t.Errorf("expected workDir=%s, got %s", dir, prep.workDir)
 	}
 }
+
+// Verifies HasProgress returns false when a diff existed before the iteration
+// started (pre-existing diff), and true when a new diff appears during the
+// iteration. An agent that only writes a signal file without changing code
+// must not trigger the shorter progress timeout.
+func TestLoop_HasProgress_SnapshotsDiffState(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-abc"}
+
+	tests := []struct {
+		name           string
+		diffAtStart    bool
+		diffDuringRun  bool
+		headMoved      bool
+		wantProgress   bool
+	}{
+		{
+			name:          "pre-existing diff, no new activity → no progress",
+			diffAtStart:   true,
+			diffDuringRun: true,
+			headMoved:     false,
+			wantProgress:  false,
+		},
+		{
+			name:          "no diff at start, new diff appears → progress",
+			diffAtStart:   false,
+			diffDuringRun: true,
+			headMoved:     false,
+			wantProgress:  true,
+		},
+		{
+			name:          "pre-existing diff, HEAD moved → progress",
+			diffAtStart:   true,
+			diffDuringRun: true,
+			headMoved:     true,
+			wantProgress:  true,
+		},
+		{
+			name:          "no diff, no head movement → no progress",
+			diffAtStart:   false,
+			diffDuringRun: false,
+			headMoved:     false,
+			wantProgress:  false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HasDiffValue: tc.diffAtStart}
+			l := New(Config{
+				Dirs:         workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+				MaxIterations: 1,
+				CallsPerHour:  80,
+				TaskBackend:   backend,
+			}, st, gm, logging.New(nil))
+
+			var capturedHasProgress func() bool
+			l.runner = &stubRunner{
+				onRunCfg: func(cfg claude.RunConfig) {
+					capturedHasProgress = cfg.HasProgress
+					// Simulate what happens during the run: update stub state
+					gm.HasDiffValue = tc.diffDuringRun
+					if tc.headMoved {
+						gm.HeadRevValue = "new-head"
+					}
+				},
+			}
+			l.runAndComplete(context.Background(), taskContext{id: "ralph-abc", title: "Fix login"}, 0)
+
+			if capturedHasProgress == nil {
+				t.Fatal("HasProgress was not passed to runner")
+			}
+			got := capturedHasProgress()
+			if got != tc.wantProgress {
+				t.Errorf("HasProgress() = %v, want %v", got, tc.wantProgress)
+			}
+		})
+	}
+}

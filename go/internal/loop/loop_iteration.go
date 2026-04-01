@@ -42,7 +42,13 @@ func (l *Loop) runAndComplete(ctx context.Context, task taskContext, runIteratio
 		IdleTimeout:         l.cfg.IdleTimeout,
 		IdleTimeoutProgress: l.cfg.IdleTimeoutProgress,
 		HasProgress: func() bool {
-			return l.git.HasDiff() || l.git.HeadRev() != prep.headBefore
+			if l.git.HeadRev() != prep.headBefore {
+				return true
+			}
+			if prep.diffBefore {
+				return false
+			}
+			return l.git.HasDiff()
 		},
 		OnSignal: func(summary string) bool {
 			return l.verifier.OnSignal(signalParams{
@@ -505,6 +511,7 @@ func (l *Loop) finalizePR(p finalizePRParams) finalizePRResult {
 type iterationPrompt struct {
 	fullPrompt string
 	headBefore string
+	diffBefore bool // true if a diff already existed when this iteration started
 	rawLogPath string
 	logStart   int
 	workDir    string
@@ -531,6 +538,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	}
 
 	headBefore := l.git.HeadRev()
+	diffBefore := l.git.HasDiff()
 	rawLogPath := filepath.Join(l.cfg.Dirs.RalphDir, "raw.log")
 	logStart := fileLineCount(rawLogPath)
 
@@ -559,6 +567,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	return iterationPrompt{
 		fullPrompt: fullPrompt,
 		headBefore: headBefore,
+		diffBefore: diffBefore,
 		rawLogPath: rawLogPath,
 		logStart:   logStart,
 		workDir:    l.git.GetWorkDir(),
