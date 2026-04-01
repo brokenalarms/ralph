@@ -239,7 +239,22 @@ func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
 
-	prep, ok := l.prepareAndBuildPrompt(context.Background(), "ralph-xyz", "Fix login")
+	prep, ok := prepareAndBuildPrompt(context.Background(), prepareAndBuildPromptParams{
+		backend:             l.cfg.TaskBackend,
+		git:                 l.git,
+		logger:              l.logger,
+		verifier:            l.verifier,
+		limiter:             l.limiter,
+		attempts:            l.attempts,
+		signals:             l.signals,
+		promptsDir:          l.cfg.Dirs.PromptsDir,
+		ralphDir:            l.cfg.Dirs.RalphDir,
+		projectDir:          l.cfg.Dirs.ProjectDir,
+		planFile:            l.cfg.PlanFile,
+		callsPerHour:        l.cfg.CallsPerHour,
+		runVerifyBuildFn:    l.runVerifyBuild,
+		waitForInternetFunc: l.waitForInternetFunc,
+	}, "ralph-xyz", "Fix login")
 	if !ok {
 		t.Fatal("expected ok=true from prepareAndBuildPrompt")
 	}
@@ -320,7 +335,37 @@ func TestLoop_HasProgress_SnapshotsDiffState(t *testing.T) {
 					}
 				},
 			}
-			l.runAndComplete(context.Background(), taskContext{id: "ralph-abc", title: "Fix login"}, 0)
+			runAndComplete(context.Background(), runAndCompleteParams{
+				git:                 l.git,
+				logger:              l.logger,
+				runner:              l.runner,
+				verifier:            l.verifier,
+				state:               l.state,
+				attempts:            l.attempts,
+				limiter:             l.limiter,
+				signals:             l.signals,
+				backend:             l.cfg.TaskBackend,
+				analyzer:            l.analyzer,
+				quiet:               l.cfg.Quiet,
+				verbose:             l.cfg.Verbose,
+				model:               l.cfg.Model,
+				idleTimeout:         l.cfg.IdleTimeout,
+				idleTimeoutProgress: l.cfg.IdleTimeoutProgress,
+				postSignalTimeout:   l.cfg.PostSignalTimeout,
+				autoMerge:           l.cfg.AutoMerge,
+				evolve:              l.cfg.Evolve,
+				notify:              l.cfg.Notify,
+				ralphDir:            l.cfg.Dirs.RalphDir,
+				promptsDir:          l.cfg.Dirs.PromptsDir,
+				projectDir:          l.cfg.Dirs.ProjectDir,
+				planFile:            l.cfg.PlanFile,
+				callsPerHour:        l.cfg.CallsPerHour,
+				runVerifyBuildFn:    l.runVerifyBuild,
+				isOnlineFunc:        l.isOnlineFunc,
+				waitForInternetFunc: l.waitForInternetFunc,
+				verifyFunc:          l.verifyFunc,
+				runPostTaskFn:       l.runPostTask,
+			}, taskContext{id: "ralph-abc", title: "Fix login"}, 0)
 
 			if capturedHasProgress == nil {
 				t.Fatal("HasProgress was not passed to runner")

@@ -268,7 +268,41 @@ func (l *Loop) Run(ctx context.Context) error {
 		// ── Run agent and handle outcome ──
 		var iterAction analyzer.Action
 		var merged bool
-		action, iterAction, merged = l.runAndComplete(ctx, task, runIteration)
+		var ct *CompletedTask
+		action, iterAction, merged, ct = runAndComplete(ctx, runAndCompleteParams{
+			git:                 l.git,
+			logger:              l.logger,
+			runner:              l.runner,
+			verifier:            l.verifier,
+			state:               l.state,
+			attempts:            l.attempts,
+			limiter:             l.limiter,
+			signals:             l.signals,
+			backend:             l.cfg.TaskBackend,
+			analyzer:            l.analyzer,
+			quiet:               l.cfg.Quiet,
+			verbose:             l.cfg.Verbose,
+			model:               l.cfg.Model,
+			idleTimeout:         l.cfg.IdleTimeout,
+			idleTimeoutProgress: l.cfg.IdleTimeoutProgress,
+			postSignalTimeout:   l.cfg.PostSignalTimeout,
+			autoMerge:           l.cfg.AutoMerge,
+			evolve:              l.cfg.Evolve,
+			notify:              l.cfg.Notify,
+			ralphDir:            l.cfg.Dirs.RalphDir,
+			promptsDir:          l.cfg.Dirs.PromptsDir,
+			projectDir:          l.cfg.Dirs.ProjectDir,
+			planFile:            l.cfg.PlanFile,
+			callsPerHour:        l.cfg.CallsPerHour,
+			runVerifyBuildFn:    l.runVerifyBuild,
+			isOnlineFunc:        l.isOnlineFunc,
+			waitForInternetFunc: l.waitForInternetFunc,
+			verifyFunc:          l.verifyFunc,
+			runPostTaskFn:       l.runPostTask,
+		}, task, runIteration)
+		if ct != nil {
+			l.sessionTasks = append(l.sessionTasks, *ct)
+		}
 		if merged {
 			lastTaskMerged = true
 		}
