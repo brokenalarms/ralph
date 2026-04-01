@@ -24,6 +24,7 @@ type VerifierConfig struct {
 	VerifyDir             string
 	VerifyModel           string
 	VerifyEscalationModel string
+	FixModel              string // model used by all fix agents; defaults to ModelOpus
 	PromptsDir            string
 	RalphDir              string
 	IdleTimeout           time.Duration
@@ -234,6 +235,14 @@ func (v *Verifier) verifyModel() string {
 	return verify.ModelSonnet
 }
 
+// fixModel returns the model to use for all fix agents.
+func (v *Verifier) fixModel() string {
+	if v.cfg.FixModel != "" {
+		return v.cfg.FixModel
+	}
+	return verify.ModelOpus
+}
+
 // VerifyCompletion runs post-signal checks: commit presence and test suite.
 func (v *Verifier) VerifyCompletion(ctx context.Context, workDir, headBefore string) (bool, string) {
 	if v.cfg.VerifyDir == "" {
@@ -367,6 +376,7 @@ func (v *Verifier) runFixAgent(ctx context.Context, description, prompt, workDir
 		Signals:      v.deps.Signals,
 		PollInterval: 2 * time.Second,
 		IdleTimeout:  v.cfg.IdleTimeout,
+		Model:        v.fixModel(),
 	})
 
 	if !result.SignalDetected {
