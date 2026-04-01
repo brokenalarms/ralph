@@ -326,28 +326,53 @@ func callLLM(ctx context.Context, workDir, prompt string, queryFn QueryFunc, mod
 var CompileCheckTimeout = 60 * time.Second
 
 // CompileCheck verifies that all packages (including test files) compile
-// without running any tests. For Go projects this catches missing interface
-// implementations in test stubs across every package. Returns a passing
-// result for non-Go projects.
+// without running any tests. Checks Go projects via go test -run=^$ and
+// TypeScript projects via tsc --noEmit (or npm run typecheck when available).
+// Both checks run when a project contains both go.mod and tsconfig.json.
 func CompileCheck(ctx context.Context, dir string) Result {
-	goDir := findGoModDir(dir)
-	if goDir == "" {
-		return Result{Passed: true, Reason: "no Go module found — skipping compile check"}
-	}
-
 	ctx, cancel := context.WithTimeout(ctx, CompileCheckTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "go", "test", "-run=^$", "-count=1", "./...")
-	cmd.Dir = goDir
-	cmd.WaitDelay = 3 * time.Second
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return Result{
-			Passed:  false,
-			Reason:  "pre-push compile check failed: not all packages compile",
-			Details: lastNLines(filterFailures(string(out)), 30),
+	foundAny := false
+
+	goDir := findGoModDir(dir)
+	if goDir != "" {
+		foundAny = true
+		cmd := exec.CommandContext(ctx, "go", "test", "-run=^$", "-count=1", "./...")
+		cmd.Dir = goDir
+		cmd.WaitDelay = 3 * time.Second
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return Result{
+				Passed:  false,
+				Reason:  "pre-push compile check failed: not all packages compile",
+				Details: lastNLines(filterFailures(string(out)), 30),
+			}
 		}
+	}
+
+	if fileExists(filepath.Join(dir, "tsconfig.json")) {
+		foundAny = true
+		var cmd *exec.Cmd
+		if hasNPMScript(dir, "typecheck") {
+			cmd = exec.CommandContext(ctx, "npm", "run", "typecheck")
+		} else {
+			cmd = exec.CommandContext(ctx, "tsc", "--noEmit")
+		}
+		cmd.Dir = dir
+		cmd.WaitDelay = 3 * time.Second
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return Result{
+				Passed:  false,
+				Reason:  "pre-push TypeScript compile check failed",
+				Details: lastNLines(string(out), 30),
+			}
+		}
+	}
+
+	if !foundAny {
+		return Result{Passed: true, Reason: "no Go module or TypeScript project found — skipping compile check"}
 	}
 	return Result{Passed: true, Reason: "all packages compile"}
 }
