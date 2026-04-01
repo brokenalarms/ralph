@@ -140,21 +140,4 @@ func selectNextTaskInner(ctx context.Context, p selectNextTaskParams, attempts i
 	}, actionProceed
 }
 
-// selectNextTask delegates to the package-level selectNextTask function.
-func (l *Loop) selectNextTask(ctx context.Context, runIteration int) (taskContext, loopAction) {
-	completedIDs := make(map[string]bool, len(l.sessionTasks))
-	for _, ct := range l.sessionTasks {
-		completedIDs[ct.ID] = true
-	}
-	return selectNextTask(ctx, selectNextTaskParams{
-		runIteration:      runIteration,
-		maxIterations:     l.cfg.MaxIterations,
-		backend:           l.cfg.TaskBackend,
-		wait:              l.cfg.Wait,
-		state:             l.state,
-		logger:            l.logger,
-		completedIDs:      completedIDs,
-		waitForTasks:      l.waitForTasks,
-		flushUnpushedWork: l.flushUnpushedWork,
-	})
-}
+

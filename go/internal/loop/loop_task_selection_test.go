@@ -158,7 +158,21 @@ func TestLoop_selectNextTask_DelegatesToPackageFunc(t *testing.T) {
 		sessionTasks: []CompletedTask{{ID: "ralph-old", Title: "Old task"}},
 	}
 
-	tc, action := l.selectNextTask(context.Background(), 0)
+	completedIDs := make(map[string]bool, len(l.sessionTasks))
+	for _, ct := range l.sessionTasks {
+		completedIDs[ct.ID] = true
+	}
+	tc, action := selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration:      0,
+		maxIterations:     l.cfg.MaxIterations,
+		backend:           l.cfg.TaskBackend,
+		wait:              l.cfg.Wait,
+		state:             l.state,
+		logger:            l.logger,
+		completedIDs:      completedIDs,
+		waitForTasks:      l.waitForTasks,
+		flushUnpushedWork: l.flushUnpushedWork,
+	})
 
 	if action != actionProceed {
 		t.Fatalf("expected actionProceed, got %v", action)

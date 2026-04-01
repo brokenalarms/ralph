@@ -665,7 +665,7 @@ func TestSetStackHead_SkipsUnfetchableBranch(t *testing.T) {
 		TaskBackend: backend,
 	}, st, gm, logger)
 
-	l.setStackHead()
+	setStackHead(l.git, l.cfg.TaskBackend, l.state, l.logger)
 
 	if gm.PrevBranch != "" {
 		t.Errorf("PrevBranch should be empty when no GitHub available, got %q", gm.PrevBranch)
@@ -702,7 +702,7 @@ func TestSetStackHead_NoLogWhenNoCompletedTasks(t *testing.T) {
 		TaskBackend: backend,
 	}, st, gm, logger)
 
-	l.setStackHead()
+	setStackHead(l.git, l.cfg.TaskBackend, l.state, l.logger)
 
 	output := buf.String()
 	if strings.Contains(output, "No stacked parents") {

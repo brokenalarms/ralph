@@ -140,15 +140,6 @@ func (l *Loop) handleRebase(ctx context.Context) error {
 	return l.git.EnsureUpToDate(ctx)
 }
 
-func (l *Loop) prepareBranch(ctx context.Context, taskID, nextTask string) error {
-	return prepareBranch(ctx, branchParams{
-		git:     l.git,
-		backend: l.cfg.TaskBackend,
-		state:   l.state,
-		logger:  l.logger,
-	}, taskID, nextTask)
-}
-
 // mergeWithRetry delegates to git.Manager.MergeWithRetry, passing a CI fix
 // callback that spawns a fix agent. Test overrides via mergeFunc bypass the
 // git module entirely for loop-level tests that only care about the outcome.
@@ -164,20 +155,6 @@ func (l *Loop) mergeWithRetry(ctx context.Context, taskID, nextTask, workDir, ra
 			return tryFixConflict(ctx, l.git, l.verifier, l.logger, l.cfg.TaskBackend, taskID, nextTask, workDir, rawLogPath)
 		},
 	})
-}
-
-func (l *Loop) shipWork(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error) {
-	if l.pushPRFunc != nil {
-		// Test path: delegate to legacy pushPRFunc stub.
-		prNumber, err := l.pushPRFunc(ctx, opts.TaskID, opts.TaskTitle, opts.Body)
-		return git.ShipResult{PRNumber: prNumber}, err
-	}
-	return l.git.Ship(ctx, opts)
-}
-
-func (l *Loop) pushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
-	result, err := l.shipWork(ctx, git.ShipOpts{TaskID: taskID, TaskTitle: taskDesc, Body: body})
-	return result.PRNumber, err
 }
 
 // buildPRBody assembles a PR description from bead context and agent summary.
@@ -244,7 +221,15 @@ func (l *Loop) resumeViaPR(ctx context.Context, taskID, nextTask string) bool {
 		}
 		l.logger.Emit(logging.Opts{Domain: logging.Git}, "Remote branch %s has clean work but no PR — creating PR", branch)
 		l.git.CheckoutRemoteBranch(branch)
-		prNum, err := l.pushAndCreatePR(ctx, taskID, nextTask, "")
+		var prNum string
+		var err error
+		if l.pushPRFunc != nil {
+			prNum, err = l.pushPRFunc(ctx, taskID, nextTask, "")
+		} else {
+			var shipResult git.ShipResult
+			shipResult, err = l.git.Ship(ctx, git.ShipOpts{TaskID: taskID, TaskTitle: nextTask})
+			prNum = shipResult.PRNumber
+		}
 		if err == nil && prNum != "" {
 			l.logger.Emit(logging.Opts{Domain: "git", Link: l.prLink(prNum)}, "Created for %s (task %s)", branch, taskID)
 			_ = l.cfg.TaskBackend.SetExternalRef(taskID, prURL(l.git.RemoteURL(), prNum))
@@ -312,7 +297,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 			_ = l.cfg.TaskBackend.SetMetadata(taskID, "branch", "")
 		}
 		l.git.PrepareForNextTask(taskID)
-		l.checkoutExistingBranch(taskID, nextTask)
+		checkoutExistingBranch(l.git, l.cfg.TaskBackend, l.logger, taskID, nextTask)
 		return false
 	}
 }
@@ -321,8 +306,14 @@ func (l *Loop) flushUnpushedWork(ctx context.Context) {
 	taskID, _ := l.state.Read("last_task_id")
 	taskDesc, _ := l.state.Read("last_task")
 	if l.pushPRFunc != nil || l.mergeFunc != nil {
-		if _, err := l.pushAndCreatePR(ctx, taskID, taskDesc, ""); err != nil {
-			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Flush push/PR: %v", err)
+		var shipErr error
+		if l.pushPRFunc != nil {
+			_, shipErr = l.pushPRFunc(ctx, taskID, taskDesc, "")
+		} else {
+			_, shipErr = l.git.Ship(ctx, git.ShipOpts{TaskID: taskID, TaskTitle: taskDesc})
+		}
+		if shipErr != nil {
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Flush push/PR: %v", shipErr)
 			return
 		}
 		if l.cfg.AutoMerge && !l.lastTaskMerged {
@@ -346,14 +337,6 @@ func (l *Loop) flushUnpushedWork(ctx context.Context) {
 	if merged {
 		notify.TaskMerged(taskID, taskDesc)
 	}
-}
-
-func (l *Loop) setStackHead() {
-	setStackHead(l.git, l.cfg.TaskBackend, l.state, l.logger)
-}
-
-func (l *Loop) checkoutExistingBranch(taskID, nextTask string) bool {
-	return checkoutExistingBranch(l.git, l.cfg.TaskBackend, l.logger, taskID, nextTask)
 }
 
 // prURL builds the canonical PR URL from the remote URL and PR number.

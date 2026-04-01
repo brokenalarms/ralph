@@ -165,7 +165,21 @@ func (l *Loop) Run(ctx context.Context) error {
 
 	for {
 		// ── Task selection ──
-		task, action := l.selectNextTask(ctx, runIteration)
+		completedIDs := make(map[string]bool, len(l.sessionTasks))
+		for _, ct := range l.sessionTasks {
+			completedIDs[ct.ID] = true
+		}
+		task, action := selectNextTask(ctx, selectNextTaskParams{
+			runIteration:      runIteration,
+			maxIterations:     l.cfg.MaxIterations,
+			backend:           l.cfg.TaskBackend,
+			wait:              l.cfg.Wait,
+			state:             l.state,
+			logger:            l.logger,
+			completedIDs:      completedIDs,
+			waitForTasks:      l.waitForTasks,
+			flushUnpushedWork: l.flushUnpushedWork,
+		})
 		if action == actionDone {
 			break
 		}
@@ -180,7 +194,12 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		// ── Branch setup ──
 		if task.changed || !l.git.IsBranchRenamed() {
-			if err := l.prepareBranch(ctx, task.id, task.title); err != nil {
+			if err := prepareBranch(ctx, branchParams{
+				git:     l.git,
+				backend: l.cfg.TaskBackend,
+				state:   l.state,
+				logger:  l.logger,
+			}, task.id, task.title); err != nil {
 				if ctx.Err() != nil {
 					l.state.Write("status", "stopped")
 				} else {

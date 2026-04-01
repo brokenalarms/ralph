@@ -63,7 +63,23 @@ func (l *Loop) runAndComplete(ctx context.Context, task taskContext, runIteratio
 		FeedbackFile: filepath.Join(l.cfg.Dirs.RalphDir, "feedback"),
 	})
 
-	runAction := l.handleRunResult(ctx, result, runErr, task.id, task.title, prep.headBefore, runIteration)
+	runAction := handleRunResult(ctx, handleRunResultParams{
+		result:              result,
+		runErr:              runErr,
+		taskID:              task.id,
+		nextTask:            task.title,
+		headBefore:          prep.headBefore,
+		runIteration:        runIteration,
+		isOnlineFunc:        l.isOnlineFunc,
+		waitForInternetFunc: l.waitForInternetFunc,
+		logger:              l.logger,
+		git:                 l.git,
+		attempts:            l.attempts,
+		limiter:             l.limiter,
+		backend:             l.cfg.TaskBackend,
+		state:               l.state,
+		skipTask:            skipTask,
+	})
 	if runAction != actionProceed {
 		return runAction
 	}
@@ -76,7 +92,7 @@ func (l *Loop) runAndComplete(ctx context.Context, task taskContext, runIteratio
 	}
 
 	if result.SignalDetected {
-		signalAction := l.handlePostSignal(postSignalParams{
+		p := postSignalParams{
 			ctx:        ctx,
 			result:     result,
 			headBefore: prep.headBefore,
@@ -85,8 +101,50 @@ func (l *Loop) runAndComplete(ctx context.Context, task taskContext, runIteratio
 			taskID:     task.id,
 			nextTask:   task.title,
 			diffStat:   diffStat,
+		}
+		out := handlePostSignal(p, handlePostSignalOpts{
+			postSignalTimeout: l.cfg.PostSignalTimeout,
+			autoMerge:         l.cfg.AutoMerge,
+			evolve:            l.cfg.Evolve,
+			notify:            l.cfg.Notify,
+			git:               l.git,
+			backend:           l.cfg.TaskBackend,
+			state:             l.state,
+			logger:            l.logger,
+			attempts:          l.attempts,
+			verifyFn: func(ctx context.Context, headBefore string) (bool, string) {
+				if l.verifyFunc != nil {
+					return l.verifyFunc(ctx, l.git.GetWorkDir(), headBefore)
+				}
+				return l.verifier.VerifyCompletion(ctx, l.git.GetWorkDir(), headBefore)
+			},
+			pushSignalPRFn: func(p postSignalParams) (string, string) {
+				return pushSignalPR(p.ctx, p, pushSignalPROpts{
+					git:                 l.git,
+					backend:             l.cfg.TaskBackend,
+					logger:              l.logger,
+					isOnlineFunc:        l.isOnlineFunc,
+					waitForInternetFunc: l.waitForInternetFunc,
+					shipFn: func(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error) {
+						if l.pushPRFunc != nil {
+							prNum, err := l.pushPRFunc(ctx, opts.TaskID, opts.TaskTitle, opts.Body)
+							return git.ShipResult{PRNumber: prNum}, err
+						}
+						return l.git.Ship(ctx, opts)
+					},
+				})
+			},
+			finalizePRFn:  l.finalizePR,
+			buildCTFn:     l.buildCompletedTask,
+			runPostTaskFn: l.runPostTask,
 		})
-		switch signalAction {
+		if out.ct != nil {
+			l.sessionTasks = append(l.sessionTasks, *out.ct)
+		}
+		if out.merged {
+			l.lastTaskMerged = true
+		}
+		switch out.action {
 		case signalRetry, signalSkipped:
 			return actionRetry
 		case signalEvolve:
@@ -292,40 +350,6 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 	return handlePostSignalOut{action: signalComplete, ct: &ct, merged: finalResult.merged}
 }
 
-// handlePostSignal delegates to the package-level handlePostSignal function,
-// collecting side-effect mutations to sessionTasks and lastTaskMerged.
-func (l *Loop) handlePostSignal(p postSignalParams) postSignalAction {
-	opts := handlePostSignalOpts{
-		postSignalTimeout: l.cfg.PostSignalTimeout,
-		autoMerge:         l.cfg.AutoMerge,
-		evolve:            l.cfg.Evolve,
-		notify:            l.cfg.Notify,
-		git:               l.git,
-		backend:           l.cfg.TaskBackend,
-		state:             l.state,
-		logger:            l.logger,
-		attempts:          l.attempts,
-		verifyFn: func(ctx context.Context, headBefore string) (bool, string) {
-			if l.verifyFunc != nil {
-				return l.verifyFunc(ctx, l.git.GetWorkDir(), headBefore)
-			}
-			return l.verifier.VerifyCompletion(ctx, l.git.GetWorkDir(), headBefore)
-		},
-		pushSignalPRFn: l.pushSignalPR,
-		finalizePRFn:   l.finalizePR,
-		buildCTFn:      l.buildCompletedTask,
-		runPostTaskFn:  l.runPostTask,
-	}
-	out := handlePostSignal(p, opts)
-	if out.ct != nil {
-		l.sessionTasks = append(l.sessionTasks, *out.ct)
-	}
-	if out.merged {
-		l.lastTaskMerged = true
-	}
-	return out.action
-}
-
 // pushSignalPROpts bundles the dependencies for the pushSignalPR package function.
 type pushSignalPROpts struct {
 	git                 git.GitOps
@@ -366,18 +390,6 @@ func pushSignalPR(ctx context.Context, p postSignalParams, opts pushSignalPROpts
 		}
 	}
 	return result.PRNumber, result.PRURL
-}
-
-// pushSignalPR delegates to the package-level pushSignalPR function.
-func (l *Loop) pushSignalPR(p postSignalParams) (string, string) {
-	return pushSignalPR(p.ctx, p, pushSignalPROpts{
-		git:                 l.git,
-		backend:             l.cfg.TaskBackend,
-		logger:              l.logger,
-		isOnlineFunc:        l.isOnlineFunc,
-		waitForInternetFunc: l.waitForInternetFunc,
-		shipFn:              l.shipWork,
-	})
 }
 
 // buildCompletedTask assembles the CompletedTask record for a signal.
@@ -653,25 +665,5 @@ func handleRunResult(ctx context.Context, p handleRunResultParams) loopAction {
 	return actionProceed
 }
 
-// handleRunResult delegates to the package-level handleRunResult function.
-func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr error,
-	taskID, nextTask, headBefore string, runIteration int) loopAction {
-	return handleRunResult(ctx, handleRunResultParams{
-		result:              result,
-		runErr:              runErr,
-		taskID:              taskID,
-		nextTask:            nextTask,
-		headBefore:          headBefore,
-		runIteration:        runIteration,
-		isOnlineFunc:        l.isOnlineFunc,
-		waitForInternetFunc: l.waitForInternetFunc,
-		logger:              l.logger,
-		git:                 l.git,
-		attempts:            l.attempts,
-		limiter:             l.limiter,
-		backend:             l.cfg.TaskBackend,
-		state:               l.state,
-		skipTask:            skipTask,
-	})
-}
+
 

@@ -492,6 +492,27 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 
 // --- handleRunResult tests ---
 
+// handleRunResultCall invokes the package-level handleRunResult using l's dependencies.
+func handleRunResultCall(l *Loop, ctx context.Context, result claude.Result, runErr error, taskID, nextTask, headBefore string, runIteration int) loopAction {
+	return handleRunResult(ctx, handleRunResultParams{
+		result:              result,
+		runErr:              runErr,
+		taskID:              taskID,
+		nextTask:            nextTask,
+		headBefore:          headBefore,
+		runIteration:        runIteration,
+		isOnlineFunc:        l.isOnlineFunc,
+		waitForInternetFunc: l.waitForInternetFunc,
+		logger:              l.logger,
+		git:                 l.git,
+		attempts:            l.attempts,
+		limiter:             l.limiter,
+		backend:             l.cfg.TaskBackend,
+		state:               l.state,
+		skipTask:            skipTask,
+	})
+}
+
 // newHandleRunResultLoop creates a minimal Loop for testing handleRunResult.
 func newHandleRunResultLoop(t *testing.T) (*Loop, string) {
 	t.Helper()
@@ -523,7 +544,7 @@ func TestHandleRunResult_OfflineReturnsRetry(t *testing.T) {
 	l.waitForInternetFunc = func(_ context.Context, _ *logging.Logger) bool { return true }
 
 	runIter := 3
-	action := l.handleRunResult(context.Background(), claude.Result{}, fmt.Errorf("connection refused"),
+	action := handleRunResultCall(l, context.Background(), claude.Result{}, fmt.Errorf("connection refused"),
 		"task-1", "Do stuff", "abc123", runIter)
 
 	if action != actionRetry {
@@ -540,7 +561,7 @@ func TestHandleRunResult_OfflineContextCancelledReturnsBreak(t *testing.T) {
 	l.waitForInternetFunc = func(_ context.Context, _ *logging.Logger) bool { return false }
 
 	runIter := 3
-	action := l.handleRunResult(context.Background(), claude.Result{}, fmt.Errorf("connection refused"),
+	action := handleRunResultCall(l, context.Background(), claude.Result{}, fmt.Errorf("connection refused"),
 		"task-1", "Do stuff", "abc123", runIter)
 
 	if action != actionDone {
@@ -557,7 +578,7 @@ func TestHandleRunResult_FeedbackKillReturnsRetry(t *testing.T) {
 
 	runIter := 3
 	result := claude.Result{FeedbackKill: true}
-	action := l.handleRunResult(context.Background(), result, nil,
+	action := handleRunResultCall(l, context.Background(), result, nil,
 		"task-fk", "Feedback task", "abc123", runIter)
 
 	if action != actionRetry {
@@ -580,7 +601,7 @@ func TestHandleRunResult_IdleTimeoutReturnsRetry(t *testing.T) {
 
 	runIter := 3
 	result := claude.Result{IdleTimeout: true}
-	action := l.handleRunResult(context.Background(), result, nil,
+	action := handleRunResultCall(l, context.Background(), result, nil,
 		"task-it", "Idle task", "abc123", runIter)
 
 	if action != actionRetry {
@@ -611,7 +632,7 @@ func TestHandleRunResult_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 
 	runIter := 3
 	result := claude.Result{IdleTimeout: true}
-	action := l.handleRunResult(context.Background(), result, nil,
+	action := handleRunResultCall(l, context.Background(), result, nil,
 		"task-it-max", "Idle task", "abc123", runIter)
 
 	if action != actionRetry {
@@ -633,7 +654,7 @@ func TestHandleRunResult_RateLimitedReturnsRetry(t *testing.T) {
 	resetAt := time.Now().Add(-1 * time.Second)
 	runIter := 3
 	result := claude.Result{RateLimited: true, ResetAt: resetAt}
-	action := l.handleRunResult(context.Background(), result, nil,
+	action := handleRunResultCall(l, context.Background(), result, nil,
 		"task-rl", "Rate limited task", "abc123", runIter)
 
 	if action != actionRetry {
@@ -654,7 +675,7 @@ func TestHandleRunResult_RateLimitedContextCancelledReturnsBreak(t *testing.T) {
 	resetAt := time.Now().Add(10 * time.Minute)
 	runIter := 3
 	result := claude.Result{RateLimited: true, ResetAt: resetAt}
-	action := l.handleRunResult(ctx, result, nil,
+	action := handleRunResultCall(l, ctx, result, nil,
 		"task-rl", "Rate limited task", "abc123", runIter)
 
 	if action != actionDone {
@@ -670,7 +691,7 @@ func TestHandleRunResult_NormalReturnsResultProceed(t *testing.T) {
 	l.isOnlineFunc = func() bool { return true }
 
 	runIter := 3
-	action := l.handleRunResult(context.Background(), claude.Result{}, nil,
+	action := handleRunResultCall(l, context.Background(), claude.Result{}, nil,
 		"task-ok", "Normal task", "abc123", runIter)
 
 	if action != actionProceed {
