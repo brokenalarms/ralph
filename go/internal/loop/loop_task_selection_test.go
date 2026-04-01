@@ -170,7 +170,13 @@ func TestLoop_selectNextTask_DelegatesToPackageFunc(t *testing.T) {
 		state:             l.state,
 		logger:            l.logger,
 		completedIDs:      completedIDs,
-		waitForTasks:      l.waitForTasks,
+		waitForTasks: func(ctx context.Context) bool {
+				return waitForTasks(ctx, waitForTasksParams{
+					logger:  l.logger,
+					state:   l.state,
+					backend: l.cfg.TaskBackend,
+				})
+			},
 		flushUnpushedWork: l.flushUnpushedWork,
 	})
 

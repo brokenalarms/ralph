@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brokenalarms/ralph/internal/analyzer"
 	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -19,10 +20,10 @@ import (
 // runAndComplete builds the prompt, runs the agent, handles retryable
 // failures, analyzes the outcome, and processes the signal. Returns the
 // loopAction Run() should take.
-func (l *Loop) runAndComplete(ctx context.Context, task taskContext, runIteration int) loopAction {
+func (l *Loop) runAndComplete(ctx context.Context, task taskContext, runIteration int) (loopAction, analyzer.Action) {
 	prep, ok := l.prepareAndBuildPrompt(ctx, task.id, task.title)
 	if !ok {
-		return actionDone
+		return actionDone, analyzer.Continue
 	}
 
 	taskStart := time.Now()
@@ -81,14 +82,14 @@ func (l *Loop) runAndComplete(ctx context.Context, task taskContext, runIteratio
 		skipTask:            skipTask,
 	})
 	if runAction != actionProceed {
-		return runAction
+		return runAction, analyzer.Continue
 	}
 	elapsed := time.Since(taskStart)
 	l.limiter.Increment()
 
-	diffStat, halt := l.processRunOutcome(result, elapsed, runIteration, prep, task.id, task.title)
+	diffStat, halt, iterAction := l.processRunOutcome(result, elapsed, runIteration, prep, task.id, task.title)
 	if halt {
-		return actionDone
+		return actionDone, iterAction
 	}
 
 	if result.SignalDetected {
@@ -146,14 +147,14 @@ func (l *Loop) runAndComplete(ctx context.Context, task taskContext, runIteratio
 		}
 		switch out.action {
 		case signalRetry, signalSkipped:
-			return actionRetry
+			return actionRetry, iterAction
 		case signalEvolve:
-			return actionDone
+			return actionDone, iterAction
 		}
 	}
 
 	l.git.TagTaskEnd(task.id)
-	return actionProceed
+	return actionProceed, iterAction
 }
 
 // postSignalAction describes the outcome of post-signal processing.
@@ -546,7 +547,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	if !l.waitForInternetFunc(ctx, l.logger) {
 		return iterationPrompt{}, false
 	}
-	if !l.waitForRate(ctx) {
+	if !waitForRate(ctx, waitForRateParams{limiter: l.limiter, callsPerHour: l.cfg.CallsPerHour, logger: l.logger}) {
 		return iterationPrompt{}, false
 	}
 
