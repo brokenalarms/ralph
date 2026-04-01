@@ -98,8 +98,8 @@ func TestVerifier_OnSignal_HappyPath(t *testing.T) {
 	}
 }
 
-// Verifier exhausts LLM retries and calls SkipTask, proving retry logic
-// and skip behavior are owned by the Verifier type.
+// Verifier exhausts LLM retries within a single OnSignal call and calls
+// SkipTask, proving retry logic and skip behavior are owned by the Verifier type.
 func TestVerifier_OnSignal_LLMExhaustsRetries_SkipsTask(t *testing.T) {
 	var skippedID string
 	v := newTestVerifier(t, func(v *Verifier) {
@@ -107,16 +107,16 @@ func TestVerifier_OnSignal_LLMExhaustsRetries_SkipsTask(t *testing.T) {
 			return verify.Result{Passed: false, Details: "diff doesn't match bead"}
 		}
 		v.deps.SkipTask = func(id, reason string) { skippedID = id }
+		v.deps.NewRunner = func() claudeRunner {
+			return &stubRunner{result: stubResult(true, "attempted fix")}
+		}
 	})
 
-	var result bool
-	for i := 0; i < maxLLMVerifyAttempts; i++ {
-		result = v.OnSignal(signalParams{
-			ctx: context.Background(), headBefore: "abc123",
-			workDir: t.TempDir(), rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
-			taskID: "test-skip", nextTask: "Skip test",
-		})
-	}
+	result := v.OnSignal(signalParams{
+		ctx: context.Background(), headBefore: "abc123",
+		workDir: t.TempDir(), rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID: "test-skip", nextTask: "Skip test",
+	})
 
 	if result {
 		t.Fatal("expected OnSignal to return false after exhausting retries")
@@ -126,8 +126,8 @@ func TestVerifier_OnSignal_LLMExhaustsRetries_SkipsTask(t *testing.T) {
 	}
 }
 
-// Model escalation works through Verifier: first attempt uses Haiku,
-// subsequent attempts use Sonnet.
+// Model escalation within a single OnSignal call: first attempt uses Haiku,
+// subsequent attempts within the same iteration use Sonnet.
 func TestVerifier_ModelEscalation(t *testing.T) {
 	var modelsUsed []string
 	llmCalls := 0
@@ -141,6 +141,9 @@ func TestVerifier_ModelEscalation(t *testing.T) {
 			}
 			return verify.Result{Passed: true, Reason: "approved"}
 		}
+		v.deps.NewRunner = func() claudeRunner {
+			return &stubRunner{result: stubResult(true, "attempted fix")}
+		}
 	})
 
 	params := signalParams{
@@ -150,11 +153,9 @@ func TestVerifier_ModelEscalation(t *testing.T) {
 	}
 
 	v.OnSignal(params)
-	v.OnSignal(params)
-	v.OnSignal(params)
 
 	if len(modelsUsed) != 3 {
-		t.Fatalf("expected 3 LLM calls, got %d", len(modelsUsed))
+		t.Fatalf("expected 3 LLM calls within one iteration, got %d", len(modelsUsed))
 	}
 	if modelsUsed[0] != verify.ModelHaiku {
 		t.Errorf("attempt 1: expected %s, got %s", verify.ModelHaiku, modelsUsed[0])
@@ -446,6 +447,38 @@ func TestVerifier_FixAgents_UseOpusModel(t *testing.T) {
 	})
 	if testFixModel != verify.ModelOpus {
 		t.Errorf("test fix agent: expected %s, got %s", verify.ModelOpus, testFixModel)
+	}
+}
+
+// A verifier with prior llmVerifyAttempts from a previous iteration starts
+// from attempt 1 on the next OnSignal call, giving it a full quota of retries.
+func TestVerifier_OnSignal_ResetsAttemptsEachIteration(t *testing.T) {
+	var modelsUsed []string
+
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+			modelsUsed = append(modelsUsed, opts.Model)
+			return verify.Result{Passed: true, Reason: "approved"}
+		}
+	})
+
+	// Simulate prior iteration that left llmVerifyAttempts at 2.
+	v.llmVerifyAttempts = 2
+
+	v.OnSignal(signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    t.TempDir(),
+		rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID:     "test-reset",
+		nextTask:   "Fresh iteration",
+	})
+
+	if len(modelsUsed) == 0 {
+		t.Fatal("expected at least one LLM call")
+	}
+	if modelsUsed[0] != verify.ModelHaiku {
+		t.Errorf("fresh iteration should start with %s (attempt 1), got %s — llmVerifyAttempts was not reset", verify.ModelHaiku, modelsUsed[0])
 	}
 }
 
