@@ -387,8 +387,9 @@ func (m *Manager) SetPrevBranch(branch string) {
 
 // PrepareForNextTask creates a fresh wip branch from HEAD so the next task
 // gets its own branch. RenameBranchForTask will rename it to a task-specific
-// name before the first commit.
-func (m *Manager) PrepareForNextTask() {
+// name before the first commit. Uncommitted changes are discarded only when
+// switching to a different task; resuming the same task preserves in-progress work.
+func (m *Manager) PrepareForNextTask(nextTaskID string) {
 	m.BranchRenamed = false
 	if m.State != nil {
 		_ = m.State.Write("branch_renamed", "false")
@@ -398,8 +399,14 @@ func (m *Manager) PrepareForNextTask() {
 		return
 	}
 
-	m.gitCmdErr(m.WorkDir, "checkout", ".")
-	m.gitCmdErr(m.WorkDir, "clean", "-fd", "--exclude=.ralph/")
+	lastTaskID := ""
+	if m.State != nil {
+		lastTaskID, _ = m.State.Read("last_task_id")
+	}
+	if nextTaskID == "" || lastTaskID == "" || nextTaskID != lastTaskID {
+		m.gitCmdErr(m.WorkDir, "checkout", ".")
+		m.gitCmdErr(m.WorkDir, "clean", "-fd", "--exclude=.ralph/")
+	}
 
 	newBranch := WipBranchName()
 	if m.WorktreeBranch == newBranch {

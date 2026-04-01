@@ -24,7 +24,7 @@ type branchParams struct {
 // prepareBranch is the package-level implementation of branch setup for a task.
 // Called by the Loop method wrapper which passes its fields as a branchParams.
 func prepareBranch(ctx context.Context, p branchParams, taskID, title string) error {
-	p.git.PrepareForNextTask()
+	p.git.PrepareForNextTask(taskID)
 
 	if p.git.GetWorktreeBranch() != "" && p.git.GetWorkDir() != p.git.GetProjectDir() {
 		setStackHead(p.git, p.backend, p.state, p.logger)
@@ -311,7 +311,7 @@ func (l *Loop) resolveByPRState(ctx context.Context, taskID, nextTask, prNumber 
 			_ = l.cfg.TaskBackend.SetExternalRef(taskID, "")
 			_ = l.cfg.TaskBackend.SetMetadata(taskID, "branch", "")
 		}
-		l.git.PrepareForNextTask()
+		l.git.PrepareForNextTask(taskID)
 		l.checkoutExistingBranch(taskID, nextTask)
 		return false
 	}

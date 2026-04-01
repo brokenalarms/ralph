@@ -508,9 +508,9 @@ func TestRenameBranchForTask_DoesNotSetPrevBranch(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.RenameBranchForTask("first task", "")
-	mgr.PrepareForNextTask()
-	mgr.RenameBranchForTask("second task", "")
+	mgr.RenameBranchForTask("first task", "ralph-aaa")
+	mgr.PrepareForNextTask("ralph-bbb")
+	mgr.RenameBranchForTask("second task", "ralph-bbb")
 
 	if mgr.PrevBranch != "" {
 		t.Errorf("PrevBranch = %q, want empty (set by setStackHead, not rename)", mgr.PrevBranch)
@@ -541,7 +541,7 @@ func TestPrepareForNextTask_CreatesFreshBranch(t *testing.T) {
 		t.Fatal("branch should have been renamed from ralph/wip")
 	}
 
-	mgr.PrepareForNextTask()
+	mgr.PrepareForNextTask("ralph-bbb")
 
 	if mgr.WorktreeBranch != "ralph/wip" {
 		t.Errorf("after PrepareForNextTask, branch = %q, want ralph/wip", mgr.WorktreeBranch)
@@ -596,7 +596,7 @@ func TestPrepareForNextTask_DiscardsUncommittedChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mgr.PrepareForNextTask()
+	mgr.PrepareForNextTask("ralph-bbb")
 
 	// Tracked file must be restored to its committed content.
 	got, err := os.ReadFile(trackedFile)
@@ -610,6 +610,104 @@ func TestPrepareForNextTask_DiscardsUncommittedChanges(t *testing.T) {
 	// Untracked file must be removed.
 	if _, err := os.Stat(untrackedFile); !os.IsNotExist(err) {
 		t.Error("untracked file should have been removed by PrepareForNextTask")
+	}
+}
+
+// PrepareForNextTask discards uncommitted changes when switching to a different
+// task (last_task_id differs from nextTaskID), so stale files don't leak across tasks.
+func TestPrepareForNextTask_CleansOnTaskSwitch(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+	_ = state.Write("last_task_id", "ralph-aaa")
+
+	mgr := &Manager{
+		ProjectDir: project,
+		BaseBranch: "main",
+		RalphDir:   ralphDir,
+		State:      state,
+		Logger:     &testLog{},
+	}
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("first task", "ralph-aaa")
+
+	trackedFile := filepath.Join(mgr.WorkDir, "tracked.txt")
+	if err := os.WriteFile(trackedFile, []byte("initial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, "git", "-C", mgr.WorkDir, "add", "tracked.txt")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add tracked")
+	if err := os.WriteFile(trackedFile, []byte("dirty"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	untrackedFile := filepath.Join(mgr.WorkDir, "untracked.txt")
+	if err := os.WriteFile(untrackedFile, []byte("untracked"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr.PrepareForNextTask("ralph-bbb")
+
+	got, err := os.ReadFile(trackedFile)
+	if err != nil {
+		t.Fatalf("reading tracked file: %v", err)
+	}
+	if string(got) != "initial" {
+		t.Errorf("tracked file content = %q, want %q after task switch", string(got), "initial")
+	}
+	if _, err := os.Stat(untrackedFile); !os.IsNotExist(err) {
+		t.Error("untracked file should have been removed when switching tasks")
+	}
+}
+
+// PrepareForNextTask preserves uncommitted changes when resuming the same task
+// (last_task_id matches nextTaskID), so in-progress work survives crash/restart.
+func TestPrepareForNextTask_PreservesChangesWhenResumingSameTask(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	state := newMemState()
+	_ = state.Write("last_task_id", "ralph-aaa")
+
+	mgr := &Manager{
+		ProjectDir: project,
+		BaseBranch: "main",
+		RalphDir:   ralphDir,
+		State:      state,
+		Logger:     &testLog{},
+	}
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("first task", "ralph-aaa")
+
+	trackedFile := filepath.Join(mgr.WorkDir, "tracked.txt")
+	if err := os.WriteFile(trackedFile, []byte("initial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, "git", "-C", mgr.WorkDir, "add", "tracked.txt")
+	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add tracked")
+	if err := os.WriteFile(trackedFile, []byte("in-progress"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	untrackedFile := filepath.Join(mgr.WorkDir, "wip.txt")
+	if err := os.WriteFile(untrackedFile, []byte("work in progress"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr.PrepareForNextTask("ralph-aaa")
+
+	got, err := os.ReadFile(trackedFile)
+	if err != nil {
+		t.Fatalf("reading tracked file: %v", err)
+	}
+	if string(got) != "in-progress" {
+		t.Errorf("tracked file content = %q, want %q when resuming same task", string(got), "in-progress")
+	}
+	if _, err := os.Stat(untrackedFile); os.IsNotExist(err) {
+		t.Error("untracked file should be preserved when resuming same task")
 	}
 }
 
