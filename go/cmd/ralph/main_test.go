@@ -831,6 +831,40 @@ func TestHelpText_StopFeedbackInLoopOnly(t *testing.T) {
 	}
 }
 
+// Verifies ralph task help text does not show [directory] in the usage line
+// or in the examples, since ralph task always operates on the current directory.
+func TestHelpText_TaskNoDirectoryArg(t *testing.T) {
+	captureStdout := func(fn func()) string {
+		t.Helper()
+		r, w, _ := os.Pipe()
+		old := os.Stdout
+		os.Stdout = w
+		fn()
+		w.Close()
+		os.Stdout = old
+		data, _ := io.ReadAll(r)
+		return string(data)
+	}
+
+	taskHelp := captureStdout(printTaskUsage)
+
+	if strings.Contains(taskHelp, "[directory]") {
+		t.Error("ralph task help should not show [directory] in usage line")
+	}
+	if strings.Contains(taskHelp, "directory") {
+		t.Error("ralph task help should not mention directory")
+	}
+
+	topHelp := captureStdout(printUsage)
+
+	if strings.Contains(topHelp, "ralph task [directory]") {
+		t.Error("top-level help should not show ralph task [directory]")
+	}
+	if strings.Contains(topHelp, "ralph task ~/") {
+		t.Error("top-level help examples should not show a directory arg for ralph task")
+	}
+}
+
 // Verifies printSessionSummary shows a clickable PR URL instead of
 // bare "PR #N" when the URL is available from GitHub.
 func TestPrintSessionSummary_ShowsPRURL(t *testing.T) {
