@@ -115,7 +115,7 @@ func (s *StubGitHub) PostEnforceAdmins(nwo, branch string) (string, error) {
 	s.PostEnforceCalled = true
 	return s.PostEnforceOutput, s.PostEnforceErr
 }
-func (s *StubGitHub) FindPR(branch, workDir string) (string, string, string, error) {
+func (s *StubGitHub) FindPR(branch, repoURL string) (string, string, string, error) {
 	return s.PRNumber, s.PRTitle, s.PRURL, s.FindPRErr
 }
 func (s *StubGitHub) SearchPR(workDir, query string) (string, error) {

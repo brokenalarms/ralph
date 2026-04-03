@@ -144,7 +144,7 @@ func (m *Manager) FindPRForBranch(branch string) (string, string, string, error)
 	if !gh.Available() {
 		return "", "", "", nil
 	}
-	return gh.FindPR(branch, m.WorkDir)
+	return gh.FindPR(branch, m.RemoteURL())
 }
 
 // PRChainIsHealthy checks that the PR's head branch exists on the remote

@@ -1,8 +1,45 @@
 package git
 
 import (
+	"fmt"
 	"testing"
 )
+
+// MergePR with a 200 response signals a successful squash-merge.
+func TestMergePR_HTTP200_ReturnsMerged(t *testing.T) {
+	output := "HTTP/2.0 200 OK\r\n\r\n{}"
+	result := classifyMergeStatus(output, nil)
+	if !result.Merged {
+		t.Errorf("expected Merged=true for HTTP 200, got %+v", result)
+	}
+	if result.Blocked || result.Conflict {
+		t.Errorf("expected no Blocked/Conflict flags for HTTP 200, got %+v", result)
+	}
+}
+
+// MergePR with a 405 response means branch protection is blocking the merge.
+func TestMergePR_HTTP405_ReturnsBlocked(t *testing.T) {
+	output := "HTTP/2.0 405 Method Not Allowed\r\n\r\n{\"message\":\"Pull Request is not mergeable\"}"
+	result := classifyMergeStatus(output, fmt.Errorf("exit status 1"))
+	if !result.Blocked {
+		t.Errorf("expected Blocked=true for HTTP 405, got %+v", result)
+	}
+	if result.Merged || result.Conflict {
+		t.Errorf("expected no Merged/Conflict flags for HTTP 405, got %+v", result)
+	}
+}
+
+// MergePR with a 409 response means the PR has unresolvable merge conflicts.
+func TestMergePR_HTTP409_ReturnsConflict(t *testing.T) {
+	output := "HTTP/2.0 409 Conflict\r\n\r\n{\"message\":\"Merge conflict\"}"
+	result := classifyMergeStatus(output, fmt.Errorf("exit status 1"))
+	if !result.Conflict {
+		t.Errorf("expected Conflict=true for HTTP 409, got %+v", result)
+	}
+	if result.Merged || result.Blocked {
+		t.Errorf("expected no Merged/Blocked flags for HTTP 409, got %+v", result)
+	}
+}
 
 // The StubGitHub type satisfies the GitHub interface, proving that test stubs
 // can replace all GitHub CLI operations without shelling out.

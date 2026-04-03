@@ -58,7 +58,7 @@ type GitHub interface {
 	GetRunLog(prNumber, workDir string) string
 	CheckEnforceAdmins(nwo, branch string) (enabled bool, err error)
 	PostEnforceAdmins(nwo, branch string) (output string, err error)
-	FindPR(branch, workDir string) (number, title, url string, err error)
+	FindPR(branch, repoURL string) (number, title, url string, err error)
 	SearchPR(workDir, query string) (prNumber string, err error)
 	PRDiff(workDir, prNumber string) (string, error)
 	GetPRState(workDir, prNumber string) (state string, err error)
@@ -82,13 +82,25 @@ func (g *ghCLI) Available() bool {
 }
 
 func (g *ghCLI) FindOpenPR(branch, repoURL string) (string, error) {
-	cmd := exec.Command("gh", "pr", "list", "--head", branch, "--state", "open",
-		"--json", "number", "--jq", ".[0].number", "-R", repoURL)
+	nwo := NWOFromRemote(repoURL)
+	if nwo == "" {
+		return "", fmt.Errorf("cannot determine owner/repo from %q", repoURL)
+	}
+	owner := strings.SplitN(nwo, "/", 2)[0]
+	endpoint := fmt.Sprintf("repos/%s/pulls", nwo)
+	cmd := exec.Command("gh", "api", endpoint,
+		"-f", "state=open",
+		"-f", fmt.Sprintf("head=%s:%s", owner, branch),
+		"--jq", ".[0].number // empty")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("gh pr list failed: %w", err)
+		return "", fmt.Errorf("gh api pulls failed: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	result := strings.TrimSpace(string(out))
+	if result == "null" {
+		return "", nil
+	}
+	return result, nil
 }
 
 func (g *ghCLI) ListOpenPRBranches(repoURL string) ([]string, error) {
@@ -106,17 +118,12 @@ func (g *ghCLI) ListOpenPRBranches(repoURL string) ([]string, error) {
 }
 
 func (g *ghCLI) CreatePR(opts CreatePROpts) error {
-	args := []string{"pr", "create", "--head", opts.Head}
-	if opts.Base != "" {
-		args = append(args, "--base", opts.Base)
+	nwo := NWOFromRemote(opts.Repo)
+	if nwo == "" {
+		return fmt.Errorf("cannot determine owner/repo from %q", opts.Repo)
 	}
-	args = append(args, "--title", opts.Title, "--body", opts.Body, "-R", opts.Repo)
-	cmd := exec.Command("gh", args...)
-	cmd.Dir = opts.Dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("PR creation failed: %s", strings.TrimSpace(string(out)))
-	}
-	return nil
+	_, err := g.CreatePRViaAPI(nwo, opts)
+	return err
 }
 
 func (g *ghCLI) EditPR(prNumber, repoURL, title, body string) error {
@@ -137,46 +144,28 @@ func (g *ghCLI) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
 		return MergeResult{Message: "cannot determine owner/repo from remote URL"}
 	}
 
-	reqBody := fmt.Sprintf(`{"merge_method":"squash"`)
-	if opts.Subject != "" {
-		reqBody += fmt.Sprintf(`,"commit_title":%q`, opts.Subject)
-	}
-	reqBody += "}"
-
 	endpoint := fmt.Sprintf("repos/%s/pulls/%s/merge", nwo, prNumber)
-	cmd := exec.Command("gh", "api", endpoint, "--method", "PUT", "--include", "--input", "-")
-	cmd.Stdin = strings.NewReader(reqBody)
+	args := []string{"api", "-X", "PUT", endpoint, "--include", "-f", "merge_method=squash"}
+	if opts.Subject != "" {
+		args = append(args, "-f", "commit_title="+opts.Subject)
+	}
+	cmd := exec.Command("gh", args...)
 	out, err := cmd.CombinedOutput()
 
-	output := string(out)
-	statusCode := parseHTTPStatus(output)
-
-	// 200 = merged
-	if err == nil || statusCode == 200 {
-		result := MergeResult{Merged: true, Message: "merged"}
+	result := classifyMergeStatus(string(out), err)
+	if result.Merged {
 		if opts.DeleteBranch {
 			g.deleteBranch(nwo, prNumber)
 		}
 		return result
 	}
 
-	// Parse JSON message from the response body (after the headers).
-	msg := parseAPIMessage(output)
-
-	switch statusCode {
-	case 405:
-		// Method Not Allowed: branch protection blocks merge via REST API.
-		// If caller opted in to admin bypass, fall back to gh pr merge --admin.
-		if opts.Admin {
-			return g.mergeAdmin(prNumber, repoURL, nwo, opts)
-		}
-		return MergeResult{Blocked: true, Message: msg}
-	case 409:
-		// Conflict: head was modified (SHA mismatch)
-		return MergeResult{Conflict: true, Message: msg}
-	default:
-		return MergeResult{Message: msg}
+	// Method Not Allowed: branch protection blocks merge via REST API.
+	// If caller opted in to admin bypass, fall back to gh pr merge --admin.
+	if result.Blocked && opts.Admin {
+		return g.mergeAdmin(prNumber, repoURL, nwo, opts)
 	}
+	return result
 }
 
 // mergeAdmin uses gh pr merge --admin to bypass branch protection rules.
@@ -192,6 +181,24 @@ func (g *ghCLI) mergeAdmin(prNumber, repoURL, nwo string, opts MergeOpts) MergeR
 		return MergeResult{Message: strings.TrimSpace(string(out))}
 	}
 	return MergeResult{Merged: true, Message: "merged (admin)"}
+}
+
+// classifyMergeStatus maps gh api --include output to a structured MergeResult.
+// HTTP 200 = merged, 405 = blocked by branch protection, 409 = merge conflict.
+func classifyMergeStatus(output string, err error) MergeResult {
+	statusCode := parseHTTPStatus(output)
+	if err == nil || statusCode == 200 {
+		return MergeResult{Merged: true, Message: "merged"}
+	}
+	msg := parseAPIMessage(output)
+	switch statusCode {
+	case 405:
+		return MergeResult{Blocked: true, Message: msg}
+	case 409:
+		return MergeResult{Conflict: true, Message: msg}
+	default:
+		return MergeResult{Message: msg}
+	}
 }
 
 // parseHTTPStatus extracts the status code from the first line of
@@ -329,14 +336,20 @@ func (g *ghCLI) GetRunLog(prNumber, workDir string) string {
 	return strings.Join(lines, "\n")
 }
 
-func (g *ghCLI) FindPR(branch, workDir string) (string, string, string, error) {
-	cmd := exec.Command("gh", "pr", "list",
-		"--head", branch,
-		"--state", "all", "--json", "number,title,url", "--jq", `.[0] | "\(.number)\t\(.title)\t\(.url)"`)
-	cmd.Dir = workDir
+func (g *ghCLI) FindPR(branch, repoURL string) (string, string, string, error) {
+	nwo := NWOFromRemote(repoURL)
+	if nwo == "" {
+		return "", "", "", fmt.Errorf("cannot determine owner/repo from %q", repoURL)
+	}
+	owner := strings.SplitN(nwo, "/", 2)[0]
+	endpoint := fmt.Sprintf("repos/%s/pulls", nwo)
+	cmd := exec.Command("gh", "api", endpoint,
+		"-f", "state=all",
+		"-f", fmt.Sprintf("head=%s:%s", owner, branch),
+		"--jq", `.[0] // empty | "\(.number)\t\(.title)\t\(.html_url)"`)
 	out, err := cmd.Output()
 	if err != nil {
-		return "", "", "", fmt.Errorf("gh pr list failed: %w", err)
+		return "", "", "", fmt.Errorf("gh api pulls failed: %w", err)
 	}
 	raw := strings.TrimSpace(string(out))
 	if raw == "" {

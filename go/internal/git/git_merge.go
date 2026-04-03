@@ -95,7 +95,7 @@ func (m *Manager) Push(ctx context.Context) error {
 // reopens it. Returns the PR number on success or empty string if no closed
 // PR was found or reopen failed.
 func reopenClosedPR(gh GitHub, workDir, branch, nwo, repoURL, title, body string, logger Log) (string, error) {
-	number, _, _, findErr := gh.FindPR(branch, workDir)
+	number, _, _, findErr := gh.FindPR(branch, repoURL)
 	if findErr != nil || number == "" {
 		return "", findErr
 	}
@@ -297,7 +297,7 @@ func Ship(ctx context.Context, runner Runner, gh GitHub, workDir, branch, remote
 	// Look up the PR URL for the external ref.
 	var prURL, prTitle string
 	if prNumber != "" {
-		if _, t, u, findErr := gh.FindPR(branch, workDir); findErr == nil {
+		if _, t, u, findErr := gh.FindPR(branch, remoteURL); findErr == nil {
 			prURL = u
 			prTitle = t
 		}
@@ -441,7 +441,7 @@ var ErrPRAlreadyMerged = fmt.Errorf("PR already merged")
 // merged, returns ErrPRAlreadyMerged. If closed, reopens and returns the
 // PR number so the caller can proceed with the normal merge flow.
 func (m *Manager) resolveClosedPR(gh GitHub, repoURL string) (string, error) {
-	number, _, _, findErr := gh.FindPR(m.WorktreeBranch, m.WorkDir)
+	number, _, _, findErr := gh.FindPR(m.WorktreeBranch, repoURL)
 	if findErr != nil || number == "" {
 		return "", nil
 	}
@@ -515,7 +515,7 @@ func executeMerge(ctx context.Context, gh GitHub, opts ExecuteMergeOpts, logger 
 	prLink := logging.PRLinkOpt(nwo, opts.PRNumber)
 	mergeOpts := opts.MergeOpts
 
-	if _, prTitle, _, titleErr := gh.FindPR(opts.WorktreeBranch, opts.WorkDir); titleErr == nil && prTitle != "" {
+	if _, prTitle, _, titleErr := gh.FindPR(opts.WorktreeBranch, opts.RepoURL); titleErr == nil && prTitle != "" {
 		mergeOpts.Subject = fmt.Sprintf("%s (#%s)", prTitle, opts.PRNumber)
 	}
 
