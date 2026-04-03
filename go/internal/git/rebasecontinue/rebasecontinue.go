@@ -282,14 +282,23 @@ func rebaseInProgress(dir string) bool {
 }
 
 func checkConflicts(dir string) []string {
-	cmd := exec.Command("git", "diff", "--name-only", "--diff-filter=U")
+	cmd := exec.Command("git", "ls-files", "--unmerged")
 	cmd.Dir = dir
 	out, _ := cmd.Output()
 	s := strings.TrimSpace(string(out))
 	if s == "" {
 		return nil
 	}
-	return strings.Split(s, "\n")
+	seen := make(map[string]bool)
+	var files []string
+	for _, line := range strings.Split(s, "\n") {
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) == 2 && parts[1] != "" && !seen[parts[1]] {
+			seen[parts[1]] = true
+			files = append(files, parts[1])
+		}
+	}
+	return files
 }
 
 func gitShow(dir, ref string) (string, error) {
@@ -309,6 +318,7 @@ func gitOutputStr(dir string, args ...string) (string, error) {
 func runGitOutput(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_EDITOR=:")
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
