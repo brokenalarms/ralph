@@ -288,10 +288,8 @@ func TestWaitForCI_BackoffDoubles(t *testing.T) {
 	}
 }
 
-// waitForCI emits exactly one log line for the entire polling duration.
-// The line is updated in-place as durations accumulate, and only the final
-// state is written to the log (via EmitFinalInPlace). N pending polls produce
-// exactly one "CI polled" entry in the log, not N+1 lines.
+// waitForCI emits exactly one log line regardless of poll count — each poll
+// appends ~4 chars rather than rewriting the line, so 10 polls produce one line.
 func TestWaitForCI_SingleLogLine(t *testing.T) {
 	origSleep := ciSleep
 	ciSleep = func(d time.Duration) <-chan time.Time {
@@ -304,7 +302,7 @@ func TestWaitForCI_SingleLogLine(t *testing.T) {
 	callCount := 0
 	fetch := func(pr, repo string) ([]CICheckResult, error) {
 		callCount++
-		if callCount < 4 {
+		if callCount < 11 {
 			return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
 		}
 		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
@@ -316,9 +314,9 @@ func TestWaitForCI_SingleLogLine(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// 3 pending polls produce exactly one final "CI polled" line in the log.
+	// 10 pending polls produce exactly one "CI polled" line in the log.
 	if len(log.messages) != 1 {
-		t.Fatalf("expected exactly 1 log message, got %d: %v", len(log.messages), log.messages)
+		t.Fatalf("expected exactly 1 log message for 10 polls, got %d: %v", len(log.messages), log.messages)
 	}
 	if !strings.Contains(log.messages[0], "polled 1s..2s..4s") {
 		t.Errorf("expected polling summary with backoff schedule, got: %s", log.messages[0])

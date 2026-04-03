@@ -35,8 +35,8 @@ func (s *memState) Write(key, value string) error {
 
 // testLog captures log output for assertion.
 type testLog struct {
-	messages     []string
-	lastInPlace  string
+	messages   []string
+	lineBuffer string
 }
 
 func (l *testLog) format(o logging.Opts, format string, args ...any) string {
@@ -61,15 +61,22 @@ func (l *testLog) Emit(o logging.Opts, format string, args ...any) {
 	l.messages = append(l.messages, l.format(o, format, args...))
 }
 
-// EmitInPlace records the latest in-place message without appending to messages.
+// EmitInPlace starts an in-place line by recording the formatted first segment.
 func (l *testLog) EmitInPlace(o logging.Opts, format string, args ...any) {
-	l.lastInPlace = l.format(o, format, args...)
+	l.lineBuffer = l.format(o, format, args...)
 }
 
-// EmitFinalInPlace commits the final in-place message to messages.
-func (l *testLog) EmitFinalInPlace(o logging.Opts, format string, args ...any) {
-	l.messages = append(l.messages, l.format(o, format, args...))
-	l.lastInPlace = ""
+// EmitAppend appends raw text to the current in-place line buffer.
+func (l *testLog) EmitAppend(format string, args ...any) {
+	l.lineBuffer += fmt.Sprintf(format, args...)
+}
+
+// EmitFinalInPlace commits the accumulated line buffer to messages.
+func (l *testLog) EmitFinalInPlace() {
+	if l.lineBuffer != "" {
+		l.messages = append(l.messages, l.lineBuffer)
+		l.lineBuffer = ""
+	}
 }
 
 func (l *testLog) contains(substr string) bool {

@@ -229,9 +229,9 @@ func (l *Logger) write(s string) {
 	fmt.Fprint(l.logFile, s)
 }
 
-// EmitInPlace writes a log message using a carriage return so it overwrites
-// the current terminal line without advancing. Only writes to stdout —
-// the log file receives nothing until EmitFinalInPlace commits the final state.
+// EmitInPlace writes the first segment of an in-place log line in append mode —
+// no carriage return, no trailing newline. Writes to both stdout and the log file.
+// Follow with EmitAppend for subsequent segments and EmitFinalInPlace to close the line.
 func (l *Logger) EmitInPlace(o Opts, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	if o.Link != nil {
@@ -248,32 +248,28 @@ func (l *Logger) EmitInPlace(o Opts, format string, args ...any) {
 	content := fmt.Sprintf("%s %s", tag, msg)
 	formatted := l.Fmt.Format(content)
 	if !l.streaming {
-		fmt.Fprint(l.out, "\r"+formatted)
+		fmt.Fprint(l.out, formatted)
 	}
+	fmt.Fprint(l.logFile, formatted)
 }
 
-// EmitFinalInPlace finalizes an in-place log line: overwrites the current
-// terminal line on stdout (advancing to a new line) and writes the line to
-// the log file. Call once after one or more EmitInPlace calls.
-func (l *Logger) EmitFinalInPlace(o Opts, format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
-	if o.Link != nil {
-		if o.Link.URL != "" {
-			msg += "  (" + Hyperlink(o.Link.URL, o.Link.Text) + ")"
-		} else if o.Link.Text != "" {
-			msg += "  (" + o.Link.Text + ")"
-		}
-	}
-	tag := Tag(o.Level.color(), Orch, o.Domain)
-	if o.Model != "" {
-		tag += ModelTag(o.Model)
-	}
-	content := fmt.Sprintf("%s %s", tag, msg)
-	formatted := l.Fmt.Format(content)
+// EmitAppend appends raw text to the current in-place log line — no tag, no
+// carriage return, no trailing newline. Writes to both stdout and the log file.
+func (l *Logger) EmitAppend(format string, args ...any) {
+	s := fmt.Sprintf(format, args...)
 	if !l.streaming {
-		fmt.Fprint(l.out, "\r"+formatted+"\n")
+		fmt.Fprint(l.out, s)
 	}
-	fmt.Fprint(l.logFile, formatted+"\n")
+	fmt.Fprint(l.logFile, s)
+}
+
+// EmitFinalInPlace closes an in-place log line with a newline.
+// Writes to both stdout and the log file.
+func (l *Logger) EmitFinalInPlace() {
+	if !l.streaming {
+		fmt.Fprint(l.out, "\n")
+	}
+	fmt.Fprint(l.logFile, "\n")
 }
 
 // AgentLog writes an info-level message with [r] actor prefix.
