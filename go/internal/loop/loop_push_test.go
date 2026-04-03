@@ -280,11 +280,11 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 		Wait:          true,
 	}, st, gm, logger)
 	l.runner = runner
-	l.isOnlineFunc = func() bool { return true }
-	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
 
 	waitEntered := make(chan struct{}, 1)
-	l.onWaitFunc = func() { waitEntered <- struct{}{} }
+	l.cfg.OnWait = func() { waitEntered <- struct{}{} }
 
 	go func() {
 		<-waitEntered
@@ -406,11 +406,11 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 		Wait:          true,
 	}, st, gm, logger)
 	l.runner = runner
-	l.isOnlineFunc = func() bool { return true }
-	l.waitForInternetFunc = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
 
 	waitEntered := make(chan struct{}, 1)
-	l.onWaitFunc = func() { waitEntered <- struct{}{} }
+	l.cfg.OnWait = func() { waitEntered <- struct{}{} }
 
 	go func() {
 		<-waitEntered

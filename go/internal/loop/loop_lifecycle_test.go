@@ -271,7 +271,7 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 
 	waitCount := 0
 	waitEntered := make(chan struct{}, 2)
-	l.onWaitFunc = func() {
+	l.cfg.OnWait = func() {
 		waitCount++
 		waitEntered <- struct{}{}
 	}
@@ -330,7 +330,7 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 	}, st, gm, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	l.onWaitFunc = func() { cancel() }
+	l.cfg.OnWait = func() { cancel() }
 
 	err := l.Run(ctx)
 	if err != nil {
@@ -370,7 +370,7 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 		Wait:          true,
 	}, st, gm, logger)
 
-	l.onWaitFunc = func() {
+	l.cfg.OnWait = func() {
 		os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
 	}
 
@@ -495,7 +495,7 @@ func TestLoop_LifecycleStates(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.verifyFunc = func(context.Context, string, string) (bool, string) {
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
 
@@ -555,7 +555,7 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.verifyFunc = func(context.Context, string, string) (bool, string) {
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return false, "tests failed"
 	}
 
@@ -676,7 +676,7 @@ func TestLoop_WaitMode_ReReadsSkippedTasksOnTick(t *testing.T) {
 		Wait:          true,
 	}, st, gm, logger)
 
-	l.onWaitFunc = func() {
+	l.cfg.OnWait = func() {
 		s, _ := st.Load()
 		s.SkippedTasks = nil
 		st.Save(s)
@@ -692,7 +692,7 @@ func TestLoop_WaitMode_ReReadsSkippedTasksOnTick(t *testing.T) {
 		logger:     l.logger,
 		state:      l.state,
 		backend:    l.cfg.TaskBackend,
-		onWaitFunc: l.onWaitFunc,
+		onWaitFunc: l.cfg.OnWait,
 	})
 	if !got {
 		t.Fatal("waitForTasks should return true after skipped tasks cleared")

@@ -45,6 +45,13 @@ type Config struct {
 	VerifyModel           string // model for first LLM verification attempt
 	VerifyEscalationModel string // model for subsequent LLM verification attempts
 	OnIterationStart      func() // called at the start of each iteration (e.g. to regenerate resume script)
+	// hooks for test injection; nil uses the real implementation
+	OnVerify        func(ctx context.Context, dir, headBefore string) (bool, string)
+	IsOnline        func() bool
+	WaitForInternet func(ctx context.Context, logger *logging.Logger) bool
+	OnWait          func()
+	NewRunner       func() claudeRunner
+	QueryFn         func(ctx context.Context, workDir, prompt, model string) (string, error)
 }
 
 // claudeRunner abstracts the Claude execution interface for testability.
@@ -67,24 +74,17 @@ type CompletedTask struct {
 // Loop orchestrates the execution phase: task selection, prompt building,
 // rate limiting, branch rotation, Claude invocation, and response analysis.
 type Loop struct {
-	cfg        Config
-	state      *state.Store
-	git        git.GitOps
-	limiter    *ratelimit.Limiter
-	runner     claudeRunner
-	verifier   *Verifier
-	analyzer   *analyzer.Analyzer
-	attempts   *attempts.Tracker
-	logger     *logging.Logger
-	signals    claude.SignalPaths
-	verifyFunc          func(ctx context.Context, dir, headBefore string) (passed bool, reason string)
-	newRunnerFunc       func() claudeRunner
-	agentRunner         *agent.Runner
-	refactorQueryFunc   func(ctx context.Context, workDir, prompt, model string) (string, error)
-	isOnlineFunc        func() bool
-	waitForInternetFunc func(ctx context.Context, logger *logging.Logger) bool
-	onWaitFunc          func() // called when the loop enters waitForTasks (test hook)
-	sessionTasks        []CompletedTask
+	cfg            Config
+	state          *state.Store
+	git            git.GitOps
+	limiter        *ratelimit.Limiter
+	runner         claudeRunner
+	verifier       *Verifier
+	analyzer       *analyzer.Analyzer
+	attempts       *attempts.Tracker
+	logger         *logging.Logger
+	signals        claude.SignalPaths
+	completedTasks []CompletedTask
 }
 
 // New creates an execution loop from the given configuration. All agent
@@ -97,19 +97,29 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 
 	agentRunner := agent.New(logger)
 
+	if cfg.IsOnline == nil {
+		cfg.IsOnline = isOnline
+	}
+	if cfg.WaitForInternet == nil {
+		cfg.WaitForInternet = waitForInternet
+	}
+	if cfg.NewRunner == nil {
+		cfg.NewRunner = func() claudeRunner { return agent.New(logger) }
+	}
+	if cfg.QueryFn == nil {
+		cfg.QueryFn = agentRunner.Query
+	}
+
 	l := &Loop{
-		cfg:                 cfg,
-		state:               st,
-		git:                 gm,
-		limiter:             limiter,
-		runner:              agentRunner,
-		analyzer:            analyzer.New(),
-		attempts:            attempts.New(cfg.Dirs.RalphDir),
-		logger:              logger,
-		signals:             signals,
-		agentRunner:         agentRunner,
-		isOnlineFunc:        isOnline,
-		waitForInternetFunc: waitForInternet,
+		cfg:      cfg,
+		state:    st,
+		git:      gm,
+		limiter:  limiter,
+		runner:   agentRunner,
+		analyzer: analyzer.New(),
+		attempts: attempts.New(cfg.Dirs.RalphDir),
+		logger:   logger,
+		signals:  signals,
 	}
 	l.verifier = NewVerifier(VerifierConfig{
 		VerifyDir:             cfg.VerifyDir,
@@ -126,13 +136,8 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 		TaskBackend: cfg.TaskBackend,
 		Runner:      func() claudeRunner { return l.runner },
 		Signals:     signals,
-		NewRunner: func() claudeRunner {
-			if l.newRunnerFunc != nil {
-				return l.newRunnerFunc()
-			}
-			return agent.New(l.logger)
-		},
-		QueryFn: l.agentRunner.Query,
+		NewRunner:   func() claudeRunner { return l.cfg.NewRunner() },
+		QueryFn:     cfg.QueryFn,
 		LLMVerify:   verify.LLMVerifyPR,
 		SkipTask: func(id, reason string) {
 			skipTask(l.cfg.TaskBackend, l.state, l.logger, id, reason)
@@ -143,7 +148,7 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 
 // SessionTasks returns the tasks completed during this session.
 func (l *Loop) SessionTasks() []CompletedTask {
-	return l.sessionTasks
+	return l.completedTasks
 }
 
 // Run executes the full iteration loop. Returns nil on normal completion
@@ -164,6 +169,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	var runIteration int
 	var lastAction analyzer.Action
 	var lastTaskMerged bool
+	var sessionTasks []CompletedTask
 	st, _ := l.state.Load()
 	iteration := st.Iteration
 
@@ -171,13 +177,13 @@ func (l *Loop) Run(ctx context.Context) error {
 		logger:     l.logger,
 		state:      l.state,
 		backend:    l.cfg.TaskBackend,
-		onWaitFunc: l.onWaitFunc,
+		onWaitFunc: l.cfg.OnWait,
 	}
 
 	for {
 		// ── Task selection ──
-		completedIDs := make(map[string]bool, len(l.sessionTasks))
-		for _, ct := range l.sessionTasks {
+		completedIDs := make(map[string]bool, len(sessionTasks))
+		for _, ct := range sessionTasks {
 			completedIDs[ct.ID] = true
 		}
 		task, action := selectNextTask(ctx, selectNextTaskParams{
@@ -228,7 +234,16 @@ func (l *Loop) Run(ctx context.Context) error {
 			}
 		}
 
-		if err := l.maybeRefactor(); err != nil {
+		if err := maybeRefactor(ctx, maybeRefactorParams{
+			cfg:          l.cfg,
+			git:          l.git,
+			limiter:      l.limiter,
+			runner:       l.runner,
+			logger:       l.logger,
+			signals:      l.signals,
+			queryFn:      l.cfg.QueryFn,
+			sessionCount: len(sessionTasks),
+		}); err != nil {
 			l.logger.Emit(logging.Opts{Level: logging.Warn}, "Refactor iteration error: %v", err)
 		}
 
@@ -294,14 +309,26 @@ func (l *Loop) Run(ctx context.Context) error {
 			projectDir:          l.cfg.Dirs.ProjectDir,
 			planFile:            l.cfg.PlanFile,
 			callsPerHour:        l.cfg.CallsPerHour,
-			runVerifyBuildFn:    l.runVerifyBuild,
-			isOnlineFunc:        l.isOnlineFunc,
-			waitForInternetFunc: l.waitForInternetFunc,
-			verifyFunc:          l.verifyFunc,
-			runPostTaskFn:       l.runPostTask,
+			runVerifyBuildFn: func(ctx context.Context) string {
+				return runVerifyBuild(ctx, runVerifyBuildParams{
+					verifyBuild: l.cfg.VerifyBuild,
+					projectDir:  l.cfg.Dirs.ProjectDir,
+					logger:      l.logger,
+				})
+			},
+			isOnlineFunc:        l.cfg.IsOnline,
+			waitForInternetFunc: l.cfg.WaitForInternet,
+			verifyFunc:          l.cfg.OnVerify,
+			runPostTaskFn: func(ctx context.Context, taskID, prNumber string, merged bool) {
+				runPostTask(ctx, runPostTaskParams{
+					postTask:   l.cfg.PostTask,
+					projectDir: l.cfg.Dirs.ProjectDir,
+					logger:     l.logger,
+				}, taskID, prNumber, merged)
+			},
 		}, task, runIteration)
 		if ct != nil {
-			l.sessionTasks = append(l.sessionTasks, *ct)
+			sessionTasks = append(sessionTasks, *ct)
 		}
 		if merged {
 			lastTaskMerged = true
@@ -315,5 +342,6 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 	}
 
+	l.completedTasks = sessionTasks
 	return nil
 }

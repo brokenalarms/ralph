@@ -153,13 +153,13 @@ func TestLoop_selectNextTask_DelegatesToPackageFunc(t *testing.T) {
 			TaskBackend:   backend,
 			Dirs:          workctx.WorkContext{RalphDir: dir + "/.ralph"},
 		},
-		state:        st,
-		logger:       logger,
-		sessionTasks: []CompletedTask{{ID: "ralph-old", Title: "Old task"}},
+		state:          st,
+		logger:         logger,
+		completedTasks: []CompletedTask{{ID: "ralph-old", Title: "Old task"}},
 	}
 
-	completedIDs := make(map[string]bool, len(l.sessionTasks))
-	for _, ct := range l.sessionTasks {
+	completedIDs := make(map[string]bool, len(l.completedTasks))
+	for _, ct := range l.completedTasks {
 		completedIDs[ct.ID] = true
 	}
 	tc, action := selectNextTask(context.Background(), selectNextTaskParams{
