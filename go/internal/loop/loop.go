@@ -42,8 +42,8 @@ type Config struct {
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 	Version             string
 	VerifyDir             string // project root where tests are run; empty disables verification
-	VerifyModel           string // model for first LLM verification attempt
-	VerifyEscalationModel string // model for subsequent LLM verification attempts
+	VerifyModel           string // unused; kept for config compatibility
+	VerifyEscalationModel string // model for all LLM verification attempts; defaults to sonnet
 	OnIterationStart      func() // called at the start of each iteration (e.g. to regenerate resume script)
 	// hooks for test injection; nil uses the real implementation
 	OnVerify        func(ctx context.Context, dir, headBefore string) (bool, string)

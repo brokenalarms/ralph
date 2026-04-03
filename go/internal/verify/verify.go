@@ -317,7 +317,7 @@ Reply with exactly one line: YES or NO followed by a one-sentence reason.`, bead
 // When queryFn is non-nil, the call goes through the centralized agent module.
 // Falls back to direct exec.Command when queryFn is nil (tests, standalone use).
 func callLLM(ctx context.Context, workDir, prompt string, queryFn QueryFunc, model ...string) Result {
-	m := ModelHaiku
+	m := ModelSonnet
 	if len(model) > 0 && model[0] != "" {
 		m = model[0]
 	}
