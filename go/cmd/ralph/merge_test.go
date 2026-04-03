@@ -417,6 +417,39 @@ func TestRunMerge_SecondPRRebased(t *testing.T) {
 	}
 }
 
+// ── stub test for per-PR rebase auto-resolve path ────────────────────────────
+
+// Proves: when the per-PR rebase after a merge fails, runMerge does NOT
+// immediately abort — it logs an auto-resolve attempt. (Full auto-resolve
+// success and failure behaviour is verified by integration tests below.)
+func TestRunMerge_SecondPRRebaseConflictAttemptsAutoResolve(t *testing.T) {
+	var logBuf bytes.Buffer
+	runner := newMergeStubRunner()
+	runner.errOnArgs("rebase origin/main", fmt.Errorf("conflict"))
+	gh := &git.StubGitHub{
+		IsAvailable: true,
+		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
+		MergeResult: git.MergeResult{Merged: true},
+	}
+	gm, tmp := buildGM(t, runner, gh)
+	gm.Logger = logging.NewWithWriter(&logBuf)
+
+	prs := []StackPR{
+		NewStackPR("1", "pr1"),
+		NewStackPR("2", "pr2"),
+	}
+	// runMerge will fail (rebasecontinue has no real repo to work in) but
+	// must log the auto-resolve attempt message before stopping.
+	RunMerge(context.Background(), prs, tmp, "main", gm, false, logging.NewWithWriter(&logBuf))
+
+	if !strings.Contains(logBuf.String(), "auto-resolve") {
+		t.Errorf("expected auto-resolve attempt logged, got: %s", logBuf.String())
+	}
+	if !runner.neverCalledWith("rebase", "--abort") {
+		t.Error("expected no 'git rebase --abort' — rebase state left for manual resolution")
+	}
+}
+
 // ── integration tests (real git repos) ───────────────────────────────────────
 
 // setupStackRepo creates a bare "remote" and a working clone with two stacked
@@ -682,6 +715,195 @@ func TestRunMerge_BlockedWithoutBypassLogs(t *testing.T) {
 	}
 	if !strings.Contains(logBuf.String(), "requires admin approval") {
 		t.Errorf("expected Blocked message in output, got: %s", logBuf.String())
+	}
+}
+
+// setupConflictingStackRepo creates a bare remote + working clone with two
+// independent branches (both from main) that both modify the same file.
+// pr1 changes shared.txt line2 to "modified-by-both".
+// pr2 changes shared.txt to "modified-by-both" AND appends "only-in-pr2",
+// plus adds pr2.txt. When pr1 is merged and main advances, rebasing pr2
+// onto new main produces a mechanical conflict on shared.txt (ours adds
+// "modified-by-both"; theirs has "modified-by-both" + "only-in-pr2" —
+// ours is a subset of theirs).
+func setupConflictingStackRepo(t *testing.T) (workDir, bareDir string) {
+	t.Helper()
+	bareDir = filepath.Join(t.TempDir(), "origin.git")
+	workDir = filepath.Join(t.TempDir(), "work")
+
+	mergeRunCmd(t, "git", "init", "--bare", "-b", "main", bareDir)
+	mergeRunCmd(t, "git", "clone", bareDir, workDir)
+
+	// Initial commit on main: shared.txt with two lines.
+	os.WriteFile(filepath.Join(workDir, "shared.txt"), []byte("line1\nline2\n"), 0o644)
+	mergeRunCmd(t, "git", "-C", workDir, "add", "shared.txt")
+	mergeRunCmd(t, "git", "-C", workDir, "commit", "-m", "init")
+	mergeRunCmd(t, "git", "-C", workDir, "push", "origin", "main")
+
+	// pr1 branch: changes line2 to "modified-by-both".
+	mergeRunCmd(t, "git", "-C", workDir, "checkout", "-b", "pr1")
+	os.WriteFile(filepath.Join(workDir, "shared.txt"), []byte("line1\nmodified-by-both\n"), 0o644)
+	mergeRunCmd(t, "git", "-C", workDir, "add", "shared.txt")
+	mergeRunCmd(t, "git", "-C", workDir, "commit", "-m", "pr1: update shared.txt")
+	mergeRunCmd(t, "git", "-C", workDir, "push", "origin", "pr1")
+
+	// pr2 branch from main (NOT from pr1): changes shared.txt to include
+	// "modified-by-both" AND "only-in-pr2" — pr2's change is a superset.
+	mergeRunCmd(t, "git", "-C", workDir, "checkout", "main")
+	mergeRunCmd(t, "git", "-C", workDir, "checkout", "-b", "pr2")
+	os.WriteFile(filepath.Join(workDir, "shared.txt"), []byte("line1\nmodified-by-both\nonly-in-pr2\n"), 0o644)
+	os.WriteFile(filepath.Join(workDir, "pr2.txt"), []byte("pr2 content\n"), 0o644)
+	mergeRunCmd(t, "git", "-C", workDir, "add", "shared.txt", "pr2.txt")
+	mergeRunCmd(t, "git", "-C", workDir, "commit", "-m", "pr2: update shared.txt and add pr2.txt")
+	mergeRunCmd(t, "git", "-C", workDir, "push", "origin", "pr2")
+
+	mergeRunCmd(t, "git", "-C", workDir, "checkout", "main")
+	return workDir, bareDir
+}
+
+// setupDivergingStackRepo is like setupConflictingStackRepo but pr2 changes
+// line2 to a DIFFERENT value than pr1. After pr1 merges, rebasing pr2 onto
+// new main produces a genuine (unresolvable) conflict.
+func setupDivergingStackRepo(t *testing.T) (workDir, bareDir string) {
+	t.Helper()
+	bareDir = filepath.Join(t.TempDir(), "origin.git")
+	workDir = filepath.Join(t.TempDir(), "work")
+
+	mergeRunCmd(t, "git", "init", "--bare", "-b", "main", bareDir)
+	mergeRunCmd(t, "git", "clone", bareDir, workDir)
+
+	os.WriteFile(filepath.Join(workDir, "shared.txt"), []byte("line1\nline2\n"), 0o644)
+	mergeRunCmd(t, "git", "-C", workDir, "add", "shared.txt")
+	mergeRunCmd(t, "git", "-C", workDir, "commit", "-m", "init")
+	mergeRunCmd(t, "git", "-C", workDir, "push", "origin", "main")
+
+	// pr1: changes line2 to "modified-by-pr1".
+	mergeRunCmd(t, "git", "-C", workDir, "checkout", "-b", "pr1")
+	os.WriteFile(filepath.Join(workDir, "shared.txt"), []byte("line1\nmodified-by-pr1\n"), 0o644)
+	mergeRunCmd(t, "git", "-C", workDir, "add", "shared.txt")
+	mergeRunCmd(t, "git", "-C", workDir, "commit", "-m", "pr1: change line2")
+	mergeRunCmd(t, "git", "-C", workDir, "push", "origin", "pr1")
+
+	// pr2 from main: changes line2 to a different value — genuine divergence.
+	mergeRunCmd(t, "git", "-C", workDir, "checkout", "main")
+	mergeRunCmd(t, "git", "-C", workDir, "checkout", "-b", "pr2")
+	os.WriteFile(filepath.Join(workDir, "shared.txt"), []byte("line1\nmodified-by-pr2\n"), 0o644)
+	mergeRunCmd(t, "git", "-C", workDir, "add", "shared.txt")
+	mergeRunCmd(t, "git", "-C", workDir, "commit", "-m", "pr2: change line2 differently")
+	mergeRunCmd(t, "git", "-C", workDir, "push", "origin", "pr2")
+
+	mergeRunCmd(t, "git", "-C", workDir, "checkout", "main")
+	return workDir, bareDir
+}
+
+// Proves: when the per-PR rebase (after a prior merge advances main) produces
+// a mechanical conflict — where main's new content is a subset of the PR's
+// content — runMerge auto-resolves via git-rebase-continue --auto and
+// continues to force-push, await CI, and merge the PR successfully.
+func TestRunMerge_PerPRRebaseMechanicalConflictAutoResolves(t *testing.T) {
+	workDir, bareDir := setupConflictingStackRepo(t)
+
+	mergeCount := 0
+	ghStub := &trackingGH{
+		StubGitHub: &git.StubGitHub{
+			IsAvailable: true,
+			MergeResult: git.MergeResult{Merged: true},
+			Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
+		},
+	}
+	ghStub.OnMerge = func() {
+		mergeCount++
+		if mergeCount == 1 {
+			// Advance main on the bare remote to include pr1's commit (simulates squash-merge).
+			exec.Command("git", "-C", bareDir, "update-ref", "refs/heads/main",
+				strings.TrimSpace(mergeCmdOutputDir(bareDir, "git", "rev-parse", "pr1"))).Run()
+		}
+	}
+
+	ralphDir := filepath.Join(workDir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	gm := &git.Manager{
+		ProjectDir: workDir,
+		WorkDir:    workDir,
+		RalphDir:   ralphDir,
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.New(nil),
+		GitHub:     ghStub,
+		BaseBranch: "main",
+	}
+
+	prs := []StackPR{
+		NewStackPR("1", "pr1"),
+		NewStackPR("2", "pr2"),
+	}
+	code := RunMerge(context.Background(), prs, workDir, "main", gm, false, logging.New(nil))
+	if code != 0 {
+		t.Errorf("expected exit 0 (auto-resolve succeeded), got %d", code)
+	}
+	if ghStub.MergeCalls != 2 {
+		t.Errorf("expected 2 MergePR calls (both PRs merged), got %d", ghStub.MergeCalls)
+	}
+	if !ghStub.calledForPR("2") {
+		t.Error("GetPRHeadSHA not called for PR 2 — fresh CI not awaited after auto-resolved rebase")
+	}
+}
+
+// Proves: when the per-PR rebase produces a genuine (unresolvable) conflict,
+// runMerge returns non-zero, logs the conflicted files and the PR number,
+// and logs the working directory for manual resolution.
+func TestRunMerge_PerPRRebaseRealDivergenceStopsWithError(t *testing.T) {
+	workDir, bareDir := setupDivergingStackRepo(t)
+
+	var logBuf bytes.Buffer
+	mergeCount := 0
+	ghStub := &trackingGH{
+		StubGitHub: &git.StubGitHub{
+			IsAvailable: true,
+			MergeResult: git.MergeResult{Merged: true},
+			Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
+		},
+	}
+	ghStub.OnMerge = func() {
+		mergeCount++
+		if mergeCount == 1 {
+			exec.Command("git", "-C", bareDir, "update-ref", "refs/heads/main",
+				strings.TrimSpace(mergeCmdOutputDir(bareDir, "git", "rev-parse", "pr1"))).Run()
+		}
+	}
+
+	ralphDir := filepath.Join(workDir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	gm := &git.Manager{
+		ProjectDir: workDir,
+		WorkDir:    workDir,
+		RalphDir:   ralphDir,
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.NewWithWriter(&logBuf),
+		GitHub:     ghStub,
+		BaseBranch: "main",
+	}
+
+	prs := []StackPR{
+		NewStackPR("1", "pr1"),
+		NewStackPR("2", "pr2"),
+	}
+	code := RunMerge(context.Background(), prs, workDir, "main", gm, false, logging.NewWithWriter(&logBuf))
+	if code == 0 {
+		t.Errorf("expected non-zero exit when real divergence exists, got 0")
+	}
+
+	out := logBuf.String()
+	// Must name the conflicted file.
+	if !strings.Contains(out, "shared.txt") {
+		t.Errorf("expected conflicted file 'shared.txt' in output, got: %s", out)
+	}
+	// Must name the PR.
+	if !strings.Contains(out, "#2") && !strings.Contains(out, "pr2") {
+		t.Errorf("expected PR number or branch in output, got: %s", out)
+	}
+	// Must include the working directory for manual resolution.
+	if !strings.Contains(out, workDir) {
+		t.Errorf("expected working directory %q in output for manual resolution, got: %s", workDir, out)
 	}
 }
 

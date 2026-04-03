@@ -112,9 +112,16 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 			// Rebase in a detached state to avoid needing a worktree.
 			runner.Run(ctx, projectDir, "checkout", "origin/"+pr.head)
 			if _, rebaseErr := runner.Run(ctx, projectDir, "rebase", "origin/"+defaultBranch); rebaseErr != nil {
-				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Rebase failed for %s: %v", pr.head, rebaseErr)
-				runner.Run(ctx, projectDir, "rebase", "--abort")
-				return 1
+				log.Emit(logging.Opts{Domain: logging.Git}, "Rebase conflict on %s — attempting auto-resolve...", pr.head)
+				if autoErr := rebasecontinue.Run(projectDir, rebasecontinue.Options{Auto: true}); autoErr != nil {
+					log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error},
+						"Rebase conflicts on PR #%s (%s): %v", pr.number, pr.head, autoErr)
+					log.Emit(logging.Opts{Domain: logging.Git},
+						"Resolve manually in: %s", projectDir)
+					log.Emit(logging.Opts{Domain: logging.Git},
+						"Then run: cd %s && git-rebase-continue", projectDir)
+					return 1
+				}
 			}
 			if _, pushErr := runner.Run(ctx, projectDir, "push", "--force-with-lease", "origin", "HEAD:"+pr.head); pushErr != nil {
 				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Force-push failed for %s: %v", pr.head, pushErr)
