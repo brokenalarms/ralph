@@ -231,11 +231,20 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL, nwo st
 	}
 
 	currentInterval := interval
-	var pollDurations []string
+	var polled bool
+
+	emitPoll := func(duration string) {
+		if !polled {
+			log.EmitInPlace(logging.Opts{Domain: logging.CI, Link: prLink}, "CI polled %s", duration)
+		} else {
+			log.EmitAppend("..%s", duration)
+		}
+		polled = true
+	}
 
 	finalize := func() {
-		if len(pollDurations) > 0 {
-			log.EmitFinalInPlace(logging.Opts{Domain: logging.CI, Link: prLink}, "CI polled %s", strings.Join(pollDurations, ".."))
+		if polled {
+			log.EmitFinalInPlace()
 		}
 	}
 
@@ -246,8 +255,7 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL, nwo st
 				finalize()
 				return nil, CIPending, fmt.Errorf("CI checks not available within %v: %w", timeout, err)
 			}
-			pollDurations = append(pollDurations, formatDuration(currentInterval))
-			log.EmitInPlace(logging.Opts{Domain: logging.CI, Link: prLink}, "CI polled %s", strings.Join(pollDurations, ".."))
+			emitPoll(formatDuration(currentInterval))
 			select {
 			case <-done:
 				finalize()
@@ -273,8 +281,7 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL, nwo st
 			return checks, CIPending, fmt.Errorf("CI checks did not complete within %v", timeout)
 		}
 
-		pollDurations = append(pollDurations, formatDuration(currentInterval))
-		log.EmitInPlace(logging.Opts{Domain: logging.CI, Link: prLink}, "CI polled %s", strings.Join(pollDurations, ".."))
+		emitPoll(formatDuration(currentInterval))
 		select {
 		case <-done:
 			finalize()

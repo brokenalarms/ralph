@@ -530,47 +530,65 @@ func TestErrorWithAnalyzerDomain(t *testing.T) {
 	}
 }
 
-// EmitInPlace writes to stdout only using a carriage return (no newline),
-// so the terminal line is overwritten on each call. The log file receives
-// nothing — only EmitFinalInPlace commits to the log file (AC8, AC9).
-func TestEmitInPlace_WritesToStdoutOnly(t *testing.T) {
+// EmitInPlace writes the first segment of an in-place line in append mode —
+// no carriage return, no trailing newline. Writes to both stdout and the log file.
+func TestEmitInPlace_AppendsWithoutCarriageReturn(t *testing.T) {
 	var stdout, logFile bytes.Buffer
 	l := &Logger{out: &stdout, logFile: &logFile}
 	l.EmitInPlace(Opts{Domain: CI}, "CI polled 1s")
-	l.EmitInPlace(Opts{Domain: CI}, "CI polled 1s..2s")
 
-	if logFile.Len() != 0 {
-		t.Errorf("EmitInPlace should not write to log file, got: %q", logFile.String())
+	if strings.Contains(stdout.String(), "\r") {
+		t.Errorf("EmitInPlace should not write carriage return, got: %q", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "\r") {
-		t.Errorf("EmitInPlace should write carriage return, got: %q", stdout.String())
+	if strings.Contains(stdout.String(), "\n") {
+		t.Errorf("EmitInPlace should not write newline, got: %q", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "CI polled") {
-		t.Errorf("EmitInPlace should contain message, got: %q", stdout.String())
+	if !strings.Contains(stdout.String(), "CI polled 1s") {
+		t.Errorf("EmitInPlace should write message to stdout, got: %q", stdout.String())
+	}
+	if !strings.Contains(logFile.String(), "CI polled 1s") {
+		t.Errorf("EmitInPlace should write message to log file, got: %q", logFile.String())
 	}
 }
 
-// EmitFinalInPlace overwrites the current terminal line (via \r) and advances
-// to a new line on stdout, while writing the final line once to the log file
-// without a carriage return — file gets the final state, not every intermediate
-// update (AC9).
-func TestEmitFinalInPlace_FinalizesToBothOutputs(t *testing.T) {
+// EmitAppend appends raw text to the current in-place line — no tag, no
+// carriage return, no trailing newline. Writes to both stdout and the log file.
+func TestEmitAppend_AppendsRawText(t *testing.T) {
 	var stdout, logFile bytes.Buffer
 	l := &Logger{out: &stdout, logFile: &logFile}
 	l.EmitInPlace(Opts{Domain: CI}, "CI polled 1s")
-	l.EmitFinalInPlace(Opts{Domain: CI}, "CI polled 1s..2s")
+	l.EmitAppend("..2s")
+	l.EmitAppend("..4s")
 
-	if !strings.Contains(stdout.String(), "CI polled 1s..2s") {
-		t.Errorf("EmitFinalInPlace should write final message to stdout, got: %q", stdout.String())
+	if strings.Contains(stdout.String(), "\r") || strings.Contains(stdout.String(), "\n") {
+		t.Errorf("EmitAppend should not write \\r or \\n, got: %q", stdout.String())
 	}
-	if !strings.Contains(logFile.String(), "CI polled 1s..2s") {
-		t.Errorf("EmitFinalInPlace should write final message to log file, got: %q", logFile.String())
+	if !strings.Contains(stdout.String(), "CI polled 1s..2s..4s") {
+		t.Errorf("stdout should contain accumulated text, got: %q", stdout.String())
 	}
-	if strings.Contains(logFile.String(), "\r") {
-		t.Errorf("log file should not contain carriage return, got: %q", logFile.String())
+	if !strings.Contains(logFile.String(), "CI polled 1s..2s..4s") {
+		t.Errorf("log file should contain accumulated text, got: %q", logFile.String())
+	}
+}
+
+// EmitFinalInPlace closes the in-place line with a newline on both stdout
+// and the log file — the line content is already accumulated via EmitInPlace
+// and EmitAppend.
+func TestEmitFinalInPlace_ClosesLineWithNewline(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile}
+	l.EmitInPlace(Opts{Domain: CI}, "CI polled 1s")
+	l.EmitAppend("..2s")
+	l.EmitFinalInPlace()
+
+	if !strings.HasSuffix(stdout.String(), "\n") {
+		t.Errorf("stdout should end with newline after EmitFinalInPlace, got: %q", stdout.String())
 	}
 	if !strings.HasSuffix(logFile.String(), "\n") {
-		t.Errorf("log file line should end with newline, got: %q", logFile.String())
+		t.Errorf("log file should end with newline after EmitFinalInPlace, got: %q", logFile.String())
+	}
+	if strings.Contains(stdout.String(), "\r") || strings.Contains(logFile.String(), "\r") {
+		t.Errorf("neither stdout nor log file should contain carriage return, stdout: %q logFile: %q", stdout.String(), logFile.String())
 	}
 }
 
@@ -583,6 +601,9 @@ func TestEmitInPlace_RespectsStreamingMode(t *testing.T) {
 	l.EmitInPlace(Opts{Domain: CI}, "CI polled 1s")
 	if stdout.Len() != 0 {
 		t.Errorf("EmitInPlace in streaming mode should not write to stdout, got: %q", stdout.String())
+	}
+	if !strings.Contains(logFile.String(), "CI polled 1s") {
+		t.Errorf("EmitInPlace in streaming mode should still write to log file, got: %q", logFile.String())
 	}
 }
 

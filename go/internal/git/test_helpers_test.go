@@ -131,9 +131,10 @@ func (s *stubRunner) OnSequence(key string, responses []stubResponse) *stubRunne
 // discardLog silences log output during tests.
 type discardLog struct{}
 
-func (discardLog) Emit(logging.Opts, string, ...any)            {}
-func (discardLog) EmitInPlace(logging.Opts, string, ...any)     {}
-func (discardLog) EmitFinalInPlace(logging.Opts, string, ...any) {}
+func (discardLog) Emit(logging.Opts, string, ...any) {}
+func (discardLog) EmitInPlace(logging.Opts, string, ...any) {}
+func (discardLog) EmitAppend(string, ...any)                {}
+func (discardLog) EmitFinalInPlace()                        {}
 
 // capturingGitHub captures CreatePR calls for assertion.
 type capturingGitHub struct {
