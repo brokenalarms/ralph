@@ -255,7 +255,7 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	if err := cmd.Start(); err != nil {
 		return Result{}, fmt.Errorf("starting claude: %w", err)
 	}
-	r.Logger.Emit(logging.Opts{Domain: logging.LLM}, "Claude started (PID: %d)", cmd.Process.Pid)
+	r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model}, "Claude started (PID: %d)", cmd.Process.Pid)
 
 	// Record stream start time for the filter.
 	_ = os.WriteFile(filepath.Join(cfg.RalphDir, ".stream-start"),
@@ -307,9 +307,9 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 			result.SignalDetected = true
 			result.AllComplete = hasSignal(cfg.Signals.AllComplete)
 			result.Summary = readSignalSummary(cfg.Signals)
-			r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success}, "Task completed via signal")
+			r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: cfg.Model}, "Task completed via signal")
 		} else {
-			r.Logger.Emit(logging.Opts{Domain: logging.LLM}, "Claude exited (no completion signal)")
+			r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model}, "Claude exited (no completion signal)")
 		}
 	}
 
@@ -319,7 +319,7 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 			if resetAt, found := ScanRawLogForRateLimit(string(logData), time.Now()); found {
 				result.RateLimited = true
 				result.ResetAt = resetAt
-				r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Claude rate limit detected — resets at %s", resetAt.Format("3:04pm"))
+				r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model}, "Claude rate limit detected — resets at %s", resetAt.Format("3:04pm"))
 			}
 		}
 	}
@@ -352,7 +352,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 			if cfg.FeedbackFile != "" {
 				if _, err := os.Stat(cfg.FeedbackFile); err == nil {
 					os.Remove(cfg.FeedbackFile)
-					r.Logger.Emit(logging.Opts{Domain: logging.LLM}, "Feedback signal detected — restarting agent")
+					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model}, "Feedback signal detected — restarting agent")
 					return Result{FeedbackKill: true}
 				}
 			}
@@ -369,7 +369,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				if cfg.FeedbackFile != "" {
 					if _, err := os.Stat(cfg.FeedbackFile); err == nil {
 						os.Remove(cfg.FeedbackFile)
-						r.Logger.Emit(logging.Opts{Domain: logging.LLM}, "Feedback signal detected — restarting agent")
+						r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model}, "Feedback signal detected — restarting agent")
 						return Result{FeedbackKill: true}
 					}
 				}
@@ -402,7 +402,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 			if cfg.FeedbackFile != "" {
 				if _, err := os.Stat(cfg.FeedbackFile); err == nil {
 					os.Remove(cfg.FeedbackFile)
-					r.Logger.Emit(logging.Opts{Domain: logging.LLM}, "Feedback signal detected — restarting agent")
+					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model}, "Feedback signal detected — restarting agent")
 					gracefulKill(cmd, processDone)
 					return Result{FeedbackKill: true}
 				}
@@ -415,9 +415,9 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 					summary = "task done"
 				}
 				if cfg.TaskID != "" {
-					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success}, "%s completed: %s", cfg.TaskID, summary)
+					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: cfg.Model}, "%s completed: %s", cfg.TaskID, summary)
 				} else {
-					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success}, "Completed: %s", summary)
+					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: cfg.Model}, "Completed: %s", summary)
 				}
 
 				// If OnSignal is set, let the orchestrator verify before accepting.
@@ -429,7 +429,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 						return Result{FeedbackKill: true}
 					}
 					if accepted == signalRejected {
-						r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Verification rejected signal — agent continues")
+						r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model}, "Verification rejected signal — agent continues")
 						clearSignals(cfg.Signals)
 						continue
 					}
@@ -459,7 +459,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				}
 				idle := time.Since(lastActivity)
 				if idle >= timeout {
-					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Idle timeout (%s with no output) — killing session", timeout)
+					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model}, "Idle timeout (%s with no output) — killing session", timeout)
 					gracefulKill(cmd, processDone)
 					return Result{IdleTimeout: true}
 				}
@@ -528,7 +528,7 @@ func (r *Runner) runOnSignalWithFeedbackWatch(cfg RunConfig, cmd *exec.Cmd, proc
 		case <-ticker.C:
 			if _, err := os.Stat(cfg.FeedbackFile); err == nil {
 				os.Remove(cfg.FeedbackFile)
-				r.Logger.Emit(logging.Opts{Domain: logging.LLM}, "Feedback signal detected — restarting agent")
+				r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model}, "Feedback signal detected — restarting agent")
 				gracefulKill(cmd, processDone)
 				return feedbackInterrupt
 			}

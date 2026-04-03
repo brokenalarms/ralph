@@ -139,7 +139,7 @@ func (v *Verifier) testFixLoop(p signalParams, beadDesc, beadAcceptance, testDet
 
 // tryFixTests spawns a fix agent to address test failures.
 func (v *Verifier) tryFixTests(p signalParams, beadDesc, beadAcceptance, testDetails string) bool {
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Model: v.fixModel()}, "Spawning fix agent for test failures (attempt %d/%d)", v.testFixAttempts, maxTestFixAttempts)
+	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Spawning fix agent for test failures (attempt %d/%d)", v.testFixAttempts, maxTestFixAttempts)
 
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 	fixPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{
@@ -178,12 +178,12 @@ func (v *Verifier) verifyWithFixLoop(p signalParams, beadDesc, beadAcceptance st
 		})
 
 		if llmResult.Passed {
-			v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success}, "LLM verified: %s", llmResult.Reason)
+			v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: model}, "LLM verified: %s", llmResult.Reason)
 			v.llmVerifyAttempts = 0
 			return true
 		}
 
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error}, "LLM verification rejected (attempt %d/%d): %s", v.llmVerifyAttempts, maxLLMVerifyAttempts, llmResult.Details)
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: model}, "LLM verification rejected (attempt %d/%d): %s", v.llmVerifyAttempts, maxLLMVerifyAttempts, llmResult.Details)
 
 		if v.llmVerifyAttempts >= maxLLMVerifyAttempts {
 			if p.taskID != "" {
@@ -423,9 +423,9 @@ func (v *Verifier) runFixAgent(ctx context.Context, description, prompt, workDir
 	})
 
 	if !result.SignalDetected {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Fix agent exited without signal (%s)", description)
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: v.fixModel()}, "Fix agent exited without signal (%s)", description)
 	} else if result.Summary != "" {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM}, "Fix agent (%s): %s", description, result.Summary)
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: v.fixModel()}, "Fix agent (%s): %s", description, result.Summary)
 	}
 
 	return result
