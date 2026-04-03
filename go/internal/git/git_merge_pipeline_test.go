@@ -140,18 +140,8 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 	}
 }
 
-// executeMerge classifies "Pull request is not mergeable" as a merge conflict
-// rather than a CI gate error. This documents current behavior: isMergeConflictError
-// is checked before isCIGatedError, so ambiguous messages that match both patterns
-// are treated as conflicts. After the orchestrator refactor, this should be
-// reconsidered — the "not mergeable" error from GitHub often means CI hasn't
-// passed, not that there's a content conflict.
-// After ralph-laun fix, executeMerge checks CI-gated first. "not mergeable"
-// still matches isMergeConflictError but only fires if isCIGatedError didn't
-// match first. This test has no CI-gated patterns, so it falls through to
-// merge conflict.
-// With structured MergeResult, "not mergeable" is classified as Blocked
-// (branch protection), not Conflict. executeMerge waits for CI then retries.
+// MergeResult{Blocked: true} causes executeMerge to wait for CI and retry,
+// not to treat the response as a content conflict.
 func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 	stubCISleep(t)
 

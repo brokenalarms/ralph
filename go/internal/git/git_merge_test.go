@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -336,33 +335,23 @@ func TestNWOFromRemote_SSHAndHTTPS(t *testing.T) {
 	}
 }
 
-// PushAndCreatePR must pass --base with the configured base branch to gh pr create,
+// PushAndCreatePR must pass the configured base branch to CreatePR,
 // so PRs target the correct branch (e.g. develop) instead of the repo default (main).
 func TestPushAndCreatePR_UsesBaseBranch(t *testing.T) {
 	project, cleanup := initBareRepoWithBranch(t, "develop")
 	defer cleanup()
 
-	// Create a worktree on a feature branch (WorkDir must differ from ProjectDir).
+	// WorkDir must differ from ProjectDir so Push doesn't bail early.
 	wtDir := filepath.Join(t.TempDir(), "worktree")
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
-	// Create a fake gh script that records its arguments.
-	binDir := t.TempDir()
-	ghLog := filepath.Join(t.TempDir(), "gh-args.log")
-	ghScript := filepath.Join(binDir, "gh")
-	if err := os.WriteFile(ghScript, []byte(fmt.Sprintf(`#!/bin/sh
-echo "$@" >> %s
-# For pr list, output empty (no existing PR)
-if [ "$2" = "list" ]; then
-  echo ""
-fi
-`, ghLog)), 0755); err != nil {
-		t.Fatalf("writing fake gh: %v", err)
+	var capturedOpts CreatePROpts
+	gh := &capturingGitHub{StubGitHub: StubGitHub{IsAvailable: true}}
+	gh.createPR = func(opts CreatePROpts) error {
+		capturedOpts = opts
+		return nil
 	}
-	// Prepend fake gh to PATH.
-	origPath := os.Getenv("PATH")
-	t.Setenv("PATH", binDir+":"+origPath)
 
 	log := &testLog{}
 	mgr := &Manager{
@@ -371,6 +360,7 @@ fi
 		WorktreeBranch: "ralph/test/feature",
 		BaseBranch:     "develop",
 		Logger:         log,
+		GitHub:         gh,
 	}
 
 	_, err := mgr.PushAndCreatePR(context.Background(), "", "test task", "")
@@ -378,26 +368,8 @@ fi
 		t.Fatalf("PushAndCreatePR failed: %v (log: %v)", err, log.messages)
 	}
 
-	ghArgs, readErr := os.ReadFile(ghLog)
-	if readErr != nil {
-		t.Fatalf("reading gh log: %v", readErr)
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(ghArgs)), "\n")
-	// Find the pr create invocation.
-	var createLine string
-	for _, line := range lines {
-		if strings.Contains(line, "pr create") {
-			createLine = line
-			break
-		}
-	}
-	if createLine == "" {
-		t.Fatal("expected gh pr create to be called, but it was not")
-	}
-
-	if !strings.Contains(createLine, "--base develop") {
-		t.Errorf("gh pr create should include --base develop, got: %s", createLine)
+	if capturedOpts.Base != "develop" {
+		t.Errorf("CreatePR should use base=develop, got base=%q", capturedOpts.Base)
 	}
 }
 
@@ -410,19 +382,12 @@ func TestPushAndCreatePR_BaseBranchMainTargetsMain(t *testing.T) {
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
-	binDir := t.TempDir()
-	ghLog := filepath.Join(t.TempDir(), "gh-args.log")
-	ghScript := filepath.Join(binDir, "gh")
-	if err := os.WriteFile(ghScript, []byte(fmt.Sprintf(`#!/bin/sh
-echo "$@" >> %s
-if [ "$2" = "list" ]; then
-  echo ""
-fi
-`, ghLog)), 0755); err != nil {
-		t.Fatalf("writing fake gh: %v", err)
+	var capturedOpts CreatePROpts
+	gh := &capturingGitHub{StubGitHub: StubGitHub{IsAvailable: true}}
+	gh.createPR = func(opts CreatePROpts) error {
+		capturedOpts = opts
+		return nil
 	}
-	origPath := os.Getenv("PATH")
-	t.Setenv("PATH", binDir+":"+origPath)
 
 	mgr := &Manager{
 		ProjectDir:     project,
@@ -430,6 +395,7 @@ fi
 		WorktreeBranch: "ralph/test/feature",
 		BaseBranch:     "main",
 		Logger:         &testLog{},
+		GitHub:         gh,
 	}
 
 	_, err := mgr.PushAndCreatePR(context.Background(), "", "test task", "")
@@ -437,23 +403,8 @@ fi
 		t.Fatalf("PushAndCreatePR failed: %v", err)
 	}
 
-	ghArgs, readErr := os.ReadFile(ghLog)
-	if readErr != nil {
-		t.Fatalf("reading gh log: %v", readErr)
-	}
-
-	var createLine string
-	for _, line := range strings.Split(strings.TrimSpace(string(ghArgs)), "\n") {
-		if strings.Contains(line, "pr create") {
-			createLine = line
-			break
-		}
-	}
-	if createLine == "" {
-		t.Fatal("expected gh pr create to be called")
-	}
-	if !strings.Contains(createLine, "--base main") {
-		t.Errorf("gh pr create should include --base main, got: %s", createLine)
+	if capturedOpts.Base != "main" {
+		t.Errorf("CreatePR should use base=main, got base=%q", capturedOpts.Base)
 	}
 }
 
@@ -467,19 +418,12 @@ func TestPushAndCreatePR_IncludesBeadIDInTitle(t *testing.T) {
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
-	binDir := t.TempDir()
-	ghLog := filepath.Join(t.TempDir(), "gh-args.log")
-	ghScript := filepath.Join(binDir, "gh")
-	if err := os.WriteFile(ghScript, []byte(fmt.Sprintf(`#!/bin/sh
-echo "$@" >> %s
-if [ "$2" = "list" ]; then
-  echo ""
-fi
-`, ghLog)), 0755); err != nil {
-		t.Fatalf("writing fake gh: %v", err)
+	var capturedOpts CreatePROpts
+	gh := &capturingGitHub{StubGitHub: StubGitHub{IsAvailable: true}}
+	gh.createPR = func(opts CreatePROpts) error {
+		capturedOpts = opts
+		return nil
 	}
-	origPath := os.Getenv("PATH")
-	t.Setenv("PATH", binDir+":"+origPath)
 
 	log := &testLog{}
 	mgr := &Manager{
@@ -488,6 +432,7 @@ fi
 		WorktreeBranch: "ralph/test/feature",
 		BaseBranch:     "main",
 		Logger:         log,
+		GitHub:         gh,
 	}
 
 	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-hm8", "fix: include bead ID in PR title", "")
@@ -495,25 +440,8 @@ fi
 		t.Fatalf("PushAndCreatePR failed: %v", err)
 	}
 
-	ghArgs, readErr := os.ReadFile(ghLog)
-	if readErr != nil {
-		t.Fatalf("reading gh log: %v", readErr)
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(ghArgs)), "\n")
-	var createLine string
-	for _, line := range lines {
-		if strings.Contains(line, "pr create") {
-			createLine = line
-			break
-		}
-	}
-	if createLine == "" {
-		t.Fatal("expected gh pr create to be called")
-	}
-
-	if !strings.Contains(createLine, "[ralph-hm8]") {
-		t.Errorf("PR title should contain bead ID prefix [ralph-hm8], got: %s", createLine)
+	if !strings.Contains(capturedOpts.Title, "[ralph-hm8]") {
+		t.Errorf("PR title should contain bead ID prefix [ralph-hm8], got: %q", capturedOpts.Title)
 	}
 }
 
@@ -527,19 +455,12 @@ func TestPushAndCreatePR_NoBeadID(t *testing.T) {
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
-	binDir := t.TempDir()
-	ghLog := filepath.Join(t.TempDir(), "gh-args.log")
-	ghScript := filepath.Join(binDir, "gh")
-	if err := os.WriteFile(ghScript, []byte(fmt.Sprintf(`#!/bin/sh
-echo "$@" >> %s
-if [ "$2" = "list" ]; then
-  echo ""
-fi
-`, ghLog)), 0755); err != nil {
-		t.Fatalf("writing fake gh: %v", err)
+	var capturedOpts CreatePROpts
+	gh := &capturingGitHub{StubGitHub: StubGitHub{IsAvailable: true}}
+	gh.createPR = func(opts CreatePROpts) error {
+		capturedOpts = opts
+		return nil
 	}
-	origPath := os.Getenv("PATH")
-	t.Setenv("PATH", binDir+":"+origPath)
 
 	log := &testLog{}
 	mgr := &Manager{
@@ -548,6 +469,7 @@ fi
 		WorktreeBranch: "ralph/test/feature",
 		BaseBranch:     "main",
 		Logger:         log,
+		GitHub:         gh,
 	}
 
 	_, err := mgr.PushAndCreatePR(context.Background(), "", "add new feature", "")
@@ -555,25 +477,8 @@ fi
 		t.Fatalf("PushAndCreatePR failed: %v", err)
 	}
 
-	ghArgs, readErr := os.ReadFile(ghLog)
-	if readErr != nil {
-		t.Fatalf("reading gh log: %v", readErr)
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(ghArgs)), "\n")
-	var createLine string
-	for _, line := range lines {
-		if strings.Contains(line, "pr create") {
-			createLine = line
-			break
-		}
-	}
-	if createLine == "" {
-		t.Fatal("expected gh pr create to be called")
-	}
-
-	if strings.Contains(createLine, "[") {
-		t.Errorf("PR title should not contain brackets when no bead ID, got: %s", createLine)
+	if strings.Contains(capturedOpts.Title, "[") {
+		t.Errorf("PR title should not contain brackets when no bead ID, got: %q", capturedOpts.Title)
 	}
 }
 
