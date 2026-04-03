@@ -22,9 +22,11 @@ var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 type testLogger struct {
 	logs      []string
 	successes []string
+	opts      []logging.Opts
 }
 
 func (l *testLogger) Emit(o logging.Opts, format string, args ...any) {
+	l.opts = append(l.opts, o)
 	msg := fmt.Sprintf(format, args...)
 	if o.Level == logging.Success {
 		l.successes = append(l.successes, msg)
@@ -1536,5 +1538,53 @@ func TestDisallowedTools_BlocksOrchestratorOwnedGitOps(t *testing.T) {
 		if !found {
 			t.Errorf("IterationDisallowedTools must block %q — orchestrator owns all branch and remote operations", key)
 		}
+	}
+}
+
+// Verifies that every Emit call with Domain: logging.LLM includes the Model
+// from RunConfig. Uses CmdFactory to run a real process so the full Run()
+// path fires, including the "Claude started (PID: ...)" log line.
+func TestRun_LLMEmitsIncludeModel(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+	const model = "claude-sonnet-4-5-20241022"
+
+	log := &testLogger{}
+	runner := &Runner{
+		Logger: log,
+		CmdFactory: func(cfg RunConfig, raw *os.File) *exec.Cmd {
+			cmd := exec.Command("true")
+			cmd.Dir = cfg.WorkDir
+			cmd.Stdout = raw
+			cmd.Stderr = raw
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			return cmd
+		},
+	}
+
+	runner.Run(RunConfig{
+		Ctx:          context.Background(),
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 100 * time.Millisecond,
+		Model:        model,
+	})
+
+	var hasLLMLine bool
+	for _, o := range log.opts {
+		if o.Domain == logging.LLM {
+			hasLLMLine = true
+			if o.Model != model {
+				t.Errorf("LLM-domain log line emitted with Model=%q, want %q", o.Model, model)
+			}
+		}
+	}
+	if !hasLLMLine {
+		t.Error("expected at least one LLM-domain log line to be emitted")
 	}
 }

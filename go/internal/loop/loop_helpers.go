@@ -135,6 +135,7 @@ type processRunOutcomeParams struct {
 	attempts *attempts.Tracker
 	analyzer *analyzer.Analyzer
 	signals  claude.SignalPaths
+	model    string
 }
 
 // processRunOutcome logs the Claude result, analyzes the iteration, and
@@ -142,7 +143,7 @@ type processRunOutcomeParams struct {
 // halt=true if the analyzer says to stop (caller should return nil).
 func processRunOutcome(p processRunOutcomeParams, result claude.Result, elapsed time.Duration, runIteration int, prep iterationPrompt, taskID, nextTask string) (string, bool, analyzer.Action) {
 	if result.Summary != "" {
-		p.logger.Emit(logging.Opts{Domain: logging.LLM}, "Summary: %s", result.Summary)
+		p.logger.Emit(logging.Opts{Domain: logging.LLM, Model: p.model}, "Summary: %s", result.Summary)
 	}
 
 	completed, _ := p.backend.CountCompleted()

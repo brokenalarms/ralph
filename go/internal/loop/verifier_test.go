@@ -704,3 +704,70 @@ func TestVerifier_ModelCap_OpusUnchanged(t *testing.T) {
 		t.Errorf("fix agent with ModelCap=opus: expected %s, got %s", verify.ModelOpus, capturedModel)
 	}
 }
+
+// Verifies that "Spawning fix agent for test failures" log line does NOT
+// include a model tag — it uses Domain: logging.Test, not logging.LLM.
+func TestVerifier_TestDomainSpawnLine_NoModelTag(t *testing.T) {
+	var buf strings.Builder
+
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.cfg.FixModel = verify.ModelOpus
+		v.deps.Logger = logging.NewWithWriter(&buf)
+		v.deps.Runner = func() claudeRunner { return &stubRunner{} }
+		v.deps.NewRunner = func() claudeRunner {
+			return &stubRunner{result: stubResult(true, "fixed")}
+		}
+		v.cfg.VerifyDir = t.TempDir()
+	})
+
+	v.tryFixTests(signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    t.TempDir(),
+		rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID:     "test-123",
+		nextTask:   "Fix something",
+	}, "Fix something", "", "tests failed output")
+
+	// Find the specific "Spawning fix agent for test failures" line and verify
+	// it does not contain a model sub-tag like [opus], [sonnet], or [haiku].
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if strings.Contains(line, "Spawning fix agent for test failures") {
+			if strings.Contains(line, "[opus]") || strings.Contains(line, "[sonnet]") || strings.Contains(line, "[haiku]") {
+				t.Errorf("test-domain spawn line should not include model tag, got: %q", line)
+			}
+			return
+		}
+	}
+	t.Error("expected to find 'Spawning fix agent for test failures' line in output")
+}
+
+// Verifies that "Running LLM verification" log line includes the model tag,
+// proving Domain: logging.LLM lines pass Model to the logger.
+func TestVerifier_LLMDomainVerifyLine_HasModelTag(t *testing.T) {
+	var buf strings.Builder
+
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.cfg.VerifyModel = verify.ModelHaiku
+		v.deps.Logger = logging.NewWithWriter(&buf)
+		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+			return verify.Result{Passed: true, Reason: "looks good"}
+		}
+	})
+
+	v.verifyWithFixLoop(signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    t.TempDir(),
+		rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID:     "test-123",
+		nextTask:   "Fix something",
+	}, "task description", "acceptance criteria")
+
+	output := buf.String()
+	// "Running LLM verification" uses Domain: logging.LLM, Model: verifyModel.
+	// Since VerifyModel is haiku, the output must contain "[haiku]".
+	if !strings.Contains(output, "[haiku]") {
+		t.Errorf("LLM-domain 'Running LLM verification' line should include model tag [haiku], got output: %q", output)
+	}
+}

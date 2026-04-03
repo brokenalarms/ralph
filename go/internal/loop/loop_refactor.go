@@ -72,9 +72,9 @@ func maybeRefactor(ctx context.Context, p maybeRefactorParams) error {
 	}
 
 	if !p.limiter.Allowed() {
-		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Rate limit hit before refactor — waiting for reset")
+		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: p.cfg.Model}, "Rate limit hit before refactor — waiting for reset")
 		if err := p.limiter.WaitForReset(ctx, func(secs int) {
-			p.logger.Emit(logging.Opts{Domain: logging.LLM}, "Rate limit: %ds until reset", secs)
+			p.logger.Emit(logging.Opts{Domain: logging.LLM, Model: p.cfg.Model}, "Rate limit: %ds until reset", secs)
 		}); err != nil {
 			return err
 		}

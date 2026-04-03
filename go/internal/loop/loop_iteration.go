@@ -122,6 +122,7 @@ func runAndComplete(ctx context.Context, p runAndCompleteParams, task taskContex
 		nextTask:            task.title,
 		headBefore:          prep.headBefore,
 		runIteration:        runIteration,
+		model:               p.model,
 		isOnlineFunc:        p.isOnlineFunc,
 		waitForInternetFunc: p.waitForInternetFunc,
 		logger:              p.logger,
@@ -146,6 +147,7 @@ func runAndComplete(ctx context.Context, p runAndCompleteParams, task taskContex
 		attempts: p.attempts,
 		analyzer: p.analyzer,
 		signals:  p.signals,
+		model:    p.model,
 	}, result, elapsed, runIteration, prep, task.id, task.title)
 	if halt {
 		return actionDone, iterAction, false, nil
@@ -689,6 +691,7 @@ type handleRunResultParams struct {
 	nextTask     string
 	headBefore   string
 	runIteration int
+	model        string
 
 	isOnlineFunc        func() bool
 	waitForInternetFunc func(context.Context, *logging.Logger) bool
@@ -710,16 +713,16 @@ type handleRunResultParams struct {
 func handleRunResult(ctx context.Context, p handleRunResultParams) loopAction {
 	if p.runErr != nil {
 		if !p.isOnlineFunc() {
-			p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Claude failed — internet appears down")
+			p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: p.model}, "Claude failed — internet appears down")
 			if !p.waitForInternetFunc(ctx, p.logger) {
 				return actionDone
 			}
 			return actionRetry
 		}
-		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Claude failed on iteration %d, continuing...", p.runIteration)
+		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: p.model}, "Claude failed on iteration %d, continuing...", p.runIteration)
 	}
 	if p.result.FeedbackKill {
-		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Restarting iteration %d — user feedback received", p.runIteration)
+		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: p.model}, "Restarting iteration %d — user feedback received", p.runIteration)
 		diffStat := p.git.DiffStatRange(p.headBefore, p.git.HeadRev())
 		p.attempts.Record(p.taskID, p.nextTask,
 			"Killed: user feedback received (see bead notes for content)",
@@ -728,7 +731,7 @@ func handleRunResult(ctx context.Context, p handleRunResultParams) loopAction {
 		return actionRetry
 	}
 	if p.result.IdleTimeout {
-		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Restarting iteration %d after idle timeout", p.runIteration)
+		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: p.model}, "Restarting iteration %d after idle timeout", p.runIteration)
 		diffStat := p.git.DiffStatRange(p.headBefore, p.git.HeadRev())
 		p.attempts.Record(p.taskID, p.nextTask,
 			"Killed: idle timeout (no output for configured duration)",
@@ -736,7 +739,7 @@ func handleRunResult(ctx context.Context, p handleRunResultParams) loopAction {
 			"idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output")
 		count, _ := p.attempts.RecordIdleTimeoutFailure(p.taskID)
 		if count >= attempts.MaxIdleTimeoutFailures {
-			p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Idle timeout %d times for %s — skipping task", count, p.taskID)
+			p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: p.model}, "Idle timeout %d times for %s — skipping task", count, p.taskID)
 			p.skipTask(p.backend, p.state, p.logger, p.taskID, "idle_timeout_max_failures")
 			return actionRetry
 		}
@@ -744,15 +747,15 @@ func handleRunResult(ctx context.Context, p handleRunResultParams) loopAction {
 	}
 	if p.result.RateLimited {
 		waitDur := claude.FormatWaitDuration(time.Until(p.result.ResetAt))
-		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Claude rate limit — waiting %s until %s", waitDur, p.result.ResetAt.Format("3:04pm"))
+		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: p.model}, "Claude rate limit — waiting %s until %s", waitDur, p.result.ResetAt.Format("3:04pm"))
 		err := p.limiter.WaitUntil(ctx, p.result.ResetAt, func(secs int) {
-			p.logger.Emit(logging.Opts{Domain: logging.LLM}, "Rate limit: %ds until reset", secs)
+			p.logger.Emit(logging.Opts{Domain: logging.LLM, Model: p.model}, "Rate limit: %ds until reset", secs)
 		})
 		if err != nil {
-			p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Rate limit wait interrupted: %v", err)
+			p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: p.model}, "Rate limit wait interrupted: %v", err)
 			return actionDone
 		}
-		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success}, "Rate limit reset — resuming")
+		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: p.model}, "Rate limit reset — resuming")
 		return actionRetry
 	}
 
