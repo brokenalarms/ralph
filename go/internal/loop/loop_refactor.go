@@ -9,77 +9,92 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/prompt"
+	"github.com/brokenalarms/ralph/internal/ratelimit"
 )
 
 const refactorCheckInterval = 5
 const refactorLookbackCommits = 10
 
-func (l *Loop) maybeRefactor() error {
-	if !l.cfg.Refactor {
+type maybeRefactorParams struct {
+	cfg          Config
+	git          git.GitOps
+	limiter      *ratelimit.Limiter
+	runner       claudeRunner
+	logger       *logging.Logger
+	signals      claude.SignalPaths
+	queryFn      func(ctx context.Context, workDir, prompt, model string) (string, error)
+	sessionCount int
+}
+
+func maybeRefactor(ctx context.Context, p maybeRefactorParams) error {
+	if !p.cfg.Refactor {
 		return nil
 	}
 
-	completedCount := len(l.sessionTasks)
-	if completedCount == 0 || completedCount%refactorCheckInterval != 0 {
+	if p.sessionCount == 0 || p.sessionCount%refactorCheckInterval != 0 {
 		return nil
 	}
 
-	recentFiles := l.git.RecentChangedFiles(refactorLookbackCommits)
+	recentFiles := p.git.RecentChangedFiles(refactorLookbackCommits)
 	if recentFiles == "" {
 		return nil
 	}
 
-	archSpec := readArchSpec(l.git.GetWorkDir())
+	archSpec := readArchSpec(p.git.GetWorkDir())
 
-	shouldRefactor, err := l.llmShouldRefactor(context.Background(), archSpec, recentFiles)
+	shouldRefactor, err := llmShouldRefactor(ctx, llmShouldRefactorParams{
+		queryFn: p.queryFn,
+		workDir: p.git.GetWorkDir(),
+	}, archSpec, recentFiles)
 	if err != nil {
 		return fmt.Errorf("refactor check: %w", err)
 	}
 
 	if !shouldRefactor {
-		l.logger.Emit(logging.Opts{Domain: "refactor"}, "LLM says no refactoring needed — skipping")
+		p.logger.Emit(logging.Opts{Domain: "refactor"}, "LLM says no refactoring needed — skipping")
 		return nil
 	}
 
-	l.logger.Phase("--- Adaptive refactor (LLM recommended) ---")
+	p.logger.Phase("--- Adaptive refactor (LLM recommended) ---")
 
 	refactorPrompt, err := prompt.BuildRefactorPrompt(prompt.Vars{
-		PromptsDir:       l.cfg.Dirs.PromptsDir,
-		WorkDir:          l.git.GetWorkDir(),
-		SignalToken:      l.signals.Complete,
-		CurrentTaskToken: l.signals.CurrentTask,
-		AllCompleteToken: l.signals.AllComplete,
+		PromptsDir:       p.cfg.Dirs.PromptsDir,
+		WorkDir:          p.git.GetWorkDir(),
+		SignalToken:      p.signals.Complete,
+		CurrentTaskToken: p.signals.CurrentTask,
+		AllCompleteToken: p.signals.AllComplete,
 	}, recentFiles)
 	if err != nil {
 		return fmt.Errorf("building refactor prompt: %w", err)
 	}
 
-	if !l.limiter.Allowed() {
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Rate limit hit before refactor — waiting for reset")
-		if err := l.limiter.WaitForReset(context.Background(), func(secs int) {
-			l.logger.Emit(logging.Opts{Domain: logging.LLM}, "Rate limit: %ds until reset", secs)
+	if !p.limiter.Allowed() {
+		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Rate limit hit before refactor — waiting for reset")
+		if err := p.limiter.WaitForReset(ctx, func(secs int) {
+			p.logger.Emit(logging.Opts{Domain: logging.LLM}, "Rate limit: %ds until reset", secs)
 		}); err != nil {
 			return err
 		}
 	}
 
-	rawLogPath := filepath.Join(l.cfg.Dirs.RalphDir, "raw.log")
-	_, err = l.runner.Run(claude.RunConfig{
-		WorkDir:      l.git.GetWorkDir(),
-		RalphDir:     l.cfg.Dirs.RalphDir,
+	rawLogPath := filepath.Join(p.cfg.Dirs.RalphDir, "raw.log")
+	_, err = p.runner.Run(claude.RunConfig{
+		WorkDir:      p.git.GetWorkDir(),
+		RalphDir:     p.cfg.Dirs.RalphDir,
 		Prompt:       refactorPrompt,
 		RawLog:       rawLogPath,
-		LogFile:      filepath.Join(l.cfg.Dirs.RalphDir, "loop.log"),
-		Quiet:        l.cfg.Quiet,
-		Verbose:      l.cfg.Verbose,
-		Signals:      l.signals,
+		LogFile:      filepath.Join(p.cfg.Dirs.RalphDir, "loop.log"),
+		Quiet:        p.cfg.Quiet,
+		Verbose:      p.cfg.Verbose,
+		Signals:      p.signals,
 		PollInterval: 2 * time.Second,
 	})
-	l.limiter.Increment()
+	p.limiter.Increment()
 
-	l.logger.Emit(logging.Opts{Level: logging.Success}, "Refactor iteration complete")
+	p.logger.Emit(logging.Opts{Level: logging.Success}, "Refactor iteration complete")
 
 	return err
 }
@@ -97,25 +112,26 @@ func readArchSpec(workDir string) string {
 	return content
 }
 
-func (l *Loop) llmShouldRefactor(ctx context.Context, archSpec, recentFiles string) (bool, error) {
-	queryFn := l.refactorQueryFunc
-	if queryFn == nil && l.agentRunner != nil {
-		queryFn = l.agentRunner.Query
-	}
-	if queryFn == nil {
+type llmShouldRefactorParams struct {
+	queryFn func(ctx context.Context, workDir, prompt, model string) (string, error)
+	workDir string
+}
+
+func llmShouldRefactor(ctx context.Context, p llmShouldRefactorParams, archSpec, recentFiles string) (bool, error) {
+	if p.queryFn == nil {
 		return false, fmt.Errorf("no query function available")
 	}
 
-	prompt := "You are deciding whether a codebase needs refactoring.\n\n"
+	refactorPrompt := "You are deciding whether a codebase needs refactoring.\n\n"
 	if archSpec != "" {
-		prompt += "## Architecture spec\n" + archSpec + "\n\n"
+		refactorPrompt += "## Architecture spec\n" + archSpec + "\n\n"
 	}
-	prompt += "## Recently changed files\n" + recentFiles + "\n\n"
-	prompt += "Based on the recently changed files and the architecture spec, does this codebase need refactoring right now?\n"
-	prompt += "Consider: code duplication, unclear naming, files growing too large, architectural drift from the spec, dead code.\n"
-	prompt += "Reply with exactly YES or NO on the first line, followed by a brief explanation."
+	refactorPrompt += "## Recently changed files\n" + recentFiles + "\n\n"
+	refactorPrompt += "Based on the recently changed files and the architecture spec, does this codebase need refactoring right now?\n"
+	refactorPrompt += "Consider: code duplication, unclear naming, files growing too large, architectural drift from the spec, dead code.\n"
+	refactorPrompt += "Reply with exactly YES or NO on the first line, followed by a brief explanation."
 
-	response, err := queryFn(ctx, l.git.GetWorkDir(), prompt, "")
+	response, err := p.queryFn(ctx, p.workDir, refactorPrompt, "")
 	if err != nil {
 		return false, err
 	}

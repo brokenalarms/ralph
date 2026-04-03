@@ -145,7 +145,7 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
-	l.newRunnerFunc = func() claudeRunner {
+	l.cfg.NewRunner = func() claudeRunner {
 		fixAgentCalled = true
 		// Fix agent "fixes" by removing the failing Makefile
 		os.Remove(filepath.Join(dir, "Makefile"))
@@ -215,7 +215,7 @@ func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 	}
 
 	fixAgentCalled := false
-	l.newRunnerFunc = func() claudeRunner {
+	l.cfg.NewRunner = func() claudeRunner {
 		fixAgentCalled = true
 		return &stubRunner{result: claude.Result{}}
 	}
@@ -282,7 +282,7 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 	}
 
 	fixAgentCalled := false
-	l.newRunnerFunc = func() claudeRunner {
+	l.cfg.NewRunner = func() claudeRunner {
 		fixAgentCalled = true
 		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
 	}
@@ -349,7 +349,7 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 		VerifyDir:     dir,
 	}, st, gm, logger)
 
-	l.newRunnerFunc = func() claudeRunner {
+	l.cfg.NewRunner = func() claudeRunner {
 		fixAttempts++
 		// Fix agent signals success but tests keep failing
 		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "attempted fix"}}

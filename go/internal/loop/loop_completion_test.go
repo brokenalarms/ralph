@@ -63,7 +63,7 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: "99"}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
 
@@ -125,7 +125,7 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 
 	l.runner = runner
 	gm.PRNumber = "42"
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
 
@@ -180,7 +180,7 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "no commits" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "no commits" }
 
 	_ = l.Run(context.Background())
 
@@ -664,7 +664,7 @@ func TestLoop_SessionTasksRecordsCompletedWork(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.verifyFunc = func(context.Context, string, string) (bool, string) {
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
 
@@ -719,7 +719,7 @@ func TestLoop_SessionTasksEmptyOnVerificationFailure(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.verifyFunc = func(context.Context, string, string) (bool, string) {
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return false, "tests failed"
 	}
 
@@ -779,7 +779,7 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 
 	l.runner = runner
 	gm.PRNumber = "42"
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
 

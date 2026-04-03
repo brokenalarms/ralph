@@ -374,7 +374,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		backend: backend,
 		counter: &iterationCount,
 	}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: true}
 	}
@@ -495,8 +495,8 @@ func handleRunResultCall(l *Loop, ctx context.Context, result claude.Result, run
 		nextTask:            nextTask,
 		headBefore:          headBefore,
 		runIteration:        runIteration,
-		isOnlineFunc:        l.isOnlineFunc,
-		waitForInternetFunc: l.waitForInternetFunc,
+		isOnlineFunc:        l.cfg.IsOnline,
+		waitForInternetFunc: l.cfg.WaitForInternet,
 		logger:              l.logger,
 		git:                 l.git,
 		attempts:            l.attempts,
@@ -534,8 +534,8 @@ func newHandleRunResultLoop(t *testing.T) (*Loop, string) {
 func TestHandleRunResult_OfflineReturnsRetry(t *testing.T) {
 	l, _ := newHandleRunResultLoop(t)
 
-	l.isOnlineFunc = func() bool { return false }
-	l.waitForInternetFunc = func(_ context.Context, _ *logging.Logger) bool { return true }
+	l.cfg.IsOnline = func() bool { return false }
+	l.cfg.WaitForInternet = func(_ context.Context, _ *logging.Logger) bool { return true }
 
 	runIter := 3
 	action := handleRunResultCall(l, context.Background(), claude.Result{}, fmt.Errorf("connection refused"),
@@ -551,8 +551,8 @@ func TestHandleRunResult_OfflineReturnsRetry(t *testing.T) {
 func TestHandleRunResult_OfflineContextCancelledReturnsBreak(t *testing.T) {
 	l, _ := newHandleRunResultLoop(t)
 
-	l.isOnlineFunc = func() bool { return false }
-	l.waitForInternetFunc = func(_ context.Context, _ *logging.Logger) bool { return false }
+	l.cfg.IsOnline = func() bool { return false }
+	l.cfg.WaitForInternet = func(_ context.Context, _ *logging.Logger) bool { return false }
 
 	runIter := 3
 	action := handleRunResultCall(l, context.Background(), claude.Result{}, fmt.Errorf("connection refused"),
@@ -568,7 +568,7 @@ func TestHandleRunResult_OfflineContextCancelledReturnsBreak(t *testing.T) {
 func TestHandleRunResult_FeedbackKillReturnsRetry(t *testing.T) {
 	l, ralphDir := newHandleRunResultLoop(t)
 
-	l.isOnlineFunc = func() bool { return true }
+	l.cfg.IsOnline = func() bool { return true }
 
 	runIter := 3
 	result := claude.Result{FeedbackKill: true}
@@ -591,7 +591,7 @@ func TestHandleRunResult_FeedbackKillReturnsRetry(t *testing.T) {
 func TestHandleRunResult_IdleTimeoutReturnsRetry(t *testing.T) {
 	l, ralphDir := newHandleRunResultLoop(t)
 
-	l.isOnlineFunc = func() bool { return true }
+	l.cfg.IsOnline = func() bool { return true }
 
 	runIter := 3
 	result := claude.Result{IdleTimeout: true}
@@ -614,7 +614,7 @@ func TestHandleRunResult_IdleTimeoutReturnsRetry(t *testing.T) {
 func TestHandleRunResult_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 	l, ralphDir := newHandleRunResultLoop(t)
 
-	l.isOnlineFunc = func() bool { return true }
+	l.cfg.IsOnline = func() bool { return true }
 
 	backend := &testutil.StubBackend{}
 	l.cfg.TaskBackend = backend
@@ -643,7 +643,7 @@ func TestHandleRunResult_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 func TestHandleRunResult_RateLimitedReturnsRetry(t *testing.T) {
 	l, _ := newHandleRunResultLoop(t)
 
-	l.isOnlineFunc = func() bool { return true }
+	l.cfg.IsOnline = func() bool { return true }
 
 	resetAt := time.Now().Add(-1 * time.Second)
 	runIter := 3
@@ -661,7 +661,7 @@ func TestHandleRunResult_RateLimitedReturnsRetry(t *testing.T) {
 func TestHandleRunResult_RateLimitedContextCancelledReturnsBreak(t *testing.T) {
 	l, _ := newHandleRunResultLoop(t)
 
-	l.isOnlineFunc = func() bool { return true }
+	l.cfg.IsOnline = func() bool { return true }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -682,7 +682,7 @@ func TestHandleRunResult_RateLimitedContextCancelledReturnsBreak(t *testing.T) {
 func TestHandleRunResult_NormalReturnsResultProceed(t *testing.T) {
 	l, _ := newHandleRunResultLoop(t)
 
-	l.isOnlineFunc = func() bool { return true }
+	l.cfg.IsOnline = func() bool { return true }
 
 	runIter := 3
 	action := handleRunResultCall(l, context.Background(), claude.Result{}, nil,

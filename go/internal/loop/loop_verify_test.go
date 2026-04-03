@@ -36,7 +36,7 @@ func TestOnSignal_HappyPath(t *testing.T) {
 	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: true, Reason: "looks good"}
 	}
-	l.verifyFunc = func(ctx context.Context, dir, headBefore string) (bool, string) {
+	l.cfg.OnVerify = func(ctx context.Context, dir, headBefore string) (bool, string) {
 		return true, ""
 	}
 

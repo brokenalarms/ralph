@@ -53,7 +53,7 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.verifyFunc = func(context.Context, string, string) (bool, string) {
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return false, "test suite failed"
 	}
 
@@ -126,7 +126,7 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.verifyFunc = func(context.Context, string, string) (bool, string) {
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return true, ""
 	}
 
@@ -420,7 +420,7 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.newRunnerFunc = func() claudeRunner {
+	l.cfg.NewRunner = func() claudeRunner {
 		return &stubRunner{result: claude.Result{SignalDetected: true}}
 	}
 
@@ -718,7 +718,7 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 		VerifyDir:     dir,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
 
@@ -844,7 +844,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 			l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 				return llmResult
 			}
-			l.newRunnerFunc = func() claudeRunner {
+			l.cfg.NewRunner = func() claudeRunner {
 				return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
 			}
 

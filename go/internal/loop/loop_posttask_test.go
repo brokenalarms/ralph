@@ -32,8 +32,8 @@ func handlePostSignalCall(l *Loop, p postSignalParams) postSignalAction {
 		logger:            l.logger,
 		attempts:          l.attempts,
 		verifyFn: func(ctx context.Context, headBefore string) (bool, string) {
-			if l.verifyFunc != nil {
-				return l.verifyFunc(ctx, l.git.GetWorkDir(), headBefore)
+			if l.cfg.OnVerify != nil {
+				return l.cfg.OnVerify(ctx, l.git.GetWorkDir(), headBefore)
 			}
 			return l.verifier.VerifyCompletion(ctx, l.git.GetWorkDir(), headBefore)
 		},
@@ -42,8 +42,8 @@ func handlePostSignalCall(l *Loop, p postSignalParams) postSignalAction {
 				git:                 l.git,
 				backend:             l.cfg.TaskBackend,
 				logger:              l.logger,
-				isOnlineFunc:        l.isOnlineFunc,
-				waitForInternetFunc: l.waitForInternetFunc,
+				isOnlineFunc:        l.cfg.IsOnline,
+				waitForInternetFunc: l.cfg.WaitForInternet,
 				shipFn: func(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error) {
 					return l.git.Ship(ctx, opts)
 				},
@@ -62,11 +62,17 @@ func handlePostSignalCall(l *Loop, p postSignalParams) postSignalAction {
 		buildCTFn: func(taskID, nextTask, summary, prNumber, _ string) CompletedTask {
 			return buildCompletedTask(taskID, nextTask, summary, prNumber, l.git)
 		},
-		runPostTaskFn: l.runPostTask,
+		runPostTaskFn: func(ctx context.Context, taskID, prNumber string, merged bool) {
+			runPostTask(ctx, runPostTaskParams{
+				postTask:   l.cfg.PostTask,
+				projectDir: l.cfg.Dirs.ProjectDir,
+				logger:     l.logger,
+			}, taskID, prNumber, merged)
+		},
 	}
 	out := handlePostSignal(p, opts)
 	if out.ct != nil {
-		l.sessionTasks = append(l.sessionTasks, *out.ct)
+		l.completedTasks = append(l.completedTasks, *out.ct)
 	}
 	return out.action
 }
@@ -101,7 +107,7 @@ func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: "42"}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	action := handlePostSignalCall(l, postSignalParams{
 		ctx:        context.Background(),
@@ -145,7 +151,7 @@ func TestLoop_HandlePostSignal_VerificationFailure(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
 	action := handlePostSignalCall(l, postSignalParams{
 		ctx:      context.Background(),
@@ -190,7 +196,7 @@ func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 		PostSignalTimeout: 50 * time.Millisecond,
 	}, st, gm, logger)
 	l.runner = &stubRunner{}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipFunc = func(ctx context.Context, _ git.ShipOpts) (git.ShipResult, error) {
 		<-ctx.Done()
 		return git.ShipResult{}, ctx.Err()
@@ -251,7 +257,7 @@ func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.
 		PostSignalTimeout: 5 * time.Second,
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: "42"}
 
 	action := handlePostSignalCall(l, postSignalParams{
@@ -297,7 +303,7 @@ func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
 		PostSignalTimeout: 50 * time.Millisecond,
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: "99"}
 	gm.MergeRetryFunc = func(ctx context.Context) (bool, error) {
 		<-ctx.Done()
@@ -354,7 +360,7 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: "99"}
 	gm.MergeRetryResult = true
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	action := handlePostSignalCall(l, postSignalParams{
 		ctx:        context.Background(),
@@ -405,7 +411,7 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 		PostTask:      scriptPath,
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
 	action := handlePostSignalCall(l, postSignalParams{
 		ctx:      context.Background(),
@@ -450,7 +456,7 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: "50"}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	action := handlePostSignalCall(l, postSignalParams{
 		ctx:        context.Background(),
@@ -497,7 +503,7 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 		PostTask:      scriptPath,
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	action := handlePostSignalCall(l, postSignalParams{
 		ctx:        context.Background(),
@@ -553,7 +559,7 @@ func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: "42"}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	var buf bytes.Buffer
 	prev := notify.SetWriter(&buf)
@@ -606,7 +612,7 @@ func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: "42"}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	var buf bytes.Buffer
 	prev := notify.SetWriter(&buf)
@@ -655,7 +661,7 @@ func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
 		Notify:        true,
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	var buf bytes.Buffer
 	prev := notify.SetWriter(&buf)

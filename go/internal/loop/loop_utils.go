@@ -136,26 +136,32 @@ func waitForInternet(ctx context.Context, logger *logging.Logger) bool {
 	}
 }
 
+type runVerifyBuildParams struct {
+	verifyBuild string
+	projectDir  string
+	logger      *logging.Logger
+}
+
 // runVerifyBuild executes the --verify-build script if configured. Runs in
 // the project directory with a timeout matching the test suite timeout.
 // Returns empty string if the script passes or is not configured.
 // Returns a build failure message (stdout+stderr) if the script exits non-zero.
-func (l *Loop) runVerifyBuild(ctx context.Context) string {
-	if l.cfg.VerifyBuild == "" {
+func runVerifyBuild(ctx context.Context, p runVerifyBuildParams) string {
+	if p.verifyBuild == "" {
 		return ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, verify.TestTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sh", "-c", l.cfg.VerifyBuild)
-	cmd.Dir = l.cfg.Dirs.ProjectDir
-	l.logger.Emit(logging.Opts{Domain: "build"}, "Running verify-build: %s", l.cfg.VerifyBuild)
+	cmd := exec.CommandContext(ctx, "sh", "-c", p.verifyBuild)
+	cmd.Dir = p.projectDir
+	p.logger.Emit(logging.Opts{Domain: "build"}, "Running verify-build: %s", p.verifyBuild)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		l.logger.Emit(logging.Opts{Domain: "build", Level: logging.Success}, "Build health check passed")
+		p.logger.Emit(logging.Opts{Domain: "build", Level: logging.Success}, "Build health check passed")
 		return ""
 	}
 	output := strings.TrimSpace(string(out))
-	l.logger.Emit(logging.Opts{Domain: "build", Level: logging.Warn}, "Build health check failed: %v", err)
+	p.logger.Emit(logging.Opts{Domain: "build", Level: logging.Warn}, "Build health check failed: %v", err)
 	msg := "\n- BUILD IS BROKEN. Fix the build before working on your task. Do not start the task until the build is healthy."
 	if output != "" {
 		msg += "\n  Build failure output:\n  " + strings.ReplaceAll(output, "\n", "\n  ")
@@ -163,15 +169,21 @@ func (l *Loop) runVerifyBuild(ctx context.Context) string {
 	return msg
 }
 
+type runPostTaskParams struct {
+	postTask   string
+	projectDir string
+	logger     *logging.Logger
+}
+
 // runPostTask executes the --post-task script if configured. Runs in the
 // project directory with RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED
 // env vars. Non-zero exit warns and continues.
-func (l *Loop) runPostTask(ctx context.Context, taskID, prNumber string, merged bool) {
-	if l.cfg.PostTask == "" {
+func runPostTask(ctx context.Context, p runPostTaskParams, taskID, prNumber string, merged bool) {
+	if p.postTask == "" {
 		return
 	}
-	cmd := exec.CommandContext(ctx, "sh", "-c", l.cfg.PostTask)
-	cmd.Dir = l.cfg.Dirs.ProjectDir
+	cmd := exec.CommandContext(ctx, "sh", "-c", p.postTask)
+	cmd.Dir = p.projectDir
 	cmd.Env = append(os.Environ(),
 		"RALPH_TASK_ID="+taskID,
 		"RALPH_PR_NUMBER="+prNumber,
@@ -179,8 +191,8 @@ func (l *Loop) runPostTask(ctx context.Context, taskID, prNumber string, merged 
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	l.logger.Emit(logging.Opts{Domain: "post-task"}, "Running %s (task=%s pr=%s merged=%t)", l.cfg.PostTask, taskID, prNumber, merged)
+	p.logger.Emit(logging.Opts{Domain: "post-task"}, "Running %s (task=%s pr=%s merged=%t)", p.postTask, taskID, prNumber, merged)
 	if err := cmd.Run(); err != nil {
-		l.logger.Emit(logging.Opts{Domain: "post-task", Level: logging.Warn}, "Script exited with error: %v", err)
+		p.logger.Emit(logging.Opts{Domain: "post-task", Level: logging.Warn}, "Script exited with error: %v", err)
 	}
 }

@@ -65,7 +65,7 @@ func TestLoop_VerifyBuild_FailureInjectedIntoPrompt(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 	l.runner = &promptCapturingRunner{inner: inner, captured: &capturedPrompt}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
 
@@ -126,7 +126,7 @@ func TestLoop_VerifyBuild_PassDoesNotInjectContext(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 	l.runner = &promptCapturingRunner{inner: inner, captured: &capturedPrompt}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
 
@@ -179,7 +179,7 @@ func TestLoop_VerifyBuild_NotConfigured_NoEffect(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 	l.runner = &promptCapturingRunner{inner: inner, captured: &capturedPrompt}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
 
@@ -241,7 +241,7 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 	l.runner = &promptCapturingRunner{inner: inner, captured: &capturedPrompt}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
 

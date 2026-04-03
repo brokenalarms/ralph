@@ -165,7 +165,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		inner:    origRunner,
 		captured: &capturedPrompt,
 	}
-	l.verifyFunc = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
 
@@ -252,8 +252,10 @@ func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
 		projectDir:          l.cfg.Dirs.ProjectDir,
 		planFile:            l.cfg.PlanFile,
 		callsPerHour:        l.cfg.CallsPerHour,
-		runVerifyBuildFn:    l.runVerifyBuild,
-		waitForInternetFunc: l.waitForInternetFunc,
+		runVerifyBuildFn: func(ctx context.Context) string {
+			return runVerifyBuild(ctx, runVerifyBuildParams{verifyBuild: l.cfg.VerifyBuild, projectDir: l.cfg.Dirs.ProjectDir, logger: l.logger})
+		},
+		waitForInternetFunc: l.cfg.WaitForInternet,
 	}, "ralph-xyz", "Fix login")
 	if !ok {
 		t.Fatal("expected ok=true from prepareAndBuildPrompt")
@@ -360,11 +362,15 @@ func TestLoop_HasProgress_SnapshotsDiffState(t *testing.T) {
 				projectDir:          l.cfg.Dirs.ProjectDir,
 				planFile:            l.cfg.PlanFile,
 				callsPerHour:        l.cfg.CallsPerHour,
-				runVerifyBuildFn:    l.runVerifyBuild,
-				isOnlineFunc:        l.isOnlineFunc,
-				waitForInternetFunc: l.waitForInternetFunc,
-				verifyFunc:          l.verifyFunc,
-				runPostTaskFn:       l.runPostTask,
+				runVerifyBuildFn: func(ctx context.Context) string {
+			return runVerifyBuild(ctx, runVerifyBuildParams{verifyBuild: l.cfg.VerifyBuild, projectDir: l.cfg.Dirs.ProjectDir, logger: l.logger})
+		},
+				isOnlineFunc:        l.cfg.IsOnline,
+				waitForInternetFunc: l.cfg.WaitForInternet,
+				verifyFunc:          l.cfg.OnVerify,
+				runPostTaskFn: func(ctx context.Context, taskID, prNumber string, merged bool) {
+				runPostTask(ctx, runPostTaskParams{postTask: l.cfg.PostTask, projectDir: l.cfg.Dirs.ProjectDir, logger: l.logger}, taskID, prNumber, merged)
+			},
 			}, taskContext{id: "ralph-abc", title: "Fix login"}, 0)
 
 			if capturedHasProgress == nil {
