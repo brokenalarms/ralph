@@ -257,21 +257,11 @@ func (v *Verifier) runTestsWithHeartbeat(ctx context.Context, dir string) (verif
 }
 
 // verifyModel returns the model for the current LLM verification attempt,
-// capped by ModelCap when set.
+// capped by ModelCap when set. All attempts use sonnet.
 func (v *Verifier) verifyModel() string {
-	var model string
-	if v.llmVerifyAttempts <= 1 {
-		if v.cfg.VerifyModel != "" {
-			model = v.cfg.VerifyModel
-		} else {
-			model = verify.ModelHaiku
-		}
-	} else {
-		if v.cfg.VerifyEscalationModel != "" {
-			model = v.cfg.VerifyEscalationModel
-		} else {
-			model = verify.ModelSonnet
-		}
+	model := v.cfg.VerifyEscalationModel
+	if model == "" {
+		model = verify.ModelSonnet
 	}
 	return verify.CapModel(v.cfg.ModelCap, model)
 }

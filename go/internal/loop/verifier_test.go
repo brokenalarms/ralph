@@ -127,8 +127,7 @@ func TestVerifier_OnSignal_LLMExhaustsRetries_SkipsTask(t *testing.T) {
 	}
 }
 
-// Model escalation within a single OnSignal call: first attempt uses Haiku,
-// subsequent attempts within the same iteration use Sonnet.
+// All three verification attempts within a single OnSignal call use Sonnet.
 func TestVerifier_ModelEscalation(t *testing.T) {
 	var modelsUsed []string
 	llmCalls := 0
@@ -158,8 +157,8 @@ func TestVerifier_ModelEscalation(t *testing.T) {
 	if len(modelsUsed) != 3 {
 		t.Fatalf("expected 3 LLM calls within one iteration, got %d", len(modelsUsed))
 	}
-	if modelsUsed[0] != verify.ModelHaiku {
-		t.Errorf("attempt 1: expected %s, got %s", verify.ModelHaiku, modelsUsed[0])
+	if modelsUsed[0] != verify.ModelSonnet {
+		t.Errorf("attempt 1: expected %s, got %s", verify.ModelSonnet, modelsUsed[0])
 	}
 	if modelsUsed[1] != verify.ModelSonnet {
 		t.Errorf("attempt 2: expected %s, got %s", verify.ModelSonnet, modelsUsed[1])
@@ -478,8 +477,8 @@ func TestVerifier_OnSignal_ResetsAttemptsEachIteration(t *testing.T) {
 	if len(modelsUsed) == 0 {
 		t.Fatal("expected at least one LLM call")
 	}
-	if modelsUsed[0] != verify.ModelHaiku {
-		t.Errorf("fresh iteration should start with %s (attempt 1), got %s — llmVerifyAttempts was not reset", verify.ModelHaiku, modelsUsed[0])
+	if modelsUsed[0] != verify.ModelSonnet {
+		t.Errorf("fresh iteration should start with %s (attempt 1), got %s — llmVerifyAttempts was not reset", verify.ModelSonnet, modelsUsed[0])
 	}
 }
 
@@ -506,12 +505,12 @@ func TestVerifier_VerificationLog_ShowsModelSubTag(t *testing.T) {
 	})
 
 	got := logOut.String()
-	if !strings.Contains(got, "[haiku]") {
-		t.Errorf("verification log should contain [haiku] model sub-tag, got:\n%s", got)
+	if !strings.Contains(got, "[sonnet]") {
+		t.Errorf("verification log should contain [sonnet] model sub-tag, got:\n%s", got)
 	}
 	// Model name must NOT appear parenthesized in message body.
-	if strings.Contains(got, "(haiku)") {
-		t.Errorf("model name must not appear as '(haiku)' in message body, got:\n%s", got)
+	if strings.Contains(got, "(sonnet)") {
+		t.Errorf("model name must not appear as '(sonnet)' in message body, got:\n%s", got)
 	}
 }
 
@@ -748,7 +747,6 @@ func TestVerifier_LLMDomainVerifyLine_HasModelTag(t *testing.T) {
 	var buf strings.Builder
 
 	v := newTestVerifier(t, func(v *Verifier) {
-		v.cfg.VerifyModel = verify.ModelHaiku
 		v.deps.Logger = logging.NewWithWriter(&buf)
 		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 			return verify.Result{Passed: true, Reason: "looks good"}
@@ -766,8 +764,8 @@ func TestVerifier_LLMDomainVerifyLine_HasModelTag(t *testing.T) {
 
 	output := buf.String()
 	// "Running LLM verification" uses Domain: logging.LLM, Model: verifyModel.
-	// Since VerifyModel is haiku, the output must contain "[haiku]".
-	if !strings.Contains(output, "[haiku]") {
-		t.Errorf("LLM-domain 'Running LLM verification' line should include model tag [haiku], got output: %q", output)
+	// All verification attempts use sonnet, so output must contain "[sonnet]".
+	if !strings.Contains(output, "[sonnet]") {
+		t.Errorf("LLM-domain 'Running LLM verification' line should include model tag [sonnet], got output: %q", output)
 	}
 }

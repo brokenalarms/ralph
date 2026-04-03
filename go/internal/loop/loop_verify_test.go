@@ -96,8 +96,7 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	}
 }
 
-// First verification uses Haiku; after rejection + fix, re-verification
-// escalates to Sonnet.
+// All verification attempts use Sonnet regardless of attempt number.
 func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -139,8 +138,8 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	if len(modelsUsed) != 3 {
 		t.Fatalf("expected 3 LLM calls, got %d", len(modelsUsed))
 	}
-	if modelsUsed[0] != verify.ModelHaiku {
-		t.Errorf("attempt 1: expected %s, got %s", verify.ModelHaiku, modelsUsed[0])
+	if modelsUsed[0] != verify.ModelSonnet {
+		t.Errorf("attempt 1: expected %s, got %s", verify.ModelSonnet, modelsUsed[0])
 	}
 	if modelsUsed[1] != verify.ModelSonnet {
 		t.Errorf("attempt 2: expected %s, got %s", verify.ModelSonnet, modelsUsed[1])
@@ -160,7 +159,6 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
-	customModel := "claude-haiku-custom"
 	customEscalation := "claude-sonnet-custom"
 
 	l := New(Config{
@@ -169,7 +167,6 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 		CallsPerHour:          80,
 		TaskBackend:           &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:             dir,
-		VerifyModel:           customModel,
 		VerifyEscalationModel: customEscalation,
 	}, st, gm, logger)
 
@@ -195,8 +192,8 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 	if len(modelsUsed) != 3 {
 		t.Fatalf("expected 3 LLM calls, got %d", len(modelsUsed))
 	}
-	if modelsUsed[0] != customModel {
-		t.Errorf("attempt 1: expected %s, got %s", customModel, modelsUsed[0])
+	if modelsUsed[0] != customEscalation {
+		t.Errorf("attempt 1: expected %s, got %s", customEscalation, modelsUsed[0])
 	}
 	if modelsUsed[1] != customEscalation {
 		t.Errorf("attempt 2: expected %s, got %s", customEscalation, modelsUsed[1])
