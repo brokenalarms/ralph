@@ -52,51 +52,56 @@ var _ GitQuerier = (*git.Manager)(nil)
 
 // DetectTestCommand finds a Makefile test target when present,
 // proving ralph can auto-detect the project's test runner.
-func TestDetectTestCommand_Makefile(t *testing.T) {
+func TestDetectTestCommand_MakeVerify(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\tgo test ./...\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\tgo test ./...\n"), 0o644)
 
 	tc := DetectTestCommand(dir)
 	if tc == nil {
 		t.Fatal("expected test command, got nil")
 	}
-	if tc.Cmd != "make" || len(tc.Args) != 1 || tc.Args[0] != "test" {
-		t.Errorf("expected make test, got %s %v", tc.Cmd, tc.Args)
+	if tc.Cmd != "make" || len(tc.Args) != 1 || tc.Args[0] != "test-verify" {
+		t.Errorf("expected make test-verify, got %s %v", tc.Cmd, tc.Args)
 	}
 }
 
-// DetectTestCommand finds npm test when package.json has a test script,
-// supporting Node.js projects.
+// DetectTestCommand finds npm run test:verify when package.json has the script.
 func TestDetectTestCommand_NPM(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"test:verify":"jest && playwright test"}}`), 0o644)
+
+	tc := DetectTestCommand(dir)
+	if tc == nil {
+		t.Fatal("expected test command, got nil")
+	}
+	if tc.Cmd != "npm" || len(tc.Args) != 2 || tc.Args[0] != "run" || tc.Args[1] != "test:verify" {
+		t.Errorf("expected npm run test:verify, got %s %v", tc.Cmd, tc.Args)
+	}
+}
+
+// DetectTestCommand ignores npm test — only test:verify is accepted.
+func TestDetectTestCommand_NPMTestIgnored(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"test":"jest"}}`), 0o644)
 
 	tc := DetectTestCommand(dir)
-	if tc == nil {
-		t.Fatal("expected test command, got nil")
-	}
-	if tc.Cmd != "npm" {
-		t.Errorf("expected npm, got %s", tc.Cmd)
+	if tc != nil {
+		t.Errorf("expected nil when only npm test exists (no test:verify), got %s %v", tc.Cmd, tc.Args)
 	}
 }
 
-// DetectTestCommand finds go test when go.mod exists,
-// supporting Go projects without a Makefile.
-func TestDetectTestCommand_GoMod(t *testing.T) {
+// DetectTestCommand ignores go.mod — heuristic detection is removed.
+func TestDetectTestCommand_GoModIgnored(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n"), 0o644)
 
 	tc := DetectTestCommand(dir)
-	if tc == nil {
-		t.Fatal("expected test command, got nil")
-	}
-	if tc.Cmd != "go" {
-		t.Errorf("expected go, got %s", tc.Cmd)
+	if tc != nil {
+		t.Errorf("expected nil when only go.mod exists (no test:verify), got %s %v", tc.Cmd, tc.Args)
 	}
 }
 
-// DetectTestCommand returns nil when no test runner is found,
-// so verification doesn't block projects without tests.
+// DetectTestCommand returns nil when no test:verify script is found.
 func TestDetectTestCommand_None(t *testing.T) {
 	dir := t.TempDir()
 
@@ -106,15 +111,14 @@ func TestDetectTestCommand_None(t *testing.T) {
 	}
 }
 
-// Makefile targets are detected only when the exact target name appears,
-// not when a similarly-named target like "test-integration" is present.
-func TestDetectTestCommand_MakefileNoTarget(t *testing.T) {
+// Makefile must have a test-verify target, not just test.
+func TestDetectTestCommand_MakefileTestTargetIgnored(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("build:\n\tgo build ./...\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\tgo test ./...\n"), 0o644)
 
 	tc := DetectTestCommand(dir)
-	if tc != nil && tc.Cmd == "make" {
-		t.Error("should not detect make test when Makefile has no test target")
+	if tc != nil {
+		t.Errorf("expected nil when Makefile has test but not test-verify, got %s %v", tc.Cmd, tc.Args)
 	}
 }
 
@@ -122,7 +126,7 @@ func TestDetectTestCommand_MakefileNoTarget(t *testing.T) {
 // where Claude's fix is verified by the test suite.
 func TestRunTests_PassingTests(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\ttrue\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\ttrue\n"), 0o644)
 
 	result := RunTests(context.Background(), dir)
 	if !result.Passed {
@@ -143,7 +147,7 @@ func TestTestTimeout_Default(t *testing.T) {
 // block the loop indefinitely.
 func TestRunTests_Timeout(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\tsleep 1\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\tsleep 1\n"), 0o644)
 
 	saved := TestTimeout
 	TestTimeout = 50 * time.Millisecond
@@ -165,7 +169,7 @@ func TestRunTests_Timeout(t *testing.T) {
 // stops a long-running test suite instead of blocking indefinitely.
 func TestRunTests_CancelledContext(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\tsleep 1\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\tsleep 1\n"), 0o644)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -180,7 +184,7 @@ func TestRunTests_CancelledContext(t *testing.T) {
 // ralph will reject Claude's completion signal when tests are broken.
 func TestRunTests_FailingTests(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\tfalse\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\tfalse\n"), 0o644)
 
 	result := RunTests(context.Background(), dir)
 	if result.Passed {
@@ -191,14 +195,14 @@ func TestRunTests_FailingTests(t *testing.T) {
 	}
 }
 
-// RunTests passes when no test runner is detected, avoiding false
-// negatives for projects that don't have a test framework.
+// RunTests fails when no test:verify script is found — projects must
+// declare their verify command explicitly.
 func TestRunTests_NoTestRunner(t *testing.T) {
 	dir := t.TempDir()
 
 	result := RunTests(context.Background(), dir)
-	if !result.Passed {
-		t.Errorf("expected pass when no test runner detected, got: %s", result.Reason)
+	if result.Passed {
+		t.Error("expected failure when no test:verify script found")
 	}
 }
 

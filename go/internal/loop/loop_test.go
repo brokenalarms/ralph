@@ -34,6 +34,9 @@ func setupTestDir(t *testing.T) (string, *state.Store) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
+	// Projects must have a test:verify script; create a passing Makefile target
+	// so tests with VerifyDir set don't fail at startup or verification.
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\ttrue\n"), 0o644)
 	st := state.NewStore(ralphDir)
 	st.Init(5)
 	return dir, st

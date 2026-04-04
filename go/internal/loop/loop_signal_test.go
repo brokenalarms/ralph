@@ -116,7 +116,7 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 
 	// Create a Makefile with a failing test command so verify.RunTests
 	// detects a test runner and returns a failure.
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\t@echo 'FAIL: broken test' && exit 1\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\t@echo 'FAIL: broken test' && exit 1\n"), 0o644)
 
 	backend := &testutil.StubBackend{
 		Remaining: 1,
@@ -147,8 +147,8 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 
 	l.cfg.NewRunner = func() claudeRunner {
 		fixAgentCalled = true
-		// Fix agent "fixes" by removing the failing Makefile
-		os.Remove(filepath.Join(dir, "Makefile"))
+		// Fix agent "fixes" by replacing the failing Makefile with a passing one
+		os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\ttrue\n"), 0o644)
 		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed tests"}}
 	}
 
@@ -323,7 +323,7 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	// Create a Makefile with a failing test command.
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\t@echo 'FAIL: broken' && exit 1\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\t@echo 'FAIL: broken' && exit 1\n"), 0o644)
 
 	backend := &testutil.StubBackend{
 		Remaining: 1,
