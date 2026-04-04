@@ -112,8 +112,14 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 		}
 		log.Phase("Merging PR #%d (%d/%d)", pr.number, merged+1, len(prs))
 
-		// Track the SHA we pushed so AwaitCI polls for the correct HEAD.
-		expectedSHA := ""
+		// Record the current PR HEAD before any push so AwaitCI can
+		// detect when GitHub updates. We wait for "HEAD != staleSHA"
+		// rather than matching a specific expected SHA.
+		staleSHA := ""
+		if prDetail, err := gh.GetPR(nwo, pr.number); err == nil {
+			staleSHA = prDetail.HeadSHA
+		}
+
 		if merged > 0 {
 			// Main moved after previous merge. Rebase this branch onto
 			// the new main and force-push so CI runs against the correct base.
@@ -139,25 +145,13 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Force-push failed for %s: %v", pr.head, pushErr)
 				return 1
 			}
-			// Capture the SHA we just pushed before switching branches.
-			// GitHub's API may lag behind the force-push, so reading the
-			// SHA from local git is the only reliable source.
-			shaOut, _ := runner.Run(ctx, projectDir, "rev-parse", "HEAD")
-			expectedSHA = strings.TrimSpace(shaOut)
 			// Return to default branch.
 			runner.Run(ctx, projectDir, "checkout", defaultBranch)
 		}
 
-		if expectedSHA == "" {
-			// First PR in stack (or no rebase needed) — ask GitHub.
-			if prDetail, err := gh.GetPR(nwo, pr.number); err == nil {
-				expectedSHA = prDetail.HeadSHA
-			}
-		}
-
 		// Wait for CI on the current HEAD.
 		log.Emit(logging.Opts{Domain: logging.CI}, "Waiting for CI on PR #%d...", pr.number)
-		_, ciStatus, ciErr := gm.AwaitCI(ctx, pr.number, repoURL, expectedSHA)
+		_, ciStatus, ciErr := gm.AwaitCI(ctx, pr.number, repoURL, staleSHA)
 		if ciErr != nil {
 			log.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "CI polling error: %v", ciErr)
 		}

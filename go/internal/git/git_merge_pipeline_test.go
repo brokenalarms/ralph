@@ -107,7 +107,7 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 		IsAvailable: true,
 		OpenPR:      42,
 		PRTitle:     "some PR",
-		PRHeadSHA:   "abc123",
+
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}
 
@@ -160,7 +160,7 @@ func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 		IsAvailable: true,
 		OpenPR:      88,
 		PRTitle:     "some PR",
-		PRHeadSHA:   "abc123",
+
 		MergeResult: MergeResult{Blocked: true, Message: "Pull request is not mergeable"},
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}
@@ -248,7 +248,6 @@ func TestAutoMerge_InfraFailureBypass_MergesWhenLocalTestsPassed(t *testing.T) {
 		IsAvailable:  true,
 		OpenPR:       99,
 		PRTitle:      "infra failure test",
-		PRHeadSHA:    "abc123",
 		MergeResult:  MergeResult{Merged: true},
 		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 		JobStepCount: 0,
@@ -298,7 +297,7 @@ func TestAutoMerge_InfraFailureNoBypass_WhenLocalTestsNotPassed(t *testing.T) {
 		IsAvailable:  true,
 		OpenPR:       100,
 		PRTitle:      "infra failure no bypass",
-		PRHeadSHA:    "abc123",
+
 		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 		JobStepCount: 0,
 	}
@@ -486,7 +485,7 @@ func TestMergeWithRetry_CIFailureWithNoCallback_ReturnsError(t *testing.T) {
 	gh := &StubGitHub{
 		IsAvailable: true,
 		OpenPR:      55,
-		PRHeadSHA:   "abc123",
+
 		Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 	}
 
@@ -536,7 +535,7 @@ func TestMergeWithRetry_InfraRetryBackoff(t *testing.T) {
 		IsAvailable: true,
 		OpenPR:      101,
 		PRTitle:     "infra retry",
-		PRHeadSHA:   "abc123",
+
 		ChecksFunc: func(call int) []CICheckResult {
 			if call <= 3 {
 				return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
@@ -696,7 +695,7 @@ func TestExecuteMerge_CIGatedRetryPath(t *testing.T) {
 		IsAvailable: true,
 		OpenPR:      120,
 		PRTitle:     "CI gated test",
-		PRHeadSHA:   "abc123",
+
 		MergeResults: []MergeResult{
 			{Blocked: true, Message: "Base branch policy prohibits the merge"},
 			{Merged: true},
@@ -835,7 +834,7 @@ func TestAutoMerge_KnownPRNumber_SkipsFindOpenPR(t *testing.T) {
 		IsAvailable: true,
 		OpenPR:      0, // FindOpenPR would return nothing
 		PRBase:      "main",
-		PRHeadSHA:   "abc123",
+
 		MergeResult: MergeResult{Merged: true},
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}

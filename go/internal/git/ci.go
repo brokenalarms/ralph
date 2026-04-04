@@ -157,14 +157,16 @@ func (e *UnresolvedConflictError) Error() string {
 type CIFetchFunc func(prNumber int, repoURL string) ([]CICheckResult, error)
 
 // AwaitCI fetches CI check status for a PR and polls until checks resolve.
-// When expectedSHA is non-empty, polls until the PR HEAD matches that SHA
-// before reading CI results — preventing stale results after a push.
-func (m *Manager) AwaitCI(ctx context.Context, prNumber int, repoURL, expectedSHA string) ([]CICheckResult, CIStatus, error) {
+// When staleSHA is non-empty, polls until the PR HEAD changes away from that
+// SHA before reading CI results — preventing stale results after a push.
+// We wait for "HEAD != staleSHA" rather than "HEAD == expectedSHA" because
+// GitHub may rewrite SHAs server-side after a push.
+func (m *Manager) AwaitCI(ctx context.Context, prNumber int, repoURL, staleSHA string) ([]CICheckResult, CIStatus, error) {
 	nwo := NWOFromRemote(repoURL)
 	gh := m.gh()
 
-	if expectedSHA != "" {
-		if err := m.awaitHeadSHA(ctx, gh, prNumber, nwo, expectedSHA); err != nil {
+	if staleSHA != "" {
+		if err := m.awaitHeadChange(ctx, gh, prNumber, nwo, staleSHA); err != nil {
 			return nil, CIPending, err
 		}
 	}
@@ -187,17 +189,19 @@ func (m *Manager) AwaitCI(ctx context.Context, prNumber int, repoURL, expectedSH
 // without waiting for real wall time.
 var awaitHeadSHAProgressInterval = 10 * time.Second
 
-// awaitHeadSHA polls until the PR HEAD SHA matches expectedSHA.
-func (m *Manager) awaitHeadSHA(ctx context.Context, gh GitHub, prNumber int, nwo, expectedSHA string) error {
+// awaitHeadChange polls until the PR HEAD SHA differs from staleSHA.
+// This detects that GitHub has processed a push without assuming what
+// the new SHA will be (GitHub may rewrite SHAs server-side).
+func (m *Manager) awaitHeadChange(ctx context.Context, gh GitHub, prNumber int, nwo, staleSHA string) error {
 	prLink := logging.PRLinkOpt(nwo, prNumber)
-	m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "Waiting for HEAD to reach %s...", expectedSHA[:min(7, len(expectedSHA))])
+	m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "Waiting for HEAD to update from %s...", staleSHA[:min(7, len(staleSHA))])
 	deadline := time.Now().Add(DefaultCIPollTimeout)
 	start := time.Now()
 	interval := DefaultCIPollInterval
 	lastProgress := time.Now()
 	for {
 		if time.Now().After(deadline) {
-			return fmt.Errorf("PR HEAD did not reach %s within %v", expectedSHA[:min(7, len(expectedSHA))], DefaultCIPollTimeout)
+			return fmt.Errorf("PR HEAD still at %s after %v", staleSHA[:min(7, len(staleSHA))], DefaultCIPollTimeout)
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -207,8 +211,8 @@ func (m *Manager) awaitHeadSHA(ctx context.Context, gh GitHub, prNumber int, nwo
 		if currentPR != nil {
 			currentSHA = currentPR.HeadSHA
 		}
-		if currentSHA == expectedSHA {
-			m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "HEAD confirmed at %s", expectedSHA[:min(7, len(expectedSHA))])
+		if currentSHA != "" && currentSHA != staleSHA {
+			m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "HEAD confirmed at %s", currentSHA[:min(7, len(currentSHA))])
 			return nil
 		}
 		<-ciSleep(interval)

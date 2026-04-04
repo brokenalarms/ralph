@@ -404,6 +404,15 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 
 	m.Logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch, Link: prLink}, "Auto-merging...")
 
+	// Record the PR HEAD before pushing so we can detect when GitHub
+	// updates. We pass this stale SHA to AwaitCI which waits for the
+	// HEAD to change, rather than matching a specific expected SHA
+	// (GitHub may rewrite SHAs server-side).
+	staleSHA := ""
+	if prDetail != nil {
+		staleSHA = prDetail.HeadSHA
+	}
+
 	// Rebase onto latest main and push so CI runs on the final tree.
 	// This avoids the updatePRBranch round-trip and double CI wait.
 	if err := m.EnsureUpToDate(ctx); err != nil {
@@ -413,8 +422,7 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Pre-merge push failed: %v", err)
 	}
 
-	headSHA := m.gitOutput(m.WorkDir, "rev-parse", "HEAD")
-	checks, status, ciErr := m.AwaitCI(ctx, prNumber, repoURL, headSHA)
+	checks, status, ciErr := m.AwaitCI(ctx, prNumber, repoURL, staleSHA)
 	if ciErr != nil {
 		m.Logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI polling failed: %v — attempting merge anyway", ciErr)
 	}
@@ -676,8 +684,9 @@ type MergeRetryOpts struct {
 	// is detected. Defaults to Manager.ResolveConflict when nil.
 	ResolveConflict func(ctx context.Context) error
 
-	// AwaitCI polls CI status after a fix agent pushes. Used for CIFixApplied.
-	AwaitCI func(ctx context.Context, prNumber int, repoURL, sha string) ([]CICheckResult, CIStatus, error)
+	// AwaitCI polls CI status after a fix agent pushes. staleSHA is the
+	// pre-push HEAD — AwaitCI waits for it to change before reading CI.
+	AwaitCI func(ctx context.Context, prNumber int, repoURL, staleSHA string) ([]CICheckResult, CIStatus, error)
 
 	// Logger receives progress and warning messages. Logging is skipped when nil.
 	Logger Log
@@ -685,7 +694,8 @@ type MergeRetryOpts struct {
 	// RemoteURL is the repository remote URL, used for AwaitCI after a fix.
 	RemoteURL string
 
-	// HeadSHAFn returns the current HEAD SHA, used for AwaitCI after a fix.
+	// HeadSHAFn returns the current HEAD SHA. Called before the fix agent
+	// runs to capture the stale SHA for AwaitCI's head-change detection.
 	HeadSHAFn func() string
 }
 
@@ -764,19 +774,21 @@ func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, 
 			if opts.OnCIFailure == nil {
 				return false, err
 			}
+			// Record the PR HEAD before the fix agent pushes. AwaitCI
+			// uses this to detect when GitHub reflects the new push
+			// (waits for HEAD != staleSHA).
+			staleSHA := ""
+			if opts.HeadSHAFn != nil {
+				staleSHA = opts.HeadSHAFn()
+			}
 			result := opts.OnCIFailure(ciErr)
 			switch result {
 			case CIFixApplied:
-				// Fix was applied and force-pushed. Wait for new CI on the
-				// updated HEAD before retrying merge — the old check status
-				// is stale after force-push.
+				// Fix was applied and force-pushed. Wait for GitHub to
+				// show a different HEAD SHA before reading CI results.
 				if opts.AwaitCI != nil {
 					repoURL := opts.RemoteURL
-					fixHeadSHA := ""
-					if opts.HeadSHAFn != nil {
-						fixHeadSHA = opts.HeadSHAFn()
-					}
-					_, ciStatus, waitErr := opts.AwaitCI(ctx, ciErr.PRNumber, repoURL, fixHeadSHA)
+					_, ciStatus, waitErr := opts.AwaitCI(ctx, ciErr.PRNumber, repoURL, staleSHA)
 					if waitErr != nil && opts.Logger != nil {
 						opts.Logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "CI polling after fix: %v", waitErr)
 					}
