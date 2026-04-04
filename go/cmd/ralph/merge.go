@@ -209,7 +209,7 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) sta
 		number int
 		head   string
 		base   string
-		state  string
+		state  git.PRState
 	}
 	byHead := make(map[string]prInfo)
 	byNumber := make(map[int]prInfo)
@@ -218,7 +218,7 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) sta
 		byNumber[pr.Number] = info
 		// Prefer OPEN PRs over CLOSED when multiple share the same head branch.
 		existing, exists := byHead[pr.Head]
-		if !exists || strings.ToUpper(pr.State) == "OPEN" && strings.ToUpper(existing.state) != "OPEN" {
+		if !exists || pr.State == git.PRStateOpen && existing.state != git.PRStateOpen {
 			byHead[pr.Head] = info
 		}
 	}
@@ -234,7 +234,7 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) sta
 	// Walk the base chain from top down to main.
 	// Include all PRs for chain walking, but only OPEN ones for merging.
 	var chain []stackPR
-	if strings.ToUpper(start.state) == "OPEN" {
+	if start.state == git.PRStateOpen {
 		chain = append(chain, stackPR{number: topNum, head: start.head})
 	}
 	currentBase := start.base
@@ -244,7 +244,7 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) sta
 		if !found {
 			break // base is main or a branch with no PR
 		}
-		if strings.ToUpper(pr.state) == "OPEN" {
+		if pr.state == git.PRStateOpen {
 			chain = append(chain, stackPR{number: pr.number, head: pr.head})
 		}
 		currentBase = pr.base

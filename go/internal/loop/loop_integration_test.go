@@ -932,26 +932,26 @@ func TestIntegration_ParsePRNumber(t *testing.T) {
 func TestIntegration_ResolveByPRState_AllStates(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
-		prState        string
+		prState        git.PRState
 		wantResolved   bool
 		wantClosed     bool
 		wantRefCleared bool
 	}{
 		{
 			name:         "MERGED closes and resolves",
-			prState:      "MERGED",
+			prState:      git.PRStateMerged,
 			wantResolved: true,
 			wantClosed:   true,
 		},
 		{
 			name:         "OPEN with auto-merge resolves",
-			prState:      "OPEN",
+			prState:      git.PRStateOpen,
 			wantResolved: true,
 			wantClosed:   true,
 		},
 		{
 			name:           "CLOSED clears ref and re-runs",
-			prState:        "CLOSED",
+			prState:        git.PRStateClosed,
 			wantResolved:   false,
 			wantRefCleared: true,
 		},

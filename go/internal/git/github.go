@@ -9,6 +9,15 @@ import (
 	"time"
 )
 
+// PRState is the lifecycle state of a GitHub pull request.
+type PRState string
+
+const (
+	PRStateOpen   PRState = "OPEN"
+	PRStateClosed PRState = "CLOSED"
+	PRStateMerged PRState = "MERGED"
+)
+
 // ParsePRNumber validates and converts a raw PR number string (typically
 // from jq or gh CLI output) into a typed int. It rejects empty strings,
 // the literal "null" (jq's output for missing values), non-numeric values,
@@ -49,13 +58,13 @@ type PRInfo struct {
 	Number int
 	Head   string
 	Base   string
-	State  string
+	State  PRState
 }
 
 // PRDetail holds the full detail of a single GitHub pull request fetched via
 // the REST API. Consolidates the four fields previously fetched individually.
 type PRDetail struct {
-	State   string
+	State   PRState
 	BaseRef string
 	HeadRef string
 	HeadSHA string
@@ -525,7 +534,7 @@ func (g *ghCLI) GetPR(nwo string, prNumber int) (*PRDetail, error) {
 		return nil, fmt.Errorf("unexpected PR response: %q", strings.TrimSpace(string(out)))
 	}
 	return &PRDetail{
-		State:   parts[0],
+		State:   PRState(parts[0]),
 		BaseRef: parts[1],
 		HeadRef: parts[2],
 		HeadSHA: parts[3],
@@ -653,7 +662,7 @@ func (g *ghCLI) ListAllPRs(workDir string) ([]PRInfo, error) {
 	}
 	prs := make([]PRInfo, len(raw))
 	for i, r := range raw {
-		prs[i] = PRInfo{Number: r.Number, Head: r.Head, Base: r.Base, State: r.State}
+		prs[i] = PRInfo{Number: r.Number, Head: r.Head, Base: r.Base, State: PRState(strings.ToUpper(r.State))}
 	}
 	return prs, nil
 }
