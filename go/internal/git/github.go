@@ -38,6 +38,15 @@ type PRInfo struct {
 	State  string
 }
 
+// PRDetail holds the full detail of a single GitHub pull request fetched via
+// the REST API. Consolidates the four fields previously fetched individually.
+type PRDetail struct {
+	State   string
+	BaseRef string
+	HeadRef string
+	HeadSHA string
+}
+
 // CreatePROpts configures a PR creation operation.
 type CreatePROpts struct {
 	Head string
@@ -84,10 +93,7 @@ type GitHub interface {
 	FindPR(branch, repoURL string) (number int, title, url string, err error)
 	SearchPR(workDir, query string) (prNumber int, err error)
 	PRDiff(repoURL string, prNumber int) (string, error)
-	GetPRState(workDir string, prNumber int) (state string, err error)
-	GetPRBase(workDir string, prNumber int) (base string, err error)
-	GetPRHead(workDir string, prNumber int) (head string, err error)
-	GetPRHeadSHA(workDir string, prNumber int) (sha string, err error)
+	GetPR(nwo string, prNumber int) (*PRDetail, error)
 	ListOpenPRBranches(repoURL string) ([]string, error)
 	ReopenPR(prNumber int, repoURL string) error
 	CreatePRViaAPI(nwo string, opts CreatePROpts) (prNumber int, err error)
@@ -485,48 +491,24 @@ func (g *ghCLI) GetJobStepCount(nwo string, prNumber int) (int, error) {
 	return count, nil
 }
 
-func (g *ghCLI) GetPRState(workDir string, prNumber int) (string, error) {
-	cmd := exec.Command("gh", "pr", "view", strconv.Itoa(prNumber),
-		"--json", "state", "--jq", ".state")
-	cmd.Dir = workDir
+func (g *ghCLI) GetPR(nwo string, prNumber int) (*PRDetail, error) {
+	endpoint := fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber)
+	cmd := exec.Command("gh", "api", endpoint,
+		"--jq", `.state+"\t"+.base.ref+"\t"+.head.ref+"\t"+.head.sha`)
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("gh pr view failed: %w", err)
+		return nil, fmt.Errorf("gh api PR failed: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-func (g *ghCLI) GetPRBase(workDir string, prNumber int) (string, error) {
-	cmd := exec.Command("gh", "pr", "view", strconv.Itoa(prNumber),
-		"--json", "baseRefName", "--jq", ".baseRefName")
-	cmd.Dir = workDir
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("gh pr view failed: %w", err)
+	parts := strings.SplitN(strings.TrimSpace(string(out)), "\t", 4)
+	if len(parts) != 4 {
+		return nil, fmt.Errorf("unexpected PR response: %q", strings.TrimSpace(string(out)))
 	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-func (g *ghCLI) GetPRHead(workDir string, prNumber int) (string, error) {
-	cmd := exec.Command("gh", "pr", "view", strconv.Itoa(prNumber),
-		"--json", "headRefName", "--jq", ".headRefName")
-	cmd.Dir = workDir
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("gh pr view failed: %w", err)
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-func (g *ghCLI) GetPRHeadSHA(workDir string, prNumber int) (string, error) {
-	cmd := exec.Command("gh", "pr", "view", strconv.Itoa(prNumber),
-		"--json", "headRefOid", "--jq", ".headRefOid")
-	cmd.Dir = workDir
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("gh pr view failed: %w", err)
-	}
-	return strings.TrimSpace(string(out)), nil
+	return &PRDetail{
+		State:   parts[0],
+		BaseRef: parts[1],
+		HeadRef: parts[2],
+		HeadSHA: parts[3],
+	}, nil
 }
 
 func (g *ghCLI) ListAllPRs(workDir string) ([]PRInfo, error) {

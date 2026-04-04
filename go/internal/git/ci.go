@@ -202,7 +202,11 @@ func (m *Manager) awaitHeadSHA(ctx context.Context, gh GitHub, prNumber int, nwo
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		currentSHA, _ := gh.GetPRHeadSHA(m.WorkDir, prNumber)
+		currentPR, _ := gh.GetPR(nwo, prNumber)
+		currentSHA := ""
+		if currentPR != nil {
+			currentSHA = currentPR.HeadSHA
+		}
 		if currentSHA == expectedSHA {
 			m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "HEAD confirmed at %s", expectedSHA[:min(7, len(expectedSHA))])
 			return nil

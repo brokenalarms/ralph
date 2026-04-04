@@ -560,8 +560,8 @@ func TestAwaitCI_SHAPollLogUsesPRLink(t *testing.T) {
 		listChecks: func(pr int, repo string) ([]CICheckResult, error) {
 			return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 		},
-		getPRHeadSHA: func(workDir string, prNumber int) (string, error) {
-			return "newsha123", nil
+		getPR: func(nwo string, prNumber int) (*PRDetail, error) {
+			return &PRDetail{HeadSHA: "newsha123"}, nil
 		},
 	}
 	log := &testLog{}
@@ -635,12 +635,12 @@ func TestAwaitCI_WaitsForExpectedSHA(t *testing.T) {
 		listChecks: func(pr int, repo string) ([]CICheckResult, error) {
 			return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 		},
-		getPRHeadSHA: func(workDir string, prNumber int) (string, error) {
+		getPR: func(nwo string, prNumber int) (*PRDetail, error) {
 			n := shaCalls.Add(1)
 			if n < 3 {
-				return "stalesha", nil
+				return &PRDetail{HeadSHA: "stalesha"}, nil
 			}
-			return "expectedsha", nil
+			return &PRDetail{HeadSHA: "expectedsha"}, nil
 		},
 	}
 	log := &testLog{}
@@ -656,7 +656,7 @@ func TestAwaitCI_WaitsForExpectedSHA(t *testing.T) {
 	if len(checks) != 1 || checks[0].Name != "test" {
 		t.Errorf("unexpected checks: %v", checks)
 	}
-	// Must have polled GetPRHeadSHA at least 3 times (2 stale + 1 match).
+	// Must have polled GetPR at least 3 times (2 stale + 1 match).
 	if shaCalls.Load() < 3 {
 		t.Errorf("expected at least 3 SHA polls, got %d", shaCalls.Load())
 	}
@@ -699,12 +699,12 @@ func TestAwaitHeadSHA_LogsProgressWhilePolling(t *testing.T) {
 		listChecks: func(pr int, repo string) ([]CICheckResult, error) {
 			return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}, nil
 		},
-		getPRHeadSHA: func(workDir string, prNumber int) (string, error) {
+		getPR: func(nwo string, prNumber int) (*PRDetail, error) {
 			n := shaCalls.Add(1)
 			if n < 3 {
-				return "stalesha", nil
+				return &PRDetail{HeadSHA: "stalesha"}, nil
 			}
-			return "targetsha", nil
+			return &PRDetail{HeadSHA: "targetsha"}, nil
 		},
 	}
 	log := &testLog{}
@@ -725,12 +725,12 @@ func TestAwaitHeadSHA_LogsProgressWhilePolling(t *testing.T) {
 	}
 }
 
-// pollableGitHub wraps StubGitHub but allows overriding ListChecks
-// with a function that changes behavior across calls.
+// pollableGitHub wraps StubGitHub but allows overriding ListChecks and GetPR
+// with functions that change behavior across calls.
 type pollableGitHub struct {
 	StubGitHub
-	listChecks   func(int, string) ([]CICheckResult, error)
-	getPRHeadSHA func(string, int) (string, error)
+	listChecks func(int, string) ([]CICheckResult, error)
+	getPR      func(nwo string, prNumber int) (*PRDetail, error)
 }
 
 func (p *pollableGitHub) ListChecks(prNumber int, repoURL string) ([]CICheckResult, error) {
@@ -740,11 +740,11 @@ func (p *pollableGitHub) ListChecks(prNumber int, repoURL string) ([]CICheckResu
 	return p.StubGitHub.ListChecks(prNumber, repoURL)
 }
 
-func (p *pollableGitHub) GetPRHeadSHA(workDir string, prNumber int) (string, error) {
-	if p.getPRHeadSHA != nil {
-		return p.getPRHeadSHA(workDir, prNumber)
+func (p *pollableGitHub) GetPR(nwo string, prNumber int) (*PRDetail, error) {
+	if p.getPR != nil {
+		return p.getPR(nwo, prNumber)
 	}
-	return p.StubGitHub.GetPRHeadSHA(workDir, prNumber)
+	return p.StubGitHub.GetPR(nwo, prNumber)
 }
 
 // setupAutoMergeManager creates a Manager with a StubGitHub and real git repos

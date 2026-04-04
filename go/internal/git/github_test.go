@@ -154,6 +154,34 @@ func TestListChecks_Stubbable(t *testing.T) {
 	}
 }
 
+// GetPR returns a PRDetail with all four fields populated from a single call,
+// replacing the four separate GetPRState/GetPRBase/GetPRHead/GetPRHeadSHA methods.
+func TestGetPR_ReturnsAllFields(t *testing.T) {
+	stub := &StubGitHub{
+		PRState:   "OPEN",
+		PRBase:    "main",
+		PRHead:    "feature-branch",
+		PRHeadSHA: "abc123def456",
+	}
+
+	pr, err := stub.GetPR("owner/repo", 42)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pr.State != "OPEN" {
+		t.Errorf("State: want %q, got %q", "OPEN", pr.State)
+	}
+	if pr.BaseRef != "main" {
+		t.Errorf("BaseRef: want %q, got %q", "main", pr.BaseRef)
+	}
+	if pr.HeadRef != "feature-branch" {
+		t.Errorf("HeadRef: want %q, got %q", "feature-branch", pr.HeadRef)
+	}
+	if pr.HeadSHA != "abc123def456" {
+		t.Errorf("HeadSHA: want %q, got %q", "abc123def456", pr.HeadSHA)
+	}
+}
+
 // Manager.GetCIFailureLog delegates to the injected GitHub interface's GetRunLog,
 // confirming that loop code can get CI logs without shelling out.
 func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
