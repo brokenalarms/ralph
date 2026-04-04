@@ -123,9 +123,10 @@ type GitHub interface {
 	GetJobStepCount(nwo string, prNumber int) (int, error)
 	// ListAllPRs returns all PRs (open and closed) for chain-walking during stack merge.
 	ListAllPRs(workDir string) ([]PRInfo, error)
-	// CheckCopilotReviewEnabled returns true if the repo has a ruleset with a
-	// copilot_code_review rule where review_on_push is true.
-	CheckCopilotReviewEnabled(nwo string) (bool, error)
+	// CheckCopilotReviewEnabled returns (enabled, reviewOnPush, error) where
+	// enabled is true if any copilot_code_review rule exists in any ruleset, and
+	// reviewOnPush reflects whether the rule gates merging on the review.
+	CheckCopilotReviewEnabled(nwo string) (bool, bool, error)
 	// PollCopilotReview polls for a review from copilot-pull-request-reviewer
 	// on the given PR, returning it with inline comments when found. Returns nil
 	// without error if the timeout expires before a review arrives.
@@ -590,11 +591,11 @@ func (g *ghCLI) GetPR(nwo string, prNumber int) (*PRDetail, error) {
 	}, nil
 }
 
-func (g *ghCLI) CheckCopilotReviewEnabled(nwo string) (bool, error) {
+func (g *ghCLI) CheckCopilotReviewEnabled(nwo string) (bool, bool, error) {
 	cmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s/rulesets", nwo))
 	out, err := cmd.Output()
 	if err != nil {
-		return false, fmt.Errorf("gh api rulesets failed: %w", err)
+		return false, false, fmt.Errorf("gh api rulesets failed: %w", err)
 	}
 	var rulesets []struct {
 		Rules []struct {
@@ -605,16 +606,16 @@ func (g *ghCLI) CheckCopilotReviewEnabled(nwo string) (bool, error) {
 		} `json:"rules"`
 	}
 	if err := json.Unmarshal(out, &rulesets); err != nil {
-		return false, fmt.Errorf("parsing rulesets: %w", err)
+		return false, false, fmt.Errorf("parsing rulesets: %w", err)
 	}
 	for _, rs := range rulesets {
 		for _, rule := range rs.Rules {
-			if rule.Type == "copilot_code_review" && rule.Parameters.ReviewOnPush {
-				return true, nil
+			if rule.Type == "copilot_code_review" {
+				return true, rule.Parameters.ReviewOnPush, nil
 			}
 		}
 	}
-	return false, nil
+	return false, false, nil
 }
 
 func (g *ghCLI) PollCopilotReview(nwo string, prNumber int, timeout time.Duration) (*CopilotReview, error) {

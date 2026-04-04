@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -469,6 +470,80 @@ func TestFinalizePR_CopilotReviewEnabled_PollsCalled(t *testing.T) {
 
 	if !gm.PollCopilotReviewCalled {
 		t.Error("PollCopilotReview should be called when copilotReviewEnabled=true and PR is OPEN")
+	}
+}
+
+// finalizePR uses a 30s timeout when copilotReviewOnPush is false, since the review
+// is opportunistic rather than a merge gate.
+func TestFinalizePR_CopilotReviewEnabled_ShortTimeoutWhenReviewOnPushFalse(t *testing.T) {
+	dir, st := setupTestDir(t)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	finalizePR(finalizePRParams{
+		ctx:                  context.Background(),
+		taskID:               "ralph-abc",
+		nextTask:             "Fix bug",
+		prNumber:             42,
+		prState:              "OPEN",
+		workDir:              dir,
+		autoMerge:            true,
+		copilotReviewEnabled: true,
+		copilotReviewOnPush:  false,
+		git:                  gm,
+		logger:               logging.New(nil),
+		backend:              backend,
+		state:                st,
+		attempts:             attempts.New(dir),
+		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+	})
+
+	if !gm.PollCopilotReviewCalled {
+		t.Error("PollCopilotReview should be called when copilotReviewEnabled=true even with review_on_push=false")
+	}
+	if gm.PollCopilotReviewTimeout != 30*time.Second {
+		t.Errorf("expected 30s poll timeout when review_on_push=false, got %v", gm.PollCopilotReviewTimeout)
+	}
+}
+
+// finalizePR uses a 120s timeout when copilotReviewOnPush is true, since the review
+// gates merging.
+func TestFinalizePR_CopilotReviewEnabled_FullTimeoutWhenReviewOnPushTrue(t *testing.T) {
+	dir, st := setupTestDir(t)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	finalizePR(finalizePRParams{
+		ctx:                  context.Background(),
+		taskID:               "ralph-abc",
+		nextTask:             "Fix bug",
+		prNumber:             42,
+		prState:              "OPEN",
+		workDir:              dir,
+		autoMerge:            true,
+		copilotReviewEnabled: true,
+		copilotReviewOnPush:  true,
+		git:                  gm,
+		logger:               logging.New(nil),
+		backend:              backend,
+		state:                st,
+		attempts:             attempts.New(dir),
+		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+	})
+
+	if !gm.PollCopilotReviewCalled {
+		t.Error("PollCopilotReview should be called when copilotReviewEnabled=true with review_on_push=true")
+	}
+	if gm.PollCopilotReviewTimeout != 120*time.Second {
+		t.Errorf("expected 120s poll timeout when review_on_push=true, got %v", gm.PollCopilotReviewTimeout)
 	}
 }
 
