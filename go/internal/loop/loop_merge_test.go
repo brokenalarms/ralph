@@ -76,7 +76,7 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
-	gm.ShipResult = git.ShipResult{PRNumber: "99"}
+	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.MergeRetryResult = true
 
 	err := l.Run(context.Background())
@@ -150,7 +150,7 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	gm.MergeRetryResult = true
-	gm.ShipResult = git.ShipResult{PRNumber: "99"}
+	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.PRState = "OPEN"
 
 	err := l.Run(context.Background())
@@ -607,7 +607,7 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logger)
 	l.runner = runner
-	gm.ShipResult = git.ShipResult{PRNumber: "99"}
+	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.MergeRetryResult = true
 
 	_ = l.Run(context.Background())

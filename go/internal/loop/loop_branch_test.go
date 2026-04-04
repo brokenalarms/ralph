@@ -613,7 +613,7 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true},
 	}
-	gm.ShipResult = git.ShipResult{PRNumber: "42"}
+	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	gm.MergeRetryResult = true
 
 	err := l.Run(context.Background())
@@ -867,7 +867,7 @@ func TestResolveByPRState_ClosedPR_RenamesBranch(t *testing.T) {
 	resolved := resolveByPRState(context.Background(), resolveByPRStateParams{
 		taskID:   "ralph-cdr3",
 		nextTask: "Fix auth bug",
-		prNumber: "439",
+		prNumber: 439,
 		backend:  backend,
 		git:      gm,
 		logger:   l.logger,

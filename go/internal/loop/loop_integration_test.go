@@ -149,8 +149,8 @@ func TestIntegration_HappyPath_SignalVerifyPushMergeClose(t *testing.T) {
 
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
-	gm.ShipResult = git.ShipResult{PRNumber: "42"}
-	gm.PRNumber = "42"
+	gm.ShipResult = git.ShipResult{PRNumber: 42}
+	gm.PRNumber = 42
 	gm.MergeRetryResult = true
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -543,8 +543,8 @@ func TestIntegration_CIFailureThenFixThenMerge(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
-	gm.ShipResult = git.ShipResult{PRNumber: "55"}
-	gm.PRNumber = "55"
+	gm.ShipResult = git.ShipResult{PRNumber: 55}
+	gm.PRNumber = 55
 	gm.MergeRetryResult = true
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -641,7 +641,7 @@ func TestIntegration_ExternalRefFormat(t *testing.T) {
 		GitHubStub: &git.StubGitHub{
 			IsAvailable: true,
 			PRBase:      "main",
-			PRNumber:    "77",
+			PRNumber:    77,
 			PRTitle:     "Ref format task",
 			PRURL:       "https://github.com/owner/repo/pull/77",
 		},
@@ -671,7 +671,7 @@ func TestIntegration_ExternalRefFormat(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
-	gm.ShipResult = git.ShipResult{PRNumber: "77"}
+	gm.ShipResult = git.ShipResult{PRNumber: 77}
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
 
@@ -911,17 +911,17 @@ func TestIntegration_TestFailureFixedByAgent(t *testing.T) {
 func TestIntegration_ParsePRNumber(t *testing.T) {
 	tests := []struct {
 		ref  string
-		want string
+		want int
 	}{
-		{"https://github.com/owner/repo/pull/123", "123"},
-		{"gh-456", "456"},
-		{"", ""},
-		{"random string", ""},
+		{"https://github.com/owner/repo/pull/123", 123},
+		{"gh-456", 456},
+		{"", 0},
+		{"random string", 0},
 	}
 	for _, tt := range tests {
 		got := parsePRNumber(tt.ref)
 		if got != tt.want {
-			t.Errorf("parsePRNumber(%q) = %q, want %q", tt.ref, got, tt.want)
+			t.Errorf("parsePRNumber(%q) = %d, want %d", tt.ref, got, tt.want)
 		}
 	}
 }
@@ -993,7 +993,7 @@ func TestIntegration_ResolveByPRState_AllStates(t *testing.T) {
 			resolved := resolveByPRState(context.Background(), resolveByPRStateParams{
 				taskID:    "ralph-test",
 				nextTask:  "test task",
-				prNumber:  "99",
+				prNumber:  99,
 				backend:   backend,
 				git:       gm,
 				logger:    l.logger,
@@ -1146,7 +1146,7 @@ func TestIntegration_StackedPRSkipsMergeButCloses(t *testing.T) {
 		ctx:       context.Background(),
 		taskID:    "ralph-stk1",
 		nextTask:  "Stacked task",
-		prNumber:  "88",
+		prNumber:  88,
 		prState:   "OPEN",
 		workDir:   dir,
 		autoMerge: true,
@@ -1218,8 +1218,8 @@ func TestIntegration_MergeConflictThenRetrySucceeds(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
-	gm.ShipResult = git.ShipResult{PRNumber: "60"}
-	gm.PRNumber = "60"
+	gm.ShipResult = git.ShipResult{PRNumber: 60}
+	gm.PRNumber = 60
 	gm.MergeRetryResult = true
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -1541,8 +1541,8 @@ func TestIntegration_EvolveExitsAfterMerge(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
-	gm.ShipResult = git.ShipResult{PRNumber: "99"}
-	gm.PRNumber = "99"
+	gm.ShipResult = git.ShipResult{PRNumber: 99}
+	gm.PRNumber = 99
 	gm.MergeRetryResult = true
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -1672,8 +1672,8 @@ func TestIntegration_DependencyBlockedTaskIsSkipped(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
-	gm.ShipResult = git.ShipResult{PRNumber: "77"}
-	gm.PRNumber = "77"
+	gm.ShipResult = git.ShipResult{PRNumber: 77}
+	gm.PRNumber = 77
 	gm.MergeRetryResult = true
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }

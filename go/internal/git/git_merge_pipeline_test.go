@@ -105,7 +105,7 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "42",
+		OpenPR:      42,
 		PRTitle:     "some PR",
 		PRHeadSHA:   "abc123",
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
@@ -131,8 +131,8 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 	if !errors.As(err, &conflictErr) {
 		t.Fatalf("expected MergeConflictError, got %T: %v", err, err)
 	}
-	if conflictErr.PRNumber != "42" {
-		t.Errorf("expected PRNumber=42, got %s", conflictErr.PRNumber)
+	if conflictErr.PRNumber != 42 {
+		t.Errorf("expected PRNumber=42, got %d", conflictErr.PRNumber)
 	}
 
 	if gh.MergeCalls > 0 {
@@ -158,7 +158,7 @@ func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "88",
+		OpenPR:      88,
 		PRTitle:     "some PR",
 		PRHeadSHA:   "abc123",
 		MergeResult: MergeResult{Blocked: true, Message: "Pull request is not mergeable"},
@@ -194,7 +194,7 @@ func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 func TestShip_PackageFunction_CreatesPR(t *testing.T) {
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "77",
+		OpenPR:      77,
 		PRTitle:     "fix: ship as package fn",
 		PRURL:       "https://github.com/test/repo/pull/77",
 	}
@@ -221,8 +221,8 @@ func TestShip_PackageFunction_CreatesPR(t *testing.T) {
 	if !pushedCalled {
 		t.Error("expected PushFn to be called")
 	}
-	if result.PRNumber != "77" {
-		t.Errorf("PRNumber = %q, want %q", result.PRNumber, "77")
+	if result.PRNumber != 77 {
+		t.Errorf("PRNumber = %d, want %d", result.PRNumber, 77)
 	}
 }
 
@@ -246,7 +246,7 @@ func TestAutoMerge_InfraFailureBypass_MergesWhenLocalTestsPassed(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable:  true,
-		OpenPR:       "99",
+		OpenPR:       99,
 		PRTitle:      "infra failure test",
 		PRHeadSHA:    "abc123",
 		MergeResult:  MergeResult{Merged: true},
@@ -296,7 +296,7 @@ func TestAutoMerge_InfraFailureNoBypass_WhenLocalTestsNotPassed(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable:  true,
-		OpenPR:       "100",
+		OpenPR:       100,
 		PRTitle:      "infra failure no bypass",
 		PRHeadSHA:    "abc123",
 		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
@@ -335,12 +335,12 @@ func TestCreatePR_StackedPRTargetsParentBranch(t *testing.T) {
 
 	var capturedOpts CreatePROpts
 	gh := &capturingGitHub{
-		StubGitHub: StubGitHub{IsAvailable: true, CreatedPR: "200"},
+		StubGitHub: StubGitHub{IsAvailable: true, CreatedPR: 200},
 	}
-	gh.createPR = func(opts CreatePROpts) error {
+	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
-		gh.StubGitHub.OpenPR = "200"
-		return nil
+		gh.StubGitHub.OpenPR = 200
+		return 200, nil
 	}
 
 	mgr := &Manager{
@@ -359,7 +359,7 @@ func TestCreatePR_StackedPRTargetsParentBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreatePR: %v", err)
 	}
-	if prNum == "" {
+	if prNum == 0 {
 		t.Fatal("expected non-empty PR number")
 	}
 	if capturedOpts.Base != "ralph/parent-task" {
@@ -378,10 +378,10 @@ func TestCreatePR_NonStackedTargetsMain(t *testing.T) {
 
 	var capturedOpts CreatePROpts
 	gh := &capturingGitHub{
-		StubGitHub: StubGitHub{IsAvailable: true, CreatedPR: "201"},
-		createPR: func(opts CreatePROpts) error {
+		StubGitHub: StubGitHub{IsAvailable: true, CreatedPR: 201},
+		createPR: func(opts CreatePROpts) (int, error) {
 			capturedOpts = opts
-			return nil
+			return 201, nil
 		},
 	}
 
@@ -485,7 +485,7 @@ func TestMergeWithRetry_CIFailureWithNoCallback_ReturnsError(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "55",
+		OpenPR:      55,
 		PRHeadSHA:   "abc123",
 		Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 	}
@@ -510,8 +510,8 @@ func TestMergeWithRetry_CIFailureWithNoCallback_ReturnsError(t *testing.T) {
 	if !errors.As(err, &ciErr) {
 		t.Fatalf("expected CIFailureError, got %T: %v", err, err)
 	}
-	if ciErr.PRNumber != "55" {
-		t.Errorf("expected PRNumber=55, got %s", ciErr.PRNumber)
+	if ciErr.PRNumber != 55 {
+		t.Errorf("expected PRNumber=55, got %d", ciErr.PRNumber)
 	}
 }
 
@@ -534,7 +534,7 @@ func TestMergeWithRetry_InfraRetryBackoff(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "101",
+		OpenPR:      101,
 		PRTitle:     "infra retry",
 		PRHeadSHA:   "abc123",
 		ChecksFunc: func(call int) []CICheckResult {
@@ -595,17 +595,17 @@ func TestExecuteMerge_PackageFunc_MergesSuccessfully(t *testing.T) {
 	gh := &StubGitHub{
 		IsAvailable: true,
 		PRTitle:     "test PR",
-		PRNumber:    "42",
+		PRNumber:    42,
 		MergeResult: MergeResult{Merged: true},
 	}
 	opts := ExecuteMergeOpts{
-		PRNumber:       "42",
+		PRNumber:       42,
 		RepoURL:        "https://github.com/test/repo.git",
 		WorktreeBranch: "ralph/test-pkg-func",
 		WorkDir:        "/tmp/workdir",
 		DefaultBranch:  "main",
 		MergeOpts:      MergeOpts{DeleteBranch: true},
-		AwaitCI: func(_ context.Context, _, _, _ string) ([]CICheckResult, CIStatus, error) {
+		AwaitCI: func(_ context.Context, _ int, _, _ string) ([]CICheckResult, CIStatus, error) {
 			return nil, CIPassed, nil
 		},
 	}
@@ -651,7 +651,7 @@ func TestMergeWithRetry_PackageFunc_InvokesResolveConflictFromOpts(t *testing.T)
 	mergeFunc := func(_ context.Context) (bool, error) {
 		attempts++
 		if attempts == 1 {
-			return false, &MergeConflictError{PRNumber: "77"}
+			return false, &MergeConflictError{PRNumber: 77}
 		}
 		return true, nil
 	}
@@ -694,7 +694,7 @@ func TestExecuteMerge_CIGatedRetryPath(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "120",
+		OpenPR:      120,
 		PRTitle:     "CI gated test",
 		PRHeadSHA:   "abc123",
 		MergeResults: []MergeResult{
@@ -740,7 +740,7 @@ func TestAutoMerge_StackedPR_WaitsForBase(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "150",
+		OpenPR:      150,
 		PRBase:      "ralph/parent-branch",
 	}
 

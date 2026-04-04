@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/brokenalarms/ralph/internal/attempts"
@@ -110,7 +111,7 @@ func checkoutExistingBranch(g git.GitOps, backend tasks.Backend, logger *logging
 			}
 			logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Remote branch %s diverged from main — cleaning up", storedBranch)
 			ref, _ := backend.GetExternalRef(taskID)
-			if parsePRNumber(ref) == "" {
+			if parsePRNumber(ref) == 0 {
 				if err := g.DeleteRemoteBranchByName(storedBranch); err != nil {
 					logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to delete stale remote branch: %v", err)
 				}
@@ -127,12 +128,12 @@ func checkoutExistingBranch(g git.GitOps, backend tasks.Backend, logger *logging
 }
 
 // prLink builds a logging.Link for a PR number using the remote URL.
-func prLink(g git.GitOps, prNumber string) *logging.Link {
+func prLink(g git.GitOps, prNumber int) *logging.Link {
 	url := prURL(g.RemoteURL(), prNumber)
 	if url == "" {
 		return nil
 	}
-	return &logging.Link{Text: "PR #" + prNumber, URL: url}
+	return &logging.Link{Text: fmt.Sprintf("PR #%d", prNumber), URL: url}
 }
 
 // mergeWithRetryParams bundles the dependencies for mergeWithRetry.
@@ -194,7 +195,7 @@ func resumeViaPR(ctx context.Context, p resumeViaPRParams) bool {
 
 	// Check bead's external-ref for an existing PR.
 	ref, _ := p.backend.GetExternalRef(p.taskID)
-	if prNumber := parsePRNumber(ref); prNumber != "" {
+	if prNumber := parsePRNumber(ref); prNumber != 0 {
 		return resolveByPRState(ctx, resolveByPRStateParams{
 			taskID:    p.taskID,
 			nextTask:  p.nextTask,
@@ -220,7 +221,7 @@ func resumeViaPR(ctx context.Context, p resumeViaPRParams) bool {
 
 	// Check if a PR exists for this exact branch.
 	prNumber, _ := p.git.FindOpenPRForBranch(branch)
-	if prNumber != "" {
+	if prNumber != 0 {
 		p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, prNumber)}, "Found for %s (task %s) — resolving", branch, p.taskID)
 		_ = p.backend.SetExternalRef(p.taskID, prURL(p.git.RemoteURL(), prNumber))
 		return resolveByPRState(ctx, resolveByPRStateParams{
@@ -250,12 +251,11 @@ func resumeViaPR(ctx context.Context, p resumeViaPRParams) bool {
 		}
 		p.logger.Emit(logging.Opts{Domain: logging.Git}, "Remote branch %s has clean work but no PR — creating PR", branch)
 		p.git.CheckoutRemoteBranch(branch)
-		var prNum string
 		var err error
 		var shipResult git.ShipResult
 		shipResult, err = p.git.Ship(ctx, git.ShipOpts{TaskID: p.taskID, TaskTitle: p.nextTask})
-		prNum = shipResult.PRNumber
-		if err == nil && prNum != "" {
+		prNum := shipResult.PRNumber
+		if err == nil && prNum != 0 {
 			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, prNum)}, "Created for %s (task %s)", branch, p.taskID)
 			_ = p.backend.SetExternalRef(p.taskID, prURL(p.git.RemoteURL(), prNum))
 			return resolveByPRState(ctx, resolveByPRStateParams{
@@ -283,7 +283,7 @@ func resumeViaPR(ctx context.Context, p resumeViaPRParams) bool {
 type resolveByPRStateParams struct {
 	taskID    string
 	nextTask  string
-	prNumber  string
+	prNumber  int
 	backend   tasks.Backend
 	git       git.GitOps
 	logger    *logging.Logger
@@ -413,25 +413,26 @@ func buildPRBody(backend tasks.Backend, taskID, summary string) string {
 
 // prURL builds the canonical PR URL from the remote URL and PR number.
 // Always returns a full URL; never returns a "gh-" prefixed string.
-func prURL(remoteURL, prNumber string) string {
+func prURL(remoteURL string, prNumber int) string {
 	nwo := git.NWOFromRemote(remoteURL)
-	if nwo == "" || prNumber == "" {
+	if nwo == "" || prNumber == 0 {
 		return ""
 	}
-	return fmt.Sprintf("https://github.com/%s/pull/%s", nwo, prNumber)
+	return fmt.Sprintf("https://github.com/%s/pull/%d", nwo, prNumber)
 }
 
 // parsePRNumber extracts a PR number from a URL
 // (https://github.com/owner/repo/pull/123) or a legacy gh-123 ref.
-func parsePRNumber(ref string) string {
+func parsePRNumber(ref string) int {
+	var s string
 	if strings.HasPrefix(ref, "gh-") {
-		return strings.TrimPrefix(ref, "gh-")
-	}
-	if strings.Contains(ref, "/pull/") {
+		s = strings.TrimPrefix(ref, "gh-")
+	} else if strings.Contains(ref, "/pull/") {
 		parts := strings.Split(ref, "/pull/")
 		if len(parts) == 2 && parts[1] != "" {
-			return parts[1]
+			s = parts[1]
 		}
 	}
-	return ""
+	n, _ := strconv.Atoi(s)
+	return n
 }

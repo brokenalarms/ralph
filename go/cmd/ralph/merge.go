@@ -70,7 +70,7 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 	defaultBranch := stack.baseBranch
 	log.Phase("Stack: %d PRs to merge", len(stack.prs))
 	for _, pr := range stack.prs {
-		log.Emit(logging.Opts{Domain: logging.Git}, "  PR #%s: %s", pr.number, pr.head)
+		log.Emit(logging.Opts{Domain: logging.Git}, "  PR #%d: %s", pr.number, pr.head)
 	}
 
 	return runMerge(ctx, stack.prs, projectDir, defaultBranch, gm, bypassRules, log)
@@ -100,7 +100,7 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 		if merged > 0 {
 			log.DashedSeparator(logging.Cyan)
 		}
-		log.Phase("Merging PR #%s (%d/%d)", pr.number, merged+1, len(prs))
+		log.Phase("Merging PR #%d (%d/%d)", pr.number, merged+1, len(prs))
 
 		if merged > 0 {
 			// Main moved after previous merge. Rebase this branch onto
@@ -115,7 +115,7 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 				log.Emit(logging.Opts{Domain: logging.Git}, "Rebase conflict on %s — attempting auto-resolve...", pr.head)
 				if autoErr := rebasecontinue.Run(projectDir, rebasecontinue.Options{Auto: true}); autoErr != nil {
 					log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error},
-						"Rebase conflicts on PR #%s (%s): %v", pr.number, pr.head, autoErr)
+						"Rebase conflicts on PR #%d (%s): %v", pr.number, pr.head, autoErr)
 					log.Emit(logging.Opts{Domain: logging.Git},
 						"Resolve manually in: %s", projectDir)
 					log.Emit(logging.Opts{Domain: logging.Git},
@@ -135,35 +135,35 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 		expectedSHA, _ := gh.GetPRHeadSHA(projectDir, pr.number)
 
 		// Wait for CI on the current HEAD.
-		log.Emit(logging.Opts{Domain: logging.CI}, "Waiting for CI on PR #%s...", pr.number)
+		log.Emit(logging.Opts{Domain: logging.CI}, "Waiting for CI on PR #%d...", pr.number)
 		_, ciStatus, ciErr := gm.AwaitCI(ctx, pr.number, repoURL, expectedSHA)
 		if ciErr != nil {
 			log.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "CI polling error: %v", ciErr)
 		}
 		if ciStatus == git.CIFailed {
-			log.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI failed on PR #%s — stopping", pr.number)
+			log.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI failed on PR #%d — stopping", pr.number)
 			return 1
 		}
-		log.Emit(logging.Opts{Domain: logging.CI, Level: logging.Success}, "CI passed for PR #%s", pr.number)
+		log.Emit(logging.Opts{Domain: logging.CI, Level: logging.Success}, "CI passed for PR #%d", pr.number)
 
 		// Merge.
-		log.Emit(logging.Opts{Domain: logging.Git}, "Merging PR #%s...", pr.number)
+		log.Emit(logging.Opts{Domain: logging.Git}, "Merging PR #%d...", pr.number)
 		opts := git.MergeOpts{DeleteBranch: true, Admin: bypassRules}
 		result := gh.MergePR(pr.number, repoURL, opts)
 		if !result.Merged {
 			if result.Conflict {
-				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "PR #%s has merge conflicts — cannot merge", pr.number)
+				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "PR #%d has merge conflicts — cannot merge", pr.number)
 				return 1
 			}
 			if result.Blocked {
-				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "PR #%s blocked by branch protection: %s", pr.number, result.Message)
+				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "PR #%d blocked by branch protection: %s", pr.number, result.Message)
 				return 1
 			}
-			log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Merge failed for PR #%s: %s", pr.number, result.Message)
+			log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Merge failed for PR #%d: %s", pr.number, result.Message)
 			return 1
 		}
 		merged++
-		log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Success}, "PR #%s merged (%d/%d)", pr.number, merged, len(prs))
+		log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Success}, "PR #%d merged (%d/%d)", pr.number, merged, len(prs))
 
 		// Update local main to include the merge.
 		runner.Run(ctx, projectDir, "fetch", "origin", defaultBranch)
@@ -176,7 +176,7 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 }
 
 type stackPR struct {
-	number string
+	number int
 	head   string
 }
 
@@ -226,7 +226,7 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) sta
 	// Include all PRs for chain walking, but only OPEN ones for merging.
 	var chain []stackPR
 	if strings.ToUpper(start.state) == "OPEN" {
-		chain = append(chain, stackPR{number: topPR, head: start.head})
+		chain = append(chain, stackPR{number: topNum, head: start.head})
 	}
 	currentBase := start.base
 
@@ -236,7 +236,7 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) sta
 			break // base is main or a branch with no PR
 		}
 		if strings.ToUpper(pr.state) == "OPEN" {
-			chain = append(chain, stackPR{number: fmt.Sprintf("%d", pr.number), head: pr.head})
+			chain = append(chain, stackPR{number: pr.number, head: pr.head})
 		}
 		currentBase = pr.base
 	}
@@ -252,7 +252,7 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) sta
 // with --update-refs onto main, then force-pushes all branches.
 // If a worktree already exists (from a previous conflict resolution),
 // skips rebase and goes straight to push.
-func rebaseStackAndPush(ctx context.Context, runner git.Runner, projectDir, defaultBranch, topBranch, topPR string, allBranches []string, gm *git.Manager, log *logging.Logger) int {
+func rebaseStackAndPush(ctx context.Context, runner git.Runner, projectDir, defaultBranch, topBranch string, topPR int, allBranches []string, gm *git.Manager, log *logging.Logger) int {
 	slug := strings.ReplaceAll(topBranch, "/", "-")
 	wtDir := filepath.Join(gm.RalphDir, "worktrees", "merge-"+slug)
 	tmpBranch := "ralph-merge/" + slug
@@ -305,7 +305,7 @@ func rebaseStackAndPush(ctx context.Context, runner git.Runner, projectDir, defa
 			if autoErr := rebasecontinue.Run(wtDir, rebasecontinue.Options{Auto: true}); autoErr != nil {
 				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Rebase has conflicts — resolve manually in:\n  %s", wtDir)
 				log.Emit(logging.Opts{Domain: logging.Git}, "Then run: cd %s && git-rebase-continue", wtDir)
-				log.Emit(logging.Opts{Domain: logging.Git}, "Then re-run: ralph merge %s", topPR)
+				log.Emit(logging.Opts{Domain: logging.Git}, "Then re-run: ralph merge %d", topPR)
 				log.Emit(logging.Opts{}, "\n%s", autoErr.Error())
 				return 1
 			}

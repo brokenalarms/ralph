@@ -17,26 +17,26 @@ func Hyperlink(url, visible string) string {
 // PRLink returns "PR #N" formatted as a clickable OSC 8 hyperlink
 // pointing to the GitHub PR URL. If nwo (owner/repo) is empty, returns
 // plain "PR #N" without a link.
-func PRLink(nwo, prNumber string) string {
-	if nwo == "" || prNumber == "" {
-		if prNumber != "" {
-			return "PR #" + prNumber
+func PRLink(nwo string, prNumber int) string {
+	if nwo == "" || prNumber == 0 {
+		if prNumber != 0 {
+			return fmt.Sprintf("PR #%d", prNumber)
 		}
 		return ""
 	}
-	url := fmt.Sprintf("https://github.com/%s/pull/%s", nwo, prNumber)
-	return Hyperlink(url, "PR #"+prNumber)
+	url := fmt.Sprintf("https://github.com/%s/pull/%d", nwo, prNumber)
+	return Hyperlink(url, fmt.Sprintf("PR #%d", prNumber))
 }
 
 // PRLinkOpt returns a *Link for use in Opts.Link, pointing to the GitHub
-// PR URL. If either argument is empty, returns nil.
-func PRLinkOpt(nwo, prNumber string) *Link {
-	if nwo == "" || prNumber == "" {
+// PR URL. If either argument is zero/empty, returns nil.
+func PRLinkOpt(nwo string, prNumber int) *Link {
+	if nwo == "" || prNumber == 0 {
 		return nil
 	}
 	return &Link{
-		Text: "PR #" + prNumber,
-		URL:  fmt.Sprintf("https://github.com/%s/pull/%s", nwo, prNumber),
+		Text: fmt.Sprintf("PR #%d", prNumber),
+		URL:  fmt.Sprintf("https://github.com/%s/pull/%d", nwo, prNumber),
 	}
 }
 

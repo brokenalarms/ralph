@@ -15,13 +15,13 @@ var RebaseStackAndPush = rebaseStackAndPush
 var RunMerge = runMerge
 var CmdOutputDir = cmdOutputDir
 
-func NewStackPR(number, head string) StackPR {
+func NewStackPR(number int, head string) StackPR {
 	return stackPR{number: number, head: head}
 }
 
 func StackResultPRs(r StackResult) []StackPR    { return r.prs }
 func StackResultBaseBranch(r StackResult) string { return r.baseBranch }
-func StackPRNumber(p StackPR) string             { return p.number }
+func StackPRNumber(p StackPR) int               { return p.number }
 func StackPRHead(p StackPR) string               { return p.head }
 
 // RunMergeForTest wraps runMerge with a cleaner signature for external tests.

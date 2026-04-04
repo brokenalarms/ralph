@@ -79,17 +79,17 @@ var _ git.Runner = (*mergeStubRunner)(nil)
 type trackingGH struct {
 	*git.StubGitHub
 	mu           sync.Mutex
-	headSHACalls []string
+	headSHACalls []int
 }
 
-func (g *trackingGH) GetPRHeadSHA(workDir, prNumber string) (string, error) {
+func (g *trackingGH) GetPRHeadSHA(workDir string, prNumber int) (string, error) {
 	g.mu.Lock()
 	g.headSHACalls = append(g.headSHACalls, prNumber)
 	g.mu.Unlock()
-	return "sha-" + prNumber, nil
+	return fmt.Sprintf("sha-%d", prNumber), nil
 }
 
-func (g *trackingGH) calledForPR(prNumber string) bool {
+func (g *trackingGH) calledForPR(prNumber int) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for _, id := range g.headSHACalls {
@@ -151,14 +151,14 @@ func TestCollectStack_BottomUpOrder(t *testing.T) {
 	if len(prs) != 3 {
 		t.Fatalf("expected 3 PRs, got %d", len(prs))
 	}
-	if StackPRNumber(prs[0]) != "452" {
-		t.Errorf("expected prs[0]=452 (bottom), got %s", StackPRNumber(prs[0]))
+	if StackPRNumber(prs[0]) != 452 {
+		t.Errorf("expected prs[0]=452 (bottom), got %d", StackPRNumber(prs[0]))
 	}
-	if StackPRNumber(prs[1]) != "459" {
-		t.Errorf("expected prs[1]=459, got %s", StackPRNumber(prs[1]))
+	if StackPRNumber(prs[1]) != 459 {
+		t.Errorf("expected prs[1]=459, got %d", StackPRNumber(prs[1]))
 	}
-	if StackPRNumber(prs[2]) != "460" {
-		t.Errorf("expected prs[2]=460 (top), got %s", StackPRNumber(prs[2]))
+	if StackPRNumber(prs[2]) != 460 {
+		t.Errorf("expected prs[2]=460 (top), got %d", StackPRNumber(prs[2]))
 	}
 	if StackResultBaseBranch(result) != "main" {
 		t.Errorf("expected baseBranch=main, got %s", StackResultBaseBranch(result))
@@ -183,11 +183,11 @@ func TestCollectStack_SkipsClosedPRs(t *testing.T) {
 	if len(prs) != 2 {
 		t.Fatalf("expected 2 PRs (CLOSED skipped), got %d", len(prs))
 	}
-	if StackPRNumber(prs[0]) != "452" {
-		t.Errorf("expected prs[0]=452, got %s", StackPRNumber(prs[0]))
+	if StackPRNumber(prs[0]) != 452 {
+		t.Errorf("expected prs[0]=452, got %d", StackPRNumber(prs[0]))
 	}
-	if StackPRNumber(prs[1]) != "460" {
-		t.Errorf("expected prs[1]=460, got %s", StackPRNumber(prs[1]))
+	if StackPRNumber(prs[1]) != 460 {
+		t.Errorf("expected prs[1]=460, got %d", StackPRNumber(prs[1]))
 	}
 }
 
@@ -206,7 +206,7 @@ func TestCollectStack_NonMainBaseBranch(t *testing.T) {
 		t.Errorf("expected baseBranch=develop, got %s", StackResultBaseBranch(result))
 	}
 	prs := StackResultPRs(result)
-	if len(prs) != 1 || StackPRNumber(prs[0]) != "100" {
+	if len(prs) != 1 || StackPRNumber(prs[0]) != 100 {
 		t.Errorf("unexpected prs: %+v", prs)
 	}
 }
@@ -228,7 +228,7 @@ func TestRebaseStackAndPush_StaleWorktreeRecreated(t *testing.T) {
 	wtDir := filepath.Join(gm.RalphDir, "worktrees", "merge-pr2")
 	os.MkdirAll(filepath.Join(wtDir, ".git"), 0o755)
 
-	RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr2", "999", []string{"pr1", "pr2"}, gm, logging.New(nil))
+	RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr2", 999, []string{"pr1", "pr2"}, gm, logging.New(nil))
 
 	if !runner.calledWith("worktree", "remove", "--force", wtDir) {
 		t.Error("expected 'git worktree remove --force' to be called for stale worktree")
@@ -244,7 +244,7 @@ func TestRebaseStackAndPush_FetchesAllBranches(t *testing.T) {
 	runner := newMergeStubRunner()
 	gm, tmp := buildGM(t, runner, &git.StubGitHub{})
 
-	RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr3", "123", []string{"pr1", "pr2", "pr3"}, gm, logging.New(nil))
+	RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr3", 123, []string{"pr1", "pr2", "pr3"}, gm, logging.New(nil))
 
 	if !runner.calledWith("fetch", "origin", "main") {
 		t.Error("expected fetch of origin/main")
@@ -262,7 +262,7 @@ func TestRebaseStackAndPush_PushesAllBranchesOnSuccess(t *testing.T) {
 	runner := newMergeStubRunner()
 	gm, tmp := buildGM(t, runner, &git.StubGitHub{})
 
-	code := RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr2", "42", []string{"pr1", "pr2"}, gm, logging.New(nil))
+	code := RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr2", 42, []string{"pr1", "pr2"}, gm, logging.New(nil))
 
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d", code)
@@ -281,7 +281,7 @@ func TestRebaseStackAndPush_RebaseConflictNoPush(t *testing.T) {
 	runner.errOnArgs("rebase --update-refs", fmt.Errorf("conflict"))
 	gm, tmp := buildGM(t, runner, &git.StubGitHub{})
 
-	code := RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr1", "7", []string{"pr1"}, gm, logging.New(nil))
+	code := RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr1", 7, []string{"pr1"}, gm, logging.New(nil))
 
 	if code == 0 {
 		t.Error("expected non-zero exit when rebase conflicts")
@@ -297,7 +297,7 @@ func TestRebaseStackAndPush_WorktreeUnderRalphDir(t *testing.T) {
 	runner := newMergeStubRunner()
 	gm, tmp := buildGM(t, runner, &git.StubGitHub{})
 
-	RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr1", "5", []string{"pr1"}, gm, logging.New(nil))
+	RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr1", 5, []string{"pr1"}, gm, logging.New(nil))
 
 	expectedPrefix := filepath.Join(gm.RalphDir, "worktrees") + string(filepath.Separator)
 	// Find the worktree add call and verify its path argument.
@@ -333,8 +333,8 @@ func TestRunMerge_CIFailureStops(t *testing.T) {
 	gm, tmp := buildGM(t, runner, gh)
 
 	prs := []StackPR{
-		NewStackPR("1", "pr1"),
-		NewStackPR("2", "pr2"),
+		NewStackPR(1, "pr1"),
+		NewStackPR(2, "pr2"),
 	}
 	code := RunMerge(context.Background(), prs, tmp, "main", gm, false, logging.New(nil))
 
@@ -359,7 +359,7 @@ func TestRunMerge_MergeConflictLogsMessage(t *testing.T) {
 	gm, tmp := buildGM(t, runner, gh)
 	gm.Logger = logging.NewWithWriter(&logBuf)
 
-	code := RunMerge(context.Background(), []StackPR{NewStackPR("1", "pr1")}, tmp, "main", gm, false, logging.NewWithWriter(&logBuf))
+	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, tmp, "main", gm, false, logging.NewWithWriter(&logBuf))
 
 	if code == 0 {
 		t.Error("expected non-zero exit on Conflict")
@@ -384,8 +384,8 @@ func TestRunMerge_SecondPRRebased(t *testing.T) {
 	gm, tmp := buildGM(t, runner, gh)
 
 	prs := []StackPR{
-		NewStackPR("1", "pr1"),
-		NewStackPR("2", "pr2"),
+		NewStackPR(1, "pr1"),
+		NewStackPR(2, "pr2"),
 	}
 	code := RunMerge(context.Background(), prs, tmp, "main", gm, false, logging.New(nil))
 
@@ -412,7 +412,7 @@ func TestRunMerge_SecondPRRebased(t *testing.T) {
 	}
 
 	// GetPRHeadSHA must be called for PR 2 to get the fresh HEAD after push.
-	if !gh.calledForPR("2") {
+	if !gh.calledForPR(2) {
 		t.Error("GetPRHeadSHA not called for PR 2 — fresh CI was not awaited after rebase")
 	}
 }
@@ -435,8 +435,8 @@ func TestRunMerge_SecondPRRebaseConflictAttemptsAutoResolve(t *testing.T) {
 	gm.Logger = logging.NewWithWriter(&logBuf)
 
 	prs := []StackPR{
-		NewStackPR("1", "pr1"),
-		NewStackPR("2", "pr2"),
+		NewStackPR(1, "pr1"),
+		NewStackPR(2, "pr2"),
 	}
 	// runMerge will fail (rebasecontinue has no real repo to work in) but
 	// must log the auto-resolve attempt message before stopping.
@@ -542,8 +542,8 @@ func TestRunMerge_SecondPRWaitsForFreshCI(t *testing.T) {
 	}
 
 	prs := []StackPR{
-		NewStackPR("1", "pr1"),
-		NewStackPR("2", "pr2"),
+		NewStackPR(1, "pr1"),
+		NewStackPR(2, "pr2"),
 	}
 
 	code := RunMerge(context.Background(), prs, workDir, "main", gm, false, logging.New(nil))
@@ -557,7 +557,7 @@ func TestRunMerge_SecondPRWaitsForFreshCI(t *testing.T) {
 	}
 
 	// GetPRHeadSHA must be called for PR 2 to get the fresh HEAD after rebase.
-	if !ghStub.calledForPR("2") {
+	if !ghStub.calledForPR(2) {
 		t.Error("GetPRHeadSHA was not called for PR 2 — fresh CI was not awaited after rebase")
 	}
 
@@ -606,7 +606,7 @@ func TestRunMerge_SinglePRMergesSuccessfully(t *testing.T) {
 		BaseBranch: "main",
 	}
 
-	code := RunMerge(context.Background(), []StackPR{NewStackPR("1", "pr1")}, workDir, "main", gm, false, logging.New(nil))
+	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, workDir, "main", gm, false, logging.New(nil))
 	if code != 0 {
 		t.Errorf("runMerge returned %d, expected 0", code)
 	}
@@ -641,7 +641,7 @@ func TestRunMerge_BypassRulesSetsAdminOnMergeOpts(t *testing.T) {
 		BaseBranch: "main",
 	}
 
-	code := RunMerge(context.Background(), []StackPR{NewStackPR("1", "pr1")}, workDir, "main", gm, true, logging.New(nil))
+	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, workDir, "main", gm, true, logging.New(nil))
 	if code != 0 {
 		t.Errorf("runMerge with bypassRules returned %d, expected 0", code)
 	}
@@ -676,7 +676,7 @@ func TestRunMerge_BypassRulesAdminFallbackOn405(t *testing.T) {
 		BaseBranch: "main",
 	}
 
-	code := RunMerge(context.Background(), []StackPR{NewStackPR("1", "pr1")}, workDir, "main", gm, true, logging.New(nil))
+	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, workDir, "main", gm, true, logging.New(nil))
 	if code != 0 {
 		t.Errorf("runMerge with bypassRules+Blocked returned %d, expected 0 (admin fallback)", code)
 	}
@@ -709,7 +709,7 @@ func TestRunMerge_BlockedWithoutBypassLogs(t *testing.T) {
 		BaseBranch: "main",
 	}
 
-	code := RunMerge(context.Background(), []StackPR{NewStackPR("1", "pr1")}, workDir, "main", gm, false, logging.NewWithWriter(&logBuf))
+	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, workDir, "main", gm, false, logging.NewWithWriter(&logBuf))
 	if code == 0 {
 		t.Errorf("runMerge with Blocked should return non-zero, got 0")
 	}
@@ -833,8 +833,8 @@ func TestRunMerge_PerPRRebaseMechanicalConflictAutoResolves(t *testing.T) {
 	}
 
 	prs := []StackPR{
-		NewStackPR("1", "pr1"),
-		NewStackPR("2", "pr2"),
+		NewStackPR(1, "pr1"),
+		NewStackPR(2, "pr2"),
 	}
 	code := RunMerge(context.Background(), prs, workDir, "main", gm, false, logging.New(nil))
 	if code != 0 {
@@ -843,7 +843,7 @@ func TestRunMerge_PerPRRebaseMechanicalConflictAutoResolves(t *testing.T) {
 	if ghStub.MergeCalls != 2 {
 		t.Errorf("expected 2 MergePR calls (both PRs merged), got %d", ghStub.MergeCalls)
 	}
-	if !ghStub.calledForPR("2") {
+	if !ghStub.calledForPR(2) {
 		t.Error("GetPRHeadSHA not called for PR 2 — fresh CI not awaited after auto-resolved rebase")
 	}
 }
@@ -884,8 +884,8 @@ func TestRunMerge_PerPRRebaseRealDivergenceStopsWithError(t *testing.T) {
 	}
 
 	prs := []StackPR{
-		NewStackPR("1", "pr1"),
-		NewStackPR("2", "pr2"),
+		NewStackPR(1, "pr1"),
+		NewStackPR(2, "pr2"),
 	}
 	code := RunMerge(context.Background(), prs, workDir, "main", gm, false, logging.NewWithWriter(&logBuf))
 	if code == 0 {
@@ -934,7 +934,7 @@ func TestRunMerge_ConflictLogsDistinctMessage(t *testing.T) {
 		BaseBranch: "main",
 	}
 
-	code := RunMerge(context.Background(), []StackPR{NewStackPR("1", "pr1")}, workDir, "main", gm, false, logging.NewWithWriter(&logBuf))
+	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, workDir, "main", gm, false, logging.NewWithWriter(&logBuf))
 	if code == 0 {
 		t.Errorf("runMerge with Conflict should return non-zero, got 0")
 	}

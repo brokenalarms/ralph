@@ -446,11 +446,11 @@ func (v *Verifier) TryFixCI(ctx context.Context, ciLog string, ciErr *git.CIFail
 	}
 
 	if len(required) == 0 {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.CI}, "Only optional checks failed on PR #%s — skipping fix agent", ciErr.PRNumber)
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.CI}, "Only optional checks failed on PR #%d — skipping fix agent", ciErr.PRNumber)
 		return false
 	}
 
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.CI}, "CI failed on PR #%s — spawning fix agent for required checks", ciErr.PRNumber)
+	v.deps.Logger.Emit(logging.Opts{Domain: logging.CI}, "CI failed on PR #%d — spawning fix agent for required checks", ciErr.PRNumber)
 
 	var checkNames []string
 	for _, f := range required {

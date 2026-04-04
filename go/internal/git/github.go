@@ -4,8 +4,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 )
+
+// ParsePRNumber validates and converts a raw PR number string (typically
+// from jq or gh CLI output) into a typed int. It rejects empty strings,
+// the literal "null" (jq's output for missing values), non-numeric values,
+// and zero/negative numbers.
+func ParsePRNumber(raw string) (int, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, fmt.Errorf("empty PR number")
+	}
+	if s == "null" {
+		return 0, fmt.Errorf("PR number is null (no PR found)")
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid PR number %q: %w", s, err)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("invalid PR number %d: must be positive", n)
+	}
+	return n, nil
+}
 
 // PRInfo holds basic metadata about a GitHub pull request.
 type PRInfo struct {
@@ -50,25 +73,25 @@ type MergeResult struct {
 // uses ghCLI; tests inject stubs to avoid shelling out to gh.
 type GitHub interface {
 	Available() bool
-	FindOpenPR(branch, repoURL string) (prNumber string, err error)
-	CreatePR(opts CreatePROpts) error
-	MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult
-	ListChecks(prNumber, repoURL string) ([]CICheckResult, error)
-	EditPR(prNumber, repoURL, title, body string) error
-	GetRunLog(prNumber, workDir string) string
+	FindOpenPR(branch, repoURL string) (prNumber int, err error)
+	CreatePR(opts CreatePROpts) (prNumber int, err error)
+	MergePR(prNumber int, repoURL string, opts MergeOpts) MergeResult
+	ListChecks(prNumber int, repoURL string) ([]CICheckResult, error)
+	EditPR(prNumber int, repoURL, title, body string) error
+	GetRunLog(prNumber int, workDir string) string
 	CheckEnforceAdmins(nwo, branch string) (enabled bool, err error)
 	PostEnforceAdmins(nwo, branch string) (output string, err error)
-	FindPR(branch, repoURL string) (number, title, url string, err error)
-	SearchPR(workDir, query string) (prNumber string, err error)
-	PRDiff(workDir, prNumber string) (string, error)
-	GetPRState(workDir, prNumber string) (state string, err error)
-	GetPRBase(workDir, prNumber string) (base string, err error)
-	GetPRHead(workDir, prNumber string) (head string, err error)
-	GetPRHeadSHA(workDir, prNumber string) (sha string, err error)
+	FindPR(branch, repoURL string) (number int, title, url string, err error)
+	SearchPR(workDir, query string) (prNumber int, err error)
+	PRDiff(workDir string, prNumber int) (string, error)
+	GetPRState(workDir string, prNumber int) (state string, err error)
+	GetPRBase(workDir string, prNumber int) (base string, err error)
+	GetPRHead(workDir string, prNumber int) (head string, err error)
+	GetPRHeadSHA(workDir string, prNumber int) (sha string, err error)
 	ListOpenPRBranches(repoURL string) ([]string, error)
-	ReopenPR(prNumber, repoURL string) error
-	CreatePRViaAPI(nwo string, opts CreatePROpts) (prNumber string, err error)
-	GetJobStepCount(nwo, prNumber string) (int, error)
+	ReopenPR(prNumber int, repoURL string) error
+	CreatePRViaAPI(nwo string, opts CreatePROpts) (prNumber int, err error)
+	GetJobStepCount(nwo string, prNumber int) (int, error)
 	// ListAllPRs returns all PRs (open and closed) for chain-walking during stack merge.
 	ListAllPRs(workDir string) ([]PRInfo, error)
 }
@@ -81,10 +104,10 @@ func (g *ghCLI) Available() bool {
 	return err == nil && p != ""
 }
 
-func (g *ghCLI) FindOpenPR(branch, repoURL string) (string, error) {
+func (g *ghCLI) FindOpenPR(branch, repoURL string) (int, error) {
 	nwo := NWOFromRemote(repoURL)
 	if nwo == "" {
-		return "", fmt.Errorf("cannot determine owner/repo from %q", repoURL)
+		return 0, fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
 	owner := strings.SplitN(nwo, "/", 2)[0]
 	endpoint := fmt.Sprintf("repos/%s/pulls", nwo)
@@ -94,13 +117,13 @@ func (g *ghCLI) FindOpenPR(branch, repoURL string) (string, error) {
 		"--jq", ".[0].number // empty")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("gh api pulls failed: %w", err)
+		return 0, fmt.Errorf("gh api pulls failed: %w", err)
 	}
 	result := strings.TrimSpace(string(out))
-	if result == "null" {
-		return "", nil
+	if result == "" {
+		return 0, nil
 	}
-	return result, nil
+	return ParsePRNumber(result)
 }
 
 func (g *ghCLI) ListOpenPRBranches(repoURL string) ([]string, error) {
@@ -117,17 +140,17 @@ func (g *ghCLI) ListOpenPRBranches(repoURL string) ([]string, error) {
 	return strings.Split(raw, "\n"), nil
 }
 
-func (g *ghCLI) CreatePR(opts CreatePROpts) error {
+func (g *ghCLI) CreatePR(opts CreatePROpts) (int, error) {
 	nwo := NWOFromRemote(opts.Repo)
 	if nwo == "" {
-		return fmt.Errorf("cannot determine owner/repo from %q", opts.Repo)
+		return 0, fmt.Errorf("cannot determine owner/repo from %q", opts.Repo)
 	}
-	_, err := g.CreatePRViaAPI(nwo, opts)
-	return err
+	return g.CreatePRViaAPI(nwo, opts)
 }
 
-func (g *ghCLI) EditPR(prNumber, repoURL, title, body string) error {
-	args := []string{"pr", "edit", prNumber, "--title", title, "-R", repoURL}
+func (g *ghCLI) EditPR(prNumber int, repoURL, title, body string) error {
+	pr := strconv.Itoa(prNumber)
+	args := []string{"pr", "edit", pr, "--title", title, "-R", repoURL}
 	if body != "" {
 		args = append(args, "--body", body)
 	}
@@ -138,13 +161,14 @@ func (g *ghCLI) EditPR(prNumber, repoURL, title, body string) error {
 	return nil
 }
 
-func (g *ghCLI) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
+func (g *ghCLI) MergePR(prNumber int, repoURL string, opts MergeOpts) MergeResult {
 	nwo := NWOFromRemote(repoURL)
 	if nwo == "" {
 		return MergeResult{Message: "cannot determine owner/repo from remote URL"}
 	}
+	pr := strconv.Itoa(prNumber)
 
-	endpoint := fmt.Sprintf("repos/%s/pulls/%s/merge", nwo, prNumber)
+	endpoint := fmt.Sprintf("repos/%s/pulls/%s/merge", nwo, pr)
 	args := []string{"api", "-X", "PUT", endpoint, "--include", "-f", "merge_method=squash"}
 	if opts.Subject != "" {
 		args = append(args, "-f", "commit_title="+opts.Subject)
@@ -155,7 +179,7 @@ func (g *ghCLI) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
 	result := classifyMergeStatus(string(out), err)
 	if result.Merged {
 		if opts.DeleteBranch {
-			g.deleteBranch(nwo, prNumber)
+			g.deleteBranch(nwo, pr)
 		}
 		return result
 	}
@@ -163,7 +187,7 @@ func (g *ghCLI) MergePR(prNumber, repoURL string, opts MergeOpts) MergeResult {
 	// Method Not Allowed: branch protection blocks merge via REST API.
 	// If caller opted in to admin bypass, fall back to gh pr merge --admin.
 	if result.Blocked && opts.Admin {
-		return g.mergeAdmin(prNumber, repoURL, nwo, opts)
+		return g.mergeAdmin(pr, repoURL, nwo, opts)
 	}
 	return result
 }
@@ -257,8 +281,9 @@ func (g *ghCLI) deleteBranch(nwo, prNumber string) {
 	delCmd.CombinedOutput() // best-effort
 }
 
-func (g *ghCLI) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
-	args := []string{"pr", "checks", prNumber, "--json", "name,state,bucket"}
+func (g *ghCLI) ListChecks(prNumber int, repoURL string) ([]CICheckResult, error) {
+	pr := strconv.Itoa(prNumber)
+	args := []string{"pr", "checks", pr, "--json", "name,state,bucket"}
 	if repoURL != "" {
 		args = append(args, "-R", repoURL)
 	}
@@ -299,8 +324,9 @@ func (g *ghCLI) PostEnforceAdmins(nwo, branch string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-func (g *ghCLI) GetRunLog(prNumber, workDir string) string {
-	cmd := exec.Command("gh", "pr", "checks", prNumber, "--json", "name,state,link", "--jq",
+func (g *ghCLI) GetRunLog(prNumber int, workDir string) string {
+	pr := strconv.Itoa(prNumber)
+	cmd := exec.Command("gh", "pr", "checks", pr, "--json", "name,state,link", "--jq",
 		`.[] | select(.state == "FAILURE") | .link`)
 	cmd.Dir = workDir
 	out, err := cmd.Output()
@@ -336,10 +362,10 @@ func (g *ghCLI) GetRunLog(prNumber, workDir string) string {
 	return strings.Join(lines, "\n")
 }
 
-func (g *ghCLI) FindPR(branch, repoURL string) (string, string, string, error) {
+func (g *ghCLI) FindPR(branch, repoURL string) (int, string, string, error) {
 	nwo := NWOFromRemote(repoURL)
 	if nwo == "" {
-		return "", "", "", fmt.Errorf("cannot determine owner/repo from %q", repoURL)
+		return 0, "", "", fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
 	owner := strings.SplitN(nwo, "/", 2)[0]
 	endpoint := fmt.Sprintf("repos/%s/pulls", nwo)
@@ -349,35 +375,45 @@ func (g *ghCLI) FindPR(branch, repoURL string) (string, string, string, error) {
 		"--jq", `.[0] // empty | "\(.number)\t\(.title)\t\(.html_url)"`)
 	out, err := cmd.Output()
 	if err != nil {
-		return "", "", "", fmt.Errorf("gh api pulls failed: %w", err)
+		return 0, "", "", fmt.Errorf("gh api pulls failed: %w", err)
 	}
 	raw := strings.TrimSpace(string(out))
 	if raw == "" {
-		return "", "", "", nil
+		return 0, "", "", nil
 	}
 	parts := strings.SplitN(raw, "\t", 3)
-	if len(parts) < 2 {
-		return parts[0], "", "", nil
+	num, parseErr := ParsePRNumber(parts[0])
+	if parseErr != nil {
+		return 0, "", "", parseErr
 	}
-	if len(parts) < 3 {
-		return parts[0], parts[1], "", nil
+	title := ""
+	url := ""
+	if len(parts) >= 2 {
+		title = parts[1]
 	}
-	return parts[0], parts[1], parts[2], nil
+	if len(parts) >= 3 {
+		url = parts[2]
+	}
+	return num, title, url, nil
 }
 
-func (g *ghCLI) SearchPR(workDir, query string) (string, error) {
+func (g *ghCLI) SearchPR(workDir, query string) (int, error) {
 	cmd := exec.Command("gh", "pr", "list", "--search", query,
 		"--state", "all", "--json", "number", "--jq", ".[0].number")
 	cmd.Dir = workDir
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("gh pr list search failed: %w", err)
+		return 0, fmt.Errorf("gh pr list search failed: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return 0, nil
+	}
+	return ParsePRNumber(raw)
 }
 
-func (g *ghCLI) PRDiff(workDir, prNumber string) (string, error) {
-	cmd := exec.Command("gh", "pr", "diff", prNumber)
+func (g *ghCLI) PRDiff(workDir string, prNumber int) (string, error) {
+	cmd := exec.Command("gh", "pr", "diff", strconv.Itoa(prNumber))
 	cmd.Dir = workDir
 	out, err := cmd.Output()
 	if err != nil {
@@ -386,8 +422,8 @@ func (g *ghCLI) PRDiff(workDir, prNumber string) (string, error) {
 	return string(out), nil
 }
 
-func (g *ghCLI) ReopenPR(prNumber, repoURL string) error {
-	args := []string{"pr", "reopen", prNumber}
+func (g *ghCLI) ReopenPR(prNumber int, repoURL string) error {
+	args := []string{"pr", "reopen", strconv.Itoa(prNumber)}
 	if repoURL != "" {
 		args = append(args, "-R", repoURL)
 	}
@@ -398,7 +434,7 @@ func (g *ghCLI) ReopenPR(prNumber, repoURL string) error {
 	return nil
 }
 
-func (g *ghCLI) CreatePRViaAPI(nwo string, opts CreatePROpts) (string, error) {
+func (g *ghCLI) CreatePRViaAPI(nwo string, opts CreatePROpts) (int, error) {
 	body := fmt.Sprintf(`{"title":%q,"body":%q,"head":%q,"base":%q}`,
 		opts.Title, opts.Body, opts.Head, opts.Base)
 	endpoint := fmt.Sprintf("repos/%s/pulls", nwo)
@@ -406,21 +442,21 @@ func (g *ghCLI) CreatePRViaAPI(nwo string, opts CreatePROpts) (string, error) {
 	cmd.Stdin = strings.NewReader(body)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("API PR creation failed: %s", strings.TrimSpace(string(out)))
+		return 0, fmt.Errorf("API PR creation failed: %s", strings.TrimSpace(string(out)))
 	}
 	var resp struct {
 		Number int `json:"number"`
 	}
 	if jsonErr := json.Unmarshal(out, &resp); jsonErr != nil {
-		return "", fmt.Errorf("parsing PR API response: %w", jsonErr)
+		return 0, fmt.Errorf("parsing PR API response: %w", jsonErr)
 	}
 	if resp.Number == 0 {
-		return "", fmt.Errorf("API PR creation returned no number")
+		return 0, fmt.Errorf("API PR creation returned no number")
 	}
-	return fmt.Sprintf("%d", resp.Number), nil
+	return resp.Number, nil
 }
 
-func (g *ghCLI) GetJobStepCount(nwo, prNumber string) (int, error) {
+func (g *ghCLI) GetJobStepCount(nwo string, prNumber int) (int, error) {
 	cmd := exec.Command("gh", "api",
 		fmt.Sprintf("repos/%s/actions/runs?event=pull_request&per_page=1", nwo),
 		"--jq", ".workflow_runs[0].id")
@@ -444,8 +480,8 @@ func (g *ghCLI) GetJobStepCount(nwo, prNumber string) (int, error) {
 	return count, nil
 }
 
-func (g *ghCLI) GetPRState(workDir, prNumber string) (string, error) {
-	cmd := exec.Command("gh", "pr", "view", prNumber,
+func (g *ghCLI) GetPRState(workDir string, prNumber int) (string, error) {
+	cmd := exec.Command("gh", "pr", "view", strconv.Itoa(prNumber),
 		"--json", "state", "--jq", ".state")
 	cmd.Dir = workDir
 	out, err := cmd.Output()
@@ -455,8 +491,8 @@ func (g *ghCLI) GetPRState(workDir, prNumber string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func (g *ghCLI) GetPRBase(workDir, prNumber string) (string, error) {
-	cmd := exec.Command("gh", "pr", "view", prNumber,
+func (g *ghCLI) GetPRBase(workDir string, prNumber int) (string, error) {
+	cmd := exec.Command("gh", "pr", "view", strconv.Itoa(prNumber),
 		"--json", "baseRefName", "--jq", ".baseRefName")
 	cmd.Dir = workDir
 	out, err := cmd.Output()
@@ -466,8 +502,8 @@ func (g *ghCLI) GetPRBase(workDir, prNumber string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func (g *ghCLI) GetPRHead(workDir, prNumber string) (string, error) {
-	cmd := exec.Command("gh", "pr", "view", prNumber,
+func (g *ghCLI) GetPRHead(workDir string, prNumber int) (string, error) {
+	cmd := exec.Command("gh", "pr", "view", strconv.Itoa(prNumber),
 		"--json", "headRefName", "--jq", ".headRefName")
 	cmd.Dir = workDir
 	out, err := cmd.Output()
@@ -477,8 +513,8 @@ func (g *ghCLI) GetPRHead(workDir, prNumber string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func (g *ghCLI) GetPRHeadSHA(workDir, prNumber string) (string, error) {
-	cmd := exec.Command("gh", "pr", "view", prNumber,
+func (g *ghCLI) GetPRHeadSHA(workDir string, prNumber int) (string, error) {
+	cmd := exec.Command("gh", "pr", "view", strconv.Itoa(prNumber),
 		"--json", "headRefOid", "--jq", ".headRefOid")
 	cmd.Dir = workDir
 	out, err := cmd.Output()

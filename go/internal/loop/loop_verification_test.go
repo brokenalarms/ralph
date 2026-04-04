@@ -110,7 +110,7 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir: dir,
 		WorkDir:    dir,
-		ShipResult: git.ShipResult{PRNumber: "42"},
+		ShipResult: git.ShipResult{PRNumber: 42},
 		PRState:    "OPEN",
 	}
 
@@ -178,7 +178,7 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir: dir,
 		WorkDir:    dir,
-		ShipResult: git.ShipResult{PRNumber: "99"},
+		ShipResult: git.ShipResult{PRNumber: 99},
 		PRState:    "OPEN",
 	}
 
@@ -227,12 +227,12 @@ func TestLoop_CIFailureStillClosesTask(t *testing.T) {
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-ci-test",
-		ShipResult:     git.ShipResult{PRNumber: "99"},
+		ShipResult:     git.ShipResult{PRNumber: 99},
 		PRState:        "OPEN",
 	}
 	gm.MergeRetryFunc = func(ctx context.Context) (bool, error) {
 		return false, &git.CIFailureError{
-			PRNumber: "99",
+			PRNumber: 99,
 			Failures: []git.CICheckResult{
 				{Name: "test", State: "FAILURE", Bucket: "fail"},
 			},
@@ -288,7 +288,7 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-conflict-test",
-		ShipResult:     git.ShipResult{PRNumber: "42"},
+		ShipResult:     git.ShipResult{PRNumber: 42},
 		PRState:        "OPEN",
 	}
 
@@ -342,7 +342,7 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 		ProjectDir:          dir,
 		WorkDir:             filepath.Join(dir, "worktree"),
 		WorktreeBranch:      "ralph/project/01-ci-fix",
-		ShipResult:          git.ShipResult{PRNumber: "42"},
+		ShipResult:          git.ShipResult{PRNumber: 42},
 		PRState:             "OPEN",
 		MergeRetryResult:    true,
 	}
@@ -406,11 +406,11 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	gm.ShipResult = git.ShipResult{PRNumber: "99"}
+	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.PRState = "OPEN"
 	gm.MergeRetryFunc = func(ctx context.Context) (bool, error) {
 		return false, &git.CIFailureError{
-			PRNumber: "99",
+			PRNumber: 99,
 			Failures: []git.CICheckResult{
 				{Name: "test", State: "FAILURE", Bucket: "fail"},
 			},
@@ -469,7 +469,7 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	gm.ShipResult = git.ShipResult{PRNumber: "99"}
+	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.PRState = "OPEN"
 	gm.MergeRetryErr = fmt.Errorf("merge failed")
 
@@ -530,7 +530,7 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	gm.ShipResult = git.ShipResult{PRNumber: "42"}
+	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	gm.PRState = "OPEN"
 	gm.MergeRetryErr = fmt.Errorf("push denied by remote")
 
@@ -593,7 +593,7 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	gm.ShipResult = git.ShipResult{PRNumber: "50"}
+	gm.ShipResult = git.ShipResult{PRNumber: 50}
 	gm.PRState = "OPEN"
 	gm.MergeRetryErr = fmt.Errorf("merge conflict")
 
@@ -660,7 +660,7 @@ func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	gm.ShipResult = git.ShipResult{PRNumber: "42"}
+	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	gm.PRState = "OPEN"
 	gm.MergeRetryResult = true
 

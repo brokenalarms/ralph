@@ -139,14 +139,14 @@ func (discardLog) EmitFinalInPlace()                        {}
 // capturingGitHub captures CreatePR calls for assertion.
 type capturingGitHub struct {
 	StubGitHub
-	createPR func(CreatePROpts) error
+	createPR func(CreatePROpts) (int, error)
 }
 
-func (c *capturingGitHub) CreatePR(opts CreatePROpts) error {
+func (c *capturingGitHub) CreatePR(opts CreatePROpts) (int, error) {
 	if c.createPR != nil {
 		return c.createPR(opts)
 	}
-	return nil
+	return 0, nil
 }
 
 // stubManager creates a Manager wired to stubs for both git commands and

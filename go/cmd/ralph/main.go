@@ -395,8 +395,8 @@ func printSessionSummary(tasks []loop.CompletedTask, log *logging.Logger) {
 		if t.Summary != "" {
 			log.Emit(logging.Opts{}, "  Fix: %s", t.Summary)
 		}
-		if t.PRNum != "" {
-			pr := fmt.Sprintf("PR #%s", t.PRNum)
+		if t.PRNum != 0 {
+			pr := fmt.Sprintf("PR #%d", t.PRNum)
 			if t.PRURL != "" {
 				pr = t.PRURL
 			}

@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -178,20 +179,21 @@ type runPostTaskParams struct {
 // runPostTask executes the --post-task script if configured. Runs in the
 // project directory with RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED
 // env vars. Non-zero exit warns and continues.
-func runPostTask(ctx context.Context, p runPostTaskParams, taskID, prNumber string, merged bool) {
+func runPostTask(ctx context.Context, p runPostTaskParams, taskID string, prNumber int, merged bool) {
 	if p.postTask == "" {
 		return
 	}
+	prStr := strconv.Itoa(prNumber)
 	cmd := exec.CommandContext(ctx, "sh", "-c", p.postTask)
 	cmd.Dir = p.projectDir
 	cmd.Env = append(os.Environ(),
 		"RALPH_TASK_ID="+taskID,
-		"RALPH_PR_NUMBER="+prNumber,
+		"RALPH_PR_NUMBER="+prStr,
 		"RALPH_MERGED="+fmt.Sprintf("%t", merged),
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	p.logger.Emit(logging.Opts{Domain: "post-task"}, "Running %s (task=%s pr=%s merged=%t)", p.postTask, taskID, prNumber, merged)
+	p.logger.Emit(logging.Opts{Domain: "post-task"}, "Running %s (task=%s pr=%d merged=%t)", p.postTask, taskID, prNumber, merged)
 	if err := cmd.Run(); err != nil {
 		p.logger.Emit(logging.Opts{Domain: "post-task", Level: logging.Warn}, "Script exited with error: %v", err)
 	}

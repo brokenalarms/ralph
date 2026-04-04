@@ -33,7 +33,7 @@ type StubGit struct {
 	PushErr              error
 	ShipResult           git.ShipResult
 	ShipErr              error
-	PushPRNumber         string
+	PushPRNumber         int
 	PushPRErr            error
 	MergeRetryResult     bool
 	MergeRetryErr        error
@@ -49,13 +49,13 @@ type StubGit struct {
 	GitHubStub git.GitHub
 
 	// PR stub values.
-	OpenPR       string
+	OpenPR       int
 	OpenPRErr    error
 	PRState      string
 	PRStateErr   error
 	OpenBranches []string
 	PRBase       string
-	PRNumber     string
+	PRNumber     int
 	PRTitle      string
 	PRURL        string
 	PRHealthy    bool
@@ -92,16 +92,16 @@ func (s *StubGit) IsBranchRenamed() bool      { return s.BranchRenamed }
 func (s *StubGit) SetBranchRenamed(v bool)    { s.BranchRenamed = v }
 func (s *StubGit) SetLocalTestsPassed(v bool) {}
 
-func (s *StubGit) FindOpenPRForBranch(branch string) (string, error) {
-	if s.OpenPR != "" {
+func (s *StubGit) FindOpenPRForBranch(branch string) (int, error) {
+	if s.OpenPR != 0 {
 		return s.OpenPR, s.OpenPRErr
 	}
 	if gh, ok := s.GitHubStub.(*git.StubGitHub); ok && gh != nil {
 		return gh.FindOpenPR(branch, s.RemoteURLValue)
 	}
-	return "", nil
+	return 0, nil
 }
-func (s *StubGit) GetPRState(prNumber string) (string, error) {
+func (s *StubGit) GetPRState(prNumber int) (string, error) {
 	if s.PRState != "" {
 		return s.PRState, s.PRStateErr
 	}
@@ -119,7 +119,7 @@ func (s *StubGit) ListOpenPRBranches() ([]string, error) {
 	}
 	return nil, nil
 }
-func (s *StubGit) GetPRBase(prNumber string) string {
+func (s *StubGit) GetPRBase(prNumber int) string {
 	if s.PRBase != "" {
 		return s.PRBase
 	}
@@ -129,17 +129,17 @@ func (s *StubGit) GetPRBase(prNumber string) string {
 	}
 	return ""
 }
-func (s *StubGit) FindPRForBranch(branch string) (string, string, string, error) {
-	if s.PRNumber != "" {
+func (s *StubGit) FindPRForBranch(branch string) (int, string, string, error) {
+	if s.PRNumber != 0 {
 		return s.PRNumber, s.PRTitle, s.PRURL, nil
 	}
 	if gh, ok := s.GitHubStub.(*git.StubGitHub); ok && gh != nil {
 		return gh.FindPR(branch, "")
 	}
-	return "", "", "", nil
+	return 0, "", "", nil
 }
 func (s *StubGit) PRDiffForTask(_ string) string { return "" }
-func (s *StubGit) PRChainIsHealthy(prNumber string) (bool, string) {
+func (s *StubGit) PRChainIsHealthy(prNumber int) (bool, string) {
 	if s.PRHealthMsg != "" {
 		return s.PRHealthy, s.PRHealthMsg
 	}
@@ -163,7 +163,7 @@ func (s *StubGit) DetectDefaultBranch() string {
 	return "main"
 }
 func (s *StubGit) RecentChangedFiles(_ int) string                    { return s.RecentFilesValue }
-func (s *StubGit) GetCIFailureLog(_ string) string                    { return s.CIFailureLogValue }
+func (s *StubGit) GetCIFailureLog(_ int) string                    { return s.CIFailureLogValue }
 
 func (s *StubGit) PrepareForNextTask(nextTaskID string) {
 	s.PrepareForNextCalls++
@@ -230,7 +230,7 @@ func (s *StubGit) Ship(ctx context.Context, opts git.ShipOpts) (git.ShipResult, 
 	return s.ShipResult, s.ShipErr
 }
 
-func (s *StubGit) PushAndCreatePR(_ context.Context, _, _, _ string) (string, error) {
+func (s *StubGit) PushAndCreatePR(_ context.Context, _, _, _ string) (int, error) {
 	return s.PushPRNumber, s.PushPRErr
 }
 

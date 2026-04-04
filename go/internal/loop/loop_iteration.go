@@ -49,7 +49,7 @@ type runAndCompleteParams struct {
 	isOnlineFunc        func() bool
 	waitForInternetFunc func(context.Context, *logging.Logger) bool
 	verifyFunc          func(ctx context.Context, dir, headBefore string) (bool, string)
-	runPostTaskFn       func(ctx context.Context, taskID, prNumber string, merged bool)
+	runPostTaskFn       func(ctx context.Context, taskID string, prNumber int, merged bool)
 }
 
 // runAndComplete builds the prompt, runs the agent, handles retryable
@@ -180,7 +180,7 @@ func runAndComplete(ctx context.Context, p runAndCompleteParams, task taskContex
 				}
 				return p.verifier.VerifyCompletion(ctx, p.git.GetWorkDir(), headBefore)
 			},
-			pushSignalPRFn: func(sp postSignalParams) (string, string) {
+			pushSignalPRFn: func(sp postSignalParams) (int, string) {
 				return pushSignalPR(sp.ctx, sp, pushSignalPROpts{
 					git:                 p.git,
 					backend:             p.backend,
@@ -202,7 +202,7 @@ func runAndComplete(ctx context.Context, p runAndCompleteParams, task taskContex
 				fp.verifier = p.verifier
 				return finalizePR(fp)
 			},
-			buildCTFn: func(taskID, nextTask, summary, prNumber, _ string) CompletedTask {
+			buildCTFn: func(taskID, nextTask, summary string, prNumber int, _ string) CompletedTask {
 				return buildCompletedTask(taskID, nextTask, summary, prNumber, p.git)
 			},
 			runPostTaskFn: p.runPostTaskFn,
@@ -255,10 +255,10 @@ type handlePostSignalOpts struct {
 	logger            *logging.Logger
 	attempts          *attempts.Tracker
 	verifyFn          func(ctx context.Context, headBefore string) (bool, string)
-	pushSignalPRFn    func(p postSignalParams) (string, string)
+	pushSignalPRFn    func(p postSignalParams) (int, string)
 	finalizePRFn      func(p finalizePRParams) finalizePRResult
-	buildCTFn         func(taskID, nextTask, summary, prNumber, workDir string) CompletedTask
-	runPostTaskFn     func(ctx context.Context, taskID, prNumber string, merged bool)
+	buildCTFn         func(taskID, nextTask, summary string, prNumber int, workDir string) CompletedTask
+	runPostTaskFn     func(ctx context.Context, taskID string, prNumber int, merged bool)
 }
 
 // handlePostSignalOut carries the results of handlePostSignal back to the method wrapper.
@@ -334,9 +334,9 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 		if p.taskID != "" {
 			closeReason := "verified complete (no new commits)"
 			ref, _ := opts.backend.GetExternalRef(p.taskID)
-			if prNum := parsePRNumber(ref); prNum != "" {
+			if prNum := parsePRNumber(ref); prNum != 0 {
 				if prState, _ := opts.git.GetPRState(prNum); strings.ToUpper(prState) == "MERGED" {
-					closeReason = fmt.Sprintf("PR #%s already merged", prNum)
+					closeReason = fmt.Sprintf("PR #%d already merged", prNum)
 				}
 			}
 			_ = opts.backend.SetState(p.taskID, "phase", "verified", closeReason)
@@ -355,7 +355,7 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 			}
 		}
 		opts.git.TagTaskEnd(p.taskID)
-		opts.runPostTaskFn(p.ctx, p.taskID, "", false)
+		opts.runPostTaskFn(p.ctx, p.taskID, 0, false)
 		if opts.notify {
 			notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
 		}
@@ -371,9 +371,9 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 	prState := "OPEN"
 
 	// Recovery: if push failed but a PR already exists, use it.
-	if prNumber == "" && p.taskID != "" {
+	if prNumber == 0 && p.taskID != "" {
 		ref, _ := opts.backend.GetExternalRef(p.taskID)
-		if existing := parsePRNumber(ref); existing != "" {
+		if existing := parsePRNumber(ref); existing != 0 {
 			prNumber = existing
 			prState = "" // unknown — let finalizePR look it up
 		}
@@ -386,7 +386,7 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 
 	// buildCTFn may discover a PR via findPRInfo that push missed.
 	// findPRInfo queries open PRs for the current branch, so OPEN is safe.
-	if prNumber == "" && ct.PRNum != "" {
+	if prNumber == 0 && ct.PRNum != 0 {
 		prNumber = ct.PRNum
 		prState = "OPEN"
 	}
@@ -396,7 +396,7 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 		return handlePostSignalOut{action: signalComplete, ct: &ct}
 	}
 
-	if prNumber == "" {
+	if prNumber == 0 {
 		opts.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No PR created — task %s stays open", p.taskID)
 		return handlePostSignalOut{action: signalComplete, ct: &ct}
 	}
@@ -442,7 +442,7 @@ type pushSignalPROpts struct {
 }
 
 // pushSignalPR pushes the branch and creates a PR after a successful signal.
-func pushSignalPR(ctx context.Context, p postSignalParams, opts pushSignalPROpts) (string, string) {
+func pushSignalPR(ctx context.Context, p postSignalParams, opts pushSignalPROpts) (int, string) {
 	prBody := buildPRBody(opts.backend, p.taskID, p.result.Summary)
 	shipOpts := git.ShipOpts{TaskID: p.taskID, TaskTitle: p.nextTask, Body: prBody}
 
@@ -458,7 +458,7 @@ func pushSignalPR(ctx context.Context, p postSignalParams, opts pushSignalPROpts
 		}
 	}
 
-	if result.PRNumber != "" && p.taskID != "" {
+	if result.PRNumber != 0 && p.taskID != "" {
 		ref := result.PRURL
 		if ref == "" {
 			ref = prURL(opts.git.RemoteURL(), result.PRNumber)
@@ -474,18 +474,18 @@ func pushSignalPR(ctx context.Context, p postSignalParams, opts pushSignalPROpts
 }
 
 // buildCompletedTask assembles the CompletedTask record for a signal.
-func buildCompletedTask(taskID, nextTask, summary, prNumber string, g git.GitOps) CompletedTask {
+func buildCompletedTask(taskID, nextTask, summary string, prNumber int, g git.GitOps) CompletedTask {
 	ct := CompletedTask{
 		ID:      taskID,
 		Title:   nextTask,
 		Summary: summary,
 		PRNum:   prNumber,
 	}
-	if num, t, u, err := g.FindPRForBranch(g.GetWorktreeBranch()); err == nil && num != "" {
+	if num, t, u, err := g.FindPRForBranch(g.GetWorktreeBranch()); err == nil && num != 0 {
 		ct.PRNum = num
 		ct.PRTitle = t
 		ct.PRURL = u
-	} else if prNumber != "" {
+	} else if prNumber != 0 {
 		ct.PRNum = prNumber
 	}
 	return ct
@@ -498,7 +498,7 @@ type finalizePRParams struct {
 	ctx        context.Context
 	taskID     string
 	nextTask   string
-	prNumber   string
+	prNumber   int
 	prState    string // "OPEN" or "MERGED"; looked up from GH if empty
 	prURL      string
 	workDir    string
@@ -523,7 +523,7 @@ type finalizePRResult struct {
 // finalizePR handles an existing PR: merges if applicable, closes the bead.
 // Returns the merge/close outcome so callers can act on it (e.g. evolve).
 func finalizePR(p finalizePRParams) finalizePRResult {
-	if p.prNumber == "" {
+	if p.prNumber == 0 {
 		p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No PR — task %s stays open", p.taskID)
 		return finalizePRResult{}
 	}
@@ -581,12 +581,12 @@ func finalizePR(p finalizePRParams) finalizePRResult {
 
 	var closeReason string
 	if mergeFailed {
-		closeReason = fmt.Sprintf("Verified — PR #%s open, merge pending", p.prNumber)
+		closeReason = fmt.Sprintf("Verified — PR #%d open, merge pending", p.prNumber)
 		if p.prURL != "" {
 			closeReason = fmt.Sprintf("Verified — %s open, merge pending", p.prURL)
 		}
 	} else {
-		closeReason = fmt.Sprintf("Fixed in PR #%s", p.prNumber)
+		closeReason = fmt.Sprintf("Fixed in PR #%d", p.prNumber)
 		if p.prURL != "" {
 			closeReason = fmt.Sprintf("Fixed in %s", p.prURL)
 		}

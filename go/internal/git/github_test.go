@@ -51,9 +51,9 @@ func TestStubGitHub_SatisfiesInterface(t *testing.T) {
 // positional-parameter mistakes.
 func TestCreatePROpts_FieldsPreserved(t *testing.T) {
 	var captured CreatePROpts
-	stub := &capturingGitHub{createPR: func(opts CreatePROpts) error {
+	stub := &capturingGitHub{createPR: func(opts CreatePROpts) (int, error) {
 		captured = opts
-		return nil
+		return 42, nil
 	}}
 
 	opts := CreatePROpts{
@@ -64,7 +64,7 @@ func TestCreatePROpts_FieldsPreserved(t *testing.T) {
 		Repo:  "owner/repo",
 		Dir:   "/tmp/work",
 	}
-	if err := stub.CreatePR(opts); err != nil {
+	if _, err := stub.CreatePR(opts); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -77,12 +77,12 @@ func TestCreatePROpts_FieldsPreserved(t *testing.T) {
 // method can be stubbed for CI failure log testing.
 func TestGetRunLog_Stubbable(t *testing.T) {
 	stub := &StubGitHub{}
-	if result := stub.GetRunLog("42", "/tmp"); result != "" {
+	if result := stub.GetRunLog(42, "/tmp"); result != "" {
 		t.Errorf("expected empty string from default stub, got %q", result)
 	}
 
 	stub.RunLogValue = "error TS2307: Cannot find module './Missing'"
-	if result := stub.GetRunLog("42", "/tmp"); result != stub.RunLogValue {
+	if result := stub.GetRunLog(42, "/tmp"); result != stub.RunLogValue {
 		t.Errorf("expected configured RunLogValue, got %q", result)
 	}
 }
@@ -97,7 +97,7 @@ func TestListChecks_Stubbable(t *testing.T) {
 		},
 	}
 
-	checks, err := stub.ListChecks("99", "owner/repo")
+	checks, err := stub.ListChecks(99, "owner/repo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
 		GitHub: stub,
 	}
 
-	result := mgr.GetCIFailureLog("42")
+	result := mgr.GetCIFailureLog(42)
 	if result != "test failure output line 1\nline 2" {
 		t.Errorf("expected delegated log output, got %q", result)
 	}

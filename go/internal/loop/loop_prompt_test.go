@@ -368,7 +368,7 @@ func TestLoop_HasProgress_SnapshotsDiffState(t *testing.T) {
 				isOnlineFunc:        l.cfg.IsOnline,
 				waitForInternetFunc: l.cfg.WaitForInternet,
 				verifyFunc:          l.cfg.OnVerify,
-				runPostTaskFn: func(ctx context.Context, taskID, prNumber string, merged bool) {
+				runPostTaskFn: func(ctx context.Context, taskID string, prNumber int, merged bool) {
 				runPostTask(ctx, runPostTaskParams{postTask: l.cfg.PostTask, projectDir: l.cfg.Dirs.ProjectDir, logger: l.logger}, taskID, prNumber, merged)
 			},
 			}, taskContext{id: "ralph-abc", title: "Fix login"}, 0)

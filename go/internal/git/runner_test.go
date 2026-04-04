@@ -131,7 +131,7 @@ func TestManager_PushAndCreatePR_NoRealProcesses(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &StubGitHub{IsAvailable: true, OpenPR: ""}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: 0}
 
 	dir := t.TempDir()
 	mgr := &Manager{
@@ -169,7 +169,7 @@ func TestManager_PushAndCreatePR_PushesEvenWhenPRExists(t *testing.T) {
 	r.On("push", "", nil)
 	r.On("ref-exists", "", nil)
 
-	gh := &StubGitHub{IsAvailable: true, OpenPR: "42"}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
 
 	dir := t.TempDir()
 	mgr := &Manager{
@@ -187,8 +187,8 @@ func TestManager_PushAndCreatePR_PushesEvenWhenPRExists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if prNum != "42" {
-		t.Errorf("expected PR 42, got %q", prNum)
+	if prNum != 42 {
+		t.Errorf("expected PR 42, got %d", prNum)
 	}
 	if !r.CalledWith("push") {
 		t.Error("push should always happen — squash + force-push ensures latest code is on branch")
@@ -205,7 +205,7 @@ func TestManager_PushAndCreatePR_UpdatesTitleWhenPRExists(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &StubGitHub{IsAvailable: true, OpenPR: "42"}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
 
 	dir := t.TempDir()
 	mgr := &Manager{
@@ -240,7 +240,7 @@ func TestManager_PushAndCreatePR_StripsComponentPrefix(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &StubGitHub{IsAvailable: true, OpenPR: "42"}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
 
 	dir := t.TempDir()
 	mgr := &Manager{
@@ -274,7 +274,7 @@ func TestManager_PushAndCreatePR_NoEditWithoutTaskID(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &StubGitHub{IsAvailable: true, OpenPR: "42"}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
 
 	dir := t.TempDir()
 	mgr := &Manager{
@@ -307,7 +307,7 @@ func TestManager_PushAndCreatePR_LogsAlreadyOpen(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &StubGitHub{IsAvailable: true, OpenPR: "42"}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
 
 	dir := t.TempDir()
 	log := &testLog{}
@@ -345,7 +345,7 @@ func TestManager_PushAndCreatePR_LogsCreatedPR(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &StubGitHub{IsAvailable: true, OpenPR: "", CreatedPR: "99"}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: 0, CreatedPR: 99}
 
 	dir := t.TempDir()
 	log := &testLog{}

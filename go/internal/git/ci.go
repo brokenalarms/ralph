@@ -30,7 +30,7 @@ const (
 
 // CIFailureError is returned when CI checks fail on a PR.
 type CIFailureError struct {
-	PRNumber string
+	PRNumber int
 	Failures []CICheckResult
 }
 
@@ -39,7 +39,7 @@ func (e *CIFailureError) Error() string {
 	for _, f := range e.Failures {
 		names = append(names, f.Name)
 	}
-	return fmt.Sprintf("CI checks failed on PR #%s: %s", e.PRNumber, strings.Join(names, ", "))
+	return fmt.Sprintf("CI checks failed on PR #%d: %s", e.PRNumber, strings.Join(names, ", "))
 }
 
 // DefaultCIPollInterval is the initial time between CI status checks.
@@ -97,7 +97,7 @@ func failedChecks(checks []CICheckResult) []CICheckResult {
 // isInfrastructureFailure checks the GitHub Actions API to determine if CI
 // failed due to infrastructure (billing, runner allocation) rather than actual
 // test failures. A job with zero steps executed indicates it never ran.
-func (m *Manager) isInfrastructureFailure(ctx context.Context, prNumber string) bool {
+func (m *Manager) isInfrastructureFailure(ctx context.Context, prNumber int) bool {
 	nwo := NWOFromRemote(m.RemoteURL())
 	if nwo == "" {
 		return false
@@ -133,33 +133,33 @@ var ErrStackedPRWaiting = fmt.Errorf("stacked PR waiting for base to merge")
 
 // MergeConflictError is returned when a PR cannot be merged due to conflicts.
 type MergeConflictError struct {
-	PRNumber string
+	PRNumber int
 }
 
 func (e *MergeConflictError) Error() string {
-	return fmt.Sprintf("PR #%s has merge conflicts with the base branch", e.PRNumber)
+	return fmt.Sprintf("PR #%d has merge conflicts with the base branch", e.PRNumber)
 }
 
 // UnresolvedConflictError is returned when a merge conflict could not be
 // auto-resolved by rebasing. Retrying will not help — the conflict requires
 // manual or agent-driven resolution.
 type UnresolvedConflictError struct {
-	PRNumber string
+	PRNumber int
 }
 
 func (e *UnresolvedConflictError) Error() string {
-	return fmt.Sprintf("PR #%s has unresolvable merge conflicts — auto-resolve failed", e.PRNumber)
+	return fmt.Sprintf("PR #%d has unresolvable merge conflicts — auto-resolve failed", e.PRNumber)
 }
 
 
 
 // CIFetchFunc is the signature for fetching PR check status.
-type CIFetchFunc func(prNumber, repoURL string) ([]CICheckResult, error)
+type CIFetchFunc func(prNumber int, repoURL string) ([]CICheckResult, error)
 
 // AwaitCI fetches CI check status for a PR and polls until checks resolve.
 // When expectedSHA is non-empty, polls until the PR HEAD matches that SHA
 // before reading CI results — preventing stale results after a push.
-func (m *Manager) AwaitCI(ctx context.Context, prNumber, repoURL, expectedSHA string) ([]CICheckResult, CIStatus, error) {
+func (m *Manager) AwaitCI(ctx context.Context, prNumber int, repoURL, expectedSHA string) ([]CICheckResult, CIStatus, error) {
 	nwo := NWOFromRemote(repoURL)
 	gh := m.gh()
 
@@ -188,7 +188,7 @@ func (m *Manager) AwaitCI(ctx context.Context, prNumber, repoURL, expectedSHA st
 var awaitHeadSHAProgressInterval = 10 * time.Second
 
 // awaitHeadSHA polls until the PR HEAD SHA matches expectedSHA.
-func (m *Manager) awaitHeadSHA(ctx context.Context, gh GitHub, prNumber, nwo, expectedSHA string) error {
+func (m *Manager) awaitHeadSHA(ctx context.Context, gh GitHub, prNumber int, nwo, expectedSHA string) error {
 	prLink := logging.PRLinkOpt(nwo, prNumber)
 	m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "Waiting for HEAD to reach %s...", expectedSHA[:min(7, len(expectedSHA))])
 	deadline := time.Now().Add(DefaultCIPollTimeout)
@@ -221,7 +221,7 @@ func (m *Manager) awaitHeadSHA(ctx context.Context, gh GitHub, prNumber, nwo, ex
 // MaxCIPollInterval. Emits a single in-place log line that grows as polls
 // accumulate (e.g. "CI polled 1s..2s..4s"), finalizing it to the log file
 // on completion. Emits nothing when CI resolves on the first fetch.
-func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber, repoURL, nwo string, interval, timeout time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
+func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nwo string, interval, timeout time.Duration, log Log) ([]CICheckResult, CIStatus, error) {
 	deadline := time.Now().Add(timeout)
 	prLink := logging.PRLinkOpt(nwo, prNumber)
 

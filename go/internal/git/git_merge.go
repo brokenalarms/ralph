@@ -92,23 +92,23 @@ func (m *Manager) Push(ctx context.Context) error {
 }
 
 // reopenClosedPR finds a closed (not merged) PR for the given branch and
-// reopens it. Returns the PR number on success or empty string if no closed
-// PR was found or reopen failed.
-func reopenClosedPR(gh GitHub, workDir, branch, nwo, repoURL, title, body string, logger Log) (string, error) {
+// reopens it. Returns the PR number on success or 0 if no closed PR was
+// found or reopen failed.
+func reopenClosedPR(gh GitHub, workDir, branch, nwo, repoURL, title, body string, logger Log) (int, error) {
 	number, _, _, findErr := gh.FindPR(branch, repoURL)
-	if findErr != nil || number == "" {
-		return "", findErr
+	if findErr != nil || number == 0 {
+		return 0, findErr
 	}
 	state, stateErr := gh.GetPRState(workDir, number)
 	if stateErr != nil || strings.ToUpper(state) != "CLOSED" {
-		return "", stateErr
+		return 0, stateErr
 	}
 
 	prLink := logging.PRLinkOpt(nwo, number)
 
 	if err := gh.ReopenPR(number, repoURL); err != nil {
 		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "Failed to reopen: %v", err)
-		return "", err
+		return 0, err
 	}
 	logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "Reopened for %s", branch)
 
@@ -120,7 +120,7 @@ func reopenClosedPR(gh GitHub, workDir, branch, nwo, repoURL, title, body string
 	return number, nil
 }
 
-func (m *Manager) reopenClosedPR(gh GitHub, repoURL, title, body string) (string, error) {
+func (m *Manager) reopenClosedPR(gh GitHub, repoURL, title, body string) (int, error) {
 	nwo := NWOFromRemote(repoURL)
 	return reopenClosedPR(gh, m.WorkDir, m.WorktreeBranch, nwo, repoURL, title, body, m.Logger)
 }
@@ -137,12 +137,12 @@ type EnsurePROpts struct {
 // CreatePR ensures a PR exists for the given branch. If one is already open,
 // updates its title and body. Otherwise creates a new PR targeting BaseBranch.
 // Returns the PR number.
-func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string, opts EnsurePROpts) (string, error) {
+func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string, opts EnsurePROpts) (int, error) {
 	if remoteURL == "" {
-		return "", nil
+		return 0, nil
 	}
 	if !gh.Available() {
-		return "", fmt.Errorf("gh CLI not found — cannot create PR")
+		return 0, fmt.Errorf("gh CLI not found — cannot create PR")
 	}
 
 	nwo := NWOFromRemote(remoteURL)
@@ -150,7 +150,7 @@ func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string,
 
 	// Existing PR — update and return.
 	prNumber, _ := gh.FindOpenPR(branch, remoteURL)
-	if prNumber != "" {
+	if prNumber != 0 {
 		prLink := logging.PRLinkOpt(nwo, prNumber)
 		if opts.TaskID != "" {
 			if err := gh.EditPR(prNumber, remoteURL, title, opts.Body); err != nil {
@@ -174,11 +174,11 @@ func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string,
 		Repo:  remoteURL,
 		Dir:   workDir,
 	}
-	createErr := gh.CreatePR(createOpts)
+	newPR, createErr := gh.CreatePR(createOpts)
 	if createErr != nil {
 		// Creation may fail if a closed PR exists for this head:base.
 		// Try to find and reopen it instead.
-		if prNumber, reopenErr := reopenClosedPR(gh, workDir, branch, nwo, remoteURL, title, body, opts.Logger); reopenErr == nil && prNumber != "" {
+		if prNumber, reopenErr := reopenClosedPR(gh, workDir, branch, nwo, remoteURL, title, body, opts.Logger); reopenErr == nil && prNumber != 0 {
 			return prNumber, nil
 		}
 
@@ -186,26 +186,23 @@ func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string,
 		// The old PR is dead — create a fresh PR via the REST API,
 		// bypassing gh pr create's client-side checks.
 		if nwo != "" {
-			if apiPR, apiErr := gh.CreatePRViaAPI(nwo, createOpts); apiErr == nil && apiPR != "" {
+			if apiPR, apiErr := gh.CreatePRViaAPI(nwo, createOpts); apiErr == nil && apiPR != 0 {
 				opts.Logger.Emit(logging.Opts{Domain: logging.Git, Link: logging.PRLinkOpt(nwo, apiPR)}, "Created for %s (via API fallback)", branch)
 				return apiPR, nil
 			}
 		}
 
-		return "", createErr
+		return 0, createErr
 	}
 
-	newPR, _ := gh.FindOpenPR(branch, remoteURL)
-	if newPR != "" {
+	if newPR != 0 {
 		opts.Logger.Emit(logging.Opts{Domain: logging.Git, Link: logging.PRLinkOpt(nwo, newPR)}, "Created for %s", branch)
-	} else {
-		opts.Logger.Emit(logging.Opts{Domain: logging.Git}, "Created PR for %s", branch)
 	}
 	return newPR, nil
 }
 
 // Manager.CreatePR delegates to the package function.
-func (m *Manager) CreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
+func (m *Manager) CreatePR(ctx context.Context, taskID, taskDesc, body string) (int, error) {
 	return CreatePR(ctx, m.gh(), m.WorkDir, m.WorktreeBranch, m.RemoteURL(), EnsurePROpts{
 		TaskID:     taskID,
 		TaskDesc:   taskDesc,
@@ -230,7 +227,7 @@ type ShipOpts struct {
 
 // ShipResult is the outcome of the Ship pipeline.
 type ShipResult struct {
-	PRNumber string
+	PRNumber int
 	PRURL    string
 	PRTitle  string
 }
@@ -297,7 +294,7 @@ func Ship(ctx context.Context, runner Runner, gh GitHub, workDir, branch, remote
 
 	// Look up the PR URL for the external ref.
 	var prURL, prTitle string
-	if prNumber != "" {
+	if prNumber != 0 {
 		if _, t, u, findErr := gh.FindPR(branch, remoteURL); findErr == nil {
 			prURL = u
 			prTitle = t
@@ -305,7 +302,7 @@ func Ship(ctx context.Context, runner Runner, gh GitHub, workDir, branch, remote
 		if prURL == "" {
 			nwo := NWOFromRemote(remoteURL)
 			if nwo != "" {
-				prURL = fmt.Sprintf("https://github.com/%s/pull/%s", nwo, prNumber)
+				prURL = fmt.Sprintf("https://github.com/%s/pull/%d", nwo, prNumber)
 			}
 		}
 	}
@@ -329,7 +326,7 @@ func (m *Manager) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 
 // PushAndCreatePR composes Push and CreatePR. Squashes, force-pushes, then
 // ensures a PR exists. Returns the PR number.
-func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (string, error) {
+func (m *Manager) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (int, error) {
 	result, err := m.Ship(ctx, ShipOpts{TaskID: taskID, TaskTitle: taskDesc, Body: body})
 	return result.PRNumber, err
 }
@@ -374,7 +371,7 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 
 	nwo := NWOFromRemote(repoURL)
 	prNumber, err := gh.FindOpenPR(m.WorktreeBranch, repoURL)
-	if err != nil || prNumber == "" {
+	if err != nil || prNumber == 0 {
 		prNumber, err = m.resolveClosedPR(gh, repoURL)
 		if errors.Is(err, ErrPRAlreadyMerged) {
 			return true, nil
@@ -382,7 +379,7 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if prNumber == "" {
+		if prNumber == 0 {
 			m.Logger.Emit(logging.Opts{Domain: logging.Git}, "No PR found for %s — skipping auto-merge", m.WorktreeBranch)
 			return false, nil
 		}
@@ -441,15 +438,15 @@ var ErrPRAlreadyMerged = fmt.Errorf("PR already merged")
 // It checks whether a PR exists in another state (merged or closed). If
 // merged, returns ErrPRAlreadyMerged. If closed, reopens and returns the
 // PR number so the caller can proceed with the normal merge flow.
-func (m *Manager) resolveClosedPR(gh GitHub, repoURL string) (string, error) {
+func (m *Manager) resolveClosedPR(gh GitHub, repoURL string) (int, error) {
 	number, _, _, findErr := gh.FindPR(m.WorktreeBranch, repoURL)
-	if findErr != nil || number == "" {
-		return "", nil
+	if findErr != nil || number == 0 {
+		return 0, nil
 	}
 
 	state, stateErr := gh.GetPRState(m.WorkDir, number)
 	if stateErr != nil {
-		return "", nil
+		return 0, nil
 	}
 
 	nwo := NWOFromRemote(repoURL)
@@ -458,7 +455,7 @@ func (m *Manager) resolveClosedPR(gh GitHub, repoURL string) (string, error) {
 	switch strings.ToUpper(state) {
 	case "MERGED":
 		m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "already merged — nothing to do")
-		return "", ErrPRAlreadyMerged
+		return 0, ErrPRAlreadyMerged
 	case "CLOSED":
 		m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "is closed — reopening")
 		if err := gh.ReopenPR(number, repoURL); err != nil {
@@ -470,16 +467,16 @@ func (m *Manager) resolveClosedPR(gh GitHub, repoURL string) (string, error) {
 				Repo: repoURL,
 				Dir:  m.WorkDir,
 			}
-			if apiPR, apiErr := gh.CreatePRViaAPI(nwo, opts); apiErr == nil && apiPR != "" {
+			if apiPR, apiErr := gh.CreatePRViaAPI(nwo, opts); apiErr == nil && apiPR != 0 {
 				m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: logging.PRLinkOpt(nwo, apiPR)}, "Created for %s (via API fallback)", m.WorktreeBranch)
 				return apiPR, nil
 			}
-			return "", nil
+			return 0, nil
 		}
 		m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "reopened")
 		return number, nil
 	default:
-		return "", nil
+		return 0, nil
 	}
 }
 
@@ -498,14 +495,14 @@ func (m *Manager) branchNeedsUpdate() bool {
 
 // ExecuteMergeOpts holds all parameters for the executeMerge package function.
 type ExecuteMergeOpts struct {
-	PRNumber       string
+	PRNumber       int
 	RepoURL        string
 	WorktreeBranch string
 	WorkDir        string
 	DefaultBranch  string
 	MergeOpts      MergeOpts
 	// AwaitCI polls CI check status for the PR. Required for the Blocked path.
-	AwaitCI func(ctx context.Context, prNumber, repoURL, expectedSHA string) ([]CICheckResult, CIStatus, error)
+	AwaitCI func(ctx context.Context, prNumber int, repoURL, expectedSHA string) ([]CICheckResult, CIStatus, error)
 }
 
 // executeMerge attempts the squash-merge and handles CI-gated retries.
@@ -517,7 +514,7 @@ func executeMerge(ctx context.Context, gh GitHub, opts ExecuteMergeOpts, logger 
 	mergeOpts := opts.MergeOpts
 
 	if _, prTitle, _, titleErr := gh.FindPR(opts.WorktreeBranch, opts.RepoURL); titleErr == nil && prTitle != "" {
-		mergeOpts.Subject = fmt.Sprintf("%s (#%s)", prTitle, opts.PRNumber)
+		mergeOpts.Subject = fmt.Sprintf("%s (#%d)", prTitle, opts.PRNumber)
 	}
 
 	result := gh.MergePR(opts.PRNumber, opts.RepoURL, mergeOpts)
@@ -537,11 +534,11 @@ func executeMerge(ctx context.Context, gh GitHub, opts ExecuteMergeOpts, logger 
 			logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "blocked by branch protection: %s — waiting for CI...", result.Message)
 		}
 		if opts.AwaitCI == nil {
-			return false, fmt.Errorf("auto-merge blocked for PR #%s: %s", opts.PRNumber, result.Message)
+			return false, fmt.Errorf("auto-merge blocked for PR #%d: %s", opts.PRNumber, result.Message)
 		}
 		checks, status, waitErr := opts.AwaitCI(ctx, opts.PRNumber, opts.RepoURL, "")
 		if waitErr != nil {
-			return false, fmt.Errorf("CI polling failed for PR #%s: %w", opts.PRNumber, waitErr)
+			return false, fmt.Errorf("CI polling failed for PR #%d: %w", opts.PRNumber, waitErr)
 		}
 		if status == CIFailed {
 			return false, &CIFailureError{PRNumber: opts.PRNumber, Failures: failedChecks(checks)}
@@ -557,18 +554,18 @@ func executeMerge(ctx context.Context, gh GitHub, opts ExecuteMergeOpts, logger 
 			if logger != nil {
 				logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "Merge retry failed: %s", retry.Message)
 			}
-			return false, fmt.Errorf("merge retry failed for PR #%s after CI passed: %s", opts.PRNumber, retry.Message)
+			return false, fmt.Errorf("merge retry failed for PR #%d after CI passed: %s", opts.PRNumber, retry.Message)
 		}
 	}
 
 	if logger != nil {
 		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "Auto-merge failed: %s", result.Message)
 	}
-	return false, fmt.Errorf("auto-merge failed for PR #%s: %s", opts.PRNumber, result.Message)
+	return false, fmt.Errorf("auto-merge failed for PR #%d: %s", opts.PRNumber, result.Message)
 }
 
 // postMergeLog logs the merge completion.
-func postMergeLog(nwo, prNumber, defaultBranch string, logger Log) (bool, error) {
+func postMergeLog(nwo string, prNumber int, defaultBranch string, logger Log) (bool, error) {
 	if logger != nil {
 		logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch, Link: logging.PRLinkOpt(nwo, prNumber)}, "merged")
 	}
@@ -576,7 +573,7 @@ func postMergeLog(nwo, prNumber, defaultBranch string, logger Log) (bool, error)
 }
 
 // Manager.executeMerge delegates to the package-level executeMerge function.
-func (m *Manager) executeMerge(ctx context.Context, prNumber, repoURL string) (bool, error) {
+func (m *Manager) executeMerge(ctx context.Context, prNumber int, repoURL string) (bool, error) {
 	return executeMerge(ctx, m.gh(), ExecuteMergeOpts{
 		PRNumber:       prNumber,
 		RepoURL:        repoURL,
@@ -589,7 +586,7 @@ func (m *Manager) executeMerge(ctx context.Context, prNumber, repoURL string) (b
 }
 
 // GetCIFailureLog retrieves the failed CI run's log output for the given PR.
-func (m *Manager) GetCIFailureLog(prNumber string) string {
+func (m *Manager) GetCIFailureLog(prNumber int) string {
 	return m.gh().GetRunLog(prNumber, m.WorkDir)
 }
 
@@ -672,7 +669,7 @@ type MergeRetryOpts struct {
 	ResolveConflict func(ctx context.Context) error
 
 	// AwaitCI polls CI status after a fix agent pushes. Used for CIFixApplied.
-	AwaitCI func(ctx context.Context, prNumber, repoURL, sha string) ([]CICheckResult, CIStatus, error)
+	AwaitCI func(ctx context.Context, prNumber int, repoURL, sha string) ([]CICheckResult, CIStatus, error)
 
 	// Logger receives progress and warning messages. Logging is skipped when nil.
 	Logger Log

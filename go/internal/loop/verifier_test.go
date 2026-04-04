@@ -295,7 +295,7 @@ func TestVerifier_TryFixCI_PromptContainsCILogAndCheckNames(t *testing.T) {
 	})
 
 	ciErr := &git.CIFailureError{
-		PRNumber: "42",
+		PRNumber: 42,
 		Failures: []git.CICheckResult{
 			{Name: "typecheck", State: "FAILURE", Bucket: "fail", IsRequired: true},
 			{Name: "test", State: "FAILURE", Bucket: "fail", IsRequired: true},
@@ -329,7 +329,7 @@ func TestVerifier_TryFixCI_NoSignal_ReturnsFalse(t *testing.T) {
 	})
 
 	ciErr := &git.CIFailureError{
-		PRNumber: "42",
+		PRNumber: 42,
 		Failures: []git.CICheckResult{{Name: "build", State: "FAILURE", Bucket: "fail", IsRequired: true}},
 	}
 
@@ -359,7 +359,7 @@ func TestVerifier_TryFixCI_PassesAllFailedChecks(t *testing.T) {
 	})
 
 	ciErr := &git.CIFailureError{
-		PRNumber: "42",
+		PRNumber: 42,
 		Failures: []git.CICheckResult{
 			{Name: "typecheck", State: "FAILURE", Bucket: "fail"},
 			{Name: "deploy/netlify", State: "FAILURE", Bucket: "fail"},
@@ -420,7 +420,7 @@ func TestVerifier_FixAgents_UseOpusModel(t *testing.T) {
 		}
 	})
 	ciErr := &git.CIFailureError{
-		PRNumber: "42",
+		PRNumber: 42,
 		Failures: []git.CICheckResult{{Name: "build", State: "FAILURE", Bucket: "fail", IsRequired: true}},
 	}
 	vCI.TryFixCI(context.Background(), "build failed", ciErr, "Build app", t.TempDir(), filepath.Join(t.TempDir(), "raw.log"))
@@ -562,7 +562,7 @@ func TestVerifier_TryFixCI_NoneFailedSkipsAgent(t *testing.T) {
 	})
 
 	ciErr := &git.CIFailureError{
-		PRNumber: "42",
+		PRNumber: 42,
 		Failures: []git.CICheckResult{
 			{Name: "deploy/netlify", State: "SUCCESS", Bucket: "pass"},
 			{Name: "Pages changed", State: "SUCCESS", Bucket: "pass"},

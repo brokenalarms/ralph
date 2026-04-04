@@ -754,7 +754,7 @@ func TestPrintSessionSummary_FormatsCompletedTasks(t *testing.T) {
 			ID:      "ralph-5eu",
 			Title:   "[bug] Last task's work not pushed before wait mode",
 			Summary: "Track last-merged flag, skip flush when already merged",
-			PRNum:   "160",
+			PRNum:   160,
 			PRTitle: "fix: skip redundant flush after signal-handler merge",
 		},
 		{
@@ -875,7 +875,7 @@ func TestPrintSessionSummary_ShowsPRURL(t *testing.T) {
 		{
 			ID:      "ralph-xyz",
 			Title:   "Add PR link to session summary",
-			PRNum:   "172",
+			PRNum:   172,
 			PRTitle: "feat: clickable PR links",
 			PRURL:   "https://github.com/brokenalarms/ralph/pull/172",
 		},

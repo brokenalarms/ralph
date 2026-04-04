@@ -348,9 +348,9 @@ func TestPushAndCreatePR_UsesBaseBranch(t *testing.T) {
 
 	var capturedOpts CreatePROpts
 	gh := &capturingGitHub{StubGitHub: StubGitHub{IsAvailable: true}}
-	gh.createPR = func(opts CreatePROpts) error {
+	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
-		return nil
+		return 0, nil
 	}
 
 	log := &testLog{}
@@ -384,9 +384,9 @@ func TestPushAndCreatePR_BaseBranchMainTargetsMain(t *testing.T) {
 
 	var capturedOpts CreatePROpts
 	gh := &capturingGitHub{StubGitHub: StubGitHub{IsAvailable: true}}
-	gh.createPR = func(opts CreatePROpts) error {
+	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
-		return nil
+		return 0, nil
 	}
 
 	mgr := &Manager{
@@ -420,9 +420,9 @@ func TestPushAndCreatePR_IncludesBeadIDInTitle(t *testing.T) {
 
 	var capturedOpts CreatePROpts
 	gh := &capturingGitHub{StubGitHub: StubGitHub{IsAvailable: true}}
-	gh.createPR = func(opts CreatePROpts) error {
+	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
-		return nil
+		return 0, nil
 	}
 
 	log := &testLog{}
@@ -457,9 +457,9 @@ func TestPushAndCreatePR_NoBeadID(t *testing.T) {
 
 	var capturedOpts CreatePROpts
 	gh := &capturingGitHub{StubGitHub: StubGitHub{IsAvailable: true}}
-	gh.createPR = func(opts CreatePROpts) error {
+	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
-		return nil
+		return 0, nil
 	}
 
 	log := &testLog{}
@@ -495,10 +495,10 @@ func TestPushAndCreatePR_PassesBodyToCreatePR(t *testing.T) {
 
 	var capturedOpts CreatePROpts
 	gh := &capturingGitHub{
-		StubGitHub: StubGitHub{IsAvailable: true, CreatedPR: "55"},
-		createPR: func(opts CreatePROpts) error {
+		StubGitHub: StubGitHub{IsAvailable: true, CreatedPR: 55},
+		createPR: func(opts CreatePROpts) (int, error) {
 			capturedOpts = opts
-			return nil
+			return 55, nil
 		},
 	}
 
@@ -541,10 +541,10 @@ func TestPushAndCreatePR_FallsBackToTaskDescWhenNoBody(t *testing.T) {
 
 	var capturedOpts CreatePROpts
 	gh := &capturingGitHub{
-		StubGitHub: StubGitHub{IsAvailable: true, CreatedPR: "55"},
-		createPR: func(opts CreatePROpts) error {
+		StubGitHub: StubGitHub{IsAvailable: true, CreatedPR: 55},
+		createPR: func(opts CreatePROpts) (int, error) {
 			capturedOpts = opts
-			return nil
+			return 55, nil
 		},
 	}
 
@@ -722,7 +722,7 @@ func TestMergeWithRetry_RecoversFromConflict(t *testing.T) {
 	mergeCalls := 0
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "42",
+		OpenPR:      42,
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		MergeResults: []MergeResult{
 			{Conflict: true, Message: "merge conflict"},
@@ -778,7 +778,7 @@ func TestMergeWithRetry_DelegatesCIFailure(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "55",
+		OpenPR:      55,
 		// First AwaitCI returns failure (triggers OnCIFailure). After CI fix,
 		// subsequent checks return success so the merge retry proceeds.
 		ChecksFunc: func(call int) []CICheckResult {
@@ -837,7 +837,7 @@ func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "99",
+		OpenPR:      99,
 		Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 		MergeResult: MergeResult{Blocked: true, Message: "CI failed"},
 	}
@@ -886,7 +886,7 @@ func TestMergeWithRetry_StopsOnUnresolvableConflict(t *testing.T) {
 	mergeCalls := 0
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "50",
+		OpenPR:      50,
 		PRHeadSHA:   "abc123",
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		MergeResults: []MergeResult{
@@ -961,7 +961,7 @@ func TestAutoMergeCurrentBranch_PassesPRTitleAsSubject(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "77",
+		OpenPR:      77,
 		PRTitle:     "[ralph-31w] Fix squash-merge subject",
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}
@@ -1016,7 +1016,7 @@ func TestMergeWithRetry_PushesFixAgentWorkBeforeRetry(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "60",
+		OpenPR:      60,
 		ChecksFunc: func(call int) []CICheckResult {
 			if call == 1 {
 				return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
@@ -1107,7 +1107,7 @@ func TestMergeWithRetry_SpawnsConflictAgent(t *testing.T) {
 	mergeCalls := 0
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "70",
+		OpenPR:      70,
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		MergeResults: []MergeResult{
 			{Conflict: true, Message: "merge conflict"},
@@ -1145,8 +1145,8 @@ func TestMergeWithRetry_SpawnsConflictAgent(t *testing.T) {
 	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
 		OnConflict: func(conflictErr *UnresolvedConflictError) bool {
 			conflictAgentCalled = true
-			if conflictErr.PRNumber != "70" {
-				t.Errorf("expected PRNumber=70, got %s", conflictErr.PRNumber)
+			if conflictErr.PRNumber != 70 {
+				t.Errorf("expected PRNumber=70, got %d", conflictErr.PRNumber)
 			}
 			return true
 		},
@@ -1182,7 +1182,7 @@ func TestMergeWithRetry_SkipsAfterConflictAgentFails(t *testing.T) {
 	mergeCalls := 0
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "71",
+		OpenPR:      71,
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		MergeResults: []MergeResult{
 			{Conflict: true, Message: "merge conflict"},
@@ -1524,8 +1524,8 @@ func TestAutoMergeCurrentBranch_ReturnsMergedForAlreadyMergedPR(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "",       // no open PR
-		PRNumber:    "438",    // FindPR returns this
+		OpenPR:      0,       // no open PR
+		PRNumber:    438,    // FindPR returns this
 		PRState:     "MERGED", // GetPRState returns this
 	}
 
@@ -1574,8 +1574,8 @@ func TestAutoMergeCurrentBranch_ReopensClosedPR(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "",       // no open PR initially
-		PRNumber:    "438",    // FindPR returns this
+		OpenPR:      0,       // no open PR initially
+		PRNumber:    438,    // FindPR returns this
 		PRState:     "CLOSED", // GetPRState returns this
 		PRTitle:     "[ralph-rvta] Fix closed PR",
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
@@ -1617,12 +1617,12 @@ func TestCreatePR_APIFallbackWhenReopenFails(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable:          true,
-		OpenPR:               "",
+		OpenPR:               0,
 		CreatePRErr:          fmt.Errorf("a pull request already exists for branch"),
-		PRNumber:             "438",
+		PRNumber:             438,
 		PRState:              "CLOSED",
 		ReopenPRErr:          fmt.Errorf("Could not open the pull request"),
-		CreatePRViaAPIResult: "500",
+		CreatePRViaAPIResult: 500,
 	}
 
 	mgr := &Manager{
@@ -1640,8 +1640,8 @@ func TestCreatePR_APIFallbackWhenReopenFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if prNumber != "500" {
-		t.Errorf("expected new PR 500 from API fallback, got %q", prNumber)
+	if prNumber != 500 {
+		t.Errorf("expected new PR 500 from API fallback, got %d", prNumber)
 	}
 	if !gh.ReopenPRCalled {
 		t.Error("expected ReopenPR to be called before API fallback")
@@ -1660,9 +1660,9 @@ func TestCreatePR_ReopensClosedPROnCreateFailure(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "",                                                     // no open PR
+		OpenPR:      0,                                                     // no open PR
 		CreatePRErr: fmt.Errorf("a pull request already exists for branch"), // create fails
-		PRNumber:    "438",                                                  // FindPR returns this
+		PRNumber:    438,                                                  // FindPR returns this
 		PRState:     "CLOSED",                                               // GetPRState returns this
 	}
 
@@ -1681,8 +1681,8 @@ func TestCreatePR_ReopensClosedPROnCreateFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if prNumber != "438" {
-		t.Errorf("expected reopened PR number 438, got %q", prNumber)
+	if prNumber != 438 {
+		t.Errorf("expected reopened PR number 438, got %d", prNumber)
 	}
 	if !gh.ReopenPRCalled {
 		t.Error("expected ReopenPR to be called")
@@ -1707,7 +1707,7 @@ func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "77",
+		OpenPR:      77,
 		Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 		MergeResult: MergeResult{Blocked: true, Message: "CI failed"},
 	}
@@ -1777,7 +1777,7 @@ func TestMergeWithRetry_InfraFailureRecovery(t *testing.T) {
 	callCount := 0
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "88",
+		OpenPR:      88,
 		ChecksFunc: func(call int) []CICheckResult {
 			if call == 1 {
 				return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
@@ -1827,7 +1827,7 @@ func TestMergeOpts_NonAdminReturnsBlocked(t *testing.T) {
 		IsAvailable: true,
 		MergeResult: MergeResult{Blocked: true, Message: "branch protection rules"},
 	}
-	result := gh.MergePR("42", "https://github.com/test/repo.git", MergeOpts{DeleteBranch: true})
+	result := gh.MergePR(42, "https://github.com/test/repo.git", MergeOpts{DeleteBranch: true})
 	if result.Merged {
 		t.Error("expected non-admin merge to not succeed when branch protection blocks")
 	}
@@ -1846,7 +1846,7 @@ func TestMergeOpts_AdminMergeReturnsMerged(t *testing.T) {
 		IsAvailable: true,
 		MergeResult: MergeResult{Merged: true},
 	}
-	result := gh.MergePR("42", "https://github.com/test/repo.git", MergeOpts{DeleteBranch: true, Admin: true})
+	result := gh.MergePR(42, "https://github.com/test/repo.git", MergeOpts{DeleteBranch: true, Admin: true})
 	if !result.Merged {
 		t.Error("expected admin merge to succeed")
 	}
@@ -1867,7 +1867,7 @@ func TestMergeOpts_AdminFallback_OnlyWhenRESTReturnsBlocked(t *testing.T) {
 		IsAvailable: true,
 		MergeResult: MergeResult{Blocked: true, Message: "branch protection rules"},
 	}
-	result := ghBlocked.MergePR("42", "https://github.com/test/repo.git", MergeOpts{Admin: true})
+	result := ghBlocked.MergePR(42, "https://github.com/test/repo.git", MergeOpts{Admin: true})
 	if !result.Merged {
 		t.Errorf("expected admin fallback to succeed when REST returns Blocked, got: %+v", result)
 	}
@@ -1880,7 +1880,7 @@ func TestMergeOpts_AdminFallback_OnlyWhenRESTReturnsBlocked(t *testing.T) {
 		IsAvailable: true,
 		MergeResult: MergeResult{Blocked: true, Message: "branch protection rules"},
 	}
-	resultNoAdmin := ghNoAdmin.MergePR("42", "https://github.com/test/repo.git", MergeOpts{Admin: false})
+	resultNoAdmin := ghNoAdmin.MergePR(42, "https://github.com/test/repo.git", MergeOpts{Admin: false})
 	if resultNoAdmin.Merged {
 		t.Error("expected non-admin merge to stay Blocked when REST returns Blocked")
 	}
@@ -1895,7 +1895,7 @@ func TestMergeOpts_AdminFallback_OnlyWhenRESTReturnsBlocked(t *testing.T) {
 		MergeResult:      MergeResult{Blocked: true},
 		AdminMergeResult: &adminFail,
 	}
-	resultFail := ghAdminFail.MergePR("42", "https://github.com/test/repo.git", MergeOpts{Admin: true})
+	resultFail := ghAdminFail.MergePR(42, "https://github.com/test/repo.git", MergeOpts{Admin: true})
 	if resultFail.Merged {
 		t.Error("expected configured AdminMergeResult to be used, not default success")
 	}
@@ -1924,7 +1924,7 @@ func TestAutoMergeCurrentBranch_InfraFailureWithLocalTestsUsesAdminMerge(t *test
 
 	gh := &StubGitHub{
 		IsAvailable:  true,
-		OpenPR:       "55",
+		OpenPR:       55,
 		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 		JobStepCount: 0, // zero steps = infrastructure failure
 		MergeResult:  MergeResult{Merged: true},
@@ -1974,7 +1974,7 @@ func TestAutoMergeCurrentBranch_InfraBypassAdminFallbackOn405(t *testing.T) {
 
 	gh := &StubGitHub{
 		IsAvailable:  true,
-		OpenPR:       "55",
+		OpenPR:       55,
 		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 		JobStepCount: 0, // zero steps = infrastructure failure
 		MergeResult:  MergeResult{Blocked: true, Message: "branch protection"},

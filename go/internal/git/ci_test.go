@@ -162,7 +162,7 @@ func TestRequiredFailedChecks_NoneFailedReturnsEmpty(t *testing.T) {
 // check names, suitable for feedback to the next iteration.
 func TestCIFailureError_Message(t *testing.T) {
 	err := &CIFailureError{
-		PRNumber: "42",
+		PRNumber: 42,
 		Failures: []CICheckResult{
 			{Name: "test", Bucket: "fail"},
 			{Name: "lint", Bucket: "fail"},
@@ -176,7 +176,7 @@ func TestCIFailureError_Message(t *testing.T) {
 
 // MergeConflictError produces a message identifying the PR with conflicts.
 func TestMergeConflictError_Message(t *testing.T) {
-	err := &MergeConflictError{PRNumber: "55"}
+	err := &MergeConflictError{PRNumber: 55}
 	msg := err.Error()
 	if msg != "PR #55 has merge conflicts with the base branch" {
 		t.Errorf("unexpected error message: %s", msg)
@@ -194,7 +194,7 @@ func TestMergeOpts_Defaults(t *testing.T) {
 
 func TestWaitForCI_PollsUntilPassed(t *testing.T) {
 	var calls atomic.Int32
-	fetch := func(pr, repo string) ([]CICheckResult, error) {
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
 		n := calls.Add(1)
 		if n < 3 {
 			return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
@@ -202,7 +202,7 @@ func TestWaitForCI_PollsUntilPassed(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
 
-	checks, status, err := waitForCI(context.Background(), fetch, "1", "", "", 1*time.Millisecond, 5*time.Second, discardLog{})
+	checks, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -218,13 +218,13 @@ func TestWaitForCI_PollsUntilPassed(t *testing.T) {
 }
 
 func TestWaitForCI_ReturnsFailedImmediately(t *testing.T) {
-	fetch := func(pr, repo string) ([]CICheckResult, error) {
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
 		return []CICheckResult{
 			{Name: "test", State: "FAILURE", Bucket: "fail"},
 		}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, "1", "", "", 1*time.Millisecond, 5*time.Second, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Second, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -234,11 +234,11 @@ func TestWaitForCI_ReturnsFailedImmediately(t *testing.T) {
 }
 
 func TestWaitForCI_TimesOut(t *testing.T) {
-	fetch := func(pr, repo string) ([]CICheckResult, error) {
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
 		return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, "1", "", "", 1*time.Millisecond, 5*time.Millisecond, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Millisecond, 5*time.Millisecond, discardLog{})
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -261,7 +261,7 @@ func TestWaitForCI_BackoffDoubles(t *testing.T) {
 	defer func() { ciSleep = origSleep }()
 
 	callCount := 0
-	fetch := func(pr, repo string) ([]CICheckResult, error) {
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
 		callCount++
 		if callCount < 6 {
 			return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
@@ -269,7 +269,7 @@ func TestWaitForCI_BackoffDoubles(t *testing.T) {
 		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
 
-	_, status, err := waitForCI(context.Background(), fetch, "1", "", "", 1*time.Second, 5*time.Minute, discardLog{})
+	_, status, err := waitForCI(context.Background(), fetch, 1, "", "", 1*time.Second, 5*time.Minute, discardLog{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestWaitForCI_SingleLogLine(t *testing.T) {
 	defer func() { ciSleep = origSleep }()
 
 	callCount := 0
-	fetch := func(pr, repo string) ([]CICheckResult, error) {
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
 		callCount++
 		if callCount < 11 {
 			return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
@@ -309,7 +309,7 @@ func TestWaitForCI_SingleLogLine(t *testing.T) {
 	}
 
 	log := &testLog{}
-	_, _, err := waitForCI(context.Background(), fetch, "42", "", "", 1*time.Second, 5*time.Minute, log)
+	_, _, err := waitForCI(context.Background(), fetch, 42, "", "", 1*time.Second, 5*time.Minute, log)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -326,12 +326,12 @@ func TestWaitForCI_SingleLogLine(t *testing.T) {
 // waitForCI emits no log line when CI resolves on the first fetch
 // without any polling being needed.
 func TestWaitForCI_NoLogLineWhenResolvedImmediately(t *testing.T) {
-	fetch := func(pr, repo string) ([]CICheckResult, error) {
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
 		return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 	}
 
 	log := &testLog{}
-	_, status, err := waitForCI(context.Background(), fetch, "42", "", "", 1*time.Second, 5*time.Minute, log)
+	_, status, err := waitForCI(context.Background(), fetch, 42, "", "", 1*time.Second, 5*time.Minute, log)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -346,14 +346,14 @@ func TestWaitForCI_NoLogLineWhenResolvedImmediately(t *testing.T) {
 // waitForCI returns immediately when the context is cancelled, proving
 // that Ctrl-C interrupts CI polling instead of blocking until timeout.
 func TestWaitForCI_CancelledContext(t *testing.T) {
-	fetch := func(pr, repo string) ([]CICheckResult, error) {
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
 		return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, status, err := waitForCI(ctx, fetch, "1", "", "", 1*time.Second, 10*time.Second, discardLog{})
+	_, status, err := waitForCI(ctx, fetch, 1, "", "", 1*time.Second, 10*time.Second, discardLog{})
 	if err == nil {
 		t.Fatal("expected error from cancelled context")
 	}
@@ -389,7 +389,7 @@ func TestAwaitCI_PassedImmediately(t *testing.T) {
 	}
 	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
 
-	checks, status, err := mgr.AwaitCI(context.Background(), "1", "repo", "")
+	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestAwaitCI_FailedImmediately(t *testing.T) {
 	}
 	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
 
-	checks, status, err := mgr.AwaitCI(context.Background(), "1", "repo", "")
+	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestAwaitCI_PollsWhenPending(t *testing.T) {
 	// Override ListChecks to transition from pending to passed.
 	pollGH := &pollableGitHub{
 		StubGitHub: *gh,
-		listChecks: func(pr, repo string) ([]CICheckResult, error) {
+		listChecks: func(pr int, repo string) ([]CICheckResult, error) {
 			n := calls.Add(1)
 			if n < 3 {
 				return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
@@ -449,7 +449,7 @@ func TestAwaitCI_PollsWhenPending(t *testing.T) {
 	}
 	mgr.GitHub = pollGH
 
-	_, status, err := mgr.AwaitCI(context.Background(), "1", "repo", "")
+	_, status, err := mgr.AwaitCI(context.Background(), 1, "repo", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -475,7 +475,7 @@ func TestAwaitCI_PollsWhenFetchErrors(t *testing.T) {
 	var calls atomic.Int32
 	pollGH := &pollableGitHub{
 		StubGitHub: StubGitHub{},
-		listChecks: func(pr, repo string) ([]CICheckResult, error) {
+		listChecks: func(pr int, repo string) ([]CICheckResult, error) {
 			n := calls.Add(1)
 			if n < 2 {
 				return nil, fmt.Errorf("no checks yet")
@@ -485,7 +485,7 @@ func TestAwaitCI_PollsWhenFetchErrors(t *testing.T) {
 	}
 	mgr := &Manager{GitHub: pollGH, Logger: &testLog{}}
 
-	_, status, err := mgr.AwaitCI(context.Background(), "1", "repo", "")
+	_, status, err := mgr.AwaitCI(context.Background(), 1, "repo", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -508,7 +508,7 @@ func TestAwaitCI_LogUsesPRLink(t *testing.T) {
 	var calls atomic.Int32
 	pollGH := &pollableGitHub{
 		StubGitHub: StubGitHub{},
-		listChecks: func(pr, repo string) ([]CICheckResult, error) {
+		listChecks: func(pr int, repo string) ([]CICheckResult, error) {
 			n := calls.Add(1)
 			if n < 2 {
 				return nil, fmt.Errorf("no checks yet")
@@ -519,7 +519,7 @@ func TestAwaitCI_LogUsesPRLink(t *testing.T) {
 	log := &testLog{}
 	mgr := &Manager{GitHub: pollGH, Logger: log}
 
-	_, status, err := mgr.AwaitCI(context.Background(), "99", "https://github.com/owner/repo", "")
+	_, status, err := mgr.AwaitCI(context.Background(), 99, "https://github.com/owner/repo", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -557,17 +557,17 @@ func TestAwaitCI_SHAPollLogUsesPRLink(t *testing.T) {
 		StubGitHub: StubGitHub{
 			Checks: []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
 		},
-		listChecks: func(pr, repo string) ([]CICheckResult, error) {
+		listChecks: func(pr int, repo string) ([]CICheckResult, error) {
 			return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 		},
-		getPRHeadSHA: func(workDir, prNumber string) (string, error) {
+		getPRHeadSHA: func(workDir string, prNumber int) (string, error) {
 			return "newsha123", nil
 		},
 	}
 	log := &testLog{}
 	mgr := &Manager{GitHub: pollGH, Logger: log}
 
-	_, status, err := mgr.AwaitCI(context.Background(), "88", "https://github.com/owner/repo", "newsha123")
+	_, status, err := mgr.AwaitCI(context.Background(), 88, "https://github.com/owner/repo", "newsha123")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -595,7 +595,7 @@ func TestWaitForCI_LogUsesPRLink(t *testing.T) {
 	defer func() { ciSleep = origSleep }()
 
 	callCount := 0
-	fetch := func(pr, repo string) ([]CICheckResult, error) {
+	fetch := func(pr int, repo string) ([]CICheckResult, error) {
 		callCount++
 		if callCount < 3 {
 			return []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}, nil
@@ -604,7 +604,7 @@ func TestWaitForCI_LogUsesPRLink(t *testing.T) {
 	}
 
 	log := &testLog{}
-	_, _, err := waitForCI(context.Background(), fetch, "77", "https://github.com/owner/repo", "owner/repo", 1*time.Second, 5*time.Minute, log)
+	_, _, err := waitForCI(context.Background(), fetch, 77, "https://github.com/owner/repo", "owner/repo", 1*time.Second, 5*time.Minute, log)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -632,10 +632,10 @@ func TestAwaitCI_WaitsForExpectedSHA(t *testing.T) {
 		StubGitHub: StubGitHub{
 			Checks: []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
 		},
-		listChecks: func(pr, repo string) ([]CICheckResult, error) {
+		listChecks: func(pr int, repo string) ([]CICheckResult, error) {
 			return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 		},
-		getPRHeadSHA: func(workDir, prNumber string) (string, error) {
+		getPRHeadSHA: func(workDir string, prNumber int) (string, error) {
 			n := shaCalls.Add(1)
 			if n < 3 {
 				return "stalesha", nil
@@ -646,7 +646,7 @@ func TestAwaitCI_WaitsForExpectedSHA(t *testing.T) {
 	log := &testLog{}
 	mgr := &Manager{GitHub: pollGH, Logger: log}
 
-	checks, status, err := mgr.AwaitCI(context.Background(), "1", "repo", "expectedsha")
+	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", "expectedsha")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -670,7 +670,7 @@ func TestAwaitCI_EmptySHASkipsVerification(t *testing.T) {
 	}
 	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
 
-	checks, status, err := mgr.AwaitCI(context.Background(), "1", "repo", "")
+	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -696,10 +696,10 @@ func TestAwaitHeadSHA_LogsProgressWhilePolling(t *testing.T) {
 		StubGitHub: StubGitHub{
 			Checks: []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		},
-		listChecks: func(pr, repo string) ([]CICheckResult, error) {
+		listChecks: func(pr int, repo string) ([]CICheckResult, error) {
 			return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}, nil
 		},
-		getPRHeadSHA: func(workDir, prNumber string) (string, error) {
+		getPRHeadSHA: func(workDir string, prNumber int) (string, error) {
 			n := shaCalls.Add(1)
 			if n < 3 {
 				return "stalesha", nil
@@ -710,7 +710,7 @@ func TestAwaitHeadSHA_LogsProgressWhilePolling(t *testing.T) {
 	log := &testLog{}
 	mgr := &Manager{GitHub: pollGH, Logger: log}
 
-	_, status, err := mgr.AwaitCI(context.Background(), "55", "https://github.com/owner/repo", "targetsha")
+	_, status, err := mgr.AwaitCI(context.Background(), 55, "https://github.com/owner/repo", "targetsha")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -729,18 +729,18 @@ func TestAwaitHeadSHA_LogsProgressWhilePolling(t *testing.T) {
 // with a function that changes behavior across calls.
 type pollableGitHub struct {
 	StubGitHub
-	listChecks   func(string, string) ([]CICheckResult, error)
-	getPRHeadSHA func(string, string) (string, error)
+	listChecks   func(int, string) ([]CICheckResult, error)
+	getPRHeadSHA func(string, int) (string, error)
 }
 
-func (p *pollableGitHub) ListChecks(prNumber, repoURL string) ([]CICheckResult, error) {
+func (p *pollableGitHub) ListChecks(prNumber int, repoURL string) ([]CICheckResult, error) {
 	if p.listChecks != nil {
 		return p.listChecks(prNumber, repoURL)
 	}
 	return p.StubGitHub.ListChecks(prNumber, repoURL)
 }
 
-func (p *pollableGitHub) GetPRHeadSHA(workDir, prNumber string) (string, error) {
+func (p *pollableGitHub) GetPRHeadSHA(workDir string, prNumber int) (string, error) {
 	if p.getPRHeadSHA != nil {
 		return p.getPRHeadSHA(workDir, prNumber)
 	}
@@ -787,7 +787,7 @@ func TestExecuteMerge_RetriesAfterCIGate(t *testing.T) {
 	calls := 0
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "10",
+		OpenPR:      10,
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}
 	mgr := setupAutoMergeManager(t, gh)
@@ -804,7 +804,7 @@ func TestExecuteMerge_RetriesAfterCIGate(t *testing.T) {
 	}
 	mgr.GitHub = seqGH
 
-	merged, err := mgr.executeMerge(context.Background(), "10", "https://github.com/test/repo.git")
+	merged, err := mgr.executeMerge(context.Background(), 10, "https://github.com/test/repo.git")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -821,7 +821,7 @@ func TestExecuteMerge_RetriesAfterCIGate(t *testing.T) {
 func TestAutoMerge_MergeConflictReturnsTypedError(t *testing.T) {
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "42",
+		OpenPR:      42,
 		Checks:      []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
 		MergeResult: MergeResult{Conflict: true, Message: "merge conflict"},
 	}
@@ -843,7 +843,7 @@ func TestAutoMerge_MergeConflictReturnsTypedError(t *testing.T) {
 func TestAutoMerge_CIFailureReturnsTypedError(t *testing.T) {
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "42",
+		OpenPR:      42,
 		Checks: []CICheckResult{
 			{Name: "test", State: "FAILURE", Bucket: "fail"},
 		},
@@ -866,7 +866,7 @@ func TestAutoMerge_CIFailureReturnsTypedError(t *testing.T) {
 func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 	gh := &StubGitHub{
 		IsAvailable: true,
-		OpenPR:      "42",
+		OpenPR:      42,
 		Checks:      []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
 	}
 

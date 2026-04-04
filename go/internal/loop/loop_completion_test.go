@@ -62,7 +62,7 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	gm.ShipResult = git.ShipResult{PRNumber: "99"}
+	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
@@ -124,7 +124,7 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	gm.PRNumber = "42"
+	gm.PRNumber = 42
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())
@@ -778,7 +778,7 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	gm.PRNumber = "42"
+	gm.PRNumber = 42
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	_ = l.Run(context.Background())

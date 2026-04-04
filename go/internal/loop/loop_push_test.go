@@ -532,7 +532,7 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 		Wait:          false,
 	}, st, gm, logger)
 	l.runner = runner
-	gm.ShipResult = git.ShipResult{PRNumber: "last"}
+	gm.ShipResult = git.ShipResult{PRNumber: 999}
 	gm.MergeRetryResult = true
 
 	err := l.Run(context.Background())

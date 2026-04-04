@@ -66,7 +66,7 @@ type CompletedTask struct {
 	ID      string
 	Title   string
 	Summary string
-	PRNum   string
+	PRNum   int
 	PRTitle string
 	PRURL   string
 }
@@ -319,7 +319,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			isOnlineFunc:        l.cfg.IsOnline,
 			waitForInternetFunc: l.cfg.WaitForInternet,
 			verifyFunc:          l.cfg.OnVerify,
-			runPostTaskFn: func(ctx context.Context, taskID, prNumber string, merged bool) {
+			runPostTaskFn: func(ctx context.Context, taskID string, prNumber int, merged bool) {
 				runPostTask(ctx, runPostTaskParams{
 					postTask:   l.cfg.PostTask,
 					projectDir: l.cfg.Dirs.ProjectDir,
