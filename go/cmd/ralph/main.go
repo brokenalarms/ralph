@@ -83,18 +83,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		cancel()
 	}()
 
-	// Write PID file so other ralph instances can detect a running loop.
-	pidPath := filepath.Join(ralphDir, "loop.pid")
-	if err := pidfile.Write(pidPath); err != nil {
-		log.Emit(logging.Opts{Level: logging.Error}, "Failed to write PID file: %v", err)
-		return 1
-	}
-	defer pidfile.Remove(pidPath)
-
-	// Clear stale stop file from a previous run so we don't halt immediately.
-	os.Remove(filepath.Join(ralphDir, "stop"))
-
-	planFile := filepath.Join(ralphDir, "plan.md")
 	stateFile := filepath.Join(ralphDir, "state.json")
 	logFile := filepath.Join(ralphDir, "loop.log")
 
@@ -108,17 +96,32 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		Logger:     log,
 	}
 
+	// Initialize .ralph directory and check for resume. This must happen
+	// before anything else so a completed run can be reset or exited
+	// without side effects like PID files or branch validation.
+	resume, exitCode := initRalphDir(ctx, cfg, gm, ralphDir, logFile, stateFile, log)
+	if exitCode >= 0 {
+		return exitCode
+	}
+
+	// Write PID file so other ralph instances can detect a running loop.
+	pidPath := filepath.Join(ralphDir, "loop.pid")
+	if err := pidfile.Write(pidPath); err != nil {
+		log.Emit(logging.Opts{Level: logging.Error}, "Failed to write PID file: %v", err)
+		return 1
+	}
+	defer pidfile.Remove(pidPath)
+
+	// Clear stale stop file from a previous run so we don't halt immediately.
+	os.Remove(filepath.Join(ralphDir, "stop"))
+
+	planFile := filepath.Join(ralphDir, "plan.md")
+
 	// Validate base branch before initializing state — a failed validation
 	// must not leave state that causes a false resume on retry.
 	if err := gm.ValidateRemoteBranch(ctx); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
 		return 1
-	}
-
-	// Initialize .ralph directory and check for resume.
-	resume, exitCode := initRalphDir(ctx, cfg, gm, ralphDir, logFile, stateFile, log)
-	if exitCode >= 0 {
-		return exitCode
 	}
 
 	st := state.NewStore(ralphDir)

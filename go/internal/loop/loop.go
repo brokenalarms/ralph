@@ -157,8 +157,8 @@ func (l *Loop) SessionTasks() []CompletedTask {
 // (all tasks done, max iterations reached, or stopped). Returns an error
 // for unrecoverable failures.
 func (l *Loop) Run(ctx context.Context) error {
-	if l.cfg.VerifyDir != "" && verify.DetectTestCommand(l.cfg.VerifyDir) == nil {
-		return fmt.Errorf("no test:verify script found in %s — add a \"test:verify\" script to package.json (or a make test-verify target) so the loop can verify task completion", l.cfg.VerifyDir)
+	if l.cfg.VerifyDir != "" && verify.DetectTestCommand(l.cfg.Dirs.ProjectDir) == nil {
+		return fmt.Errorf("no test:verify script found in %s — add a \"test:verify\" script to package.json (or a make test-verify target) so the loop can verify task completion", l.cfg.Dirs.ProjectDir)
 	}
 
 	if err := initialize(ctx, initParams{
