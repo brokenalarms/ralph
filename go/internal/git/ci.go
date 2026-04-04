@@ -10,7 +10,8 @@ import (
 )
 
 // CICheckResult represents the status of a single CI check.
-// Fields: name, state (SUCCESS/FAILURE/PENDING), bucket (pass/fail/pending), startedAt.
+// State is the provider-reported CI state (e.g. SUCCESS, FAILURE, PENDING, CANCELLED).
+// Bucket is the normalized merge-gate bucket: pass, fail, or pending.
 type CICheckResult struct {
 	Name       string    `json:"name"`
 	State      string    `json:"state"`
