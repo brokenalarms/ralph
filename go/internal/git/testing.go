@@ -55,6 +55,7 @@ type StubGitHub struct {
 	AllPRs                []PRInfo
 	AllPRsErr             error
 	CopilotReviewEnabled  bool
+	CopilotReviewOnPush   bool
 	CopilotReviewErr      error
 	CopilotReviewResult   *CopilotReview
 	PollCopilotReviewErr  error
@@ -184,8 +185,8 @@ func (s *StubGitHub) GetJobStepCount(nwo string, prNumber int) (int, error) {
 func (s *StubGitHub) ListAllPRs(workDir string) ([]PRInfo, error) {
 	return s.AllPRs, s.AllPRsErr
 }
-func (s *StubGitHub) CheckCopilotReviewEnabled(nwo string) (bool, error) {
-	return s.CopilotReviewEnabled, s.CopilotReviewErr
+func (s *StubGitHub) CheckCopilotReviewEnabled(nwo string) (bool, bool, error) {
+	return s.CopilotReviewEnabled, s.CopilotReviewOnPush, s.CopilotReviewErr
 }
 func (s *StubGitHub) PollCopilotReview(nwo string, prNumber int, timeout time.Duration) (*CopilotReview, error) {
 	return s.CopilotReviewResult, s.PollCopilotReviewErr

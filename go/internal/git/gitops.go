@@ -69,9 +69,10 @@ type GitOps interface {
 	Ship(ctx context.Context, opts ShipOpts) (ShipResult, error)
 	PushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (int, error)
 
-	// CheckCopilotReviewEnabled returns true if the repo has a ruleset with
-	// copilot_code_review configured with review_on_push: true.
-	CheckCopilotReviewEnabled() (bool, error)
+	// CheckCopilotReviewEnabled returns (enabled, reviewOnPush, error) where
+	// enabled is true if any copilot_code_review rule exists in any ruleset, and
+	// reviewOnPush reflects whether the rule gates merging on the review.
+	CheckCopilotReviewEnabled() (bool, bool, error)
 	// PollCopilotReview polls for a Copilot review on the given PR. Returns nil
 	// without error when timeout expires before a review arrives.
 	PollCopilotReview(prNumber int, timeout time.Duration) (*CopilotReview, error)
@@ -192,12 +193,12 @@ func (m *Manager) PRChainIsHealthy(prNumber int) (bool, string) {
 }
 
 // CheckCopilotReviewEnabled queries the repo's rulesets to determine whether
-// Copilot code review is configured with review_on_push enabled.
-func (m *Manager) CheckCopilotReviewEnabled() (bool, error) {
+// Copilot code review is configured and whether it gates merging.
+func (m *Manager) CheckCopilotReviewEnabled() (bool, bool, error) {
 	gh := m.gh()
 	nwo := NWOFromRemote(m.RemoteURL())
 	if nwo == "" {
-		return false, nil
+		return false, false, nil
 	}
 	return gh.CheckCopilotReviewEnabled(nwo)
 }

@@ -195,8 +195,9 @@ func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
 	}
 }
 
-// CheckCopilotReviewEnabled returns true when the repo has a ruleset containing a
-// copilot_code_review rule with review_on_push: true, proving auto-review detection works.
+// CheckCopilotReviewEnabled returns (true, true) when the repo has a ruleset containing a
+// copilot_code_review rule with review_on_push: true, proving auto-review detection works
+// and the review gates merging.
 func TestCheckCopilotReviewEnabled_ReturnsTrueWhenRulePresent(t *testing.T) {
 	bin := t.TempDir()
 	logFile := filepath.Join(bin, "gh.log")
@@ -209,12 +210,15 @@ func TestCheckCopilotReviewEnabled_ReturnsTrueWhenRulePresent(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	enabled, err := g.CheckCopilotReviewEnabled("owner/repo")
+	enabled, reviewOnPush, err := g.CheckCopilotReviewEnabled("owner/repo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !enabled {
 		t.Error("expected enabled=true when copilot_code_review rule with review_on_push=true exists")
+	}
+	if !reviewOnPush {
+		t.Error("expected reviewOnPush=true when review_on_push=true in ruleset")
 	}
 
 	raw, _ := os.ReadFile(logFile)
@@ -223,9 +227,10 @@ func TestCheckCopilotReviewEnabled_ReturnsTrueWhenRulePresent(t *testing.T) {
 	}
 }
 
-// CheckCopilotReviewEnabled returns false when review_on_push is false, proving
-// disabled Copilot reviews are not treated as active.
-func TestCheckCopilotReviewEnabled_ReturnsFalseWhenReviewOnPushFalse(t *testing.T) {
+// CheckCopilotReviewEnabled returns (true, false) when the copilot_code_review rule exists
+// with review_on_push=false, proving Copilot auto-review is detected even when it doesn't
+// gate merging.
+func TestCheckCopilotReviewEnabled_ReturnsTrueWhenReviewOnPushFalse(t *testing.T) {
 	bin := t.TempDir()
 	response := `[{"id":1,"rules":[{"type":"copilot_code_review","parameters":{"review_on_push":false}}]}]`
 	script := "#!/bin/sh\necho '" + response + "'\n"
@@ -236,16 +241,19 @@ func TestCheckCopilotReviewEnabled_ReturnsFalseWhenReviewOnPushFalse(t *testing.
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	enabled, err := g.CheckCopilotReviewEnabled("owner/repo")
+	enabled, reviewOnPush, err := g.CheckCopilotReviewEnabled("owner/repo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if enabled {
-		t.Error("expected enabled=false when review_on_push=false")
+	if !enabled {
+		t.Error("expected enabled=true when copilot_code_review rule exists (review_on_push=false)")
+	}
+	if reviewOnPush {
+		t.Error("expected reviewOnPush=false when review_on_push=false in ruleset")
 	}
 }
 
-// CheckCopilotReviewEnabled returns false when no copilot_code_review rule exists,
+// CheckCopilotReviewEnabled returns (false, false) when no copilot_code_review rule exists,
 // proving non-Copilot rulesets don't trigger the flag.
 func TestCheckCopilotReviewEnabled_ReturnsFalseWhenNoRule(t *testing.T) {
 	bin := t.TempDir()
@@ -258,7 +266,7 @@ func TestCheckCopilotReviewEnabled_ReturnsFalseWhenNoRule(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	enabled, err := g.CheckCopilotReviewEnabled("owner/repo")
+	enabled, _, err := g.CheckCopilotReviewEnabled("owner/repo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -268,15 +276,18 @@ func TestCheckCopilotReviewEnabled_ReturnsFalseWhenNoRule(t *testing.T) {
 }
 
 // StubGitHub.CheckCopilotReviewEnabled returns the configured CopilotReviewEnabled
-// value, proving tests can control the flag without shelling out.
+// and CopilotReviewOnPush values, proving tests can control both flags without shelling out.
 func TestStubGitHub_CheckCopilotReviewEnabled(t *testing.T) {
-	stub := &StubGitHub{CopilotReviewEnabled: true}
-	enabled, err := stub.CheckCopilotReviewEnabled("owner/repo")
+	stub := &StubGitHub{CopilotReviewEnabled: true, CopilotReviewOnPush: true}
+	enabled, reviewOnPush, err := stub.CheckCopilotReviewEnabled("owner/repo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !enabled {
 		t.Error("expected enabled=true from stub with CopilotReviewEnabled=true")
+	}
+	if !reviewOnPush {
+		t.Error("expected reviewOnPush=true from stub with CopilotReviewOnPush=true")
 	}
 }
 

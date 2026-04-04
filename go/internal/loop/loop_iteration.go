@@ -45,6 +45,7 @@ type runAndCompleteParams struct {
 	planFile            string
 	callsPerHour        int
 	copilotReviewEnabled bool
+	copilotReviewOnPush  bool
 	// func deps
 	runVerifyBuildFn    func(ctx context.Context) string
 	isOnlineFunc        func() bool
@@ -171,6 +172,7 @@ func runAndComplete(ctx context.Context, p runAndCompleteParams, task taskContex
 			evolve:               p.evolve,
 			notify:               p.notify,
 			copilotReviewEnabled: p.copilotReviewEnabled,
+			copilotReviewOnPush:  p.copilotReviewOnPush,
 			git:                  p.git,
 			backend:           p.backend,
 			state:             p.state,
@@ -197,6 +199,7 @@ func runAndComplete(ctx context.Context, p runAndCompleteParams, task taskContex
 			finalizePRFn: func(fp finalizePRParams) finalizePRResult {
 				fp.autoMerge = p.autoMerge
 				fp.copilotReviewEnabled = p.copilotReviewEnabled
+				fp.copilotReviewOnPush = p.copilotReviewOnPush
 				fp.git = p.git
 				fp.logger = p.logger
 				fp.backend = p.backend
@@ -253,6 +256,7 @@ type handlePostSignalOpts struct {
 	evolve               bool
 	notify               bool
 	copilotReviewEnabled bool
+	copilotReviewOnPush  bool
 	git                  git.GitOps
 	backend           tasks.Backend
 	state             *state.Store
@@ -510,6 +514,7 @@ type finalizePRParams struct {
 	// dependency fields
 	autoMerge            bool
 	copilotReviewEnabled bool
+	copilotReviewOnPush  bool
 	git                  git.GitOps
 	logger               *logging.Logger
 	backend              tasks.Backend
@@ -573,7 +578,11 @@ func finalizePR(p finalizePRParams) finalizePRResult {
 			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, p.prNumber)}, "targets %s — stacked, closing bead", prBase)
 		} else {
 			if p.copilotReviewEnabled && !p.copilotReviewAddressed() {
-				review, err := p.git.PollCopilotReview(p.prNumber, 120*time.Second)
+				pollTimeout := 120 * time.Second
+				if !p.copilotReviewOnPush {
+					pollTimeout = 30 * time.Second
+				}
+				review, err := p.git.PollCopilotReview(p.prNumber, pollTimeout)
 				if err != nil {
 					p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "Copilot review poll: %v", err)
 				} else if review != nil {

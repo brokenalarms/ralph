@@ -87,6 +87,7 @@ type Loop struct {
 	signals              claude.SignalPaths
 	completedTasks       []CompletedTask
 	copilotReviewEnabled bool
+	copilotReviewOnPush  bool
 }
 
 // New creates an execution loop from the given configuration. All agent
@@ -172,12 +173,17 @@ func (l *Loop) Run(ctx context.Context) error {
 		return err
 	}
 
-	if enabled, err := l.git.CheckCopilotReviewEnabled(); err != nil {
+	if enabled, reviewOnPush, err := l.git.CheckCopilotReviewEnabled(); err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Could not check Copilot review rulesets: %v", err)
 	} else {
 		l.copilotReviewEnabled = enabled
+		l.copilotReviewOnPush = reviewOnPush
 		if enabled {
-			l.logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=true)")
+			if reviewOnPush {
+				l.logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=true)")
+			} else {
+				l.logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=false, opportunistic)")
+			}
 		}
 	}
 
@@ -320,6 +326,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			evolve:               l.cfg.Evolve,
 			notify:               l.cfg.Notify,
 			copilotReviewEnabled: l.copilotReviewEnabled,
+			copilotReviewOnPush:  l.copilotReviewOnPush,
 			ralphDir:            l.cfg.Dirs.RalphDir,
 			promptsDir:          l.cfg.Dirs.PromptsDir,
 			projectDir:          l.cfg.Dirs.ProjectDir,

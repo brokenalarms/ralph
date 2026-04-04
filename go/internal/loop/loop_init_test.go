@@ -63,7 +63,8 @@ func TestInitialize_WritesConfigAndLoadsSkipped(t *testing.T) {
 }
 
 // Verifies that Loop.Run calls CheckCopilotReviewEnabled at startup and stores
-// the result, so the post-signal pipeline knows whether to wait for Copilot reviews.
+// both the enabled flag and reviewOnPush flag, so the post-signal pipeline knows
+// whether to wait for Copilot reviews and how long to poll.
 func TestLoop_CopilotReviewEnabledSetAtStartup(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -73,6 +74,7 @@ func TestLoop_CopilotReviewEnabledSetAtStartup(t *testing.T) {
 		ProjectDir:           dir,
 		WorkDir:              dir,
 		CopilotReviewEnabled: true,
+		CopilotReviewOnPush:  true,
 	}
 	backend := &testutil.StubBackend{Remaining: 0, Completed: 0, Total: 0}
 	cfg := Config{
@@ -93,6 +95,9 @@ func TestLoop_CopilotReviewEnabledSetAtStartup(t *testing.T) {
 
 	if !l.copilotReviewEnabled {
 		t.Error("expected copilotReviewEnabled=true after startup when StubGit.CopilotReviewEnabled=true")
+	}
+	if !l.copilotReviewOnPush {
+		t.Error("expected copilotReviewOnPush=true after startup when StubGit.CopilotReviewOnPush=true")
 	}
 }
 

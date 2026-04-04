@@ -82,11 +82,13 @@ type StubGit struct {
 	ShipFunc        func(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error)
 	MergeRetryFunc  func(ctx context.Context) (bool, error)
 
-	CopilotReviewEnabled    bool
-	CopilotReviewErr        error
-	PollCopilotReviewResult *git.CopilotReview
-	PollCopilotReviewErr    error
-	PollCopilotReviewCalled bool
+	CopilotReviewEnabled      bool
+	CopilotReviewOnPush       bool
+	CopilotReviewErr          error
+	PollCopilotReviewResult   *git.CopilotReview
+	PollCopilotReviewErr      error
+	PollCopilotReviewCalled   bool
+	PollCopilotReviewTimeout  time.Duration
 }
 
 // Compile-time check that StubGit satisfies git.GitOps.
@@ -268,12 +270,13 @@ func (s *StubGit) PostMergeUpdateMain() {
 	s.PostMergeUpdateCalls++
 }
 
-func (s *StubGit) CheckCopilotReviewEnabled() (bool, error) {
-	return s.CopilotReviewEnabled, s.CopilotReviewErr
+func (s *StubGit) CheckCopilotReviewEnabled() (bool, bool, error) {
+	return s.CopilotReviewEnabled, s.CopilotReviewOnPush, s.CopilotReviewErr
 }
 
-func (s *StubGit) PollCopilotReview(_ int, _ time.Duration) (*git.CopilotReview, error) {
+func (s *StubGit) PollCopilotReview(_ int, timeout time.Duration) (*git.CopilotReview, error) {
 	s.PollCopilotReviewCalled = true
+	s.PollCopilotReviewTimeout = timeout
 	return s.PollCopilotReviewResult, s.PollCopilotReviewErr
 }
 
