@@ -64,6 +64,10 @@ type GitOps interface {
 	Ship(ctx context.Context, opts ShipOpts) (ShipResult, error)
 	PushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (int, error)
 
+	// CheckCopilotReviewEnabled returns true if the repo has a ruleset with
+	// copilot_code_review configured with review_on_push: true.
+	CheckCopilotReviewEnabled() (bool, error)
+
 	// Merge operations.
 	MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, error)
 	FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, autoMerge bool) (merged bool, err error)
@@ -177,6 +181,17 @@ func (m *Manager) PRChainIsHealthy(prNumber int) (bool, string) {
 		return false, fmt.Sprintf("branch %s already merged into main", headBranch)
 	}
 	return true, ""
+}
+
+// CheckCopilotReviewEnabled queries the repo's rulesets to determine whether
+// Copilot code review is configured with review_on_push enabled.
+func (m *Manager) CheckCopilotReviewEnabled() (bool, error) {
+	gh := m.gh()
+	nwo := NWOFromRemote(m.RemoteURL())
+	if nwo == "" {
+		return false, nil
+	}
+	return gh.CheckCopilotReviewEnabled(nwo)
 }
 
 // PRDiffForTask searches for a PR matching the task ID and returns its diff.

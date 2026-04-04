@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/ratelimit"
 	"github.com/brokenalarms/ralph/internal/testutil"
@@ -58,6 +59,40 @@ func TestInitialize_WritesConfigAndLoadsSkipped(t *testing.T) {
 	last := skipped[len(skipped)-1]
 	if len(last) == 0 || last[0] != "ralph-skip1" {
 		t.Errorf("expected ['ralph-skip1'] in last SetSkippedIDs call, got %v", last)
+	}
+}
+
+// Verifies that Loop.Run calls CheckCopilotReviewEnabled at startup and stores
+// the result, so the post-signal pipeline knows whether to wait for Copilot reviews.
+func TestLoop_CopilotReviewEnabledSetAtStartup(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	logger := logging.New(nil)
+
+	gm := &testutil.StubGit{
+		ProjectDir:           dir,
+		WorkDir:              dir,
+		CopilotReviewEnabled: true,
+	}
+	backend := &testutil.StubBackend{Remaining: 0, Completed: 0, Total: 0}
+	cfg := Config{
+		Dirs:         workctx.WorkContext{ProjectDir: dir, RalphDir: ralphDir},
+		MaxIterations: 1,
+		TaskBackend:  backend,
+		IsOnline:     func() bool { return true },
+		WaitForInternet: func(_ context.Context, _ *logging.Logger) bool { return true },
+		NewRunner:    func() claudeRunner { return &stubRunner{result: claude.Result{}} },
+		QueryFn:      func(_ context.Context, _, _, _ string) (string, error) { return "", nil },
+	}
+
+	l := New(cfg, st, gm, logger)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately so the loop exits after initialization
+	_ = l.Run(ctx)
+
+	if !l.copilotReviewEnabled {
+		t.Error("expected copilotReviewEnabled=true after startup when StubGit.CopilotReviewEnabled=true")
 	}
 }
 
