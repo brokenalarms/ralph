@@ -184,10 +184,8 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 	iterationCount := 0
 	taskABranch := "ralph-aaa-task-a"
 
-	ghStub := &git.StubGitHub{
-		IsAvailable:    true,
-		OpenPRBranches: []string{taskABranch},
-	}
+	ghStub := git.NewStubGitHub()
+	ghStub.OpenPRBranches = []string{taskABranch}
 
 	gm := &testutil.StubGit{
 		ProjectDir:          dir,
@@ -284,10 +282,8 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 	iterationCount := 0
 	taskABranch := "ralph-aaa-task-a"
 
-	ghStub := &git.StubGitHub{
-		IsAvailable:    true,
-		OpenPRBranches: []string{taskABranch},
-	}
+	ghStub := git.NewStubGitHub()
+	ghStub.OpenPRBranches = []string{taskABranch}
 
 	gm := &testutil.StubGit{
 		ProjectDir:          dir,
@@ -378,10 +374,8 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 	iterationCount := 0
 	taskABranch := "ralph-aaa-task-a"
 
-	ghStub := &git.StubGitHub{
-		IsAvailable:    true,
-		OpenPRBranches: []string{taskABranch},
-	}
+	ghStub := git.NewStubGitHub()
+	ghStub.OpenPRBranches = []string{taskABranch}
 
 	gm := &testutil.StubGit{
 		ProjectDir:          dir,

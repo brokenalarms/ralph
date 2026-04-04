@@ -1,6 +1,7 @@
 package git
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -57,6 +58,19 @@ type StubGitHub struct {
 	CopilotReviewErr      error
 	CopilotReviewResult   *CopilotReview
 	PollCopilotReviewErr  error
+}
+
+// NewStubGitHub returns a StubGitHub with sensible defaults for the common
+// case: an available GitHub instance with an open PR against main that merges
+// successfully. Override specific fields for non-default scenarios.
+func NewStubGitHub() *StubGitHub {
+	return &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      42,
+		PRBase:      "main",
+		PRState:     "OPEN",
+		MergeResult: MergeResult{Merged: true},
+	}
 }
 
 func (s *StubGitHub) Available() bool { return s.IsAvailable }
@@ -135,11 +149,15 @@ func (s *StubGitHub) PRDiff(repoURL string, prNumber int) (string, error) {
 	return s.PRDiffOutput, nil
 }
 func (s *StubGitHub) GetPR(nwo string, prNumber int) (*PRDetail, error) {
+	headSHA := s.HeadSHA
+	if headSHA == "" {
+		headSHA = fmt.Sprintf("stub-sha-%d", prNumber)
+	}
 	return &PRDetail{
 		State:   s.PRState,
 		BaseRef: s.PRBase,
 		HeadRef: s.PRHead,
-		HeadSHA: s.HeadSHA,
+		HeadSHA: headSHA,
 	}, nil
 }
 func (s *StubGitHub) ListOpenPRBranches(repoURL string) ([]string, error) {

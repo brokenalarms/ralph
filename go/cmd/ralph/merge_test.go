@@ -113,12 +113,11 @@ func mergeRunCmd(t *testing.T, name string, args ...string) {
 // returning them in bottom-up order with the correct baseBranch.
 func TestCollectStack_BottomUpOrder(t *testing.T) {
 	// PR 460 → 459 → 452 → main
-	gh := &git.StubGitHub{
-		AllPRs: []git.PRInfo{
-			{Number: 452, Head: "feature/a", Base: "main", State: "OPEN"},
-			{Number: 459, Head: "feature/b", Base: "feature/a", State: "OPEN"},
-			{Number: 460, Head: "feature/c", Base: "feature/b", State: "OPEN"},
-		},
+	gh := git.NewStubGitHub()
+	gh.AllPRs = []git.PRInfo{
+		{Number: 452, Head: "feature/a", Base: "main", State: "OPEN"},
+		{Number: 459, Head: "feature/b", Base: "feature/a", State: "OPEN"},
+		{Number: 460, Head: "feature/c", Base: "feature/b", State: "OPEN"},
 	}
 
 	result := CollectStack(gh, "/any", "460", logging.New(nil))
@@ -145,12 +144,11 @@ func TestCollectStack_BottomUpOrder(t *testing.T) {
 // returned stack (closed ones are still used as chain links).
 func TestCollectStack_SkipsClosedPRs(t *testing.T) {
 	// PR 459 is CLOSED (already merged), 460 is still open on top.
-	gh := &git.StubGitHub{
-		AllPRs: []git.PRInfo{
-			{Number: 452, Head: "feature/a", Base: "main", State: "OPEN"},
-			{Number: 459, Head: "feature/b", Base: "feature/a", State: "CLOSED"},
-			{Number: 460, Head: "feature/c", Base: "feature/b", State: "OPEN"},
-		},
+	gh := git.NewStubGitHub()
+	gh.AllPRs = []git.PRInfo{
+		{Number: 452, Head: "feature/a", Base: "main", State: "OPEN"},
+		{Number: 459, Head: "feature/b", Base: "feature/a", State: "CLOSED"},
+		{Number: 460, Head: "feature/c", Base: "feature/b", State: "OPEN"},
 	}
 
 	result := CollectStack(gh, "/any", "460", logging.New(nil))
@@ -170,10 +168,9 @@ func TestCollectStack_SkipsClosedPRs(t *testing.T) {
 // Proves: when the bottom PR targets a non-main branch (e.g. 'develop'),
 // baseBranch reflects that target, not 'main'.
 func TestCollectStack_NonMainBaseBranch(t *testing.T) {
-	gh := &git.StubGitHub{
-		AllPRs: []git.PRInfo{
-			{Number: 100, Head: "feature/x", Base: "develop", State: "OPEN"},
-		},
+	gh := git.NewStubGitHub()
+	gh.AllPRs = []git.PRInfo{
+		{Number: 100, Head: "feature/x", Base: "develop", State: "OPEN"},
 	}
 
 	result := CollectStack(gh, "/any", "100", logging.New(nil))
@@ -197,7 +194,7 @@ func TestRebaseStackAndPush_StaleWorktreeRecreated(t *testing.T) {
 	// merge-base --is-ancestor fails → stale worktree
 	runner.errOnArgs("merge-base --is-ancestor", fmt.Errorf("not an ancestor"))
 	// worktree add succeeds; rebase succeeds
-	gm, tmp := buildGM(t, runner, &git.StubGitHub{})
+	gm, tmp := buildGM(t, runner, git.NewStubGitHub())
 	gm.RalphDir = filepath.Join(tmp, ".ralph")
 
 	// Create a fake .git inside the worktree dir to simulate an existing worktree.
@@ -218,7 +215,7 @@ func TestRebaseStackAndPush_StaleWorktreeRecreated(t *testing.T) {
 // every individual stack branch before creating the worktree.
 func TestRebaseStackAndPush_FetchesAllBranches(t *testing.T) {
 	runner := newMergeStubRunner()
-	gm, tmp := buildGM(t, runner, &git.StubGitHub{})
+	gm, tmp := buildGM(t, runner, git.NewStubGitHub())
 
 	RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr3", 123, []string{"pr1", "pr2", "pr3"}, gm, logging.New(nil))
 
@@ -236,7 +233,7 @@ func TestRebaseStackAndPush_FetchesAllBranches(t *testing.T) {
 // in the stack.
 func TestRebaseStackAndPush_PushesAllBranchesOnSuccess(t *testing.T) {
 	runner := newMergeStubRunner()
-	gm, tmp := buildGM(t, runner, &git.StubGitHub{})
+	gm, tmp := buildGM(t, runner, git.NewStubGitHub())
 
 	code := RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr2", 42, []string{"pr1", "pr2"}, gm, logging.New(nil))
 
@@ -255,7 +252,7 @@ func TestRebaseStackAndPush_PushesAllBranchesOnSuccess(t *testing.T) {
 func TestRebaseStackAndPush_RebaseConflictNoPush(t *testing.T) {
 	runner := newMergeStubRunner()
 	runner.errOnArgs("rebase --update-refs", fmt.Errorf("conflict"))
-	gm, tmp := buildGM(t, runner, &git.StubGitHub{})
+	gm, tmp := buildGM(t, runner, git.NewStubGitHub())
 
 	code := RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr1", 7, []string{"pr1"}, gm, logging.New(nil))
 
@@ -271,7 +268,7 @@ func TestRebaseStackAndPush_RebaseConflictNoPush(t *testing.T) {
 // project root or some other temp location).
 func TestRebaseStackAndPush_WorktreeUnderRalphDir(t *testing.T) {
 	runner := newMergeStubRunner()
-	gm, tmp := buildGM(t, runner, &git.StubGitHub{})
+	gm, tmp := buildGM(t, runner, git.NewStubGitHub())
 
 	RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr1", 5, []string{"pr1"}, gm, logging.New(nil))
 
@@ -301,11 +298,8 @@ func TestRebaseStackAndPush_WorktreeUnderRalphDir(t *testing.T) {
 // attempt to merge any subsequent PRs.
 func TestRunMerge_CIFailureStops(t *testing.T) {
 	runner := newMergeStubRunner()
-	gh := &git.StubGitHub{
-		IsAvailable: true,
-		Checks:      []git.CICheckResult{{Bucket: "check", State: "FAILURE"}},
-		MergeResult: git.MergeResult{Merged: true},
-	}
+	gh := git.NewStubGitHub()
+	gh.Checks = []git.CICheckResult{{Bucket: "check", State: "FAILURE"}}
 	gm, tmp := buildGM(t, runner, gh)
 
 	prs := []StackPR{
@@ -327,11 +321,9 @@ func TestRunMerge_CIFailureStops(t *testing.T) {
 func TestRunMerge_MergeConflictLogsMessage(t *testing.T) {
 	runner := newMergeStubRunner()
 	var logBuf bytes.Buffer
-	gh := &git.StubGitHub{
-		IsAvailable: true,
-		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-		MergeResult: git.MergeResult{Conflict: true},
-	}
+	gh := git.NewStubGitHub()
+	gh.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
+	gh.MergeResult = git.MergeResult{Conflict: true}
 	gm, tmp := buildGM(t, runner, gh)
 	gm.Logger = logging.NewWithWriter(&logBuf)
 
@@ -350,11 +342,8 @@ func TestRunMerge_MergeConflictLogsMessage(t *testing.T) {
 // This ensures stale CI results from the original base are never used.
 func TestRunMerge_SecondPRRebased(t *testing.T) {
 	runner := newMergeStubRunner()
-	gh := &git.StubGitHub{
-		IsAvailable: true,
-		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-		MergeResult: git.MergeResult{Merged: true},
-	}
+	gh := git.NewStubGitHub()
+	gh.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 	gm, tmp := buildGM(t, runner, gh)
 
 	prs := []StackPR{
@@ -395,11 +384,8 @@ func TestRunMerge_SecondPRRebaseConflictAttemptsAutoResolve(t *testing.T) {
 	var logBuf bytes.Buffer
 	runner := newMergeStubRunner()
 	runner.errOnArgs("rebase origin/main", fmt.Errorf("conflict"))
-	gh := &git.StubGitHub{
-		IsAvailable: true,
-		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-		MergeResult: git.MergeResult{Merged: true},
-	}
+	gh := git.NewStubGitHub()
+	gh.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 	gm, tmp := buildGM(t, runner, gh)
 	gm.Logger = logging.NewWithWriter(&logBuf)
 
@@ -475,11 +461,8 @@ func TestRunMerge_SecondPRWaitsForFreshCI(t *testing.T) {
 	// Record main's SHA before any merges so we can verify the rebase later.
 	mainSHABefore := strings.TrimSpace(mergeCmdOutputDir(workDir, "git", "rev-parse", "origin/main"))
 
-	ghStub := &git.StubGitHub{
-		IsAvailable: true,
-		MergeResult: git.MergeResult{Merged: true},
-		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-	}
+	ghStub := git.NewStubGitHub()
+	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 
 	// Simulate GitHub advancing main when PR 1 is merged: fast-forward
 	// main on the bare remote to include pr1's commit. This is what
@@ -547,11 +530,8 @@ func TestRunMerge_SecondPRWaitsForFreshCI(t *testing.T) {
 func TestRunMerge_SinglePRMergesSuccessfully(t *testing.T) {
 	workDir, _ := setupStackRepo(t)
 
-	ghStub := &git.StubGitHub{
-		IsAvailable: true,
-		MergeResult: git.MergeResult{Merged: true},
-		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-	}
+	ghStub := git.NewStubGitHub()
+	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 
 	ralphDir := filepath.Join(workDir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
@@ -580,11 +560,8 @@ func TestRunMerge_SinglePRMergesSuccessfully(t *testing.T) {
 func TestRunMerge_BypassRulesSetsAdminOnMergeOpts(t *testing.T) {
 	workDir, _ := setupStackRepo(t)
 
-	ghStub := &git.StubGitHub{
-		IsAvailable: true,
-		MergeResult: git.MergeResult{Merged: true},
-		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-	}
+	ghStub := git.NewStubGitHub()
+	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 
 	ralphDir := filepath.Join(workDir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
@@ -613,11 +590,9 @@ func TestRunMerge_BypassRulesSetsAdminOnMergeOpts(t *testing.T) {
 func TestRunMerge_BypassRulesAdminFallbackOn405(t *testing.T) {
 	workDir, _ := setupStackRepo(t)
 
-	ghStub := &git.StubGitHub{
-		IsAvailable: true,
-		MergeResult: git.MergeResult{Blocked: true, Message: "branch protection"},
-		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-	}
+	ghStub := git.NewStubGitHub()
+	ghStub.MergeResult = git.MergeResult{Blocked: true, Message: "branch protection"}
+	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 
 	ralphDir := filepath.Join(workDir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
@@ -644,11 +619,9 @@ func TestRunMerge_BlockedWithoutBypassLogs(t *testing.T) {
 	workDir, _ := setupStackRepo(t)
 
 	var logBuf bytes.Buffer
-	ghStub := &git.StubGitHub{
-		IsAvailable: true,
-		MergeResult: git.MergeResult{Blocked: true, Message: "requires admin approval"},
-		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-	}
+	ghStub := git.NewStubGitHub()
+	ghStub.MergeResult = git.MergeResult{Blocked: true, Message: "requires admin approval"}
+	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 
 	ralphDir := filepath.Join(workDir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
@@ -758,11 +731,8 @@ func TestRunMerge_PerPRRebaseMechanicalConflictAutoResolves(t *testing.T) {
 	workDir, bareDir := setupConflictingStackRepo(t)
 
 	mergeCount := 0
-	ghStub := &git.StubGitHub{
-		IsAvailable: true,
-		MergeResult: git.MergeResult{Merged: true},
-		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-	}
+	ghStub := git.NewStubGitHub()
+	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 	ghStub.OnMerge = func() {
 		mergeCount++
 		if mergeCount == 1 {
@@ -805,11 +775,8 @@ func TestRunMerge_PerPRRebaseRealDivergenceStopsWithError(t *testing.T) {
 
 	var logBuf bytes.Buffer
 	mergeCount := 0
-	ghStub := &git.StubGitHub{
-		IsAvailable: true,
-		MergeResult: git.MergeResult{Merged: true},
-		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-	}
+	ghStub := git.NewStubGitHub()
+	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 	ghStub.OnMerge = func() {
 		mergeCount++
 		if mergeCount == 1 {
@@ -860,11 +827,9 @@ func TestRunMerge_ConflictLogsDistinctMessage(t *testing.T) {
 	workDir, _ := setupStackRepo(t)
 
 	var logBuf bytes.Buffer
-	ghStub := &git.StubGitHub{
-		IsAvailable: true,
-		MergeResult: git.MergeResult{Conflict: true},
-		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-	}
+	ghStub := git.NewStubGitHub()
+	ghStub.MergeResult = git.MergeResult{Conflict: true}
+	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 
 	ralphDir := filepath.Join(workDir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)

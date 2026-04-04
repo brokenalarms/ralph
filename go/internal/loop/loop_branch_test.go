@@ -848,13 +848,15 @@ func TestResolveByPRState_ClosedPR_RenamesBranch(t *testing.T) {
 	// Simulate a closed PR linked to this task.
 	backend.externalRefs["ralph-cdr3"] = "gh-439"
 
+	ghStub := git.NewStubGitHub()
+	ghStub.PRState = "CLOSED"
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/next",
 		BranchRenamed:  true, // Stale from previous run
 		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     &git.StubGitHub{IsAvailable: true, PRState: "CLOSED"},
+		GitHubStub:     ghStub,
 	}
 
 	l := New(Config{

@@ -767,10 +767,12 @@ func TestResolveByPRState_Merged_NotifyEnabled(t *testing.T) {
 		},
 	}
 
+	ghStub := git.NewStubGitHub()
+	ghStub.PRState = "MERGED"
 	gm := &testutil.StubGit{
-		ProjectDir:  dir,
-		WorkDir:     dir,
-		GitHubStub: &git.StubGitHub{IsAvailable: true, PRState: "MERGED"},
+		ProjectDir: dir,
+		WorkDir:    dir,
+		GitHubStub: ghStub,
 	}
 
 	l := New(Config{
@@ -831,11 +833,13 @@ func TestResolveByPRState_Open_NotifyEnabled(t *testing.T) {
 	}
 
 	branchName := "ralph-ro1/add-cache"
+	ghStub2 := git.NewStubGitHub()
+	ghStub2.PRHead = branchName
 	gm := &testutil.StubGit{
 		ProjectDir:          dir,
 		WorkDir:             dir,
 		RemoteBranchCommits: true,
-		GitHubStub:          &git.StubGitHub{IsAvailable: true, PRState: "OPEN", PRHead: branchName},
+		GitHubStub:          ghStub2,
 	}
 
 	l := New(Config{
@@ -895,10 +899,12 @@ func TestResolveByPRState_Merged_NotifyDisabled(t *testing.T) {
 		},
 	}
 
+	ghStub3 := git.NewStubGitHub()
+	ghStub3.PRState = "MERGED"
 	gm := &testutil.StubGit{
-		ProjectDir:  dir,
-		WorkDir:     dir,
-		GitHubStub: &git.StubGitHub{IsAvailable: true, PRState: "MERGED"},
+		ProjectDir: dir,
+		WorkDir:    dir,
+		GitHubStub: ghStub3,
 	}
 
 	l := New(Config{
