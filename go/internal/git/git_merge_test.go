@@ -288,7 +288,9 @@ func TestPushAndCreatePR_UsesBaseBranch(t *testing.T) {
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
 	var capturedOpts CreatePROpts
-	gh := &capturingGitHub{StubGitHub: StubGitHub{IsAvailable: true}}
+	ghBase := NewStubGitHub()
+	ghBase.OpenPR = 0 // no existing PR — force creation path
+	gh := &capturingGitHub{StubGitHub: *ghBase}
 	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
 		return 0, nil
@@ -324,7 +326,9 @@ func TestPushAndCreatePR_BaseBranchMainTargetsMain(t *testing.T) {
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
 	var capturedOpts CreatePROpts
-	gh := &capturingGitHub{StubGitHub: StubGitHub{IsAvailable: true}}
+	ghBase := NewStubGitHub()
+	ghBase.OpenPR = 0 // no existing PR — force creation path
+	gh := &capturingGitHub{StubGitHub: *ghBase}
 	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
 		return 0, nil
@@ -360,7 +364,7 @@ func TestPushAndCreatePR_IncludesBeadIDInTitle(t *testing.T) {
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
 	var capturedOpts CreatePROpts
-	gh := &capturingGitHub{StubGitHub: StubGitHub{IsAvailable: true}}
+	ghBase := NewStubGitHub(); ghBase.OpenPR = 0; gh := &capturingGitHub{StubGitHub: *ghBase}
 	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
 		return 0, nil
@@ -397,7 +401,7 @@ func TestPushAndCreatePR_NoBeadID(t *testing.T) {
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
 	var capturedOpts CreatePROpts
-	gh := &capturingGitHub{StubGitHub: StubGitHub{IsAvailable: true}}
+	ghBase := NewStubGitHub(); ghBase.OpenPR = 0; gh := &capturingGitHub{StubGitHub: *ghBase}
 	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
 		return 0, nil
@@ -435,8 +439,11 @@ func TestPushAndCreatePR_PassesBodyToCreatePR(t *testing.T) {
 	r.On("merge-base --is-ancestor", "", nil)
 
 	var capturedOpts CreatePROpts
+	ghBase := NewStubGitHub()
+	ghBase.OpenPR = 0 // no existing PR — force creation path
+	ghBase.CreatedPR = 55
 	gh := &capturingGitHub{
-		StubGitHub: StubGitHub{IsAvailable: true, CreatedPR: 55},
+		StubGitHub: *ghBase,
 		createPR: func(opts CreatePROpts) (int, error) {
 			capturedOpts = opts
 			return 55, nil
@@ -481,8 +488,11 @@ func TestPushAndCreatePR_FallsBackToTaskDescWhenNoBody(t *testing.T) {
 	r.On("merge-base --is-ancestor", "", nil)
 
 	var capturedOpts CreatePROpts
+	ghBase := NewStubGitHub()
+	ghBase.OpenPR = 0 // no existing PR — force creation path
+	ghBase.CreatedPR = 55
 	gh := &capturingGitHub{
-		StubGitHub: StubGitHub{IsAvailable: true, CreatedPR: 55},
+		StubGitHub: *ghBase,
 		createPR: func(opts CreatePROpts) (int, error) {
 			capturedOpts = opts
 			return 55, nil
@@ -661,16 +671,13 @@ func TestMergeWithRetry_RecoversFromConflict(t *testing.T) {
 	}
 
 	mergeCalls := 0
-	gh := &StubGitHub{
-		IsAvailable: true,
-		OpenPR:      42,
-		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
-		MergeResults: []MergeResult{
-			{Conflict: true, Message: "merge conflict"},
-			{Merged: true},
-		},
-		OnMerge: func() { mergeCalls++ },
+	gh := NewStubGitHub()
+	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
+	gh.MergeResults = []MergeResult{
+		{Conflict: true, Message: "merge conflict"},
+		{Merged: true},
 	}
+	gh.OnMerge = func() { mergeCalls++ }
 	mgr.GitHub = gh
 
 	runner := newStubRunner()
@@ -717,21 +724,17 @@ func TestMergeWithRetry_DelegatesCIFailure(t *testing.T) {
 		Logger:         &testLog{},
 	}
 
-	gh := &StubGitHub{
-		IsAvailable: true,
-		OpenPR:      55,
-		// First AwaitCI returns failure (triggers OnCIFailure). After CI fix,
-		// subsequent checks return success so the merge retry proceeds.
-		ChecksFunc: func(call int) []CICheckResult {
-			if call == 1 {
-				return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
-			}
-			return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-		},
-		MergeResults: []MergeResult{
-			{Merged: true},
-		},
+	gh := NewStubGitHub()
+	gh.OpenPR = 55
+	// First AwaitCI returns failure (triggers OnCIFailure). After CI fix,
+	// subsequent checks return success so the merge retry proceeds.
+	gh.ChecksFunc = func(call int) []CICheckResult {
+		if call == 1 {
+			return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
+		}
+		return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 	}
+	gh.MergeResults = []MergeResult{{Merged: true}}
 	mgr.GitHub = gh
 
 	runner := newStubRunner()
@@ -776,12 +779,10 @@ func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 		Logger:         &testLog{},
 	}
 
-	gh := &StubGitHub{
-		IsAvailable: true,
-		OpenPR:      99,
-		Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
-		MergeResult: MergeResult{Blocked: true, Message: "CI failed"},
-	}
+	gh := NewStubGitHub()
+	gh.OpenPR = 99
+	gh.Checks = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
+	gh.MergeResult = MergeResult{Blocked: true, Message: "CI failed"}
 	mgr.GitHub = gh
 
 	runner := newStubRunner()
@@ -825,18 +826,16 @@ func TestMergeWithRetry_StopsOnUnresolvableConflict(t *testing.T) {
 	}
 
 	mergeCalls := 0
-	gh := &StubGitHub{
-		IsAvailable: true,
-		OpenPR:      50,
-		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
-		MergeResults: []MergeResult{
-			{Conflict: true, Message: "merge conflict"},
-			{Conflict: true, Message: "merge conflict"},
-			{Conflict: true, Message: "merge conflict"},
-			{Conflict: true, Message: "merge conflict"},
-		},
-		OnMerge: func() { mergeCalls++ },
+	gh := NewStubGitHub()
+	gh.OpenPR = 50
+	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
+	gh.MergeResults = []MergeResult{
+		{Conflict: true, Message: "merge conflict"},
+		{Conflict: true, Message: "merge conflict"},
+		{Conflict: true, Message: "merge conflict"},
+		{Conflict: true, Message: "merge conflict"},
 	}
+	gh.OnMerge = func() { mergeCalls++ }
 	mgr.GitHub = gh
 
 	runner := newStubRunner()
@@ -899,12 +898,10 @@ func TestAutoMergeCurrentBranch_PassesPRTitleAsSubject(t *testing.T) {
 		Logger:         &testLog{},
 	}
 
-	gh := &StubGitHub{
-		IsAvailable: true,
-		OpenPR:      77,
-		PRTitle:     "[ralph-31w] Fix squash-merge subject",
-		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
-	}
+	gh := NewStubGitHub()
+	gh.OpenPR = 77
+	gh.PRTitle = "[ralph-31w] Fix squash-merge subject"
+	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 	mgr.GitHub = gh
 
 	runner := newStubRunner()
@@ -954,19 +951,17 @@ func TestMergeWithRetry_PushesFixAgentWorkBeforeRetry(t *testing.T) {
 	// OnCIFailure and the merge retry.
 	var events []string
 
-	gh := &StubGitHub{
-		IsAvailable: true,
-		OpenPR:      60,
-		ChecksFunc: func(call int) []CICheckResult {
-			if call == 1 {
-				return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
-			}
-			events = append(events, "await-ci")
-			return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-		},
-		OnMerge: func() {
-			events = append(events, "merge-retry")
-		},
+	gh := NewStubGitHub()
+	gh.OpenPR = 60
+	gh.ChecksFunc = func(call int) []CICheckResult {
+		if call == 1 {
+			return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
+		}
+		events = append(events, "await-ci")
+		return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
+	}
+	gh.OnMerge = func() {
+		events = append(events, "merge-retry")
 	}
 	mgr.GitHub = gh
 
@@ -1045,15 +1040,11 @@ func TestMergeWithRetry_SpawnsConflictAgent(t *testing.T) {
 	}
 
 	mergeCalls := 0
-	gh := &StubGitHub{
-		IsAvailable: true,
-		OpenPR:      70,
-		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
-		MergeResults: []MergeResult{
-			{Conflict: true, Message: "merge conflict"},
-		},
-		OnMerge: func() { mergeCalls++ },
-	}
+	gh := NewStubGitHub()
+	gh.OpenPR = 70
+	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
+	gh.MergeResults = []MergeResult{{Conflict: true, Message: "merge conflict"}}
+	gh.OnMerge = func() { mergeCalls++ }
 	mgr.GitHub = gh
 
 	runner := newStubRunner()
@@ -1120,16 +1111,14 @@ func TestMergeWithRetry_SkipsAfterConflictAgentFails(t *testing.T) {
 	}
 
 	mergeCalls := 0
-	gh := &StubGitHub{
-		IsAvailable: true,
-		OpenPR:      71,
-		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
-		MergeResults: []MergeResult{
-			{Conflict: true, Message: "merge conflict"},
-			{Conflict: true, Message: "merge conflict"},
-		},
-		OnMerge: func() { mergeCalls++ },
+	gh := NewStubGitHub()
+	gh.OpenPR = 71
+	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
+	gh.MergeResults = []MergeResult{
+		{Conflict: true, Message: "merge conflict"},
+		{Conflict: true, Message: "merge conflict"},
 	}
+	gh.OnMerge = func() { mergeCalls++ }
 	mgr.GitHub = gh
 
 	runner := newStubRunner()
@@ -1462,12 +1451,10 @@ func TestAutoMergeCurrentBranch_ReturnsMergedForAlreadyMergedPR(t *testing.T) {
 	runner := newStubRunner()
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 
-	gh := &StubGitHub{
-		IsAvailable: true,
-		OpenPR:      0,       // no open PR
-		PRNumber:    438,    // FindPR returns this
-		PRState:     "MERGED", // GetPRState returns this
-	}
+	gh := NewStubGitHub()
+	gh.OpenPR = 0        // no open PR
+	gh.PRNumber = 438    // FindPR returns this
+	gh.PRState = "MERGED" // GetPRState returns this
 
 	mgr := &Manager{
 		ProjectDir:     "/project",
@@ -1512,14 +1499,12 @@ func TestAutoMergeCurrentBranch_ReopensClosedPR(t *testing.T) {
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("reset --hard", "", nil)
 
-	gh := &StubGitHub{
-		IsAvailable: true,
-		OpenPR:      0,       // no open PR initially
-		PRNumber:    438,    // FindPR returns this
-		PRState:     "CLOSED", // GetPRState returns this
-		PRTitle:     "[ralph-rvta] Fix closed PR",
-		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
-	}
+	gh := NewStubGitHub()
+	gh.OpenPR = 0          // no open PR initially
+	gh.PRNumber = 438       // FindPR returns this
+	gh.PRState = "CLOSED"   // GetPRState returns this
+	gh.PRTitle = "[ralph-rvta] Fix closed PR"
+	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 
 	mgr := &Manager{
 		ProjectDir:     "/project",
@@ -1555,15 +1540,13 @@ func TestCreatePR_APIFallbackWhenReopenFails(t *testing.T) {
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 
-	gh := &StubGitHub{
-		IsAvailable:          true,
-		OpenPR:               0,
-		CreatePRErr:          fmt.Errorf("a pull request already exists for branch"),
-		PRNumber:             438,
-		PRState:              "CLOSED",
-		ReopenPRErr:          fmt.Errorf("Could not open the pull request"),
-		CreatePRViaAPIResult: 500,
-	}
+	gh := NewStubGitHub()
+	gh.OpenPR = 0
+	gh.CreatePRErr = fmt.Errorf("a pull request already exists for branch")
+	gh.PRNumber = 438
+	gh.PRState = "CLOSED"
+	gh.ReopenPRErr = fmt.Errorf("Could not open the pull request")
+	gh.CreatePRViaAPIResult = 500
 
 	mgr := &Manager{
 		ProjectDir:     "/project",
@@ -1598,13 +1581,11 @@ func TestCreatePR_ReopensClosedPROnCreateFailure(t *testing.T) {
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 
-	gh := &StubGitHub{
-		IsAvailable: true,
-		OpenPR:      0,                                                     // no open PR
-		CreatePRErr: fmt.Errorf("a pull request already exists for branch"), // create fails
-		PRNumber:    438,                                                  // FindPR returns this
-		PRState:     "CLOSED",                                               // GetPRState returns this
-	}
+	gh := NewStubGitHub()
+	gh.OpenPR = 0                                                      // no open PR
+	gh.CreatePRErr = fmt.Errorf("a pull request already exists for branch") // create fails
+	gh.PRNumber = 438                                                   // FindPR returns this
+	gh.PRState = "CLOSED"                                               // GetPRState returns this
 
 	mgr := &Manager{
 		ProjectDir:     "/project",
@@ -1637,13 +1618,11 @@ func TestCreatePR_ReturnsMergedPRNumberOnAlreadyExists(t *testing.T) {
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 
-	gh := &StubGitHub{
-		IsAvailable: true,
-		OpenPR:      0,                                                              // no open PR found
-		CreatePRErr: fmt.Errorf("A pull request already exists for brokenalarms:ralph/already-merged-branch"), // create fails with 422
-		PRNumber:    438,                                                             // FindPR returns this
-		PRState:     "MERGED",                                                        // GetPR returns this
-	}
+	gh := NewStubGitHub()
+	gh.OpenPR = 0                                                               // no open PR found
+	gh.CreatePRErr = fmt.Errorf("A pull request already exists for brokenalarms:ralph/already-merged-branch") // create fails with 422
+	gh.PRNumber = 438                                                            // FindPR returns this
+	gh.PRState = "MERGED"                                                        // GetPR returns this
 
 	mgr := &Manager{
 		ProjectDir:     "/project",
@@ -1687,12 +1666,10 @@ func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
 		Logger:         &testLog{},
 	}
 
-	gh := &StubGitHub{
-		IsAvailable: true,
-		OpenPR:      77,
-		Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
-		MergeResult: MergeResult{Blocked: true, Message: "CI failed"},
-	}
+	gh := NewStubGitHub()
+	gh.OpenPR = 77
+	gh.Checks = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
+	gh.MergeResult = MergeResult{Blocked: true, Message: "CI failed"}
 	mgr.GitHub = gh
 
 	runner := newStubRunner()
@@ -1757,19 +1734,15 @@ func TestMergeWithRetry_InfraFailureRecovery(t *testing.T) {
 	}
 
 	callCount := 0
-	gh := &StubGitHub{
-		IsAvailable: true,
-		OpenPR:      88,
-		ChecksFunc: func(call int) []CICheckResult {
-			if call == 1 {
-				return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
-			}
-			return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-		},
-		MergeResults: []MergeResult{
-			{Merged: true},
-		},
+	gh := NewStubGitHub()
+	gh.OpenPR = 88
+	gh.ChecksFunc = func(call int) []CICheckResult {
+		if call == 1 {
+			return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
+		}
+		return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 	}
+	gh.MergeResults = []MergeResult{{Merged: true}}
 	mgr.GitHub = gh
 
 	runner := newStubRunner()
@@ -1805,10 +1778,8 @@ func TestMergeWithRetry_InfraFailureRecovery(t *testing.T) {
 // When Admin=false (default), MergePR on StubGitHub returns Blocked when
 // configured to do so — non-admin merges obey branch protection.
 func TestMergeOpts_NonAdminReturnsBlocked(t *testing.T) {
-	gh := &StubGitHub{
-		IsAvailable: true,
-		MergeResult: MergeResult{Blocked: true, Message: "branch protection rules"},
-	}
+	gh := NewStubGitHub()
+	gh.MergeResult = MergeResult{Blocked: true, Message: "branch protection rules"}
 	result := gh.MergePR(42, "https://github.com/test/repo.git", MergeOpts{DeleteBranch: true})
 	if result.Merged {
 		t.Error("expected non-admin merge to not succeed when branch protection blocks")
@@ -1824,10 +1795,7 @@ func TestMergeOpts_NonAdminReturnsBlocked(t *testing.T) {
 // When Admin=true and REST succeeds (not Blocked), MergePR returns Merged
 // without needing the admin fallback path.
 func TestMergeOpts_AdminMergeReturnsMerged(t *testing.T) {
-	gh := &StubGitHub{
-		IsAvailable: true,
-		MergeResult: MergeResult{Merged: true},
-	}
+	gh := NewStubGitHub() // MergeResult defaults to Merged: true
 	result := gh.MergePR(42, "https://github.com/test/repo.git", MergeOpts{DeleteBranch: true, Admin: true})
 	if !result.Merged {
 		t.Error("expected admin merge to succeed")
@@ -1845,10 +1813,8 @@ func TestMergeOpts_AdminMergeReturnsMerged(t *testing.T) {
 // Admin fallback is only triggered by Blocked, never by other failures.
 func TestMergeOpts_AdminFallback_OnlyWhenRESTReturnsBlocked(t *testing.T) {
 	// Admin=true + REST returns Blocked → admin fallback succeeds.
-	ghBlocked := &StubGitHub{
-		IsAvailable: true,
-		MergeResult: MergeResult{Blocked: true, Message: "branch protection rules"},
-	}
+	ghBlocked := NewStubGitHub()
+	ghBlocked.MergeResult = MergeResult{Blocked: true, Message: "branch protection rules"}
 	result := ghBlocked.MergePR(42, "https://github.com/test/repo.git", MergeOpts{Admin: true})
 	if !result.Merged {
 		t.Errorf("expected admin fallback to succeed when REST returns Blocked, got: %+v", result)
@@ -1858,10 +1824,8 @@ func TestMergeOpts_AdminFallback_OnlyWhenRESTReturnsBlocked(t *testing.T) {
 	}
 
 	// Admin=false + REST returns Blocked → stays Blocked (no fallback).
-	ghNoAdmin := &StubGitHub{
-		IsAvailable: true,
-		MergeResult: MergeResult{Blocked: true, Message: "branch protection rules"},
-	}
+	ghNoAdmin := NewStubGitHub()
+	ghNoAdmin.MergeResult = MergeResult{Blocked: true, Message: "branch protection rules"}
 	resultNoAdmin := ghNoAdmin.MergePR(42, "https://github.com/test/repo.git", MergeOpts{Admin: false})
 	if resultNoAdmin.Merged {
 		t.Error("expected non-admin merge to stay Blocked when REST returns Blocked")
@@ -1872,11 +1836,9 @@ func TestMergeOpts_AdminFallback_OnlyWhenRESTReturnsBlocked(t *testing.T) {
 
 	// Admin=true + AdminMergeResult configured → uses configured result.
 	adminFail := MergeResult{Message: "admin merge failed: not permitted"}
-	ghAdminFail := &StubGitHub{
-		IsAvailable:      true,
-		MergeResult:      MergeResult{Blocked: true},
-		AdminMergeResult: &adminFail,
-	}
+	ghAdminFail := NewStubGitHub()
+	ghAdminFail.MergeResult = MergeResult{Blocked: true}
+	ghAdminFail.AdminMergeResult = &adminFail
 	resultFail := ghAdminFail.MergePR(42, "https://github.com/test/repo.git", MergeOpts{Admin: true})
 	if resultFail.Merged {
 		t.Error("expected configured AdminMergeResult to be used, not default success")
@@ -1904,13 +1866,11 @@ func TestAutoMergeCurrentBranch_InfraFailureWithLocalTestsUsesAdminMerge(t *test
 		LocalTestsPassed: true,
 	}
 
-	gh := &StubGitHub{
-		IsAvailable:  true,
-		OpenPR:       55,
-		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
-		JobStepCount: 0, // zero steps = infrastructure failure
-		MergeResult:  MergeResult{Merged: true},
-	}
+	gh := NewStubGitHub()
+	gh.OpenPR = 55
+	gh.Checks = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
+	gh.JobStepCount = 0 // zero steps = infrastructure failure
+	// MergeResult defaults to Merged: true
 	mgr.GitHub = gh
 
 	runner := newStubRunner()
@@ -1954,13 +1914,11 @@ func TestAutoMergeCurrentBranch_InfraBypassAdminFallbackOn405(t *testing.T) {
 		LocalTestsPassed: true,
 	}
 
-	gh := &StubGitHub{
-		IsAvailable:  true,
-		OpenPR:       55,
-		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
-		JobStepCount: 0, // zero steps = infrastructure failure
-		MergeResult:  MergeResult{Blocked: true, Message: "branch protection"},
-	}
+	gh := NewStubGitHub()
+	gh.OpenPR = 55
+	gh.Checks = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
+	gh.JobStepCount = 0 // zero steps = infrastructure failure
+	gh.MergeResult = MergeResult{Blocked: true, Message: "branch protection"}
 	mgr.GitHub = gh
 
 	runner := newStubRunner()

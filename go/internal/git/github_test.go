@@ -122,7 +122,7 @@ func TestCreatePROpts_FieldsPreserved(t *testing.T) {
 // GetRunLog returns the stub's configured RunLogValue, proving the interface
 // method can be stubbed for CI failure log testing.
 func TestGetRunLog_Stubbable(t *testing.T) {
-	stub := &StubGitHub{}
+	stub := NewStubGitHub()
 	if result := stub.GetRunLog(42, "/tmp"); result != "" {
 		t.Errorf("expected empty string from default stub, got %q", result)
 	}
@@ -136,11 +136,10 @@ func TestGetRunLog_Stubbable(t *testing.T) {
 // ListChecks replaces the former FetchChecks method, returning CI check results
 // that callers use to determine merge readiness.
 func TestListChecks_Stubbable(t *testing.T) {
-	stub := &StubGitHub{
-		Checks: []CICheckResult{
-			{Name: "build", State: "SUCCESS", Bucket: "pass"},
-			{Name: "lint", State: "FAILURE", Bucket: "fail"},
-		},
+	stub := NewStubGitHub()
+	stub.Checks = []CICheckResult{
+		{Name: "build", State: "SUCCESS", Bucket: "pass"},
+		{Name: "lint", State: "FAILURE", Bucket: "fail"},
 	}
 
 	checks, err := stub.ListChecks(99, "owner/repo")
@@ -158,12 +157,9 @@ func TestListChecks_Stubbable(t *testing.T) {
 // GetPR returns a PRDetail with all fields populated and auto-generates
 // a deterministic HeadSHA that changes on each call (simulating pushes).
 func TestGetPR_ReturnsAllFields(t *testing.T) {
-	stub := &StubGitHub{
-		PRState: "OPEN",
-		PRBase:  "main",
-		PRHead:  "feature-branch",
-		HeadSHA: "abc123",
-	}
+	stub := NewStubGitHub()
+	stub.PRHead = "feature-branch"
+	stub.HeadSHA = "abc123"
 
 	pr, err := stub.GetPR("owner/repo", 42)
 	if err != nil {
@@ -186,7 +182,8 @@ func TestGetPR_ReturnsAllFields(t *testing.T) {
 // Manager.GetCIFailureLog delegates to the injected GitHub interface's GetRunLog,
 // confirming that loop code can get CI logs without shelling out.
 func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
-	stub := &StubGitHub{RunLogValue: "test failure output line 1\nline 2"}
+	stub := NewStubGitHub()
+	stub.RunLogValue = "test failure output line 1\nline 2"
 	mgr := &Manager{
 		BaseBranch: "main",
 		GitHub: stub,

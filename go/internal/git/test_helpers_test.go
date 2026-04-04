@@ -156,7 +156,7 @@ func stubManager(dir string, runner *stubRunner, gh *StubGitHub) *Manager {
 		runner = newStubRunner()
 	}
 	if gh == nil {
-		gh = &StubGitHub{}
+		gh = NewStubGitHub()
 	}
 	return &Manager{
 		ProjectDir: dir,
