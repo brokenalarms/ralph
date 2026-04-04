@@ -178,7 +178,7 @@ func (m *Manager) PRDiffForTask(taskID string) string {
 	if err != nil || prNumber == 0 {
 		return ""
 	}
-	diff, err := gh.PRDiff(m.WorkDir, prNumber)
+	diff, err := gh.PRDiff(m.RemoteURL(), prNumber)
 	if err != nil {
 		return ""
 	}

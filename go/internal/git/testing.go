@@ -122,7 +122,7 @@ func (s *StubGitHub) SearchPR(workDir, query string) (int, error) {
 	s.SearchCalled = true
 	return s.SearchPRNumber, nil
 }
-func (s *StubGitHub) PRDiff(workDir string, prNumber int) (string, error) {
+func (s *StubGitHub) PRDiff(repoURL string, prNumber int) (string, error) {
 	s.PRDiffCalled = true
 	return s.PRDiffOutput, nil
 }
