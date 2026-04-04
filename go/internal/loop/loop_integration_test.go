@@ -1928,5 +1928,288 @@ func TestIntegration_CIFailureTriggersFixAgent(t *testing.T) {
 	}
 }
 
+// gitCommandTracker implements git.Runner and records every git command issued.
+// Returns the value from outputs (keyed by joined args) for known commands;
+// returns ("", nil) for everything else so callers treat unknown commands as
+// success without error.
+type gitCommandTracker struct {
+	mu      sync.Mutex
+	calls   []string
+	outputs map[string]string
+}
+
+func (r *gitCommandTracker) Run(_ context.Context, _ string, args ...string) (string, error) {
+	key := strings.Join(args, " ")
+	r.mu.Lock()
+	r.calls = append(r.calls, key)
+	out := r.outputs[key]
+	r.mu.Unlock()
+	return out, nil
+}
+
+func (r *gitCommandTracker) calledWith(sub string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.calls {
+		if strings.Contains(c, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// gitMemState is a minimal git.StateStore backed by a map.
+type gitMemState struct {
+	mu   sync.Mutex
+	data map[string]string
+}
+
+func newGitMemState() *gitMemState { return &gitMemState{data: make(map[string]string)} }
+
+func (s *gitMemState) Read(key string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.data[key], nil
+}
+
+func (s *gitMemState) Write(key, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data[key] = value
+	return nil
+}
+
+// Scenario 12: CI already passing on the current PR head SHA — the loop
+// completes signal→verify→merge without a git push during the merge phase.
+// Exercises the fast path in AutoMergeCurrentBranch where SHA matches and CI
+// is green, so rebase+push is skipped entirely.
+func TestIntegration_CIAlreadyPassing_SkipsPushAndMerges(t *testing.T) {
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
+
+	const taskID = "ralph-cap1"
+	const localSHA = "sha-already-passing"
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Completed = 0
+	backend.Total = 1
+	backend.NextTask = "CI already passing task"
+	backend.NextID = taskID
+	backend.BackendLabel = "beads"
+
+	// gitCommandTracker doubles as git.Runner for the real git.Manager used
+	// inside MergeRetryFunc. Outputs are configured for the commands that
+	// AutoMergeCurrentBranch issues on the fast path.
+	tracker := &gitCommandTracker{
+		outputs: map[string]string{
+			"remote get-url origin": "https://github.com/owner/repo.git",
+			"rev-parse HEAD":        localSHA,
+		},
+	}
+
+	// realGH drives the real git.Manager's GitHub calls. HeadSHA matches
+	// the local SHA so the fast path triggers and CI is already resolved.
+	realGH := &git.StubGitHub{
+		IsAvailable: true,
+		OpenPR:      99,
+		PRNumber:    99,
+		PRTitle:     "CI already passing task",
+		PRBase:      "main",
+		HeadSHA:     localSHA, // matches tracker "rev-parse HEAD" output
+		Checks:      []git.CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		MergeResult: git.MergeResult{Merged: true},
+	}
+
+	realMgr := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir + "/wt",
+		WorktreeBranch: "ralph/cap1-ci-already-passing",
+		BaseBranch:     "main",
+		Runner:         tracker,
+		GitHub:         realGH,
+		State:          newGitMemState(),
+		Logger:         logging.New(nil),
+	}
+
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/next",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		PRBase:         "main",
+		DefaultBranch:  "main",
+		PRHealthy:      true,
+		ShipResult:     git.ShipResult{PRNumber: 99},
+		MergeRetryFunc: func(ctx context.Context) (bool, error) {
+			return realMgr.AutoMergeCurrentBranch(ctx)
+		},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			gm.HeadRevValue = localSHA
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "ci fast path"},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Fast path must not push during the merge phase.
+	if tracker.calledWith("push") {
+		t.Error("git push should not be called when CI is already passing on the current SHA")
+	}
+
+	// Merge must succeed and task must close.
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) == 0 {
+		t.Fatal("expected task to be closed after fast-path merge")
+	}
+	if backend.ClosedIDs[0] != taskID {
+		t.Errorf("expected close for %s, got %q", taskID, backend.ClosedIDs[0])
+	}
+	if !strings.Contains(backend.CloseReasons[0], "99") {
+		t.Errorf("close reason should reference PR #99, got %q", backend.CloseReasons[0])
+	}
+}
+
+// Scenario 13: Local HEAD differs from the PR head SHA — the loop falls
+// through to the normal rebase+push+CI-poll flow. Exercises the branch in
+// AutoMergeCurrentBranch where the SHA check fails so a git push is issued
+// before CI is awaited.
+func TestIntegration_CIAlreadyPassing_FallsThrough_WhenHeadDiffers(t *testing.T) {
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
+
+	const taskID = "ralph-cap2"
+	const localSHA = "sha-local-new-commit"
+	const prHeadSHA = "sha-pr-head-differs"
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Completed = 0
+	backend.Total = 1
+	backend.NextTask = "SHA differs normal flow task"
+	backend.NextID = taskID
+	backend.BackendLabel = "beads"
+
+	tracker := &gitCommandTracker{
+		outputs: map[string]string{
+			"remote get-url origin": "https://github.com/owner/repo.git",
+			"rev-parse HEAD":        localSHA,
+		},
+	}
+
+	// realGH has a HeadSHA that differs from localSHA so the fast path does
+	// not trigger and the normal rebase+push+AwaitCI flow runs instead.
+	realGH := &git.StubGitHub{
+		IsAvailable: true,
+		OpenPR:      100,
+		PRNumber:    100,
+		PRTitle:     "SHA differs normal flow task",
+		PRBase:      "main",
+		HeadSHA:     prHeadSHA, // different from localSHA → fast path not taken
+		Checks:      []git.CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+		MergeResult: git.MergeResult{Merged: true},
+	}
+
+	realMgr := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir + "/wt",
+		WorktreeBranch: "ralph/cap2-sha-differs",
+		BaseBranch:     "main",
+		Runner:         tracker,
+		GitHub:         realGH,
+		State:          newGitMemState(),
+		Logger:         logging.New(nil),
+	}
+
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/next",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		PRBase:         "main",
+		DefaultBranch:  "main",
+		PRHealthy:      true,
+		ShipResult:     git.ShipResult{PRNumber: 100},
+		MergeRetryFunc: func(ctx context.Context) (bool, error) {
+			return realMgr.AutoMergeCurrentBranch(ctx)
+		},
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			gm.HeadRevValue = localSHA
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "sha differs"},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Normal flow must push during the merge phase because SHA differs.
+	if !tracker.calledWith("push") {
+		t.Error("git push should be called when local HEAD differs from PR head SHA")
+	}
+
+	// Merge must succeed and task must close.
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) == 0 {
+		t.Fatal("expected task to be closed after normal flow merge")
+	}
+	if backend.ClosedIDs[0] != taskID {
+		t.Errorf("expected close for %s, got %q", taskID, backend.ClosedIDs[0])
+	}
+	if !strings.Contains(backend.CloseReasons[0], "100") {
+		t.Errorf("close reason should reference PR #100, got %q", backend.CloseReasons[0])
+	}
+}
+
 // Ensure the integrationBackend satisfies tasks.Backend.
 var _ tasks.Backend = (*integrationBackend)(nil)
