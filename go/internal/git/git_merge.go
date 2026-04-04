@@ -176,6 +176,17 @@ func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string,
 	}
 	newPR, createErr := gh.CreatePR(createOpts)
 	if createErr != nil {
+		// PR creation failed. Check if the branch already has a PR in any state.
+		// A merged PR means the push already delivered commits — return its number.
+		// A closed PR can be reopened by the block below.
+		if existingPR, _, _, findErr := gh.FindPR(branch, remoteURL); findErr == nil && existingPR != 0 {
+			if prDetail, detailErr := gh.GetPR(nwo, existingPR); detailErr == nil && prDetail != nil && prDetail.State == "MERGED" {
+				prLink := logging.PRLinkOpt(nwo, existingPR)
+				opts.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "Merged PR already exists for %s — commits landed", branch)
+				return existingPR, nil
+			}
+		}
+
 		// Creation may fail if a closed PR exists for this head:base.
 		// Try to find and reopen it instead.
 		if prNumber, reopenErr := reopenClosedPR(gh, workDir, branch, nwo, remoteURL, title, body, opts.Logger); reopenErr == nil && prNumber != 0 {
