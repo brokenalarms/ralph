@@ -320,6 +320,91 @@ func TestPollCopilotReview_ReturnsCopilotReview(t *testing.T) {
 	}
 }
 
+// ListChecks uses gh api repos/{nwo}/commits/{sha}/check-runs instead of
+// gh pr checks. It fetches the head SHA via GetPR and maps API status/conclusion
+// fields to CICheckResult State and Bucket values that callers depend on.
+func TestListChecks_UsesGhAPICheckRuns(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	checksJSON := `[{"name":"build","status":"completed","conclusion":"success","started_at":"2024-01-01T00:00:00Z"},{"name":"lint","status":"completed","conclusion":"failure","started_at":"2024-01-01T00:00:00Z"},{"name":"queue","status":"queued","conclusion":null,"started_at":null}]`
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\n" +
+		"if echo \"$@\" | grep -q 'check-runs'; then\n" +
+		"  echo '" + checksJSON + "'\n" +
+		"elif echo \"$@\" | grep -q 'pulls/42'; then\n" +
+		"  printf 'OPEN\\tmain\\tfeature\\tabc123def\\n'\n" +
+		"fi\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	checks, err := g.ListChecks(42, "https://github.com/owner/repo.git")
+	if err != nil {
+		t.Fatalf("ListChecks returned error: %v", err)
+	}
+	if len(checks) != 3 {
+		t.Fatalf("expected 3 checks, got %d", len(checks))
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	invocations := string(raw)
+	if strings.Contains(invocations, "pr checks") {
+		t.Errorf("ListChecks must not use 'gh pr checks', got: %q", invocations)
+	}
+	if !strings.Contains(invocations, "check-runs") {
+		t.Errorf("expected check-runs endpoint, got: %q", invocations)
+	}
+	if !strings.Contains(invocations, "abc123def") {
+		t.Errorf("expected head SHA in check-runs URL, got: %q", invocations)
+	}
+
+	// completed+success → SUCCESS/pass
+	if checks[0].Name != "build" || checks[0].State != "SUCCESS" || checks[0].Bucket != "pass" {
+		t.Errorf("build: expected SUCCESS/pass, got State=%q Bucket=%q", checks[0].State, checks[0].Bucket)
+	}
+	// completed+failure → FAILURE/fail
+	if checks[1].Name != "lint" || checks[1].State != "FAILURE" || checks[1].Bucket != "fail" {
+		t.Errorf("lint: expected FAILURE/fail, got State=%q Bucket=%q", checks[1].State, checks[1].Bucket)
+	}
+	// queued → PENDING/pending
+	if checks[2].Name != "queue" || checks[2].State != "PENDING" || checks[2].Bucket != "pending" {
+		t.Errorf("queue: expected PENDING/pending, got State=%q Bucket=%q", checks[2].State, checks[2].Bucket)
+	}
+}
+
+// mergeAdmin uses gh api PUT repos/{nwo}/pulls/{num}/merge instead of
+// gh pr merge --admin, so admin bypass is implicit via token permissions.
+func TestMergeAdmin_UsesGhAPI(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho 'HTTP/2.0 200 OK'\necho ''\necho '{}'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	result := g.mergeAdmin("42", "https://github.com/owner/repo.git", "owner/repo", MergeOpts{})
+	if !result.Merged {
+		t.Errorf("expected Merged=true, got %+v", result)
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	invocation := string(raw)
+	if strings.Contains(invocation, "pr merge") {
+		t.Errorf("mergeAdmin must not use 'gh pr merge', got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "pulls/42/merge") {
+		t.Errorf("expected pulls/42/merge endpoint, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "PUT") {
+		t.Errorf("expected PUT method, got: %q", invocation)
+	}
+}
+
 // PollCopilotReview returns nil without error when the timeout expires and no
 // review from copilot-pull-request-reviewer has arrived, so the loop proceeds.
 func TestPollCopilotReview_Timeout_ReturnsNil(t *testing.T) {
