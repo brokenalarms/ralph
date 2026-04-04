@@ -389,7 +389,7 @@ func TestAwaitCI_PassedImmediately(t *testing.T) {
 	}
 	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
 
-	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", "")
+	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestAwaitCI_FailedImmediately(t *testing.T) {
 	}
 	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
 
-	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", "")
+	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestAwaitCI_PollsWhenPending(t *testing.T) {
 	}
 	mgr.GitHub = pollGH
 
-	_, status, err := mgr.AwaitCI(context.Background(), 1, "repo", "")
+	_, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -485,7 +485,7 @@ func TestAwaitCI_PollsWhenFetchErrors(t *testing.T) {
 	}
 	mgr := &Manager{GitHub: pollGH, Logger: &testLog{}}
 
-	_, status, err := mgr.AwaitCI(context.Background(), 1, "repo", "")
+	_, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -519,7 +519,7 @@ func TestAwaitCI_LogUsesPRLink(t *testing.T) {
 	log := &testLog{}
 	mgr := &Manager{GitHub: pollGH, Logger: log}
 
-	_, status, err := mgr.AwaitCI(context.Background(), 99, "https://github.com/owner/repo", "")
+	_, status, err := mgr.AwaitCI(context.Background(), 99, "https://github.com/owner/repo", time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -543,32 +543,21 @@ func TestAwaitCI_LogUsesPRLink(t *testing.T) {
 	}
 }
 
-// AwaitCI with staleSHA logs PRLink clickable terminal links during SHA polling.
-func TestAwaitCI_SHAPollLogUsesPRLink(t *testing.T) {
-	origSleep := ciSleep
-	ciSleep = func(d time.Duration) <-chan time.Time {
-		ch := make(chan time.Time, 1)
-		ch <- time.Now()
-		return ch
-	}
-	defer func() { ciSleep = origSleep }()
+// AwaitCI with pushedAt logs PRLink clickable terminal links.
+func TestAwaitCI_PushedAtLogUsesPRLink(t *testing.T) {
+	stubCISleep(t)
 
+	now := time.Now()
 	pollGH := &pollableGitHub{
-		StubGitHub: StubGitHub{
-			Checks: []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
-		},
+		StubGitHub: StubGitHub{},
 		listChecks: func(pr int, repo string) ([]CICheckResult, error) {
-			return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
-		},
-		getPR: func(nwo string, prNumber int) (*PRDetail, error) {
-			return &PRDetail{HeadSHA: "newsha123"}, nil
+			return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass", StartedAt: now.Add(time.Second)}}, nil
 		},
 	}
 	log := &testLog{}
 	mgr := &Manager{GitHub: pollGH, Logger: log}
 
-	// Pass stale SHA — HEAD is already different so it resolves immediately.
-	_, status, err := mgr.AwaitCI(context.Background(), 88, "https://github.com/owner/repo", "oldsha999")
+	_, status, err := mgr.AwaitCI(context.Background(), 88, "https://github.com/owner/repo", now)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -576,9 +565,9 @@ func TestAwaitCI_SHAPollLogUsesPRLink(t *testing.T) {
 		t.Errorf("expected CIPassed, got %v", status)
 	}
 
-	// "Waiting for" and "HEAD confirmed" lines must contain clickable links.
+	// "Waiting for fresh CI" line must contain a clickable link.
 	for _, msg := range log.messages {
-		if (strings.Contains(msg, "Waiting for") || strings.Contains(msg, "HEAD confirmed")) &&
+		if strings.Contains(msg, "Waiting for fresh CI") &&
 			!strings.Contains(msg, "github.com/owner/repo/pull/88") {
 			t.Errorf("expected PRLink hyperlink in log, got: %s", msg)
 		}
@@ -617,40 +606,29 @@ func TestWaitForCI_LogUsesPRLink(t *testing.T) {
 	}
 }
 
-// AwaitCI with a stale SHA polls until the PR HEAD changes away from that SHA
-// before returning CI results, preventing stale results after a push.
-func TestAwaitCI_WaitsForStaleSHAToChange(t *testing.T) {
-	origSleep := ciSleep
-	ciSleep = func(d time.Duration) <-chan time.Time {
-		ch := make(chan time.Time, 1)
-		ch <- time.Now()
-		return ch
-	}
-	defer func() { ciSleep = origSleep }()
+// AwaitCI with pushedAt filters out stale checks (started before push)
+// and polls until fresh checks appear.
+func TestAwaitCI_FiltersStaleChecks(t *testing.T) {
+	stubCISleep(t)
 
-	var shaCalls atomic.Int32
+	pushedAt := time.Now()
+	var calls atomic.Int32
 	pollGH := &pollableGitHub{
-		StubGitHub: StubGitHub{
-			Checks: []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
-		},
+		StubGitHub: StubGitHub{},
 		listChecks: func(pr int, repo string) ([]CICheckResult, error) {
-			return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
-		},
-		getPR: func(nwo string, prNumber int) (*PRDetail, error) {
-			n := shaCalls.Add(1)
+			n := calls.Add(1)
 			if n < 3 {
-				// Still showing the stale SHA — GitHub hasn't caught up yet.
-				return &PRDetail{HeadSHA: "stalesha"}, nil
+				// Only stale checks exist — started before the push.
+				return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass", StartedAt: pushedAt.Add(-time.Minute)}}, nil
 			}
-			// GitHub now reflects the new push with a different SHA.
-			return &PRDetail{HeadSHA: "newsha-from-github"}, nil
+			// Fresh checks appear.
+			return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass", StartedAt: pushedAt.Add(time.Second)}}, nil
 		},
 	}
 	log := &testLog{}
 	mgr := &Manager{GitHub: pollGH, Logger: log}
 
-	// Pass the stale SHA — AwaitCI waits for HEAD != "stalesha".
-	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", "stalesha")
+	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", pushedAt)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -660,21 +638,19 @@ func TestAwaitCI_WaitsForStaleSHAToChange(t *testing.T) {
 	if len(checks) != 1 || checks[0].Name != "test" {
 		t.Errorf("unexpected checks: %v", checks)
 	}
-	// Must have polled GetPR at least 3 times (2 stale + 1 changed).
-	if shaCalls.Load() < 3 {
-		t.Errorf("expected at least 3 SHA polls, got %d", shaCalls.Load())
+	if calls.Load() < 3 {
+		t.Errorf("expected at least 3 polls (2 stale + 1 fresh), got %d", calls.Load())
 	}
 }
 
-// AwaitCI with empty staleSHA skips SHA verification and returns
-// results immediately when checks are already resolved.
-func TestAwaitCI_EmptySHASkipsVerification(t *testing.T) {
+// AwaitCI with zero pushedAt skips filtering and returns results immediately.
+func TestAwaitCI_ZeroPushedAtSkipsFiltering(t *testing.T) {
 	gh := &StubGitHub{
 		Checks: []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
 	}
 	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
 
-	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", "")
+	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -686,58 +662,11 @@ func TestAwaitCI_EmptySHASkipsVerification(t *testing.T) {
 	}
 }
 
-// awaitHeadChange logs progress messages while polling when the SHA does not
-// change immediately, so long-running retarget waits are not silent.
-func TestAwaitHeadChange_LogsProgressWhilePolling(t *testing.T) {
-	stubCISleep(t)
-
-	origInterval := awaitHeadSHAProgressInterval
-	awaitHeadSHAProgressInterval = 0 // trigger progress log on every poll
-	t.Cleanup(func() { awaitHeadSHAProgressInterval = origInterval })
-
-	var shaCalls atomic.Int32
-	pollGH := &pollableGitHub{
-		StubGitHub: StubGitHub{
-			Checks: []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
-		},
-		listChecks: func(pr int, repo string) ([]CICheckResult, error) {
-			return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}, nil
-		},
-		getPR: func(nwo string, prNumber int) (*PRDetail, error) {
-			n := shaCalls.Add(1)
-			if n < 3 {
-				// Still stale — GitHub hasn't caught up.
-				return &PRDetail{HeadSHA: "stalesha"}, nil
-			}
-			// Now changed.
-			return &PRDetail{HeadSHA: "newsha"}, nil
-		},
-	}
-	log := &testLog{}
-	mgr := &Manager{GitHub: pollGH, Logger: log}
-
-	// Pass stale SHA — waits for HEAD != "stalesha".
-	_, status, err := mgr.AwaitCI(context.Background(), 55, "https://github.com/owner/repo", "stalesha")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if status != CIPassed {
-		t.Errorf("expected CIPassed, got %v", status)
-	}
-
-	// At least one "Still waiting" progress log must appear — the SHA polling
-	// loop is not silent during a long retarget wait.
-	if !log.contains("Still waiting") {
-		t.Errorf("expected progress log during SHA polling, got: %v", log.messages)
-	}
-}
-
-// pollableGitHub wraps StubGitHub but allows overriding ListChecks and GetPR
-// with functions that change behavior across calls.
+// pollableGitHub wraps StubGitHub but allows overriding ListChecks
+// with a function that changes behavior across calls.
 type pollableGitHub struct {
 	StubGitHub
 	listChecks func(int, string) ([]CICheckResult, error)
-	getPR      func(nwo string, prNumber int) (*PRDetail, error)
 }
 
 func (p *pollableGitHub) ListChecks(prNumber int, repoURL string) ([]CICheckResult, error) {
@@ -745,13 +674,6 @@ func (p *pollableGitHub) ListChecks(prNumber int, repoURL string) ([]CICheckResu
 		return p.listChecks(prNumber, repoURL)
 	}
 	return p.StubGitHub.ListChecks(prNumber, repoURL)
-}
-
-func (p *pollableGitHub) GetPR(nwo string, prNumber int) (*PRDetail, error) {
-	if p.getPR != nil {
-		return p.getPR(nwo, prNumber)
-	}
-	return p.StubGitHub.GetPR(nwo, prNumber)
 }
 
 // setupAutoMergeManager creates a Manager with a StubGitHub and real git repos

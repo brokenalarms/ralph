@@ -604,7 +604,7 @@ func TestExecuteMerge_PackageFunc_MergesSuccessfully(t *testing.T) {
 		WorkDir:        "/tmp/workdir",
 		DefaultBranch:  "main",
 		MergeOpts:      MergeOpts{DeleteBranch: true},
-		AwaitCI: func(_ context.Context, _ int, _, _ string) ([]CICheckResult, CIStatus, error) {
+		AwaitCI: func(_ context.Context, _ int, _ string, _ time.Time) ([]CICheckResult, CIStatus, error) {
 			return nil, CIPassed, nil
 		},
 	}

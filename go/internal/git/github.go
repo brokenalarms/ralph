@@ -310,7 +310,7 @@ func (g *ghCLI) deleteBranch(nwo, prNumber string) {
 
 func (g *ghCLI) ListChecks(prNumber int, repoURL string) ([]CICheckResult, error) {
 	pr := strconv.Itoa(prNumber)
-	args := []string{"pr", "checks", pr, "--json", "name,state,bucket"}
+	args := []string{"pr", "checks", pr, "--json", "name,state,bucket,startedAt"}
 	if repoURL != "" {
 		args = append(args, "-R", repoURL)
 	}

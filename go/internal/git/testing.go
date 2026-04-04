@@ -1,7 +1,6 @@
 package git
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -41,7 +40,7 @@ type StubGitHub struct {
 	PRState            string
 	PRBase             string
 	PRHead             string
-	getPRCalls int
+	HeadSHA    string
 	OpenPRBranches     []string
 	SearchCalled       bool
 	PRDiffCalled       bool
@@ -136,16 +135,11 @@ func (s *StubGitHub) PRDiff(repoURL string, prNumber int) (string, error) {
 	return s.PRDiffOutput, nil
 }
 func (s *StubGitHub) GetPR(nwo string, prNumber int) (*PRDetail, error) {
-	s.getPRCalls++
-	// Generate a deterministic SHA from the call count. Each call returns a
-	// different SHA, mirroring real GitHub where each push produces a new
-	// HEAD. This lets awaitHeadChange detect that GitHub processed a push
-	// without tests needing to configure SHA values.
 	return &PRDetail{
 		State:   s.PRState,
 		BaseRef: s.PRBase,
 		HeadRef: s.PRHead,
-		HeadSHA: fmt.Sprintf("sha-%d", s.getPRCalls),
+		HeadSHA: s.HeadSHA,
 	}, nil
 }
 func (s *StubGitHub) ListOpenPRBranches(repoURL string) ([]string, error) {

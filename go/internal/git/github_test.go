@@ -162,6 +162,7 @@ func TestGetPR_ReturnsAllFields(t *testing.T) {
 		PRState: "OPEN",
 		PRBase:  "main",
 		PRHead:  "feature-branch",
+		HeadSHA: "abc123",
 	}
 
 	pr, err := stub.GetPR("owner/repo", 42)
@@ -177,14 +178,8 @@ func TestGetPR_ReturnsAllFields(t *testing.T) {
 	if pr.HeadRef != "feature-branch" {
 		t.Errorf("HeadRef: want %q, got %q", "feature-branch", pr.HeadRef)
 	}
-	if pr.HeadSHA == "" {
-		t.Error("HeadSHA should be auto-generated, got empty")
-	}
-
-	// Second call returns a different SHA (simulates push).
-	pr2, _ := stub.GetPR("owner/repo", 42)
-	if pr2.HeadSHA == pr.HeadSHA {
-		t.Errorf("HeadSHA should change between calls, got %q both times", pr.HeadSHA)
+	if pr.HeadSHA != "abc123" {
+		t.Errorf("HeadSHA: want %q, got %q", "abc123", pr.HeadSHA)
 	}
 }
 

@@ -75,30 +75,6 @@ func (r *mergeStubRunner) neverCalledWith(args ...string) bool {
 // Compile-time check that mergeStubRunner satisfies git.Runner.
 var _ git.Runner = (*mergeStubRunner)(nil)
 
-// trackingGH wraps StubGitHub and records which PR numbers GetPR is called for.
-type trackingGH struct {
-	*git.StubGitHub
-	mu           sync.Mutex
-	headSHACalls []int
-}
-
-func (g *trackingGH) GetPR(nwo string, prNumber int) (*git.PRDetail, error) {
-	g.mu.Lock()
-	g.headSHACalls = append(g.headSHACalls, prNumber)
-	g.mu.Unlock()
-	return &git.PRDetail{HeadSHA: fmt.Sprintf("sha-%d", prNumber)}, nil
-}
-
-func (g *trackingGH) calledForPR(prNumber int) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	for _, id := range g.headSHACalls {
-		if id == prNumber {
-			return true
-		}
-	}
-	return false
-}
 
 // buildGM creates a git.Manager with the given stubs for merge tests.
 // Uses a temp dir for RalphDir so worktree paths are predictable.
@@ -374,12 +350,10 @@ func TestRunMerge_MergeConflictLogsMessage(t *testing.T) {
 // This ensures stale CI results from the original base are never used.
 func TestRunMerge_SecondPRRebased(t *testing.T) {
 	runner := newMergeStubRunner()
-	gh := &trackingGH{
-		StubGitHub: &git.StubGitHub{
-			IsAvailable: true,
-			Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-			MergeResult: git.MergeResult{Merged: true},
-		},
+	gh := &git.StubGitHub{
+		IsAvailable: true,
+		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
+		MergeResult: git.MergeResult{Merged: true},
 	}
 	gm, tmp := buildGM(t, runner, gh)
 
@@ -409,11 +383,6 @@ func TestRunMerge_SecondPRRebased(t *testing.T) {
 	// Must force-push pr2 before CI wait.
 	if !runner.calledWith("push", "--force-with-lease", "origin", "HEAD:pr2") {
 		t.Error("expected force-with-lease push of pr2")
-	}
-
-	// GetPR must be called for PR 2 to get the fresh HEAD after push.
-	if !gh.calledForPR(2) {
-		t.Error("GetPR not called for PR 2 — fresh CI was not awaited after rebase")
 	}
 }
 
@@ -506,12 +475,10 @@ func TestRunMerge_SecondPRWaitsForFreshCI(t *testing.T) {
 	// Record main's SHA before any merges so we can verify the rebase later.
 	mainSHABefore := strings.TrimSpace(mergeCmdOutputDir(workDir, "git", "rev-parse", "origin/main"))
 
-	ghStub := &trackingGH{
-		StubGitHub: &git.StubGitHub{
-			IsAvailable: true,
-			MergeResult: git.MergeResult{Merged: true},
-			Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-		},
+	ghStub := &git.StubGitHub{
+		IsAvailable: true,
+		MergeResult: git.MergeResult{Merged: true},
+		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
 	}
 
 	// Simulate GitHub advancing main when PR 1 is merged: fast-forward
@@ -556,11 +523,6 @@ func TestRunMerge_SecondPRWaitsForFreshCI(t *testing.T) {
 		t.Errorf("expected 2 MergePR calls, got %d", ghStub.MergeCalls)
 	}
 
-	// GetPR must be called for PR 2 to get the fresh HEAD after rebase.
-	if !ghStub.calledForPR(2) {
-		t.Error("GetPR was not called for PR 2 — fresh CI was not awaited after rebase")
-	}
-
 	// Verify pr2 was actually rebased onto the updated main (not the old main).
 	// After the rebase, pr2 on the remote must have the new main (which includes
 	// pr1) as an ancestor, not just the original main.
@@ -585,12 +547,10 @@ func TestRunMerge_SecondPRWaitsForFreshCI(t *testing.T) {
 func TestRunMerge_SinglePRMergesSuccessfully(t *testing.T) {
 	workDir, _ := setupStackRepo(t)
 
-	ghStub := &trackingGH{
-		StubGitHub: &git.StubGitHub{
-			IsAvailable: true,
-			MergeResult: git.MergeResult{Merged: true},
-			Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-		},
+	ghStub := &git.StubGitHub{
+		IsAvailable: true,
+		MergeResult: git.MergeResult{Merged: true},
+		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
 	}
 
 	ralphDir := filepath.Join(workDir, ".ralph")
@@ -620,12 +580,10 @@ func TestRunMerge_SinglePRMergesSuccessfully(t *testing.T) {
 func TestRunMerge_BypassRulesSetsAdminOnMergeOpts(t *testing.T) {
 	workDir, _ := setupStackRepo(t)
 
-	ghStub := &trackingGH{
-		StubGitHub: &git.StubGitHub{
-			IsAvailable: true,
-			MergeResult: git.MergeResult{Merged: true},
-			Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-		},
+	ghStub := &git.StubGitHub{
+		IsAvailable: true,
+		MergeResult: git.MergeResult{Merged: true},
+		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
 	}
 
 	ralphDir := filepath.Join(workDir, ".ralph")
@@ -655,12 +613,10 @@ func TestRunMerge_BypassRulesSetsAdminOnMergeOpts(t *testing.T) {
 func TestRunMerge_BypassRulesAdminFallbackOn405(t *testing.T) {
 	workDir, _ := setupStackRepo(t)
 
-	ghStub := &trackingGH{
-		StubGitHub: &git.StubGitHub{
-			IsAvailable: true,
-			MergeResult: git.MergeResult{Blocked: true, Message: "branch protection"},
-			Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-		},
+	ghStub := &git.StubGitHub{
+		IsAvailable: true,
+		MergeResult: git.MergeResult{Blocked: true, Message: "branch protection"},
+		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
 	}
 
 	ralphDir := filepath.Join(workDir, ".ralph")
@@ -688,12 +644,10 @@ func TestRunMerge_BlockedWithoutBypassLogs(t *testing.T) {
 	workDir, _ := setupStackRepo(t)
 
 	var logBuf bytes.Buffer
-	ghStub := &trackingGH{
-		StubGitHub: &git.StubGitHub{
-			IsAvailable: true,
-			MergeResult: git.MergeResult{Blocked: true, Message: "requires admin approval"},
-			Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-		},
+	ghStub := &git.StubGitHub{
+		IsAvailable: true,
+		MergeResult: git.MergeResult{Blocked: true, Message: "requires admin approval"},
+		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
 	}
 
 	ralphDir := filepath.Join(workDir, ".ralph")
@@ -804,12 +758,10 @@ func TestRunMerge_PerPRRebaseMechanicalConflictAutoResolves(t *testing.T) {
 	workDir, bareDir := setupConflictingStackRepo(t)
 
 	mergeCount := 0
-	ghStub := &trackingGH{
-		StubGitHub: &git.StubGitHub{
-			IsAvailable: true,
-			MergeResult: git.MergeResult{Merged: true},
-			Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-		},
+	ghStub := &git.StubGitHub{
+		IsAvailable: true,
+		MergeResult: git.MergeResult{Merged: true},
+		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
 	}
 	ghStub.OnMerge = func() {
 		mergeCount++
@@ -843,9 +795,6 @@ func TestRunMerge_PerPRRebaseMechanicalConflictAutoResolves(t *testing.T) {
 	if ghStub.MergeCalls != 2 {
 		t.Errorf("expected 2 MergePR calls (both PRs merged), got %d", ghStub.MergeCalls)
 	}
-	if !ghStub.calledForPR(2) {
-		t.Error("GetPR not called for PR 2 — fresh CI not awaited after auto-resolved rebase")
-	}
 }
 
 // Proves: when the per-PR rebase produces a genuine (unresolvable) conflict,
@@ -856,12 +805,10 @@ func TestRunMerge_PerPRRebaseRealDivergenceStopsWithError(t *testing.T) {
 
 	var logBuf bytes.Buffer
 	mergeCount := 0
-	ghStub := &trackingGH{
-		StubGitHub: &git.StubGitHub{
-			IsAvailable: true,
-			MergeResult: git.MergeResult{Merged: true},
-			Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-		},
+	ghStub := &git.StubGitHub{
+		IsAvailable: true,
+		MergeResult: git.MergeResult{Merged: true},
+		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
 	}
 	ghStub.OnMerge = func() {
 		mergeCount++
@@ -913,12 +860,10 @@ func TestRunMerge_ConflictLogsDistinctMessage(t *testing.T) {
 	workDir, _ := setupStackRepo(t)
 
 	var logBuf bytes.Buffer
-	ghStub := &trackingGH{
-		StubGitHub: &git.StubGitHub{
-			IsAvailable: true,
-			MergeResult: git.MergeResult{Conflict: true},
-			Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
-		},
+	ghStub := &git.StubGitHub{
+		IsAvailable: true,
+		MergeResult: git.MergeResult{Conflict: true},
+		Checks:      []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}},
 	}
 
 	ralphDir := filepath.Join(workDir, ".ralph")

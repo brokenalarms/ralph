@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -105,21 +106,13 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 	gh := gm.GH()
 	merged := 0
 	repoURL := gm.RemoteURL()
-	nwo := git.NWOFromRemote(repoURL)
 	for _, pr := range prs {
 		if merged > 0 {
 			log.DashedSeparator(logging.Cyan)
 		}
 		log.Phase("Merging PR #%d (%d/%d)", pr.number, merged+1, len(prs))
 
-		// Record the current PR HEAD before any push so AwaitCI can
-		// detect when GitHub updates. We wait for "HEAD != staleSHA"
-		// rather than matching a specific expected SHA.
-		staleSHA := ""
-		if prDetail, err := gh.GetPR(nwo, pr.number); err == nil {
-			staleSHA = prDetail.HeadSHA
-		}
-
+		var pushedAt time.Time
 		if merged > 0 {
 			// Main moved after previous merge. Rebase this branch onto
 			// the new main and force-push so CI runs against the correct base.
@@ -141,6 +134,7 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 					return 1
 				}
 			}
+			pushedAt = time.Now()
 			if _, pushErr := runner.Run(ctx, projectDir, "push", "--force-with-lease", "origin", "HEAD:"+pr.head); pushErr != nil {
 				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Force-push failed for %s: %v", pr.head, pushErr)
 				return 1
@@ -151,7 +145,7 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 
 		// Wait for CI on the current HEAD.
 		log.Emit(logging.Opts{Domain: logging.CI}, "Waiting for CI on PR #%d...", pr.number)
-		_, ciStatus, ciErr := gm.AwaitCI(ctx, pr.number, repoURL, staleSHA)
+		_, ciStatus, ciErr := gm.AwaitCI(ctx, pr.number, repoURL, pushedAt)
 		if ciErr != nil {
 			log.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "CI polling error: %v", ciErr)
 		}
