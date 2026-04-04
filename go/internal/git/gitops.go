@@ -29,6 +29,10 @@ type GitOps interface {
 	// CI bypass flag.
 	SetLocalTestsPassed(v bool)
 
+	// SetKnownPRNumber stores a known PR number so merge/PR operations
+	// skip the FindOpenPR lookup.
+	SetKnownPRNumber(n int)
+
 	// Diff and status queries.
 	HeadRev() string
 	HasDiff() bool

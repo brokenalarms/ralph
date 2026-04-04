@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -57,7 +60,14 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		log.Emit(logging.Opts{Level: logging.Error}, "gh CLI not available")
 		return 1
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		cancel()
+	}()
 
 	// Collect all PRs in the stack, walking down from the given PR to
 	// find the bottom, then collecting upward.
@@ -96,13 +106,13 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 	gh := gm.GH()
 	merged := 0
 	repoURL := gm.RemoteURL()
-	nwo := git.NWOFromRemote(repoURL)
 	for _, pr := range prs {
 		if merged > 0 {
 			log.DashedSeparator(logging.Cyan)
 		}
 		log.Phase("Merging PR #%d (%d/%d)", pr.number, merged+1, len(prs))
 
+		var pushedAt time.Time
 		if merged > 0 {
 			// Main moved after previous merge. Rebase this branch onto
 			// the new main and force-push so CI runs against the correct base.
@@ -124,6 +134,7 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 					return 1
 				}
 			}
+			pushedAt = time.Now()
 			if _, pushErr := runner.Run(ctx, projectDir, "push", "--force-with-lease", "origin", "HEAD:"+pr.head); pushErr != nil {
 				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Force-push failed for %s: %v", pr.head, pushErr)
 				return 1
@@ -132,15 +143,9 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 			runner.Run(ctx, projectDir, "checkout", defaultBranch)
 		}
 
-		// Get the HEAD SHA after push for fresh CI detection.
-		expectedSHA := ""
-		if prDetail, err := gh.GetPR(nwo, pr.number); err == nil {
-			expectedSHA = prDetail.HeadSHA
-		}
-
 		// Wait for CI on the current HEAD.
 		log.Emit(logging.Opts{Domain: logging.CI}, "Waiting for CI on PR #%d...", pr.number)
-		_, ciStatus, ciErr := gm.AwaitCI(ctx, pr.number, repoURL, expectedSHA)
+		_, ciStatus, ciErr := gm.AwaitCI(ctx, pr.number, repoURL, pushedAt)
 		if ciErr != nil {
 			log.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "CI polling error: %v", ciErr)
 		}

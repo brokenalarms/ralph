@@ -107,7 +107,7 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 		IsAvailable: true,
 		OpenPR:      42,
 		PRTitle:     "some PR",
-		PRHeadSHA:   "abc123",
+
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}
 
@@ -160,7 +160,7 @@ func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 		IsAvailable: true,
 		OpenPR:      88,
 		PRTitle:     "some PR",
-		PRHeadSHA:   "abc123",
+
 		MergeResult: MergeResult{Blocked: true, Message: "Pull request is not mergeable"},
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}
@@ -248,7 +248,6 @@ func TestAutoMerge_InfraFailureBypass_MergesWhenLocalTestsPassed(t *testing.T) {
 		IsAvailable:  true,
 		OpenPR:       99,
 		PRTitle:      "infra failure test",
-		PRHeadSHA:    "abc123",
 		MergeResult:  MergeResult{Merged: true},
 		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 		JobStepCount: 0,
@@ -298,7 +297,7 @@ func TestAutoMerge_InfraFailureNoBypass_WhenLocalTestsNotPassed(t *testing.T) {
 		IsAvailable:  true,
 		OpenPR:       100,
 		PRTitle:      "infra failure no bypass",
-		PRHeadSHA:    "abc123",
+
 		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 		JobStepCount: 0,
 	}
@@ -486,7 +485,7 @@ func TestMergeWithRetry_CIFailureWithNoCallback_ReturnsError(t *testing.T) {
 	gh := &StubGitHub{
 		IsAvailable: true,
 		OpenPR:      55,
-		PRHeadSHA:   "abc123",
+
 		Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 	}
 
@@ -536,7 +535,7 @@ func TestMergeWithRetry_InfraRetryBackoff(t *testing.T) {
 		IsAvailable: true,
 		OpenPR:      101,
 		PRTitle:     "infra retry",
-		PRHeadSHA:   "abc123",
+
 		ChecksFunc: func(call int) []CICheckResult {
 			if call <= 3 {
 				return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
@@ -605,7 +604,7 @@ func TestExecuteMerge_PackageFunc_MergesSuccessfully(t *testing.T) {
 		WorkDir:        "/tmp/workdir",
 		DefaultBranch:  "main",
 		MergeOpts:      MergeOpts{DeleteBranch: true},
-		AwaitCI: func(_ context.Context, _ int, _, _ string) ([]CICheckResult, CIStatus, error) {
+		AwaitCI: func(_ context.Context, _ int, _ string, _ time.Time) ([]CICheckResult, CIStatus, error) {
 			return nil, CIPassed, nil
 		},
 	}
@@ -696,7 +695,7 @@ func TestExecuteMerge_CIGatedRetryPath(t *testing.T) {
 		IsAvailable: true,
 		OpenPR:      120,
 		PRTitle:     "CI gated test",
-		PRHeadSHA:   "abc123",
+
 		MergeResults: []MergeResult{
 			{Blocked: true, Message: "Base branch policy prohibits the merge"},
 			{Merged: true},
@@ -811,5 +810,57 @@ func TestBranchNeedsUpdate_ReturnsFalseWhenMainIsAncestorOfHEAD(t *testing.T) {
 
 	if mgr.branchNeedsUpdate() {
 		t.Error("branchNeedsUpdate should return false when origin/main is an ancestor of HEAD")
+	}
+}
+
+// AutoMergeCurrentBranch uses KnownPRNumber when set, skipping the
+// FindOpenPR lookup. This prevents failures when the branch-based PR
+// lookup fails (e.g. cross-project naming).
+func TestAutoMerge_KnownPRNumber_SkipsFindOpenPR(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("rev-parse HEAD", "abc123", nil)
+
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      0, // FindOpenPR would return nothing
+		PRBase:      "main",
+
+		MergeResult: MergeResult{Merged: true},
+		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+	}
+
+	mgr := &Manager{
+		ProjectDir:     "/project",
+		WorkDir:        "/project/wt",
+		WorktreeBranch: "ralph/test/01-known-pr",
+		BaseBranch:     "main",
+		Runner:         runner,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         &testLog{},
+		KnownPRNumber:  42,
+	}
+
+	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("expected merge to succeed with KnownPRNumber, got: %v", err)
+	}
+	if !merged {
+		t.Error("expected merged=true when KnownPRNumber is set and CI passes")
+	}
+
+	log := mgr.Logger.(*testLog)
+	if log.contains("No PR found") {
+		t.Error("should not attempt FindOpenPR when KnownPRNumber is set")
 	}
 }

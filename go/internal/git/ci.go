@@ -11,12 +11,13 @@ import (
 
 // CICheckResult represents the status of a single CI check from gh pr checks.
 // gh pr checks --json returns: name, state (SUCCESS/FAILURE/PENDING/CANCELLED),
-// bucket (pass/fail/pending).
+// bucket (pass/fail/pending), startedAt.
 type CICheckResult struct {
-	Name       string `json:"name"`
-	State      string `json:"state"`
-	Bucket     string `json:"bucket"`
-	IsRequired bool   `json:"isRequired"`
+	Name       string    `json:"name"`
+	State      string    `json:"state"`
+	Bucket     string    `json:"bucket"`
+	IsRequired bool      `json:"isRequired"`
+	StartedAt  time.Time `json:"startedAt"`
 }
 
 // CIStatus summarizes the overall state of all CI checks on a PR.
@@ -157,19 +158,33 @@ func (e *UnresolvedConflictError) Error() string {
 type CIFetchFunc func(prNumber int, repoURL string) ([]CICheckResult, error)
 
 // AwaitCI fetches CI check status for a PR and polls until checks resolve.
-// When expectedSHA is non-empty, polls until the PR HEAD matches that SHA
-// before reading CI results — preventing stale results after a push.
-func (m *Manager) AwaitCI(ctx context.Context, prNumber int, repoURL, expectedSHA string) ([]CICheckResult, CIStatus, error) {
+// When pushedAt is non-zero, filters out checks that started before the push
+// so only fresh CI results are evaluated. This prevents stale results from a
+// previous push from gating the merge.
+func (m *Manager) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushedAt time.Time) ([]CICheckResult, CIStatus, error) {
 	nwo := NWOFromRemote(repoURL)
 	gh := m.gh()
 
-	if expectedSHA != "" {
-		if err := m.awaitHeadSHA(ctx, gh, prNumber, nwo, expectedSHA); err != nil {
-			return nil, CIPending, err
+	fetch := gh.ListChecks
+	if !pushedAt.IsZero() {
+		m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "Waiting for fresh CI checks (pushed at %s)...", pushedAt.Format("15:04:05"))
+		baseFetch := fetch
+		fetch = func(prNumber int, repoURL string) ([]CICheckResult, error) {
+			checks, err := baseFetch(prNumber, repoURL)
+			if err != nil {
+				return nil, err
+			}
+			var fresh []CICheckResult
+			for _, c := range checks {
+				if !c.StartedAt.IsZero() && c.StartedAt.Before(pushedAt) {
+					continue
+				}
+				fresh = append(fresh, c)
+			}
+			return fresh, nil
 		}
 	}
 
-	fetch := gh.ListChecks
 	checks, fetchErr := fetch(prNumber, repoURL)
 	if fetchErr != nil || len(checks) == 0 {
 		m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "CI checks not available yet — waiting...")
@@ -180,44 +195,6 @@ func (m *Manager) AwaitCI(ctx context.Context, prNumber int, repoURL, expectedSH
 		return checks, status, nil
 	}
 	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
-}
-
-// awaitHeadSHAProgressInterval controls how often awaitHeadSHA emits a
-// progress log while polling. Tests override this to trigger logging
-// without waiting for real wall time.
-var awaitHeadSHAProgressInterval = 10 * time.Second
-
-// awaitHeadSHA polls until the PR HEAD SHA matches expectedSHA.
-func (m *Manager) awaitHeadSHA(ctx context.Context, gh GitHub, prNumber int, nwo, expectedSHA string) error {
-	prLink := logging.PRLinkOpt(nwo, prNumber)
-	m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "Waiting for HEAD to reach %s...", expectedSHA[:min(7, len(expectedSHA))])
-	deadline := time.Now().Add(DefaultCIPollTimeout)
-	start := time.Now()
-	interval := DefaultCIPollInterval
-	lastProgress := time.Now()
-	for {
-		if time.Now().After(deadline) {
-			return fmt.Errorf("PR HEAD did not reach %s within %v", expectedSHA[:min(7, len(expectedSHA))], DefaultCIPollTimeout)
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		currentPR, _ := gh.GetPR(nwo, prNumber)
-		currentSHA := ""
-		if currentPR != nil {
-			currentSHA = currentPR.HeadSHA
-		}
-		if currentSHA == expectedSHA {
-			m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "HEAD confirmed at %s", expectedSHA[:min(7, len(expectedSHA))])
-			return nil
-		}
-		<-ciSleep(interval)
-		interval = nextBackoff(interval)
-		if time.Since(lastProgress) >= awaitHeadSHAProgressInterval {
-			m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "Still waiting for HEAD... (%s elapsed)", time.Since(start).Round(time.Second))
-			lastProgress = time.Now()
-		}
-	}
 }
 
 // waitForCI polls PR checks until they complete or timeout is reached.

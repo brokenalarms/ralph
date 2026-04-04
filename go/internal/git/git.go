@@ -48,6 +48,7 @@ type Manager struct {
 	PrePush          func(ctx context.Context) error
 	LocalTestsPassed bool
 	BypassRules      bool
+	KnownPRNumber    int
 }
 
 // GH returns the GitHub interface, using the injected stub if set (tests)
@@ -65,6 +66,12 @@ func (m *Manager) gh() GitHub {
 
 func (m *Manager) SetLocalTestsPassed(v bool) {
 	m.LocalTestsPassed = v
+}
+
+// SetKnownPRNumber stores a PR number discovered earlier (e.g. during Ship)
+// so that AutoMergeCurrentBranch and FlushUnpushedWork can skip the FindOpenPR lookup.
+func (m *Manager) SetKnownPRNumber(n int) {
+	m.KnownPRNumber = n
 }
 
 

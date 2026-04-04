@@ -155,14 +155,14 @@ func TestListChecks_Stubbable(t *testing.T) {
 	}
 }
 
-// GetPR returns a PRDetail with all four fields populated from a single call,
-// replacing the four separate GetPRState/GetPRBase/GetPRHead/GetPRHeadSHA methods.
+// GetPR returns a PRDetail with all fields populated and auto-generates
+// a deterministic HeadSHA that changes on each call (simulating pushes).
 func TestGetPR_ReturnsAllFields(t *testing.T) {
 	stub := &StubGitHub{
-		PRState:   "OPEN",
-		PRBase:    "main",
-		PRHead:    "feature-branch",
-		PRHeadSHA: "abc123def456",
+		PRState: "OPEN",
+		PRBase:  "main",
+		PRHead:  "feature-branch",
+		HeadSHA: "abc123",
 	}
 
 	pr, err := stub.GetPR("owner/repo", 42)
@@ -178,8 +178,8 @@ func TestGetPR_ReturnsAllFields(t *testing.T) {
 	if pr.HeadRef != "feature-branch" {
 		t.Errorf("HeadRef: want %q, got %q", "feature-branch", pr.HeadRef)
 	}
-	if pr.HeadSHA != "abc123def456" {
-		t.Errorf("HeadSHA: want %q, got %q", "abc123def456", pr.HeadSHA)
+	if pr.HeadSHA != "abc123" {
+		t.Errorf("HeadSHA: want %q, got %q", "abc123", pr.HeadSHA)
 	}
 }
 

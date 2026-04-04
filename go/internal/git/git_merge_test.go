@@ -828,7 +828,6 @@ func TestMergeWithRetry_StopsOnUnresolvableConflict(t *testing.T) {
 	gh := &StubGitHub{
 		IsAvailable: true,
 		OpenPR:      50,
-		PRHeadSHA:   "abc123",
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 		MergeResults: []MergeResult{
 			{Conflict: true, Message: "merge conflict"},

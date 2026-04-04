@@ -1,6 +1,8 @@
 package git
 
-import "time"
+import (
+	"time"
+)
 
 // StubGitHub is a test double for the GitHub interface, shared across all
 // packages that need to stub GitHub operations. Configure fields for the
@@ -38,7 +40,7 @@ type StubGitHub struct {
 	PRState            string
 	PRBase             string
 	PRHead             string
-	PRHeadSHA          string
+	HeadSHA    string
 	OpenPRBranches     []string
 	SearchCalled       bool
 	PRDiffCalled       bool
@@ -137,7 +139,7 @@ func (s *StubGitHub) GetPR(nwo string, prNumber int) (*PRDetail, error) {
 		State:   s.PRState,
 		BaseRef: s.PRBase,
 		HeadRef: s.PRHead,
-		HeadSHA: s.PRHeadSHA,
+		HeadSHA: s.HeadSHA,
 	}, nil
 }
 func (s *StubGitHub) ListOpenPRBranches(repoURL string) ([]string, error) {
