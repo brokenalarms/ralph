@@ -405,14 +405,21 @@ func TestMapCheckRun_ConclusionMapping(t *testing.T) {
 		{"unknown_future_conclusion", "PENDING", "pending"},
 	}
 	for _, tc := range cases {
-		result := mapCheckRun("check", "completed", tc.conclusion, time.Time{})
+		c := tc.conclusion
+		result := mapCheckRun("check", "completed", &c, nil)
 		if result.State != tc.wantState || result.Bucket != tc.wantBucket {
 			t.Errorf("conclusion=%q: want State=%q Bucket=%q, got State=%q Bucket=%q",
 				tc.conclusion, tc.wantState, tc.wantBucket, result.State, result.Bucket)
 		}
 	}
+	// nil conclusion (pending/queued check) → PENDING
+	result := mapCheckRun("check", "completed", nil, nil)
+	if result.State != "PENDING" || result.Bucket != "pending" {
+		t.Errorf("completed+nil conclusion: want PENDING/pending, got State=%q Bucket=%q", result.State, result.Bucket)
+	}
 	// non-completed status always → PENDING regardless of conclusion
-	result := mapCheckRun("check", "queued", "success", time.Time{})
+	s := "success"
+	result = mapCheckRun("check", "queued", &s, nil)
 	if result.State != "PENDING" || result.Bucket != "pending" {
 		t.Errorf("queued+success: want PENDING/pending, got State=%q Bucket=%q", result.State, result.Bucket)
 	}
@@ -574,7 +581,7 @@ func TestListOpenPRBranches_UsesGhAPI(t *testing.T) {
 func TestListAllPRs_UsesGhAPI(t *testing.T) {
 	bin := t.TempDir()
 	logFile := filepath.Join(bin, "gh.log")
-	pullsJSON := `[{"number":10,"head":{"ref":"feat-a"},"base":{"ref":"main"},"state":"open"},{"number":11,"head":{"ref":"feat-b"},"base":{"ref":"main"},"state":"closed"},{"number":12,"head":{"ref":"feat-c"},"base":{"ref":"main"},"state":"closed","merged_at":"2024-01-01T00:00:00Z"}]`
+	pullsJSON := `[{"number":10,"head":{"ref":"feat-a"},"base":{"ref":"main"},"state":"open","merged_at":null},{"number":11,"head":{"ref":"feat-b"},"base":{"ref":"main"},"state":"closed","merged_at":null},{"number":12,"head":{"ref":"feat-c"},"base":{"ref":"main"},"state":"closed","merged_at":"2024-01-01T00:00:00Z"}]`
 	gitPath := filepath.Join(bin, "git")
 	gitScript := "#!/bin/sh\necho 'https://github.com/owner/repo.git'\n"
 	if err := os.WriteFile(gitPath, []byte(gitScript), 0o755); err != nil {
@@ -612,11 +619,15 @@ func TestListAllPRs_UsesGhAPI(t *testing.T) {
 	}
 
 	// State is normalized to uppercase regardless of API's lowercase output.
+	// merged_at:null is treated as not merged (OPEN/CLOSED preserved).
 	if prs[0].State != PRStateOpen {
 		t.Errorf("PR #10: expected state OPEN, got %q", prs[0].State)
 	}
 	if prs[1].State != PRStateClosed {
-		t.Errorf("PR #11: expected state CLOSED, got %q", prs[1].State)
+		t.Errorf("PR #11: expected state CLOSED (merged_at:null), got %q", prs[1].State)
+	}
+	if prs[2].State != PRStateMerged {
+		t.Errorf("PR #12: expected state MERGED (merged_at set), got %q", prs[2].State)
 	}
 }
 
