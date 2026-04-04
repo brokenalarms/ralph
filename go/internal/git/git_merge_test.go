@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -59,109 +60,49 @@ func TestPostMergeUpdateMain_AdvancesLocalMain(t *testing.T) {
 	}
 }
 
-// PostMergeUpdateMain must advance local main to match origin/main without
-// leaving stale staged changes.
-func TestPostMergeUpdateMain_AtomicResetNoStagedChanges(t *testing.T) {
+// PostMergeUpdateMain must not destroy uncommitted working-tree changes in the
+// project dir when advancing local main to origin/main. Users editing files
+// while ralph merges a PR must not lose their unsaved work.
+func TestPostMergeUpdateMain_PreservesUncommittedWorkingTreeChanges(t *testing.T) {
 	project, _ := initBareRepo(t)
 	bare := filepath.Join(filepath.Dir(project), "bare.git")
 	ralphDir := filepath.Join(project, ".ralph")
-	st := newMemState()
-	log := &testLog{}
+
+	// Commit a tracked file to main so we can modify it later.
+	writeFile(t, project, "tracked.txt", "original\n")
+	run(t, "git", "-C", project, "add", "tracked.txt")
+	run(t, "git", "-C", project, "commit", "-m", "add tracked file")
+	run(t, "git", "-C", project, "push", "origin", "main")
 
 	mgr := &Manager{
 		ProjectDir: project,
 		RalphDir:   ralphDir,
 		BaseBranch: "main",
-		State:      st,
-		Logger:     log,
+		State:      newMemState(),
+		Logger:     &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	// Verify main is checked out in project dir (the typical worktree scenario)
-	checkedOut := gitOutput(project, "symbolic-ref", "--short", "HEAD")
-	if checkedOut != "main" {
-		t.Fatalf("expected main checked out in project dir, got %q", checkedOut)
+	// Simulate user editing a tracked file in the project dir without staging it.
+	if err := os.WriteFile(filepath.Join(project, "tracked.txt"), []byte("user-modified\n"), 0o644); err != nil {
+		t.Fatalf("write tracked.txt: %v", err)
 	}
 
-	localMainBefore := gitOutput(project, "rev-parse", "main")
-
-	// Simulate a commit landing on origin/main (as happens after squash-merge)
-	// by pushing directly to the bare repo from a temp clone.
+	// Push a new commit to origin/main from a separate clone (simulates PR merge).
 	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
 	run(t, "git", "clone", bare, tmpClone)
-	writeFile(t, tmpClone, "merged-work.txt", "merged content\n")
+	writeFile(t, tmpClone, "merged-pr.txt", "merged content\n")
 	run(t, "git", "-C", tmpClone, "commit", "-m", "squash-merged PR")
 	run(t, "git", "-C", tmpClone, "push", "origin", "main")
 
-	// Fetch in project dir so origin/main advances
-	run(t, "git", "-C", project, "fetch", "origin", "main")
-
-	originMain := gitOutput(project, "rev-parse", "origin/main")
-	if originMain == localMainBefore {
-		t.Fatal("origin/main should have advanced")
-	}
-
-	// Call PostMergeUpdateMain (the method under test)
 	mgr.PostMergeUpdateMain()
 
-	// Local main should now match origin/main
-	localMainAfter := gitOutput(project, "rev-parse", "main")
-	if localMainAfter != originMain {
-		t.Errorf("local main should match origin/main: got %s, want %s", localMainAfter, originMain)
-	}
-
-	// Main must still be checked out
-	stillCheckedOut := gitOutput(project, "symbolic-ref", "--short", "HEAD")
-	if stillCheckedOut != "main" {
-		t.Errorf("main should still be checked out, got %q", stillCheckedOut)
-	}
-
-	// The index must have no staged changes — this is the critical assertion.
-	// The old update-ref approach left the index stale, causing `git diff --cached`
-	// to show staged reversions of the merged PR's files.
-	diffIndex := strings.TrimSpace(gitOutput(project, "diff", "--cached", "--name-only"))
-	if diffIndex != "" {
-		t.Errorf("project dir should have no staged changes after postMergeUpdate, got:\n%s", diffIndex)
-	}
-}
-
-// Proves the old two-step approach (update-ref + reset --hard HEAD) leaves
-// stale staged changes, demonstrating why atomic reset is necessary.
-func TestPostMergeUpdate_TwoStepLeavesStaleIndex(t *testing.T) {
-	project, _ := initBareRepo(t)
-	bare := filepath.Join(filepath.Dir(project), "bare.git")
-
-	localMainBefore := gitOutput(project, "rev-parse", "main")
-
-	// Push a new commit to origin/main via a temp clone.
-	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
-	run(t, "git", "clone", bare, tmpClone)
-	writeFile(t, tmpClone, "merged-work.txt", "merged content\n")
-	run(t, "git", "-C", tmpClone, "commit", "-m", "squash-merged PR")
-	run(t, "git", "-C", tmpClone, "push", "origin", "main")
-
-	run(t, "git", "-C", project, "fetch", "origin", "main")
-
-	originMain := gitOutput(project, "rev-parse", "origin/main")
-	if originMain == localMainBefore {
-		t.Fatal("origin/main should have advanced")
-	}
-
-	// Reproduce the old buggy two-step: update-ref advances the ref but
-	// the index still reflects the old commit's tree.
-	gitCmd(project, "update-ref", "refs/heads/main", originMain)
-	// At this point git diff --cached will show staged reversions because
-	// the index doesn't match the new HEAD.
-	diffAfterUpdateRef := strings.TrimSpace(gitOutput(project, "diff", "--cached", "--name-only"))
-	if diffAfterUpdateRef == "" {
-		t.Skip("git version doesn't exhibit the stale-index behavior after update-ref")
-	}
-
-	// Confirm the stale index shows the merged file as a staged deletion
-	if !strings.Contains(diffAfterUpdateRef, "merged-work.txt") {
-		t.Errorf("expected stale index to show merged-work.txt as staged change, got:\n%s", diffAfterUpdateRef)
+	// User's modification to tracked.txt must survive the main-update.
+	got := strings.TrimSpace(gitOutput(project, "diff", "HEAD", "--", "tracked.txt"))
+	if !strings.Contains(got, "user-modified") {
+		t.Errorf("working tree change to tracked.txt was destroyed by PostMergeUpdateMain; diff:\n%s", got)
 	}
 }
 
