@@ -9,7 +9,8 @@
   },
   "scripts": {
     "start": "node server.js",
-    "loop": "bash ralph.sh"
+    "loop": "bash ralph.sh",
+    "test:verify": "cd go && go test -count=1 ./..."
   },
   "keywords": ["claude", "ai", "automation", "loop", "agent"],
   "license": "MIT"

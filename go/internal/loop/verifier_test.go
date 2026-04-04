@@ -46,6 +46,7 @@ func newTestVerifier(t *testing.T, opts ...func(*Verifier)) *Verifier {
 	os.MkdirAll(ralphDir, 0o755)
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\ttrue\n"), 0o644)
 
 	st := newTestState(t, ralphDir)
 
@@ -187,12 +188,12 @@ func TestVerifier_OnSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 
 	v := newTestVerifier(t, func(v *Verifier) {
 		verifyDir := v.cfg.VerifyDir
-		os.WriteFile(filepath.Join(verifyDir, "Makefile"), []byte("test:\n\t@echo 'FAIL: widget_test.go:42 expected 3 got 5' && exit 1\n"), 0o644)
+		os.WriteFile(filepath.Join(verifyDir, "Makefile"), []byte("test-verify:\n\t@echo 'FAIL: widget_test.go:42 expected 3 got 5' && exit 1\n"), 0o644)
 
 		v.deps.NewRunner = func() claudeRunner {
 			fixAgentCalled = true
-			// Fix agent "fixes" the tests by removing the failing Makefile
-			os.Remove(filepath.Join(verifyDir, "Makefile"))
+			// Fix agent "fixes" the tests by replacing with a passing Makefile
+			os.WriteFile(filepath.Join(verifyDir, "Makefile"), []byte("test-verify:\n\ttrue\n"), 0o644)
 			return &promptCapturingFixRunner{
 				onPrompt: func(p string) { fixPromptReceived = p },
 				result:   stubResult(true, "fixed tests"),
@@ -224,7 +225,7 @@ func TestVerifier_OnSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 // not start a new iteration.
 func TestVerifier_OnSignal_TestFailure_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 	v := newTestVerifier(t, func(v *Verifier) {
-		os.WriteFile(filepath.Join(v.cfg.VerifyDir, "Makefile"), []byte("test:\n\t@echo 'FAIL' && exit 1\n"), 0o644)
+		os.WriteFile(filepath.Join(v.cfg.VerifyDir, "Makefile"), []byte("test-verify:\n\t@echo 'FAIL' && exit 1\n"), 0o644)
 
 		v.deps.NewRunner = func() claudeRunner {
 			return &stubRunner{result: stubResult(false, "")}
@@ -250,7 +251,7 @@ func TestVerifier_OnSignal_TestFailure_ExhaustsRetries(t *testing.T) {
 	fixAttempts := 0
 
 	v := newTestVerifier(t, func(v *Verifier) {
-		os.WriteFile(filepath.Join(v.cfg.VerifyDir, "Makefile"), []byte("test:\n\t@echo 'FAIL' && exit 1\n"), 0o644)
+		os.WriteFile(filepath.Join(v.cfg.VerifyDir, "Makefile"), []byte("test-verify:\n\t@echo 'FAIL' && exit 1\n"), 0o644)
 
 		v.deps.NewRunner = func() claudeRunner {
 			fixAttempts++
@@ -431,7 +432,7 @@ func TestVerifier_FixAgents_UseOpusModel(t *testing.T) {
 	// Test fix agent.
 	vTest := newTestVerifier(t, func(v *Verifier) {
 		verifyDir := v.cfg.VerifyDir
-		os.WriteFile(filepath.Join(verifyDir, "Makefile"), []byte("test:\n\t@echo 'FAIL' && exit 1\n"), 0o644)
+		os.WriteFile(filepath.Join(verifyDir, "Makefile"), []byte("test-verify:\n\t@echo 'FAIL' && exit 1\n"), 0o644)
 		v.deps.NewRunner = func() claudeRunner {
 			os.Remove(filepath.Join(verifyDir, "Makefile"))
 			return &promptCapturingFixRunner{
@@ -623,7 +624,7 @@ func TestVerifier_RunTestsWithHeartbeat_EmitsHeartbeat(t *testing.T) {
 
 	v := newTestVerifier(t, func(v *Verifier) {
 		v.deps.Logger = logger
-		os.WriteFile(filepath.Join(v.cfg.VerifyDir, "Makefile"), []byte("test:\n\t@sleep 0.1\n"), 0o644)
+		os.WriteFile(filepath.Join(v.cfg.VerifyDir, "Makefile"), []byte("test-verify:\n\t@sleep 0.1\n"), 0o644)
 	})
 
 	result, elapsed := v.runTestsWithHeartbeat(context.Background(), v.cfg.VerifyDir)

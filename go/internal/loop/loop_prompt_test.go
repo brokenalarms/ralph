@@ -118,7 +118,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		[]byte("Assumptions\n{{TEST_STATUS}}\n{{TASK_INSTRUCTIONS}}\n{{ATTEMPT_HISTORY}}"), 0o644)
 
 	// Create Makefile with passing tests
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\ttrue\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\ttrue\n"), 0o644)
 
 	var capturedPrompt string
 	backend := &testutil.StubBackend{

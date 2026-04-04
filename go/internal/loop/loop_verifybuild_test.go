@@ -207,7 +207,7 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 	os.WriteFile(scriptPath, []byte("#!/bin/sh\necho 'bundle invalid'\nexit 2\n"), 0o755)
 
 	// Also create a passing test suite so pre-iteration tests pass.
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\ttrue\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\ttrue\n"), 0o644)
 
 	var capturedPrompt string
 	backend := &testutil.StubBackend{

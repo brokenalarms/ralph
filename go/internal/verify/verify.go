@@ -91,41 +91,31 @@ type TestCommand struct {
 	Args []string
 }
 
-// DetectTestCommand inspects the project directory for common test runners
-// and returns the command to execute. Returns nil if no test runner is found.
+// DetectTestCommand looks for an explicit test:verify script in the project.
+// Projects must declare what "verified" means — the loop does not guess.
+// Returns nil if no test:verify script is found; callers should refuse to
+// start the loop without a verify command.
 func DetectTestCommand(dir string) *TestCommand {
-	if hasMakeTarget(dir, "test") {
-		return &TestCommand{Cmd: "make", Args: []string{"test"}}
-	}
-
 	if fileExists(filepath.Join(dir, "package.json")) {
-		if hasNPMScript(dir, "test") {
-			return &TestCommand{Cmd: "npm", Args: []string{"test"}}
+		if hasNPMScript(dir, "test:verify") {
+			return &TestCommand{Cmd: "npm", Args: []string{"run", "test:verify"}}
 		}
 	}
 
-	if fileExists(filepath.Join(dir, "Cargo.toml")) {
-		return &TestCommand{Cmd: "cargo", Args: []string{"test"}}
-	}
-
-	if hasGoMod(dir) {
-		return &TestCommand{Cmd: "go", Args: []string{"test", "-count=1", "./..."}}
-	}
-
-	if fileExists(filepath.Join(dir, "pyproject.toml")) || fileExists(filepath.Join(dir, "setup.py")) {
-		return &TestCommand{Cmd: "python", Args: []string{"-m", "pytest"}}
+	if hasMakeTarget(dir, "test-verify") {
+		return &TestCommand{Cmd: "make", Args: []string{"test-verify"}}
 	}
 
 	return nil
 }
 
 // RunTests executes the detected test command and returns the result.
-// If no test command is detected, verification passes (we can't block
-// on projects that don't have tests).
+// Returns a failure if no test:verify command is detected — the loop
+// should have caught this at startup, but we fail safe here too.
 func RunTests(ctx context.Context, dir string) Result {
 	tc := DetectTestCommand(dir)
 	if tc == nil {
-		return Result{Passed: true, Reason: "no test runner detected"}
+		return Result{Passed: false, Reason: "no test:verify script found — add a \"test:verify\" script to package.json"}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, TestTimeout)
