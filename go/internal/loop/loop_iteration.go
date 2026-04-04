@@ -525,6 +525,25 @@ type finalizePRResult struct {
 	closed bool
 }
 
+// copilotReviewAddressed returns true when Copilot review feedback was
+// already addressed for this task in a previous finalizePR call.
+func (p *finalizePRParams) copilotReviewAddressed() bool {
+	if p.state == nil || p.taskID == "" {
+		return false
+	}
+	v, _ := p.state.Read("copilot_review_addressed:" + p.taskID)
+	return v == "true"
+}
+
+// markCopilotReviewAddressed records that Copilot review feedback was
+// addressed so subsequent finalizePR calls for the same task skip re-polling.
+func (p *finalizePRParams) markCopilotReviewAddressed() {
+	if p.state == nil || p.taskID == "" {
+		return
+	}
+	p.state.Write("copilot_review_addressed:"+p.taskID, "true")
+}
+
 // finalizePR handles an existing PR: merges if applicable, closes the bead.
 // Returns the merge/close outcome so callers can act on it (e.g. evolve).
 func finalizePR(p finalizePRParams) finalizePRResult {
@@ -553,12 +572,16 @@ func finalizePR(p finalizePRParams) finalizePRResult {
 		if prBase != "" && prBase != defaultBranch {
 			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, p.prNumber)}, "targets %s — stacked, closing bead", prBase)
 		} else {
-			if p.copilotReviewEnabled {
+			if p.copilotReviewEnabled && !p.copilotReviewAddressed() {
 				review, err := p.git.PollCopilotReview(p.prNumber, 120*time.Second)
 				if err != nil {
 					p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "Copilot review poll: %v", err)
 				} else if review != nil {
 					p.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink(p.git, p.prNumber)}, "Copilot review received (%d comments)", len(review.Comments))
+					if p.verifier != nil {
+						tryFixCopilotReview(p.ctx, p.git, p.verifier, p.logger, review, p.prNumber, p.nextTask, p.workDir, p.rawLogPath)
+					}
+					p.markCopilotReviewAddressed()
 				} else {
 					p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "No Copilot review arrived within timeout — proceeding to merge")
 				}
