@@ -1629,6 +1629,48 @@ func TestCreatePR_ReopensClosedPROnCreateFailure(t *testing.T) {
 	}
 }
 
+// CreatePR returns the merged PR number without error when the branch already has
+// a merged PR — the push landed commits into the existing merged PR, so there is
+// nothing left to do. No reopen or API-create fallback should be attempted.
+func TestCreatePR_ReturnsMergedPRNumberOnAlreadyExists(t *testing.T) {
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      0,                                                              // no open PR found
+		CreatePRErr: fmt.Errorf("A pull request already exists for brokenalarms:ralph/already-merged-branch"), // create fails with 422
+		PRNumber:    438,                                                             // FindPR returns this
+		PRState:     "MERGED",                                                        // GetPR returns this
+	}
+
+	mgr := &Manager{
+		ProjectDir:     "/project",
+		WorkDir:        "/project/wt",
+		WorktreeBranch: "ralph/already-merged-branch",
+		BaseBranch:     "main",
+		Runner:         runner,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	prNumber, err := mgr.CreatePR(context.Background(), "ralph-test", "Fix merged", "body")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if prNumber != 438 {
+		t.Errorf("expected merged PR number 438, got %d", prNumber)
+	}
+	if gh.ReopenPRCalled {
+		t.Error("must not attempt to reopen a merged PR")
+	}
+	if gh.CreatePRViaAPICalled {
+		t.Error("must not attempt API PR creation when a merged PR already exists")
+	}
+}
+
 // When the fix agent makes no commits (CIFixNoCommits), MergeWithRetry retries
 // with exponential backoff instead of immediately giving up. After MaxInfraRetries,
 // it returns the CI error. This covers the case where CI fails due to infrastructure
