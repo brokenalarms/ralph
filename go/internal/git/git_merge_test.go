@@ -364,7 +364,9 @@ func TestPushAndCreatePR_IncludesBeadIDInTitle(t *testing.T) {
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
 	var capturedOpts CreatePROpts
-	ghBase := NewStubGitHub(); ghBase.OpenPR = 0; gh := &capturingGitHub{StubGitHub: *ghBase}
+	ghBase := NewStubGitHub()
+	ghBase.OpenPR = 0
+	gh := &capturingGitHub{StubGitHub: *ghBase}
 	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
 		return 0, nil
@@ -401,7 +403,9 @@ func TestPushAndCreatePR_NoBeadID(t *testing.T) {
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
 	var capturedOpts CreatePROpts
-	ghBase := NewStubGitHub(); ghBase.OpenPR = 0; gh := &capturingGitHub{StubGitHub: *ghBase}
+	ghBase := NewStubGitHub()
+	ghBase.OpenPR = 0
+	gh := &capturingGitHub{StubGitHub: *ghBase}
 	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
 		return 0, nil
