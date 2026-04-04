@@ -29,6 +29,15 @@ type integrationBackend struct {
 	metadata     map[string]map[string]string
 	externalRefs map[string]string
 	states       []integrationStateCall
+	onClose      func(id string) // optional hook called before CloseTask records the ID
+}
+
+// CloseTask overrides TrackingBackend.CloseTask to call onClose before recording.
+func (b *integrationBackend) CloseTask(id, reason string) error {
+	if b.onClose != nil {
+		b.onClose(id)
+	}
+	return b.TrackingBackend.CloseTask(id, reason)
 }
 
 type integrationStateCall struct {
@@ -1684,6 +1693,238 @@ func TestIntegration_DependencyBlockedTaskIsSkipped(t *testing.T) {
 	defer backend.CloseMu.Unlock()
 	if len(backend.SkippedIDs) == 0 {
 		t.Error("task should be skipped when CloseTask fails with dependency error")
+	}
+}
+
+// ciTriggerGit extends StubGit to call opts.OnCIFailure once when configured,
+// enabling tests to verify the CI failure → fix agent path through the full loop
+// without a real GitHub connection.
+type ciTriggerGit struct {
+	*testutil.StubGit
+	triggerCI bool // if true, next MergeWithRetry call triggers OnCIFailure once
+}
+
+func (g *ciTriggerGit) MergeWithRetry(ctx context.Context, opts git.MergeRetryOpts) (bool, error) {
+	g.StubGit.MergeRetryCalls++
+	if g.triggerCI && opts.OnCIFailure != nil {
+		g.triggerCI = false
+		ciErr := &git.CIFailureError{
+			PRNumber: 42,
+			Failures: []git.CICheckResult{{Name: "tests", Bucket: "fail"}},
+		}
+		result := opts.OnCIFailure(ciErr)
+		if result == git.CIFixApplied {
+			return true, nil
+		}
+		return false, ciErr
+	}
+	if g.StubGit.MergeRetryFunc != nil {
+		return g.StubGit.MergeRetryFunc(ctx)
+	}
+	return g.StubGit.MergeRetryResult, g.StubGit.MergeRetryErr
+}
+
+// TestIntegration_FullLifecycleSequenceOrdering verifies that all lifecycle
+// stages execute in the documented order: signal → verify → push → merge →
+// close, repeated for each task. A sequence recorder captures each stage and
+// asserts the final ordering.
+//
+// Also verifies the second iteration: after first close, next task is selected
+// and the worktree is reset via PrepareForNextTask.
+func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
+
+	var seq []string
+	var seqMu sync.Mutex
+	record := func(stage string) {
+		seqMu.Lock()
+		seq = append(seq, stage)
+		seqMu.Unlock()
+	}
+
+	backend := newIntegrationBackend()
+	backend.onClose = func(id string) { record("close:" + id) }
+	backend.Remaining = 2
+	backend.Completed = 0
+	backend.Total = 2
+	backend.NextTask = "Add auth middleware"
+	backend.NextID = "ralph-seq1"
+	backend.BackendLabel = "beads"
+
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/next",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		GitHubStub:     &git.StubGitHub{IsAvailable: true, PRBase: "main"},
+	}
+
+	prCounter := 0
+	gm.ShipFunc = func(_ context.Context, _ git.ShipOpts) (git.ShipResult, error) {
+		record("push")
+		prCounter++
+		return git.ShipResult{PRNumber: prCounter * 10}, nil
+	}
+	gm.MergeRetryFunc = func(_ context.Context) (bool, error) {
+		record("merge")
+		return true, nil
+	}
+
+	taskIdx := 0
+	runner := &stubRunner{
+		onRun: func() {
+			record("agent_signal")
+			taskIdx++
+			// Simulate a new commit so push is triggered (SHA changes from "").
+			gm.HeadRevValue = fmt.Sprintf("sha%d", taskIdx)
+			backend.Lock()
+			backend.Completed = taskIdx
+			if taskIdx == 1 {
+				backend.NextTask = "Write auth tests"
+				backend.NextID = "ralph-seq2"
+				backend.Remaining = 1
+			} else {
+				backend.Remaining = 0
+			}
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.cfg.OnVerify = func(_ context.Context, _, _ string) (bool, string) {
+		record("verify")
+		return true, ""
+	}
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
+
+	seqMu.Lock()
+	got := make([]string, len(seq))
+	copy(got, seq)
+	seqMu.Unlock()
+
+	want := []string{
+		"agent_signal", "verify", "push", "merge", "close:ralph-seq1",
+		"agent_signal", "verify", "push", "merge", "close:ralph-seq2",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("stage sequence length: got %d, want %d\ngot:  %v\nwant: %v", len(got), len(want), got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("stage[%d]: got %q, want %q\nfull sequence: %v", i, got[i], want[i], got)
+		}
+	}
+
+	// Both tasks are recorded in session output.
+	sessionTasks := l.SessionTasks()
+	if len(sessionTasks) != 2 {
+		t.Fatalf("expected 2 session tasks, got %d", len(sessionTasks))
+	}
+	if sessionTasks[0].ID != "ralph-seq1" || sessionTasks[1].ID != "ralph-seq2" {
+		t.Errorf("session task IDs: got [%s, %s], want [ralph-seq1, ralph-seq2]",
+			sessionTasks[0].ID, sessionTasks[1].ID)
+	}
+
+	// Worktree was reset for both tasks (PrepareForNextTask called at least twice).
+	if gm.PrepareForNextCalls < 2 {
+		t.Errorf("worktree reset (PrepareForNextTask) expected ≥2 calls, got %d", gm.PrepareForNextCalls)
+	}
+}
+
+// TestIntegration_CIFailureTriggersFixAgent verifies that when MergeWithRetry
+// encounters a CI failure it invokes the OnCIFailure callback which spawns a
+// fix agent, and that the loop completes successfully after the fix.
+func TestIntegration_CIFailureTriggersFixAgent(t *testing.T) {
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Completed = 0
+	backend.Total = 1
+	backend.NextTask = "Fix CI pipeline"
+	backend.NextID = "ralph-ci2"
+	backend.BackendLabel = "beads"
+
+	stub := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/next",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		GitHubStub:     &git.StubGitHub{IsAvailable: true, PRBase: "main"},
+	}
+	gm := &ciTriggerGit{StubGit: stub, triggerCI: true}
+	gm.ShipResult = git.ShipResult{PRNumber: 99}
+	gm.PRNumber = 99
+
+	runner := &stubRunner{
+		onRun: func() {
+			stub.HeadRevValue = "initial-sha"
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "implemented"},
+	}
+
+	fixAgentCalled := false
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.NewRunner = func() claudeRunner {
+		fixAgentCalled = true
+		// Fix agent simulates a new commit by changing the HEAD SHA.
+		stub.HeadRevValue = "sha-after-fix"
+		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "ci fixed"}}
+	}
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
+
+	if !fixAgentCalled {
+		t.Error("fix agent should have been spawned for CI failure")
+	}
+
+	// Task was closed after fix agent resolved CI.
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) == 0 {
+		t.Fatal("task should be closed after CI fix and merge")
+	}
+	if backend.ClosedIDs[0] != "ralph-ci2" {
+		t.Errorf("expected ralph-ci2 to be closed, got %q", backend.ClosedIDs[0])
 	}
 }
 
