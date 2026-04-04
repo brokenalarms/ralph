@@ -118,13 +118,15 @@ Never show the raw bd command — only the echo-back.
 
 ### Updating beads
 
-Before any `bd update`, run `bd show <id>` to verify the bead is not
-closed. `bd update` on a closed bead silently succeeds — there is no error
-to catch. You must check status explicitly before every update.
+Before any `bd update`, run two checks:
+
+1. `bd show <id>` — verify the bead is not closed. `bd update` on a closed bead silently succeeds — there is no error to catch.
+2. `bd state <id> phase` — check whether the loop is actively working on it. A bead may still show `open` in `bd show` while `phase=implementing` — the phase field is the authoritative in-flight indicator.
 
 - **Closed** → never update or reopen closed beads. Create a new bead and
   reference the original. This applies whether the fix was wrong,
   incomplete, or follow-on work is needed.
+- **phase=implementing** → the loop agent is actively working on this bead right now. Do not modify it. Either confirm with the user that changes should go into the active bead, or create a follow-up task with a dependency on it instead.
 - **in_progress** → ask the user for confirmation before modifying. Do not
   silently change tasks that the ralph loop is actively working on.
 - **Open** → modify freely.
