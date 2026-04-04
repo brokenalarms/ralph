@@ -854,7 +854,13 @@ func (m *Manager) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string
 func (m *Manager) PostMergeUpdateMain() {
 	defaultBranch := m.detectDefaultBranch()
 	m.gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
-	m.gitCmd(m.ProjectDir, "update-ref", "refs/heads/"+defaultBranch, "origin/"+defaultBranch)
+
+	currentBranch := strings.TrimSpace(m.gitOutput(m.ProjectDir, "symbolic-ref", "--short", "HEAD"))
+	if currentBranch == defaultBranch {
+		m.gitCmd(m.ProjectDir, "merge", "--ff-only", "origin/"+defaultBranch)
+	} else {
+		m.gitCmd(m.ProjectDir, "update-ref", "refs/heads/"+defaultBranch, "origin/"+defaultBranch)
+	}
 	m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Updated local %s to latest origin", defaultBranch)
 
 	// Sync worktree with updated main. If rebase conflicts, reset —

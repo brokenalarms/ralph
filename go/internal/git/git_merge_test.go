@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -85,7 +86,9 @@ func TestPostMergeUpdateMain_PreservesUncommittedWorkingTreeChanges(t *testing.T
 	}
 
 	// Simulate user editing a tracked file in the project dir without staging it.
-	writeFile(t, project, "tracked.txt", "user-modified\n")
+	if err := os.WriteFile(filepath.Join(project, "tracked.txt"), []byte("user-modified\n"), 0o644); err != nil {
+		t.Fatalf("write tracked.txt: %v", err)
+	}
 
 	// Push a new commit to origin/main from a separate clone (simulates PR merge).
 	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
