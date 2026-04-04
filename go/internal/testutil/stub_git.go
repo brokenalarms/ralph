@@ -106,7 +106,11 @@ func (s *StubGit) GetPRState(prNumber int) (string, error) {
 		return s.PRState, s.PRStateErr
 	}
 	if gh, ok := s.GitHubStub.(*git.StubGitHub); ok && gh != nil {
-		return gh.GetPRState("", prNumber)
+		pr, err := gh.GetPR("", prNumber)
+		if err != nil {
+			return "", err
+		}
+		return pr.State, nil
 	}
 	return "", nil
 }
@@ -124,8 +128,11 @@ func (s *StubGit) GetPRBase(prNumber int) string {
 		return s.PRBase
 	}
 	if gh, ok := s.GitHubStub.(*git.StubGitHub); ok && gh != nil {
-		base, _ := gh.GetPRBase("", prNumber)
-		return base
+		pr, err := gh.GetPR("", prNumber)
+		if err != nil {
+			return ""
+		}
+		return pr.BaseRef
 	}
 	return ""
 }

@@ -115,7 +115,11 @@ func (m *Manager) GetPRState(prNumber int) (string, error) {
 	if !gh.Available() {
 		return "", nil
 	}
-	return gh.GetPRState(m.WorkDir, prNumber)
+	pr, err := gh.GetPR(NWOFromRemote(m.RemoteURL()), prNumber)
+	if err != nil {
+		return "", err
+	}
+	return pr.State, nil
 }
 
 // ListOpenPRBranches returns branch names that have open PRs.
@@ -134,8 +138,11 @@ func (m *Manager) GetPRBase(prNumber int) string {
 	if !gh.Available() {
 		return ""
 	}
-	base, _ := gh.GetPRBase(m.WorkDir, prNumber)
-	return base
+	pr, err := gh.GetPR(NWOFromRemote(m.RemoteURL()), prNumber)
+	if err != nil {
+		return ""
+	}
+	return pr.BaseRef
 }
 
 // FindPRForBranch finds any PR (open or closed) for the given branch.
@@ -154,7 +161,11 @@ func (m *Manager) PRChainIsHealthy(prNumber int) (bool, string) {
 	if !gh.Available() {
 		return false, "gh CLI not available"
 	}
-	headBranch, _ := gh.GetPRHead(m.WorkDir, prNumber)
+	pr, _ := gh.GetPR(NWOFromRemote(m.RemoteURL()), prNumber)
+	headBranch := ""
+	if pr != nil {
+		headBranch = pr.HeadRef
+	}
 	if headBranch == "" {
 		return false, fmt.Sprintf("PR #%d has no head branch", prNumber)
 	}

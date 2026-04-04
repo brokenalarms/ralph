@@ -75,18 +75,18 @@ func (r *mergeStubRunner) neverCalledWith(args ...string) bool {
 // Compile-time check that mergeStubRunner satisfies git.Runner.
 var _ git.Runner = (*mergeStubRunner)(nil)
 
-// trackingGH wraps StubGitHub and records which PR numbers GetPRHeadSHA is called for.
+// trackingGH wraps StubGitHub and records which PR numbers GetPR is called for.
 type trackingGH struct {
 	*git.StubGitHub
 	mu           sync.Mutex
 	headSHACalls []int
 }
 
-func (g *trackingGH) GetPRHeadSHA(workDir string, prNumber int) (string, error) {
+func (g *trackingGH) GetPR(nwo string, prNumber int) (*git.PRDetail, error) {
 	g.mu.Lock()
 	g.headSHACalls = append(g.headSHACalls, prNumber)
 	g.mu.Unlock()
-	return fmt.Sprintf("sha-%d", prNumber), nil
+	return &git.PRDetail{HeadSHA: fmt.Sprintf("sha-%d", prNumber)}, nil
 }
 
 func (g *trackingGH) calledForPR(prNumber int) bool {
@@ -411,9 +411,9 @@ func TestRunMerge_SecondPRRebased(t *testing.T) {
 		t.Error("expected force-with-lease push of pr2")
 	}
 
-	// GetPRHeadSHA must be called for PR 2 to get the fresh HEAD after push.
+	// GetPR must be called for PR 2 to get the fresh HEAD after push.
 	if !gh.calledForPR(2) {
-		t.Error("GetPRHeadSHA not called for PR 2 — fresh CI was not awaited after rebase")
+		t.Error("GetPR not called for PR 2 — fresh CI was not awaited after rebase")
 	}
 }
 
@@ -497,7 +497,7 @@ func mergeCmdOutputDir(dir, name string, args ...string) string {
 }
 
 // Proves: when a two-PR stack is merged, the second PR's branch is rebased
-// onto the updated main and fresh CI is awaited (GetPRHeadSHA is called for
+// onto the updated main and fresh CI is awaited (GetPR is called for
 // the second PR) before it is merged. This ensures stale CI results from the
 // original base branch are never used to gate the merge.
 func TestRunMerge_SecondPRWaitsForFreshCI(t *testing.T) {
@@ -556,9 +556,9 @@ func TestRunMerge_SecondPRWaitsForFreshCI(t *testing.T) {
 		t.Errorf("expected 2 MergePR calls, got %d", ghStub.MergeCalls)
 	}
 
-	// GetPRHeadSHA must be called for PR 2 to get the fresh HEAD after rebase.
+	// GetPR must be called for PR 2 to get the fresh HEAD after rebase.
 	if !ghStub.calledForPR(2) {
-		t.Error("GetPRHeadSHA was not called for PR 2 — fresh CI was not awaited after rebase")
+		t.Error("GetPR was not called for PR 2 — fresh CI was not awaited after rebase")
 	}
 
 	// Verify pr2 was actually rebased onto the updated main (not the old main).
@@ -844,7 +844,7 @@ func TestRunMerge_PerPRRebaseMechanicalConflictAutoResolves(t *testing.T) {
 		t.Errorf("expected 2 MergePR calls (both PRs merged), got %d", ghStub.MergeCalls)
 	}
 	if !ghStub.calledForPR(2) {
-		t.Error("GetPRHeadSHA not called for PR 2 — fresh CI not awaited after auto-resolved rebase")
+		t.Error("GetPR not called for PR 2 — fresh CI not awaited after auto-resolved rebase")
 	}
 }
 

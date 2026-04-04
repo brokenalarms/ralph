@@ -96,6 +96,7 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 	gh := gm.GH()
 	merged := 0
 	repoURL := gm.RemoteURL()
+	nwo := git.NWOFromRemote(repoURL)
 	for _, pr := range prs {
 		if merged > 0 {
 			log.DashedSeparator(logging.Cyan)
@@ -132,7 +133,10 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 		}
 
 		// Get the HEAD SHA after push for fresh CI detection.
-		expectedSHA, _ := gh.GetPRHeadSHA(projectDir, pr.number)
+		expectedSHA := ""
+		if prDetail, err := gh.GetPR(nwo, pr.number); err == nil {
+			expectedSHA = prDetail.HeadSHA
+		}
 
 		// Wait for CI on the current HEAD.
 		log.Emit(logging.Opts{Domain: logging.CI}, "Waiting for CI on PR #%d...", pr.number)

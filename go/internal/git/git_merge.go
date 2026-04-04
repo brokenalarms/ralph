@@ -99,8 +99,8 @@ func reopenClosedPR(gh GitHub, workDir, branch, nwo, repoURL, title, body string
 	if findErr != nil || number == 0 {
 		return 0, findErr
 	}
-	state, stateErr := gh.GetPRState(workDir, number)
-	if stateErr != nil || strings.ToUpper(state) != "CLOSED" {
+	prDetail, stateErr := gh.GetPR(nwo, number)
+	if stateErr != nil || prDetail == nil || prDetail.State != "CLOSED" {
 		return 0, stateErr
 	}
 
@@ -388,7 +388,11 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 
 	defaultBranch := m.detectDefaultBranch()
 
-	prBase, _ := gh.GetPRBase(m.WorkDir, prNumber)
+	prDetail, _ := gh.GetPR(nwo, prNumber)
+	prBase := ""
+	if prDetail != nil {
+		prBase = prDetail.BaseRef
+	}
 	if prBase != "" && prBase != defaultBranch {
 		m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "targets %s (not %s) — waiting for base PRs to merge first", prBase, defaultBranch)
 		return false, ErrStackedPRWaiting
@@ -444,15 +448,15 @@ func (m *Manager) resolveClosedPR(gh GitHub, repoURL string) (int, error) {
 		return 0, nil
 	}
 
-	state, stateErr := gh.GetPRState(m.WorkDir, number)
-	if stateErr != nil {
+	nwo := NWOFromRemote(repoURL)
+	prDetail, stateErr := gh.GetPR(nwo, number)
+	if stateErr != nil || prDetail == nil {
 		return 0, nil
 	}
 
-	nwo := NWOFromRemote(repoURL)
 	prLink := logging.PRLinkOpt(nwo, number)
 
-	switch strings.ToUpper(state) {
+	switch prDetail.State {
 	case "MERGED":
 		m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "already merged — nothing to do")
 		return 0, ErrPRAlreadyMerged

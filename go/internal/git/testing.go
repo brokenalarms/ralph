@@ -126,17 +126,13 @@ func (s *StubGitHub) PRDiff(repoURL string, prNumber int) (string, error) {
 	s.PRDiffCalled = true
 	return s.PRDiffOutput, nil
 }
-func (s *StubGitHub) GetPRState(workDir string, prNumber int) (string, error) {
-	return s.PRState, nil
-}
-func (s *StubGitHub) GetPRBase(workDir string, prNumber int) (string, error) {
-	return s.PRBase, nil
-}
-func (s *StubGitHub) GetPRHead(workDir string, prNumber int) (string, error) {
-	return s.PRHead, nil
-}
-func (s *StubGitHub) GetPRHeadSHA(workDir string, prNumber int) (string, error) {
-	return s.PRHeadSHA, nil
+func (s *StubGitHub) GetPR(nwo string, prNumber int) (*PRDetail, error) {
+	return &PRDetail{
+		State:   s.PRState,
+		BaseRef: s.PRBase,
+		HeadRef: s.PRHead,
+		HeadSHA: s.PRHeadSHA,
+	}, nil
 }
 func (s *StubGitHub) ListOpenPRBranches(repoURL string) ([]string, error) {
 	return s.OpenPRBranches, nil
