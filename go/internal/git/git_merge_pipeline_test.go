@@ -813,3 +813,55 @@ func TestBranchNeedsUpdate_ReturnsFalseWhenMainIsAncestorOfHEAD(t *testing.T) {
 		t.Error("branchNeedsUpdate should return false when origin/main is an ancestor of HEAD")
 	}
 }
+
+// AutoMergeCurrentBranch uses KnownPRNumber when set, skipping the
+// FindOpenPR lookup. This prevents failures when the branch-based PR
+// lookup fails (e.g. cross-project naming).
+func TestAutoMerge_KnownPRNumber_SkipsFindOpenPR(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("rev-parse HEAD", "abc123", nil)
+
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      0, // FindOpenPR would return nothing
+		PRBase:      "main",
+		PRHeadSHA:   "abc123",
+		MergeResult: MergeResult{Merged: true},
+		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+	}
+
+	mgr := &Manager{
+		ProjectDir:     "/project",
+		WorkDir:        "/project/wt",
+		WorktreeBranch: "ralph/test/01-known-pr",
+		BaseBranch:     "main",
+		Runner:         runner,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         &testLog{},
+		KnownPRNumber:  42,
+	}
+
+	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("expected merge to succeed with KnownPRNumber, got: %v", err)
+	}
+	if !merged {
+		t.Error("expected merged=true when KnownPRNumber is set and CI passes")
+	}
+
+	log := mgr.Logger.(*testLog)
+	if log.contains("No PR found") {
+		t.Error("should not attempt FindOpenPR when KnownPRNumber is set")
+	}
+}

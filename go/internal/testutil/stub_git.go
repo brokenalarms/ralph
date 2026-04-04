@@ -98,6 +98,7 @@ func (s *StubGit) GetPrevBranch() string      { return s.PrevBranch }
 func (s *StubGit) IsBranchRenamed() bool      { return s.BranchRenamed }
 func (s *StubGit) SetBranchRenamed(v bool)    { s.BranchRenamed = v }
 func (s *StubGit) SetLocalTestsPassed(v bool) {}
+func (s *StubGit) SetKnownPRNumber(n int)     {}
 
 func (s *StubGit) FindOpenPRForBranch(branch string) (int, error) {
 	if s.OpenPR != 0 {

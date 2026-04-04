@@ -370,18 +370,22 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	}
 
 	nwo := NWOFromRemote(repoURL)
-	prNumber, err := gh.FindOpenPR(m.WorktreeBranch, repoURL)
-	if err != nil || prNumber == 0 {
-		prNumber, err = m.resolveClosedPR(gh, repoURL)
-		if errors.Is(err, ErrPRAlreadyMerged) {
-			return true, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		if prNumber == 0 {
-			m.Logger.Emit(logging.Opts{Domain: logging.Git}, "No PR found for %s — skipping auto-merge", m.WorktreeBranch)
-			return false, nil
+	prNumber := m.KnownPRNumber
+	if prNumber == 0 {
+		var err error
+		prNumber, err = gh.FindOpenPR(m.WorktreeBranch, repoURL)
+		if err != nil || prNumber == 0 {
+			prNumber, err = m.resolveClosedPR(gh, repoURL)
+			if errors.Is(err, ErrPRAlreadyMerged) {
+				return true, nil
+			}
+			if err != nil {
+				return false, err
+			}
+			if prNumber == 0 {
+				m.Logger.Emit(logging.Opts{Domain: logging.Git}, "No PR found for %s — skipping auto-merge", m.WorktreeBranch)
+				return false, nil
+			}
 		}
 	}
 	prLink := logging.PRLinkOpt(nwo, prNumber)
@@ -836,7 +840,13 @@ func (m *Manager) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string
 	if m.WorktreeBranch == WipBranchName() {
 		return false, nil
 	}
-	if _, pushErr := m.PushAndCreatePR(ctx, taskID, taskDesc, ""); pushErr != nil {
+	// When a PR is already known (set during finalizePR), just push —
+	// don't try to create/find the PR again. The PR already exists.
+	if m.KnownPRNumber != 0 {
+		if pushErr := m.Push(ctx); pushErr != nil {
+			m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Flush push failed: %v", pushErr)
+		}
+	} else if _, pushErr := m.PushAndCreatePR(ctx, taskID, taskDesc, ""); pushErr != nil {
 		return false, pushErr
 	}
 	if !autoMerge {
