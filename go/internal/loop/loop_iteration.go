@@ -277,6 +277,18 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 		p.ctx = ctx
 	}
 
+	// Guard: if the task was already skipped during verification (e.g. 3
+	// rejected attempts), do not push or merge the rejected work.
+	if p.taskID != "" {
+		skipped, _ := opts.state.GetSkippedTasks()
+		for _, id := range skipped {
+			if id == p.taskID {
+				opts.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s was skipped during verification — not pushing", p.taskID)
+				return handlePostSignalOut{action: signalSkipped}
+			}
+		}
+	}
+
 	// Preflight: check bead wasn't prematurely closed by the agent.
 	if p.taskID != "" {
 		phase, _ := opts.backend.GetState(p.taskID, "phase")

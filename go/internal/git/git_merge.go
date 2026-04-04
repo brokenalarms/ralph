@@ -278,8 +278,9 @@ func Ship(ctx context.Context, runner Runner, gh GitHub, workDir, branch, remote
 				return ShipResult{}, ctx.Err()
 			}
 			if opts.Logger != nil {
-				opts.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push failed: %v — attempting PR creation anyway", err)
+				opts.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push failed: %v", err)
 			}
+			return ShipResult{}, fmt.Errorf("push failed: %w", err)
 		}
 	}
 

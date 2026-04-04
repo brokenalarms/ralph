@@ -171,6 +171,68 @@ func TestLoop_HandlePostSignal_VerificationFailure(t *testing.T) {
 	}
 }
 
+// handlePostSignal: if the task was already skipped (e.g. verification
+// rejected 3 times), it returns signalSkipped without pushing or merging.
+func TestHandlePostSignal_SkippedTask_DoesNotPush(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-skipped"}},
+	}
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	var logBuf bytes.Buffer
+	logger := logging.New(&logBuf)
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = &stubRunner{}
+	gm.ShipResult = git.ShipResult{PRNumber: "99"}
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	// Mark the task as skipped in state before calling handlePostSignal.
+	if err := st.AddSkippedTask("ralph-skipped"); err != nil {
+		t.Fatalf("AddSkippedTask: %v", err)
+	}
+
+	action := handlePostSignalCall(l, postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-skipped",
+		nextTask:   "Fix bug",
+	})
+
+	if action != signalSkipped {
+		t.Errorf("expected signalSkipped, got %d", action)
+	}
+
+	// Ship should NOT have been called — no push attempt.
+	if gm.ShipCalls > 0 {
+		t.Error("Ship was called for a skipped task — rejected work should not be pushed")
+	}
+
+	// Task should NOT be closed.
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 0 {
+		t.Errorf("skipped task should not be closed, got %v", backend.ClosedIDs)
+	}
+
+	if !strings.Contains(logBuf.String(), "was skipped during verification") {
+		t.Errorf("expected skip log message, got: %s", logBuf.String())
+	}
+}
+
 // handlePostSignal returns within PostSignalTimeout even when push blocks
 // indefinitely, proving the timeout prevents infinite stalls from rate limits
 // or network issues.

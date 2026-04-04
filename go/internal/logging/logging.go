@@ -71,6 +71,7 @@ const (
 	CI       Domain = "ci"
 	Beads    Domain = "beads"
 	Test     Domain = "test"
+	Build    Domain = "build"
 	LLM      Domain = "llm"
 	Shell    Domain = "bash"
 	Analyzer Domain = "analyzer"
