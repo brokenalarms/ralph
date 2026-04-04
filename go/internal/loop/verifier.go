@@ -109,12 +109,24 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 	// Run compile check (go build / tsc --noEmit) after tests pass.
 	// Pre-existing type errors are the agent's responsibility to fix.
 	if v.cfg.VerifyDir != "" {
-		if !v.compileFixLoop(p, beadDesc, beadAcceptance) {
+		if !v.compileFixLoop(p, beadAcceptance) {
 			return false
 		}
 	}
 
-	return v.verifyWithFixLoop(p, beadDesc, beadAcceptance)
+	if !v.verifyWithFixLoop(p, beadDesc, beadAcceptance) {
+		return false
+	}
+
+	// Re-run compile check after LLM verification — fix agents spawned
+	// during verification may have introduced new build errors.
+	if v.cfg.VerifyDir != "" {
+		if !v.compileFixLoop(p, beadAcceptance) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // testFixLoop spawns fix agents to address test failures, re-running tests
@@ -165,7 +177,7 @@ func (v *Verifier) tryFixTests(p signalParams, beadDesc, beadAcceptance, testDet
 // resolve build/type errors. Returns true when compilation passes, false
 // when attempts are exhausted. Uses its own attempt counter separate from
 // test fix attempts.
-func (v *Verifier) compileFixLoop(p signalParams, beadDesc, beadAcceptance string) bool {
+func (v *Verifier) compileFixLoop(p signalParams, beadAcceptance string) bool {
 	compileResult := verify.CompileCheck(p.ctx, v.cfg.VerifyDir)
 	if compileResult.Passed {
 		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build}, "Compile check passed")
@@ -179,14 +191,12 @@ func (v *Verifier) compileFixLoop(p signalParams, beadDesc, beadAcceptance strin
 	}
 	for {
 		compileAttempts++
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Compile check failed (attempt %d/%d)", compileAttempts, maxTestFixAttempts)
-
 		if compileAttempts > maxTestFixAttempts {
-			v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Error}, "Compile check still failing after %d attempts — giving up", maxTestFixAttempts)
+			v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Error}, "Compile check still failing after %d fix attempts — giving up", maxTestFixAttempts)
 			return false
 		}
 
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build}, "Spawning fix agent for build errors (attempt %d/%d)", compileAttempts, maxTestFixAttempts)
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Compile check failed — spawning fix agent (attempt %d/%d)", compileAttempts, maxTestFixAttempts)
 
 		signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 		fixPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{

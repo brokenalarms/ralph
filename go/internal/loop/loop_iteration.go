@@ -280,7 +280,11 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 	// Guard: if the task was already skipped during verification (e.g. 3
 	// rejected attempts), do not push or merge the rejected work.
 	if p.taskID != "" {
-		skipped, _ := opts.state.GetSkippedTasks()
+		skipped, err := opts.state.GetSkippedTasks()
+		if err != nil {
+			opts.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to load skipped tasks for %s: %v — conservatively not pushing", p.taskID, err)
+			return handlePostSignalOut{action: signalSkipped}
+		}
 		for _, id := range skipped {
 			if id == p.taskID {
 				opts.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s was skipped during verification — not pushing", p.taskID)
