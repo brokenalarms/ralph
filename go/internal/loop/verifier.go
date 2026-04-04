@@ -106,7 +106,27 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 		}
 	}
 
-	return v.verifyWithFixLoop(p, beadDesc, beadAcceptance)
+	// Run compile check (go build / tsc --noEmit) after tests pass.
+	// Pre-existing type errors are the agent's responsibility to fix.
+	if v.cfg.VerifyDir != "" {
+		if !v.compileFixLoop(p, beadAcceptance) {
+			return false
+		}
+	}
+
+	if !v.verifyWithFixLoop(p, beadDesc, beadAcceptance) {
+		return false
+	}
+
+	// Re-run compile check after LLM verification — fix agents spawned
+	// during verification may have introduced new build errors.
+	if v.cfg.VerifyDir != "" {
+		if !v.compileFixLoop(p, beadAcceptance) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // testFixLoop spawns fix agents to address test failures, re-running tests
@@ -151,6 +171,56 @@ func (v *Verifier) tryFixTests(p signalParams, beadDesc, beadAcceptance, testDet
 
 	fixResult := v.runFixAgent(p.ctx, "test failures", fixPrompt, p.workDir, p.rawLogPath)
 	return fixResult.SignalDetected
+}
+
+// compileFixLoop runs CompileCheck and, on failure, spawns fix agents to
+// resolve build/type errors. Returns true when compilation passes, false
+// when attempts are exhausted. Uses its own attempt counter separate from
+// test fix attempts.
+func (v *Verifier) compileFixLoop(p signalParams, beadAcceptance string) bool {
+	compileResult := verify.CompileCheck(p.ctx, v.cfg.VerifyDir)
+	if compileResult.Passed {
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build}, "Compile check passed")
+		return true
+	}
+
+	compileAttempts := 0
+	details := compileResult.Reason
+	if compileResult.Details != "" {
+		details += "\n" + compileResult.Details
+	}
+	for {
+		compileAttempts++
+		if compileAttempts > maxTestFixAttempts {
+			v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Error}, "Compile check still failing after %d fix attempts — giving up", maxTestFixAttempts)
+			return false
+		}
+
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Compile check failed — spawning fix agent (attempt %d/%d)", compileAttempts, maxTestFixAttempts)
+
+		signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
+		fixPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{
+			"{{TASK_TITLE}}":       p.nextTask,
+			"{{TASK_DESCRIPTION}}": fmt.Sprintf("Build/type check failed after completion. Fix the compile errors.\n\nAcceptance criteria:\n%s", beadAcceptance),
+			"{{TEST_OUTPUT}}":      details,
+			"{{SIGNAL_COMPLETE}}":  signalPath,
+		})
+
+		fixResult := v.runFixAgent(p.ctx, "build errors", fixPrompt, p.workDir, p.rawLogPath)
+		if !fixResult.SignalDetected {
+			return false
+		}
+
+		recheck := verify.CompileCheck(p.ctx, v.cfg.VerifyDir)
+		if recheck.Passed {
+			v.deps.Logger.Emit(logging.Opts{Domain: logging.Build}, "Compile check passed after fix agent")
+			return true
+		}
+		details = recheck.Reason
+		if recheck.Details != "" {
+			details += "\n" + recheck.Details
+		}
+	}
 }
 
 // verifyWithFixLoop runs LLM verification and, on rejection, spawns a fix
@@ -303,12 +373,15 @@ func (v *Verifier) VerifyCompletion(ctx context.Context, workDir, headBefore str
 	return true, ""
 }
 
-// RunPreIterationTests runs the full test suite before handing off to the
-// agent. Returns a human-readable status string for the agent prompt.
+// RunPreIterationTests runs the full test suite and compile check before
+// handing off to the agent. Returns a human-readable status string for the
+// agent prompt so the agent knows about pre-existing failures to fix.
 func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 	if v.cfg.VerifyDir == "" {
 		return ""
 	}
+
+	var msg string
 
 	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Running pre-iteration test suite...")
 	result := verify.RunTests(ctx, v.cfg.VerifyDir)
@@ -318,21 +391,41 @@ func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 		v.deps.State.Write("last_test_result", "pass")
 		v.deps.State.Write("last_test_time", now)
 		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Success}, "Pre-iteration tests: all passing")
-		return "\n- Test suite status: all tests passing as of start."
+		msg += "\n- Test suite status: all tests passing as of start."
+	} else {
+		v.deps.State.Write("last_test_result", "fail")
+		v.deps.State.Write("last_test_time", now)
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Pre-iteration tests: failures detected")
+		msg += "\n- Test suite status: some tests are FAILING. Fix them before your task. If the tests pass when you run them, they were fixed externally — proceed with your task."
+		if result.Details != "" {
+			details := result.Details
+			lines := strings.Split(details, "\n")
+			if len(lines) > 20 {
+				details = strings.Join(lines[len(lines)-20:], "\n")
+			}
+			msg += "\n  Failure output:\n  " + strings.ReplaceAll(details, "\n", "\n  ")
+		}
 	}
 
-	v.deps.State.Write("last_test_result", "fail")
-	v.deps.State.Write("last_test_time", now)
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Pre-iteration tests: failures detected")
-	msg := "\n- Test suite status: some tests are FAILING. Fix them before your task. If the tests pass when you run them, they were fixed externally — proceed with your task."
-	if result.Details != "" {
-		details := result.Details
-		lines := strings.Split(details, "\n")
-		if len(lines) > 20 {
-			details = strings.Join(lines[len(lines)-20:], "\n")
+	compileResult := verify.CompileCheck(ctx, v.cfg.VerifyDir)
+	if compileResult.Passed {
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Success}, "Pre-iteration compile check: passing")
+	} else {
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Pre-iteration compile check: failures detected")
+		msg += "\n- Build status: compile check is FAILING. Fix the build errors before your task."
+		details := compileResult.Details
+		if details == "" {
+			details = compileResult.Reason
 		}
-		msg += "\n  Failure output:\n  " + strings.ReplaceAll(details, "\n", "\n  ")
+		if details != "" {
+			lines := strings.Split(details, "\n")
+			if len(lines) > 20 {
+				details = strings.Join(lines[len(lines)-20:], "\n")
+			}
+			msg += "\n  Compile errors:\n  " + strings.ReplaceAll(details, "\n", "\n  ")
+		}
 	}
+
 	return msg
 }
 
