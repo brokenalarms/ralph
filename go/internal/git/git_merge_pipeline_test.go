@@ -864,3 +864,106 @@ func TestAutoMerge_KnownPRNumber_SkipsFindOpenPR(t *testing.T) {
 		t.Error("should not attempt FindOpenPR when KnownPRNumber is set")
 	}
 }
+
+// AutoMergeCurrentBranch skips rebase+push when CI is already passing on the
+// current PR head SHA, avoiding the no-op push → stale filter → infinite poll cycle.
+func TestAutoMerge_CIAlreadyPassing_SkipsPushAndMergesDirectly(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	// rev-parse HEAD returns the same SHA as the PR head
+	runner.On("rev-parse HEAD", "sha-already-passing", nil)
+
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      77,
+		PRTitle:     "already passing",
+		HeadSHA:     "sha-already-passing",
+		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+	}
+
+	log := &testLog{}
+	mgr := &Manager{
+		ProjectDir:     "/project",
+		WorkDir:        "/project/wt",
+		WorktreeBranch: "ralph/test/01-ci-fast-path",
+		BaseBranch:     "main",
+		Runner:         runner,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         log,
+	}
+
+	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("expected merge to succeed on fast path, got: %v", err)
+	}
+	if !merged {
+		t.Error("expected merged=true on CI fast path")
+	}
+
+	// Push must not be called — the fast path skips rebase+push entirely.
+	if runner.CalledWith("push") {
+		t.Error("push should not be called when CI is already passing on the current SHA")
+	}
+
+	// Merge must have happened.
+	if gh.MergeCalls == 0 {
+		t.Error("MergePR should be called on fast path")
+	}
+
+	// Log must confirm the fast path was taken.
+	if !log.contains("CI already passing on sha-already-passing") {
+		t.Errorf("expected fast-path log message, got: %v", log.messages)
+	}
+}
+
+// AutoMergeCurrentBranch falls through to the normal rebase+push+poll flow
+// when local HEAD differs from the PR head SHA (new commits exist locally).
+func TestAutoMerge_LocalHeadDiffersFromPRHead_UsesNormalFlow(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	// Local HEAD differs from PR head SHA → fast path does not trigger.
+	runner.On("rev-parse HEAD", "sha-new-local-commit", nil)
+
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      78,
+		PRTitle:     "new local commits",
+		HeadSHA:     "sha-remote-head",
+		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
+	}
+
+	mgr := &Manager{
+		ProjectDir:     "/project",
+		WorkDir:        "/project/wt",
+		WorktreeBranch: "ralph/test/01-sha-mismatch",
+		BaseBranch:     "main",
+		Runner:         runner,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("expected merge to succeed via normal flow, got: %v", err)
+	}
+	if !merged {
+		t.Error("expected merged=true via normal flow when SHA differs")
+	}
+
+	// Push must be called — normal flow requires it.
+	if !runner.CalledWith("push") {
+		t.Error("push should be called when local HEAD differs from PR head SHA")
+	}
+}
