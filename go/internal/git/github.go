@@ -358,18 +358,17 @@ func (g *ghCLI) ListChecks(prNumber int, repoURL string) ([]CICheckResult, error
 }
 
 // mapCheckRun converts a GitHub REST API check-run to a CICheckResult.
-// GitHub API: status (queued/in_progress/completed) + conclusion (success/failure/etc).
-// Maps to existing state values callers depend on: SUCCESS/pass, FAILURE/fail, PENDING/pending.
+// GitHub API: status (queued/in_progress/completed) + conclusion (success/failure/neutral/etc).
+// neutral and skipped conclusions are treated as passing; cancelled and related conclusions as failing.
 func mapCheckRun(name, status, conclusion string, startedAt time.Time) CICheckResult {
 	var state, bucket string
 	if status == "completed" {
 		switch conclusion {
-		case "success":
+		case "success", "neutral", "skipped":
 			state, bucket = "SUCCESS", "pass"
-		case "failure", "timed_out", "action_required":
+		case "failure", "timed_out", "action_required", "cancelled", "startup_failure", "stale":
 			state, bucket = "FAILURE", "fail"
 		default:
-			// neutral, skipped, cancelled → treat as pending (non-blocking)
 			state, bucket = "PENDING", "pending"
 		}
 	} else {

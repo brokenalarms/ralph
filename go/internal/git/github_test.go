@@ -385,6 +385,39 @@ func TestListChecks_UsesGhAPICheckRuns(t *testing.T) {
 	}
 }
 
+// mapCheckRun maps GitHub API check-run conclusion strings to the
+// State/Bucket values that evaluateChecks uses for merge-gating decisions.
+func TestMapCheckRun_ConclusionMapping(t *testing.T) {
+	cases := []struct {
+		conclusion    string
+		wantState     string
+		wantBucket    string
+	}{
+		{"success", "SUCCESS", "pass"},
+		{"neutral", "SUCCESS", "pass"},
+		{"skipped", "SUCCESS", "pass"},
+		{"failure", "FAILURE", "fail"},
+		{"timed_out", "FAILURE", "fail"},
+		{"action_required", "FAILURE", "fail"},
+		{"cancelled", "FAILURE", "fail"},
+		{"startup_failure", "FAILURE", "fail"},
+		{"stale", "FAILURE", "fail"},
+		{"unknown_future_conclusion", "PENDING", "pending"},
+	}
+	for _, tc := range cases {
+		result := mapCheckRun("check", "completed", tc.conclusion, time.Time{})
+		if result.State != tc.wantState || result.Bucket != tc.wantBucket {
+			t.Errorf("conclusion=%q: want State=%q Bucket=%q, got State=%q Bucket=%q",
+				tc.conclusion, tc.wantState, tc.wantBucket, result.State, result.Bucket)
+		}
+	}
+	// non-completed status always → PENDING regardless of conclusion
+	result := mapCheckRun("check", "queued", "success", time.Time{})
+	if result.State != "PENDING" || result.Bucket != "pending" {
+		t.Errorf("queued+success: want PENDING/pending, got State=%q Bucket=%q", result.State, result.Bucket)
+	}
+}
+
 // mergeAdmin uses gh api PUT repos/{nwo}/pulls/{num}/merge instead of
 // gh pr merge --admin, so admin bypass is implicit via token permissions.
 func TestMergeAdmin_UsesGhAPI(t *testing.T) {
