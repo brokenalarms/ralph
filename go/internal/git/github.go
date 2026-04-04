@@ -341,10 +341,10 @@ func (g *ghCLI) ListChecks(prNumber int, repoURL string) ([]CICheckResult, error
 		return nil, fmt.Errorf("gh api check-runs failed: %w", err)
 	}
 	type apiCheckRun struct {
-		Name       string    `json:"name"`
-		Status     string    `json:"status"`
-		Conclusion string    `json:"conclusion"`
-		StartedAt  time.Time `json:"started_at"`
+		Name       string     `json:"name"`
+		Status     string     `json:"status"`
+		Conclusion *string    `json:"conclusion"`
+		StartedAt  *time.Time `json:"started_at"`
 	}
 	var runs []apiCheckRun
 	if err := json.Unmarshal(out, &runs); err != nil {
@@ -360,10 +360,14 @@ func (g *ghCLI) ListChecks(prNumber int, repoURL string) ([]CICheckResult, error
 // mapCheckRun converts a GitHub REST API check-run to a CICheckResult.
 // GitHub API: status (queued/in_progress/completed) + conclusion (success/failure/neutral/etc).
 // neutral and skipped conclusions are treated as passing; cancelled and related conclusions as failing.
-func mapCheckRun(name, status, conclusion string, startedAt time.Time) CICheckResult {
+func mapCheckRun(name, status string, conclusion *string, startedAt *time.Time) CICheckResult {
 	var state, bucket string
 	if status == "completed" {
-		switch conclusion {
+		c := ""
+		if conclusion != nil {
+			c = *conclusion
+		}
+		switch c {
 		case "success", "neutral", "skipped":
 			state, bucket = "SUCCESS", "pass"
 		case "failure", "timed_out", "action_required", "cancelled", "startup_failure", "stale":
@@ -374,7 +378,11 @@ func mapCheckRun(name, status, conclusion string, startedAt time.Time) CICheckRe
 	} else {
 		state, bucket = "PENDING", "pending"
 	}
-	return CICheckResult{Name: name, State: state, Bucket: bucket, StartedAt: startedAt}
+	var t time.Time
+	if startedAt != nil {
+		t = *startedAt
+	}
+	return CICheckResult{Name: name, State: state, Bucket: bucket, StartedAt: t}
 }
 
 
@@ -711,7 +719,7 @@ func (g *ghCLI) ListAllPRs(workDir string) ([]PRInfo, error) {
 		Head     struct{ Ref string `json:"ref"` } `json:"head"`
 		Base     struct{ Ref string `json:"ref"` } `json:"base"`
 		State    string `json:"state"`
-		MergedAt string `json:"merged_at"`
+		MergedAt *string `json:"merged_at"`
 	}
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return nil, fmt.Errorf("parse PR list: %w", err)
@@ -719,7 +727,7 @@ func (g *ghCLI) ListAllPRs(workDir string) ([]PRInfo, error) {
 	prs := make([]PRInfo, len(raw))
 	for i, r := range raw {
 		state := PRState(strings.ToUpper(r.State))
-		if r.MergedAt != "" {
+		if r.MergedAt != nil && *r.MergedAt != "" {
 			state = PRStateMerged
 		}
 		prs[i] = PRInfo{Number: r.Number, Head: r.Head.Ref, Base: r.Base.Ref, State: state}
