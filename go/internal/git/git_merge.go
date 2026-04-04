@@ -404,6 +404,17 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 
 	m.Logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch, Link: prLink}, "Auto-merging...")
 
+	// Fast path: when local HEAD already matches the PR head SHA and CI is already
+	// passing, skip the rebase+push cycle — no new tree to test, no push needed.
+	// This avoids the no-op push → stale pushedAt filter → infinite poll cycle.
+	if prDetail != nil && prDetail.HeadSHA != "" && prDetail.HeadSHA == m.HeadRev() {
+		_, fastStatus, _ := m.AwaitCI(ctx, prNumber, repoURL, time.Time{})
+		if fastStatus == CIPassed {
+			m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "CI already passing on %s — merging", prDetail.HeadSHA)
+			return m.executeMerge(ctx, prNumber, repoURL)
+		}
+	}
+
 	// Rebase onto latest main and push so CI runs on the final tree.
 	// This avoids the updatePRBranch round-trip and double CI wait.
 	if err := m.EnsureUpToDate(ctx); err != nil {
