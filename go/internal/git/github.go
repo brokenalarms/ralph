@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ParsePRNumber validates and converts a raw PR number string (typically
@@ -28,6 +29,19 @@ func ParsePRNumber(raw string) (int, error) {
 		return 0, fmt.Errorf("invalid PR number %d: must be positive", n)
 	}
 	return n, nil
+}
+
+// CopilotReview is a Copilot code review on a pull request.
+type CopilotReview struct {
+	Body     string
+	Comments []ReviewComment
+}
+
+// ReviewComment is an inline comment from a pull request review.
+type ReviewComment struct {
+	Path string
+	Line int
+	Body string
 }
 
 // PRInfo holds basic metadata about a GitHub pull request.
@@ -103,6 +117,10 @@ type GitHub interface {
 	// CheckCopilotReviewEnabled returns true if the repo has a ruleset with a
 	// copilot_code_review rule where review_on_push is true.
 	CheckCopilotReviewEnabled(nwo string) (bool, error)
+	// PollCopilotReview polls for a review from copilot-pull-request-reviewer
+	// on the given PR, returning it with inline comments when found. Returns nil
+	// without error if the timeout expires before a review arrives.
+	PollCopilotReview(nwo string, prNumber int, timeout time.Duration) (*CopilotReview, error)
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -539,6 +557,81 @@ func (g *ghCLI) CheckCopilotReviewEnabled(nwo string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func (g *ghCLI) PollCopilotReview(nwo string, prNumber int, timeout time.Duration) (*CopilotReview, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		review, err := g.fetchCopilotReview(nwo, prNumber)
+		if err != nil {
+			return nil, err
+		}
+		if review != nil {
+			return review, nil
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		sleep := 10 * time.Second
+		if sleep > remaining {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
+	}
+	return nil, nil
+}
+
+func (g *ghCLI) fetchCopilotReview(nwo string, prNumber int) (*CopilotReview, error) {
+	endpoint := fmt.Sprintf("repos/%s/pulls/%d/reviews", nwo, prNumber)
+	cmd := exec.Command("gh", "api", endpoint)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("gh api reviews: %w", err)
+	}
+	var reviews []struct {
+		ID   int `json:"id"`
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal(out, &reviews); err != nil {
+		return nil, fmt.Errorf("parsing reviews: %w", err)
+	}
+	for _, r := range reviews {
+		if r.User.Login == "copilot-pull-request-reviewer" {
+			comments, err := g.fetchReviewComments(nwo, prNumber, r.ID)
+			if err != nil {
+				return nil, err
+			}
+			return &CopilotReview{Body: r.Body, Comments: comments}, nil
+		}
+	}
+	return nil, nil
+}
+
+func (g *ghCLI) fetchReviewComments(nwo string, prNumber, reviewID int) ([]ReviewComment, error) {
+	endpoint := fmt.Sprintf("repos/%s/pulls/%d/comments", nwo, prNumber)
+	jqFilter := fmt.Sprintf("[.[] | select(.pull_request_review_id == %d) | {path: .path, line: (.line // .original_line // 0), body: .body}]", reviewID)
+	cmd := exec.Command("gh", "api", endpoint, "--jq", jqFilter)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("gh api pr comments: %w", err)
+	}
+	var raw []struct {
+		Path string `json:"path"`
+		Line int    `json:"line"`
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return nil, fmt.Errorf("parsing review comments: %w", err)
+	}
+	comments := make([]ReviewComment, len(raw))
+	for i, c := range raw {
+		comments[i] = ReviewComment{Path: c.Path, Line: c.Line, Body: c.Body}
+	}
+	return comments, nil
 }
 
 func (g *ghCLI) ListAllPRs(workDir string) ([]PRInfo, error) {

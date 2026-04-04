@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // MergePR with a 200 response signals a successful squash-merge.
@@ -279,6 +280,67 @@ func TestStubGitHub_CheckCopilotReviewEnabled(t *testing.T) {
 	}
 	if !enabled {
 		t.Error("expected enabled=true from stub with CopilotReviewEnabled=true")
+	}
+}
+
+// PollCopilotReview returns a CopilotReview with body and inline comments when
+// copilot-pull-request-reviewer has submitted a review on the PR.
+func TestPollCopilotReview_ReturnsCopilotReview(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+
+	reviewJSON := `[{"id":1001,"user":{"login":"copilot-pull-request-reviewer"},"body":"LGTM with suggestions"}]`
+	commentsJSON := `[{"path":"main.go","line":42,"body":"Consider using constants","pull_request_review_id":1001}]`
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\nif echo \"$@\" | grep -q 'comments'; then\n  echo '" + commentsJSON + "'\nelse\n  echo '" + reviewJSON + "'\nfi\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	review, err := g.PollCopilotReview("owner/repo", 42, 5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if review == nil {
+		t.Fatal("expected non-nil review")
+	}
+	if review.Body != "LGTM with suggestions" {
+		t.Errorf("Body: want %q, got %q", "LGTM with suggestions", review.Body)
+	}
+	if len(review.Comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(review.Comments))
+	}
+	if review.Comments[0].Path != "main.go" {
+		t.Errorf("Path: want main.go, got %q", review.Comments[0].Path)
+	}
+	if review.Comments[0].Line != 42 {
+		t.Errorf("Line: want 42, got %d", review.Comments[0].Line)
+	}
+	if review.Comments[0].Body != "Consider using constants" {
+		t.Errorf("Body: want %q, got %q", "Consider using constants", review.Comments[0].Body)
+	}
+}
+
+// PollCopilotReview returns nil without error when the timeout expires and no
+// review from copilot-pull-request-reviewer has arrived, so the loop proceeds.
+func TestPollCopilotReview_Timeout_ReturnsNil(t *testing.T) {
+	bin := t.TempDir()
+	script := "#!/bin/sh\necho '[{\"id\":999,\"user\":{\"login\":\"other-bot\"},\"body\":\"not copilot\"}]'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	review, err := g.PollCopilotReview("owner/repo", 42, 1*time.Millisecond)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if review != nil {
+		t.Errorf("expected nil review on timeout, got %+v", review)
 	}
 }
 

@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"context"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/git"
 )
@@ -80,8 +81,11 @@ type StubGit struct {
 	ShipFunc        func(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error)
 	MergeRetryFunc  func(ctx context.Context) (bool, error)
 
-	CopilotReviewEnabled bool
-	CopilotReviewErr     error
+	CopilotReviewEnabled    bool
+	CopilotReviewErr        error
+	PollCopilotReviewResult *git.CopilotReview
+	PollCopilotReviewErr    error
+	PollCopilotReviewCalled bool
 }
 
 // Compile-time check that StubGit satisfies git.GitOps.
@@ -264,6 +268,11 @@ func (s *StubGit) PostMergeUpdateMain() {
 
 func (s *StubGit) CheckCopilotReviewEnabled() (bool, error) {
 	return s.CopilotReviewEnabled, s.CopilotReviewErr
+}
+
+func (s *StubGit) PollCopilotReview(_ int, _ time.Duration) (*git.CopilotReview, error) {
+	s.PollCopilotReviewCalled = true
+	return s.PollCopilotReviewResult, s.PollCopilotReviewErr
 }
 
 func (s *StubGit) FetchBranch(_ string) error            { return s.FetchBranchErr }

@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // GitOps abstracts the git operations that the execution loop needs.
@@ -67,6 +68,9 @@ type GitOps interface {
 	// CheckCopilotReviewEnabled returns true if the repo has a ruleset with
 	// copilot_code_review configured with review_on_push: true.
 	CheckCopilotReviewEnabled() (bool, error)
+	// PollCopilotReview polls for a Copilot review on the given PR. Returns nil
+	// without error when timeout expires before a review arrives.
+	PollCopilotReview(prNumber int, timeout time.Duration) (*CopilotReview, error)
 
 	// Merge operations.
 	MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, error)
@@ -192,6 +196,16 @@ func (m *Manager) CheckCopilotReviewEnabled() (bool, error) {
 		return false, nil
 	}
 	return gh.CheckCopilotReviewEnabled(nwo)
+}
+
+// PollCopilotReview polls for a Copilot review on the given PR.
+func (m *Manager) PollCopilotReview(prNumber int, timeout time.Duration) (*CopilotReview, error) {
+	gh := m.gh()
+	nwo := NWOFromRemote(m.RemoteURL())
+	if nwo == "" {
+		return nil, nil
+	}
+	return gh.PollCopilotReview(nwo, prNumber, timeout)
 }
 
 // PRDiffForTask searches for a PR matching the task ID and returns its diff.

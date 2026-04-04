@@ -196,6 +196,7 @@ func runAndComplete(ctx context.Context, p runAndCompleteParams, task taskContex
 			},
 			finalizePRFn: func(fp finalizePRParams) finalizePRResult {
 				fp.autoMerge = p.autoMerge
+				fp.copilotReviewEnabled = p.copilotReviewEnabled
 				fp.git = p.git
 				fp.logger = p.logger
 				fp.backend = p.backend
@@ -507,13 +508,14 @@ type finalizePRParams struct {
 	workDir    string
 	rawLogPath string
 	// dependency fields
-	autoMerge bool
-	git       git.GitOps
-	logger    *logging.Logger
-	backend   tasks.Backend
-	state     *state.Store
-	attempts  *attempts.Tracker
-	verifier  *Verifier
+	autoMerge            bool
+	copilotReviewEnabled bool
+	git                  git.GitOps
+	logger               *logging.Logger
+	backend              tasks.Backend
+	state                *state.Store
+	attempts             *attempts.Tracker
+	verifier             *Verifier
 	// mergeFunc overrides git.MergeWithRetry for tests; nil uses the real path.
 	mergeFunc func(ctx context.Context) (bool, error)
 }
@@ -551,6 +553,16 @@ func finalizePR(p finalizePRParams) finalizePRResult {
 		if prBase != "" && prBase != defaultBranch {
 			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, p.prNumber)}, "targets %s — stacked, closing bead", prBase)
 		} else {
+			if p.copilotReviewEnabled {
+				review, err := p.git.PollCopilotReview(p.prNumber, 120*time.Second)
+				if err != nil {
+					p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "Copilot review poll: %v", err)
+				} else if review != nil {
+					p.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink(p.git, p.prNumber)}, "Copilot review received (%d comments)", len(review.Comments))
+				} else {
+					p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "No Copilot review arrived within timeout — proceeding to merge")
+				}
+			}
 			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, p.prNumber)}, "targets %s — merging", defaultBranch)
 			var mergeErr error
 			merged, mergeErr = mergeWithRetry(p.ctx, mergeWithRetryParams{
