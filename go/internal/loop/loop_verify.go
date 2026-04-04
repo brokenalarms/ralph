@@ -2,6 +2,8 @@ package loop
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -73,4 +75,88 @@ func getBeadDescription(backend tasks.Backend, taskID string) string {
 		return ""
 	}
 	return desc
+}
+
+// filterActionableComments returns only comments that propose concrete changes.
+// Purely informational comments (e.g. "This PR does X" summaries) are excluded.
+func filterActionableComments(comments []git.ReviewComment) []git.ReviewComment {
+	var out []git.ReviewComment
+	for _, c := range comments {
+		if isActionableComment(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// isActionableComment returns true when a review comment proposes a concrete
+// change rather than just describing what the code does. Heuristics:
+//   - markdown suggestion blocks (```suggestion) always propose a change
+//   - code blocks on file-scoped comments propose a change
+//   - comments containing issue-signalling keywords are actionable
+func isActionableComment(c git.ReviewComment) bool {
+	body := strings.TrimSpace(c.Body)
+	if body == "" {
+		return false
+	}
+	if strings.Contains(body, "```suggestion") {
+		return true
+	}
+	if c.Path != "" && strings.Contains(body, "```") {
+		return true
+	}
+	lower := strings.ToLower(body)
+	for _, kw := range []string{"bug", "nil check", "incorrect", "missing", "should ", "must ", "fix ", "issue", "problem", "error", "panic", "crash", "leak"} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// formatCopilotReviewContext formats actionable review comments as structured
+// agent context with file paths and line numbers.
+func formatCopilotReviewContext(prNumber int, comments []git.ReviewComment) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "## Copilot Review Feedback\nThe following review comments were left on PR #%d. Address each one:\n\n", prNumber)
+	for _, c := range comments {
+		fmt.Fprintf(&sb, "### %s:%d\n%s\n\n", c.Path, c.Line, c.Body)
+	}
+	return sb.String()
+}
+
+// tryFixCopilotReview filters actionable comments from the review, spawns a
+// fix agent to address them, and force-pushes the result. Returns true when
+// the fix was committed and pushed successfully.
+func tryFixCopilotReview(ctx context.Context, g git.GitOps, v *Verifier, logger *logging.Logger, review *git.CopilotReview, prNumber int, nextTask, workDir, rawLogPath string) bool {
+	actionable := filterActionableComments(review.Comments)
+	if len(actionable) == 0 {
+		logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot review: no actionable comments — proceeding to merge")
+		return false
+	}
+
+	logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot review: %d actionable comment(s) — spawning fix agent", len(actionable))
+	reviewCtx := formatCopilotReviewContext(prNumber, actionable)
+	headBefore := g.HeadRev()
+
+	if !v.TryCopilotFix(ctx, reviewCtx, nextTask, workDir, rawLogPath) {
+		return false
+	}
+
+	if g.HasUncommittedChanges() {
+		logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent left uncommitted changes — auto-committing")
+		g.CommitAll("fix: address Copilot review feedback")
+	}
+
+	if g.HeadRev() == headBefore {
+		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Copilot fix agent made no new commits — proceeding to merge anyway")
+		return false
+	}
+
+	logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot fix committed — pushing")
+	if err := g.Push(ctx); err != nil {
+		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after Copilot fix failed: %v", err)
+		return false
+	}
+	return true
 }

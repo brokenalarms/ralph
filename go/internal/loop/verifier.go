@@ -469,6 +469,24 @@ func (v *Verifier) TryFixCI(ctx context.Context, ciLog string, ciErr *git.CIFail
 	return fixResult.SignalDetected
 }
 
+// TryCopilotFix spawns a fix agent to address actionable Copilot review
+// comments. reviewContext is the pre-formatted comment block including file
+// paths and line numbers. Returns false without spawning if the fix agent
+// exits without signaling.
+func (v *Verifier) TryCopilotFix(ctx context.Context, reviewContext, nextTask, workDir, rawLogPath string) bool {
+	v.deps.Logger.Emit(logging.Opts{Domain: logging.Git}, "Spawning Copilot review fix agent")
+
+	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
+	fixPrompt := v.loadVerifyPrompt("verify-copilot-review.md", map[string]string{
+		"{{TASK_TITLE}}":      nextTask,
+		"{{REVIEW_FEEDBACK}}": reviewContext,
+		"{{SIGNAL_COMPLETE}}": signalPath,
+	})
+
+	fixResult := v.runFixAgent(ctx, "Copilot review feedback", fixPrompt, workDir, rawLogPath)
+	return fixResult.SignalDetected
+}
+
 // TryFixConflict spawns a conflict resolution agent when automatic rebase
 // could not resolve merge conflicts.
 func (v *Verifier) TryFixConflict(ctx context.Context, conflictDiff, beadDesc, nextTask, workDir, rawLogPath string) bool {

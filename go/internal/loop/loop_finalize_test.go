@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/attempts"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 )
@@ -555,6 +556,262 @@ func TestPersistCompletedTask_Standalone(t *testing.T) {
 	}
 	if !tasks[0].Merged {
 		t.Error("merged should be true")
+	}
+}
+
+// finalizePR spawns a fix agent when Copilot review returns actionable comments.
+func TestFinalizePR_CopilotReview_ActionableComments_SpawnsFixAgent(t *testing.T) {
+	dir, st := setupTestDir(t)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	fixAgentSpawned := false
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.deps.NewRunner = func() claudeRunner {
+			fixAgentSpawned = true
+			return &stubRunner{result: stubResult(true, "addressed nil check")}
+		}
+	})
+
+	gm := &testutil.StubGit{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		PollCopilotReviewResult: &git.CopilotReview{
+			Body: "Review",
+			Comments: []git.ReviewComment{
+				{Path: "pkg/foo.go", Line: 42, Body: "Missing nil check — this will panic"},
+			},
+		},
+	}
+
+	finalizePR(finalizePRParams{
+		ctx:                  context.Background(),
+		taskID:               "ralph-abc",
+		nextTask:             "Fix bug",
+		prNumber:             42,
+		prState:              "OPEN",
+		workDir:              dir,
+		autoMerge:            true,
+		copilotReviewEnabled: true,
+		git:                  gm,
+		logger:               logging.New(nil),
+		backend:              backend,
+		state:                st,
+		attempts:             attempts.New(dir),
+		verifier:             v,
+		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+	})
+
+	if !fixAgentSpawned {
+		t.Error("fix agent should be spawned when Copilot review has actionable comments")
+	}
+}
+
+// finalizePR does not spawn a fix agent when Copilot review has no actionable comments.
+func TestFinalizePR_CopilotReview_InformationalOnly_NoFixAgent(t *testing.T) {
+	dir, st := setupTestDir(t)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	fixAgentSpawned := false
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.deps.NewRunner = func() claudeRunner {
+			fixAgentSpawned = true
+			return &stubRunner{result: stubResult(true, "done")}
+		}
+	})
+
+	gm := &testutil.StubGit{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		PollCopilotReviewResult: &git.CopilotReview{
+			Body: "LGTM",
+			Comments: []git.ReviewComment{
+				{Path: "pkg/foo.go", Line: 1, Body: "This PR adds caching support."},
+			},
+		},
+	}
+
+	finalizePR(finalizePRParams{
+		ctx:                  context.Background(),
+		taskID:               "ralph-abc",
+		nextTask:             "Fix bug",
+		prNumber:             42,
+		prState:              "OPEN",
+		workDir:              dir,
+		autoMerge:            true,
+		copilotReviewEnabled: true,
+		git:                  gm,
+		logger:               logging.New(nil),
+		backend:              backend,
+		state:                st,
+		attempts:             attempts.New(dir),
+		verifier:             v,
+		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+	})
+
+	if fixAgentSpawned {
+		t.Error("fix agent should not be spawned for purely informational review comments")
+	}
+}
+
+// finalizePR does not re-poll Copilot review when already addressed in state.
+func TestFinalizePR_CopilotReview_AlreadyAddressed_NoPoll(t *testing.T) {
+	dir, st := setupTestDir(t)
+
+	// Pre-seed the addressed flag in state.
+	st.Write("copilot_review_addressed:ralph-abc", "true")
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	finalizePR(finalizePRParams{
+		ctx:                  context.Background(),
+		taskID:               "ralph-abc",
+		nextTask:             "Fix bug",
+		prNumber:             42,
+		prState:              "OPEN",
+		workDir:              dir,
+		autoMerge:            true,
+		copilotReviewEnabled: true,
+		git:                  gm,
+		logger:               logging.New(nil),
+		backend:              backend,
+		state:                st,
+		attempts:             attempts.New(dir),
+		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+	})
+
+	if gm.PollCopilotReviewCalled {
+		t.Error("PollCopilotReview should not be called when copilot review was already addressed")
+	}
+}
+
+// finalizePR marks review as addressed in state after processing, preventing
+// re-poll on subsequent calls for the same task.
+func TestFinalizePR_CopilotReview_SetsAddressedFlag(t *testing.T) {
+	dir, st := setupTestDir(t)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.deps.NewRunner = func() claudeRunner {
+			return &stubRunner{result: stubResult(true, "done")}
+		}
+	})
+
+	gm := &testutil.StubGit{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		PollCopilotReviewResult: &git.CopilotReview{
+			Comments: []git.ReviewComment{
+				{Path: "pkg/foo.go", Line: 5, Body: "Missing nil check"},
+			},
+		},
+	}
+
+	finalizePR(finalizePRParams{
+		ctx:                  context.Background(),
+		taskID:               "ralph-abc",
+		nextTask:             "Fix bug",
+		prNumber:             42,
+		prState:              "OPEN",
+		workDir:              dir,
+		autoMerge:            true,
+		copilotReviewEnabled: true,
+		git:                  gm,
+		logger:               logging.New(nil),
+		backend:              backend,
+		state:                st,
+		attempts:             attempts.New(dir),
+		verifier:             v,
+		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+	})
+
+	addressed, _ := st.Read("copilot_review_addressed:ralph-abc")
+	if addressed != "true" {
+		t.Errorf("state should have copilot_review_addressed:ralph-abc=true after review processed, got %q", addressed)
+	}
+}
+
+// isActionableComment classifies comments correctly.
+func TestIsActionableComment(t *testing.T) {
+	tests := []struct {
+		name       string
+		comment    git.ReviewComment
+		actionable bool
+	}{
+		{
+			name:       "suggestion block",
+			comment:    git.ReviewComment{Path: "foo.go", Line: 1, Body: "```suggestion\nfixed code\n```"},
+			actionable: true,
+		},
+		{
+			name:       "nil check keyword",
+			comment:    git.ReviewComment{Path: "foo.go", Line: 5, Body: "Missing nil check before using ptr"},
+			actionable: true,
+		},
+		{
+			name:       "bug keyword",
+			comment:    git.ReviewComment{Path: "bar.go", Line: 10, Body: "This is a bug — value may overflow"},
+			actionable: true,
+		},
+		{
+			name:       "code block on file comment",
+			comment:    git.ReviewComment{Path: "bar.go", Line: 3, Body: "Consider:\n```go\nreturn err\n```"},
+			actionable: true,
+		},
+		{
+			name:       "informational summary",
+			comment:    git.ReviewComment{Path: "bar.go", Line: 1, Body: "This PR adds caching support to the auth layer."},
+			actionable: false,
+		},
+		{
+			name:       "empty body",
+			comment:    git.ReviewComment{Path: "foo.go", Line: 1, Body: ""},
+			actionable: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isActionableComment(tc.comment)
+			if got != tc.actionable {
+				t.Errorf("isActionableComment(%q) = %v, want %v", tc.comment.Body, got, tc.actionable)
+			}
+		})
+	}
+}
+
+// formatCopilotReviewContext structures comments with file paths and line numbers.
+func TestFormatCopilotReviewContext(t *testing.T) {
+	comments := []git.ReviewComment{
+		{Path: "pkg/auth.go", Line: 42, Body: "Missing nil check"},
+		{Path: "pkg/db.go", Line: 17, Body: "```suggestion\nreturn nil, err\n```"},
+	}
+
+	result := formatCopilotReviewContext(99, comments)
+
+	if !strings.Contains(result, "PR #99") {
+		t.Error("context should mention PR number")
+	}
+	if !strings.Contains(result, "pkg/auth.go:42") {
+		t.Error("context should contain file:line for first comment")
+	}
+	if !strings.Contains(result, "Missing nil check") {
+		t.Error("context should contain first comment body")
+	}
+	if !strings.Contains(result, "pkg/db.go:17") {
+		t.Error("context should contain file:line for second comment")
 	}
 }
 

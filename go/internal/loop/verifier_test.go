@@ -769,3 +769,47 @@ func TestVerifier_LLMDomainVerifyLine_HasModelTag(t *testing.T) {
 		t.Errorf("LLM-domain 'Running LLM verification' line should include model tag [sonnet], got output: %q", output)
 	}
 }
+
+// TryCopilotFix passes review feedback and task title to the fix agent prompt.
+func TestVerifier_TryCopilotFix_PromptContainsFeedbackAndTitle(t *testing.T) {
+	var capturedPrompt string
+	v := newTestVerifier(t, func(v *Verifier) {
+		template := "TASK: {{TASK_TITLE}}\nFEEDBACK: {{REVIEW_FEEDBACK}}\nSIGNAL: {{SIGNAL_COMPLETE}}"
+		os.WriteFile(filepath.Join(v.cfg.PromptsDir, "verify-copilot-review.md"), []byte(template), 0o644)
+
+		v.deps.NewRunner = func() claudeRunner {
+			return &promptCapturingFixRunner{
+				onPrompt: func(p string) { capturedPrompt = p },
+				result:   stubResult(true, "addressed review comments"),
+			}
+		}
+	})
+
+	reviewContext := "## Copilot Review Feedback\n### pkg/foo.go:42\nMissing nil check before dereferencing ptr\n"
+	result := v.TryCopilotFix(context.Background(), reviewContext, "Fix auth bug", t.TempDir(), filepath.Join(t.TempDir(), "raw.log"))
+
+	if !result {
+		t.Fatal("expected TryCopilotFix to return true when fix agent signals")
+	}
+	if !strings.Contains(capturedPrompt, "Fix auth bug") {
+		t.Errorf("prompt should contain task title, got: %s", capturedPrompt)
+	}
+	if !strings.Contains(capturedPrompt, "Missing nil check before dereferencing ptr") {
+		t.Errorf("prompt should contain review feedback, got: %s", capturedPrompt)
+	}
+}
+
+// TryCopilotFix returns false when the fix agent exits without signaling.
+func TestVerifier_TryCopilotFix_NoSignal_ReturnsFalse(t *testing.T) {
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.deps.NewRunner = func() claudeRunner {
+			return &stubRunner{result: stubResult(false, "")}
+		}
+	})
+
+	result := v.TryCopilotFix(context.Background(), "some feedback", "Fix bug", t.TempDir(), filepath.Join(t.TempDir(), "raw.log"))
+
+	if result {
+		t.Fatal("expected TryCopilotFix to return false when fix agent doesn't signal")
+	}
+}
