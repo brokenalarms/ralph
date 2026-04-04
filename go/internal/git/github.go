@@ -163,11 +163,15 @@ func (g *ghCLI) FindOpenPR(branch, repoURL string) (int, error) {
 }
 
 func (g *ghCLI) ListOpenPRBranches(repoURL string) ([]string, error) {
-	cmd := exec.Command("gh", "pr", "list", "--state", "open",
-		"--json", "headRefName", "--jq", ".[].headRefName", "-R", repoURL)
+	nwo := NWOFromRemote(repoURL)
+	if nwo == "" {
+		return nil, fmt.Errorf("cannot determine owner/repo from %q", repoURL)
+	}
+	endpoint := fmt.Sprintf("repos/%s/pulls?state=open&per_page=100", nwo)
+	cmd := exec.Command("gh", "api", endpoint, "--jq", ".[].head.ref")
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("gh pr list failed: %w", err)
+		return nil, fmt.Errorf("gh api pulls failed: %w", err)
 	}
 	raw := strings.TrimSpace(string(out))
 	if raw == "" {
@@ -472,12 +476,18 @@ func (g *ghCLI) FindPR(branch, repoURL string) (int, string, string, error) {
 }
 
 func (g *ghCLI) SearchPR(workDir, query string) (int, error) {
-	cmd := exec.Command("gh", "pr", "list", "--search", query,
-		"--state", "all", "--json", "number", "--jq", ".[0].number")
-	cmd.Dir = workDir
-	out, err := cmd.Output()
+	remoteOut, err := exec.Command("git", "-C", workDir, "remote", "get-url", "origin").Output()
 	if err != nil {
-		return 0, fmt.Errorf("gh pr list search failed: %w", err)
+		return 0, fmt.Errorf("get remote URL: %w", err)
+	}
+	nwo := NWOFromRemote(strings.TrimSpace(string(remoteOut)))
+	if nwo == "" {
+		return 0, fmt.Errorf("cannot determine owner/repo from remote URL")
+	}
+	q := fmt.Sprintf("%s+repo:%s+type:pr", query, nwo)
+	out, err := exec.Command("gh", "api", "search/issues", "-f", "q="+q, "--jq", ".items[0].number // empty").Output()
+	if err != nil {
+		return 0, fmt.Errorf("gh api search failed: %w", err)
 	}
 	raw := strings.TrimSpace(string(out))
 	if raw == "" {
@@ -683,25 +693,36 @@ func (g *ghCLI) fetchReviewComments(nwo string, prNumber, reviewID int) ([]Revie
 }
 
 func (g *ghCLI) ListAllPRs(workDir string) ([]PRInfo, error) {
-	cmd := exec.Command("gh", "pr", "list", "--state", "all",
-		"--json", "number,headRefName,baseRefName,state", "--limit", "200")
-	cmd.Dir = workDir
-	out, err := cmd.Output()
+	remoteOut, err := exec.Command("git", "-C", workDir, "remote", "get-url", "origin").Output()
 	if err != nil {
-		return nil, fmt.Errorf("gh pr list: %w", err)
+		return nil, fmt.Errorf("get remote URL: %w", err)
+	}
+	nwo := NWOFromRemote(strings.TrimSpace(string(remoteOut)))
+	if nwo == "" {
+		return nil, fmt.Errorf("cannot determine owner/repo from remote URL")
+	}
+	endpoint := fmt.Sprintf("repos/%s/pulls?state=all&per_page=100", nwo)
+	out, err := exec.Command("gh", "api", endpoint).Output()
+	if err != nil {
+		return nil, fmt.Errorf("gh api pulls: %w", err)
 	}
 	var raw []struct {
-		Number int    `json:"number"`
-		Head   string `json:"headRefName"`
-		Base   string `json:"baseRefName"`
-		State  string `json:"state"`
+		Number   int    `json:"number"`
+		Head     struct{ Ref string `json:"ref"` } `json:"head"`
+		Base     struct{ Ref string `json:"ref"` } `json:"base"`
+		State    string `json:"state"`
+		MergedAt string `json:"merged_at"`
 	}
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return nil, fmt.Errorf("parse PR list: %w", err)
 	}
 	prs := make([]PRInfo, len(raw))
 	for i, r := range raw {
-		prs[i] = PRInfo{Number: r.Number, Head: r.Head, Base: r.Base, State: PRState(strings.ToUpper(r.State))}
+		state := PRState(strings.ToUpper(r.State))
+		if r.MergedAt != "" {
+			state = PRStateMerged
+		}
+		prs[i] = PRInfo{Number: r.Number, Head: r.Head.Ref, Base: r.Base.Ref, State: state}
 	}
 	return prs, nil
 }
