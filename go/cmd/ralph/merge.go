@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -57,7 +59,14 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		log.Emit(logging.Opts{Level: logging.Error}, "gh CLI not available")
 		return 1
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		cancel()
+	}()
 
 	// Collect all PRs in the stack, walking down from the given PR to
 	// find the bottom, then collecting upward.
@@ -103,6 +112,8 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 		}
 		log.Phase("Merging PR #%d (%d/%d)", pr.number, merged+1, len(prs))
 
+		// Track the SHA we pushed so AwaitCI polls for the correct HEAD.
+		expectedSHA := ""
 		if merged > 0 {
 			// Main moved after previous merge. Rebase this branch onto
 			// the new main and force-push so CI runs against the correct base.
@@ -128,14 +139,20 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Force-push failed for %s: %v", pr.head, pushErr)
 				return 1
 			}
+			// Capture the SHA we just pushed before switching branches.
+			// GitHub's API may lag behind the force-push, so reading the
+			// SHA from local git is the only reliable source.
+			shaOut, _ := runner.Run(ctx, projectDir, "rev-parse", "HEAD")
+			expectedSHA = strings.TrimSpace(shaOut)
 			// Return to default branch.
 			runner.Run(ctx, projectDir, "checkout", defaultBranch)
 		}
 
-		// Get the HEAD SHA after push for fresh CI detection.
-		expectedSHA := ""
-		if prDetail, err := gh.GetPR(nwo, pr.number); err == nil {
-			expectedSHA = prDetail.HeadSHA
+		if expectedSHA == "" {
+			// First PR in stack (or no rebase needed) — ask GitHub.
+			if prDetail, err := gh.GetPR(nwo, pr.number); err == nil {
+				expectedSHA = prDetail.HeadSHA
+			}
 		}
 
 		// Wait for CI on the current HEAD.
