@@ -83,7 +83,7 @@ type GitHub interface {
 	PostEnforceAdmins(nwo, branch string) (output string, err error)
 	FindPR(branch, repoURL string) (number int, title, url string, err error)
 	SearchPR(workDir, query string) (prNumber int, err error)
-	PRDiff(workDir string, prNumber int) (string, error)
+	PRDiff(repoURL string, prNumber int) (string, error)
 	GetPRState(workDir string, prNumber int) (state string, err error)
 	GetPRBase(workDir string, prNumber int) (base string, err error)
 	GetPRHead(workDir string, prNumber int) (head string, err error)
@@ -412,12 +412,17 @@ func (g *ghCLI) SearchPR(workDir, query string) (int, error) {
 	return ParsePRNumber(raw)
 }
 
-func (g *ghCLI) PRDiff(workDir string, prNumber int) (string, error) {
-	cmd := exec.Command("gh", "pr", "diff", strconv.Itoa(prNumber))
-	cmd.Dir = workDir
+func (g *ghCLI) PRDiff(repoURL string, prNumber int) (string, error) {
+	nwo := NWOFromRemote(repoURL)
+	if nwo == "" {
+		return "", fmt.Errorf("could not determine repo NWO from %q", repoURL)
+	}
+	cmd := exec.Command("gh", "api",
+		fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber),
+		"-H", "Accept: application/vnd.github.diff")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("gh pr diff failed: %w", err)
+		return "", fmt.Errorf("gh api pull diff failed: %w", err)
 	}
 	return string(out), nil
 }

@@ -2,6 +2,9 @@ package git
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -38,6 +41,48 @@ func TestMergePR_HTTP409_ReturnsConflict(t *testing.T) {
 	}
 	if result.Merged || result.Blocked {
 		t.Errorf("expected no Merged/Blocked flags for HTTP 409, got %+v", result)
+	}
+}
+
+// PRDiff uses gh api with the diff Accept header, not gh pr diff.
+// A fake gh binary records the invocation args; the test verifies the
+// implementation sends "gh api repos/{nwo}/pulls/{num}" with the diff header.
+func TestPRDiff_UsesGhAPI(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho '+added line'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	diff, err := g.PRDiff("https://github.com/owner/repo.git", 42)
+	if err != nil {
+		t.Fatalf("PRDiff returned error: %v", err)
+	}
+	if !strings.Contains(diff, "+added line") {
+		t.Errorf("unexpected diff output: %q", diff)
+	}
+
+	raw, readErr := os.ReadFile(logFile)
+	if readErr != nil {
+		t.Fatalf("gh was never called: %v", readErr)
+	}
+	invocation := string(raw)
+
+	if !strings.Contains(invocation, "api") {
+		t.Errorf("expected 'gh api' invocation, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "repos/owner/repo/pulls/42") {
+		t.Errorf("expected repos/owner/repo/pulls/42 in args, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "application/vnd.github.diff") {
+		t.Errorf("expected application/vnd.github.diff Accept header, got: %q", invocation)
+	}
+	if strings.Contains(invocation, "pr diff") {
+		t.Errorf("found 'gh pr diff' invocation — must use gh api: %q", invocation)
 	}
 }
 
