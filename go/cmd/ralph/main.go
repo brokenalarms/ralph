@@ -89,11 +89,12 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	// Create git manager early so pre-setup calls use it instead of
 	// package-level functions. SetupWorktree is called after state init.
 	gm := &git.Manager{
-		ProjectDir: cfg.ProjectDir,
-		WorkDir:    cfg.ProjectDir,
-		RalphDir:   ralphDir,
-		BaseBranch: cfg.BaseBranch,
-		Logger:     log,
+		ProjectDir:    cfg.ProjectDir,
+		WorkDir:       cfg.ProjectDir,
+		RalphDir:      ralphDir,
+		BaseBranch:    cfg.BaseBranch,
+		Logger:        log,
+		CIPollTimeout: cfg.CIPollTimeout,
 	}
 
 	// Initialize .ralph directory and check for resume. This must happen

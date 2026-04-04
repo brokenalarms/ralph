@@ -84,6 +84,7 @@ type Config struct {
 	PostTask                string
 	VerifyBuild             string
 	Notify                  bool
+	CIPollTimeout           time.Duration
 
 	cliSet map[string]bool
 }

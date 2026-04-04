@@ -185,16 +185,21 @@ func (m *Manager) AwaitCI(ctx context.Context, prNumber int, repoURL string, pus
 		}
 	}
 
+	timeout := m.CIPollTimeout
+	if timeout == 0 {
+		timeout = DefaultCIPollTimeout
+	}
+
 	checks, fetchErr := fetch(prNumber, repoURL)
 	if fetchErr != nil || len(checks) == 0 {
 		m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "CI checks not available yet — waiting...")
-		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, m.Logger)
 	}
 	status := evaluateChecks(checks)
 	if status != CIPending {
 		return checks, status, nil
 	}
-	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, DefaultCIPollTimeout, m.Logger)
+	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, m.Logger)
 }
 
 // waitForCI polls PR checks until they complete or timeout is reached.
