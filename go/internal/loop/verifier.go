@@ -384,18 +384,28 @@ func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 	var msg string
 
 	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Running pre-iteration test suite...")
+	testStart := time.Now()
 	result := verify.RunTests(ctx, v.cfg.VerifyDir)
+	testElapsed := time.Since(testStart).Truncate(10 * time.Millisecond)
 	now := time.Now().Format(time.RFC3339)
+
+	if result.Command != "" {
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Using: %s (in %s)", result.Command, result.Dir)
+	}
 
 	if result.Passed {
 		v.deps.State.Write("last_test_result", "pass")
 		v.deps.State.Write("last_test_time", now)
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Success}, "Pre-iteration tests: all passing")
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Success}, "Pre-iteration tests: all passing (%s, %s)", result.Command, testElapsed)
 		msg += "\n- Test suite status: all tests passing as of start."
 	} else {
 		v.deps.State.Write("last_test_result", "fail")
 		v.deps.State.Write("last_test_time", now)
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Pre-iteration tests: failures detected")
+		cmdInfo := result.Command
+		if cmdInfo == "" {
+			cmdInfo = "unknown command"
+		}
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Pre-iteration tests: failures detected (%s, %s, %s)", cmdInfo, result.Reason, testElapsed)
 		msg += "\n- Test suite status: some tests are FAILING. Fix them before your task. If the tests pass when you run them, they were fixed externally — proceed with your task."
 		if result.Details != "" {
 			details := result.Details
@@ -407,11 +417,26 @@ func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 		}
 	}
 
+	compileStart := time.Now()
 	compileResult := verify.CompileCheck(ctx, v.cfg.VerifyDir)
+	compileElapsed := time.Since(compileStart).Truncate(10 * time.Millisecond)
+
+	if compileResult.Command != "" {
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build}, "Using: %s (in %s)", compileResult.Command, compileResult.Dir)
+	}
+
 	if compileResult.Passed {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Success}, "Pre-iteration compile check: passing")
+		cmdInfo := compileResult.Command
+		if cmdInfo == "" {
+			cmdInfo = "skipped"
+		}
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Success}, "Pre-iteration compile check: passing (%s, %s)", cmdInfo, compileElapsed)
 	} else {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Pre-iteration compile check: failures detected")
+		cmdInfo := compileResult.Command
+		if cmdInfo == "" {
+			cmdInfo = "unknown command"
+		}
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Pre-iteration compile check: failures detected (%s, %s, %s)", cmdInfo, compileResult.Reason, compileElapsed)
 		msg += "\n- Build status: compile check is FAILING. Fix the build errors before your task."
 		details := compileResult.Details
 		if details == "" {

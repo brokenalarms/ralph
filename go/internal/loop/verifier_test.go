@@ -814,3 +814,119 @@ func TestVerifier_TryCopilotFix_NoSignal_ReturnsFalse(t *testing.T) {
 		t.Fatal("expected TryCopilotFix to return false when fix agent doesn't signal")
 	}
 }
+
+// RunPreIterationTests logs the detected test command in the pass/fail line,
+// proving the pre-iteration log shows what ran without being generic.
+func TestVerifier_RunPreIterationTests_LogsDetectedCommand(t *testing.T) {
+	var buf strings.Builder
+	logger := logging.NewWithWriter(&buf)
+
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\ttrue\n"), 0o644)
+
+	st := newTestState(t, ralphDir)
+	v := NewVerifier(VerifierConfig{
+		VerifyDir:  dir,
+		PromptsDir: filepath.Join(dir, "prompts"),
+		RalphDir:   ralphDir,
+	}, VerifierDeps{
+		Logger:      logger,
+		Git:         &testutil.StubGit{HeadRevValue: "abc123"},
+		State:       st,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1},
+		Runner:      func() claudeRunner { return &stubRunner{} },
+		Signals:     claude.DefaultSignalPaths(ralphDir),
+		NewRunner:   func() claudeRunner { return &stubRunner{} },
+		LLMVerify:   func(opts verify.VerifyOpts) verify.Result { return verify.Result{Passed: true} },
+		SkipTask:    func(id, reason string) {},
+	})
+
+	v.RunPreIterationTests(context.Background())
+
+	log := buf.String()
+	if !strings.Contains(log, "make test-verify") {
+		t.Errorf("expected log to contain detected command 'make test-verify', got:\n%s", log)
+	}
+}
+
+// RunPreIterationTests includes the detected command in failure log lines,
+// proving the operator knows what ran without diving into raw output.
+func TestVerifier_RunPreIterationTests_LogsCommandOnFailure(t *testing.T) {
+	var buf strings.Builder
+	logger := logging.NewWithWriter(&buf)
+
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\tfalse\n"), 0o644)
+
+	st := newTestState(t, ralphDir)
+	v := NewVerifier(VerifierConfig{
+		VerifyDir:  dir,
+		PromptsDir: filepath.Join(dir, "prompts"),
+		RalphDir:   ralphDir,
+	}, VerifierDeps{
+		Logger:      logger,
+		Git:         &testutil.StubGit{HeadRevValue: "abc123"},
+		State:       st,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1},
+		Runner:      func() claudeRunner { return &stubRunner{} },
+		Signals:     claude.DefaultSignalPaths(ralphDir),
+		NewRunner:   func() claudeRunner { return &stubRunner{} },
+		LLMVerify:   func(opts verify.VerifyOpts) verify.Result { return verify.Result{Passed: true} },
+		SkipTask:    func(id, reason string) {},
+	})
+
+	v.RunPreIterationTests(context.Background())
+
+	log := buf.String()
+	if !strings.Contains(log, "make test-verify") {
+		t.Errorf("expected failure log to contain detected command 'make test-verify', got:\n%s", log)
+	}
+	if !strings.Contains(log, "failures detected") {
+		t.Errorf("expected failure log to contain 'failures detected', got:\n%s", log)
+	}
+}
+
+// RunPreIterationTests logs the compile check command in the pass/fail line.
+func TestVerifier_RunPreIterationTests_LogsCompileCommand(t *testing.T) {
+	var buf strings.Builder
+	logger := logging.NewWithWriter(&buf)
+
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	// Passing test suite
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\ttrue\n"), 0o644)
+	// Go project for compile check
+	goDir := filepath.Join(dir, "go")
+	os.MkdirAll(goDir, 0o755)
+	os.WriteFile(filepath.Join(goDir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644)
+	os.WriteFile(filepath.Join(goDir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644)
+
+	st := newTestState(t, ralphDir)
+	v := NewVerifier(VerifierConfig{
+		VerifyDir:  dir,
+		PromptsDir: filepath.Join(dir, "prompts"),
+		RalphDir:   ralphDir,
+	}, VerifierDeps{
+		Logger:      logger,
+		Git:         &testutil.StubGit{HeadRevValue: "abc123"},
+		State:       st,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1},
+		Runner:      func() claudeRunner { return &stubRunner{} },
+		Signals:     claude.DefaultSignalPaths(ralphDir),
+		NewRunner:   func() claudeRunner { return &stubRunner{} },
+		LLMVerify:   func(opts verify.VerifyOpts) verify.Result { return verify.Result{Passed: true} },
+		SkipTask:    func(id, reason string) {},
+	})
+
+	v.RunPreIterationTests(context.Background())
+
+	log := buf.String()
+	if !strings.Contains(log, "go test -run=^$ ./...") {
+		t.Errorf("expected log to contain compile command 'go test -run=^$ ./...', got:\n%s", log)
+	}
+}
