@@ -323,12 +323,12 @@ func resolveByPRState(ctx context.Context, p resolveByPRStateParams) bool {
 		mergeFunc:  p.mergeFunc,
 	}
 
-	switch strings.ToUpper(prState) {
-	case "MERGED":
+	switch prState {
+	case git.PRStateMerged:
 		p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Success, Link: prLink(p.git, p.prNumber)}, "already merged — closing bead and moving on")
 		p.attempts.Clear(p.taskID, p.nextTask)
 		p.state.RecordCompletedTask(p.taskID, p.nextTask)
-		fp.prState = "MERGED"
+		fp.prState = git.PRStateMerged
 		finalizePR(fp)
 		if p.notify {
 			notify.TaskCompleted(p.taskID, p.nextTask, "")
@@ -336,12 +336,12 @@ func resolveByPRState(ctx context.Context, p resolveByPRStateParams) bool {
 		notify.TaskMerged(p.taskID, p.nextTask)
 		return true
 
-	case "OPEN":
+	case git.PRStateOpen:
 		if ok, reason := p.git.PRChainIsHealthy(p.prNumber); !ok {
 			p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "chain unhealthy: %s — re-running agent", reason)
 			return false
 		}
-		fp.prState = "OPEN"
+		fp.prState = git.PRStateOpen
 		finalizePR(fp)
 		if p.notify {
 			notify.TaskCompleted(p.taskID, p.nextTask, "")

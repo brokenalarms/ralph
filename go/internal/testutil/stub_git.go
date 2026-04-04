@@ -53,7 +53,7 @@ type StubGit struct {
 	// PR stub values.
 	OpenPR       int
 	OpenPRErr    error
-	PRState      string
+	PRState      git.PRState
 	PRStateErr   error
 	OpenBranches []string
 	PRBase       string
@@ -110,7 +110,7 @@ func (s *StubGit) FindOpenPRForBranch(branch string) (int, error) {
 	}
 	return 0, nil
 }
-func (s *StubGit) GetPRState(prNumber int) (string, error) {
+func (s *StubGit) GetPRState(prNumber int) (git.PRState, error) {
 	if s.PRState != "" {
 		return s.PRState, s.PRStateErr
 	}

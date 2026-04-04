@@ -19,7 +19,7 @@ type GitOps interface {
 
 	// PR operations — delegated to GitHub internally.
 	FindOpenPRForBranch(branch string) (int, error)
-	GetPRState(prNumber int) (string, error)
+	GetPRState(prNumber int) (PRState, error)
 	ListOpenPRBranches() ([]string, error)
 	GetPRBase(prNumber int) string
 	FindPRForBranch(branch string) (number int, title, url string, err error)
@@ -122,7 +122,7 @@ func (m *Manager) FindOpenPRForBranch(branch string) (int, error) {
 }
 
 // GetPRState returns the state (OPEN/CLOSED/MERGED) of a PR.
-func (m *Manager) GetPRState(prNumber int) (string, error) {
+func (m *Manager) GetPRState(prNumber int) (PRState, error) {
 	gh := m.gh()
 	if !gh.Available() {
 		return "", nil

@@ -100,7 +100,7 @@ func reopenClosedPR(gh GitHub, workDir, branch, nwo, repoURL, title, body string
 		return 0, findErr
 	}
 	prDetail, stateErr := gh.GetPR(nwo, number)
-	if stateErr != nil || prDetail == nil || prDetail.State != "CLOSED" {
+	if stateErr != nil || prDetail == nil || prDetail.State != PRStateClosed {
 		return 0, stateErr
 	}
 
@@ -180,7 +180,7 @@ func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string,
 		// A merged PR means the push already delivered commits — return its number.
 		// A closed PR can be reopened by the block below.
 		if existingPR, _, _, findErr := gh.FindPR(branch, remoteURL); findErr == nil && existingPR != 0 {
-			if prDetail, detailErr := gh.GetPR(nwo, existingPR); detailErr == nil && prDetail != nil && prDetail.State == "MERGED" {
+			if prDetail, detailErr := gh.GetPR(nwo, existingPR); detailErr == nil && prDetail != nil && prDetail.State == PRStateMerged {
 				prLink := logging.PRLinkOpt(nwo, existingPR)
 				opts.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "Merged PR already exists for %s — commits landed", branch)
 				return existingPR, nil
@@ -483,10 +483,10 @@ func (m *Manager) resolveClosedPR(gh GitHub, repoURL string) (int, error) {
 	prLink := logging.PRLinkOpt(nwo, number)
 
 	switch prDetail.State {
-	case "MERGED":
+	case PRStateMerged:
 		m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "already merged — nothing to do")
 		return 0, ErrPRAlreadyMerged
-	case "CLOSED":
+	case PRStateClosed:
 		m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "is closed — reopening")
 		if err := gh.ReopenPR(number, repoURL); err != nil {
 			m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "Failed to reopen: %v — creating new PR", err)

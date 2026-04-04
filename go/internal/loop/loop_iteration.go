@@ -339,7 +339,7 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 			closeReason := "verified complete (no new commits)"
 			ref, _ := opts.backend.GetExternalRef(p.taskID)
 			if prNum := parsePRNumber(ref); prNum != 0 {
-				if prState, _ := opts.git.GetPRState(prNum); strings.ToUpper(prState) == "MERGED" {
+				if prState, _ := opts.git.GetPRState(prNum); prState == git.PRStateMerged {
 					closeReason = fmt.Sprintf("PR #%d already merged", prNum)
 				}
 			}
@@ -372,7 +372,7 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 	}
 
 	prNumber, shipURL := opts.pushSignalPRFn(p)
-	prState := "OPEN"
+	prState := git.PRStateOpen
 
 	// Recovery: if push failed but a PR already exists, use it.
 	if prNumber == 0 && p.taskID != "" {
@@ -392,7 +392,7 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 	// findPRInfo queries open PRs for the current branch, so OPEN is safe.
 	if prNumber == 0 && ct.PRNum != 0 {
 		prNumber = ct.PRNum
-		prState = "OPEN"
+		prState = git.PRStateOpen
 	}
 
 	if p.ctx.Err() != nil {
@@ -503,7 +503,7 @@ type finalizePRParams struct {
 	taskID     string
 	nextTask   string
 	prNumber   int
-	prState    string // "OPEN" or "MERGED"; looked up from GH if empty
+	prState    git.PRState // looked up from GH if empty
 	prURL      string
 	workDir    string
 	rawLogPath string
@@ -559,13 +559,13 @@ func finalizePR(p finalizePRParams) finalizePRResult {
 			p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "Failed to get state: %v", err)
 			return finalizePRResult{}
 		}
-		prState = strings.ToUpper(looked)
+		prState = looked
 	}
 
-	merged := prState == "MERGED"
+	merged := prState == git.PRStateMerged
 	mergeFailed := false
 
-	if prState == "OPEN" && p.autoMerge {
+	if prState == git.PRStateOpen && p.autoMerge {
 		p.git.SetLocalTestsPassed(true)
 		prBase := p.git.GetPRBase(p.prNumber)
 		defaultBranch := p.git.DetectDefaultBranch()

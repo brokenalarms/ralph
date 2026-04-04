@@ -38,7 +38,7 @@ type StubGitHub struct {
 	SearchPRNumber     int
 	PRDiffOutput       string
 	CreatedPR          int
-	PRState            string
+	PRState            PRState
 	PRBase             string
 	PRHead             string
 	HeadSHA    string
@@ -68,7 +68,7 @@ func NewStubGitHub() *StubGitHub {
 		IsAvailable: true,
 		OpenPR:      42,
 		PRBase:      "main",
-		PRState:     "OPEN",
+		PRState:     PRStateOpen,
 		MergeResult: MergeResult{Merged: true},
 	}
 }
@@ -167,7 +167,7 @@ func (s *StubGitHub) ReopenPR(prNumber int, repoURL string) error {
 	s.ReopenPRCalled = true
 	if s.ReopenPRErr == nil {
 		s.OpenPR = prNumber
-		s.PRState = "OPEN"
+		s.PRState = PRStateOpen
 	}
 	return s.ReopenPRErr
 }
