@@ -1928,8 +1928,7 @@ func TestIntegration_CIFailureTriggersFixAgent(t *testing.T) {
 
 // gitCommandTracker implements git.Runner and records every git command issued.
 // Returns the value from outputs (keyed by joined args) for known commands;
-// returns ("", nil) for everything else so callers treat unknown commands as
-// success without error.
+// returns an error for unregistered commands so unexpected invocations fail fast.
 type gitCommandTracker struct {
 	mu      sync.Mutex
 	calls   []string
@@ -1940,16 +1939,22 @@ func (r *gitCommandTracker) Run(_ context.Context, _ string, args ...string) (st
 	key := strings.Join(args, " ")
 	r.mu.Lock()
 	r.calls = append(r.calls, key)
-	out := r.outputs[key]
+	out, ok := r.outputs[key]
 	r.mu.Unlock()
+	if !ok {
+		return "", fmt.Errorf("gitCommandTracker: unregistered command %q", key)
+	}
 	return out, nil
 }
 
+// calledWith reports whether any recorded call has the given string as its
+// first space-delimited token (exact subcommand match, not substring).
 func (r *gitCommandTracker) calledWith(sub string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, c := range r.calls {
-		if strings.Contains(c, sub) {
+		first, _, _ := strings.Cut(c, " ")
+		if first == sub {
 			return true
 		}
 	}
@@ -2127,6 +2132,7 @@ func TestIntegration_CIAlreadyPassing_FallsThrough_WhenHeadDiffers(t *testing.T)
 	realGH.Checks = []git.CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 	// MergeResult defaults to Merged: true
 
+	var logBuf strings.Builder
 	realMgr := &git.Manager{
 		ProjectDir:     dir,
 		WorkDir:        dir + "/wt",
@@ -2135,7 +2141,7 @@ func TestIntegration_CIAlreadyPassing_FallsThrough_WhenHeadDiffers(t *testing.T)
 		Runner:         tracker,
 		GitHub:         realGH,
 		State:          newGitMemState(),
-		Logger:         logging.New(nil),
+		Logger:         logging.NewWithWriter(&logBuf),
 	}
 
 	gm := &testutil.StubGit{
@@ -2187,6 +2193,12 @@ func TestIntegration_CIAlreadyPassing_FallsThrough_WhenHeadDiffers(t *testing.T)
 	// Normal flow must push during the merge phase because SHA differs.
 	if !tracker.calledWith("push") {
 		t.Error("git push should be called when local HEAD differs from PR head SHA")
+	}
+
+	// AwaitCI must be called with a non-zero pushedAt — the whole point of the
+	// falls-through path is to wait for fresh CI after pushing.
+	if !strings.Contains(logBuf.String(), "Waiting for fresh CI checks (pushed at") {
+		t.Errorf("expected 'Waiting for fresh CI checks (pushed at' in log output, got:\n%s", logBuf.String())
 	}
 
 	// Merge must succeed and task must close.
