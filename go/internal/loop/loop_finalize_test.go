@@ -439,6 +439,70 @@ func TestFinalizePR_DependencyBlockedClose_SkipsWithBlockerIDs(t *testing.T) {
 	}
 }
 
+// finalizePR calls PollCopilotReview when copilotReviewEnabled is true and the PR is OPEN with autoMerge on.
+func TestFinalizePR_CopilotReviewEnabled_PollsCalled(t *testing.T) {
+	dir, st := setupTestDir(t)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	finalizePR(finalizePRParams{
+		ctx:                  context.Background(),
+		taskID:               "ralph-abc",
+		nextTask:             "Fix bug",
+		prNumber:             42,
+		prState:              "OPEN",
+		workDir:              dir,
+		autoMerge:            true,
+		copilotReviewEnabled: true,
+		git:                  gm,
+		logger:               logging.New(nil),
+		backend:              backend,
+		state:                st,
+		attempts:             attempts.New(dir),
+		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+	})
+
+	if !gm.PollCopilotReviewCalled {
+		t.Error("PollCopilotReview should be called when copilotReviewEnabled=true and PR is OPEN")
+	}
+}
+
+// finalizePR does not call PollCopilotReview when copilotReviewEnabled is false.
+func TestFinalizePR_CopilotReviewDisabled_NoPoll(t *testing.T) {
+	dir, st := setupTestDir(t)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	finalizePR(finalizePRParams{
+		ctx:                  context.Background(),
+		taskID:               "ralph-abc",
+		nextTask:             "Fix bug",
+		prNumber:             42,
+		prState:              "OPEN",
+		workDir:              dir,
+		autoMerge:            true,
+		copilotReviewEnabled: false,
+		git:                  gm,
+		logger:               logging.New(nil),
+		backend:              backend,
+		state:                st,
+		attempts:             attempts.New(dir),
+		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+	})
+
+	if gm.PollCopilotReviewCalled {
+		t.Error("PollCopilotReview should not be called when copilotReviewEnabled=false")
+	}
+}
+
 // skipTask sets status to open in backend and persists to state.json.
 func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
 	_, st := setupTestDir(t)

@@ -1,5 +1,7 @@
 package git
 
+import "time"
+
 // StubGitHub is a test double for the GitHub interface, shared across all
 // packages that need to stub GitHub operations. Configure fields for the
 // methods under test; all methods have sensible zero-value defaults.
@@ -51,6 +53,8 @@ type StubGitHub struct {
 	AllPRsErr             error
 	CopilotReviewEnabled  bool
 	CopilotReviewErr      error
+	CopilotReviewResult   *CopilotReview
+	PollCopilotReviewErr  error
 }
 
 func (s *StubGitHub) Available() bool { return s.IsAvailable }
@@ -162,4 +166,7 @@ func (s *StubGitHub) ListAllPRs(workDir string) ([]PRInfo, error) {
 }
 func (s *StubGitHub) CheckCopilotReviewEnabled(nwo string) (bool, error) {
 	return s.CopilotReviewEnabled, s.CopilotReviewErr
+}
+func (s *StubGitHub) PollCopilotReview(nwo string, prNumber int, timeout time.Duration) (*CopilotReview, error) {
+	return s.CopilotReviewResult, s.PollCopilotReviewErr
 }
