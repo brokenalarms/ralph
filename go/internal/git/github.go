@@ -84,7 +84,7 @@ type CreatePROpts struct {
 type MergeOpts struct {
 	DeleteBranch bool
 	Subject      string
-	// Admin bypasses branch protection rules using gh pr merge --admin.
+	// Admin bypasses branch protection rules via admin token privileges.
 	// Only set when the caller has explicitly opted in (infrastructure failure
 	// with local tests passing, or --bypass-rules flag).
 	Admin bool
@@ -221,26 +221,25 @@ func (g *ghCLI) MergePR(prNumber int, repoURL string, opts MergeOpts) MergeResul
 	}
 
 	// Method Not Allowed: branch protection blocks merge via REST API.
-	// If caller opted in to admin bypass, fall back to gh pr merge --admin.
+	// If caller opted in to admin bypass, retry via mergeAdmin with token privileges.
 	if result.Blocked && opts.Admin {
 		return g.mergeAdmin(pr, repoURL, nwo, opts)
 	}
 	return result
 }
 
-// mergeAdmin uses gh pr merge --admin to bypass branch protection rules.
-// Used when the caller explicitly opts in via MergeOpts.Admin.
+// mergeAdmin uses gh api PUT to merge a PR with admin token privileges,
+// bypassing branch protection rules. Admin access is implicit from the token.
 func (g *ghCLI) mergeAdmin(prNumber, repoURL, nwo string, opts MergeOpts) MergeResult {
-	args := []string{"pr", "merge", prNumber, "--admin", "--squash", "-R", repoURL}
-	if opts.DeleteBranch {
-		args = append(args, "--delete-branch")
-	}
+	endpoint := fmt.Sprintf("repos/%s/pulls/%s/merge", nwo, prNumber)
+	args := []string{"api", "-X", "PUT", endpoint, "--include", "-f", "merge_method=squash"}
 	cmd := exec.Command("gh", args...)
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return MergeResult{Message: strings.TrimSpace(string(out))}
+	result := classifyMergeStatus(string(out), err)
+	if result.Merged && opts.DeleteBranch {
+		g.deleteBranch(nwo, prNumber)
 	}
-	return MergeResult{Merged: true, Message: "merged (admin)"}
+	return result
 }
 
 // classifyMergeStatus maps gh api --include output to a structured MergeResult.
@@ -318,21 +317,56 @@ func (g *ghCLI) deleteBranch(nwo, prNumber string) {
 }
 
 func (g *ghCLI) ListChecks(prNumber int, repoURL string) ([]CICheckResult, error) {
-	pr := strconv.Itoa(prNumber)
-	args := []string{"pr", "checks", pr, "--json", "name,state,bucket,startedAt"}
-	if repoURL != "" {
-		args = append(args, "-R", repoURL)
+	nwo := NWOFromRemote(repoURL)
+	if nwo == "" {
+		return nil, fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
-	cmd := exec.Command("gh", args...)
+	detail, err := g.GetPR(nwo, prNumber)
+	if err != nil {
+		return nil, fmt.Errorf("getting PR head SHA: %w", err)
+	}
+	endpoint := fmt.Sprintf("repos/%s/commits/%s/check-runs", nwo, detail.HeadSHA)
+	cmd := exec.Command("gh", "api", endpoint, "--jq", ".check_runs")
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("gh pr checks failed: %w", err)
+		return nil, fmt.Errorf("gh api check-runs failed: %w", err)
 	}
-	var checks []CICheckResult
-	if err := json.Unmarshal(out, &checks); err != nil {
-		return nil, fmt.Errorf("parsing check results: %w", err)
+	type apiCheckRun struct {
+		Name       string    `json:"name"`
+		Status     string    `json:"status"`
+		Conclusion string    `json:"conclusion"`
+		StartedAt  time.Time `json:"started_at"`
+	}
+	var runs []apiCheckRun
+	if err := json.Unmarshal(out, &runs); err != nil {
+		return nil, fmt.Errorf("parsing check-runs: %w", err)
+	}
+	checks := make([]CICheckResult, len(runs))
+	for i, run := range runs {
+		checks[i] = mapCheckRun(run.Name, run.Status, run.Conclusion, run.StartedAt)
 	}
 	return checks, nil
+}
+
+// mapCheckRun converts a GitHub REST API check-run to a CICheckResult.
+// GitHub API: status (queued/in_progress/completed) + conclusion (success/failure/etc).
+// Maps to existing state values callers depend on: SUCCESS/pass, FAILURE/fail, PENDING/pending.
+func mapCheckRun(name, status, conclusion string, startedAt time.Time) CICheckResult {
+	var state, bucket string
+	if status == "completed" {
+		switch conclusion {
+		case "success":
+			state, bucket = "SUCCESS", "pass"
+		case "failure", "timed_out", "action_required":
+			state, bucket = "FAILURE", "fail"
+		default:
+			// neutral, skipped, cancelled → treat as pending (non-blocking)
+			state, bucket = "PENDING", "pending"
+		}
+	} else {
+		state, bucket = "PENDING", "pending"
+	}
+	return CICheckResult{Name: name, State: state, Bucket: bucket, StartedAt: startedAt}
 }
 
 

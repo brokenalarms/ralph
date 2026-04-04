@@ -9,9 +9,8 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 )
 
-// CICheckResult represents the status of a single CI check from gh pr checks.
-// gh pr checks --json returns: name, state (SUCCESS/FAILURE/PENDING/CANCELLED),
-// bucket (pass/fail/pending), startedAt.
+// CICheckResult represents the status of a single CI check.
+// Fields: name, state (SUCCESS/FAILURE/PENDING), bucket (pass/fail/pending), startedAt.
 type CICheckResult struct {
 	Name       string    `json:"name"`
 	State      string    `json:"state"`
