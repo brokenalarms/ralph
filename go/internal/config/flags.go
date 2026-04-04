@@ -373,6 +373,18 @@ var Flags = []FlagDef{
 		},
 		Read: func(cfg *Config) string { return cfg.VerifyEscalationModel },
 	},
+	{
+		ConfigKey: "ci_poll_timeout", Default: "5m",
+		Kind: KindDuration,
+		Apply: func(cfg *Config, val string) error {
+			d, err := parseDuration(val)
+			if err != nil {
+				return err
+			}
+			cfg.CIPollTimeout = d
+			return nil
+		},
+	},
 }
 
 var (

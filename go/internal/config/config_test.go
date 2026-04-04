@@ -40,6 +40,9 @@ func TestDefaultValues(t *testing.T) {
 	if cfg.IdleTimeoutProgress != 5*time.Minute {
 		t.Errorf("IdleTimeoutProgress = %s, want 5m", cfg.IdleTimeoutProgress)
 	}
+	if cfg.CIPollTimeout != 5*time.Minute {
+		t.Errorf("CIPollTimeout = %s, want 5m", cfg.CIPollTimeout)
+	}
 }
 
 // Verifies that RALPH_MAX_ITERATIONS env var overrides the Flags registry default.

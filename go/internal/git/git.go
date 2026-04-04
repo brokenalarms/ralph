@@ -49,6 +49,7 @@ type Manager struct {
 	LocalTestsPassed bool
 	BypassRules      bool
 	KnownPRNumber    int
+	CIPollTimeout    time.Duration
 }
 
 // GH returns the GitHub interface, using the injected stub if set (tests)

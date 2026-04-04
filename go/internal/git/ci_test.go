@@ -820,3 +820,49 @@ func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 	}
 }
 
+// AwaitCI uses Manager.CIPollTimeout when non-zero, falling back to
+// DefaultCIPollTimeout when zero. This proves the config value is wired
+// through to the polling loop rather than always using the constant.
+func TestAwaitCI_UsesManagerCIPollTimeout(t *testing.T) {
+	origSleep := ciSleep
+	ciSleep = func(d time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+	defer func() { ciSleep = origSleep }()
+
+	// Manager with a very short custom timeout — pending checks should time out quickly.
+	gh := &StubGitHub{
+		Checks: []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}},
+	}
+	mgr := &Manager{GitHub: gh, Logger: &testLog{}, CIPollTimeout: 1 * time.Millisecond}
+
+	_, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
+	if err == nil {
+		t.Fatal("expected timeout error with 1ms CIPollTimeout")
+	}
+	if status != CIPending {
+		t.Errorf("expected CIPending on timeout, got %v", status)
+	}
+}
+
+// AwaitCI falls back to DefaultCIPollTimeout when Manager.CIPollTimeout is zero,
+// preserving backwards compatibility for tests that construct Manager directly.
+func TestAwaitCI_ZeroCIPollTimeoutFallsBackToDefault(t *testing.T) {
+	// Manager with zero CIPollTimeout and checks that pass immediately —
+	// if the fallback is working, it won't time out before the first poll.
+	gh := &StubGitHub{
+		Checks: []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}},
+	}
+	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
+
+	_, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed, got %v", status)
+	}
+}
+
