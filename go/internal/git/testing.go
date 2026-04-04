@@ -68,6 +68,10 @@ func NewStubGitHub() *StubGitHub {
 	return &StubGitHub{
 		IsAvailable: true,
 		OpenPR:      42,
+		PRNumber:    42,
+		PRHead:      "feature",
+		PRTitle:     "stub PR",
+		PRURL:       "https://github.com/owner/repo/pull/42",
 		PRBase:      "main",
 		PRState:     PRStateOpen,
 		MergeResult: MergeResult{Merged: true},

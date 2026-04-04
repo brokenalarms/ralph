@@ -154,8 +154,8 @@ func TestListChecks_Stubbable(t *testing.T) {
 	}
 }
 
-// GetPR returns a PRDetail with all fields populated and auto-generates
-// a deterministic HeadSHA that changes on each call (simulating pushes).
+// GetPR returns a PRDetail with all fields populated and a deterministic
+// HeadSHA derived from the PR number.
 func TestGetPR_ReturnsAllFields(t *testing.T) {
 	stub := NewStubGitHub()
 	stub.PRHead = "feature-branch"
@@ -443,7 +443,10 @@ func TestMergeAdmin_UsesGhAPI(t *testing.T) {
 		t.Errorf("expected Merged=true, got %+v", result)
 	}
 
-	raw, _ := os.ReadFile(logFile)
+	raw, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("reading gh invocation log: %v", err)
+	}
 	invocation := string(raw)
 	if strings.Contains(invocation, "pr merge") {
 		t.Errorf("mergeAdmin must not use 'gh pr merge', got: %q", invocation)
@@ -474,7 +477,10 @@ func TestEditPR_UsesGhAPI(t *testing.T) {
 		t.Fatalf("EditPR returned error: %v", err)
 	}
 
-	raw, _ := os.ReadFile(logFile)
+	raw, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("reading gh invocation log: %v", err)
+	}
 	invocation := string(raw)
 
 	if strings.Contains(invocation, "pr edit") {

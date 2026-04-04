@@ -289,6 +289,18 @@ var Flags = []FlagDef{
 		},
 	},
 	{
+		ConfigKey: "ci_poll_timeout", Default: "5m",
+		Kind: KindDuration,
+		Apply: func(cfg *Config, val string) error {
+			d, err := parseDuration(val)
+			if err != nil {
+				return err
+			}
+			cfg.CIPollTimeout = d
+			return nil
+		},
+	},
+	{
 		Long: "--post-task", MetaVar: "<script>",
 		Help:      "Run external script after each task completes",
 		ConfigKey: "post_task",
@@ -372,18 +384,6 @@ var Flags = []FlagDef{
 			return nil
 		},
 		Read: func(cfg *Config) string { return cfg.VerifyEscalationModel },
-	},
-	{
-		ConfigKey: "ci_poll_timeout", Default: "5m",
-		Kind: KindDuration,
-		Apply: func(cfg *Config, val string) error {
-			d, err := parseDuration(val)
-			if err != nil {
-				return err
-			}
-			cfg.CIPollTimeout = d
-			return nil
-		},
 	},
 }
 

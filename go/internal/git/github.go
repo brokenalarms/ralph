@@ -527,7 +527,7 @@ func (g *ghCLI) ReopenPR(prNumber int, repoURL string) error {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber)
 	cmd := exec.Command("gh", "api", "-X", "PATCH", endpoint, "-f", "state=open")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("gh pr reopen failed: %s", strings.TrimSpace(string(out)))
+		return fmt.Errorf("gh api PATCH %s failed: %s", endpoint, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -730,9 +730,18 @@ func (g *ghCLI) ListAllPRs(workDir string) ([]PRInfo, error) {
 		if err := json.Unmarshal([]byte(line), &r); err != nil {
 			return nil, fmt.Errorf("parse PR list: %w", err)
 		}
-		state := PRState(strings.ToUpper(r.State))
-		if r.MergedAt != nil && *r.MergedAt != "" {
-			state = PRStateMerged
+		var state PRState
+		switch strings.ToLower(r.State) {
+		case "open":
+			state = PRStateOpen
+		case "closed":
+			if r.MergedAt != nil && *r.MergedAt != "" {
+				state = PRStateMerged
+			} else {
+				state = PRStateClosed
+			}
+		default:
+			return nil, fmt.Errorf("unrecognised PR state %q", r.State)
 		}
 		prs = append(prs, PRInfo{Number: r.Number, Head: r.Head.Ref, Base: r.Base.Ref, State: state})
 	}

@@ -51,7 +51,8 @@ const DefaultCIPollInterval = 1 * time.Second
 const MaxCIPollInterval = 5 * time.Second
 
 // DefaultCIPollTimeout is the maximum time to wait for CI checks to complete.
-const DefaultCIPollTimeout = 10 * time.Minute
+// Matches the ci_poll_timeout config-file default.
+const DefaultCIPollTimeout = 5 * time.Minute
 
 // ciSleep is the function used to create timer channels in waitForCI.
 // Tests override this to avoid real sleeps.
