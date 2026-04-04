@@ -83,6 +83,8 @@ type Result struct {
 	NoDiff  bool // true when verification passed because no diff was found
 	Reason  string
 	Details string
+	Command string // the command that was run (e.g. "npm run test:verify")
+	Dir     string // the directory the command ran in
 }
 
 // TestCommand holds the detected test runner for a project.
@@ -118,6 +120,8 @@ func RunTests(ctx context.Context, dir string) Result {
 		return Result{Passed: false, Reason: "no test:verify script found — add a \"test:verify\" script to package.json"}
 	}
 
+	command := tc.Cmd + " " + strings.Join(tc.Args, " ")
+
 	ctx, cancel := context.WithTimeout(ctx, TestTimeout)
 	defer cancel()
 
@@ -139,10 +143,12 @@ func RunTests(ctx context.Context, dir string) Result {
 			Passed:  false,
 			Reason:  reason,
 			Details: tail,
+			Command: command,
+			Dir:     dir,
 		}
 	}
 
-	return Result{Passed: true, Reason: "tests passed"}
+	return Result{Passed: true, Reason: "tests passed", Command: command, Dir: dir}
 }
 
 // CheckCommits returns a Result indicating whether HEAD moved since the
@@ -352,10 +358,12 @@ func CompileCheck(ctx context.Context, dir string) Result {
 	defer cancel()
 
 	foundAny := false
+	var commands []string
 
 	goDir := findGoModDir(dir)
 	if goDir != "" {
 		foundAny = true
+		commands = append(commands, "go test -run=^$ ./...")
 		cmd := exec.CommandContext(ctx, "go", "test", "-run=^$", "-count=1", "./...")
 		cmd.Dir = goDir
 		cmd.WaitDelay = 3 * time.Second
@@ -365,18 +373,24 @@ func CompileCheck(ctx context.Context, dir string) Result {
 				Passed:  false,
 				Reason:  "pre-push compile check failed: not all packages compile",
 				Details: lastNLines(filterFailures(string(out)), 30),
+				Command: strings.Join(commands, " + "),
+				Dir:     dir,
 			}
 		}
 	}
 
 	if fileExists(filepath.Join(dir, "tsconfig.json")) {
 		foundAny = true
+		var tsCmd string
 		var cmd *exec.Cmd
 		if hasNPMScript(dir, "typecheck") {
+			tsCmd = "npm run typecheck"
 			cmd = exec.CommandContext(ctx, "npm", "run", "typecheck")
 		} else {
+			tsCmd = "tsc --noEmit"
 			cmd = exec.CommandContext(ctx, "tsc", "--noEmit")
 		}
+		commands = append(commands, tsCmd)
 		cmd.Dir = dir
 		cmd.WaitDelay = 3 * time.Second
 		out, err := cmd.CombinedOutput()
@@ -385,6 +399,8 @@ func CompileCheck(ctx context.Context, dir string) Result {
 				Passed:  false,
 				Reason:  "pre-push TypeScript compile check failed",
 				Details: lastNLines(string(out), 30),
+				Command: strings.Join(commands, " + "),
+				Dir:     dir,
 			}
 		}
 	}
@@ -392,7 +408,7 @@ func CompileCheck(ctx context.Context, dir string) Result {
 	if !foundAny {
 		return Result{Passed: true, Reason: "no Go module or TypeScript project found — skipping compile check"}
 	}
-	return Result{Passed: true, Reason: "all packages compile"}
+	return Result{Passed: true, Reason: "all packages compile", Command: strings.Join(commands, " + "), Dir: dir}
 }
 
 // findGoModDir locates the directory containing go.mod by checking the given

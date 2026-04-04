@@ -701,6 +701,92 @@ func TestCapModel(t *testing.T) {
 	}
 }
 
+// RunTests populates Command and Dir so callers can log what was detected.
+func TestRunTests_PopulatesCommandAndDir(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\ttrue\n"), 0o644)
+
+	result := RunTests(context.Background(), dir)
+	if result.Command != "make test-verify" {
+		t.Errorf("expected Command='make test-verify', got %q", result.Command)
+	}
+	if result.Dir != dir {
+		t.Errorf("expected Dir=%q, got %q", dir, result.Dir)
+	}
+}
+
+// RunTests populates Command and Dir even when the test suite fails, so
+// the caller can include the command in failure log lines.
+func TestRunTests_PopulatesCommandOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\tfalse\n"), 0o644)
+
+	result := RunTests(context.Background(), dir)
+	if result.Passed {
+		t.Fatal("expected failure")
+	}
+	if result.Command != "make test-verify" {
+		t.Errorf("expected Command='make test-verify' on failure, got %q", result.Command)
+	}
+	if result.Dir != dir {
+		t.Errorf("expected Dir=%q, got %q", dir, result.Dir)
+	}
+}
+
+// CompileCheck populates Command so callers can log the detected build tool.
+func TestCompileCheck_PopulatesCommand_Go(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644)
+
+	result := CompileCheck(context.Background(), dir)
+	if !result.Passed {
+		t.Fatalf("expected pass, got: %s\n%s", result.Reason, result.Details)
+	}
+	if result.Command != "go test -run=^$ ./..." {
+		t.Errorf("expected Command='go test -run=^$ ./...', got %q", result.Command)
+	}
+	if result.Dir != dir {
+		t.Errorf("expected Dir=%q, got %q", dir, result.Dir)
+	}
+}
+
+// CompileCheck includes the TypeScript command when a tsconfig.json is present.
+func TestCompileCheck_PopulatesCommand_TS(t *testing.T) {
+	dir := t.TempDir()
+	binDir := t.TempDir()
+	os.WriteFile(filepath.Join(binDir, "tsc"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(`{}`), 0o644)
+
+	result := CompileCheck(context.Background(), dir)
+	if !result.Passed {
+		t.Fatalf("expected pass, got: %s", result.Reason)
+	}
+	if result.Command != "tsc --noEmit" {
+		t.Errorf("expected Command='tsc --noEmit', got %q", result.Command)
+	}
+}
+
+// CompileCheck lists both commands when the project has Go and TypeScript.
+func TestCompileCheck_PopulatesCommand_Both(t *testing.T) {
+	dir := t.TempDir()
+	binDir := t.TempDir()
+	os.WriteFile(filepath.Join(binDir, "tsc"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(`{}`), 0o644)
+
+	result := CompileCheck(context.Background(), dir)
+	if !result.Passed {
+		t.Fatalf("expected pass, got: %s", result.Reason)
+	}
+	if result.Command != "go test -run=^$ ./... + tsc --noEmit" {
+		t.Errorf("expected compound Command, got %q", result.Command)
+	}
+}
+
 func setupGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
