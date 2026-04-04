@@ -69,7 +69,7 @@ func (m *Manager) SetLocalTestsPassed(v bool) {
 }
 
 // SetKnownPRNumber stores a PR number discovered earlier (e.g. during Ship)
-// so that AutoMergeCurrentBranch and CreatePR can skip the FindOpenPR lookup.
+// so that AutoMergeCurrentBranch and FlushUnpushedWork can skip the FindOpenPR lookup.
 func (m *Manager) SetKnownPRNumber(n int) {
 	m.KnownPRNumber = n
 }

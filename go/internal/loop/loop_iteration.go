@@ -588,6 +588,7 @@ func finalizePR(p finalizePRParams) finalizePRResult {
 			}
 			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, p.prNumber)}, "targets %s — merging", defaultBranch)
 			p.git.SetKnownPRNumber(p.prNumber)
+			defer p.git.SetKnownPRNumber(0)
 			var mergeErr error
 			merged, mergeErr = mergeWithRetry(p.ctx, mergeWithRetryParams{
 				taskID:     p.taskID,

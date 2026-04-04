@@ -856,7 +856,7 @@ func (m *Manager) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string
 	// don't try to create/find the PR again. The PR already exists.
 	if m.KnownPRNumber != 0 {
 		if pushErr := m.Push(ctx); pushErr != nil {
-			m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Flush push failed: %v", pushErr)
+			return false, pushErr
 		}
 	} else if _, pushErr := m.PushAndCreatePR(ctx, taskID, taskDesc, ""); pushErr != nil {
 		return false, pushErr
