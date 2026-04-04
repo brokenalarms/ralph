@@ -100,7 +100,7 @@ func reopenClosedPR(gh GitHub, workDir, branch, nwo, repoURL, title, body string
 		return 0, findErr
 	}
 	prDetail, stateErr := gh.GetPR(nwo, number)
-	if stateErr != nil || strings.ToUpper(prDetail.State) != "CLOSED" {
+	if stateErr != nil || prDetail == nil || prDetail.State != "CLOSED" {
 		return 0, stateErr
 	}
 
@@ -450,13 +450,13 @@ func (m *Manager) resolveClosedPR(gh GitHub, repoURL string) (int, error) {
 
 	nwo := NWOFromRemote(repoURL)
 	prDetail, stateErr := gh.GetPR(nwo, number)
-	if stateErr != nil {
+	if stateErr != nil || prDetail == nil {
 		return 0, nil
 	}
 
 	prLink := logging.PRLinkOpt(nwo, number)
 
-	switch strings.ToUpper(prDetail.State) {
+	switch prDetail.State {
 	case "MERGED":
 		m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "already merged — nothing to do")
 		return 0, ErrPRAlreadyMerged

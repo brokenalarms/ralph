@@ -494,7 +494,7 @@ func (g *ghCLI) GetJobStepCount(nwo string, prNumber int) (int, error) {
 func (g *ghCLI) GetPR(nwo string, prNumber int) (*PRDetail, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber)
 	cmd := exec.Command("gh", "api", endpoint,
-		"--jq", `.state+"\t"+.base.ref+"\t"+.head.ref+"\t"+.head.sha`)
+		"--jq", `(if .merged_at != null then "MERGED" elif .state == "open" then "OPEN" else "CLOSED" end)+"\t"+.base.ref+"\t"+.head.ref+"\t"+.head.sha`)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("gh api PR failed: %w", err)
