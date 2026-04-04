@@ -49,6 +49,8 @@ type StubGitHub struct {
 	JobStepCount          int
 	AllPRs                []PRInfo
 	AllPRsErr             error
+	CopilotReviewEnabled  bool
+	CopilotReviewErr      error
 }
 
 func (s *StubGitHub) Available() bool { return s.IsAvailable }
@@ -157,4 +159,7 @@ func (s *StubGitHub) GetJobStepCount(nwo string, prNumber int) (int, error) {
 }
 func (s *StubGitHub) ListAllPRs(workDir string) ([]PRInfo, error) {
 	return s.AllPRs, s.AllPRsErr
+}
+func (s *StubGitHub) CheckCopilotReviewEnabled(nwo string) (bool, error) {
+	return s.CopilotReviewEnabled, s.CopilotReviewErr
 }

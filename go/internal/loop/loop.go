@@ -74,17 +74,18 @@ type CompletedTask struct {
 // Loop orchestrates the execution phase: task selection, prompt building,
 // rate limiting, branch rotation, Claude invocation, and response analysis.
 type Loop struct {
-	cfg            Config
-	state          *state.Store
-	git            git.GitOps
-	limiter        *ratelimit.Limiter
-	runner         claudeRunner
-	verifier       *Verifier
-	analyzer       *analyzer.Analyzer
-	attempts       *attempts.Tracker
-	logger         *logging.Logger
-	signals        claude.SignalPaths
-	completedTasks []CompletedTask
+	cfg                  Config
+	state                *state.Store
+	git                  git.GitOps
+	limiter              *ratelimit.Limiter
+	runner               claudeRunner
+	verifier             *Verifier
+	analyzer             *analyzer.Analyzer
+	attempts             *attempts.Tracker
+	logger               *logging.Logger
+	signals              claude.SignalPaths
+	completedTasks       []CompletedTask
+	copilotReviewEnabled bool
 }
 
 // New creates an execution loop from the given configuration. All agent
@@ -164,6 +165,15 @@ func (l *Loop) Run(ctx context.Context) error {
 		git:     l.git,
 	}); err != nil {
 		return err
+	}
+
+	if enabled, err := l.git.CheckCopilotReviewEnabled(); err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Could not check Copilot review rulesets: %v", err)
+	} else {
+		l.copilotReviewEnabled = enabled
+		if enabled {
+			l.logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=true)")
+		}
 	}
 
 	var runIteration int
@@ -285,25 +295,26 @@ func (l *Loop) Run(ctx context.Context) error {
 		var merged bool
 		var ct *CompletedTask
 		action, iterAction, merged, ct = runAndComplete(ctx, runAndCompleteParams{
-			git:                 l.git,
-			logger:              l.logger,
-			runner:              l.runner,
-			verifier:            l.verifier,
-			state:               l.state,
-			attempts:            l.attempts,
-			limiter:             l.limiter,
-			signals:             l.signals,
-			backend:             l.cfg.TaskBackend,
-			analyzer:            l.analyzer,
-			quiet:               l.cfg.Quiet,
-			verbose:             l.cfg.Verbose,
-			model:               l.cfg.Model,
-			idleTimeout:         l.cfg.IdleTimeout,
-			idleTimeoutProgress: l.cfg.IdleTimeoutProgress,
-			postSignalTimeout:   l.cfg.PostSignalTimeout,
-			autoMerge:           l.cfg.AutoMerge,
-			evolve:              l.cfg.Evolve,
-			notify:              l.cfg.Notify,
+			git:                  l.git,
+			logger:               l.logger,
+			runner:               l.runner,
+			verifier:             l.verifier,
+			state:                l.state,
+			attempts:             l.attempts,
+			limiter:              l.limiter,
+			signals:              l.signals,
+			backend:              l.cfg.TaskBackend,
+			analyzer:             l.analyzer,
+			quiet:                l.cfg.Quiet,
+			verbose:              l.cfg.Verbose,
+			model:                l.cfg.Model,
+			idleTimeout:          l.cfg.IdleTimeout,
+			idleTimeoutProgress:  l.cfg.IdleTimeoutProgress,
+			postSignalTimeout:    l.cfg.PostSignalTimeout,
+			autoMerge:            l.cfg.AutoMerge,
+			evolve:               l.cfg.Evolve,
+			notify:               l.cfg.Notify,
+			copilotReviewEnabled: l.copilotReviewEnabled,
 			ralphDir:            l.cfg.Dirs.RalphDir,
 			promptsDir:          l.cfg.Dirs.PromptsDir,
 			projectDir:          l.cfg.Dirs.ProjectDir,

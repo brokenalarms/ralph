@@ -44,6 +44,7 @@ type runAndCompleteParams struct {
 	projectDir          string
 	planFile            string
 	callsPerHour        int
+	copilotReviewEnabled bool
 	// func deps
 	runVerifyBuildFn    func(ctx context.Context) string
 	isOnlineFunc        func() bool
@@ -165,11 +166,12 @@ func runAndComplete(ctx context.Context, p runAndCompleteParams, task taskContex
 			diffStat:   diffStat,
 		}
 		out := handlePostSignal(sp, handlePostSignalOpts{
-			postSignalTimeout: p.postSignalTimeout,
-			autoMerge:         p.autoMerge,
-			evolve:            p.evolve,
-			notify:            p.notify,
-			git:               p.git,
+			postSignalTimeout:    p.postSignalTimeout,
+			autoMerge:            p.autoMerge,
+			evolve:               p.evolve,
+			notify:               p.notify,
+			copilotReviewEnabled: p.copilotReviewEnabled,
+			git:                  p.git,
 			backend:           p.backend,
 			state:             p.state,
 			logger:            p.logger,
@@ -245,11 +247,12 @@ type postSignalParams struct {
 
 // handlePostSignalOpts bundles all dependencies for the handlePostSignal package function.
 type handlePostSignalOpts struct {
-	postSignalTimeout time.Duration
-	autoMerge         bool
-	evolve            bool
-	notify            bool
-	git               git.GitOps
+	postSignalTimeout    time.Duration
+	autoMerge            bool
+	evolve               bool
+	notify               bool
+	copilotReviewEnabled bool
+	git                  git.GitOps
 	backend           tasks.Backend
 	state             *state.Store
 	logger            *logging.Logger

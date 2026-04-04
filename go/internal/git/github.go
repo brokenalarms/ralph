@@ -100,6 +100,9 @@ type GitHub interface {
 	GetJobStepCount(nwo string, prNumber int) (int, error)
 	// ListAllPRs returns all PRs (open and closed) for chain-walking during stack merge.
 	ListAllPRs(workDir string) ([]PRInfo, error)
+	// CheckCopilotReviewEnabled returns true if the repo has a ruleset with a
+	// copilot_code_review rule where review_on_push is true.
+	CheckCopilotReviewEnabled(nwo string) (bool, error)
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -509,6 +512,33 @@ func (g *ghCLI) GetPR(nwo string, prNumber int) (*PRDetail, error) {
 		HeadRef: parts[2],
 		HeadSHA: parts[3],
 	}, nil
+}
+
+func (g *ghCLI) CheckCopilotReviewEnabled(nwo string) (bool, error) {
+	cmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s/rulesets", nwo))
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("gh api rulesets failed: %w", err)
+	}
+	var rulesets []struct {
+		Rules []struct {
+			Type       string `json:"type"`
+			Parameters struct {
+				ReviewOnPush bool `json:"review_on_push"`
+			} `json:"parameters"`
+		} `json:"rules"`
+	}
+	if err := json.Unmarshal(out, &rulesets); err != nil {
+		return false, fmt.Errorf("parsing rulesets: %w", err)
+	}
+	for _, rs := range rulesets {
+		for _, rule := range rs.Rules {
+			if rule.Type == "copilot_code_review" && rule.Parameters.ReviewOnPush {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func (g *ghCLI) ListAllPRs(workDir string) ([]PRInfo, error) {

@@ -79,6 +79,9 @@ type StubGit struct {
 	// Optional func overrides for fine-grained test control.
 	ShipFunc        func(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error)
 	MergeRetryFunc  func(ctx context.Context) (bool, error)
+
+	CopilotReviewEnabled bool
+	CopilotReviewErr     error
 }
 
 // Compile-time check that StubGit satisfies git.GitOps.
@@ -257,6 +260,10 @@ func (s *StubGit) FlushUnpushedWork(_ context.Context, _, _ string, autoMerge bo
 
 func (s *StubGit) PostMergeUpdateMain() {
 	s.PostMergeUpdateCalls++
+}
+
+func (s *StubGit) CheckCopilotReviewEnabled() (bool, error) {
+	return s.CopilotReviewEnabled, s.CopilotReviewErr
 }
 
 func (s *StubGit) FetchBranch(_ string) error            { return s.FetchBranchErr }
