@@ -168,8 +168,8 @@ func (g *ghCLI) ListOpenPRBranches(repoURL string) ([]string, error) {
 	if nwo == "" {
 		return nil, fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
-	endpoint := fmt.Sprintf("repos/%s/pulls?state=open&per_page=100", nwo)
-	cmd := exec.Command("gh", "api", endpoint, "--jq", ".[].head.ref")
+	endpoint := fmt.Sprintf("repos/%s/pulls?state=open", nwo)
+	cmd := exec.Command("gh", "api", "--paginate", endpoint, "--jq", ".[].head.ref")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("gh api pulls failed: %w", err)
@@ -709,28 +709,32 @@ func (g *ghCLI) ListAllPRs(workDir string) ([]PRInfo, error) {
 	if nwo == "" {
 		return nil, fmt.Errorf("cannot determine owner/repo from remote URL")
 	}
-	endpoint := fmt.Sprintf("repos/%s/pulls?state=all&per_page=100", nwo)
-	out, err := exec.Command("gh", "api", endpoint).Output()
+	endpoint := fmt.Sprintf("repos/%s/pulls?state=all", nwo)
+	out, err := exec.Command("gh", "api", "--paginate", "--jq", ".[]", endpoint).Output()
 	if err != nil {
 		return nil, fmt.Errorf("gh api pulls: %w", err)
 	}
-	var raw []struct {
-		Number   int    `json:"number"`
+	type rawPR struct {
+		Number   int                  `json:"number"`
 		Head     struct{ Ref string `json:"ref"` } `json:"head"`
 		Base     struct{ Ref string `json:"ref"` } `json:"base"`
-		State    string `json:"state"`
-		MergedAt *string `json:"merged_at"`
+		State    string               `json:"state"`
+		MergedAt *string              `json:"merged_at"`
 	}
-	if err := json.Unmarshal(out, &raw); err != nil {
-		return nil, fmt.Errorf("parse PR list: %w", err)
-	}
-	prs := make([]PRInfo, len(raw))
-	for i, r := range raw {
+	var prs []PRInfo
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		var r rawPR
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			return nil, fmt.Errorf("parse PR list: %w", err)
+		}
 		state := PRState(strings.ToUpper(r.State))
 		if r.MergedAt != nil && *r.MergedAt != "" {
 			state = PRStateMerged
 		}
-		prs[i] = PRInfo{Number: r.Number, Head: r.Head.Ref, Base: r.Base.Ref, State: state}
+		prs = append(prs, PRInfo{Number: r.Number, Head: r.Head.Ref, Base: r.Base.Ref, State: state})
 	}
 	return prs, nil
 }

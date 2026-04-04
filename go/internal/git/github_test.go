@@ -574,6 +574,9 @@ func TestListOpenPRBranches_UsesGhAPI(t *testing.T) {
 	if !strings.Contains(invocation, "state=open") {
 		t.Errorf("expected state=open param, got: %q", invocation)
 	}
+	if !strings.Contains(invocation, "--paginate") {
+		t.Errorf("expected --paginate flag for pagination, got: %q", invocation)
+	}
 }
 
 // ListAllPRs uses gh api repos/{nwo}/pulls?state=all instead of gh pr list,
@@ -581,14 +584,17 @@ func TestListOpenPRBranches_UsesGhAPI(t *testing.T) {
 func TestListAllPRs_UsesGhAPI(t *testing.T) {
 	bin := t.TempDir()
 	logFile := filepath.Join(bin, "gh.log")
-	pullsJSON := `[{"number":10,"head":{"ref":"feat-a"},"base":{"ref":"main"},"state":"open","merged_at":null},{"number":11,"head":{"ref":"feat-b"},"base":{"ref":"main"},"state":"closed","merged_at":null},{"number":12,"head":{"ref":"feat-c"},"base":{"ref":"main"},"state":"closed","merged_at":"2024-01-01T00:00:00Z"}]`
+	// NDJSON output: one object per line, as produced by --paginate --jq '.[]'
+	pullsNDJSON := `{"number":10,"head":{"ref":"feat-a"},"base":{"ref":"main"},"state":"open","merged_at":null}
+{"number":11,"head":{"ref":"feat-b"},"base":{"ref":"main"},"state":"closed","merged_at":null}
+{"number":12,"head":{"ref":"feat-c"},"base":{"ref":"main"},"state":"closed","merged_at":"2024-01-01T00:00:00Z"}`
 	gitPath := filepath.Join(bin, "git")
 	gitScript := "#!/bin/sh\necho 'https://github.com/owner/repo.git'\n"
 	if err := os.WriteFile(gitPath, []byte(gitScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	ghPath := filepath.Join(bin, "gh")
-	ghScript := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho '" + pullsJSON + "'\n"
+	ghScript := "#!/bin/sh\necho \"$@\" >> " + logFile + "\nprintf '" + pullsNDJSON + "\\n'\n"
 	if err := os.WriteFile(ghPath, []byte(ghScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -617,6 +623,9 @@ func TestListAllPRs_UsesGhAPI(t *testing.T) {
 	if !strings.Contains(invocation, "state=all") {
 		t.Errorf("expected state=all param, got: %q", invocation)
 	}
+	if !strings.Contains(invocation, "--paginate") {
+		t.Errorf("expected --paginate flag for pagination, got: %q", invocation)
+	}
 
 	// State is normalized to uppercase regardless of API's lowercase output.
 	// merged_at:null is treated as not merged (OPEN/CLOSED preserved).
@@ -628,6 +637,65 @@ func TestListAllPRs_UsesGhAPI(t *testing.T) {
 	}
 	if prs[2].State != PRStateMerged {
 		t.Errorf("PR #12: expected state MERGED (merged_at set), got %q", prs[2].State)
+	}
+}
+
+// ListAllPRs paginates through all results so repos with >100 PRs return
+// all items without silent truncation.
+func TestListAllPRs_Paginates(t *testing.T) {
+	bin := t.TempDir()
+	// Simulate 101 PRs returned as NDJSON (as produced by --paginate --jq '.[]').
+	var lines []string
+	for i := 1; i <= 101; i++ {
+		lines = append(lines, fmt.Sprintf(`{"number":%d,"head":{"ref":"branch-%d"},"base":{"ref":"main"},"state":"open","merged_at":null}`, i, i))
+	}
+	ndjson := strings.Join(lines, "\n")
+	gitScript := "#!/bin/sh\necho 'https://github.com/owner/repo.git'\n"
+	gitPath := filepath.Join(bin, "git")
+	if err := os.WriteFile(gitPath, []byte(gitScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ghScript := "#!/bin/sh\nprintf '" + ndjson + "\\n'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(ghScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	prs, err := g.ListAllPRs(bin)
+	if err != nil {
+		t.Fatalf("ListAllPRs returned error: %v", err)
+	}
+	if len(prs) != 101 {
+		t.Fatalf("expected 101 PRs (no truncation at 100), got %d", len(prs))
+	}
+}
+
+// ListOpenPRBranches paginates through all results so repos with >100 open
+// PRs return all branch names without silent truncation.
+func TestListOpenPRBranches_Paginates(t *testing.T) {
+	bin := t.TempDir()
+	// Simulate 101 branch names returned (as produced by --paginate --jq '.[].head.ref').
+	var branchLines []string
+	for i := 1; i <= 101; i++ {
+		branchLines = append(branchLines, fmt.Sprintf("branch-%d", i))
+	}
+	output := strings.Join(branchLines, "\n")
+	ghScript := "#!/bin/sh\nprintf '" + output + "\\n'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(ghScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	branches, err := g.ListOpenPRBranches("https://github.com/owner/repo.git")
+	if err != nil {
+		t.Fatalf("ListOpenPRBranches returned error: %v", err)
+	}
+	if len(branches) != 101 {
+		t.Fatalf("expected 101 branches (no truncation at 100), got %d", len(branches))
 	}
 }
 
