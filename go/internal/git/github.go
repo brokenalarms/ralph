@@ -185,10 +185,14 @@ func (g *ghCLI) CreatePR(opts CreatePROpts) (int, error) {
 }
 
 func (g *ghCLI) EditPR(prNumber int, repoURL, title, body string) error {
-	pr := strconv.Itoa(prNumber)
-	args := []string{"pr", "edit", pr, "--title", title, "-R", repoURL}
+	nwo := NWOFromRemote(repoURL)
+	if nwo == "" {
+		return fmt.Errorf("cannot determine owner/repo from %q", repoURL)
+	}
+	endpoint := fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber)
+	args := []string{"api", "-X", "PATCH", endpoint, "-f", "title=" + title}
 	if body != "" {
-		args = append(args, "--body", body)
+		args = append(args, "-f", "body="+body)
 	}
 	cmd := exec.Command("gh", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -498,11 +502,12 @@ func (g *ghCLI) PRDiff(repoURL string, prNumber int) (string, error) {
 }
 
 func (g *ghCLI) ReopenPR(prNumber int, repoURL string) error {
-	args := []string{"pr", "reopen", strconv.Itoa(prNumber)}
-	if repoURL != "" {
-		args = append(args, "-R", repoURL)
+	nwo := NWOFromRemote(repoURL)
+	if nwo == "" {
+		return fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
-	cmd := exec.Command("gh", args...)
+	endpoint := fmt.Sprintf("repos/%s/pulls/%d", nwo, prNumber)
+	cmd := exec.Command("gh", "api", "-X", "PATCH", endpoint, "-f", "state=open")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("gh pr reopen failed: %s", strings.TrimSpace(string(out)))
 	}

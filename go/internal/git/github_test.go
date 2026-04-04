@@ -405,6 +405,85 @@ func TestMergeAdmin_UsesGhAPI(t *testing.T) {
 	}
 }
 
+// EditPR uses gh api PATCH repos/{nwo}/pulls/{num} with title and body fields,
+// not gh pr edit, so PR updates go through the REST API.
+func TestEditPR_UsesGhAPI(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho '{}'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	err := g.EditPR(42, "https://github.com/owner/repo.git", "New Title", "New body")
+	if err != nil {
+		t.Fatalf("EditPR returned error: %v", err)
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	invocation := string(raw)
+
+	if strings.Contains(invocation, "pr edit") {
+		t.Errorf("EditPR must not use 'gh pr edit', got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "api") {
+		t.Errorf("expected 'gh api' invocation, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "PATCH") {
+		t.Errorf("expected PATCH method, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "repos/owner/repo/pulls/42") {
+		t.Errorf("expected repos/owner/repo/pulls/42 endpoint, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "New Title") {
+		t.Errorf("expected title in args, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "New body") {
+		t.Errorf("expected body in args, got: %q", invocation)
+	}
+}
+
+// ReopenPR uses gh api PATCH repos/{nwo}/pulls/{num} -f state=open,
+// not gh pr reopen, so PR state changes go through the REST API.
+func TestReopenPR_UsesGhAPI(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho '{}'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	err := g.ReopenPR(42, "https://github.com/owner/repo.git")
+	if err != nil {
+		t.Fatalf("ReopenPR returned error: %v", err)
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	invocation := string(raw)
+
+	if strings.Contains(invocation, "pr reopen") {
+		t.Errorf("ReopenPR must not use 'gh pr reopen', got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "api") {
+		t.Errorf("expected 'gh api' invocation, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "PATCH") {
+		t.Errorf("expected PATCH method, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "repos/owner/repo/pulls/42") {
+		t.Errorf("expected repos/owner/repo/pulls/42 endpoint, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "state=open") {
+		t.Errorf("expected state=open in args, got: %q", invocation)
+	}
+}
+
 // PollCopilotReview returns nil without error when the timeout expires and no
 // review from copilot-pull-request-reviewer has arrived, so the loop proceeds.
 func TestPollCopilotReview_Timeout_ReturnsNil(t *testing.T) {
