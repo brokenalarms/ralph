@@ -484,6 +484,141 @@ func TestReopenPR_UsesGhAPI(t *testing.T) {
 	}
 }
 
+// ListOpenPRBranches uses gh api repos/{nwo}/pulls?state=open instead of
+// gh pr list, returning branch names for all open PRs.
+func TestListOpenPRBranches_UsesGhAPI(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	// The fake gh binary returns ref names as if --jq ".[].head.ref" ran.
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\nprintf 'feature-a\\nfeature-b\\n'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	branches, err := g.ListOpenPRBranches("https://github.com/owner/repo.git")
+	if err != nil {
+		t.Fatalf("ListOpenPRBranches returned error: %v", err)
+	}
+	if len(branches) != 2 {
+		t.Fatalf("expected 2 branches, got %d: %v", len(branches), branches)
+	}
+	if branches[0] != "feature-a" || branches[1] != "feature-b" {
+		t.Errorf("unexpected branches: %v", branches)
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	invocation := string(raw)
+	if strings.Contains(invocation, "pr list") {
+		t.Errorf("ListOpenPRBranches must not use 'gh pr list', got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "api") {
+		t.Errorf("expected 'gh api' invocation, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "repos/owner/repo/pulls") {
+		t.Errorf("expected repos/owner/repo/pulls endpoint, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "state=open") {
+		t.Errorf("expected state=open param, got: %q", invocation)
+	}
+}
+
+// ListAllPRs uses gh api repos/{nwo}/pulls?state=all instead of gh pr list,
+// returning PRInfo structs with state normalized to uppercase.
+func TestListAllPRs_UsesGhAPI(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	pullsJSON := `[{"number":10,"head":{"ref":"feat-a"},"base":{"ref":"main"},"state":"open"},{"number":11,"head":{"ref":"feat-b"},"base":{"ref":"main"},"state":"closed"},{"number":12,"head":{"ref":"feat-c"},"base":{"ref":"main"},"state":"closed","merged_at":"2024-01-01T00:00:00Z"}]`
+	gitPath := filepath.Join(bin, "git")
+	gitScript := "#!/bin/sh\necho 'https://github.com/owner/repo.git'\n"
+	if err := os.WriteFile(gitPath, []byte(gitScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ghPath := filepath.Join(bin, "gh")
+	ghScript := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho '" + pullsJSON + "'\n"
+	if err := os.WriteFile(ghPath, []byte(ghScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	prs, err := g.ListAllPRs(bin)
+	if err != nil {
+		t.Fatalf("ListAllPRs returned error: %v", err)
+	}
+	if len(prs) != 3 {
+		t.Fatalf("expected 3 PRs, got %d", len(prs))
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	invocation := string(raw)
+	if strings.Contains(invocation, "pr list") {
+		t.Errorf("ListAllPRs must not use 'gh pr list', got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "api") {
+		t.Errorf("expected 'gh api' invocation, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "repos/owner/repo/pulls") {
+		t.Errorf("expected repos/owner/repo/pulls endpoint, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "state=all") {
+		t.Errorf("expected state=all param, got: %q", invocation)
+	}
+
+	// State is normalized to uppercase regardless of API's lowercase output.
+	if prs[0].State != PRStateOpen {
+		t.Errorf("PR #10: expected state OPEN, got %q", prs[0].State)
+	}
+	if prs[1].State != PRStateClosed {
+		t.Errorf("PR #11: expected state CLOSED, got %q", prs[1].State)
+	}
+}
+
+// SearchPR uses gh api search/issues instead of gh pr list --search,
+// finding a PR by task ID and returning its number.
+func TestSearchPR_UsesGhAPI(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	gitPath := filepath.Join(bin, "git")
+	gitScript := "#!/bin/sh\necho 'https://github.com/owner/repo.git'\n"
+	if err := os.WriteFile(gitPath, []byte(gitScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ghPath := filepath.Join(bin, "gh")
+	// The fake gh binary returns the number as if --jq ".items[0].number // empty" ran.
+	ghScript := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho '42'\n"
+	if err := os.WriteFile(ghPath, []byte(ghScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	prNumber, err := g.SearchPR(bin, "my-task-id")
+	if err != nil {
+		t.Fatalf("SearchPR returned error: %v", err)
+	}
+	if prNumber != 42 {
+		t.Errorf("expected PR number 42, got %d", prNumber)
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	invocation := string(raw)
+	if strings.Contains(invocation, "pr list") {
+		t.Errorf("SearchPR must not use 'gh pr list', got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "api") {
+		t.Errorf("expected 'gh api' invocation, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "search/issues") {
+		t.Errorf("expected search/issues endpoint, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "my-task-id") {
+		t.Errorf("expected query in args, got: %q", invocation)
+	}
+}
+
 // PollCopilotReview returns nil without error when the timeout expires and no
 // review from copilot-pull-request-reviewer has arrived, so the loop proceeds.
 func TestPollCopilotReview_Timeout_ReturnsNil(t *testing.T) {
