@@ -127,6 +127,7 @@ func TestIntegration_HappyPath_SignalVerifyPushMergeClose(t *testing.T) {
 
 	ghStub := git.NewStubGitHub()
 	ghStub.OpenPR = 0
+	ghStub.PRNumber = 0 // no pre-existing PR for the branch
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        dir,
@@ -162,7 +163,6 @@ func TestIntegration_HappyPath_SignalVerifyPushMergeClose(t *testing.T) {
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
-	gm.PRNumber = 42
 	gm.MergeRetryResult = true
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -289,6 +289,78 @@ func TestIntegration_ResumeViaPR_Merged(t *testing.T) {
 	}
 	if backend.ClosedIDs[0] != "ralph-m1" {
 		t.Errorf("expected close for ralph-m1, got %q", backend.ClosedIDs[0])
+	}
+}
+
+// Scenario 2b: Merged PR found via branch metadata (any-state lookup), not external-ref.
+// resumeViaPR uses FindPRForBranch to detect the merged PR and closes the bead
+// without running the agent. This covers the regression where FindOpenPRForBranch
+// missed merged/closed PRs and the agent would re-do already-landed work.
+func TestIntegration_ResumeViaPR_MergedFoundViaBranchMetadata(t *testing.T) {
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Completed = 0
+	backend.Total = 1
+	backend.NextTask = "Already landed task"
+	backend.NextID = "ralph-ac6"
+	backend.BackendLabel = "beads"
+	// Simulate prior iteration: branch was stored in metadata, but no external-ref set.
+	_ = backend.SetMetadata("ralph-ac6", "branch", "ralph/ralph-ac6-already-landed-task")
+
+	ghStub := git.NewStubGitHub()
+	ghStub.OpenPR = 0                     // FindOpenPRForBranch (old path) returns nothing
+	ghStub.PRNumber = 200                 // FindPRForBranch (any-state) returns this
+	ghStub.PRState = git.PRStateMerged    // the PR is already merged
+	ghStub.PRTitle = "Already landed task"
+	ghStub.PRURL = "https://github.com/owner/repo/pull/200"
+
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/ralph-ac6-already-landed-task",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		GitHubStub:     ghStub,
+		BranchRenamed:  true, // branch already named for the task
+	}
+
+	agentCalled := false
+	runner := &stubRunner{
+		onRun: func() { agentCalled = true },
+		result: claude.Result{},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 3,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if agentCalled {
+		t.Error("agent should not run when a merged PR already exists for the branch")
+	}
+
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) == 0 {
+		t.Fatal("expected bead to be closed when merged PR found via branch metadata")
+	}
+	if backend.ClosedIDs[0] != "ralph-ac6" {
+		t.Errorf("expected close for ralph-ac6, got %q", backend.ClosedIDs[0])
 	}
 }
 
@@ -1511,6 +1583,7 @@ func TestIntegration_EvolveExitsAfterMerge(t *testing.T) {
 
 	ghStub := git.NewStubGitHub()
 	ghStub.OpenPR = 0
+	ghStub.PRNumber = 0 // no pre-existing PR for the branch
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        dir,
@@ -1544,7 +1617,6 @@ func TestIntegration_EvolveExitsAfterMerge(t *testing.T) {
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
-	gm.PRNumber = 99
 	gm.MergeRetryResult = true
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
