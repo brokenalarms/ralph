@@ -195,14 +195,23 @@ func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
 	}
 }
 
-// CheckCopilotReviewEnabled returns (true, true) when the repo has a ruleset containing a
-// copilot_code_review rule with review_on_push: true, proving auto-review detection works
-// and the review gates merging.
+// CheckCopilotReviewEnabled fetches each ruleset by ID (two-phase: list then detail) and
+// returns (true, true) when the detail endpoint contains a copilot_code_review rule with
+// review_on_push: true, proving the implementation doesn't rely on the list endpoint's
+// missing rules array.
 func TestCheckCopilotReviewEnabled_ReturnsTrueWhenRulePresent(t *testing.T) {
 	bin := t.TempDir()
 	logFile := filepath.Join(bin, "gh.log")
-	response := `[{"id":1,"rules":[{"type":"copilot_code_review","parameters":{"review_on_push":true}}]}]`
-	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho '" + response + "'\n"
+	// list endpoint returns metadata only (no rules), matching real GitHub API behaviour
+	listResponse := `[{"id":1,"name":"main","target":"branch","enforcement":"active"}]`
+	// detail endpoint returns full ruleset with rules array
+	detailResponse := `{"id":1,"name":"main","rules":[{"type":"copilot_code_review","parameters":{"review_on_push":true}}]}`
+	script := "#!/bin/sh\n" +
+		"echo \"$@\" >> " + logFile + "\n" +
+		"case \"$@\" in\n" +
+		"  *rulesets/1*) echo '" + detailResponse + "' ;;\n" +
+		"  *) echo '" + listResponse + "' ;;\n" +
+		"esac\n"
 	ghPath := filepath.Join(bin, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -222,18 +231,27 @@ func TestCheckCopilotReviewEnabled_ReturnsTrueWhenRulePresent(t *testing.T) {
 	}
 
 	raw, _ := os.ReadFile(logFile)
-	if !strings.Contains(string(raw), "repos/owner/repo/rulesets") {
-		t.Errorf("expected rulesets endpoint, got: %q", string(raw))
+	log := string(raw)
+	if !strings.Contains(log, "repos/owner/repo/rulesets ") && !strings.Contains(log, "repos/owner/repo/rulesets\n") {
+		t.Errorf("expected list rulesets endpoint call, got: %q", log)
+	}
+	if !strings.Contains(log, "repos/owner/repo/rulesets/1") {
+		t.Errorf("expected detail rulesets endpoint call for ID 1, got: %q", log)
 	}
 }
 
-// CheckCopilotReviewEnabled returns (true, false) when the copilot_code_review rule exists
-// with review_on_push=false, proving Copilot auto-review is detected even when it doesn't
-// gate merging.
+// CheckCopilotReviewEnabled returns (true, false) when the detail endpoint contains
+// copilot_code_review with review_on_push=false, proving detection works even when
+// the rule doesn't gate merging.
 func TestCheckCopilotReviewEnabled_ReturnsTrueWhenReviewOnPushFalse(t *testing.T) {
 	bin := t.TempDir()
-	response := `[{"id":1,"rules":[{"type":"copilot_code_review","parameters":{"review_on_push":false}}]}]`
-	script := "#!/bin/sh\necho '" + response + "'\n"
+	listResponse := `[{"id":1,"name":"main","target":"branch","enforcement":"active"}]`
+	detailResponse := `{"id":1,"name":"main","rules":[{"type":"copilot_code_review","parameters":{"review_on_push":false}}]}`
+	script := "#!/bin/sh\n" +
+		"case \"$@\" in\n" +
+		"  *rulesets/1*) echo '" + detailResponse + "' ;;\n" +
+		"  *) echo '" + listResponse + "' ;;\n" +
+		"esac\n"
 	ghPath := filepath.Join(bin, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -253,12 +271,17 @@ func TestCheckCopilotReviewEnabled_ReturnsTrueWhenReviewOnPushFalse(t *testing.T
 	}
 }
 
-// CheckCopilotReviewEnabled returns (false, false) when no copilot_code_review rule exists,
-// proving non-Copilot rulesets don't trigger the flag.
+// CheckCopilotReviewEnabled returns (false, false) when the detail endpoint contains no
+// copilot_code_review rule, proving non-Copilot rulesets don't trigger the flag.
 func TestCheckCopilotReviewEnabled_ReturnsFalseWhenNoRule(t *testing.T) {
 	bin := t.TempDir()
-	response := `[{"id":1,"rules":[{"type":"required_status_checks","parameters":{}}]}]`
-	script := "#!/bin/sh\necho '" + response + "'\n"
+	listResponse := `[{"id":1,"name":"main","target":"branch","enforcement":"active"}]`
+	detailResponse := `{"id":1,"name":"main","rules":[{"type":"required_status_checks","parameters":{}}]}`
+	script := "#!/bin/sh\n" +
+		"case \"$@\" in\n" +
+		"  *rulesets/1*) echo '" + detailResponse + "' ;;\n" +
+		"  *) echo '" + listResponse + "' ;;\n" +
+		"esac\n"
 	ghPath := filepath.Join(bin, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
