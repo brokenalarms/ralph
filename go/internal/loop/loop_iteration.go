@@ -372,12 +372,11 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 	prNumber, shipURL := opts.pushSignalPRFn(p)
 	prState := git.PRStateOpen
 
-	// Recovery: if push failed but a PR already exists, use it.
+	// Recovery: if push/Ship didn't produce a PR, find any existing PR in any state.
 	if prNumber == 0 && p.taskID != "" {
-		ref, _ := opts.backend.GetExternalRef(p.taskID)
-		if existing := parsePRNumber(ref); existing != 0 {
-			prNumber = existing
-			prState = "" // unknown — let finalizePR look it up
+		if num, found := findExistingPRForTask(p.taskID, opts.git.GetWorktreeBranch(), opts.backend, opts.git); found {
+			prNumber = num
+			prState = "" // let finalizePR look up the actual state
 		}
 	}
 
@@ -386,8 +385,8 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 		ct.PRURL = shipURL
 	}
 
-	// buildCTFn may discover a PR via findPRInfo that push missed.
-	// findPRInfo queries open PRs for the current branch, so OPEN is safe.
+	// buildCTFn may discover a PR that recovery missed. A PR found in the
+	// post-push context was just created, so OPEN is a safe assumption.
 	if prNumber == 0 && ct.PRNum != 0 {
 		prNumber = ct.PRNum
 		prState = git.PRStateOpen
@@ -399,7 +398,17 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 	}
 
 	if prNumber == 0 {
-		opts.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No PR created — task %s stays open", p.taskID)
+		opts.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No PR created — closing bead for task %s", p.taskID)
+		if p.taskID != "" {
+			branch := opts.git.GetWorktreeBranch()
+			closeReason := "Verified — no PR created"
+			if branch != "" {
+				closeReason = fmt.Sprintf("Verified — branch %s, no PR", branch)
+			}
+			if err := opts.backend.CloseTask(p.taskID, closeReason); err != nil {
+				opts.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
+			}
+		}
 		return handlePostSignalOut{action: signalComplete, ct: &ct}
 	}
 

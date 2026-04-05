@@ -188,6 +188,22 @@ type resumeViaPRParams struct {
 	mergeFunc func(ctx context.Context) (bool, error)
 }
 
+// findExistingPRForTask returns any PR number (open, closed, or merged) for the
+// given task. It checks the external-ref first, then finds any PR for the branch.
+// Returns (prNumber, true) if found; (0, false) otherwise.
+func findExistingPRForTask(taskID, branch string, backend tasks.Backend, g git.GitOps) (int, bool) {
+	ref, _ := backend.GetExternalRef(taskID)
+	if num := parsePRNumber(ref); num != 0 {
+		return num, true
+	}
+	if branch != "" {
+		if num, _, _, err := g.FindPRForBranch(branch); err == nil && num != 0 {
+			return num, true
+		}
+	}
+	return 0, false
+}
+
 // resumeViaPR checks the bead's metadata and external-ref for existing work
 // and resolves accordingly. Returns true if the task was fully handled (merged
 // or skipped) and the loop should continue to the next task; false if the
@@ -197,9 +213,23 @@ func resumeViaPR(ctx context.Context, p resumeViaPRParams) bool {
 		return false
 	}
 
-	// Check bead's external-ref for an existing PR.
-	ref, _ := p.backend.GetExternalRef(p.taskID)
-	if prNumber := parsePRNumber(ref); prNumber != 0 {
+	// Check metadata for the branch name stored when work started.
+	// An invalid branch (not containing taskID) is treated as missing, but
+	// the external-ref check via findExistingPRForTask still applies.
+	branch, _ := p.backend.GetMetadata(p.taskID, "branch")
+	if branch != "" && !strings.Contains(branch, p.taskID) {
+		branch = ""
+	}
+
+	// Check external-ref and any PR for the branch (in any state: open, closed, merged).
+	prNumber, found := findExistingPRForTask(p.taskID, branch, p.backend, p.git)
+	if found {
+		// Only log and set external-ref when discovered via branch (external-ref already set otherwise).
+		existingRef, _ := p.backend.GetExternalRef(p.taskID)
+		if parsePRNumber(existingRef) == 0 && branch != "" {
+			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, prNumber)}, "Found for %s (task %s) — resolving", branch, p.taskID)
+			_ = p.backend.SetExternalRef(p.taskID, prURL(p.git.RemoteURL(), prNumber))
+		}
 		return resolveByPRState(ctx, resolveByPRStateParams{
 			taskID:    p.taskID,
 			nextTask:  p.nextTask,
@@ -217,35 +247,10 @@ func resumeViaPR(ctx context.Context, p resumeViaPRParams) bool {
 		})
 	}
 
-	// Check metadata for the exact branch name stored when work started.
-	branch, _ := p.backend.GetMetadata(p.taskID, "branch")
-	if branch == "" || !strings.Contains(branch, p.taskID) {
+	// No PR found — check if the remote branch exists with clean work on top of main.
+	if branch == "" {
 		return false
 	}
-
-	// Check if a PR exists for this exact branch.
-	prNumber, _ := p.git.FindOpenPRForBranch(branch)
-	if prNumber != 0 {
-		p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, prNumber)}, "Found for %s (task %s) — resolving", branch, p.taskID)
-		_ = p.backend.SetExternalRef(p.taskID, prURL(p.git.RemoteURL(), prNumber))
-		return resolveByPRState(ctx, resolveByPRStateParams{
-			taskID:    p.taskID,
-			nextTask:  p.nextTask,
-			prNumber:  prNumber,
-			backend:   p.backend,
-			git:       p.git,
-			logger:    p.logger,
-			attempts:  p.attempts,
-			state:     p.state,
-			autoMerge: p.autoMerge,
-			notify:    p.notify,
-			ralphDir:  p.ralphDir,
-			verifier:  p.verifier,
-			mergeFunc: p.mergeFunc,
-		})
-	}
-
-	// No PR — check if the remote branch exists with clean work on top of main.
 	_ = p.git.FetchBranch(branch)
 	if p.git.RemoteBranchHasCommits(branch) {
 		if !p.git.RemoteBranchIsOnMain(branch) {
