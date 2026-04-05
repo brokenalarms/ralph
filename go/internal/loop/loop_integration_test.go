@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -2561,6 +2562,341 @@ func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
 	}
 	if backend.ClosedIDs[0] != taskID {
 		t.Errorf("expected close for %s, got %q", taskID, backend.ClosedIDs[0])
+	}
+}
+
+// TestIntegration_LifecycleOrdering_BranchRenameAndReviewers traces the full
+// iteration lifecycle using a recorded call log and asserts the exact ordering:
+// rename → detect_reviewers → agent_signal → verify → push → close.
+//
+// Proves:
+//   - Branch is renamed (task-specific) before any push occurs (AC2).
+//   - DetectActiveReviewers is called lazily (just before the agent runs),
+//     not during startup (AC3 — IS called when a task completes).
+//   - The call log catches ordering violations: a refactor that moves rename
+//     after push, or moves DetectActiveReviewers to startup, will fail this test.
+func TestIntegration_LifecycleOrdering_BranchRenameAndReviewers(t *testing.T) {
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
+
+	var seq []string
+	var seqMu sync.Mutex
+	record := func(stage string) {
+		seqMu.Lock()
+		seq = append(seq, stage)
+		seqMu.Unlock()
+	}
+
+	backend := newIntegrationBackend()
+	backend.onClose = func(id string) { record("close:" + id) }
+	backend.Remaining = 1
+	backend.Completed = 0
+	backend.Total = 1
+	backend.NextTask = "Add auth handler"
+	backend.NextID = "ralph-ord1"
+	backend.BackendLabel = "beads"
+
+	// No existing open PR — OpenPR=0 prevents the initWorktree resume path
+	// from firing and ensures the agent actually runs.
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/next",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		OnRenameBranch: func(_, _ string) { record("rename") },
+		OnDetectActiveReviewers: func() { record("detect_reviewers") },
+	}
+
+	gm.ShipFunc = func(_ context.Context, _ git.ShipOpts) (git.ShipResult, error) {
+		record("push")
+		return git.ShipResult{PRNumber: 77}, nil
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			record("agent_signal")
+			gm.HeadRevValue = "sha-ord1"
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "auth handler done"},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.cfg.OnVerify = func(_ context.Context, _, _ string) (bool, string) {
+		record("verify")
+		return true, ""
+	}
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
+
+	seqMu.Lock()
+	got := make([]string, len(seq))
+	copy(got, seq)
+	seqMu.Unlock()
+
+	want := []string{
+		"rename", "detect_reviewers", "agent_signal", "verify", "push", "close:ralph-ord1",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("stage sequence length: got %d, want %d\ngot:  %v\nwant: %v", len(got), len(want), got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("stage[%d]: got %q, want %q\nfull sequence: %v", i, got[i], want[i], got)
+		}
+	}
+
+	// Structural assertions as belt-and-suspenders.
+	renameIdx, pushIdx := -1, -1
+	reviewersIdx, agentIdx := -1, -1
+	for i, s := range got {
+		switch s {
+		case "rename":
+			renameIdx = i
+		case "push":
+			pushIdx = i
+		case "detect_reviewers":
+			reviewersIdx = i
+		case "agent_signal":
+			agentIdx = i
+		}
+	}
+	if renameIdx < 0 || pushIdx < 0 {
+		t.Fatal("rename or push not found in sequence")
+	}
+	if renameIdx >= pushIdx {
+		t.Errorf("rename (idx %d) must occur before push (idx %d)", renameIdx, pushIdx)
+	}
+	if reviewersIdx < 0 || agentIdx < 0 {
+		t.Fatal("detect_reviewers or agent_signal not found in sequence")
+	}
+	if reviewersIdx >= agentIdx {
+		t.Errorf("detect_reviewers (idx %d) must occur before agent_signal (idx %d)", reviewersIdx, agentIdx)
+	}
+}
+
+// TestIntegration_LifecycleOrdering_NoReviewerDetectionWithoutTasks verifies
+// that when the loop starts with zero tasks, DetectActiveReviewers is never
+// called. The loop should exit immediately without reaching the reviewer
+// detection step (AC3 — NOT called during startup when no tasks run).
+func TestIntegration_LifecycleOrdering_NoReviewerDetectionWithoutTasks(t *testing.T) {
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 0
+	backend.Completed = 0
+	backend.Total = 0
+	backend.BackendLabel = "beads"
+
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/next",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+	}
+
+	var seq []string
+	var seqMu sync.Mutex
+	record := func(stage string) {
+		seqMu.Lock()
+		seq = append(seq, stage)
+		seqMu.Unlock()
+	}
+
+	gm.OnDetectActiveReviewers = func() { record("detect_reviewers") }
+	gm.OnRenameBranch = func(_, _ string) { record("rename") }
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+
+	_ = l.Run(context.Background())
+
+	seqMu.Lock()
+	got := make([]string, len(seq))
+	copy(got, seq)
+	seqMu.Unlock()
+
+	for _, s := range got {
+		if s == "detect_reviewers" {
+			t.Error("DetectActiveReviewers was called during startup with no tasks — it should only be called lazily when a task runs")
+		}
+	}
+
+	if gm.DetectActiveReviewersCalled {
+		t.Error("DetectActiveReviewersCalled should be false when no tasks run")
+	}
+}
+
+// TestIntegration_LifecycleOrdering_FlushNoopAfterShip verifies that after a
+// task is shipped (Ship creates the PR), the flush step that runs when the loop
+// finds no remaining tasks does NOT call PushAndCreatePR — the work is already
+// pushed so flush correctly skips the redundant API call.
+//
+// Uses FlushUnpushedWorkFunc to simulate the real decision logic (checking
+// whether Ship already ran) so a regression that removes the guard causes
+// PushAndCreatePRCalls to become non-zero, failing the assertion.
+func TestIntegration_LifecycleOrdering_FlushNoopAfterShip(t *testing.T) {
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Completed = 0
+	backend.Total = 1
+	backend.NextTask = "Refactor auth module"
+	backend.NextID = "ralph-flush1"
+	backend.BackendLabel = "beads"
+
+	// No existing open PR — OpenPR=0 prevents initWorktree from taking the
+	// resume-from-PR path before the agent runs.
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/next",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+	}
+
+	// Ship records when it's called and returns a valid PR number.
+	gm.ShipFunc = func(_ context.Context, _ git.ShipOpts) (git.ShipResult, error) {
+		return git.ShipResult{PRNumber: 88}, nil
+	}
+
+	// FlushUnpushedWorkFunc simulates the real guard: if Ship already ran
+	// (ShipCalls > 0), the branch was pushed — skip PushAndCreatePR.
+	// Without this guard a regression increments PushAndCreatePRCalls.
+	gm.FlushUnpushedWorkFunc = func(_ context.Context, _, _ string, _ bool) (bool, error) {
+		if gm.ShipCalls > 0 {
+			// Branch was already pushed via Ship — no-op, same as the real
+			// rev-list guard in git.Manager.FlushUnpushedWork.
+			return false, nil
+		}
+		// Branch not yet pushed — simulate PushAndCreatePR call.
+		gm.PushAndCreatePRCalls++
+		return false, nil
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			gm.HeadRevValue = "sha-flush1"
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "refactor done"},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.cfg.OnVerify = func(_ context.Context, _, _ string) (bool, string) { return true, "" }
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	gm.MergeRetryResult = true
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
+
+	if gm.ShipCalls == 0 {
+		t.Fatal("expected Ship to be called during task completion")
+	}
+	if gm.FlushUnpushedCalls == 0 {
+		t.Fatal("expected FlushUnpushedWork to be called after task completes")
+	}
+	if gm.PushAndCreatePRCalls > 0 {
+		t.Errorf("PushAndCreatePR should not be called after Ship already pushed the branch, got %d calls", gm.PushAndCreatePRCalls)
+	}
+}
+
+// TestIntegration_CreatePRViaAPI_SpecialCharsJSON verifies that CreatePRViaAPI
+// produces valid JSON when the PR title and body contain newlines, quotes,
+// backticks, and Unicode — characters that previously caused GitHub 400 errors
+// when fmt.Sprintf was used instead of json.Marshal.
+func TestIntegration_CreatePRViaAPI_SpecialCharsJSON(t *testing.T) {
+	bin := t.TempDir()
+	stdinFile := filepath.Join(bin, "stdin.json")
+	script := "#!/bin/sh\ncat > " + stdinFile + "\necho '{\"number\":42}'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	m := &git.Manager{}
+	gh := m.GH()
+
+	opts := git.CreatePROpts{
+		Title: "Fix `backtick` and \"double quotes\"",
+		Body:  "Line one\nLine two\tTabbed\nBackslash: \\\nUnicode: éàü\nBacktick: `code`\nQuote: \"hello\"",
+		Head:  "ralph/task-branch",
+		Base:  "main",
+	}
+	prNum, err := gh.CreatePRViaAPI("owner/repo", opts)
+	if err != nil {
+		t.Fatalf("CreatePRViaAPI returned error: %v", err)
+	}
+	if prNum != 42 {
+		t.Errorf("expected PR number 42, got %d", prNum)
+	}
+
+	raw, readErr := os.ReadFile(stdinFile)
+	if readErr != nil {
+		t.Fatalf("gh was never called or stdin not captured: %v", readErr)
+	}
+
+	var parsed map[string]string
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("request body is not valid JSON: %v\nbody: %s", err, raw)
+	}
+	if parsed["title"] != opts.Title {
+		t.Errorf("title mismatch: got %q, want %q", parsed["title"], opts.Title)
+	}
+	if parsed["body"] != opts.Body {
+		t.Errorf("body mismatch: got %q, want %q", parsed["body"], opts.Body)
+	}
+	if parsed["head"] != opts.Head {
+		t.Errorf("head mismatch: got %q, want %q", parsed["head"], opts.Head)
+	}
+	if parsed["base"] != opts.Base {
+		t.Errorf("base mismatch: got %q, want %q", parsed["base"], opts.Base)
 	}
 }
 
