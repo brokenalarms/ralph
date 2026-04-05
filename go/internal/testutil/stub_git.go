@@ -82,13 +82,13 @@ type StubGit struct {
 	ShipFunc        func(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error)
 	MergeRetryFunc  func(ctx context.Context) (bool, error)
 
-	CopilotReviewEnabled      bool
-	CopilotReviewOnPush       bool
-	CopilotReviewErr          error
-	PollCopilotReviewResult   *git.CopilotReview
-	PollCopilotReviewErr      error
-	PollCopilotReviewCalled   bool
-	PollCopilotReviewTimeout  time.Duration
+	ActiveReviewers        []git.Reviewer
+	DetectReviewersErr     error
+	PollReviewResult       *git.AutoReview
+	PollReviewErr          error
+	PollReviewCalled       bool
+	PollReviewLastUsername string
+	PollReviewLastTimeout  time.Duration
 }
 
 // Compile-time check that StubGit satisfies git.GitOps.
@@ -270,14 +270,15 @@ func (s *StubGit) PostMergeUpdateMain() {
 	s.PostMergeUpdateCalls++
 }
 
-func (s *StubGit) CheckCopilotReviewEnabled() (bool, bool, error) {
-	return s.CopilotReviewEnabled, s.CopilotReviewOnPush, s.CopilotReviewErr
+func (s *StubGit) DetectActiveReviewers() ([]git.Reviewer, error) {
+	return s.ActiveReviewers, s.DetectReviewersErr
 }
 
-func (s *StubGit) PollCopilotReview(_ int, timeout time.Duration) (*git.CopilotReview, error) {
-	s.PollCopilotReviewCalled = true
-	s.PollCopilotReviewTimeout = timeout
-	return s.PollCopilotReviewResult, s.PollCopilotReviewErr
+func (s *StubGit) PollReview(botUsername string, _ int, timeout time.Duration) (*git.AutoReview, error) {
+	s.PollReviewCalled = true
+	s.PollReviewLastUsername = botUsername
+	s.PollReviewLastTimeout = timeout
+	return s.PollReviewResult, s.PollReviewErr
 }
 
 func (s *StubGit) FetchBranch(_ string) error            { return s.FetchBranchErr }

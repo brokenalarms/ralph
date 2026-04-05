@@ -195,22 +195,21 @@ func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
 	}
 }
 
-// CheckCopilotReviewEnabled fetches each ruleset by ID (two-phase: list then detail) and
-// returns (true, true) when the detail endpoint contains a copilot_code_review rule with
-// review_on_push: true, proving the implementation doesn't rely on the list endpoint's
-// missing rules array.
-func TestCheckCopilotReviewEnabled_ReturnsTrueWhenRulePresent(t *testing.T) {
+// DetectActiveReviewers returns Copilot in the active list when the installations
+// endpoint reports it and the Copilot ruleset has review_on_push=true. The
+// Copilot reviewer gets ReviewOnPush=true and retains the full 120s timeout.
+func TestDetectActiveReviewers_CopilotWithReviewOnPush(t *testing.T) {
 	bin := t.TempDir()
 	logFile := filepath.Join(bin, "gh.log")
-	// list endpoint returns metadata only (no rules), matching real GitHub API behaviour
+	installsResponse := `{"installations":[{"app_slug":"copilot-code-review"}]}`
 	listResponse := `[{"id":1,"name":"main","target":"branch","enforcement":"active"}]`
-	// detail endpoint returns full ruleset with rules array
 	detailResponse := `{"id":1,"name":"main","rules":[{"type":"copilot_code_review","parameters":{"review_on_push":true}}]}`
 	script := "#!/bin/sh\n" +
 		"echo \"$@\" >> " + logFile + "\n" +
 		"case \"$@\" in\n" +
+		"  *installations*) echo '" + installsResponse + "' ;;\n" +
 		"  *rulesets/1*) echo '" + detailResponse + "' ;;\n" +
-		"  *) echo '" + listResponse + "' ;;\n" +
+		"  *rulesets*) echo '" + listResponse + "' ;;\n" +
 		"esac\n"
 	ghPath := filepath.Join(bin, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
@@ -219,38 +218,45 @@ func TestCheckCopilotReviewEnabled_ReturnsTrueWhenRulePresent(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	enabled, reviewOnPush, err := g.CheckCopilotReviewEnabled("owner/repo")
+	reviewers, err := g.DetectActiveReviewers("owner/repo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !enabled {
-		t.Error("expected enabled=true when copilot_code_review rule with review_on_push=true exists")
+	if len(reviewers) != 1 {
+		t.Fatalf("expected 1 active reviewer, got %d", len(reviewers))
 	}
-	if !reviewOnPush {
-		t.Error("expected reviewOnPush=true when review_on_push=true in ruleset")
+	if reviewers[0].BotUsername != "copilot-pull-request-reviewer" {
+		t.Errorf("expected copilot bot username, got %q", reviewers[0].BotUsername)
+	}
+	if !reviewers[0].ReviewOnPush {
+		t.Error("expected ReviewOnPush=true when copilot_code_review ruleset has review_on_push=true")
+	}
+	if reviewers[0].DefaultTimeout != 120*time.Second {
+		t.Errorf("expected 120s timeout when review_on_push=true, got %v", reviewers[0].DefaultTimeout)
 	}
 
 	raw, _ := os.ReadFile(logFile)
 	log := string(raw)
-	if !strings.Contains(log, "repos/owner/repo/rulesets ") && !strings.Contains(log, "repos/owner/repo/rulesets\n") {
-		t.Errorf("expected list rulesets endpoint call, got: %q", log)
+	if !strings.Contains(log, "installations") {
+		t.Errorf("expected installations endpoint call, got: %q", log)
 	}
-	if !strings.Contains(log, "repos/owner/repo/rulesets/1") {
-		t.Errorf("expected detail rulesets endpoint call for ID 1, got: %q", log)
+	if !strings.Contains(log, "repos/owner/repo/rulesets") {
+		t.Errorf("expected rulesets endpoint call, got: %q", log)
 	}
 }
 
-// CheckCopilotReviewEnabled returns (true, false) when the detail endpoint contains
-// copilot_code_review with review_on_push=false, proving detection works even when
-// the rule doesn't gate merging.
-func TestCheckCopilotReviewEnabled_ReturnsTrueWhenReviewOnPushFalse(t *testing.T) {
+// DetectActiveReviewers sets ReviewOnPush=false and reduces timeout to 30s when
+// the Copilot ruleset has review_on_push=false, since the review is opportunistic.
+func TestDetectActiveReviewers_CopilotWithoutReviewOnPush(t *testing.T) {
 	bin := t.TempDir()
+	installsResponse := `{"installations":[{"app_slug":"copilot-code-review"}]}`
 	listResponse := `[{"id":1,"name":"main","target":"branch","enforcement":"active"}]`
 	detailResponse := `{"id":1,"name":"main","rules":[{"type":"copilot_code_review","parameters":{"review_on_push":false}}]}`
 	script := "#!/bin/sh\n" +
 		"case \"$@\" in\n" +
+		"  *installations*) echo '" + installsResponse + "' ;;\n" +
 		"  *rulesets/1*) echo '" + detailResponse + "' ;;\n" +
-		"  *) echo '" + listResponse + "' ;;\n" +
+		"  *rulesets*) echo '" + listResponse + "' ;;\n" +
 		"esac\n"
 	ghPath := filepath.Join(bin, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
@@ -259,29 +265,27 @@ func TestCheckCopilotReviewEnabled_ReturnsTrueWhenReviewOnPushFalse(t *testing.T
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	enabled, reviewOnPush, err := g.CheckCopilotReviewEnabled("owner/repo")
+	reviewers, err := g.DetectActiveReviewers("owner/repo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !enabled {
-		t.Error("expected enabled=true when copilot_code_review rule exists (review_on_push=false)")
+	if len(reviewers) != 1 {
+		t.Fatalf("expected 1 active reviewer, got %d", len(reviewers))
 	}
-	if reviewOnPush {
-		t.Error("expected reviewOnPush=false when review_on_push=false in ruleset")
+	if reviewers[0].ReviewOnPush {
+		t.Error("expected ReviewOnPush=false when review_on_push=false in ruleset")
+	}
+	if reviewers[0].DefaultTimeout != 30*time.Second {
+		t.Errorf("expected 30s timeout when review_on_push=false, got %v", reviewers[0].DefaultTimeout)
 	}
 }
 
-// CheckCopilotReviewEnabled returns (false, false) when the detail endpoint contains no
-// copilot_code_review rule, proving non-Copilot rulesets don't trigger the flag.
-func TestCheckCopilotReviewEnabled_ReturnsFalseWhenNoRule(t *testing.T) {
+// DetectActiveReviewers returns an empty list when no known reviewers are installed,
+// proving the loop skips polling when no apps are configured.
+func TestDetectActiveReviewers_NoKnownReviewersInstalled(t *testing.T) {
 	bin := t.TempDir()
-	listResponse := `[{"id":1,"name":"main","target":"branch","enforcement":"active"}]`
-	detailResponse := `{"id":1,"name":"main","rules":[{"type":"required_status_checks","parameters":{}}]}`
-	script := "#!/bin/sh\n" +
-		"case \"$@\" in\n" +
-		"  *rulesets/1*) echo '" + detailResponse + "' ;;\n" +
-		"  *) echo '" + listResponse + "' ;;\n" +
-		"esac\n"
+	installsResponse := `{"installations":[{"app_slug":"some-other-app"}]}`
+	script := "#!/bin/sh\necho '" + installsResponse + "'\n"
 	ghPath := filepath.Join(bin, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -289,34 +293,41 @@ func TestCheckCopilotReviewEnabled_ReturnsFalseWhenNoRule(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	enabled, _, err := g.CheckCopilotReviewEnabled("owner/repo")
+	reviewers, err := g.DetectActiveReviewers("owner/repo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if enabled {
-		t.Error("expected enabled=false when no copilot_code_review rule exists")
+	if len(reviewers) != 0 {
+		t.Errorf("expected 0 active reviewers when no known apps installed, got %d", len(reviewers))
 	}
 }
 
-// StubGitHub.CheckCopilotReviewEnabled returns the configured CopilotReviewEnabled
-// and CopilotReviewOnPush values, proving tests can control both flags without shelling out.
-func TestStubGitHub_CheckCopilotReviewEnabled(t *testing.T) {
-	stub := &StubGitHub{CopilotReviewEnabled: true, CopilotReviewOnPush: true}
-	enabled, reviewOnPush, err := stub.CheckCopilotReviewEnabled("owner/repo")
+// StubGitHub.DetectActiveReviewers returns the configured ActiveReviewers slice,
+// proving tests can control the reviewer list without shelling out.
+func TestStubGitHub_DetectActiveReviewers(t *testing.T) {
+	stub := &StubGitHub{
+		ActiveReviewers: []Reviewer{
+			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second, ReviewOnPush: true},
+		},
+	}
+	reviewers, err := stub.DetectActiveReviewers("owner/repo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !enabled {
-		t.Error("expected enabled=true from stub with CopilotReviewEnabled=true")
+	if len(reviewers) != 1 {
+		t.Fatalf("expected 1 reviewer, got %d", len(reviewers))
 	}
-	if !reviewOnPush {
-		t.Error("expected reviewOnPush=true from stub with CopilotReviewOnPush=true")
+	if reviewers[0].BotUsername != "copilot-pull-request-reviewer" {
+		t.Errorf("expected copilot bot, got %q", reviewers[0].BotUsername)
+	}
+	if !reviewers[0].ReviewOnPush {
+		t.Error("expected ReviewOnPush=true from stub")
 	}
 }
 
-// PollCopilotReview returns a CopilotReview with body and inline comments when
-// copilot-pull-request-reviewer has submitted a review on the PR.
-func TestPollCopilotReview_ReturnsCopilotReview(t *testing.T) {
+// PollReview returns an AutoReview with body and inline comments when the given
+// bot username has submitted a review on the PR.
+func TestPollReview_ReturnsAutoReview(t *testing.T) {
 	bin := t.TempDir()
 	logFile := filepath.Join(bin, "gh.log")
 
@@ -330,7 +341,7 @@ func TestPollCopilotReview_ReturnsCopilotReview(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	review, err := g.PollCopilotReview("owner/repo", 42, 5*time.Second)
+	review, err := g.PollReview("owner/repo", "copilot-pull-request-reviewer", 42, 5*time.Second)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -771,11 +782,11 @@ func TestSearchPR_UsesGhAPI(t *testing.T) {
 	}
 }
 
-// PollCopilotReview returns nil without error when the timeout expires and no
-// review from copilot-pull-request-reviewer has arrived, so the loop proceeds.
-func TestPollCopilotReview_Timeout_ReturnsNil(t *testing.T) {
+// PollReview returns nil without error when the timeout expires and no review
+// from the given bot username has arrived, so the loop proceeds to merge.
+func TestPollReview_Timeout_ReturnsNil(t *testing.T) {
 	bin := t.TempDir()
-	script := "#!/bin/sh\necho '[{\"id\":999,\"user\":{\"login\":\"other-bot\"},\"body\":\"not copilot\"}]'\n"
+	script := "#!/bin/sh\necho '[{\"id\":999,\"user\":{\"login\":\"other-bot\"},\"body\":\"not our reviewer\"}]'\n"
 	ghPath := filepath.Join(bin, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -783,7 +794,7 @@ func TestPollCopilotReview_Timeout_ReturnsNil(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	review, err := g.PollCopilotReview("owner/repo", 42, 1*time.Millisecond)
+	review, err := g.PollReview("owner/repo", "copilot-pull-request-reviewer", 42, 1*time.Millisecond)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

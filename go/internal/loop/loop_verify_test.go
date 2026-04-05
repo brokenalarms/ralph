@@ -397,10 +397,10 @@ func stubResult(signal bool, summary string) claude.Result {
 	}
 }
 
-// tryFixCopilotReview logs each actionable comment as "file:line — first line"
+// tryFixReviewComments logs each actionable comment as "reviewer: file:line — first line"
 // before spawning the fix agent, giving the operator visibility into what the
 // agent will address without requiring them to check GitHub.
-func TestTryFixCopilotReview_LogsEachActionableComment(t *testing.T) {
+func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 	var buf bytes.Buffer
 	logger := logging.NewWithWriter(&buf)
 
@@ -412,14 +412,14 @@ func TestTryFixCopilotReview_LogsEachActionableComment(t *testing.T) {
 	})
 
 	gm := &testutil.StubGit{HeadRevValue: "abc123"}
-	review := &git.CopilotReview{
+	review := &git.AutoReview{
 		Comments: []git.ReviewComment{
 			{Path: "src/foo.go", Line: 42, Body: "Should use pointer receiver for consistency\nMore detail here"},
 			{Path: "pkg/bar.go", Line: 7, Body: "Missing nil check before dereferencing ptr"},
 		},
 	}
 
-	tryFixCopilotReview(context.Background(), gm, v, logger, review, 1, "task", t.TempDir(), t.TempDir()+"/raw.log")
+	tryFixReviewComments(context.Background(), gm, v, logger, "copilot-pull-request-reviewer", review, 1, "task", t.TempDir(), t.TempDir()+"/raw.log")
 
 	output := buf.String()
 	if !strings.Contains(output, "src/foo.go:42") {

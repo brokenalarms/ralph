@@ -441,8 +441,8 @@ func TestFinalizePR_DependencyBlockedClose_SkipsWithBlockerIDs(t *testing.T) {
 	}
 }
 
-// finalizePR calls PollCopilotReview when copilotReviewEnabled is true and the PR is OPEN with autoMerge on.
-func TestFinalizePR_CopilotReviewEnabled_PollsCalled(t *testing.T) {
+// finalizePR calls PollReview for each active reviewer when the PR is OPEN with autoMerge on.
+func TestFinalizePR_ActiveReviewer_PollsCalled(t *testing.T) {
 	dir, st := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
@@ -452,30 +452,32 @@ func TestFinalizePR_CopilotReviewEnabled_PollsCalled(t *testing.T) {
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	finalizePR(finalizePRParams{
-		ctx:                  context.Background(),
-		taskID:               "ralph-abc",
-		nextTask:             "Fix bug",
-		prNumber:             42,
-		prState:              "OPEN",
-		workDir:              dir,
-		autoMerge:            true,
-		copilotReviewEnabled: true,
-		git:                  gm,
-		logger:               logging.New(nil),
-		backend:              backend,
-		state:                st,
-		attempts:             attempts.New(dir),
-		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix bug",
+		prNumber: 42,
+		prState:  "OPEN",
+		workDir:  dir,
+		autoMerge: true,
+		activeReviewers: []git.Reviewer{
+			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second},
+		},
+		git:      gm,
+		logger:   logging.New(nil),
+		backend:  backend,
+		state:    st,
+		attempts: attempts.New(dir),
+		mergeFunc: func(ctx context.Context) (bool, error) { return true, nil },
 	})
 
-	if !gm.PollCopilotReviewCalled {
-		t.Error("PollCopilotReview should be called when copilotReviewEnabled=true and PR is OPEN")
+	if !gm.PollReviewCalled {
+		t.Error("PollReview should be called when activeReviewers is set and PR is OPEN")
 	}
 }
 
-// finalizePR uses a 30s timeout when copilotReviewOnPush is false, since the review
-// is opportunistic rather than a merge gate.
-func TestFinalizePR_CopilotReviewEnabled_ShortTimeoutWhenReviewOnPushFalse(t *testing.T) {
+// finalizePR uses the per-reviewer DefaultTimeout from the registry — 30s when
+// review_on_push=false (opportunistic), as set by DetectActiveReviewers.
+func TestFinalizePR_ActiveReviewer_ShortTimeoutWhenReviewOnPushFalse(t *testing.T) {
 	dir, st := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
@@ -485,34 +487,34 @@ func TestFinalizePR_CopilotReviewEnabled_ShortTimeoutWhenReviewOnPushFalse(t *te
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	finalizePR(finalizePRParams{
-		ctx:                  context.Background(),
-		taskID:               "ralph-abc",
-		nextTask:             "Fix bug",
-		prNumber:             42,
-		prState:              "OPEN",
-		workDir:              dir,
-		autoMerge:            true,
-		copilotReviewEnabled: true,
-		copilotReviewOnPush:  false,
-		git:                  gm,
-		logger:               logging.New(nil),
-		backend:              backend,
-		state:                st,
-		attempts:             attempts.New(dir),
-		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix bug",
+		prNumber: 42,
+		prState:  "OPEN",
+		workDir:  dir,
+		autoMerge: true,
+		activeReviewers: []git.Reviewer{
+			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 30 * time.Second, ReviewOnPush: false},
+		},
+		git:      gm,
+		logger:   logging.New(nil),
+		backend:  backend,
+		state:    st,
+		attempts: attempts.New(dir),
+		mergeFunc: func(ctx context.Context) (bool, error) { return true, nil },
 	})
 
-	if !gm.PollCopilotReviewCalled {
-		t.Error("PollCopilotReview should be called when copilotReviewEnabled=true even with review_on_push=false")
+	if !gm.PollReviewCalled {
+		t.Error("PollReview should be called even with review_on_push=false")
 	}
-	if gm.PollCopilotReviewTimeout != 30*time.Second {
-		t.Errorf("expected 30s poll timeout when review_on_push=false, got %v", gm.PollCopilotReviewTimeout)
+	if gm.PollReviewLastTimeout != 30*time.Second {
+		t.Errorf("expected 30s poll timeout when reviewer has 30s DefaultTimeout, got %v", gm.PollReviewLastTimeout)
 	}
 }
 
-// finalizePR uses a 120s timeout when copilotReviewOnPush is true, since the review
-// gates merging.
-func TestFinalizePR_CopilotReviewEnabled_FullTimeoutWhenReviewOnPushTrue(t *testing.T) {
+// finalizePR uses 120s timeout when the reviewer has DefaultTimeout=120s (review_on_push=true).
+func TestFinalizePR_ActiveReviewer_FullTimeoutWhenReviewOnPushTrue(t *testing.T) {
 	dir, st := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
@@ -522,33 +524,34 @@ func TestFinalizePR_CopilotReviewEnabled_FullTimeoutWhenReviewOnPushTrue(t *test
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	finalizePR(finalizePRParams{
-		ctx:                  context.Background(),
-		taskID:               "ralph-abc",
-		nextTask:             "Fix bug",
-		prNumber:             42,
-		prState:              "OPEN",
-		workDir:              dir,
-		autoMerge:            true,
-		copilotReviewEnabled: true,
-		copilotReviewOnPush:  true,
-		git:                  gm,
-		logger:               logging.New(nil),
-		backend:              backend,
-		state:                st,
-		attempts:             attempts.New(dir),
-		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix bug",
+		prNumber: 42,
+		prState:  "OPEN",
+		workDir:  dir,
+		autoMerge: true,
+		activeReviewers: []git.Reviewer{
+			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second, ReviewOnPush: true},
+		},
+		git:      gm,
+		logger:   logging.New(nil),
+		backend:  backend,
+		state:    st,
+		attempts: attempts.New(dir),
+		mergeFunc: func(ctx context.Context) (bool, error) { return true, nil },
 	})
 
-	if !gm.PollCopilotReviewCalled {
-		t.Error("PollCopilotReview should be called when copilotReviewEnabled=true with review_on_push=true")
+	if !gm.PollReviewCalled {
+		t.Error("PollReview should be called with review_on_push=true")
 	}
-	if gm.PollCopilotReviewTimeout != 120*time.Second {
-		t.Errorf("expected 120s poll timeout when review_on_push=true, got %v", gm.PollCopilotReviewTimeout)
+	if gm.PollReviewLastTimeout != 120*time.Second {
+		t.Errorf("expected 120s poll timeout when reviewer has 120s DefaultTimeout, got %v", gm.PollReviewLastTimeout)
 	}
 }
 
-// finalizePR does not call PollCopilotReview when copilotReviewEnabled is false.
-func TestFinalizePR_CopilotReviewDisabled_NoPoll(t *testing.T) {
+// finalizePR does not call PollReview when activeReviewers is empty.
+func TestFinalizePR_NoActiveReviewers_NoPoll(t *testing.T) {
 	dir, st := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
@@ -558,24 +561,24 @@ func TestFinalizePR_CopilotReviewDisabled_NoPoll(t *testing.T) {
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	finalizePR(finalizePRParams{
-		ctx:                  context.Background(),
-		taskID:               "ralph-abc",
-		nextTask:             "Fix bug",
-		prNumber:             42,
-		prState:              "OPEN",
-		workDir:              dir,
-		autoMerge:            true,
-		copilotReviewEnabled: false,
-		git:                  gm,
-		logger:               logging.New(nil),
-		backend:              backend,
-		state:                st,
-		attempts:             attempts.New(dir),
-		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+		ctx:             context.Background(),
+		taskID:          "ralph-abc",
+		nextTask:        "Fix bug",
+		prNumber:        42,
+		prState:         "OPEN",
+		workDir:         dir,
+		autoMerge:       true,
+		activeReviewers: nil,
+		git:             gm,
+		logger:          logging.New(nil),
+		backend:         backend,
+		state:           st,
+		attempts:        attempts.New(dir),
+		mergeFunc:       func(ctx context.Context) (bool, error) { return true, nil },
 	})
 
-	if gm.PollCopilotReviewCalled {
-		t.Error("PollCopilotReview should not be called when copilotReviewEnabled=false")
+	if gm.PollReviewCalled {
+		t.Error("PollReview should not be called when activeReviewers is empty")
 	}
 }
 
@@ -634,8 +637,8 @@ func TestPersistCompletedTask_Standalone(t *testing.T) {
 	}
 }
 
-// finalizePR spawns a fix agent when Copilot review returns actionable comments.
-func TestFinalizePR_CopilotReview_ActionableComments_SpawnsFixAgent(t *testing.T) {
+// finalizePR spawns a fix agent when a reviewer returns actionable comments.
+func TestFinalizePR_AutoReview_ActionableComments_SpawnsFixAgent(t *testing.T) {
 	dir, st := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
@@ -653,7 +656,7 @@ func TestFinalizePR_CopilotReview_ActionableComments_SpawnsFixAgent(t *testing.T
 	gm := &testutil.StubGit{
 		ProjectDir: dir,
 		WorkDir:    dir,
-		PollCopilotReviewResult: &git.CopilotReview{
+		PollReviewResult: &git.AutoReview{
 			Body: "Review",
 			Comments: []git.ReviewComment{
 				{Path: "pkg/foo.go", Line: 42, Body: "Missing nil check — this will panic"},
@@ -662,30 +665,32 @@ func TestFinalizePR_CopilotReview_ActionableComments_SpawnsFixAgent(t *testing.T
 	}
 
 	finalizePR(finalizePRParams{
-		ctx:                  context.Background(),
-		taskID:               "ralph-abc",
-		nextTask:             "Fix bug",
-		prNumber:             42,
-		prState:              "OPEN",
-		workDir:              dir,
-		autoMerge:            true,
-		copilotReviewEnabled: true,
-		git:                  gm,
-		logger:               logging.New(nil),
-		backend:              backend,
-		state:                st,
-		attempts:             attempts.New(dir),
-		verifier:             v,
-		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix bug",
+		prNumber: 42,
+		prState:  "OPEN",
+		workDir:  dir,
+		autoMerge: true,
+		activeReviewers: []git.Reviewer{
+			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second},
+		},
+		git:      gm,
+		logger:   logging.New(nil),
+		backend:  backend,
+		state:    st,
+		attempts: attempts.New(dir),
+		verifier: v,
+		mergeFunc: func(ctx context.Context) (bool, error) { return true, nil },
 	})
 
 	if !fixAgentSpawned {
-		t.Error("fix agent should be spawned when Copilot review has actionable comments")
+		t.Error("fix agent should be spawned when reviewer has actionable comments")
 	}
 }
 
-// finalizePR does not spawn a fix agent when Copilot review has no actionable comments.
-func TestFinalizePR_CopilotReview_InformationalOnly_NoFixAgent(t *testing.T) {
+// finalizePR does not spawn a fix agent when review has no actionable comments.
+func TestFinalizePR_AutoReview_InformationalOnly_NoFixAgent(t *testing.T) {
 	dir, st := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
@@ -703,7 +708,7 @@ func TestFinalizePR_CopilotReview_InformationalOnly_NoFixAgent(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir: dir,
 		WorkDir:    dir,
-		PollCopilotReviewResult: &git.CopilotReview{
+		PollReviewResult: &git.AutoReview{
 			Body: "LGTM",
 			Comments: []git.ReviewComment{
 				{Path: "pkg/foo.go", Line: 1, Body: "This PR adds caching support."},
@@ -712,21 +717,23 @@ func TestFinalizePR_CopilotReview_InformationalOnly_NoFixAgent(t *testing.T) {
 	}
 
 	finalizePR(finalizePRParams{
-		ctx:                  context.Background(),
-		taskID:               "ralph-abc",
-		nextTask:             "Fix bug",
-		prNumber:             42,
-		prState:              "OPEN",
-		workDir:              dir,
-		autoMerge:            true,
-		copilotReviewEnabled: true,
-		git:                  gm,
-		logger:               logging.New(nil),
-		backend:              backend,
-		state:                st,
-		attempts:             attempts.New(dir),
-		verifier:             v,
-		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix bug",
+		prNumber: 42,
+		prState:  "OPEN",
+		workDir:  dir,
+		autoMerge: true,
+		activeReviewers: []git.Reviewer{
+			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second},
+		},
+		git:      gm,
+		logger:   logging.New(nil),
+		backend:  backend,
+		state:    st,
+		attempts: attempts.New(dir),
+		verifier: v,
+		mergeFunc: func(ctx context.Context) (bool, error) { return true, nil },
 	})
 
 	if fixAgentSpawned {
@@ -734,12 +741,12 @@ func TestFinalizePR_CopilotReview_InformationalOnly_NoFixAgent(t *testing.T) {
 	}
 }
 
-// finalizePR does not re-poll Copilot review when already addressed in state.
-func TestFinalizePR_CopilotReview_AlreadyAddressed_NoPoll(t *testing.T) {
+// finalizePR does not re-poll when a reviewer's feedback was already addressed in state.
+func TestFinalizePR_AutoReview_AlreadyAddressed_NoPoll(t *testing.T) {
 	dir, st := setupTestDir(t)
 
-	// Pre-seed the addressed flag in state.
-	st.Write("copilot_review_addressed:ralph-abc", "true")
+	// Pre-seed the addressed flag in state using the per-reviewer key.
+	st.Write("review_addressed:copilot-pull-request-reviewer:ralph-abc", "true")
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
@@ -748,30 +755,32 @@ func TestFinalizePR_CopilotReview_AlreadyAddressed_NoPoll(t *testing.T) {
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	finalizePR(finalizePRParams{
-		ctx:                  context.Background(),
-		taskID:               "ralph-abc",
-		nextTask:             "Fix bug",
-		prNumber:             42,
-		prState:              "OPEN",
-		workDir:              dir,
-		autoMerge:            true,
-		copilotReviewEnabled: true,
-		git:                  gm,
-		logger:               logging.New(nil),
-		backend:              backend,
-		state:                st,
-		attempts:             attempts.New(dir),
-		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix bug",
+		prNumber: 42,
+		prState:  "OPEN",
+		workDir:  dir,
+		autoMerge: true,
+		activeReviewers: []git.Reviewer{
+			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second},
+		},
+		git:      gm,
+		logger:   logging.New(nil),
+		backend:  backend,
+		state:    st,
+		attempts: attempts.New(dir),
+		mergeFunc: func(ctx context.Context) (bool, error) { return true, nil },
 	})
 
-	if gm.PollCopilotReviewCalled {
-		t.Error("PollCopilotReview should not be called when copilot review was already addressed")
+	if gm.PollReviewCalled {
+		t.Error("PollReview should not be called when reviewer feedback was already addressed")
 	}
 }
 
-// finalizePR marks review as addressed in state after processing, preventing
-// re-poll on subsequent calls for the same task.
-func TestFinalizePR_CopilotReview_SetsAddressedFlag(t *testing.T) {
+// finalizePR marks review as addressed per-reviewer in state after processing,
+// preventing re-poll on subsequent calls for the same task.
+func TestFinalizePR_AutoReview_SetsAddressedFlag(t *testing.T) {
 	dir, st := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
@@ -787,7 +796,7 @@ func TestFinalizePR_CopilotReview_SetsAddressedFlag(t *testing.T) {
 	gm := &testutil.StubGit{
 		ProjectDir: dir,
 		WorkDir:    dir,
-		PollCopilotReviewResult: &git.CopilotReview{
+		PollReviewResult: &git.AutoReview{
 			Comments: []git.ReviewComment{
 				{Path: "pkg/foo.go", Line: 5, Body: "Missing nil check"},
 			},
@@ -795,26 +804,28 @@ func TestFinalizePR_CopilotReview_SetsAddressedFlag(t *testing.T) {
 	}
 
 	finalizePR(finalizePRParams{
-		ctx:                  context.Background(),
-		taskID:               "ralph-abc",
-		nextTask:             "Fix bug",
-		prNumber:             42,
-		prState:              "OPEN",
-		workDir:              dir,
-		autoMerge:            true,
-		copilotReviewEnabled: true,
-		git:                  gm,
-		logger:               logging.New(nil),
-		backend:              backend,
-		state:                st,
-		attempts:             attempts.New(dir),
-		verifier:             v,
-		mergeFunc:            func(ctx context.Context) (bool, error) { return true, nil },
+		ctx:      context.Background(),
+		taskID:   "ralph-abc",
+		nextTask: "Fix bug",
+		prNumber: 42,
+		prState:  "OPEN",
+		workDir:  dir,
+		autoMerge: true,
+		activeReviewers: []git.Reviewer{
+			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second},
+		},
+		git:      gm,
+		logger:   logging.New(nil),
+		backend:  backend,
+		state:    st,
+		attempts: attempts.New(dir),
+		verifier: v,
+		mergeFunc: func(ctx context.Context) (bool, error) { return true, nil },
 	})
 
-	addressed, _ := st.Read("copilot_review_addressed:ralph-abc")
+	addressed, _ := st.Read("review_addressed:copilot-pull-request-reviewer:ralph-abc")
 	if addressed != "true" {
-		t.Errorf("state should have copilot_review_addressed:ralph-abc=true after review processed, got %q", addressed)
+		t.Errorf("state should have review_addressed:copilot-pull-request-reviewer:ralph-abc=true after review processed, got %q", addressed)
 	}
 }
 
@@ -867,17 +878,20 @@ func TestIsActionableComment(t *testing.T) {
 	}
 }
 
-// formatCopilotReviewContext structures comments with file paths and line numbers.
-func TestFormatCopilotReviewContext(t *testing.T) {
+// formatReviewContext structures comments with file paths, line numbers, and reviewer name.
+func TestFormatReviewContext(t *testing.T) {
 	comments := []git.ReviewComment{
 		{Path: "pkg/auth.go", Line: 42, Body: "Missing nil check"},
 		{Path: "pkg/db.go", Line: 17, Body: "```suggestion\nreturn nil, err\n```"},
 	}
 
-	result := formatCopilotReviewContext(99, comments)
+	result := formatReviewContext("copilot-pull-request-reviewer", 99, comments)
 
 	if !strings.Contains(result, "PR #99") {
 		t.Error("context should mention PR number")
+	}
+	if !strings.Contains(result, "copilot-pull-request-reviewer") {
+		t.Error("context should mention reviewer name")
 	}
 	if !strings.Contains(result, "pkg/auth.go:42") {
 		t.Error("context should contain file:line for first comment")

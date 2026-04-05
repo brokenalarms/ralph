@@ -40,8 +40,8 @@ func ParsePRNumber(raw string) (int, error) {
 	return n, nil
 }
 
-// CopilotReview is a Copilot code review on a pull request.
-type CopilotReview struct {
+// AutoReview is an automated code review on a pull request from a GitHub App reviewer.
+type AutoReview struct {
 	Body     string
 	Comments []ReviewComment
 }
@@ -123,14 +123,14 @@ type GitHub interface {
 	GetJobStepCount(nwo string, prNumber int) (int, error)
 	// ListAllPRs returns all PRs (open and closed) for chain-walking during stack merge.
 	ListAllPRs(workDir string) ([]PRInfo, error)
-	// CheckCopilotReviewEnabled returns (enabled, reviewOnPush, error) where
-	// enabled is true if any copilot_code_review rule exists in any ruleset, and
-	// reviewOnPush reflects whether the rule gates merging on the review.
-	CheckCopilotReviewEnabled(nwo string) (bool, bool, error)
-	// PollCopilotReview polls for a review from copilot-pull-request-reviewer
-	// on the given PR, returning it with inline comments when found. Returns nil
-	// without error if the timeout expires before a review arrives.
-	PollCopilotReview(nwo string, prNumber int, timeout time.Duration) (*CopilotReview, error)
+	// DetectActiveReviewers queries the repo's installed GitHub Apps and cross-
+	// references against the Known reviewer registry. For Copilot it also checks
+	// rulesets to set the correct timeout. Returns the active reviewer list.
+	DetectActiveReviewers(nwo string) ([]Reviewer, error)
+	// PollReview polls for a review from the given bot username on the given PR,
+	// returning it with inline comments when found. Returns nil without error if
+	// the timeout expires before a review arrives.
+	PollReview(nwo string, botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error)
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -598,7 +598,51 @@ func (g *ghCLI) GetPR(nwo string, prNumber int) (*PRDetail, error) {
 	}, nil
 }
 
-func (g *ghCLI) CheckCopilotReviewEnabled(nwo string) (bool, bool, error) {
+// DetectActiveReviewers queries the repo's installed GitHub Apps, cross-
+// references against Known, and for Copilot additionally checks rulesets to
+// set the correct polling timeout.
+func (g *ghCLI) DetectActiveReviewers(nwo string) ([]Reviewer, error) {
+	cmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s/installations", nwo))
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("gh api installations: %w", err)
+	}
+	var resp struct {
+		Installations []struct {
+			AppSlug string `json:"app_slug"`
+		} `json:"installations"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("parsing installations: %w", err)
+	}
+	slugSet := make(map[string]bool, len(resp.Installations))
+	for _, inst := range resp.Installations {
+		slugSet[inst.AppSlug] = true
+	}
+
+	var active []Reviewer
+	for _, r := range Known {
+		if !slugSet[r.AppSlug] {
+			continue
+		}
+		reviewer := r
+		if r.AppSlug == "copilot-code-review" {
+			_, reviewOnPush, err := g.checkCopilotRulesets(nwo)
+			if err == nil {
+				reviewer.ReviewOnPush = reviewOnPush
+				if !reviewOnPush {
+					reviewer.DefaultTimeout = 30 * time.Second
+				}
+			}
+		}
+		active = append(active, reviewer)
+	}
+	return active, nil
+}
+
+// checkCopilotRulesets fetches each ruleset detail to find a copilot_code_review
+// rule. Returns (enabled, reviewOnPush, error).
+func (g *ghCLI) checkCopilotRulesets(nwo string) (bool, bool, error) {
 	listCmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s/rulesets", nwo))
 	listOut, err := listCmd.Output()
 	if err != nil {
@@ -636,10 +680,10 @@ func (g *ghCLI) CheckCopilotReviewEnabled(nwo string) (bool, bool, error) {
 	return false, false, nil
 }
 
-func (g *ghCLI) PollCopilotReview(nwo string, prNumber int, timeout time.Duration) (*CopilotReview, error) {
+func (g *ghCLI) PollReview(nwo string, botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		review, err := g.fetchCopilotReview(nwo, prNumber)
+		review, err := g.fetchReview(nwo, botUsername, prNumber)
 		if err != nil {
 			return nil, err
 		}
@@ -659,7 +703,7 @@ func (g *ghCLI) PollCopilotReview(nwo string, prNumber int, timeout time.Duratio
 	return nil, nil
 }
 
-func (g *ghCLI) fetchCopilotReview(nwo string, prNumber int) (*CopilotReview, error) {
+func (g *ghCLI) fetchReview(nwo, botUsername string, prNumber int) (*AutoReview, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d/reviews", nwo, prNumber)
 	cmd := exec.Command("gh", "api", endpoint)
 	out, err := cmd.Output()
@@ -677,12 +721,12 @@ func (g *ghCLI) fetchCopilotReview(nwo string, prNumber int) (*CopilotReview, er
 		return nil, fmt.Errorf("parsing reviews: %w", err)
 	}
 	for _, r := range reviews {
-		if r.User.Login == "copilot-pull-request-reviewer" {
+		if r.User.Login == botUsername {
 			comments, err := g.fetchReviewComments(nwo, prNumber, r.ID)
 			if err != nil {
 				return nil, err
 			}
-			return &CopilotReview{Body: r.Body, Comments: comments}, nil
+			return &AutoReview{Body: r.Body, Comments: comments}, nil
 		}
 	}
 	return nil, nil

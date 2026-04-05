@@ -114,36 +114,36 @@ func isActionableComment(c git.ReviewComment) bool {
 	return false
 }
 
-// formatCopilotReviewContext formats actionable review comments as structured
-// agent context with file paths and line numbers.
-func formatCopilotReviewContext(prNumber int, comments []git.ReviewComment) string {
+// formatReviewContext formats actionable review comments as structured agent
+// context with file paths and line numbers, attributed to the given reviewer.
+func formatReviewContext(reviewerName string, prNumber int, comments []git.ReviewComment) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "## Copilot Review Feedback\nThe following review comments were left on PR #%d. Address each one:\n\n", prNumber)
+	fmt.Fprintf(&sb, "## %s Review Feedback\nThe following review comments were left on PR #%d. Address each one:\n\n", reviewerName, prNumber)
 	for _, c := range comments {
 		fmt.Fprintf(&sb, "### %s:%d\n%s\n\n", c.Path, c.Line, c.Body)
 	}
 	return sb.String()
 }
 
-// tryFixCopilotReview filters actionable comments from the review, spawns a
+// tryFixReviewComments filters actionable comments from the review, spawns a
 // fix agent to address them, and force-pushes the result. Returns true when
 // the fix was committed and pushed successfully.
-func tryFixCopilotReview(ctx context.Context, g git.GitOps, v *Verifier, logger *logging.Logger, review *git.CopilotReview, prNumber int, nextTask, workDir, rawLogPath string) bool {
+func tryFixReviewComments(ctx context.Context, g git.GitOps, v *Verifier, logger *logging.Logger, reviewerName string, review *git.AutoReview, prNumber int, nextTask, workDir, rawLogPath string) bool {
 	actionable := filterActionableComments(review.Comments)
 	if len(actionable) == 0 {
-		logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot review: no actionable comments — proceeding to merge")
+		logger.Emit(logging.Opts{Domain: logging.Git}, "%s review: no actionable comments — proceeding to merge", reviewerName)
 		return false
 	}
 
-	logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot review: %d actionable comment(s) — spawning fix agent", len(actionable))
+	logger.Emit(logging.Opts{Domain: logging.Git}, "%s review: %d actionable comment(s) — spawning fix agent", reviewerName, len(actionable))
 	for _, c := range actionable {
 		firstLine := c.Body
 		if i := strings.IndexByte(c.Body, '\n'); i >= 0 {
 			firstLine = c.Body[:i]
 		}
-		logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot: %s:%d — %s", c.Path, c.Line, firstLine)
+		logger.Emit(logging.Opts{Domain: logging.Git}, "%s: %s:%d — %s", reviewerName, c.Path, c.Line, firstLine)
 	}
-	reviewCtx := formatCopilotReviewContext(prNumber, actionable)
+	reviewCtx := formatReviewContext(reviewerName, prNumber, actionable)
 	headBefore := g.HeadRev()
 
 	if !v.TryCopilotFix(ctx, reviewCtx, nextTask, workDir, rawLogPath) {
@@ -152,17 +152,17 @@ func tryFixCopilotReview(ctx context.Context, g git.GitOps, v *Verifier, logger 
 
 	if g.HasUncommittedChanges() {
 		logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent left uncommitted changes — auto-committing")
-		g.CommitAll("fix: address Copilot review feedback")
+		g.CommitAll("fix: address " + reviewerName + " review feedback")
 	}
 
 	if g.HeadRev() == headBefore {
-		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Copilot fix agent made no new commits — proceeding to merge anyway")
+		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%s fix agent made no new commits — proceeding to merge anyway", reviewerName)
 		return false
 	}
 
-	logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot fix committed — pushing")
+	logger.Emit(logging.Opts{Domain: logging.Git}, "%s fix committed — pushing", reviewerName)
 	if err := g.Push(ctx); err != nil {
-		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after Copilot fix failed: %v", err)
+		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after %s fix failed: %v", reviewerName, err)
 		return false
 	}
 	return true
