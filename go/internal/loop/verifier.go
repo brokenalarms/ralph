@@ -26,6 +26,7 @@ var HeartbeatInterval = 30 * time.Second
 // VerifierConfig holds the configuration needed by the Verifier.
 type VerifierConfig struct {
 	VerifyDir             string
+	ProjectDir            string // project root used as fallback when ralph:verify is absent from VerifyDir
 	VerifyModel           string
 	VerifyEscalationModel string
 	FixModel              string // model used by all fix agents; defaults to ModelOpus
@@ -326,7 +327,7 @@ func (v *Verifier) runTestsWithHeartbeat(ctx context.Context, dir string) (verif
 		}
 	}()
 
-	result := verify.RunTests(ctx, dir)
+	result := verify.RunTests(ctx, dir, v.cfg.ProjectDir)
 	return result, time.Since(start).Truncate(time.Millisecond)
 }
 
@@ -361,7 +362,7 @@ func (v *Verifier) VerifyCompletion(ctx context.Context, workDir, headBefore str
 		return false, commitResult.Reason
 	}
 
-	testResult := verify.RunTests(ctx, v.cfg.VerifyDir)
+	testResult := verify.RunTests(ctx, v.cfg.VerifyDir, v.cfg.ProjectDir)
 	now := time.Now().Format(time.RFC3339)
 	if !testResult.Passed {
 		v.deps.State.Write("last_test_result", "fail")
@@ -389,7 +390,7 @@ func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 
 	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Running pre-iteration test suite...")
 	testStart := time.Now()
-	result := verify.RunTests(ctx, v.cfg.VerifyDir)
+	result := verify.RunTests(ctx, v.cfg.VerifyDir, v.cfg.ProjectDir)
 	testElapsed := time.Since(testStart).Truncate(10 * time.Millisecond)
 	now := time.Now().Format(time.RFC3339)
 

@@ -92,44 +92,54 @@ type Result struct {
 type TestCommand struct {
 	Cmd  string
 	Args []string
+	Dir  string // the directory where the command should be run
+}
+
+// detectScript checks each directory in order and returns a TestCommand for
+// the first directory that contains npmScript in package.json or makeTarget
+// in a Makefile. Empty directories are skipped. Returns nil if nothing found.
+func detectScript(npmScript, makeTarget string, dirs ...string) *TestCommand {
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		if fileExists(filepath.Join(dir, "package.json")) && hasNPMScript(dir, npmScript) {
+			return &TestCommand{Cmd: "npm", Args: []string{"run", npmScript}, Dir: dir}
+		}
+		if hasMakeTarget(dir, makeTarget) {
+			return &TestCommand{Cmd: "make", Args: []string{makeTarget}, Dir: dir}
+		}
+	}
+	return nil
 }
 
 // DetectTestCommand looks for an explicit ralph:verify script in the project.
 // Projects must declare what "verified" means — the loop does not guess.
+// Accepts multiple directories checked in order; returns the first match.
 // Returns nil if no ralph:verify script is found; callers should refuse to
 // start the loop without a verify command.
-func DetectTestCommand(dir string) *TestCommand {
-	if fileExists(filepath.Join(dir, "package.json")) {
-		if hasNPMScript(dir, "ralph:verify") {
-			return &TestCommand{Cmd: "npm", Args: []string{"run", "ralph:verify"}}
-		}
-	}
-
-	if hasMakeTarget(dir, "ralph-verify") {
-		return &TestCommand{Cmd: "make", Args: []string{"ralph-verify"}}
-	}
-
-	return nil
+func DetectTestCommand(dirs ...string) *TestCommand {
+	return detectScript("ralph:verify", "ralph-verify", dirs...)
 }
 
 // DetectPostTaskCommand looks for a ralph:posttask script in the project,
-// falling back to the CLI --post-task value. Returns empty string when neither
-// is configured (post-task is optional).
-func DetectPostTaskCommand(dir, cliPostTask string) string {
-	if fileExists(filepath.Join(dir, "package.json")) && hasNPMScript(dir, "ralph:posttask") {
-		return "npm run ralph:posttask"
-	}
-	if hasMakeTarget(dir, "ralph-posttask") {
-		return "make ralph-posttask"
+// falling back to the CLI --post-task value. Accepts multiple directories
+// checked in order (typically worktree first, project root second).
+// Returns empty string when neither is configured (post-task is optional).
+func DetectPostTaskCommand(cliPostTask string, dirs ...string) string {
+	tc := detectScript("ralph:posttask", "ralph-posttask", dirs...)
+	if tc != nil {
+		return tc.Cmd + " " + strings.Join(tc.Args, " ")
 	}
 	return cliPostTask
 }
 
 // RunTests executes the detected test command and returns the result.
-// Returns a failure if no ralph:verify command is detected — the loop
-// should have caught this at startup, but we fail safe here too.
-func RunTests(ctx context.Context, dir string) Result {
-	tc := DetectTestCommand(dir)
+// Accepts multiple directories checked in order — the command runs in the
+// first directory where ralph:verify is found. Returns a failure if no
+// ralph:verify command is detected.
+func RunTests(ctx context.Context, dirs ...string) Result {
+	tc := DetectTestCommand(dirs...)
 	if tc == nil {
 		return Result{Passed: false, ScriptMissing: true, Reason: "no ralph:verify script found — add a \"ralph:verify\" script to package.json"}
 	}
@@ -140,7 +150,7 @@ func RunTests(ctx context.Context, dir string) Result {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, tc.Cmd, tc.Args...)
-	cmd.Dir = dir
+	cmd.Dir = tc.Dir
 	cmd.WaitDelay = 3 * time.Second
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -158,11 +168,11 @@ func RunTests(ctx context.Context, dir string) Result {
 			Reason:  reason,
 			Details: tail,
 			Command: command,
-			Dir:     dir,
+			Dir:     tc.Dir,
 		}
 	}
 
-	return Result{Passed: true, Reason: "tests passed", Command: command, Dir: dir}
+	return Result{Passed: true, Reason: "tests passed", Command: command, Dir: tc.Dir}
 }
 
 // CheckCommits returns a Result indicating whether HEAD moved since the

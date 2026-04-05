@@ -171,18 +171,19 @@ func runVerifyBuild(ctx context.Context, p runVerifyBuildParams) string {
 }
 
 type runPostTaskParams struct {
-	postTask   string
-	projectDir string
-	logger     *logging.Logger
+	postTask    string
+	worktreeDir string
+	projectDir  string
+	logger      *logging.Logger
 }
 
 // runPostTask executes the post-task script if configured. Checks for a
-// ralph:posttask npm script or ralph-posttask Makefile target first; falls
-// back to the --post-task CLI flag. Runs in the project directory with
-// RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED env vars.
+// ralph:posttask npm script or ralph-posttask Makefile target first (worktree
+// then project root); falls back to the --post-task CLI flag. Runs in the
+// project directory with RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED env vars.
 // Non-zero exit warns and continues.
 func runPostTask(ctx context.Context, p runPostTaskParams, taskID string, prNumber int, merged bool) {
-	script := verify.DetectPostTaskCommand(p.projectDir, p.postTask)
+	script := verify.DetectPostTaskCommand(p.postTask, p.worktreeDir, p.projectDir)
 	if script == "" {
 		return
 	}

@@ -216,7 +216,7 @@ func TestDetectPostTaskCommand_NPM(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"ralph:posttask":"node ./scripts/posttask.js"}}`), 0o644)
 
-	got := DetectPostTaskCommand(dir, "")
+	got := DetectPostTaskCommand("", dir)
 	if got != "npm run ralph:posttask" {
 		t.Errorf("expected 'npm run ralph:posttask', got %q", got)
 	}
@@ -227,7 +227,7 @@ func TestDetectPostTaskCommand_Make(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-posttask:\n\t./scripts/posttask.sh\n"), 0o644)
 
-	got := DetectPostTaskCommand(dir, "")
+	got := DetectPostTaskCommand("", dir)
 	if got != "make ralph-posttask" {
 		t.Errorf("expected 'make ralph-posttask', got %q", got)
 	}
@@ -237,7 +237,7 @@ func TestDetectPostTaskCommand_Make(t *testing.T) {
 func TestDetectPostTaskCommand_CLIFallback(t *testing.T) {
 	dir := t.TempDir()
 
-	got := DetectPostTaskCommand(dir, "/path/to/posttask.sh")
+	got := DetectPostTaskCommand("/path/to/posttask.sh", dir)
 	if got != "/path/to/posttask.sh" {
 		t.Errorf("expected CLI flag value, got %q", got)
 	}
@@ -248,7 +248,7 @@ func TestDetectPostTaskCommand_CLIFallback(t *testing.T) {
 func TestDetectPostTaskCommand_None(t *testing.T) {
 	dir := t.TempDir()
 
-	got := DetectPostTaskCommand(dir, "")
+	got := DetectPostTaskCommand("", dir)
 	if got != "" {
 		t.Errorf("expected empty string, got %q", got)
 	}
@@ -259,9 +259,42 @@ func TestDetectPostTaskCommand_NPMTakesPriorityOverCLI(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"ralph:posttask":"node ./scripts/posttask.js"}}`), 0o644)
 
-	got := DetectPostTaskCommand(dir, "/path/to/cli-posttask.sh")
+	got := DetectPostTaskCommand("/path/to/cli-posttask.sh", dir)
 	if got != "npm run ralph:posttask" {
 		t.Errorf("expected npm script to take priority, got %q", got)
+	}
+}
+
+// DetectTestCommand finds the script in a fallback directory when the primary
+// directory does not have it — proving worktrees branched before ralph:verify
+// was added still detect the script via the project root.
+func TestDetectTestCommand_FallbackDir(t *testing.T) {
+	primary := t.TempDir()   // simulates worktree — no ralph:verify
+	fallback := t.TempDir()  // simulates project root — has ralph:verify
+	os.WriteFile(filepath.Join(fallback, "Makefile"), []byte("ralph-verify:\n\tgo test ./...\n"), 0o644)
+
+	tc := DetectTestCommand(primary, fallback)
+	if tc == nil {
+		t.Fatal("expected test command via fallback dir, got nil")
+	}
+	if tc.Dir != fallback {
+		t.Errorf("expected Dir=%q (fallback), got %q", fallback, tc.Dir)
+	}
+	if tc.Cmd != "make" {
+		t.Errorf("expected make, got %s", tc.Cmd)
+	}
+}
+
+// DetectPostTaskCommand finds the script in a fallback directory when the
+// primary directory does not have it.
+func TestDetectPostTaskCommand_FallbackDir(t *testing.T) {
+	primary := t.TempDir()  // simulates worktree — no ralph:posttask
+	fallback := t.TempDir() // simulates project root — has ralph:posttask
+	os.WriteFile(filepath.Join(fallback, "package.json"), []byte(`{"scripts":{"ralph:posttask":"node ./scripts/posttask.js"}}`), 0o644)
+
+	got := DetectPostTaskCommand("", primary, fallback)
+	if got != "npm run ralph:posttask" {
+		t.Errorf("expected 'npm run ralph:posttask' via fallback, got %q", got)
 	}
 }
 
