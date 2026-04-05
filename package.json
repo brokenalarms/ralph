@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node server.js",
     "loop": "bash ralph.sh",
-    "test:verify": "cd go && go test -count=1 ./..."
+    "ralph:verify": "cd go && go test -count=1 ./...",
+    "ralph:posttask": "./scripts/sync-and-build.sh"
   },
   "keywords": ["claude", "ai", "automation", "loop", "agent"],
   "license": "MIT"
