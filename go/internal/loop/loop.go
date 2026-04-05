@@ -85,8 +85,9 @@ type Loop struct {
 	attempts             *attempts.Tracker
 	logger               *logging.Logger
 	signals              claude.SignalPaths
-	completedTasks       []CompletedTask
-	activeReviewers []git.Reviewer
+	completedTasks      []CompletedTask
+	activeReviewers     []git.Reviewer
+	reviewersDetected   bool
 }
 
 // New creates an execution loop from the given configuration. All agent
@@ -153,6 +154,32 @@ func (l *Loop) SessionTasks() []CompletedTask {
 	return l.completedTasks
 }
 
+// ensureActiveReviewers populates l.activeReviewers on first call. Subsequent
+// calls are no-ops. The loop is single-threaded so no synchronization is needed.
+func (l *Loop) ensureActiveReviewers() {
+	if l.reviewersDetected {
+		return
+	}
+	l.reviewersDetected = true
+	reviewers, err := l.git.DetectActiveReviewers()
+	if err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Could not detect active reviewers: %v", err)
+		return
+	}
+	l.activeReviewers = reviewers
+	for _, r := range reviewers {
+		if r.AppSlug == "copilot-code-review" {
+			if r.ReviewOnPush {
+				l.logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=true)")
+			} else {
+				l.logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=false, opportunistic)")
+			}
+		} else {
+			l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s code review is enabled", r.AppSlug)
+		}
+	}
+}
+
 // Run executes the full iteration loop. Returns nil on normal completion
 // (all tasks done, max iterations reached, or stopped). Returns an error
 // for unrecoverable failures.
@@ -170,23 +197,6 @@ func (l *Loop) Run(ctx context.Context) error {
 		git:     l.git,
 	}); err != nil {
 		return err
-	}
-
-	if reviewers, err := l.git.DetectActiveReviewers(); err != nil {
-		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Could not detect active reviewers: %v", err)
-	} else {
-		l.activeReviewers = reviewers
-		for _, r := range reviewers {
-			if r.AppSlug == "copilot-code-review" {
-				if r.ReviewOnPush {
-					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=true)")
-				} else {
-					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=false, opportunistic)")
-				}
-			} else {
-				l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s code review is enabled", r.AppSlug)
-			}
-		}
 	}
 
 	var runIteration int
@@ -304,6 +314,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		// ── Run agent and handle outcome ──
+		l.ensureActiveReviewers()
 		var iterAction analyzer.Action
 		var merged bool
 		var ct *CompletedTask
