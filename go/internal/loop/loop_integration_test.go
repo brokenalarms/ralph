@@ -1718,10 +1718,56 @@ func (g *ciTriggerGit) MergeWithRetry(ctx context.Context, opts git.MergeRetryOp
 	return g.StubGit.MergeRetryResult, g.StubGit.MergeRetryErr
 }
 
-// TestIntegration_FullLifecycleSequenceOrdering verifies that all lifecycle
-// stages execute in the documented order: signal → verify → push → merge →
-// close, repeated for each task. A sequence recorder captures each stage and
-// asserts the final ordering.
+// testGitRunner is a git.Runner for lifecycle integration tests. It handles the
+// two git commands that AutoMergeCurrentBranch needs without spawning real
+// processes. All other commands return empty string with nil error so the fast
+// path can complete without real git operations.
+type testGitRunner struct {
+	remoteURL string
+	headSHA   func() string // called on every rev-parse HEAD invocation
+}
+
+func (r *testGitRunner) Run(_ context.Context, _ string, args ...string) (string, error) {
+	switch strings.Join(args, " ") {
+	case "remote get-url origin":
+		return r.remoteURL, nil
+	case "rev-parse HEAD":
+		return r.headSHA(), nil
+	}
+	// Return nil error for all other commands so push, fetch, merge-base etc.
+	// succeed without real git state. The fast path skips these entirely.
+	return "", nil
+}
+
+// realMergeGit wraps StubGit for all loop operations except MergeWithRetry,
+// which delegates to a real git.Manager. This exercises the full
+// AutoMergeCurrentBranch → AwaitCI → evaluateChecks pipeline driven by
+// StubGitHub, proving CI results flow through the real code path.
+type realMergeGit struct {
+	*testutil.StubGit
+	realMgr *git.Manager
+}
+
+// SetKnownPRNumber keeps the real manager in sync with the stub so
+// AutoMergeCurrentBranch skips FindOpenPR (no network call needed).
+func (g *realMergeGit) SetKnownPRNumber(n int) {
+	g.StubGit.SetKnownPRNumber(n)
+	g.realMgr.KnownPRNumber = n
+}
+
+// MergeWithRetry delegates to the real git.Manager, passing opts including
+// OnCIFailure so the full CI failure → fix agent path can be exercised.
+func (g *realMergeGit) MergeWithRetry(ctx context.Context, opts git.MergeRetryOpts) (bool, error) {
+	g.StubGit.MergeRetryCalls++
+	return g.realMgr.MergeWithRetry(ctx, opts)
+}
+
+// TestIntegration_FullLifecycleSequenceOrdering verifies all lifecycle stages
+// execute in order: signal → verify → push → ci_poll → ci_passed → merge →
+// close, for each task. The merge step uses a real git.Manager so
+// AutoMergeCurrentBranch → AwaitCI → evaluateChecks all execute; StubGitHub
+// drives CI results. The sequence recorder captures CI-specific stages between
+// push and merge, proving the CI pipeline actually ran.
 //
 // Also verifies the second iteration: after first close, next task is selected
 // and the worktree is reset via PrepareForNextTask.
@@ -1745,34 +1791,67 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 	backend.NextID = "ralph-seq1"
 	backend.BackendLabel = "beads"
 
-	ghStub := git.NewStubGitHub()
-	ghStub.OpenPR = 0
-	gm := &testutil.StubGit{
+	// realGH drives CI through the real AwaitCI → evaluateChecks code path.
+	// HeadSHA is updated per task so the fast path triggers (no push needed).
+	realGH := git.NewStubGitHub()
+	realGH.OpenPR = 0
+	realGH.PRBase = "main"
+	realGH.PRState = git.PRStateOpen
+
+	// ChecksFunc records ci_poll and returns a passing check. The real
+	// evaluateChecks function receives these checks and must return CIPassed.
+	realGH.ChecksFunc = func(_ int) []git.CICheckResult {
+		record("ci_poll")
+		return []git.CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
+	}
+
+	// testGitRunner handles the two commands AutoMergeCurrentBranch needs.
+	// headSHA reads from the stub so fast-path (HeadSHA == HeadRev) triggers.
+	stub := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
 		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     ghStub,
+		PRBase:         "main",
+		DefaultBranch:  "main",
+		PRHealthy:      true,
 	}
+	runner2 := &testGitRunner{
+		remoteURL: "https://github.com/owner/repo.git",
+		headSHA:   func() string { return stub.HeadRevValue },
+	}
+	realMgr := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir + "/wt",
+		WorktreeBranch: "ralph/lifecycle-seq",
+		BaseBranch:     "main",
+		Runner:         runner2,
+		GitHub:         realGH,
+		State:          newGitMemState(),
+		Logger:         logging.New(nil),
+	}
+	gm := &realMergeGit{StubGit: stub, realMgr: realMgr}
 
 	prCounter := 0
-	gm.ShipFunc = func(_ context.Context, _ git.ShipOpts) (git.ShipResult, error) {
+	stub.ShipFunc = func(_ context.Context, _ git.ShipOpts) (git.ShipResult, error) {
 		record("push")
 		prCounter++
-		return git.ShipResult{PRNumber: prCounter * 10}, nil
-	}
-	gm.MergeRetryFunc = func(_ context.Context) (bool, error) {
-		record("merge")
-		return true, nil
+		pr := prCounter * 10
+		// Keep realGH and stub in sync so FindPR / MergePR use the right number.
+		realGH.PRNumber = pr
+		return git.ShipResult{PRNumber: pr}, nil
 	}
 
 	taskIdx := 0
-	runner := &stubRunner{
+	agentRunner := &stubRunner{
 		onRun: func() {
 			record("agent_signal")
 			taskIdx++
-			// Simulate a new commit so push is triggered (SHA changes from "").
-			gm.HeadRevValue = fmt.Sprintf("sha%d", taskIdx)
+			sha := fmt.Sprintf("sha%d", taskIdx)
+			// Update both stub.HeadRevValue (for testGitRunner closure) and
+			// realGH.HeadSHA (for fast-path check in AutoMergeCurrentBranch).
+			stub.HeadRevValue = sha
+			realGH.HeadSHA = sha
 			backend.Lock()
 			backend.Completed = taskIdx
 			if taskIdx == 1 {
@@ -1799,13 +1878,27 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 		AutoMerge:     true,
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
-	l.runner = runner
+	l.runner = agentRunner
 	l.cfg.OnVerify = func(_ context.Context, _, _ string) (bool, string) {
 		record("verify")
 		return true, ""
 	}
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+
+	// "merge" is recorded when MergePR fires inside executeMerge — this runs only
+	// after AwaitCI returns CIPassed, so merge cannot appear before ci_passed.
+	realGH.OnMerge = func() { record("merge") }
+
+	// "ci_poll" is recorded when ChecksFunc is called (real ListChecks path).
+	// "ci_passed" is recorded immediately after because these checks always pass
+	// and evaluateChecks returns CIPassed — proving the real pipeline evaluated them.
+	origChecksFunc := realGH.ChecksFunc
+	realGH.ChecksFunc = func(call int) []git.CICheckResult {
+		checks := origChecksFunc(call) // records "ci_poll"
+		record("ci_passed")            // evaluateChecks will return CIPassed for these
+		return checks
+	}
 
 	if err := l.Run(context.Background()); err != nil {
 		t.Fatalf("Run returned unexpected error: %v", err)
@@ -1816,9 +1909,11 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 	copy(got, seq)
 	seqMu.Unlock()
 
+	// The sequence proves: CI pipeline actually ran (ci_poll → ci_passed) between
+	// push and merge, not a stub that bypasses AwaitCI entirely.
 	want := []string{
-		"agent_signal", "verify", "push", "merge", "close:ralph-seq1",
-		"agent_signal", "verify", "push", "merge", "close:ralph-seq2",
+		"agent_signal", "verify", "push", "ci_poll", "ci_passed", "merge", "close:ralph-seq1",
+		"agent_signal", "verify", "push", "ci_poll", "ci_passed", "merge", "close:ralph-seq2",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("stage sequence length: got %d, want %d\ngot:  %v\nwant: %v", len(got), len(want), got, want)
@@ -1840,8 +1935,132 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 	}
 
 	// Worktree was reset for both tasks (PrepareForNextTask called at least twice).
-	if gm.PrepareForNextCalls < 2 {
-		t.Errorf("worktree reset (PrepareForNextTask) expected ≥2 calls, got %d", gm.PrepareForNextCalls)
+	if stub.PrepareForNextCalls < 2 {
+		t.Errorf("worktree reset (PrepareForNextTask) expected ≥2 calls, got %d", stub.PrepareForNextCalls)
+	}
+}
+
+// TestIntegration_LifecycleCI_FailureFixRetry verifies that a CI failure during
+// merge triggers the fix agent path and the loop merges successfully after the
+// fix. Unlike TestIntegration_CIFailureTriggersFixAgent (which uses ciTriggerGit
+// to stub the CI failure at the MergeWithRetry boundary), this test uses a real
+// git.Manager so the CI failure flows through the real AwaitCI → evaluateChecks
+// path: ChecksFunc returns failure on the first call and passing on subsequent
+// calls. The fix agent updates the HEAD SHA so tryFixCI detects a new commit and
+// returns CIFixApplied; the real opts.AwaitCI then polls again and sees CI pass.
+func TestIntegration_LifecycleCI_FailureFixRetry(t *testing.T) {
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Completed = 0
+	backend.Total = 1
+	backend.NextTask = "Add feature with CI failure"
+	backend.NextID = "ralph-cifr1"
+	backend.BackendLabel = "beads"
+
+	realGH := git.NewStubGitHub()
+	realGH.OpenPR = 0
+	realGH.PRBase = "main"
+	realGH.PRState = git.PRStateOpen
+	realGH.PRNumber = 55
+
+	// ChecksFunc returns failure on the first call (AutoMergeCurrentBranch attempt
+	// 1), passing on all subsequent calls (opts.AwaitCI after fix, attempt 2).
+	realGH.ChecksFunc = func(call int) []git.CICheckResult {
+		if call == 1 {
+			return []git.CICheckResult{{Name: "tests", State: "FAILURE", Bucket: "fail"}}
+		}
+		return []git.CICheckResult{{Name: "tests", State: "SUCCESS", Bucket: "pass"}}
+	}
+
+	stub := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/next",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		PRBase:         "main",
+		DefaultBranch:  "main",
+		PRHealthy:      true,
+		ShipResult:     git.ShipResult{PRNumber: 55},
+	}
+	gitRunner := &testGitRunner{
+		remoteURL: "https://github.com/owner/repo.git",
+		headSHA:   func() string { return stub.HeadRevValue },
+	}
+	realMgr := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir + "/wt",
+		WorktreeBranch: "ralph/cifr-test",
+		BaseBranch:     "main",
+		Runner:         gitRunner,
+		GitHub:         realGH,
+		State:          newGitMemState(),
+		Logger:         logging.New(nil),
+	}
+	gm := &realMergeGit{StubGit: stub, realMgr: realMgr}
+	gm.SetKnownPRNumber(55)
+
+	agentRunner := &stubRunner{
+		onRun: func() {
+			stub.HeadRevValue = "initial-sha"
+			// HeadSHA differs from HeadRev so fast path is not taken and
+			// AutoMergeCurrentBranch uses the push path → AwaitCI → CI fails.
+			realGH.HeadSHA = "pr-head-sha"
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "implemented"},
+	}
+
+	fixAgentCalled := false
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = agentRunner
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	// Fix agent changes the HEAD SHA, proving tryFixCI sees a new commit and
+	// returns CIFixApplied so MergeWithRetry continues to a second attempt.
+	l.cfg.NewRunner = func() claudeRunner {
+		fixAgentCalled = true
+		stub.HeadRevValue = "sha-after-fix"
+		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "ci fixed"}}
+	}
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
+
+	if !fixAgentCalled {
+		t.Error("fix agent should have been spawned for CI failure")
+	}
+
+	// The task must be closed after fix agent resolved CI and merge succeeded.
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) == 0 {
+		t.Fatal("task should be closed after CI fix and merge")
+	}
+	if backend.ClosedIDs[0] != "ralph-cifr1" {
+		t.Errorf("expected ralph-cifr1 to be closed, got %q", backend.ClosedIDs[0])
+	}
+
+	// Real MergePR must have been called — merge actually happened.
+	if realGH.MergeCalls == 0 {
+		t.Error("expected MergePR to be called after CI passed")
 	}
 }
 
@@ -2212,6 +2431,136 @@ func TestIntegration_CIAlreadyPassing_FallsThrough_WhenHeadDiffers(t *testing.T)
 	}
 	if !strings.Contains(backend.CloseReasons[0], "100") {
 		t.Errorf("close reason should reference PR #100, got %q", backend.CloseReasons[0])
+	}
+}
+
+// TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered verifies that when
+// push does not change HeadRev (same SHA before and after), existing failing CI
+// checks are NOT filtered out by the pushedAt filter. This was the exact
+// regression from tabi PR #495: the pushedAt filter discarded pre-push failing
+// checks, making it look like CI passed when it hadn't.
+//
+// The test uses realMergeGit so the full AutoMergeCurrentBranch → AwaitCI →
+// evaluateChecks pipeline runs. The testGitRunner always returns the same SHA
+// for rev-parse HEAD, making push a no-op. ChecksFunc returns failing checks.
+// The test asserts that MergePR is never called and the task still closes
+// (CI failure does not block task closure, only merge).
+func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
+
+	const taskID = "ralph-nop1"
+	const localSHA = "sha-unchanged-by-push"
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Completed = 0
+	backend.Total = 1
+	backend.NextTask = "Same SHA no-op push task"
+	backend.NextID = taskID
+	backend.BackendLabel = "beads"
+
+	realGH := git.NewStubGitHub()
+	realGH.OpenPR = 0
+	realGH.PRBase = "main"
+	realGH.PRState = git.PRStateOpen
+	realGH.PRNumber = 77
+
+	// PR HeadSHA differs from local so the fast path is NOT taken and
+	// AutoMergeCurrentBranch falls through to the rebase+push path.
+	realGH.HeadSHA = "sha-old-pr-head"
+
+	// ChecksFunc always returns a failing check. After push (which is a no-op),
+	// the pushedAt filter must NOT discard this check — the no-op detection in
+	// AutoMergeCurrentBranch sets awaitPushedAt to time.Time{} so existing
+	// checks are preserved and evaluateChecks returns CIFailed.
+	realGH.ChecksFunc = func(_ int) []git.CICheckResult {
+		return []git.CICheckResult{{Name: "tests", State: "FAILURE", Bucket: "fail"}}
+	}
+
+	stub := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/next",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		PRBase:         "main",
+		DefaultBranch:  "main",
+		PRHealthy:      true,
+		ShipResult:     git.ShipResult{PRNumber: 77},
+	}
+
+	// testGitRunner always returns the same SHA — push is a no-op.
+	runner2 := &testGitRunner{
+		remoteURL: "https://github.com/owner/repo.git",
+		headSHA:   func() string { return localSHA },
+	}
+	realMgr := &git.Manager{
+		ProjectDir:     dir,
+		WorkDir:        dir + "/wt",
+		WorktreeBranch: "ralph/nop-push-test",
+		BaseBranch:     "main",
+		Runner:         runner2,
+		GitHub:         realGH,
+		State:          newGitMemState(),
+		Logger:         logging.New(nil),
+	}
+	gm := &realMergeGit{StubGit: stub, realMgr: realMgr}
+	gm.SetKnownPRNumber(77)
+
+	agentRunner := &stubRunner{
+		onRun: func() {
+			stub.HeadRevValue = localSHA
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "implemented"},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = agentRunner
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	// Fix agent changes the SHA so tryFixCI returns CIFixApplied (not
+	// CIFixNoCommits which triggers 30s infrastructure retries). But CI
+	// still fails on re-check, so MergeWithRetry exhausts MaxMergeAttempts
+	// and returns CIFailureError — proving the failing checks weren't filtered.
+	fixAttempt := 0
+	l.cfg.NewRunner = func() claudeRunner {
+		fixAttempt++
+		stub.HeadRevValue = fmt.Sprintf("sha-after-fix-%d", fixAttempt)
+		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "ci fix attempted"}}
+	}
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
+
+	// MergePR must NOT be called — CI failed, so merge must not proceed.
+	if realGH.MergeCalls > 0 {
+		t.Errorf("MergePR should not be called when CI is failing, got %d calls", realGH.MergeCalls)
+	}
+
+	// Task must still be closed (CI failure does not block task closure).
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) == 0 {
+		t.Fatal("task should be closed even when CI fails during merge")
+	}
+	if backend.ClosedIDs[0] != taskID {
+		t.Errorf("expected close for %s, got %q", taskID, backend.ClosedIDs[0])
 	}
 }
 
