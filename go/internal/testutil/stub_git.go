@@ -84,13 +84,15 @@ type StubGit struct {
 	ShipFunc        func(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error)
 	MergeRetryFunc  func(ctx context.Context) (bool, error)
 
-	ActiveReviewers        []git.Reviewer
-	DetectReviewersErr     error
-	PollReviewResult       *git.AutoReview
-	PollReviewErr          error
-	PollReviewCalled       bool
-	PollReviewLastUsername string
-	PollReviewLastTimeout  time.Duration
+	ActiveReviewers               []git.Reviewer
+	DetectReviewersErr            error
+	DetectActiveReviewersCalled   bool
+	DetectActiveReviewersCallCount int
+	PollReviewResult              *git.AutoReview
+	PollReviewErr                 error
+	PollReviewCalled              bool
+	PollReviewLastUsername        string
+	PollReviewLastTimeout         time.Duration
 }
 
 // Compile-time check that StubGit satisfies git.GitOps.
@@ -277,6 +279,8 @@ func (s *StubGit) PostMergeUpdateMain() {
 }
 
 func (s *StubGit) DetectActiveReviewers() ([]git.Reviewer, error) {
+	s.DetectActiveReviewersCalled = true
+	s.DetectActiveReviewersCallCount++
 	return s.ActiveReviewers, s.DetectReviewersErr
 }
 

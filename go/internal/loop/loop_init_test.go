@@ -64,9 +64,9 @@ func TestInitialize_WritesConfigAndLoadsSkipped(t *testing.T) {
 	}
 }
 
-// Verifies that Loop.Run calls DetectActiveReviewers at startup and stores the
-// reviewer list, so the post-signal pipeline knows which reviewers to poll.
-func TestLoop_ActiveReviewersSetAtStartup(t *testing.T) {
+// Verifies that Loop.Run does NOT call DetectActiveReviewers at startup when no
+// tasks are available — reviewer detection is deferred until a task actually runs.
+func TestLoop_ActiveReviewersNotDetectedAtStartup(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	logger := logging.New(nil)
@@ -80,29 +80,71 @@ func TestLoop_ActiveReviewersSetAtStartup(t *testing.T) {
 	}
 	backend := &testutil.StubBackend{Remaining: 0, Completed: 0, Total: 0}
 	cfg := Config{
-		Dirs:         workctx.WorkContext{ProjectDir: dir, RalphDir: ralphDir},
-		MaxIterations: 1,
-		TaskBackend:  backend,
-		IsOnline:     func() bool { return true },
+		Dirs:            workctx.WorkContext{ProjectDir: dir, RalphDir: ralphDir},
+		MaxIterations:   1,
+		TaskBackend:     backend,
+		IsOnline:        func() bool { return true },
 		WaitForInternet: func(_ context.Context, _ *logging.Logger) bool { return true },
-		NewRunner:    func() claudeRunner { return &stubRunner{result: claude.Result{}} },
-		QueryFn:      func(_ context.Context, _, _, _ string) (string, error) { return "", nil },
+		NewRunner:       func() claudeRunner { return &stubRunner{result: claude.Result{}} },
+		QueryFn:         func(_ context.Context, _, _, _ string) (string, error) { return "", nil },
 	}
 
 	l := New(cfg, st, gm, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately so the loop exits after initialization
+	cancel() // cancel immediately — no tasks will run
 	_ = l.Run(ctx)
 
+	// With no tasks, DetectActiveReviewers must not be called at startup.
+	if gm.DetectActiveReviewersCalled {
+		t.Error("DetectActiveReviewers should not be called at startup when no tasks are available")
+	}
+	if l.reviewersDetected {
+		t.Error("reviewersDetected should be false when no tasks ran")
+	}
+}
+
+// Verifies that ensureActiveReviewers populates activeReviewers on first call
+// and caches the result — DetectActiveReviewers is not called a second time.
+func TestLoop_EnsureActiveReviewers_LazyInitAndCache(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	logger := logging.New(nil)
+
+	reviewer := git.Reviewer{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second, ReviewOnPush: true}
+	gm := &testutil.StubGit{
+		ProjectDir:      dir,
+		WorkDir:         dir,
+		ActiveReviewers: []git.Reviewer{reviewer},
+	}
+	cfg := Config{
+		Dirs:        workctx.WorkContext{ProjectDir: dir, RalphDir: ralphDir},
+		TaskBackend: &testutil.StubBackend{},
+	}
+	l := New(cfg, st, gm, logger)
+
+	// Before first call: no reviewers cached, detection not run.
+	if l.reviewersDetected {
+		t.Fatal("reviewersDetected should be false before first ensureActiveReviewers call")
+	}
+
+	l.ensureActiveReviewers()
+
+	if !l.reviewersDetected {
+		t.Error("reviewersDetected should be true after first call")
+	}
 	if len(l.activeReviewers) != 1 {
-		t.Fatalf("expected 1 active reviewer after startup, got %d", len(l.activeReviewers))
+		t.Fatalf("expected 1 reviewer after lazy init, got %d", len(l.activeReviewers))
 	}
 	if l.activeReviewers[0].BotUsername != "copilot-pull-request-reviewer" {
 		t.Errorf("expected copilot bot username, got %q", l.activeReviewers[0].BotUsername)
 	}
-	if !l.activeReviewers[0].ReviewOnPush {
-		t.Error("expected ReviewOnPush=true for Copilot reviewer")
+
+	// Second call must not call DetectActiveReviewers again.
+	prevCount := gm.DetectActiveReviewersCallCount
+	l.ensureActiveReviewers()
+	if gm.DetectActiveReviewersCallCount != prevCount {
+		t.Error("DetectActiveReviewers called more than once — cache not working")
 	}
 }
 
