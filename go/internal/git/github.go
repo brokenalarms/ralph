@@ -599,24 +599,35 @@ func (g *ghCLI) GetPR(nwo string, prNumber int) (*PRDetail, error) {
 }
 
 func (g *ghCLI) CheckCopilotReviewEnabled(nwo string) (bool, bool, error) {
-	cmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s/rulesets", nwo))
-	out, err := cmd.Output()
+	listCmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s/rulesets", nwo))
+	listOut, err := listCmd.Output()
 	if err != nil {
 		return false, false, fmt.Errorf("gh api rulesets failed: %w", err)
 	}
-	var rulesets []struct {
-		Rules []struct {
-			Type       string `json:"type"`
-			Parameters struct {
-				ReviewOnPush bool `json:"review_on_push"`
-			} `json:"parameters"`
-		} `json:"rules"`
+	var listing []struct {
+		ID int `json:"id"`
 	}
-	if err := json.Unmarshal(out, &rulesets); err != nil {
-		return false, false, fmt.Errorf("parsing rulesets: %w", err)
+	if err := json.Unmarshal(listOut, &listing); err != nil {
+		return false, false, fmt.Errorf("parsing rulesets list: %w", err)
 	}
-	for _, rs := range rulesets {
-		for _, rule := range rs.Rules {
+	for _, entry := range listing {
+		detailCmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s/rulesets/%d", nwo, entry.ID))
+		detailOut, err := detailCmd.Output()
+		if err != nil {
+			return false, false, fmt.Errorf("gh api rulesets/%d failed: %w", entry.ID, err)
+		}
+		var detail struct {
+			Rules []struct {
+				Type       string `json:"type"`
+				Parameters struct {
+					ReviewOnPush bool `json:"review_on_push"`
+				} `json:"parameters"`
+			} `json:"rules"`
+		}
+		if err := json.Unmarshal(detailOut, &detail); err != nil {
+			return false, false, fmt.Errorf("parsing ruleset %d: %w", entry.ID, err)
+		}
+		for _, rule := range detail.Rules {
 			if rule.Type == "copilot_code_review" {
 				return true, rule.Parameters.ReviewOnPush, nil
 			}
