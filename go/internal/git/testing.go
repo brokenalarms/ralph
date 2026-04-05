@@ -54,10 +54,12 @@ type StubGitHub struct {
 	JobStepCount          int
 	AllPRs                []PRInfo
 	AllPRsErr             error
-	ActiveReviewers   []Reviewer
-	DetectReviewerErr error
-	AutoReviewResult  *AutoReview
-	PollReviewErr     error
+	ActiveReviewers    []Reviewer
+	DetectReviewerErr  error
+	AutoReviewResult   *AutoReview
+	PollReviewErr      error
+	RequiredChecks     []string
+	RequiredChecksErr  error
 }
 
 // NewStubGitHub returns a StubGitHub with sensible defaults for the common
@@ -193,4 +195,7 @@ func (s *StubGitHub) DetectActiveReviewers(nwo string) ([]Reviewer, error) {
 }
 func (s *StubGitHub) PollReview(nwo string, botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error) {
 	return s.AutoReviewResult, s.PollReviewErr
+}
+func (s *StubGitHub) GetRequiredChecks(nwo, branch string) ([]string, error) {
+	return s.RequiredChecks, s.RequiredChecksErr
 }

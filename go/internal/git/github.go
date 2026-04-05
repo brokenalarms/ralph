@@ -131,6 +131,10 @@ type GitHub interface {
 	// returning it with inline comments when found. Returns nil without error if
 	// the timeout expires before a review arrives.
 	PollReview(nwo string, botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error)
+	// GetRequiredChecks returns the required status check context names for the
+	// given branch from branch protection rulesets. Returns an empty slice when
+	// no required checks are configured, which means all checks are evaluated.
+	GetRequiredChecks(nwo, branch string) ([]string, error)
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -408,6 +412,35 @@ func (g *ghCLI) PostEnforceAdmins(nwo, branch string) (string, error) {
 	cmd := exec.Command("gh", "api", "-X", "POST", endpoint)
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
+}
+
+func (g *ghCLI) GetRequiredChecks(nwo, branch string) ([]string, error) {
+	endpoint := fmt.Sprintf("repos/%s/rules/branches/%s", nwo, branch)
+	cmd := exec.Command("gh", "api", endpoint)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("gh api rules/branches failed: %w", err)
+	}
+	var rules []struct {
+		Type       string `json:"type"`
+		Parameters struct {
+			RequiredStatusChecks []struct {
+				Context string `json:"context"`
+			} `json:"required_status_checks"`
+		} `json:"parameters"`
+	}
+	if err := json.Unmarshal(out, &rules); err != nil {
+		return nil, fmt.Errorf("parsing branch rules: %w", err)
+	}
+	var checks []string
+	for _, rule := range rules {
+		if rule.Type == "required_status_checks" {
+			for _, c := range rule.Parameters.RequiredStatusChecks {
+				checks = append(checks, c.Context)
+			}
+		}
+	}
+	return checks, nil
 }
 
 func (g *ghCLI) GetRunLog(prNumber int, workDir string) string {

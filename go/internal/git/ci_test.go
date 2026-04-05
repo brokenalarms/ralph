@@ -846,3 +846,63 @@ func TestAwaitCI_ZeroCIPollTimeoutFallsBackToDefault(t *testing.T) {
 	}
 }
 
+// AwaitCI filters to only required status checks when branch protection
+// configures them, so non-required checks (Netlify, tag workflows) do not
+// gate merging. A failing non-required check is ignored; the required check
+// that passes causes CIPassed to be returned.
+func TestAwaitCI_RequiredChecksFilter_IgnoresNonRequired(t *testing.T) {
+	gh := NewStubGitHub()
+	gh.Checks = []CICheckResult{
+		{Name: "test", State: "SUCCESS", Bucket: "pass"},
+		{Name: "netlify", State: "FAILURE", Bucket: "fail"}, // not required
+	}
+	gh.RequiredChecks = []string{"test"} // only "test" is required
+
+	mgr := &Manager{GitHub: gh, BaseBranch: "main", Logger: &testLog{}}
+
+	_, status, err := mgr.AwaitCI(context.Background(), 1, "https://github.com/owner/repo.git", time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != CIPassed {
+		t.Errorf("expected CIPassed (non-required netlify failure should be ignored), got %v", status)
+	}
+}
+
+// AwaitCI returns CIFailed when a required check fails, even when non-required
+// checks are also present, proving required-only evaluation is applied correctly.
+func TestAwaitCI_RequiredChecksFilter_RequiredFailureBlocks(t *testing.T) {
+	gh := NewStubGitHub()
+	gh.Checks = []CICheckResult{
+		{Name: "test", State: "FAILURE", Bucket: "fail"},   // required, failing
+		{Name: "lint", State: "SUCCESS", Bucket: "pass"},   // required, passing
+		{Name: "netlify", State: "SUCCESS", Bucket: "pass"}, // not required
+	}
+	gh.RequiredChecks = []string{"test", "lint"}
+
+	mgr := &Manager{GitHub: gh, BaseBranch: "main", Logger: &testLog{}}
+
+	_, status, _ := mgr.AwaitCI(context.Background(), 1, "https://github.com/owner/repo.git", time.Time{})
+	if status != CIFailed {
+		t.Errorf("expected CIFailed (required check 'test' failing), got %v", status)
+	}
+}
+
+// AwaitCI evaluates all checks when GetRequiredChecks returns empty, preserving
+// existing behavior for repos without branch protection rules configured.
+func TestAwaitCI_RequiredChecksFilter_FallsBackToAllChecksWhenEmpty(t *testing.T) {
+	gh := NewStubGitHub()
+	gh.Checks = []CICheckResult{
+		{Name: "test", State: "SUCCESS", Bucket: "pass"},
+		{Name: "netlify", State: "FAILURE", Bucket: "fail"},
+	}
+	gh.RequiredChecks = nil // no required checks configured
+
+	mgr := &Manager{GitHub: gh, BaseBranch: "main", Logger: &testLog{}}
+
+	_, status, _ := mgr.AwaitCI(context.Background(), 1, "https://github.com/owner/repo.git", time.Time{})
+	if status != CIFailed {
+		t.Errorf("expected CIFailed (no required checks → evaluate all, netlify fails), got %v", status)
+	}
+}
+

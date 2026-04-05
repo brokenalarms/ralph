@@ -967,3 +967,61 @@ func TestAutoMerge_LocalHeadDiffersFromPRHead_UsesNormalFlow(t *testing.T) {
 		t.Error("push should be called when local HEAD differs from PR head SHA")
 	}
 }
+
+// AutoMergeCurrentBranch returns CIFailureError when the push is a no-op (same
+// SHA before and after). Without the fix, the pushedAt filter would discard the
+// pre-existing failing check (started before pushedAt), causing the loop to
+// poll indefinitely and eventually evaluate only post-push checks — missing the
+// failure. This is the regression test for PR #495 which merged despite a
+// failing test check.
+func TestAutoMerge_NoOpPush_CIFailureDetected(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	// rev-parse HEAD always returns the same SHA — push is a no-op.
+	runner.On("rev-parse HEAD", "sha-no-change", nil)
+
+	// The failing check started well before the push. Without the fix, the
+	// pushedAt filter would discard it and the loop would see no checks.
+	failStart := time.Now().Add(-5 * time.Minute)
+
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      88,
+		PRTitle:     "no-op push regression",
+		HeadSHA:     "sha-remote-head", // differs from local so fast path doesn't trigger
+		Checks: []CICheckResult{{
+			Name:      "test",
+			State:     "FAILURE",
+			Bucket:    "fail",
+			StartedAt: failStart,
+		}},
+	}
+
+	mgr := &Manager{
+		ProjectDir:     "/project",
+		WorkDir:        "/project/wt",
+		WorktreeBranch: "ralph/test/01-no-op-push",
+		BaseBranch:     "main",
+		Runner:         runner,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         &testLog{},
+	}
+
+	_, err := mgr.AutoMergeCurrentBranch(context.Background())
+	var ciErr *CIFailureError
+	if !errors.As(err, &ciErr) {
+		t.Fatalf("expected CIFailureError when push is no-op and CI was failing, got: %v", err)
+	}
+	if len(ciErr.Failures) == 0 || ciErr.Failures[0].Name != "test" {
+		t.Errorf("expected failing check 'test', got: %v", ciErr.Failures)
+	}
+}
