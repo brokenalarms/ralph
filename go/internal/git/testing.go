@@ -54,11 +54,10 @@ type StubGitHub struct {
 	JobStepCount          int
 	AllPRs                []PRInfo
 	AllPRsErr             error
-	CopilotReviewEnabled  bool
-	CopilotReviewOnPush   bool
-	CopilotReviewErr      error
-	CopilotReviewResult   *CopilotReview
-	PollCopilotReviewErr  error
+	ActiveReviewers   []Reviewer
+	DetectReviewerErr error
+	AutoReviewResult  *AutoReview
+	PollReviewErr     error
 }
 
 // NewStubGitHub returns a StubGitHub with sensible defaults for the common
@@ -189,9 +188,9 @@ func (s *StubGitHub) GetJobStepCount(nwo string, prNumber int) (int, error) {
 func (s *StubGitHub) ListAllPRs(workDir string) ([]PRInfo, error) {
 	return s.AllPRs, s.AllPRsErr
 }
-func (s *StubGitHub) CheckCopilotReviewEnabled(nwo string) (bool, bool, error) {
-	return s.CopilotReviewEnabled, s.CopilotReviewOnPush, s.CopilotReviewErr
+func (s *StubGitHub) DetectActiveReviewers(nwo string) ([]Reviewer, error) {
+	return s.ActiveReviewers, s.DetectReviewerErr
 }
-func (s *StubGitHub) PollCopilotReview(nwo string, prNumber int, timeout time.Duration) (*CopilotReview, error) {
-	return s.CopilotReviewResult, s.PollCopilotReviewErr
+func (s *StubGitHub) PollReview(nwo string, botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error) {
+	return s.AutoReviewResult, s.PollReviewErr
 }

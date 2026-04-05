@@ -4,8 +4,10 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/ratelimit"
 	"github.com/brokenalarms/ralph/internal/testutil"
@@ -62,19 +64,19 @@ func TestInitialize_WritesConfigAndLoadsSkipped(t *testing.T) {
 	}
 }
 
-// Verifies that Loop.Run calls CheckCopilotReviewEnabled at startup and stores
-// both the enabled flag and reviewOnPush flag, so the post-signal pipeline knows
-// whether to wait for Copilot reviews and how long to poll.
-func TestLoop_CopilotReviewEnabledSetAtStartup(t *testing.T) {
+// Verifies that Loop.Run calls DetectActiveReviewers at startup and stores the
+// reviewer list, so the post-signal pipeline knows which reviewers to poll.
+func TestLoop_ActiveReviewersSetAtStartup(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	logger := logging.New(nil)
 
 	gm := &testutil.StubGit{
-		ProjectDir:           dir,
-		WorkDir:              dir,
-		CopilotReviewEnabled: true,
-		CopilotReviewOnPush:  true,
+		ProjectDir: dir,
+		WorkDir:    dir,
+		ActiveReviewers: []git.Reviewer{
+			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second, ReviewOnPush: true},
+		},
 	}
 	backend := &testutil.StubBackend{Remaining: 0, Completed: 0, Total: 0}
 	cfg := Config{
@@ -93,11 +95,14 @@ func TestLoop_CopilotReviewEnabledSetAtStartup(t *testing.T) {
 	cancel() // cancel immediately so the loop exits after initialization
 	_ = l.Run(ctx)
 
-	if !l.copilotReviewEnabled {
-		t.Error("expected copilotReviewEnabled=true after startup when StubGit.CopilotReviewEnabled=true")
+	if len(l.activeReviewers) != 1 {
+		t.Fatalf("expected 1 active reviewer after startup, got %d", len(l.activeReviewers))
 	}
-	if !l.copilotReviewOnPush {
-		t.Error("expected copilotReviewOnPush=true after startup when StubGit.CopilotReviewOnPush=true")
+	if l.activeReviewers[0].BotUsername != "copilot-pull-request-reviewer" {
+		t.Errorf("expected copilot bot username, got %q", l.activeReviewers[0].BotUsername)
+	}
+	if !l.activeReviewers[0].ReviewOnPush {
+		t.Error("expected ReviewOnPush=true for Copilot reviewer")
 	}
 }
 

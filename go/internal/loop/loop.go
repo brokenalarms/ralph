@@ -86,8 +86,7 @@ type Loop struct {
 	logger               *logging.Logger
 	signals              claude.SignalPaths
 	completedTasks       []CompletedTask
-	copilotReviewEnabled bool
-	copilotReviewOnPush  bool
+	activeReviewers []git.Reviewer
 }
 
 // New creates an execution loop from the given configuration. All agent
@@ -173,16 +172,19 @@ func (l *Loop) Run(ctx context.Context) error {
 		return err
 	}
 
-	if enabled, reviewOnPush, err := l.git.CheckCopilotReviewEnabled(); err != nil {
-		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Could not check Copilot review rulesets: %v", err)
+	if reviewers, err := l.git.DetectActiveReviewers(); err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Could not detect active reviewers: %v", err)
 	} else {
-		l.copilotReviewEnabled = enabled
-		l.copilotReviewOnPush = reviewOnPush
-		if enabled {
-			if reviewOnPush {
-				l.logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=true)")
+		l.activeReviewers = reviewers
+		for _, r := range reviewers {
+			if r.AppSlug == "copilot-code-review" {
+				if r.ReviewOnPush {
+					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=true)")
+				} else {
+					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=false, opportunistic)")
+				}
 			} else {
-				l.logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=false, opportunistic)")
+				l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s code review is enabled", r.AppSlug)
 			}
 		}
 	}
@@ -325,8 +327,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			autoMerge:            l.cfg.AutoMerge,
 			evolve:               l.cfg.Evolve,
 			notify:               l.cfg.Notify,
-			copilotReviewEnabled: l.copilotReviewEnabled,
-			copilotReviewOnPush:  l.copilotReviewOnPush,
+			activeReviewers:     l.activeReviewers,
 			ralphDir:            l.cfg.Dirs.RalphDir,
 			promptsDir:          l.cfg.Dirs.PromptsDir,
 			projectDir:          l.cfg.Dirs.ProjectDir,

@@ -69,13 +69,13 @@ type GitOps interface {
 	Ship(ctx context.Context, opts ShipOpts) (ShipResult, error)
 	PushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (int, error)
 
-	// CheckCopilotReviewEnabled returns (enabled, reviewOnPush, error) where
-	// enabled is true if any copilot_code_review rule exists in any ruleset, and
-	// reviewOnPush reflects whether the rule gates merging on the review.
-	CheckCopilotReviewEnabled() (bool, bool, error)
-	// PollCopilotReview polls for a Copilot review on the given PR. Returns nil
-	// without error when timeout expires before a review arrives.
-	PollCopilotReview(prNumber int, timeout time.Duration) (*CopilotReview, error)
+	// DetectActiveReviewers queries the repo's installed GitHub Apps and returns
+	// the subset that are in the Known reviewer registry. For Copilot it also
+	// checks rulesets to set the correct polling timeout.
+	DetectActiveReviewers() ([]Reviewer, error)
+	// PollReview polls for a review from the given bot username on the given PR.
+	// Returns nil without error when timeout expires before a review arrives.
+	PollReview(botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error)
 
 	// Merge operations.
 	MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, error)
@@ -192,25 +192,25 @@ func (m *Manager) PRChainIsHealthy(prNumber int) (bool, string) {
 	return true, ""
 }
 
-// CheckCopilotReviewEnabled queries the repo's rulesets to determine whether
-// Copilot code review is configured and whether it gates merging.
-func (m *Manager) CheckCopilotReviewEnabled() (bool, bool, error) {
-	gh := m.gh()
-	nwo := NWOFromRemote(m.RemoteURL())
-	if nwo == "" {
-		return false, false, nil
-	}
-	return gh.CheckCopilotReviewEnabled(nwo)
-}
-
-// PollCopilotReview polls for a Copilot review on the given PR.
-func (m *Manager) PollCopilotReview(prNumber int, timeout time.Duration) (*CopilotReview, error) {
+// DetectActiveReviewers queries the repo's installed GitHub Apps and returns
+// the subset matching the Known reviewer registry.
+func (m *Manager) DetectActiveReviewers() ([]Reviewer, error) {
 	gh := m.gh()
 	nwo := NWOFromRemote(m.RemoteURL())
 	if nwo == "" {
 		return nil, nil
 	}
-	return gh.PollCopilotReview(nwo, prNumber, timeout)
+	return gh.DetectActiveReviewers(nwo)
+}
+
+// PollReview polls for a review from the given bot username on the given PR.
+func (m *Manager) PollReview(botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error) {
+	gh := m.gh()
+	nwo := NWOFromRemote(m.RemoteURL())
+	if nwo == "" {
+		return nil, nil
+	}
+	return gh.PollReview(nwo, botUsername, prNumber, timeout)
 }
 
 // PRDiffForTask searches for a PR matching the task ID and returns its diff.

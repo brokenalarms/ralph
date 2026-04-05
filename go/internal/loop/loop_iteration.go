@@ -44,8 +44,7 @@ type runAndCompleteParams struct {
 	projectDir          string
 	planFile            string
 	callsPerHour        int
-	copilotReviewEnabled bool
-	copilotReviewOnPush  bool
+	activeReviewers     []git.Reviewer
 	// func deps
 	runVerifyBuildFn    func(ctx context.Context) string
 	isOnlineFunc        func() bool
@@ -171,9 +170,8 @@ func runAndComplete(ctx context.Context, p runAndCompleteParams, task taskContex
 			autoMerge:            p.autoMerge,
 			evolve:               p.evolve,
 			notify:               p.notify,
-			copilotReviewEnabled: p.copilotReviewEnabled,
-			copilotReviewOnPush:  p.copilotReviewOnPush,
-			git:                  p.git,
+			activeReviewers: p.activeReviewers,
+			git:             p.git,
 			backend:           p.backend,
 			state:             p.state,
 			logger:            p.logger,
@@ -198,8 +196,7 @@ func runAndComplete(ctx context.Context, p runAndCompleteParams, task taskContex
 			},
 			finalizePRFn: func(fp finalizePRParams) finalizePRResult {
 				fp.autoMerge = p.autoMerge
-				fp.copilotReviewEnabled = p.copilotReviewEnabled
-				fp.copilotReviewOnPush = p.copilotReviewOnPush
+				fp.activeReviewers = p.activeReviewers
 				fp.git = p.git
 				fp.logger = p.logger
 				fp.backend = p.backend
@@ -255,14 +252,13 @@ type handlePostSignalOpts struct {
 	autoMerge            bool
 	evolve               bool
 	notify               bool
-	copilotReviewEnabled bool
-	copilotReviewOnPush  bool
-	git                  git.GitOps
-	backend           tasks.Backend
-	state             *state.Store
-	logger            *logging.Logger
-	attempts          *attempts.Tracker
-	verifyFn          func(ctx context.Context, headBefore string) (bool, string)
+	activeReviewers []git.Reviewer
+	git             git.GitOps
+	backend         tasks.Backend
+	state           *state.Store
+	logger          *logging.Logger
+	attempts        *attempts.Tracker
+	verifyFn        func(ctx context.Context, headBefore string) (bool, string)
 	pushSignalPRFn    func(p postSignalParams) (int, string)
 	finalizePRFn      func(p finalizePRParams) finalizePRResult
 	buildCTFn         func(taskID, nextTask, summary string, prNumber int, workDir string) CompletedTask
@@ -512,10 +508,9 @@ type finalizePRParams struct {
 	workDir    string
 	rawLogPath string
 	// dependency fields
-	autoMerge            bool
-	copilotReviewEnabled bool
-	copilotReviewOnPush  bool
-	git                  git.GitOps
+	autoMerge       bool
+	activeReviewers []git.Reviewer
+	git             git.GitOps
 	logger               *logging.Logger
 	backend              tasks.Backend
 	state                *state.Store
@@ -530,23 +525,23 @@ type finalizePRResult struct {
 	closed bool
 }
 
-// copilotReviewAddressed returns true when Copilot review feedback was
-// already addressed for this task in a previous finalizePR call.
-func (p *finalizePRParams) copilotReviewAddressed() bool {
+// reviewAddressed returns true when the given reviewer's feedback was already
+// addressed for this task in a previous finalizePR call.
+func (p *finalizePRParams) reviewAddressed(botUsername string) bool {
 	if p.state == nil || p.taskID == "" {
 		return false
 	}
-	v, _ := p.state.Read("copilot_review_addressed:" + p.taskID)
+	v, _ := p.state.Read("review_addressed:" + botUsername + ":" + p.taskID)
 	return v == "true"
 }
 
-// markCopilotReviewAddressed records that Copilot review feedback was
-// addressed so subsequent finalizePR calls for the same task skip re-polling.
-func (p *finalizePRParams) markCopilotReviewAddressed() {
+// markReviewAddressed records that the given reviewer's feedback was addressed
+// so subsequent finalizePR calls for the same task skip re-polling.
+func (p *finalizePRParams) markReviewAddressed(botUsername string) {
 	if p.state == nil || p.taskID == "" {
 		return
 	}
-	p.state.Write("copilot_review_addressed:"+p.taskID, "true")
+	p.state.Write("review_addressed:"+botUsername+":"+p.taskID, "true")
 }
 
 // finalizePR handles an existing PR: merges if applicable, closes the bead.
@@ -577,22 +572,23 @@ func finalizePR(p finalizePRParams) finalizePRResult {
 		if prBase != "" && prBase != defaultBranch {
 			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, p.prNumber)}, "targets %s — stacked, closing bead", prBase)
 		} else {
-			if p.copilotReviewEnabled && !p.copilotReviewAddressed() {
-				pollTimeout := 120 * time.Second
-				if !p.copilotReviewOnPush {
-					pollTimeout = 30 * time.Second
+			for _, reviewer := range p.activeReviewers {
+				if p.reviewAddressed(reviewer.BotUsername) {
+					continue
 				}
-				review, err := p.git.PollCopilotReview(p.prNumber, pollTimeout)
+				review, err := p.git.PollReview(reviewer.BotUsername, p.prNumber, reviewer.DefaultTimeout)
 				if err != nil {
-					p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "Copilot review poll: %v", err)
-				} else if review != nil {
-					p.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink(p.git, p.prNumber)}, "Copilot review received (%d comments)", len(review.Comments))
+					p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "%s review poll: %v", reviewer.BotUsername, err)
+					continue
+				}
+				if review != nil {
+					p.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink(p.git, p.prNumber)}, "%s review received (%d comments)", reviewer.BotUsername, len(review.Comments))
 					if p.verifier != nil {
-						tryFixCopilotReview(p.ctx, p.git, p.verifier, p.logger, review, p.prNumber, p.nextTask, p.workDir, p.rawLogPath)
+						tryFixReviewComments(p.ctx, p.git, p.verifier, p.logger, reviewer.BotUsername, review, p.prNumber, p.nextTask, p.workDir, p.rawLogPath)
 					}
-					p.markCopilotReviewAddressed()
+					p.markReviewAddressed(reviewer.BotUsername)
 				} else {
-					p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "No Copilot review arrived within timeout — proceeding to merge")
+					p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "No %s review arrived within timeout — proceeding to merge", reviewer.BotUsername)
 				}
 			}
 			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, p.prNumber)}, "targets %s — merging", defaultBranch)
