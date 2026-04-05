@@ -891,6 +891,83 @@ func TestVerifier_RunPreIterationTests_LogsCommandOnFailure(t *testing.T) {
 }
 
 // RunPreIterationTests logs the compile check command in the pass/fail line.
+// When DetectTestCommand returns nil, OnSignal logs a distinct "script not found"
+// error and returns false without spawning any fix agents.
+func TestVerifier_OnSignal_MissingScript_NoFixAgent(t *testing.T) {
+	fixAgentCalled := false
+
+	v := newTestVerifier(t, func(v *Verifier) {
+		// Remove the Makefile set by newTestVerifier so no ralph:verify script exists
+		os.Remove(filepath.Join(v.cfg.VerifyDir, "Makefile"))
+
+		v.deps.NewRunner = func() claudeRunner {
+			fixAgentCalled = true
+			return &stubRunner{result: stubResult(true, "")}
+		}
+	})
+
+	var buf strings.Builder
+	v.deps.Logger = logging.NewWithWriter(&buf)
+
+	result := v.OnSignal(signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    t.TempDir(),
+		rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID:     "test-missing",
+		nextTask:   "Some task",
+	})
+
+	if result {
+		t.Fatal("expected OnSignal to return false when ralph:verify script is missing")
+	}
+	if fixAgentCalled {
+		t.Fatal("expected no fix agent to be spawned for missing script — this is a config error")
+	}
+	if !strings.Contains(buf.String(), "ralph:verify script not found") {
+		t.Errorf("expected distinct 'ralph:verify script not found' log, got:\n%s", buf.String())
+	}
+}
+
+// When ralph:verify script is missing, RunPreIterationTests logs a distinct
+// error instead of treating it as a test failure.
+func TestVerifier_RunPreIterationTests_MissingScript(t *testing.T) {
+	var buf strings.Builder
+	logger := logging.NewWithWriter(&buf)
+
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	// No Makefile, no package.json — DetectTestCommand returns nil
+
+	st := newTestState(t, ralphDir)
+	v := NewVerifier(VerifierConfig{
+		VerifyDir:  dir,
+		PromptsDir: filepath.Join(dir, "prompts"),
+		RalphDir:   ralphDir,
+	}, VerifierDeps{
+		Logger:      logger,
+		Git:         &testutil.StubGit{HeadRevValue: "abc123"},
+		State:       st,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1},
+		Runner:      func() claudeRunner { return &stubRunner{} },
+		Signals:     claude.DefaultSignalPaths(ralphDir),
+		NewRunner:   func() claudeRunner { return &stubRunner{} },
+		LLMVerify:   func(opts verify.VerifyOpts) verify.Result { return verify.Result{Passed: true} },
+		SkipTask:    func(id, reason string) {},
+	})
+
+	v.RunPreIterationTests(context.Background())
+
+	log := buf.String()
+	if !strings.Contains(log, "ralph:verify script not found") {
+		t.Errorf("expected distinct 'ralph:verify script not found' log, got:\n%s", log)
+	}
+	if strings.Contains(log, "FAILING") {
+		t.Errorf("expected no 'FAILING' message for missing script — it is not a test failure, got:\n%s", log)
+	}
+}
+
 func TestVerifier_RunPreIterationTests_LogsCompileCommand(t *testing.T) {
 	var buf strings.Builder
 	logger := logging.NewWithWriter(&buf)

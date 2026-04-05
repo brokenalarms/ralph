@@ -101,6 +101,10 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 	beadAcceptance := getBeadAcceptance(v.deps.TaskBackend, p.taskID)
 
 	if !testResult.Passed {
+		if testResult.ScriptMissing {
+			v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "ralph:verify script not found — cannot verify")
+			return false
+		}
 		if !v.testFixLoop(p, beadDesc, beadAcceptance, testResult.Details) {
 			return false
 		}
@@ -398,6 +402,8 @@ func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 		v.deps.State.Write("last_test_time", now)
 		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Success}, "Pre-iteration tests: all passing (%s, %s)", result.Command, testElapsed)
 		msg += "\n- Test suite status: all tests passing as of start."
+	} else if result.ScriptMissing {
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "ralph:verify script not found — skipping test suite")
 	} else {
 		v.deps.State.Write("last_test_result", "fail")
 		v.deps.State.Write("last_test_time", now)

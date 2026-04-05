@@ -198,11 +198,16 @@ func TestRunTests_FailingTests(t *testing.T) {
 // RunTests fails when no ralph:verify script is found — projects must
 // declare their verify command explicitly.
 func TestRunTests_NoTestRunner(t *testing.T) {
+	// Proves: when no ralph:verify script exists, Result.ScriptMissing is set
+	// so callers can distinguish configuration errors from test failures.
 	dir := t.TempDir()
 
 	result := RunTests(context.Background(), dir)
 	if result.Passed {
 		t.Error("expected failure when no ralph:verify script found")
+	}
+	if !result.ScriptMissing {
+		t.Error("expected ScriptMissing=true when no ralph:verify script found")
 	}
 }
 

@@ -79,12 +79,13 @@ type QueryFunc func(ctx context.Context, workDir, prompt, model string) (string,
 
 // Result describes the outcome of a post-signal verification.
 type Result struct {
-	Passed  bool
-	NoDiff  bool // true when verification passed because no diff was found
-	Reason  string
-	Details string
-	Command string // the command that was run (e.g. "npm run ralph:verify")
-	Dir     string // the directory the command ran in
+	Passed        bool
+	NoDiff        bool // true when verification passed because no diff was found
+	ScriptMissing bool // true when no ralph:verify script was found — not a test failure
+	Reason        string
+	Details       string
+	Command       string // the command that was run (e.g. "npm run ralph:verify")
+	Dir           string // the directory the command ran in
 }
 
 // TestCommand holds the detected test runner for a project.
@@ -130,7 +131,7 @@ func DetectPostTaskCommand(dir, cliPostTask string) string {
 func RunTests(ctx context.Context, dir string) Result {
 	tc := DetectTestCommand(dir)
 	if tc == nil {
-		return Result{Passed: false, Reason: "no ralph:verify script found — add a \"ralph:verify\" script to package.json"}
+		return Result{Passed: false, ScriptMissing: true, Reason: "no ralph:verify script found — add a \"ralph:verify\" script to package.json"}
 	}
 
 	command := tc.Cmd + " " + strings.Join(tc.Args, " ")
