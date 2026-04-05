@@ -167,6 +167,31 @@ func (m *Manager) AwaitCI(ctx context.Context, prNumber int, repoURL string, pus
 	gh := m.gh()
 
 	fetch := gh.ListChecks
+
+	// When required status checks are configured on the base branch, filter to
+	// only those checks. Non-required checks (deploy previews, tag workflows)
+	// must not gate merging — only branch-protection-required checks count.
+	if requiredChecks, err := gh.GetRequiredChecks(nwo, m.BaseBranch); err == nil && len(requiredChecks) > 0 {
+		required := make(map[string]bool, len(requiredChecks))
+		for _, c := range requiredChecks {
+			required[c] = true
+		}
+		baseFetch := fetch
+		fetch = func(prNumber int, repoURL string) ([]CICheckResult, error) {
+			checks, err := baseFetch(prNumber, repoURL)
+			if err != nil {
+				return nil, err
+			}
+			var filtered []CICheckResult
+			for _, c := range checks {
+				if required[c.Name] {
+					filtered = append(filtered, c)
+				}
+			}
+			return filtered, nil
+		}
+	}
+
 	if !pushedAt.IsZero() {
 		m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "Waiting for fresh CI checks (pushed at %s)...", pushedAt.Format("15:04:05"))
 		baseFetch := fetch

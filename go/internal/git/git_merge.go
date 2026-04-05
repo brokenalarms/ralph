@@ -431,12 +431,23 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	if err := m.EnsureUpToDate(ctx); err != nil {
 		m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Pre-merge rebase failed: %v", err)
 	}
+	headBefore := m.HeadRev()
 	pushedAt := time.Now()
-	if err := m.Push(ctx); err != nil {
-		m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Pre-merge push failed: %v", err)
+	pushErr := m.Push(ctx)
+	if pushErr != nil {
+		m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Pre-merge push failed: %v", pushErr)
+	}
+	// When the push succeeds but is a no-op (same SHA before and after), no new
+	// CI is triggered. The existing checks are the only relevant results �� skip
+	// the pushedAt filter so they are not discarded. Without this, the loop
+	// evaluates only post-push checks and misses pre-existing failures.
+	awaitPushedAt := pushedAt
+	if pushErr == nil && headBefore != "" && m.HeadRev() == headBefore {
+		m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "Push was no-op (SHA unchanged) — evaluating existing checks")
+		awaitPushedAt = time.Time{}
 	}
 
-	checks, status, ciErr := m.AwaitCI(ctx, prNumber, repoURL, pushedAt)
+	checks, status, ciErr := m.AwaitCI(ctx, prNumber, repoURL, awaitPushedAt)
 	if ciErr != nil {
 		m.Logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI polling failed: %v — attempting merge anyway", ciErr)
 	}
