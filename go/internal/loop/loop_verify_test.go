@@ -98,7 +98,7 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	}
 }
 
-// All verification attempts use Sonnet regardless of attempt number.
+// First LLM verification attempt uses haiku; subsequent attempts escalate to sonnet.
 func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -140,18 +140,18 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	if len(modelsUsed) != 3 {
 		t.Fatalf("expected 3 LLM calls, got %d", len(modelsUsed))
 	}
-	if modelsUsed[0] != verify.ModelSonnet {
-		t.Errorf("attempt 1: expected %s, got %s", verify.ModelSonnet, modelsUsed[0])
+	if modelsUsed[0] != verify.ModelHaiku {
+		t.Errorf("attempt 1: expected %s (haiku), got %s", verify.ModelHaiku, modelsUsed[0])
 	}
 	if modelsUsed[1] != verify.ModelSonnet {
-		t.Errorf("attempt 2: expected %s, got %s", verify.ModelSonnet, modelsUsed[1])
+		t.Errorf("attempt 2: expected %s (sonnet escalation), got %s", verify.ModelSonnet, modelsUsed[1])
 	}
 	if modelsUsed[2] != verify.ModelSonnet {
-		t.Errorf("attempt 3: expected %s, got %s", verify.ModelSonnet, modelsUsed[2])
+		t.Errorf("attempt 3: expected %s (sonnet escalation), got %s", verify.ModelSonnet, modelsUsed[2])
 	}
 }
 
-// Config-driven model selection overrides defaults.
+// Config-driven model selection: first attempt uses VerifyModel, subsequent attempts use VerifyEscalationModel.
 func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -161,6 +161,7 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
+	customFirst := "claude-haiku-custom"
 	customEscalation := "claude-sonnet-custom"
 
 	l := New(Config{
@@ -169,6 +170,7 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 		CallsPerHour:          80,
 		TaskBackend:           &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:             dir,
+		VerifyModel:           customFirst,
 		VerifyEscalationModel: customEscalation,
 	}, st, gm, logger)
 
@@ -194,8 +196,8 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 	if len(modelsUsed) != 3 {
 		t.Fatalf("expected 3 LLM calls, got %d", len(modelsUsed))
 	}
-	if modelsUsed[0] != customEscalation {
-		t.Errorf("attempt 1: expected %s, got %s", customEscalation, modelsUsed[0])
+	if modelsUsed[0] != customFirst {
+		t.Errorf("attempt 1: expected %s, got %s", customFirst, modelsUsed[0])
 	}
 	if modelsUsed[1] != customEscalation {
 		t.Errorf("attempt 2: expected %s, got %s", customEscalation, modelsUsed[1])
