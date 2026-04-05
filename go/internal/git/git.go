@@ -47,7 +47,6 @@ type Manager struct {
 	Logger         Log
 	PrePush          func(ctx context.Context) error
 	LocalTestsPassed bool
-	BypassRules      bool
 	KnownPRNumber    int
 	CIPollTimeout    time.Duration
 }

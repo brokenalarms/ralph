@@ -84,10 +84,6 @@ type CreatePROpts struct {
 type MergeOpts struct {
 	DeleteBranch bool
 	Subject      string
-	// Admin bypasses branch protection rules via admin token privileges.
-	// Only set when the caller has explicitly opted in (infrastructure failure
-	// with local tests passing, or --bypass-rules flag).
-	Admin bool
 }
 
 // MergeResult is the structured outcome of a merge attempt.
@@ -231,26 +227,6 @@ func (g *ghCLI) MergePR(prNumber int, repoURL string, opts MergeOpts) MergeResul
 			g.deleteBranch(nwo, pr)
 		}
 		return result
-	}
-
-	// Method Not Allowed: branch protection blocks merge via REST API.
-	// If caller opted in to admin bypass, retry via mergeAdmin with token privileges.
-	if result.Blocked && opts.Admin {
-		return g.mergeAdmin(pr, repoURL, nwo, opts)
-	}
-	return result
-}
-
-// mergeAdmin uses gh api PUT to merge a PR with admin token privileges,
-// bypassing branch protection rules. Admin access is implicit from the token.
-func (g *ghCLI) mergeAdmin(prNumber, repoURL, nwo string, opts MergeOpts) MergeResult {
-	endpoint := fmt.Sprintf("repos/%s/pulls/%s/merge", nwo, prNumber)
-	args := []string{"api", "-X", "PUT", endpoint, "--include", "-f", "merge_method=squash"}
-	cmd := exec.Command("gh", args...)
-	out, err := cmd.CombinedOutput()
-	result := classifyMergeStatus(string(out), err)
-	if result.Merged && opts.DeleteBranch {
-		g.deleteBranch(nwo, prNumber)
 	}
 	return result
 }

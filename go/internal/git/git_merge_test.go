@@ -1779,84 +1779,27 @@ func TestMergeWithRetry_InfraFailureRecovery(t *testing.T) {
 	}
 }
 
-// When Admin=false (default), MergePR on StubGitHub returns Blocked when
-// configured to do so — non-admin merges obey branch protection.
-func TestMergeOpts_NonAdminReturnsBlocked(t *testing.T) {
+// MergePR returns Blocked when branch protection blocks the merge.
+// No admin retry is ever attempted — branch protection is the hard gate.
+func TestMergeOpts_BlockedReturnsBlocked(t *testing.T) {
 	gh := NewStubGitHub()
 	gh.MergeResult = MergeResult{Blocked: true, Message: "branch protection rules"}
 	result := gh.MergePR(42, "https://github.com/test/repo.git", MergeOpts{DeleteBranch: true})
 	if result.Merged {
-		t.Error("expected non-admin merge to not succeed when branch protection blocks")
+		t.Error("expected merge to fail when branch protection blocks")
 	}
 	if !result.Blocked {
-		t.Error("expected non-admin merge to return Blocked=true")
+		t.Error("expected Blocked=true when branch protection blocks merge")
 	}
-	if gh.LastMergeOpts.Admin {
-		t.Error("expected LastMergeOpts.Admin to be false for non-admin merge")
-	}
-}
-
-// When Admin=true and REST succeeds (not Blocked), MergePR returns Merged
-// without needing the admin fallback path.
-func TestMergeOpts_AdminMergeReturnsMerged(t *testing.T) {
-	gh := NewStubGitHub() // MergeResult defaults to Merged: true
-	result := gh.MergePR(42, "https://github.com/test/repo.git", MergeOpts{DeleteBranch: true, Admin: true})
-	if !result.Merged {
-		t.Error("expected admin merge to succeed")
-	}
-	if result.Blocked {
-		t.Error("expected admin merge to not return Blocked")
-	}
-	if !gh.LastMergeOpts.Admin {
-		t.Error("expected LastMergeOpts.Admin to be true for admin merge")
+	if gh.MergeCalls != 1 {
+		t.Errorf("expected exactly 1 merge attempt (no admin retry), got %d", gh.MergeCalls)
 	}
 }
 
-// When Admin=true and REST returns Blocked (405), MergePR falls back to
-// gh pr merge --admin instead of returning Blocked to the caller.
-// Admin fallback is only triggered by Blocked, never by other failures.
-func TestMergeOpts_AdminFallback_OnlyWhenRESTReturnsBlocked(t *testing.T) {
-	// Admin=true + REST returns Blocked → admin fallback succeeds.
-	ghBlocked := NewStubGitHub()
-	ghBlocked.MergeResult = MergeResult{Blocked: true, Message: "branch protection rules"}
-	result := ghBlocked.MergePR(42, "https://github.com/test/repo.git", MergeOpts{Admin: true})
-	if !result.Merged {
-		t.Errorf("expected admin fallback to succeed when REST returns Blocked, got: %+v", result)
-	}
-	if result.Blocked {
-		t.Error("expected admin fallback to clear Blocked=true")
-	}
-
-	// Admin=false + REST returns Blocked → stays Blocked (no fallback).
-	ghNoAdmin := NewStubGitHub()
-	ghNoAdmin.MergeResult = MergeResult{Blocked: true, Message: "branch protection rules"}
-	resultNoAdmin := ghNoAdmin.MergePR(42, "https://github.com/test/repo.git", MergeOpts{Admin: false})
-	if resultNoAdmin.Merged {
-		t.Error("expected non-admin merge to stay Blocked when REST returns Blocked")
-	}
-	if !resultNoAdmin.Blocked {
-		t.Error("expected Blocked=true when Admin=false and REST returns Blocked")
-	}
-
-	// Admin=true + AdminMergeResult configured → uses configured result.
-	adminFail := MergeResult{Message: "admin merge failed: not permitted"}
-	ghAdminFail := NewStubGitHub()
-	ghAdminFail.MergeResult = MergeResult{Blocked: true}
-	ghAdminFail.AdminMergeResult = &adminFail
-	resultFail := ghAdminFail.MergePR(42, "https://github.com/test/repo.git", MergeOpts{Admin: true})
-	if resultFail.Merged {
-		t.Error("expected configured AdminMergeResult to be used, not default success")
-	}
-	if resultFail.Message != adminFail.Message {
-		t.Errorf("expected AdminMergeResult message %q, got %q", adminFail.Message, resultFail.Message)
-	}
-}
-
-// When CI fails due to infrastructure (zero job steps) and local tests passed,
-// AutoMergeCurrentBranch sets Admin=true and retries the merge instead of
-// returning ErrMergeBlockedByInfra. This allows ralph loop to bypass branch
-// protection when CI is broken at the infrastructure level.
-func TestAutoMergeCurrentBranch_InfraFailureWithLocalTestsUsesAdminMerge(t *testing.T) {
+// When CI fails (including infrastructure failures), AutoMergeCurrentBranch
+// returns a CIFailureError. Branch protection is never bypassed — the PR is
+// left open for CI/branch protection to gate naturally.
+func TestAutoMergeCurrentBranch_InfraFailureReturnsCIFailureError(t *testing.T) {
 	project, _ := initBareRepo(t)
 	stubCISleep(t)
 
@@ -1864,7 +1807,7 @@ func TestAutoMergeCurrentBranch_InfraFailureWithLocalTestsUsesAdminMerge(t *test
 		ProjectDir:       project,
 		BaseBranch:       "main",
 		WorkDir:          filepath.Join(t.TempDir(), "wt"),
-		WorktreeBranch:   "ralph/test/01-infra-admin",
+		WorktreeBranch:   "ralph/test/01-infra-no-bypass",
 		State:            newMemState(),
 		Logger:           &testLog{},
 		LocalTestsPassed: true,
@@ -1874,7 +1817,6 @@ func TestAutoMergeCurrentBranch_InfraFailureWithLocalTestsUsesAdminMerge(t *test
 	gh.OpenPR = 55
 	gh.Checks = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
 	gh.JobStepCount = 0 // zero steps = infrastructure failure
-	// MergeResult defaults to Merged: true
 	mgr.GitHub = gh
 
 	runner := newStubRunner()
@@ -1889,39 +1831,34 @@ func TestAutoMergeCurrentBranch_InfraFailureWithLocalTestsUsesAdminMerge(t *test
 	runner.On("reset --hard", "", nil)
 	mgr.Runner = runner
 
-	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
-	if err != nil {
-		t.Fatalf("expected admin merge to succeed, got: %v", err)
+	_, err := mgr.AutoMergeCurrentBranch(context.Background())
+	if err == nil {
+		t.Fatal("expected CIFailureError for infra CI failure, got nil")
 	}
-	if !merged {
-		t.Error("expected merge to succeed via admin bypass")
-	}
-	if !gh.LastMergeOpts.Admin {
-		t.Error("expected MergeOpts.Admin=true when bypassing branch protection after infra failure")
+	var ciErr *CIFailureError
+	if !errors.As(err, &ciErr) {
+		t.Fatalf("expected CIFailureError, got %T: %v", err, err)
 	}
 }
 
-// When ralph loop detects an infrastructure failure (zero job steps) and local
-// tests passed, Admin=true is set. If the REST merge returns 405 (Blocked),
-// the admin fallback kicks in and the merge succeeds.
-func TestAutoMergeCurrentBranch_InfraBypassAdminFallbackOn405(t *testing.T) {
+// When branch protection persistently blocks the merge (405), AutoMergeCurrentBranch
+// returns an error without merged=true. No admin bypass is ever used.
+func TestAutoMergeCurrentBranch_BlockedMergeReturnsError(t *testing.T) {
 	project, _ := initBareRepo(t)
 	stubCISleep(t)
 
 	mgr := &Manager{
-		ProjectDir:       project,
-		BaseBranch:       "main",
-		WorkDir:          filepath.Join(t.TempDir(), "wt"),
-		WorktreeBranch:   "ralph/test/01-infra-admin-405",
-		State:            newMemState(),
-		Logger:           &testLog{},
-		LocalTestsPassed: true,
+		ProjectDir:     project,
+		BaseBranch:     "main",
+		WorkDir:        filepath.Join(t.TempDir(), "wt"),
+		WorktreeBranch: "ralph/test/01-blocked-no-bypass",
+		State:          newMemState(),
+		Logger:         &testLog{},
 	}
 
 	gh := NewStubGitHub()
 	gh.OpenPR = 55
-	gh.Checks = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
-	gh.JobStepCount = 0 // zero steps = infrastructure failure
+	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 	gh.MergeResult = MergeResult{Blocked: true, Message: "branch protection"}
 	mgr.GitHub = gh
 
@@ -1938,14 +1875,11 @@ func TestAutoMergeCurrentBranch_InfraBypassAdminFallbackOn405(t *testing.T) {
 	mgr.Runner = runner
 
 	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
-	if err != nil {
-		t.Fatalf("expected admin fallback to succeed on 405, got: %v", err)
+	if merged {
+		t.Error("expected merged=false when branch protection blocks merge")
 	}
-	if !merged {
-		t.Error("expected merge to succeed via admin fallback after infra failure + 405")
-	}
-	if !gh.LastMergeOpts.Admin {
-		t.Error("expected MergeOpts.Admin=true for infra bypass path")
+	if err == nil {
+		t.Fatal("expected error when merge is blocked by branch protection")
 	}
 }
 

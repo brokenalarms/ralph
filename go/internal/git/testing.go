@@ -17,7 +17,6 @@ type StubGitHub struct {
 	EditPRTitle        string
 	MergeResult        MergeResult
 	MergeResults       []MergeResult // sequential results; takes precedence over MergeResult
-	AdminMergeResult   *MergeResult  // returned when Admin=true and REST would return Blocked
 	OnMerge            func()        // called on each MergePR call
 	mergeIdx           int
 	Checks             []CICheckResult
@@ -103,27 +102,12 @@ func (s *StubGitHub) MergePR(prNumber int, repoURL string, opts MergeOpts) Merge
 	if s.mergeIdx < len(s.MergeResults) {
 		r := s.MergeResults[s.mergeIdx]
 		s.mergeIdx++
-		// Admin fallback: when Admin=true and REST would return Blocked, use
-		// the next sequential result (the admin attempt outcome).
-		if r.Blocked && opts.Admin && s.mergeIdx < len(s.MergeResults) {
-			admin := s.MergeResults[s.mergeIdx]
-			s.mergeIdx++
-			return admin
-		}
 		return r
 	}
 	r := s.MergeResult
 	// Default to success when no explicit result is configured.
 	if !r.Merged && !r.Blocked && !r.Conflict && r.Message == "" {
 		r.Merged = true
-	}
-	// Admin fallback: mirrors ghCLI.MergePR behaviour — when Admin=true and
-	// the REST result would be Blocked, fall back to an admin attempt.
-	if r.Blocked && opts.Admin {
-		if s.AdminMergeResult != nil {
-			return *s.AdminMergeResult
-		}
-		return MergeResult{Merged: true, Message: "merged (admin)"}
 	}
 	return r
 }

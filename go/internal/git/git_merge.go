@@ -449,14 +449,10 @@ func (m *Manager) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 
 	checks, status, ciErr := m.AwaitCI(ctx, prNumber, repoURL, awaitPushedAt)
 	if ciErr != nil {
-		m.Logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI polling failed: %v — attempting merge anyway", ciErr)
+		m.Logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI did not complete within timeout — leaving PR open")
+		return false, ciErr
 	}
 	if status == CIFailed {
-		if m.LocalTestsPassed && m.isInfrastructureFailure(ctx, prNumber) {
-			m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "CI infrastructure failure — local tests passed, bypassing branch protection")
-			m.BypassRules = true
-			return m.executeMerge(ctx, prNumber, repoURL)
-		}
 		return false, &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
 	}
 	if status == CIPassed {
@@ -635,7 +631,6 @@ func (m *Manager) GetCIFailureLog(prNumber int) string {
 func (m *Manager) mergeOpts() MergeOpts {
 	return MergeOpts{
 		DeleteBranch: true,
-		Admin:        m.BypassRules,
 	}
 }
 
