@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -542,11 +543,19 @@ func (g *ghCLI) ReopenPR(prNumber int, repoURL string) error {
 }
 
 func (g *ghCLI) CreatePRViaAPI(nwo string, opts CreatePROpts) (int, error) {
-	body := fmt.Sprintf(`{"title":%q,"body":%q,"head":%q,"base":%q}`,
-		opts.Title, opts.Body, opts.Head, opts.Base)
+	type prRequest struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+		Head  string `json:"head"`
+		Base  string `json:"base"`
+	}
+	bodyBytes, err := json.Marshal(prRequest{Title: opts.Title, Body: opts.Body, Head: opts.Head, Base: opts.Base})
+	if err != nil {
+		return 0, fmt.Errorf("marshaling PR request: %w", err)
+	}
 	endpoint := fmt.Sprintf("repos/%s/pulls", nwo)
 	cmd := exec.Command("gh", "api", endpoint, "--method", "POST", "--input", "-")
-	cmd.Stdin = strings.NewReader(body)
+	cmd.Stdin = bytes.NewReader(bodyBytes)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return 0, fmt.Errorf("API PR creation failed: %s", strings.TrimSpace(string(out)))
