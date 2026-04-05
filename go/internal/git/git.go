@@ -308,25 +308,25 @@ func (m *Manager) tryAutoResolve(ctx context.Context, defaultBranch string) bool
 // RenameBranchForTask renames the current branch to include a task slug.
 // Records the previous branch name for stacked PR targeting.
 // Only renames once per task (tracked by BranchRenamed).
-func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
+// Returns an error if the rename fails — callers must abort the iteration.
+func (m *Manager) RenameBranchForTask(taskDesc, taskID string) error {
 	if m.BranchRenamed || m.WorktreeBranch == "" || taskDesc == "" {
-		return
+		return nil
 	}
 	if m.WorkDir == m.ProjectDir {
-		return
+		return nil
 	}
 
 	slug := Slugify(taskDesc)
 	if slug == "" {
-		return
+		return nil
 	}
 
 	newBranch := BranchName(taskID, slug)
 	if err := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); err != nil {
 		_ = m.gitCmdErr(m.WorkDir, "branch", "-D", newBranch)
 		if retryErr := m.gitCmdErr(m.WorkDir, "branch", "-m", m.WorktreeBranch, newBranch); retryErr != nil {
-			m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to rename branch %s → %s: %v", m.WorktreeBranch, newBranch, retryErr)
-			return
+			return fmt.Errorf("rename branch %s → %s: %w", m.WorktreeBranch, newBranch, retryErr)
 		}
 	}
 	m.WorktreeBranch = newBranch
@@ -335,6 +335,7 @@ func (m *Manager) RenameBranchForTask(taskDesc, taskID string) {
 		_ = m.State.Write("worktree_branch", m.WorktreeBranch)
 		_ = m.State.Write("branch_renamed", "true")
 	}
+	return nil
 }
 
 // RenameBranchTo renames the current worktree branch to a specific name.

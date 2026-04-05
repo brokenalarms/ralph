@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -781,7 +782,10 @@ func TestLoop_CheckoutExistingBranch_NoRemote(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
-	checkedOut := checkoutExistingBranch(l.git, l.cfg.TaskBackend, l.logger, "ralph-xyz", "Fix login")
+	checkedOut, err := checkoutExistingBranch(l.git, l.cfg.TaskBackend, l.logger, "ralph-xyz", "Fix login")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if checkedOut {
 		t.Error("expected false (no stored branch in metadata), got true")
 	}
@@ -904,5 +908,68 @@ func TestResolveByPRState_ClosedPR_RenamesBranch(t *testing.T) {
 	// PrepareForNextTask must have been called to reset branch state.
 	if gm.PrepareForNextCalls == 0 {
 		t.Error("PrepareForNextTask should have been called")
+	}
+}
+
+// checkoutExistingBranch returns an error when branch rename fails,
+// preventing the iteration from proceeding on a placeholder branch.
+func TestLoop_CheckoutExistingBranch_RenameFailure_ReturnsError(t *testing.T) {
+	dir, _ := setupTestDir(t)
+
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login"}
+	gm := &testutil.StubGit{
+		ProjectDir:      dir,
+		WorkDir:         filepath.Join(dir, "worktree"),
+		WorktreeBranch:  "ralph/next",
+		RenameBranchErr: fmt.Errorf("git branch -m: fatal: branch already exists"),
+	}
+
+	logger := logging.New(nil)
+	_, err := checkoutExistingBranch(gm, backend, logger, "ralph-xyz", "Fix login")
+	if err == nil {
+		t.Fatal("expected error when rename fails, got nil")
+	}
+	if gm.WorktreeBranch != "ralph/next" {
+		t.Errorf("branch should stay unchanged on rename failure, got %q", gm.WorktreeBranch)
+	}
+	if gm.BranchRenamed {
+		t.Error("BranchRenamed should remain false after rename failure")
+	}
+}
+
+// prepareBranch aborts the iteration when branch rename fails — the agent
+// must never run on a placeholder branch like ralph/next.
+func TestLoop_PrepareBranch_RenameFailure_AbortsIteration(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login"}
+	gm := &testutil.StubGit{
+		ProjectDir:      dir,
+		WorkDir:         filepath.Join(dir, "worktree"),
+		WorktreeBranch:  "ralph/next",
+		RenameBranchErr: fmt.Errorf("git branch -m: fatal: branch already exists"),
+	}
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: gm.WorkDir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	err := prepareBranch(context.Background(), branchParams{
+		git:     l.git,
+		backend: l.cfg.TaskBackend,
+		state:   st,
+		logger:  l.logger,
+	}, "ralph-xyz", "Fix login")
+	if err == nil {
+		t.Fatal("expected error from prepareBranch when rename fails, got nil")
+	}
+	if gm.ShipCalls > 0 {
+		t.Error("Ship must not be called when branch rename fails")
 	}
 }
