@@ -11,7 +11,8 @@
     "start": "node server.js",
     "loop": "bash ralph.sh",
     "ralph:verify": "cd go && go test -count=1 ./...",
-    "ralph:posttask": "./scripts/sync-and-build.sh"
+    "ralph:posttask": "./scripts/sync-and-build.sh",
+    "ralph:post-task": "./scripts/sync-and-build.sh"
   },
   "keywords": ["claude", "ai", "automation", "loop", "agent"],
   "license": "MIT"
