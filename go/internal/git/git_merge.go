@@ -865,8 +865,20 @@ func (m *Manager) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string
 		if pushErr := m.Push(ctx); pushErr != nil {
 			return false, pushErr
 		}
-	} else if _, pushErr := m.PushAndCreatePR(ctx, taskID, taskDesc, ""); pushErr != nil {
-		return false, pushErr
+	} else {
+		// If origin/<branch> exists and HEAD is not ahead of it, there is nothing
+		// to push — the previous task already shipped. Skip to avoid a spurious
+		// API call that would produce a "Problems parsing JSON" 400 error.
+		remoteRef := "origin/" + m.WorktreeBranch
+		if m.refExists(m.WorkDir, remoteRef) {
+			count := strings.TrimSpace(m.gitOutput(m.WorkDir, "rev-list", remoteRef+"..HEAD", "--count"))
+			if count == "0" {
+				return false, nil
+			}
+		}
+		if _, pushErr := m.PushAndCreatePR(ctx, taskID, taskDesc, ""); pushErr != nil {
+			return false, pushErr
+		}
 	}
 	if !autoMerge {
 		return false, nil

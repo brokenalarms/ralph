@@ -1902,3 +1902,28 @@ func TestFlushUnpushedWork_SkipsOnPlaceholderBranch(t *testing.T) {
 		t.Error("FlushUnpushedWork on placeholder branch must not attempt git push")
 	}
 }
+
+// FlushUnpushedWork when origin/<branch> already has HEAD (0 commits ahead)
+// returns (false, nil) without calling PushAndCreatePR — the previous task
+// already shipped and there is nothing to flush.
+func TestFlushUnpushedWork_SkipsWhenNoUnpushedCommits(t *testing.T) {
+	dir := t.TempDir()
+	runner := newStubRunner()
+	// rev-parse --verify returns success → origin/branch exists
+	runner.On("rev-parse", "", nil)
+	// rev-list origin/branch..HEAD --count returns 0 → HEAD is not ahead
+	runner.On("rev-list", "0", nil)
+	mgr := stubManager(dir, runner, nil)
+	mgr.WorktreeBranch = "ralph/some-task"
+
+	merged, err := mgr.FlushUnpushedWork(context.Background(), "ralph-ne9f", "skip flush test", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if merged {
+		t.Error("expected merged=false when no unpushed commits")
+	}
+	if runner.CalledWith("push") {
+		t.Error("must not push when HEAD is not ahead of origin/branch")
+	}
+}
