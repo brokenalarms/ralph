@@ -44,7 +44,7 @@ type runAndCompleteParams struct {
 	projectDir          string
 	planFile            string
 	callsPerHour        int
-	activeReviewers     []git.Reviewer
+	ensureReviewersFn   func() []git.Reviewer
 	// func deps
 	runVerifyBuildFn    func(ctx context.Context) string
 	isOnlineFunc        func() bool
@@ -170,7 +170,6 @@ func runAndComplete(ctx context.Context, p runAndCompleteParams, task taskContex
 			autoMerge:            p.autoMerge,
 			evolve:               p.evolve,
 			notify:               p.notify,
-			activeReviewers: p.activeReviewers,
 			git:             p.git,
 			backend:           p.backend,
 			state:             p.state,
@@ -196,7 +195,7 @@ func runAndComplete(ctx context.Context, p runAndCompleteParams, task taskContex
 			},
 			finalizePRFn: func(fp finalizePRParams) finalizePRResult {
 				fp.autoMerge = p.autoMerge
-				fp.activeReviewers = p.activeReviewers
+				fp.activeReviewers = p.ensureReviewersFn()
 				fp.git = p.git
 				fp.logger = p.logger
 				fp.backend = p.backend
@@ -252,7 +251,6 @@ type handlePostSignalOpts struct {
 	autoMerge            bool
 	evolve               bool
 	notify               bool
-	activeReviewers []git.Reviewer
 	git             git.GitOps
 	backend         tasks.Backend
 	state           *state.Store

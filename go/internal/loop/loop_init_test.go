@@ -148,6 +148,53 @@ func TestLoop_EnsureActiveReviewers_LazyInitAndCache(t *testing.T) {
 	}
 }
 
+// Verifies that the ensureReviewersFn closure passed to runAndCompleteParams
+// triggers DetectActiveReviewers when called (as it is during finalizePR),
+// proving detection is deferred to the finalize phase rather than happening
+// before the agent runs.
+func TestLoop_ReviewersDetectedViaEnsureReviewersFn(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	logger := logging.New(nil)
+
+	reviewer := git.Reviewer{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second, ReviewOnPush: true}
+	gm := &testutil.StubGit{
+		ProjectDir:      dir,
+		WorkDir:         dir,
+		ActiveReviewers: []git.Reviewer{reviewer},
+	}
+	cfg := Config{
+		Dirs:        workctx.WorkContext{ProjectDir: dir, RalphDir: ralphDir},
+		TaskBackend: &testutil.StubBackend{},
+	}
+	l := New(cfg, st, gm, logger)
+
+	// Build the same ensureReviewersFn closure that loop.go passes to runAndCompleteParams.
+	ensureReviewersFn := func() []git.Reviewer { l.ensureActiveReviewers(); return l.activeReviewers }
+
+	// Before the closure is called, DetectActiveReviewers must not have run.
+	if gm.DetectActiveReviewersCalled {
+		t.Fatal("DetectActiveReviewers should not be called before ensureReviewersFn is invoked")
+	}
+
+	// Calling the closure (as finalizePRFn does) must trigger detection.
+	reviewers := ensureReviewersFn()
+
+	if !gm.DetectActiveReviewersCalled {
+		t.Error("DetectActiveReviewers should be called when ensureReviewersFn is invoked")
+	}
+	if len(reviewers) != 1 || reviewers[0].BotUsername != "copilot-pull-request-reviewer" {
+		t.Errorf("ensureReviewersFn should return detected reviewers, got %v", reviewers)
+	}
+
+	// Second call must not re-detect (cache is preserved).
+	prevCount := gm.DetectActiveReviewersCallCount
+	_ = ensureReviewersFn()
+	if gm.DetectActiveReviewersCallCount != prevCount {
+		t.Error("DetectActiveReviewers called more than once — cache not preserved")
+	}
+}
+
 // Verifies that initWorktree as a package function is a no-op when the git
 // context has no worktree branch (i.e. running in the project dir directly),
 // proving the guard condition works via the package function signature.

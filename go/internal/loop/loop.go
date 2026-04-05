@@ -315,7 +315,6 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 
 		// ── Run agent and handle outcome ──
-		l.ensureActiveReviewers()
 		var iterAction analyzer.Action
 		var merged bool
 		var ct *CompletedTask
@@ -339,7 +338,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			autoMerge:            l.cfg.AutoMerge,
 			evolve:               l.cfg.Evolve,
 			notify:               l.cfg.Notify,
-			activeReviewers:     l.activeReviewers,
+			ensureReviewersFn:   func() []git.Reviewer { l.ensureActiveReviewers(); return l.activeReviewers },
 			ralphDir:            l.cfg.Dirs.RalphDir,
 			promptsDir:          l.cfg.Dirs.PromptsDir,
 			projectDir:          l.cfg.Dirs.ProjectDir,

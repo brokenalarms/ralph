@@ -2567,14 +2567,14 @@ func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
 
 // TestIntegration_LifecycleOrdering_BranchRenameAndReviewers traces the full
 // iteration lifecycle using a recorded call log and asserts the exact ordering:
-// rename → detect_reviewers → agent_signal → verify → push → close.
+// rename → agent_signal → verify → push → detect_reviewers → close.
 //
 // Proves:
-//   - Branch is renamed (task-specific) before any push occurs (AC2).
-//   - DetectActiveReviewers is called lazily (just before the agent runs),
-//     not during startup (AC3 — IS called when a task completes).
+//   - Branch is renamed (task-specific) before any push occurs.
+//   - DetectActiveReviewers is called during finalizePR (after push), not
+//     before the agent runs — reviewer detection is deferred to the merge phase.
 //   - The call log catches ordering violations: a refactor that moves rename
-//     after push, or moves DetectActiveReviewers to startup, will fail this test.
+//     after push, or moves DetectActiveReviewers before the agent, will fail.
 func TestIntegration_LifecycleOrdering_BranchRenameAndReviewers(t *testing.T) {
 	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
@@ -2652,7 +2652,7 @@ func TestIntegration_LifecycleOrdering_BranchRenameAndReviewers(t *testing.T) {
 	seqMu.Unlock()
 
 	want := []string{
-		"rename", "detect_reviewers", "agent_signal", "verify", "push", "close:ralph-ord1",
+		"rename", "agent_signal", "verify", "push", "detect_reviewers", "close:ralph-ord1",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("stage sequence length: got %d, want %d\ngot:  %v\nwant: %v", len(got), len(want), got, want)
@@ -2687,8 +2687,11 @@ func TestIntegration_LifecycleOrdering_BranchRenameAndReviewers(t *testing.T) {
 	if reviewersIdx < 0 || agentIdx < 0 {
 		t.Fatal("detect_reviewers or agent_signal not found in sequence")
 	}
-	if reviewersIdx >= agentIdx {
-		t.Errorf("detect_reviewers (idx %d) must occur before agent_signal (idx %d)", reviewersIdx, agentIdx)
+	if reviewersIdx <= pushIdx {
+		t.Errorf("detect_reviewers (idx %d) must occur after push (idx %d) — detection belongs in finalizePR", reviewersIdx, pushIdx)
+	}
+	if reviewersIdx <= agentIdx {
+		t.Errorf("detect_reviewers (idx %d) must occur after agent_signal (idx %d) — detection must not happen before agent runs", reviewersIdx, agentIdx)
 	}
 }
 
