@@ -440,7 +440,7 @@ func TestIntegration_TestFailureThenFixAgentPasses(t *testing.T) {
 	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	// Create a Makefile that fails on first call but passes after fix.
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\t@echo 'FAIL: broken' && exit 1\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\t@echo 'FAIL: broken' && exit 1\n"), 0o644)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
@@ -857,7 +857,7 @@ func TestIntegration_TestFailureFixedByAgent(t *testing.T) {
 	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
 	// Create a Makefile that fails.
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\t@echo 'FAIL: broken' && exit 1\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\t@echo 'FAIL: broken' && exit 1\n"), 0o644)
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1

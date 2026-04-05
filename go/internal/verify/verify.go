@@ -83,7 +83,7 @@ type Result struct {
 	NoDiff  bool // true when verification passed because no diff was found
 	Reason  string
 	Details string
-	Command string // the command that was run (e.g. "npm run test:verify")
+	Command string // the command that was run (e.g. "npm run ralph:verify")
 	Dir     string // the directory the command ran in
 }
 
@@ -93,31 +93,44 @@ type TestCommand struct {
 	Args []string
 }
 
-// DetectTestCommand looks for an explicit test:verify script in the project.
+// DetectTestCommand looks for an explicit ralph:verify script in the project.
 // Projects must declare what "verified" means — the loop does not guess.
-// Returns nil if no test:verify script is found; callers should refuse to
+// Returns nil if no ralph:verify script is found; callers should refuse to
 // start the loop without a verify command.
 func DetectTestCommand(dir string) *TestCommand {
 	if fileExists(filepath.Join(dir, "package.json")) {
-		if hasNPMScript(dir, "test:verify") {
-			return &TestCommand{Cmd: "npm", Args: []string{"run", "test:verify"}}
+		if hasNPMScript(dir, "ralph:verify") {
+			return &TestCommand{Cmd: "npm", Args: []string{"run", "ralph:verify"}}
 		}
 	}
 
-	if hasMakeTarget(dir, "test-verify") {
-		return &TestCommand{Cmd: "make", Args: []string{"test-verify"}}
+	if hasMakeTarget(dir, "ralph-verify") {
+		return &TestCommand{Cmd: "make", Args: []string{"ralph-verify"}}
 	}
 
 	return nil
 }
 
+// DetectPostTaskCommand looks for a ralph:posttask script in the project,
+// falling back to the CLI --post-task value. Returns empty string when neither
+// is configured (post-task is optional).
+func DetectPostTaskCommand(dir, cliPostTask string) string {
+	if fileExists(filepath.Join(dir, "package.json")) && hasNPMScript(dir, "ralph:posttask") {
+		return "npm run ralph:posttask"
+	}
+	if hasMakeTarget(dir, "ralph-posttask") {
+		return "make ralph-posttask"
+	}
+	return cliPostTask
+}
+
 // RunTests executes the detected test command and returns the result.
-// Returns a failure if no test:verify command is detected — the loop
+// Returns a failure if no ralph:verify command is detected — the loop
 // should have caught this at startup, but we fail safe here too.
 func RunTests(ctx context.Context, dir string) Result {
 	tc := DetectTestCommand(dir)
 	if tc == nil {
-		return Result{Passed: false, Reason: "no test:verify script found — add a \"test:verify\" script to package.json"}
+		return Result{Passed: false, Reason: "no ralph:verify script found — add a \"ralph:verify\" script to package.json"}
 	}
 
 	command := tc.Cmd + " " + strings.Join(tc.Args, " ")
