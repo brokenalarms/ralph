@@ -11,7 +11,9 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/notify"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -753,5 +755,202 @@ func TestHandleRunResult_NormalReturnsResultProceed(t *testing.T) {
 
 	if action != actionProceed {
 		t.Fatalf("expected actionProceed, got %d", action)
+	}
+}
+
+// resolveByPRState sends TaskCompleted and TaskMerged when PR is already merged and Notify is enabled.
+func TestResolveByPRState_Merged_NotifyEnabled(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:   "Fix login",
+				NextID:    "ralph-rm1",
+			},
+		},
+	}
+
+	ghStub := git.NewStubGitHub()
+	ghStub.PRState = "MERGED"
+	gm := &testutil.StubGit{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		GitHubStub: ghStub,
+	}
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Notify:        true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+
+	var buf bytes.Buffer
+	prev := notify.SetWriter(&buf)
+	t.Cleanup(func() { notify.SetWriter(prev) })
+
+	resolved := resolveByPRState(context.Background(), resolveByPRStateParams{
+		taskID:   "ralph-rm1",
+		nextTask: "Fix login",
+		prNumber: 99,
+		backend:  backend,
+		git:      gm,
+		logger:   l.logger,
+		attempts: l.attempts,
+		state:    l.state,
+		notify:   l.cfg.Notify,
+		ralphDir: ralphDir,
+		verifier: l.verifier,
+	})
+	if !resolved {
+		t.Fatal("expected resolveByPRState to return true for MERGED PR")
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "Task done: [ralph-rm1] Fix login") {
+		t.Errorf("expected TaskCompleted notification, got %q", got)
+	}
+	if !strings.Contains(got, "Task merged: [ralph-rm1] Fix login") {
+		t.Errorf("expected TaskMerged notification, got %q", got)
+	}
+}
+
+// resolveByPRState sends TaskCompleted (no TaskMerged) when PR is OPEN and Notify is enabled.
+func TestResolveByPRState_Open_NotifyEnabled(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:   "Add cache",
+				NextID:    "ralph-ro1",
+			},
+		},
+	}
+
+	branchName := "ralph-ro1/add-cache"
+	ghStub2 := git.NewStubGitHub()
+	ghStub2.PRHead = branchName
+	gm := &testutil.StubGit{
+		ProjectDir:          dir,
+		WorkDir:             dir,
+		RemoteBranchCommits: true,
+		GitHubStub:          ghStub2,
+	}
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Notify:        true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+
+	var buf bytes.Buffer
+	prev := notify.SetWriter(&buf)
+	t.Cleanup(func() { notify.SetWriter(prev) })
+
+	resolved := resolveByPRState(context.Background(), resolveByPRStateParams{
+		taskID:   "ralph-ro1",
+		nextTask: "Add cache",
+		prNumber: 88,
+		backend:  backend,
+		git:      gm,
+		logger:   l.logger,
+		attempts: l.attempts,
+		state:    l.state,
+		notify:   l.cfg.Notify,
+		ralphDir: ralphDir,
+		verifier: l.verifier,
+	})
+	if !resolved {
+		t.Fatal("expected resolveByPRState to return true for OPEN PR")
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "Task done: [ralph-ro1] Add cache") {
+		t.Errorf("expected TaskCompleted notification, got %q", got)
+	}
+	if strings.Contains(got, "Task merged") {
+		t.Errorf("expected no TaskMerged notification for OPEN PR, got %q", got)
+	}
+}
+
+// resolveByPRState does NOT send TaskCompleted when Notify is disabled, but still sends TaskMerged.
+func TestResolveByPRState_Merged_NotifyDisabled(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:   "Fix logout",
+				NextID:    "ralph-rd1",
+			},
+		},
+	}
+
+	ghStub3 := git.NewStubGitHub()
+	ghStub3.PRState = "MERGED"
+	gm := &testutil.StubGit{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		GitHubStub: ghStub3,
+	}
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		Notify:        false,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+
+	var buf bytes.Buffer
+	prev := notify.SetWriter(&buf)
+	t.Cleanup(func() { notify.SetWriter(prev) })
+
+	resolved := resolveByPRState(context.Background(), resolveByPRStateParams{
+		taskID:   "ralph-rd1",
+		nextTask: "Fix logout",
+		prNumber: 77,
+		backend:  backend,
+		git:      gm,
+		logger:   l.logger,
+		attempts: l.attempts,
+		state:    l.state,
+		notify:   l.cfg.Notify,
+		ralphDir: ralphDir,
+		verifier: l.verifier,
+	})
+	if !resolved {
+		t.Fatal("expected resolveByPRState to return true for MERGED PR")
+	}
+
+	got := buf.String()
+	if strings.Contains(got, "Task done") {
+		t.Errorf("expected no TaskCompleted when Notify=false, got %q", got)
+	}
+	if !strings.Contains(got, "Task merged: [ralph-rd1] Fix logout") {
+		t.Errorf("expected TaskMerged even when Notify=false, got %q", got)
 	}
 }

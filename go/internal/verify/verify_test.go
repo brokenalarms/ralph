@@ -54,39 +54,39 @@ var _ GitQuerier = (*git.Manager)(nil)
 // proving ralph can auto-detect the project's test runner.
 func TestDetectTestCommand_MakeVerify(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\tgo test ./...\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\tgo test ./...\n"), 0o644)
 
 	tc := DetectTestCommand(dir)
 	if tc == nil {
 		t.Fatal("expected test command, got nil")
 	}
-	if tc.Cmd != "make" || len(tc.Args) != 1 || tc.Args[0] != "test-verify" {
-		t.Errorf("expected make test-verify, got %s %v", tc.Cmd, tc.Args)
+	if tc.Cmd != "make" || len(tc.Args) != 1 || tc.Args[0] != "ralph-verify" {
+		t.Errorf("expected make ralph-verify, got %s %v", tc.Cmd, tc.Args)
 	}
 }
 
-// DetectTestCommand finds npm run test:verify when package.json has the script.
+// DetectTestCommand finds npm run ralph:verify when package.json has the script.
 func TestDetectTestCommand_NPM(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"test:verify":"jest && playwright test"}}`), 0o644)
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"ralph:verify":"jest && playwright test"}}`), 0o644)
 
 	tc := DetectTestCommand(dir)
 	if tc == nil {
 		t.Fatal("expected test command, got nil")
 	}
-	if tc.Cmd != "npm" || len(tc.Args) != 2 || tc.Args[0] != "run" || tc.Args[1] != "test:verify" {
-		t.Errorf("expected npm run test:verify, got %s %v", tc.Cmd, tc.Args)
+	if tc.Cmd != "npm" || len(tc.Args) != 2 || tc.Args[0] != "run" || tc.Args[1] != "ralph:verify" {
+		t.Errorf("expected npm run ralph:verify, got %s %v", tc.Cmd, tc.Args)
 	}
 }
 
-// DetectTestCommand ignores npm test — only test:verify is accepted.
+// DetectTestCommand ignores npm test — only ralph:verify is accepted.
 func TestDetectTestCommand_NPMTestIgnored(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"test":"jest"}}`), 0o644)
 
 	tc := DetectTestCommand(dir)
 	if tc != nil {
-		t.Errorf("expected nil when only npm test exists (no test:verify), got %s %v", tc.Cmd, tc.Args)
+		t.Errorf("expected nil when only npm test exists (no ralph:verify), got %s %v", tc.Cmd, tc.Args)
 	}
 }
 
@@ -97,11 +97,11 @@ func TestDetectTestCommand_GoModIgnored(t *testing.T) {
 
 	tc := DetectTestCommand(dir)
 	if tc != nil {
-		t.Errorf("expected nil when only go.mod exists (no test:verify), got %s %v", tc.Cmd, tc.Args)
+		t.Errorf("expected nil when only go.mod exists (no ralph:verify), got %s %v", tc.Cmd, tc.Args)
 	}
 }
 
-// DetectTestCommand returns nil when no test:verify script is found.
+// DetectTestCommand returns nil when no ralph:verify script is found.
 func TestDetectTestCommand_None(t *testing.T) {
 	dir := t.TempDir()
 
@@ -111,14 +111,14 @@ func TestDetectTestCommand_None(t *testing.T) {
 	}
 }
 
-// Makefile must have a test-verify target, not just test.
+// Makefile must have a ralph-verify target, not just test.
 func TestDetectTestCommand_MakefileTestTargetIgnored(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\tgo test ./...\n"), 0o644)
 
 	tc := DetectTestCommand(dir)
 	if tc != nil {
-		t.Errorf("expected nil when Makefile has test but not test-verify, got %s %v", tc.Cmd, tc.Args)
+		t.Errorf("expected nil when Makefile has test but not ralph-verify, got %s %v", tc.Cmd, tc.Args)
 	}
 }
 
@@ -126,7 +126,7 @@ func TestDetectTestCommand_MakefileTestTargetIgnored(t *testing.T) {
 // where Claude's fix is verified by the test suite.
 func TestRunTests_PassingTests(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\ttrue\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\ttrue\n"), 0o644)
 
 	result := RunTests(context.Background(), dir)
 	if !result.Passed {
@@ -147,7 +147,7 @@ func TestTestTimeout_Default(t *testing.T) {
 // block the loop indefinitely.
 func TestRunTests_Timeout(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\tsleep 1\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\tsleep 1\n"), 0o644)
 
 	saved := TestTimeout
 	TestTimeout = 50 * time.Millisecond
@@ -169,7 +169,7 @@ func TestRunTests_Timeout(t *testing.T) {
 // stops a long-running test suite instead of blocking indefinitely.
 func TestRunTests_CancelledContext(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\tsleep 1\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\tsleep 1\n"), 0o644)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -184,7 +184,7 @@ func TestRunTests_CancelledContext(t *testing.T) {
 // ralph will reject Claude's completion signal when tests are broken.
 func TestRunTests_FailingTests(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\tfalse\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\tfalse\n"), 0o644)
 
 	result := RunTests(context.Background(), dir)
 	if result.Passed {
@@ -195,14 +195,68 @@ func TestRunTests_FailingTests(t *testing.T) {
 	}
 }
 
-// RunTests fails when no test:verify script is found — projects must
+// RunTests fails when no ralph:verify script is found — projects must
 // declare their verify command explicitly.
 func TestRunTests_NoTestRunner(t *testing.T) {
 	dir := t.TempDir()
 
 	result := RunTests(context.Background(), dir)
 	if result.Passed {
-		t.Error("expected failure when no test:verify script found")
+		t.Error("expected failure when no ralph:verify script found")
+	}
+}
+
+// DetectPostTaskCommand returns "npm run ralph:posttask" when package.json has the script.
+func TestDetectPostTaskCommand_NPM(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"ralph:posttask":"node ./scripts/posttask.js"}}`), 0o644)
+
+	got := DetectPostTaskCommand(dir, "")
+	if got != "npm run ralph:posttask" {
+		t.Errorf("expected 'npm run ralph:posttask', got %q", got)
+	}
+}
+
+// DetectPostTaskCommand returns "make ralph-posttask" when the Makefile target is present.
+func TestDetectPostTaskCommand_Make(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-posttask:\n\t./scripts/posttask.sh\n"), 0o644)
+
+	got := DetectPostTaskCommand(dir, "")
+	if got != "make ralph-posttask" {
+		t.Errorf("expected 'make ralph-posttask', got %q", got)
+	}
+}
+
+// DetectPostTaskCommand falls back to the CLI flag when no package.json script or Makefile target is found.
+func TestDetectPostTaskCommand_CLIFallback(t *testing.T) {
+	dir := t.TempDir()
+
+	got := DetectPostTaskCommand(dir, "/path/to/posttask.sh")
+	if got != "/path/to/posttask.sh" {
+		t.Errorf("expected CLI flag value, got %q", got)
+	}
+}
+
+// DetectPostTaskCommand returns empty string when neither package.json script,
+// Makefile target, nor CLI flag is present.
+func TestDetectPostTaskCommand_None(t *testing.T) {
+	dir := t.TempDir()
+
+	got := DetectPostTaskCommand(dir, "")
+	if got != "" {
+		t.Errorf("expected empty string, got %q", got)
+	}
+}
+
+// DetectPostTaskCommand prefers ralph:posttask npm script over the CLI flag.
+func TestDetectPostTaskCommand_NPMTakesPriorityOverCLI(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"ralph:posttask":"node ./scripts/posttask.js"}}`), 0o644)
+
+	got := DetectPostTaskCommand(dir, "/path/to/cli-posttask.sh")
+	if got != "npm run ralph:posttask" {
+		t.Errorf("expected npm script to take priority, got %q", got)
 	}
 }
 
@@ -704,11 +758,11 @@ func TestCapModel(t *testing.T) {
 // RunTests populates Command and Dir so callers can log what was detected.
 func TestRunTests_PopulatesCommandAndDir(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\ttrue\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\ttrue\n"), 0o644)
 
 	result := RunTests(context.Background(), dir)
-	if result.Command != "make test-verify" {
-		t.Errorf("expected Command='make test-verify', got %q", result.Command)
+	if result.Command != "make ralph-verify" {
+		t.Errorf("expected Command='make ralph-verify', got %q", result.Command)
 	}
 	if result.Dir != dir {
 		t.Errorf("expected Dir=%q, got %q", dir, result.Dir)
@@ -719,14 +773,14 @@ func TestRunTests_PopulatesCommandAndDir(t *testing.T) {
 // the caller can include the command in failure log lines.
 func TestRunTests_PopulatesCommandOnFailure(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\tfalse\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\tfalse\n"), 0o644)
 
 	result := RunTests(context.Background(), dir)
 	if result.Passed {
 		t.Fatal("expected failure")
 	}
-	if result.Command != "make test-verify" {
-		t.Errorf("expected Command='make test-verify' on failure, got %q", result.Command)
+	if result.Command != "make ralph-verify" {
+		t.Errorf("expected Command='make ralph-verify' on failure, got %q", result.Command)
 	}
 	if result.Dir != dir {
 		t.Errorf("expected Dir=%q, got %q", dir, result.Dir)

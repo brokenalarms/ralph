@@ -176,15 +176,18 @@ type runPostTaskParams struct {
 	logger     *logging.Logger
 }
 
-// runPostTask executes the --post-task script if configured. Runs in the
-// project directory with RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED
-// env vars. Non-zero exit warns and continues.
+// runPostTask executes the post-task script if configured. Checks for a
+// ralph:posttask npm script or ralph-posttask Makefile target first; falls
+// back to the --post-task CLI flag. Runs in the project directory with
+// RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED env vars.
+// Non-zero exit warns and continues.
 func runPostTask(ctx context.Context, p runPostTaskParams, taskID string, prNumber int, merged bool) {
-	if p.postTask == "" {
+	script := verify.DetectPostTaskCommand(p.projectDir, p.postTask)
+	if script == "" {
 		return
 	}
 	prStr := strconv.Itoa(prNumber)
-	cmd := exec.CommandContext(ctx, "sh", "-c", p.postTask)
+	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	cmd.Dir = p.projectDir
 	cmd.Env = append(os.Environ(),
 		"RALPH_TASK_ID="+taskID,
@@ -193,7 +196,7 @@ func runPostTask(ctx context.Context, p runPostTaskParams, taskID string, prNumb
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	p.logger.Emit(logging.Opts{Domain: "post-task"}, "Running %s (task=%s pr=%d merged=%t)", p.postTask, taskID, prNumber, merged)
+	p.logger.Emit(logging.Opts{Domain: "post-task"}, "Running %s (task=%s pr=%d merged=%t)", script, taskID, prNumber, merged)
 	if err := cmd.Run(); err != nil {
 		p.logger.Emit(logging.Opts{Domain: "post-task", Level: logging.Warn}, "Script exited with error: %v", err)
 	}

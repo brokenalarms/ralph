@@ -684,7 +684,7 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	// Create a Makefile with passing tests so VerifyDir detects a runner
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-verify:\n\ttrue\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\ttrue\n"), 0o644)
 
 	backend := &testutil.StubBackend{
 		Remaining:    1,
