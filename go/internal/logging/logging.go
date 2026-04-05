@@ -334,6 +334,48 @@ func (l *Logger) TaskBanner(taskID, title string, priority *int) {
 	}
 }
 
+// descMaxLines is the maximum number of description lines shown in the stream log.
+const descMaxLines = 3
+
+// descTagPad is the number of spaces to indent description continuation lines,
+// aligning them with the text start after the [o][beads] tag and its space.
+// "[o][beads] " = 10 visible tag chars + 1 space separator = 11.
+const descTagPad = 11
+
+// EmitDescription writes a bead description to the log with per-output truncation:
+// stdout shows the first descMaxLines lines followed by a dim "… (N more lines)"
+// indicator when the description is longer; the log file receives the full text.
+// All lines are formatted with timestamp and markdown stripping. Continuation
+// lines are indented to align with the text column past the [o][beads] tag.
+func (l *Logger) EmitDescription(description string) {
+	if description == "" {
+		return
+	}
+	lines := strings.Split(strings.TrimRight(description, "\n"), "\n")
+	tag := Tag(Info.color(), Orch, Beads)
+	pad := strings.Repeat(" ", descTagPad)
+
+	for i, line := range lines {
+		var content string
+		if i == 0 {
+			content = fmt.Sprintf("%s %s", tag, FormatContent(line))
+		} else {
+			content = pad + FormatContent(line)
+		}
+		formatted := l.Fmt.FormatLine(content) + "\n"
+		fmt.Fprint(l.logFile, formatted)
+		if i < descMaxLines && !l.streaming {
+			fmt.Fprint(l.out, formatted)
+		}
+	}
+
+	if len(lines) > descMaxLines && !l.streaming {
+		remaining := len(lines) - descMaxLines
+		indicator := fmt.Sprintf("%s%s… (%d more lines)%s", pad, Dim, remaining, Reset)
+		fmt.Fprint(l.out, l.Fmt.FormatLine(indicator)+"\n")
+	}
+}
+
 // BannerOpts holds the data for an iteration banner.
 type BannerOpts struct {
 	RunIteration int
@@ -368,7 +410,7 @@ func (l *Logger) IterationBanner(o BannerOpts) {
 		o.RunIteration, o.MaxIteration, o.Lifetime, o.Completed, o.Total, versionTag)
 
 	if o.Description != "" {
-		l.Emit(Opts{Domain: Beads}, "  %s", o.Description)
+		l.EmitDescription(o.Description)
 	}
 }
 

@@ -134,6 +134,69 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 	}
 }
 
+// Verifies that a multi-line bead description is truncated to 3 lines in the
+// stream log with a dim "… (N more lines)" indicator, so the operator sees only
+// the gist rather than the full agent spec.
+func TestLoop_LongDescriptionTruncatedInStream(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	var streamBuf bytes.Buffer
+	logger := logging.NewWithWriter(&streamBuf)
+
+	desc := "Line one of the description\nLine two goes here\nLine three is next\nLine four is hidden\nLine five is hidden"
+
+	backend := &testutil.StubBackend{
+		Remaining:    1,
+		Completed:    0,
+		Total:        1,
+		NextTask:     "Fix the auth module",
+		NextID:       "ralph-abc",
+		BackendLabel: "beads",
+		Description:  desc,
+	}
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = &stubRunner{
+		onRun: func() {
+			backend.Remaining = 0
+			backend.Completed = 1
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+	l.Run(context.Background())
+
+	output := streamBuf.String()
+
+	for _, want := range []string{"Line one", "Line two", "Line three"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("stream missing %q:\n%s", want, output)
+		}
+	}
+	for _, absent := range []string{"Line four", "Line five"} {
+		if strings.Contains(output, absent) {
+			t.Errorf("stream should not contain truncated line %q:\n%s", absent, output)
+		}
+	}
+	if !strings.Contains(output, "2 more lines") {
+		t.Errorf("stream missing truncation indicator:\n%s", output)
+	}
+}
+
 // Verifies that when a task has no description, no extra description line
 // is logged — only the task title appears.
 func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
