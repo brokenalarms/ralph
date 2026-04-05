@@ -1,6 +1,7 @@
 package git
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -798,6 +799,51 @@ func TestPollReview_Timeout_ReturnsNil(t *testing.T) {
 	}
 	if review != nil {
 		t.Errorf("expected nil review on timeout, got %+v", review)
+	}
+}
+
+// CreatePRViaAPI sends a valid JSON body even when title or body contain
+// newlines, tabs, backslashes, backticks, and Unicode — characters where
+// Go's %q formatting diverges from JSON encoding, causing GitHub 400 errors.
+func TestCreatePRViaAPI_SpecialCharsProduceValidJSON(t *testing.T) {
+	bin := t.TempDir()
+	stdinFile := filepath.Join(bin, "stdin.json")
+	script := "#!/bin/sh\ncat > " + stdinFile + "\necho '{\"number\":99}'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	opts := CreatePROpts{
+		Title: "Fix `backtick` and \"quotes\"",
+		Body:  "Line one\nLine two\tTabbed\nBackslash: \\\nUnicode: \u00e9",
+		Head:  "feature/my-branch",
+		Base:  "main",
+	}
+	prNum, err := g.CreatePRViaAPI("owner/repo", opts)
+	if err != nil {
+		t.Fatalf("CreatePRViaAPI returned error: %v", err)
+	}
+	if prNum != 99 {
+		t.Errorf("expected PR number 99, got %d", prNum)
+	}
+
+	raw, readErr := os.ReadFile(stdinFile)
+	if readErr != nil {
+		t.Fatalf("gh was never called or stdin not captured: %v", readErr)
+	}
+
+	var parsed map[string]string
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("request body is not valid JSON: %v\nbody: %s", err, raw)
+	}
+	if parsed["title"] != opts.Title {
+		t.Errorf("title mismatch: got %q, want %q", parsed["title"], opts.Title)
+	}
+	if parsed["body"] != opts.Body {
+		t.Errorf("body mismatch: got %q, want %q", parsed["body"], opts.Body)
 	}
 }
 
