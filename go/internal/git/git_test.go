@@ -834,7 +834,9 @@ func TestRenameBranchForTask_RenamesBranch(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.RenameBranchForTask("Fix auth bug", "")
+	if err := mgr.RenameBranchForTask("Fix auth bug", ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	wantBranch := "ralph/fix-auth-bug"
 	if mgr.WorktreeBranch != wantBranch {
@@ -866,7 +868,9 @@ func TestRenameBranchForTask_IncludesTaskID(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.RenameBranchForTask("Fix auth bug", "ralph-abc1")
+	if err := mgr.RenameBranchForTask("Fix auth bug", "ralph-abc1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	wantBranch := "ralph/ralph-abc1-fix-auth-bug"
 	if mgr.WorktreeBranch != wantBranch {
@@ -891,10 +895,14 @@ func TestRenameBranchForTask_OnlyRenamesOnce(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.RenameBranchForTask("First task", "")
+	if err := mgr.RenameBranchForTask("First task", ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	firstBranch := mgr.WorktreeBranch
 
-	mgr.RenameBranchForTask("Second task", "")
+	if err := mgr.RenameBranchForTask("Second task", ""); err != nil {
+		t.Fatalf("unexpected error on second call: %v", err)
+	}
 	if mgr.WorktreeBranch != firstBranch {
 		t.Errorf("branch changed on second call: %q → %q", firstBranch, mgr.WorktreeBranch)
 	}
@@ -908,7 +916,9 @@ func TestRenameBranchForTask_NoOpWithoutWorktree(t *testing.T) {
 		WorkDir:    "/some/dir",
 		Logger:     &testLog{},
 	}
-	mgr.RenameBranchForTask("anything", "")
+	if err := mgr.RenameBranchForTask("anything", ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if mgr.BranchRenamed {
 		t.Error("should not rename when WorkDir == ProjectDir")
 	}

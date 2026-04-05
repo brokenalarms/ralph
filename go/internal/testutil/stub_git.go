@@ -78,6 +78,8 @@ type StubGit struct {
 	FlushUnpushedCalls    int
 	LastFlushAutoMerge    bool
 
+	RenameBranchErr error
+
 	// Optional func overrides for fine-grained test control.
 	ShipFunc        func(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error)
 	MergeRetryFunc  func(ctx context.Context) (bool, error)
@@ -194,17 +196,21 @@ func (s *StubGit) ResetToDefaultBranch() {
 	s.BranchRenamed = false
 }
 
-func (s *StubGit) RenameBranchForTask(taskDesc, taskID string) {
+func (s *StubGit) RenameBranchForTask(taskDesc, taskID string) error {
 	if s.BranchRenamed || s.WorktreeBranch == "" || taskDesc == "" {
-		return
+		return nil
+	}
+	if s.RenameBranchErr != nil {
+		return s.RenameBranchErr
 	}
 	s.RenameBranchCalls++
 	slug := git.Slugify(taskDesc)
 	if slug == "" {
-		return
+		return nil
 	}
 	s.WorktreeBranch = git.BranchName(taskID, slug)
 	s.BranchRenamed = true
+	return nil
 }
 
 func (s *StubGit) RenameBranchTo(name string) {

@@ -40,7 +40,9 @@ func prepareBranch(ctx context.Context, p branchParams, taskID, title string) er
 		setStackHead(p.git, p.backend, p.state, p.logger)
 	}
 
-	checkoutExistingBranch(p.git, p.backend, p.logger, taskID, title)
+	if _, err := checkoutExistingBranch(p.git, p.backend, p.logger, taskID, title); err != nil {
+		return err
+	}
 	p.state.WriteRunBranch(p.git.GetWorktreeBranch())
 	return nil
 }
@@ -96,8 +98,8 @@ func setStackHead(g git.GitOps, backend tasks.Backend, st *state.Store, logger *
 // iteration. If the remote has that branch with work, it checks it out.
 // Otherwise, it renames the current branch for the task and stores the
 // new name in metadata. Returns true if an existing remote branch was
-// checked out.
-func checkoutExistingBranch(g git.GitOps, backend tasks.Backend, logger *logging.Logger, taskID, nextTask string) bool {
+// checked out. Returns an error if the branch rename fails.
+func checkoutExistingBranch(g git.GitOps, backend tasks.Backend, logger *logging.Logger, taskID, nextTask string) (bool, error) {
 	storedBranch := ""
 	if taskID != "" {
 		storedBranch, _ = backend.GetMetadata(taskID, "branch")
@@ -107,7 +109,7 @@ func checkoutExistingBranch(g git.GitOps, backend tasks.Backend, logger *logging
 		if g.RemoteBranchHasCommits(storedBranch) {
 			if g.RemoteBranchIsOnMain(storedBranch) {
 				g.CheckoutRemoteBranch(storedBranch)
-				return true
+				return true, nil
 			}
 			logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Remote branch %s diverged from main — cleaning up", storedBranch)
 			ref, _ := backend.GetExternalRef(taskID)
@@ -118,13 +120,15 @@ func checkoutExistingBranch(g git.GitOps, backend tasks.Backend, logger *logging
 			}
 		}
 		g.RenameBranchTo(storedBranch)
-		return false
+		return false, nil
 	}
-	g.RenameBranchForTask(nextTask, taskID)
+	if err := g.RenameBranchForTask(nextTask, taskID); err != nil {
+		return false, fmt.Errorf("branch rename failed: %w", err)
+	}
 	if taskID != "" && g.GetWorktreeBranch() != "" && strings.Contains(g.GetWorktreeBranch(), taskID) {
 		_ = backend.SetMetadata(taskID, "branch", g.GetWorktreeBranch())
 	}
-	return false
+	return false, nil
 }
 
 // prLink builds a logging.Link for a PR number using the remote URL.

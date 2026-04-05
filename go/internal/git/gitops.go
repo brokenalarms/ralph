@@ -50,7 +50,7 @@ type GitOps interface {
 	// Branch lifecycle.
 	PrepareForNextTask(nextTaskID string)
 	ResetToDefaultBranch()
-	RenameBranchForTask(taskDesc, taskID string)
+	RenameBranchForTask(taskDesc, taskID string) error
 	RenameBranchTo(name string)
 	SetPrevBranch(branch string)
 
