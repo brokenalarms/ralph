@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verify"
@@ -392,5 +394,47 @@ func stubResult(signal bool, summary string) claude.Result {
 	return claude.Result{
 		SignalDetected: signal,
 		Summary:        summary,
+	}
+}
+
+// tryFixCopilotReview logs each actionable comment as "file:line — first line"
+// before spawning the fix agent, giving the operator visibility into what the
+// agent will address without requiring them to check GitHub.
+func TestTryFixCopilotReview_LogsEachActionableComment(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.NewWithWriter(&buf)
+
+	v := newTestVerifier(t, func(v *Verifier) {
+		v.deps.Logger = logger
+		v.deps.NewRunner = func() claudeRunner {
+			return &stubRunner{result: stubResult(true, "fixed")}
+		}
+	})
+
+	gm := &testutil.StubGit{HeadRevValue: "abc123"}
+	review := &git.CopilotReview{
+		Comments: []git.ReviewComment{
+			{Path: "src/foo.go", Line: 42, Body: "Should use pointer receiver for consistency\nMore detail here"},
+			{Path: "pkg/bar.go", Line: 7, Body: "Missing nil check before dereferencing ptr"},
+		},
+	}
+
+	tryFixCopilotReview(context.Background(), gm, v, logger, review, 1, "task", t.TempDir(), t.TempDir()+"/raw.log")
+
+	output := buf.String()
+	if !strings.Contains(output, "src/foo.go:42") {
+		t.Errorf("expected log to contain src/foo.go:42, got: %s", output)
+	}
+	if !strings.Contains(output, "Should use pointer receiver for consistency") {
+		t.Errorf("expected log to contain first line of first comment, got: %s", output)
+	}
+	if strings.Contains(output, "More detail here") {
+		t.Errorf("expected log to contain only first line of body, not full body, got: %s", output)
+	}
+	if !strings.Contains(output, "pkg/bar.go:7") {
+		t.Errorf("expected log to contain pkg/bar.go:7, got: %s", output)
+	}
+	if !strings.Contains(output, "Missing nil check before dereferencing ptr") {
+		t.Errorf("expected log to contain first line of second comment, got: %s", output)
 	}
 }

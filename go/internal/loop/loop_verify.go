@@ -136,6 +136,13 @@ func tryFixCopilotReview(ctx context.Context, g git.GitOps, v *Verifier, logger 
 	}
 
 	logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot review: %d actionable comment(s) — spawning fix agent", len(actionable))
+	for _, c := range actionable {
+		firstLine := c.Body
+		if i := strings.IndexByte(c.Body, '\n'); i >= 0 {
+			firstLine = c.Body[:i]
+		}
+		logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot: %s:%d — %s", c.Path, c.Line, firstLine)
+	}
 	reviewCtx := formatCopilotReviewContext(prNumber, actionable)
 	headBefore := g.HeadRev()
 
