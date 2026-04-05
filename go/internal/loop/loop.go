@@ -126,6 +126,7 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 	}
 	l.verifier = NewVerifier(VerifierConfig{
 		VerifyDir:             cfg.VerifyDir,
+		ProjectDir:            cfg.Dirs.ProjectDir,
 		VerifyModel:           cfg.VerifyModel,
 		VerifyEscalationModel: cfg.VerifyEscalationModel,
 		ModelCap:              cfg.ModelCap,
@@ -184,7 +185,7 @@ func (l *Loop) ensureActiveReviewers() {
 // (all tasks done, max iterations reached, or stopped). Returns an error
 // for unrecoverable failures.
 func (l *Loop) Run(ctx context.Context) error {
-	if l.cfg.VerifyDir != "" && verify.DetectTestCommand(l.cfg.Dirs.ProjectDir) == nil {
+	if l.cfg.VerifyDir != "" && verify.DetectTestCommand(l.cfg.VerifyDir, l.cfg.Dirs.ProjectDir) == nil {
 		return fmt.Errorf("no ralph:verify script found in %s — add a \"ralph:verify\" script to package.json (or a make ralph-verify target) so the loop can verify task completion", l.cfg.Dirs.ProjectDir)
 	}
 
@@ -356,9 +357,10 @@ func (l *Loop) Run(ctx context.Context) error {
 			verifyFunc:          l.cfg.OnVerify,
 			runPostTaskFn: func(ctx context.Context, taskID string, prNumber int, merged bool) {
 				runPostTask(ctx, runPostTaskParams{
-					postTask:   l.cfg.PostTask,
-					projectDir: l.cfg.Dirs.ProjectDir,
-					logger:     l.logger,
+					postTask:    l.cfg.PostTask,
+					worktreeDir: l.cfg.VerifyDir,
+					projectDir:  l.cfg.Dirs.ProjectDir,
+					logger:      l.logger,
 				}, taskID, prNumber, merged)
 			},
 		}, task, runIteration)
