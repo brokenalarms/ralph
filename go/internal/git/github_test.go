@@ -459,12 +459,12 @@ func TestMapCheckRun_ConclusionMapping(t *testing.T) {
 	}
 }
 
-// mergeAdmin uses gh api PUT repos/{nwo}/pulls/{num}/merge instead of
-// gh pr merge --admin, so admin bypass is implicit via token permissions.
-func TestMergeAdmin_UsesGhAPI(t *testing.T) {
+// MergePR uses gh api PUT repos/{nwo}/pulls/{num}/merge — never gh pr merge --admin.
+// A 405 response returns Blocked without any retry, respecting branch protection.
+func TestMergePR_HTTP405_ReturnsBlocked_NoAdminRetry(t *testing.T) {
 	bin := t.TempDir()
 	logFile := filepath.Join(bin, "gh.log")
-	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho 'HTTP/2.0 200 OK'\necho ''\necho '{}'\n"
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho 'HTTP/2.0 405 Method Not Allowed'\necho ''\necho '{\"message\":\"Branch protection\"}\n'\nexit 1\n"
 	ghPath := filepath.Join(bin, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -472,24 +472,22 @@ func TestMergeAdmin_UsesGhAPI(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
 	g := &ghCLI{}
-	result := g.mergeAdmin("42", "https://github.com/owner/repo.git", "owner/repo", MergeOpts{})
-	if !result.Merged {
-		t.Errorf("expected Merged=true, got %+v", result)
+	result := g.MergePR(42, "https://github.com/owner/repo.git", MergeOpts{})
+	if result.Merged {
+		t.Error("expected Merged=false when branch protection blocks merge")
+	}
+	if !result.Blocked {
+		t.Error("expected Blocked=true for HTTP 405 response")
 	}
 
 	raw, err := os.ReadFile(logFile)
 	if err != nil {
 		t.Fatalf("reading gh invocation log: %v", err)
 	}
-	invocation := string(raw)
-	if strings.Contains(invocation, "pr merge") {
-		t.Errorf("mergeAdmin must not use 'gh pr merge', got: %q", invocation)
-	}
-	if !strings.Contains(invocation, "pulls/42/merge") {
-		t.Errorf("expected pulls/42/merge endpoint, got: %q", invocation)
-	}
-	if !strings.Contains(invocation, "PUT") {
-		t.Errorf("expected PUT method, got: %q", invocation)
+	// Only one gh invocation — no admin retry after 405.
+	invocations := strings.Count(string(raw), "pulls/42/merge")
+	if invocations != 1 {
+		t.Errorf("expected exactly 1 merge attempt (no admin retry), got %d", invocations)
 	}
 }
 

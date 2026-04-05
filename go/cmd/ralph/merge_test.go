@@ -306,7 +306,7 @@ func TestRunMerge_CIFailureStops(t *testing.T) {
 		NewStackPR(1, "pr1"),
 		NewStackPR(2, "pr2"),
 	}
-	code := RunMerge(context.Background(), prs, tmp, "main", gm, false, logging.New(nil))
+	code := RunMerge(context.Background(), prs, tmp, "main", gm, logging.New(nil))
 
 	if code == 0 {
 		t.Errorf("expected non-zero exit when CI fails, got 0")
@@ -327,7 +327,7 @@ func TestRunMerge_MergeConflictLogsMessage(t *testing.T) {
 	gm, tmp := buildGM(t, runner, gh)
 	gm.Logger = logging.NewWithWriter(&logBuf)
 
-	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, tmp, "main", gm, false, logging.NewWithWriter(&logBuf))
+	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, tmp, "main", gm, logging.NewWithWriter(&logBuf))
 
 	if code == 0 {
 		t.Error("expected non-zero exit on Conflict")
@@ -350,7 +350,7 @@ func TestRunMerge_SecondPRRebased(t *testing.T) {
 		NewStackPR(1, "pr1"),
 		NewStackPR(2, "pr2"),
 	}
-	code := RunMerge(context.Background(), prs, tmp, "main", gm, false, logging.New(nil))
+	code := RunMerge(context.Background(), prs, tmp, "main", gm, logging.New(nil))
 
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d", code)
@@ -395,7 +395,7 @@ func TestRunMerge_SecondPRRebaseConflictAttemptsAutoResolve(t *testing.T) {
 	}
 	// runMerge will fail (rebasecontinue has no real repo to work in) but
 	// must log the auto-resolve attempt message before stopping.
-	RunMerge(context.Background(), prs, tmp, "main", gm, false, logging.NewWithWriter(&logBuf))
+	RunMerge(context.Background(), prs, tmp, "main", gm, logging.NewWithWriter(&logBuf))
 
 	if !strings.Contains(logBuf.String(), "auto-resolve") {
 		t.Errorf("expected auto-resolve attempt logged, got: %s", logBuf.String())
@@ -496,7 +496,7 @@ func TestRunMerge_SecondPRWaitsForFreshCI(t *testing.T) {
 		NewStackPR(2, "pr2"),
 	}
 
-	code := RunMerge(context.Background(), prs, workDir, "main", gm, false, logging.New(nil))
+	code := RunMerge(context.Background(), prs, workDir, "main", gm, logging.New(nil))
 	if code != 0 {
 		t.Errorf("runMerge returned %d, expected 0 (success)", code)
 	}
@@ -546,7 +546,7 @@ func TestRunMerge_SinglePRMergesSuccessfully(t *testing.T) {
 		BaseBranch: "main",
 	}
 
-	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, workDir, "main", gm, false, logging.New(nil))
+	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, workDir, "main", gm, logging.New(nil))
 	if code != 0 {
 		t.Errorf("runMerge returned %d, expected 0", code)
 	}
@@ -555,67 +555,9 @@ func TestRunMerge_SinglePRMergesSuccessfully(t *testing.T) {
 	}
 }
 
-// Proves: --bypass-rules sets Admin=true on each MergePR call, allowing
-// branch protection to be bypassed when the flag is explicitly passed.
-func TestRunMerge_BypassRulesSetsAdminOnMergeOpts(t *testing.T) {
-	workDir, _ := setupStackRepo(t)
-
-	ghStub := git.NewStubGitHub()
-	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
-
-	ralphDir := filepath.Join(workDir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-
-	gm := &git.Manager{
-		ProjectDir: workDir,
-		WorkDir:    workDir,
-		RalphDir:   ralphDir,
-		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
-		Logger:     logging.New(nil),
-		GitHub:     ghStub,
-		BaseBranch: "main",
-	}
-
-	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, workDir, "main", gm, true, logging.New(nil))
-	if code != 0 {
-		t.Errorf("runMerge with bypassRules returned %d, expected 0", code)
-	}
-	if !ghStub.LastMergeOpts.Admin {
-		t.Error("expected MergeOpts.Admin=true when --bypass-rules is set")
-	}
-}
-
-// Proves: --bypass-rules with REST returning 405 triggers the admin fallback
-// and still merges successfully (end-to-end through runMerge).
-func TestRunMerge_BypassRulesAdminFallbackOn405(t *testing.T) {
-	workDir, _ := setupStackRepo(t)
-
-	ghStub := git.NewStubGitHub()
-	ghStub.MergeResult = git.MergeResult{Blocked: true, Message: "branch protection"}
-	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
-
-	ralphDir := filepath.Join(workDir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-
-	gm := &git.Manager{
-		ProjectDir: workDir,
-		WorkDir:    workDir,
-		RalphDir:   ralphDir,
-		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
-		Logger:     logging.New(nil),
-		GitHub:     ghStub,
-		BaseBranch: "main",
-	}
-
-	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, workDir, "main", gm, true, logging.New(nil))
-	if code != 0 {
-		t.Errorf("runMerge with bypassRules+Blocked returned %d, expected 0 (admin fallback)", code)
-	}
-}
-
-// Proves: when MergeResult.Blocked=true without --bypass-rules, runMerge returns
-// non-zero and logs the block message so the user knows why the merge stopped.
-func TestRunMerge_BlockedWithoutBypassLogs(t *testing.T) {
+// Proves: when MergeResult.Blocked=true, runMerge returns non-zero and logs the
+// block message. Branch protection is the hard gate — no bypass is attempted.
+func TestRunMerge_BlockedLogsMessage(t *testing.T) {
 	workDir, _ := setupStackRepo(t)
 
 	var logBuf bytes.Buffer
@@ -636,7 +578,7 @@ func TestRunMerge_BlockedWithoutBypassLogs(t *testing.T) {
 		BaseBranch: "main",
 	}
 
-	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, workDir, "main", gm, false, logging.NewWithWriter(&logBuf))
+	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, workDir, "main", gm, logging.NewWithWriter(&logBuf))
 	if code == 0 {
 		t.Errorf("runMerge with Blocked should return non-zero, got 0")
 	}
@@ -758,7 +700,7 @@ func TestRunMerge_PerPRRebaseMechanicalConflictAutoResolves(t *testing.T) {
 		NewStackPR(1, "pr1"),
 		NewStackPR(2, "pr2"),
 	}
-	code := RunMerge(context.Background(), prs, workDir, "main", gm, false, logging.New(nil))
+	code := RunMerge(context.Background(), prs, workDir, "main", gm, logging.New(nil))
 	if code != 0 {
 		t.Errorf("expected exit 0 (auto-resolve succeeded), got %d", code)
 	}
@@ -801,7 +743,7 @@ func TestRunMerge_PerPRRebaseRealDivergenceStopsWithError(t *testing.T) {
 		NewStackPR(1, "pr1"),
 		NewStackPR(2, "pr2"),
 	}
-	code := RunMerge(context.Background(), prs, workDir, "main", gm, false, logging.NewWithWriter(&logBuf))
+	code := RunMerge(context.Background(), prs, workDir, "main", gm, logging.NewWithWriter(&logBuf))
 	if code == 0 {
 		t.Errorf("expected non-zero exit when real divergence exists, got 0")
 	}
@@ -844,7 +786,7 @@ func TestRunMerge_ConflictLogsDistinctMessage(t *testing.T) {
 		BaseBranch: "main",
 	}
 
-	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, workDir, "main", gm, false, logging.NewWithWriter(&logBuf))
+	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, workDir, "main", gm, logging.NewWithWriter(&logBuf))
 	if code == 0 {
 		t.Errorf("runMerge with Conflict should return non-zero, got 0")
 	}

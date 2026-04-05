@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -226,10 +227,10 @@ func TestShip_PackageFunction_CreatesPR(t *testing.T) {
 	}
 }
 
-// AutoMergeCurrentBranch bypasses branch protection via admin merge when
-// local tests passed and CI failed due to infrastructure (zero steps executed).
-// Admin merge is used so billing outages don't block merges indefinitely.
-func TestAutoMerge_InfraFailureBypass_MergesWhenLocalTestsPassed(t *testing.T) {
+// AutoMergeCurrentBranch returns CIFailureError when CI fails due to
+// infrastructure (zero steps executed). Branch protection is never bypassed —
+// the loop closes the bead and leaves the PR open for CI to gate naturally.
+func TestAutoMerge_InfraFailure_ReturnsCIFailureError(t *testing.T) {
 	stubCISleep(t)
 
 	runner := newStubRunner()
@@ -248,7 +249,6 @@ func TestAutoMerge_InfraFailureBypass_MergesWhenLocalTestsPassed(t *testing.T) {
 		IsAvailable:  true,
 		OpenPR:       99,
 		PRTitle:      "infra failure test",
-		MergeResult:  MergeResult{Merged: true},
 		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 		JobStepCount: 0,
 	}
@@ -256,7 +256,7 @@ func TestAutoMerge_InfraFailureBypass_MergesWhenLocalTestsPassed(t *testing.T) {
 	mgr := &Manager{
 		ProjectDir:       "/project",
 		WorkDir:          "/project/wt",
-		WorktreeBranch:   "ralph/test/01-infra-bypass",
+		WorktreeBranch:   "ralph/test/01-infra-failure",
 		BaseBranch:       "main",
 		Runner:           runner,
 		GitHub:           gh,
@@ -265,21 +265,19 @@ func TestAutoMerge_InfraFailureBypass_MergesWhenLocalTestsPassed(t *testing.T) {
 		LocalTestsPassed: true,
 	}
 
-	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
-	if err != nil {
-		t.Fatalf("expected admin merge to succeed after infra failure, got: %v", err)
+	_, err := mgr.AutoMergeCurrentBranch(context.Background())
+	if err == nil {
+		t.Fatal("expected CIFailureError for infra CI failure, got nil")
 	}
-	if !merged {
-		t.Error("expected merged=true — admin merge bypasses branch protection")
-	}
-	if !gh.LastMergeOpts.Admin {
-		t.Error("expected MergeOpts.Admin=true when bypassing after infra failure")
+	var ciErr *CIFailureError
+	if !errors.As(err, &ciErr) {
+		t.Fatalf("expected CIFailureError, got %T: %v", err, err)
 	}
 }
 
-// AutoMergeCurrentBranch does NOT bypass CI failure when local tests did not
-// pass, even if the failure is an infrastructure issue.
-func TestAutoMerge_InfraFailureNoBypass_WhenLocalTestsNotPassed(t *testing.T) {
+// AutoMergeCurrentBranch returns CIFailureError when CI fails regardless of
+// whether local tests passed — branch protection is always respected.
+func TestAutoMerge_CIFailure_AlwaysReturnsCIFailureError(t *testing.T) {
 	stubCISleep(t)
 
 	runner := newStubRunner()
@@ -294,18 +292,16 @@ func TestAutoMerge_InfraFailureNoBypass_WhenLocalTestsNotPassed(t *testing.T) {
 	runner.On("rev-parse HEAD", "abc123", nil)
 
 	gh := &StubGitHub{
-		IsAvailable:  true,
-		OpenPR:       100,
-		PRTitle:      "infra failure no bypass",
-
-		Checks:       []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
-		JobStepCount: 0,
+		IsAvailable: true,
+		OpenPR:      100,
+		PRTitle:     "ci failure test",
+		Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 	}
 
 	mgr := &Manager{
 		ProjectDir:       "/project",
 		WorkDir:          "/project/wt",
-		WorktreeBranch:   "ralph/test/01-infra-no-bypass",
+		WorktreeBranch:   "ralph/test/01-ci-failure",
 		BaseBranch:       "main",
 		Runner:           runner,
 		GitHub:           gh,
@@ -316,12 +312,63 @@ func TestAutoMerge_InfraFailureNoBypass_WhenLocalTestsNotPassed(t *testing.T) {
 
 	_, err := mgr.AutoMergeCurrentBranch(context.Background())
 	if err == nil {
-		t.Fatal("expected CIFailureError when local tests not passed")
+		t.Fatal("expected CIFailureError when CI fails")
 	}
 
 	var ciErr *CIFailureError
 	if !errors.As(err, &ciErr) {
 		t.Fatalf("expected CIFailureError, got %T: %v", err, err)
+	}
+}
+
+// AutoMergeCurrentBranch returns an error when CI times out (does not complete
+// within the poll timeout). The PR is left open unmerged for CI to gate naturally.
+func TestAutoMerge_CITimeout_ReturnsErrorWithoutMerging(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("rev-parse HEAD", "abc123", nil)
+	runner.On("reset --hard", "", nil)
+
+	gh := &StubGitHub{
+		IsAvailable: true,
+		OpenPR:      102,
+		PRTitle:     "ci timeout test",
+		// ChecksErr causes AwaitCI to exhaust its timeout returning an error.
+		ChecksErr: fmt.Errorf("API unavailable"),
+	}
+
+	mgr := &Manager{
+		ProjectDir:     "/project",
+		WorkDir:        "/project/wt",
+		WorktreeBranch: "ralph/test/01-ci-timeout",
+		BaseBranch:     "main",
+		Runner:         runner,
+		GitHub:         gh,
+		State:          newMemState(),
+		Logger:         &testLog{},
+		// Short timeout so the test doesn't run for minutes.
+		CIPollTimeout: 50 * time.Millisecond,
+	}
+
+	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	if merged {
+		t.Error("expected merged=false when CI times out")
+	}
+	if err == nil {
+		t.Fatal("expected error when CI times out (PR must be left open)")
+	}
+	// PR must not have been merged.
+	if gh.MergeCalls > 0 {
+		t.Errorf("expected no MergePR calls when CI times out, got %d", gh.MergeCalls)
 	}
 }
 
