@@ -93,6 +93,13 @@ type StubGit struct {
 	PollReviewCalled              bool
 	PollReviewLastUsername        string
 	PollReviewLastTimeout         time.Duration
+
+	PushAndCreatePRCalls    int
+	FlushUnpushedWorkFunc   func(ctx context.Context, taskID, taskDesc string, autoMerge bool) (bool, error)
+
+	// Optional hooks for call-order recording in integration tests.
+	OnRenameBranch          func(desc, id string)
+	OnDetectActiveReviewers func()
 }
 
 // Compile-time check that StubGit satisfies git.GitOps.
@@ -206,6 +213,9 @@ func (s *StubGit) RenameBranchForTask(taskDesc, taskID string) error {
 		return s.RenameBranchErr
 	}
 	s.RenameBranchCalls++
+	if s.OnRenameBranch != nil {
+		s.OnRenameBranch(taskDesc, taskID)
+	}
 	slug := git.Slugify(taskDesc)
 	if slug == "" {
 		return nil
@@ -257,6 +267,7 @@ func (s *StubGit) Ship(ctx context.Context, opts git.ShipOpts) (git.ShipResult, 
 }
 
 func (s *StubGit) PushAndCreatePR(_ context.Context, _, _, _ string) (int, error) {
+	s.PushAndCreatePRCalls++
 	return s.PushPRNumber, s.PushPRErr
 }
 
@@ -268,9 +279,12 @@ func (s *StubGit) MergeWithRetry(ctx context.Context, _ git.MergeRetryOpts) (boo
 	return s.MergeRetryResult, s.MergeRetryErr
 }
 
-func (s *StubGit) FlushUnpushedWork(_ context.Context, _, _ string, autoMerge bool) (bool, error) {
+func (s *StubGit) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, autoMerge bool) (bool, error) {
 	s.FlushUnpushedCalls++
 	s.LastFlushAutoMerge = autoMerge
+	if s.FlushUnpushedWorkFunc != nil {
+		return s.FlushUnpushedWorkFunc(ctx, taskID, taskDesc, autoMerge)
+	}
 	return s.FlushMerged, s.FlushErr
 }
 
@@ -281,6 +295,9 @@ func (s *StubGit) PostMergeUpdateMain() {
 func (s *StubGit) DetectActiveReviewers() ([]git.Reviewer, error) {
 	s.DetectActiveReviewersCalled = true
 	s.DetectActiveReviewersCallCount++
+	if s.OnDetectActiveReviewers != nil {
+		s.OnDetectActiveReviewers()
+	}
 	return s.ActiveReviewers, s.DetectReviewersErr
 }
 
