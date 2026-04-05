@@ -675,3 +675,110 @@ func TestEmit_WithModel_ShowsSubTag(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+// EmitDescription writes the first 3 lines of a long description to stdout,
+// followed by a dim "… (N more lines)" indicator, while the log file gets
+// the complete untruncated description.
+func TestEmitDescription_TruncatesInStream(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile}
+
+	desc := "Line one\nLine two\nLine three\nLine four\nLine five\nLine six"
+	l.EmitDescription(desc)
+
+	out := stdout.String()
+	log := logFile.String()
+
+	for _, want := range []string{"Line one", "Line two", "Line three"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q:\n%s", want, out)
+		}
+	}
+	for _, absent := range []string{"Line four", "Line five", "Line six"} {
+		if strings.Contains(out, absent) {
+			t.Errorf("stdout should not contain %q (truncated):\n%s", absent, out)
+		}
+	}
+	if !strings.Contains(out, "3 more lines") {
+		t.Errorf("stdout missing truncation indicator:\n%s", out)
+	}
+
+	for _, want := range []string{"Line one", "Line two", "Line three", "Line four", "Line five", "Line six"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("log file missing %q (should have full description):\n%s", want, log)
+		}
+	}
+	if strings.Contains(log, "more lines") {
+		t.Errorf("log file should not contain truncation indicator:\n%s", log)
+	}
+}
+
+// EmitDescription indents continuation lines to align with the text start
+// past the [o][beads] prefix so multi-line descriptions read as a block.
+func TestEmitDescription_IndentsContinuationLines(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile}
+
+	l.EmitDescription("First line\nSecond line\nThird line")
+
+	out := stdout.String()
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+
+	if len(lines) < 3 {
+		t.Fatalf("expected at least 3 lines, got %d:\n%s", len(lines), out)
+	}
+
+	// Strip ANSI codes to measure visible columns.
+	plain := func(s string) string { return ansiRe.ReplaceAllString(s, "") }
+
+	// First line: timestamp + [o][beads] + space + text.
+	// Continuation lines: same timestamp width + spaces for tag area + text.
+	findTextStart := func(line string) int {
+		p := plain(line)
+		idx := strings.Index(p, "First line")
+		return idx
+	}
+	findContStart := func(line string) int {
+		p := plain(line)
+		idx := strings.Index(p, "Second line")
+		return idx
+	}
+
+	first := findTextStart(lines[0])
+	second := findContStart(lines[1])
+	if first < 0 {
+		t.Fatalf("could not find 'First line' in first output line: %q", lines[0])
+	}
+	if second < 0 {
+		t.Fatalf("could not find 'Second line' in second output line: %q", lines[1])
+	}
+	if first != second {
+		t.Errorf("continuation lines not aligned: first-line text starts at col %d, second-line text at col %d", first, second)
+	}
+}
+
+// EmitDescription with ≤ 3 lines shows all lines and no truncation indicator.
+func TestEmitDescription_ShortDescriptionNoTruncation(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile}
+
+	l.EmitDescription("Only one line")
+
+	out := stdout.String()
+	if !strings.Contains(out, "Only one line") {
+		t.Errorf("stdout missing description:\n%s", out)
+	}
+	if strings.Contains(out, "more lines") {
+		t.Errorf("stdout should not contain truncation indicator for short description:\n%s", out)
+	}
+}
+
+// EmitDescription on an empty string writes nothing.
+func TestEmitDescription_EmptyStringWritesNothing(t *testing.T) {
+	var stdout, logFile bytes.Buffer
+	l := &Logger{out: &stdout, logFile: &logFile}
+	l.EmitDescription("")
+	if stdout.Len() != 0 || logFile.Len() != 0 {
+		t.Errorf("EmitDescription(\"\") should write nothing; stdout=%q logFile=%q", stdout.String(), logFile.String())
+	}
+}
