@@ -230,11 +230,12 @@ Anti-patterns:
   an existing helper or pattern should be used, name it explicitly in the AC.
 - When a task inserts, reorders, or adds a step in a sequence of events (e.g.
   the iteration lifecycle: branch setup → agent run → signal → Ship → verify →
-  merge → close), include an AC requiring at least one integration test that
-  traces the full lifecycle and asserts each action happens in the correct
-  sequence. Ordering regressions are invisible to unit tests — a refactor can
-  move a call earlier or later without any unit test failing. Integration tests
-  should record method calls in order and assert the sequence after completion.
+  merge → close), include an AC requiring that at least one integration test
+  asserts the new ordering. Prefer extending existing lifecycle integration
+  tests over creating new ones — check what's already covered first and add
+  the ordering assertion there. Ordering regressions are invisible to unit
+  tests — a refactor can move a call earlier or later without any unit test
+  failing.
 
 ### Scope discipline
 
