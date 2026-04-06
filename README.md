@@ -12,8 +12,30 @@ Autonomous [Claude Code](https://docs.anthropic.com/en/docs/claude-code) task or
 ralph task ~/myproject
 
 # Run the loop
-ralph loop --auto-merge --evolve
+ralph loop --wait --auto-merge --base-branch main --evolve
 ```
+
+## Recommended workflow
+
+Add this alias for rapid iteration:
+
+```bash
+alias loop='ralph loop --wait --auto-merge --base-branch main --evolve'
+```
+
+- `--wait` — keeps the loop running after the backlog empties, polling for new tasks
+- `--auto-merge` — squash-merges each PR automatically after CI passes
+- `--base-branch main` — rebases and merges into `main` (change to match your repo)
+- `--evolve` — re-execs ralph after each merge so improvements take effect immediately
+
+Run two tmux windows side by side, named `{project}-loop` and `{project}-task`:
+
+```
+{project}-loop: loop               # runs the loop alias
+{project}-task: ralph task         # interactive triage: create tasks, write specs
+```
+
+Both windows stay live so you can monitor the loop and add tasks from anywhere — including from your phone via [Shellfish](https://shellfishapp.com/) (iOS) or any SSH client on Android.
 
 ## How it works
 
@@ -87,7 +109,8 @@ Run `ralph task` to build up a backlog, then `ralph loop` to work through it.
 | `--idle-timeout <dur>` | Kill idle session after duration | 10m | `RALPH_IDLE_TIMEOUT` |
 | `--idle-timeout-progress <dur>` | Shorter idle timeout when progress detected | 5m | `RALPH_IDLE_TIMEOUT_PROGRESS` |
 | `--post-signal-timeout <dur>` | Timeout for post-signal operations | 15m | `RALPH_POST_SIGNAL_TIMEOUT` |
-| `--model <model>` | Model for loop agent | claude-sonnet-4-6 | |
+| `--model <model>` | Model ceiling for all LLM interactions (loop agent, fix agents, verification) | claude-sonnet-4-6 | |
+| `--agent-escalation-model <model>` | Model for agent on retry attempts | claude-opus-4-6 | |
 | `--verify-model <model>` | Model for LLM verification (first attempt) | claude-haiku-4-5-20251001 | |
 | `--verify-escalation-model <model>` | Model for verification escalation (subsequent attempts) | claude-sonnet-4-6 | |
 | `--refactor` | Enable LLM-based adaptive refactoring | — | |
@@ -103,12 +126,23 @@ The orchestrator owns the entire push/PR/merge lifecycle. The agent writes code 
 - `bd close` — orchestrator closes the bead only after successful merge
 - `git checkout` / `git branch` — prevents sub-agents from interfering with branch management
 
+### Model escalation
+
+The loop uses a tiered model strategy to balance cost and quality:
+
+- **Agent first pass** — sonnet (default `--model`)
+- **Agent retry** — opus (default `--agent-escalation-model`); escalated automatically on subsequent attempts
+- **Verification first pass** — haiku (default `--verify-model`)
+- **Verification retry** — sonnet (default `--verify-escalation-model`)
+
+`--model` acts as a ceiling — no LLM call may use a higher-tier model than the value set.
+
 ### Verification pipeline
 
 After the agent signals completion:
 
 1. **Test suite** — full `make test` (or equivalent) must pass. If it fails, a fix agent is spawned to address the failures (up to 3 retries).
-2. **LLM diff review** — a fast model reviews the diff against the bead's acceptance criteria. If rejected, a fix agent addresses the issues (up to 3 retries, escalating to a stronger model).
+2. **LLM diff review** — haiku reviews the diff against the bead's acceptance criteria. If rejected, a fix agent addresses the issues (up to 3 retries, escalating to sonnet).
 
 ### Merge pipeline
 
@@ -122,7 +156,11 @@ After verification passes:
 
 ### Feedback
 
-When a user writes feedback via `ralph feedback "msg"`, the message is appended to the bead's notes via `bd update --append-notes`. The orchestrator kills the running agent and restarts it with a fresh context. The bead notes — including the feedback — are included in the new iteration's prompt. The agent must acknowledge feedback with a `FEEDBACK:` line before proceeding.
+`ralph feedback "msg"` appends the message to the bead's notes via `bd update --append-notes`, then kills the running agent via context cancellation — aborting any in-flight operation (CI polling, merge wait, review wait). The loop restarts immediately with a fresh context. The agent must acknowledge feedback with a `FEEDBACK:` line before proceeding.
+
+### SIGINT (Ctrl-C)
+
+Ctrl-C cancels the running operation but leaves the bead open. The loop exits cleanly — no bead is closed or skipped. Resume by restarting the loop.
 
 ### Git strategy: stacked single-commit PRs
 
