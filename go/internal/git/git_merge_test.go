@@ -12,18 +12,19 @@ import (
 	"time"
 )
 
-// PostMergeUpdateMain updates local main to match origin/main after a merge,
-// but does NOT touch the worktree.
-func TestPostMergeUpdateMain_AdvancesLocalMain(t *testing.T) {
+// PostMergeUpdateMain must not modify the ProjectDir checkout: no merge,
+// update-ref, or other write operations on main. The worktree handles syncing
+// via rebase; local main staying behind origin/main is intentional.
+func TestPostMergeUpdateMain_DoesNotModifyProjectDir(t *testing.T) {
 	project, _ := initBareRepo(t)
+	bare := filepath.Join(filepath.Dir(project), "bare.git")
 	ralphDir := filepath.Join(project, ".ralph")
-	st := newMemState()
 
 	mgr := &Manager{
 		ProjectDir: project,
 		RalphDir:   ralphDir,
 		BaseBranch: "main",
-		State:      st,
+		State:      newMemState(),
 		Logger:     &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -32,29 +33,32 @@ func TestPostMergeUpdateMain_AdvancesLocalMain(t *testing.T) {
 
 	mgr.RenameBranchForTask("completed task", "")
 
-	// Simulate a commit landing on origin/main (as happens after merge)
-	bare := filepath.Join(filepath.Dir(project), "bare.git")
+	// Record local main SHA before PostMergeUpdateMain.
+	localMainBefore := gitOutput(project, "rev-parse", "main")
+
+	// Push a new commit to origin/main (simulates a merged PR).
 	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
 	run(t, "git", "clone", bare, tmpClone)
 	writeFile(t, tmpClone, "merged-work.txt", "merged content\n")
 	run(t, "git", "-C", tmpClone, "commit", "-m", "merged PR")
 	run(t, "git", "-C", tmpClone, "push", "origin", "main")
 
-	run(t, "git", "-C", project, "fetch", "origin", "main")
-	localBefore := gitOutput(project, "rev-parse", "main")
-	originMain := gitOutput(project, "rev-parse", "origin/main")
-	if localBefore == originMain {
-		t.Fatal("test setup: local main should not yet match origin/main")
-	}
-
 	mgr.PostMergeUpdateMain()
 
-	localAfter := gitOutput(project, "rev-parse", "main")
-	if localAfter != originMain {
-		t.Errorf("local main should match origin/main: got %s, want %s", localAfter, originMain)
+	// Local main must not have been advanced — ProjectDir is untouched.
+	localMainAfter := gitOutput(project, "rev-parse", "main")
+	if localMainAfter != localMainBefore {
+		t.Errorf("PostMergeUpdateMain must not modify local main in ProjectDir: SHA changed from %s to %s", localMainBefore, localMainAfter)
 	}
 
-	// After cleanup the worktree moves to ralph/next (the task branch was deleted).
+	// ProjectDir working tree must have no tracked file modifications.
+	// (Untracked files like .ralph/ are ignored since they're expected.)
+	status := strings.TrimSpace(gitOutput(project, "status", "--porcelain", "--untracked-files=no"))
+	if status != "" {
+		t.Errorf("ProjectDir has dirty tracked files after PostMergeUpdateMain:\n%s", status)
+	}
+
+	// Worktree moves to ralph/next after branch cleanup.
 	if mgr.WorktreeBranch != "ralph/next" {
 		t.Errorf("worktree branch should be ralph/next after task branch cleanup, got %q", mgr.WorktreeBranch)
 	}
@@ -106,27 +110,27 @@ func TestPostMergeUpdateMain_PreservesUncommittedWorkingTreeChanges(t *testing.T
 	}
 }
 
-// PostMergeUpdateMain logs "Updated local <branch> to latest origin" — not
-// "Force-reset" or other force language — so normal operation logs are clear.
-func TestPostMergeUpdateMain_LogSaysUpdatedLocalToLatest(t *testing.T) {
+// PostMergeUpdateMain must not log "force" language in normal operation —
+// the rebase path is clean, and force-language would be alarming for users
+// monitoring the stream log.
+func TestPostMergeUpdateMain_RebasePathLogsCleanly(t *testing.T) {
 	project, _ := initBareRepo(t)
+	bare := filepath.Join(filepath.Dir(project), "bare.git")
 	ralphDir := filepath.Join(project, ".ralph")
-	st := newMemState()
 	log := &testLog{}
 
 	mgr := &Manager{
 		ProjectDir: project,
 		RalphDir:   ralphDir,
 		BaseBranch: "main",
-		State:      st,
+		State:      newMemState(),
 		Logger:     log,
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	// Push a commit to origin/main so PostMergeUpdateMain has work to do
-	bare := filepath.Join(filepath.Dir(project), "bare.git")
+	// Push a commit to origin/main so PostMergeUpdateMain has work to do.
 	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
 	run(t, "git", "clone", bare, tmpClone)
 	writeFile(t, tmpClone, "new-file.txt", "content\n")
@@ -135,9 +139,6 @@ func TestPostMergeUpdateMain_LogSaysUpdatedLocalToLatest(t *testing.T) {
 
 	mgr.PostMergeUpdateMain()
 
-	if !log.contains("Updated local main to latest origin") {
-		t.Errorf("expected log to contain 'Updated local main to latest origin', got: %v", log.messages)
-	}
 	for _, msg := range log.messages {
 		lower := strings.ToLower(msg)
 		if strings.Contains(lower, "force") && !strings.Contains(lower, "enforce") {

@@ -521,12 +521,14 @@ func TestPostMergeUpdateMain_RebasesWorktree(t *testing.T) {
 
 	originMainSHA := strings.TrimSpace(cmdOutput(t, "git", "-C", tmpClone, "rev-parse", "HEAD"))
 
+	localMainBefore := gitOutput(project, "rev-parse", "main")
+
 	mgr.PostMergeUpdateMain()
 
-	// Local main should match origin/main.
-	localMain := gitOutput(project, "rev-parse", "main")
-	if localMain != originMainSHA {
-		t.Errorf("local main = %s, want %s (should match origin/main)", localMain, originMainSHA)
+	// Local main must NOT be modified by PostMergeUpdateMain.
+	localMainAfter := gitOutput(project, "rev-parse", "main")
+	if localMainAfter != localMainBefore {
+		t.Errorf("PostMergeUpdateMain must not modify local main: SHA changed from %s to %s", localMainBefore, localMainAfter)
 	}
 
 	// Worktree HEAD should have changed (rebased).
