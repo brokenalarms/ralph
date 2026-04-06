@@ -392,6 +392,169 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 }
 
 
+// Proves: first agent attempt uses cfg.Model; subsequent attempts (when prior
+// attempts exist on disk) use cfg.AgentEscalationModel, with ModelCap applied
+// as a ceiling over both.
+func TestAgentModelEscalation(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	const firstModel = verify.ModelSonnet
+	const escalationModel = verify.ModelOpus
+
+	l := New(Config{
+		Dirs:                 workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations:        1,
+		CallsPerHour:         80,
+		TaskBackend:          &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-abc"},
+		Model:                firstModel,
+		AgentEscalationModel: escalationModel,
+	}, st, gm, logger)
+
+	var capturedModels []string
+	l.runner = &stubRunner{
+		onRunCfg: func(cfg claude.RunConfig) {
+			capturedModels = append(capturedModels, cfg.Model)
+		},
+	}
+
+	baseParams := func() runAndCompleteParams {
+		return runAndCompleteParams{
+			git:                 l.git,
+			logger:              l.logger,
+			runner:              l.runner,
+			verifier:            l.verifier,
+			state:               l.state,
+			attempts:            l.attempts,
+			limiter:             l.limiter,
+			signals:             l.signals,
+			backend:             l.cfg.TaskBackend,
+			analyzer:            l.analyzer,
+			quiet:               l.cfg.Quiet,
+			verbose:             l.cfg.Verbose,
+			model:               l.cfg.Model,
+			agentEscalationModel: l.cfg.AgentEscalationModel,
+			modelCap:            l.cfg.ModelCap,
+			idleTimeout:         l.cfg.IdleTimeout,
+			idleTimeoutProgress: l.cfg.IdleTimeoutProgress,
+			postSignalTimeout:   l.cfg.PostSignalTimeout,
+			autoMerge:           l.cfg.AutoMerge,
+			evolve:              l.cfg.Evolve,
+			notify:              l.cfg.Notify,
+			ralphDir:            l.cfg.Dirs.RalphDir,
+			promptsDir:          l.cfg.Dirs.PromptsDir,
+			projectDir:          l.cfg.Dirs.ProjectDir,
+			planFile:            l.cfg.PlanFile,
+			callsPerHour:        l.cfg.CallsPerHour,
+			runVerifyBuildFn:    func(_ context.Context) string { return "" },
+			isOnlineFunc:        l.cfg.IsOnline,
+			waitForInternetFunc: l.cfg.WaitForInternet,
+			verifyFunc:          l.cfg.OnVerify,
+			ensureReviewersFn:   func() []git.Reviewer { return nil },
+			runPostTaskFn:       func(_ context.Context, _ string, _ int, _ bool) {},
+		}
+	}
+
+	task := taskContext{id: "ralph-abc", title: "Fix login"}
+
+	// First run: no prior attempts on disk — should use Model (sonnet).
+	runAndComplete(context.Background(), baseParams(), task, 0)
+
+	// Record a prior attempt to simulate a retry.
+	l.attempts.Record("ralph-abc", "Fix login", "first try failed", "", "continue")
+
+	// Second run: one prior attempt on disk — should use AgentEscalationModel (opus).
+	runAndComplete(context.Background(), baseParams(), task, 1)
+
+	if len(capturedModels) != 2 {
+		t.Fatalf("expected 2 runner calls, got %d", len(capturedModels))
+	}
+	if capturedModels[0] != firstModel {
+		t.Errorf("attempt 1: expected %s (sonnet), got %s", firstModel, capturedModels[0])
+	}
+	if capturedModels[1] != escalationModel {
+		t.Errorf("attempt 2: expected %s (opus escalation), got %s", escalationModel, capturedModels[1])
+	}
+}
+
+// Proves: ModelCap is applied as a ceiling over both agent model and escalation model.
+func TestAgentModelEscalation_ModelCapApplied(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
+
+	l := New(Config{
+		Dirs:                 workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations:        1,
+		CallsPerHour:         80,
+		TaskBackend:          &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-cap"},
+		Model:                verify.ModelSonnet,
+		AgentEscalationModel: verify.ModelOpus,
+		ModelCap:             verify.ModelHaiku, // cap everything to haiku
+	}, st, gm, logger)
+
+	var capturedModels []string
+	l.runner = &stubRunner{
+		onRunCfg: func(cfg claude.RunConfig) {
+			capturedModels = append(capturedModels, cfg.Model)
+		},
+	}
+
+	// Record a prior attempt so escalation model would normally be used.
+	l.attempts.Record("ralph-cap", "Fix login", "first try failed", "", "continue")
+
+	runAndComplete(context.Background(), runAndCompleteParams{
+		git:                  l.git,
+		logger:               l.logger,
+		runner:               l.runner,
+		verifier:             l.verifier,
+		state:                l.state,
+		attempts:             l.attempts,
+		limiter:              l.limiter,
+		signals:              l.signals,
+		backend:              l.cfg.TaskBackend,
+		analyzer:             l.analyzer,
+		quiet:                l.cfg.Quiet,
+		verbose:              l.cfg.Verbose,
+		model:                l.cfg.Model,
+		agentEscalationModel: l.cfg.AgentEscalationModel,
+		modelCap:             l.cfg.ModelCap,
+		idleTimeout:          l.cfg.IdleTimeout,
+		idleTimeoutProgress:  l.cfg.IdleTimeoutProgress,
+		postSignalTimeout:    l.cfg.PostSignalTimeout,
+		autoMerge:            l.cfg.AutoMerge,
+		evolve:               l.cfg.Evolve,
+		notify:               l.cfg.Notify,
+		ralphDir:             l.cfg.Dirs.RalphDir,
+		promptsDir:           l.cfg.Dirs.PromptsDir,
+		projectDir:           l.cfg.Dirs.ProjectDir,
+		planFile:             l.cfg.PlanFile,
+		callsPerHour:         l.cfg.CallsPerHour,
+		runVerifyBuildFn:     func(_ context.Context) string { return "" },
+		isOnlineFunc:         l.cfg.IsOnline,
+		waitForInternetFunc:  l.cfg.WaitForInternet,
+		verifyFunc:           l.cfg.OnVerify,
+		ensureReviewersFn:    func() []git.Reviewer { return nil },
+		runPostTaskFn:        func(_ context.Context, _ string, _ int, _ bool) {},
+	}, taskContext{id: "ralph-cap", title: "Fix login"}, 1)
+
+	if len(capturedModels) != 1 {
+		t.Fatalf("expected 1 runner call, got %d", len(capturedModels))
+	}
+	if capturedModels[0] != verify.ModelHaiku {
+		t.Errorf("ModelCap not applied: expected %s (haiku), got %s", verify.ModelHaiku, capturedModels[0])
+	}
+}
+
 func stubResult(signal bool, summary string) claude.Result {
 	return claude.Result{
 		SignalDetected: signal,

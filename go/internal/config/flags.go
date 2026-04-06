@@ -362,6 +362,18 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.Model },
 	},
 	{
+		Long: "--agent-escalation-model", MetaVar: "<model>",
+		Help:      "Model for agent on retry attempts (subsequent attempts after first)",
+		Default:   ModelOpus,
+		ConfigKey: "agent_escalation_model",
+		Kind:      KindString, TrackCLI: true,
+		Apply: func(cfg *Config, val string) error {
+			cfg.AgentEscalationModel = val
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.AgentEscalationModel },
+	},
+	{
 		Long: "--verify-model", MetaVar: "<model>",
 		Help:      "Model for LLM verification (first attempt)",
 		Default:   ModelHaiku,

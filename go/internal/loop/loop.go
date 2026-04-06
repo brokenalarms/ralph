@@ -38,8 +38,9 @@ type Config struct {
 	Notify              bool
 	Wait                bool
 	Verbose             bool
-	Model               string
-	ModelCap            string // maximum model tier for all LLM calls; empty means no cap
+	Model                  string
+	AgentEscalationModel   string // model for agent on retry attempts; defaults to opus
+	ModelCap               string // maximum model tier for all LLM calls; empty means no cap
 	OnRebaseConflict    func(err error) git.RebaseRecovery
 	Version             string
 	VerifyDir             string // project root where tests are run; empty disables verification
@@ -332,6 +333,8 @@ func (l *Loop) Run(ctx context.Context) error {
 			quiet:                l.cfg.Quiet,
 			verbose:              l.cfg.Verbose,
 			model:                l.cfg.Model,
+			agentEscalationModel: l.cfg.AgentEscalationModel,
+			modelCap:             l.cfg.ModelCap,
 			idleTimeout:          l.cfg.IdleTimeout,
 			idleTimeoutProgress:  l.cfg.IdleTimeoutProgress,
 			postSignalTimeout:    l.cfg.PostSignalTimeout,

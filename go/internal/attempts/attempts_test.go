@@ -95,6 +95,25 @@ func TestRecord_ShowsChangesNoneWhenNoDiffStat(t *testing.T) {
 	}
 }
 
+// Proves: Count returns 0 for a new task and the correct count after recording attempts.
+func TestCount_ReturnsAttemptCount(t *testing.T) {
+	tr := newTestTracker(t)
+
+	if got := tr.Count("t-count", "Count task"); got != 0 {
+		t.Errorf("expected 0 before any attempts, got %d", got)
+	}
+
+	tr.Record("t-count", "Count task", "first try", "", "continue")
+	if got := tr.Count("t-count", "Count task"); got != 1 {
+		t.Errorf("expected 1 after first attempt, got %d", got)
+	}
+
+	tr.Record("t-count", "Count task", "second try", "", "continue")
+	if got := tr.Count("t-count", "Count task"); got != 2 {
+		t.Errorf("expected 2 after second attempt, got %d", got)
+	}
+}
+
 // Proves: read returns the full log content for lookup.
 func TestRead_ReturnsRecordedAttempts(t *testing.T) {
 	tr := newTestTracker(t)
