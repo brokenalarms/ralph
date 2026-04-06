@@ -41,6 +41,7 @@ func TestLoop_AllTasksComplete(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logger)
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -79,6 +80,7 @@ func TestLoop_NoTasksError(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logger)
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -120,6 +122,7 @@ func TestLoop_StopFileDetection(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logger)
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -166,6 +169,7 @@ func TestLoop_ContextCancellation(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logger)
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(ctx)
 	if err != nil {
 		t.Fatalf("expected no error on context cancel, got %v", err)
@@ -204,6 +208,7 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logger)
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	maxIter := st.ReadMaxIterations(0)
@@ -289,6 +294,7 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 		cancel()
 	}()
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -332,6 +338,7 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	l.cfg.OnWait = func() { cancel() }
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -374,6 +381,7 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 		os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
 	}
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -414,6 +422,7 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 	}, st, gm, logger)
 
 	start := time.Now()
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	elapsed := time.Since(start)
 
@@ -499,6 +508,7 @@ func TestLoop_LifecycleStates(t *testing.T) {
 		return true, ""
 	}
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	if len(backend.stateCalls) < 2 {
@@ -559,6 +569,7 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 		return false, "tests failed"
 	}
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	for _, call := range backend.stateCalls {
@@ -635,6 +646,7 @@ func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = runner
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

@@ -79,6 +79,7 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.MergeRetryResult = true
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -153,6 +154,7 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.PRState = "OPEN"
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -247,6 +249,7 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 	l.runner = runner
 	gm.MergeRetryResult = true
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -345,6 +348,7 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 	l.runner = runner
 	gm.MergeRetryResult = true
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -435,6 +439,7 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 	l.runner = runner
 	gm.MergeRetryResult = true
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -521,6 +526,7 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 	l.runner = runner
 	gm.MergeRetryResult = true
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	if err := l.Run(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -604,6 +610,7 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.MergeRetryResult = true
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// initRun may produce one reset (before any task runs).

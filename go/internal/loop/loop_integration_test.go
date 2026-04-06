@@ -166,6 +166,7 @@ func TestIntegration_HappyPath_SignalVerifyPushMergeClose(t *testing.T) {
 	gm.MergeRetryResult = true
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -266,6 +267,7 @@ func TestIntegration_ResumeViaPR_Merged(t *testing.T) {
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -345,6 +347,7 @@ func TestIntegration_ResumeViaPR_MergedFoundViaBranchMetadata(t *testing.T) {
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	if err := l.Run(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -405,6 +408,7 @@ func TestIntegration_ResumeViaPR_OpenAutoMerge(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	gm.MergeRetryResult = true
 
 	err := l.Run(context.Background())
@@ -474,6 +478,7 @@ func TestIntegration_ResumeViaPR_Closed(t *testing.T) {
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -544,6 +549,7 @@ func TestIntegration_TestFailureThenFixAgentPasses(t *testing.T) {
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	l.cfg.NewRunner = func() claudeRunner {
 		fixAgentCalls++
@@ -625,6 +631,7 @@ func TestIntegration_CIFailureThenFixThenMerge(t *testing.T) {
 	gm.MergeRetryResult = true
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -680,6 +687,7 @@ func TestIntegration_MaxIterationsReached(t *testing.T) {
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -749,6 +757,7 @@ func TestIntegration_ExternalRefFormat(t *testing.T) {
 	gm.ShipResult = git.ShipResult{PRNumber: 77}
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -824,6 +833,7 @@ func TestIntegration_PushCalledOnSignal(t *testing.T) {
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -885,6 +895,7 @@ func TestIntegration_WaitModePicksUpNewTask(t *testing.T) {
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	waitEntered := make(chan struct{}, 2)
 	waitCount := 0
@@ -960,6 +971,7 @@ func TestIntegration_TestFailureFixedByAgent(t *testing.T) {
 	}
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	l.cfg.NewRunner = func() claudeRunner {
 		fixCalls++
@@ -1153,6 +1165,7 @@ func TestIntegration_TwoTasksCompleteSequentially(t *testing.T) {
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -1295,6 +1308,7 @@ func TestIntegration_MergeConflictThenRetrySucceeds(t *testing.T) {
 	gm.MergeRetryResult = true
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -1342,6 +1356,7 @@ func TestIntegration_AgentExitsWithoutSignal_Retries(t *testing.T) {
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	l.Run(context.Background())
 
@@ -1401,6 +1416,7 @@ func TestIntegration_CompletedTaskNotReselected(t *testing.T) {
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	l.Run(context.Background())
 
@@ -1450,6 +1466,7 @@ func TestIntegration_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	l.Run(context.Background())
 
@@ -1503,6 +1520,7 @@ func TestIntegration_FeedbackKillRestartsIteration(t *testing.T) {
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	// After first feedback kill, switch to signal completion
 	originalOnRun := runner.onRun
@@ -1556,6 +1574,7 @@ func TestIntegration_StopFileHaltsLoop(t *testing.T) {
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	l.Run(context.Background())
 
@@ -1620,6 +1639,7 @@ func TestIntegration_EvolveExitsAfterMerge(t *testing.T) {
 	gm.MergeRetryResult = true
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	l.Run(context.Background())
 
@@ -1669,6 +1689,7 @@ func TestIntegration_TestsRunBeforeAndAfterAgent(t *testing.T) {
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	// Track pre-iteration test call
 	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
@@ -1753,6 +1774,7 @@ func TestIntegration_DependencyBlockedTaskIsSkipped(t *testing.T) {
 	gm.MergeRetryResult = true
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	l.Run(context.Background())
 
@@ -1958,6 +1980,7 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 	}
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	// "merge" is recorded when MergePR fires inside executeMerge — this runs only
 	// after AwaitCI returns CIPassed, so merge cannot appear before ci_passed.
@@ -2105,6 +2128,7 @@ func TestIntegration_LifecycleCI_FailureFixRetry(t *testing.T) {
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	// Fix agent changes the HEAD SHA, proving tryFixCI sees a new commit and
 	// returns CIFixApplied so MergeWithRetry continues to a second attempt.
 	l.cfg.NewRunner = func() claudeRunner {
@@ -2192,6 +2216,7 @@ func TestIntegration_CIFailureTriggersFixAgent(t *testing.T) {
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	l.cfg.NewRunner = func() claudeRunner {
 		fixAgentCalled = true
 		// Fix agent simulates a new commit by changing the HEAD SHA.
@@ -2364,6 +2389,7 @@ func TestIntegration_CIAlreadyPassing_SkipsPushAndMerges(t *testing.T) {
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	if err := l.Run(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -2477,6 +2503,7 @@ func TestIntegration_CIAlreadyPassing_FallsThrough_WhenHeadDiffers(t *testing.T)
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	if err := l.Run(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -2606,6 +2633,7 @@ func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	// Fix agent changes the SHA so tryFixCI returns CIFixApplied (not
 	// CIFixNoCommits which triggers 30s infrastructure retries). But CI
 	// still fails on re-check, so MergeWithRetry exhausts MaxMergeAttempts
@@ -2711,6 +2739,7 @@ func TestIntegration_LifecycleOrdering_BranchRenameAndReviewers(t *testing.T) {
 	}
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	if err := l.Run(context.Background()); err != nil {
 		t.Fatalf("Run returned unexpected error: %v", err)
@@ -2809,6 +2838,7 @@ func TestIntegration_LifecycleOrdering_NoReviewerDetectionWithoutTasks(t *testin
 	}, st, gm, logging.New(nil))
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	_ = l.Run(context.Background())
 
@@ -2902,6 +2932,7 @@ func TestIntegration_LifecycleOrdering_FlushNoopAfterShip(t *testing.T) {
 	l.cfg.OnVerify = func(_ context.Context, _, _ string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	gm.MergeRetryResult = true
 
 	if err := l.Run(context.Background()); err != nil {

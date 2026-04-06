@@ -50,6 +50,7 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// With stacked PRs, no rotation to /next — branch keeps its task name
@@ -93,6 +94,7 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// Same task — branch should NOT have been rotated
@@ -166,6 +168,7 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
 	l.runner = runner
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -428,6 +431,7 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 		},
 	}
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// Branch should be the task branch, NOT rotated to /next
@@ -493,6 +497,7 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 		},
 	}
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// Branch should now be the second task
@@ -553,6 +558,7 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 		},
 	}
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// Branch should be the task branch — refactor didn't create a new one
@@ -616,6 +622,7 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	}
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	gm.MergeRetryResult = true
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -667,6 +674,7 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	finalState, _ := st.Load()
@@ -746,6 +754,7 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 
 	l.runner = &stubRunner{}
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	branch, _ := backend.GetMetadata("ralph-abc", "branch")
@@ -823,6 +832,7 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 
 	l.runner = &stubRunner{}
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// Branch should be ralph/<project>/ralph-xyz-fix-login-flow (no 01- prefix)
