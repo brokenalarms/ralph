@@ -48,6 +48,7 @@ type Config struct {
 	VerifyEscalationModel string // model for subsequent LLM verification attempts; defaults to sonnet
 	OnIterationStart      func() // called at the start of each iteration (e.g. to regenerate resume script)
 	// hooks for test injection; nil uses the real implementation
+	CheckGitHub     func(ctx context.Context) error // startup GitHub reachability check; nil uses real implementation
 	OnVerify        func(ctx context.Context, dir, headBefore string) (bool, string)
 	IsOnline        func() bool
 	WaitForInternet func(ctx context.Context, logger *logging.Logger) bool
@@ -106,6 +107,9 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 	}
 	if cfg.WaitForInternet == nil {
 		cfg.WaitForInternet = waitForInternet
+	}
+	if cfg.CheckGitHub == nil {
+		cfg.CheckGitHub = checkGitHubConnectivity
 	}
 	if cfg.NewRunner == nil {
 		cfg.NewRunner = func() claudeRunner { return agent.New(logger) }
@@ -199,6 +203,14 @@ func (l *Loop) Run(ctx context.Context) error {
 		git:     l.git,
 	}); err != nil {
 		return err
+	}
+
+	if err := l.cfg.CheckGitHub(ctx); err != nil {
+		if ctx.Err() != nil {
+			l.state.Write("status", "stopped")
+			return nil
+		}
+		return fmt.Errorf("Cannot reach GitHub (%v).\nPossible causes: VPN blocking GitHub, no internet, gh auth expired.\nFixes: disconnect VPN, check internet, or run \"gh auth login\" to refresh credentials.", err)
 	}
 
 	var runIteration int

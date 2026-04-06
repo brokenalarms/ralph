@@ -137,6 +137,22 @@ func waitForInternet(ctx context.Context, logger *logging.Logger) bool {
 	}
 }
 
+// checkGitHubConnectivity verifies that GitHub is reachable via gh api /rate_limit.
+// Uses a 10-second context timeout to avoid hanging on blocked SSH connections.
+// Returns a descriptive error with remediation hints if unreachable.
+func checkGitHubConnectivity(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "gh", "api", "/rate_limit")
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("GitHub connectivity check timed out after 10s")
+		}
+		return fmt.Errorf("gh api /rate_limit: %w", err)
+	}
+	return nil
+}
+
 type runVerifyBuildParams struct {
 	verifyBuild string
 	projectDir  string
