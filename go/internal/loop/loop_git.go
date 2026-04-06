@@ -258,6 +258,11 @@ func resumeViaPR(ctx context.Context, p resumeViaPRParams) bool {
 			_ = p.git.DeleteRemoteBranchByName(branch)
 			return false
 		}
+		if !p.git.BranchIsAheadOfMain(branch) {
+			p.logger.Emit(logging.Opts{Domain: logging.Git}, "Remote branch %s has no commits ahead of main — already resolved, cleaning up", branch)
+			_ = p.git.DeleteRemoteBranchByName(branch)
+			return false
+		}
 		p.logger.Emit(logging.Opts{Domain: logging.Git}, "Remote branch %s has clean work but no PR — creating PR", branch)
 		p.git.CheckoutRemoteBranch(branch)
 		var err error
