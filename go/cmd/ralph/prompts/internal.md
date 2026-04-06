@@ -16,5 +16,24 @@ Be concise. State the issue, apply the fix, write tests, signal completion. Do n
 - Run only scoped, relevant tests as you develop. The orchestrator runs the full test suite as the verification gate after you signal completion.
 {{TEST_STATUS}}
 
+## Rebased changes are the new baseline
+The orchestrator periodically runs `evolve` to rebase your worktree onto the
+latest main, pulling in commits from other contributors. When this happens:
+
+- **Never revert or undo changes that arrived from main via rebase.** Those are
+  intentional commits from other contributors — not regressions you introduced.
+- **If verification passes after a rebase, the rebased state is correct.** Do
+  not "fix" files back to their pre-rebase state just because they appear in
+  your diff history or conflict with previous reflection notes.
+- **Stale reflection notes may reference pre-rebase state.** A reflection saying
+  something "regressed" was written before the rebase. If tests pass now, that
+  reflection is outdated — do not act on it.
+- **The Boy Scout Rule still applies.** Genuine cleanup (dead code, naming
+  improvements, simplifying logic) is encouraged. The constraint is specifically
+  against reverting recent intentional commits from main — improving the
+  codebase is good, undoing someone else's commit is not.
+- **Verification is the gate, not diff shape.** If you are unsure whether a
+  change is yours or came from main, run the tests. If they pass, move on.
+
 {{TASK_INSTRUCTIONS}}
 {{ATTEMPT_HISTORY}}

@@ -1153,3 +1153,63 @@ func TestBuildTaskManagerPrompt_IncludesQualityGuidelines(t *testing.T) {
 		}
 	}
 }
+
+// Proves: internal.md contains the rebase baseline instruction, so an agent
+// that receives commits from main via evolve/rebase does not treat them as
+// regressions to fix — the rebased state is the new baseline.
+func TestInternalPrompt_RebaseBaselineInstruction(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "internal.md"))
+	if err != nil {
+		t.Fatalf("reading internal.md: %v", err)
+	}
+	s := string(content)
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"rebase", "prompt must address rebase scenario"},
+		{"Never revert", "prompt must explicitly prohibit reverting rebased changes"},
+		{"new baseline", "prompt must state rebased state is the new baseline"},
+		{"verification passes", "prompt must make verification the gate, not diff shape"},
+		{"Boy Scout Rule", "prompt must clarify the Boy Scout Rule still applies"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(s, tc.substr) {
+			t.Errorf("internal.md missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: the assembled prompt includes the rebase baseline instruction even
+// when the agent has stale attempt history referencing pre-rebase state —
+// simulating evolve pulling user commits while reflections say "regressed".
+func TestBuildPrompt_RebaseBaselineInstructionPresentWithStaleAttemptHistory(t *testing.T) {
+	v := testVars(t)
+	// Simulate stale reflection: agent previously noted a "regression" in a
+	// file that was actually modified by a user commit pulled via rebase.
+	v.AttemptHistory = "## Previous attempts on this task\n" +
+		"### Attempt 1\n" +
+		"Summary: attempted to fix config.go but it regressed — status check broken\n" +
+		"Changes: config.go 3 insertions\n" +
+		"Analysis: warn:stuck\n"
+
+	result, err := BuildPrompt(v)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	// Stale reflection must be present (test setup check)
+	if !strings.Contains(result, "regressed") {
+		t.Error("test setup: stale reflection content should be present in prompt")
+	}
+
+	// Rebase baseline instruction must still be present to override stale reflection
+	if !strings.Contains(result, "new baseline") {
+		t.Error("prompt must contain 'new baseline' instruction so agent doesn't revert rebased changes")
+	}
+	if !strings.Contains(result, "Never revert") {
+		t.Error("prompt must explicitly prohibit reverting rebased changes")
+	}
+}
