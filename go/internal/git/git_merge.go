@@ -915,20 +915,12 @@ func (m *Manager) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string
 	return merged, nil
 }
 
-// PostMergeUpdateMain fetches and fast-forwards local main after a PR is
-// merged, then moves the worktree to the placeholder branch and deletes
-// the stale task branch.
+// PostMergeUpdateMain fetches origin/main and rebases the worktree onto it
+// after a PR merge, then moves the worktree to the placeholder branch and
+// deletes the stale task branch. It does not modify the ProjectDir checkout.
 func (m *Manager) PostMergeUpdateMain() {
 	defaultBranch := m.detectDefaultBranch()
 	m.gitCmd(m.ProjectDir, "fetch", "origin", defaultBranch)
-
-	currentBranch := strings.TrimSpace(m.gitOutput(m.ProjectDir, "symbolic-ref", "--short", "HEAD"))
-	if currentBranch == defaultBranch {
-		m.gitCmd(m.ProjectDir, "merge", "--ff-only", "origin/"+defaultBranch)
-	} else {
-		m.gitCmd(m.ProjectDir, "update-ref", "refs/heads/"+defaultBranch, "origin/"+defaultBranch)
-	}
-	m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Updated local %s to latest origin", defaultBranch)
 
 	// Sync worktree with updated main. If rebase conflicts, reset —
 	// the merged work is on main and stale stack commits are expendable.
