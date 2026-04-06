@@ -232,6 +232,7 @@ type ShipOpts struct {
 	PushFn                  func(ctx context.Context) error
 	HasUncommittedChangesFn func() bool
 	CommitAllFn             func(message string)
+	BranchIsAheadOfMainFn   func(branch string) bool
 	BaseBranch              string
 	Logger                  Log
 }
@@ -292,6 +293,13 @@ func Ship(ctx context.Context, runner Runner, gh GitHub, workDir, branch, remote
 		}
 	}
 
+	if opts.BranchIsAheadOfMainFn != nil && !opts.BranchIsAheadOfMainFn(branch) {
+		if opts.Logger != nil {
+			opts.Logger.Emit(logging.Opts{Domain: logging.Git}, "Ship: branch %s is not ahead of main — skipping PR creation", branch)
+		}
+		return ShipResult{}, nil
+	}
+
 	prNumber, err := CreatePR(ctx, gh, workDir, branch, remoteURL, EnsurePROpts{
 		TaskID:     opts.TaskID,
 		TaskDesc:   opts.TaskTitle,
@@ -330,6 +338,7 @@ func (m *Manager) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 	opts.PushFn = m.Push
 	opts.HasUncommittedChangesFn = m.HasUncommittedChanges
 	opts.CommitAllFn = m.CommitAll
+	opts.BranchIsAheadOfMainFn = m.BranchIsAheadOfMain
 	opts.BaseBranch = m.resolveBaseBranch()
 	opts.Logger = m.Logger
 	return Ship(ctx, m.run(), m.gh(), m.WorkDir, m.WorktreeBranch, m.RemoteURL(), opts)
@@ -871,12 +880,20 @@ func (m *Manager) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string
 			return false, pushErr
 		}
 	} else {
-		// If origin/<branch> exists and HEAD is not ahead of it, there is nothing
-		// to push — the previous task already shipped. Skip to avoid a spurious
-		// API call that would produce a "Problems parsing JSON" 400 error.
 		remoteRef := "origin/" + m.WorktreeBranch
 		if m.refExists(m.WorkDir, remoteRef) {
+			// origin/<branch> exists — bail if HEAD is already there to avoid
+			// a spurious API call that would produce a "Problems parsing JSON" 400.
 			count := strings.TrimSpace(m.gitOutput(m.WorkDir, "rev-list", remoteRef+"..HEAD", "--count"))
+			if count == "0" {
+				return false, nil
+			}
+		} else {
+			// origin/<branch> absent (e.g. deleted after squash-merge). Bail if
+			// HEAD has no commits ahead of origin/main — nothing left to flush.
+			defaultBranch := m.detectDefaultBranch()
+			mainRef := "origin/" + defaultBranch
+			count := strings.TrimSpace(m.gitOutput(m.WorkDir, "rev-list", mainRef+"..HEAD", "--count"))
 			if count == "0" {
 				return false, nil
 			}

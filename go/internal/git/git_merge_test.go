@@ -1927,3 +1927,28 @@ func TestFlushUnpushedWork_SkipsWhenNoUnpushedCommits(t *testing.T) {
 		t.Error("must not push when HEAD is not ahead of origin/branch")
 	}
 }
+
+// FlushUnpushedWork when origin/<branch> doesn't exist but HEAD has no commits
+// ahead of origin/main (e.g. after a squash-merge deleted the remote branch)
+// returns (false, nil) without calling PushAndCreatePR.
+func TestFlushUnpushedWork_SkipsWhenNoBranchAndNotAheadOfMain(t *testing.T) {
+	dir := t.TempDir()
+	runner := newStubRunner()
+	// rev-parse --verify fails → origin/<branch> does not exist
+	runner.On("rev-parse", "", fmt.Errorf("unknown ref"))
+	// rev-list origin/main..HEAD --count returns "0" → HEAD is at origin/main
+	runner.On("rev-list", "0", nil)
+	mgr := stubManager(dir, runner, nil)
+	mgr.WorktreeBranch = "ralph/already-merged"
+
+	merged, err := mgr.FlushUnpushedWork(context.Background(), "ralph-k7hl", "already merged task", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if merged {
+		t.Error("expected merged=false when branch has no commits ahead of main")
+	}
+	if runner.CalledWith("push") {
+		t.Error("must not push when origin/<branch> absent and HEAD is at origin/main")
+	}
+}
