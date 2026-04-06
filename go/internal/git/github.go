@@ -631,7 +631,7 @@ func (g *ghCLI) DetectActiveReviewers(nwo string) ([]Reviewer, error) {
 			reviewer := r
 			reviewer.ReviewOnPush = reviewOnPush
 			if !reviewOnPush {
-				reviewer.DefaultTimeout = 30 * time.Second
+				reviewer.DefaultTimeout = 90 * time.Second
 			}
 			active = append(active, reviewer)
 		}
