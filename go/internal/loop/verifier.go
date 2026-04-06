@@ -89,7 +89,8 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 
 	commitResult := verify.CheckCommits(v.deps.Git, p.headBefore)
 	if !commitResult.Passed {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No new commits — will verify via LLM if work is already on main")
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "No commits found — task was not worked")
+		return false
 	}
 
 	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Running post-signal test suite...")
