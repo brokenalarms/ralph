@@ -43,6 +43,7 @@ type StubGit struct {
 	FlushErr             error
 	FetchBranchErr       error
 	DeleteBranchErr      error
+	DeleteBranchCalled   bool
 	RemoteBranchCommits  bool
 	RemoteBranchOnMain   bool
 	BranchAheadOfMain    bool
@@ -314,4 +315,7 @@ func (s *StubGit) RemoteBranchHasCommits(_ string) bool  { return s.RemoteBranch
 func (s *StubGit) RemoteBranchIsOnMain(_ string) bool    { return s.RemoteBranchOnMain }
 func (s *StubGit) BranchIsAheadOfMain(_ string) bool     { return s.BranchAheadOfMain }
 func (s *StubGit) BranchIsAncestorOfMain(_ string) bool  { return s.BranchAncestorOfMain }
-func (s *StubGit) DeleteRemoteBranchByName(_ string) error { return s.DeleteBranchErr }
+func (s *StubGit) DeleteRemoteBranchByName(_ string) error {
+	s.DeleteBranchCalled = true
+	return s.DeleteBranchErr
+}
