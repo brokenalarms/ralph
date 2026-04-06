@@ -245,7 +245,7 @@ func TestDetectActiveReviewers_CopilotWithReviewOnPush(t *testing.T) {
 	}
 }
 
-// DetectActiveReviewers sets ReviewOnPush=false and reduces timeout to 30s when
+// DetectActiveReviewers sets ReviewOnPush=false and reduces timeout to 90s when
 // the Copilot ruleset has review_on_push=false, since the review is opportunistic.
 func TestDetectActiveReviewers_CopilotWithoutReviewOnPush(t *testing.T) {
 	bin := t.TempDir()
@@ -274,8 +274,8 @@ func TestDetectActiveReviewers_CopilotWithoutReviewOnPush(t *testing.T) {
 	if reviewers[0].ReviewOnPush {
 		t.Error("expected ReviewOnPush=false when review_on_push=false in ruleset")
 	}
-	if reviewers[0].DefaultTimeout != 30*time.Second {
-		t.Errorf("expected 30s timeout when review_on_push=false, got %v", reviewers[0].DefaultTimeout)
+	if reviewers[0].DefaultTimeout != 90*time.Second {
+		t.Errorf("expected 90s timeout when review_on_push=false, got %v", reviewers[0].DefaultTimeout)
 	}
 }
 
