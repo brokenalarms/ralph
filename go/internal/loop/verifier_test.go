@@ -100,6 +100,35 @@ func TestVerifier_OnSignal_HappyPath(t *testing.T) {
 	}
 }
 
+// Verifier.OnSignal rejects when the agent makes no new commits, proving
+// the zero-commit gate fires before tests or LLM run so tasks cannot be
+// falsely verified when the agent signaled completion without doing any work.
+func TestVerifier_OnSignal_ZeroCommits_Rejected(t *testing.T) {
+	v := newTestVerifier(t, func(v *Verifier) {
+		// headBefore and HeadRevValue are the same SHA — no commits were made.
+		v.deps.Git = &testutil.StubGit{HeadRevValue: "abc123"}
+	})
+
+	var buf strings.Builder
+	v.deps.Logger = logging.NewWithWriter(&buf)
+
+	result := v.OnSignal(signalParams{
+		ctx:        context.Background(),
+		headBefore: "abc123",
+		workDir:    t.TempDir(),
+		rawLogPath: filepath.Join(t.TempDir(), "raw.log"),
+		taskID:     "test-nowork",
+		nextTask:   "Task agent skipped",
+	})
+
+	if result {
+		t.Fatal("expected OnSignal to return false when no commits were made")
+	}
+	if !strings.Contains(buf.String(), "No commits found") {
+		t.Errorf("expected 'No commits found' in log, got:\n%s", buf.String())
+	}
+}
+
 // Verifier exhausts LLM retries within a single OnSignal call and calls
 // SkipTask, proving retry logic and skip behavior are owned by the Verifier type.
 func TestVerifier_OnSignal_LLMExhaustsRetries_SkipsTask(t *testing.T) {
