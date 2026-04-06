@@ -167,6 +167,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	if !strings.Contains(capturedPrompt, "tests passing") {

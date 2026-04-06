@@ -1,12 +1,18 @@
 package loop
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/testutil"
+	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
 type stubRunner struct {
@@ -40,6 +46,50 @@ func setupTestDir(t *testing.T) (string, *state.Store) {
 	st := state.NewStore(ralphDir)
 	st.Init(5)
 	return dir, st
+}
+
+// TestRun_ExitsOnGitHubUnreachable proves that the loop exits immediately with
+// a diagnostic error when GitHub is unreachable at startup instead of hanging.
+func TestRun_ExitsOnGitHubUnreachable(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		RemoteURLValue: "https://github.com/owner/repo.git",
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   &testutil.TrackingBackend{},
+	}, st, gm, logging.New(nil))
+
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error {
+		return errors.New("GitHub connectivity check timed out after 10s")
+	}
+
+	err := l.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected error when GitHub is unreachable, got nil")
+	}
+	if !strings.Contains(err.Error(), "Cannot reach GitHub") {
+		t.Errorf("error should contain 'Cannot reach GitHub', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "VPN") {
+		t.Errorf("error should mention VPN as a possible cause, got: %v", err)
+	}
 }
 
 // --- test helpers ---

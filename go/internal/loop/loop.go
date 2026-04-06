@@ -48,6 +48,7 @@ type Config struct {
 	VerifyEscalationModel string // model for subsequent LLM verification attempts; defaults to sonnet
 	OnIterationStart      func() // called at the start of each iteration (e.g. to regenerate resume script)
 	// hooks for test injection; nil uses the real implementation
+	CheckGitHub     func(ctx context.Context) error // startup GitHub reachability check; nil uses real implementation
 	OnVerify        func(ctx context.Context, dir, headBefore string) (bool, string)
 	IsOnline        func() bool
 	WaitForInternet func(ctx context.Context, logger *logging.Logger) bool
@@ -101,6 +102,9 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 
 	agentRunner := agent.New(logger)
 
+	if cfg.CheckGitHub == nil {
+		cfg.CheckGitHub = checkGitHubConnectivity
+	}
 	if cfg.IsOnline == nil {
 		cfg.IsOnline = isOnline
 	}
@@ -188,6 +192,14 @@ func (l *Loop) ensureActiveReviewers() {
 func (l *Loop) Run(ctx context.Context) error {
 	if l.cfg.VerifyDir != "" && verify.DetectTestCommand(l.cfg.VerifyDir, l.cfg.Dirs.ProjectDir) == nil {
 		return fmt.Errorf("no ralph:verify script found in %s — add a \"ralph:verify\" script to package.json (or a make ralph-verify target) so the loop can verify task completion", l.cfg.Dirs.ProjectDir)
+	}
+
+	if err := l.cfg.CheckGitHub(ctx); err != nil {
+		if ctx.Err() != nil {
+			l.state.Write("status", "stopped")
+			return nil
+		}
+		return fmt.Errorf("Cannot reach GitHub (%v).\nPossible causes: VPN blocking GitHub, no internet, gh auth expired.\nFixes: disconnect VPN, check internet, or run \"gh auth login\" to refresh credentials.", err)
 	}
 
 	if err := initialize(ctx, initParams{

@@ -65,7 +65,8 @@ func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 				TaskBackend:   tt.backend,
 			}, st, gm, logger)
 
-			l.Run(context.Background())
+			l.cfg.CheckGitHub = func(context.Context) error { return nil }
+	l.Run(context.Background())
 
 			output := logBuf.String()
 			if !strings.Contains(output, tt.want) {
@@ -116,6 +117,7 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	l.Run(context.Background())
 
 	output := logBuf.String()
@@ -180,6 +182,7 @@ func TestLoop_LongDescriptionTruncatedInStream(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	l.Run(context.Background())
 
 	output := streamBuf.String()
@@ -239,6 +242,7 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	l.Run(context.Background())
 
 	output := logBuf.String()
@@ -315,6 +319,7 @@ func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	output := logBuf.String()
@@ -373,6 +378,7 @@ func TestLoop_TaskBannerOnNewTask(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	output := logBuf.String()
@@ -444,6 +450,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		return verify.Result{Passed: true}
 	}
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	output := logBuf.String()
@@ -541,6 +548,7 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 	}, st, gm, logger)
 	l.runner = runner
 
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	output := logBuf.String()
