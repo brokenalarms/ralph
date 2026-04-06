@@ -26,6 +26,7 @@ func handlePostSignalCall(l *Loop, p postSignalParams) postSignalAction {
 		autoMerge:         l.cfg.AutoMerge,
 		evolve:            l.cfg.Evolve,
 		notify:            l.cfg.Notify,
+		ralphDir:          l.cfg.Dirs.RalphDir,
 		git:               l.git,
 		backend:           l.cfg.TaskBackend,
 		state:             l.state,
@@ -851,5 +852,78 @@ func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
 	got := buf.String()
 	if !strings.Contains(got, "Task done: [ralph-nc1] Update docs") {
 		t.Errorf("expected TaskCompleted on no-commits path, got %q", got)
+	}
+}
+
+// handlePostSignal cancels when a feedback file appears during the post-signal
+// pipeline, proving that feedback during CI/merge/review aborts processing
+// and CloseTask is never called.
+func TestHandlePostSignal_FeedbackFileStopsPostSignal(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-feedback"}},
+	}
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	var logBuf bytes.Buffer
+	logger := logging.New(&logBuf)
+
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logger)
+	l.runner = &stubRunner{}
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	// Ship blocks until context is cancelled, simulating a stuck CI/merge step.
+	gm.ShipFunc = func(ctx context.Context, _ git.ShipOpts) (git.ShipResult, error) {
+		<-ctx.Done()
+		return git.ShipResult{}, ctx.Err()
+	}
+
+	// Write the feedback file after a short delay.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		os.WriteFile(filepath.Join(ralphDir, "feedback"), nil, 0o644)
+	}()
+
+	done := make(chan postSignalAction, 1)
+	go func() {
+		done <- handlePostSignalCall(l, postSignalParams{
+			ctx:        context.Background(),
+			result:     claude.Result{SignalDetected: true},
+			headBefore: "",
+			workDir:    dir,
+			rawLogPath: filepath.Join(ralphDir, "raw.log"),
+			taskID:     "ralph-feedback",
+			nextTask:   "Fix bug",
+		})
+	}()
+
+	select {
+	case action := <-done:
+		if action != signalComplete {
+			t.Errorf("expected signalComplete, got %d", action)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("handlePostSignal hung — feedback file did not cancel context")
+	}
+
+	output := logBuf.String()
+	if !strings.Contains(output, "Feedback signal detected during post-signal pipeline") {
+		t.Errorf("expected feedback log message, got: %s", output)
+	}
+
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) > 0 {
+		t.Errorf("task should not be closed when feedback arrives, got %v", backend.ClosedIDs)
 	}
 }
