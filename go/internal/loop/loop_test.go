@@ -104,3 +104,22 @@ func createPromptTemplates(t *testing.T, dir string) {
 	}
 }
 
+func TestGetBeadDescription_Standalone(t *testing.T) {
+	backend := &testutil.StubBackend{Description: "Fix auth middleware"}
+
+	desc := getBeadDescription(backend, "ralph-abc")
+	if desc != "Fix auth middleware" {
+		t.Errorf("expected description, got %q", desc)
+	}
+
+	desc = getBeadDescription(backend, "")
+	if desc != "" {
+		t.Errorf("empty taskID should return empty, got %q", desc)
+	}
+
+	desc = getBeadDescription(nil, "ralph-abc")
+	if desc != "" {
+		t.Errorf("nil backend should return empty, got %q", desc)
+	}
+}
+

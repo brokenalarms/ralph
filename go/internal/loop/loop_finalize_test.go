@@ -259,6 +259,49 @@ func TestFinalizePR_CIFixExhausted_TaskStaysOpen(t *testing.T) {
 	}
 }
 
+// When CI fails and the fix agent cannot resolve it, mergeWithRetry returns a
+// plain CIFailureError. finalizePR must leave the task open — not close it as
+// "verified, merge pending".
+func TestFinalizePR_CIFailure_TaskStaysOpen(t *testing.T) {
+	dir, st := setupTestDir(t)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	result := finalizePR(finalizePRParams{
+		ctx:       context.Background(),
+		taskID:    "ralph-abc",
+		nextTask:  "Fix failing tests",
+		prNumber:  99,
+		prState:   "OPEN",
+		workDir:   dir,
+		autoMerge: true,
+		git:       gm,
+		logger:    logging.New(nil),
+		backend:   backend,
+		state:     st,
+		attempts:  attempts.New(dir),
+		mergeFunc: func(ctx context.Context) (bool, error) {
+			return false, &git.CIFailureError{PRNumber: 99, Failures: []git.CICheckResult{{Name: "tests", State: "FAILURE", Bucket: "fail"}}}
+		},
+	})
+
+	if result.closed {
+		t.Error("task should NOT be closed when CI is failing — CIFailureError must prevent closure")
+	}
+	if result.merged {
+		t.Error("task should not be merged when CI is failing")
+	}
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 0 {
+		t.Errorf("CloseTask must not be called when CI fails, got %v", backend.ClosedIDs)
+	}
+}
+
 // finalizePR with merge failure records merged:false in completed_tasks so
 // setStackHead can find the unmerged branch for the next task to stack on.
 func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testing.T) {
@@ -947,22 +990,3 @@ func TestFormatReviewContext(t *testing.T) {
 	}
 }
 
-// getBeadDescription takes a backend — no Loop or Verifier needed.
-func TestGetBeadDescription_Standalone(t *testing.T) {
-	backend := &testutil.StubBackend{Description: "Fix auth middleware"}
-
-	desc := getBeadDescription(backend, "ralph-abc")
-	if desc != "Fix auth middleware" {
-		t.Errorf("expected description, got %q", desc)
-	}
-
-	desc = getBeadDescription(backend, "")
-	if desc != "" {
-		t.Errorf("empty taskID should return empty, got %q", desc)
-	}
-
-	desc = getBeadDescription(nil, "ralph-abc")
-	if desc != "" {
-		t.Errorf("nil backend should return empty, got %q", desc)
-	}
-}
