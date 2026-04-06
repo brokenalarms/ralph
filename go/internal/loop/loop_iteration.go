@@ -16,6 +16,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/ratelimit"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
+	"github.com/brokenalarms/ralph/internal/verify"
 )
 
 type runAndCompleteParams struct {
@@ -30,9 +31,11 @@ type runAndCompleteParams struct {
 	backend             tasks.Backend
 	analyzer            *analyzer.Analyzer
 	// destructured cfg fields
-	quiet               bool
-	verbose             bool
-	model               string
+	quiet                bool
+	verbose              bool
+	model                string
+	agentEscalationModel string
+	modelCap             string
 	idleTimeout         time.Duration
 	idleTimeoutProgress time.Duration
 	postSignalTimeout   time.Duration
@@ -79,6 +82,12 @@ func runAndComplete(ctx context.Context, p runAndCompleteParams, task taskContex
 	}
 
 	taskStart := time.Now()
+	agentModel := p.model
+	if p.attempts.Count(task.id, task.title) > 0 {
+		agentModel = p.agentEscalationModel
+	}
+	agentModel = verify.CapModel(p.modelCap, agentModel)
+	p.logger.Emit(logging.Opts{Domain: logging.LLM, Model: agentModel}, "Agent model: %s", agentModel)
 	result, runErr := p.runner.Run(claude.RunConfig{
 		Ctx:                 ctx,
 		WorkDir:             prep.workDir,
@@ -89,7 +98,7 @@ func runAndComplete(ctx context.Context, p runAndCompleteParams, task taskContex
 		LogFile:             filepath.Join(p.ralphDir, "loop.log"),
 		Quiet:               p.quiet,
 		Verbose:             p.verbose,
-		Model:               p.model,
+		Model:               agentModel,
 		Signals:             p.signals,
 		PollInterval:        2 * time.Second,
 		IdleTimeout:         p.idleTimeout,

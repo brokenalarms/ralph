@@ -78,6 +78,7 @@ type Config struct {
 	Wait                    bool
 	Verbose                 bool
 	Model                   string
+	AgentEscalationModel    string
 	VerifyModel             string
 	VerifyEscalationModel   string
 	PostSignalTimeout       time.Duration

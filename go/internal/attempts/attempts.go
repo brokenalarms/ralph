@@ -64,6 +64,16 @@ func (t *Tracker) Record(taskID, taskName, summary, diffStat, analysis string) e
 
 const maxPromptAttempts = 3
 
+// Count returns the number of recorded attempts for a task (reads the full
+// attempt file, not the capped tail). Returns 0 if no attempts exist yet.
+func (t *Tracker) Count(taskID, taskName string) int {
+	data, err := os.ReadFile(t.attemptFile(taskID, taskName))
+	if err != nil {
+		return 0
+	}
+	return strings.Count(string(data), "### Attempt ")
+}
+
 // Read returns the most recent attempts for a task (capped at
 // maxPromptAttempts). All attempts remain on disk; only the tail
 // is returned to keep prompt context small.
