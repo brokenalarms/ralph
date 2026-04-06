@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verify"
@@ -384,5 +385,141 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 	defer backend.CloseMu.Unlock()
 	if len(backend.ClosedIDs) != 0 {
 		t.Errorf("task must not be closed when test fix agents exhausted, got %v", backend.ClosedIDs)
+	}
+}
+
+// Ctrl-C (pre-cancelled context) on the no-commits path leaves the bead open.
+// Proves that SIGINT before CloseTask on the no-commits branch does not close the bead.
+func TestHandlePostSignal_CancelledCtx_NoCommits_BeadStaysOpen(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-ctrlc1"}},
+	}
+
+	// HeadRevValue == headBefore triggers the no-commits branch.
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "same-sha"}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel to simulate Ctrl-C
+
+	handlePostSignalCall(l, postSignalParams{
+		ctx:        ctx,
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "same-sha",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-ctrlc1",
+		nextTask:   "Fix bug",
+	})
+
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 0 {
+		t.Errorf("Ctrl-C: bead must not be closed on no-commits path, got %v", backend.ClosedIDs)
+	}
+}
+
+// Ctrl-C (pre-cancelled context) on the no-PR path leaves the bead open.
+// Proves that SIGINT before CloseTask when Ship produces no PR does not close the bead.
+func TestHandlePostSignal_CancelledCtx_NoPR_BeadStaysOpen(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-ctrlc2"}},
+	}
+
+	// HeadRevValue != headBefore so the no-commits branch is skipped.
+	// ShipResult with PRNumber=0 means no PR was created.
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm.ShipResult = git.ShipResult{PRNumber: 0}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel to simulate Ctrl-C
+
+	handlePostSignalCall(l, postSignalParams{
+		ctx:        ctx,
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "before",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-ctrlc2",
+		nextTask:   "Fix bug",
+	})
+
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 0 {
+		t.Errorf("Ctrl-C: bead must not be closed on no-PR path, got %v", backend.ClosedIDs)
+	}
+}
+
+// Ctrl-C (pre-cancelled context) inside finalizePR leaves the bead open.
+// Proves that SIGINT before CloseTask in finalizePR does not close the bead
+// even when a PR was successfully created.
+func TestHandlePostSignal_CancelledCtx_FinalizePR_BeadStaysOpen(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-ctrlc3"}},
+	}
+
+	// HeadRevValue != headBefore so no-commits branch is skipped.
+	// Ship returns a PR so finalizePR is called.
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm.ShipResult = git.ShipResult{PRNumber: 99, PRURL: "https://github.com/example/repo/pull/99"}
+	gm.PRState = git.PRStateOpen
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     false, // skip merge attempt, go straight to close
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel to simulate Ctrl-C
+
+	handlePostSignalCall(l, postSignalParams{
+		ctx:        ctx,
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "before",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-ctrlc3",
+		nextTask:   "Fix bug",
+	})
+
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 0 {
+		t.Errorf("Ctrl-C: bead must not be closed in finalizePR path, got %v", backend.ClosedIDs)
 	}
 }

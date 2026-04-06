@@ -927,3 +927,4 @@ func TestHandlePostSignal_FeedbackFileStopsPostSignal(t *testing.T) {
 		t.Errorf("task should not be closed when feedback arrives, got %v", backend.ClosedIDs)
 	}
 }
+
