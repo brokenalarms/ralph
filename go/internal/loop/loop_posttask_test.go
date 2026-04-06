@@ -540,6 +540,52 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 	}
 }
 
+// runPostTask logs a clear message at startup when no ralph:post-task script
+// is found in package.json and no --post-task CLI flag is set.
+func TestLoop_PostTaskScript_LogsWhenNotConfigured(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	var logBuf bytes.Buffer
+	logger := logging.New(&logBuf)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-npt"}},
+	}
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm.ShipResult = git.ShipResult{PRNumber: 10}
+	gm.MergeRetryResult = true
+
+	// No PostTask CLI flag and no package.json — must log "skipping post-task".
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     true,
+	}, st, gm, logger)
+	l.runner = &stubRunner{}
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	handlePostSignalCall(l, postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-npt",
+		nextTask:   "Fix bug",
+	})
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "No ralph:post-task script found in package.json and no --post-task CLI flag — skipping post-task") {
+		t.Errorf("expected 'skipping post-task' log message, got: %s", logOutput)
+	}
+}
+
 // runPostTask is called in the no-commits path (signalSkipped) with merged=false.
 func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 	dir, st := setupTestDir(t)
@@ -592,7 +638,7 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 	}
 }
 
-// runPostTask detects ralph:posttask in package.json and runs it even when
+// runPostTask detects ralph:post-task in package.json and runs it even when
 // no --post-task CLI flag is set, proving package.json is the priority source.
 func TestLoop_PostTaskScript_PackageJSONDetection(t *testing.T) {
 	dir, st := setupTestDir(t)
@@ -600,11 +646,11 @@ func TestLoop_PostTaskScript_PackageJSONDetection(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	// Write package.json with ralph:posttask script that records env vars.
+	// Write package.json with ralph:post-task script that records env vars.
 	envFile := filepath.Join(dir, "post-task-env.txt")
-	scriptPath := filepath.Join(dir, "posttask.sh")
+	scriptPath := filepath.Join(dir, "post-task.sh")
 	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\necho \"TASK=$RALPH_TASK_ID PR=$RALPH_PR_NUMBER MERGED=$RALPH_MERGED\" > %s\n", envFile)), 0o755)
-	pkgJSON := fmt.Sprintf(`{"scripts":{"ralph:posttask":"sh %s"}}`, scriptPath)
+	pkgJSON := fmt.Sprintf(`{"scripts":{"ralph:post-task":"sh %s"}}`, scriptPath)
 	os.WriteFile(filepath.Join(dir, "package.json"), []byte(pkgJSON), 0o644)
 
 	backend := &testutil.TrackingBackend{
@@ -642,7 +688,7 @@ func TestLoop_PostTaskScript_PackageJSONDetection(t *testing.T) {
 
 	data, err := os.ReadFile(envFile)
 	if err != nil {
-		t.Fatalf("ralph:posttask script was not run: %v", err)
+		t.Fatalf("ralph:post-task script was not run: %v", err)
 	}
 	got := strings.TrimSpace(string(data))
 	want := "TASK=ralph-pkg1 PR=77 MERGED=true"
