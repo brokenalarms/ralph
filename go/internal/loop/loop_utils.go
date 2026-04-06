@@ -97,9 +97,9 @@ func skipTask(backend tasks.Backend, st *state.Store, logger *logging.Logger, id
 	}
 }
 
-// isOnline checks internet connectivity with a quick DNS lookup.
-func isOnline() bool {
-	conn, err := net.DialTimeout("tcp", "api.anthropic.com:443", 3*time.Second)
+// isOnline checks internet connectivity with a quick TCP dial.
+func isOnline(timeout time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", "api.anthropic.com:443", timeout)
 	if err != nil {
 		return false
 	}
@@ -110,15 +110,15 @@ func isOnline() bool {
 // waitForInternet blocks until internet connectivity is restored.
 // Shows a single updating line in the terminal log, writes one summary
 // line to the log file when restored. Returns false if context is cancelled.
-func waitForInternet(ctx context.Context, logger *logging.Logger) bool {
-	if isOnline() {
+func waitForInternet(ctx context.Context, logger *logging.Logger, interval, checkTimeout time.Duration) bool {
+	if isOnline(checkTimeout) {
 		return true
 	}
 
 	start := time.Now()
 	logger.Emit(logging.Opts{Level: logging.Warn}, "Internet unreachable — waiting for connectivity...")
 
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -126,7 +126,7 @@ func waitForInternet(ctx context.Context, logger *logging.Logger) bool {
 		case <-ctx.Done():
 			return false
 		case <-ticker.C:
-			if isOnline() {
+			if isOnline(checkTimeout) {
 				elapsed := time.Since(start).Truncate(time.Second)
 				logger.Emit(logging.Opts{Level: logging.Success}, "Internet restored after %s", elapsed)
 				return true
@@ -155,6 +155,7 @@ func checkGitHubConnectivity(ctx context.Context) error {
 type runVerifyBuildParams struct {
 	verifyBuild string
 	projectDir  string
+	testTimeout time.Duration
 	logger      *logging.Logger
 }
 
@@ -166,7 +167,7 @@ func runVerifyBuild(ctx context.Context, p runVerifyBuildParams) string {
 	if p.verifyBuild == "" {
 		return ""
 	}
-	ctx, cancel := context.WithTimeout(ctx, verify.TestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, p.testTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "-c", p.verifyBuild)
 	cmd.Dir = p.projectDir

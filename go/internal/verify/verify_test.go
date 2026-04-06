@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
 )
 
@@ -128,17 +129,21 @@ func TestRunTests_PassingTests(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\ttrue\n"), 0o644)
 
-	result := RunTests(context.Background(), dir)
+	result := RunTests(context.Background(), 5*time.Minute, dir)
 	if !result.Passed {
 		t.Errorf("expected tests to pass, got: %s", result.Reason)
 	}
 }
 
-// TestTimeout is 5 minutes — enough for ralph's own suite (~3 min)
+// Default test timeout in config is 5 minutes — enough for ralph's own suite (~3 min)
 // without masking genuinely hanging tests.
 func TestTestTimeout_Default(t *testing.T) {
-	if TestTimeout != 5*time.Minute {
-		t.Errorf("TestTimeout = %v, want 5m", TestTimeout)
+	defaults := config.Defaults()
+	if defaults.TestTimeout != 5*time.Minute {
+		t.Errorf("config.Defaults().TestTimeout = %v, want 5m", defaults.TestTimeout)
+	}
+	if defaults.CompileCheckTimeout != 60*time.Second {
+		t.Errorf("config.Defaults().CompileCheckTimeout = %v, want 60s", defaults.CompileCheckTimeout)
 	}
 }
 
@@ -149,11 +154,7 @@ func TestRunTests_Timeout(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\tsleep 1\n"), 0o644)
 
-	saved := TestTimeout
-	TestTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { TestTimeout = saved })
-
-	result := RunTests(context.Background(), dir)
+	result := RunTests(context.Background(), 50*time.Millisecond, dir)
 	if result.Passed {
 		t.Error("expected tests to fail when timeout expires")
 	}
@@ -174,7 +175,7 @@ func TestRunTests_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	result := RunTests(ctx, dir)
+	result := RunTests(ctx, 5*time.Minute, dir)
 	if result.Passed {
 		t.Error("expected tests to fail with cancelled context")
 	}
@@ -186,7 +187,7 @@ func TestRunTests_FailingTests(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\tfalse\n"), 0o644)
 
-	result := RunTests(context.Background(), dir)
+	result := RunTests(context.Background(), 5*time.Minute, dir)
 	if result.Passed {
 		t.Error("expected tests to fail")
 	}
@@ -202,7 +203,7 @@ func TestRunTests_NoTestRunner(t *testing.T) {
 	// so callers can distinguish configuration errors from test failures.
 	dir := t.TempDir()
 
-	result := RunTests(context.Background(), dir)
+	result := RunTests(context.Background(), 5*time.Minute, dir)
 	if result.Passed {
 		t.Error("expected failure when no ralph:verify script found")
 	}
@@ -588,7 +589,7 @@ func TestCompileCheck_PassingProject(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "main_test.go"), []byte("package main\nimport \"testing\"\nfunc TestNoop(t *testing.T) {}\n"), 0o644)
 
-	result := CompileCheck(context.Background(), dir)
+	result := CompileCheck(context.Background(), 60*time.Second, dir)
 	if !result.Passed {
 		t.Errorf("expected compile check to pass, got: %s\n%s", result.Reason, result.Details)
 	}
@@ -602,7 +603,7 @@ func TestCompileCheck_BrokenStub(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "main_test.go"), []byte("package main\nimport \"testing\"\nfunc TestBroken(t *testing.T) { undefined() }\n"), 0o644)
 
-	result := CompileCheck(context.Background(), dir)
+	result := CompileCheck(context.Background(), 60*time.Second, dir)
 	if result.Passed {
 		t.Error("expected compile check to fail for broken test file")
 	}
@@ -627,7 +628,7 @@ func TestCompileCheck_FiltersPassingPackages(t *testing.T) {
 	os.WriteFile(filepath.Join(badDir, "bad.go"), []byte("package bad\n"), 0o644)
 	os.WriteFile(filepath.Join(badDir, "bad_test.go"), []byte("package bad\nimport \"testing\"\nfunc TestBad(t *testing.T) { undefined() }\n"), 0o644)
 
-	result := CompileCheck(context.Background(), dir)
+	result := CompileCheck(context.Background(), 60*time.Second, dir)
 	if result.Passed {
 		t.Fatal("expected compile check to fail")
 	}
@@ -648,7 +649,7 @@ func TestCompileCheck_GoSubdirectory(t *testing.T) {
 	os.WriteFile(filepath.Join(goDir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644)
 	os.WriteFile(filepath.Join(goDir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644)
 
-	result := CompileCheck(context.Background(), dir)
+	result := CompileCheck(context.Background(), 60*time.Second, dir)
 	if !result.Passed {
 		t.Errorf("expected compile check to pass with go/ subdir, got: %s\n%s", result.Reason, result.Details)
 	}
@@ -659,7 +660,7 @@ func TestCompileCheck_NonGoProject(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{}`), 0o644)
 
-	result := CompileCheck(context.Background(), dir)
+	result := CompileCheck(context.Background(), 60*time.Second, dir)
 	if !result.Passed {
 		t.Errorf("expected pass for non-Go project, got: %s", result.Reason)
 	}
@@ -674,7 +675,7 @@ func TestCompileCheck_TypeScriptPasses(t *testing.T) {
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 	os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(`{}`), 0o644)
 
-	result := CompileCheck(context.Background(), dir)
+	result := CompileCheck(context.Background(), 60*time.Second, dir)
 	if !result.Passed {
 		t.Errorf("expected TypeScript compile check to pass, got: %s\n%s", result.Reason, result.Details)
 	}
@@ -689,7 +690,7 @@ func TestCompileCheck_TypeScriptFails(t *testing.T) {
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 	os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(`{}`), 0o644)
 
-	result := CompileCheck(context.Background(), dir)
+	result := CompileCheck(context.Background(), 60*time.Second, dir)
 	if result.Passed {
 		t.Error("expected TypeScript compile check to fail for type error")
 	}
@@ -712,7 +713,7 @@ func TestCompileCheck_TypeScriptNPMTypecheck(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(`{}`), 0o644)
 	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"typecheck":"tsc --noEmit"}}`), 0o644)
 
-	result := CompileCheck(context.Background(), dir)
+	result := CompileCheck(context.Background(), 60*time.Second, dir)
 	if !result.Passed {
 		t.Errorf("expected npm run typecheck to pass, got: %s\n%s", result.Reason, result.Details)
 	}
@@ -729,7 +730,7 @@ func TestCompileCheck_BothGoAndTypeScript(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(`{}`), 0o644)
 
-	result := CompileCheck(context.Background(), dir)
+	result := CompileCheck(context.Background(), 60*time.Second, dir)
 	if !result.Passed {
 		t.Errorf("expected both checks to pass, got: %s\n%s", result.Reason, result.Details)
 	}
@@ -798,7 +799,7 @@ func TestRunTests_PopulatesCommandAndDir(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\ttrue\n"), 0o644)
 
-	result := RunTests(context.Background(), dir)
+	result := RunTests(context.Background(), 5*time.Minute, dir)
 	if result.Command != "make ralph-verify" {
 		t.Errorf("expected Command='make ralph-verify', got %q", result.Command)
 	}
@@ -813,7 +814,7 @@ func TestRunTests_PopulatesCommandOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\tfalse\n"), 0o644)
 
-	result := RunTests(context.Background(), dir)
+	result := RunTests(context.Background(), 5*time.Minute, dir)
 	if result.Passed {
 		t.Fatal("expected failure")
 	}
@@ -831,7 +832,7 @@ func TestCompileCheck_PopulatesCommand_Go(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644)
 
-	result := CompileCheck(context.Background(), dir)
+	result := CompileCheck(context.Background(), 60*time.Second, dir)
 	if !result.Passed {
 		t.Fatalf("expected pass, got: %s\n%s", result.Reason, result.Details)
 	}
@@ -851,7 +852,7 @@ func TestCompileCheck_PopulatesCommand_TS(t *testing.T) {
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 	os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(`{}`), 0o644)
 
-	result := CompileCheck(context.Background(), dir)
+	result := CompileCheck(context.Background(), 60*time.Second, dir)
 	if !result.Passed {
 		t.Fatalf("expected pass, got: %s", result.Reason)
 	}
@@ -870,7 +871,7 @@ func TestCompileCheck_PopulatesCommand_Both(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(`{}`), 0o644)
 
-	result := CompileCheck(context.Background(), dir)
+	result := CompileCheck(context.Background(), 60*time.Second, dir)
 	if !result.Passed {
 		t.Fatalf("expected pass, got: %s", result.Reason)
 	}

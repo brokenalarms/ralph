@@ -87,6 +87,26 @@ type Config struct {
 	Notify                  bool
 	CIPollTimeout           time.Duration
 
+	// Review timeouts — how long to wait for automated code reviewers.
+	CopilotReviewTimeout        time.Duration
+	CopilotOpportunisticTimeout time.Duration
+	CodeRabbitReviewTimeout     time.Duration
+
+	// Attempt limits — maximum retries before giving up or skipping.
+	MaxPromptAttempts      int
+	MaxMergeFailures       int
+	MaxIdleTimeoutFailures int
+	MaxLLMVerifyAttempts   int
+	MaxTestFixAttempts     int
+
+	// Test/compile timeouts.
+	TestTimeout         time.Duration
+	CompileCheckTimeout time.Duration
+
+	// Network timeouts for connectivity checks.
+	ConnectivityCheckTimeout time.Duration
+	InternetRestoreInterval  time.Duration
+
 	cliSet map[string]bool
 }
 
