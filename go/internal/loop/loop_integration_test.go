@@ -3004,5 +3004,126 @@ func TestIntegration_CreatePRViaAPI_SpecialCharsJSON(t *testing.T) {
 	}
 }
 
+// Simulate evolve rebase pulling a user commit from main: the agent receives
+// the rebase-baseline instruction in its prompt, verification passes, and the
+// user's file changes survive — proving the agent does not revert them.
+func TestIntegration_EvolveRebasePreservesUserCommits(t *testing.T) {
+	dir, ralphDir, _, st := setupIntegrationTest(t)
+
+	// Use the real internal.md from the prompts shipped with the binary so the
+	// rebase-baseline instruction is present in the assembled prompt.
+	realPromptsDir := filepath.Join("..", "..", "cmd", "ralph", "prompts")
+	if _, err := os.Stat(filepath.Join(realPromptsDir, "internal.md")); err != nil {
+		t.Skipf("real prompts dir not found at %s: %v", realPromptsDir, err)
+	}
+
+	// Create a file representing a user commit pulled from main via rebase.
+	userFile := filepath.Join(dir, "config.go")
+	userContent := []byte("package main\n\n// user's intentional refactor\nvar Version = \"2.0\"\n")
+	os.WriteFile(userFile, userContent, 0o644)
+
+	// Seed stale attempt history referencing the user-modified file as a
+	// "regression" — this is the scenario where the agent might revert.
+	attemptsDir := filepath.Join(ralphDir, "attempts")
+	os.MkdirAll(attemptsDir, 0o755)
+	staleAttempt := "### Attempt 1\n" +
+		"Summary: attempted to fix config.go but it regressed — Version changed unexpectedly\n" +
+		"Changes: config.go 3 insertions\n" +
+		"Analysis: warn:stuck\n"
+	os.WriteFile(filepath.Join(attemptsDir, "ralph-rb1.log"), []byte(staleAttempt), 0o644)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Completed = 0
+	backend.Total = 1
+	backend.NextTask = "Fix logging format"
+	backend.NextID = "ralph-rb1"
+	backend.BackendLabel = "beads"
+
+	ghStub := git.NewStubGitHub()
+	ghStub.OpenPR = 0
+	ghStub.PRNumber = 0
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/next",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		GitHubStub:     ghStub,
+		DiffStatValue:  "config.go | 3 +++\n 1 file changed, 3 insertions(+)",
+	}
+
+	var capturedPrompt string
+	runner := &stubRunner{
+		onRunCfg: func(cfg claude.RunConfig) {
+			capturedPrompt = cfg.Prompt
+			// Simulate agent making a commit (on the task, not reverting user file).
+			gm.HeadRevValue = "agent-commit-123"
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "fixed logging format"},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: realPromptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+
+	l.runner = runner
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+	gm.ShipResult = git.ShipResult{PRNumber: 55}
+	gm.MergeRetryResult = true
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Criterion 1: prompt contains the rebase-baseline instruction.
+	if !strings.Contains(capturedPrompt, "Never revert") {
+		t.Error("prompt must contain 'Never revert' instruction for rebase baseline")
+	}
+	if !strings.Contains(capturedPrompt, "new baseline") {
+		t.Error("prompt must contain 'new baseline' instruction")
+	}
+
+	// Criterion 6: stale reflection content is present but overridden by instruction.
+	if !strings.Contains(capturedPrompt, "regressed") {
+		t.Error("stale attempt history referencing 'regressed' should be present in prompt")
+	}
+
+	// Criterion 5: user's file from main is preserved — agent did not revert it.
+	got, readErr := os.ReadFile(userFile)
+	if readErr != nil {
+		t.Fatalf("user file should still exist: %v", readErr)
+	}
+	if string(got) != string(userContent) {
+		t.Errorf("user's commit was reverted!\nwant: %s\ngot:  %s", userContent, got)
+	}
+
+	// Criterion 2: task completed successfully (closed with PR reference).
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) == 0 {
+		t.Fatal("expected task to be closed after successful verification")
+	}
+	if backend.ClosedIDs[0] != "ralph-rb1" {
+		t.Errorf("expected close for ralph-rb1, got %q", backend.ClosedIDs[0])
+	}
+}
+
 // Ensure the integrationBackend satisfies tasks.Backend.
 var _ tasks.Backend = (*integrationBackend)(nil)
