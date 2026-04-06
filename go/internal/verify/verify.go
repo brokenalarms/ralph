@@ -12,10 +12,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/config"
 )
 
-// TestTimeout is the maximum duration RunTests will wait for the test
-// command to complete. Exported so tests can override it.
-var TestTimeout = 5 * time.Minute
-
 // GitQuerier abstracts the git operations that verify needs, allowing the
 // package to work without calling git package-level functions directly.
 type GitQuerier interface {
@@ -145,7 +141,7 @@ func DetectPostTask(dirs ...string) *TestCommand {
 // Accepts multiple directories checked in order — the command runs in the
 // first directory where ralph:verify is found. Returns a failure if no
 // ralph:verify command is detected.
-func RunTests(ctx context.Context, dirs ...string) Result {
+func RunTests(ctx context.Context, timeout time.Duration, dirs ...string) Result {
 	tc := DetectTestCommand(dirs...)
 	if tc == nil {
 		return Result{Passed: false, ScriptMissing: true, Reason: "no ralph:verify script found — add a \"ralph:verify\" script to package.json"}
@@ -153,7 +149,7 @@ func RunTests(ctx context.Context, dirs ...string) Result {
 
 	command := tc.Cmd + " " + strings.Join(tc.Args, " ")
 
-	ctx, cancel := context.WithTimeout(ctx, TestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, tc.Cmd, tc.Args...)
@@ -167,7 +163,7 @@ func RunTests(ctx context.Context, dirs ...string) Result {
 		if ctx.Err() == context.DeadlineExceeded {
 			reason = fmt.Sprintf(
 				"test suite timed out after %s — a test may be hanging. Do not run the full suite; run individual test files to isolate",
-				TestTimeout.Truncate(time.Second),
+				timeout.Truncate(time.Second),
 			)
 		}
 		return Result{
@@ -376,16 +372,12 @@ func callLLM(ctx context.Context, workDir, prompt string, queryFn QueryFunc, mod
 	return Result{Passed: true, Reason: "LLM verified: " + response}
 }
 
-// CompileCheckTimeout is the maximum duration CompileCheck will wait for the
-// compilation to complete. Exported so tests can override it.
-var CompileCheckTimeout = 60 * time.Second
-
 // CompileCheck verifies that all packages (including test files) compile
 // without running any tests. Checks Go projects via go test -run=^$ and
 // TypeScript projects via tsc --noEmit (or npm run typecheck when available).
 // Both checks run when a project contains both go.mod and tsconfig.json.
-func CompileCheck(ctx context.Context, dir string) Result {
-	ctx, cancel := context.WithTimeout(ctx, CompileCheckTimeout)
+func CompileCheck(ctx context.Context, timeout time.Duration, dir string) Result {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	foundAny := false

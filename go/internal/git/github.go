@@ -135,7 +135,11 @@ type GitHub interface {
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
-type ghCLI struct{}
+type ghCLI struct {
+	CopilotGatedTimeout         time.Duration
+	CopilotOpportunisticTimeout time.Duration
+	CodeRabbitTimeout           time.Duration
+}
 
 func (g *ghCLI) Available() bool {
 	p, err := exec.LookPath("gh")
@@ -630,8 +634,10 @@ func (g *ghCLI) DetectActiveReviewers(nwo string) ([]Reviewer, error) {
 			}
 			reviewer := r
 			reviewer.ReviewOnPush = reviewOnPush
-			if !reviewOnPush {
-				reviewer.DefaultTimeout = 90 * time.Second
+			if reviewOnPush {
+				reviewer.DefaultTimeout = g.CopilotGatedTimeout
+			} else {
+				reviewer.DefaultTimeout = g.CopilotOpportunisticTimeout
 			}
 			active = append(active, reviewer)
 		}

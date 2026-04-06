@@ -21,6 +21,6 @@ type Reviewer struct {
 // Detection uses per-reviewer probes — only reviewers with a supported probe
 // are returned by DetectActiveReviewers.
 var Known = []Reviewer{
-	{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second},
-	{AppSlug: "coderabbitai", BotUsername: "coderabbitai[bot]", DefaultTimeout: 60 * time.Second},
+	{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer"},
+	{AppSlug: "coderabbitai", BotUsername: "coderabbitai[bot]"},
 }

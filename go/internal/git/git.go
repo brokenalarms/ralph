@@ -49,6 +49,11 @@ type Manager struct {
 	LocalTestsPassed bool
 	KnownPRNumber    int
 	CIPollTimeout    time.Duration
+
+	// Review timeouts — passed through to GitHub operations.
+	CopilotGatedTimeout        time.Duration
+	CopilotOpportunisticTimeout time.Duration
+	CodeRabbitTimeout          time.Duration
 }
 
 // GH returns the GitHub interface, using the injected stub if set (tests)
@@ -57,7 +62,11 @@ func (m *Manager) GH() GitHub {
 	if m.GitHub != nil {
 		return m.GitHub
 	}
-	return &ghCLI{}
+	return &ghCLI{
+		CopilotGatedTimeout:         m.CopilotGatedTimeout,
+		CopilotOpportunisticTimeout: m.CopilotOpportunisticTimeout,
+		CodeRabbitTimeout:           m.CodeRabbitTimeout,
+	}
 }
 
 func (m *Manager) gh() GitHub {

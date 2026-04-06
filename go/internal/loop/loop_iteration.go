@@ -821,7 +821,7 @@ func handleRunResult(ctx context.Context, p handleRunResultParams) loopAction {
 			diffStat,
 			"idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output")
 		count, _ := p.attempts.RecordIdleTimeoutFailure(p.taskID)
-		if count >= attempts.MaxIdleTimeoutFailures {
+		if count >= p.attempts.MaxIdleTimeoutFailures {
 			p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: p.model}, "Idle timeout %d times for %s — skipping task", count, p.taskID)
 			p.skipTask(p.backend, p.state, p.logger, p.taskID, "idle_timeout_max_failures")
 			return actionRetry

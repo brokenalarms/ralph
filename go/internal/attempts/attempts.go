@@ -13,12 +13,21 @@ import (
 // Tracker records and retrieves attempt history for tasks, enabling
 // the prompt to include context about previous failed attempts.
 type Tracker struct {
-	RalphDir string
+	RalphDir               string
+	MaxPromptAttempts      int
+	MaxMergeFailures       int
+	MaxIdleTimeoutFailures int
 }
 
 // New creates a Tracker that stores attempt logs in ralphDir/attempts/.
+// Limits default to 3 and are overridden by the loop config via public fields.
 func New(ralphDir string) *Tracker {
-	return &Tracker{RalphDir: ralphDir}
+	return &Tracker{
+		RalphDir:               ralphDir,
+		MaxPromptAttempts:      3,
+		MaxMergeFailures:       3,
+		MaxIdleTimeoutFailures: 3,
+	}
 }
 
 func (t *Tracker) attemptsDir() string {
@@ -62,8 +71,6 @@ func (t *Tracker) Record(taskID, taskName, summary, diffStat, analysis string) e
 	return err
 }
 
-const maxPromptAttempts = 3
-
 // Count returns the number of recorded attempts for a task (reads the full
 // attempt file, not the capped tail). Returns 0 if no attempts exist yet.
 func (t *Tracker) Count(taskID, taskName string) int {
@@ -75,14 +82,14 @@ func (t *Tracker) Count(taskID, taskName string) int {
 }
 
 // Read returns the most recent attempts for a task (capped at
-// maxPromptAttempts). All attempts remain on disk; only the tail
+// MaxPromptAttempts). All attempts remain on disk; only the tail
 // is returned to keep prompt context small.
 func (t *Tracker) Read(taskID, taskName string) string {
 	data, err := os.ReadFile(t.attemptFile(taskID, taskName))
 	if err != nil {
 		return ""
 	}
-	return lastNAttempts(string(data), maxPromptAttempts)
+	return lastNAttempts(string(data), t.MaxPromptAttempts)
 }
 
 func lastNAttempts(content string, n int) string {
@@ -180,8 +187,6 @@ func (t *Tracker) ClearForTasks(taskIDs []string) {
 	}
 }
 
-const MaxMergeFailures = 3
-
 func (t *Tracker) mergeFailureFile(taskID string) string {
 	return filepath.Join(t.attemptsDir(), taskID+".merge-failures")
 }
@@ -219,8 +224,6 @@ func (t *Tracker) ClearMergeFailures(taskID string) {
 		os.Remove(t.mergeFailureFile(taskID))
 	}
 }
-
-const MaxIdleTimeoutFailures = 3
 
 func (t *Tracker) idleTimeoutFailureFile(taskID string) string {
 	return filepath.Join(t.attemptsDir(), taskID+".idle-timeout-failures")

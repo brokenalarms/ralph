@@ -217,7 +217,7 @@ func TestDetectActiveReviewers_CopilotWithReviewOnPush(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
-	g := &ghCLI{}
+	g := &ghCLI{CopilotGatedTimeout: 120 * time.Second, CopilotOpportunisticTimeout: 90 * time.Second}
 	reviewers, err := g.DetectActiveReviewers("owner/repo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -263,7 +263,7 @@ func TestDetectActiveReviewers_CopilotWithoutReviewOnPush(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
-	g := &ghCLI{}
+	g := &ghCLI{CopilotGatedTimeout: 120 * time.Second, CopilotOpportunisticTimeout: 90 * time.Second}
 	reviewers, err := g.DetectActiveReviewers("owner/repo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -299,7 +299,7 @@ func TestDetectActiveReviewers_NoCopilotRuleset(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
-	g := &ghCLI{}
+	g := &ghCLI{CopilotGatedTimeout: 120 * time.Second, CopilotOpportunisticTimeout: 90 * time.Second}
 	reviewers, err := g.DetectActiveReviewers("owner/repo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

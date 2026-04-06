@@ -16,9 +16,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/verify"
 )
 
-const maxLLMVerifyAttempts = 3
-const maxTestFixAttempts = 3
-
 // HeartbeatInterval is how often a heartbeat line is emitted while tests run.
 // Exported so tests can override it.
 var HeartbeatInterval = 30 * time.Second
@@ -34,6 +31,10 @@ type VerifierConfig struct {
 	PromptsDir            string
 	RalphDir              string
 	IdleTimeout           time.Duration
+	MaxLLMVerifyAttempts  int
+	MaxTestFixAttempts    int
+	TestTimeout           time.Duration
+	CompileCheckTimeout   time.Duration
 }
 
 // VerifierDeps holds the injected dependencies for the Verifier.
@@ -67,6 +68,18 @@ func NewVerifier(cfg VerifierConfig, deps VerifierDeps) *Verifier {
 		llmVerify = verify.LLMVerifyPR
 	}
 	deps.LLMVerify = llmVerify
+	if cfg.MaxLLMVerifyAttempts == 0 {
+		cfg.MaxLLMVerifyAttempts = 3
+	}
+	if cfg.MaxTestFixAttempts == 0 {
+		cfg.MaxTestFixAttempts = 3
+	}
+	if cfg.TestTimeout == 0 {
+		cfg.TestTimeout = 5 * time.Minute
+	}
+	if cfg.CompileCheckTimeout == 0 {
+		cfg.CompileCheckTimeout = 60 * time.Second
+	}
 	return &Verifier{cfg: cfg, deps: deps}
 }
 
@@ -141,10 +154,10 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 func (v *Verifier) testFixLoop(p signalParams, beadDesc, beadAcceptance, testDetails string) bool {
 	for {
 		v.testFixAttempts++
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Tests failed (attempt %d/%d)", v.testFixAttempts, maxTestFixAttempts)
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Tests failed (attempt %d/%d)", v.testFixAttempts, v.cfg.MaxTestFixAttempts)
 
-		if v.testFixAttempts > maxTestFixAttempts {
-			v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "Tests still failing after %d attempts — giving up", maxTestFixAttempts)
+		if v.testFixAttempts > v.cfg.MaxTestFixAttempts {
+			v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "Tests still failing after %d attempts — giving up", v.cfg.MaxTestFixAttempts)
 			return false
 		}
 
@@ -165,7 +178,7 @@ func (v *Verifier) testFixLoop(p signalParams, beadDesc, beadAcceptance, testDet
 
 // tryFixTests spawns a fix agent to address test failures.
 func (v *Verifier) tryFixTests(p signalParams, beadDesc, beadAcceptance, testDetails string) bool {
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Spawning fix agent for test failures (attempt %d/%d)", v.testFixAttempts, maxTestFixAttempts)
+	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Spawning fix agent for test failures (attempt %d/%d)", v.testFixAttempts, v.cfg.MaxTestFixAttempts)
 
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 	fixPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{
@@ -184,7 +197,7 @@ func (v *Verifier) tryFixTests(p signalParams, beadDesc, beadAcceptance, testDet
 // when attempts are exhausted. Uses its own attempt counter separate from
 // test fix attempts.
 func (v *Verifier) compileFixLoop(p signalParams, beadAcceptance string) bool {
-	compileResult := verify.CompileCheck(p.ctx, v.cfg.VerifyDir)
+	compileResult := verify.CompileCheck(p.ctx, v.cfg.CompileCheckTimeout, v.cfg.VerifyDir)
 	if compileResult.Passed {
 		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build}, "Compile check passed")
 		return true
@@ -197,12 +210,12 @@ func (v *Verifier) compileFixLoop(p signalParams, beadAcceptance string) bool {
 	}
 	for {
 		compileAttempts++
-		if compileAttempts > maxTestFixAttempts {
-			v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Error}, "Compile check still failing after %d fix attempts — giving up", maxTestFixAttempts)
+		if compileAttempts > v.cfg.MaxTestFixAttempts {
+			v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Error}, "Compile check still failing after %d fix attempts — giving up", v.cfg.MaxTestFixAttempts)
 			return false
 		}
 
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Compile check failed — spawning fix agent (attempt %d/%d)", compileAttempts, maxTestFixAttempts)
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Compile check failed — spawning fix agent (attempt %d/%d)", compileAttempts, v.cfg.MaxTestFixAttempts)
 
 		signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 		fixPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{
@@ -217,7 +230,7 @@ func (v *Verifier) compileFixLoop(p signalParams, beadAcceptance string) bool {
 			return false
 		}
 
-		recheck := verify.CompileCheck(p.ctx, v.cfg.VerifyDir)
+		recheck := verify.CompileCheck(p.ctx, v.cfg.CompileCheckTimeout, v.cfg.VerifyDir)
 		if recheck.Passed {
 			v.deps.Logger.Emit(logging.Opts{Domain: logging.Build}, "Compile check passed after fix agent")
 			return true
@@ -237,7 +250,7 @@ func (v *Verifier) verifyWithFixLoop(p signalParams, beadDesc, beadAcceptance st
 	for {
 		v.llmVerifyAttempts++
 		model := v.verifyModel()
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Running LLM verification (attempt %d/%d)...", v.llmVerifyAttempts, maxLLMVerifyAttempts)
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Running LLM verification (attempt %d/%d)...", v.llmVerifyAttempts, v.cfg.MaxLLMVerifyAttempts)
 		llmResult := v.deps.LLMVerify(verify.VerifyOpts{
 			Ctx:             p.ctx,
 			Git:             v.deps.Git,
@@ -259,11 +272,11 @@ func (v *Verifier) verifyWithFixLoop(p signalParams, beadDesc, beadAcceptance st
 			return true
 		}
 
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: model}, "LLM verification rejected (attempt %d/%d): %s", v.llmVerifyAttempts, maxLLMVerifyAttempts, llmResult.Details)
+		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: model}, "LLM verification rejected (attempt %d/%d): %s", v.llmVerifyAttempts, v.cfg.MaxLLMVerifyAttempts, llmResult.Details)
 
-		if v.llmVerifyAttempts >= maxLLMVerifyAttempts {
+		if v.llmVerifyAttempts >= v.cfg.MaxLLMVerifyAttempts {
 			if p.taskID != "" {
-				v.deps.SkipTask(p.taskID, fmt.Sprintf("verification_rejected_%d_attempts: %s", maxLLMVerifyAttempts, llmResult.Details))
+				v.deps.SkipTask(p.taskID, fmt.Sprintf("verification_rejected_%d_attempts: %s", v.cfg.MaxLLMVerifyAttempts, llmResult.Details))
 			}
 			return false
 		}
@@ -284,7 +297,7 @@ func (v *Verifier) verifyWithFixLoop(p signalParams, beadDesc, beadAcceptance st
 
 // tryFixVerification spawns a fix agent to address LLM verification rejection.
 func (v *Verifier) tryFixVerification(p signalParams, beadDesc, beadAcceptance, rejectionDetails string) bool {
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: v.fixModel()}, "Spawning fix agent for verification rejection (attempt %d/%d)", v.llmVerifyAttempts, maxLLMVerifyAttempts)
+	v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: v.fixModel()}, "Spawning fix agent for verification rejection (attempt %d/%d)", v.llmVerifyAttempts, v.cfg.MaxLLMVerifyAttempts)
 
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 	fixPrompt := v.loadVerifyPrompt("verify-fix.md", map[string]string{
@@ -328,7 +341,7 @@ func (v *Verifier) runTestsWithHeartbeat(ctx context.Context, dir string) (verif
 		}
 	}()
 
-	result := verify.RunTests(ctx, dir, v.cfg.ProjectDir)
+	result := verify.RunTests(ctx, v.cfg.TestTimeout, dir, v.cfg.ProjectDir)
 	return result, time.Since(start).Truncate(time.Millisecond)
 }
 
@@ -372,7 +385,7 @@ func (v *Verifier) VerifyCompletion(ctx context.Context, workDir, headBefore str
 		return false, commitResult.Reason
 	}
 
-	testResult := verify.RunTests(ctx, v.cfg.VerifyDir, v.cfg.ProjectDir)
+	testResult := verify.RunTests(ctx, v.cfg.TestTimeout, v.cfg.VerifyDir, v.cfg.ProjectDir)
 	now := time.Now().Format(time.RFC3339)
 	if !testResult.Passed {
 		v.deps.State.Write("last_test_result", "fail")
@@ -400,7 +413,7 @@ func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 
 	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Running pre-iteration test suite...")
 	testStart := time.Now()
-	result := verify.RunTests(ctx, v.cfg.VerifyDir, v.cfg.ProjectDir)
+	result := verify.RunTests(ctx, v.cfg.TestTimeout, v.cfg.VerifyDir, v.cfg.ProjectDir)
 	testElapsed := time.Since(testStart).Truncate(10 * time.Millisecond)
 	now := time.Now().Format(time.RFC3339)
 
@@ -435,7 +448,7 @@ func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 	}
 
 	compileStart := time.Now()
-	compileResult := verify.CompileCheck(ctx, v.cfg.VerifyDir)
+	compileResult := verify.CompileCheck(ctx, v.cfg.CompileCheckTimeout, v.cfg.VerifyDir)
 	compileElapsed := time.Since(compileStart).Truncate(10 * time.Millisecond)
 
 	if compileResult.Command != "" {
