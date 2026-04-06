@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -180,6 +181,7 @@ func runAndComplete(ctx context.Context, p runAndCompleteParams, task taskContex
 			autoMerge:            p.autoMerge,
 			evolve:               p.evolve,
 			notify:               p.notify,
+			ralphDir:             p.ralphDir,
 			git:             p.git,
 			backend:           p.backend,
 			state:             p.state,
@@ -261,6 +263,7 @@ type handlePostSignalOpts struct {
 	autoMerge            bool
 	evolve               bool
 	notify               bool
+	ralphDir             string
 	git             git.GitOps
 	backend         tasks.Backend
 	state           *state.Store
@@ -287,6 +290,36 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 		ctx, cancel := context.WithTimeout(p.ctx, opts.postSignalTimeout)
 		defer cancel()
 		p.ctx = ctx
+	}
+
+	// Watch for feedback file and cancel context when it appears.
+	if opts.ralphDir != "" {
+		feedbackFile := filepath.Join(opts.ralphDir, "feedback")
+		ctx, cancel := context.WithCancel(p.ctx)
+		p.ctx = ctx
+		ticker := time.NewTicker(500 * time.Millisecond)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if _, err := os.Stat(feedbackFile); err == nil {
+						os.Remove(feedbackFile)
+						opts.logger.Emit(logging.Opts{Domain: logging.Git}, "Feedback signal detected during post-signal pipeline — cancelling")
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+		defer func() {
+			cancel()
+			ticker.Stop()
+			<-done
+		}()
 	}
 
 	// Guard: if the task was already skipped during verification (e.g. 3
