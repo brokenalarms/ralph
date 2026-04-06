@@ -178,13 +178,24 @@ type runPostTaskParams struct {
 }
 
 // runPostTask executes the post-task script if configured. Checks for a
-// ralph:posttask npm script or ralph-posttask Makefile target first (worktree
+// ralph:post-task npm script or ralph-post-task Makefile target first (worktree
 // then project root); falls back to the --post-task CLI flag. Runs in the
 // project directory with RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED env vars.
 // Non-zero exit warns and continues.
 func runPostTask(ctx context.Context, p runPostTaskParams, taskID string, prNumber int, merged bool) {
-	script := verify.DetectPostTaskCommand(p.postTask, p.worktreeDir, p.projectDir)
-	if script == "" {
+	tc := verify.DetectPostTask(p.worktreeDir, p.projectDir)
+	var script string
+	var scriptDir string
+	if tc != nil {
+		script = tc.Cmd + " " + strings.Join(tc.Args, " ")
+		scriptDir = tc.Dir
+		p.logger.Emit(logging.Opts{Domain: "post-task"}, "Detected ralph:post-task script: %s (in %s)", script, scriptDir)
+	} else if p.postTask != "" {
+		script = p.postTask
+		scriptDir = p.projectDir
+		p.logger.Emit(logging.Opts{Domain: "post-task"}, "Using --post-task CLI flag: %s (in %s)", script, scriptDir)
+	} else {
+		p.logger.Emit(logging.Opts{Domain: "post-task"}, "No ralph:post-task script found in package.json and no --post-task CLI flag — skipping post-task")
 		return
 	}
 	prStr := strconv.Itoa(prNumber)

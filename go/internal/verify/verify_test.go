@@ -211,25 +211,25 @@ func TestRunTests_NoTestRunner(t *testing.T) {
 	}
 }
 
-// DetectPostTaskCommand returns "npm run ralph:posttask" when package.json has the script.
+// DetectPostTaskCommand returns "npm run ralph:post-task" when package.json has the script.
 func TestDetectPostTaskCommand_NPM(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"ralph:posttask":"node ./scripts/posttask.js"}}`), 0o644)
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"ralph:post-task":"node ./scripts/post-task.js"}}`), 0o644)
 
 	got := DetectPostTaskCommand("", dir)
-	if got != "npm run ralph:posttask" {
-		t.Errorf("expected 'npm run ralph:posttask', got %q", got)
+	if got != "npm run ralph:post-task" {
+		t.Errorf("expected 'npm run ralph:post-task', got %q", got)
 	}
 }
 
-// DetectPostTaskCommand returns "make ralph-posttask" when the Makefile target is present.
+// DetectPostTaskCommand returns "make ralph-post-task" when the Makefile target is present.
 func TestDetectPostTaskCommand_Make(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-posttask:\n\t./scripts/posttask.sh\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-post-task:\n\t./scripts/post-task.sh\n"), 0o644)
 
 	got := DetectPostTaskCommand("", dir)
-	if got != "make ralph-posttask" {
-		t.Errorf("expected 'make ralph-posttask', got %q", got)
+	if got != "make ralph-post-task" {
+		t.Errorf("expected 'make ralph-post-task', got %q", got)
 	}
 }
 
@@ -237,8 +237,8 @@ func TestDetectPostTaskCommand_Make(t *testing.T) {
 func TestDetectPostTaskCommand_CLIFallback(t *testing.T) {
 	dir := t.TempDir()
 
-	got := DetectPostTaskCommand("/path/to/posttask.sh", dir)
-	if got != "/path/to/posttask.sh" {
+	got := DetectPostTaskCommand("/path/to/post-task.sh", dir)
+	if got != "/path/to/post-task.sh" {
 		t.Errorf("expected CLI flag value, got %q", got)
 	}
 }
@@ -254,13 +254,13 @@ func TestDetectPostTaskCommand_None(t *testing.T) {
 	}
 }
 
-// DetectPostTaskCommand prefers ralph:posttask npm script over the CLI flag.
+// DetectPostTaskCommand prefers ralph:post-task npm script over the CLI flag.
 func TestDetectPostTaskCommand_NPMTakesPriorityOverCLI(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"ralph:posttask":"node ./scripts/posttask.js"}}`), 0o644)
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"ralph:post-task":"node ./scripts/post-task.js"}}`), 0o644)
 
-	got := DetectPostTaskCommand("/path/to/cli-posttask.sh", dir)
-	if got != "npm run ralph:posttask" {
+	got := DetectPostTaskCommand("/path/to/cli-post-task.sh", dir)
+	if got != "npm run ralph:post-task" {
 		t.Errorf("expected npm script to take priority, got %q", got)
 	}
 }
@@ -288,13 +288,13 @@ func TestDetectTestCommand_FallbackDir(t *testing.T) {
 // DetectPostTaskCommand finds the script in a fallback directory when the
 // primary directory does not have it.
 func TestDetectPostTaskCommand_FallbackDir(t *testing.T) {
-	primary := t.TempDir()  // simulates worktree — no ralph:posttask
-	fallback := t.TempDir() // simulates project root — has ralph:posttask
-	os.WriteFile(filepath.Join(fallback, "package.json"), []byte(`{"scripts":{"ralph:posttask":"node ./scripts/posttask.js"}}`), 0o644)
+	primary := t.TempDir()  // simulates worktree — no ralph:post-task
+	fallback := t.TempDir() // simulates project root — has ralph:post-task
+	os.WriteFile(filepath.Join(fallback, "package.json"), []byte(`{"scripts":{"ralph:post-task":"node ./scripts/post-task.js"}}`), 0o644)
 
 	got := DetectPostTaskCommand("", primary, fallback)
-	if got != "npm run ralph:posttask" {
-		t.Errorf("expected 'npm run ralph:posttask' via fallback, got %q", got)
+	if got != "npm run ralph:post-task" {
+		t.Errorf("expected 'npm run ralph:post-task' via fallback, got %q", got)
 	}
 }
 
