@@ -196,21 +196,20 @@ func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
 	}
 }
 
-// DetectActiveReviewers returns Copilot in the active list when the installations
-// endpoint reports it and the Copilot ruleset has review_on_push=true. The
-// Copilot reviewer gets ReviewOnPush=true and retains the full 120s timeout.
+// DetectActiveReviewers returns Copilot in the active list when the Copilot
+// ruleset has review_on_push=true. The Copilot reviewer gets ReviewOnPush=true
+// and retains the full 120s timeout. The /installations endpoint is never called.
 func TestDetectActiveReviewers_CopilotWithReviewOnPush(t *testing.T) {
 	bin := t.TempDir()
 	logFile := filepath.Join(bin, "gh.log")
-	installsResponse := `{"installations":[{"app_slug":"copilot-code-review"}]}`
 	listResponse := `[{"id":1,"name":"main","target":"branch","enforcement":"active"}]`
 	detailResponse := `{"id":1,"name":"main","rules":[{"type":"copilot_code_review","parameters":{"review_on_push":true}}]}`
 	script := "#!/bin/sh\n" +
 		"echo \"$@\" >> " + logFile + "\n" +
 		"case \"$@\" in\n" +
-		"  *installations*) echo '" + installsResponse + "' ;;\n" +
 		"  *rulesets/1*) echo '" + detailResponse + "' ;;\n" +
 		"  *rulesets*) echo '" + listResponse + "' ;;\n" +
+		"  *) exit 1 ;;\n" +
 		"esac\n"
 	ghPath := filepath.Join(bin, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
@@ -238,8 +237,8 @@ func TestDetectActiveReviewers_CopilotWithReviewOnPush(t *testing.T) {
 
 	raw, _ := os.ReadFile(logFile)
 	log := string(raw)
-	if !strings.Contains(log, "installations") {
-		t.Errorf("expected installations endpoint call, got: %q", log)
+	if strings.Contains(log, "installations") {
+		t.Errorf("DetectActiveReviewers must not call /installations endpoint, got: %q", log)
 	}
 	if !strings.Contains(log, "repos/owner/repo/rulesets") {
 		t.Errorf("expected rulesets endpoint call, got: %q", log)
@@ -250,14 +249,13 @@ func TestDetectActiveReviewers_CopilotWithReviewOnPush(t *testing.T) {
 // the Copilot ruleset has review_on_push=false, since the review is opportunistic.
 func TestDetectActiveReviewers_CopilotWithoutReviewOnPush(t *testing.T) {
 	bin := t.TempDir()
-	installsResponse := `{"installations":[{"app_slug":"copilot-code-review"}]}`
 	listResponse := `[{"id":1,"name":"main","target":"branch","enforcement":"active"}]`
 	detailResponse := `{"id":1,"name":"main","rules":[{"type":"copilot_code_review","parameters":{"review_on_push":false}}]}`
 	script := "#!/bin/sh\n" +
 		"case \"$@\" in\n" +
-		"  *installations*) echo '" + installsResponse + "' ;;\n" +
 		"  *rulesets/1*) echo '" + detailResponse + "' ;;\n" +
 		"  *rulesets*) echo '" + listResponse + "' ;;\n" +
+		"  *) exit 1 ;;\n" +
 		"esac\n"
 	ghPath := filepath.Join(bin, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
@@ -281,12 +279,20 @@ func TestDetectActiveReviewers_CopilotWithoutReviewOnPush(t *testing.T) {
 	}
 }
 
-// DetectActiveReviewers returns an empty list when no known reviewers are installed,
-// proving the loop skips polling when no apps are configured.
-func TestDetectActiveReviewers_NoKnownReviewersInstalled(t *testing.T) {
+// DetectActiveReviewers returns an empty list when no copilot_code_review ruleset
+// exists, proving the loop skips polling when Copilot is not configured.
+func TestDetectActiveReviewers_NoCopilotRuleset(t *testing.T) {
 	bin := t.TempDir()
-	installsResponse := `{"installations":[{"app_slug":"some-other-app"}]}`
-	script := "#!/bin/sh\necho '" + installsResponse + "'\n"
+	logFile := filepath.Join(bin, "gh.log")
+	listResponse := `[{"id":1,"name":"main","target":"branch","enforcement":"active"}]`
+	detailResponse := `{"id":1,"name":"main","rules":[{"type":"required_status_checks","parameters":{}}]}`
+	script := "#!/bin/sh\n" +
+		"echo \"$@\" >> " + logFile + "\n" +
+		"case \"$@\" in\n" +
+		"  *rulesets/1*) echo '" + detailResponse + "' ;;\n" +
+		"  *rulesets*) echo '" + listResponse + "' ;;\n" +
+		"  *) exit 1 ;;\n" +
+		"esac\n"
 	ghPath := filepath.Join(bin, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -299,7 +305,11 @@ func TestDetectActiveReviewers_NoKnownReviewersInstalled(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(reviewers) != 0 {
-		t.Errorf("expected 0 active reviewers when no known apps installed, got %d", len(reviewers))
+		t.Errorf("expected 0 active reviewers when no copilot ruleset configured, got %d", len(reviewers))
+	}
+	raw, _ := os.ReadFile(logFile)
+	if strings.Contains(string(raw), "installations") {
+		t.Errorf("DetectActiveReviewers must not call /installations endpoint")
 	}
 }
 
