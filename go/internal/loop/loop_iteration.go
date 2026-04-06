@@ -377,6 +377,10 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 		// That's sufficient proof the work is on main — close the bead.
 		opts.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits — verified complete, closing bead")
 		if p.taskID != "" {
+			if p.ctx.Err() != nil {
+				opts.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+				return handlePostSignalOut{action: signalComplete}
+			}
 			closeReason := "verified complete (no new commits)"
 			ref, _ := opts.backend.GetExternalRef(p.taskID)
 			if prNum := parsePRNumber(ref); prNum != 0 {
@@ -443,6 +447,10 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 	if prNumber == 0 {
 		opts.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No PR created — closing bead for task %s", p.taskID)
 		if p.taskID != "" {
+			if p.ctx.Err() != nil {
+				opts.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+				return handlePostSignalOut{action: signalComplete, ct: &ct}
+			}
 			branch := opts.git.GetWorktreeBranch()
 			closeReason := "Verified — no PR created"
 			if branch != "" {
@@ -695,6 +703,10 @@ func finalizePR(p finalizePRParams) finalizePRResult {
 	stateReason := "ralph: PR open or stacked"
 	if merged {
 		stateReason = "ralph: PR merged"
+	}
+	if p.ctx.Err() != nil {
+		p.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+		return finalizePRResult{merged: merged}
 	}
 	_ = p.backend.SetState(p.taskID, "phase", "verified", stateReason)
 	if err := p.backend.CloseTask(p.taskID, closeReason); err != nil {
