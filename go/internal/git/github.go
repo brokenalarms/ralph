@@ -616,44 +616,25 @@ func (g *ghCLI) GetPR(nwo string, prNumber int) (*PRDetail, error) {
 	}, nil
 }
 
-// DetectActiveReviewers queries the repo's installed GitHub Apps, cross-
-// references against Known, and for Copilot additionally checks rulesets to
-// set the correct polling timeout.
+// DetectActiveReviewers probes the repo for known automated reviewers using
+// endpoints that work with standard OAuth tokens. For Copilot, it uses the
+// rulesets endpoint (checkCopilotRulesets). Reviewers with no probe are skipped.
 func (g *ghCLI) DetectActiveReviewers(nwo string) ([]Reviewer, error) {
-	cmd := exec.Command("gh", "api", fmt.Sprintf("repos/%s/installations", nwo))
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("gh api installations: %w", err)
-	}
-	var resp struct {
-		Installations []struct {
-			AppSlug string `json:"app_slug"`
-		} `json:"installations"`
-	}
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return nil, fmt.Errorf("parsing installations: %w", err)
-	}
-	slugSet := make(map[string]bool, len(resp.Installations))
-	for _, inst := range resp.Installations {
-		slugSet[inst.AppSlug] = true
-	}
-
 	var active []Reviewer
 	for _, r := range Known {
-		if !slugSet[r.AppSlug] {
-			continue
-		}
-		reviewer := r
-		if r.AppSlug == "copilot-code-review" {
-			_, reviewOnPush, err := g.checkCopilotRulesets(nwo)
-			if err == nil {
-				reviewer.ReviewOnPush = reviewOnPush
-				if !reviewOnPush {
-					reviewer.DefaultTimeout = 30 * time.Second
-				}
+		switch r.AppSlug {
+		case "copilot-code-review":
+			enabled, reviewOnPush, err := g.checkCopilotRulesets(nwo)
+			if err != nil || !enabled {
+				continue
 			}
+			reviewer := r
+			reviewer.ReviewOnPush = reviewOnPush
+			if !reviewOnPush {
+				reviewer.DefaultTimeout = 30 * time.Second
+			}
+			active = append(active, reviewer)
 		}
-		active = append(active, reviewer)
 	}
 	return active, nil
 }
