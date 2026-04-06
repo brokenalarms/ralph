@@ -754,6 +754,7 @@ func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, 
 	}
 
 	infraRetries := 0
+	ciFixApplied := false
 
 	for attempt := 0; attempt < MaxMergeAttempts; attempt++ {
 		merged, err := mergeFunc(ctx)
@@ -794,6 +795,7 @@ func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, 
 			result := opts.OnCIFailure(ciErr)
 			switch result {
 			case CIFixApplied:
+				ciFixApplied = true
 				// Fix was applied and force-pushed. Wait for fresh CI
 				// checks that started after the push.
 				if opts.AwaitCI != nil {
@@ -831,6 +833,9 @@ func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, 
 		}
 
 		return false, err
+	}
+	if ciFixApplied {
+		return false, &CIFixExhaustedError{Attempts: MaxMergeAttempts}
 	}
 	return false, fmt.Errorf("merge failed after %d attempts", MaxMergeAttempts)
 }

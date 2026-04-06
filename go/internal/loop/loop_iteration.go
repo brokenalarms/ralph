@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -624,6 +625,11 @@ func finalizePR(p finalizePRParams) finalizePRResult {
 			})
 			if mergeErr != nil {
 				p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Auto-merge: %v", mergeErr)
+				var ciExhausted *git.CIFixExhaustedError
+				if errors.As(mergeErr, &ciExhausted) {
+					p.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI fix agents gave up after %d attempts — tests still failing. Leaving task %s open for manual investigation.", ciExhausted.Attempts, p.taskID)
+					return finalizePRResult{}
+				}
 			}
 			if !merged {
 				mergeFailed = true

@@ -216,6 +216,49 @@ func TestFinalizePR_MergeFailure_ClosesTask(t *testing.T) {
 	}
 }
 
+// When CI fix agents apply code changes but CI is still failing after all merge
+// attempts, finalizePR leaves the task open for manual investigation. The task
+// is NOT closed as "verified" — phase stays at implementing.
+func TestFinalizePR_CIFixExhausted_TaskStaysOpen(t *testing.T) {
+	dir, st := setupTestDir(t)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	result := finalizePR(finalizePRParams{
+		ctx:       context.Background(),
+		taskID:    "ralph-abc",
+		nextTask:  "Fix failing tests",
+		prNumber:  99,
+		prState:   "OPEN",
+		workDir:   dir,
+		autoMerge: true,
+		git:       gm,
+		logger:    logging.New(nil),
+		backend:   backend,
+		state:     st,
+		attempts:  attempts.New(dir),
+		mergeFunc: func(ctx context.Context) (bool, error) {
+			return false, &git.CIFixExhaustedError{Attempts: 3}
+		},
+	})
+
+	if result.closed {
+		t.Error("task should NOT be closed when CI fix agents exhausted — tests still failing")
+	}
+	if result.merged {
+		t.Error("task should not be merged")
+	}
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 0 {
+		t.Errorf("CloseTask must not be called when CI fix agents exhausted, got %v", backend.ClosedIDs)
+	}
+}
+
 // finalizePR with merge failure records merged:false in completed_tasks so
 // setStackHead can find the unmerged branch for the next task to stack on.
 func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testing.T) {

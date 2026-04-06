@@ -688,6 +688,54 @@ func TestMergeWithRetry_PackageFunc_MergesSuccessfully(t *testing.T) {
 	}
 }
 
+// When CIFixApplied is returned repeatedly and MaxMergeAttempts is exhausted,
+// MergeWithRetry returns CIFixExhaustedError rather than a generic error.
+// This signals genuine test failures so the loop can leave the task open.
+func TestMergeWithRetry_CIFixApplied_Exhausted_ReturnsCIFixExhaustedError(t *testing.T) {
+	ciFixCalls := 0
+	ciErr := &CIFailureError{PRNumber: 42, Failures: []CICheckResult{{Name: "tests", State: "FAILURE", Bucket: "fail"}}}
+
+	mergeFunc := func(_ context.Context) (bool, error) {
+		return false, ciErr
+	}
+
+	// Base: without CIFixApplied, returns generic error
+	_, err := MergeWithRetry(context.Background(), mergeFunc, MergeRetryOpts{
+		Logger: discardLog{},
+		OnCIFailure: func(*CIFailureError) CIFixResult {
+			return CIFixFailed // infra failure — no code applied
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var exhausted *CIFixExhaustedError
+	if errors.As(err, &exhausted) {
+		t.Error("expected non-CIFixExhaustedError when CIFixFailed returned (infra), got CIFixExhaustedError")
+	}
+
+	// Delta: with CIFixApplied, returns CIFixExhaustedError
+	_, err = MergeWithRetry(context.Background(), mergeFunc, MergeRetryOpts{
+		Logger: discardLog{},
+		OnCIFailure: func(*CIFailureError) CIFixResult {
+			ciFixCalls++
+			return CIFixApplied // fix applied but CI still failing
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error after exhaustion")
+	}
+	if !errors.As(err, &exhausted) {
+		t.Fatalf("expected CIFixExhaustedError when CIFixApplied exhausted, got %T: %v", err, err)
+	}
+	if exhausted.Attempts != MaxMergeAttempts {
+		t.Errorf("expected Attempts=%d, got %d", MaxMergeAttempts, exhausted.Attempts)
+	}
+	if ciFixCalls != MaxMergeAttempts {
+		t.Errorf("expected %d CI fix calls, got %d", MaxMergeAttempts, ciFixCalls)
+	}
+}
+
 // MergeWithRetry package function invokes ResolveConflict from opts when
 // a MergeConflictError occurs, without needing a Manager receiver.
 func TestMergeWithRetry_PackageFunc_InvokesResolveConflictFromOpts(t *testing.T) {

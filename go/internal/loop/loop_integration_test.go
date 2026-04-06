@@ -2626,14 +2626,12 @@ func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
 		t.Errorf("MergePR should not be called when CI is failing, got %d calls", realGH.MergeCalls)
 	}
 
-	// Task must still be closed (CI failure does not block task closure).
+	// Task must NOT be closed — CI fix agents applied code (CIFixApplied) but tests
+	// are still failing. The loop leaves the task open for manual investigation.
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
-	if len(backend.ClosedIDs) == 0 {
-		t.Fatal("task should be closed even when CI fails during merge")
-	}
-	if backend.ClosedIDs[0] != taskID {
-		t.Errorf("expected close for %s, got %q", taskID, backend.ClosedIDs[0])
+	if len(backend.ClosedIDs) != 0 {
+		t.Fatalf("task must not be closed when CI fix agents exhausted and tests still failing, got closed: %v", backend.ClosedIDs)
 	}
 }
 

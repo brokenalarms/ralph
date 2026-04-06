@@ -315,7 +315,8 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 }
 
 // Verifies that test fix attempts are exhausted within a single onSignal call
-// (fix agents loop internally) and onSignal returns false when max is reached.
+// (fix agents loop internally), onSignal returns false when max is reached,
+// and the task is NOT closed — it stays open for manual investigation.
 func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -325,11 +326,15 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 	// Create a Makefile with a failing test command.
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\t@echo 'FAIL: broken' && exit 1\n"), 0o644)
 
-	backend := &testutil.StubBackend{
-		Remaining: 1,
-		Total:     1,
-		NextTask:  "Fix tests",
-		NextID:    "ralph-tr1",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:  "Fix tests",
+				NextID:    "ralph-tr1",
+			},
+		},
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
@@ -372,5 +377,12 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 	}
 	if fixAttempts != maxTestFixAttempts {
 		t.Errorf("expected %d fix agent spawns, got %d", maxTestFixAttempts, fixAttempts)
+	}
+
+	// Task must NOT be closed — tests are still failing, leave open for investigation.
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 0 {
+		t.Errorf("task must not be closed when test fix agents exhausted, got %v", backend.ClosedIDs)
 	}
 }

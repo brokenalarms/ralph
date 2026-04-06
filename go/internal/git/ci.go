@@ -43,6 +43,18 @@ func (e *CIFailureError) Error() string {
 	return fmt.Sprintf("CI checks failed on PR #%d: %s", e.PRNumber, strings.Join(names, ", "))
 }
 
+// CIFixExhaustedError is returned by MergeWithRetry when CI fix agents applied
+// code changes but CI is still failing after all merge attempts. This signals
+// genuine test failures — the loop should leave the task open for manual investigation
+// rather than closing it as verified.
+type CIFixExhaustedError struct {
+	Attempts int
+}
+
+func (e *CIFixExhaustedError) Error() string {
+	return fmt.Sprintf("CI fix agents exhausted after %d attempts — tests still failing", e.Attempts)
+}
+
 // DefaultCIPollInterval is the initial time between CI status checks.
 // Each subsequent poll doubles this interval up to MaxCIPollInterval.
 const DefaultCIPollInterval = 1 * time.Second
