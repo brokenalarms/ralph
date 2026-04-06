@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -253,7 +254,7 @@ func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
 		planFile:            l.cfg.PlanFile,
 		callsPerHour:        l.cfg.CallsPerHour,
 		runVerifyBuildFn: func(ctx context.Context) string {
-			return runVerifyBuild(ctx, runVerifyBuildParams{verifyBuild: l.cfg.VerifyBuild, projectDir: l.cfg.Dirs.ProjectDir, logger: l.logger})
+			return runVerifyBuild(ctx, runVerifyBuildParams{verifyBuild: l.cfg.VerifyBuild, projectDir: l.cfg.Dirs.ProjectDir, logger: l.logger, testTimeout: 5 * time.Minute})
 		},
 		waitForInternetFunc: l.cfg.WaitForInternet,
 	}, "ralph-xyz", "Fix login")
@@ -363,7 +364,7 @@ func TestLoop_HasProgress_SnapshotsDiffState(t *testing.T) {
 				planFile:            l.cfg.PlanFile,
 				callsPerHour:        l.cfg.CallsPerHour,
 				runVerifyBuildFn: func(ctx context.Context) string {
-			return runVerifyBuild(ctx, runVerifyBuildParams{verifyBuild: l.cfg.VerifyBuild, projectDir: l.cfg.Dirs.ProjectDir, logger: l.logger})
+			return runVerifyBuild(ctx, runVerifyBuildParams{verifyBuild: l.cfg.VerifyBuild, projectDir: l.cfg.Dirs.ProjectDir, logger: l.logger, testTimeout: 5 * time.Minute})
 		},
 				isOnlineFunc:        l.cfg.IsOnline,
 				waitForInternetFunc: l.cfg.WaitForInternet,

@@ -272,8 +272,8 @@ func TestVerifier_OnSignal_TestFailure_ExhaustsRetries(t *testing.T) {
 	if result {
 		t.Fatal("expected OnSignal to return false after exhausting test fix attempts")
 	}
-	if fixAttempts != maxTestFixAttempts {
-		t.Fatalf("expected %d fix attempts, got %d", maxTestFixAttempts, fixAttempts)
+	if fixAttempts != 3 {
+		t.Fatalf("expected 3 fix attempts, got %d", fixAttempts)
 	}
 }
 

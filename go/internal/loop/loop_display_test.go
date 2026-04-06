@@ -685,7 +685,7 @@ func TestHandleRunResult_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 	l.cfg.TaskBackend = backend
 
 	tracker := attempts.New(ralphDir)
-	for i := 0; i < attempts.MaxIdleTimeoutFailures-1; i++ {
+	for i := 0; i < tracker.MaxIdleTimeoutFailures-1; i++ {
 		tracker.RecordIdleTimeoutFailure("task-it-max")
 	}
 

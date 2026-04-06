@@ -87,6 +87,19 @@ type Config struct {
 	Notify                  bool
 	CIPollTimeout           time.Duration
 
+	CopilotReviewTimeout        time.Duration
+	CopilotOpportunisticTimeout time.Duration
+	CodeRabbitReviewTimeout     time.Duration
+	MaxPromptAttempts           int
+	MaxMergeFailures            int
+	MaxIdleTimeoutFailures      int
+	MaxLLMVerifyAttempts        int
+	MaxTestFixAttempts          int
+	TestTimeout                 time.Duration
+	CompileCheckTimeout         time.Duration
+	ConnectivityCheckTimeout    time.Duration
+	ConnectivityRestoreInterval time.Duration
+
 	cliSet map[string]bool
 }
 

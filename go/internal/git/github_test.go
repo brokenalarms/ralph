@@ -197,8 +197,9 @@ func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
 }
 
 // DetectActiveReviewers returns Copilot in the active list when the Copilot
-// ruleset has review_on_push=true. The Copilot reviewer gets ReviewOnPush=true
-// and retains the full 120s timeout. The /installations endpoint is never called.
+// Manager.DetectActiveReviewers applies CopilotReviewTimeout from config when
+// review_on_push=true. The ghCLI probe detects the ruleset; Manager applies
+// the timeout. The /installations endpoint is never called.
 func TestDetectActiveReviewers_CopilotWithReviewOnPush(t *testing.T) {
 	bin := t.TempDir()
 	logFile := filepath.Join(bin, "gh.log")
@@ -217,8 +218,18 @@ func TestDetectActiveReviewers_CopilotWithReviewOnPush(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
-	g := &ghCLI{}
-	reviewers, err := g.DetectActiveReviewers("owner/repo")
+	project, _ := initBareRepo(t)
+	// Point origin to a github.com URL so NWOFromRemote returns a valid NWO.
+	run(t, "git", "-C", project, "remote", "set-url", "origin", "https://github.com/owner/repo.git")
+
+	m := &Manager{
+		ProjectDir:                  project,
+		WorkDir:                     project,
+		Logger:                      &testLog{},
+		CopilotReviewTimeout:        120 * time.Second,
+		CopilotOpportunisticTimeout: 90 * time.Second,
+	}
+	reviewers, err := m.DetectActiveReviewers()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -245,8 +256,8 @@ func TestDetectActiveReviewers_CopilotWithReviewOnPush(t *testing.T) {
 	}
 }
 
-// DetectActiveReviewers sets ReviewOnPush=false and reduces timeout to 90s when
-// the Copilot ruleset has review_on_push=false, since the review is opportunistic.
+// Manager.DetectActiveReviewers applies CopilotOpportunisticTimeout from config
+// when review_on_push=false, since the review is opportunistic.
 func TestDetectActiveReviewers_CopilotWithoutReviewOnPush(t *testing.T) {
 	bin := t.TempDir()
 	listResponse := `[{"id":1,"name":"main","target":"branch","enforcement":"active"}]`
@@ -263,8 +274,17 @@ func TestDetectActiveReviewers_CopilotWithoutReviewOnPush(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
-	g := &ghCLI{}
-	reviewers, err := g.DetectActiveReviewers("owner/repo")
+	project, _ := initBareRepo(t)
+	run(t, "git", "-C", project, "remote", "set-url", "origin", "https://github.com/owner/repo.git")
+
+	m := &Manager{
+		ProjectDir:                  project,
+		WorkDir:                     project,
+		Logger:                      &testLog{},
+		CopilotReviewTimeout:        120 * time.Second,
+		CopilotOpportunisticTimeout: 90 * time.Second,
+	}
+	reviewers, err := m.DetectActiveReviewers()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

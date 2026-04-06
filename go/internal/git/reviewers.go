@@ -11,6 +11,7 @@ type Reviewer struct {
 	// BotUsername is the GitHub login of the bot account that posts reviews.
 	BotUsername string
 	// DefaultTimeout is how long to wait for a review before giving up.
+	// Set by Manager.DetectActiveReviewers using config-derived values.
 	DefaultTimeout time.Duration
 	// ReviewOnPush is only meaningful for Copilot: true if the ruleset gates
 	// merging on Copilot review, which warrants the full DefaultTimeout.
@@ -21,6 +22,6 @@ type Reviewer struct {
 // Detection uses per-reviewer probes — only reviewers with a supported probe
 // are returned by DetectActiveReviewers.
 var Known = []Reviewer{
-	{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second},
-	{AppSlug: "coderabbitai", BotUsername: "coderabbitai[bot]", DefaultTimeout: 60 * time.Second},
+	{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer"},
+	{AppSlug: "coderabbitai", BotUsername: "coderabbitai[bot]"},
 }

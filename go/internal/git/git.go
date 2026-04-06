@@ -49,6 +49,10 @@ type Manager struct {
 	LocalTestsPassed bool
 	KnownPRNumber    int
 	CIPollTimeout    time.Duration
+
+	CopilotReviewTimeout        time.Duration
+	CopilotOpportunisticTimeout time.Duration
+	CodeRabbitReviewTimeout     time.Duration
 }
 
 // GH returns the GitHub interface, using the injected stub if set (tests)

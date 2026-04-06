@@ -301,6 +301,186 @@ var Flags = []FlagDef{
 		},
 	},
 	{
+		Long: "--copilot-review-timeout", MetaVar: "<dur>",
+		Help: "Timeout for Copilot code review when review_on_push=true (gated)", Default: "2m",
+		ConfigKey: "copilot_review_timeout",
+		Kind: KindDuration,
+		Apply: func(cfg *Config, val string) error {
+			d, err := parseDuration(val)
+			if err != nil {
+				return err
+			}
+			cfg.CopilotReviewTimeout = d
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.CopilotReviewTimeout.String() },
+	},
+	{
+		Long: "--copilot-opportunistic-timeout", MetaVar: "<dur>",
+		Help: "Timeout for Copilot code review when review_on_push=false (opportunistic)", Default: "90s",
+		ConfigKey: "copilot_opportunistic_timeout",
+		Kind: KindDuration,
+		Apply: func(cfg *Config, val string) error {
+			d, err := parseDuration(val)
+			if err != nil {
+				return err
+			}
+			cfg.CopilotOpportunisticTimeout = d
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.CopilotOpportunisticTimeout.String() },
+	},
+	{
+		Long: "--coderabbit-review-timeout", MetaVar: "<dur>",
+		Help: "Timeout for CodeRabbit code review", Default: "60s",
+		ConfigKey: "coderabbit_review_timeout",
+		Kind: KindDuration,
+		Apply: func(cfg *Config, val string) error {
+			d, err := parseDuration(val)
+			if err != nil {
+				return err
+			}
+			cfg.CodeRabbitReviewTimeout = d
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.CodeRabbitReviewTimeout.String() },
+	},
+	{
+		Long: "--max-prompt-attempts", MetaVar: "<N>",
+		Help: "Max recent attempts to include in agent prompt context", Default: "3",
+		ConfigKey: "max_prompt_attempts",
+		Kind: KindInt,
+		Apply: func(cfg *Config, val string) error {
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return err
+			}
+			cfg.MaxPromptAttempts = n
+			return nil
+		},
+		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxPromptAttempts) },
+	},
+	{
+		Long: "--max-merge-failures", MetaVar: "<N>",
+		Help: "Max consecutive merge failures before skipping a task", Default: "3",
+		ConfigKey: "max_merge_failures",
+		Kind: KindInt,
+		Apply: func(cfg *Config, val string) error {
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return err
+			}
+			cfg.MaxMergeFailures = n
+			return nil
+		},
+		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxMergeFailures) },
+	},
+	{
+		Long: "--max-idle-timeout-failures", MetaVar: "<N>",
+		Help: "Max consecutive idle timeout failures before skipping a task", Default: "3",
+		ConfigKey: "max_idle_timeout_failures",
+		Kind: KindInt,
+		Apply: func(cfg *Config, val string) error {
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return err
+			}
+			cfg.MaxIdleTimeoutFailures = n
+			return nil
+		},
+		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxIdleTimeoutFailures) },
+	},
+	{
+		Long: "--max-llm-verify-attempts", MetaVar: "<N>",
+		Help: "Max LLM verification attempts before skipping a task", Default: "3",
+		ConfigKey: "max_llm_verify_attempts",
+		Kind: KindInt,
+		Apply: func(cfg *Config, val string) error {
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return err
+			}
+			cfg.MaxLLMVerifyAttempts = n
+			return nil
+		},
+		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxLLMVerifyAttempts) },
+	},
+	{
+		Long: "--max-test-fix-attempts", MetaVar: "<N>",
+		Help: "Max test fix agent spawns per verification cycle", Default: "3",
+		ConfigKey: "max_test_fix_attempts",
+		Kind: KindInt,
+		Apply: func(cfg *Config, val string) error {
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return err
+			}
+			cfg.MaxTestFixAttempts = n
+			return nil
+		},
+		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxTestFixAttempts) },
+	},
+	{
+		Long: "--test-timeout", MetaVar: "<dur>",
+		Help: "Timeout for the test suite during verification", Default: "5m",
+		ConfigKey: "test_timeout",
+		Kind: KindDuration,
+		Apply: func(cfg *Config, val string) error {
+			d, err := parseDuration(val)
+			if err != nil {
+				return err
+			}
+			cfg.TestTimeout = d
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.TestTimeout.String() },
+	},
+	{
+		Long: "--compile-check-timeout", MetaVar: "<dur>",
+		Help: "Timeout for compile/type checks during verification", Default: "60s",
+		ConfigKey: "compile_check_timeout",
+		Kind: KindDuration,
+		Apply: func(cfg *Config, val string) error {
+			d, err := parseDuration(val)
+			if err != nil {
+				return err
+			}
+			cfg.CompileCheckTimeout = d
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.CompileCheckTimeout.String() },
+	},
+	{
+		Long: "--connectivity-check-timeout", MetaVar: "<dur>",
+		Help: "Timeout for individual internet connectivity checks", Default: "3s",
+		ConfigKey: "connectivity_check_timeout",
+		Kind: KindDuration,
+		Apply: func(cfg *Config, val string) error {
+			d, err := parseDuration(val)
+			if err != nil {
+				return err
+			}
+			cfg.ConnectivityCheckTimeout = d
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.ConnectivityCheckTimeout.String() },
+	},
+	{
+		Long: "--connectivity-restore-interval", MetaVar: "<dur>",
+		Help: "How often to re-check internet connectivity while waiting for restoration", Default: "30s",
+		ConfigKey: "connectivity_restore_interval",
+		Kind: KindDuration,
+		Apply: func(cfg *Config, val string) error {
+			d, err := parseDuration(val)
+			if err != nil {
+				return err
+			}
+			cfg.ConnectivityRestoreInterval = d
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.ConnectivityRestoreInterval.String() },
+	},
+	{
 		Long: "--post-task", MetaVar: "<script>",
 		Help:      "Run external script after each task completes",
 		ConfigKey: "post_task",

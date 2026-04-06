@@ -375,8 +375,8 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 	if result {
 		t.Error("expected onSignal to return false after exhausting test fix attempts")
 	}
-	if fixAttempts != maxTestFixAttempts {
-		t.Errorf("expected %d fix agent spawns, got %d", maxTestFixAttempts, fixAttempts)
+	if fixAttempts != 3 {
+		t.Errorf("expected 3 fix agent spawns, got %d", fixAttempts)
 	}
 
 	// Task must NOT be closed — tests are still failing, leave open for investigation.

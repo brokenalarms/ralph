@@ -47,6 +47,17 @@ type Config struct {
 	VerifyModel           string // model for the first LLM verification attempt; defaults to haiku
 	VerifyEscalationModel string // model for subsequent LLM verification attempts; defaults to sonnet
 	OnIterationStart      func() // called at the start of each iteration (e.g. to regenerate resume script)
+	MaxPromptAttempts      int
+	MaxMergeFailures       int
+	MaxIdleTimeoutFailures int
+	MaxLLMVerifyAttempts   int
+	MaxTestFixAttempts     int
+	TestTimeout            time.Duration
+	CompileCheckTimeout    time.Duration
+
+	ConnectivityCheckTimeout    time.Duration
+	ConnectivityRestoreInterval time.Duration
+
 	// hooks for test injection; nil uses the real implementation
 	OnVerify        func(ctx context.Context, dir, headBefore string) (bool, string)
 	IsOnline        func() bool
@@ -102,16 +113,41 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 	agentRunner := agent.New(logger)
 
 	if cfg.IsOnline == nil {
-		cfg.IsOnline = isOnline
+		checkTimeout := cfg.ConnectivityCheckTimeout
+		if checkTimeout == 0 {
+			checkTimeout = 3 * time.Second
+		}
+		cfg.IsOnline = func() bool { return isOnline(checkTimeout) }
 	}
 	if cfg.WaitForInternet == nil {
-		cfg.WaitForInternet = waitForInternet
+		checkTimeout := cfg.ConnectivityCheckTimeout
+		if checkTimeout == 0 {
+			checkTimeout = 3 * time.Second
+		}
+		interval := cfg.ConnectivityRestoreInterval
+		if interval == 0 {
+			interval = 30 * time.Second
+		}
+		cfg.WaitForInternet = func(ctx context.Context, logger *logging.Logger) bool {
+			return waitForInternet(ctx, logger, checkTimeout, interval)
+		}
 	}
 	if cfg.NewRunner == nil {
 		cfg.NewRunner = func() claudeRunner { return agent.New(logger) }
 	}
 	if cfg.QueryFn == nil {
 		cfg.QueryFn = agentRunner.Query
+	}
+
+	tracker := attempts.New(cfg.Dirs.RalphDir)
+	if cfg.MaxPromptAttempts > 0 {
+		tracker.MaxPromptAttempts = cfg.MaxPromptAttempts
+	}
+	if cfg.MaxMergeFailures > 0 {
+		tracker.MaxMergeFailures = cfg.MaxMergeFailures
+	}
+	if cfg.MaxIdleTimeoutFailures > 0 {
+		tracker.MaxIdleTimeoutFailures = cfg.MaxIdleTimeoutFailures
 	}
 
 	l := &Loop{
@@ -121,7 +157,7 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 		limiter:  limiter,
 		runner:   agentRunner,
 		analyzer: analyzer.New(),
-		attempts: attempts.New(cfg.Dirs.RalphDir),
+		attempts: tracker,
 		logger:   logger,
 		signals:  signals,
 	}
@@ -134,6 +170,10 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 		PromptsDir:            cfg.Dirs.PromptsDir,
 		RalphDir:              cfg.Dirs.RalphDir,
 		IdleTimeout:           cfg.IdleTimeout,
+		MaxLLMVerifyAttempts:  cfg.MaxLLMVerifyAttempts,
+		MaxTestFixAttempts:    cfg.MaxTestFixAttempts,
+		TestTimeout:           cfg.TestTimeout,
+		CompileCheckTimeout:   cfg.CompileCheckTimeout,
 	}, VerifierDeps{
 		Logger:      logger,
 		Git:         gm,
@@ -348,10 +388,15 @@ func (l *Loop) Run(ctx context.Context) error {
 			planFile:            l.cfg.PlanFile,
 			callsPerHour:        l.cfg.CallsPerHour,
 			runVerifyBuildFn: func(ctx context.Context) string {
+				timeout := l.cfg.TestTimeout
+				if timeout == 0 {
+					timeout = 5 * time.Minute
+				}
 				return runVerifyBuild(ctx, runVerifyBuildParams{
 					verifyBuild: l.cfg.VerifyBuild,
 					projectDir:  l.cfg.Dirs.ProjectDir,
 					logger:      l.logger,
+					testTimeout: timeout,
 				})
 			},
 			isOnlineFunc:        l.cfg.IsOnline,

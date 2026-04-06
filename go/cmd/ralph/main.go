@@ -89,12 +89,15 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	// Create git manager early so pre-setup calls use it instead of
 	// package-level functions. SetupWorktree is called after state init.
 	gm := &git.Manager{
-		ProjectDir:    cfg.ProjectDir,
-		WorkDir:       cfg.ProjectDir,
-		RalphDir:      ralphDir,
-		BaseBranch:    cfg.BaseBranch,
-		Logger:        log,
-		CIPollTimeout: cfg.CIPollTimeout,
+		ProjectDir:                  cfg.ProjectDir,
+		WorkDir:                     cfg.ProjectDir,
+		RalphDir:                    ralphDir,
+		BaseBranch:                  cfg.BaseBranch,
+		Logger:                      log,
+		CIPollTimeout:               cfg.CIPollTimeout,
+		CopilotReviewTimeout:        cfg.CopilotReviewTimeout,
+		CopilotOpportunisticTimeout: cfg.CopilotOpportunisticTimeout,
+		CodeRabbitReviewTimeout:     cfg.CodeRabbitReviewTimeout,
 	}
 
 	// Initialize .ralph directory and check for resume. This must happen
@@ -166,7 +169,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	dirs.WorkDir = gm.WorkDir
 
 	gm.PrePush = func(ctx context.Context) error {
-		result := verify.CompileCheck(ctx, dirs.WorkDir)
+		result := verify.CompileCheck(ctx, cfg.CompileCheckTimeout, dirs.WorkDir)
 		if !result.Passed {
 			return fmt.Errorf("%s\n%s", result.Reason, result.Details)
 		}
@@ -228,6 +231,15 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		OnIterationStart: func() {
 			generateResumeScript(cfg, ralphDir, scriptPath, args, log)
 		},
+		MaxPromptAttempts:           cfg.MaxPromptAttempts,
+		MaxMergeFailures:            cfg.MaxMergeFailures,
+		MaxIdleTimeoutFailures:      cfg.MaxIdleTimeoutFailures,
+		MaxLLMVerifyAttempts:        cfg.MaxLLMVerifyAttempts,
+		MaxTestFixAttempts:          cfg.MaxTestFixAttempts,
+		TestTimeout:                 cfg.TestTimeout,
+		CompileCheckTimeout:         cfg.CompileCheckTimeout,
+		ConnectivityCheckTimeout:    cfg.ConnectivityCheckTimeout,
+		ConnectivityRestoreInterval: cfg.ConnectivityRestoreInterval,
 	}, st, gm, log)
 
 	if err := execLoop.Run(ctx); err != nil {

@@ -193,14 +193,31 @@ func (m *Manager) PRChainIsHealthy(prNumber int) (bool, string) {
 }
 
 // DetectActiveReviewers queries the repo's installed GitHub Apps and returns
-// the subset matching the Known reviewer registry.
+// the subset matching the Known reviewer registry, with timeouts applied from
+// the Manager's config-derived fields.
 func (m *Manager) DetectActiveReviewers() ([]Reviewer, error) {
 	gh := m.gh()
 	nwo := NWOFromRemote(m.RemoteURL())
 	if nwo == "" {
 		return nil, nil
 	}
-	return gh.DetectActiveReviewers(nwo)
+	reviewers, err := gh.DetectActiveReviewers(nwo)
+	if err != nil {
+		return nil, err
+	}
+	for i := range reviewers {
+		switch reviewers[i].AppSlug {
+		case "copilot-code-review":
+			if reviewers[i].ReviewOnPush {
+				reviewers[i].DefaultTimeout = m.CopilotReviewTimeout
+			} else {
+				reviewers[i].DefaultTimeout = m.CopilotOpportunisticTimeout
+			}
+		case "coderabbitai":
+			reviewers[i].DefaultTimeout = m.CodeRabbitReviewTimeout
+		}
+	}
+	return reviewers, nil
 }
 
 // PollReview polls for a review from the given bot username on the given PR.

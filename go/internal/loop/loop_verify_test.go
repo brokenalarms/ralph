@@ -90,8 +90,8 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	if result {
 		t.Fatal("expected onSignal to return false when LLM verification exhausts retries")
 	}
-	if llmCalls != maxLLMVerifyAttempts {
-		t.Fatalf("expected %d LLM verify calls, got %d", maxLLMVerifyAttempts, llmCalls)
+	if llmCalls != 3 {
+		t.Fatalf("expected 3 LLM verify calls, got %d", llmCalls)
 	}
 	if backend.SkippedTask != "test-123" {
 		t.Fatalf("expected test-123 deferred in backend, got %q", backend.SkippedTask)

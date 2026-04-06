@@ -45,6 +45,49 @@ func TestDefaultValues(t *testing.T) {
 	}
 }
 
+// Verifies that the new timeout and attempt-limit fields have the correct defaults,
+// proving the config is the authoritative source for these previously-scattered constants.
+func TestNewFieldDefaults(t *testing.T) {
+	cfg := Defaults()
+
+	if cfg.TestTimeout != 5*time.Minute {
+		t.Errorf("TestTimeout = %v, want 5m", cfg.TestTimeout)
+	}
+	if cfg.CompileCheckTimeout != 60*time.Second {
+		t.Errorf("CompileCheckTimeout = %v, want 60s", cfg.CompileCheckTimeout)
+	}
+	if cfg.CopilotReviewTimeout != 2*time.Minute {
+		t.Errorf("CopilotReviewTimeout = %v, want 2m", cfg.CopilotReviewTimeout)
+	}
+	if cfg.CopilotOpportunisticTimeout != 90*time.Second {
+		t.Errorf("CopilotOpportunisticTimeout = %v, want 90s", cfg.CopilotOpportunisticTimeout)
+	}
+	if cfg.CodeRabbitReviewTimeout != 60*time.Second {
+		t.Errorf("CodeRabbitReviewTimeout = %v, want 60s", cfg.CodeRabbitReviewTimeout)
+	}
+	if cfg.MaxLLMVerifyAttempts != 3 {
+		t.Errorf("MaxLLMVerifyAttempts = %d, want 3", cfg.MaxLLMVerifyAttempts)
+	}
+	if cfg.MaxTestFixAttempts != 3 {
+		t.Errorf("MaxTestFixAttempts = %d, want 3", cfg.MaxTestFixAttempts)
+	}
+	if cfg.MaxPromptAttempts != 3 {
+		t.Errorf("MaxPromptAttempts = %d, want 3", cfg.MaxPromptAttempts)
+	}
+	if cfg.MaxMergeFailures != 3 {
+		t.Errorf("MaxMergeFailures = %d, want 3", cfg.MaxMergeFailures)
+	}
+	if cfg.MaxIdleTimeoutFailures != 3 {
+		t.Errorf("MaxIdleTimeoutFailures = %d, want 3", cfg.MaxIdleTimeoutFailures)
+	}
+	if cfg.ConnectivityCheckTimeout != 3*time.Second {
+		t.Errorf("ConnectivityCheckTimeout = %v, want 3s", cfg.ConnectivityCheckTimeout)
+	}
+	if cfg.ConnectivityRestoreInterval != 30*time.Second {
+		t.Errorf("ConnectivityRestoreInterval = %v, want 30s", cfg.ConnectivityRestoreInterval)
+	}
+}
+
 // Verifies that RALPH_MAX_ITERATIONS env var overrides the Flags registry default.
 func TestEnvVarDefaults(t *testing.T) {
 	t.Setenv("RALPH_MAX_ITERATIONS", "100")
