@@ -227,6 +227,39 @@ func TestShip_PackageFunction_CreatesPR(t *testing.T) {
 	}
 }
 
+// Ship skips CreatePR and returns an empty result when BranchIsAheadOfMainFn
+// reports the branch is not ahead of main after pushing — prevents spurious
+// 422 API errors on empty/already-merged branches.
+func TestShip_SkipsCreatePRWhenNotAheadOfMain(t *testing.T) {
+	createPRCalled := false
+	gh := &capturingGitHub{
+		StubGitHub: StubGitHub{IsAvailable: true},
+		createPR: func(opts CreatePROpts) (int, error) {
+			createPRCalled = true
+			return 42, nil
+		},
+	}
+
+	opts := ShipOpts{
+		PushFn:                  func(ctx context.Context) error { return nil },
+		HasUncommittedChangesFn: func() bool { return false },
+		CommitAllFn:             func(string) {},
+		BranchIsAheadOfMainFn:  func(string) bool { return false },
+		Logger:                  discardLog{},
+	}
+
+	result, err := Ship(context.Background(), nil, gh, "/wt", "ralph/test-branch", "", opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if createPRCalled {
+		t.Error("CreatePR must not be called when branch is not ahead of main")
+	}
+	if result.PRNumber != 0 {
+		t.Errorf("PRNumber = %d, want 0 (no-op)", result.PRNumber)
+	}
+}
+
 // AutoMergeCurrentBranch returns CIFailureError when CI fails due to
 // infrastructure (zero steps executed). Branch protection is never bypassed —
 // the loop closes the bead and leaves the PR open for CI to gate naturally.
