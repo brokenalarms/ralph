@@ -206,10 +206,9 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 	}
 }
 
-// When CI fails during merge, the task is closed (not skipped) because the
-// work is verified — the PR exists for manual review. Merge is a separate
-// concern from task completion.
-func TestLoop_CIFailureStillClosesTask(t *testing.T) {
+// When CI fails during merge, the task stays open — CIFailureError means
+// tests are still failing and the PR needs manual investigation.
+func TestLoop_CIFailureLeavesTaskOpen(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -264,11 +263,8 @@ func TestLoop_CIFailureStillClosesTask(t *testing.T) {
 
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
-	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-ci1" {
-		t.Errorf("expected ralph-ci1 closed in backend, got %v", backend.ClosedIDs)
-	}
-	if backend.SkippedTask != "" {
-		t.Errorf("task should not be skipped when CI fails during merge, got %q", backend.SkippedTask)
+	if len(backend.ClosedIDs) != 0 {
+		t.Errorf("task should NOT be closed when CI fails, got %v", backend.ClosedIDs)
 	}
 }
 

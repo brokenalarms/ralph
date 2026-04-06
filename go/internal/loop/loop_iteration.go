@@ -671,6 +671,11 @@ func finalizePR(p finalizePRParams) finalizePRResult {
 					p.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI fix agents gave up after %d attempts — tests still failing. Leaving task %s open for manual investigation.", ciExhausted.Attempts, p.taskID)
 					return finalizePRResult{}
 				}
+				var ciFailure *git.CIFailureError
+				if errors.As(mergeErr, &ciFailure) {
+					p.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI failing on PR #%d — leaving task %s open.", ciFailure.PRNumber, p.taskID)
+					return finalizePRResult{}
+				}
 			}
 			if !merged {
 				mergeFailed = true
