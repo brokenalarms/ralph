@@ -64,6 +64,10 @@ func handlePostSignalCall(l *Loop, p postSignalParams) postSignalAction {
 			return buildCompletedTask(taskID, nextTask, summary, prNumber, l.git)
 		},
 		runPostTaskFn: func(ctx context.Context, taskID string, prNumber int, merged bool) {
+			if l.cfg.OnPostTask != nil {
+				l.cfg.OnPostTask(ctx, taskID, prNumber, merged)
+				return
+			}
 			runPostTask(ctx, runPostTaskParams{
 				postTask:   l.cfg.PostTask,
 				projectDir: l.cfg.Dirs.ProjectDir,

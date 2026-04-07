@@ -374,20 +374,52 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 	headAfterSignal := opts.git.HeadRev()
 	if p.headBefore != "" && headAfterSignal == p.headBefore {
 		// No new commits but verification passed (agent + LLM + tests agree).
-		// That's sufficient proof the work is on main — close the bead.
-		opts.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits — verified complete, closing bead")
+		opts.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits — verified complete")
+
+		// Check for an existing PR from a prior attempt that still needs merging.
+		if p.taskID != "" {
+			ref, _ := opts.backend.GetExternalRef(p.taskID)
+			if prNum := parsePRNumber(ref); prNum != 0 {
+				prState, _ := opts.git.GetPRState(prNum)
+				if prState == git.PRStateOpen {
+					opts.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through merge", prNum)
+					finalResult := opts.finalizePRFn(finalizePRParams{
+						ctx:      p.ctx,
+						taskID:   p.taskID,
+						nextTask: p.nextTask,
+						prNumber: prNum,
+						prState:  prState,
+						workDir:  p.workDir,
+					})
+					opts.git.TagTaskEnd(p.taskID)
+					opts.runPostTaskFn(p.ctx, p.taskID, prNum, finalResult.merged)
+					if opts.notify {
+						notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
+						if finalResult.merged {
+							notify.TaskMerged(p.taskID, p.nextTask)
+						}
+					}
+					if finalResult.merged && opts.evolve {
+						opts.logger.Phase("Evolve: restarting with latest main")
+						opts.state.Write("status", "evolve_restart")
+						return handlePostSignalOut{action: signalEvolve, merged: true}
+					}
+					return handlePostSignalOut{action: signalSkipped, merged: finalResult.merged}
+				}
+				if prState == git.PRStateMerged {
+					opts.logger.Emit(logging.Opts{Domain: logging.Git}, "PR #%d already merged", prNum)
+				}
+			}
+		}
+
+		// No existing PR to merge — close the bead directly.
+		opts.logger.Emit(logging.Opts{Domain: logging.Git}, "Closing bead (no PR to merge)")
 		if p.taskID != "" {
 			if p.ctx.Err() != nil {
 				opts.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
 				return handlePostSignalOut{action: signalComplete}
 			}
 			closeReason := "verified complete (no new commits)"
-			ref, _ := opts.backend.GetExternalRef(p.taskID)
-			if prNum := parsePRNumber(ref); prNum != 0 {
-				if prState, _ := opts.git.GetPRState(prNum); prState == git.PRStateMerged {
-					closeReason = fmt.Sprintf("PR #%d already merged", prNum)
-				}
-			}
 			_ = opts.backend.SetState(p.taskID, "phase", "verified", closeReason)
 			if err := opts.backend.CloseTask(p.taskID, closeReason); err != nil {
 				skipReason := "close_failed"

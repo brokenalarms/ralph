@@ -476,6 +476,149 @@ func TestHandlePostSignal_CancelledCtx_NoPR_BeadStaysOpen(t *testing.T) {
 	}
 }
 
+// When headBefore == headAfterSignal (no new commits) but an open PR exists
+// from a prior attempt, the no-commits path must route through finalizePR to
+// merge the PR instead of orphaning it.
+func TestHandlePostSignal_NoNewCommits_ExistingOpenPR_MergesViaFinalize(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-retry1"},
+			ExternalRefs: map[string]string{
+				"ralph-retry1": "gh-42",
+			},
+		},
+	}
+
+	// HeadRevValue == headBefore triggers the no-commits branch.
+	// PRState is open — simulates a PR from a prior attempt that wasn't merged.
+	gm := &testutil.StubGit{
+		ProjectDir:      dir,
+		WorkDir:         dir,
+		HeadRevValue:    "same-sha",
+		PRState:         git.PRStateOpen,
+		PRBase:          "main",
+		DefaultBranch:   "main",
+		MergeRetryResult: true,
+	}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	var postTaskPR int
+	var postTaskMerged bool
+	l.cfg.OnPostTask = func(_ context.Context, _ string, prNumber int, merged bool) {
+		postTaskPR = prNumber
+		postTaskMerged = merged
+	}
+
+	action := handlePostSignalCall(l, postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "same-sha",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-retry1",
+		nextTask:   "Fix bug",
+	})
+
+	// The task should be closed (finalizePR handles close).
+	backend.CloseMu.Lock()
+	closedIDs := append([]string{}, backend.ClosedIDs...)
+	backend.CloseMu.Unlock()
+	if len(closedIDs) != 1 || closedIDs[0] != "ralph-retry1" {
+		t.Errorf("expected bead ralph-retry1 to be closed, got %v", closedIDs)
+	}
+
+	// MergeWithRetry should have been called (via finalizePR).
+	if gm.MergeRetryCalls != 1 {
+		t.Errorf("expected MergeWithRetry to be called once, got %d", gm.MergeRetryCalls)
+	}
+
+	// Post-task should receive the real PR number and merged=true.
+	if postTaskPR != 42 {
+		t.Errorf("post-task PR number: got %d, want 42", postTaskPR)
+	}
+	if !postTaskMerged {
+		t.Errorf("post-task merged: got false, want true")
+	}
+
+	if action != signalSkipped {
+		t.Errorf("expected signalSkipped, got %v", action)
+	}
+}
+
+// When headBefore == headAfterSignal and the existing PR is already merged,
+// the no-commits path should close the bead without trying to merge again.
+func TestHandlePostSignal_NoNewCommits_ExistingMergedPR_ClosesDirectly(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-retry2"},
+			ExternalRefs: map[string]string{
+				"ralph-retry2": "gh-55",
+			},
+		},
+	}
+
+	gm := &testutil.StubGit{
+		ProjectDir:   dir,
+		WorkDir:      dir,
+		HeadRevValue: "same-sha",
+		PRState:      git.PRStateMerged,
+	}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		AutoMerge:     true,
+	}, st, gm, logging.New(nil))
+	l.runner = &stubRunner{}
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	action := handlePostSignalCall(l, postSignalParams{
+		ctx:        context.Background(),
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "same-sha",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-retry2",
+		nextTask:   "Fix bug",
+	})
+
+	// Bead closed via the direct path (not finalizePR).
+	backend.CloseMu.Lock()
+	closedIDs := append([]string{}, backend.ClosedIDs...)
+	backend.CloseMu.Unlock()
+	if len(closedIDs) != 1 || closedIDs[0] != "ralph-retry2" {
+		t.Errorf("expected bead ralph-retry2 to be closed, got %v", closedIDs)
+	}
+
+	// MergeWithRetry should NOT have been called — PR is already merged.
+	if gm.MergeRetryCalls != 0 {
+		t.Errorf("expected no MergeWithRetry calls for already-merged PR, got %d", gm.MergeRetryCalls)
+	}
+
+	if action != signalSkipped {
+		t.Errorf("expected signalSkipped, got %v", action)
+	}
+}
+
 // Ctrl-C (pre-cancelled context) inside finalizePR leaves the bead open.
 // Proves that SIGINT before CloseTask in finalizePR does not close the bead
 // even when a PR was successfully created.

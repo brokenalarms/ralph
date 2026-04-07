@@ -66,6 +66,7 @@ type Config struct {
 	// hooks for test injection; nil uses the real implementation
 	CheckGitHub     func(ctx context.Context) error // startup GitHub reachability check; nil uses real implementation
 	OnVerify        func(ctx context.Context, dir, headBefore string) (bool, string)
+	OnPostTask      func(ctx context.Context, taskID string, prNumber int, merged bool) // called instead of runPostTask when set
 	IsOnline        func() bool
 	WaitForInternet func(ctx context.Context, logger *logging.Logger) bool
 	OnWait          func()
@@ -418,6 +419,10 @@ func (l *Loop) Run(ctx context.Context) error {
 			waitForInternetFunc: l.cfg.WaitForInternet,
 			verifyFunc:          l.cfg.OnVerify,
 			runPostTaskFn: func(ctx context.Context, taskID string, prNumber int, merged bool) {
+				if l.cfg.OnPostTask != nil {
+					l.cfg.OnPostTask(ctx, taskID, prNumber, merged)
+					return
+				}
 				runPostTask(ctx, runPostTaskParams{
 					postTask:    l.cfg.PostTask,
 					worktreeDir: l.cfg.VerifyDir,

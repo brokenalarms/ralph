@@ -1981,6 +1981,7 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
+	l.cfg.OnPostTask = func(_ context.Context, _ string, _ int, _ bool) { record("post_task") }
 
 	// "merge" is recorded when MergePR fires inside executeMerge — this runs only
 	// after AwaitCI returns CIPassed, so merge cannot appear before ci_passed.
@@ -2008,8 +2009,8 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 	// The sequence proves: CI pipeline actually ran (ci_poll → ci_passed) between
 	// push and merge, not a stub that bypasses AwaitCI entirely.
 	want := []string{
-		"agent_signal", "verify", "push", "ci_poll", "ci_passed", "merge", "close:ralph-seq1",
-		"agent_signal", "verify", "push", "ci_poll", "ci_passed", "merge", "close:ralph-seq2",
+		"agent_signal", "verify", "push", "ci_poll", "ci_passed", "merge", "close:ralph-seq1", "post_task",
+		"agent_signal", "verify", "push", "ci_poll", "ci_passed", "merge", "close:ralph-seq2", "post_task",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("stage sequence length: got %d, want %d\ngot:  %v\nwant: %v", len(got), len(want), got, want)
