@@ -3125,5 +3125,74 @@ func TestIntegration_EvolveRebasePreservesUserCommits(t *testing.T) {
 	}
 }
 
+// Scenario: an open PR already exists for the task branch at iteration start.
+// resumeViaPR detects it via FindPRForBranch and resolves the task without
+// running the agent. This covers the bug where FindOpenPR / FindPR used the
+// unreliable gh api head filter and returned empty, causing the agent to
+// re-do work that was already done and Ship to 422.
+func TestIntegration_ResumeViaPR_DetectsExistingOpenPR(t *testing.T) {
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Completed = 0
+	backend.Total = 1
+	backend.NextTask = "Refactor hints"
+	backend.NextID = "ralph-peou"
+	backend.BackendLabel = "beads"
+	_ = backend.SetMetadata("ralph-peou", "branch", "ralph/ralph-peou-refactor-hints")
+
+	ghStub := git.NewStubGitHub()
+	ghStub.OpenPR = 0        // old unreliable path returns nothing
+	ghStub.PRNumber = 303    // FindPRForBranch (any-state) finds the open PR
+	ghStub.PRState = git.PRStateOpen
+	ghStub.PRTitle = "Refactor hints"
+	ghStub.PRURL = "https://github.com/owner/repo/pull/303"
+
+	// CI is passing so the PR can be merged and the task closed.
+	ghStub.Checks = []git.CICheckResult{
+		{Name: "build", State: "SUCCESS", Bucket: "pass"},
+	}
+
+	gm := &testutil.StubGit{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/ralph-peou-refactor-hints",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		GitHubStub:     ghStub,
+		BranchRenamed:  true,
+	}
+
+	agentCalled := false
+	runner := &stubRunner{
+		onRun:  func() { agentCalled = true },
+		result: claude.Result{},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 3,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if agentCalled {
+		t.Error("agent must not run when an open PR already exists for the task branch")
+	}
+}
+
 // Ensure the integrationBackend satisfies tasks.Backend.
 var _ tasks.Backend = (*integrationBackend)(nil)
