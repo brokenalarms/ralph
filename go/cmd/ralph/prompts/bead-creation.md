@@ -66,6 +66,12 @@ Lines shift between bead creation and agent execution — a reference like
 "the `RunIteration` function in runner.go" or "the retry logic in CloseTask"
 instead.
 
+When referencing project-specific identifiers (command names, function names,
+enum members), use the exact name from the code — not a human paraphrase. The
+task manager has access to the codebase during triage: verify names before
+writing them into the bead. Write `Command.goBack`, not "history back" or "go
+back". The agent executing the bead needs exact names to find the code.
+
 When the user pastes DOM fragments, logs, stack traces, or other diagnostic
 content, include it verbatim and unedited in the bead description. This is
 diagnostic evidence — do not summarize, reformat, or strip it.

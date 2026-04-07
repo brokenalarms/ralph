@@ -1019,6 +1019,24 @@ func TestTaskManagerPrompt_ReferenceBehaviorsNotLines(t *testing.T) {
 	}
 }
 
+// Proves: bead-creation.md requires exact code identifiers when referencing
+// project-specific names so agents can find the code without wasting time on
+// paraphrases that don't exist in the codebase (e.g. 'historyBack' vs Command.goBack).
+func TestBeadCreationPrompt_ExactIdentifiers(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "bead-creation.md"))
+	if err != nil {
+		t.Fatalf("reading bead-creation.md: %v", err)
+	}
+	s := string(content)
+
+	if !strings.Contains(s, "exact name from the code") {
+		t.Error("bead-creation.md should require using exact names from the code")
+	}
+	if !strings.Contains(s, "paraphrase") {
+		t.Error("bead-creation.md should warn against using human paraphrases")
+	}
+}
+
 // Proves: the reflection template includes an attempt-handoff status line
 // so subsequent attempts can immediately see what was done, what remains,
 // and whether tests pass — without re-verifying from scratch.
