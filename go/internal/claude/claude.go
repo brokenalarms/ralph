@@ -130,15 +130,23 @@ var IterationAllowedTools = []string{
 }
 
 // IterationDisallowedTools lists tools the agent must not use.
-// The orchestrator owns bead lifecycle (bd close) and all remote git
-// operations (push, PR creation). Git checkout/branch are blocked so
-// sub-agents can't interfere with ralph's branch management.
+// The orchestrator owns all bd and gh operations — the agent must never
+// interact with beads or GitHub directly. Git checkout/branch/push are
+// blocked so sub-agents can't interfere with ralph's branch management.
+//
+// Patterns use leading wildcards (e.g. "Bash(*gh *)") to match commands
+// that chain via && or ; after a cd prefix.
 var IterationDisallowedTools = []string{
-	"Bash(bd close*)",
+	"Bash(bd *)",
+	"Bash(gh *)",
 	"Bash(git checkout*)",
 	"Bash(git branch*)",
 	"Bash(git push*)",
-	"Bash(gh pr create*)",
+	"Bash(*bd *)",
+	"Bash(*gh *)",
+	"Bash(*git checkout*)",
+	"Bash(*git branch*)",
+	"Bash(*git push*)",
 }
 
 // CmdFactory builds the exec.Cmd that Run() will start. Receives the

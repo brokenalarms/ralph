@@ -1517,26 +1517,28 @@ func TestRun_WaitsForOutputAfterSignal(t *testing.T) {
 	}
 }
 
-// Verifies that all orchestrator-owned git operations are disallowed:
-// checkout/branch (prevents sub-agents from interfering with ralph's branches),
-// push and gh pr create (orchestrator owns all remote operations).
-func TestDisallowedTools_BlocksOrchestratorOwnedGitOps(t *testing.T) {
-	required := map[string]bool{
-		"git checkout": false,
-		"git branch":   false,
-		"git push":     false,
-		"gh pr create": false,
+// Verifies that all orchestrator-owned operations are disallowed:
+// bd (bead lifecycle), gh (GitHub operations), and destructive git commands.
+// Each must be blocked both bare and with a leading wildcard for cd-prefixed variants.
+func TestDisallowedTools_BlocksOrchestratorOwnedOps(t *testing.T) {
+	required := []string{
+		"bd ",
+		"gh ",
+		"git checkout",
+		"git branch",
+		"git push",
 	}
-	for _, tool := range IterationDisallowedTools {
-		for key := range required {
-			if strings.Contains(tool, key) {
-				required[key] = true
-			}
+
+	joined := strings.Join(IterationDisallowedTools, "\n")
+
+	for _, cmd := range required {
+		barePattern := "Bash(" + cmd
+		if !strings.Contains(joined, barePattern) {
+			t.Errorf("IterationDisallowedTools must block bare %q", cmd)
 		}
-	}
-	for key, found := range required {
-		if !found {
-			t.Errorf("IterationDisallowedTools must block %q — orchestrator owns all branch and remote operations", key)
+		wildcardPattern := "Bash(*" + cmd
+		if !strings.Contains(joined, wildcardPattern) {
+			t.Errorf("IterationDisallowedTools must block wildcard-prefixed %q", cmd)
 		}
 	}
 }
