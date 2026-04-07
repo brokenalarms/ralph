@@ -815,6 +815,126 @@ func TestPollReview_Timeout_ReturnsNil(t *testing.T) {
 // CreatePRViaAPI sends a valid JSON body even when title or body contain
 // newlines, tabs, backslashes, backticks, and Unicode — characters where
 // Go's %q formatting diverges from JSON encoding, causing GitHub 400 errors.
+// FindOpenPR uses gh pr list --head {branch} --repo {nwo} instead of the
+// gh api pulls endpoint with an owner:branch head filter, which GitHub's list
+// API returns empty for even when the PR exists.
+func TestFindOpenPR_UsesPRListNotAPIFilter(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\nprintf '42\\n'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	prNum, err := g.FindOpenPR("ralph/my-task-branch", "https://github.com/owner/repo.git")
+	if err != nil {
+		t.Fatalf("FindOpenPR returned error: %v", err)
+	}
+	if prNum != 42 {
+		t.Errorf("expected PR number 42, got %d", prNum)
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	invocation := string(raw)
+
+	if !strings.Contains(invocation, "pr list") {
+		t.Errorf("FindOpenPR must use 'gh pr list', got: %q", invocation)
+	}
+	if strings.Contains(invocation, "owner:") {
+		t.Errorf("FindOpenPR must not use owner:branch head filter, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "--head") {
+		t.Errorf("expected --head flag, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "ralph/my-task-branch") {
+		t.Errorf("expected branch name in args, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "owner/repo") {
+		t.Errorf("expected repo nwo in args, got: %q", invocation)
+	}
+}
+
+// FindPR (all-states variant) uses gh pr list --state all instead of the
+// gh api pulls endpoint with owner:branch filter.
+func TestFindPR_UsesPRListNotAPIFilter(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\nprintf '77\\tFix auth\\thttps://github.com/owner/repo/pull/77\\n'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	num, title, url, err := g.FindPR("ralph/my-task-branch", "https://github.com/owner/repo.git")
+	if err != nil {
+		t.Fatalf("FindPR returned error: %v", err)
+	}
+	if num != 77 {
+		t.Errorf("expected PR number 77, got %d", num)
+	}
+	if title != "Fix auth" {
+		t.Errorf("expected title 'Fix auth', got %q", title)
+	}
+	if url != "https://github.com/owner/repo/pull/77" {
+		t.Errorf("unexpected url: %q", url)
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	invocation := string(raw)
+
+	if !strings.Contains(invocation, "pr list") {
+		t.Errorf("FindPR must use 'gh pr list', got: %q", invocation)
+	}
+	if strings.Contains(invocation, "owner:") {
+		t.Errorf("FindPR must not use owner:branch head filter, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "--state") || !strings.Contains(invocation, "all") {
+		t.Errorf("expected --state all, got: %q", invocation)
+	}
+}
+
+// CreatePRViaAPI recovers from a 422 'already exists' error by looking up
+// the existing open PR and returning its number instead of failing with 0.
+func TestCreatePRViaAPI_Returns422ExistingPR(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	// First call (POST) exits 1 with a 422 "already exists" body.
+	// Second call (pr list) succeeds and returns the existing PR number.
+	script := `#!/bin/sh
+echo "$@" >> ` + logFile + `
+if echo "$@" | grep -q "pr list"; then
+  printf '55\n'
+  exit 0
+fi
+printf '{"message":"Validation Failed","errors":[{"message":"A pull request already exists for owner:ralph/my-branch."}]}\n'
+exit 1
+`
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	opts := CreatePROpts{
+		Head: "ralph/my-branch",
+		Base: "main",
+		Repo: "https://github.com/owner/repo.git",
+	}
+	prNum, err := g.CreatePRViaAPI("owner/repo", opts)
+	if err != nil {
+		t.Fatalf("CreatePRViaAPI returned error on 422: %v", err)
+	}
+	if prNum != 55 {
+		t.Errorf("expected existing PR number 55, got %d", prNum)
+	}
+}
+
 func TestCreatePRViaAPI_SpecialCharsProduceValidJSON(t *testing.T) {
 	bin := t.TempDir()
 	stdinFile := filepath.Join(bin, "stdin.json")

@@ -151,15 +151,15 @@ func (g *ghCLI) FindOpenPR(branch, repoURL string) (int, error) {
 	if nwo == "" {
 		return 0, fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
-	owner := strings.SplitN(nwo, "/", 2)[0]
-	endpoint := fmt.Sprintf("repos/%s/pulls", nwo)
-	cmd := exec.Command("gh", "api", endpoint,
-		"-f", "state=open",
-		"-f", fmt.Sprintf("head=%s:%s", owner, branch),
+	cmd := exec.Command("gh", "pr", "list",
+		"--head", branch,
+		"--repo", nwo,
+		"--state", "open",
+		"--json", "number",
 		"--jq", ".[0].number // empty")
 	out, err := cmd.Output()
 	if err != nil {
-		return 0, fmt.Errorf("gh api pulls failed: %w", err)
+		return 0, fmt.Errorf("gh pr list failed: %w", err)
 	}
 	result := strings.TrimSpace(string(out))
 	if result == "" {
@@ -467,15 +467,15 @@ func (g *ghCLI) FindPR(branch, repoURL string) (int, string, string, error) {
 	if nwo == "" {
 		return 0, "", "", fmt.Errorf("cannot determine owner/repo from %q", repoURL)
 	}
-	owner := strings.SplitN(nwo, "/", 2)[0]
-	endpoint := fmt.Sprintf("repos/%s/pulls", nwo)
-	cmd := exec.Command("gh", "api", endpoint,
-		"-f", "state=all",
-		"-f", fmt.Sprintf("head=%s:%s", owner, branch),
-		"--jq", `.[0] // empty | "\(.number)\t\(.title)\t\(.html_url)"`)
+	cmd := exec.Command("gh", "pr", "list",
+		"--head", branch,
+		"--repo", nwo,
+		"--state", "all",
+		"--json", "number,title,url",
+		"--jq", `.[0] // empty | "\(.number)\t\(.title)\t\(.url)"`)
 	out, err := cmd.Output()
 	if err != nil {
-		return 0, "", "", fmt.Errorf("gh api pulls failed: %w", err)
+		return 0, "", "", fmt.Errorf("gh pr list failed: %w", err)
 	}
 	raw := strings.TrimSpace(string(out))
 	if raw == "" {
@@ -562,6 +562,11 @@ func (g *ghCLI) CreatePRViaAPI(nwo string, opts CreatePROpts) (int, error) {
 	cmd.Stdin = bytes.NewReader(bodyBytes)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if strings.Contains(string(out), "already exists") {
+			if existing, findErr := g.FindOpenPR(opts.Head, opts.Repo); findErr == nil && existing != 0 {
+				return existing, nil
+			}
+		}
 		return 0, fmt.Errorf("API PR creation failed: %s", strings.TrimSpace(string(out)))
 	}
 	var resp struct {
