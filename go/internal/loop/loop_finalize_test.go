@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
+	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
 // buildPRBody assembles description, acceptance criteria, and agent summary
@@ -329,6 +331,9 @@ func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testi
 		mergeFunc: func(ctx context.Context) (bool, error) {
 			return false, fmt.Errorf("CI check failed")
 		},
+		persistCompletedFn: func(taskID string, merged bool) {
+			_ = st.AddCompletedTask(taskID, merged)
+		},
 	})
 
 	tasks, err := st.GetCompletedTasks()
@@ -433,6 +438,10 @@ func TestFinalizePR_CloseTaskFailure_SkipsTask(t *testing.T) {
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	l := New(Config{
+		TaskBackend: backend,
+		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+	}, st, gm, logging.New(nil))
 
 	result := finalizePR(finalizePRParams{
 		ctx:       context.Background(),
@@ -450,6 +459,7 @@ func TestFinalizePR_CloseTaskFailure_SkipsTask(t *testing.T) {
 		mergeFunc: func(ctx context.Context) (bool, error) {
 			return true, nil
 		},
+		skipTaskFn: l.skipTask,
 	})
 
 	if !result.merged {
@@ -492,6 +502,10 @@ func TestFinalizePR_DependencyBlockedClose_SkipsWithBlockerIDs(t *testing.T) {
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	l := New(Config{
+		TaskBackend: backend,
+		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+	}, st, gm, logging.New(nil))
 
 	finalizePR(finalizePRParams{
 		ctx:       context.Background(),
@@ -509,6 +523,7 @@ func TestFinalizePR_DependencyBlockedClose_SkipsWithBlockerIDs(t *testing.T) {
 		mergeFunc: func(ctx context.Context) (bool, error) {
 			return true, nil
 		},
+		skipTaskFn: l.skipTask,
 	})
 
 	backend.SkipMu.Lock()
@@ -668,12 +683,16 @@ func TestFinalizePR_NoActiveReviewers_NoPoll(t *testing.T) {
 	}
 }
 
-// skipTask sets status to open in backend and persists to state.json.
+// Loop.skipTask sets status to open in backend and persists to state.json.
 func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
-	_, st := setupTestDir(t)
+	dir, st := setupTestDir(t)
 	backend := &testutil.StubBackend{}
+	l := New(Config{
+		TaskBackend: backend,
+		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+	}, st, &testutil.StubGit{ProjectDir: dir, WorkDir: dir}, logging.New(nil))
 
-	skipTask(backend, st, logging.New(nil), "ralph-xyz", "merge_failed")
+	l.skipTask("ralph-xyz", "merge_failed")
 
 	if backend.SkippedTask != "ralph-xyz" {
 		t.Errorf("expected backend.SkippedTask=ralph-xyz, got %q", backend.SkippedTask)
@@ -690,36 +709,19 @@ func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
 	}
 }
 
-// skipTask is a no-op with empty ID.
+// Loop.skipTask is a no-op with empty ID.
 func TestSkipTask_EmptyID(t *testing.T) {
-	_, st := setupTestDir(t)
+	dir, st := setupTestDir(t)
 	backend := &testutil.StubBackend{}
+	l := New(Config{
+		TaskBackend: backend,
+		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+	}, st, &testutil.StubGit{ProjectDir: dir, WorkDir: dir}, logging.New(nil))
 
-	skipTask(backend, st, logging.New(nil), "", "reason")
+	l.skipTask("", "reason")
 
 	if backend.SkippedTask != "" {
 		t.Error("expected no skip with empty ID")
-	}
-}
-
-// persistCompletedTask takes state and logger — no Loop needed.
-func TestPersistCompletedTask_Standalone(t *testing.T) {
-	_, st := setupTestDir(t)
-
-	persistCompletedTask(st, logging.New(nil), "ralph-abc", true)
-
-	tasks, err := st.GetCompletedTasks()
-	if err != nil {
-		t.Fatalf("GetCompletedTasks: %v", err)
-	}
-	if len(tasks) != 1 {
-		t.Fatalf("expected 1 completed task, got %d", len(tasks))
-	}
-	if tasks[0].ID != "ralph-abc" {
-		t.Errorf("expected ID ralph-abc, got %q", tasks[0].ID)
-	}
-	if !tasks[0].Merged {
-		t.Error("merged should be true")
 	}
 }
 

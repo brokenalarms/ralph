@@ -559,25 +559,9 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 
 // --- handleRunResult tests ---
 
-// handleRunResultCall invokes the package-level handleRunResult using l's dependencies.
+// handleRunResultCall invokes handleRunResult on l's Loop.
 func handleRunResultCall(l *Loop, ctx context.Context, result claude.Result, runErr error, taskID, nextTask, headBefore string, runIteration int) loopAction {
-	return handleRunResult(ctx, handleRunResultParams{
-		result:              result,
-		runErr:              runErr,
-		taskID:              taskID,
-		nextTask:            nextTask,
-		headBefore:          headBefore,
-		runIteration:        runIteration,
-		isOnlineFunc:        l.cfg.IsOnline,
-		waitForInternetFunc: l.cfg.WaitForInternet,
-		logger:              l.logger,
-		git:                 l.git,
-		attempts:            l.attempts,
-		limiter:             l.limiter,
-		backend:             l.cfg.TaskBackend,
-		state:               l.state,
-		skipTask:            skipTask,
-	})
+	return l.handleRunResult(ctx, result, runErr, taskID, nextTask, headBefore, runIteration)
 }
 
 // newHandleRunResultLoop creates a minimal Loop for testing handleRunResult.

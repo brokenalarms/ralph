@@ -13,9 +13,9 @@ import (
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
-// Verifies that initialize as a package function writes max_iterations to
-// state and loads skipped tasks from state into the backend, proving both
-// initialization side-effects work when called outside the Loop struct.
+// Verifies that initialize writes max_iterations to state and loads skipped
+// tasks from state into the backend, proving both initialization side-effects
+// work when called on a Loop.
 func TestInitialize_WritesConfigAndLoadsSkipped(t *testing.T) {
 	dir, st := setupTestDir(t)
 
@@ -31,13 +31,13 @@ func TestInitialize_WritesConfigAndLoadsSkipped(t *testing.T) {
 	logger := logging.New(nil)
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
-	err := initialize(context.Background(), initParams{
-		maxIter: 7,
-		state:   st,
-		backend: backend,
-		logger:  logger,
-		git:     gm,
-	})
+	l := New(Config{
+		MaxIterations: 7,
+		TaskBackend:   backend,
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+	}, st, gm, logger)
+
+	err := l.initialize(context.Background())
 	if err != nil {
 		t.Fatalf("initialize returned error: %v", err)
 	}
@@ -191,9 +191,9 @@ func TestLoop_ReviewersDetectedViaEnsureReviewersFn(t *testing.T) {
 	}
 }
 
-// Verifies that initWorktree as a package function is a no-op when the git
-// context has no worktree branch (i.e. running in the project dir directly),
-// proving the guard condition works via the package function signature.
+// Verifies that initWorktree is a no-op when the git context has no worktree
+// branch (i.e. running in the project dir directly), proving the guard
+// condition works.
 func TestInitWorktree_NoopWhenNoWorktreeBranch(t *testing.T) {
 	dir, st := setupTestDir(t)
 	logger := logging.New(nil)
@@ -201,13 +201,12 @@ func TestInitWorktree_NoopWhenNoWorktreeBranch(t *testing.T) {
 	// StubGit with WorkDir == ProjectDir means no worktree → early return.
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
-	err := initWorktree(context.Background(), initWorktreeParams{
-		git:     gm,
-		dirs:    workctx.WorkContext{ProjectDir: dir, WorkDir: dir},
-		backend: backend,
-		state:   st,
-		logger:  logger,
-	})
+	l := New(Config{
+		TaskBackend: backend,
+		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+	}, st, gm, logger)
+
+	err := l.initWorktree(context.Background())
 	if err != nil {
 		t.Fatalf("initWorktree returned error for no-worktree case: %v", err)
 	}

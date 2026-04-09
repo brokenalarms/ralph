@@ -184,6 +184,8 @@ type resumeViaPRParams struct {
 	notify    bool
 	ralphDir  string
 	verifier  *Verifier
+	skipTaskFn         func(id, reason string)
+	persistCompletedFn func(taskID string, merged bool)
 	// mergeFunc overrides git.MergeWithRetry for tests; nil uses the real path.
 	mergeFunc func(ctx context.Context) (bool, error)
 }
@@ -231,19 +233,21 @@ func resumeViaPR(ctx context.Context, p resumeViaPRParams) bool {
 			_ = p.backend.SetExternalRef(p.taskID, prURL(p.git.RemoteURL(), prNumber))
 		}
 		return resolveByPRState(ctx, resolveByPRStateParams{
-			taskID:    p.taskID,
-			nextTask:  p.nextTask,
-			prNumber:  prNumber,
-			backend:   p.backend,
-			git:       p.git,
-			logger:    p.logger,
-			attempts:  p.attempts,
-			state:     p.state,
-			autoMerge: p.autoMerge,
-			notify:    p.notify,
-			ralphDir:  p.ralphDir,
-			verifier:  p.verifier,
-			mergeFunc: p.mergeFunc,
+			taskID:             p.taskID,
+			nextTask:           p.nextTask,
+			prNumber:           prNumber,
+			backend:            p.backend,
+			git:                p.git,
+			logger:             p.logger,
+			attempts:           p.attempts,
+			state:              p.state,
+			autoMerge:          p.autoMerge,
+			notify:             p.notify,
+			ralphDir:           p.ralphDir,
+			verifier:           p.verifier,
+			skipTaskFn:         p.skipTaskFn,
+			persistCompletedFn: p.persistCompletedFn,
+			mergeFunc:          p.mergeFunc,
 		})
 	}
 
@@ -273,19 +277,21 @@ func resumeViaPR(ctx context.Context, p resumeViaPRParams) bool {
 			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, prNum)}, "Created for %s (task %s)", branch, p.taskID)
 			_ = p.backend.SetExternalRef(p.taskID, prURL(p.git.RemoteURL(), prNum))
 			return resolveByPRState(ctx, resolveByPRStateParams{
-				taskID:    p.taskID,
-				nextTask:  p.nextTask,
-				prNumber:  prNum,
-				backend:   p.backend,
-				git:       p.git,
-				logger:    p.logger,
-				attempts:  p.attempts,
-				state:     p.state,
-				autoMerge: p.autoMerge,
-				notify:    p.notify,
-				ralphDir:  p.ralphDir,
-				verifier:  p.verifier,
-				mergeFunc: p.mergeFunc,
+				taskID:             p.taskID,
+				nextTask:           p.nextTask,
+				prNumber:           prNum,
+				backend:            p.backend,
+				git:                p.git,
+				logger:             p.logger,
+				attempts:           p.attempts,
+				state:              p.state,
+				autoMerge:          p.autoMerge,
+				notify:             p.notify,
+				ralphDir:           p.ralphDir,
+				verifier:           p.verifier,
+				skipTaskFn:         p.skipTaskFn,
+				persistCompletedFn: p.persistCompletedFn,
+				mergeFunc:          p.mergeFunc,
 			})
 		}
 	}
@@ -307,6 +313,8 @@ type resolveByPRStateParams struct {
 	notify    bool
 	ralphDir  string
 	verifier  *Verifier
+	skipTaskFn         func(id, reason string)
+	persistCompletedFn func(taskID string, merged bool)
 	mergeFunc func(ctx context.Context) (bool, error)
 }
 
@@ -321,20 +329,22 @@ func resolveByPRState(ctx context.Context, p resolveByPRStateParams) bool {
 
 	rawLogPath := filepath.Join(p.ralphDir, "raw.log")
 	fp := finalizePRParams{
-		ctx:        ctx,
-		taskID:     p.taskID,
-		nextTask:   p.nextTask,
-		prNumber:   p.prNumber,
-		workDir:    p.git.GetWorkDir(),
-		rawLogPath: rawLogPath,
-		autoMerge:  p.autoMerge,
-		git:        p.git,
-		logger:     p.logger,
-		backend:    p.backend,
-		state:      p.state,
-		attempts:   p.attempts,
-		verifier:   p.verifier,
-		mergeFunc:  p.mergeFunc,
+		ctx:                ctx,
+		taskID:             p.taskID,
+		nextTask:           p.nextTask,
+		prNumber:           p.prNumber,
+		workDir:            p.git.GetWorkDir(),
+		rawLogPath:         rawLogPath,
+		autoMerge:          p.autoMerge,
+		git:                p.git,
+		logger:             p.logger,
+		backend:            p.backend,
+		state:              p.state,
+		attempts:           p.attempts,
+		verifier:           p.verifier,
+		skipTaskFn:         p.skipTaskFn,
+		persistCompletedFn: p.persistCompletedFn,
+		mergeFunc:          p.mergeFunc,
 	}
 
 	switch prState {
@@ -376,24 +386,15 @@ func resolveByPRState(ctx context.Context, p resolveByPRStateParams) bool {
 	}
 }
 
-// flushUnpushedWorkParams bundles the dependencies for flushUnpushedWork.
-type flushUnpushedWorkParams struct {
-	autoMerge      bool
-	lastTaskMerged bool
-	state          *state.Store
-	git            git.GitOps
-	logger         *logging.Logger
-}
-
 // flushUnpushedWork pushes any unpushed commits and optionally merges before
 // the loop exits or enters wait mode. lastTaskMerged prevents a double-merge
 // when the signal handler already merged the task.
-func flushUnpushedWork(ctx context.Context, p flushUnpushedWorkParams) {
-	taskID, _ := p.state.Read("last_task_id")
-	taskDesc, _ := p.state.Read("last_task")
-	merged, err := p.git.FlushUnpushedWork(ctx, taskID, taskDesc, p.autoMerge && !p.lastTaskMerged)
+func (l *Loop) flushUnpushedWork(ctx context.Context, lastTaskMerged bool) {
+	taskID, _ := l.state.Read("last_task_id")
+	taskDesc, _ := l.state.Read("last_task")
+	merged, err := l.git.FlushUnpushedWork(ctx, taskID, taskDesc, l.cfg.AutoMerge && !lastTaskMerged)
 	if err != nil {
-		p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Flush: %v", err)
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Flush: %v", err)
 	}
 	if merged {
 		notify.TaskMerged(taskID, taskDesc)

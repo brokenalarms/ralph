@@ -11,33 +11,17 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/state"
-	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/verify"
 )
 
 // isNewTask returns true when the next task differs from the last one stored
 // in state. Prefers task ID comparison (stable across description edits);
 // falls back to description when no ID is available.
-func isNewTask(st *state.Store, taskID, taskDesc string) bool {
+func isNewTask(lastID, lastTask, taskID, taskDesc string) bool {
 	if taskID != "" {
-		lastID, _ := st.Read("last_task_id")
 		return lastID != taskID
 	}
-	lastTask, _ := st.Read("last_task")
 	return lastTask != taskDesc
-}
-
-// persistCompletedTask writes a completed task entry to state.json so
-// ralph-task can verify tasks weren't falsely closed and setStackHead can
-// find unmerged branches for stacking.
-func persistCompletedTask(st *state.Store, logger *logging.Logger, taskID string, merged bool) {
-	if taskID == "" {
-		return
-	}
-	if err := st.AddCompletedTask(taskID, merged); err != nil {
-		logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
-	}
 }
 
 func fileLineCount(path string) int {
@@ -74,27 +58,6 @@ func readLogFrom(path string, startLine int) string {
 		return ""
 	}
 	return string(data[offset:])
-}
-
-// skipTask sets the task back to open in bd, records the reason as a
-// comment, and adds the ID to both the backend's in-memory skip set
-// and the state.json skipped_tasks list so it stays excluded from
-// future selection.
-func skipTask(backend tasks.Backend, st *state.Store, logger *logging.Logger, id, reason string) {
-	if id == "" {
-		return
-	}
-	logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Skipping task %s: %s", id, reason)
-	if err := backend.SkipTask(id, reason); err != nil {
-		logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to skip task %s in backend: %v", id, err)
-	}
-	if st != nil {
-		if err := st.AddSkippedTask(id); err != nil {
-			logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to persist skip for %s: %v", id, err)
-		}
-		skipped, _ := st.GetSkippedTasks()
-		backend.SetSkippedIDs(skipped)
-	}
 }
 
 // isTransientGitHubError returns true for HTTP errors that are safe to retry:

@@ -62,6 +62,7 @@ func TestSelectNextTask_SkipsCompletedIDs(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-done", NextTask: "Already done"}
 	p, _ := newSelectionParams(t, backend)
 	p.completedIDs = map[string]bool{"ralph-done": true}
+	p.skipTask = func(id, reason string) { _ = backend.SkipTask(id, reason) }
 
 	_, action := selectNextTask(context.Background(), p)
 
