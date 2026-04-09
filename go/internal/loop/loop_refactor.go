@@ -9,92 +9,75 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/prompt"
-	"github.com/brokenalarms/ralph/internal/ratelimit"
 )
 
 const refactorCheckInterval = 5
 const refactorLookbackCommits = 10
 
-type maybeRefactorParams struct {
-	cfg          Config
-	git          git.GitOps
-	limiter      *ratelimit.Limiter
-	runner       claudeRunner
-	logger       *logging.Logger
-	signals      claude.SignalPaths
-	queryFn      func(ctx context.Context, workDir, prompt, model string) (string, error)
-	sessionCount int
-}
-
-func maybeRefactor(ctx context.Context, p maybeRefactorParams) error {
-	if !p.cfg.Refactor {
+// maybeRefactor runs an adaptive refactoring iteration if enough tasks have
+// been completed and the LLM recommends it. The caller is responsible for
+// ensuring the rate limit allows the call before invoking this method.
+func (l *Loop) maybeRefactor(ctx context.Context, sessionCount int) error {
+	if !l.cfg.Refactor {
 		return nil
 	}
 
-	if p.sessionCount == 0 || p.sessionCount%refactorCheckInterval != 0 {
+	if sessionCount == 0 || sessionCount%refactorCheckInterval != 0 {
 		return nil
 	}
 
-	recentFiles := p.git.RecentChangedFiles(refactorLookbackCommits)
+	recentFiles := l.git.RecentChangedFiles(refactorLookbackCommits)
 	if recentFiles == "" {
 		return nil
 	}
 
-	archSpec := readArchSpec(p.git.GetWorkDir())
+	archSpec := readArchSpec(l.git.GetWorkDir())
 
-	shouldRefactor, err := llmShouldRefactor(ctx, llmShouldRefactorParams{
-		queryFn: p.queryFn,
-		workDir: p.git.GetWorkDir(),
-	}, archSpec, recentFiles)
+	shouldRefactor, err := llmShouldRefactor(ctx, l.cfg.QueryFn, l.git.GetWorkDir(), archSpec, recentFiles)
 	if err != nil {
 		return fmt.Errorf("refactor check: %w", err)
 	}
 
 	if !shouldRefactor {
-		p.logger.Emit(logging.Opts{Domain: "refactor"}, "LLM says no refactoring needed — skipping")
+		l.logger.Emit(logging.Opts{Domain: "refactor"}, "LLM says no refactoring needed — skipping")
 		return nil
 	}
 
-	p.logger.Phase("--- Adaptive refactor (LLM recommended) ---")
+	l.logger.Phase("--- Adaptive refactor (LLM recommended) ---")
 
+	ralphDir := l.cfg.Dirs.RalphDir
 	refactorPrompt, err := prompt.BuildRefactorPrompt(prompt.Vars{
-		PromptsDir:       p.cfg.Dirs.PromptsDir,
-		WorkDir:          p.git.GetWorkDir(),
-		SignalToken:      p.signals.Complete,
-		CurrentTaskToken: p.signals.CurrentTask,
-		AllCompleteToken: p.signals.AllComplete,
+		PromptsDir:       l.cfg.Dirs.PromptsDir,
+		WorkDir:          l.git.GetWorkDir(),
+		SignalToken:      l.signals.Complete,
+		CurrentTaskToken: l.signals.CurrentTask,
+		AllCompleteToken: l.signals.AllComplete,
 	}, recentFiles)
 	if err != nil {
 		return fmt.Errorf("building refactor prompt: %w", err)
 	}
 
-	if !p.limiter.Allowed() {
-		p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: p.cfg.Model}, "Rate limit hit before refactor — waiting for reset")
-		if err := p.limiter.WaitForReset(ctx, func(secs int) {
-			p.logger.Emit(logging.Opts{Domain: logging.LLM, Model: p.cfg.Model}, "Rate limit: %ds until reset", secs)
-		}); err != nil {
-			return err
-		}
+	if !l.waitForRate(ctx) {
+		return nil
 	}
 
-	rawLogPath := filepath.Join(p.cfg.Dirs.RalphDir, "raw.log")
-	_, err = p.runner.Run(claude.RunConfig{
-		WorkDir:      p.git.GetWorkDir(),
-		RalphDir:     p.cfg.Dirs.RalphDir,
+	rawLogPath := filepath.Join(ralphDir, "raw.log")
+	_, err = l.runner.Run(claude.RunConfig{
+		WorkDir:      l.git.GetWorkDir(),
+		RalphDir:     ralphDir,
 		Prompt:       refactorPrompt,
 		RawLog:       rawLogPath,
-		LogFile:      filepath.Join(p.cfg.Dirs.RalphDir, "loop.log"),
-		Quiet:        p.cfg.Quiet,
-		Verbose:      p.cfg.Verbose,
-		Signals:      p.signals,
+		LogFile:      filepath.Join(ralphDir, "loop.log"),
+		Quiet:        l.cfg.Quiet,
+		Verbose:      l.cfg.Verbose,
+		Signals:      l.signals,
 		PollInterval: 2 * time.Second,
 	})
-	p.limiter.Increment()
+	l.limiter.Increment()
 
-	p.logger.Emit(logging.Opts{Level: logging.Success}, "Refactor iteration complete")
+	l.logger.Emit(logging.Opts{Level: logging.Success}, "Refactor iteration complete")
 
 	return err
 }
@@ -112,13 +95,8 @@ func readArchSpec(workDir string) string {
 	return content
 }
 
-type llmShouldRefactorParams struct {
-	queryFn func(ctx context.Context, workDir, prompt, model string) (string, error)
-	workDir string
-}
-
-func llmShouldRefactor(ctx context.Context, p llmShouldRefactorParams, archSpec, recentFiles string) (bool, error) {
-	if p.queryFn == nil {
+func llmShouldRefactor(ctx context.Context, queryFn func(context.Context, string, string, string) (string, error), workDir string, archSpec, recentFiles string) (bool, error) {
+	if queryFn == nil {
 		return false, fmt.Errorf("no query function available")
 	}
 
@@ -131,7 +109,7 @@ func llmShouldRefactor(ctx context.Context, p llmShouldRefactorParams, archSpec,
 	refactorPrompt += "Consider: code duplication, unclear naming, files growing too large, architectural drift from the spec, dead code.\n"
 	refactorPrompt += "Reply with exactly YES or NO on the first line, followed by a brief explanation."
 
-	response, err := p.queryFn(ctx, p.workDir, refactorPrompt, "")
+	response, err := queryFn(ctx, workDir, refactorPrompt, "")
 	if err != nil {
 		return false, err
 	}

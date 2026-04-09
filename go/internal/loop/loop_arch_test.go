@@ -54,11 +54,11 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 		// "flushUnpushedWorkParams": true,
 
 		// --- Bead 8: limiter/analyzer out of params (ralph-r7my) ---
-		// "waitForRateParams":             true,
-		// "maybeRefactorParams":           true,
-		// "llmShouldRefactorParams":       true,
-		// "analyzeIterationParams":        true,
-		// "prepareAndBuildPromptParams":   true,
+		"waitForRateParams":           true,
+		"maybeRefactorParams":         true,
+		"llmShouldRefactorParams":     true,
+		"analyzeIterationParams":      true,
+		"prepareAndBuildPromptParams": true,
 
 		// --- Bead 9: merge/iteration params (ralph-bk7m / ralph-93jq) ---
 		// "mergeWithRetryParams": true,

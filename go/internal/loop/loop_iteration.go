@@ -14,7 +14,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
-	"github.com/brokenalarms/ralph/internal/ratelimit"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
@@ -531,50 +530,41 @@ type iterationPrompt struct {
 	workDir    string
 }
 
-type prepareAndBuildPromptParams struct {
-	backend             tasks.Backend
-	git                 git.GitOps
-	logger              *logging.Logger
-	verifier            *Verifier
-	limiter             *ratelimit.Limiter
-	attempts            *attempts.Tracker
-	signals             claude.SignalPaths
-	promptsDir          string
-	ralphDir            string
-	projectDir          string
-	planFile            string
-	callsPerHour        int
-	runVerifyBuildFn    func(ctx context.Context) string
-	waitForInternetFunc func(context.Context, *logging.Logger) bool
-}
-
 // prepareAndBuildPrompt sets the task phase, runs pre-iteration tests, reads
 // feedback, assembles attempt context, and builds the full prompt. Returns
 // false if Run() should break (internet or rate limit unavailable).
-func prepareAndBuildPrompt(ctx context.Context, p prepareAndBuildPromptParams, taskID, nextTask string) (iterationPrompt, bool) {
+func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask string) (iterationPrompt, bool) {
 	if taskID != "" {
-		if err := p.backend.SetState(taskID, "phase", "implementing", "ralph: starting task"); err != nil {
-			p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=implementing: %v", err)
+		if err := l.cfg.TaskBackend.SetState(taskID, "phase", "implementing", "ralph: starting task"); err != nil {
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=implementing: %v", err)
 		}
 	}
 
-	taskPrompt := buildTaskPrompt(nextTask, taskID, p.backend, p.promptsDir, p.ralphDir)
-	buildStatus := p.runVerifyBuildFn(ctx)
-	testStatus := buildStatus + p.verifier.RunPreIterationTests(ctx)
+	promptsDir := l.cfg.Dirs.PromptsDir
+	ralphDir := l.cfg.Dirs.RalphDir
 
-	if !p.waitForInternetFunc(ctx, p.logger) {
+	taskPrompt := buildTaskPrompt(nextTask, taskID, l.cfg.TaskBackend, promptsDir, ralphDir)
+	buildStatus := runVerifyBuild(ctx, runVerifyBuildParams{
+		verifyBuild: l.cfg.VerifyBuild,
+		projectDir:  l.cfg.Dirs.ProjectDir,
+		testTimeout: l.cfg.TestTimeout,
+		logger:      l.logger,
+	})
+	testStatus := buildStatus + l.verifier.RunPreIterationTests(ctx)
+
+	if !l.cfg.WaitForInternet(ctx, l.logger) {
 		return iterationPrompt{}, false
 	}
-	if !waitForRate(ctx, waitForRateParams{limiter: p.limiter, callsPerHour: p.callsPerHour, logger: p.logger}) {
+	if !l.waitForRate(ctx) {
 		return iterationPrompt{}, false
 	}
 
-	headBefore := p.git.HeadRev()
-	diffBefore := p.git.HasDiff()
-	rawLogPath := filepath.Join(p.ralphDir, "raw.log")
+	headBefore := l.git.HeadRev()
+	diffBefore := l.git.HasDiff()
+	rawLogPath := filepath.Join(ralphDir, "raw.log")
 	logStart := fileLineCount(rawLogPath)
 
-	attemptContext := buildAttemptContext(taskID, nextTask, p.attempts, p.ralphDir)
+	attemptContext := buildAttemptContext(taskID, nextTask, l.attempts, ralphDir)
 	if attemptContext != "" {
 		attemptCount := strings.Count(attemptContext, "### Attempt ")
 		reflectionCount := strings.Count(attemptContext, "## Recent learnings")
@@ -586,13 +576,13 @@ func prepareAndBuildPrompt(ctx context.Context, p prepareAndBuildPromptParams, t
 			if reflectionCount > 0 {
 				parts = append(parts, "learnings from other tasks")
 			}
-			p.logger.Emit(logging.Opts{}, "Including %s", strings.Join(parts, " + "))
+			l.logger.Emit(logging.Opts{}, "Including %s", strings.Join(parts, " + "))
 		}
 	}
 
-	fullPrompt, err := buildPrompt(taskPrompt, attemptContext, testStatus, p.backend, p.promptsDir, p.projectDir, p.git.GetWorkDir(), p.ralphDir, p.planFile, p.signals, p.logger)
+	fullPrompt, err := buildPrompt(taskPrompt, attemptContext, testStatus, l.cfg.TaskBackend, promptsDir, l.cfg.Dirs.ProjectDir, l.git.GetWorkDir(), ralphDir, l.cfg.PlanFile, l.signals, l.logger)
 	if err != nil {
-		p.logger.Emit(logging.Opts{Level: logging.Error}, "Prompt build failed: %v", err)
+		l.logger.Emit(logging.Opts{Level: logging.Error}, "Prompt build failed: %v", err)
 		return iterationPrompt{}, false
 	}
 
@@ -602,7 +592,7 @@ func prepareAndBuildPrompt(ctx context.Context, p prepareAndBuildPromptParams, t
 		diffBefore: diffBefore,
 		rawLogPath: rawLogPath,
 		logStart:   logStart,
-		workDir:    p.git.GetWorkDir(),
+		workDir:    l.git.GetWorkDir(),
 	}, true
 }
 
