@@ -147,6 +147,14 @@ var IterationDisallowedTools = []string{
 	"Bash(*git checkout*)",
 	"Bash(*git branch*)",
 	"Bash(*git push*)",
+	"Bash(rm *.beads*)",
+	"Bash(rm *.ralph*)",
+	"Bash(*rm *.beads*)",
+	"Bash(*rm *.ralph*)",
+	"Bash(pkill*dolt*)",
+	"Bash(kill*dolt*)",
+	"Bash(*pkill*dolt*)",
+	"Bash(*kill*dolt*)",
 }
 
 // CmdFactory builds the exec.Cmd that Run() will start. Receives the
