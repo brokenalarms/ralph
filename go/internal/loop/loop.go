@@ -487,7 +487,7 @@ iterLoop:
 
 		// ── Complete task (post-signal pipeline) ──
 		if agentRun.result.SignalDetected {
-			out := completeTask(ctx, completeTaskParams{
+			out := l.completeTask(ctx, completeTaskParams{
 				result:            agentRun.result,
 				headBefore:        agentRun.prep.headBefore,
 				workDir:           agentRun.prep.workDir,
@@ -496,185 +496,9 @@ iterLoop:
 				taskID:            task.id,
 				nextTask:          task.title,
 				postSignalTimeout: l.cfg.PostSignalTimeout,
-				autoMerge:         l.cfg.AutoMerge,
 				evolve:            l.cfg.Evolve,
 				notify:            l.cfg.Notify,
 				ralphDir:          l.cfg.Dirs.RalphDir,
-				logger:            l.logger,
-				verifyFn: func(ctx context.Context, headBefore string) (bool, string) {
-					if l.cfg.OnVerify != nil {
-						return l.cfg.OnVerify(ctx, l.git.GetWorkDir(), headBefore)
-					}
-					return l.verifier.VerifyCompletion(ctx, l.git.GetWorkDir(), headBefore)
-				},
-				headRevFn:        l.git.HeadRev,
-				worktreeBranchFn: l.git.GetWorktreeBranch,
-				tagTaskEndFn:     l.git.TagTaskEnd,
-				getPRStateFn:     l.git.GetPRState,
-				findExistingPRFn: func(taskID, branch string) (int, bool) {
-					return findExistingPRForTask(taskID, branch, l.cfg.TaskBackend, l.git)
-				},
-				getStateFn: func(taskID, key string) (string, error) {
-					return l.cfg.TaskBackend.GetState(taskID, key)
-				},
-				setStateFn: func(taskID, key, value, reason string) error {
-					return l.cfg.TaskBackend.SetState(taskID, key, value, reason)
-				},
-				closeTaskFn: l.cfg.TaskBackend.CloseTask,
-				getExternalRefFn: func(taskID string) (string, error) {
-					return l.cfg.TaskBackend.GetExternalRef(taskID)
-				},
-				getSkippedTasksFn: l.state.GetSkippedTasks,
-				recordCompletedFn: func(taskID, nextTask string) {
-					l.state.RecordCompletedTask(taskID, nextTask)
-				},
-				persistCompletedFn: func(taskID string, merged bool) {
-					if taskID == "" {
-						return
-					}
-					if err := l.state.AddCompletedTask(taskID, merged); err != nil {
-						l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
-					}
-				},
-				touchPlanFlashFn: l.state.TouchPlanFlash,
-				writeStateFn: func(key, value string) {
-					l.state.Write(key, value) //nolint:errcheck
-				},
-				recordAttemptFn: func(taskID, nextTask, reason, diffStat, note string) {
-					l.attempts.Record(taskID, nextTask, reason, diffStat, note)
-				},
-				clearAttemptsFn:      l.attempts.Clear,
-				clearMergeFailuresFn: l.attempts.ClearMergeFailures,
-				skipTaskFn: func(taskID, reason string) { l.skipTask(taskID, reason) },
-				shipFn: func(ctx context.Context, taskID, title, summary string) (int, string, bool, bool, bool) {
-					prBody := buildPRBody(l.cfg.TaskBackend, taskID, summary)
-
-					doShip := func(opts git.ShipOpts) (git.ShipResult, error) {
-						result, err := l.git.Ship(ctx, opts)
-						if err != nil {
-							if !l.cfg.IsOnline() {
-								l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed — internet appears down")
-								l.cfg.WaitForInternet(ctx, l.logger)
-								result, err = l.git.Ship(ctx, opts)
-							} else if isTransientGitHubError(err) {
-								backoffs := l.cfg.ShipRetryBackoffs
-								if backoffs == nil {
-									backoffs = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
-								}
-								for _, delay := range backoffs {
-									if err == nil {
-										break
-									}
-									l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed with transient error (%v) — retrying in %s", err, delay)
-									select {
-									case <-ctx.Done():
-										return result, err
-									case <-time.After(delay):
-									}
-									result, err = l.git.Ship(ctx, opts)
-								}
-							}
-							if err != nil {
-								l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship: %v", err)
-							}
-						}
-						return result, err
-					}
-
-					// Phase 1: push + PR (no merge yet) so push happens before reviewer detection.
-					pushOpts := git.ShipOpts{TaskID: taskID, TaskTitle: title, Body: prBody}
-					result, err := doShip(pushOpts)
-					if err != nil {
-						return result.PRNumber, result.PRURL, false, false, false
-					}
-
-					// Link task to PR as soon as PR is available.
-					if result.PRNumber != 0 && taskID != "" {
-						ref := result.PRURL
-						if ref == "" {
-							ref = prURL(l.git.RemoteURL(), result.PRNumber)
-						}
-						if ref != "" {
-							l.logger.Emit(logging.Opts{Domain: logging.Git}, "Linking task %s to %s (branch: %s)", taskID, ref, l.git.GetWorktreeBranch())
-							if refErr := l.cfg.TaskBackend.SetExternalRef(taskID, ref); refErr != nil {
-								l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetExternalRef: %v", refErr)
-							}
-						}
-					}
-
-					// Reviewer detection happens after push (lazy, deferred until post-push
-					// context is established) regardless of AutoMerge setting.
-					l.ensureActiveReviewers()
-
-					if !l.cfg.AutoMerge || result.PRNumber == 0 {
-						return result.PRNumber, result.PRURL, false, false, false
-					}
-
-					// Phase 2: Ship with merge enabled. Pass the PR number so Ship
-					// skips push+PR and proceeds directly to reviewer poll + merge.
-					prNumber := result.PRNumber
-					prResultURL := result.PRURL
-
-					// Seed review-addressed state from persistent store.
-					reviewAddressed := make(map[string]bool)
-					for _, reviewer := range l.activeReviewers {
-						key := "review_addressed:" + reviewer.BotUsername + ":" + taskID
-						if v, err := l.state.Read(key); err == nil && v == "true" {
-							reviewAddressed[reviewer.BotUsername] = true
-						}
-					}
-
-					rawLogPath := agentRun.prep.rawLogPath
-					workDir := agentRun.prep.workDir
-
-					// Retry loop: Ship may return ReviewFixNeeded or CIFailure; fix and retry.
-					const maxShipRetries = 5
-					var mergeResult git.ShipResult
-					for attempt := 0; attempt < maxShipRetries; attempt++ {
-						var mergeErr error
-						mergeResult, mergeErr = doShip(git.ShipOpts{
-							PRNumber:        prNumber,
-							AutoMerge:       true,
-							Reviewers:       l.activeReviewers,
-							ReviewAddressed: reviewAddressed,
-						})
-						if mergeErr != nil {
-							l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship (merge): %v", mergeErr)
-							return prNumber, prResultURL, false, false, false
-						}
-						if mergeResult.ReviewFixNeeded {
-							// Review fix needed: spawn fix agent, mark addressed, retry.
-							tryFixReviewComments(ctx, l.git, l.verifier, l.logger, mergeResult.PendingReviewer, mergeResult.PendingReview, prNumber, title, workDir, rawLogPath)
-							l.state.Write("review_addressed:"+mergeResult.PendingReviewer+":"+taskID, "true") //nolint:errcheck
-							reviewAddressed[mergeResult.PendingReviewer] = true
-							continue
-						}
-						if mergeResult.CIFailure && mergeResult.CIFailureDetail != nil {
-							// CI fix: spawn fix agent; if it pushed new commits, retry merge.
-							fixResult := tryFixCI(ctx, l.git, l.verifier, l.logger, mergeResult.CIFailureDetail, title, workDir, rawLogPath)
-							if fixResult == git.CIFixApplied {
-								continue
-							}
-						}
-						return prNumber, prResultURL, mergeResult.Merged, mergeResult.CIFailure, mergeResult.Stacked
-					}
-					return prNumber, prResultURL, mergeResult.Merged, mergeResult.CIFailure, mergeResult.Stacked
-				},
-				buildCTFn: func(taskID, nextTask, summary string, prNumber int) CompletedTask {
-					return buildCompletedTask(taskID, nextTask, summary, prNumber, l.git)
-				},
-				runPostTaskFn: func(ctx context.Context, taskID string, prNumber int, merged bool) {
-					if l.cfg.OnPostTask != nil {
-						l.cfg.OnPostTask(ctx, taskID, prNumber, merged)
-						return
-					}
-					runPostTask(ctx, runPostTaskParams{
-						postTask:    l.cfg.PostTask,
-						worktreeDir: l.cfg.VerifyDir,
-						projectDir:  l.cfg.Dirs.ProjectDir,
-						logger:      l.logger,
-					}, taskID, prNumber, merged)
-				},
 			})
 			if out.ct != nil {
 				sessionTasks = append(sessionTasks, *out.ct)
@@ -695,4 +519,118 @@ iterLoop:
 
 	l.completedTasks = sessionTasks
 	return nil
+}
+
+// doShip executes the full two-phase ship pipeline: push + PR creation (Phase 1),
+// then reviewer polling and merge (Phase 2, only when AutoMerge is enabled).
+// Retries up to 5 times on review fix requests or CI failures.
+func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, workDir string) (prNumber int, prResultURL string, merged bool, ciFailure bool, stacked bool) {
+	prBody := buildPRBody(l.cfg.TaskBackend, taskID, summary)
+
+	callShip := func(opts git.ShipOpts) (git.ShipResult, error) {
+		result, err := l.git.Ship(ctx, opts)
+		if err != nil {
+			if !l.cfg.IsOnline() {
+				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed — internet appears down")
+				l.cfg.WaitForInternet(ctx, l.logger)
+				result, err = l.git.Ship(ctx, opts)
+			} else if isTransientGitHubError(err) {
+				backoffs := l.cfg.ShipRetryBackoffs
+				if backoffs == nil {
+					backoffs = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
+				}
+				for _, delay := range backoffs {
+					if err == nil {
+						break
+					}
+					l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed with transient error (%v) — retrying in %s", err, delay)
+					select {
+					case <-ctx.Done():
+						return result, err
+					case <-time.After(delay):
+					}
+					result, err = l.git.Ship(ctx, opts)
+				}
+			}
+			if err != nil {
+				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship: %v", err)
+			}
+		}
+		return result, err
+	}
+
+	// Phase 1: push + PR (no merge yet) so push happens before reviewer detection.
+	result, err := callShip(git.ShipOpts{TaskID: taskID, TaskTitle: title, Body: prBody})
+	if err != nil {
+		return result.PRNumber, result.PRURL, false, false, false
+	}
+
+	// Link task to PR as soon as PR is available.
+	if result.PRNumber != 0 && taskID != "" {
+		ref := result.PRURL
+		if ref == "" {
+			ref = prURL(l.git.RemoteURL(), result.PRNumber)
+		}
+		if ref != "" {
+			l.logger.Emit(logging.Opts{Domain: logging.Git}, "Linking task %s to %s (branch: %s)", taskID, ref, l.git.GetWorktreeBranch())
+			if refErr := l.cfg.TaskBackend.SetExternalRef(taskID, ref); refErr != nil {
+				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetExternalRef: %v", refErr)
+			}
+		}
+	}
+
+	// Reviewer detection happens after push (lazy, deferred until post-push
+	// context is established) regardless of AutoMerge setting.
+	l.ensureActiveReviewers()
+
+	if !l.cfg.AutoMerge || result.PRNumber == 0 {
+		return result.PRNumber, result.PRURL, false, false, false
+	}
+
+	// Phase 2: Ship with merge enabled. Pass the PR number so Ship
+	// skips push+PR and proceeds directly to reviewer poll + merge.
+	prResultNum := result.PRNumber
+	prResultURL = result.PRURL
+
+	// Seed review-addressed state from persistent store.
+	reviewAddressed := make(map[string]bool)
+	for _, reviewer := range l.activeReviewers {
+		key := "review_addressed:" + reviewer.BotUsername + ":" + taskID
+		if v, err := l.state.Read(key); err == nil && v == "true" {
+			reviewAddressed[reviewer.BotUsername] = true
+		}
+	}
+
+	// Retry loop: Ship may return ReviewFixNeeded or CIFailure; fix and retry.
+	const maxShipRetries = 5
+	var mergeResult git.ShipResult
+	for attempt := 0; attempt < maxShipRetries; attempt++ {
+		var mergeErr error
+		mergeResult, mergeErr = callShip(git.ShipOpts{
+			PRNumber:        prResultNum,
+			AutoMerge:       true,
+			Reviewers:       l.activeReviewers,
+			ReviewAddressed: reviewAddressed,
+		})
+		if mergeErr != nil {
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship (merge): %v", mergeErr)
+			return prResultNum, prResultURL, false, false, false
+		}
+		if mergeResult.ReviewFixNeeded {
+			// Review fix needed: spawn fix agent, mark addressed, retry.
+			tryFixReviewComments(ctx, l.git, l.verifier, l.logger, mergeResult.PendingReviewer, mergeResult.PendingReview, prResultNum, title, workDir, rawLogPath)
+			l.state.Write("review_addressed:"+mergeResult.PendingReviewer+":"+taskID, "true") //nolint:errcheck
+			reviewAddressed[mergeResult.PendingReviewer] = true
+			continue
+		}
+		if mergeResult.CIFailure && mergeResult.CIFailureDetail != nil {
+			// CI fix: spawn fix agent; if it pushed new commits, retry merge.
+			fixResult := tryFixCI(ctx, l.git, l.verifier, l.logger, mergeResult.CIFailureDetail, title, workDir, rawLogPath)
+			if fixResult == git.CIFixApplied {
+				continue
+			}
+		}
+		return prResultNum, prResultURL, mergeResult.Merged, mergeResult.CIFailure, mergeResult.Stacked
+	}
+	return prResultNum, prResultURL, mergeResult.Merged, mergeResult.CIFailure, mergeResult.Stacked
 }
