@@ -414,14 +414,14 @@ func TestCompleteTask_CancelledCtx_NoCommits_BeadStaysOpen(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel to simulate Ctrl-C
 
-	completeTaskCall(l, postSignalParams{
-		ctx:        ctx,
+	l.completeTask(ctx, completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "same-sha",
 		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-ctrlc1",
 		nextTask:   "Fix bug",
+		ralphDir:   ralphDir,
 	})
 
 	backend.CloseMu.Lock()
@@ -459,14 +459,14 @@ func TestCompleteTask_CancelledCtx_NoPR_BeadStaysOpen(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel to simulate Ctrl-C
 
-	completeTaskCall(l, postSignalParams{
-		ctx:        ctx,
+	l.completeTask(ctx, completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "before",
 		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-ctrlc2",
 		nextTask:   "Fix bug",
+		ralphDir:   ralphDir,
 	})
 
 	backend.CloseMu.Lock()
@@ -523,14 +523,14 @@ func TestCompleteTask_NoNewCommits_ExistingOpenPR_MergesViaFinalize(t *testing.T
 		postTaskMerged = merged
 	}
 
-	action := completeTaskCall(l, postSignalParams{
-		ctx:        context.Background(),
+	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "same-sha",
 		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-retry1",
 		nextTask:   "Fix bug",
+		ralphDir:   ralphDir,
 	})
 
 	// The task should be closed (finalizePR handles close).
@@ -554,8 +554,8 @@ func TestCompleteTask_NoNewCommits_ExistingOpenPR_MergesViaFinalize(t *testing.T
 		t.Errorf("post-task merged: got false, want true")
 	}
 
-	if action != signalSkipped {
-		t.Errorf("expected signalSkipped, got %v", action)
+	if out.action != signalSkipped {
+		t.Errorf("expected signalSkipped, got %v", out.action)
 	}
 }
 
@@ -592,14 +592,14 @@ func TestCompleteTask_NoNewCommits_ExistingMergedPR_ClosesDirectly(t *testing.T)
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	action := completeTaskCall(l, postSignalParams{
-		ctx:        context.Background(),
+	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "same-sha",
 		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-retry2",
 		nextTask:   "Fix bug",
+		ralphDir:   ralphDir,
 	})
 
 	// Bead closed via the direct path (not finalizePR).
@@ -615,8 +615,8 @@ func TestCompleteTask_NoNewCommits_ExistingMergedPR_ClosesDirectly(t *testing.T)
 		t.Errorf("expected no MergeWithRetry calls for already-merged PR, got %d", gm.MergeRetryCalls)
 	}
 
-	if action != signalSkipped {
-		t.Errorf("expected signalSkipped, got %v", action)
+	if out.action != signalSkipped {
+		t.Errorf("expected signalSkipped, got %v", out.action)
 	}
 }
 
@@ -651,14 +651,14 @@ func TestCompleteTask_CancelledCtx_FinalizePR_BeadStaysOpen(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel to simulate Ctrl-C
 
-	completeTaskCall(l, postSignalParams{
-		ctx:        ctx,
+	l.completeTask(ctx, completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "before",
 		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-ctrlc3",
 		nextTask:   "Fix bug",
+		ralphDir:   ralphDir,
 	})
 
 	backend.CloseMu.Lock()

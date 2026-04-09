@@ -18,122 +18,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
-// completeTaskCall invokes completeTask using l's dependencies assembled as callbacks,
-// and applies the session-task side effects back onto l.
-func completeTaskCall(l *Loop, p postSignalParams) postSignalAction {
-	out := completeTask(p.ctx, completeTaskParams{
-		result:            p.result,
-		headBefore:        p.headBefore,
-		workDir:           p.workDir,
-		rawLogPath:        p.rawLogPath,
-		diffStat:          p.diffStat,
-		taskID:            p.taskID,
-		nextTask:          p.nextTask,
-		postSignalTimeout: l.cfg.PostSignalTimeout,
-		autoMerge:         l.cfg.AutoMerge,
-		evolve:            l.cfg.Evolve,
-		notify:            l.cfg.Notify,
-		ralphDir:          l.cfg.Dirs.RalphDir,
-		logger:            l.logger,
-		verifyFn: func(ctx context.Context, headBefore string) (bool, string) {
-			if l.cfg.OnVerify != nil {
-				return l.cfg.OnVerify(ctx, l.git.GetWorkDir(), headBefore)
-			}
-			return l.verifier.VerifyCompletion(ctx, l.git.GetWorkDir(), headBefore)
-		},
-		headRevFn:        l.git.HeadRev,
-		worktreeBranchFn: l.git.GetWorktreeBranch,
-		tagTaskEndFn:     l.git.TagTaskEnd,
-		getPRStateFn:     l.git.GetPRState,
-		findExistingPRFn: func(taskID, branch string) (int, bool) {
-			return findExistingPRForTask(taskID, branch, l.cfg.TaskBackend, l.git)
-		},
-		getStateFn: func(taskID, key string) (string, error) {
-			return l.cfg.TaskBackend.GetState(taskID, key)
-		},
-		setStateFn: func(taskID, key, value, reason string) error {
-			return l.cfg.TaskBackend.SetState(taskID, key, value, reason)
-		},
-		closeTaskFn: l.cfg.TaskBackend.CloseTask,
-		getExternalRefFn: func(taskID string) (string, error) {
-			return l.cfg.TaskBackend.GetExternalRef(taskID)
-		},
-		getSkippedTasksFn: l.state.GetSkippedTasks,
-		recordCompletedFn: func(taskID, nextTask string) {
-			l.state.RecordCompletedTask(taskID, nextTask)
-		},
-		persistCompletedFn: func(taskID string, merged bool) {
-			if taskID == "" {
-				return
-			}
-			if err := l.state.AddCompletedTask(taskID, merged); err != nil {
-				l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
-			}
-		},
-		touchPlanFlashFn: l.state.TouchPlanFlash,
-		writeStateFn: func(key, value string) {
-			l.state.Write(key, value) //nolint:errcheck
-		},
-		recordAttemptFn: func(taskID, nextTask, reason, diffStat, note string) {
-			l.attempts.Record(taskID, nextTask, reason, diffStat, note)
-		},
-		clearAttemptsFn:      l.attempts.Clear,
-		clearMergeFailuresFn: l.attempts.ClearMergeFailures,
-		skipTaskFn: func(taskID, reason string) { l.skipTask(taskID, reason) },
-		shipFn: func(ctx context.Context, taskID, title, summary string) (int, string, bool, bool, bool) {
-			l.ensureActiveReviewers()
-			prBody := buildPRBody(l.cfg.TaskBackend, taskID, summary)
-			shipOpts := git.ShipOpts{
-				TaskID:    taskID,
-				TaskTitle: title,
-				Body:      prBody,
-				AutoMerge: l.cfg.AutoMerge,
-				Reviewers: l.activeReviewers,
-			}
-			result, err := l.git.Ship(ctx, shipOpts)
-			if err != nil {
-				if !l.cfg.IsOnline() {
-					l.cfg.WaitForInternet(ctx, l.logger)
-					result, err = l.git.Ship(ctx, shipOpts)
-				}
-				if err != nil {
-					l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship: %v", err)
-				}
-			}
-			if result.PRNumber != 0 && taskID != "" {
-				ref := result.PRURL
-				if ref == "" {
-					ref = prURL(l.git.RemoteURL(), result.PRNumber)
-				}
-				if ref != "" {
-					if refErr := l.cfg.TaskBackend.SetExternalRef(taskID, ref); refErr != nil {
-						l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetExternalRef: %v", refErr)
-					}
-				}
-			}
-			return result.PRNumber, result.PRURL, result.Merged, result.CIFailure, result.Stacked
-		},
-		buildCTFn: func(taskID, nextTask, summary string, prNumber int) CompletedTask {
-			return buildCompletedTask(taskID, nextTask, summary, prNumber, l.git)
-		},
-		runPostTaskFn: func(ctx context.Context, taskID string, prNumber int, merged bool) {
-			if l.cfg.OnPostTask != nil {
-				l.cfg.OnPostTask(ctx, taskID, prNumber, merged)
-				return
-			}
-			runPostTask(ctx, runPostTaskParams{
-				postTask:   l.cfg.PostTask,
-				projectDir: l.cfg.Dirs.ProjectDir,
-				logger:     l.logger,
-			}, taskID, prNumber, merged)
-		},
-	})
-	if out.ct != nil {
-		l.completedTasks = append(l.completedTasks, *out.ct)
-	}
-	return out.action
-}
-
 // Branch name format uses beadID-slug without sequence number,
 // proving the old TaskSeq pattern has been removed.
 // completeTask: verifies that a successful signal pushes, closes the
@@ -149,7 +33,7 @@ func TestLoop_CompleteTask_ClosesTask(t *testing.T) {
 			StubBackend: testutil.StubBackend{
 				Remaining: 1,
 				Total:     1,
-				NextTask:   "Fix auth bug",
+				NextTask:  "Fix auth bug",
 				NextID:    "ralph-xyz",
 			},
 		},
@@ -166,19 +50,18 @@ func TestLoop_CompleteTask_ClosesTask(t *testing.T) {
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	action := completeTaskCall(l, postSignalParams{
-		ctx:        context.Background(),
+	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
 		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-xyz",
 		nextTask:   "Fix auth bug",
-		diffStat:   "",
+		ralphDir:   ralphDir,
 	})
 
-	if action != signalComplete {
-		t.Errorf("expected signalComplete, got %d", action)
+	if out.action != signalComplete {
+		t.Errorf("expected signalComplete, got %d", out.action)
 	}
 
 	backend.CloseMu.Lock()
@@ -197,7 +80,7 @@ func TestLoop_CompleteTask_VerificationFailure(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-abc"}},
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-abc"}},
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
@@ -210,15 +93,15 @@ func TestLoop_CompleteTask_VerificationFailure(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
-	action := completeTaskCall(l, postSignalParams{
-		ctx:      context.Background(),
+	out := l.completeTask(context.Background(), completeTaskParams{
 		result:   claude.Result{},
 		taskID:   "ralph-abc",
-		nextTask:   "Fix bug",
+		nextTask: "Fix bug",
+		ralphDir: ralphDir,
 	})
 
-	if action != signalRetry {
-		t.Errorf("expected signalRetry, got %d", action)
+	if out.action != signalRetry {
+		t.Errorf("expected signalRetry, got %d", out.action)
 	}
 
 	backend.CloseMu.Lock()
@@ -259,18 +142,18 @@ func TestCompleteTask_SkippedTask_DoesNotPush(t *testing.T) {
 		t.Fatalf("AddSkippedTask: %v", err)
 	}
 
-	action := completeTaskCall(l, postSignalParams{
-		ctx:        context.Background(),
+	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
 		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-skipped",
 		nextTask:   "Fix bug",
+		ralphDir:   ralphDir,
 	})
 
-	if action != signalSkipped {
-		t.Errorf("expected signalSkipped, got %d", action)
+	if out.action != signalSkipped {
+		t.Errorf("expected signalSkipped, got %d", out.action)
 	}
 
 	// Ship should NOT have been called — no push attempt.
@@ -300,7 +183,7 @@ func TestCompleteTask_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-timeout"}},
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-timeout"}},
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
@@ -323,15 +206,16 @@ func TestCompleteTask_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 
 	done := make(chan postSignalAction, 1)
 	go func() {
-		done <- completeTaskCall(l, postSignalParams{
-			ctx:        context.Background(),
-			result:     claude.Result{SignalDetected: true},
-			headBefore: "",
-			workDir:    dir,
-			rawLogPath: filepath.Join(ralphDir, "raw.log"),
-			taskID:     "ralph-timeout",
-			nextTask:   "Fix bug",
-		})
+		done <- l.completeTask(context.Background(), completeTaskParams{
+			result:            claude.Result{SignalDetected: true},
+			headBefore:        "",
+			workDir:           dir,
+			rawLogPath:        filepath.Join(ralphDir, "raw.log"),
+			taskID:            "ralph-timeout",
+			nextTask:          "Fix bug",
+			postSignalTimeout: l.cfg.PostSignalTimeout,
+			ralphDir:          ralphDir,
+		}).action
 	}()
 
 	select {
@@ -364,7 +248,7 @@ func TestCompleteTask_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix login", NextID: "ralph-fast"}},
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-fast"}},
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
@@ -379,18 +263,19 @@ func TestCompleteTask_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 
-	action := completeTaskCall(l, postSignalParams{
-		ctx:        context.Background(),
-		result:     claude.Result{SignalDetected: true},
-		headBefore: "",
-		workDir:    dir,
-		rawLogPath: filepath.Join(ralphDir, "raw.log"),
-		taskID:     "ralph-fast",
-		nextTask:   "Fix login",
+	out := l.completeTask(context.Background(), completeTaskParams{
+		result:            claude.Result{SignalDetected: true},
+		headBefore:        "",
+		workDir:           dir,
+		rawLogPath:        filepath.Join(ralphDir, "raw.log"),
+		taskID:            "ralph-fast",
+		nextTask:          "Fix login",
+		postSignalTimeout: l.cfg.PostSignalTimeout,
+		ralphDir:          ralphDir,
 	})
 
-	if action != signalComplete {
-		t.Errorf("expected signalComplete, got %d", action)
+	if out.action != signalComplete {
+		t.Errorf("expected signalComplete, got %d", out.action)
 	}
 
 	backend.CloseMu.Lock()
@@ -409,7 +294,7 @@ func TestCompleteTask_PostSignalTimeout_CancelsMerge(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Slow merge", NextID: "ralph-slow"}},
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Slow merge", NextID: "ralph-slow"}},
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
@@ -431,15 +316,16 @@ func TestCompleteTask_PostSignalTimeout_CancelsMerge(t *testing.T) {
 
 	done := make(chan postSignalAction, 1)
 	go func() {
-		done <- completeTaskCall(l, postSignalParams{
-			ctx:        context.Background(),
-			result:     claude.Result{SignalDetected: true},
-			headBefore: "",
-			workDir:    dir,
-			rawLogPath: filepath.Join(ralphDir, "raw.log"),
-			taskID:     "ralph-slow",
-			nextTask:   "Slow merge",
-		})
+		done <- l.completeTask(context.Background(), completeTaskParams{
+			result:            claude.Result{SignalDetected: true},
+			headBefore:        "",
+			workDir:           dir,
+			rawLogPath:        filepath.Join(ralphDir, "raw.log"),
+			taskID:            "ralph-slow",
+			nextTask:          "Slow merge",
+			postSignalTimeout: l.cfg.PostSignalTimeout,
+			ralphDir:          ralphDir,
+		}).action
 	}()
 
 	select {
@@ -464,7 +350,7 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\necho \"TASK=$RALPH_TASK_ID PR=$RALPH_PR_NUMBER MERGED=$RALPH_MERGED\" > %s\n", envFile)), 0o755)
 
 	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt1"}},
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-pt1"}},
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
@@ -481,18 +367,18 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 	gm.MergeRetryResult = true
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	action := completeTaskCall(l, postSignalParams{
-		ctx:        context.Background(),
+	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
 		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-pt1",
 		nextTask:   "Fix bug",
+		ralphDir:   ralphDir,
 	})
 
-	if action != signalComplete {
-		t.Fatalf("expected signalComplete, got %d", action)
+	if out.action != signalComplete {
+		t.Fatalf("expected signalComplete, got %d", out.action)
 	}
 
 	data, err := os.ReadFile(envFile)
@@ -518,7 +404,7 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\necho ran > %s\n", envFile)), 0o755)
 
 	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt2"}},
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-pt2"}},
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
@@ -532,15 +418,15 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
-	action := completeTaskCall(l, postSignalParams{
-		ctx:      context.Background(),
+	out := l.completeTask(context.Background(), completeTaskParams{
 		result:   claude.Result{},
 		taskID:   "ralph-pt2",
-		nextTask:   "Fix bug",
+		nextTask: "Fix bug",
+		ralphDir: ralphDir,
 	})
 
-	if action != signalRetry {
-		t.Fatalf("expected signalRetry, got %d", action)
+	if out.action != signalRetry {
+		t.Fatalf("expected signalRetry, got %d", out.action)
 	}
 
 	if _, err := os.Stat(envFile); err == nil {
@@ -562,7 +448,7 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 	logger := logging.New(&logBuf)
 
 	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt3"}},
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-pt3"}},
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
@@ -577,18 +463,18 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 	gm.ShipResult = git.ShipResult{PRNumber: 50}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	action := completeTaskCall(l, postSignalParams{
-		ctx:        context.Background(),
+	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
 		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-pt3",
 		nextTask:   "Fix bug",
+		ralphDir:   ralphDir,
 	})
 
-	if action != signalComplete {
-		t.Fatalf("expected signalComplete despite script failure, got %d", action)
+	if out.action != signalComplete {
+		t.Fatalf("expected signalComplete despite script failure, got %d", out.action)
 	}
 
 	logOutput := logBuf.String()
@@ -627,14 +513,14 @@ func TestLoop_PostTaskScript_LogsWhenNotConfigured(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	completeTaskCall(l, postSignalParams{
-		ctx:        context.Background(),
+	l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
 		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-npt",
 		nextTask:   "Fix bug",
+		ralphDir:   ralphDir,
 	})
 
 	logOutput := logBuf.String()
@@ -655,7 +541,7 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\necho \"TASK=$RALPH_TASK_ID PR=$RALPH_PR_NUMBER MERGED=$RALPH_MERGED\" > %s\n", envFile)), 0o755)
 
 	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask:   "Fix bug", NextID: "ralph-pt4"}},
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-pt4"}},
 	}
 
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before"}
@@ -670,18 +556,18 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	action := completeTaskCall(l, postSignalParams{
-		ctx:        context.Background(),
+	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{OnSignalUsed: true},
 		headBefore: "before",
 		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-pt4",
 		nextTask:   "Fix bug",
+		ralphDir:   ralphDir,
 	})
 
-	if action != signalSkipped {
-		t.Fatalf("expected signalSkipped, got %d", action)
+	if out.action != signalSkipped {
+		t.Fatalf("expected signalSkipped, got %d", out.action)
 	}
 
 	data, err := os.ReadFile(envFile)
@@ -729,18 +615,18 @@ func TestLoop_PostTaskScript_PackageJSONDetection(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	action := completeTaskCall(l, postSignalParams{
-		ctx:        context.Background(),
+	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
 		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-pkg1",
 		nextTask:   "Fix bug",
+		ralphDir:   ralphDir,
 	})
 
-	if action != signalComplete {
-		t.Fatalf("expected signalComplete, got %d", action)
+	if out.action != signalComplete {
+		t.Fatalf("expected signalComplete, got %d", out.action)
 	}
 
 	data, err := os.ReadFile(envFile)
@@ -767,7 +653,7 @@ func TestCompleteTask_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 			StubBackend: testutil.StubBackend{
 				Remaining: 1,
 				Total:     1,
-				NextTask:   "Fix auth bug",
+				NextTask:  "Fix auth bug",
 				NextID:    "ralph-ntf",
 			},
 		},
@@ -789,14 +675,15 @@ func TestCompleteTask_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	completeTaskCall(l, postSignalParams{
-		ctx:        context.Background(),
+	l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
 		headBefore: "",
 		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-ntf",
 		nextTask:   "Fix auth bug",
+		notify:     true,
+		ralphDir:   ralphDir,
 	})
 
 	got := buf.String()
@@ -820,7 +707,7 @@ func TestCompleteTask_NotifyDisabled_NoNotification(t *testing.T) {
 			StubBackend: testutil.StubBackend{
 				Remaining: 1,
 				Total:     1,
-				NextTask:   "Fix auth bug",
+				NextTask:  "Fix auth bug",
 				NextID:    "ralph-ntf2",
 			},
 		},
@@ -842,14 +729,15 @@ func TestCompleteTask_NotifyDisabled_NoNotification(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	completeTaskCall(l, postSignalParams{
-		ctx:        context.Background(),
+	l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
 		headBefore: "",
 		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-ntf2",
 		nextTask:   "Fix auth bug",
+		notify:     false,
+		ralphDir:   ralphDir,
 	})
 
 	got := buf.String()
@@ -870,7 +758,7 @@ func TestCompleteTask_NotifyOnNoCommitsPath(t *testing.T) {
 			StubBackend: testutil.StubBackend{
 				Remaining: 1,
 				Total:     1,
-				NextTask:   "Update docs",
+				NextTask:  "Update docs",
 				NextID:    "ralph-nc1",
 			},
 		},
@@ -891,18 +779,19 @@ func TestCompleteTask_NotifyOnNoCommitsPath(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	action := completeTaskCall(l, postSignalParams{
-		ctx:        context.Background(),
+	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true, Summary: "Updated README"},
 		headBefore: "before",
 		workDir:    dir,
 		rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID:     "ralph-nc1",
 		nextTask:   "Update docs",
+		notify:     true,
+		ralphDir:   ralphDir,
 	})
 
-	if action != signalSkipped {
-		t.Errorf("expected signalSkipped for no-commits path, got %d", action)
+	if out.action != signalSkipped {
+		t.Errorf("expected signalSkipped for no-commits path, got %d", out.action)
 	}
 
 	got := buf.String()
@@ -952,15 +841,15 @@ func TestCompleteTask_FeedbackFileStopsPostSignal(t *testing.T) {
 
 	done := make(chan postSignalAction, 1)
 	go func() {
-		done <- completeTaskCall(l, postSignalParams{
-			ctx:        context.Background(),
+		done <- l.completeTask(context.Background(), completeTaskParams{
 			result:     claude.Result{SignalDetected: true},
 			headBefore: "",
 			workDir:    dir,
 			rawLogPath: filepath.Join(ralphDir, "raw.log"),
 			taskID:     "ralph-feedback",
 			nextTask:   "Fix bug",
-		})
+			ralphDir:   ralphDir,
+		}).action
 	}()
 
 	select {
@@ -983,4 +872,3 @@ func TestCompleteTask_FeedbackFileStopsPostSignal(t *testing.T) {
 		t.Errorf("task should not be closed when feedback arrives, got %v", backend.ClosedIDs)
 	}
 }
-

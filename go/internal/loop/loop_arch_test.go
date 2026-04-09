@@ -37,7 +37,7 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 		"finalizePRParams": true,
 
 		// --- Bead 4 rework: completeTaskParams data-only (ralph-93jq) ---
-		// "completeTaskParams": true,
+		"completeTaskParams": true,
 
 		// --- Bead 6: task selection → tasks module (ralph-u4c7) ---
 		// selectNextTaskParams and logIterationBannerParams are data-only structs.

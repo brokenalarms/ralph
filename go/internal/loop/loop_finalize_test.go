@@ -10,6 +10,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -86,7 +87,7 @@ func TestBuildPRBody_NeverGeneric(t *testing.T) {
 	}
 }
 
-// shipResult holds the values returned by a shipFn stub.
+// shipResult holds the values returned by a ship stub for finalize tests.
 type shipResult struct {
 	prNumber  int
 	prURL     string
@@ -95,48 +96,62 @@ type shipResult struct {
 	stacked   bool
 }
 
-// buildFinalizeParams constructs a completeTaskParams for testing the post-ship
-// close logic. headBefore is set to "before-sha" so the "no new commits" guard
-// is skipped (current HEAD defaults to "" which differs from "before-sha").
-func buildFinalizeParams(t *testing.T, dir, taskID, nextTask string, backend *testutil.TrackingBackend, ship shipResult, skipFn func(string, string)) completeTaskParams {
+// finalizeSetup bundles a Loop and pre-built params for finalize tests.
+type finalizeSetup struct {
+	loop *Loop
+	gm   *testutil.StubGit
+	st   *state.Store
+	p    completeTaskParams
+}
+
+// buildFinalizeSetup constructs a Loop with StubGit configured to return ship,
+// and a data-only completeTaskParams with headBefore="before-sha" (ensuring
+// the "new commits" path is taken since HeadRev returns "after-sha").
+func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *testutil.TrackingBackend, ship shipResult) finalizeSetup {
 	t.Helper()
-	return completeTaskParams{
-		result:     claude.Result{SignalDetected: true, OnSignalUsed: true},
-		headBefore: "before-sha",
-		workDir:    dir,
-		taskID:     taskID,
-		nextTask:   nextTask,
-		logger:     logging.New(nil),
-		verifyFn:   func(context.Context, string) (bool, string) { return true, "" },
-		headRevFn:  func() string { return "after-sha" },
-		worktreeBranchFn: func() string { return "ralph/" + taskID },
-		tagTaskEndFn:     func(string) {},
-		getPRStateFn:     func(int) (git.PRState, error) { return git.PRStateOpen, nil },
-		findExistingPRFn: func(string, string) (int, bool) { return 0, false },
-		getStateFn:       func(string, string) (string, error) { return "", nil },
-		setStateFn:       func(string, string, string, string) error { return nil },
-		closeTaskFn:      backend.CloseTask,
-		getExternalRefFn: func(string) (string, error) { return "", nil },
-		getSkippedTasksFn: func() ([]string, error) { return nil, nil },
-		recordCompletedFn:    func(string, string) {},
-		persistCompletedFn:   func(string, bool) {},
-		touchPlanFlashFn:     func() {},
-		writeStateFn:         func(string, string) {},
-		recordAttemptFn:      func(string, string, string, string, string) {},
-		clearAttemptsFn:      func(string, string) {},
-		clearMergeFailuresFn: func(string) {},
-		skipTaskFn: skipFn,
-		shipFn: func(_ context.Context, _, _, _ string) (int, string, bool, bool, bool) {
-			return ship.prNumber, ship.prURL, ship.merged, ship.ciFailure, ship.stacked
+	_, st := setupTestDir(t)
+	gm := &testutil.StubGit{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		HeadRevValue: "after-sha",
+		PRState:    git.PRStateOpen,
+	}
+	gm.ShipFunc = func(_ context.Context, opts git.ShipOpts) (git.ShipResult, error) {
+		if opts.PRNumber == 0 {
+			// Phase 1: push + PR creation
+			return git.ShipResult{PRNumber: ship.prNumber, PRURL: ship.prURL}, nil
+		}
+		// Phase 2: merge
+		return git.ShipResult{
+			PRNumber:  opts.PRNumber,
+			PRURL:     ship.prURL,
+			Merged:    ship.merged,
+			CIFailure: ship.ciFailure,
+			Stacked:   ship.stacked,
+		}, nil
+	}
+	autoMerge := ship.merged || ship.ciFailure || ship.stacked
+	l := New(Config{
+		TaskBackend: backend,
+		AutoMerge:   autoMerge,
+		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+	}, st, gm, logging.New(nil))
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+	return finalizeSetup{
+		loop: l,
+		gm:   gm,
+		st:   st,
+		p: completeTaskParams{
+			result:     claude.Result{SignalDetected: true, OnSignalUsed: true},
+			headBefore: "before-sha",
+			workDir:    dir,
+			taskID:     taskID,
+			nextTask:   nextTask,
 		},
-		buildCTFn: func(taskID, nextTask, summary string, prNumber int) CompletedTask {
-			return CompletedTask{ID: taskID, Title: nextTask, PRNum: prNumber, PRURL: ship.prURL}
-		},
-		runPostTaskFn: func(context.Context, string, int, bool) {},
 	}
 }
 
-// completeTask closes the bead when AutoMerge is off (shipFn returns merged=false).
+// completeTask closes the bead when AutoMerge is off (ship returns merged=false).
 func TestFinalizePR_NoAutoMerge_ClosesTask(t *testing.T) {
 	dir, _ := setupTestDir(t)
 
@@ -144,12 +159,12 @@ func TestFinalizePR_NoAutoMerge_ClosesTask(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix auth bug", backend, shipResult{
+	fs := buildFinalizeSetup(t, dir, "ralph-abc", "Fix auth bug", backend, shipResult{
 		prNumber: 42,
 		merged:   false,
-	}, nil)
+	})
 
-	out := completeTask(context.Background(), p)
+	out := fs.loop.completeTask(context.Background(), fs.p)
 
 	if out.merged {
 		t.Error("should not merge when AutoMerge is disabled")
@@ -161,7 +176,7 @@ func TestFinalizePR_NoAutoMerge_ClosesTask(t *testing.T) {
 	}
 }
 
-// completeTask merges and closes when shipFn returns merged=true.
+// completeTask merges and closes when ship returns merged=true.
 func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
 	dir, _ := setupTestDir(t)
 
@@ -169,12 +184,12 @@ func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	p := buildFinalizeParams(t, dir, "ralph-xyz", "Add feature", backend, shipResult{
+	fs := buildFinalizeSetup(t, dir, "ralph-xyz", "Add feature", backend, shipResult{
 		prNumber: 42,
 		merged:   true,
-	}, nil)
+	})
 
-	out := completeTask(context.Background(), p)
+	out := fs.loop.completeTask(context.Background(), fs.p)
 
 	if !out.merged {
 		t.Error("should be merged when ship returns merged=true")
@@ -195,13 +210,13 @@ func TestFinalizePR_MergeFailure_ClosesTask(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix bug", backend, shipResult{
+	fs := buildFinalizeSetup(t, dir, "ralph-abc", "Fix bug", backend, shipResult{
 		prNumber: 99,
 		merged:   false,
 		prURL:    "https://github.com/owner/repo/pull/99",
-	}, nil)
+	})
 
-	out := completeTask(context.Background(), p)
+	out := fs.loop.completeTask(context.Background(), fs.p)
 
 	if out.merged {
 		t.Error("should not be merged on failure")
@@ -224,12 +239,12 @@ func TestFinalizePR_CIFixExhausted_TaskStaysOpen(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix failing tests", backend, shipResult{
+	fs := buildFinalizeSetup(t, dir, "ralph-abc", "Fix failing tests", backend, shipResult{
 		prNumber:  99,
 		ciFailure: true,
-	}, nil)
+	})
 
-	completeTask(context.Background(), p)
+	fs.loop.completeTask(context.Background(), fs.p)
 
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
@@ -238,7 +253,7 @@ func TestFinalizePR_CIFixExhausted_TaskStaysOpen(t *testing.T) {
 	}
 }
 
-// CIFailure from shipFn leaves the task open.
+// CIFailure from ship leaves the task open.
 func TestFinalizePR_CIFailure_TaskStaysOpen(t *testing.T) {
 	dir, _ := setupTestDir(t)
 
@@ -246,12 +261,12 @@ func TestFinalizePR_CIFailure_TaskStaysOpen(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix failing tests", backend, shipResult{
+	fs := buildFinalizeSetup(t, dir, "ralph-abc", "Fix failing tests", backend, shipResult{
 		prNumber:  99,
 		ciFailure: true,
-	}, nil)
+	})
 
-	completeTask(context.Background(), p)
+	fs.loop.completeTask(context.Background(), fs.p)
 
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
@@ -269,15 +284,29 @@ func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testi
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix bug", backend, shipResult{
-		prNumber: 99,
-		merged:   false,
-	}, nil)
-	p.persistCompletedFn = func(id string, merged bool) {
-		_ = st.AddCompletedTask(id, merged)
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after-sha"}
+	gm.ShipFunc = func(_ context.Context, opts git.ShipOpts) (git.ShipResult, error) {
+		if opts.PRNumber == 0 {
+			return git.ShipResult{PRNumber: 99}, nil
+		}
+		return git.ShipResult{PRNumber: opts.PRNumber, Merged: false}, nil
+	}
+	l := New(Config{
+		TaskBackend: backend,
+		AutoMerge:   false,
+		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+	}, st, gm, logging.New(nil))
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+
+	p := completeTaskParams{
+		result:     claude.Result{SignalDetected: true, OnSignalUsed: true},
+		headBefore: "before-sha",
+		workDir:    dir,
+		taskID:     "ralph-abc",
+		nextTask:   "Fix bug",
 	}
 
-	completeTask(context.Background(), p)
+	l.completeTask(context.Background(), p)
 
 	tasks, err := st.GetCompletedTasks()
 	if err != nil {
@@ -294,7 +323,7 @@ func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testi
 	}
 }
 
-// When shipFn returns merged=true, completeTask closes the bead immediately.
+// When ship returns merged=true, completeTask closes the bead immediately.
 func TestFinalizePR_AlreadyMerged_ClosesImmediately(t *testing.T) {
 	dir, _ := setupTestDir(t)
 
@@ -302,12 +331,12 @@ func TestFinalizePR_AlreadyMerged_ClosesImmediately(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	p := buildFinalizeParams(t, dir, "ralph-xyz", "Add feature", backend, shipResult{
+	fs := buildFinalizeSetup(t, dir, "ralph-xyz", "Add feature", backend, shipResult{
 		prNumber: 42,
 		merged:   true,
-	}, nil)
+	})
 
-	out := completeTask(context.Background(), p)
+	out := fs.loop.completeTask(context.Background(), fs.p)
 
 	if !out.merged {
 		t.Error("should report merged when ship returns merged=true")
@@ -327,13 +356,13 @@ func TestFinalizePR_UsesURLInCloseReason(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix login", backend, shipResult{
+	fs := buildFinalizeSetup(t, dir, "ralph-abc", "Fix login", backend, shipResult{
 		prNumber: 55,
 		prURL:    "https://github.com/owner/repo/pull/55",
 		merged:   false,
-	}, nil)
+	})
 
-	completeTask(context.Background(), p)
+	fs.loop.completeTask(context.Background(), fs.p)
 
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
@@ -354,19 +383,12 @@ func TestFinalizePR_CloseTaskFailure_SkipsTask(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	_, st := setupTestDir(t)
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
-		TaskBackend: backend,
-		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, gm, logging.New(nil))
-
-	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix auth bug", backend, shipResult{
+	fs := buildFinalizeSetup(t, dir, "ralph-abc", "Fix auth bug", backend, shipResult{
 		prNumber: 42,
 		merged:   true,
-	}, l.skipTask)
+	})
 
-	out := completeTask(context.Background(), p)
+	out := fs.loop.completeTask(context.Background(), fs.p)
 
 	if !out.merged {
 		t.Error("PR should still report merged")
@@ -402,19 +424,12 @@ func TestFinalizePR_DependencyBlockedClose_SkipsWithBlockerIDs(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	_, st2 := setupTestDir(t)
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
-		TaskBackend: backend,
-		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st2, gm, logging.New(nil))
-
-	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix auth bug", backend, shipResult{
+	fs := buildFinalizeSetup(t, dir, "ralph-abc", "Fix auth bug", backend, shipResult{
 		prNumber: 42,
 		merged:   true,
-	}, l.skipTask)
+	})
 
-	completeTask(context.Background(), p)
+	fs.loop.completeTask(context.Background(), fs.p)
 
 	backend.SkipMu.Lock()
 	defer backend.SkipMu.Unlock()
@@ -432,7 +447,7 @@ func TestFinalizePR_DependencyBlockedClose_SkipsWithBlockerIDs(t *testing.T) {
 	}
 }
 
-// Stacked PR (shipFn returns stacked=true) closes the bead without merging.
+// Stacked PR (ship returns stacked=true) closes the bead without merging.
 func TestFinalizePR_StackedPR_ClosesWithoutMerge(t *testing.T) {
 	dir, _ := setupTestDir(t)
 
@@ -440,13 +455,13 @@ func TestFinalizePR_StackedPR_ClosesWithoutMerge(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	p := buildFinalizeParams(t, dir, "ralph-stk1", "Stacked task", backend, shipResult{
+	fs := buildFinalizeSetup(t, dir, "ralph-stk1", "Stacked task", backend, shipResult{
 		prNumber: 88,
 		merged:   false,
 		stacked:  true,
-	}, nil)
+	})
 
-	out := completeTask(context.Background(), p)
+	out := fs.loop.completeTask(context.Background(), fs.p)
 
 	if out.merged {
 		t.Error("merge should not be called for stacked PR")

@@ -15,9 +15,9 @@ import (
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
-// completeTaskParams bundles the signal data and callbacks for the post-signal
-// pipeline. All module interactions are callbacks — no module references are
-// held as fields; only data, func types, and *logging.Logger are permitted.
+// completeTaskParams bundles the signal data and config for the post-signal
+// pipeline. All fields are data only — no module references, no interfaces,
+// no func types.
 type completeTaskParams struct {
 	// signal data
 	result     claude.Result
@@ -29,42 +29,9 @@ type completeTaskParams struct {
 	nextTask   string
 	// config
 	postSignalTimeout time.Duration
-	autoMerge         bool
 	evolve            bool
 	notify            bool
 	ralphDir          string
-	// cross-cutting
-	logger *logging.Logger
-	// verification
-	verifyFn func(ctx context.Context, headBefore string) (bool, string)
-	// git callbacks
-	headRevFn        func() string
-	worktreeBranchFn func() string
-	tagTaskEndFn     func(taskID string)
-	getPRStateFn     func(prNum int) (git.PRState, error)
-	findExistingPRFn func(taskID, branch string) (int, bool)
-	// backend callbacks
-	getStateFn       func(taskID, key string) (string, error)
-	setStateFn       func(taskID, key, value, reason string) error
-	closeTaskFn      func(taskID, reason string) error
-	getExternalRefFn func(taskID string) (string, error)
-	// state callbacks
-	getSkippedTasksFn  func() ([]string, error)
-	recordCompletedFn  func(taskID, nextTask string)
-	persistCompletedFn func(taskID string, merged bool)
-	touchPlanFlashFn   func()
-	writeStateFn       func(key, value string)
-	// attempts callbacks
-	recordAttemptFn func(taskID, nextTask, reason, diffStat, note string)
-	clearAttemptsFn func(taskID, nextTask string)
-	// skip
-	skipTaskFn func(taskID, reason string)
-	// attempts callbacks
-	clearMergeFailuresFn func(taskID string)
-	// ship + post-task
-	shipFn        func(ctx context.Context, taskID, title, summary string) (prNumber int, prURL string, merged bool, ciFailure bool, stacked bool)
-	buildCTFn     func(taskID, nextTask, summary string, prNumber int) CompletedTask
-	runPostTaskFn func(ctx context.Context, taskID string, prNumber int, merged bool)
 }
 
 // completeTaskOut carries the results of completeTask back to Run().
@@ -98,7 +65,7 @@ type postSignalParams struct {
 
 // completeTask runs after the agent signals completion: verifies the work,
 // ships a PR, merges if configured, and closes the bead.
-func completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
+func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
 	if p.postSignalTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, p.postSignalTimeout)
@@ -121,7 +88,7 @@ func completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
 				case <-ticker.C:
 					if _, err := os.Stat(feedbackFile); err == nil {
 						os.Remove(feedbackFile)
-						p.logger.Emit(logging.Opts{Domain: logging.Git}, "Feedback signal detected during post-signal pipeline — cancelling")
+						l.logger.Emit(logging.Opts{Domain: logging.Git}, "Feedback signal detected during post-signal pipeline — cancelling")
 						cancel()
 						return
 					}
@@ -138,14 +105,14 @@ func completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
 	// Guard: if the task was already skipped during verification (e.g. 3
 	// rejected attempts), do not push or merge the rejected work.
 	if p.taskID != "" {
-		skipped, err := p.getSkippedTasksFn()
+		skipped, err := l.state.GetSkippedTasks()
 		if err != nil {
-			p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to load skipped tasks for %s: %v — conservatively not pushing", p.taskID, err)
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to load skipped tasks for %s: %v — conservatively not pushing", p.taskID, err)
 			return completeTaskOut{action: signalSkipped}
 		}
 		for _, id := range skipped {
 			if id == p.taskID {
-				p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s was skipped during verification — not pushing", p.taskID)
+				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s was skipped during verification — not pushing", p.taskID)
 				return completeTaskOut{action: signalSkipped}
 			}
 		}
@@ -153,18 +120,18 @@ func completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
 
 	// Preflight: check bead wasn't prematurely closed by the agent.
 	if p.taskID != "" {
-		phase, _ := p.getStateFn(p.taskID, "phase")
+		phase, _ := l.cfg.TaskBackend.GetState(p.taskID, "phase")
 		if phase != "implementing" {
-			p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s phase is %q (expected implementing) — agent may have tampered with task state", p.taskID, phase)
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s phase is %q (expected implementing) — agent may have tampered with task state", p.taskID, phase)
 		}
 	}
 
 	// If OnSignal was set, verification already passed in the runner.
 	// If not (legacy/test path), run verification here as fallback.
 	if !p.result.OnSignalUsed {
-		if passed, reason := p.verifyFn(ctx, p.headBefore); !passed {
-			p.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Verification failed: %s", reason)
-			p.recordAttemptFn(p.taskID, p.nextTask,
+		if passed, reason := l.verifyCompletion(ctx, p.headBefore); !passed {
+			l.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Verification failed: %s", reason)
+			l.attempts.Record(p.taskID, p.nextTask,
 				"Signal received but verification failed: "+reason,
 				p.diffStat,
 				"verification_failed: fix must pass tests and produce commits before closing")
@@ -173,41 +140,39 @@ func completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
 	}
 
 	if p.taskID != "" {
-		if err := p.setStateFn(p.taskID, "phase", "verified", "ralph: tests passed, commits present"); err != nil {
-			p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=verified: %v", err)
+		if err := l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", "ralph: tests passed, commits present"); err != nil {
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=verified: %v", err)
 		} else {
-			p.logger.Emit(logging.Opts{Domain: logging.Beads}, "%s → verified", p.taskID)
+			l.logger.Emit(logging.Opts{Domain: logging.Beads}, "%s → verified", p.taskID)
 		}
 	}
 
-	p.clearAttemptsFn(p.taskID, p.nextTask)
-	p.recordCompletedFn(p.taskID, p.nextTask)
-	p.touchPlanFlashFn()
+	l.attempts.Clear(p.taskID, p.nextTask)
+	l.state.RecordCompletedTask(p.taskID, p.nextTask)
+	l.state.TouchPlanFlash()
 
-	headAfterSignal := p.headRevFn()
+	headAfterSignal := l.git.HeadRev()
 	if p.headBefore != "" && headAfterSignal == p.headBefore {
 		// No new commits but verification passed (agent + LLM + tests agree).
-		p.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits — verified complete")
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits — verified complete")
 
 		// Check for an existing PR from a prior attempt that still needs merging.
 		if p.taskID != "" {
-			ref, _ := p.getExternalRefFn(p.taskID)
+			ref, _ := l.cfg.TaskBackend.GetExternalRef(p.taskID)
 			if prNum := parsePRNumber(ref); prNum != 0 {
-				prState, _ := p.getPRStateFn(prNum)
+				prState, _ := l.git.GetPRState(prNum)
 				if prState == git.PRStateOpen {
-					p.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through merge", prNum)
-					_, _, merged, _, _ := p.shipFn(ctx, p.taskID, p.nextTask, p.result.Summary)
-					if p.clearMergeFailuresFn != nil {
-						p.clearMergeFailuresFn(p.taskID)
-					}
+					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through merge", prNum)
+					_, _, merged, _, _ := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
+					l.attempts.ClearMergeFailures(p.taskID)
 					prRef := fmt.Sprintf("PR #%d", prNum)
 					closeReason := fmt.Sprintf("Verified — %s open, merge pending", prRef)
 					if merged {
 						closeReason = fmt.Sprintf("Fixed in %s", prRef)
 					}
-					_ = p.closeTaskFn(p.taskID, closeReason)
-					p.tagTaskEndFn(p.taskID)
-					p.runPostTaskFn(ctx, p.taskID, prNum, merged)
+					_ = l.cfg.TaskBackend.CloseTask(p.taskID, closeReason)
+					l.git.TagTaskEnd(p.taskID)
+					l.execRunPostTask(ctx, p.taskID, prNum, merged)
 					if p.notify {
 						notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
 						if merged {
@@ -215,43 +180,43 @@ func completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
 						}
 					}
 					if merged && p.evolve {
-						p.logger.Phase("Evolve: restarting with latest main")
-						p.writeStateFn("status", "evolve_restart")
+						l.logger.Phase("Evolve: restarting with latest main")
+						l.state.Write("status", "evolve_restart") //nolint:errcheck
 						return completeTaskOut{action: signalEvolve, merged: true}
 					}
 					return completeTaskOut{action: signalSkipped, merged: merged}
 				}
 				if prState == git.PRStateMerged {
-					p.logger.Emit(logging.Opts{Domain: logging.Git}, "PR #%d already merged", prNum)
+					l.logger.Emit(logging.Opts{Domain: logging.Git}, "PR #%d already merged", prNum)
 				}
 			}
 		}
 
 		// No existing PR to merge — close the bead directly.
-		p.logger.Emit(logging.Opts{Domain: logging.Git}, "Closing bead (no PR to merge)")
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "Closing bead (no PR to merge)")
 		if p.taskID != "" {
 			if ctx.Err() != nil {
-				p.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+				l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
 				return completeTaskOut{action: signalComplete}
 			}
 			closeReason := "verified complete (no new commits)"
-			_ = p.setStateFn(p.taskID, "phase", "verified", closeReason)
-			if err := p.closeTaskFn(p.taskID, closeReason); err != nil {
+			_ = l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", closeReason)
+			if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
 				skipReason := "close_failed"
 				if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
-					p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
+					l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
 					skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
 				} else {
-					p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
+					l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
 				}
-				p.skipTaskFn(p.taskID, skipReason)
+				l.skipTask(p.taskID, skipReason)
 			} else {
-				p.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
-				p.persistCompletedFn(p.taskID, false)
+				l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
+				l.persistCompleted(p.taskID, false)
 			}
 		}
-		p.tagTaskEndFn(p.taskID)
-		p.runPostTaskFn(ctx, p.taskID, 0, false)
+		l.git.TagTaskEnd(p.taskID)
+		l.execRunPostTask(ctx, p.taskID, 0, false)
 		if p.notify {
 			notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
 		}
@@ -259,48 +224,48 @@ func completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
 	}
 
 	if ctx.Err() != nil {
-		p.logger.Emit(logging.Opts{Level: logging.Warn}, "Post-signal timeout — aborting before push")
+		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Post-signal timeout — aborting before push")
 		return completeTaskOut{action: signalComplete}
 	}
 
-	prNumber, shipURL, merged, ciFailure, stacked := p.shipFn(ctx, p.taskID, p.nextTask, p.result.Summary)
+	prNumber, shipURL, merged, ciFailure, stacked := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
 
 	// Recovery: if ship didn't produce a PR, find any existing PR in any state.
 	if prNumber == 0 && p.taskID != "" {
-		if num, found := p.findExistingPRFn(p.taskID, p.worktreeBranchFn()); found {
+		if num, found := findExistingPRForTask(p.taskID, l.git.GetWorktreeBranch(), l.cfg.TaskBackend, l.git); found {
 			prNumber = num
 		}
 	}
 
-	ct := p.buildCTFn(p.taskID, p.nextTask, p.result.Summary, prNumber)
+	ct := buildCompletedTask(p.taskID, p.nextTask, p.result.Summary, prNumber, l.git)
 	if shipURL != "" {
 		ct.PRURL = shipURL
 	}
 
-	// buildCTFn may discover a PR that recovery missed.
+	// buildCompletedTask may discover a PR that recovery missed.
 	if prNumber == 0 && ct.PRNum != 0 {
 		prNumber = ct.PRNum
 	}
 
 	if ctx.Err() != nil {
-		p.logger.Emit(logging.Opts{Level: logging.Warn}, "Post-signal timeout — aborting before merge")
+		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Post-signal timeout — aborting before merge")
 		return completeTaskOut{action: signalComplete, ct: &ct}
 	}
 
 	if prNumber == 0 {
-		p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No PR created — closing bead for task %s", p.taskID)
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No PR created — closing bead for task %s", p.taskID)
 		if p.taskID != "" {
 			if ctx.Err() != nil {
-				p.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+				l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
 				return completeTaskOut{action: signalComplete, ct: &ct}
 			}
-			branch := p.worktreeBranchFn()
+			branch := l.git.GetWorktreeBranch()
 			closeReason := "Verified — no PR created"
 			if branch != "" {
 				closeReason = fmt.Sprintf("Verified — branch %s, no PR", branch)
 			}
-			if err := p.closeTaskFn(p.taskID, closeReason); err != nil {
-				p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
+			if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
+				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
 			}
 		}
 		return completeTaskOut{action: signalComplete, ct: &ct}
@@ -308,16 +273,16 @@ func completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
 
 	// CI is failing — leave task open for manual investigation or next loop.
 	if ciFailure {
-		p.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI failing on PR #%d — leaving task %s open.", prNumber, p.taskID)
-		p.tagTaskEndFn(p.taskID)
-		p.runPostTaskFn(ctx, p.taskID, prNumber, false)
+		l.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI failing on PR #%d — leaving task %s open.", prNumber, p.taskID)
+		l.git.TagTaskEnd(p.taskID)
+		l.execRunPostTask(ctx, p.taskID, prNumber, false)
 		return completeTaskOut{action: signalComplete, ct: &ct}
 	}
 
 	// Close the task based on merge outcome.
 	if p.taskID != "" {
 		if ctx.Err() != nil {
-			p.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+			l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
 			return completeTaskOut{action: signalComplete, ct: &ct}
 		}
 		prRef := ct.PRURL
@@ -332,29 +297,27 @@ func completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
 		} else {
 			closeReason = fmt.Sprintf("Fixed in %s", prRef)
 		}
-		if p.clearMergeFailuresFn != nil {
-			p.clearMergeFailuresFn(p.taskID)
-		}
-		_ = p.setStateFn(p.taskID, "phase", "verified", "ralph: PR open or stacked")
+		l.attempts.ClearMergeFailures(p.taskID)
+		_ = l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", "ralph: PR open or stacked")
 		if merged {
-			_ = p.setStateFn(p.taskID, "phase", "verified", "ralph: PR merged")
+			_ = l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", "ralph: PR merged")
 		}
-		if err := p.closeTaskFn(p.taskID, closeReason); err != nil {
+		if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
 			skipReason := "close_failed"
 			if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
-				p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
+				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
 				skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
 			} else {
-				p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
+				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
 			}
-			p.skipTaskFn(p.taskID, skipReason)
+			l.skipTask(p.taskID, skipReason)
 		} else {
-			p.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
-			p.persistCompletedFn(p.taskID, merged)
+			l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
+			l.persistCompleted(p.taskID, merged)
 		}
 	}
 
-	p.runPostTaskFn(ctx, p.taskID, prNumber, merged)
+	l.execRunPostTask(ctx, p.taskID, prNumber, merged)
 
 	if p.notify {
 		notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
@@ -363,14 +326,46 @@ func completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
 	if merged {
 		notify.TaskMerged(p.taskID, p.nextTask)
 		if p.evolve {
-			p.tagTaskEndFn(p.taskID)
-			p.logger.Phase("Evolve: restarting with latest main")
-			p.writeStateFn("status", "evolve_restart")
+			l.git.TagTaskEnd(p.taskID)
+			l.logger.Phase("Evolve: restarting with latest main")
+			l.state.Write("status", "evolve_restart") //nolint:errcheck
 			return completeTaskOut{action: signalEvolve, ct: &ct, merged: true}
 		}
 	}
 
 	return completeTaskOut{action: signalComplete, ct: &ct, merged: merged}
+}
+
+// verifyCompletion delegates to OnVerify when set, otherwise runs the standard verifier.
+func (l *Loop) verifyCompletion(ctx context.Context, headBefore string) (bool, string) {
+	if l.cfg.OnVerify != nil {
+		return l.cfg.OnVerify(ctx, l.git.GetWorkDir(), headBefore)
+	}
+	return l.verifier.VerifyCompletion(ctx, l.git.GetWorkDir(), headBefore)
+}
+
+// persistCompleted records a completed task in the persistent state store.
+func (l *Loop) persistCompleted(taskID string, merged bool) {
+	if taskID == "" {
+		return
+	}
+	if err := l.state.AddCompletedTask(taskID, merged); err != nil {
+		l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
+	}
+}
+
+// execRunPostTask runs the configured post-task hook after a task completes.
+func (l *Loop) execRunPostTask(ctx context.Context, taskID string, prNumber int, merged bool) {
+	if l.cfg.OnPostTask != nil {
+		l.cfg.OnPostTask(ctx, taskID, prNumber, merged)
+		return
+	}
+	runPostTask(ctx, runPostTaskParams{
+		postTask:    l.cfg.PostTask,
+		worktreeDir: l.cfg.VerifyDir,
+		projectDir:  l.cfg.Dirs.ProjectDir,
+		logger:      l.logger,
+	}, taskID, prNumber, merged)
 }
 
 // buildCompletedTask assembles the CompletedTask record for a signal.
@@ -390,7 +385,6 @@ func buildCompletedTask(taskID, nextTask, summary string, prNumber int, g git.Gi
 	}
 	return ct
 }
-
 
 // iterationPrompt holds the prepared prompt and context needed to invoke Claude.
 type iterationPrompt struct {
@@ -523,6 +517,3 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 
 	return actionProceed
 }
-
-
-
