@@ -82,6 +82,11 @@ type StubGit struct {
 
 	RenameBranchErr error
 
+	// ResumeTask stub fields.
+	ResumeResult git.ResumeTaskResult
+	ResumeErr    error
+	ResumeCalls  int
+
 	// Optional func overrides for fine-grained test control.
 	ShipFunc        func(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error)
 	MergeRetryFunc  func(ctx context.Context) (bool, error)
@@ -345,6 +350,11 @@ func (s *StubGit) PollReview(botUsername string, _ int, timeout time.Duration) (
 	s.PollReviewLastUsername = botUsername
 	s.PollReviewLastTimeout = timeout
 	return s.PollReviewResult, s.PollReviewErr
+}
+
+func (s *StubGit) ResumeTask(_ context.Context, _ git.ResumeTaskMeta, _ git.ResumeTaskOpts) (git.ResumeTaskResult, error) {
+	s.ResumeCalls++
+	return s.ResumeResult, s.ResumeErr
 }
 
 func (s *StubGit) FetchBranch(_ string) error            { return s.FetchBranchErr }

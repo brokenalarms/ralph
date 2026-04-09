@@ -232,8 +232,15 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 
 	// Recovery: if ship didn't produce a PR, find any existing PR in any state.
 	if prNumber == 0 && p.taskID != "" {
-		if num, found := findExistingPRForTask(p.taskID, l.git.GetWorktreeBranch(), l.cfg.TaskBackend, l.git); found {
-			prNumber = num
+		if ref, _ := l.cfg.TaskBackend.GetExternalRef(p.taskID); ref != "" {
+			if n := parsePRNumber(ref); n != 0 {
+				prNumber = n
+			}
+		}
+		if prNumber == 0 {
+			if n, _, _, err := l.git.FindPRForBranch(l.git.GetWorktreeBranch()); err == nil && n != 0 {
+				prNumber = n
+			}
 		}
 	}
 

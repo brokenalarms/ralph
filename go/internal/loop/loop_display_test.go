@@ -750,8 +750,8 @@ func TestHandleRunResult_NormalReturnsResultProceed(t *testing.T) {
 	}
 }
 
-// resolveByPRState sends TaskCompleted and TaskMerged when PR is already merged and Notify is enabled.
-func TestResolveByPRState_Merged_NotifyEnabled(t *testing.T) {
+// onResumeDone sends TaskCompleted and TaskMerged when PR is already merged and Notify is enabled.
+func TestOnResumeDone_Merged_NotifyEnabled(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -768,12 +768,10 @@ func TestResolveByPRState_Merged_NotifyEnabled(t *testing.T) {
 		},
 	}
 
-	ghStub := git.NewStubGitHub()
-	ghStub.PRState = "MERGED"
 	gm := &testutil.StubGit{
-		ProjectDir: dir,
-		WorkDir:    dir,
-		GitHubStub: ghStub,
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		RemoteURLValue: "https://github.com/owner/repo.git",
 	}
 
 	l := New(Config{
@@ -789,22 +787,12 @@ func TestResolveByPRState_Merged_NotifyEnabled(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	resolved := resolveByPRState(context.Background(), resolveByPRStateParams{
-		taskID:   "ralph-rm1",
-		nextTask: "Fix login",
-		prNumber: 99,
-		backend:  backend,
-		git:      gm,
-		logger:   l.logger,
-		attempts: l.attempts,
-		state:    l.state,
-		notify:   l.cfg.Notify,
-		ralphDir: ralphDir,
-		verifier: l.verifier,
+	l.onResumeDone(context.Background(), "ralph-rm1", "Fix login", git.ResumeTaskResult{
+		Handled:       true,
+		AlreadyMerged: true,
+		Merged:        true,
+		PRNumber:      99,
 	})
-	if !resolved {
-		t.Fatal("expected resolveByPRState to return true for MERGED PR")
-	}
 
 	got := buf.String()
 	if !strings.Contains(got, "Task done: [ralph-rm1] Fix login") {
@@ -815,8 +803,8 @@ func TestResolveByPRState_Merged_NotifyEnabled(t *testing.T) {
 	}
 }
 
-// resolveByPRState sends TaskCompleted (no TaskMerged) when PR is OPEN and Notify is enabled.
-func TestResolveByPRState_Open_NotifyEnabled(t *testing.T) {
+// onResumeDone sends TaskCompleted (no TaskMerged) when PR is OPEN and Notify is enabled.
+func TestOnResumeDone_Open_NotifyEnabled(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -833,14 +821,10 @@ func TestResolveByPRState_Open_NotifyEnabled(t *testing.T) {
 		},
 	}
 
-	branchName := "ralph-ro1/add-cache"
-	ghStub2 := git.NewStubGitHub()
-	ghStub2.PRHead = branchName
 	gm := &testutil.StubGit{
-		ProjectDir:          dir,
-		WorkDir:             dir,
-		RemoteBranchCommits: true,
-		GitHubStub:          ghStub2,
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		RemoteURLValue: "https://github.com/owner/repo.git",
 	}
 
 	l := New(Config{
@@ -856,22 +840,11 @@ func TestResolveByPRState_Open_NotifyEnabled(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	resolved := resolveByPRState(context.Background(), resolveByPRStateParams{
-		taskID:   "ralph-ro1",
-		nextTask: "Add cache",
-		prNumber: 88,
-		backend:  backend,
-		git:      gm,
-		logger:   l.logger,
-		attempts: l.attempts,
-		state:    l.state,
-		notify:   l.cfg.Notify,
-		ralphDir: ralphDir,
-		verifier: l.verifier,
+	l.onResumeDone(context.Background(), "ralph-ro1", "Add cache", git.ResumeTaskResult{
+		Handled:  true,
+		Merged:   false, // PR is open, not yet merged
+		PRNumber: 88,
 	})
-	if !resolved {
-		t.Fatal("expected resolveByPRState to return true for OPEN PR")
-	}
 
 	got := buf.String()
 	if !strings.Contains(got, "Task done: [ralph-ro1] Add cache") {
@@ -882,8 +855,8 @@ func TestResolveByPRState_Open_NotifyEnabled(t *testing.T) {
 	}
 }
 
-// resolveByPRState does NOT send TaskCompleted when Notify is disabled, but still sends TaskMerged.
-func TestResolveByPRState_Merged_NotifyDisabled(t *testing.T) {
+// onResumeDone does NOT send TaskCompleted when Notify is disabled, but still sends TaskMerged.
+func TestOnResumeDone_Merged_NotifyDisabled(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -900,12 +873,10 @@ func TestResolveByPRState_Merged_NotifyDisabled(t *testing.T) {
 		},
 	}
 
-	ghStub3 := git.NewStubGitHub()
-	ghStub3.PRState = "MERGED"
 	gm := &testutil.StubGit{
-		ProjectDir: dir,
-		WorkDir:    dir,
-		GitHubStub: ghStub3,
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		RemoteURLValue: "https://github.com/owner/repo.git",
 	}
 
 	l := New(Config{
@@ -921,22 +892,12 @@ func TestResolveByPRState_Merged_NotifyDisabled(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	resolved := resolveByPRState(context.Background(), resolveByPRStateParams{
-		taskID:   "ralph-rd1",
-		nextTask: "Fix logout",
-		prNumber: 77,
-		backend:  backend,
-		git:      gm,
-		logger:   l.logger,
-		attempts: l.attempts,
-		state:    l.state,
-		notify:   l.cfg.Notify,
-		ralphDir: ralphDir,
-		verifier: l.verifier,
+	l.onResumeDone(context.Background(), "ralph-rd1", "Fix logout", git.ResumeTaskResult{
+		Handled:       true,
+		AlreadyMerged: true,
+		Merged:        true,
+		PRNumber:      77,
 	})
-	if !resolved {
-		t.Fatal("expected resolveByPRState to return true for MERGED PR")
-	}
 
 	got := buf.String()
 	if strings.Contains(got, "Task done") {

@@ -244,6 +244,11 @@ func TestIntegration_ResumeViaPR_Merged(t *testing.T) {
 		WorktreeBranch: "ralph/next",
 		RemoteURLValue: "https://github.com/owner/repo.git",
 		GitHubStub:     ghStub,
+		ResumeResult: git.ResumeTaskResult{
+			Handled:       true,
+			AlreadyMerged: true,
+			PRNumber:      100,
+		},
 	}
 
 	agentCalled := false
@@ -323,6 +328,11 @@ func TestIntegration_ResumeViaPR_MergedFoundViaBranchMetadata(t *testing.T) {
 		RemoteURLValue: "https://github.com/owner/repo.git",
 		GitHubStub:     ghStub,
 		BranchRenamed:  true, // branch already named for the task
+		ResumeResult: git.ResumeTaskResult{
+			Handled:       true,
+			AlreadyMerged: true,
+			PRNumber:      200,
+		},
 	}
 
 	agentCalled := false
@@ -389,6 +399,11 @@ func TestIntegration_ResumeViaPR_OpenAutoMerge(t *testing.T) {
 		RemoteURLValue:      "https://github.com/owner/repo.git",
 		GitHubStub:          ghStub,
 		RemoteBranchCommits: true,
+		ResumeResult: git.ResumeTaskResult{
+			Handled:  true,
+			Merged:   true,
+			PRNumber: 200,
+		},
 	}
 
 	l := New(Config{
@@ -412,10 +427,6 @@ func TestIntegration_ResumeViaPR_OpenAutoMerge(t *testing.T) {
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if gm.MergeRetryCalls == 0 {
-		t.Error("merge should be attempted for OPEN PR with auto-merge")
 	}
 
 	backend.CloseMu.Lock()
@@ -452,6 +463,12 @@ func TestIntegration_ResumeViaPR_Closed(t *testing.T) {
 		WorktreeBranch: "ralph/next",
 		RemoteURLValue: "https://github.com/owner/repo.git",
 		GitHubStub:     ghStub,
+		ResumeResult: git.ResumeTaskResult{
+			Handled:       false,
+			ClearMetadata: true,
+			PRNumber:      300,
+			NewBranch:     "ralph/ralph-c1-closed-pr-task",
+		},
 	}
 
 	agentCalled := false
@@ -499,10 +516,8 @@ func TestIntegration_ResumeViaPR_Closed(t *testing.T) {
 	if ref != "" {
 		t.Errorf("external ref should be cleared, got %q", ref)
 	}
-	// Branch metadata is cleared by resolveByPRState but re-set by
-	// checkoutExistingBranch when it renames the branch for the re-run.
-	// The key behavior: the old branch name ("ralph-c1-old-branch") is gone,
-	// replaced by a fresh task-specific name.
+	// Branch metadata is cleared and replaced with the new task-specific name.
+	// The key behavior: the old branch name ("ralph-c1-old-branch") is gone.
 	if branch == "ralph-c1-old-branch" {
 		t.Error("stale branch name should be replaced with a new task-specific name")
 	}
@@ -1011,32 +1026,45 @@ func TestIntegration_ParsePRNumber(t *testing.T) {
 	}
 }
 
-// Scenario: resolveByPRState handles each PR state correctly.
-func TestIntegration_ResolveByPRState_AllStates(t *testing.T) {
+// Scenario: ResumeTask result is acted on correctly by the loop for each PR state.
+func TestIntegration_ResumeTask_AllStates(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
-		prState        git.PRState
-		wantResolved   bool
+		resumeResult   git.ResumeTaskResult
 		wantClosed     bool
 		wantRefCleared bool
+		wantAgentRun   bool
 	}{
 		{
-			name:         "MERGED closes and resolves",
-			prState:      git.PRStateMerged,
-			wantResolved: true,
+			name: "MERGED closes and skips agent",
+			resumeResult: git.ResumeTaskResult{
+				Handled:       true,
+				AlreadyMerged: true,
+				Merged:        true,
+				PRNumber:      99,
+			},
 			wantClosed:   true,
+			wantAgentRun: false,
 		},
 		{
-			name:         "OPEN with auto-merge resolves",
-			prState:      git.PRStateOpen,
-			wantResolved: true,
+			name: "OPEN with auto-merge closes and skips agent",
+			resumeResult: git.ResumeTaskResult{
+				Handled:  true,
+				Merged:   true,
+				PRNumber: 99,
+			},
 			wantClosed:   true,
+			wantAgentRun: false,
 		},
 		{
-			name:           "CLOSED clears ref and re-runs",
-			prState:        git.PRStateClosed,
-			wantResolved:   false,
+			name: "CLOSED clears ref and re-runs agent",
+			resumeResult: git.ResumeTaskResult{
+				Handled:       false,
+				ClearMetadata: true,
+				PRNumber:      99,
+			},
 			wantRefCleared: true,
+			wantAgentRun:   true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1047,19 +1075,15 @@ func TestIntegration_ResolveByPRState_AllStates(t *testing.T) {
 			backend.Total = 1
 			backend.NextTask = "test task"
 			backend.NextID = "ralph-test"
-			backend.externalRefs["ralph-test"] = "gh-99"
+			backend.externalRefs["ralph-test"] = "https://github.com/owner/repo/pull/99"
 
-			ghStub := git.NewStubGitHub()
-			ghStub.PRState = tc.prState
-			ghStub.PRHead = "ralph-test-branch"
-
+			agentCalled := false
 			gm := &testutil.StubGit{
-				ProjectDir:          dir,
-				WorkDir:             dir,
-				WorktreeBranch:      "ralph/next",
-				RemoteURLValue:      "https://github.com/owner/repo.git",
-				GitHubStub:          ghStub,
-				RemoteBranchCommits: true,
+				ProjectDir:     dir,
+				WorkDir:        dir,
+				WorktreeBranch: "ralph/next",
+				RemoteURLValue: "https://github.com/owner/repo.git",
+				ResumeResult:   tc.resumeResult,
 			}
 
 			l := New(Config{
@@ -1069,24 +1093,13 @@ func TestIntegration_ResolveByPRState_AllStates(t *testing.T) {
 				AutoMerge:     true,
 				TaskBackend:   backend,
 			}, st, gm, logging.New(nil))
-			l.runner = &stubRunner{}
-			gm.MergeRetryResult = true
+			l.runner = &stubRunner{onRun: func() { agentCalled = true }}
+			l.cfg.IsOnline = func() bool { return true }
+			l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+			l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
-			resolved := resolveByPRState(context.Background(), resolveByPRStateParams{
-				taskID:    "ralph-test",
-				nextTask:  "test task",
-				prNumber:  99,
-				backend:   backend,
-				git:       gm,
-				logger:    l.logger,
-				attempts:  l.attempts,
-				state:     l.state,
-				autoMerge: true,
-				ralphDir:  ralphDir,
-				verifier:  l.verifier,
-			})
-			if resolved != tc.wantResolved {
-				t.Errorf("resolved = %v, want %v", resolved, tc.wantResolved)
+			if err := l.Run(context.Background()); err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
 
 			if tc.wantClosed {
@@ -1105,6 +1118,10 @@ func TestIntegration_ResolveByPRState_AllStates(t *testing.T) {
 				if ref != "" {
 					t.Errorf("expected external ref cleared, got %q", ref)
 				}
+			}
+
+			if agentCalled != tc.wantAgentRun {
+				t.Errorf("agentCalled = %v, want %v", agentCalled, tc.wantAgentRun)
 			}
 		})
 	}
@@ -3218,6 +3235,10 @@ func TestIntegration_ResumeViaPR_DetectsExistingOpenPR(t *testing.T) {
 		RemoteURLValue: "https://github.com/owner/repo.git",
 		GitHubStub:     ghStub,
 		BranchRenamed:  true,
+		ResumeResult: git.ResumeTaskResult{
+			Handled:  true,
+			PRNumber: 303,
+		},
 	}
 
 	agentCalled := false

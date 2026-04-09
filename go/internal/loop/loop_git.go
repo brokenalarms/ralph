@@ -3,11 +3,9 @@ package loop
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 
-	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
@@ -131,278 +129,73 @@ func checkoutExistingBranch(g git.GitOps, backend tasks.Backend, logger *logging
 	return false, nil
 }
 
-// prLink builds a logging.Link for a PR number using the remote URL.
-func prLink(g git.GitOps, prNumber int) *logging.Link {
-	url := prURL(g.RemoteURL(), prNumber)
+// prLink builds a logging.Link for a PR number using the loop's git remote URL.
+func (l *Loop) prLink(prNumber int) *logging.Link {
+	url := prURL(l.git.RemoteURL(), prNumber)
 	if url == "" {
 		return nil
 	}
 	return &logging.Link{Text: fmt.Sprintf("PR #%d", prNumber), URL: url}
 }
 
-
-// resumeViaPRParams bundles the dependencies for resumeViaPR.
-type resumeViaPRParams struct {
-	taskID    string
-	nextTask  string
-	backend   tasks.Backend
-	git       git.GitOps
-	logger    *logging.Logger
-	attempts  *attempts.Tracker
-	state     *state.Store
-	autoMerge bool
-	notify    bool
-	ralphDir  string
-	verifier  *Verifier
-	ensureReviewersFn  func() []git.Reviewer
-	skipTaskFn         func(id, reason string)
-	persistCompletedFn func(taskID string, merged bool)
-}
-
-// findExistingPRForTask returns any PR number (open, closed, or merged) for the
-// given task. It checks the external-ref first, then finds any PR for the branch.
-// Returns (prNumber, true) if found; (0, false) otherwise.
-func findExistingPRForTask(taskID, branch string, backend tasks.Backend, g git.GitOps) (int, bool) {
-	ref, _ := backend.GetExternalRef(taskID)
-	if num := parsePRNumber(ref); num != 0 {
-		return num, true
-	}
-	if branch != "" {
-		if num, _, _, err := g.FindPRForBranch(branch); err == nil && num != 0 {
-			return num, true
-		}
-	}
-	return 0, false
-}
-
-// resumeViaPR checks the bead's metadata and external-ref for existing work
-// and resolves accordingly. Returns true if the task was fully handled (merged
-// or skipped) and the loop should continue to the next task; false if the
-// agent should run.
-func resumeViaPR(ctx context.Context, p resumeViaPRParams) bool {
-	if p.taskID == "" {
-		return false
-	}
-
-	// Check metadata for the branch name stored when work started.
-	// An invalid branch (not containing taskID) is treated as missing, but
-	// the external-ref check via findExistingPRForTask still applies.
-	branch, _ := p.backend.GetMetadata(p.taskID, "branch")
-	if branch != "" && !strings.Contains(branch, p.taskID) {
-		branch = ""
-	}
-
-	// Check external-ref and any PR for the branch (in any state: open, closed, merged).
-	prNumber, found := findExistingPRForTask(p.taskID, branch, p.backend, p.git)
-	if found {
-		// Only log and set external-ref when discovered via branch (external-ref already set otherwise).
-		existingRef, _ := p.backend.GetExternalRef(p.taskID)
-		if parsePRNumber(existingRef) == 0 && branch != "" {
-			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, prNumber)}, "Found for %s (task %s) — resolving", branch, p.taskID)
-			_ = p.backend.SetExternalRef(p.taskID, prURL(p.git.RemoteURL(), prNumber))
-		}
-		var reviewers []git.Reviewer
-		if p.ensureReviewersFn != nil {
-			reviewers = p.ensureReviewersFn()
-		}
-		return resolveByPRState(ctx, resolveByPRStateParams{
-			taskID:             p.taskID,
-			nextTask:           p.nextTask,
-			prNumber:           prNumber,
-			backend:            p.backend,
-			git:                p.git,
-			logger:             p.logger,
-			attempts:           p.attempts,
-			state:              p.state,
-			autoMerge:          p.autoMerge,
-			notify:             p.notify,
-			ralphDir:           p.ralphDir,
-			verifier:           p.verifier,
-			reviewers:          reviewers,
-			skipTaskFn:         p.skipTaskFn,
-			persistCompletedFn: p.persistCompletedFn,
-
-		})
-	}
-
-	// No PR found — check if the remote branch exists with clean work on top of main.
-	if branch == "" {
-		return false
-	}
-	_ = p.git.FetchBranch(branch)
-	if p.git.RemoteBranchHasCommits(branch) {
-		if !p.git.RemoteBranchIsOnMain(branch) {
-			p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Remote branch %s diverged from main — abandoning stale work", branch)
-			_ = p.git.DeleteRemoteBranchByName(branch)
-			return false
-		}
-		if !p.git.BranchIsAheadOfMain(branch) {
-			p.logger.Emit(logging.Opts{Domain: logging.Git}, "Remote branch %s has no commits ahead of main — already resolved, cleaning up", branch)
-			_ = p.git.DeleteRemoteBranchByName(branch)
-			return false
-		}
-		p.logger.Emit(logging.Opts{Domain: logging.Git}, "Remote branch %s has clean work but no PR — creating PR", branch)
-		p.git.CheckoutRemoteBranch(branch)
-		var err error
-		var shipResult git.ShipResult
-		shipResult, err = p.git.Ship(ctx, git.ShipOpts{TaskID: p.taskID, TaskTitle: p.nextTask})
-		prNum := shipResult.PRNumber
-		if err == nil && prNum != 0 {
-			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, prNum)}, "Created for %s (task %s)", branch, p.taskID)
-			_ = p.backend.SetExternalRef(p.taskID, prURL(p.git.RemoteURL(), prNum))
-			var reviewers []git.Reviewer
-			if p.ensureReviewersFn != nil {
-				reviewers = p.ensureReviewersFn()
-			}
-			return resolveByPRState(ctx, resolveByPRStateParams{
-				taskID:             p.taskID,
-				nextTask:           p.nextTask,
-				prNumber:           prNum,
-				backend:            p.backend,
-				git:                p.git,
-				logger:             p.logger,
-				attempts:           p.attempts,
-				state:              p.state,
-				autoMerge:          p.autoMerge,
-				notify:             p.notify,
-				ralphDir:           p.ralphDir,
-				verifier:           p.verifier,
-				reviewers:          reviewers,
-				skipTaskFn:         p.skipTaskFn,
-				persistCompletedFn: p.persistCompletedFn,
-
-			})
-		}
-	}
-
-	return false
-}
-
-// resolveByPRStateParams bundles the dependencies for resolveByPRState.
-type resolveByPRStateParams struct {
-	taskID    string
-	nextTask  string
-	prNumber  int
-	backend   tasks.Backend
-	git       git.GitOps
-	logger    *logging.Logger
-	attempts  *attempts.Tracker
-	state     *state.Store
-	autoMerge bool
-	notify    bool
-	ralphDir  string
-	verifier  *Verifier
-	reviewers []git.Reviewer
-	skipTaskFn         func(id, reason string)
-	persistCompletedFn func(taskID string, merged bool)
-}
-
-// resolveByPRState inspects the PR's state and takes the appropriate action:
-// merged PRs close the bead immediately; open PRs call Ship (which does merge
-// + close); other states re-run the agent.
-func resolveByPRState(ctx context.Context, p resolveByPRStateParams) bool {
-	// Seed review-addressed state from persistent store.
-	reviewAddressed := make(map[string]bool)
-	for _, reviewer := range p.reviewers {
-		key := "review_addressed:" + reviewer.BotUsername + ":" + p.taskID
-		if v, err := p.state.Read(key); err == nil && v == "true" {
-			reviewAddressed[reviewer.BotUsername] = true
-		}
-	}
-
-	// Delegate state checking to Ship — the git package owns PR state queries.
-	shipResult, err := p.git.Ship(ctx, git.ShipOpts{
-		PRNumber:        p.prNumber,
-		AutoMerge:       p.autoMerge,
-		Reviewers:       p.reviewers,
-		ReviewAddressed: reviewAddressed,
-	})
-	if err != nil {
-		p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "Ship (resume): %v", err)
-		return false
-	}
-
-	rawLogPath := filepath.Join(p.ralphDir, "raw.log")
-	workDir := p.git.GetWorkDir()
-
-	switch {
-	case shipResult.AlreadyMerged:
-		p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Success, Link: prLink(p.git, p.prNumber)}, "already merged — closing bead and moving on")
-		p.attempts.Clear(p.taskID, p.nextTask)
-		p.state.RecordCompletedTask(p.taskID, p.nextTask)
-		closeResumedTask(ctx, p, true, rawLogPath, workDir)
-		if p.notify {
-			notify.TaskCompleted(p.taskID, p.nextTask, "")
-		}
-		notify.TaskMerged(p.taskID, p.nextTask)
-		return true
-
-	case shipResult.Closed:
-		p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "is closed (not merged) — re-running agent")
-		if p.taskID != "" {
-			_ = p.backend.SetExternalRef(p.taskID, "")
-			_ = p.backend.SetMetadata(p.taskID, "branch", "")
-		}
-		p.git.PrepareForNextTask(p.taskID)
-		checkoutExistingBranch(p.git, p.backend, p.logger, p.taskID, p.nextTask)
-		return false
-
-	default:
-		// PR is open — Ship already attempted merge if autoMerge was set.
-		if ok, reason := p.git.PRChainIsHealthy(p.prNumber); !ok {
-			p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "chain unhealthy: %s — re-running agent", reason)
-			return false
-		}
-		closeResumedTask(ctx, p, shipResult.Merged, rawLogPath, workDir)
-		if p.notify {
-			notify.TaskCompleted(p.taskID, p.nextTask, "")
-		}
-		return true
-	}
-}
-
 // closeResumedTask closes the bead after the resume path resolves the PR.
-// merged=true uses the "Fixed in PR" reason; false uses "merge pending".
-func closeResumedTask(ctx context.Context, p resolveByPRStateParams, merged bool, rawLogPath, workDir string) {
-	if p.taskID == "" {
+func (l *Loop) closeResumedTask(ctx context.Context, taskID, taskTitle string, result git.ResumeTaskResult) {
+	if taskID == "" {
 		return
 	}
 	if ctx.Err() != nil {
-		p.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", taskID)
 		return
 	}
-	prRef := prURL(p.git.RemoteURL(), p.prNumber)
-	if prRef == "" {
-		prRef = fmt.Sprintf("PR #%d", p.prNumber)
+	prRef := prURL(l.git.RemoteURL(), result.PRNumber)
+	if prRef == "" && result.PRNumber != 0 {
+		prRef = fmt.Sprintf("PR #%d", result.PRNumber)
 	}
+	merged := result.AlreadyMerged || result.Merged
 	var closeReason string
-	if merged {
+	if prRef == "" {
+		closeReason = "Verified — merge pending"
+	} else if merged {
 		closeReason = fmt.Sprintf("Fixed in %s", prRef)
 	} else {
 		closeReason = fmt.Sprintf("Verified — %s open, merge pending", prRef)
 	}
-	p.attempts.ClearMergeFailures(p.taskID)
+	l.attempts.ClearMergeFailures(taskID)
+	if result.AlreadyMerged {
+		l.attempts.Clear(taskID, taskTitle)
+		l.state.RecordCompletedTask(taskID, taskTitle)
+	}
 	stateReason := "ralph: PR open or stacked"
 	if merged {
 		stateReason = "ralph: PR merged"
 	}
-	_ = p.backend.SetState(p.taskID, "phase", "verified", stateReason)
-	if err := p.backend.CloseTask(p.taskID, closeReason); err != nil {
+	_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", stateReason)
+	if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
 		skipReason := "close_failed"
 		if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
-			p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", taskID, blockers)
 			skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
 		} else {
-			p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
 		}
-		if p.skipTaskFn != nil {
-			p.skipTaskFn(p.taskID, skipReason)
-		}
+		l.skipTask(taskID, skipReason)
 	} else {
-		p.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
-		if p.persistCompletedFn != nil {
-			p.persistCompletedFn(p.taskID, merged)
+		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", taskID, closeReason)
+		if err := l.state.AddCompletedTask(taskID, merged); err != nil {
+			l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
 		}
+	}
+}
+
+// onResumeDone handles the loop-level aftermath after ResumeTask reports the task was handled:
+// closes the bead and sends notifications.
+func (l *Loop) onResumeDone(ctx context.Context, taskID, taskTitle string, result git.ResumeTaskResult) {
+	l.closeResumedTask(ctx, taskID, taskTitle, result)
+	if l.cfg.Notify {
+		notify.TaskCompleted(taskID, taskTitle, "")
+	}
+	if result.AlreadyMerged {
+		notify.TaskMerged(taskID, taskTitle)
 	}
 }
 

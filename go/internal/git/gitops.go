@@ -77,6 +77,12 @@ type GitOps interface {
 	// Returns nil without error when timeout expires before a review arrives.
 	PollReview(botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error)
 
+	// ResumeTask checks whether prior work exists for the task (open PR, merged PR,
+	// remote branch) and resolves it. The loop passes task metadata extracted from
+	// the backend; ResumeTask handles all git-side state resolution and returns
+	// a result the loop acts on for bead close, notifications, and metadata updates.
+	ResumeTask(ctx context.Context, meta ResumeTaskMeta, opts ResumeTaskOpts) (ResumeTaskResult, error)
+
 	// Merge operations.
 	MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, error)
 	FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, autoMerge bool) (merged bool, err error)

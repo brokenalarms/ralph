@@ -840,9 +840,9 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 	}
 }
 
-// Closed PR re-run renames the branch from ralph/next to a task-specific name
-// and clears the stale external-ref so the agent pushes to the correct branch.
-func TestResolveByPRState_ClosedPR_RenamesBranch(t *testing.T) {
+// When ResumeTask reports a closed PR (ClearMetadata=true), the loop clears the
+// external-ref, updates branch metadata, and re-runs the agent.
+func TestResumeTask_ClosedPR_ClearsMetadataAndReruns(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -854,18 +854,26 @@ func TestResolveByPRState_ClosedPR_RenamesBranch(t *testing.T) {
 	backend.NextTask = "Fix auth bug"
 	backend.NextID = "ralph-cdr3"
 	// Simulate a closed PR linked to this task.
-	backend.externalRefs["ralph-cdr3"] = "gh-439"
+	backend.externalRefs["ralph-cdr3"] = "https://github.com/owner/repo/pull/439"
+	_ = backend.SetMetadata("ralph-cdr3", "branch", "ralph/next")
 
-	ghStub := git.NewStubGitHub()
-	ghStub.PRState = "CLOSED"
+	// ResumeTask reports: PR was closed, branch was renamed to task-specific name.
+	renamedBranch := "ralph/ralph-cdr3-fix-auth-bug"
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/next",
-		BranchRenamed:  true, // Stale from previous run
 		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     ghStub,
+		ResumeResult: git.ResumeTaskResult{
+			Handled:       false,
+			ClearMetadata: true,
+			NewBranch:     renamedBranch,
+			PRNumber:      439,
+		},
 	}
+
+	agentCalled := false
+	runner := &stubRunner{onRun: func() { agentCalled = true }, result: claude.Result{}}
 
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: gm.WorkDir, RalphDir: ralphDir, PromptsDir: promptsDir},
@@ -873,28 +881,13 @@ func TestResolveByPRState_ClosedPR_RenamesBranch(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
-	resolved := resolveByPRState(context.Background(), resolveByPRStateParams{
-		taskID:   "ralph-cdr3",
-		nextTask: "Fix auth bug",
-		prNumber: 439,
-		backend:  backend,
-		git:      gm,
-		logger:   l.logger,
-		attempts: l.attempts,
-		state:    l.state,
-		ralphDir: ralphDir,
-	})
-	if resolved {
-		t.Fatal("expected resolveByPRState to return false for CLOSED PR")
-	}
-
-	// Branch must be renamed from ralph/next to a task-specific name.
-	if gm.WorktreeBranch == "ralph/next" {
-		t.Error("branch should be renamed from ralph/next, still ralph/next")
-	}
-	if !strings.Contains(gm.WorktreeBranch, "ralph-cdr3") {
-		t.Errorf("branch %q should contain task ID ralph-cdr3", gm.WorktreeBranch)
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// External-ref must be cleared so the closed PR isn't re-discovered.
@@ -905,13 +898,13 @@ func TestResolveByPRState_ClosedPR_RenamesBranch(t *testing.T) {
 
 	// Branch metadata should be updated with the new task-specific name.
 	branch, _ := backend.GetMetadata("ralph-cdr3", "branch")
-	if !strings.Contains(branch, "ralph-cdr3") {
-		t.Errorf("branch metadata should contain task ID, got %q", branch)
+	if branch != renamedBranch {
+		t.Errorf("branch metadata should be %q, got %q", renamedBranch, branch)
 	}
 
-	// PrepareForNextTask must have been called to reset branch state.
-	if gm.PrepareForNextCalls == 0 {
-		t.Error("PrepareForNextTask should have been called")
+	// Agent must be called since ResumeTask returned Handled=false.
+	if !agentCalled {
+		t.Error("agent should run when ResumeTask returns Handled=false")
 	}
 }
 

@@ -30,8 +30,8 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 		// "branchParams": true,
 
 		// --- Bead 2: git.ResumeTask (ralph-o8sb) ---
-		// "resumeViaPRParams":      true,
-		// "resolveByPRStateParams": true,
+		"resumeViaPRParams":      true,
+		"resolveByPRStateParams": true,
 
 		// --- Bead 3: git.Ship (ralph-bk7m) ---
 		"finalizePRParams": true,

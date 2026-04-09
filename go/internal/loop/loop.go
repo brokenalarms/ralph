@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/agent"
@@ -448,29 +449,40 @@ iterLoop:
 		l.beginIteration(task, iteration)
 
 		// ── Resume check: does a PR already exist for this task? ──
-		if resumeViaPR(ctx, resumeViaPRParams{
-			taskID:    task.id,
-			nextTask:  task.title,
-			backend:   l.cfg.TaskBackend,
-			git:       l.git,
-			logger:    l.logger,
-			attempts:  l.attempts,
-			state:     l.state,
-			autoMerge: l.cfg.AutoMerge,
-			notify:    l.cfg.Notify,
-			ralphDir:  l.cfg.Dirs.RalphDir,
-			verifier:  l.verifier,
-			ensureReviewersFn: func() []git.Reviewer { l.ensureActiveReviewers(); return l.activeReviewers },
-			skipTaskFn: l.skipTask,
-			persistCompletedFn: func(taskID string, merged bool) {
-				if taskID == "" {
-					return
-				}
-				if err := l.state.AddCompletedTask(taskID, merged); err != nil {
-					l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
-				}
-			},
-		}) {
+		branch, _ := l.cfg.TaskBackend.GetMetadata(task.id, "branch")
+		if branch != "" && !strings.Contains(branch, task.id) {
+			branch = ""
+		}
+		externalRef, _ := l.cfg.TaskBackend.GetExternalRef(task.id)
+		if externalRef != "" {
+			l.ensureActiveReviewers()
+		}
+		resumeResult, resumeErr := l.git.ResumeTask(ctx, git.ResumeTaskMeta{
+			TaskID:      task.id,
+			TaskTitle:   task.title,
+			Branch:      branch,
+			ExternalRef: externalRef,
+		}, git.ResumeTaskOpts{
+			AutoMerge:       l.cfg.AutoMerge,
+			Reviewers:       l.activeReviewers,
+			ReviewAddressed: readReviewAddressedForTask(l.state, task.id, l.activeReviewers),
+		})
+		if resumeErr != nil {
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "ResumeTask: %v", resumeErr)
+		}
+		if resumeResult.PRURLToStore != "" && task.id != "" {
+			_ = l.cfg.TaskBackend.SetExternalRef(task.id, resumeResult.PRURLToStore)
+		}
+		if resumeResult.ClearMetadata && task.id != "" {
+			_ = l.cfg.TaskBackend.SetExternalRef(task.id, "")
+			if resumeResult.NewBranch != "" {
+				_ = l.cfg.TaskBackend.SetMetadata(task.id, "branch", resumeResult.NewBranch)
+			} else {
+				_ = l.cfg.TaskBackend.SetMetadata(task.id, "branch", "")
+			}
+		}
+		if resumeResult.Handled {
+			l.onResumeDone(ctx, task.id, task.title, resumeResult)
 			l.git.TagTaskEnd(task.id)
 			continue
 		}
