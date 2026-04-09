@@ -38,7 +38,6 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 
 		// --- Bead 4 rework: completeTaskParams data-only (ralph-93jq) ---
 		// "completeTaskParams": true,
-		// "postSignalParams":   true,
 
 		// --- Bead 6: task selection → tasks module (ralph-u4c7) ---
 		// "selectNextTaskParams":     true,
