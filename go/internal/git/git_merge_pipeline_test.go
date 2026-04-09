@@ -50,7 +50,7 @@ func TestPush_RebasesWhenOriginMainDiverged(t *testing.T) {
 
 	mainSHA := strings.TrimSpace(cmdOutput(t, "git", "-C", tmpClone, "rev-parse", "HEAD"))
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch:     "main",
 		WorkDir:        wtDir,
@@ -112,7 +112,7 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-main-moved",
@@ -166,7 +166,7 @@ func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-not-mergeable",
@@ -286,7 +286,7 @@ func TestAutoMerge_InfraFailure_ReturnsCIFailureError(t *testing.T) {
 		JobStepCount: 0,
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:       "/project",
 		WorkDir:          "/project/wt",
 		WorktreeBranch:   "ralph/test/01-infra-failure",
@@ -331,7 +331,7 @@ func TestAutoMerge_CIFailure_AlwaysReturnsCIFailureError(t *testing.T) {
 		Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:       "/project",
 		WorkDir:          "/project/wt",
 		WorktreeBranch:   "ralph/test/01-ci-failure",
@@ -379,7 +379,7 @@ func TestAutoMerge_CITimeout_ReturnsErrorWithoutMerging(t *testing.T) {
 		ChecksErr: fmt.Errorf("API unavailable"),
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-ci-timeout",
@@ -422,7 +422,7 @@ func TestCreatePR_StackedPRTargetsParentBranch(t *testing.T) {
 		return 200, nil
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/02-child-task",
@@ -464,7 +464,7 @@ func TestCreatePR_NonStackedTargetsMain(t *testing.T) {
 		},
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-solo-task",
@@ -491,7 +491,7 @@ func TestPostMergeUpdateMain_RebasesWorktree(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	st := newMemState()
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir: project,
 		RalphDir:   ralphDir,
 		BaseBranch: "main",
@@ -571,7 +571,7 @@ func TestMergeWithRetry_CIFailureWithNoCallback_ReturnsError(t *testing.T) {
 		Checks:      []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}},
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-ci-no-callback",
@@ -626,7 +626,7 @@ func TestMergeWithRetry_InfraRetryBackoff(t *testing.T) {
 		},
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-infra-retry",
@@ -837,7 +837,7 @@ func TestExecuteMerge_CIGatedRetryPath(t *testing.T) {
 			return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 		},
 	}
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-ci-gated",
@@ -873,7 +873,7 @@ func TestAutoMerge_StackedPR_WaitsForBase(t *testing.T) {
 		PRBase:      "ralph/parent-branch",
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/02-stacked-child",
@@ -904,7 +904,7 @@ func TestBranchNeedsUpdate_ReturnsTrueWhenMainNotAncestorOfHEAD(t *testing.T) {
 	// merge-base --is-ancestor fails → origin/main is NOT an ancestor of HEAD
 	runner.On("merge-base --is-ancestor", "", errors.New("not ancestor"))
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-needs-update",
@@ -928,7 +928,7 @@ func TestBranchNeedsUpdate_ReturnsFalseWhenMainIsAncestorOfHEAD(t *testing.T) {
 	// merge-base --is-ancestor succeeds → origin/main IS an ancestor of HEAD
 	runner.On("merge-base --is-ancestor", "", nil)
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-up-to-date",
@@ -969,7 +969,7 @@ func TestAutoMerge_KnownPRNumber_SkipsFindOpenPR(t *testing.T) {
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-known-pr",
@@ -1014,7 +1014,7 @@ func TestAutoMerge_CIAlreadyPassing_SkipsPushAndMergesDirectly(t *testing.T) {
 	}
 
 	log := &testLog{}
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-ci-fast-path",
@@ -1073,7 +1073,7 @@ func TestAutoMerge_LocalHeadDiffersFromPRHead_UsesNormalFlow(t *testing.T) {
 		Checks:      []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}},
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-sha-mismatch",
@@ -1135,7 +1135,7 @@ func TestAutoMerge_NoOpPush_CIFailureDetected(t *testing.T) {
 		}},
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-no-op-push",

@@ -376,7 +376,7 @@ func (l *Loop) execRunPostTask(ctx context.Context, taskID string, prNumber int,
 }
 
 // buildCompletedTask assembles the CompletedTask record for a signal.
-func buildCompletedTask(taskID, nextTask, summary string, prNumber int, g git.GitOps) CompletedTask {
+func buildCompletedTask(taskID, nextTask, summary string, prNumber int, g git.Ops) CompletedTask {
 	ct := CompletedTask{
 		ID:      taskID,
 		Title:   nextTask,

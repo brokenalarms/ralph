@@ -151,14 +151,14 @@ func (c *capturingGitHub) CreatePR(opts CreatePROpts) (int, error) {
 
 // stubManager creates a Manager wired to stubs for both git commands and
 // GitHub operations. The Manager's dirs are set to the given directory.
-func stubManager(dir string, runner *stubRunner, gh *StubGitHub) *Manager {
+func stubManager(dir string, runner *stubRunner, gh *StubGitHub) *Repo {
 	if runner == nil {
 		runner = newStubRunner()
 	}
 	if gh == nil {
 		gh = NewStubGitHub()
 	}
-	return &Manager{
+	return &Repo{
 		ProjectDir: dir,
 		WorkDir:    dir,
 		BaseBranch: "main",

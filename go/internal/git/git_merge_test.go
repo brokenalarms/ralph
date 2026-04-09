@@ -20,7 +20,7 @@ func TestPostMergeUpdateMain_DoesNotModifyProjectDir(t *testing.T) {
 	bare := filepath.Join(filepath.Dir(project), "bare.git")
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir: project,
 		RalphDir:   ralphDir,
 		BaseBranch: "main",
@@ -78,7 +78,7 @@ func TestPostMergeUpdateMain_PreservesUncommittedWorkingTreeChanges(t *testing.T
 	run(t, "git", "-C", project, "commit", "-m", "add tracked file")
 	run(t, "git", "-C", project, "push", "origin", "main")
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir: project,
 		RalphDir:   ralphDir,
 		BaseBranch: "main",
@@ -119,7 +119,7 @@ func TestPostMergeUpdateMain_RebasePathLogsCleanly(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	log := &testLog{}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir: project,
 		RalphDir:   ralphDir,
 		BaseBranch: "main",
@@ -155,7 +155,7 @@ func TestPostMergeUpdateMain_DeletesLocalTaskBranch(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	st := newMemState()
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir: project,
 		RalphDir:   ralphDir,
 		BaseBranch: "main",
@@ -199,7 +199,7 @@ func TestPostMergeUpdateMain_MovesToNextBranchWhenOnTaskBranch(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	st := newMemState()
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir: project,
 		RalphDir:   ralphDir,
 		BaseBranch: "main",
@@ -298,7 +298,7 @@ func TestPushAndCreatePR_UsesBaseBranch(t *testing.T) {
 	}
 
 	log := &testLog{}
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		WorkDir:        wtDir,
 		WorktreeBranch: "ralph/test/feature",
@@ -335,7 +335,7 @@ func TestPushAndCreatePR_BaseBranchMainTargetsMain(t *testing.T) {
 		return 0, nil
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		WorkDir:        wtDir,
 		WorktreeBranch: "ralph/test/feature",
@@ -374,7 +374,7 @@ func TestPushAndCreatePR_IncludesBeadIDInTitle(t *testing.T) {
 	}
 
 	log := &testLog{}
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		WorkDir:        wtDir,
 		WorktreeBranch: "ralph/test/feature",
@@ -413,7 +413,7 @@ func TestPushAndCreatePR_NoBeadID(t *testing.T) {
 	}
 
 	log := &testLog{}
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		WorkDir:        wtDir,
 		WorktreeBranch: "ralph/test/feature",
@@ -456,7 +456,7 @@ func TestPushAndCreatePR_PassesBodyToCreatePR(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     dir,
 		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
@@ -505,7 +505,7 @@ func TestPushAndCreatePR_FallsBackToTaskDescWhenNoBody(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     dir,
 		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
@@ -529,7 +529,7 @@ func TestPushAndCreatePR_FallsBackToTaskDescWhenNoBody(t *testing.T) {
 // AutoMergeCurrentBranch returns nil when no worktree branch is set,
 // so --auto-merge is a safe no-op without worktree isolation.
 func TestAutoMergeCurrentBranch_SkipsWhenNoWorktreeBranch(t *testing.T) {
-	mgr := &Manager{
+	mgr := &Repo{
 		WorkDir:    "/some/dir",
 		ProjectDir: "/some/dir",
 		BaseBranch: "main",
@@ -547,7 +547,7 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoWorktreeBranch(t *testing.T) {
 // AutoMergeCurrentBranch returns nil when WorkDir equals ProjectDir,
 // avoiding merging from the project dir itself.
 func TestAutoMergeCurrentBranch_SkipsWhenWorkDirIsProjectDir(t *testing.T) {
-	mgr := &Manager{
+	mgr := &Repo{
 		WorktreeBranch: "ralph/project/01-some-task",
 		WorkDir:        "/some/dir",
 		ProjectDir:     "/some/dir",
@@ -574,7 +574,7 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	state := newMemState()
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:  project,
 		BaseBranch: "main",
 		RalphDir:    ralphDir,
@@ -603,7 +603,7 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 
 // mergeOpts always sets DeleteBranch=true since each task gets its own branch.
 func TestMergeOpts_AlwaysDeletesBranch(t *testing.T) {
-	mgr := &Manager{}
+	mgr := &Repo{}
 	opts := mgr.mergeOpts()
 	if !opts.DeleteBranch {
 		t.Fatal("mergeOpts should always set DeleteBranch")
@@ -617,7 +617,7 @@ func TestResolveConflict_RebasesAndForcePushes(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	st := newMemState()
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir: project,
 		RalphDir:   ralphDir,
 		BaseBranch: "main",
@@ -665,7 +665,7 @@ func TestMergeWithRetry_RecoversFromConflict(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
@@ -719,7 +719,7 @@ func TestMergeWithRetry_DelegatesCIFailure(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
@@ -775,7 +775,7 @@ func TestMergeWithRetry_DelegatesCIFailure(t *testing.T) {
 func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 	project, _ := initBareRepo(t)
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
@@ -821,7 +821,7 @@ func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 func TestMergeWithRetry_StopsOnUnresolvableConflict(t *testing.T) {
 	project, _ := initBareRepo(t)
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
@@ -894,7 +894,7 @@ func TestMergeWithRetry_StopsOnUnresolvableConflict(t *testing.T) {
 func TestAutoMergeCurrentBranch_PassesPRTitleAsSubject(t *testing.T) {
 	project, _ := initBareRepo(t)
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
@@ -942,7 +942,7 @@ func TestMergeWithRetry_PushesFixAgentWorkBeforeRetry(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
@@ -1035,7 +1035,7 @@ func TestMergeWithRetry_PushesFixAgentWorkBeforeRetry(t *testing.T) {
 func TestMergeWithRetry_SpawnsConflictAgent(t *testing.T) {
 	project, _ := initBareRepo(t)
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
@@ -1106,7 +1106,7 @@ func TestMergeWithRetry_SpawnsConflictAgent(t *testing.T) {
 func TestMergeWithRetry_SkipsAfterConflictAgentFails(t *testing.T) {
 	project, _ := initBareRepo(t)
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch: "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
@@ -1190,7 +1190,7 @@ func TestPush_SquashesMultipleCommits(t *testing.T) {
 		t.Fatalf("expected 3 commits before push, got %s", countBefore)
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch: "main",
 		WorkDir:        wtDir,
@@ -1230,7 +1230,7 @@ func TestPush_SingleCommitNoOp(t *testing.T) {
 	run(t, "git", "-C", wtDir, "add", "-A")
 	run(t, "git", "-C", wtDir, "commit", "-m", "single commit")
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch: "main",
 		WorkDir:        wtDir,
@@ -1276,7 +1276,7 @@ func TestPush_AfterFixAgent(t *testing.T) {
 		t.Fatalf("expected 3 local commits, got %s", countLocal)
 	}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch: "main",
 		WorkDir:        wtDir,
@@ -1315,7 +1315,7 @@ func TestPush_StackedBranch_PreservesParent(t *testing.T) {
 	run(t, "git", "-C", fooDir, "add", "-A")
 	run(t, "git", "-C", fooDir, "commit", "-m", "foo work")
 
-	fooMgr := &Manager{
+	fooMgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch: "main",
 		WorkDir:        fooDir,
@@ -1338,7 +1338,7 @@ func TestPush_StackedBranch_PreservesParent(t *testing.T) {
 	run(t, "git", "-C", barDir, "add", "-A")
 	run(t, "git", "-C", barDir, "commit", "-m", "bar work 2")
 
-	barMgr := &Manager{
+	barMgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch: "main",
 		WorkDir:        barDir,
@@ -1388,7 +1388,7 @@ func TestPush_PrePushBlocksPush(t *testing.T) {
 	run(t, "git", "-C", wtDir, "add", "-A")
 	run(t, "git", "-C", wtDir, "commit", "-m", "add feature")
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch: "main",
 		WorkDir:        wtDir,
@@ -1429,7 +1429,7 @@ func TestPush_PrePushPasses(t *testing.T) {
 	run(t, "git", "-C", wtDir, "commit", "-m", "add feature")
 
 	prePushCalled := false
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch: "main",
 		WorkDir:        wtDir,
@@ -1461,7 +1461,7 @@ func TestAutoMergeCurrentBranch_ReturnsMergedForAlreadyMergedPR(t *testing.T) {
 	gh.PRNumber = 438    // FindPR returns this
 	gh.PRState = "MERGED" // GetPRState returns this
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-merged",
@@ -1511,7 +1511,7 @@ func TestAutoMergeCurrentBranch_ReopensClosedPR(t *testing.T) {
 	gh.PRTitle = "[ralph-rvta] Fix closed PR"
 	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-reopen",
@@ -1553,7 +1553,7 @@ func TestCreatePR_APIFallbackWhenReopenFails(t *testing.T) {
 	gh.ReopenPRErr = fmt.Errorf("Could not open the pull request")
 	gh.CreatePRViaAPIResult = 500
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/diverged-branch",
@@ -1592,7 +1592,7 @@ func TestCreatePR_ReopensClosedPROnCreateFailure(t *testing.T) {
 	gh.PRNumber = 438                                                   // FindPR returns this
 	gh.PRState = "CLOSED"                                               // GetPRState returns this
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-reopen-create",
@@ -1629,7 +1629,7 @@ func TestCreatePR_ReturnsMergedPRNumberOnAlreadyExists(t *testing.T) {
 	gh.PRNumber = 438                                                            // FindPR returns this
 	gh.PRState = "MERGED"                                                        // GetPR returns this
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/already-merged-branch",
@@ -1662,7 +1662,7 @@ func TestCreatePR_ReturnsMergedPRNumberOnAlreadyExists(t *testing.T) {
 func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
 	project, _ := initBareRepo(t)
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch:     "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
@@ -1728,7 +1728,7 @@ func TestMergeWithRetry_InfraFailureRecovery(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch:     "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),
@@ -1804,7 +1804,7 @@ func TestAutoMergeCurrentBranch_InfraFailureReturnsCIFailureError(t *testing.T) 
 	project, _ := initBareRepo(t)
 	stubCISleep(t)
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:       project,
 		BaseBranch:       "main",
 		WorkDir:          filepath.Join(t.TempDir(), "wt"),
@@ -1848,7 +1848,7 @@ func TestAutoMergeCurrentBranch_BlockedMergeReturnsError(t *testing.T) {
 	project, _ := initBareRepo(t)
 	stubCISleep(t)
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     project,
 		BaseBranch:     "main",
 		WorkDir:        filepath.Join(t.TempDir(), "wt"),

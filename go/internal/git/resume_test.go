@@ -86,7 +86,7 @@ func TestResumeTask_ClosedPRRenamesBranch(t *testing.T) {
 	// branch -m succeeds (rename), branch -D succeeds
 	runner.On("branch", "", nil)
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     dir,
 		WorkDir:        worktreeDir, // distinct from ProjectDir so rename is allowed
 		WorktreeBranch: "ralph/next",

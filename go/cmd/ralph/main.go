@@ -88,17 +88,13 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 	// Create git manager early so pre-setup calls use it instead of
 	// package-level functions. SetupWorktree is called after state init.
-	gm := &git.Manager{
-		ProjectDir:                  cfg.ProjectDir,
-		WorkDir:                     cfg.ProjectDir,
-		RalphDir:                    ralphDir,
-		BaseBranch:                  cfg.BaseBranch,
-		Logger:                      log,
-		CIPollTimeout:               cfg.CIPollTimeout,
-		CopilotGatedTimeout:         cfg.CopilotReviewTimeout,
-		CopilotOpportunisticTimeout: cfg.CopilotOpportunisticTimeout,
-		CodeRabbitTimeout:           cfg.CodeRabbitReviewTimeout,
-	}
+	gm := git.New(cfg.ProjectDir, ralphDir, nil)
+	gm.BaseBranch = cfg.BaseBranch
+	gm.Logger = log
+	gm.CIPollTimeout = cfg.CIPollTimeout
+	gm.CopilotGatedTimeout = cfg.CopilotReviewTimeout
+	gm.CopilotOpportunisticTimeout = cfg.CopilotOpportunisticTimeout
+	gm.CodeRabbitTimeout = cfg.CodeRabbitReviewTimeout
 
 	// Initialize .ralph directory and check for resume. This must happen
 	// before anything else so a completed run can be reset or exited
@@ -261,7 +257,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 // initRalphDir creates .ralph, checks for dirty working tree, handles resume
 // detection. Returns (resume, exitCode). exitCode < 0 means continue.
-func initRalphDir(ctx context.Context, cfg config.Config, gm *git.Manager, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
+func initRalphDir(ctx context.Context, cfg config.Config, gm *git.Repo, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
 	if err := os.MkdirAll(ralphDir, 0o755); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Failed to create .ralph dir: %v", err)
 		return false, 1
@@ -336,7 +332,7 @@ func initTaskBackend(cfg config.Config, promptsDir string, log *logging.Logger) 
 }
 
 // cleanup generates resume script, prints summary, and removes unused worktrees.
-func cleanup(cfg config.Config, gm *git.Manager, st *state.Store, backend tasks.Backend, ralphDir, planFile, scriptPath string, args []string, sessionTasks []loop.CompletedTask, interrupted bool, log *logging.Logger) {
+func cleanup(cfg config.Config, gm *git.Repo, st *state.Store, backend tasks.Backend, ralphDir, planFile, scriptPath string, args []string, sessionTasks []loop.CompletedTask, interrupted bool, log *logging.Logger) {
 	clearSignalFiles(ralphDir)
 
 	// Clear cli_config so stale flags don't persist across manual restarts.
@@ -427,7 +423,7 @@ func printSessionSummary(tasks []loop.CompletedTask, log *logging.Logger) {
 }
 
 // printSummary displays the end-of-run summary.
-func printSummary(cfg config.Config, gm *git.Manager, st *state.Store, backend tasks.Backend, ralphDir, planFile string, log *logging.Logger) {
+func printSummary(cfg config.Config, gm *git.Repo, st *state.Store, backend tasks.Backend, ralphDir, planFile string, log *logging.Logger) {
 	fmt.Println()
 	log.Phase("=== SUMMARY ===")
 

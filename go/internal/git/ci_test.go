@@ -185,7 +185,7 @@ func TestMergeConflictError_Message(t *testing.T) {
 
 // mergeOpts always sets DeleteBranch and never sets Admin (removed).
 func TestMergeOpts_Defaults(t *testing.T) {
-	mgr := &Manager{}
+	mgr := &Repo{}
 	opts := mgr.mergeOpts()
 	if !opts.DeleteBranch {
 		t.Error("expected DeleteBranch=true")
@@ -364,7 +364,7 @@ func TestWaitForCI_CancelledContext(t *testing.T) {
 
 // gh() returns the default ghCLI when no GitHub interface is injected.
 func TestGh_DefaultsToGhCLI(t *testing.T) {
-	mgr := &Manager{}
+	mgr := &Repo{}
 	gh := mgr.gh()
 	if gh == nil {
 		t.Fatal("gh() returned nil")
@@ -374,7 +374,7 @@ func TestGh_DefaultsToGhCLI(t *testing.T) {
 // gh() returns the injected GitHub interface when one is set.
 func TestGh_UsesInjectedGitHub(t *testing.T) {
 	stub := NewStubGitHub()
-	mgr := &Manager{GitHub: stub}
+	mgr := &Repo{GitHub: stub}
 	if mgr.gh() != stub {
 		t.Error("gh() should return the injected GitHub interface")
 	}
@@ -386,7 +386,7 @@ func TestGh_UsesInjectedGitHub(t *testing.T) {
 func TestAwaitCI_PassedImmediately(t *testing.T) {
 	gh := NewStubGitHub()
 	gh.Checks = []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}
-	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
+	mgr := &Repo{GitHub: gh, Logger: &testLog{}}
 
 	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err != nil {
@@ -405,7 +405,7 @@ func TestAwaitCI_PassedImmediately(t *testing.T) {
 func TestAwaitCI_FailedImmediately(t *testing.T) {
 	gh := NewStubGitHub()
 	gh.Checks = []CICheckResult{{Name: "lint", State: "FAILURE", Bucket: "fail"}}
-	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
+	mgr := &Repo{GitHub: gh, Logger: &testLog{}}
 
 	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err != nil {
@@ -432,7 +432,7 @@ func TestAwaitCI_PollsWhenPending(t *testing.T) {
 
 	var calls atomic.Int32
 	gh := NewStubGitHub()
-	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
+	mgr := &Repo{GitHub: gh, Logger: &testLog{}}
 
 	// Override ListChecks to transition from pending to passed.
 	pollGH := &pollableGitHub{
@@ -481,7 +481,7 @@ func TestAwaitCI_PollsWhenFetchErrors(t *testing.T) {
 			return []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}, nil
 		},
 	}
-	mgr := &Manager{GitHub: pollGH, Logger: &testLog{}}
+	mgr := &Repo{GitHub: pollGH, Logger: &testLog{}}
 
 	_, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err != nil {
@@ -515,7 +515,7 @@ func TestAwaitCI_LogUsesPRLink(t *testing.T) {
 		},
 	}
 	log := &testLog{}
-	mgr := &Manager{GitHub: pollGH, Logger: log}
+	mgr := &Repo{GitHub: pollGH, Logger: log}
 
 	_, status, err := mgr.AwaitCI(context.Background(), 99, "https://github.com/owner/repo", time.Time{})
 	if err != nil {
@@ -553,7 +553,7 @@ func TestAwaitCI_PushedAtLogUsesPRLink(t *testing.T) {
 		},
 	}
 	log := &testLog{}
-	mgr := &Manager{GitHub: pollGH, Logger: log}
+	mgr := &Repo{GitHub: pollGH, Logger: log}
 
 	_, status, err := mgr.AwaitCI(context.Background(), 88, "https://github.com/owner/repo", now)
 	if err != nil {
@@ -624,7 +624,7 @@ func TestAwaitCI_FiltersStaleChecks(t *testing.T) {
 		},
 	}
 	log := &testLog{}
-	mgr := &Manager{GitHub: pollGH, Logger: log}
+	mgr := &Repo{GitHub: pollGH, Logger: log}
 
 	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", pushedAt)
 	if err != nil {
@@ -645,7 +645,7 @@ func TestAwaitCI_FiltersStaleChecks(t *testing.T) {
 func TestAwaitCI_ZeroPushedAtSkipsFiltering(t *testing.T) {
 	gh := NewStubGitHub()
 	gh.Checks = []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}
-	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
+	mgr := &Repo{GitHub: gh, Logger: &testLog{}}
 
 	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err != nil {
@@ -675,13 +675,13 @@ func (p *pollableGitHub) ListChecks(prNumber int, repoURL string) ([]CICheckResu
 
 // setupAutoMergeManager creates a Manager with a StubGitHub and real git repos
 // so AutoMergeCurrentBranch can run without a real gh CLI.
-func setupAutoMergeManager(t *testing.T, gh *StubGitHub) *Manager {
+func setupAutoMergeManager(t *testing.T, gh *StubGitHub) *Repo {
 	t.Helper()
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 	st := newMemState()
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:  project,
 		BaseBranch: "main",
 		RalphDir:    ralphDir,
@@ -782,7 +782,7 @@ func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	st := newMemState()
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir: project,
 		BaseBranch: "main",
 		RalphDir:   ralphDir,
@@ -817,7 +817,7 @@ func TestAwaitCI_UsesManagerCIPollTimeout(t *testing.T) {
 	// Manager with a very short custom timeout — pending checks should time out quickly.
 	gh := NewStubGitHub()
 	gh.Checks = []CICheckResult{{Name: "test", State: "PENDING", Bucket: "pending"}}
-	mgr := &Manager{GitHub: gh, Logger: &testLog{}, CIPollTimeout: 1 * time.Millisecond}
+	mgr := &Repo{GitHub: gh, Logger: &testLog{}, CIPollTimeout: 1 * time.Millisecond}
 
 	_, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err == nil {
@@ -835,7 +835,7 @@ func TestAwaitCI_ZeroCIPollTimeoutFallsBackToDefault(t *testing.T) {
 	// if the fallback is working, it won't time out before the first poll.
 	gh := NewStubGitHub()
 	gh.Checks = []CICheckResult{{Name: "test", State: "SUCCESS", Bucket: "pass"}}
-	mgr := &Manager{GitHub: gh, Logger: &testLog{}}
+	mgr := &Repo{GitHub: gh, Logger: &testLog{}}
 
 	_, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err != nil {
@@ -858,7 +858,7 @@ func TestAwaitCI_RequiredChecksFilter_IgnoresNonRequired(t *testing.T) {
 	}
 	gh.RequiredChecks = []string{"test"} // only "test" is required
 
-	mgr := &Manager{GitHub: gh, BaseBranch: "main", Logger: &testLog{}}
+	mgr := &Repo{GitHub: gh, BaseBranch: "main", Logger: &testLog{}}
 
 	_, status, err := mgr.AwaitCI(context.Background(), 1, "https://github.com/owner/repo.git", time.Time{})
 	if err != nil {
@@ -880,7 +880,7 @@ func TestAwaitCI_RequiredChecksFilter_RequiredFailureBlocks(t *testing.T) {
 	}
 	gh.RequiredChecks = []string{"test", "lint"}
 
-	mgr := &Manager{GitHub: gh, BaseBranch: "main", Logger: &testLog{}}
+	mgr := &Repo{GitHub: gh, BaseBranch: "main", Logger: &testLog{}}
 
 	_, status, _ := mgr.AwaitCI(context.Background(), 1, "https://github.com/owner/repo.git", time.Time{})
 	if status != CIFailed {
@@ -898,7 +898,7 @@ func TestAwaitCI_RequiredChecksFilter_FallsBackToAllChecksWhenEmpty(t *testing.T
 	}
 	gh.RequiredChecks = nil // no required checks configured
 
-	mgr := &Manager{GitHub: gh, BaseBranch: "main", Logger: &testLog{}}
+	mgr := &Repo{GitHub: gh, BaseBranch: "main", Logger: &testLog{}}
 
 	_, status, _ := mgr.AwaitCI(context.Background(), 1, "https://github.com/owner/repo.git", time.Time{})
 	if status != CIFailed {

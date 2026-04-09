@@ -47,7 +47,7 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -99,7 +99,7 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -169,7 +169,7 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -214,7 +214,7 @@ func TestLoop_RecordsAttemptAfterIteration(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -258,7 +258,7 @@ func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -311,7 +311,7 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 		BackendLabel: "beads",
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -490,7 +490,7 @@ func TestLoop_RecordsCompletedTasks(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir: dir,
 		WorkDir:    dir,
 	}
@@ -544,7 +544,7 @@ func TestLoop_ClearsCompletedTasksOnStart(t *testing.T) {
 		Total:     1,
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir: dir,
 		WorkDir:    dir,
 	}
@@ -597,7 +597,7 @@ func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir: dir,
 		WorkDir:    dir,
 	}
@@ -661,7 +661,7 @@ func TestLoop_SessionTasksRecordsCompletedWork(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "added session summary before evolve"},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -717,7 +717,7 @@ func TestLoop_SessionTasksEmptyOnVerificationFailure(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "tried to fix it"},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -765,7 +765,7 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -823,7 +823,7 @@ func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
 		Total:     1,
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{

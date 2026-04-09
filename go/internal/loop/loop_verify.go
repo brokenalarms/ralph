@@ -15,7 +15,7 @@ import (
 //   - CIFixApplied:   fix was pushed, ready for merge retry
 //   - CIFixNoCommits: agent ran but made no commits (infrastructure failure)
 //   - CIFixFailed:    agent error or push failure
-func tryFixCI(ctx context.Context, g git.GitOps, v *Verifier, logger *logging.Logger, ciErr *git.CIFailureError, nextTask, workDir, rawLogPath string) git.CIFixResult {
+func tryFixCI(ctx context.Context, g git.Ops, v *Verifier, logger *logging.Logger, ciErr *git.CIFailureError, nextTask, workDir, rawLogPath string) git.CIFixResult {
 	ciLog := g.GetCIFailureLog(ciErr.PRNumber)
 	headBefore := g.HeadRev()
 	if !v.TryFixCI(ctx, ciLog, ciErr, nextTask, workDir, rawLogPath) {
@@ -45,7 +45,7 @@ func tryFixCI(ctx context.Context, g git.GitOps, v *Verifier, logger *logging.Lo
 // tryFixConflict spawns a conflict resolution agent, force-pushes the
 // resolved commits, and returns true if the fix was pushed (ready for
 // merge retry). Mirrors tryFixCI.
-func tryFixConflict(ctx context.Context, g git.GitOps, v *Verifier, logger *logging.Logger, backend tasks.Backend, taskID, nextTask, workDir, rawLogPath string) bool {
+func tryFixConflict(ctx context.Context, g git.Ops, v *Verifier, logger *logging.Logger, backend tasks.Backend, taskID, nextTask, workDir, rawLogPath string) bool {
 	conflictDiff := g.ConflictDiff()
 	beadDesc := getBeadDescription(backend, taskID)
 	headBefore := g.HeadRev()
@@ -128,7 +128,7 @@ func formatReviewContext(reviewerName string, prNumber int, comments []git.Revie
 // tryFixReviewComments filters actionable comments from the review, spawns a
 // fix agent to address them, and force-pushes the result. Returns true when
 // the fix was committed and pushed successfully.
-func tryFixReviewComments(ctx context.Context, g git.GitOps, v *Verifier, logger *logging.Logger, reviewerName string, review *git.AutoReview, prNumber int, nextTask, workDir, rawLogPath string) bool {
+func tryFixReviewComments(ctx context.Context, g git.Ops, v *Verifier, logger *logging.Logger, reviewerName string, review *git.AutoReview, prNumber int, nextTask, workDir, rawLogPath string) bool {
 	actionable := filterActionableComments(review.Comments)
 	if len(actionable) == 0 {
 		logger.Emit(logging.Opts{Domain: logging.Git}, "%s review: no actionable comments — proceeding to merge", reviewerName)

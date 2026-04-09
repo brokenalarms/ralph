@@ -36,7 +36,7 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -114,7 +114,7 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -184,18 +184,14 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 	iterationCount := 0
 	taskABranch := "ralph-aaa-task-a"
 
-	ghStub := git.NewStubGitHub()
-	ghStub.OpenPRBranches = []string{taskABranch}
-
-	gm := &testutil.StubGit{
-		ProjectDir:          dir,
-		WorkDir:             dir,
-		WorktreeBranch:      "main",
-		GitHubStub:          ghStub,
-		RemoteURLValue:      "https://github.com/example/repo",
-		RemoteBranchCommits: true,
-		BranchAheadOfMain:   true,
-	}
+	gm := git.NewStubRepo()
+	gm.ProjectDir = dir
+	gm.WorkDir = dir
+	gm.WorktreeBranch = "main"
+	gm.GH.OpenPRBranches = []string{taskABranch}
+	gm.RemoteURLValue = "https://github.com/example/repo"
+	gm.RemoteBranchCommits = true
+	gm.BranchAheadOfMain = true
 
 	backend := &testutil.MutableBackend{
 		StubBackend: testutil.StubBackend{
@@ -283,18 +279,14 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 	iterationCount := 0
 	taskABranch := "ralph-aaa-task-a"
 
-	ghStub := git.NewStubGitHub()
-	ghStub.OpenPRBranches = []string{taskABranch}
-
-	gm := &testutil.StubGit{
-		ProjectDir:          dir,
-		WorkDir:             dir,
-		WorktreeBranch:      "main",
-		GitHubStub:          ghStub,
-		RemoteURLValue:      "https://github.com/example/repo",
-		RemoteBranchCommits: false, // branch deleted from remote
-		BranchAheadOfMain:   false,
-	}
+	gm := git.NewStubRepo()
+	gm.ProjectDir = dir
+	gm.WorkDir = dir
+	gm.WorktreeBranch = "main"
+	gm.GH.OpenPRBranches = []string{taskABranch}
+	gm.RemoteURLValue = "https://github.com/example/repo"
+	gm.RemoteBranchCommits = false
+	gm.BranchAheadOfMain = false
 
 	backend := &testutil.MutableBackend{
 		StubBackend: testutil.StubBackend{
@@ -376,18 +368,14 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 	iterationCount := 0
 	taskABranch := "ralph-aaa-task-a"
 
-	ghStub := git.NewStubGitHub()
-	ghStub.OpenPRBranches = []string{taskABranch}
-
-	gm := &testutil.StubGit{
-		ProjectDir:          dir,
-		WorkDir:             dir,
-		WorktreeBranch:      "main",
-		GitHubStub:          ghStub,
-		RemoteURLValue:      "https://github.com/example/repo",
-		RemoteBranchCommits: true, // branch still exists on remote
-		BranchAheadOfMain:   false, // but work is already on main
-	}
+	gm := git.NewStubRepo()
+	gm.ProjectDir = dir
+	gm.WorkDir = dir
+	gm.WorktreeBranch = "main"
+	gm.GH.OpenPRBranches = []string{taskABranch}
+	gm.RemoteURLValue = "https://github.com/example/repo"
+	gm.RemoteBranchCommits = true
+	gm.BranchAheadOfMain = false
 
 	backend := &testutil.MutableBackend{
 		StubBackend: testutil.StubBackend{
@@ -479,7 +467,7 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "main",
@@ -566,7 +554,7 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "main",

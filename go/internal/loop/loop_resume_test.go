@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -26,7 +26,7 @@ func TestResumeTask_HandledFalseRunsAgent(t *testing.T) {
 	backend.NextID = "ralph-xg0x"
 	_ = backend.SetMetadata("ralph-xg0x", "branch", "ralph/ralph-xg0x-fix-auth")
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/ralph-xg0x-fix-auth",

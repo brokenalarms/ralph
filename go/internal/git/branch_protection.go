@@ -41,7 +41,7 @@ func repoNWO(remoteURL string) string {
 //
 // Requires: gh CLI authenticated with admin access to the repo, and existing
 // branch protection rules on the target branch.
-func (m *Manager) EnforceAdmins() error {
+func (m *Repo) EnforceAdmins() error {
 	dir := m.WorkDir
 	if dir == "" {
 		dir = m.ProjectDir

@@ -43,15 +43,10 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 
 	ralphDir := filepath.Join(projectDir, ".ralph")
 	st := state.NewStore(filepath.Join(ralphDir, "state.json"))
-	gm := &git.Manager{
-		ProjectDir: projectDir,
-		WorkDir:    projectDir,
-		RalphDir:   ralphDir,
-		State:      st,
-		Logger:     log,
-	}
-	gh := gm.GH()
-	if gh == nil || !gh.Available() {
+	gm := git.New(projectDir, ralphDir, nil)
+	gm.State = st
+	gm.Logger = log
+	if !gm.GitHubAvailable() {
 		log.Emit(logging.Opts{Level: logging.Error}, "gh CLI not available")
 		return 1
 	}
@@ -66,7 +61,7 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 
 	// Collect all PRs in the stack, walking down from the given PR to
 	// find the bottom, then collecting upward.
-	stack := collectStack(gh, projectDir, prNumber, log)
+	stack := collectStack(gm, projectDir, prNumber, log)
 	if len(stack.prs) == 0 {
 		log.Emit(logging.Opts{Level: logging.Error}, "No open PRs found starting from #%s", prNumber)
 		return 1
@@ -84,7 +79,7 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 // runMerge rebases the stack onto defaultBranch, then merges PRs bottom-up.
 // For each PR after the first, it rebases the branch onto updated main and
 // waits for fresh CI on the new HEAD before merging.
-func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch string, gm *git.Manager, log *logging.Logger) int {
+func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch string, gm *git.Repo, log *logging.Logger) int {
 	topBranch := prs[len(prs)-1].head
 	allBranches := make([]string, len(prs))
 	for i, pr := range prs {
@@ -190,10 +185,10 @@ type stackResult struct {
 }
 
 // collectStack walks the base chain from the given PR down to main,
-// collecting the full stack in bottom-up order. Uses gh.ListAllPRs
+// collecting the full stack in bottom-up order. Uses g.ListAllPRs
 // to get all open PRs in one call, then walks the base references.
-func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) stackResult {
-	allPRs, err := gh.ListAllPRs(workDir)
+func collectStack(g git.Ops, workDir, topPR string, log *logging.Logger) stackResult {
+	allPRs, err := g.ListAllPRs(workDir)
 	if err != nil {
 		log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to list PRs: %v", err)
 		return stackResult{}
@@ -256,7 +251,7 @@ func collectStack(gh git.GitHub, workDir, topPR string, log *logging.Logger) sta
 // with --update-refs onto main, then force-pushes all branches.
 // If a worktree already exists (from a previous conflict resolution),
 // skips rebase and goes straight to push.
-func rebaseStackAndPush(ctx context.Context, runner git.Runner, projectDir, defaultBranch, topBranch string, topPR int, allBranches []string, gm *git.Manager, log *logging.Logger) int {
+func rebaseStackAndPush(ctx context.Context, runner git.Runner, projectDir, defaultBranch, topBranch string, topPR int, allBranches []string, gm *git.Repo, log *logging.Logger) int {
 	slug := strings.ReplaceAll(topBranch, "/", "-")
 	wtDir := filepath.Join(gm.RalphDir, "worktrees", "merge-"+slug)
 	tmpBranch := "ralph-merge/" + slug

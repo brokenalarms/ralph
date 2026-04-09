@@ -39,7 +39,7 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "fixed it"},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -108,7 +108,7 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir: dir,
 		WorkDir:    dir,
 		ShipResult: git.ShipResult{PRNumber: 42},
@@ -177,7 +177,7 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir: dir,
 		WorkDir:    dir,
 		ShipResult: git.ShipResult{PRNumber: 99},
@@ -225,7 +225,7 @@ func TestLoop_CIFailureLeavesTaskOpen(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-ci-test",
@@ -284,7 +284,7 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 		NextID:    "ralph-mc1",
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-conflict-test",
@@ -339,7 +339,7 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 		NextID:    "ralph-ci2",
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:          dir,
 		WorkDir:             filepath.Join(dir, "worktree"),
 		WorktreeBranch:      "ralph/project/01-ci-fix",
@@ -389,7 +389,7 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 		NextID:    "ralph-ci3",
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-ci-exhaust",
@@ -453,7 +453,7 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 		NextID:    "ralph-mixed",
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-mixed",
@@ -515,7 +515,7 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-stubborn",
@@ -579,7 +579,7 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-fixable",
@@ -642,7 +642,7 @@ func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-recover",
@@ -710,7 +710,7 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -828,7 +828,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 			var logBuf bytes.Buffer
 			logger := logging.NewWithWriter(&logBuf)
 
-			gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+			gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 			llmResult := verify.Result{
 				Passed:  tt.passed,

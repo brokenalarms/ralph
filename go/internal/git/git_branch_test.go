@@ -14,7 +14,7 @@ import (
 func TestSetStackHead_SkipsWhenNoBranchesAvailable(t *testing.T) {
 	log := &testLog{}
 	gh := &StubGitHub{IsAvailable: true, OpenPRBranches: nil}
-	m := &Manager{
+	m := &Repo{
 		Logger: log,
 		GitHub: gh,
 	}
@@ -35,7 +35,7 @@ func TestSetStackHead_SkipsWhenNoBranchesAvailable(t *testing.T) {
 // empty — the early-return path is silent.
 func TestSetStackHead_SilentWhenNoCompletedBranches(t *testing.T) {
 	log := &testLog{}
-	m := &Manager{Logger: log}
+	m := &Repo{Logger: log}
 
 	setStackHead(m, nil)
 
@@ -52,7 +52,7 @@ func TestCheckoutExistingBranch_NoStoredBranch_RenamesBranch(t *testing.T) {
 	runner := newStubRunner()
 	runner.On("branch", "", nil)
 
-	m := &Manager{
+	m := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/worktrees/wt1",
 		WorktreeBranch: "ralph/wip-branch",
@@ -79,7 +79,7 @@ func TestCheckoutExistingBranch_RenameFailure_ReturnsError(t *testing.T) {
 	runner := newStubRunner()
 	runner.On("branch", "", renameErr)
 
-	m := &Manager{
+	m := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/worktrees/wt1",
 		WorktreeBranch: "ralph/next",
@@ -105,7 +105,7 @@ func TestBranchForTask_UsesStoredBranchWhenRemoteEmpty(t *testing.T) {
 	// rev-list returns "" (no commits ahead) — RemoteBranchHasCommits returns false
 	runner.On("rev-list", "", nil)
 
-	m := &Manager{
+	m := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/worktrees/wt1",
 		WorktreeBranch: "ralph/wip-branch",

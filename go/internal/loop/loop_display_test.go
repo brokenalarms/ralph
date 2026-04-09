@@ -52,7 +52,7 @@ func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 			var logBuf strings.Builder
 			logger := logging.New(&logBuf)
 
-			gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+			gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 			l := New(Config{
 				Dirs: workctx.WorkContext{
@@ -97,7 +97,7 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 		Description:  "Auth tokens are expiring too early due to clock skew",
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -162,7 +162,7 @@ func TestLoop_LongDescriptionTruncatedInStream(t *testing.T) {
 		Description:  desc,
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -222,7 +222,7 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 		BackendLabel: "beads",
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -301,7 +301,7 @@ func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
@@ -360,7 +360,7 @@ func TestLoop_TaskBannerOnNewTask(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
@@ -425,7 +425,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	var logBuf bytes.Buffer
 
 	l := New(Config{
@@ -529,7 +529,7 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
@@ -570,7 +570,7 @@ func newHandleRunResultLoop(t *testing.T) (*Loop, string) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
 	l := New(Config{
@@ -768,7 +768,7 @@ func TestOnResumeDone_Merged_NotifyEnabled(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		RemoteURLValue: "https://github.com/owner/repo.git",
@@ -821,7 +821,7 @@ func TestOnResumeDone_Open_NotifyEnabled(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		RemoteURLValue: "https://github.com/owner/repo.git",
@@ -873,7 +873,7 @@ func TestOnResumeDone_Merged_NotifyDisabled(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		RemoteURLValue: "https://github.com/owner/repo.git",

@@ -1,6 +1,12 @@
 package git
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
 
 // Proves StubGitHub satisfies the GitHub interface at compile time.
 func TestStubGitHub_ImplementsGitHub(t *testing.T) {
@@ -47,5 +53,44 @@ func TestStubGitHub_GetPR_AutoGeneratesHeadSHA(t *testing.T) {
 	pr, _ = gh.GetPR("", 42)
 	if pr.HeadSHA != "explicit-sha" {
 		t.Errorf("explicit HeadSHA should not be overridden, got %q", pr.HeadSHA)
+	}
+}
+
+// TestGitHubIsInternal proves that git.GitHub, git.StubGitHub, and
+// git.NewStubGitHub are not referenced in any .go file outside go/internal/git/.
+// This enforces that the GitHub type is internal to the git package.
+func TestGitHubIsInternal(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	// goDir is go/  (two levels up from go/internal/git/)
+	goDir := filepath.Join(filepath.Dir(thisFile), "..", "..")
+
+	forbidden := []string{"git.GitHub", "git.StubGitHub", "git.NewStubGitHub"}
+
+	err := filepath.Walk(goDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		// Skip files within internal/git/ itself.
+		rel, _ := filepath.Rel(goDir, path)
+		if strings.HasPrefix(rel, "internal/git/") {
+			return nil
+		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		src := string(content)
+		for _, pattern := range forbidden {
+			if strings.Contains(src, pattern) {
+				t.Errorf("%s: references %q — GitHub type must stay internal to go/internal/git/", rel, pattern)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk error: %v", err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
@@ -56,7 +57,7 @@ func TestRun_ExitsOnGitHubUnreachable(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		RemoteURLValue: "https://github.com/owner/repo.git",

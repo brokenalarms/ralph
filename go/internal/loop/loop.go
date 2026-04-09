@@ -102,7 +102,7 @@ type CompletedTask struct {
 type Loop struct {
 	cfg                  Config
 	state                *state.Store
-	git                  git.GitOps
+	git                  git.Ops
 	limiter              *ratelimit.Limiter
 	runner               claudeRunner
 	verifier             *Verifier
@@ -117,7 +117,7 @@ type Loop struct {
 
 // New creates an execution loop from the given configuration. All agent
 // invocations go through the centralized agent module.
-func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Loop {
+func New(cfg Config, st *state.Store, gm git.Ops, logger *logging.Logger) *Loop {
 	signals := claude.DefaultSignalPaths(cfg.Dirs.RalphDir)
 
 	limiter := ratelimit.New(cfg.Dirs.RalphDir, cfg.CallsPerHour)
