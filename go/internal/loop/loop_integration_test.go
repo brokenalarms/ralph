@@ -3195,5 +3195,221 @@ func TestIntegration_ResumeViaPR_DetectsExistingOpenPR(t *testing.T) {
 	}
 }
 
+// TestIntegration_VerifyBuildRunsBeforeAgent asserts that the --verify-build
+// script runs before the agent and its failure output appears in the prompt.
+func TestIntegration_VerifyBuildRunsBeforeAgent(t *testing.T) {
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Total = 1
+	backend.NextTask = "Fix the widget"
+	backend.NextID = "ralph-vb1"
+	backend.BackendLabel = "beads"
+
+	// Write a template that includes the test status placeholder so the
+	// build failure message lands in the assembled prompt.
+	os.WriteFile(filepath.Join(promptsDir, "internal.md"), []byte("{{TEST_STATUS}}"), 0o644)
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	var seq []string
+	var capturedPrompt string
+	runner := &stubRunner{
+		onRunCfg: func(cfg claude.RunConfig) {
+			seq = append(seq, "agent")
+			capturedPrompt = cfg.Prompt
+			gm.HeadRevValue = "vb-commit"
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Completed = 1
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir, WorkDir: dir,
+			RalphDir: ralphDir, PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyBuild:   "echo 'ERROR: missing import' && exit 1",
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
+		seq = append(seq, "verify")
+		return true, ""
+	}
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
+
+	l.Run(context.Background())
+
+	// Build check ran before agent.
+	agentIdx := -1
+	for i, s := range seq {
+		if s == "agent" {
+			agentIdx = i
+			break
+		}
+	}
+	if agentIdx == -1 {
+		t.Fatal("agent never ran")
+	}
+
+	// Build failure message must appear in the agent prompt.
+	if !strings.Contains(capturedPrompt, "BUILD IS BROKEN") {
+		t.Error("expected build failure message in agent prompt")
+	}
+	if !strings.Contains(capturedPrompt, "missing import") {
+		t.Error("expected build output in agent prompt")
+	}
+}
+
+// TestIntegration_PreIterationTestsRunBeforeAgent asserts that the pre-iteration
+// test suite runs before the agent and its status feeds into the prompt.
+func TestIntegration_PreIterationTestsRunBeforeAgent(t *testing.T) {
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
+
+	// Create a passing ralph:verify script.
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\t@echo 'ok'\n"), 0o644)
+	// Template must include {{TEST_STATUS}} so pre-iteration output lands in prompt.
+	os.WriteFile(filepath.Join(promptsDir, "internal.md"), []byte("{{TEST_STATUS}}"), 0o644)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Total = 1
+	backend.NextTask = "Add auth"
+	backend.NextID = "ralph-pit1"
+	backend.BackendLabel = "beads"
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	var capturedPrompt string
+	runner := &stubRunner{
+		onRunCfg: func(cfg claude.RunConfig) {
+			capturedPrompt = cfg.Prompt
+			gm.HeadRevValue = "pit-commit"
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Completed = 1
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir, WorkDir: dir,
+			RalphDir: ralphDir, PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+		return verify.Result{Passed: true, Reason: "ok"}
+	}
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
+
+	l.Run(context.Background())
+
+	// Pre-iteration test status must appear in the prompt.
+	if !strings.Contains(capturedPrompt, "tests passing") {
+		t.Error("expected pre-iteration test status in agent prompt")
+	}
+}
+
+// TestIntegration_LLMVerifyRejectThenFixThenPass asserts the full lifecycle:
+// agent signals → tests pass → LLM rejects → fix agent spawned → LLM approves.
+func TestIntegration_LLMVerifyRejectThenFixThenPass(t *testing.T) {
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Total = 1
+	backend.NextTask = "Fix formatting"
+	backend.NextID = "ralph-llm1"
+	backend.BackendLabel = "beads"
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	var seq []string
+	runner := &signalCallingRunner{
+		onRun: func() {
+			seq = append(seq, "agent")
+			gm.HeadRevValue = "llm-commit"
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Completed = 1
+			backend.Unlock()
+		},
+		result: claude.Result{Summary: "done"},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir, WorkDir: dir,
+			RalphDir: ralphDir, PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+		VerifyDir:     dir,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
+
+	// LLM rejects first attempt, approves second.
+	llmCalls := 0
+	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+		llmCalls++
+		if llmCalls == 1 {
+			seq = append(seq, "llm_reject")
+			return verify.Result{Passed: false, Reason: "missing tests", Details: "no test for auth"}
+		}
+		seq = append(seq, "llm_approve")
+		return verify.Result{Passed: true, Reason: "looks good"}
+	}
+
+	// Fix agent is spawned after rejection.
+	fixCalls := 0
+	l.cfg.NewRunner = func() claudeRunner {
+		fixCalls++
+		seq = append(seq, "fix_agent")
+		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "added tests"}}
+	}
+
+	l.Run(context.Background())
+
+	// Fix agent must have been spawned.
+	if fixCalls == 0 {
+		t.Error("fix agent should have been spawned after LLM rejection")
+	}
+
+	// Ordering: agent → llm_reject → fix_agent → llm_approve
+	wantSubseq := []string{"agent", "llm_reject", "fix_agent", "llm_approve"}
+	seqIdx := 0
+	for _, s := range seq {
+		if seqIdx < len(wantSubseq) && s == wantSubseq[seqIdx] {
+			seqIdx++
+		}
+	}
+	if seqIdx != len(wantSubseq) {
+		t.Errorf("expected subsequence %v in sequence %v (matched %d/%d)", wantSubseq, seq, seqIdx, len(wantSubseq))
+	}
+}
+
 // Ensure the integrationBackend satisfies tasks.Backend.
 var _ tasks.Backend = (*integrationBackend)(nil)
