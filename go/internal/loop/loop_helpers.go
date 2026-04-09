@@ -11,14 +11,12 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/ratelimit"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
 type initParams struct {
-	limiter *ratelimit.Limiter
 	maxIter int
 	state   *state.Store
 	backend tasks.Backend
@@ -34,12 +32,10 @@ type initWorktreeParams struct {
 	logger  *logging.Logger
 }
 
-// initialize performs all one-time setup: limiter init, skipped task loading,
-// state config write, and worktree sync.
+// initialize performs all one-time setup: skipped task loading,
+// state config write, and worktree sync. The caller is responsible for
+// calling limiter.Init() before initialize.
 func initialize(ctx context.Context, p initParams) error {
-	if err := p.limiter.Init(); err != nil {
-		return fmt.Errorf("rate limiter init: %w", err)
-	}
 	p.state.WriteConfig(p.maxIter)
 
 	if skipped, err := p.state.GetSkippedTasks(); err == nil && len(skipped) > 0 {
@@ -96,18 +92,18 @@ func initWorktree(ctx context.Context, p initWorktreeParams) error {
 	return nil
 }
 
-
 type analyzeIterationParams struct {
-	git      git.GitOps
-	analyzer *analyzer.Analyzer
-	signals  claude.SignalPaths
+	hasDiff      bool
+	changedFiles []string
+	signals      claude.SignalPaths
 }
 
-func analyzeIteration(p analyzeIterationParams, rawLogPath string, logStart int, headBefore, headAfter, taskKey string) analyzer.Result {
+// analyzeIteration assembles an IterationState from pre-computed git data and
+// log content. The caller is responsible for calling analyzer.Analyze on the
+// returned state.
+func analyzeIteration(p analyzeIterationParams, rawLogPath string, logStart int, headBefore, headAfter, taskKey string) analyzer.IterationState {
 	iterLog := readLogFrom(rawLogPath, logStart)
-	hasDiff := p.git.HasDiff()
 	newCommits := headBefore != "" && headAfter != "" && headBefore != headAfter
-	changedFiles := p.git.ChangedFiles(headBefore, headAfter)
 
 	hasSignal := false
 	if _, err := os.Stat(p.signals.Complete); err == nil {
@@ -117,30 +113,30 @@ func analyzeIteration(p analyzeIterationParams, rawLogPath string, logStart int,
 		hasSignal = true
 	}
 
-	return p.analyzer.Analyze(analyzer.IterationState{
-		HasDiff:      hasDiff,
+	return analyzer.IterationState{
+		HasDiff:      p.hasDiff,
 		NewCommits:   newCommits,
 		HasSignal:    hasSignal,
-		ChangedFiles: changedFiles,
+		ChangedFiles: p.changedFiles,
 		IterationLog: iterLog,
 		TaskKey:      taskKey,
-	})
+	}
 }
 
 type processRunOutcomeParams struct {
-	backend  tasks.Backend
-	git      git.GitOps
-	logger   *logging.Logger
-	state    *state.Store
-	attempts *attempts.Tracker
-	analyzer *analyzer.Analyzer
-	signals  claude.SignalPaths
-	model    string
+	backend        tasks.Backend
+	git            git.GitOps
+	logger         *logging.Logger
+	state          *state.Store
+	attempts       *attempts.Tracker
+	analysisResult analyzer.Result
+	headAfter      string
+	model          string
 }
 
-// processRunOutcome logs the Claude result, analyzes the iteration, and
-// records attempts. Returns the diffStat (needed by signal handling) and
-// halt=true if the analyzer says to stop (caller should return nil).
+// processRunOutcome logs the Claude result and records attempts. Returns the
+// diffStat (needed by signal handling) and halt=true if the analyzer says to
+// stop (caller should return nil).
 func processRunOutcome(p processRunOutcomeParams, result claude.Result, elapsed time.Duration, runIteration int, prep iterationPrompt, taskID, nextTask string) (string, bool, analyzer.Action) {
 	if result.Summary != "" {
 		p.logger.Emit(logging.Opts{Domain: logging.LLM, Model: p.model}, "Summary: %s", result.Summary)
@@ -151,13 +147,8 @@ func processRunOutcome(p processRunOutcomeParams, result claude.Result, elapsed 
 	p.logger.Emit(logging.Opts{}, "Run iteration %d complete (%dm%ds). %d/%d tasks done.",
 		runIteration, int(elapsed.Minutes()), int(elapsed.Seconds())%60, completed, total)
 
-	headAfter := p.git.HeadRev()
-	diffStat := p.git.DiffStatRange(prep.headBefore, headAfter)
-	analysisResult := analyzeIteration(analyzeIterationParams{
-		git:      p.git,
-		analyzer: p.analyzer,
-		signals:  p.signals,
-	}, prep.rawLogPath, prep.logStart, prep.headBefore, headAfter, taskID)
+	diffStat := p.git.DiffStatRange(prep.headBefore, p.headAfter)
+	analysisResult := p.analysisResult
 
 	summary := result.Summary
 	if summary == "" {
@@ -189,4 +180,3 @@ func processRunOutcome(p processRunOutcomeParams, result claude.Result, elapsed 
 
 	return diffStat, false, analysisResult.Action
 }
-

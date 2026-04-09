@@ -7,7 +7,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/analyzer"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/ratelimit"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
@@ -93,25 +92,6 @@ func beginIteration(p beginIterationParams, task taskContext, iteration int) {
 	p.state.BeginIteration(task.id, task.title, iteration)
 	p.git.TagTaskStart(task.id)
 	p.state.UpdateStreamTask(task.id, task.title, task.info.Priority)
-}
-
-type waitForRateParams struct {
-	limiter      *ratelimit.Limiter
-	callsPerHour int
-	logger       *logging.Logger
-}
-
-func waitForRate(ctx context.Context, p waitForRateParams) bool {
-	if p.limiter.Allowed() {
-		return true
-	}
-
-	p.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Rate limit reached (%d/%d calls this hour)", p.limiter.Count(), p.callsPerHour)
-
-	err := p.limiter.WaitForReset(ctx, func(secs int) {
-		p.logger.Emit(logging.Opts{Domain: logging.LLM}, "Rate limit: %ds until reset", secs)
-	})
-	return err == nil
 }
 
 type logIterationBannerParams struct {

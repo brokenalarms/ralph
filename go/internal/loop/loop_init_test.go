@@ -9,7 +9,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/ratelimit"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -19,7 +18,6 @@ import (
 // initialization side-effects work when called outside the Loop struct.
 func TestInitialize_WritesConfigAndLoadsSkipped(t *testing.T) {
 	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
 
 	st.AddSkippedTask("ralph-skip1")
 
@@ -31,11 +29,9 @@ func TestInitialize_WritesConfigAndLoadsSkipped(t *testing.T) {
 		},
 	}
 	logger := logging.New(nil)
-	limiter := ratelimit.New(ralphDir, 80)
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 
 	err := initialize(context.Background(), initParams{
-		limiter: limiter,
 		maxIter: 7,
 		state:   st,
 		backend: backend,

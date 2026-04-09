@@ -9,8 +9,8 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/analyzer"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/ratelimit"
 	"github.com/brokenalarms/ralph/internal/testutil"
+	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
 // Verifies that pollForTasks is a package function: returns found=true when
@@ -93,19 +93,18 @@ func TestBeginIteration_PackageFunction(t *testing.T) {
 	}
 }
 
-// Verifies that waitForRate is a package function: it returns true immediately
-// when the rate limiter allows the call, without accessing any Loop field.
-func TestWaitForRate_PackageFunction(t *testing.T) {
-	dir, _ := setupTestDir(t)
+// Verifies that waitForRate returns true immediately when the rate limiter
+// allows the call, exercised through the Loop method.
+func TestWaitForRate_AllowsWhenUnderLimit(t *testing.T) {
+	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
-	logger := logging.New(nil)
-	limiter := ratelimit.New(ralphDir, 80)
 
-	allowed := waitForRate(context.Background(), waitForRateParams{
-		limiter:      limiter,
-		callsPerHour: 80,
-		logger:       logger,
-	})
+	l := New(Config{
+		Dirs:         workctx.WorkContext{RalphDir: ralphDir},
+		CallsPerHour: 80,
+	}, st, &testutil.StubGit{}, logging.New(nil))
+
+	allowed := l.waitForRate(context.Background())
 
 	if !allowed {
 		t.Error("expected waitForRate to return true when limiter allows")

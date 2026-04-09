@@ -240,24 +240,7 @@ func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
 	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
 
-	prep, ok := prepareAndBuildPrompt(context.Background(), prepareAndBuildPromptParams{
-		backend:             l.cfg.TaskBackend,
-		git:                 l.git,
-		logger:              l.logger,
-		verifier:            l.verifier,
-		limiter:             l.limiter,
-		attempts:            l.attempts,
-		signals:             l.signals,
-		promptsDir:          l.cfg.Dirs.PromptsDir,
-		ralphDir:            l.cfg.Dirs.RalphDir,
-		projectDir:          l.cfg.Dirs.ProjectDir,
-		planFile:            l.cfg.PlanFile,
-		callsPerHour:        l.cfg.CallsPerHour,
-		runVerifyBuildFn: func(ctx context.Context) string {
-			return runVerifyBuild(ctx, runVerifyBuildParams{verifyBuild: l.cfg.VerifyBuild, projectDir: l.cfg.Dirs.ProjectDir, logger: l.logger})
-		},
-		waitForInternetFunc: l.cfg.WaitForInternet,
-	}, "ralph-xyz", "Fix login")
+	prep, ok := l.prepareAndBuildPrompt(context.Background(), "ralph-xyz", "Fix login")
 	if !ok {
 		t.Fatal("expected ok=true from prepareAndBuildPrompt")
 	}

@@ -250,30 +250,24 @@ type agentRunResult struct {
 
 // runAgent prepares the prompt, invokes Claude, handles run errors, and analyzes
 // the outcome. If action != actionProceed, Run() should use that action directly.
+// waitForRate returns true immediately if the rate limit allows the call.
+// If the limit is exceeded, it waits for the reset window and returns true
+// once the limit clears, or false if the context is cancelled.
+func (l *Loop) waitForRate(ctx context.Context) bool {
+	if l.limiter.Allowed() {
+		return true
+	}
+
+	l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Rate limit reached (%d/%d calls this hour)", l.limiter.Count(), l.cfg.CallsPerHour)
+
+	err := l.limiter.WaitForReset(ctx, func(secs int) {
+		l.logger.Emit(logging.Opts{Domain: logging.LLM}, "Rate limit: %ds until reset", secs)
+	})
+	return err == nil
+}
+
 func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int) agentRunResult {
-	prep, ok := prepareAndBuildPrompt(ctx, prepareAndBuildPromptParams{
-		backend:             l.cfg.TaskBackend,
-		git:                 l.git,
-		logger:              l.logger,
-		verifier:            l.verifier,
-		limiter:             l.limiter,
-		attempts:            l.attempts,
-		signals:             l.signals,
-		promptsDir:          l.cfg.Dirs.PromptsDir,
-		ralphDir:            l.cfg.Dirs.RalphDir,
-		projectDir:          l.cfg.Dirs.ProjectDir,
-		planFile:            l.cfg.PlanFile,
-		callsPerHour:        l.cfg.CallsPerHour,
-		runVerifyBuildFn: func(ctx context.Context) string {
-			return runVerifyBuild(ctx, runVerifyBuildParams{
-				verifyBuild: l.cfg.VerifyBuild,
-				projectDir:  l.cfg.Dirs.ProjectDir,
-				testTimeout: l.cfg.TestTimeout,
-				logger:      l.logger,
-			})
-		},
-		waitForInternetFunc: l.cfg.WaitForInternet,
-	}, task.id, task.title)
+	prep, ok := l.prepareAndBuildPrompt(ctx, task.id, task.title)
 	if !ok {
 		return agentRunResult{action: actionDone}
 	}
@@ -346,15 +340,23 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 	elapsed := time.Since(taskStart)
 	l.limiter.Increment()
 
+	headAfter := l.git.HeadRev()
+	iterState := analyzeIteration(analyzeIterationParams{
+		hasDiff:      l.git.HasDiff(),
+		changedFiles: l.git.ChangedFiles(prep.headBefore, headAfter),
+		signals:      l.signals,
+	}, prep.rawLogPath, prep.logStart, prep.headBefore, headAfter, task.id)
+	analysisResult := l.analyzer.Analyze(iterState)
+
 	diffStat, halt, iterAction := processRunOutcome(processRunOutcomeParams{
-		backend:  l.cfg.TaskBackend,
-		git:      l.git,
-		logger:   l.logger,
-		state:    l.state,
-		attempts: l.attempts,
-		analyzer: l.analyzer,
-		signals:  l.signals,
-		model:    l.cfg.Model,
+		backend:        l.cfg.TaskBackend,
+		git:            l.git,
+		logger:         l.logger,
+		state:          l.state,
+		attempts:       l.attempts,
+		analysisResult: analysisResult,
+		headAfter:      headAfter,
+		model:          l.cfg.Model,
 	}, result, elapsed, runIteration, prep, task.id, task.title)
 	if halt {
 		return agentRunResult{action: actionDone, iterAction: iterAction}
@@ -385,8 +387,10 @@ func (l *Loop) Run(ctx context.Context) error {
 		return fmt.Errorf("Cannot reach GitHub (%v).\nPossible causes: VPN blocking GitHub, no internet, gh auth expired.\nFixes: disconnect VPN, check internet, or run \"gh auth login\" to refresh credentials.", err)
 	}
 
+	if err := l.limiter.Init(); err != nil {
+		return fmt.Errorf("rate limiter init: %w", err)
+	}
 	if err := initialize(ctx, initParams{
-		limiter: l.limiter,
 		maxIter: l.cfg.MaxIterations,
 		state:   l.state,
 		backend: l.cfg.TaskBackend,
@@ -465,16 +469,7 @@ iterLoop:
 			}
 		}
 
-		if err := maybeRefactor(ctx, maybeRefactorParams{
-			cfg:          l.cfg,
-			git:          l.git,
-			limiter:      l.limiter,
-			runner:       l.runner,
-			logger:       l.logger,
-			signals:      l.signals,
-			queryFn:      l.cfg.QueryFn,
-			sessionCount: len(sessionTasks),
-		}); err != nil {
+		if err := l.maybeRefactor(ctx, len(sessionTasks)); err != nil {
 			l.logger.Emit(logging.Opts{Level: logging.Warn}, "Refactor iteration error: %v", err)
 		}
 
