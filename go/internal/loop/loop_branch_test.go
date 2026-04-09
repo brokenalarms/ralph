@@ -356,29 +356,23 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 
 // Verifies isNewTask compares by task ID when available, falling back to
 // description, so that task identity is stable even if descriptions change.
-// isNewTask is a standalone function — takes state.Store directly, no Loop needed.
 func TestLoop_IsNewTask(t *testing.T) {
-	_, st := setupTestDir(t)
-
-	if !isNewTask(st, "ralph-abc", "Fix bug") {
+	if !isNewTask("", "", "ralph-abc", "Fix bug") {
 		t.Error("expected new task when no last_task_id in state")
 	}
 
-	st.Write("last_task_id", "ralph-abc")
-	st.Write("last_task", "Fix bug")
-
-	if isNewTask(st, "ralph-abc", "Fix bug") {
+	if isNewTask("ralph-abc", "Fix bug", "ralph-abc", "Fix bug") {
 		t.Error("same task ID should not be considered new")
 	}
 
-	if !isNewTask(st, "ralph-xyz", "Fix bug") {
+	if !isNewTask("ralph-abc", "Fix bug", "ralph-xyz", "Fix bug") {
 		t.Error("different task ID should be considered new")
 	}
 
-	if isNewTask(st, "", "Fix bug") {
+	if isNewTask("ralph-abc", "Fix bug", "", "Fix bug") {
 		t.Error("same description with no ID should not be new")
 	}
-	if !isNewTask(st, "", "Different task") {
+	if !isNewTask("ralph-abc", "Fix bug", "", "Different task") {
 		t.Error("different description with no ID should be new")
 	}
 }

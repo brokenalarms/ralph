@@ -63,7 +63,12 @@ func completeTaskCall(l *Loop, p postSignalParams) postSignalAction {
 			l.state.RecordCompletedTask(taskID, nextTask)
 		},
 		persistCompletedFn: func(taskID string, merged bool) {
-			persistCompletedTask(l.state, l.logger, taskID, merged)
+			if taskID == "" {
+				return
+			}
+			if err := l.state.AddCompletedTask(taskID, merged); err != nil {
+				l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
+			}
 		},
 		touchPlanFlashFn: l.state.TouchPlanFlash,
 		writeStateFn: func(key, value string) {
@@ -73,9 +78,7 @@ func completeTaskCall(l *Loop, p postSignalParams) postSignalAction {
 			l.attempts.Record(taskID, nextTask, reason, diffStat, note)
 		},
 		clearAttemptsFn: l.attempts.Clear,
-		skipTaskFn: func(taskID, reason string) {
-			skipTask(l.cfg.TaskBackend, l.state, l.logger, taskID, reason)
-		},
+		skipTaskFn: func(taskID, reason string) { l.skipTask(taskID, reason) },
 		shipFn: func(ctx context.Context, taskID, title, summary string) (int, string) {
 			prBody := buildPRBody(l.cfg.TaskBackend, taskID, summary)
 			shipOpts := git.ShipOpts{TaskID: taskID, TaskTitle: title, Body: prBody}

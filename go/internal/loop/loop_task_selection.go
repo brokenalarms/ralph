@@ -35,8 +35,9 @@ type selectNextTaskParams struct {
 	logger        *logging.Logger
 	completedIDs  map[string]bool
 
-	waitForTasks     func(ctx context.Context) bool
+	waitForTasks      func(ctx context.Context) bool
 	flushUnpushedWork func(ctx context.Context)
+	skipTask          func(id, reason string)
 }
 
 // selectNextTask checks all stop conditions and selects the next task.
@@ -131,13 +132,17 @@ func selectNextTaskInner(ctx context.Context, p selectNextTaskParams, attempts i
 
 	if p.completedIDs[taskID] {
 		p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s already completed this session — skipping", taskID)
-		skipTask(p.backend, p.state, p.logger, taskID, "already_completed_this_session")
+		if p.skipTask != nil {
+			p.skipTask(taskID, "already_completed_this_session")
+		}
 		// Recurse to try the next task. runIteration stays the same since
 		// we didn't actually run anything.
 		return selectNextTaskInner(ctx, p, attempts+1)
 	}
 
-	changed := isNewTask(p.state, taskID, nextTask)
+	lastID, _ := p.state.Read("last_task_id")
+	lastTask, _ := p.state.Read("last_task")
+	changed := isNewTask(lastID, lastTask, taskID, nextTask)
 	return taskContext{
 		info:    taskInfo,
 		id:      taskID,

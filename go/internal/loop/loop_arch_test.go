@@ -47,11 +47,12 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 		// "logIterationBannerParams": true,
 
 		// --- Bead 7: state/attempts out of params (ralph-eycr) ---
-		// "processRunOutcomeParams": true,
-		// "handleRunResultParams":   true,
-		// "initParams":              true,
-		// "initWorktreeParams":      true,
-		// "flushUnpushedWorkParams": true,
+		// Structs converted to Loop methods — no longer exist as params structs.
+		"processRunOutcomeParams": true,
+		"handleRunResultParams":   true,
+		"initParams":              true,
+		"initWorktreeParams":      true,
+		"flushUnpushedWorkParams": true,
 
 		// --- Bead 8: limiter/analyzer out of params (ralph-r7my) ---
 		"waitForRateParams":           true,

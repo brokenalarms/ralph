@@ -201,9 +201,7 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 		NewRunner:   func() claudeRunner { return l.cfg.NewRunner() },
 		QueryFn:     cfg.QueryFn,
 		LLMVerify:   verify.LLMVerifyPR,
-		SkipTask: func(id, reason string) {
-			skipTask(l.cfg.TaskBackend, l.state, l.logger, id, reason)
-		},
+		SkipTask:    func(id, reason string) { l.skipTask(id, reason) },
 	})
 	return l
 }
@@ -211,6 +209,24 @@ func New(cfg Config, st *state.Store, gm git.GitOps, logger *logging.Logger) *Lo
 // SessionTasks returns the tasks completed during this session.
 func (l *Loop) SessionTasks() []CompletedTask {
 	return l.completedTasks
+}
+
+// skipTask sets the task back to open in bd, records the reason as a comment,
+// and adds the ID to both the backend's in-memory skip set and the state.json
+// skipped_tasks list so it stays excluded from future selection.
+func (l *Loop) skipTask(id, reason string) {
+	if id == "" {
+		return
+	}
+	l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Skipping task %s: %s", id, reason)
+	if err := l.cfg.TaskBackend.SkipTask(id, reason); err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to skip task %s in backend: %v", id, err)
+	}
+	if err := l.state.AddSkippedTask(id); err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to persist skip for %s: %v", id, err)
+	}
+	skipped, _ := l.state.GetSkippedTasks()
+	l.cfg.TaskBackend.SetSkippedIDs(skipped)
 }
 
 // ensureActiveReviewers populates l.activeReviewers on first call. Subsequent
@@ -316,24 +332,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 		FeedbackFile: filepath.Join(l.cfg.Dirs.RalphDir, "feedback"),
 	})
 
-	runAction := handleRunResult(ctx, handleRunResultParams{
-		result:              result,
-		runErr:              runErr,
-		taskID:              task.id,
-		nextTask:            task.title,
-		headBefore:          prep.headBefore,
-		runIteration:        runIteration,
-		model:               l.cfg.Model,
-		isOnlineFunc:        l.cfg.IsOnline,
-		waitForInternetFunc: l.cfg.WaitForInternet,
-		logger:              l.logger,
-		git:                 l.git,
-		attempts:            l.attempts,
-		limiter:             l.limiter,
-		backend:             l.cfg.TaskBackend,
-		state:               l.state,
-		skipTask:            skipTask,
-	})
+	runAction := l.handleRunResult(ctx, result, runErr, task.id, task.title, prep.headBefore, runIteration)
 	if runAction != actionProceed {
 		return agentRunResult{action: runAction}
 	}
@@ -348,16 +347,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 	}, prep.rawLogPath, prep.logStart, prep.headBefore, headAfter, task.id)
 	analysisResult := l.analyzer.Analyze(iterState)
 
-	diffStat, halt, iterAction := processRunOutcome(processRunOutcomeParams{
-		backend:        l.cfg.TaskBackend,
-		git:            l.git,
-		logger:         l.logger,
-		state:          l.state,
-		attempts:       l.attempts,
-		analysisResult: analysisResult,
-		headAfter:      headAfter,
-		model:          l.cfg.Model,
-	}, result, elapsed, runIteration, prep, task.id, task.title)
+	diffStat, halt, iterAction := l.processRunOutcome(result, elapsed, runIteration, prep, task.id, task.title, analysisResult, headAfter)
 	if halt {
 		return agentRunResult{action: actionDone, iterAction: iterAction}
 	}
@@ -390,13 +380,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	if err := l.limiter.Init(); err != nil {
 		return fmt.Errorf("rate limiter init: %w", err)
 	}
-	if err := initialize(ctx, initParams{
-		maxIter: l.cfg.MaxIterations,
-		state:   l.state,
-		backend: l.cfg.TaskBackend,
-		logger:  l.logger,
-		git:     l.git,
-	}); err != nil {
+	if err := l.initialize(ctx); err != nil {
 		return err
 	}
 
@@ -431,14 +415,9 @@ iterLoop:
 			completedIDs:  completedIDs,
 			waitForTasks:  func(ctx context.Context) bool { return waitForTasks(ctx, wtParams) },
 			flushUnpushedWork: func(ctx context.Context) {
-				flushUnpushedWork(ctx, flushUnpushedWorkParams{
-					autoMerge:      l.cfg.AutoMerge,
-					lastTaskMerged: lastTaskMerged,
-					state:          l.state,
-					git:            l.git,
-					logger:         l.logger,
-				})
+				l.flushUnpushedWork(ctx, lastTaskMerged)
 			},
+			skipTask: l.skipTask,
 		})
 		if action == actionDone {
 			break
@@ -501,6 +480,15 @@ iterLoop:
 			notify:    l.cfg.Notify,
 			ralphDir:  l.cfg.Dirs.RalphDir,
 			verifier:  l.verifier,
+			skipTaskFn: l.skipTask,
+			persistCompletedFn: func(taskID string, merged bool) {
+				if taskID == "" {
+					return
+				}
+				if err := l.state.AddCompletedTask(taskID, merged); err != nil {
+					l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
+				}
+			},
 		}) {
 			l.git.TagTaskEnd(task.id)
 			continue
@@ -560,7 +548,12 @@ iterLoop:
 					l.state.RecordCompletedTask(taskID, nextTask)
 				},
 				persistCompletedFn: func(taskID string, merged bool) {
-					persistCompletedTask(l.state, l.logger, taskID, merged)
+					if taskID == "" {
+						return
+					}
+					if err := l.state.AddCompletedTask(taskID, merged); err != nil {
+						l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
+					}
 				},
 				touchPlanFlashFn: l.state.TouchPlanFlash,
 				writeStateFn: func(key, value string) {
@@ -570,9 +563,7 @@ iterLoop:
 					l.attempts.Record(taskID, nextTask, reason, diffStat, note)
 				},
 				clearAttemptsFn: l.attempts.Clear,
-				skipTaskFn: func(taskID, reason string) {
-					skipTask(l.cfg.TaskBackend, l.state, l.logger, taskID, reason)
-				},
+				skipTaskFn: func(taskID, reason string) { l.skipTask(taskID, reason) },
 				shipFn: func(ctx context.Context, taskID, title, summary string) (int, string) {
 					prBody := buildPRBody(l.cfg.TaskBackend, taskID, summary)
 					shipOpts := git.ShipOpts{TaskID: taskID, TaskTitle: title, Body: prBody}
@@ -637,6 +628,15 @@ iterLoop:
 						state:           l.state,
 						attempts:        l.attempts,
 						verifier:        l.verifier,
+						skipTaskFn:      l.skipTask,
+						persistCompletedFn: func(taskID string, merged bool) {
+							if taskID == "" {
+								return
+							}
+							if err := l.state.AddCompletedTask(taskID, merged); err != nil {
+								l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
+							}
+						},
 					})
 				},
 				buildCTFn: func(taskID, nextTask, summary string, prNumber int) CompletedTask {
