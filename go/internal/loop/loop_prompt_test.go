@@ -338,41 +338,7 @@ func TestLoop_HasProgress_SnapshotsDiffState(t *testing.T) {
 					}
 				},
 			}
-			runAndComplete(context.Background(), runAndCompleteParams{
-				git:                 l.git,
-				logger:              l.logger,
-				runner:              l.runner,
-				verifier:            l.verifier,
-				state:               l.state,
-				attempts:            l.attempts,
-				limiter:             l.limiter,
-				signals:             l.signals,
-				backend:             l.cfg.TaskBackend,
-				analyzer:            l.analyzer,
-				quiet:               l.cfg.Quiet,
-				verbose:             l.cfg.Verbose,
-				model:               l.cfg.Model,
-				idleTimeout:         l.cfg.IdleTimeout,
-				idleTimeoutProgress: l.cfg.IdleTimeoutProgress,
-				postSignalTimeout:   l.cfg.PostSignalTimeout,
-				autoMerge:           l.cfg.AutoMerge,
-				evolve:              l.cfg.Evolve,
-				notify:              l.cfg.Notify,
-				ralphDir:            l.cfg.Dirs.RalphDir,
-				promptsDir:          l.cfg.Dirs.PromptsDir,
-				projectDir:          l.cfg.Dirs.ProjectDir,
-				planFile:            l.cfg.PlanFile,
-				callsPerHour:        l.cfg.CallsPerHour,
-				runVerifyBuildFn: func(ctx context.Context) string {
-			return runVerifyBuild(ctx, runVerifyBuildParams{verifyBuild: l.cfg.VerifyBuild, projectDir: l.cfg.Dirs.ProjectDir, logger: l.logger})
-		},
-				isOnlineFunc:        l.cfg.IsOnline,
-				waitForInternetFunc: l.cfg.WaitForInternet,
-				verifyFunc:          l.cfg.OnVerify,
-				runPostTaskFn: func(ctx context.Context, taskID string, prNumber int, merged bool) {
-				runPostTask(ctx, runPostTaskParams{postTask: l.cfg.PostTask, projectDir: l.cfg.Dirs.ProjectDir, logger: l.logger}, taskID, prNumber, merged)
-			},
-			}, taskContext{id: "ralph-abc", title: "Fix login"}, 0)
+			l.runAgent(context.Background(), taskContext{id: "ralph-abc", title: "Fix login"}, 0)
 
 			if capturedHasProgress == nil {
 				t.Fatal("HasProgress was not passed to runner")

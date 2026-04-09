@@ -234,6 +234,136 @@ func (l *Loop) ensureActiveReviewers() {
 	}
 }
 
+// agentRunResult carries the outcome of a single agent invocation.
+type agentRunResult struct {
+	prep       iterationPrompt
+	result     claude.Result
+	iterAction analyzer.Action
+	diffStat   string
+	action     loopAction // actionDone or actionRetry if short-circuited; actionProceed otherwise
+}
+
+// runAgent prepares the prompt, invokes Claude, handles run errors, and analyzes
+// the outcome. If action != actionProceed, Run() should use that action directly.
+func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int) agentRunResult {
+	prep, ok := prepareAndBuildPrompt(ctx, prepareAndBuildPromptParams{
+		backend:             l.cfg.TaskBackend,
+		git:                 l.git,
+		logger:              l.logger,
+		verifier:            l.verifier,
+		limiter:             l.limiter,
+		attempts:            l.attempts,
+		signals:             l.signals,
+		promptsDir:          l.cfg.Dirs.PromptsDir,
+		ralphDir:            l.cfg.Dirs.RalphDir,
+		projectDir:          l.cfg.Dirs.ProjectDir,
+		planFile:            l.cfg.PlanFile,
+		callsPerHour:        l.cfg.CallsPerHour,
+		runVerifyBuildFn: func(ctx context.Context) string {
+			return runVerifyBuild(ctx, runVerifyBuildParams{
+				verifyBuild: l.cfg.VerifyBuild,
+				projectDir:  l.cfg.Dirs.ProjectDir,
+				testTimeout: l.cfg.TestTimeout,
+				logger:      l.logger,
+			})
+		},
+		waitForInternetFunc: l.cfg.WaitForInternet,
+	}, task.id, task.title)
+	if !ok {
+		return agentRunResult{action: actionDone}
+	}
+
+	taskStart := time.Now()
+	agentModel := l.cfg.Model
+	if l.attempts.Count(task.id, task.title) > 0 {
+		agentModel = l.cfg.AgentEscalationModel
+	}
+	agentModel = verify.CapModel(l.cfg.ModelCap, agentModel)
+	l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: agentModel}, "Agent model: %s", agentModel)
+	result, runErr := l.runner.Run(claude.RunConfig{
+		Ctx:                 ctx,
+		WorkDir:             prep.workDir,
+		RalphDir:            l.cfg.Dirs.RalphDir,
+		Prompt:              prep.fullPrompt,
+		TaskID:              task.id,
+		RawLog:              prep.rawLogPath,
+		LogFile:             filepath.Join(l.cfg.Dirs.RalphDir, "loop.log"),
+		Quiet:               l.cfg.Quiet,
+		Verbose:             l.cfg.Verbose,
+		Model:               agentModel,
+		Signals:             l.signals,
+		PollInterval:        2 * time.Second,
+		IdleTimeout:         l.cfg.IdleTimeout,
+		IdleTimeoutProgress: l.cfg.IdleTimeoutProgress,
+		HasProgress: func() bool {
+			if l.git.HeadRev() != prep.headBefore {
+				return true
+			}
+			if prep.diffBefore {
+				return false
+			}
+			return l.git.HasDiff()
+		},
+		OnSignal: func(summary string) bool {
+			return l.verifier.OnSignal(signalParams{
+				ctx:        ctx,
+				headBefore: prep.headBefore,
+				workDir:    prep.workDir,
+				rawLogPath: prep.rawLogPath,
+				taskID:     task.id,
+				nextTask:   task.title,
+			})
+		},
+		FeedbackFile: filepath.Join(l.cfg.Dirs.RalphDir, "feedback"),
+	})
+
+	runAction := handleRunResult(ctx, handleRunResultParams{
+		result:              result,
+		runErr:              runErr,
+		taskID:              task.id,
+		nextTask:            task.title,
+		headBefore:          prep.headBefore,
+		runIteration:        runIteration,
+		model:               l.cfg.Model,
+		isOnlineFunc:        l.cfg.IsOnline,
+		waitForInternetFunc: l.cfg.WaitForInternet,
+		logger:              l.logger,
+		git:                 l.git,
+		attempts:            l.attempts,
+		limiter:             l.limiter,
+		backend:             l.cfg.TaskBackend,
+		state:               l.state,
+		skipTask:            skipTask,
+	})
+	if runAction != actionProceed {
+		return agentRunResult{action: runAction}
+	}
+	elapsed := time.Since(taskStart)
+	l.limiter.Increment()
+
+	diffStat, halt, iterAction := processRunOutcome(processRunOutcomeParams{
+		backend:  l.cfg.TaskBackend,
+		git:      l.git,
+		logger:   l.logger,
+		state:    l.state,
+		attempts: l.attempts,
+		analyzer: l.analyzer,
+		signals:  l.signals,
+		model:    l.cfg.Model,
+	}, result, elapsed, runIteration, prep, task.id, task.title)
+	if halt {
+		return agentRunResult{action: actionDone, iterAction: iterAction}
+	}
+
+	return agentRunResult{
+		prep:       prep,
+		result:     result,
+		iterAction: iterAction,
+		diffStat:   diffStat,
+		action:     actionProceed,
+	}
+}
+
 // Run executes the full iteration loop. Returns nil on normal completion
 // (all tasks done, max iterations reached, or stopped). Returns an error
 // for unrecoverable failures.
@@ -275,6 +405,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		onWaitFunc: l.cfg.OnWait,
 	}
 
+iterLoop:
 	for {
 		// ── Task selection ──
 		completedIDs := make(map[string]bool, len(sessionTasks))
@@ -375,75 +506,153 @@ func (l *Loop) Run(ctx context.Context) error {
 			continue
 		}
 
-		// ── Run agent and handle outcome ──
-		var iterAction analyzer.Action
-		var merged bool
-		var ct *CompletedTask
-		action, iterAction, merged, ct = runAndComplete(ctx, runAndCompleteParams{
-			git:                  l.git,
-			logger:               l.logger,
-			runner:               l.runner,
-			verifier:             l.verifier,
-			state:                l.state,
-			attempts:             l.attempts,
-			limiter:              l.limiter,
-			signals:              l.signals,
-			backend:              l.cfg.TaskBackend,
-			analyzer:             l.analyzer,
-			quiet:                l.cfg.Quiet,
-			verbose:              l.cfg.Verbose,
-			model:                l.cfg.Model,
-			agentEscalationModel: l.cfg.AgentEscalationModel,
-			modelCap:             l.cfg.ModelCap,
-			idleTimeout:          l.cfg.IdleTimeout,
-			idleTimeoutProgress:  l.cfg.IdleTimeoutProgress,
-			postSignalTimeout:    l.cfg.PostSignalTimeout,
-			autoMerge:            l.cfg.AutoMerge,
-			evolve:               l.cfg.Evolve,
-			notify:               l.cfg.Notify,
-			ensureReviewersFn:   func() []git.Reviewer { l.ensureActiveReviewers(); return l.activeReviewers },
-			ralphDir:            l.cfg.Dirs.RalphDir,
-			promptsDir:          l.cfg.Dirs.PromptsDir,
-			projectDir:          l.cfg.Dirs.ProjectDir,
-			planFile:            l.cfg.PlanFile,
-			callsPerHour:        l.cfg.CallsPerHour,
-			runVerifyBuildFn: func(ctx context.Context) string {
-				return runVerifyBuild(ctx, runVerifyBuildParams{
-					verifyBuild: l.cfg.VerifyBuild,
-					projectDir:  l.cfg.Dirs.ProjectDir,
-					testTimeout: l.cfg.TestTimeout,
-					logger:      l.logger,
-				})
-			},
-			isOnlineFunc:        l.cfg.IsOnline,
-			waitForInternetFunc: l.cfg.WaitForInternet,
-			verifyFunc:          l.cfg.OnVerify,
-			runPostTaskFn: func(ctx context.Context, taskID string, prNumber int, merged bool) {
-				if l.cfg.OnPostTask != nil {
-					l.cfg.OnPostTask(ctx, taskID, prNumber, merged)
-					return
-				}
-				runPostTask(ctx, runPostTaskParams{
-					postTask:    l.cfg.PostTask,
-					worktreeDir: l.cfg.VerifyDir,
-					projectDir:  l.cfg.Dirs.ProjectDir,
-					logger:      l.logger,
-				}, taskID, prNumber, merged)
-			},
-		}, task, runIteration)
-		if ct != nil {
-			sessionTasks = append(sessionTasks, *ct)
-		}
-		if merged {
-			lastTaskMerged = true
-		}
-		lastAction = iterAction
-		if action == actionRetry {
-			continue
-		}
-		if action == actionDone {
+		// ── Run agent ──
+		agentRun := l.runAgent(ctx, task, runIteration)
+		lastAction = agentRun.iterAction
+		if agentRun.action != actionProceed {
+			if agentRun.action == actionRetry {
+				continue
+			}
 			break
 		}
+
+		// ── Complete task (post-signal pipeline) ──
+		if agentRun.result.SignalDetected {
+			out := completeTask(ctx, completeTaskParams{
+				result:            agentRun.result,
+				headBefore:        agentRun.prep.headBefore,
+				workDir:           agentRun.prep.workDir,
+				rawLogPath:        agentRun.prep.rawLogPath,
+				diffStat:          agentRun.diffStat,
+				taskID:            task.id,
+				nextTask:          task.title,
+				postSignalTimeout: l.cfg.PostSignalTimeout,
+				autoMerge:         l.cfg.AutoMerge,
+				evolve:            l.cfg.Evolve,
+				notify:            l.cfg.Notify,
+				ralphDir:          l.cfg.Dirs.RalphDir,
+				logger:            l.logger,
+				verifyFn: func(ctx context.Context, headBefore string) (bool, string) {
+					if l.cfg.OnVerify != nil {
+						return l.cfg.OnVerify(ctx, l.git.GetWorkDir(), headBefore)
+					}
+					return l.verifier.VerifyCompletion(ctx, l.git.GetWorkDir(), headBefore)
+				},
+				headRevFn:        l.git.HeadRev,
+				worktreeBranchFn: l.git.GetWorktreeBranch,
+				tagTaskEndFn:     l.git.TagTaskEnd,
+				getPRStateFn:     l.git.GetPRState,
+				findExistingPRFn: func(taskID, branch string) (int, bool) {
+					return findExistingPRForTask(taskID, branch, l.cfg.TaskBackend, l.git)
+				},
+				getStateFn: func(taskID, key string) (string, error) {
+					return l.cfg.TaskBackend.GetState(taskID, key)
+				},
+				setStateFn: func(taskID, key, value, reason string) error {
+					return l.cfg.TaskBackend.SetState(taskID, key, value, reason)
+				},
+				closeTaskFn: l.cfg.TaskBackend.CloseTask,
+				getExternalRefFn: func(taskID string) (string, error) {
+					return l.cfg.TaskBackend.GetExternalRef(taskID)
+				},
+				getSkippedTasksFn: l.state.GetSkippedTasks,
+				recordCompletedFn: func(taskID, nextTask string) {
+					l.state.RecordCompletedTask(taskID, nextTask)
+				},
+				persistCompletedFn: func(taskID string, merged bool) {
+					persistCompletedTask(l.state, l.logger, taskID, merged)
+				},
+				touchPlanFlashFn: l.state.TouchPlanFlash,
+				writeStateFn: func(key, value string) {
+					l.state.Write(key, value) //nolint:errcheck
+				},
+				recordAttemptFn: func(taskID, nextTask, reason, diffStat, note string) {
+					l.attempts.Record(taskID, nextTask, reason, diffStat, note)
+				},
+				clearAttemptsFn: l.attempts.Clear,
+				skipTaskFn: func(taskID, reason string) {
+					skipTask(l.cfg.TaskBackend, l.state, l.logger, taskID, reason)
+				},
+				shipFn: func(ctx context.Context, taskID, title, summary string) (int, string) {
+					prBody := buildPRBody(l.cfg.TaskBackend, taskID, summary)
+					shipOpts := git.ShipOpts{TaskID: taskID, TaskTitle: title, Body: prBody}
+					result, err := l.git.Ship(ctx, shipOpts)
+					if err != nil {
+						if !l.cfg.IsOnline() {
+							l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed — internet appears down")
+							l.cfg.WaitForInternet(ctx, l.logger)
+							result, err = l.git.Ship(ctx, shipOpts)
+						}
+						if err != nil {
+							l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship: %v", err)
+						}
+					}
+					if result.PRNumber != 0 && taskID != "" {
+						ref := result.PRURL
+						if ref == "" {
+							ref = prURL(l.git.RemoteURL(), result.PRNumber)
+						}
+						if ref != "" {
+							l.logger.Emit(logging.Opts{Domain: logging.Git}, "Linking task %s to %s (branch: %s)", taskID, ref, l.git.GetWorktreeBranch())
+							if refErr := l.cfg.TaskBackend.SetExternalRef(taskID, ref); refErr != nil {
+								l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetExternalRef: %v", refErr)
+							}
+						}
+					}
+					return result.PRNumber, result.PRURL
+				},
+				finalizePRFn: func(ctx context.Context, taskID, nextTask string, prNumber int, prState git.PRState, prURL, workDir, rawLogPath string) finalizePRResult {
+					l.ensureActiveReviewers()
+					return finalizePR(finalizePRParams{
+						ctx:             ctx,
+						taskID:          taskID,
+						nextTask:        nextTask,
+						prNumber:        prNumber,
+						prState:         prState,
+						prURL:           prURL,
+						workDir:         workDir,
+						rawLogPath:      rawLogPath,
+						autoMerge:       l.cfg.AutoMerge,
+						activeReviewers: l.activeReviewers,
+						git:             l.git,
+						logger:          l.logger,
+						backend:         l.cfg.TaskBackend,
+						state:           l.state,
+						attempts:        l.attempts,
+						verifier:        l.verifier,
+					})
+				},
+				buildCTFn: func(taskID, nextTask, summary string, prNumber int) CompletedTask {
+					return buildCompletedTask(taskID, nextTask, summary, prNumber, l.git)
+				},
+				runPostTaskFn: func(ctx context.Context, taskID string, prNumber int, merged bool) {
+					if l.cfg.OnPostTask != nil {
+						l.cfg.OnPostTask(ctx, taskID, prNumber, merged)
+						return
+					}
+					runPostTask(ctx, runPostTaskParams{
+						postTask:    l.cfg.PostTask,
+						worktreeDir: l.cfg.VerifyDir,
+						projectDir:  l.cfg.Dirs.ProjectDir,
+						logger:      l.logger,
+					}, taskID, prNumber, merged)
+				},
+			})
+			if out.ct != nil {
+				sessionTasks = append(sessionTasks, *out.ct)
+			}
+			if out.merged {
+				lastTaskMerged = true
+			}
+			switch out.action {
+			case signalRetry, signalSkipped:
+				continue
+			case signalEvolve:
+				break iterLoop
+			}
+			// signalComplete: fall through to tagTaskEnd
+		}
+		l.git.TagTaskEnd(task.id)
 	}
 
 	l.completedTasks = sessionTasks

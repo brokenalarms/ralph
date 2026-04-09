@@ -34,8 +34,6 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 		// "finalizePRParams": "git.GitOps",
 
 		// --- Bead 4: completeTask (ralph-6a80) ---
-		// "runAndCompleteParams": "git.GitOps",
-		// "handlePostSignalOpts": "git.GitOps",
 
 		// --- Bead 6: task selection → tasks module ---
 		// "selectNextTaskParams":  "tasks.Backend",

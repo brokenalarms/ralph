@@ -148,7 +148,7 @@ func TestLoop_EnsureActiveReviewers_LazyInitAndCache(t *testing.T) {
 	}
 }
 
-// Verifies that the ensureReviewersFn closure passed to runAndCompleteParams
+// Verifies that the ensureReviewersFn closure passed to completeTaskParams
 // triggers DetectActiveReviewers when called (as it is during finalizePR),
 // proving detection is deferred to the finalize phase rather than happening
 // before the agent runs.
@@ -169,7 +169,7 @@ func TestLoop_ReviewersDetectedViaEnsureReviewersFn(t *testing.T) {
 	}
 	l := New(cfg, st, gm, logger)
 
-	// Build the same ensureReviewersFn closure that loop.go passes to runAndCompleteParams.
+	// Build the same ensureReviewersFn closure that loop.go passes to completeTaskParams.
 	ensureReviewersFn := func() []git.Reviewer { l.ensureActiveReviewers(); return l.activeReviewers }
 
 	// Before the closure is called, DetectActiveReviewers must not have run.

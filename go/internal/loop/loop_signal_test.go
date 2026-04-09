@@ -390,7 +390,7 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 
 // Ctrl-C (pre-cancelled context) on the no-commits path leaves the bead open.
 // Proves that SIGINT before CloseTask on the no-commits branch does not close the bead.
-func TestHandlePostSignal_CancelledCtx_NoCommits_BeadStaysOpen(t *testing.T) {
+func TestCompleteTask_CancelledCtx_NoCommits_BeadStaysOpen(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -414,7 +414,7 @@ func TestHandlePostSignal_CancelledCtx_NoCommits_BeadStaysOpen(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel to simulate Ctrl-C
 
-	handlePostSignalCall(l, postSignalParams{
+	completeTaskCall(l, postSignalParams{
 		ctx:        ctx,
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "same-sha",
@@ -433,7 +433,7 @@ func TestHandlePostSignal_CancelledCtx_NoCommits_BeadStaysOpen(t *testing.T) {
 
 // Ctrl-C (pre-cancelled context) on the no-PR path leaves the bead open.
 // Proves that SIGINT before CloseTask when Ship produces no PR does not close the bead.
-func TestHandlePostSignal_CancelledCtx_NoPR_BeadStaysOpen(t *testing.T) {
+func TestCompleteTask_CancelledCtx_NoPR_BeadStaysOpen(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -459,7 +459,7 @@ func TestHandlePostSignal_CancelledCtx_NoPR_BeadStaysOpen(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel to simulate Ctrl-C
 
-	handlePostSignalCall(l, postSignalParams{
+	completeTaskCall(l, postSignalParams{
 		ctx:        ctx,
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "before",
@@ -479,7 +479,7 @@ func TestHandlePostSignal_CancelledCtx_NoPR_BeadStaysOpen(t *testing.T) {
 // When headBefore == headAfterSignal (no new commits) but an open PR exists
 // from a prior attempt, the no-commits path must route through finalizePR to
 // merge the PR instead of orphaning it.
-func TestHandlePostSignal_NoNewCommits_ExistingOpenPR_MergesViaFinalize(t *testing.T) {
+func TestCompleteTask_NoNewCommits_ExistingOpenPR_MergesViaFinalize(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -522,7 +522,7 @@ func TestHandlePostSignal_NoNewCommits_ExistingOpenPR_MergesViaFinalize(t *testi
 		postTaskMerged = merged
 	}
 
-	action := handlePostSignalCall(l, postSignalParams{
+	action := completeTaskCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "same-sha",
@@ -560,7 +560,7 @@ func TestHandlePostSignal_NoNewCommits_ExistingOpenPR_MergesViaFinalize(t *testi
 
 // When headBefore == headAfterSignal and the existing PR is already merged,
 // the no-commits path should close the bead without trying to merge again.
-func TestHandlePostSignal_NoNewCommits_ExistingMergedPR_ClosesDirectly(t *testing.T) {
+func TestCompleteTask_NoNewCommits_ExistingMergedPR_ClosesDirectly(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -591,7 +591,7 @@ func TestHandlePostSignal_NoNewCommits_ExistingMergedPR_ClosesDirectly(t *testin
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	action := handlePostSignalCall(l, postSignalParams{
+	action := completeTaskCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "same-sha",
@@ -622,7 +622,7 @@ func TestHandlePostSignal_NoNewCommits_ExistingMergedPR_ClosesDirectly(t *testin
 // Ctrl-C (pre-cancelled context) inside finalizePR leaves the bead open.
 // Proves that SIGINT before CloseTask in finalizePR does not close the bead
 // even when a PR was successfully created.
-func TestHandlePostSignal_CancelledCtx_FinalizePR_BeadStaysOpen(t *testing.T) {
+func TestCompleteTask_CancelledCtx_FinalizePR_BeadStaysOpen(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -650,7 +650,7 @@ func TestHandlePostSignal_CancelledCtx_FinalizePR_BeadStaysOpen(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel to simulate Ctrl-C
 
-	handlePostSignalCall(l, postSignalParams{
+	completeTaskCall(l, postSignalParams{
 		ctx:        ctx,
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "before",

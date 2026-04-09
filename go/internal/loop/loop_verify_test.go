@@ -423,53 +423,16 @@ func TestAgentModelEscalation(t *testing.T) {
 		},
 	}
 
-	baseParams := func() runAndCompleteParams {
-		return runAndCompleteParams{
-			git:                 l.git,
-			logger:              l.logger,
-			runner:              l.runner,
-			verifier:            l.verifier,
-			state:               l.state,
-			attempts:            l.attempts,
-			limiter:             l.limiter,
-			signals:             l.signals,
-			backend:             l.cfg.TaskBackend,
-			analyzer:            l.analyzer,
-			quiet:               l.cfg.Quiet,
-			verbose:             l.cfg.Verbose,
-			model:               l.cfg.Model,
-			agentEscalationModel: l.cfg.AgentEscalationModel,
-			modelCap:            l.cfg.ModelCap,
-			idleTimeout:         l.cfg.IdleTimeout,
-			idleTimeoutProgress: l.cfg.IdleTimeoutProgress,
-			postSignalTimeout:   l.cfg.PostSignalTimeout,
-			autoMerge:           l.cfg.AutoMerge,
-			evolve:              l.cfg.Evolve,
-			notify:              l.cfg.Notify,
-			ralphDir:            l.cfg.Dirs.RalphDir,
-			promptsDir:          l.cfg.Dirs.PromptsDir,
-			projectDir:          l.cfg.Dirs.ProjectDir,
-			planFile:            l.cfg.PlanFile,
-			callsPerHour:        l.cfg.CallsPerHour,
-			runVerifyBuildFn:    func(_ context.Context) string { return "" },
-			isOnlineFunc:        l.cfg.IsOnline,
-			waitForInternetFunc: l.cfg.WaitForInternet,
-			verifyFunc:          l.cfg.OnVerify,
-			ensureReviewersFn:   func() []git.Reviewer { return nil },
-			runPostTaskFn:       func(_ context.Context, _ string, _ int, _ bool) {},
-		}
-	}
-
 	task := taskContext{id: "ralph-abc", title: "Fix login"}
 
 	// First run: no prior attempts on disk — should use Model (sonnet).
-	runAndComplete(context.Background(), baseParams(), task, 0)
+	l.runAgent(context.Background(), task, 0)
 
 	// Record a prior attempt to simulate a retry.
 	l.attempts.Record("ralph-abc", "Fix login", "first try failed", "", "continue")
 
 	// Second run: one prior attempt on disk — should use AgentEscalationModel (opus).
-	runAndComplete(context.Background(), baseParams(), task, 1)
+	l.runAgent(context.Background(), task, 1)
 
 	if len(capturedModels) != 2 {
 		t.Fatalf("expected 2 runner calls, got %d", len(capturedModels))
@@ -512,40 +475,7 @@ func TestAgentModelEscalation_ModelCapApplied(t *testing.T) {
 	// Record a prior attempt so escalation model would normally be used.
 	l.attempts.Record("ralph-cap", "Fix login", "first try failed", "", "continue")
 
-	runAndComplete(context.Background(), runAndCompleteParams{
-		git:                  l.git,
-		logger:               l.logger,
-		runner:               l.runner,
-		verifier:             l.verifier,
-		state:                l.state,
-		attempts:             l.attempts,
-		limiter:              l.limiter,
-		signals:              l.signals,
-		backend:              l.cfg.TaskBackend,
-		analyzer:             l.analyzer,
-		quiet:                l.cfg.Quiet,
-		verbose:              l.cfg.Verbose,
-		model:                l.cfg.Model,
-		agentEscalationModel: l.cfg.AgentEscalationModel,
-		modelCap:             l.cfg.ModelCap,
-		idleTimeout:          l.cfg.IdleTimeout,
-		idleTimeoutProgress:  l.cfg.IdleTimeoutProgress,
-		postSignalTimeout:    l.cfg.PostSignalTimeout,
-		autoMerge:            l.cfg.AutoMerge,
-		evolve:               l.cfg.Evolve,
-		notify:               l.cfg.Notify,
-		ralphDir:             l.cfg.Dirs.RalphDir,
-		promptsDir:           l.cfg.Dirs.PromptsDir,
-		projectDir:           l.cfg.Dirs.ProjectDir,
-		planFile:             l.cfg.PlanFile,
-		callsPerHour:         l.cfg.CallsPerHour,
-		runVerifyBuildFn:     func(_ context.Context) string { return "" },
-		isOnlineFunc:         l.cfg.IsOnline,
-		waitForInternetFunc:  l.cfg.WaitForInternet,
-		verifyFunc:           l.cfg.OnVerify,
-		ensureReviewersFn:    func() []git.Reviewer { return nil },
-		runPostTaskFn:        func(_ context.Context, _ string, _ int, _ bool) {},
-	}, taskContext{id: "ralph-cap", title: "Fix login"}, 1)
+	l.runAgent(context.Background(), taskContext{id: "ralph-cap", title: "Fix login"}, 1)
 
 	if len(capturedModels) != 1 {
 		t.Fatalf("expected 1 runner call, got %d", len(capturedModels))

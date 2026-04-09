@@ -773,7 +773,7 @@ func TestIntegration_ExternalRefFormat(t *testing.T) {
 	}
 
 	// The external ref should be a URL when findPRInfo returns a URL.
-	// Current behavior: pushSignalPR calls findPRInfo and uses the URL if available,
+	// Current behavior: completeTask calls findPRInfo and uses the URL if available,
 	// falling back to "gh-N" if findPRInfo returns no URL.
 	// When StubGitHub has PRURL set, FindPR returns it, so the ref should be a URL.
 	if strings.Contains(ref, "github.com") && strings.Contains(ref, "/pull/") {
