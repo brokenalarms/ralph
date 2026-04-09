@@ -184,13 +184,22 @@ func TestBD_GetNextTaskID_PrefersInProgressAtSamePriority(t *testing.T) {
 }
 
 // Proves: Init creates .beads dir and updates .gitignore.
-func TestBD_Init_CreatesBeadsAndGitignore(t *testing.T) {
+// Proves: Init requires .beads to already exist — never auto-initializes.
+func TestBD_Init_RequiresExistingBeads(t *testing.T) {
 	b := setupBD(t, defaultMock())
+	// No .beads directory — Init should fail.
+	err := b.Init()
+	if !errors.Is(err, ErrNeedsFallback) {
+		t.Errorf("expected ErrNeedsFallback when .beads missing, got %v", err)
+	}
+}
+
+// Proves: Init creates .gitignore entries when .beads exists and server is healthy.
+func TestBD_Init_CreatesGitignore(t *testing.T) {
+	b := setupBD(t, defaultMock())
+	os.MkdirAll(filepath.Join(b.ProjectDir, ".beads"), 0755)
 	if err := b.Init(); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(b.ProjectDir, ".beads")); err != nil {
-		t.Error("expected .beads directory to exist after Init")
 	}
 	data, err := os.ReadFile(filepath.Join(b.ProjectDir, ".gitignore"))
 	if err != nil {
@@ -208,6 +217,7 @@ func TestBD_Init_CreatesBeadsAndGitignore(t *testing.T) {
 // Proves: Init is idempotent — doesn't duplicate .gitignore entries.
 func TestBD_Init_IdempotentGitignore(t *testing.T) {
 	b := setupBD(t, defaultMock())
+	os.MkdirAll(filepath.Join(b.ProjectDir, ".beads"), 0755)
 	os.WriteFile(filepath.Join(b.ProjectDir, ".gitignore"), []byte(".beads\n.dolt\n"), 0644)
 	if err := b.Init(); err != nil {
 		t.Fatal(err)
@@ -221,61 +231,46 @@ func TestBD_Init_IdempotentGitignore(t *testing.T) {
 	}
 }
 
-// Proves: Init returns ErrNeedsFallback when bd is completely unavailable.
-func TestBD_Init_FallbackOnInitFailure(t *testing.T) {
-	failing := func(_ context.Context, dir string, args ...string) (string, error) {
-		return "", errors.New("bd not found")
-	}
-	b := setupBD(t, failing)
+// Proves: Init returns ErrNeedsFallback when .beads is missing.
+func TestBD_Init_FallbackOnMissingBeads(t *testing.T) {
+	b := setupBD(t, defaultMock())
+	// No .beads — should fail without calling bd init.
 	err := b.Init()
 	if !errors.Is(err, ErrNeedsFallback) {
 		t.Errorf("expected ErrNeedsFallback, got %v", err)
 	}
 }
 
-// Proves: Init returns ErrNeedsFallback when server is unreachable after retry.
+// Proves: Init returns ErrNeedsFallback when server is unreachable (no retry).
 func TestBD_Init_FallbackOnUnhealthyServer(t *testing.T) {
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] == "init" {
-			os.MkdirAll(filepath.Join(dir, ".beads"), 0755)
-			return "", nil
-		}
 		// count always fails — server unreachable
 		return "", errors.New("database not found")
 	}
 	b := setupBD(t, runner)
+	os.MkdirAll(filepath.Join(b.ProjectDir, ".beads"), 0755)
 	err := b.Init()
 	if !errors.Is(err, ErrNeedsFallback) {
 		t.Errorf("expected ErrNeedsFallback, got %v", err)
 	}
 }
 
-// Proves: Init retries and succeeds when .beads exists but server reconnects.
-func TestBD_Init_RetrySucceeds(t *testing.T) {
-	callCount := 0
+// Proves: Init never calls bd init even when server is unhealthy.
+func TestBD_Init_NeverCallsInit(t *testing.T) {
+	initCalled := false
 	runner := func(_ context.Context, dir string, args ...string) (string, error) {
-		if len(args) == 0 {
-			return "", errors.New("no args")
-		}
-		switch args[0] {
-		case "init":
-			os.MkdirAll(filepath.Join(dir, ".beads"), 0755)
+		if len(args) > 0 && args[0] == "init" {
+			initCalled = true
 			return "", nil
-		case "count":
-			callCount++
-			// First count fails (stale), subsequent succeed after re-init.
-			if callCount <= 1 {
-				return "", errors.New("stale")
-			}
-			return "5", nil
 		}
-		return "", nil
+		// count fails — server stale
+		return "", errors.New("stale")
 	}
 	b := setupBD(t, runner)
-	// Pre-create .beads to simulate a previous run.
 	os.MkdirAll(filepath.Join(b.ProjectDir, ".beads"), 0755)
-	if err := b.Init(); err != nil {
-		t.Errorf("expected Init to succeed after retry, got %v", err)
+	_ = b.Init() // will fail, that's expected
+	if initCalled {
+		t.Error("Init must never call bd init — it should fail cleanly instead")
 	}
 }
 
@@ -477,6 +472,7 @@ func TestBD_ResolveBD_Idempotent(t *testing.T) {
 // Proves: Init skips resolveBD when a mock runner is injected.
 func TestBD_Init_SkipsResolveWithMockRunner(t *testing.T) {
 	b := setupBD(t, defaultMock())
+	os.MkdirAll(filepath.Join(b.ProjectDir, ".beads"), 0755)
 	if err := b.Init(); err != nil {
 		t.Fatalf("Init with mock runner should not fail: %v", err)
 	}

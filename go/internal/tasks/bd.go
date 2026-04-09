@@ -96,9 +96,11 @@ func (b *BD) defaultRunBD(ctx context.Context, dir string, args ...string) (stri
 	return strings.TrimSpace(string(out)), err
 }
 
-// Init prepares the bd backend: runs bd init if needed, verifies
-// health, and manages .gitignore entries. Returns ErrNeedsFallback
-// when bd/Dolt is unreachable.
+// Init prepares the bd backend: verifies health and manages .gitignore
+// entries. If .beads doesn't exist, returns an error requiring the user
+// to run `bd init` manually — ralph never auto-initializes a beads
+// database to avoid accidentally reinitializing (and wiping) an
+// existing one.
 func (b *BD) Init() error {
 	// Resolve the bd binary path before any commands run.
 	if b.RunBD == nil {
@@ -107,26 +109,15 @@ func (b *BD) Init() error {
 		}
 	}
 
-	ctx := b.ctx()
-	run := b.runner()
-
-	// If .beads doesn't exist, run bd init.
+	// Require .beads to already exist — never auto-init.
 	beadsDir := filepath.Join(b.ProjectDir, ".beads")
 	if _, err := os.Stat(beadsDir); os.IsNotExist(err) {
-		if _, initErr := run(ctx, b.ProjectDir, "init"); initErr != nil {
-			return fmt.Errorf("bd init failed: %w: %w", initErr, ErrNeedsFallback)
-		}
+		return fmt.Errorf("no .beads directory in %s — run `bd init` manually to initialize: %w", b.ProjectDir, ErrNeedsFallback)
 	}
 
 	// Health check: bd count is lightweight and exercises the DB connection.
 	if !b.isHealthy() {
-		// Retry init to reconnect a stale server.
-		if _, initErr := run(ctx, b.ProjectDir, "init"); initErr != nil {
-			return fmt.Errorf("bd init retry failed: %w: %w", initErr, ErrNeedsFallback)
-		}
-		if !b.isHealthy() {
-			return fmt.Errorf("server unreachable after retry: %w", ErrNeedsFallback)
-		}
+		return fmt.Errorf("bd unhealthy (bd count failed) — run `bd doctor` to diagnose: %w", ErrNeedsFallback)
 	}
 
 	// Ensure .beads and .dolt are in .gitignore.
