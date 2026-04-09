@@ -140,36 +140,6 @@ func prLink(g git.GitOps, prNumber int) *logging.Link {
 	return &logging.Link{Text: fmt.Sprintf("PR #%d", prNumber), URL: url}
 }
 
-// mergeWithRetryParams bundles the dependencies for mergeWithRetry.
-type mergeWithRetryParams struct {
-	taskID     string
-	nextTask   string
-	workDir    string
-	rawLogPath string
-	// mergeFunc overrides git.MergeWithRetry for tests; nil uses the real path.
-	mergeFunc func(ctx context.Context) (bool, error)
-	git       git.GitOps
-	verifier  *Verifier
-	logger    *logging.Logger
-	backend   tasks.Backend
-}
-
-// mergeWithRetry delegates to git.Manager.MergeWithRetry, passing CI fix and
-// conflict callbacks. When mergeFunc is set (test override), it short-circuits
-// the git module call.
-func mergeWithRetry(ctx context.Context, p mergeWithRetryParams) (bool, error) {
-	if p.mergeFunc != nil {
-		return p.mergeFunc(ctx)
-	}
-	return p.git.MergeWithRetry(ctx, git.MergeRetryOpts{
-		OnCIFailure: func(ciErr *git.CIFailureError) git.CIFixResult {
-			return tryFixCI(ctx, p.git, p.verifier, p.logger, ciErr, p.nextTask, p.workDir, p.rawLogPath)
-		},
-		OnConflict: func(conflictErr *git.UnresolvedConflictError) bool {
-			return tryFixConflict(ctx, p.git, p.verifier, p.logger, p.backend, p.taskID, p.nextTask, p.workDir, p.rawLogPath)
-		},
-	})
-}
 
 // resumeViaPRParams bundles the dependencies for resumeViaPR.
 type resumeViaPRParams struct {
@@ -184,10 +154,9 @@ type resumeViaPRParams struct {
 	notify    bool
 	ralphDir  string
 	verifier  *Verifier
+	ensureReviewersFn  func() []git.Reviewer
 	skipTaskFn         func(id, reason string)
 	persistCompletedFn func(taskID string, merged bool)
-	// mergeFunc overrides git.MergeWithRetry for tests; nil uses the real path.
-	mergeFunc func(ctx context.Context) (bool, error)
 }
 
 // findExistingPRForTask returns any PR number (open, closed, or merged) for the
@@ -232,6 +201,10 @@ func resumeViaPR(ctx context.Context, p resumeViaPRParams) bool {
 			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, prNumber)}, "Found for %s (task %s) — resolving", branch, p.taskID)
 			_ = p.backend.SetExternalRef(p.taskID, prURL(p.git.RemoteURL(), prNumber))
 		}
+		var reviewers []git.Reviewer
+		if p.ensureReviewersFn != nil {
+			reviewers = p.ensureReviewersFn()
+		}
 		return resolveByPRState(ctx, resolveByPRStateParams{
 			taskID:             p.taskID,
 			nextTask:           p.nextTask,
@@ -245,9 +218,10 @@ func resumeViaPR(ctx context.Context, p resumeViaPRParams) bool {
 			notify:             p.notify,
 			ralphDir:           p.ralphDir,
 			verifier:           p.verifier,
+			reviewers:          reviewers,
 			skipTaskFn:         p.skipTaskFn,
 			persistCompletedFn: p.persistCompletedFn,
-			mergeFunc:          p.mergeFunc,
+
 		})
 	}
 
@@ -276,6 +250,10 @@ func resumeViaPR(ctx context.Context, p resumeViaPRParams) bool {
 		if err == nil && prNum != 0 {
 			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, prNum)}, "Created for %s (task %s)", branch, p.taskID)
 			_ = p.backend.SetExternalRef(p.taskID, prURL(p.git.RemoteURL(), prNum))
+			var reviewers []git.Reviewer
+			if p.ensureReviewersFn != nil {
+				reviewers = p.ensureReviewersFn()
+			}
 			return resolveByPRState(ctx, resolveByPRStateParams{
 				taskID:             p.taskID,
 				nextTask:           p.nextTask,
@@ -289,9 +267,10 @@ func resumeViaPR(ctx context.Context, p resumeViaPRParams) bool {
 				notify:             p.notify,
 				ralphDir:           p.ralphDir,
 				verifier:           p.verifier,
+				reviewers:          reviewers,
 				skipTaskFn:         p.skipTaskFn,
 				persistCompletedFn: p.persistCompletedFn,
-				mergeFunc:          p.mergeFunc,
+
 			})
 		}
 	}
@@ -313,69 +292,53 @@ type resolveByPRStateParams struct {
 	notify    bool
 	ralphDir  string
 	verifier  *Verifier
+	reviewers []git.Reviewer
 	skipTaskFn         func(id, reason string)
 	persistCompletedFn func(taskID string, merged bool)
-	mergeFunc func(ctx context.Context) (bool, error)
 }
 
-// resolveByPRState inspects the PR's state and takes the appropriate action.
-// Delegates merge+close to finalizePR so resume and post-signal share one path.
+// resolveByPRState inspects the PR's state and takes the appropriate action:
+// merged PRs close the bead immediately; open PRs call Ship (which does merge
+// + close); other states re-run the agent.
 func resolveByPRState(ctx context.Context, p resolveByPRStateParams) bool {
-	prState, err := p.git.GetPRState(p.prNumber)
+	// Seed review-addressed state from persistent store.
+	reviewAddressed := make(map[string]bool)
+	for _, reviewer := range p.reviewers {
+		key := "review_addressed:" + reviewer.BotUsername + ":" + p.taskID
+		if v, err := p.state.Read(key); err == nil && v == "true" {
+			reviewAddressed[reviewer.BotUsername] = true
+		}
+	}
+
+	// Delegate state checking to Ship — the git package owns PR state queries.
+	shipResult, err := p.git.Ship(ctx, git.ShipOpts{
+		PRNumber:        p.prNumber,
+		AutoMerge:       p.autoMerge,
+		Reviewers:       p.reviewers,
+		ReviewAddressed: reviewAddressed,
+	})
 	if err != nil {
-		p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "Failed to get state: %v", err)
+		p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "Ship (resume): %v", err)
 		return false
 	}
 
 	rawLogPath := filepath.Join(p.ralphDir, "raw.log")
-	fp := finalizePRParams{
-		ctx:                ctx,
-		taskID:             p.taskID,
-		nextTask:           p.nextTask,
-		prNumber:           p.prNumber,
-		workDir:            p.git.GetWorkDir(),
-		rawLogPath:         rawLogPath,
-		autoMerge:          p.autoMerge,
-		git:                p.git,
-		logger:             p.logger,
-		backend:            p.backend,
-		state:              p.state,
-		attempts:           p.attempts,
-		verifier:           p.verifier,
-		skipTaskFn:         p.skipTaskFn,
-		persistCompletedFn: p.persistCompletedFn,
-		mergeFunc:          p.mergeFunc,
-	}
+	workDir := p.git.GetWorkDir()
 
-	switch prState {
-	case git.PRStateMerged:
+	switch {
+	case shipResult.AlreadyMerged:
 		p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Success, Link: prLink(p.git, p.prNumber)}, "already merged — closing bead and moving on")
 		p.attempts.Clear(p.taskID, p.nextTask)
 		p.state.RecordCompletedTask(p.taskID, p.nextTask)
-		fp.prState = git.PRStateMerged
-		finalizePR(fp)
+		closeResumedTask(ctx, p, true, rawLogPath, workDir)
 		if p.notify {
 			notify.TaskCompleted(p.taskID, p.nextTask, "")
 		}
 		notify.TaskMerged(p.taskID, p.nextTask)
 		return true
 
-	case git.PRStateOpen:
-		if ok, reason := p.git.PRChainIsHealthy(p.prNumber); !ok {
-			p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "chain unhealthy: %s — re-running agent", reason)
-			return false
-		}
-		fp.prState = git.PRStateOpen
-		finalizePR(fp)
-		if p.notify {
-			notify.TaskCompleted(p.taskID, p.nextTask, "")
-		}
-		return true
-
-	default:
-		p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "is %s (not merged) — re-running agent", prState)
-		// Clear stale refs so the closed PR isn't re-discovered on the
-		// next iteration and the agent pushes to a fresh branch.
+	case shipResult.Closed:
+		p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "is closed (not merged) — re-running agent")
 		if p.taskID != "" {
 			_ = p.backend.SetExternalRef(p.taskID, "")
 			_ = p.backend.SetMetadata(p.taskID, "branch", "")
@@ -383,7 +346,89 @@ func resolveByPRState(ctx context.Context, p resolveByPRStateParams) bool {
 		p.git.PrepareForNextTask(p.taskID)
 		checkoutExistingBranch(p.git, p.backend, p.logger, p.taskID, p.nextTask)
 		return false
+
+	default:
+		// PR is open — Ship already attempted merge if autoMerge was set.
+		if ok, reason := p.git.PRChainIsHealthy(p.prNumber); !ok {
+			p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "chain unhealthy: %s — re-running agent", reason)
+			return false
+		}
+		closeResumedTask(ctx, p, shipResult.Merged, rawLogPath, workDir)
+		if p.notify {
+			notify.TaskCompleted(p.taskID, p.nextTask, "")
+		}
+		return true
 	}
+}
+
+// closeResumedTask closes the bead after the resume path resolves the PR.
+// merged=true uses the "Fixed in PR" reason; false uses "merge pending".
+func closeResumedTask(ctx context.Context, p resolveByPRStateParams, merged bool, rawLogPath, workDir string) {
+	if p.taskID == "" {
+		return
+	}
+	if ctx.Err() != nil {
+		p.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+		return
+	}
+	prRef := prURL(p.git.RemoteURL(), p.prNumber)
+	if prRef == "" {
+		prRef = fmt.Sprintf("PR #%d", p.prNumber)
+	}
+	var closeReason string
+	if merged {
+		closeReason = fmt.Sprintf("Fixed in %s", prRef)
+	} else {
+		closeReason = fmt.Sprintf("Verified — %s open, merge pending", prRef)
+	}
+	p.attempts.ClearMergeFailures(p.taskID)
+	stateReason := "ralph: PR open or stacked"
+	if merged {
+		stateReason = "ralph: PR merged"
+	}
+	_ = p.backend.SetState(p.taskID, "phase", "verified", stateReason)
+	if err := p.backend.CloseTask(p.taskID, closeReason); err != nil {
+		skipReason := "close_failed"
+		if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
+			p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
+			skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
+		} else {
+			p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
+		}
+		if p.skipTaskFn != nil {
+			p.skipTaskFn(p.taskID, skipReason)
+		}
+	} else {
+		p.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
+		if p.persistCompletedFn != nil {
+			p.persistCompletedFn(p.taskID, merged)
+		}
+	}
+}
+
+// readReviewAddressedForTask reads from state which reviewers had their
+// feedback addressed for the given task, returning a map of botUsername → true.
+func readReviewAddressedForTask(st *state.Store, taskID string, reviewers []git.Reviewer) map[string]bool {
+	if st == nil || taskID == "" || len(reviewers) == 0 {
+		return nil
+	}
+	result := make(map[string]bool, len(reviewers))
+	for _, r := range reviewers {
+		v, _ := st.Read("review_addressed:" + r.BotUsername + ":" + taskID)
+		if v == "true" {
+			result[r.BotUsername] = true
+		}
+	}
+	return result
+}
+
+// writeReviewAddressed records that a reviewer's feedback was addressed for
+// the given task so subsequent Ship calls skip re-polling.
+func writeReviewAddressed(st *state.Store, taskID, botUsername string) {
+	if st == nil || taskID == "" || botUsername == "" {
+		return
+	}
+	st.Write("review_addressed:"+botUsername+":"+taskID, "true")
 }
 
 // flushUnpushedWork pushes any unpushed commits and optionally merges before

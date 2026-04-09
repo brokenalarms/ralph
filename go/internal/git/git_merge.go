@@ -223,18 +223,28 @@ func (m *Manager) CreatePR(ctx context.Context, taskID, taskDesc, body string) (
 	})
 }
 
-// ShipOpts configures the Ship pipeline.
+// ShipOpts configures the Ship pipeline. All fields are data — no func or
+// interface fields. Manager.Ship fills infrastructure from its own fields.
 type ShipOpts struct {
 	TaskID    string
 	TaskTitle string
 	Body      string
-	// Infrastructure — Manager fills these before delegating.
-	PushFn                  func(ctx context.Context) error
-	HasUncommittedChangesFn func() bool
-	CommitAllFn             func(message string)
-	BranchIsAheadOfMainFn   func(branch string) bool
-	BaseBranch              string
-	Logger                  Log
+	BaseBranch string
+
+	// PRNumber, when non-zero, tells Ship to skip push+PR creation and proceed
+	// directly to the merge phase using the identified PR.
+	PRNumber int
+
+	// AutoMerge instructs Ship to proceed through reviewer polling and merge
+	// after the PR is created/updated. When false, Ship returns after push+PR.
+	AutoMerge bool
+
+	// Reviewers lists automated code reviewers to poll before merging.
+	Reviewers []Reviewer
+
+	// ReviewAddressed maps bot username → true when that reviewer's feedback
+	// was already addressed in a previous call, skipping re-poll.
+	ReviewAddressed map[string]bool
 }
 
 // ShipResult is the outcome of the Ship pipeline.
@@ -242,13 +252,56 @@ type ShipResult struct {
 	PRNumber int
 	PRURL    string
 	PRTitle  string
+
+	// Merged is true when the PR was squash-merged successfully.
+	Merged bool
+
+	// AlreadyMerged is true when Ship discovered the PR was already merged
+	// before it took any action. The caller can close the task immediately.
+	AlreadyMerged bool
+
+	// Closed is true when Ship discovered the PR is closed (not merged).
+	// The caller should clear stale refs and re-run the agent.
+	Closed bool
+
+	// Stacked is true when the PR targets a non-default branch (merge skipped,
+	// task should be closed and the loop continues).
+	Stacked bool
+
+	// CIFailure is true when merge was attempted but CI is failing. The loop
+	// may call a fix agent and retry Ship.
+	CIFailure bool
+
+	// CIFailureDetail carries the CI failure error for use by tryFixCI.
+	// Populated when CIFailure is true.
+	CIFailureDetail *CIFailureError
+
+	// ReviewFixNeeded is true when a reviewer returned actionable comments.
+	// The loop should run tryFixReviewComments and retry Ship.
+	ReviewFixNeeded bool
+
+	// PendingReview is the review that needs to be addressed.
+	PendingReview *AutoReview
+
+	// PendingReviewer is the bot username whose review needs addressing.
+	PendingReviewer string
 }
 
-// Ship is the single "get work into a PR" pipeline: auto-commit any
+// shipInfra holds the infrastructure callbacks used by shipPR. These are
+// separated from ShipOpts to keep ShipOpts data-only.
+type shipInfra struct {
+	push              func(context.Context) error
+	hasUncommitted    func() bool
+	commitAll         func(string)
+	branchAheadOfMain func(string) bool
+	logger            Log
+}
+
+// shipPR is the single "get work into a PR" pipeline: auto-commit any
 // uncommitted changes, push (squash + rebase + force-push), and create
 // or update a PR. Returns the PR number and URL.
-func Ship(ctx context.Context, runner Runner, gh GitHub, workDir, branch, remoteURL string, opts ShipOpts) (ShipResult, error) {
-	hasChanges := opts.HasUncommittedChangesFn
+func shipPR(ctx context.Context, runner Runner, gh GitHub, workDir, branch, remoteURL string, opts ShipOpts, infra shipInfra) (ShipResult, error) {
+	hasChanges := infra.hasUncommitted
 	if hasChanges == nil {
 		r := runner
 		if r == nil {
@@ -261,7 +314,7 @@ func Ship(ctx context.Context, runner Runner, gh GitHub, workDir, branch, remote
 		}
 	}
 
-	commitAll := opts.CommitAllFn
+	commitAll := infra.commitAll
 	if commitAll == nil {
 		r := runner
 		if r == nil {
@@ -281,31 +334,32 @@ func Ship(ctx context.Context, runner Runner, gh GitHub, workDir, branch, remote
 		commitAll(msg)
 	}
 
-	if opts.PushFn != nil {
-		if err := opts.PushFn(ctx); err != nil {
+	if infra.push != nil {
+		if err := infra.push(ctx); err != nil {
 			if ctx.Err() != nil {
 				return ShipResult{}, ctx.Err()
 			}
-			if opts.Logger != nil {
-				opts.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push failed: %v", err)
+			if infra.logger != nil {
+				infra.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push failed: %v", err)
 			}
 			return ShipResult{}, fmt.Errorf("push failed: %w", err)
 		}
 	}
 
-	if opts.BranchIsAheadOfMainFn != nil && !opts.BranchIsAheadOfMainFn(branch) {
-		if opts.Logger != nil {
-			opts.Logger.Emit(logging.Opts{Domain: logging.Git}, "Ship: branch %s is not ahead of main — skipping PR creation", branch)
+	if infra.branchAheadOfMain != nil && !infra.branchAheadOfMain(branch) {
+		if infra.logger != nil {
+			infra.logger.Emit(logging.Opts{Domain: logging.Git}, "Ship: branch %s is not ahead of main — skipping PR creation", branch)
 		}
 		return ShipResult{}, nil
 	}
 
+	baseBranch := opts.BaseBranch
 	prNumber, err := CreatePR(ctx, gh, workDir, branch, remoteURL, EnsurePROpts{
 		TaskID:     opts.TaskID,
 		TaskDesc:   opts.TaskTitle,
 		Body:       opts.Body,
-		BaseBranch: opts.BaseBranch,
-		Logger:     opts.Logger,
+		BaseBranch: baseBranch,
+		Logger:     infra.logger,
 	})
 	if err != nil {
 		return ShipResult{PRNumber: prNumber}, err
@@ -333,15 +387,121 @@ func Ship(ctx context.Context, runner Runner, gh GitHub, workDir, branch, remote
 	}, nil
 }
 
-// Manager.Ship delegates to the package function.
+// Manager.Ship runs the full push + PR + reviewer poll + merge pipeline.
+// ShipOpts carries only data; infrastructure callbacks come from Manager fields.
+// When opts.PRNumber is non-zero, Ship skips push+PR and proceeds directly to
+// reviewer polling and merge using that PR.
 func (m *Manager) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
-	opts.PushFn = m.Push
-	opts.HasUncommittedChangesFn = m.HasUncommittedChanges
-	opts.CommitAllFn = m.CommitAll
-	opts.BranchIsAheadOfMainFn = m.BranchIsAheadOfMain
-	opts.BaseBranch = m.resolveBaseBranch()
-	opts.Logger = m.Logger
-	return Ship(ctx, m.run(), m.gh(), m.WorkDir, m.WorktreeBranch, m.RemoteURL(), opts)
+	if opts.BaseBranch == "" {
+		opts.BaseBranch = m.resolveBaseBranch()
+	}
+
+	var result ShipResult
+	var err error
+
+	if opts.PRNumber != 0 {
+		// Caller identified the PR — check its state before proceeding.
+		result = ShipResult{PRNumber: opts.PRNumber}
+		prState, stateErr := m.GetPRState(opts.PRNumber)
+		if stateErr != nil {
+			return result, fmt.Errorf("get PR state: %w", stateErr)
+		}
+		switch prState {
+		case PRStateMerged:
+			result.AlreadyMerged = true
+			result.Merged = true
+			m.PostMergeUpdateMain()
+			return result, nil
+		case PRStateClosed:
+			result.Closed = true
+			return result, nil
+		}
+		// PRStateOpen — fall through to merge phase.
+	} else {
+		infra := shipInfra{
+			push:              m.Push,
+			hasUncommitted:    m.HasUncommittedChanges,
+			commitAll:         m.CommitAll,
+			branchAheadOfMain: m.BranchIsAheadOfMain,
+			logger:            m.Logger,
+		}
+		result, err = shipPR(ctx, m.run(), m.gh(), m.WorkDir, m.WorktreeBranch, m.RemoteURL(), opts, infra)
+		if err != nil {
+			return result, err
+		}
+	}
+
+	if !opts.AutoMerge || result.PRNumber == 0 {
+		return result, nil
+	}
+
+	gh := m.gh()
+	nwo := NWOFromRemote(m.RemoteURL())
+	repoURL := m.RemoteURL()
+	prLink := logging.PRLinkOpt(nwo, result.PRNumber)
+
+	// Reviewer polling.
+	for _, reviewer := range opts.Reviewers {
+		if opts.ReviewAddressed[reviewer.BotUsername] {
+			continue
+		}
+		review, pollErr := m.PollReview(reviewer.BotUsername, result.PRNumber, reviewer.DefaultTimeout)
+		if pollErr != nil {
+			m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "%s review poll: %v", reviewer.BotUsername, pollErr)
+			continue
+		}
+		if review != nil {
+			m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "%s review received (%d comments)", reviewer.BotUsername, len(review.Comments))
+			result.ReviewFixNeeded = true
+			result.PendingReview = review
+			result.PendingReviewer = reviewer.BotUsername
+			return result, nil
+		}
+		m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "No %s review arrived within timeout — proceeding to merge", reviewer.BotUsername)
+	}
+
+	// Check if stacked (PR targets non-default branch — merge skipped).
+	defaultBranch := m.detectDefaultBranch()
+	prDetail, _ := gh.GetPR(nwo, result.PRNumber)
+	prBase := ""
+	if prDetail != nil {
+		prBase = prDetail.BaseRef
+	}
+	if prBase != "" && prBase != defaultBranch {
+		m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "targets %s (not %s) — stacked, closing bead", prBase, defaultBranch)
+		result.Stacked = true
+		return result, nil
+	}
+
+	// Attempt merge (no OnCIFailure/OnConflict — return errors for loop to handle).
+	m.SetLocalTestsPassed(true)
+	m.SetKnownPRNumber(result.PRNumber)
+	defer m.SetKnownPRNumber(0)
+
+	merged, mergeErr := m.MergeWithRetry(ctx, MergeRetryOpts{
+		Logger:    m.Logger,
+		RemoteURL: repoURL,
+	})
+	if mergeErr != nil {
+		var ciExhausted *CIFixExhaustedError
+		var ciFailure *CIFailureError
+		if errors.As(mergeErr, &ciExhausted) {
+			result.CIFailure = true
+			return result, nil
+		}
+		if errors.As(mergeErr, &ciFailure) {
+			result.CIFailure = true
+			result.CIFailureDetail = ciFailure
+			return result, nil
+		}
+		return result, mergeErr
+	}
+
+	result.Merged = merged
+	if merged {
+		m.PostMergeUpdateMain()
+	}
+	return result, nil
 }
 
 // PushAndCreatePR composes Push and CreatePR. Squashes, force-pushes, then

@@ -2,19 +2,16 @@ package loop
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
-	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
@@ -62,9 +59,10 @@ type completeTaskParams struct {
 	clearAttemptsFn func(taskID, nextTask string)
 	// skip
 	skipTaskFn func(taskID, reason string)
-	// ship + finalize + post-task
-	shipFn        func(ctx context.Context, taskID, title, summary string) (prNumber int, prURL string)
-	finalizePRFn  func(ctx context.Context, taskID, nextTask string, prNumber int, prState git.PRState, prURL, workDir, rawLogPath string) finalizePRResult
+	// attempts callbacks
+	clearMergeFailuresFn func(taskID string)
+	// ship + post-task
+	shipFn        func(ctx context.Context, taskID, title, summary string) (prNumber int, prURL string, merged bool, ciFailure bool, stacked bool)
 	buildCTFn     func(taskID, nextTask, summary string, prNumber int) CompletedTask
 	runPostTaskFn func(ctx context.Context, taskID string, prNumber int, merged bool)
 }
@@ -198,21 +196,30 @@ func completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
 				prState, _ := p.getPRStateFn(prNum)
 				if prState == git.PRStateOpen {
 					p.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through merge", prNum)
-					finalResult := p.finalizePRFn(ctx, p.taskID, p.nextTask, prNum, prState, "", p.workDir, p.rawLogPath)
+					_, _, merged, _, _ := p.shipFn(ctx, p.taskID, p.nextTask, p.result.Summary)
+					if p.clearMergeFailuresFn != nil {
+						p.clearMergeFailuresFn(p.taskID)
+					}
+					prRef := fmt.Sprintf("PR #%d", prNum)
+					closeReason := fmt.Sprintf("Verified — %s open, merge pending", prRef)
+					if merged {
+						closeReason = fmt.Sprintf("Fixed in %s", prRef)
+					}
+					_ = p.closeTaskFn(p.taskID, closeReason)
 					p.tagTaskEndFn(p.taskID)
-					p.runPostTaskFn(ctx, p.taskID, prNum, finalResult.merged)
+					p.runPostTaskFn(ctx, p.taskID, prNum, merged)
 					if p.notify {
 						notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
-						if finalResult.merged {
+						if merged {
 							notify.TaskMerged(p.taskID, p.nextTask)
 						}
 					}
-					if finalResult.merged && p.evolve {
+					if merged && p.evolve {
 						p.logger.Phase("Evolve: restarting with latest main")
 						p.writeStateFn("status", "evolve_restart")
 						return completeTaskOut{action: signalEvolve, merged: true}
 					}
-					return completeTaskOut{action: signalSkipped, merged: finalResult.merged}
+					return completeTaskOut{action: signalSkipped, merged: merged}
 				}
 				if prState == git.PRStateMerged {
 					p.logger.Emit(logging.Opts{Domain: logging.Git}, "PR #%d already merged", prNum)
@@ -256,14 +263,12 @@ func completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
 		return completeTaskOut{action: signalComplete}
 	}
 
-	prNumber, shipURL := p.shipFn(ctx, p.taskID, p.nextTask, p.result.Summary)
-	prState := git.PRStateOpen
+	prNumber, shipURL, merged, ciFailure, stacked := p.shipFn(ctx, p.taskID, p.nextTask, p.result.Summary)
 
 	// Recovery: if ship didn't produce a PR, find any existing PR in any state.
 	if prNumber == 0 && p.taskID != "" {
 		if num, found := p.findExistingPRFn(p.taskID, p.worktreeBranchFn()); found {
 			prNumber = num
-			prState = "" // let finalizePR look up the actual state
 		}
 	}
 
@@ -272,11 +277,9 @@ func completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
 		ct.PRURL = shipURL
 	}
 
-	// buildCTFn may discover a PR that recovery missed. A PR found in the
-	// post-push context was just created, so OPEN is a safe assumption.
+	// buildCTFn may discover a PR that recovery missed.
 	if prNumber == 0 && ct.PRNum != 0 {
 		prNumber = ct.PRNum
-		prState = git.PRStateOpen
 	}
 
 	if ctx.Err() != nil {
@@ -303,15 +306,61 @@ func completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
 		return completeTaskOut{action: signalComplete, ct: &ct}
 	}
 
-	finalResult := p.finalizePRFn(ctx, p.taskID, p.nextTask, prNumber, prState, ct.PRURL, p.workDir, p.rawLogPath)
+	// CI is failing — leave task open for manual investigation or next loop.
+	if ciFailure {
+		p.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI failing on PR #%d — leaving task %s open.", prNumber, p.taskID)
+		p.tagTaskEndFn(p.taskID)
+		p.runPostTaskFn(ctx, p.taskID, prNumber, false)
+		return completeTaskOut{action: signalComplete, ct: &ct}
+	}
 
-	p.runPostTaskFn(ctx, p.taskID, prNumber, finalResult.merged)
+	// Close the task based on merge outcome.
+	if p.taskID != "" {
+		if ctx.Err() != nil {
+			p.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+			return completeTaskOut{action: signalComplete, ct: &ct}
+		}
+		prRef := ct.PRURL
+		if prRef == "" {
+			prRef = fmt.Sprintf("PR #%d", prNumber)
+		}
+		var closeReason string
+		if stacked {
+			closeReason = fmt.Sprintf("Verified — %s open, merge pending", prRef)
+		} else if !merged {
+			closeReason = fmt.Sprintf("Verified — %s open, merge pending", prRef)
+		} else {
+			closeReason = fmt.Sprintf("Fixed in %s", prRef)
+		}
+		if p.clearMergeFailuresFn != nil {
+			p.clearMergeFailuresFn(p.taskID)
+		}
+		_ = p.setStateFn(p.taskID, "phase", "verified", "ralph: PR open or stacked")
+		if merged {
+			_ = p.setStateFn(p.taskID, "phase", "verified", "ralph: PR merged")
+		}
+		if err := p.closeTaskFn(p.taskID, closeReason); err != nil {
+			skipReason := "close_failed"
+			if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
+				p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
+				skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
+			} else {
+				p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
+			}
+			p.skipTaskFn(p.taskID, skipReason)
+		} else {
+			p.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
+			p.persistCompletedFn(p.taskID, merged)
+		}
+	}
+
+	p.runPostTaskFn(ctx, p.taskID, prNumber, merged)
 
 	if p.notify {
 		notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
 	}
 
-	if finalResult.merged {
+	if merged {
 		notify.TaskMerged(p.taskID, p.nextTask)
 		if p.evolve {
 			p.tagTaskEndFn(p.taskID)
@@ -321,7 +370,7 @@ func completeTask(ctx context.Context, p completeTaskParams) completeTaskOut {
 		}
 	}
 
-	return completeTaskOut{action: signalComplete, ct: &ct, merged: finalResult.merged}
+	return completeTaskOut{action: signalComplete, ct: &ct, merged: merged}
 }
 
 // buildCompletedTask assembles the CompletedTask record for a signal.
@@ -342,189 +391,6 @@ func buildCompletedTask(taskID, nextTask, summary string, prNumber int, g git.Gi
 	return ct
 }
 
-// finalizePRParams bundles the context and dependencies needed to finalize a
-// PR: merge if applicable, then close the bead. Used by both the post-signal
-// flow and the resume-via-PR flow so neither duplicates merge+close logic.
-type finalizePRParams struct {
-	ctx        context.Context
-	taskID     string
-	nextTask   string
-	prNumber   int
-	prState    git.PRState // looked up from GH if empty
-	prURL      string
-	workDir    string
-	rawLogPath string
-	// dependency fields
-	autoMerge       bool
-	activeReviewers []git.Reviewer
-	git             git.GitOps
-	logger               *logging.Logger
-	backend              tasks.Backend
-	state                *state.Store
-	attempts             *attempts.Tracker
-	verifier             *Verifier
-	skipTaskFn           func(id, reason string)
-	persistCompletedFn   func(taskID string, merged bool)
-	// mergeFunc overrides git.MergeWithRetry for tests; nil uses the real path.
-	mergeFunc func(ctx context.Context) (bool, error)
-}
-
-type finalizePRResult struct {
-	merged bool
-	closed bool
-}
-
-// reviewAddressed returns true when the given reviewer's feedback was already
-// addressed for this task in a previous finalizePR call.
-func (p *finalizePRParams) reviewAddressed(botUsername string) bool {
-	if p.state == nil || p.taskID == "" {
-		return false
-	}
-	v, _ := p.state.Read("review_addressed:" + botUsername + ":" + p.taskID)
-	return v == "true"
-}
-
-// markReviewAddressed records that the given reviewer's feedback was addressed
-// so subsequent finalizePR calls for the same task skip re-polling.
-func (p *finalizePRParams) markReviewAddressed(botUsername string) {
-	if p.state == nil || p.taskID == "" {
-		return
-	}
-	p.state.Write("review_addressed:"+botUsername+":"+p.taskID, "true")
-}
-
-// finalizePR handles an existing PR: merges if applicable, closes the bead.
-// Returns the merge/close outcome so callers can act on it (e.g. evolve).
-func finalizePR(p finalizePRParams) finalizePRResult {
-	if p.prNumber == 0 {
-		p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No PR — task %s stays open", p.taskID)
-		return finalizePRResult{}
-	}
-
-	prState := p.prState
-	if prState == "" {
-		looked, err := p.git.GetPRState(p.prNumber)
-		if err != nil || looked == "" {
-			p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "Failed to get state: %v", err)
-			return finalizePRResult{}
-		}
-		prState = looked
-	}
-
-	merged := prState == git.PRStateMerged
-	mergeFailed := false
-
-	if prState == git.PRStateOpen && p.autoMerge {
-		p.git.SetLocalTestsPassed(true)
-		prBase := p.git.GetPRBase(p.prNumber)
-		defaultBranch := p.git.DetectDefaultBranch()
-		if prBase != "" && prBase != defaultBranch {
-			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, p.prNumber)}, "targets %s — stacked, closing bead", prBase)
-		} else {
-			for _, reviewer := range p.activeReviewers {
-				if p.reviewAddressed(reviewer.BotUsername) {
-					continue
-				}
-				review, err := p.git.PollReview(reviewer.BotUsername, p.prNumber, reviewer.DefaultTimeout)
-				if err != nil {
-					p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "%s review poll: %v", reviewer.BotUsername, err)
-					continue
-				}
-				if review != nil {
-					p.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink(p.git, p.prNumber)}, "%s review received (%d comments)", reviewer.BotUsername, len(review.Comments))
-					if p.verifier != nil {
-						tryFixReviewComments(p.ctx, p.git, p.verifier, p.logger, reviewer.BotUsername, review, p.prNumber, p.nextTask, p.workDir, p.rawLogPath)
-					}
-					p.markReviewAddressed(reviewer.BotUsername)
-				} else {
-					p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "No %s review arrived within timeout — proceeding to merge", reviewer.BotUsername)
-				}
-			}
-			p.logger.Emit(logging.Opts{Domain: "git", Link: prLink(p.git, p.prNumber)}, "targets %s — merging", defaultBranch)
-			p.git.SetKnownPRNumber(p.prNumber)
-			defer p.git.SetKnownPRNumber(0)
-			var mergeErr error
-			merged, mergeErr = mergeWithRetry(p.ctx, mergeWithRetryParams{
-				taskID:     p.taskID,
-				nextTask:   p.nextTask,
-				workDir:    p.workDir,
-				rawLogPath: p.rawLogPath,
-				mergeFunc:  p.mergeFunc,
-				git:        p.git,
-				verifier:   p.verifier,
-				logger:     p.logger,
-				backend:    p.backend,
-			})
-			if mergeErr != nil {
-				p.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Auto-merge: %v", mergeErr)
-				var ciExhausted *git.CIFixExhaustedError
-				if errors.As(mergeErr, &ciExhausted) {
-					p.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI fix agents gave up after %d attempts — tests still failing. Leaving task %s open for manual investigation.", ciExhausted.Attempts, p.taskID)
-					return finalizePRResult{}
-				}
-				var ciFailure *git.CIFailureError
-				if errors.As(mergeErr, &ciFailure) {
-					p.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI failing on PR #%d — leaving task %s open.", ciFailure.PRNumber, p.taskID)
-					return finalizePRResult{}
-				}
-			}
-			if !merged {
-				mergeFailed = true
-				p.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: prLink(p.git, p.prNumber)}, "Merge pending — closing bead")
-			}
-		}
-	}
-
-	if merged {
-		p.git.PostMergeUpdateMain()
-	}
-
-	if p.taskID == "" {
-		return finalizePRResult{merged: merged, closed: true}
-	}
-
-	var closeReason string
-	if mergeFailed {
-		closeReason = fmt.Sprintf("Verified — PR #%d open, merge pending", p.prNumber)
-		if p.prURL != "" {
-			closeReason = fmt.Sprintf("Verified — %s open, merge pending", p.prURL)
-		}
-	} else {
-		closeReason = fmt.Sprintf("Fixed in PR #%d", p.prNumber)
-		if p.prURL != "" {
-			closeReason = fmt.Sprintf("Fixed in %s", p.prURL)
-		}
-	}
-	p.attempts.ClearMergeFailures(p.taskID)
-	stateReason := "ralph: PR open or stacked"
-	if merged {
-		stateReason = "ralph: PR merged"
-	}
-	if p.ctx.Err() != nil {
-		p.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
-		return finalizePRResult{merged: merged}
-	}
-	_ = p.backend.SetState(p.taskID, "phase", "verified", stateReason)
-	if err := p.backend.CloseTask(p.taskID, closeReason); err != nil {
-		skipReason := "close_failed"
-		if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
-			p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
-			skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
-		} else {
-			p.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
-		}
-		if p.skipTaskFn != nil {
-			p.skipTaskFn(p.taskID, skipReason)
-		}
-	} else {
-		p.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
-		if p.persistCompletedFn != nil {
-			p.persistCompletedFn(p.taskID, merged)
-		}
-	}
-
-	return finalizePRResult{merged: merged, closed: true}
-}
 
 // iterationPrompt holds the prepared prompt and context needed to invoke Claude.
 type iterationPrompt struct {

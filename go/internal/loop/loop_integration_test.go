@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -276,9 +277,6 @@ func TestIntegration_ResumeViaPR_Merged(t *testing.T) {
 
 	if agentCalled {
 		t.Error("agent should not run when PR is already merged")
-	}
-	if gm.ShipCalls > 0 {
-		t.Error("push should not be called for already-merged PR")
 	}
 	if gm.MergeRetryCalls > 0 {
 		t.Error("merge should not be called for already-merged PR")
@@ -1202,50 +1200,56 @@ func TestIntegration_StackedPRSkipsMergeButCloses(t *testing.T) {
 
 	backend := newIntegrationBackend()
 	backend.Remaining = 1
+	backend.Completed = 0
 	backend.Total = 1
 	backend.NextTask = "Stacked task"
 	backend.NextID = "ralph-stk1"
-
-	ghStub := git.NewStubGitHub()
-	ghStub.PRBase = "ralph-prev-task"
+	backend.BackendLabel = "beads"
 
 	gm := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        dir,
+		WorktreeBranch: "ralph/next",
 		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     ghStub,
+		PRBase:         "ralph-prev-task",
+		DefaultBranch:  "main",
+	}
+
+	// Ship returns Stacked=true when PR targets a non-default branch.
+	gm.ShipFunc = func(_ context.Context, opts git.ShipOpts) (git.ShipResult, error) {
+		return git.ShipResult{PRNumber: 88, Stacked: true}, nil
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			gm.HeadRevValue = "sha-stk1"
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "stacked task done"},
 	}
 
 	l := New(Config{
-		Dirs:         workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		CallsPerHour: 80,
-		AutoMerge:    true,
-		TaskBackend:  backend,
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		TaskBackend:   backend,
 	}, st, gm, logging.New(nil))
-	l.runner = &stubRunner{}
-	gm.MergeRetryResult = true
+	l.runner = runner
+	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
-	result := finalizePR(finalizePRParams{
-		ctx:       context.Background(),
-		taskID:    "ralph-stk1",
-		nextTask:  "Stacked task",
-		prNumber:  88,
-		prState:   "OPEN",
-		workDir:   dir,
-		autoMerge: true,
-		git:       gm,
-		logger:    l.logger,
-		backend:   backend,
-		state:     l.state,
-		attempts:  l.attempts,
-		verifier:  l.verifier,
-	})
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
 
 	if gm.MergeRetryCalls > 0 {
 		t.Error("merge should not be called for stacked PR (base != default branch)")
-	}
-	if !result.closed {
-		t.Error("stacked PR should still close the task")
 	}
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
@@ -1857,6 +1861,43 @@ func (g *realMergeGit) MergeWithRetry(ctx context.Context, opts git.MergeRetryOp
 	return g.realMgr.MergeWithRetry(ctx, opts)
 }
 
+// Ship handles the two-phase Ship lifecycle for integration tests:
+//   - Phase 1 (AutoMerge=false): delegates to the stub's ShipFunc or ShipResult
+//     to record "push" and return a PR number.
+//   - Phase 2 (AutoMerge=true): delegates to the real git.Manager.MergeWithRetry
+//     so the full AwaitCI → evaluateChecks → MergePR pipeline runs.
+func (g *realMergeGit) Ship(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error) {
+	if !opts.AutoMerge {
+		return g.StubGit.Ship(ctx, opts)
+	}
+	g.StubGit.ShipCalls++
+	g.StubGit.LastShipOpts = opts
+	// Mirror real Ship: check PR state when PRNumber is set.
+	if opts.PRNumber != 0 {
+		prState, stateErr := g.StubGit.GetPRState(opts.PRNumber)
+		if stateErr != nil {
+			return git.ShipResult{PRNumber: opts.PRNumber}, stateErr
+		}
+		switch prState {
+		case git.PRStateMerged:
+			g.StubGit.PostMergeUpdateMain()
+			return git.ShipResult{PRNumber: opts.PRNumber, AlreadyMerged: true, Merged: true}, nil
+		case git.PRStateClosed:
+			return git.ShipResult{PRNumber: opts.PRNumber, Closed: true}, nil
+		}
+	}
+	g.realMgr.KnownPRNumber = opts.PRNumber
+	merged, err := g.realMgr.MergeWithRetry(ctx, git.MergeRetryOpts{})
+	if err != nil {
+		var ciErr *git.CIFailureError
+		if errors.As(err, &ciErr) {
+			return git.ShipResult{PRNumber: opts.PRNumber, CIFailure: true, CIFailureDetail: ciErr}, nil
+		}
+		return git.ShipResult{PRNumber: opts.PRNumber}, nil
+	}
+	return git.ShipResult{PRNumber: opts.PRNumber, Merged: merged}, nil
+}
+
 // TestIntegration_FullLifecycleSequenceOrdering verifies all lifecycle stages
 // execute in order: signal → verify → push → ci_poll → ci_passed → merge →
 // close, for each task. The merge step uses a real git.Manager so
@@ -2162,9 +2203,9 @@ func TestIntegration_LifecycleCI_FailureFixRetry(t *testing.T) {
 	}
 }
 
-// TestIntegration_CIFailureTriggersFixAgent verifies that when MergeWithRetry
-// encounters a CI failure it invokes the OnCIFailure callback which spawns a
-// fix agent, and that the loop completes successfully after the fix.
+// TestIntegration_CIFailureTriggersFixAgent verifies that when Ship reports a
+// CI failure the loop spawns a fix agent and retries, and the loop completes
+// successfully after the fix.
 func TestIntegration_CIFailureTriggersFixAgent(t *testing.T) {
 	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
@@ -2176,19 +2217,35 @@ func TestIntegration_CIFailureTriggersFixAgent(t *testing.T) {
 	backend.NextID = "ralph-ci2"
 	backend.BackendLabel = "beads"
 
-	ciGhStub := git.NewStubGitHub()
-	ciGhStub.OpenPR = 0
 	stub := &testutil.StubGit{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
 		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     ciGhStub,
 	}
-	gm := &ciTriggerGit{StubGit: stub, triggerCI: true}
-	gm.ShipResult = git.ShipResult{PRNumber: 99}
-	gm.PRNumber = 99
 
+	// ShipFunc drives the two-phase Ship lifecycle:
+	//   call 1 — push+PR (AutoMerge=false): return PR number
+	//   call 2 — merge attempt (AutoMerge=true): simulate CI failure
+	//   call 3 — merge retry (AutoMerge=true, after fix): succeed
+	shipCall := 0
+	stub.ShipFunc = func(_ context.Context, opts git.ShipOpts) (git.ShipResult, error) {
+		shipCall++
+		if !opts.AutoMerge {
+			return git.ShipResult{PRNumber: 99}, nil
+		}
+		if shipCall == 2 {
+			return git.ShipResult{
+				PRNumber:  99,
+				CIFailure: true,
+				CIFailureDetail: &git.CIFailureError{
+					PRNumber: 99,
+					Failures: []git.CICheckResult{{Name: "tests", Bucket: "fail"}},
+				},
+			}, nil
+		}
+		return git.ShipResult{PRNumber: 99, Merged: true}, nil
+	}
 	runner := &stubRunner{
 		onRun: func() {
 			stub.HeadRevValue = "initial-sha"
@@ -2212,7 +2269,7 @@ func TestIntegration_CIFailureTriggersFixAgent(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, stub, logging.New(nil))
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
@@ -2220,7 +2277,6 @@ func TestIntegration_CIFailureTriggersFixAgent(t *testing.T) {
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	l.cfg.NewRunner = func() claudeRunner {
 		fixAgentCalled = true
-		// Fix agent simulates a new commit by changing the HEAD SHA.
 		stub.HeadRevValue = "sha-after-fix"
 		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "ci fixed"}}
 	}

@@ -497,12 +497,13 @@ func TestCompleteTask_NoNewCommits_ExistingOpenPR_MergesViaFinalize(t *testing.T
 	// HeadRevValue == headBefore triggers the no-commits branch.
 	// PRState is open — simulates a PR from a prior attempt that wasn't merged.
 	gm := &testutil.StubGit{
-		ProjectDir:      dir,
-		WorkDir:         dir,
-		HeadRevValue:    "same-sha",
-		PRState:         git.PRStateOpen,
-		PRBase:          "main",
-		DefaultBranch:   "main",
+		ProjectDir:       dir,
+		WorkDir:          dir,
+		HeadRevValue:     "same-sha",
+		PRState:          git.PRStateOpen,
+		PRBase:           "main",
+		DefaultBranch:    "main",
+		ShipResult:       git.ShipResult{PRNumber: 42},
 		MergeRetryResult: true,
 	}
 	l := New(Config{

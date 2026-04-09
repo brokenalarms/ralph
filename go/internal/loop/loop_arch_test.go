@@ -34,7 +34,7 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 		// "resolveByPRStateParams": true,
 
 		// --- Bead 3: git.Ship (ralph-bk7m) ---
-		// "finalizePRParams": true,
+		"finalizePRParams": true,
 
 		// --- Bead 4 rework: completeTaskParams data-only (ralph-93jq) ---
 		// "completeTaskParams": true,
