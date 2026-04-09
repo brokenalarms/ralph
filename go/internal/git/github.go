@@ -691,6 +691,26 @@ func (g *ghCLI) checkCopilotRulesets(nwo string) (bool, bool, error) {
 }
 
 func (g *ghCLI) PollReview(nwo string, botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error) {
+	// Check if a completed review already exists before doing anything else.
+	existing, err := g.fetchReview(nwo, botUsername, prNumber)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		fmt.Printf("review received (%d comments)\n", len(existing.Comments))
+		return existing, nil
+	}
+
+	// If the bot is not a requested reviewer and has no review, none is coming.
+	requested, err := g.isRequestedReviewer(nwo, botUsername, prNumber)
+	if err != nil {
+		return nil, err
+	}
+	if !requested {
+		fmt.Printf("not assigned — skipping\n")
+		return nil, nil
+	}
+
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		review, err := g.fetchReview(nwo, botUsername, prNumber)
@@ -698,6 +718,7 @@ func (g *ghCLI) PollReview(nwo string, botUsername string, prNumber int, timeout
 			return nil, err
 		}
 		if review != nil {
+			fmt.Printf("review received (%d comments)\n", len(review.Comments))
 			return review, nil
 		}
 		remaining := time.Until(deadline)
@@ -710,7 +731,41 @@ func (g *ghCLI) PollReview(nwo string, botUsername string, prNumber int, timeout
 		}
 		time.Sleep(sleep)
 	}
+	fmt.Printf("no review within timeout\n")
 	return nil, nil
+}
+
+// isRequestedReviewer reports whether botUsername is listed as a requested reviewer on the PR.
+func (g *ghCLI) isRequestedReviewer(nwo, botUsername string, prNumber int) (bool, error) {
+	endpoint := fmt.Sprintf("repos/%s/pulls/%d/requested_reviewers", nwo, prNumber)
+	cmd := exec.Command("gh", "api", endpoint)
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("gh api requested_reviewers: %w", err)
+	}
+	var resp struct {
+		Users []struct {
+			Login string `json:"login"`
+		} `json:"users"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return false, fmt.Errorf("parsing requested_reviewers: %w", err)
+	}
+	for _, u := range resp.Users {
+		if u.Login == botUsername {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// terminalReviewStates are GitHub review states that mean the review is complete.
+// PENDING means Copilot is still composing the review — keep polling.
+var terminalReviewStates = map[string]bool{
+	"APPROVED":           true,
+	"COMMENTED":          true,
+	"CHANGES_REQUESTED":  true,
+	"DISMISSED":          true,
 }
 
 func (g *ghCLI) fetchReview(nwo, botUsername string, prNumber int) (*AutoReview, error) {
@@ -725,13 +780,14 @@ func (g *ghCLI) fetchReview(nwo, botUsername string, prNumber int) (*AutoReview,
 		User struct {
 			Login string `json:"login"`
 		} `json:"user"`
-		Body string `json:"body"`
+		Body  string `json:"body"`
+		State string `json:"state"`
 	}
 	if err := json.Unmarshal(out, &reviews); err != nil {
 		return nil, fmt.Errorf("parsing reviews: %w", err)
 	}
 	for _, r := range reviews {
-		if r.User.Login == botUsername {
+		if r.User.Login == botUsername && terminalReviewStates[r.State] {
 			comments, err := g.fetchReviewComments(nwo, prNumber, r.ID)
 			if err != nil {
 				return nil, err

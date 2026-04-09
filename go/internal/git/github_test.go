@@ -342,7 +342,7 @@ func TestPollReview_ReturnsAutoReview(t *testing.T) {
 	bin := t.TempDir()
 	logFile := filepath.Join(bin, "gh.log")
 
-	reviewJSON := `[{"id":1001,"user":{"login":"copilot-pull-request-reviewer"},"body":"LGTM with suggestions"}]`
+	reviewJSON := `[{"id":1001,"user":{"login":"copilot-pull-request-reviewer"},"state":"COMMENTED","body":"LGTM with suggestions"}]`
 	commentsJSON := `[{"path":"main.go","line":42,"body":"Consider using constants","pull_request_review_id":1001}]`
 	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\nif echo \"$@\" | grep -q 'comments'; then\n  echo '" + commentsJSON + "'\nelse\n  echo '" + reviewJSON + "'\nfi\n"
 	ghPath := filepath.Join(bin, "gh")
@@ -795,7 +795,12 @@ func TestSearchPR_UsesGhAPI(t *testing.T) {
 // from the given bot username has arrived, so the loop proceeds to merge.
 func TestPollReview_Timeout_ReturnsNil(t *testing.T) {
 	bin := t.TempDir()
-	script := "#!/bin/sh\necho '[{\"id\":999,\"user\":{\"login\":\"other-bot\"},\"body\":\"not our reviewer\"}]'\n"
+	script := "#!/bin/sh\n" +
+		"if echo \"$@\" | grep -q 'requested_reviewers'; then\n" +
+		"  echo '{\"users\":[{\"login\":\"copilot-pull-request-reviewer\"}],\"teams\":[]}'\n" +
+		"else\n" +
+		"  echo '[{\"id\":999,\"user\":{\"login\":\"other-bot\"},\"state\":\"COMMENTED\",\"body\":\"not our reviewer\"}]'\n" +
+		"fi\n"
 	ghPath := filepath.Join(bin, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -809,6 +814,128 @@ func TestPollReview_Timeout_ReturnsNil(t *testing.T) {
 	}
 	if review != nil {
 		t.Errorf("expected nil review on timeout, got %+v", review)
+	}
+}
+
+// PollReview returns nil immediately (without entering the poll loop) when the
+// bot is not in the PR's requested_reviewers list and has no existing review —
+// polling would be wasted since no review is coming.
+func TestPollReview_NotRequested_ReturnsNilImmediately(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	script := "#!/bin/sh\n" +
+		"echo \"$@\" >> " + logFile + "\n" +
+		"if echo \"$@\" | grep -q 'requested_reviewers'; then\n" +
+		"  echo '{\"users\":[],\"teams\":[]}'\n" +
+		"else\n" +
+		"  echo '[]'\n" +
+		"fi\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	// Long timeout — if pre-check works, returns nil immediately without waiting.
+	review, err := g.PollReview("owner/repo", "copilot-pull-request-reviewer", 42, 60*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if review != nil {
+		t.Errorf("expected nil when bot not assigned, got %+v", review)
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	var reviewCalls, requestedCalls int
+	for _, line := range lines {
+		if strings.Contains(line, "requested_reviewers") {
+			requestedCalls++
+		} else if strings.Contains(line, "reviews") {
+			reviewCalls++
+		}
+	}
+	if requestedCalls != 1 {
+		t.Errorf("expected 1 requested_reviewers call, got %d", requestedCalls)
+	}
+	// At most 1 reviews check (initial pre-check), not a polling loop.
+	if reviewCalls > 1 {
+		t.Errorf("expected at most 1 reviews call before skipping, got %d", reviewCalls)
+	}
+}
+
+// PollReview keeps polling when the bot's review state is PENDING (review not yet
+// submitted) and returns the review once it reaches a terminal state like APPROVED.
+func TestPollReview_PendingStateKeepsPolling(t *testing.T) {
+	bin := t.TempDir()
+	counterFile := filepath.Join(bin, "count")
+	script := "#!/bin/sh\n" +
+		"if echo \"$@\" | grep -q 'requested_reviewers'; then\n" +
+		"  echo '{\"users\":[{\"login\":\"copilot-pull-request-reviewer\"}],\"teams\":[]}'\n" +
+		"elif echo \"$@\" | grep -q 'comments'; then\n" +
+		"  echo '[]'\n" +
+		"else\n" +
+		"  n=0\n" +
+		"  [ -f " + counterFile + " ] && n=$(cat " + counterFile + ")\n" +
+		"  n=$((n+1))\n" +
+		"  echo $n > " + counterFile + "\n" +
+		"  if [ \"$n\" -le 1 ]; then\n" +
+		"    echo '[{\"id\":1,\"user\":{\"login\":\"copilot-pull-request-reviewer\"},\"state\":\"PENDING\",\"body\":\"\"}]'\n" +
+		"  else\n" +
+		"    echo '[{\"id\":1,\"user\":{\"login\":\"copilot-pull-request-reviewer\"},\"state\":\"APPROVED\",\"body\":\"LGTM\"}]'\n" +
+		"  fi\n" +
+		"fi\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	review, err := g.PollReview("owner/repo", "copilot-pull-request-reviewer", 42, 200*time.Millisecond)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if review == nil {
+		t.Fatal("expected review after PENDING → APPROVED transition, got nil")
+	}
+	if review.Body != "LGTM" {
+		t.Errorf("expected body %q, got %q", "LGTM", review.Body)
+	}
+}
+
+// PollReview returns an AutoReview with an empty (non-nil) Comments slice when the
+// bot submits an APPROVED review with no inline comments — state=APPROVED is terminal.
+func TestPollReview_TerminalStateNoComments(t *testing.T) {
+	bin := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"if echo \"$@\" | grep -q 'requested_reviewers'; then\n" +
+		"  echo '{\"users\":[{\"login\":\"copilot-pull-request-reviewer\"}],\"teams\":[]}'\n" +
+		"elif echo \"$@\" | grep -q 'comments'; then\n" +
+		"  echo '[]'\n" +
+		"else\n" +
+		"  echo '[{\"id\":1,\"user\":{\"login\":\"copilot-pull-request-reviewer\"},\"state\":\"APPROVED\",\"body\":\"\"}]'\n" +
+		"fi\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	review, err := g.PollReview("owner/repo", "copilot-pull-request-reviewer", 42, 5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if review == nil {
+		t.Fatal("expected non-nil AutoReview for APPROVED state with no comments")
+	}
+	if review.Comments == nil {
+		t.Error("expected empty slice for Comments, not nil")
+	}
+	if len(review.Comments) != 0 {
+		t.Errorf("expected 0 comments, got %d", len(review.Comments))
 	}
 }
 
