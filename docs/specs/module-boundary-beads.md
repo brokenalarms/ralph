@@ -146,35 +146,66 @@ task was handled (merged, open PR, needs agent). The orchestrator passes
 choreographs: push → create PR → poll reviewers → merge → post-merge update.
 This lives in `finalizePR` (125 lines, 17 fields).
 
-**Target:** `g.Ship(ctx, opts)` — one call for "get this work into a PR and
-optionally merge." Internally handles push, PR create/update, reviewer
-polling, merge with retry, post-merge main sync.
-
-The orchestrator provides callbacks in `ShipOpts` for cross-module concerns
-(spawning fix agents):
+**Target:** `g.Ship(ctx, opts)` handles push, PR create/update, reviewer
+polling, and merge attempt. When a cross-module concern arises (CI failure,
+unresolved conflict, review feedback), Ship returns a typed result and the
+orchestrator decides what to do — call the verifier, spawn a fix agent,
+retry, or give up.
 
 ```go
 type ShipOpts struct {
-    TaskID       string
-    TaskTitle    string
-    Body         string
-    AutoMerge    bool
-    Reviewers    []Reviewer
-    OnCIFailure  func(*CIFailureError) CIFixResult
-    OnConflict   func(*UnresolvedConflictError) bool
-    OnReviewFix  func(string, *AutoReview, int) bool
+    TaskID    string
+    TaskTitle string
+    Body      string
+    AutoMerge bool
+    Reviewers []Reviewer
+}
+
+type ShipResult struct {
+    PRNumber int
+    PRURL    string
+    Merged   bool
+    // Non-nil when Ship could not complete — orchestrator decides next step.
+    CIFailure  *CIFailureError
+    Conflict   *UnresolvedConflictError
+    ReviewFix  *ReviewFixNeeded
 }
 ```
 
+The orchestrator owns the retry loop:
+
+```go
+for {
+    result, err := g.Ship(ctx, shipOpts)
+    if err != nil { return err }
+    if result.Merged { break }
+
+    if result.CIFailure != nil {
+        fixed := v.TryFixCI(ctx, result.CIFailure)
+        if !fixed { break }
+        continue
+    }
+    if result.Conflict != nil {
+        resolved := v.TryFixConflict(ctx, result.Conflict)
+        if !resolved { break }
+        continue
+    }
+    break
+}
+```
+
+No callbacks. The git module returns data, the orchestrator acts on it.
+
 **AC:**
-1. `Ship` on the `git.Repo` interface accepts `ShipOpts` with reviewer
-   config, merge options, and fix callbacks
+1. `Ship` on the `git.Repo` interface accepts `ShipOpts` (data only, no
+   callbacks) and returns `ShipResult`
 2. `finalizePR` is deleted from `loop_iteration.go`
 3. `finalizePRParams` struct is deleted
 4. The loop does not call `PostMergeUpdateMain`, `SetLocalTestsPassed`,
    `SetKnownPRNumber`, `GetPRState`, `GetPRBase`, `PollReview`, or
    `MergeWithRetry` directly
-5. All existing integration tests pass unchanged
+5. No `func` type fields in `ShipOpts` or any params struct
+6. All existing integration tests pass unchanged
 
 **Greppable assertion:** `grep -r 'finalizePR\|PostMergeUpdateMain\|SetLocalTestsPassed\|SetKnownPRNumber\|PollReview' go/internal/loop/` returns zero matches (except test helpers).
 
@@ -184,29 +215,34 @@ type ShipOpts struct {
 
 ### Bead 4: completeTask replaces handlePostSignal + runAndComplete tail
 
-**Current state:** After the agent signals, `runAndComplete` calls
-`handlePostSignal` which calls `pushSignalPR` and `finalizePR` (after
-bead 3 replaces finalizePR with `g.Ship`). `handlePostSignal` has 16
-dependency fields. `runAndComplete` has 35.
+**Status:** Partially landed (ralph-6a80, PR #510). `handlePostSignal` and
+`runAndCompleteParams` were deleted, but `completeTaskParams` replaced
+module references with 22 `func` fields — same dependency threading via
+callbacks instead of interfaces. Needs re-work.
 
-**Target:** `completeTask(ctx, completeOpts) loopAction` is the single
-post-completion function. After bead 3, the Ship call is one line. What
-remains is: verify → ship → close bead → record completion → notify.
-That's 5 concerns, each one call.
+**Current state:** `completeTaskParams` has 22 func fields wrapping module
+methods (`shipFn`, `finalizePRFn`, `closeTaskFn`, `getStateFn`, etc.).
+Each is a closure over a module on the `Loop` struct. This is the same
+anti-pattern — the god object became a god callback bag.
+
+**Target:** `completeTask` receives only data: the task ID, branch name,
+summary, PR number, and any results the orchestrator has already obtained
+from modules. The orchestrator calls modules directly (verify, ship, close
+bead, record completion) and passes results between them. `completeTask`
+does not need to call back into modules — the orchestrator sequences the
+calls.
 
 **AC:**
-1. `completeTask` exists in the loop package
-2. `handlePostSignal` and `pushSignalPR` are deleted
-3. `handlePostSignalOpts` and `runAndCompleteParams` structs are deleted
-4. `loop.go:Run()` calls: run agent → `completeTask`. Two phases, not one
-   35-field mega-delegation
-5. No params struct in the loop package carries a module reference
-   (interface or pointer-to-struct-with-methods). Only data, callbacks,
-   and `*logging.Logger`.
-6. `TestOrchestratorParamsNoModules` exists and passes
-7. All existing integration tests pass unchanged
+1. `completeTaskParams` contains zero `func` type fields
+2. `completeTaskParams` contains zero interface fields
+3. `completeTaskParams` contains only data: primitives, data structs
+   (no methods), and `*logging.Logger`
+4. The orchestrator in `Run()` calls modules directly and passes results
+   as data to `completeTask`
+5. `TestOrchestratorParamsNoModules` passes (universal no-func-types check)
+6. All existing integration tests pass unchanged
 
-**Greppable assertion:** `grep -r 'handlePostSignal\|pushSignalPR\|runAndCompleteParams' go/internal/loop/` returns zero matches.
+**Greppable assertion:** `grep -r 'handlePostSignal\|pushSignalPR\|runAndCompleteParams' go/internal/loop/` returns zero matches (already satisfied).
 
 ---
 
@@ -275,7 +311,6 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
     //   Allowed:
     //     - Primitives: string, int, bool, time.Duration, etc.
     //     - Data structs: structs with no methods (git.TaskMeta, git.ShipResult)
-    //     - Function types: func(...) ... (callbacks for composition)
     //     - *logging.Logger (cross-cutting, ubiquitous)
     //     - context.Context
     //
@@ -283,7 +318,10 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
     //     - Interfaces with methods (tasks.Backend, git.GitOps, git.Ops)
     //     - Pointers to structs with methods (*state.Store, *attempts.Tracker,
     //       *Verifier, *ratelimit.Limiter, *analyzer.Analyzer, *git.Repo)
-    //     — except *logging.Logger
+    //       — except *logging.Logger
+    //     - Function types: func(...) ... — callbacks are module references
+    //       in disguise. If a downstream function needs a module's result,
+    //       the caller obtains it and passes the result as data.
     //
     // This applies to ALL packages in go/internal/ — not just the
     // orchestrator. Any package can grow into the same anti-pattern.
@@ -294,22 +332,24 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 }
 ```
 
-Function callbacks (`func(string) bool`, `func(ctx) error`) are allowed
-and encouraged — they enable composition without dependency threading.
-The orchestrator controls what backs the callback; the downstream function
-only sees the operation.
+Function callbacks (`func(...)`) are **forbidden** in params/opts structs.
+They are module references in disguise — wrapping `v.TryFixCI` in
+`func(*CIFailureError) CIFixResult` still threads the verifier module
+through the params struct. The orchestrator calls modules directly and
+passes results as data.
 
 ### AGENTS.md addition
 
 > The orchestrator (loop package) holds module references on the `Loop`
-> struct and calls them directly. Params structs in the loop package must
-> not carry module references — only data (primitives, data structs),
-> callbacks (`func` types for composition), and `*logging.Logger`.
-> `TestOrchestratorParamsNoModules` enforces this.
+> struct and calls them directly. Params/opts structs passed to functions
+> must carry only data: primitives, data structs (no methods), and
+> `*logging.Logger`. No interfaces, no struct-with-methods pointers, and
+> no function types. `TestOrchestratorParamsNoModules` enforces this.
 >
 > If a downstream function needs a module's result, the orchestrator calls
-> the module and passes the result as data. If a downstream function needs
-> to perform a module operation, the orchestrator passes a callback.
+> the module first and passes the result as data. If a module operation
+> requires a decision from another module, the called module returns data
+> describing the situation and the orchestrator makes the decision.
 >
 > GitHub is git's internal persistence layer. Do not reference `git.GitHub`,
 > `git.StubGitHub`, or any GitHub type outside `go/internal/git/`.

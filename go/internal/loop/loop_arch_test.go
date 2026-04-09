@@ -12,9 +12,9 @@ import (
 )
 
 // TestOrchestratorParamsNoModules enforces that params/opts structs in the
-// loop package do not carry module references (interfaces or pointers to
-// structs with methods). Only data, callbacks (func types), and
-// *logging.Logger are allowed.
+// loop package do not carry module references. Only data (primitives, data
+// structs without methods) and *logging.Logger are allowed. Function types
+// are forbidden — they are module references in disguise.
 //
 // Each section is commented out until the corresponding bead lands.
 // The agent completing each bead uncomments their section.
@@ -34,6 +34,9 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 		// "finalizePRParams": "git.GitOps",
 
 		// --- Bead 4: completeTask (ralph-6a80) ---
+		// Landed but replaced module refs with 22 func fields.
+		// Universal no-func-types check catches these.
+		// Needs re-work: completeTaskParams must carry only data.
 
 		// --- Bead 6: task selection → tasks module ---
 		// "selectNextTaskParams":  "tasks.Backend",
@@ -54,10 +57,6 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 		// "maybeRefactorParams":     "ratelimit.Limiter",
 		// "analyzeIterationParams":  "analyzer.Analyzer",
 		// "prepareAndBuildPromptParams": "ratelimit.Limiter",
-	}
-
-	if len(forbidden) == 0 {
-		t.Skip("all sections commented out — uncomment as beads land")
 	}
 
 	fset := token.NewFileSet()
@@ -87,8 +86,7 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 					continue
 				}
 				structName := ts.Name.Name
-				wantGone, tracked := forbidden[structName]
-				if !tracked {
+				if !isParamsOrOpts(structName) {
 					continue
 				}
 				st, ok := ts.Type.(*ast.StructType)
@@ -97,16 +95,42 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 				}
 				for _, field := range st.Fields.List {
 					typStr := typeString(field.Type)
-					if strings.Contains(typStr, wantGone) {
+
+					// Check bead-specific forbidden types.
+					if wantGone, tracked := forbidden[structName]; tracked {
+						if strings.Contains(typStr, wantGone) {
+							for _, name := range field.Names {
+								t.Errorf("%s.%s carries module %s — must be data, not a module reference",
+									structName, name.Name, wantGone)
+							}
+						}
+					}
+
+					// Universal rule: no func types in any params/opts struct.
+					// Callbacks are module references in disguise.
+					if isFuncType(field.Type) {
 						for _, name := range field.Names {
-							t.Errorf("%s.%s carries module %s — must be data or callback, not a module reference",
-								structName, name.Name, wantGone)
+							t.Errorf("%s.%s is a func type — params/opts structs must carry only data, not callbacks",
+								structName, name.Name)
+						}
+					}
+
+					// Universal rule: no interface types.
+					if isInterfaceType(field.Type) {
+						for _, name := range field.Names {
+							t.Errorf("%s.%s is an interface — params/opts structs must carry only data, not module references",
+								structName, name.Name)
 						}
 					}
 				}
 			}
 		}
 	}
+}
+
+// isParamsOrOpts returns true for struct names ending in Params or Opts.
+func isParamsOrOpts(name string) bool {
+	return strings.HasSuffix(name, "Params") || strings.HasSuffix(name, "Opts")
 }
 
 func typeString(expr ast.Expr) string {
@@ -128,4 +152,14 @@ func typeString(expr ast.Expr) string {
 	default:
 		return ""
 	}
+}
+
+func isFuncType(expr ast.Expr) bool {
+	_, ok := expr.(*ast.FuncType)
+	return ok
+}
+
+func isInterfaceType(expr ast.Expr) bool {
+	_, ok := expr.(*ast.InterfaceType)
+	return ok
 }
