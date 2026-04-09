@@ -285,12 +285,12 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
     //       *Verifier, *ratelimit.Limiter, *analyzer.Analyzer, *git.Repo)
     //     — except *logging.Logger
     //
-    // This applies ONLY to the loop package (the orchestrator). Other
-    // packages can structure their internals however they want.
+    // This applies to ALL packages in go/internal/ — not just the
+    // orchestrator. Any package can grow into the same anti-pattern.
     //
-    // The Loop struct itself may hold module references — that's where
-    // the orchestrator calls them from. But those references must not be
-    // copied into params structs for downstream functions.
+    // Top-level structs (Loop, Verifier, git.Repo) may hold module
+    // references as fields — that's dependency injection at construction.
+    // But params/opts structs passed to functions must not carry them.
 }
 ```
 
