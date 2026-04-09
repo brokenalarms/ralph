@@ -324,7 +324,7 @@ type resolveByPRStateParams struct {
 func resolveByPRState(ctx context.Context, p resolveByPRStateParams) bool {
 	rawLogPath := filepath.Join(p.ralphDir, "raw.log")
 
-	shipResult, _ := p.git.Ship(ctx, git.ShipOpts{
+	shipResult, shipErr := p.git.Ship(ctx, git.ShipOpts{
 		PRNumber:  p.prNumber,
 		AutoMerge: p.autoMerge,
 		Logger:    p.logger,
@@ -358,6 +358,10 @@ func resolveByPRState(ctx context.Context, p resolveByPRStateParams) bool {
 			p.state.Write("review_addressed:"+botUsername+":"+p.taskID, "true")
 		},
 	})
+
+	if isCIError(shipErr) {
+		return false
+	}
 
 	switch shipResult.PRState {
 	case git.PRStateMerged:

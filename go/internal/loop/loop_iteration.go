@@ -415,25 +415,25 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 					taskID:   p.taskID,
 					nextTask: p.nextTask,
 				})
+				if isCIError(shipErr) {
+					return handlePostSignalOut{action: signalSkipped}
+				}
 				if shipResult.PRState == git.PRStateOpen || shipResult.PRState == git.PRStateMerged {
-					var beadResult closeBeadResult
-					if !isCIError(shipErr) {
-						beadResult = closeBeadAfterShip(closeBeadParams{
-							ctx:         p.ctx,
-							taskID:      p.taskID,
-							prNumber:    prNum,
-							prURL:       shipResult.PRURL,
-							remoteURL:   opts.git.RemoteURL(),
-							merged:      shipResult.Merged,
-							mergeFailed: shipResult.MergeFailed,
-							logger:      opts.logger,
-							backend:     opts.backend,
-							state:       opts.state,
-							attempts:    opts.attempts,
-						})
-					}
+					beadResult := closeBeadAfterShip(closeBeadParams{
+						ctx:         p.ctx,
+						taskID:      p.taskID,
+						prNumber:    prNum,
+						prURL:       shipResult.PRURL,
+						remoteURL:   opts.git.RemoteURL(),
+						merged:      shipResult.Merged,
+						mergeFailed: shipResult.MergeFailed,
+						logger:      opts.logger,
+						backend:     opts.backend,
+						state:       opts.state,
+						attempts:    opts.attempts,
+					})
 					opts.git.TagTaskEnd(p.taskID)
-					opts.runPostTaskFn(p.ctx, p.taskID, prNum, shipResult.Merged)
+					opts.runPostTaskFn(p.ctx, p.taskID, prNum, beadResult.merged)
 					if opts.notify {
 						notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
 						if shipResult.Merged {
@@ -547,22 +547,23 @@ func handlePostSignal(p postSignalParams, opts handlePostSignalOpts) handlePostS
 		nextTask:   p.nextTask,
 	})
 
-	var beadResult closeBeadResult
-	if !isCIError(shipErr) {
-		beadResult = closeBeadAfterShip(closeBeadParams{
-			ctx:         p.ctx,
-			taskID:      p.taskID,
-			prNumber:    prNumber,
-			prURL:       ct.PRURL,
-			remoteURL:   opts.git.RemoteURL(),
-			merged:      shipResult.Merged,
-			mergeFailed: shipResult.MergeFailed,
-			logger:      opts.logger,
-			backend:     opts.backend,
-			state:       opts.state,
-			attempts:    opts.attempts,
-		})
+	if isCIError(shipErr) {
+		return handlePostSignalOut{action: signalComplete, ct: &ct}
 	}
+
+	beadResult := closeBeadAfterShip(closeBeadParams{
+		ctx:         p.ctx,
+		taskID:      p.taskID,
+		prNumber:    prNumber,
+		prURL:       ct.PRURL,
+		remoteURL:   opts.git.RemoteURL(),
+		merged:      shipResult.Merged,
+		mergeFailed: shipResult.MergeFailed,
+		logger:      opts.logger,
+		backend:     opts.backend,
+		state:       opts.state,
+		attempts:    opts.attempts,
+	})
 
 	opts.runPostTaskFn(p.ctx, p.taskID, prNumber, beadResult.merged)
 

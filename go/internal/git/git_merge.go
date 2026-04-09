@@ -517,7 +517,7 @@ func shipMerge(ctx context.Context, gh GitHub, prNumber int, remoteURL string, o
 		opts.PostMergeUpdateFn()
 	}
 
-	return shipMergeResult{merged: true, prState: PRStateOpen}
+	return shipMergeResult{merged: true, prState: PRStateMerged}
 }
 
 // Manager.Ship delegates to the package function, filling in git-internal
