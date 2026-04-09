@@ -201,6 +201,43 @@ func (s *StubGit) DetectDefaultBranch() string {
 func (s *StubGit) RecentChangedFiles(_ int) string                    { return s.RecentFilesValue }
 func (s *StubGit) GetCIFailureLog(_ int) string                    { return s.CIFailureLogValue }
 
+func (s *StubGit) SyncWorktreeBase(_ context.Context, _ []string) error {
+	return s.EnsureUpToDateErr
+}
+
+func (s *StubGit) BranchForTask(_ context.Context, taskID, title string, meta git.BranchTaskMeta) (string, error) {
+	s.PrepareForNextTask(taskID)
+
+	// Mirror setStackHead: find the most recent completed branch with an open PR that's ahead of main.
+	s.SetPrevBranch("")
+	if len(meta.CompletedBranches) > 0 {
+		openBranches, err := s.ListOpenPRBranches()
+		if err == nil && len(openBranches) > 0 {
+			openSet := make(map[string]bool, len(openBranches))
+			for _, b := range openBranches {
+				openSet[b] = true
+			}
+			for i := len(meta.CompletedBranches) - 1; i >= 0; i-- {
+				branch := meta.CompletedBranches[i]
+				if branch != "" && openSet[branch] && s.BranchIsAheadOfMain(branch) {
+					s.SetPrevBranch(branch)
+					break
+				}
+			}
+		}
+	}
+
+	storedBranch := meta.Branch
+	if storedBranch != "" {
+		s.RenameBranchTo(storedBranch)
+		return s.WorktreeBranch, nil
+	}
+	if err := s.RenameBranchForTask(title, taskID); err != nil {
+		return "", err
+	}
+	return s.WorktreeBranch, nil
+}
+
 func (s *StubGit) PrepareForNextTask(nextTaskID string) {
 	s.PrepareForNextCalls++
 	s.PrepareForNextTaskIDs = append(s.PrepareForNextTaskIDs, nextTaskID)

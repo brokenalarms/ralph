@@ -420,18 +420,25 @@ iterLoop:
 
 		// ── Branch setup ──
 		if task.changed || !l.git.IsBranchRenamed() {
-			if err := prepareBranch(ctx, branchParams{
-				git:     l.git,
-				backend: l.cfg.TaskBackend,
-				state:   l.state,
-				logger:  l.logger,
-			}, task.id, task.title); err != nil {
+			storedBranch, _ := l.cfg.TaskBackend.GetMetadata(task.id, "branch")
+			storedExternalRef, _ := l.cfg.TaskBackend.GetExternalRef(task.id)
+			completedBranches := buildCompletedBranches(l.state, l.cfg.TaskBackend)
+			branch, err := l.git.BranchForTask(ctx, task.id, task.title, git.BranchTaskMeta{
+				Branch:            storedBranch,
+				ExternalRef:       storedExternalRef,
+				CompletedBranches: completedBranches,
+			})
+			if err != nil {
 				if ctx.Err() != nil {
 					l.state.Write("status", "stopped")
 				} else {
 					l.state.Write("status", "error")
 				}
 				break
+			}
+			l.state.WriteRunBranch(branch)
+			if task.id != "" && branch != "" && strings.Contains(branch, task.id) {
+				_ = l.cfg.TaskBackend.SetMetadata(task.id, "branch", branch)
 			}
 		}
 

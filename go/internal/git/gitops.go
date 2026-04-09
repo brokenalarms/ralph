@@ -48,6 +48,8 @@ type GitOps interface {
 	GetCIFailureLog(prNumber int) string
 
 	// Branch lifecycle.
+	SyncWorktreeBase(ctx context.Context, completedBranches []string) error
+	BranchForTask(ctx context.Context, taskID, title string, meta BranchTaskMeta) (string, error)
 	PrepareForNextTask(nextTaskID string)
 	ResetToDefaultBranch()
 	RenameBranchForTask(taskDesc, taskID string) error

@@ -1923,7 +1923,7 @@ func (g *realMergeGit) Ship(ctx context.Context, opts git.ShipOpts) (git.ShipRes
 // push and merge, proving the CI pipeline actually ran.
 //
 // Also verifies the second iteration: after first close, next task is selected
-// and the worktree is reset via PrepareForNextTask.
+// and branch setup runs for the next task.
 func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
 
@@ -2089,9 +2089,9 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 			sessionTasks[0].ID, sessionTasks[1].ID)
 	}
 
-	// Worktree was reset for both tasks (PrepareForNextTask called at least twice).
+	// Branch setup ran for both tasks (PrepareForNextCalls ≥ 2).
 	if stub.PrepareForNextCalls < 2 {
-		t.Errorf("worktree reset (PrepareForNextTask) expected ≥2 calls, got %d", stub.PrepareForNextCalls)
+		t.Errorf("branch setup (PrepareForNextCalls) expected ≥2 calls, got %d", stub.PrepareForNextCalls)
 	}
 }
 

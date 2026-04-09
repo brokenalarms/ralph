@@ -1,10 +1,8 @@
 package loop
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -94,8 +92,8 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 	}
 }
 
-// Verifies that PostMergeUpdateMain is called between tasks and PrepareForNextTask
-// is called to set up the next task, proving each task starts from merged main
+// Verifies that PostMergeUpdateMain is called between tasks and branch setup
+// is called for the next task, proving each task starts from merged main
 // rather than building on stale commits.
 func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 	dir, st := setupTestDir(t)
@@ -169,7 +167,7 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 	}
 
 	if gm.PrepareForNextCalls == 0 {
-		t.Errorf("expected PrepareForNextTask to be called at least once between tasks")
+		t.Errorf("expected branch prep (PrepareForNextCalls) at least once between tasks, got 0")
 	}
 }
 
@@ -366,7 +364,7 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 	}
 }
 
-// setStackHead skips a branch whose work landed on main even when the
+// Stack head detection skips a branch whose work landed on main even when the
 // remote branch still exists (BranchIsAheadOfMain returns false).
 func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 	dir, st := setupTestDir(t)
@@ -547,8 +545,8 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 }
 
 // After a merge, PostMergeUpdateMain already syncs the worktree to main.
-// The next iteration must NOT call ResetToDefaultBranch again, so
-// ResetCalls should be at most 1 (from initRun before any task runs).
+// The next iteration must not reset again, so ResetCalls should be at most 1
+// (from initRun before any task runs).
 func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -614,10 +612,9 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 	_ = l.Run(context.Background())
 
 	// initRun may produce one reset (before any task runs).
-	// After merge, PostMergeUpdateMain handles the reset — a second
-	// ResetToDefaultBranch call would be redundant.
+	// After merge, PostMergeUpdateMain handles the reset — a second reset is redundant.
 	if gm.ResetCalls > 1 {
-		t.Errorf("expected at most 1 ResetToDefaultBranch call (from initRun), got %d — next-task path should skip reset after merge", gm.ResetCalls)
+		t.Errorf("expected at most 1 reset (from initRun), got %d — next-task path should skip reset after merge", gm.ResetCalls)
 	}
 
 	if gm.PostMergeUpdateCalls == 0 {
@@ -625,74 +622,3 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 	}
 }
 
-// setStackHead silently falls through when no GitHub stub is configured
-// (early return due to missing repoURL/gh) — PrevBranch stays empty.
-func TestSetStackHead_SkipsUnfetchableBranch(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-
-	var buf bytes.Buffer
-	logger := logging.NewWithWriter(&buf)
-
-	gm := &testutil.StubGit{
-		ProjectDir: dir,
-		WorkDir:    dir,
-	}
-
-	st.AddCompletedTask("ralph-aaa", true)
-	backend := &testutil.MutableBackend{}
-
-	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
-			RalphDir:   ralphDir,
-		},
-		TaskBackend: backend,
-	}, st, gm, logger)
-
-	setStackHead(l.git, l.cfg.TaskBackend, l.state, l.logger)
-
-	if gm.PrevBranch != "" {
-		t.Errorf("PrevBranch should be empty when no GitHub available, got %q", gm.PrevBranch)
-	}
-	output := buf.String()
-	if strings.Contains(output, "Stack head") {
-		t.Errorf("should not log 'Stack head' when no GitHub available, got:\n%s", output)
-	}
-}
-
-// setStackHead does NOT log "No stacked parents" when there are no
-// completed tasks — the early return path should be silent.
-func TestSetStackHead_NoLogWhenNoCompletedTasks(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-
-	var buf bytes.Buffer
-	logger := logging.NewWithWriter(&buf)
-
-	gm := &testutil.StubGit{
-		ProjectDir: dir,
-		WorkDir:    dir,
-	}
-
-	backend := &testutil.MutableBackend{}
-
-	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    dir,
-			RalphDir:   ralphDir,
-		},
-		TaskBackend: backend,
-	}, st, gm, logger)
-
-	setStackHead(l.git, l.cfg.TaskBackend, l.state, l.logger)
-
-	output := buf.String()
-	if strings.Contains(output, "No stacked parents") {
-		t.Errorf("should not log 'No stacked parents' when no completed tasks exist, got:\n%s", output)
-	}
-}

@@ -36,13 +36,10 @@ func (l *Loop) initWorktree(ctx context.Context) error {
 	}
 
 	// One-time sync: rebase onto latest base so the first iteration
-	// starts from a clean state. prepareBranch handles this on subsequent
+	// starts from a clean state. BranchForTask handles this on subsequent
 	// iterations, but we need it here before the loop starts.
-	setStackHead(l.git, l.cfg.TaskBackend, l.state, l.logger)
-	if l.git.GetPrevBranch() == "" {
-		l.git.ResetToDefaultBranch()
-	}
-	if err := l.git.EnsureUpToDate(ctx); err != nil {
+	completedBranches := buildCompletedBranches(l.state, l.cfg.TaskBackend)
+	if err := l.git.SyncWorktreeBase(ctx, completedBranches); err != nil {
 		if ctx.Err() != nil {
 			l.state.Write("status", "stopped")
 			return nil
@@ -52,7 +49,7 @@ func (l *Loop) initWorktree(ctx context.Context) error {
 	}
 
 	// If resuming the same task, mark the branch as already renamed so
-	// prepareBranch doesn't re-rename it on the first iteration.
+	// BranchForTask doesn't re-rename it on the first iteration.
 	if lastID, _ := l.state.Read("last_task_id"); lastID != "" {
 		l.cfg.TaskBackend.SetResumeTaskID(lastID)
 	}
