@@ -202,32 +202,31 @@ func TestShip_PackageFunction_CreatesPR(t *testing.T) {
 
 	pushedCalled := false
 	opts := ShipOpts{
-		TaskID:    "ralph-gmxa",
-		TaskTitle: "ship as package fn",
-		Body:      "extracted ship body",
-		PushFn: func(ctx context.Context) error {
-			pushedCalled = true
-			return nil
-		},
-		HasUncommittedChangesFn: func() bool { return false },
-		CommitAllFn:             func(string) {},
-		BaseBranch:              "main",
-		Logger:                  discardLog{},
+		TaskID:     "ralph-gmxa",
+		TaskTitle:  "ship as package fn",
+		Body:       "extracted ship body",
+		BaseBranch: "main",
+	}
+	infra := shipInfra{
+		push:           func(ctx context.Context) error { pushedCalled = true; return nil },
+		hasUncommitted: func() bool { return false },
+		commitAll:      func(string) {},
+		logger:         discardLog{},
 	}
 
-	result, err := Ship(context.Background(), nil, gh, "/wt", "ralph/gmxa-ship", "https://github.com/test/repo.git", opts)
+	result, err := shipPR(context.Background(), nil, gh, "/wt", "ralph/gmxa-ship", "https://github.com/test/repo.git", opts, infra)
 	if err != nil {
-		t.Fatalf("Ship package function failed: %v", err)
+		t.Fatalf("shipPR failed: %v", err)
 	}
 	if !pushedCalled {
-		t.Error("expected PushFn to be called")
+		t.Error("expected push to be called")
 	}
 	if result.PRNumber != 77 {
 		t.Errorf("PRNumber = %d, want %d", result.PRNumber, 77)
 	}
 }
 
-// Ship skips CreatePR and returns an empty result when BranchIsAheadOfMainFn
+// shipPR skips CreatePR and returns an empty result when branchAheadOfMain
 // reports the branch is not ahead of main after pushing — prevents spurious
 // 422 API errors on empty/already-merged branches.
 func TestShip_SkipsCreatePRWhenNotAheadOfMain(t *testing.T) {
@@ -240,15 +239,16 @@ func TestShip_SkipsCreatePRWhenNotAheadOfMain(t *testing.T) {
 		},
 	}
 
-	opts := ShipOpts{
-		PushFn:                  func(ctx context.Context) error { return nil },
-		HasUncommittedChangesFn: func() bool { return false },
-		CommitAllFn:             func(string) {},
-		BranchIsAheadOfMainFn:  func(string) bool { return false },
-		Logger:                  discardLog{},
+	opts := ShipOpts{}
+	infra := shipInfra{
+		push:              func(ctx context.Context) error { return nil },
+		hasUncommitted:    func() bool { return false },
+		commitAll:         func(string) {},
+		branchAheadOfMain: func(string) bool { return false },
+		logger:            discardLog{},
 	}
 
-	result, err := Ship(context.Background(), nil, gh, "/wt", "ralph/test-branch", "", opts)
+	result, err := shipPR(context.Background(), nil, gh, "/wt", "ralph/test-branch", "", opts, infra)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

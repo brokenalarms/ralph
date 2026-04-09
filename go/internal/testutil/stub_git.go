@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/git"
@@ -264,7 +265,44 @@ func (s *StubGit) Ship(ctx context.Context, opts git.ShipOpts) (git.ShipResult, 
 	if s.ShipFunc != nil {
 		return s.ShipFunc(ctx, opts)
 	}
-	return s.ShipResult, s.ShipErr
+	result := s.ShipResult
+	if s.ShipErr != nil {
+		return result, s.ShipErr
+	}
+	// Mirror real Ship: when PRNumber is set, check PR state first.
+	if opts.PRNumber != 0 {
+		result.PRNumber = opts.PRNumber
+		prState, stateErr := s.GetPRState(opts.PRNumber)
+		if stateErr != nil {
+			return result, stateErr
+		}
+		switch prState {
+		case git.PRStateMerged:
+			result.AlreadyMerged = true
+			result.Merged = true
+			s.PostMergeUpdateMain()
+			return result, nil
+		case git.PRStateClosed:
+			result.Closed = true
+			return result, nil
+		}
+	}
+	if opts.AutoMerge {
+		merged, mergeErr := s.MergeWithRetry(ctx, git.MergeRetryOpts{})
+		if mergeErr != nil {
+			var ciErr *git.CIFailureError
+			if errors.As(mergeErr, &ciErr) {
+				result.CIFailure = true
+				result.CIFailureDetail = ciErr
+			}
+			return result, nil
+		}
+		result.Merged = merged
+		if merged {
+			s.PostMergeUpdateMain()
+		}
+	}
+	return result, nil
 }
 
 func (s *StubGit) PushAndCreatePR(_ context.Context, _, _, _ string) (int, error) {

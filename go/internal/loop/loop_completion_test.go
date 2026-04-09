@@ -125,8 +125,10 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 	}, st, gm, logging.New(nil))
 
 	l.runner = runner
-	gm.PRNumber = 42
+	gm.ShipResult = git.ShipResult{PRNumber: 42}
+	gm.MergeRetryResult = true
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
+	l.cfg.AutoMerge = true
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())

@@ -436,10 +436,10 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 	}
 }
 
-// When mergeFunc returns an error, the loop does not close the task —
-// ensuring failed merges leave the task open for retry. The combined
-// conflict+CI retry pipeline is tested in git module
-// (TestMergeWithRetry_RecoversFromConflict, TestMergeWithRetry_DelegatesCIFailure).
+// When Ship returns a non-CI merge error (plain error, not CIFailureError), the
+// loop closes the task with "merge pending" — the work is done, only merge failed.
+// CI failure handling (which leaves task open) is tested separately in
+// TestFinalizePR_CIFailure_TaskStaysOpen and TestIntegration_CIFailureTriggersFixAgent.
 func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -488,8 +488,8 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	_ = l.Run(context.Background())
 
 	output := buf.String()
-	if !strings.Contains(output, "Auto-merge") {
-		t.Errorf("expected log output to contain 'Auto-merge', got: %s", output)
+	if !strings.Contains(output, "merge pending") {
+		t.Errorf("expected log output to contain 'merge pending' for non-CI merge failure, got: %s", output)
 	}
 }
 

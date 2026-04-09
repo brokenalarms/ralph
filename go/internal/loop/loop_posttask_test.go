@@ -77,11 +77,19 @@ func completeTaskCall(l *Loop, p postSignalParams) postSignalAction {
 		recordAttemptFn: func(taskID, nextTask, reason, diffStat, note string) {
 			l.attempts.Record(taskID, nextTask, reason, diffStat, note)
 		},
-		clearAttemptsFn: l.attempts.Clear,
+		clearAttemptsFn:      l.attempts.Clear,
+		clearMergeFailuresFn: l.attempts.ClearMergeFailures,
 		skipTaskFn: func(taskID, reason string) { l.skipTask(taskID, reason) },
-		shipFn: func(ctx context.Context, taskID, title, summary string) (int, string) {
+		shipFn: func(ctx context.Context, taskID, title, summary string) (int, string, bool, bool, bool) {
+			l.ensureActiveReviewers()
 			prBody := buildPRBody(l.cfg.TaskBackend, taskID, summary)
-			shipOpts := git.ShipOpts{TaskID: taskID, TaskTitle: title, Body: prBody}
+			shipOpts := git.ShipOpts{
+				TaskID:    taskID,
+				TaskTitle: title,
+				Body:      prBody,
+				AutoMerge: l.cfg.AutoMerge,
+				Reviewers: l.activeReviewers,
+			}
 			result, err := l.git.Ship(ctx, shipOpts)
 			if err != nil {
 				if !l.cfg.IsOnline() {
@@ -103,28 +111,7 @@ func completeTaskCall(l *Loop, p postSignalParams) postSignalAction {
 					}
 				}
 			}
-			return result.PRNumber, result.PRURL
-		},
-		finalizePRFn: func(ctx context.Context, taskID, nextTask string, prNumber int, prState git.PRState, prURL, workDir, rawLogPath string) finalizePRResult {
-			l.ensureActiveReviewers()
-			return finalizePR(finalizePRParams{
-				ctx:             ctx,
-				taskID:          taskID,
-				nextTask:        nextTask,
-				prNumber:        prNumber,
-				prState:         prState,
-				prURL:           prURL,
-				workDir:         workDir,
-				rawLogPath:      rawLogPath,
-				autoMerge:       l.cfg.AutoMerge,
-				activeReviewers: l.activeReviewers,
-				git:             l.git,
-				logger:          l.logger,
-				backend:         l.cfg.TaskBackend,
-				state:           l.state,
-				attempts:        l.attempts,
-				verifier:        l.verifier,
-			})
+			return result.PRNumber, result.PRURL, result.Merged, result.CIFailure, result.Stacked
 		},
 		buildCTFn: func(taskID, nextTask, summary string, prNumber int) CompletedTask {
 			return buildCompletedTask(taskID, nextTask, summary, prNumber, l.git)

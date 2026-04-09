@@ -6,9 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/brokenalarms/ralph/internal/attempts"
+	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
@@ -87,36 +86,73 @@ func TestBuildPRBody_NeverGeneric(t *testing.T) {
 	}
 }
 
-// finalizePR skips merge and closes the bead when AutoMerge is off.
+// shipResult holds the values returned by a shipFn stub.
+type shipResult struct {
+	prNumber  int
+	prURL     string
+	merged    bool
+	ciFailure bool
+	stacked   bool
+}
+
+// buildFinalizeParams constructs a completeTaskParams for testing the post-ship
+// close logic. headBefore is set to "before-sha" so the "no new commits" guard
+// is skipped (current HEAD defaults to "" which differs from "before-sha").
+func buildFinalizeParams(t *testing.T, dir, taskID, nextTask string, backend *testutil.TrackingBackend, ship shipResult, skipFn func(string, string)) completeTaskParams {
+	t.Helper()
+	return completeTaskParams{
+		result:     claude.Result{SignalDetected: true, OnSignalUsed: true},
+		headBefore: "before-sha",
+		workDir:    dir,
+		taskID:     taskID,
+		nextTask:   nextTask,
+		logger:     logging.New(nil),
+		verifyFn:   func(context.Context, string) (bool, string) { return true, "" },
+		headRevFn:  func() string { return "after-sha" },
+		worktreeBranchFn: func() string { return "ralph/" + taskID },
+		tagTaskEndFn:     func(string) {},
+		getPRStateFn:     func(int) (git.PRState, error) { return git.PRStateOpen, nil },
+		findExistingPRFn: func(string, string) (int, bool) { return 0, false },
+		getStateFn:       func(string, string) (string, error) { return "", nil },
+		setStateFn:       func(string, string, string, string) error { return nil },
+		closeTaskFn:      backend.CloseTask,
+		getExternalRefFn: func(string) (string, error) { return "", nil },
+		getSkippedTasksFn: func() ([]string, error) { return nil, nil },
+		recordCompletedFn:    func(string, string) {},
+		persistCompletedFn:   func(string, bool) {},
+		touchPlanFlashFn:     func() {},
+		writeStateFn:         func(string, string) {},
+		recordAttemptFn:      func(string, string, string, string, string) {},
+		clearAttemptsFn:      func(string, string) {},
+		clearMergeFailuresFn: func(string) {},
+		skipTaskFn: skipFn,
+		shipFn: func(_ context.Context, _, _, _ string) (int, string, bool, bool, bool) {
+			return ship.prNumber, ship.prURL, ship.merged, ship.ciFailure, ship.stacked
+		},
+		buildCTFn: func(taskID, nextTask, summary string, prNumber int) CompletedTask {
+			return CompletedTask{ID: taskID, Title: nextTask, PRNum: prNumber, PRURL: ship.prURL}
+		},
+		runPostTaskFn: func(context.Context, string, int, bool) {},
+	}
+}
+
+// completeTask closes the bead when AutoMerge is off (shipFn returns merged=false).
 func TestFinalizePR_NoAutoMerge_ClosesTask(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir, _ := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix auth bug", backend, shipResult{
+		prNumber: 42,
+		merged:   false,
+	}, nil)
 
-	result := finalizePR(finalizePRParams{
-		ctx:       context.Background(),
-		taskID:    "ralph-abc",
-		nextTask:  "Fix auth bug",
-		prNumber:  42,
-		prState:   "OPEN",
-		workDir:   dir,
-		autoMerge: false,
-		git:       gm,
-		logger:    logging.New(nil),
-		backend:   backend,
-		state:     st,
-		attempts:  attempts.New(dir),
-	})
+	out := completeTask(context.Background(), p)
 
-	if result.merged {
+	if out.merged {
 		t.Error("should not merge when AutoMerge is disabled")
-	}
-	if !result.closed {
-		t.Error("task should be closed even without merge")
 	}
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
@@ -125,44 +161,23 @@ func TestFinalizePR_NoAutoMerge_ClosesTask(t *testing.T) {
 	}
 }
 
-// finalizePR merges and closes when AutoMerge is on and merge succeeds.
+// completeTask merges and closes when shipFn returns merged=true.
 func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir, _ := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	mergeCalled := false
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	p := buildFinalizeParams(t, dir, "ralph-xyz", "Add feature", backend, shipResult{
+		prNumber: 42,
+		merged:   true,
+	}, nil)
 
-	result := finalizePR(finalizePRParams{
-		ctx:       context.Background(),
-		taskID:    "ralph-xyz",
-		nextTask:  "Add feature",
-		prNumber:  42,
-		prState:   "OPEN",
-		workDir:   dir,
-		autoMerge: true,
-		git:       gm,
-		logger:    logging.New(nil),
-		backend:   backend,
-		state:     st,
-		attempts:  attempts.New(dir),
-		mergeFunc: func(ctx context.Context) (bool, error) {
-			mergeCalled = true
-			return true, nil
-		},
-	})
+	out := completeTask(context.Background(), p)
 
-	if !mergeCalled {
-		t.Error("merge should have been called")
-	}
-	if !result.merged {
-		t.Error("should be merged when merge returns true")
-	}
-	if !result.closed {
-		t.Error("task should be closed after merge")
+	if !out.merged {
+		t.Error("should be merged when ship returns merged=true")
 	}
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
@@ -171,43 +186,26 @@ func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
 	}
 }
 
-// finalizePR closes the bead (not skips) when merge fails with AutoMerge on.
-// Work is verified — it should land in completed_tasks so setStackHead can find
-// the branch for the next task to stack on.
+// completeTask closes the bead (not skips) when merge fails — work is verified
+// and the branch should be findable by setStackHead for the next task.
 func TestFinalizePR_MergeFailure_ClosesTask(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir, _ := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix bug", backend, shipResult{
+		prNumber: 99,
+		merged:   false,
+		prURL:    "https://github.com/owner/repo/pull/99",
+	}, nil)
 
-	result := finalizePR(finalizePRParams{
-		ctx:       context.Background(),
-		taskID:    "ralph-abc",
-		nextTask:  "Fix bug",
-		prNumber:  99,
-		prState:   "OPEN",
-		workDir:   dir,
-		autoMerge: true,
-		git:       gm,
-		logger:    logging.New(nil),
-		backend:   backend,
-		state:     st,
-		attempts:  attempts.New(dir),
-		mergeFunc: func(ctx context.Context) (bool, error) {
-			return false, fmt.Errorf("merge conflict")
-		},
-	})
+	out := completeTask(context.Background(), p)
 
-	if result.merged {
+	if out.merged {
 		t.Error("should not be merged on failure")
 	}
-	if !result.closed {
-		t.Error("task should be closed (not skipped) after merge failure — work is verified")
-	}
-
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
 	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-abc" {
@@ -218,85 +216,43 @@ func TestFinalizePR_MergeFailure_ClosesTask(t *testing.T) {
 	}
 }
 
-// When CI fix agents apply code changes but CI is still failing after all merge
-// attempts, finalizePR leaves the task open for manual investigation. The task
-// is NOT closed as "verified" — phase stays at implementing.
+// When CI fails, completeTask leaves the task open for manual investigation.
 func TestFinalizePR_CIFixExhausted_TaskStaysOpen(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir, _ := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-
-	result := finalizePR(finalizePRParams{
-		ctx:       context.Background(),
-		taskID:    "ralph-abc",
-		nextTask:  "Fix failing tests",
+	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix failing tests", backend, shipResult{
 		prNumber:  99,
-		prState:   "OPEN",
-		workDir:   dir,
-		autoMerge: true,
-		git:       gm,
-		logger:    logging.New(nil),
-		backend:   backend,
-		state:     st,
-		attempts:  attempts.New(dir),
-		mergeFunc: func(ctx context.Context) (bool, error) {
-			return false, &git.CIFixExhaustedError{Attempts: 3}
-		},
-	})
+		ciFailure: true,
+	}, nil)
 
-	if result.closed {
-		t.Error("task should NOT be closed when CI fix agents exhausted — tests still failing")
-	}
-	if result.merged {
-		t.Error("task should not be merged")
-	}
+	completeTask(context.Background(), p)
+
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
 	if len(backend.ClosedIDs) != 0 {
-		t.Errorf("CloseTask must not be called when CI fix agents exhausted, got %v", backend.ClosedIDs)
+		t.Errorf("CloseTask must not be called when CI failure, got %v", backend.ClosedIDs)
 	}
 }
 
-// When CI fails and the fix agent cannot resolve it, mergeWithRetry returns a
-// plain CIFailureError. finalizePR must leave the task open — not close it as
-// "verified, merge pending".
+// CIFailure from shipFn leaves the task open.
 func TestFinalizePR_CIFailure_TaskStaysOpen(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir, _ := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-
-	result := finalizePR(finalizePRParams{
-		ctx:       context.Background(),
-		taskID:    "ralph-abc",
-		nextTask:  "Fix failing tests",
+	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix failing tests", backend, shipResult{
 		prNumber:  99,
-		prState:   "OPEN",
-		workDir:   dir,
-		autoMerge: true,
-		git:       gm,
-		logger:    logging.New(nil),
-		backend:   backend,
-		state:     st,
-		attempts:  attempts.New(dir),
-		mergeFunc: func(ctx context.Context) (bool, error) {
-			return false, &git.CIFailureError{PRNumber: 99, Failures: []git.CICheckResult{{Name: "tests", State: "FAILURE", Bucket: "fail"}}}
-		},
-	})
+		ciFailure: true,
+	}, nil)
 
-	if result.closed {
-		t.Error("task should NOT be closed when CI is failing — CIFailureError must prevent closure")
-	}
-	if result.merged {
-		t.Error("task should not be merged when CI is failing")
-	}
+	completeTask(context.Background(), p)
+
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
 	if len(backend.ClosedIDs) != 0 {
@@ -304,8 +260,8 @@ func TestFinalizePR_CIFailure_TaskStaysOpen(t *testing.T) {
 	}
 }
 
-// finalizePR with merge failure records merged:false in completed_tasks so
-// setStackHead can find the unmerged branch for the next task to stack on.
+// When merge fails, the task still appears in completed_tasks with merged=false
+// so setStackHead can find the unmerged branch for the next task.
 func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testing.T) {
 	dir, st := setupTestDir(t)
 
@@ -313,28 +269,15 @@ func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testi
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix bug", backend, shipResult{
+		prNumber: 99,
+		merged:   false,
+	}, nil)
+	p.persistCompletedFn = func(id string, merged bool) {
+		_ = st.AddCompletedTask(id, merged)
+	}
 
-	finalizePR(finalizePRParams{
-		ctx:       context.Background(),
-		taskID:    "ralph-abc",
-		nextTask:  "Fix bug",
-		prNumber:  99,
-		prState:   "OPEN",
-		workDir:   dir,
-		autoMerge: true,
-		git:       gm,
-		logger:    logging.New(nil),
-		backend:   backend,
-		state:     st,
-		attempts:  attempts.New(dir),
-		mergeFunc: func(ctx context.Context) (bool, error) {
-			return false, fmt.Errorf("CI check failed")
-		},
-		persistCompletedFn: func(taskID string, merged bool) {
-			_ = st.AddCompletedTask(taskID, merged)
-		},
-	})
+	completeTask(context.Background(), p)
 
 	tasks, err := st.GetCompletedTasks()
 	if err != nil {
@@ -351,40 +294,23 @@ func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testi
 	}
 }
 
-// finalizePR with MERGED state closes immediately without attempting merge.
+// When shipFn returns merged=true, completeTask closes the bead immediately.
 func TestFinalizePR_AlreadyMerged_ClosesImmediately(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir, _ := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	p := buildFinalizeParams(t, dir, "ralph-xyz", "Add feature", backend, shipResult{
+		prNumber: 42,
+		merged:   true,
+	}, nil)
 
-	result := finalizePR(finalizePRParams{
-		ctx:       context.Background(),
-		taskID:    "ralph-xyz",
-		nextTask:  "Add feature",
-		prNumber:  42,
-		prState:   "MERGED",
-		workDir:   dir,
-		autoMerge: true,
-		git:       gm,
-		logger:    logging.New(nil),
-		backend:   backend,
-		state:     st,
-		attempts:  attempts.New(dir),
-		mergeFunc: func(ctx context.Context) (bool, error) {
-			t.Fatal("merge should not be called for already-merged PR")
-			return false, nil
-		},
-	})
+	out := completeTask(context.Background(), p)
 
-	if !result.merged {
-		t.Error("should report merged for MERGED state")
-	}
-	if !result.closed {
-		t.Error("task should be closed")
+	if !out.merged {
+		t.Error("should report merged when ship returns merged=true")
 	}
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
@@ -393,30 +319,21 @@ func TestFinalizePR_AlreadyMerged_ClosesImmediately(t *testing.T) {
 	}
 }
 
-// finalizePR uses PR URL in close reason when available.
+// completeTask uses PR URL in close reason when available.
 func TestFinalizePR_UsesURLInCloseReason(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir, _ := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix login", backend, shipResult{
+		prNumber: 55,
+		prURL:    "https://github.com/owner/repo/pull/55",
+		merged:   false,
+	}, nil)
 
-	finalizePR(finalizePRParams{
-		ctx:       context.Background(),
-		taskID:    "ralph-abc",
-		nextTask:  "Fix login",
-		prNumber:  55,
-		prState:   "OPEN",
-		prURL:     "https://github.com/owner/repo/pull/55",
-		workDir:   dir,
-		git:       gm,
-		logger:    logging.New(nil),
-		backend:   backend,
-		state:     st,
-		attempts:  attempts.New(dir),
-	})
+	completeTask(context.Background(), p)
 
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
@@ -430,46 +347,31 @@ func TestFinalizePR_UsesURLInCloseReason(t *testing.T) {
 
 // CloseTask failure after merge skips the task so the loop doesn't retry it.
 func TestFinalizePR_CloseTaskFailure_SkipsTask(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir, _ := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
 		CloseErr:       fmt.Errorf("exit status 1"),
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
+	_, st := setupTestDir(t)
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	l := New(Config{
 		TaskBackend: backend,
 		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
 	}, st, gm, logging.New(nil))
 
-	result := finalizePR(finalizePRParams{
-		ctx:       context.Background(),
-		taskID:    "ralph-abc",
-		nextTask:  "Fix auth bug",
-		prNumber:  42,
-		prState:   "OPEN",
-		workDir:   dir,
-		autoMerge: true,
-		git:       gm,
-		logger:    logging.New(nil),
-		backend:   backend,
-		state:     st,
-		attempts:  attempts.New(dir),
-		mergeFunc: func(ctx context.Context) (bool, error) {
-			return true, nil
-		},
-		skipTaskFn: l.skipTask,
-	})
+	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix auth bug", backend, shipResult{
+		prNumber: 42,
+		merged:   true,
+	}, l.skipTask)
 
-	if !result.merged {
+	out := completeTask(context.Background(), p)
+
+	if !out.merged {
 		t.Error("PR should still report merged")
 	}
-	if !result.closed {
-		t.Error("closed should be true even on CloseTask failure (task was skipped)")
-	}
 
-	// The task must be skipped so the loop doesn't retry it.
 	backend.SkipMu.Lock()
 	defer backend.SkipMu.Unlock()
 	found := false
@@ -482,7 +384,6 @@ func TestFinalizePR_CloseTaskFailure_SkipsTask(t *testing.T) {
 		t.Errorf("task should be skipped after CloseTask failure, skipped=%v", backend.SkippedIDs)
 	}
 
-	// Verify the skip reason mentions close failure.
 	for i, id := range backend.SkippedIDs {
 		if id == "ralph-abc" {
 			if !strings.Contains(backend.SkipReasons[i], "close_failed") {
@@ -494,37 +395,26 @@ func TestFinalizePR_CloseTaskFailure_SkipsTask(t *testing.T) {
 
 // Dependency-blocked CloseTask failure includes blocker IDs in skip reason.
 func TestFinalizePR_DependencyBlockedClose_SkipsWithBlockerIDs(t *testing.T) {
-	dir, st := setupTestDir(t)
+	dir, _ := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
 		CloseErr:       fmt.Errorf("exit status 1: cannot close ralph-abc: blocked by open issues [ralph-dep1] (use --force to override)"),
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
+	_, st2 := setupTestDir(t)
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	l := New(Config{
 		TaskBackend: backend,
 		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, gm, logging.New(nil))
+	}, st2, gm, logging.New(nil))
 
-	finalizePR(finalizePRParams{
-		ctx:       context.Background(),
-		taskID:    "ralph-abc",
-		nextTask:  "Fix auth bug",
-		prNumber:  42,
-		prState:   "OPEN",
-		workDir:   dir,
-		autoMerge: true,
-		git:       gm,
-		logger:    logging.New(nil),
-		backend:   backend,
-		state:     st,
-		attempts:  attempts.New(dir),
-		mergeFunc: func(ctx context.Context) (bool, error) {
-			return true, nil
-		},
-		skipTaskFn: l.skipTask,
-	})
+	p := buildFinalizeParams(t, dir, "ralph-abc", "Fix auth bug", backend, shipResult{
+		prNumber: 42,
+		merged:   true,
+	}, l.skipTask)
+
+	completeTask(context.Background(), p)
 
 	backend.SkipMu.Lock()
 	defer backend.SkipMu.Unlock()
@@ -542,144 +432,29 @@ func TestFinalizePR_DependencyBlockedClose_SkipsWithBlockerIDs(t *testing.T) {
 	}
 }
 
-// finalizePR calls PollReview for each active reviewer when the PR is OPEN with autoMerge on.
-func TestFinalizePR_ActiveReviewer_PollsCalled(t *testing.T) {
-	dir, st := setupTestDir(t)
+// Stacked PR (shipFn returns stacked=true) closes the bead without merging.
+func TestFinalizePR_StackedPR_ClosesWithoutMerge(t *testing.T) {
+	dir, _ := setupTestDir(t)
 
 	backend := &testutil.TrackingBackend{
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	p := buildFinalizeParams(t, dir, "ralph-stk1", "Stacked task", backend, shipResult{
+		prNumber: 88,
+		merged:   false,
+		stacked:  true,
+	}, nil)
 
-	finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-abc",
-		nextTask: "Fix bug",
-		prNumber: 42,
-		prState:  "OPEN",
-		workDir:  dir,
-		autoMerge: true,
-		activeReviewers: []git.Reviewer{
-			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second},
-		},
-		git:      gm,
-		logger:   logging.New(nil),
-		backend:  backend,
-		state:    st,
-		attempts: attempts.New(dir),
-		mergeFunc: func(ctx context.Context) (bool, error) { return true, nil },
-	})
+	out := completeTask(context.Background(), p)
 
-	if !gm.PollReviewCalled {
-		t.Error("PollReview should be called when activeReviewers is set and PR is OPEN")
+	if out.merged {
+		t.Error("merge should not be called for stacked PR")
 	}
-}
-
-// finalizePR uses the per-reviewer DefaultTimeout from the registry — 30s when
-// review_on_push=false (opportunistic), as set by DetectActiveReviewers.
-func TestFinalizePR_ActiveReviewer_ShortTimeoutWhenReviewOnPushFalse(t *testing.T) {
-	dir, st := setupTestDir(t)
-
-	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
-	}
-
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-
-	finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-abc",
-		nextTask: "Fix bug",
-		prNumber: 42,
-		prState:  "OPEN",
-		workDir:  dir,
-		autoMerge: true,
-		activeReviewers: []git.Reviewer{
-			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 30 * time.Second, ReviewOnPush: false},
-		},
-		git:      gm,
-		logger:   logging.New(nil),
-		backend:  backend,
-		state:    st,
-		attempts: attempts.New(dir),
-		mergeFunc: func(ctx context.Context) (bool, error) { return true, nil },
-	})
-
-	if !gm.PollReviewCalled {
-		t.Error("PollReview should be called even with review_on_push=false")
-	}
-	if gm.PollReviewLastTimeout != 30*time.Second {
-		t.Errorf("expected 30s poll timeout when reviewer has 30s DefaultTimeout, got %v", gm.PollReviewLastTimeout)
-	}
-}
-
-// finalizePR uses 120s timeout when the reviewer has DefaultTimeout=120s (review_on_push=true).
-func TestFinalizePR_ActiveReviewer_FullTimeoutWhenReviewOnPushTrue(t *testing.T) {
-	dir, st := setupTestDir(t)
-
-	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
-	}
-
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-
-	finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-abc",
-		nextTask: "Fix bug",
-		prNumber: 42,
-		prState:  "OPEN",
-		workDir:  dir,
-		autoMerge: true,
-		activeReviewers: []git.Reviewer{
-			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second, ReviewOnPush: true},
-		},
-		git:      gm,
-		logger:   logging.New(nil),
-		backend:  backend,
-		state:    st,
-		attempts: attempts.New(dir),
-		mergeFunc: func(ctx context.Context) (bool, error) { return true, nil },
-	})
-
-	if !gm.PollReviewCalled {
-		t.Error("PollReview should be called with review_on_push=true")
-	}
-	if gm.PollReviewLastTimeout != 120*time.Second {
-		t.Errorf("expected 120s poll timeout when reviewer has 120s DefaultTimeout, got %v", gm.PollReviewLastTimeout)
-	}
-}
-
-// finalizePR does not call PollReview when activeReviewers is empty.
-func TestFinalizePR_NoActiveReviewers_NoPoll(t *testing.T) {
-	dir, st := setupTestDir(t)
-
-	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
-	}
-
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-
-	finalizePR(finalizePRParams{
-		ctx:             context.Background(),
-		taskID:          "ralph-abc",
-		nextTask:        "Fix bug",
-		prNumber:        42,
-		prState:         "OPEN",
-		workDir:         dir,
-		autoMerge:       true,
-		activeReviewers: nil,
-		git:             gm,
-		logger:          logging.New(nil),
-		backend:         backend,
-		state:           st,
-		attempts:        attempts.New(dir),
-		mergeFunc:       func(ctx context.Context) (bool, error) { return true, nil },
-	})
-
-	if gm.PollReviewCalled {
-		t.Error("PollReview should not be called when activeReviewers is empty")
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) == 0 || backend.ClosedIDs[0] != "ralph-stk1" {
+		t.Errorf("stacked PR should still close the task, got %v", backend.ClosedIDs)
 	}
 }
 
@@ -722,198 +497,6 @@ func TestSkipTask_EmptyID(t *testing.T) {
 
 	if backend.SkippedTask != "" {
 		t.Error("expected no skip with empty ID")
-	}
-}
-
-// finalizePR spawns a fix agent when a reviewer returns actionable comments.
-func TestFinalizePR_AutoReview_ActionableComments_SpawnsFixAgent(t *testing.T) {
-	dir, st := setupTestDir(t)
-
-	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
-	}
-
-	fixAgentSpawned := false
-	v := newTestVerifier(t, func(v *Verifier) {
-		v.deps.NewRunner = func() claudeRunner {
-			fixAgentSpawned = true
-			return &stubRunner{result: stubResult(true, "addressed nil check")}
-		}
-	})
-
-	gm := &testutil.StubGit{
-		ProjectDir: dir,
-		WorkDir:    dir,
-		PollReviewResult: &git.AutoReview{
-			Body: "Review",
-			Comments: []git.ReviewComment{
-				{Path: "pkg/foo.go", Line: 42, Body: "Missing nil check — this will panic"},
-			},
-		},
-	}
-
-	finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-abc",
-		nextTask: "Fix bug",
-		prNumber: 42,
-		prState:  "OPEN",
-		workDir:  dir,
-		autoMerge: true,
-		activeReviewers: []git.Reviewer{
-			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second},
-		},
-		git:      gm,
-		logger:   logging.New(nil),
-		backend:  backend,
-		state:    st,
-		attempts: attempts.New(dir),
-		verifier: v,
-		mergeFunc: func(ctx context.Context) (bool, error) { return true, nil },
-	})
-
-	if !fixAgentSpawned {
-		t.Error("fix agent should be spawned when reviewer has actionable comments")
-	}
-}
-
-// finalizePR does not spawn a fix agent when review has no actionable comments.
-func TestFinalizePR_AutoReview_InformationalOnly_NoFixAgent(t *testing.T) {
-	dir, st := setupTestDir(t)
-
-	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
-	}
-
-	fixAgentSpawned := false
-	v := newTestVerifier(t, func(v *Verifier) {
-		v.deps.NewRunner = func() claudeRunner {
-			fixAgentSpawned = true
-			return &stubRunner{result: stubResult(true, "done")}
-		}
-	})
-
-	gm := &testutil.StubGit{
-		ProjectDir: dir,
-		WorkDir:    dir,
-		PollReviewResult: &git.AutoReview{
-			Body: "LGTM",
-			Comments: []git.ReviewComment{
-				{Path: "pkg/foo.go", Line: 1, Body: "This PR adds caching support."},
-			},
-		},
-	}
-
-	finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-abc",
-		nextTask: "Fix bug",
-		prNumber: 42,
-		prState:  "OPEN",
-		workDir:  dir,
-		autoMerge: true,
-		activeReviewers: []git.Reviewer{
-			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second},
-		},
-		git:      gm,
-		logger:   logging.New(nil),
-		backend:  backend,
-		state:    st,
-		attempts: attempts.New(dir),
-		verifier: v,
-		mergeFunc: func(ctx context.Context) (bool, error) { return true, nil },
-	})
-
-	if fixAgentSpawned {
-		t.Error("fix agent should not be spawned for purely informational review comments")
-	}
-}
-
-// finalizePR does not re-poll when a reviewer's feedback was already addressed in state.
-func TestFinalizePR_AutoReview_AlreadyAddressed_NoPoll(t *testing.T) {
-	dir, st := setupTestDir(t)
-
-	// Pre-seed the addressed flag in state using the per-reviewer key.
-	st.Write("review_addressed:copilot-pull-request-reviewer:ralph-abc", "true")
-
-	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
-	}
-
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
-
-	finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-abc",
-		nextTask: "Fix bug",
-		prNumber: 42,
-		prState:  "OPEN",
-		workDir:  dir,
-		autoMerge: true,
-		activeReviewers: []git.Reviewer{
-			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second},
-		},
-		git:      gm,
-		logger:   logging.New(nil),
-		backend:  backend,
-		state:    st,
-		attempts: attempts.New(dir),
-		mergeFunc: func(ctx context.Context) (bool, error) { return true, nil },
-	})
-
-	if gm.PollReviewCalled {
-		t.Error("PollReview should not be called when reviewer feedback was already addressed")
-	}
-}
-
-// finalizePR marks review as addressed per-reviewer in state after processing,
-// preventing re-poll on subsequent calls for the same task.
-func TestFinalizePR_AutoReview_SetsAddressedFlag(t *testing.T) {
-	dir, st := setupTestDir(t)
-
-	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
-	}
-
-	v := newTestVerifier(t, func(v *Verifier) {
-		v.deps.NewRunner = func() claudeRunner {
-			return &stubRunner{result: stubResult(true, "done")}
-		}
-	})
-
-	gm := &testutil.StubGit{
-		ProjectDir: dir,
-		WorkDir:    dir,
-		PollReviewResult: &git.AutoReview{
-			Comments: []git.ReviewComment{
-				{Path: "pkg/foo.go", Line: 5, Body: "Missing nil check"},
-			},
-		},
-	}
-
-	finalizePR(finalizePRParams{
-		ctx:      context.Background(),
-		taskID:   "ralph-abc",
-		nextTask: "Fix bug",
-		prNumber: 42,
-		prState:  "OPEN",
-		workDir:  dir,
-		autoMerge: true,
-		activeReviewers: []git.Reviewer{
-			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second},
-		},
-		git:      gm,
-		logger:   logging.New(nil),
-		backend:  backend,
-		state:    st,
-		attempts: attempts.New(dir),
-		verifier: v,
-		mergeFunc: func(ctx context.Context) (bool, error) { return true, nil },
-	})
-
-	addressed, _ := st.Read("review_addressed:copilot-pull-request-reviewer:ralph-abc")
-	if addressed != "true" {
-		t.Errorf("state should have review_addressed:copilot-pull-request-reviewer:ralph-abc=true after review processed, got %q", addressed)
 	}
 }
 
@@ -991,4 +574,3 @@ func TestFormatReviewContext(t *testing.T) {
 		t.Error("context should contain file:line for second comment")
 	}
 }
-
