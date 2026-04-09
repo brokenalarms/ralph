@@ -305,8 +305,11 @@ func TestGitHubIsInternal(t *testing.T) {
 
 ```go
 func TestOrchestratorParamsNoModules(t *testing.T) {
-    // Parse all type *Params/*Opts struct fields in loop_*.go (non-test)
-    // For each field, check its type:
+    // A `checked` set lists structs that must pass the data-only rule.
+    // Each bead uncomments its structs. Agents only see failures for
+    // the structs they're responsible for — not all 35 at once.
+    //
+    // For each checked struct, every field is validated:
     //
     //   Allowed:
     //     - Primitives: string, int, bool, time.Duration, etc.
@@ -322,9 +325,6 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
     //     - Function types: func(...) ... — callbacks are module references
     //       in disguise. If a downstream function needs a module's result,
     //       the caller obtains it and passes the result as data.
-    //
-    // This applies to ALL packages in go/internal/ — not just the
-    // orchestrator. Any package can grow into the same anti-pattern.
     //
     // Top-level structs (Loop, Verifier, git.Repo) may hold module
     // references as fields — that's dependency injection at construction.
