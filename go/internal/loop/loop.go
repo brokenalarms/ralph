@@ -63,6 +63,11 @@ type Config struct {
 	ConnectivityCheckTimeout time.Duration
 	InternetRestoreInterval  time.Duration
 
+	// ShipRetryBackoffs overrides the default retry delays for transient GitHub
+	// errors (default: 5s, 15s, 30s). Set to zero-duration slices in tests to
+	// avoid sleeping.
+	ShipRetryBackoffs []time.Duration
+
 	// hooks for test injection; nil uses the real implementation
 	CheckGitHub     func(ctx context.Context) error // startup GitHub reachability check; nil uses real implementation
 	OnVerify        func(ctx context.Context, dir, headBefore string) (bool, string)
@@ -582,6 +587,23 @@ iterLoop:
 							l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed — internet appears down")
 							l.cfg.WaitForInternet(ctx, l.logger)
 							result, err = l.git.Ship(ctx, shipOpts)
+						} else if isTransientGitHubError(err) {
+							backoffs := l.cfg.ShipRetryBackoffs
+							if backoffs == nil {
+								backoffs = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
+							}
+							for _, delay := range backoffs {
+								if err == nil {
+									break
+								}
+								l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed with transient error (%v) — retrying in %s", err, delay)
+								select {
+								case <-ctx.Done():
+									break
+								case <-time.After(delay):
+								}
+								result, err = l.git.Ship(ctx, shipOpts)
+							}
 						}
 						if err != nil {
 							l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship: %v", err)
