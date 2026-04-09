@@ -391,13 +391,6 @@ func (l *Loop) Run(ctx context.Context) error {
 	st, _ := l.state.Load()
 	iteration := st.Iteration
 
-	wtParams := waitForTasksParams{
-		logger:     l.logger,
-		state:      l.state,
-		backend:    l.cfg.TaskBackend,
-		onWaitFunc: l.cfg.OnWait,
-	}
-
 iterLoop:
 	for {
 		// ── Task selection ──
@@ -405,19 +398,12 @@ iterLoop:
 		for _, ct := range sessionTasks {
 			completedIDs[ct.ID] = true
 		}
-		task, action := selectNextTask(ctx, selectNextTaskParams{
-			runIteration:  runIteration,
-			maxIterations: l.cfg.MaxIterations,
-			backend:       l.cfg.TaskBackend,
-			wait:          l.cfg.Wait,
-			state:         l.state,
-			logger:        l.logger,
-			completedIDs:  completedIDs,
-			waitForTasks:  func(ctx context.Context) bool { return waitForTasks(ctx, wtParams) },
-			flushUnpushedWork: func(ctx context.Context) {
-				l.flushUnpushedWork(ctx, lastTaskMerged)
-			},
-			skipTask: l.skipTask,
+		task, action := l.selectNextTask(ctx, selectNextTaskParams{
+			runIteration:   runIteration,
+			maxIterations:  l.cfg.MaxIterations,
+			wait:           l.cfg.Wait,
+			completedIDs:   completedIDs,
+			lastTaskMerged: lastTaskMerged,
 		})
 		if action == actionDone {
 			break
@@ -456,16 +442,10 @@ iterLoop:
 			l.cfg.OnIterationStart()
 		}
 
-		logIterationBanner(logIterationBannerParams{
-			backend: l.cfg.TaskBackend,
-			state:   l.state,
-			logger:  l.logger,
+		l.logIterationBanner(logIterationBannerParams{
 			version: l.cfg.Version,
 		}, runIteration, l.state.ReadMaxIterations(l.cfg.MaxIterations), iteration, task, lastAction)
-		beginIteration(beginIterationParams{
-			state: l.state,
-			git:   l.git,
-		}, task, iteration)
+		l.beginIteration(task, iteration)
 
 		// ── Resume check: does a PR already exist for this task? ──
 		if resumeViaPR(ctx, resumeViaPRParams{

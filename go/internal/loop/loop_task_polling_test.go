@@ -13,21 +13,21 @@ import (
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
-// Verifies that pollForTasks is a package function: returns found=true when
-// the backend reports tasks remaining, without accessing any Loop struct field.
+// Verifies that l.pollForTasks returns found=true when the backend reports
+// tasks remaining, without requiring any params struct.
 func TestPollForTasks_PackageFunction(t *testing.T) {
 	dir, st := setupTestDir(t)
 	logger := logging.New(nil)
-
 	backend := &testutil.StubBackend{Remaining: 1}
-
-	found, done := pollForTasks(pollForTasksParams{
-		state:   st,
-		backend: backend,
-		logger:  logger,
-	})
-
 	_ = dir
+
+	l := &Loop{
+		cfg:    Config{TaskBackend: backend},
+		state:  st,
+		logger: logger,
+	}
+	found, done := l.pollForTasks()
+
 	if !found {
 		t.Error("expected found=true when backend has remaining tasks")
 	}
@@ -36,8 +36,8 @@ func TestPollForTasks_PackageFunction(t *testing.T) {
 	}
 }
 
-// Verifies that waitForTasks is a package function: it detects newly available
-// tasks added by onWaitFunc and returns true, without accessing any Loop field.
+// Verifies that l.waitForTasks detects newly available tasks added by OnWait
+// and returns true.
 func TestWaitForTasks_PackageFunction(t *testing.T) {
 	_, st := setupTestDir(t)
 	logger := logging.New(nil)
@@ -47,42 +47,42 @@ func TestWaitForTasks_PackageFunction(t *testing.T) {
 	}
 
 	onWaitCalled := false
-	onWaitFunc := func() {
-		onWaitCalled = true
-		backend.Lock()
-		backend.Remaining = 1
-		backend.Unlock()
+	l := &Loop{
+		cfg: Config{
+			TaskBackend: backend,
+			OnWait: func() {
+				onWaitCalled = true
+				backend.Lock()
+				backend.Remaining = 1
+				backend.Unlock()
+			},
+		},
+		state:  st,
+		logger: logger,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	found := waitForTasks(ctx, waitForTasksParams{
-		logger:     logger,
-		state:      st,
-		backend:    backend,
-		onWaitFunc: onWaitFunc,
-	})
+	found := l.waitForTasks(ctx)
 
 	if !found {
-		t.Fatal("expected waitForTasks to find tasks after onWaitFunc added them")
+		t.Fatal("expected waitForTasks to find tasks after OnWait added them")
 	}
 	if !onWaitCalled {
-		t.Error("expected onWaitFunc to be called")
+		t.Error("expected OnWait to be called")
 	}
 }
 
-// Verifies that beginIteration is a package function: it records the task title
-// and iteration number in state, without accessing any Loop struct field.
+// Verifies that l.beginIteration records the task title and iteration number
+// in state.
 func TestBeginIteration_PackageFunction(t *testing.T) {
 	dir, st := setupTestDir(t)
 	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
 	task := taskContext{id: "ralph-abc", title: "Fix auth"}
 
-	beginIteration(beginIterationParams{
-		state: st,
-		git:   gm,
-	}, task, 3)
+	l := &Loop{state: st, git: gm, logger: logging.New(nil)}
+	l.beginIteration(task, 3)
 
 	storeState, _ := st.Load()
 	if storeState.LastTask != "Fix auth" {
@@ -111,8 +111,7 @@ func TestWaitForRate_AllowsWhenUnderLimit(t *testing.T) {
 	}
 }
 
-// Verifies that logIterationBanner is a package function taking lastAction as
-// a parameter: it emits log output when called without any Loop field access.
+// Verifies that l.logIterationBanner emits log output when called.
 func TestLogIterationBanner_PackageFunction(t *testing.T) {
 	_, st := setupTestDir(t)
 
@@ -127,12 +126,12 @@ func TestLogIterationBanner_PackageFunction(t *testing.T) {
 	logger := logging.NewWithWriter(&logBuf)
 	task := taskContext{id: "ralph-abc", title: "Fix login"}
 
-	logIterationBanner(logIterationBannerParams{
-		backend: backend,
-		state:   st,
-		logger:  logger,
-		version: "1.0.0",
-	}, 1, 10, 1, task, analyzer.Warn)
+	l := &Loop{
+		cfg:    Config{TaskBackend: backend},
+		state:  st,
+		logger: logger,
+	}
+	l.logIterationBanner(logIterationBannerParams{version: "1.0.0"}, 1, 10, 1, task, analyzer.Warn)
 
 	output := logBuf.String()
 	if output == "" {
