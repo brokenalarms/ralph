@@ -217,6 +217,14 @@ reasoning about *why*. Include:
 - Show the target function signature with explicit parameters where applicable
 - Specify what the call site looks like after the change
 
+When a task changes or removes existing behavior, identify the test functions
+that assert the current behavior. List them by name in the description so the
+agent updates them as part of the change rather than discovering them through
+compile failures.
+
+Reference test function names, not line numbers or file paths — lines shift
+between bead creation and execution, but function names are stable and greppable.
+
 Anti-patterns:
 - "Eliminate X" or "Refactor Y" without specifying the concrete code transformation
 - "Improve error handling" without showing which error paths and what the new
@@ -242,6 +250,14 @@ Anti-patterns:
   the ordering assertion there. Ordering regressions are invisible to unit
   tests — a refactor can move a call earlier or later without any unit test
   failing.
+- For extraction or refactoring tasks, AC must constrain the **call site**, not
+  just the extracted function. Instead of "prepareBranch is a package function
+  that receives only its dependencies", write "the orchestrator calls
+  `git.BranchForTask(projectDir, taskID)` — one call. No branch preparation
+  logic remains in the loop package." Include a greppable end-state assertion:
+  name the specific symbol or import that must no longer appear in the caller's
+  file. This prevents agents from satisfying extraction beads by moving code
+  without changing the dependency graph.
 
 ### Scope discipline
 
