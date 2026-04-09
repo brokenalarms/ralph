@@ -18,49 +18,112 @@ import (
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
-// handlePostSignalCall invokes the package-level handlePostSignal using l's dependencies,
+// completeTaskCall invokes completeTask using l's dependencies assembled as callbacks,
 // and applies the session-task side effects back onto l.
-func handlePostSignalCall(l *Loop, p postSignalParams) postSignalAction {
-	opts := handlePostSignalOpts{
+func completeTaskCall(l *Loop, p postSignalParams) postSignalAction {
+	out := completeTask(p.ctx, completeTaskParams{
+		result:            p.result,
+		headBefore:        p.headBefore,
+		workDir:           p.workDir,
+		rawLogPath:        p.rawLogPath,
+		diffStat:          p.diffStat,
+		taskID:            p.taskID,
+		nextTask:          p.nextTask,
 		postSignalTimeout: l.cfg.PostSignalTimeout,
 		autoMerge:         l.cfg.AutoMerge,
 		evolve:            l.cfg.Evolve,
 		notify:            l.cfg.Notify,
 		ralphDir:          l.cfg.Dirs.RalphDir,
-		git:               l.git,
-		backend:           l.cfg.TaskBackend,
-		state:             l.state,
 		logger:            l.logger,
-		attempts:          l.attempts,
 		verifyFn: func(ctx context.Context, headBefore string) (bool, string) {
 			if l.cfg.OnVerify != nil {
 				return l.cfg.OnVerify(ctx, l.git.GetWorkDir(), headBefore)
 			}
 			return l.verifier.VerifyCompletion(ctx, l.git.GetWorkDir(), headBefore)
 		},
-		pushSignalPRFn: func(p postSignalParams) (int, string) {
-			return pushSignalPR(p.ctx, p, pushSignalPROpts{
-				git:                 l.git,
-				backend:             l.cfg.TaskBackend,
-				logger:              l.logger,
-				isOnlineFunc:        l.cfg.IsOnline,
-				waitForInternetFunc: l.cfg.WaitForInternet,
-				shipFn: func(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error) {
-					return l.git.Ship(ctx, opts)
-				},
+		headRevFn:        l.git.HeadRev,
+		worktreeBranchFn: l.git.GetWorktreeBranch,
+		tagTaskEndFn:     l.git.TagTaskEnd,
+		getPRStateFn:     l.git.GetPRState,
+		findExistingPRFn: func(taskID, branch string) (int, bool) {
+			return findExistingPRForTask(taskID, branch, l.cfg.TaskBackend, l.git)
+		},
+		getStateFn: func(taskID, key string) (string, error) {
+			return l.cfg.TaskBackend.GetState(taskID, key)
+		},
+		setStateFn: func(taskID, key, value, reason string) error {
+			return l.cfg.TaskBackend.SetState(taskID, key, value, reason)
+		},
+		closeTaskFn: l.cfg.TaskBackend.CloseTask,
+		getExternalRefFn: func(taskID string) (string, error) {
+			return l.cfg.TaskBackend.GetExternalRef(taskID)
+		},
+		getSkippedTasksFn: l.state.GetSkippedTasks,
+		recordCompletedFn: func(taskID, nextTask string) {
+			l.state.RecordCompletedTask(taskID, nextTask)
+		},
+		persistCompletedFn: func(taskID string, merged bool) {
+			persistCompletedTask(l.state, l.logger, taskID, merged)
+		},
+		touchPlanFlashFn: l.state.TouchPlanFlash,
+		writeStateFn: func(key, value string) {
+			l.state.Write(key, value) //nolint:errcheck
+		},
+		recordAttemptFn: func(taskID, nextTask, reason, diffStat, note string) {
+			l.attempts.Record(taskID, nextTask, reason, diffStat, note)
+		},
+		clearAttemptsFn: l.attempts.Clear,
+		skipTaskFn: func(taskID, reason string) {
+			skipTask(l.cfg.TaskBackend, l.state, l.logger, taskID, reason)
+		},
+		shipFn: func(ctx context.Context, taskID, title, summary string) (int, string) {
+			prBody := buildPRBody(l.cfg.TaskBackend, taskID, summary)
+			shipOpts := git.ShipOpts{TaskID: taskID, TaskTitle: title, Body: prBody}
+			result, err := l.git.Ship(ctx, shipOpts)
+			if err != nil {
+				if !l.cfg.IsOnline() {
+					l.cfg.WaitForInternet(ctx, l.logger)
+					result, err = l.git.Ship(ctx, shipOpts)
+				}
+				if err != nil {
+					l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship: %v", err)
+				}
+			}
+			if result.PRNumber != 0 && taskID != "" {
+				ref := result.PRURL
+				if ref == "" {
+					ref = prURL(l.git.RemoteURL(), result.PRNumber)
+				}
+				if ref != "" {
+					if refErr := l.cfg.TaskBackend.SetExternalRef(taskID, ref); refErr != nil {
+						l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetExternalRef: %v", refErr)
+					}
+				}
+			}
+			return result.PRNumber, result.PRURL
+		},
+		finalizePRFn: func(ctx context.Context, taskID, nextTask string, prNumber int, prState git.PRState, prURL, workDir, rawLogPath string) finalizePRResult {
+			l.ensureActiveReviewers()
+			return finalizePR(finalizePRParams{
+				ctx:             ctx,
+				taskID:          taskID,
+				nextTask:        nextTask,
+				prNumber:        prNumber,
+				prState:         prState,
+				prURL:           prURL,
+				workDir:         workDir,
+				rawLogPath:      rawLogPath,
+				autoMerge:       l.cfg.AutoMerge,
+				activeReviewers: l.activeReviewers,
+				git:             l.git,
+				logger:          l.logger,
+				backend:         l.cfg.TaskBackend,
+				state:           l.state,
+				attempts:        l.attempts,
+				verifier:        l.verifier,
 			})
 		},
-		finalizePRFn: func(fp finalizePRParams) finalizePRResult {
-			fp.autoMerge = l.cfg.AutoMerge
-			fp.git = l.git
-			fp.logger = l.logger
-			fp.backend = l.cfg.TaskBackend
-			fp.state = l.state
-			fp.attempts = l.attempts
-			fp.verifier = l.verifier
-			return finalizePR(fp)
-		},
-		buildCTFn: func(taskID, nextTask, summary string, prNumber int, _ string) CompletedTask {
+		buildCTFn: func(taskID, nextTask, summary string, prNumber int) CompletedTask {
 			return buildCompletedTask(taskID, nextTask, summary, prNumber, l.git)
 		},
 		runPostTaskFn: func(ctx context.Context, taskID string, prNumber int, merged bool) {
@@ -74,8 +137,7 @@ func handlePostSignalCall(l *Loop, p postSignalParams) postSignalAction {
 				logger:     l.logger,
 			}, taskID, prNumber, merged)
 		},
-	}
-	out := handlePostSignal(p, opts)
+	})
 	if out.ct != nil {
 		l.completedTasks = append(l.completedTasks, *out.ct)
 	}
@@ -84,9 +146,9 @@ func handlePostSignalCall(l *Loop, p postSignalParams) postSignalAction {
 
 // Branch name format uses beadID-slug without sequence number,
 // proving the old TaskSeq pattern has been removed.
-// handlePostSignal: verifies that a successful signal pushes, closes the
+// completeTask: verifies that a successful signal pushes, closes the
 // task, and returns signalComplete for the normal (non-evolve) path.
-func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
+func TestLoop_CompleteTask_ClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -114,7 +176,7 @@ func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	action := handlePostSignalCall(l, postSignalParams{
+	action := completeTaskCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
@@ -136,9 +198,9 @@ func TestLoop_HandlePostSignal_ClosesTask(t *testing.T) {
 	}
 }
 
-// handlePostSignal: verification failure returns signalRetry so the loop
+// completeTask: verification failure returns signalRetry so the loop
 // continues without closing the task.
-func TestLoop_HandlePostSignal_VerificationFailure(t *testing.T) {
+func TestLoop_CompleteTask_VerificationFailure(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -158,7 +220,7 @@ func TestLoop_HandlePostSignal_VerificationFailure(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
-	action := handlePostSignalCall(l, postSignalParams{
+	action := completeTaskCall(l, postSignalParams{
 		ctx:      context.Background(),
 		result:   claude.Result{},
 		taskID:   "ralph-abc",
@@ -176,9 +238,9 @@ func TestLoop_HandlePostSignal_VerificationFailure(t *testing.T) {
 	}
 }
 
-// handlePostSignal: if the task was already skipped (e.g. verification
+// completeTask: if the task was already skipped (e.g. verification
 // rejected 3 times), it returns signalSkipped without pushing or merging.
-func TestHandlePostSignal_SkippedTask_DoesNotPush(t *testing.T) {
+func TestCompleteTask_SkippedTask_DoesNotPush(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -202,12 +264,12 @@ func TestHandlePostSignal_SkippedTask_DoesNotPush(t *testing.T) {
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	// Mark the task as skipped in state before calling handlePostSignal.
+	// Mark the task as skipped in state before calling completeTask.
 	if err := st.AddSkippedTask("ralph-skipped"); err != nil {
 		t.Fatalf("AddSkippedTask: %v", err)
 	}
 
-	action := handlePostSignalCall(l, postSignalParams{
+	action := completeTaskCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
@@ -238,10 +300,10 @@ func TestHandlePostSignal_SkippedTask_DoesNotPush(t *testing.T) {
 	}
 }
 
-// handlePostSignal returns within PostSignalTimeout even when push blocks
+// completeTask returns within PostSignalTimeout even when push blocks
 // indefinitely, proving the timeout prevents infinite stalls from rate limits
 // or network issues.
-func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
+func TestCompleteTask_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -271,7 +333,7 @@ func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 
 	done := make(chan postSignalAction, 1)
 	go func() {
-		done <- handlePostSignalCall(l, postSignalParams{
+		done <- completeTaskCall(l, postSignalParams{
 			ctx:        context.Background(),
 			result:     claude.Result{SignalDetected: true},
 			headBefore: "",
@@ -288,7 +350,7 @@ func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 			t.Errorf("expected signalComplete, got %d", action)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("handlePostSignal hung — PostSignalTimeout did not fire")
+		t.Fatal("completeTask hung — PostSignalTimeout did not fire")
 	}
 
 	output := logBuf.String()
@@ -303,9 +365,9 @@ func TestHandlePostSignal_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 	}
 }
 
-// handlePostSignal completes normally within PostSignalTimeout when operations
+// completeTask completes normally within PostSignalTimeout when operations
 // are fast, proving the timeout doesn't interfere with successful flows.
-func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
+func TestCompleteTask_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -327,7 +389,7 @@ func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 
-	action := handlePostSignalCall(l, postSignalParams{
+	action := completeTaskCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
@@ -348,9 +410,9 @@ func TestHandlePostSignal_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.
 	}
 }
 
-// handlePostSignal cancels a blocking merge when the post-signal timeout
+// completeTask cancels a blocking merge when the post-signal timeout
 // fires, so the orchestrator doesn't stall on a rate-limited API call.
-func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
+func TestCompleteTask_PostSignalTimeout_CancelsMerge(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -379,7 +441,7 @@ func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
 
 	done := make(chan postSignalAction, 1)
 	go func() {
-		done <- handlePostSignalCall(l, postSignalParams{
+		done <- completeTaskCall(l, postSignalParams{
 			ctx:        context.Background(),
 			result:     claude.Result{SignalDetected: true},
 			headBefore: "",
@@ -394,7 +456,7 @@ func TestHandlePostSignal_PostSignalTimeout_CancelsMerge(t *testing.T) {
 	case <-done:
 		// Returned within timeout — merge was cancelled, not hung
 	case <-time.After(5 * time.Second):
-		t.Fatal("handlePostSignal hung — PostSignalTimeout did not cancel merge")
+		t.Fatal("completeTask hung — PostSignalTimeout did not cancel merge")
 	}
 }
 
@@ -429,7 +491,7 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 	gm.MergeRetryResult = true
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	action := handlePostSignalCall(l, postSignalParams{
+	action := completeTaskCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
@@ -480,7 +542,7 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
-	action := handlePostSignalCall(l, postSignalParams{
+	action := completeTaskCall(l, postSignalParams{
 		ctx:      context.Background(),
 		result:   claude.Result{},
 		taskID:   "ralph-pt2",
@@ -525,7 +587,7 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 	gm.ShipResult = git.ShipResult{PRNumber: 50}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	action := handlePostSignalCall(l, postSignalParams{
+	action := completeTaskCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
@@ -575,7 +637,7 @@ func TestLoop_PostTaskScript_LogsWhenNotConfigured(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	handlePostSignalCall(l, postSignalParams{
+	completeTaskCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
@@ -618,7 +680,7 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	action := handlePostSignalCall(l, postSignalParams{
+	action := completeTaskCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{OnSignalUsed: true},
 		headBefore: "before",
@@ -677,7 +739,7 @@ func TestLoop_PostTaskScript_PackageJSONDetection(t *testing.T) {
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	action := handlePostSignalCall(l, postSignalParams{
+	action := completeTaskCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true},
 		headBefore: "",
@@ -702,9 +764,9 @@ func TestLoop_PostTaskScript_PackageJSONDetection(t *testing.T) {
 	}
 }
 
-// handlePostSignal fires a TaskCompleted notification after post-task when
+// completeTask fires a TaskCompleted notification after post-task when
 // Notify is enabled.
-func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
+func TestCompleteTask_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -737,7 +799,7 @@ func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	handlePostSignalCall(l, postSignalParams{
+	completeTaskCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
 		headBefore: "",
@@ -756,8 +818,8 @@ func TestHandlePostSignal_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 	}
 }
 
-// handlePostSignal does NOT send TaskCompleted when Notify is disabled.
-func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
+// completeTask does NOT send TaskCompleted when Notify is disabled.
+func TestCompleteTask_NotifyDisabled_NoNotification(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -790,7 +852,7 @@ func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	handlePostSignalCall(l, postSignalParams{
+	completeTaskCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true, Summary: "Fixed token expiry"},
 		headBefore: "",
@@ -806,8 +868,8 @@ func TestHandlePostSignal_NotifyDisabled_NoNotification(t *testing.T) {
 	}
 }
 
-// handlePostSignal fires TaskCompleted on the no-commits path when Notify is enabled.
-func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
+// completeTask fires TaskCompleted on the no-commits path when Notify is enabled.
+func TestCompleteTask_NotifyOnNoCommitsPath(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
@@ -839,7 +901,7 @@ func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
 	prev := notify.SetWriter(&buf)
 	t.Cleanup(func() { notify.SetWriter(prev) })
 
-	action := handlePostSignalCall(l, postSignalParams{
+	action := completeTaskCall(l, postSignalParams{
 		ctx:        context.Background(),
 		result:     claude.Result{SignalDetected: true, Summary: "Updated README"},
 		headBefore: "before",
@@ -859,10 +921,10 @@ func TestHandlePostSignal_NotifyOnNoCommitsPath(t *testing.T) {
 	}
 }
 
-// handlePostSignal cancels when a feedback file appears during the post-signal
+// completeTask cancels when a feedback file appears during the post-signal
 // pipeline, proving that feedback during CI/merge/review aborts processing
 // and CloseTask is never called.
-func TestHandlePostSignal_FeedbackFileStopsPostSignal(t *testing.T) {
+func TestCompleteTask_FeedbackFileStopsPostSignal(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
@@ -900,7 +962,7 @@ func TestHandlePostSignal_FeedbackFileStopsPostSignal(t *testing.T) {
 
 	done := make(chan postSignalAction, 1)
 	go func() {
-		done <- handlePostSignalCall(l, postSignalParams{
+		done <- completeTaskCall(l, postSignalParams{
 			ctx:        context.Background(),
 			result:     claude.Result{SignalDetected: true},
 			headBefore: "",
@@ -917,7 +979,7 @@ func TestHandlePostSignal_FeedbackFileStopsPostSignal(t *testing.T) {
 			t.Errorf("expected signalComplete, got %d", action)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("handlePostSignal hung — feedback file did not cancel context")
+		t.Fatal("completeTask hung — feedback file did not cancel context")
 	}
 
 	output := logBuf.String()
