@@ -277,9 +277,6 @@ func TestIntegration_ResumeViaPR_Merged(t *testing.T) {
 	if agentCalled {
 		t.Error("agent should not run when PR is already merged")
 	}
-	if gm.ShipCalls > 0 {
-		t.Error("push should not be called for already-merged PR")
-	}
 	if gm.MergeRetryCalls > 0 {
 		t.Error("merge should not be called for already-merged PR")
 	}
@@ -1195,7 +1192,7 @@ func TestIntegration_TwoTasksCompleteSequentially(t *testing.T) {
 	}
 }
 
-// Scenario: finalizePR with a stacked PR (base != default branch) skips
+// Scenario: Ship with a stacked PR (base != default branch) skips
 // merge but still closes the task.
 func TestIntegration_StackedPRSkipsMergeButCloses(t *testing.T) {
 	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
@@ -1225,20 +1222,31 @@ func TestIntegration_StackedPRSkipsMergeButCloses(t *testing.T) {
 	l.runner = &stubRunner{}
 	gm.MergeRetryResult = true
 
-	result := finalizePR(finalizePRParams{
-		ctx:       context.Background(),
-		taskID:    "ralph-stk1",
-		nextTask:  "Stacked task",
-		prNumber:  88,
-		prState:   "OPEN",
-		workDir:   dir,
-		autoMerge: true,
-		git:       gm,
-		logger:    l.logger,
-		backend:   backend,
-		state:     l.state,
-		attempts:  l.attempts,
-		verifier:  l.verifier,
+	ctx := context.Background()
+	shipResult, _ := git.Ship(ctx, nil, ghStub, "", "", "", git.ShipOpts{
+		PRNumber:              88,
+		PRState:               "OPEN",
+		AutoMerge:             true,
+		SetLocalTestsPassedFn: gm.SetLocalTestsPassed,
+		DetectDefaultBranchFn: gm.DetectDefaultBranch,
+		PollReviewFn:          gm.PollReview,
+		SetKnownPRNumberFn:    gm.SetKnownPRNumber,
+		PostMergeUpdateFn:     gm.PostMergeUpdateMain,
+		MergeFn: func(ctx context.Context) (bool, error) {
+			return gm.MergeWithRetry(ctx, git.MergeRetryOpts{})
+		},
+		Logger: l.logger,
+	})
+	result := closeBeadAfterShip(closeBeadParams{
+		ctx:         ctx,
+		taskID:      "ralph-stk1",
+		prNumber:    88,
+		merged:      shipResult.Merged,
+		mergeFailed: shipResult.MergeFailed,
+		logger:      l.logger,
+		backend:     backend,
+		state:       l.state,
+		attempts:    l.attempts,
 	})
 
 	if gm.MergeRetryCalls > 0 {
@@ -1928,7 +1936,25 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 	gm := &realMergeGit{StubGit: stub, realMgr: realMgr}
 
 	prCounter := 0
-	stub.ShipFunc = func(_ context.Context, _ git.ShipOpts) (git.ShipResult, error) {
+	stub.ShipFunc = func(_ context.Context, opts git.ShipOpts) (git.ShipResult, error) {
+		if opts.PRNumber != 0 {
+			if opts.DetectDefaultBranchFn == nil {
+				opts.DetectDefaultBranchFn = stub.DetectDefaultBranch
+			}
+			if opts.SetLocalTestsPassedFn == nil {
+				opts.SetLocalTestsPassedFn = stub.SetLocalTestsPassed
+			}
+			if opts.PollReviewFn == nil {
+				opts.PollReviewFn = stub.PollReview
+			}
+			if opts.SetKnownPRNumberFn == nil {
+				opts.SetKnownPRNumberFn = gm.SetKnownPRNumber
+			}
+			if opts.PostMergeUpdateFn == nil {
+				opts.PostMergeUpdateFn = stub.PostMergeUpdateMain
+			}
+			return git.Ship(context.Background(), nil, stub.GitHubStub, stub.WorkDir, "", stub.RemoteURLValue, opts)
+		}
 		record("push")
 		prCounter++
 		pr := prCounter * 10
@@ -2670,7 +2696,7 @@ func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
 //
 // Proves:
 //   - Branch is renamed (task-specific) before any push occurs.
-//   - DetectActiveReviewers is called during finalizePR (after push), not
+//   - DetectActiveReviewers is called during Ship (after push), not
 //     before the agent runs — reviewer detection is deferred to the merge phase.
 //   - The call log catches ordering violations: a refactor that moves rename
 //     after push, or moves DetectActiveReviewers before the agent, will fail.
@@ -2705,7 +2731,25 @@ func TestIntegration_LifecycleOrdering_BranchRenameAndReviewers(t *testing.T) {
 		OnDetectActiveReviewers: func() { record("detect_reviewers") },
 	}
 
-	gm.ShipFunc = func(_ context.Context, _ git.ShipOpts) (git.ShipResult, error) {
+	gm.ShipFunc = func(_ context.Context, opts git.ShipOpts) (git.ShipResult, error) {
+		if opts.PRNumber != 0 {
+			if opts.DetectDefaultBranchFn == nil {
+				opts.DetectDefaultBranchFn = gm.DetectDefaultBranch
+			}
+			if opts.SetLocalTestsPassedFn == nil {
+				opts.SetLocalTestsPassedFn = gm.SetLocalTestsPassed
+			}
+			if opts.PollReviewFn == nil {
+				opts.PollReviewFn = gm.PollReview
+			}
+			if opts.SetKnownPRNumberFn == nil {
+				opts.SetKnownPRNumberFn = gm.SetKnownPRNumber
+			}
+			if opts.PostMergeUpdateFn == nil {
+				opts.PostMergeUpdateFn = gm.PostMergeUpdateMain
+			}
+			return git.Ship(context.Background(), nil, gm.GitHubStub, gm.WorkDir, "", gm.RemoteURLValue, opts)
+		}
 		record("push")
 		return git.ShipResult{PRNumber: 77}, nil
 	}
@@ -2788,7 +2832,7 @@ func TestIntegration_LifecycleOrdering_BranchRenameAndReviewers(t *testing.T) {
 		t.Fatal("detect_reviewers or agent_signal not found in sequence")
 	}
 	if reviewersIdx <= pushIdx {
-		t.Errorf("detect_reviewers (idx %d) must occur after push (idx %d) — detection belongs in finalizePR", reviewersIdx, pushIdx)
+		t.Errorf("detect_reviewers (idx %d) must occur after push (idx %d) — detection belongs in Ship", reviewersIdx, pushIdx)
 	}
 	if reviewersIdx <= agentIdx {
 		t.Errorf("detect_reviewers (idx %d) must occur after agent_signal (idx %d) — detection must not happen before agent runs", reviewersIdx, agentIdx)

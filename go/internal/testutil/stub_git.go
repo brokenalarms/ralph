@@ -264,6 +264,30 @@ func (s *StubGit) Ship(ctx context.Context, opts git.ShipOpts) (git.ShipResult, 
 	if s.ShipFunc != nil {
 		return s.ShipFunc(ctx, opts)
 	}
+	if opts.PRNumber != 0 {
+		if opts.DetectDefaultBranchFn == nil {
+			opts.DetectDefaultBranchFn = s.DetectDefaultBranch
+		}
+		if opts.SetLocalTestsPassedFn == nil {
+			opts.SetLocalTestsPassedFn = s.SetLocalTestsPassed
+		}
+		if opts.PollReviewFn == nil {
+			opts.PollReviewFn = s.PollReview
+		}
+		if opts.SetKnownPRNumberFn == nil {
+			opts.SetKnownPRNumberFn = s.SetKnownPRNumber
+		}
+		if opts.PostMergeUpdateFn == nil {
+			opts.PostMergeUpdateFn = s.PostMergeUpdateMain
+		}
+		gh := s.GitHubStub
+		if gh == nil {
+			gh = git.NewStubGitHub()
+			gh.(*git.StubGitHub).PRState = s.PRState
+			gh.(*git.StubGitHub).PRBase = s.PRBase
+		}
+		return git.Ship(ctx, nil, gh, s.WorkDir, "", s.RemoteURLValue, opts)
+	}
 	return s.ShipResult, s.ShipErr
 }
 

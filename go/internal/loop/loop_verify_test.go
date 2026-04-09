@@ -603,3 +603,78 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 		t.Errorf("expected log to contain first line of second comment, got: %s", output)
 	}
 }
+
+// isActionableComment classifies comments correctly.
+func TestIsActionableComment(t *testing.T) {
+	tests := []struct {
+		name       string
+		comment    git.ReviewComment
+		actionable bool
+	}{
+		{
+			name:       "suggestion block",
+			comment:    git.ReviewComment{Path: "foo.go", Line: 1, Body: "```suggestion\nfixed code\n```"},
+			actionable: true,
+		},
+		{
+			name:       "nil check keyword",
+			comment:    git.ReviewComment{Path: "foo.go", Line: 5, Body: "Missing nil check before using ptr"},
+			actionable: true,
+		},
+		{
+			name:       "bug keyword",
+			comment:    git.ReviewComment{Path: "bar.go", Line: 10, Body: "This is a bug — value may overflow"},
+			actionable: true,
+		},
+		{
+			name:       "code block on file comment",
+			comment:    git.ReviewComment{Path: "bar.go", Line: 3, Body: "Consider:\n```go\nreturn err\n```"},
+			actionable: true,
+		},
+		{
+			name:       "informational summary",
+			comment:    git.ReviewComment{Path: "bar.go", Line: 1, Body: "This PR adds caching support to the auth layer."},
+			actionable: false,
+		},
+		{
+			name:       "empty body",
+			comment:    git.ReviewComment{Path: "foo.go", Line: 1, Body: ""},
+			actionable: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isActionableComment(tc.comment)
+			if got != tc.actionable {
+				t.Errorf("isActionableComment(%q) = %v, want %v", tc.comment.Body, got, tc.actionable)
+			}
+		})
+	}
+}
+
+// formatReviewContext structures comments with file paths, line numbers, and reviewer name.
+func TestFormatReviewContext(t *testing.T) {
+	comments := []git.ReviewComment{
+		{Path: "pkg/auth.go", Line: 42, Body: "Missing nil check"},
+		{Path: "pkg/db.go", Line: 17, Body: "```suggestion\nreturn nil, err\n```"},
+	}
+
+	result := formatReviewContext("copilot-pull-request-reviewer", 99, comments)
+
+	if !strings.Contains(result, "PR #99") {
+		t.Error("context should mention PR number")
+	}
+	if !strings.Contains(result, "copilot-pull-request-reviewer") {
+		t.Error("context should mention reviewer name")
+	}
+	if !strings.Contains(result, "pkg/auth.go:42") {
+		t.Error("context should contain file:line for first comment")
+	}
+	if !strings.Contains(result, "Missing nil check") {
+		t.Error("context should contain first comment body")
+	}
+	if !strings.Contains(result, "pkg/db.go:17") {
+		t.Error("context should contain file:line for second comment")
+	}
+}

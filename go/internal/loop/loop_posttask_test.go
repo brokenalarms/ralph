@@ -50,15 +50,46 @@ func handlePostSignalCall(l *Loop, p postSignalParams) postSignalAction {
 				},
 			})
 		},
-		finalizePRFn: func(fp finalizePRParams) finalizePRResult {
-			fp.autoMerge = l.cfg.AutoMerge
-			fp.git = l.git
-			fp.logger = l.logger
-			fp.backend = l.cfg.TaskBackend
-			fp.state = l.state
-			fp.attempts = l.attempts
-			fp.verifier = l.verifier
-			return finalizePR(fp)
+		shipMergeFn: func(r shipMergeRequest) (git.ShipResult, error) {
+			return l.git.Ship(r.ctx, git.ShipOpts{
+				PRNumber:  r.prNumber,
+				PRState:   r.prState,
+				PRURL:     r.prURL,
+				AutoMerge: l.cfg.AutoMerge,
+				Logger:    l.logger,
+				ActiveReviewers: func() []git.Reviewer {
+					l.ensureActiveReviewers()
+					return l.activeReviewers
+				}(),
+				MergeFn: func(ctx context.Context) (bool, error) {
+					return mergeWithRetry(ctx, mergeWithRetryParams{
+						taskID:     r.taskID,
+						nextTask:   r.nextTask,
+						workDir:    r.workDir,
+						rawLogPath: r.rawLogPath,
+						git:        l.git,
+						verifier:   l.verifier,
+						logger:     l.logger,
+						backend:    l.cfg.TaskBackend,
+					})
+				},
+				OnReviewFix: func(ctx context.Context, botUsername string, review *git.AutoReview, prNumber int) bool {
+					return tryFixReviewComments(ctx, l.git, l.verifier, l.logger, botUsername, review, prNumber, r.nextTask, r.workDir, r.rawLogPath)
+				},
+				ReviewAddressedFn: func(botUsername string) bool {
+					if l.state == nil || r.taskID == "" {
+						return false
+					}
+					v, _ := l.state.Read("review_addressed:" + botUsername + ":" + r.taskID)
+					return v == "true"
+				},
+				MarkReviewAddressedFn: func(botUsername string) {
+					if l.state == nil || r.taskID == "" {
+						return
+					}
+					l.state.Write("review_addressed:"+botUsername+":"+r.taskID, "true")
+				},
+			})
 		},
 		buildCTFn: func(taskID, nextTask, summary string, prNumber int, _ string) CompletedTask {
 			return buildCompletedTask(taskID, nextTask, summary, prNumber, l.git)

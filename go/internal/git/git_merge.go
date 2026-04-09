@@ -235,105 +235,294 @@ type ShipOpts struct {
 	BranchIsAheadOfMainFn   func(branch string) bool
 	BaseBranch              string
 	Logger                  Log
+
+	// Merge pipeline — set AutoMerge to enable post-PR merge flow.
+	// When PRNumber is pre-set, Ship skips push+PR and goes straight to merge.
+	AutoMerge       bool
+	ActiveReviewers []Reviewer
+	PRNumber        int     // pre-known PR number (non-zero skips push+PR)
+	PRState         PRState // pre-known state (empty = look up via gh.GetPR)
+	PRURL           string
+
+	// Merge pipeline callbacks — Manager fills git-internal ones.
+	DetectDefaultBranchFn func() string
+	SetLocalTestsPassedFn func(bool)
+	PollReviewFn          func(string, int, time.Duration) (*AutoReview, error)
+	SetKnownPRNumberFn    func(int)
+	PostMergeUpdateFn     func()
+
+	// Cross-module callbacks — caller provides these.
+	MergeFn               func(ctx context.Context) (bool, error)
+	OnReviewFix           func(ctx context.Context, botUsername string, review *AutoReview, prNumber int) bool
+	ReviewAddressedFn     func(botUsername string) bool
+	MarkReviewAddressedFn func(botUsername string)
 }
 
 // ShipResult is the outcome of the Ship pipeline.
 type ShipResult struct {
-	PRNumber int
-	PRURL    string
-	PRTitle  string
+	PRNumber    int
+	PRURL       string
+	PRTitle     string
+	PRState     PRState // state after Ship completes (looked up when AutoMerge + PRNumber)
+	Merged      bool
+	MergeFailed bool
 }
 
-// Ship is the single "get work into a PR" pipeline: auto-commit any
-// uncommitted changes, push (squash + rebase + force-push), and create
-// or update a PR. Returns the PR number and URL.
+// Ship is the single "get work into a PR and optionally merge" pipeline.
+// Phase 1 (push+PR): auto-commit, push, create/update PR — skipped when
+// opts.PRNumber is pre-set.
+// Phase 2 (merge): when AutoMerge is set, handles reviewer polling, merge
+// with retry, and post-merge main sync.
 func Ship(ctx context.Context, runner Runner, gh GitHub, workDir, branch, remoteURL string, opts ShipOpts) (ShipResult, error) {
-	hasChanges := opts.HasUncommittedChangesFn
-	if hasChanges == nil {
-		r := runner
-		if r == nil {
-			r = defaultRunner
-		}
-		hasChanges = func() bool {
-			_, err1 := r.Run(context.Background(), workDir, "diff", "--quiet")
-			_, err2 := r.Run(context.Background(), workDir, "diff", "--cached", "--quiet")
-			return err1 != nil || err2 != nil
-		}
-	}
+	prNumber := opts.PRNumber
+	prURL := opts.PRURL
+	var prTitle string
 
-	commitAll := opts.CommitAllFn
-	if commitAll == nil {
-		r := runner
-		if r == nil {
-			r = defaultRunner
-		}
-		commitAll = func(msg string) {
-			r.Run(context.Background(), workDir, "add", "-A")
-			r.Run(context.Background(), workDir, "commit", "-m", msg)
-		}
-	}
-
-	if hasChanges() {
-		msg := "auto-commit agent changes"
-		if opts.TaskID != "" {
-			msg = fmt.Sprintf("[%s] %s", opts.TaskID, msg)
-		}
-		commitAll(msg)
-	}
-
-	if opts.PushFn != nil {
-		if err := opts.PushFn(ctx); err != nil {
-			if ctx.Err() != nil {
-				return ShipResult{}, ctx.Err()
+	// Phase 1: push + PR creation (skip when PRNumber already known).
+	if prNumber == 0 {
+		hasChanges := opts.HasUncommittedChangesFn
+		if hasChanges == nil {
+			r := runner
+			if r == nil {
+				r = defaultRunner
 			}
+			hasChanges = func() bool {
+				_, err1 := r.Run(context.Background(), workDir, "diff", "--quiet")
+				_, err2 := r.Run(context.Background(), workDir, "diff", "--cached", "--quiet")
+				return err1 != nil || err2 != nil
+			}
+		}
+
+		commitAll := opts.CommitAllFn
+		if commitAll == nil {
+			r := runner
+			if r == nil {
+				r = defaultRunner
+			}
+			commitAll = func(msg string) {
+				r.Run(context.Background(), workDir, "add", "-A")
+				r.Run(context.Background(), workDir, "commit", "-m", msg)
+			}
+		}
+
+		if hasChanges() {
+			msg := "auto-commit agent changes"
+			if opts.TaskID != "" {
+				msg = fmt.Sprintf("[%s] %s", opts.TaskID, msg)
+			}
+			commitAll(msg)
+		}
+
+		if opts.PushFn != nil {
+			if err := opts.PushFn(ctx); err != nil {
+				if ctx.Err() != nil {
+					return ShipResult{}, ctx.Err()
+				}
+				if opts.Logger != nil {
+					opts.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push failed: %v", err)
+				}
+				return ShipResult{}, fmt.Errorf("push failed: %w", err)
+			}
+		}
+
+		if opts.BranchIsAheadOfMainFn != nil && !opts.BranchIsAheadOfMainFn(branch) {
 			if opts.Logger != nil {
-				opts.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push failed: %v", err)
+				opts.Logger.Emit(logging.Opts{Domain: logging.Git}, "Ship: branch %s is not ahead of main — skipping PR creation", branch)
 			}
-			return ShipResult{}, fmt.Errorf("push failed: %w", err)
+			return ShipResult{}, nil
 		}
-	}
 
-	if opts.BranchIsAheadOfMainFn != nil && !opts.BranchIsAheadOfMainFn(branch) {
-		if opts.Logger != nil {
-			opts.Logger.Emit(logging.Opts{Domain: logging.Git}, "Ship: branch %s is not ahead of main — skipping PR creation", branch)
+		var err error
+		prNumber, err = CreatePR(ctx, gh, workDir, branch, remoteURL, EnsurePROpts{
+			TaskID:     opts.TaskID,
+			TaskDesc:   opts.TaskTitle,
+			Body:       opts.Body,
+			BaseBranch: opts.BaseBranch,
+			Logger:     opts.Logger,
+		})
+		if err != nil {
+			return ShipResult{PRNumber: prNumber}, err
 		}
-		return ShipResult{}, nil
-	}
 
-	prNumber, err := CreatePR(ctx, gh, workDir, branch, remoteURL, EnsurePROpts{
-		TaskID:     opts.TaskID,
-		TaskDesc:   opts.TaskTitle,
-		Body:       opts.Body,
-		BaseBranch: opts.BaseBranch,
-		Logger:     opts.Logger,
-	})
-	if err != nil {
-		return ShipResult{PRNumber: prNumber}, err
-	}
-
-	// Look up the PR URL for the external ref.
-	var prURL, prTitle string
-	if prNumber != 0 {
-		if _, t, u, findErr := gh.FindPR(branch, remoteURL); findErr == nil {
-			prURL = u
-			prTitle = t
-		}
-		if prURL == "" {
-			nwo := NWOFromRemote(remoteURL)
-			if nwo != "" {
-				prURL = fmt.Sprintf("https://github.com/%s/pull/%d", nwo, prNumber)
+		if prNumber != 0 {
+			if _, t, u, findErr := gh.FindPR(branch, remoteURL); findErr == nil {
+				prURL = u
+				prTitle = t
+			}
+			if prURL == "" {
+				nwo := NWOFromRemote(remoteURL)
+				if nwo != "" {
+					prURL = fmt.Sprintf("https://github.com/%s/pull/%d", nwo, prNumber)
+				}
 			}
 		}
 	}
 
-	return ShipResult{
+	result := ShipResult{
 		PRNumber: prNumber,
 		PRURL:    prURL,
 		PRTitle:  prTitle,
-	}, nil
+	}
+
+	// Phase 2: state lookup + optional merge pipeline.
+	// Runs when PRNumber was pre-set (skip-push mode) or AutoMerge is on.
+	if prNumber != 0 && (opts.AutoMerge || opts.PRNumber != 0) {
+		mergeResult := shipMerge(ctx, gh, prNumber, remoteURL, opts)
+		result.Merged = mergeResult.merged
+		result.MergeFailed = mergeResult.mergeFailed
+		result.PRState = mergeResult.prState
+		if mergeResult.err != nil {
+			return result, mergeResult.err
+		}
+	}
+
+	return result, nil
 }
 
-// Manager.Ship delegates to the package function.
+type shipMergeResult struct {
+	merged      bool
+	mergeFailed bool
+	prState     PRState
+	err         error
+}
+
+// shipMerge runs the merge pipeline: state lookup, reviewer polling, merge,
+// post-merge sync. CI errors are returned in the result so the caller can
+// decide whether to close the bead.
+func shipMerge(ctx context.Context, gh GitHub, prNumber int, remoteURL string, opts ShipOpts) shipMergeResult {
+	nwo := NWOFromRemote(remoteURL)
+	prLink := logging.PRLinkOpt(nwo, prNumber)
+
+	// Look up PR details directly via gh.GetPR — no callbacks needed.
+	prState := opts.PRState
+	prBase := ""
+	if gh != nil && gh.Available() {
+		pr, lookErr := gh.GetPR(nwo, prNumber)
+		if pr != nil && lookErr == nil {
+			if prState == "" {
+				prState = pr.State
+			}
+			prBase = pr.BaseRef
+		} else if prState == "" {
+			if opts.Logger != nil {
+				opts.Logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: prLink}, "Failed to get state: %v", lookErr)
+			}
+			return shipMergeResult{}
+		}
+	} else if prState == "" {
+		return shipMergeResult{}
+	}
+
+	if prState == PRStateMerged {
+		if opts.PostMergeUpdateFn != nil {
+			opts.PostMergeUpdateFn()
+		}
+		return shipMergeResult{merged: true, prState: PRStateMerged}
+	}
+
+	if prState != PRStateOpen {
+		return shipMergeResult{prState: prState}
+	}
+
+	if !opts.AutoMerge {
+		return shipMergeResult{prState: PRStateOpen}
+	}
+
+	// PR is OPEN and AutoMerge requested — proceed with merge pipeline.
+	if opts.SetLocalTestsPassedFn != nil {
+		opts.SetLocalTestsPassedFn(true)
+	}
+	defaultBranch := "main"
+	if opts.DetectDefaultBranchFn != nil {
+		defaultBranch = opts.DetectDefaultBranchFn()
+	}
+
+	if prBase != "" && prBase != defaultBranch {
+		if opts.Logger != nil {
+			opts.Logger.Emit(logging.Opts{Domain: "git", Link: prLink}, "targets %s — stacked, closing bead", prBase)
+		}
+		return shipMergeResult{prState: PRStateOpen}
+	}
+
+	// Poll reviewers.
+	for _, reviewer := range opts.ActiveReviewers {
+		if opts.ReviewAddressedFn != nil && opts.ReviewAddressedFn(reviewer.BotUsername) {
+			continue
+		}
+		if opts.PollReviewFn == nil {
+			continue
+		}
+		review, pollErr := opts.PollReviewFn(reviewer.BotUsername, prNumber, reviewer.DefaultTimeout)
+		if pollErr != nil {
+			if opts.Logger != nil {
+				opts.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "%s review poll: %v", reviewer.BotUsername, pollErr)
+			}
+			continue
+		}
+		if review != nil {
+			if opts.Logger != nil {
+				opts.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "%s review received (%d comments)", reviewer.BotUsername, len(review.Comments))
+			}
+			if opts.OnReviewFix != nil {
+				opts.OnReviewFix(ctx, reviewer.BotUsername, review, prNumber)
+			}
+			if opts.MarkReviewAddressedFn != nil {
+				opts.MarkReviewAddressedFn(reviewer.BotUsername)
+			}
+		} else if opts.Logger != nil {
+			opts.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "No %s review arrived within timeout — proceeding to merge", reviewer.BotUsername)
+		}
+	}
+
+	// Merge.
+	if opts.Logger != nil {
+		opts.Logger.Emit(logging.Opts{Domain: "git", Link: prLink}, "targets %s — merging", defaultBranch)
+	}
+	if opts.SetKnownPRNumberFn != nil {
+		opts.SetKnownPRNumberFn(prNumber)
+		defer opts.SetKnownPRNumberFn(0)
+	}
+	var merged bool
+	if opts.MergeFn != nil {
+		var mergeErr error
+		merged, mergeErr = opts.MergeFn(ctx)
+		if mergeErr != nil {
+			if opts.Logger != nil {
+				opts.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Auto-merge: %v", mergeErr)
+			}
+			var ciExhausted *CIFixExhaustedError
+			if errors.As(mergeErr, &ciExhausted) {
+				if opts.Logger != nil {
+					opts.Logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI fix agents gave up after %d attempts — tests still failing. Leaving task open for manual investigation.", ciExhausted.Attempts)
+				}
+				return shipMergeResult{prState: PRStateOpen, err: mergeErr}
+			}
+			var ciFailure *CIFailureError
+			if errors.As(mergeErr, &ciFailure) {
+				if opts.Logger != nil {
+					opts.Logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI failing on PR #%d — leaving task open.", ciFailure.PRNumber)
+				}
+				return shipMergeResult{prState: PRStateOpen, err: mergeErr}
+			}
+		}
+	}
+	if !merged {
+		if opts.Logger != nil {
+			opts.Logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: prLink}, "Merge pending — closing bead")
+		}
+		return shipMergeResult{mergeFailed: true, prState: PRStateOpen}
+	}
+
+	if opts.PostMergeUpdateFn != nil {
+		opts.PostMergeUpdateFn()
+	}
+
+	return shipMergeResult{merged: true, prState: PRStateOpen}
+}
+
+// Manager.Ship delegates to the package function, filling in git-internal
+// callbacks from Manager methods. Callers provide cross-module callbacks
+// (MergeFn, OnReviewFix, ReviewAddressedFn, MarkReviewAddressedFn) directly.
 func (m *Manager) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 	opts.PushFn = m.Push
 	opts.HasUncommittedChangesFn = m.HasUncommittedChanges
@@ -341,6 +530,12 @@ func (m *Manager) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 	opts.BranchIsAheadOfMainFn = m.BranchIsAheadOfMain
 	opts.BaseBranch = m.resolveBaseBranch()
 	opts.Logger = m.Logger
+	// Merge pipeline callbacks — git-internal operations.
+	opts.DetectDefaultBranchFn = m.DetectDefaultBranch
+	opts.SetLocalTestsPassedFn = m.SetLocalTestsPassed
+	opts.PollReviewFn = m.PollReview
+	opts.SetKnownPRNumberFn = m.SetKnownPRNumber
+	opts.PostMergeUpdateFn = m.PostMergeUpdateMain
 	return Ship(ctx, m.run(), m.gh(), m.WorkDir, m.WorktreeBranch, m.RemoteURL(), opts)
 }
 
