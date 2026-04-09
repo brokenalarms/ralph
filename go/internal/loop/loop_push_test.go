@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -615,5 +616,73 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 	// Signal handler didn't fire, so merge only happens during flush.
 	if gm.FlushUnpushedCalls != 1 || !gm.LastFlushAutoMerge {
 		t.Errorf("expected exactly 1 flush with autoMerge=true, got FlushCalls=%d LastAutoMerge=%v", gm.FlushUnpushedCalls, gm.LastFlushAutoMerge)
+	}
+}
+
+// Ship is retried when GitHub returns a transient error (401/5xx). After the
+// transient error clears, the loop records a PR number instead of closing the
+// bead with prNumber=0 and losing work.
+func TestLoop_ShipRetriesOnTransientGitHubError(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.MutableBackend{
+		StubBackend: testutil.StubBackend{
+			Remaining:    1,
+			Completed:    0,
+			Total:        1,
+			NextTask:     "task A",
+			NextID:       "ralph-aaa",
+			BackendLabel: "beads",
+		},
+	}
+
+	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+
+	shipAttempts := 0
+	gm.ShipFunc = func(_ context.Context, _ git.ShipOpts) (git.ShipResult, error) {
+		shipAttempts++
+		if shipAttempts == 1 {
+			return git.ShipResult{}, fmt.Errorf("API PR creation failed: HTTP 401: Unauthorized")
+		}
+		return git.ShipResult{PRNumber: 42, PRURL: "https://github.com/owner/repo/pull/42"}, nil
+	}
+
+	runner := &stubRunner{
+		onRun: func() {
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Completed = 1
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm, logging.New(nil))
+	l.runner = runner
+	l.cfg.IsOnline = func() bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.CheckGitHub = func(context.Context) error { return nil }
+	l.cfg.ShipRetryBackoffs = []time.Duration{0, 0, 0}
+
+	err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if shipAttempts < 2 {
+		t.Errorf("expected Ship called at least twice (initial + retry), got %d", shipAttempts)
 	}
 }
