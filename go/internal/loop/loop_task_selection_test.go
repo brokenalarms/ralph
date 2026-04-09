@@ -9,27 +9,31 @@ import (
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
-// newSelectionParams builds minimal selectNextTaskParams for testing.
-func newSelectionParams(t *testing.T, backend *testutil.StubBackend) (selectNextTaskParams, string) {
+// newTestLoopForSelection builds a minimal Loop for testing selectNextTask.
+func newTestLoopForSelection(t *testing.T, backend *testutil.StubBackend) (*Loop, string) {
 	t.Helper()
 	dir, st := setupTestDir(t)
-	logger := logging.New(nil)
-	return selectNextTaskParams{
-		backend:           backend,
-		state:             st,
-		logger:            logger,
-		completedIDs:      map[string]bool{},
-		waitForTasks:      func(_ context.Context) bool { return false },
-		flushUnpushedWork: func(_ context.Context) {},
-	}, dir
+	l := &Loop{
+		cfg: Config{
+			MaxIterations: 100,
+			TaskBackend:   backend,
+			Dirs:          workctx.WorkContext{RalphDir: dir + "/.ralph"},
+		},
+		state:  st,
+		logger: logging.New(nil),
+		git:    &testutil.StubGit{ProjectDir: dir, WorkDir: dir},
+	}
+	return l, dir
 }
 
 // selectNextTask returns actionProceed with the correct taskContext when a task is available.
 func TestSelectNextTask_ReturnsTask(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-abc", NextTask: "Fix login"}
-	p, _ := newSelectionParams(t, backend)
+	l, _ := newTestLoopForSelection(t, backend)
 
-	tc, action := selectNextTask(context.Background(), p)
+	tc, action := l.selectNextTask(context.Background(), selectNextTaskParams{
+		completedIDs: map[string]bool{},
+	})
 
 	if action != actionProceed {
 		t.Fatalf("expected actionProceed, got %v", action)
@@ -45,12 +49,14 @@ func TestSelectNextTask_ReturnsTask(t *testing.T) {
 // selectNextTask returns actionDone when context is cancelled.
 func TestSelectNextTask_ContextCancelled(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-abc", NextTask: "Fix login"}
-	p, _ := newSelectionParams(t, backend)
+	l, _ := newTestLoopForSelection(t, backend)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, action := selectNextTask(ctx, p)
+	_, action := l.selectNextTask(ctx, selectNextTaskParams{
+		completedIDs: map[string]bool{},
+	})
 
 	if action != actionDone {
 		t.Fatalf("expected actionDone on cancelled context, got %v", action)
@@ -60,11 +66,11 @@ func TestSelectNextTask_ContextCancelled(t *testing.T) {
 // selectNextTask skips tasks in completedIDs and returns actionDone when no other task is available.
 func TestSelectNextTask_SkipsCompletedIDs(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-done", NextTask: "Already done"}
-	p, _ := newSelectionParams(t, backend)
-	p.completedIDs = map[string]bool{"ralph-done": true}
-	p.skipTask = func(id, reason string) { _ = backend.SkipTask(id, reason) }
+	l, _ := newTestLoopForSelection(t, backend)
 
-	_, action := selectNextTask(context.Background(), p)
+	_, action := l.selectNextTask(context.Background(), selectNextTaskParams{
+		completedIDs: map[string]bool{"ralph-done": true},
+	})
 
 	if action != actionDone {
 		t.Fatalf("expected actionDone after exhausting attempts, got %v", action)
@@ -77,16 +83,18 @@ func TestSelectNextTask_SkipsCompletedIDs(t *testing.T) {
 // selectNextTask returns actionDone and writes "max_iterations_reached" when runIteration >= maxIterations.
 func TestSelectNextTask_MaxIterationsReached(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-abc", NextTask: "Fix login"}
-	p, _ := newSelectionParams(t, backend)
-	p.runIteration = 5
-	p.maxIterations = 5
+	l, _ := newTestLoopForSelection(t, backend)
 
-	_, action := selectNextTask(context.Background(), p)
+	_, action := l.selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration:  5,
+		maxIterations: 5,
+		completedIDs:  map[string]bool{},
+	})
 
 	if action != actionDone {
 		t.Fatalf("expected actionDone, got %v", action)
 	}
-	status, _ := p.state.Read("status")
+	status, _ := l.state.Read("status")
 	if status != "max_iterations_reached" {
 		t.Errorf("expected status max_iterations_reached, got %q", status)
 	}
@@ -95,15 +103,17 @@ func TestSelectNextTask_MaxIterationsReached(t *testing.T) {
 // selectNextTask returns actionDone when no tasks remain and wait=false.
 func TestSelectNextTask_NoTasksNoWait(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 0, Total: 1}
-	p, _ := newSelectionParams(t, backend)
-	p.runIteration = 1 // not first iteration, so flushUnpushedWork is called
+	l, _ := newTestLoopForSelection(t, backend)
 
-	_, action := selectNextTask(context.Background(), p)
+	_, action := l.selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration: 1, // not first iteration, so flushUnpushedWork is called
+		completedIDs: map[string]bool{},
+	})
 
 	if action != actionDone {
 		t.Fatalf("expected actionDone, got %v", action)
 	}
-	status, _ := p.state.Read("status")
+	status, _ := l.state.Read("status")
 	if status != "completed" {
 		t.Errorf("expected status completed, got %q", status)
 	}
@@ -112,73 +122,63 @@ func TestSelectNextTask_NoTasksNoWait(t *testing.T) {
 // selectNextTask calls flushUnpushedWork when no tasks remain and runIteration > 0.
 func TestSelectNextTask_FlushesUnpushedWorkWhenNoTasks(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 0, Total: 1}
-	p, _ := newSelectionParams(t, backend)
-	p.runIteration = 2
+	stubGit := &testutil.StubGit{}
+	dir, st := setupTestDir(t)
+	l := &Loop{
+		cfg: Config{
+			MaxIterations: 100,
+			TaskBackend:   backend,
+			Dirs:          workctx.WorkContext{RalphDir: dir + "/.ralph"},
+		},
+		state:  st,
+		logger: logging.New(nil),
+		git:    stubGit,
+	}
 
-	flushed := false
-	p.flushUnpushedWork = func(_ context.Context) { flushed = true }
+	l.selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration: 2,
+		completedIDs: map[string]bool{},
+	})
 
-	selectNextTask(context.Background(), p)
-
-	if !flushed {
-		t.Error("expected flushUnpushedWork to be called when no tasks remain and runIteration > 0")
+	if stubGit.FlushUnpushedCalls == 0 {
+		t.Error("expected FlushUnpushedWork to be called when no tasks remain and runIteration > 0")
 	}
 }
 
 // selectNextTask returns actionDone when no tasks exist and wait=false (first iteration).
 func TestSelectNextTask_NoTasksAtAll(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 0, Total: 0}
-	p, _ := newSelectionParams(t, backend)
-	p.runIteration = 0
+	l, _ := newTestLoopForSelection(t, backend)
 
-	_, action := selectNextTask(context.Background(), p)
+	_, action := l.selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration: 0,
+		completedIDs: map[string]bool{},
+	})
 
 	if action != actionDone {
 		t.Fatalf("expected actionDone when no tasks exist, got %v", action)
 	}
-	status, _ := p.state.Read("status")
+	status, _ := l.state.Read("status")
 	if status != "error" {
 		t.Errorf("expected status error, got %q", status)
 	}
 }
 
-// Loop.selectNextTask delegates to the package function, building completedIDs from sessionTasks.
+// l.selectNextTask uses completedIDs from the session to skip already-done tasks.
 func TestLoop_selectNextTask_DelegatesToPackageFunc(t *testing.T) {
-	dir, st := setupTestDir(t)
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-new", NextTask: "New task"}
-	logger := logging.New(nil)
-
-	l := &Loop{
-		cfg: Config{
-			MaxIterations: 10,
-			TaskBackend:   backend,
-			Dirs:          workctx.WorkContext{RalphDir: dir + "/.ralph"},
-		},
-		state:          st,
-		logger:         logger,
-		completedTasks: []CompletedTask{{ID: "ralph-old", Title: "Old task"}},
-	}
+	l, _ := newTestLoopForSelection(t, backend)
+	l.completedTasks = []CompletedTask{{ID: "ralph-old", Title: "Old task"}}
 
 	completedIDs := make(map[string]bool, len(l.completedTasks))
 	for _, ct := range l.completedTasks {
 		completedIDs[ct.ID] = true
 	}
-	tc, action := selectNextTask(context.Background(), selectNextTaskParams{
-		runIteration:      0,
-		maxIterations:     l.cfg.MaxIterations,
-		backend:           l.cfg.TaskBackend,
-		wait:              l.cfg.Wait,
-		state:             l.state,
-		logger:            l.logger,
-		completedIDs:      completedIDs,
-		waitForTasks: func(ctx context.Context) bool {
-				return waitForTasks(ctx, waitForTasksParams{
-					logger:  l.logger,
-					state:   l.state,
-					backend: l.cfg.TaskBackend,
-				})
-			},
-		flushUnpushedWork: func(_ context.Context) {},
+	tc, action := l.selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration: 0,
+		maxIterations: l.cfg.MaxIterations,
+		wait:          l.cfg.Wait,
+		completedIDs:  completedIDs,
 	})
 
 	if action != actionProceed {
@@ -193,12 +193,13 @@ func TestLoop_selectNextTask_DelegatesToPackageFunc(t *testing.T) {
 // so a fresh start or resume picks up where it left off.
 func TestSelectNextTask_SetResumeIDOnFirstIteration(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-abc", NextTask: "Fix login"}
-	p, dir := newSelectionParams(t, backend)
-	p.runIteration = 0
-	p.state.Write("last_task_id", "ralph-abc")
-	_ = dir
+	l, _ := newTestLoopForSelection(t, backend)
+	l.state.Write("last_task_id", "ralph-abc")
 
-	selectNextTask(context.Background(), p)
+	l.selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration: 0,
+		completedIDs: map[string]bool{},
+	})
 
 	if backend.ResumeIDSet != "ralph-abc" {
 		t.Errorf("expected SetResumeTaskID(ralph-abc) on first iteration, got %q", backend.ResumeIDSet)
@@ -210,12 +211,13 @@ func TestSelectNextTask_SetResumeIDOnFirstIteration(t *testing.T) {
 // a no-signal exit.
 func TestSelectNextTask_NoResumeIDOnSubsequentIterations(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextID: "ralph-abc", NextTask: "Fix login"}
-	p, dir := newSelectionParams(t, backend)
-	p.runIteration = 1
-	p.state.Write("last_task_id", "ralph-abc")
-	_ = dir
+	l, _ := newTestLoopForSelection(t, backend)
+	l.state.Write("last_task_id", "ralph-abc")
 
-	selectNextTask(context.Background(), p)
+	l.selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration: 1,
+		completedIDs: map[string]bool{},
+	})
 
 	if backend.ResumeIDSet != "" {
 		t.Errorf("expected no SetResumeTaskID call on iteration > 0, got %q", backend.ResumeIDSet)

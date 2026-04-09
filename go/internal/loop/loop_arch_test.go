@@ -40,11 +40,14 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 		// "completeTaskParams": true,
 
 		// --- Bead 6: task selection → tasks module (ralph-u4c7) ---
-		// "selectNextTaskParams":     true,
-		// "pollForTasksParams":       true,
-		// "waitForTasksParams":       true,
-		// "beginIterationParams":     true,
-		// "logIterationBannerParams": true,
+		// selectNextTaskParams and logIterationBannerParams are data-only structs.
+		// pollForTasksParams, waitForTasksParams, and beginIterationParams were
+		// converted to Loop methods — no longer exist as params structs.
+		"selectNextTaskParams":     true,
+		"pollForTasksParams":       true,
+		"waitForTasksParams":       true,
+		"beginIterationParams":     true,
+		"logIterationBannerParams": true,
 
 		// --- Bead 7: state/attempts out of params (ralph-eycr) ---
 		// Structs converted to Loop methods — no longer exist as params structs.

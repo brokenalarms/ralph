@@ -700,12 +700,7 @@ func TestLoop_WaitMode_ReReadsSkippedTasksOnTick(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	got := waitForTasks(ctx, waitForTasksParams{
-		logger:     l.logger,
-		state:      l.state,
-		backend:    l.cfg.TaskBackend,
-		onWaitFunc: l.cfg.OnWait,
-	})
+	got := l.waitForTasks(ctx)
 	if !got {
 		t.Fatal("waitForTasks should return true after skipped tasks cleared")
 	}
