@@ -70,7 +70,7 @@ func TestEnforceAdmins_NoRemote(t *testing.T) {
 	run(t, "git", "init", tmp)
 
 	log := &testLog{}
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir: tmp,
 		BaseBranch: "main",
 		WorkDir:    tmp,
@@ -193,13 +193,13 @@ func TestEnforceAdmins_PostAPIError(t *testing.T) {
 	}
 }
 
-func enforceAdminsManager(t *testing.T) (*Manager, *testLog) {
+func enforceAdminsManager(t *testing.T) (*Repo, *testLog) {
 	t.Helper()
 	project, _ := initBareRepo(t)
 	run(t, "git", "-C", project, "remote", "set-url", "origin", "https://github.com/owner/repo.git")
 
 	log := &testLog{}
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir: project,
 		BaseBranch: "main",
 		WorkDir:    project,

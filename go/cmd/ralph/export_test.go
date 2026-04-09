@@ -25,6 +25,6 @@ func StackPRNumber(p StackPR) int               { return p.number }
 func StackPRHead(p StackPR) string               { return p.head }
 
 // RunMergeForTest wraps runMerge for external tests.
-func RunMergeForTest(ctx context.Context, prs []stackPR, projectDir, defaultBranch string, gm *git.Manager, log *logging.Logger) int {
+func RunMergeForTest(ctx context.Context, prs []stackPR, projectDir, defaultBranch string, gm *git.Repo, log *logging.Logger) int {
 	return runMerge(ctx, prs, projectDir, defaultBranch, gm, log)
 }

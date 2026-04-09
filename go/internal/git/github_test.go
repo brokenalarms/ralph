@@ -185,7 +185,7 @@ func TestGetPR_ReturnsAllFields(t *testing.T) {
 func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
 	stub := NewStubGitHub()
 	stub.RunLogValue = "test failure output line 1\nline 2"
-	mgr := &Manager{
+	mgr := &Repo{
 		BaseBranch: "main",
 		GitHub: stub,
 	}

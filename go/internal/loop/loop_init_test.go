@@ -29,7 +29,7 @@ func TestInitialize_WritesConfigAndLoadsSkipped(t *testing.T) {
 		},
 	}
 	logger := logging.New(nil)
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		MaxIterations: 7,
@@ -67,7 +67,7 @@ func TestLoop_ActiveReviewersNotDetectedAtStartup(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 	logger := logging.New(nil)
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir: dir,
 		WorkDir:    dir,
 		ActiveReviewers: []git.Reviewer{
@@ -108,7 +108,7 @@ func TestLoop_EnsureActiveReviewers_LazyInitAndCache(t *testing.T) {
 	logger := logging.New(nil)
 
 	reviewer := git.Reviewer{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second, ReviewOnPush: true}
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:      dir,
 		WorkDir:         dir,
 		ActiveReviewers: []git.Reviewer{reviewer},
@@ -154,7 +154,7 @@ func TestLoop_ReviewersDetectedViaEnsureReviewersFn(t *testing.T) {
 	logger := logging.New(nil)
 
 	reviewer := git.Reviewer{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second, ReviewOnPush: true}
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:      dir,
 		WorkDir:         dir,
 		ActiveReviewers: []git.Reviewer{reviewer},
@@ -199,7 +199,7 @@ func TestInitWorktree_NoopWhenNoWorktreeBranch(t *testing.T) {
 	logger := logging.New(nil)
 	backend := &testutil.StubBackend{}
 	// StubGit with WorkDir == ProjectDir means no worktree → early return.
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		TaskBackend: backend,

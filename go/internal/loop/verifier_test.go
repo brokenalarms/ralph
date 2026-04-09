@@ -56,7 +56,7 @@ func newTestVerifier(t *testing.T, opts ...func(*Verifier)) *Verifier {
 		RalphDir:   ralphDir,
 	}, VerifierDeps{
 		Logger:      logging.New(nil),
-		Git:         &testutil.StubGit{HeadRevValue: "def456"},
+		Git:         &git.StubRepo{HeadRevValue: "def456"},
 		State:       st,
 		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		Runner:      func() claudeRunner { return &stubRunner{} },
@@ -106,7 +106,7 @@ func TestVerifier_OnSignal_HappyPath(t *testing.T) {
 func TestVerifier_OnSignal_ZeroCommits_Rejected(t *testing.T) {
 	v := newTestVerifier(t, func(v *Verifier) {
 		// headBefore and HeadRevValue are the same SHA — no commits were made.
-		v.deps.Git = &testutil.StubGit{HeadRevValue: "abc123"}
+		v.deps.Git = &git.StubRepo{HeadRevValue: "abc123"}
 	})
 
 	var buf strings.Builder
@@ -862,7 +862,7 @@ func TestVerifier_RunPreIterationTests_LogsDetectedCommand(t *testing.T) {
 		RalphDir:   ralphDir,
 	}, VerifierDeps{
 		Logger:      logger,
-		Git:         &testutil.StubGit{HeadRevValue: "abc123"},
+		Git:         &git.StubRepo{HeadRevValue: "abc123"},
 		State:       st,
 		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1},
 		Runner:      func() claudeRunner { return &stubRunner{} },
@@ -898,7 +898,7 @@ func TestVerifier_RunPreIterationTests_LogsCommandOnFailure(t *testing.T) {
 		RalphDir:   ralphDir,
 	}, VerifierDeps{
 		Logger:      logger,
-		Git:         &testutil.StubGit{HeadRevValue: "abc123"},
+		Git:         &git.StubRepo{HeadRevValue: "abc123"},
 		State:       st,
 		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1},
 		Runner:      func() claudeRunner { return &stubRunner{} },
@@ -976,7 +976,7 @@ func TestVerifier_RunPreIterationTests_MissingScript(t *testing.T) {
 		RalphDir:   ralphDir,
 	}, VerifierDeps{
 		Logger:      logger,
-		Git:         &testutil.StubGit{HeadRevValue: "abc123"},
+		Git:         &git.StubRepo{HeadRevValue: "abc123"},
 		State:       st,
 		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1},
 		Runner:      func() claudeRunner { return &stubRunner{} },
@@ -1019,7 +1019,7 @@ func TestVerifier_RunPreIterationTests_LogsCompileCommand(t *testing.T) {
 		RalphDir:   ralphDir,
 	}, VerifierDeps{
 		Logger:      logger,
-		Git:         &testutil.StubGit{HeadRevValue: "abc123"},
+		Git:         &git.StubRepo{HeadRevValue: "abc123"},
 		State:       st,
 		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1},
 		Runner:      func() claudeRunner { return &stubRunner{} },

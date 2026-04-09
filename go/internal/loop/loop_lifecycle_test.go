@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -26,7 +27,7 @@ func TestLoop_AllTasksComplete(t *testing.T) {
 		Total:     3,
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
 
@@ -65,7 +66,7 @@ func TestLoop_NoTasksError(t *testing.T) {
 		Total:     0,
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
 
@@ -107,7 +108,7 @@ func TestLoop_StopFileDetection(t *testing.T) {
 		NextTask:  "Some task",
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
 
@@ -151,7 +152,7 @@ func TestLoop_ContextCancellation(t *testing.T) {
 		NextTask:  "Some task",
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
 
@@ -193,7 +194,7 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 		Total:     1,
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
 
@@ -239,7 +240,7 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var (
 		callsMu sync.Mutex
@@ -321,7 +322,7 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -363,7 +364,7 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -407,7 +408,7 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -490,7 +491,7 @@ func TestLoop_LifecycleStates(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -551,7 +552,7 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -628,7 +629,7 @@ func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -674,7 +675,7 @@ func TestLoop_WaitMode_ReReadsSkippedTasksOnTick(t *testing.T) {
 	backend.BackendLabel = "beads"
 
 	logger := logging.New(nil)
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{

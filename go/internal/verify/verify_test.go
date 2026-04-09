@@ -48,8 +48,8 @@ func newQuerier(dir string) *dirQuerier {
 // Compile-time check that dirQuerier satisfies GitQuerier.
 var _ GitQuerier = (*dirQuerier)(nil)
 
-// Compile-time check that git.Manager satisfies GitQuerier.
-var _ GitQuerier = (*git.Manager)(nil)
+// Compile-time check that git.Repo satisfies GitQuerier.
+var _ GitQuerier = (*git.Repo)(nil)
 
 // DetectTestCommand finds a Makefile test target when present,
 // proving ralph can auto-detect the project's test runner.

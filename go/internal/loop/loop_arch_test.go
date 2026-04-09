@@ -65,7 +65,7 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 		"prepareAndBuildPromptParams": true,
 
 		// --- Bead 9: merge/iteration params (ralph-bk7m / ralph-93jq) ---
-		// "mergeWithRetryParams": true,
+		"mergeWithRetryParams": true,
 	}
 
 	if len(checked) == 0 {

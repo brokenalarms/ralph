@@ -126,16 +126,13 @@ func TestIntegration_HappyPath_SignalVerifyPushMergeClose(t *testing.T) {
 	backend.NextID = "ralph-hp1"
 	backend.BackendLabel = "beads"
 
-	ghStub := git.NewStubGitHub()
-	ghStub.OpenPR = 0
-	ghStub.PRNumber = 0 // no pre-existing PR for the branch
-	gm := &testutil.StubGit{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		WorktreeBranch: "ralph/next",
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     ghStub,
-	}
+	gm := git.NewStubRepo()
+	gm.ProjectDir = dir
+	gm.WorkDir = dir
+	gm.WorktreeBranch = "ralph/next"
+	gm.RemoteURLValue = "https://github.com/owner/repo.git"
+	gm.GH.OpenPR = 0
+	gm.GH.PRNumber = 0
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -235,20 +232,16 @@ func TestIntegration_ResumeViaPR_Merged(t *testing.T) {
 	backend.BackendLabel = "beads"
 	backend.externalRefs["ralph-m1"] = "https://github.com/owner/repo/pull/100"
 
-	ghStub := git.NewStubGitHub()
-	ghStub.PRState = "MERGED"
-
-	gm := &testutil.StubGit{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		WorktreeBranch: "ralph/next",
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     ghStub,
-		ResumeResult: git.ResumeTaskResult{
-			Handled:       true,
-			AlreadyMerged: true,
-			PRNumber:      100,
-		},
+	gm := git.NewStubRepo()
+	gm.ProjectDir = dir
+	gm.WorkDir = dir
+	gm.WorktreeBranch = "ralph/next"
+	gm.RemoteURLValue = "https://github.com/owner/repo.git"
+	gm.GH.PRState = "MERGED"
+	gm.ResumeResult = git.ResumeTaskResult{
+		Handled:       true,
+		AlreadyMerged: true,
+		PRNumber:      100,
 	}
 
 	agentCalled := false
@@ -314,25 +307,21 @@ func TestIntegration_ResumeViaPR_MergedFoundViaBranchMetadata(t *testing.T) {
 	// Simulate prior iteration: branch was stored in metadata, but no external-ref set.
 	_ = backend.SetMetadata("ralph-ac6", "branch", "ralph/ralph-ac6-already-landed-task")
 
-	ghStub := git.NewStubGitHub()
-	ghStub.OpenPR = 0                     // FindOpenPRForBranch (old path) returns nothing
-	ghStub.PRNumber = 200                 // FindPRForBranch (any-state) returns this
-	ghStub.PRState = git.PRStateMerged    // the PR is already merged
-	ghStub.PRTitle = "Already landed task"
-	ghStub.PRURL = "https://github.com/owner/repo/pull/200"
-
-	gm := &testutil.StubGit{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		WorktreeBranch: "ralph/ralph-ac6-already-landed-task",
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     ghStub,
-		BranchRenamed:  true, // branch already named for the task
-		ResumeResult: git.ResumeTaskResult{
-			Handled:       true,
-			AlreadyMerged: true,
-			PRNumber:      200,
-		},
+	gm := git.NewStubRepo()
+	gm.ProjectDir = dir
+	gm.WorkDir = dir
+	gm.WorktreeBranch = "ralph/ralph-ac6-already-landed-task"
+	gm.RemoteURLValue = "https://github.com/owner/repo.git"
+	gm.GH.OpenPR = 0
+	gm.GH.PRNumber = 200
+	gm.GH.PRState = git.PRStateMerged
+	gm.GH.PRTitle = "Already landed task"
+	gm.GH.PRURL = "https://github.com/owner/repo/pull/200"
+	gm.BranchRenamed = true
+	gm.ResumeResult = git.ResumeTaskResult{
+		Handled:       true,
+		AlreadyMerged: true,
+		PRNumber:      200,
 	}
 
 	agentCalled := false
@@ -389,21 +378,17 @@ func TestIntegration_ResumeViaPR_OpenAutoMerge(t *testing.T) {
 	backend.BackendLabel = "beads"
 	backend.externalRefs["ralph-o1"] = "https://github.com/owner/repo/pull/200"
 
-	ghStub := git.NewStubGitHub()
-	ghStub.PRHead = "ralph-o1-open-pr-task"
-
-	gm := &testutil.StubGit{
-		ProjectDir:          dir,
-		WorkDir:             dir,
-		WorktreeBranch:      "ralph/next",
-		RemoteURLValue:      "https://github.com/owner/repo.git",
-		GitHubStub:          ghStub,
-		RemoteBranchCommits: true,
-		ResumeResult: git.ResumeTaskResult{
-			Handled:  true,
-			Merged:   true,
-			PRNumber: 200,
-		},
+	gm := git.NewStubRepo()
+	gm.ProjectDir = dir
+	gm.WorkDir = dir
+	gm.WorktreeBranch = "ralph/next"
+	gm.RemoteURLValue = "https://github.com/owner/repo.git"
+	gm.GH.PRHead = "ralph-o1-open-pr-task"
+	gm.RemoteBranchCommits = true
+	gm.ResumeResult = git.ResumeTaskResult{
+		Handled:  true,
+		Merged:   true,
+		PRNumber: 200,
 	}
 
 	l := New(Config{
@@ -454,21 +439,17 @@ func TestIntegration_ResumeViaPR_Closed(t *testing.T) {
 	backend.externalRefs["ralph-c1"] = "gh-300"
 	backend.metadata["ralph-c1"] = map[string]string{"branch": "ralph-c1-old-branch"}
 
-	ghStub := git.NewStubGitHub()
-	ghStub.PRState = "CLOSED"
-
-	gm := &testutil.StubGit{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		WorktreeBranch: "ralph/next",
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     ghStub,
-		ResumeResult: git.ResumeTaskResult{
-			Handled:       false,
-			ClearMetadata: true,
-			PRNumber:      300,
-			NewBranch:     "ralph/ralph-c1-closed-pr-task",
-		},
+	gm := git.NewStubRepo()
+	gm.ProjectDir = dir
+	gm.WorkDir = dir
+	gm.WorktreeBranch = "ralph/next"
+	gm.RemoteURLValue = "https://github.com/owner/repo.git"
+	gm.GH.PRState = "CLOSED"
+	gm.ResumeResult = git.ResumeTaskResult{
+		Handled:       false,
+		ClearMetadata: true,
+		PRNumber:      300,
+		NewBranch:     "ralph/ralph-c1-closed-pr-task",
 	}
 
 	agentCalled := false
@@ -540,7 +521,7 @@ func TestIntegration_TestFailureThenFixAgentPasses(t *testing.T) {
 	backend.NextID = "ralph-tf1"
 	backend.BackendLabel = "beads"
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	fixAgentCalls := 0
 	runner := &signalCallingRunner{
@@ -604,15 +585,12 @@ func TestIntegration_CIFailureThenFixThenMerge(t *testing.T) {
 	backend.NextID = "ralph-ci1"
 	backend.BackendLabel = "beads"
 
-	ghStub := git.NewStubGitHub()
-	ghStub.OpenPR = 0
-	gm := &testutil.StubGit{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		WorktreeBranch: "ralph/next",
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     ghStub,
-	}
+	gm := git.NewStubRepo()
+	gm.ProjectDir = dir
+	gm.WorkDir = dir
+	gm.WorktreeBranch = "ralph/next"
+	gm.RemoteURLValue = "https://github.com/owner/repo.git"
+	gm.GH.OpenPR = 0
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -677,7 +655,7 @@ func TestIntegration_MaxIterationsReached(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -731,17 +709,14 @@ func TestIntegration_ExternalRefFormat(t *testing.T) {
 	backend.NextID = "ralph-ref1"
 	backend.BackendLabel = "beads"
 
-	ghRef := git.NewStubGitHub()
-	ghRef.PRNumber = 77
-	ghRef.PRTitle = "Ref format task"
-	ghRef.PRURL = "https://github.com/owner/repo/pull/77"
-	gm := &testutil.StubGit{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		WorktreeBranch: "ralph/next",
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     ghRef,
-	}
+	gm := git.NewStubRepo()
+	gm.ProjectDir = dir
+	gm.WorkDir = dir
+	gm.WorktreeBranch = "ralph/next"
+	gm.RemoteURLValue = "https://github.com/owner/repo.git"
+	gm.GH.PRNumber = 77
+	gm.GH.PRTitle = "Ref format task"
+	gm.GH.PRURL = "https://github.com/owner/repo/pull/77"
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -814,7 +789,7 @@ func TestIntegration_PushCalledOnSignal(t *testing.T) {
 	backend.NextID = "ralph-push1"
 	backend.BackendLabel = "beads"
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -876,7 +851,7 @@ func TestIntegration_WaitModePicksUpNewTask(t *testing.T) {
 		},
 	}
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	agentCalled := false
 	runner := &stubRunner{
@@ -963,7 +938,7 @@ func TestIntegration_TestFailureFixedByAgent(t *testing.T) {
 	backend.NextID = "ralph-tf2"
 	backend.BackendLabel = "beads"
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	fixCalls := 0
 	l := New(Config{
@@ -1078,7 +1053,7 @@ func TestIntegration_ResumeTask_AllStates(t *testing.T) {
 			backend.externalRefs["ralph-test"] = "https://github.com/owner/repo/pull/99"
 
 			agentCalled := false
-			gm := &testutil.StubGit{
+			gm := &git.StubRepo{
 				ProjectDir:     dir,
 				WorkDir:        dir,
 				WorktreeBranch: "ralph/next",
@@ -1140,7 +1115,7 @@ func TestIntegration_TwoTasksCompleteSequentially(t *testing.T) {
 	backend.NextID = "ralph-a1"
 	backend.BackendLabel = "beads"
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -1223,7 +1198,7 @@ func TestIntegration_StackedPRSkipsMergeButCloses(t *testing.T) {
 	backend.NextID = "ralph-stk1"
 	backend.BackendLabel = "beads"
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -1289,15 +1264,12 @@ func TestIntegration_MergeConflictThenRetrySucceeds(t *testing.T) {
 	backend.NextID = "ralph-conf1"
 	backend.BackendLabel = "beads"
 
-	ghStub := git.NewStubGitHub()
-	ghStub.OpenPR = 0
-	gm := &testutil.StubGit{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		WorktreeBranch: "ralph/next",
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     ghStub,
-	}
+	gm := git.NewStubRepo()
+	gm.ProjectDir = dir
+	gm.WorkDir = dir
+	gm.WorktreeBranch = "ralph/next"
+	gm.RemoteURLValue = "https://github.com/owner/repo.git"
+	gm.GH.OpenPR = 0
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -1357,7 +1329,7 @@ func TestIntegration_AgentExitsWithoutSignal_Retries(t *testing.T) {
 	backend.NextID = "ralph-ns1"
 	backend.BackendLabel = "beads"
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runCount := 0
 	runner := &stubRunner{
@@ -1405,7 +1377,7 @@ func TestIntegration_CompletedTaskNotReselected(t *testing.T) {
 	backend.NextID = "ralph-dup1"
 	backend.BackendLabel = "beads"
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	taskIDs := []string{}
 	runCount := 0
@@ -1469,7 +1441,7 @@ func TestIntegration_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 	backend.NextID = "ralph-idle1"
 	backend.BackendLabel = "beads"
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		result: claude.Result{IdleTimeout: true},
@@ -1512,7 +1484,7 @@ func TestIntegration_FeedbackKillRestartsIteration(t *testing.T) {
 	backend.NextID = "ralph-fb1"
 	backend.BackendLabel = "beads"
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runCount := 0
 	runner := &stubRunner{
@@ -1571,7 +1543,7 @@ func TestIntegration_StopFileHaltsLoop(t *testing.T) {
 	backend.NextID = "ralph-stop1"
 	backend.BackendLabel = "beads"
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runCount := 0
 	runner := &stubRunner{
@@ -1621,16 +1593,13 @@ func TestIntegration_EvolveExitsAfterMerge(t *testing.T) {
 	backend.NextID = "ralph-ev1"
 	backend.BackendLabel = "beads"
 
-	ghStub := git.NewStubGitHub()
-	ghStub.OpenPR = 0
-	ghStub.PRNumber = 0 // no pre-existing PR for the branch
-	gm := &testutil.StubGit{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		WorktreeBranch: "ralph/next",
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     ghStub,
-	}
+	gm := git.NewStubRepo()
+	gm.ProjectDir = dir
+	gm.WorkDir = dir
+	gm.WorktreeBranch = "ralph/next"
+	gm.RemoteURLValue = "https://github.com/owner/repo.git"
+	gm.GH.OpenPR = 0
+	gm.GH.PRNumber = 0
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -1682,7 +1651,7 @@ func TestIntegration_TestsRunBeforeAndAfterAgent(t *testing.T) {
 	backend.NextID = "ralph-tt1"
 	backend.BackendLabel = "beads"
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	sequence := []string{}
 	runner := &stubRunner{
@@ -1757,15 +1726,12 @@ func TestIntegration_DependencyBlockedTaskIsSkipped(t *testing.T) {
 	// CloseTask will return a dependency error
 	backend.CloseErr = fmt.Errorf("blocked by dependency: ralph-parent1 is not closed")
 
-	ghStub := git.NewStubGitHub()
-	ghStub.OpenPR = 0
-	gm := &testutil.StubGit{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		WorktreeBranch: "ralph/next",
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     ghStub,
-	}
+	gm := git.NewStubRepo()
+	gm.ProjectDir = dir
+	gm.WorkDir = dir
+	gm.WorktreeBranch = "ralph/next"
+	gm.RemoteURLValue = "https://github.com/owner/repo.git"
+	gm.GH.OpenPR = 0
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -1810,12 +1776,12 @@ func TestIntegration_DependencyBlockedTaskIsSkipped(t *testing.T) {
 // enabling tests to verify the CI failure → fix agent path through the full loop
 // without a real GitHub connection.
 type ciTriggerGit struct {
-	*testutil.StubGit
+	*git.StubRepo
 	triggerCI bool // if true, next MergeWithRetry call triggers OnCIFailure once
 }
 
 func (g *ciTriggerGit) MergeWithRetry(ctx context.Context, opts git.MergeRetryOpts) (bool, error) {
-	g.StubGit.MergeRetryCalls++
+	g.StubRepo.MergeRetryCalls++
 	if g.triggerCI && opts.OnCIFailure != nil {
 		g.triggerCI = false
 		ciErr := &git.CIFailureError{
@@ -1828,10 +1794,10 @@ func (g *ciTriggerGit) MergeWithRetry(ctx context.Context, opts git.MergeRetryOp
 		}
 		return false, ciErr
 	}
-	if g.StubGit.MergeRetryFunc != nil {
-		return g.StubGit.MergeRetryFunc(ctx)
+	if g.StubRepo.MergeRetryFunc != nil {
+		return g.StubRepo.MergeRetryFunc(ctx)
 	}
-	return g.StubGit.MergeRetryResult, g.StubGit.MergeRetryErr
+	return g.StubRepo.MergeRetryResult, g.StubRepo.MergeRetryErr
 }
 
 // testGitRunner is a git.Runner for lifecycle integration tests. It handles the
@@ -1856,48 +1822,48 @@ func (r *testGitRunner) Run(_ context.Context, _ string, args ...string) (string
 }
 
 // realMergeGit wraps StubGit for all loop operations except MergeWithRetry,
-// which delegates to a real git.Manager. This exercises the full
+// which delegates to a real git.Repo. This exercises the full
 // AutoMergeCurrentBranch → AwaitCI → evaluateChecks pipeline driven by
 // StubGitHub, proving CI results flow through the real code path.
 type realMergeGit struct {
-	*testutil.StubGit
-	realMgr *git.Manager
+	*git.StubRepo
+	realMgr *git.Repo
 }
 
 // SetKnownPRNumber keeps the real manager in sync with the stub so
 // AutoMergeCurrentBranch skips FindOpenPR (no network call needed).
 func (g *realMergeGit) SetKnownPRNumber(n int) {
-	g.StubGit.SetKnownPRNumber(n)
+	g.StubRepo.SetKnownPRNumber(n)
 	g.realMgr.KnownPRNumber = n
 }
 
-// MergeWithRetry delegates to the real git.Manager, passing opts including
+// MergeWithRetry delegates to the real git.Repo, passing opts including
 // OnCIFailure so the full CI failure → fix agent path can be exercised.
 func (g *realMergeGit) MergeWithRetry(ctx context.Context, opts git.MergeRetryOpts) (bool, error) {
-	g.StubGit.MergeRetryCalls++
+	g.StubRepo.MergeRetryCalls++
 	return g.realMgr.MergeWithRetry(ctx, opts)
 }
 
 // Ship handles the two-phase Ship lifecycle for integration tests:
 //   - Phase 1 (AutoMerge=false): delegates to the stub's ShipFunc or ShipResult
 //     to record "push" and return a PR number.
-//   - Phase 2 (AutoMerge=true): delegates to the real git.Manager.MergeWithRetry
+//   - Phase 2 (AutoMerge=true): delegates to the real git.Repo.MergeWithRetry
 //     so the full AwaitCI → evaluateChecks → MergePR pipeline runs.
 func (g *realMergeGit) Ship(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error) {
 	if !opts.AutoMerge {
-		return g.StubGit.Ship(ctx, opts)
+		return g.StubRepo.Ship(ctx, opts)
 	}
-	g.StubGit.ShipCalls++
-	g.StubGit.LastShipOpts = opts
+	g.StubRepo.ShipCalls++
+	g.StubRepo.LastShipOpts = opts
 	// Mirror real Ship: check PR state when PRNumber is set.
 	if opts.PRNumber != 0 {
-		prState, stateErr := g.StubGit.GetPRState(opts.PRNumber)
+		prState, stateErr := g.StubRepo.GetPRState(opts.PRNumber)
 		if stateErr != nil {
 			return git.ShipResult{PRNumber: opts.PRNumber}, stateErr
 		}
 		switch prState {
 		case git.PRStateMerged:
-			g.StubGit.PostMergeUpdateMain()
+			g.StubRepo.PostMergeUpdateMain()
 			return git.ShipResult{PRNumber: opts.PRNumber, AlreadyMerged: true, Merged: true}, nil
 		case git.PRStateClosed:
 			return git.ShipResult{PRNumber: opts.PRNumber, Closed: true}, nil
@@ -1917,7 +1883,7 @@ func (g *realMergeGit) Ship(ctx context.Context, opts git.ShipOpts) (git.ShipRes
 
 // TestIntegration_FullLifecycleSequenceOrdering verifies all lifecycle stages
 // execute in order: signal → verify → push → ci_poll → ci_passed → merge →
-// close, for each task. The merge step uses a real git.Manager so
+// close, for each task. The merge step uses a real git.Repo so
 // AutoMergeCurrentBranch → AwaitCI → evaluateChecks all execute; StubGitHub
 // drives CI results. The sequence recorder captures CI-specific stages between
 // push and merge, proving the CI pipeline actually ran.
@@ -1944,12 +1910,17 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 	backend.NextID = "ralph-seq1"
 	backend.BackendLabel = "beads"
 
-	// realGH drives CI through the real AwaitCI → evaluateChecks code path.
-	// HeadSHA is updated per task so the fast path triggers (no push needed).
-	realGH := git.NewStubGitHub()
+	// realMgr drives CI through the real AwaitCI → evaluateChecks code path.
+	// realGH drives CI results and HeadSHA is updated per task so the fast path triggers.
+	realMgr, realGH := git.NewRepoForTesting(dir, ralphDir)
 	realGH.OpenPR = 0
 	realGH.PRBase = "main"
 	realGH.PRState = git.PRStateOpen
+	realMgr.State = newGitMemState()
+	realMgr.Logger = logging.New(nil)
+	realMgr.BaseBranch = "main"
+	realMgr.WorkDir = dir + "/wt"
+	realMgr.WorktreeBranch = "ralph/lifecycle-seq"
 
 	// ChecksFunc records ci_poll and returns a passing check. The real
 	// evaluateChecks function receives these checks and must return CIPassed.
@@ -1960,7 +1931,7 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 
 	// testGitRunner handles the two commands AutoMergeCurrentBranch needs.
 	// headSHA reads from the stub so fast-path (HeadSHA == HeadRev) triggers.
-	stub := &testutil.StubGit{
+	stub := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -1973,17 +1944,8 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 		remoteURL: "https://github.com/owner/repo.git",
 		headSHA:   func() string { return stub.HeadRevValue },
 	}
-	realMgr := &git.Manager{
-		ProjectDir:     dir,
-		WorkDir:        dir + "/wt",
-		WorktreeBranch: "ralph/lifecycle-seq",
-		BaseBranch:     "main",
-		Runner:         runner2,
-		GitHub:         realGH,
-		State:          newGitMemState(),
-		Logger:         logging.New(nil),
-	}
-	gm := &realMergeGit{StubGit: stub, realMgr: realMgr}
+	realMgr.Runner = runner2
+	gm := &realMergeGit{StubRepo: stub, realMgr: realMgr}
 
 	prCounter := 0
 	stub.ShipFunc = func(_ context.Context, _ git.ShipOpts) (git.ShipResult, error) {
@@ -2099,7 +2061,7 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 // merge triggers the fix agent path and the loop merges successfully after the
 // fix. Unlike TestIntegration_CIFailureTriggersFixAgent (which uses ciTriggerGit
 // to stub the CI failure at the MergeWithRetry boundary), this test uses a real
-// git.Manager so the CI failure flows through the real AwaitCI → evaluateChecks
+// git.Repo so the CI failure flows through the real AwaitCI → evaluateChecks
 // path: ChecksFunc returns failure on the first call and passing on subsequent
 // calls. The fix agent updates the HEAD SHA so tryFixCI detects a new commit and
 // returns CIFixApplied; the real opts.AwaitCI then polls again and sees CI pass.
@@ -2114,11 +2076,16 @@ func TestIntegration_LifecycleCI_FailureFixRetry(t *testing.T) {
 	backend.NextID = "ralph-cifr1"
 	backend.BackendLabel = "beads"
 
-	realGH := git.NewStubGitHub()
+	realMgr, realGH := git.NewRepoForTesting(dir, ralphDir)
 	realGH.OpenPR = 0
 	realGH.PRBase = "main"
 	realGH.PRState = git.PRStateOpen
 	realGH.PRNumber = 55
+	realMgr.State = newGitMemState()
+	realMgr.Logger = logging.New(nil)
+	realMgr.BaseBranch = "main"
+	realMgr.WorkDir = dir + "/wt"
+	realMgr.WorktreeBranch = "ralph/cifr-test"
 
 	// ChecksFunc returns failure on the first call (AutoMergeCurrentBranch attempt
 	// 1), passing on all subsequent calls (opts.AwaitCI after fix, attempt 2).
@@ -2129,7 +2096,7 @@ func TestIntegration_LifecycleCI_FailureFixRetry(t *testing.T) {
 		return []git.CICheckResult{{Name: "tests", State: "SUCCESS", Bucket: "pass"}}
 	}
 
-	stub := &testutil.StubGit{
+	stub := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -2143,17 +2110,8 @@ func TestIntegration_LifecycleCI_FailureFixRetry(t *testing.T) {
 		remoteURL: "https://github.com/owner/repo.git",
 		headSHA:   func() string { return stub.HeadRevValue },
 	}
-	realMgr := &git.Manager{
-		ProjectDir:     dir,
-		WorkDir:        dir + "/wt",
-		WorktreeBranch: "ralph/cifr-test",
-		BaseBranch:     "main",
-		Runner:         gitRunner,
-		GitHub:         realGH,
-		State:          newGitMemState(),
-		Logger:         logging.New(nil),
-	}
-	gm := &realMergeGit{StubGit: stub, realMgr: realMgr}
+	realMgr.Runner = gitRunner
+	gm := &realMergeGit{StubRepo: stub, realMgr: realMgr}
 	gm.SetKnownPRNumber(55)
 
 	agentRunner := &stubRunner{
@@ -2234,7 +2192,7 @@ func TestIntegration_CIFailureTriggersFixAgent(t *testing.T) {
 	backend.NextID = "ralph-ci2"
 	backend.BackendLabel = "beads"
 
-	stub := &testutil.StubGit{
+	stub := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -2391,7 +2349,7 @@ func TestIntegration_CIAlreadyPassing_SkipsPushAndMerges(t *testing.T) {
 	backend.NextID = taskID
 	backend.BackendLabel = "beads"
 
-	// gitCommandTracker doubles as git.Runner for the real git.Manager used
+	// gitCommandTracker doubles as git.Runner for the real git.Repo used
 	// inside MergeRetryFunc. Outputs are configured for the commands that
 	// AutoMergeCurrentBranch issues on the fast path.
 	tracker := &gitCommandTracker{
@@ -2401,28 +2359,22 @@ func TestIntegration_CIAlreadyPassing_SkipsPushAndMerges(t *testing.T) {
 		},
 	}
 
-	// realGH drives the real git.Manager's GitHub calls. HeadSHA matches
+	// realGH drives the real git.Repo's GitHub calls. HeadSHA matches
 	// the local SHA so the fast path triggers and CI is already resolved.
-	realGH := git.NewStubGitHub()
+	realMgr, realGH := git.NewRepoForTesting(dir, ralphDir)
 	realGH.OpenPR = 99
 	realGH.PRNumber = 99
 	realGH.PRTitle = "CI already passing task"
-	realGH.HeadSHA = localSHA // matches tracker "rev-parse HEAD" output
+	realGH.HeadSHA = localSHA
 	realGH.Checks = []git.CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-	// MergeResult defaults to Merged: true
+	realMgr.State = newGitMemState()
+	realMgr.Logger = logging.New(nil)
+	realMgr.BaseBranch = "main"
+	realMgr.WorkDir = dir + "/wt"
+	realMgr.WorktreeBranch = "ralph/cap1-ci-already-passing"
+	realMgr.Runner = tracker
 
-	realMgr := &git.Manager{
-		ProjectDir:     dir,
-		WorkDir:        dir + "/wt",
-		WorktreeBranch: "ralph/cap1-ci-already-passing",
-		BaseBranch:     "main",
-		Runner:         tracker,
-		GitHub:         realGH,
-		State:          newGitMemState(),
-		Logger:         logging.New(nil),
-	}
-
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -2516,27 +2468,21 @@ func TestIntegration_CIAlreadyPassing_FallsThrough_WhenHeadDiffers(t *testing.T)
 
 	// realGH has a HeadSHA that differs from localSHA so the fast path does
 	// not trigger and the normal rebase+push+AwaitCI flow runs instead.
-	realGH := git.NewStubGitHub()
+	var logBuf strings.Builder
+	realMgr, realGH := git.NewRepoForTesting(dir, ralphDir)
 	realGH.OpenPR = 100
 	realGH.PRNumber = 100
 	realGH.PRTitle = "SHA differs normal flow task"
-	realGH.HeadSHA = prHeadSHA // different from localSHA → fast path not taken
+	realGH.HeadSHA = prHeadSHA
 	realGH.Checks = []git.CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-	// MergeResult defaults to Merged: true
+	realMgr.State = newGitMemState()
+	realMgr.Logger = logging.NewWithWriter(&logBuf)
+	realMgr.BaseBranch = "main"
+	realMgr.WorkDir = dir + "/wt"
+	realMgr.WorktreeBranch = "ralph/cap2-sha-differs"
+	realMgr.Runner = tracker
 
-	var logBuf strings.Builder
-	realMgr := &git.Manager{
-		ProjectDir:     dir,
-		WorkDir:        dir + "/wt",
-		WorktreeBranch: "ralph/cap2-sha-differs",
-		BaseBranch:     "main",
-		Runner:         tracker,
-		GitHub:         realGH,
-		State:          newGitMemState(),
-		Logger:         logging.NewWithWriter(&logBuf),
-	}
-
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -2633,25 +2579,22 @@ func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
 	backend.NextID = taskID
 	backend.BackendLabel = "beads"
 
-	realGH := git.NewStubGitHub()
+	realMgr, realGH := git.NewRepoForTesting(dir, ralphDir)
 	realGH.OpenPR = 0
 	realGH.PRBase = "main"
 	realGH.PRState = git.PRStateOpen
 	realGH.PRNumber = 77
-
-	// PR HeadSHA differs from local so the fast path is NOT taken and
-	// AutoMergeCurrentBranch falls through to the rebase+push path.
 	realGH.HeadSHA = "sha-old-pr-head"
-
-	// ChecksFunc always returns a failing check. After push (which is a no-op),
-	// the pushedAt filter must NOT discard this check — the no-op detection in
-	// AutoMergeCurrentBranch sets awaitPushedAt to time.Time{} so existing
-	// checks are preserved and evaluateChecks returns CIFailed.
 	realGH.ChecksFunc = func(_ int) []git.CICheckResult {
 		return []git.CICheckResult{{Name: "tests", State: "FAILURE", Bucket: "fail"}}
 	}
+	realMgr.State = newGitMemState()
+	realMgr.Logger = logging.New(nil)
+	realMgr.BaseBranch = "main"
+	realMgr.WorkDir = dir + "/wt"
+	realMgr.WorktreeBranch = "ralph/nop-push-test"
 
-	stub := &testutil.StubGit{
+	stub := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -2667,17 +2610,8 @@ func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
 		remoteURL: "https://github.com/owner/repo.git",
 		headSHA:   func() string { return localSHA },
 	}
-	realMgr := &git.Manager{
-		ProjectDir:     dir,
-		WorkDir:        dir + "/wt",
-		WorktreeBranch: "ralph/nop-push-test",
-		BaseBranch:     "main",
-		Runner:         runner2,
-		GitHub:         realGH,
-		State:          newGitMemState(),
-		Logger:         logging.New(nil),
-	}
-	gm := &realMergeGit{StubGit: stub, realMgr: realMgr}
+	realMgr.Runner = runner2
+	gm := &realMergeGit{StubRepo: stub, realMgr: realMgr}
 	gm.SetKnownPRNumber(77)
 
 	agentRunner := &stubRunner{
@@ -2769,7 +2703,7 @@ func TestIntegration_LifecycleOrdering_BranchRenameAndReviewers(t *testing.T) {
 
 	// No existing open PR — OpenPR=0 prevents the initWorktree resume path
 	// from firing and ensures the agent actually runs.
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -2881,7 +2815,7 @@ func TestIntegration_LifecycleOrdering_NoReviewerDetectionWithoutTasks(t *testin
 	backend.Total = 0
 	backend.BackendLabel = "beads"
 
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -2953,7 +2887,7 @@ func TestIntegration_LifecycleOrdering_FlushNoopAfterShip(t *testing.T) {
 
 	// No existing open PR — OpenPR=0 prevents initWorktree from taking the
 	// resume-from-PR path before the agent runs.
-	gm := &testutil.StubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -2971,7 +2905,7 @@ func TestIntegration_LifecycleOrdering_FlushNoopAfterShip(t *testing.T) {
 	gm.FlushUnpushedWorkFunc = func(_ context.Context, _, _ string, _ bool) (bool, error) {
 		if gm.ShipCalls > 0 {
 			// Branch was already pushed via Ship — no-op, same as the real
-			// rev-list guard in git.Manager.FlushUnpushedWork.
+			// rev-list guard in git.Repo.FlushUnpushedWork.
 			return false, nil
 		}
 		// Branch not yet pushed — simulate PushAndCreatePR call.
@@ -3038,7 +2972,7 @@ func TestIntegration_CreatePRViaAPI_SpecialCharsJSON(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 
-	m := &git.Manager{}
+	m := &git.Repo{}
 	gh := m.GH()
 
 	opts := git.CreatePROpts{
@@ -3114,17 +3048,14 @@ func TestIntegration_EvolveRebasePreservesUserCommits(t *testing.T) {
 	backend.NextID = "ralph-rb1"
 	backend.BackendLabel = "beads"
 
-	ghStub := git.NewStubGitHub()
-	ghStub.OpenPR = 0
-	ghStub.PRNumber = 0
-	gm := &testutil.StubGit{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		WorktreeBranch: "ralph/next",
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     ghStub,
-		DiffStatValue:  "config.go | 3 +++\n 1 file changed, 3 insertions(+)",
-	}
+	gm := git.NewStubRepo()
+	gm.ProjectDir = dir
+	gm.WorkDir = dir
+	gm.WorktreeBranch = "ralph/next"
+	gm.RemoteURLValue = "https://github.com/owner/repo.git"
+	gm.GH.OpenPR = 0
+	gm.GH.PRNumber = 0
+	gm.DiffStatValue = "config.go | 3 +++\n 1 file changed, 3 insertions(+)"
 
 	var capturedPrompt string
 	runner := &stubRunner{
@@ -3216,29 +3147,23 @@ func TestIntegration_ResumeViaPR_DetectsExistingOpenPR(t *testing.T) {
 	backend.BackendLabel = "beads"
 	_ = backend.SetMetadata("ralph-peou", "branch", "ralph/ralph-peou-refactor-hints")
 
-	ghStub := git.NewStubGitHub()
-	ghStub.OpenPR = 0        // old unreliable path returns nothing
-	ghStub.PRNumber = 303    // FindPRForBranch (any-state) finds the open PR
-	ghStub.PRState = git.PRStateOpen
-	ghStub.PRTitle = "Refactor hints"
-	ghStub.PRURL = "https://github.com/owner/repo/pull/303"
-
-	// CI is passing so the PR can be merged and the task closed.
-	ghStub.Checks = []git.CICheckResult{
+	gm := git.NewStubRepo()
+	gm.ProjectDir = dir
+	gm.WorkDir = dir
+	gm.WorktreeBranch = "ralph/ralph-peou-refactor-hints"
+	gm.RemoteURLValue = "https://github.com/owner/repo.git"
+	gm.GH.OpenPR = 0
+	gm.GH.PRNumber = 303
+	gm.GH.PRState = git.PRStateOpen
+	gm.GH.PRTitle = "Refactor hints"
+	gm.GH.PRURL = "https://github.com/owner/repo/pull/303"
+	gm.GH.Checks = []git.CICheckResult{
 		{Name: "build", State: "SUCCESS", Bucket: "pass"},
 	}
-
-	gm := &testutil.StubGit{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		WorktreeBranch: "ralph/ralph-peou-refactor-hints",
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		GitHubStub:     ghStub,
-		BranchRenamed:  true,
-		ResumeResult: git.ResumeTaskResult{
-			Handled:  true,
-			PRNumber: 303,
-		},
+	gm.BranchRenamed = true
+	gm.ResumeResult = git.ResumeTaskResult{
+		Handled:  true,
+		PRNumber: 303,
 	}
 
 	agentCalled := false
@@ -3288,7 +3213,7 @@ func TestIntegration_VerifyBuildRunsBeforeAgent(t *testing.T) {
 	// build failure message lands in the assembled prompt.
 	os.WriteFile(filepath.Join(promptsDir, "internal.md"), []byte("{{TEST_STATUS}}"), 0o644)
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var seq []string
 	var capturedPrompt string
@@ -3364,7 +3289,7 @@ func TestIntegration_PreIterationTestsRunBeforeAgent(t *testing.T) {
 	backend.NextID = "ralph-pit1"
 	backend.BackendLabel = "beads"
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var capturedPrompt string
 	runner := &stubRunner{
@@ -3418,7 +3343,7 @@ func TestIntegration_LLMVerifyRejectThenFixThenPass(t *testing.T) {
 	backend.NextID = "ralph-llm1"
 	backend.BackendLabel = "beads"
 
-	gm := &testutil.StubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var seq []string
 	runner := &signalCallingRunner{

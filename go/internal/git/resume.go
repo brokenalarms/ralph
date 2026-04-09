@@ -69,7 +69,7 @@ func parsePRNumber(ref string) int {
 }
 
 // buildPRURL constructs the canonical PR URL from the manager's remote URL.
-func (m *Manager) buildPRURL(prNumber int) string {
+func (m *Repo) buildPRURL(prNumber int) string {
 	nwo := NWOFromRemote(m.RemoteURL())
 	if nwo == "" || prNumber == 0 {
 		return ""
@@ -78,7 +78,7 @@ func (m *Manager) buildPRURL(prNumber int) string {
 }
 
 // buildPRLink constructs a logging.Link for a PR number.
-func (m *Manager) buildPRLink(prNumber int) *logging.Link {
+func (m *Repo) buildPRLink(prNumber int) *logging.Link {
 	url := m.buildPRURL(prNumber)
 	if url == "" {
 		return nil
@@ -88,7 +88,7 @@ func (m *Manager) buildPRLink(prNumber int) *logging.Link {
 
 // findExistingPR returns any PR number (open, closed, or merged) for the given task.
 // Checks external-ref first, then finds any PR for the branch.
-func (m *Manager) findExistingPR(meta ResumeTaskMeta) (int, bool) {
+func (m *Repo) findExistingPR(meta ResumeTaskMeta) (int, bool) {
 	if num := parsePRNumber(meta.ExternalRef); num != 0 {
 		return num, true
 	}
@@ -103,7 +103,7 @@ func (m *Manager) findExistingPR(meta ResumeTaskMeta) (int, bool) {
 // ResumeTask checks for existing work for the task and resolves it.
 // Returns a ResumeTaskResult describing what happened — whether the task was
 // fully handled (loop continues to next task) or the agent should run.
-func (m *Manager) ResumeTask(ctx context.Context, meta ResumeTaskMeta, opts ResumeTaskOpts) (ResumeTaskResult, error) {
+func (m *Repo) ResumeTask(ctx context.Context, meta ResumeTaskMeta, opts ResumeTaskOpts) (ResumeTaskResult, error) {
 	if meta.TaskID == "" {
 		return ResumeTaskResult{}, nil
 	}
@@ -156,7 +156,7 @@ func (m *Manager) ResumeTask(ctx context.Context, meta ResumeTaskMeta, opts Resu
 }
 
 // resolveByState inspects PR state and returns what the loop should do next.
-func (m *Manager) resolveByState(ctx context.Context, prNumber int, meta ResumeTaskMeta, opts ResumeTaskOpts) (ResumeTaskResult, error) {
+func (m *Repo) resolveByState(ctx context.Context, prNumber int, meta ResumeTaskMeta, opts ResumeTaskOpts) (ResumeTaskResult, error) {
 	shipResult, err := m.Ship(ctx, ShipOpts{
 		PRNumber:        prNumber,
 		AutoMerge:       opts.AutoMerge,

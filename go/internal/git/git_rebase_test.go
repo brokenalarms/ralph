@@ -31,12 +31,12 @@ func initBareRepoWithOrigin(t *testing.T) (projectDir string, bareDir string) {
 
 // setupRebaseMgr creates a Manager with a worktree ready for rebase testing.
 // The worktree's origin points at the bare repo so fetch/push work correctly.
-func setupRebaseMgr(t *testing.T, project, bare string) *Manager {
+func setupRebaseMgr(t *testing.T, project, bare string) *Repo {
 	t.Helper()
 	ralphDir := filepath.Join(project, ".ralph")
 	state := newMemState()
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:  project,
 		BaseBranch: "main",
 		RalphDir:    ralphDir,
@@ -222,7 +222,7 @@ func TestTagTaskStart_WithTaskID(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:  project,
 		BaseBranch: "main",
 		RalphDir:    ralphDir,
@@ -245,7 +245,7 @@ func TestTagTaskEnd_WithTaskID(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:  project,
 		BaseBranch: "main",
 		RalphDir:    ralphDir,
@@ -268,7 +268,7 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:  project,
 		BaseBranch: "main",
 		RalphDir:    ralphDir,
@@ -289,7 +289,7 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 
 // Tags are no-ops when running without a worktree (WorkDir == ProjectDir)
 func TestTagTaskStart_NoOpWithoutWorktree(t *testing.T) {
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir: "/some/dir",
 		BaseBranch: "main",
 		WorkDir:    "/some/dir",
@@ -303,7 +303,7 @@ func TestTagTaskStart_SkipsWipBranch(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:  project,
 		BaseBranch: "main",
 		RalphDir:    ralphDir,
@@ -328,7 +328,7 @@ func TestTagStartEnd_DifferentCommits(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:  project,
 		BaseBranch: "main",
 		RalphDir:    ralphDir,

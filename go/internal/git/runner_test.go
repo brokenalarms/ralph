@@ -134,7 +134,7 @@ func TestManager_PushAndCreatePR_NoRealProcesses(t *testing.T) {
 	gh := &StubGitHub{IsAvailable: true, OpenPR: 0}
 
 	dir := t.TempDir()
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     dir,
 		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
@@ -172,7 +172,7 @@ func TestManager_PushAndCreatePR_PushesEvenWhenPRExists(t *testing.T) {
 	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
 
 	dir := t.TempDir()
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     dir,
 		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
@@ -208,7 +208,7 @@ func TestManager_PushAndCreatePR_UpdatesTitleWhenPRExists(t *testing.T) {
 	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
 
 	dir := t.TempDir()
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     dir,
 		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
@@ -243,7 +243,7 @@ func TestManager_PushAndCreatePR_StripsComponentPrefix(t *testing.T) {
 	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
 
 	dir := t.TempDir()
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     dir,
 		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
@@ -277,7 +277,7 @@ func TestManager_PushAndCreatePR_NoEditWithoutTaskID(t *testing.T) {
 	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
 
 	dir := t.TempDir()
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     dir,
 		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
@@ -311,7 +311,7 @@ func TestManager_PushAndCreatePR_LogsAlreadyOpen(t *testing.T) {
 
 	dir := t.TempDir()
 	log := &testLog{}
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     dir,
 		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",
@@ -349,7 +349,7 @@ func TestManager_PushAndCreatePR_LogsCreatedPR(t *testing.T) {
 
 	dir := t.TempDir()
 	log := &testLog{}
-	mgr := &Manager{
+	mgr := &Repo{
 		ProjectDir:     dir,
 		BaseBranch: "main",
 		WorkDir:        dir + "/worktree",

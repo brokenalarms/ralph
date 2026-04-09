@@ -17,7 +17,7 @@ type BranchTaskMeta struct {
 // SyncWorktreeBase detects the current stack head and rebases the worktree onto
 // it (or the default branch if no stack exists). Called once on startup before
 // the first iteration, before any task-specific branch setup.
-func (m *Manager) SyncWorktreeBase(ctx context.Context, completedBranches []string) error {
+func (m *Repo) SyncWorktreeBase(ctx context.Context, completedBranches []string) error {
 	setStackHead(m, completedBranches)
 	if m.PrevBranch == "" {
 		m.ResetToDefaultBranch()
@@ -28,7 +28,7 @@ func (m *Manager) SyncWorktreeBase(ctx context.Context, completedBranches []stri
 // BranchForTask prepares a branch for the given task: detects the stack head,
 // resets/rebases if in a worktree, and checks out or renames to the task branch.
 // Returns the resulting branch name.
-func (m *Manager) BranchForTask(ctx context.Context, taskID, title string, meta BranchTaskMeta) (string, error) {
+func (m *Repo) BranchForTask(ctx context.Context, taskID, title string, meta BranchTaskMeta) (string, error) {
 	m.PrepareForNextTask(taskID)
 
 	if m.WorktreeBranch != "" && m.WorkDir != m.ProjectDir {
@@ -51,7 +51,7 @@ func (m *Manager) BranchForTask(ctx context.Context, taskID, title string, meta 
 
 // setStackHead finds the most recent completed branch that is cleanly ahead of
 // main and sets it as the stack base for the next task.
-func setStackHead(m *Manager, completedBranches []string) {
+func setStackHead(m *Repo, completedBranches []string) {
 	m.PrevBranch = ""
 	if len(completedBranches) == 0 {
 		return
@@ -92,7 +92,7 @@ func setStackHead(m *Manager, completedBranches []string) {
 // If the remote has that branch with clean work, it checks it out.
 // Otherwise it renames the current branch for the task.
 // Returns true if an existing remote branch was checked out.
-func checkoutExistingBranch(m *Manager, meta BranchTaskMeta, taskID, nextTask string) (bool, error) {
+func checkoutExistingBranch(m *Repo, meta BranchTaskMeta, taskID, nextTask string) (bool, error) {
 	storedBranch := meta.Branch
 	if storedBranch != "" {
 		_ = m.FetchBranch(storedBranch)

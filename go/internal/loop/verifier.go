@@ -40,7 +40,7 @@ type VerifierConfig struct {
 // VerifierDeps holds the injected dependencies for the Verifier.
 type VerifierDeps struct {
 	Logger      *logging.Logger
-	Git         git.GitOps
+	Git         git.Ops
 	State       *state.Store
 	TaskBackend tasks.Backend
 	Runner      func() claudeRunner // returns the current main runner (for StopStreaming before fix agents)

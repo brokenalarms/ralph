@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -19,7 +19,7 @@ func TestLoop_MaybeRefactor_DisabledByDefault(t *testing.T) {
 	l := New(Config{
 		Dirs:    workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: false,
-	}, st, &testutil.StubGit{WorkDir: dir}, logging.New(nil))
+	}, st, &git.StubRepo{WorkDir: dir}, logging.New(nil))
 
 	err := l.maybeRefactor(context.Background(), 5)
 	if err != nil {
@@ -36,7 +36,7 @@ func TestLoop_MaybeRefactor_SkipsBelow5Completions(t *testing.T) {
 	l := New(Config{
 		Dirs:    workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: true,
-	}, st, &testutil.StubGit{WorkDir: dir}, logging.New(nil))
+	}, st, &git.StubRepo{WorkDir: dir}, logging.New(nil))
 
 	err := l.maybeRefactor(context.Background(), 3)
 	if err != nil {
@@ -58,7 +58,7 @@ func TestLoop_MaybeRefactor_LLMSaysNo(t *testing.T) {
 			queryFnCalled = true
 			return "NO\nCode looks fine.", nil
 		},
-	}, st, &testutil.StubGit{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, logging.New(nil))
+	}, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, logging.New(nil))
 
 	err := l.maybeRefactor(context.Background(), 5)
 	if err != nil {
@@ -90,7 +90,7 @@ func TestLoop_MaybeRefactor_LLMSaysYes(t *testing.T) {
 		QueryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			return "YES\nThere is significant duplication.", nil
 		},
-	}, st, &testutil.StubGit{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, logging.New(nil))
+	}, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, logging.New(nil))
 	l.runner = &stubRunner{
 		onRun: func() {
 			runnerCalled = true
@@ -119,7 +119,7 @@ func TestLoop_MaybeRefactor_TriggersAtMultiplesOf5(t *testing.T) {
 			queryCalls++
 			return "NO\nAll good.", nil
 		},
-	}, st, &testutil.StubGit{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, logging.New(nil))
+	}, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, logging.New(nil))
 
 	// 7 completions: should NOT trigger (not a multiple of 5)
 	queryCalls = 0
