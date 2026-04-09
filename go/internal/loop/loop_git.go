@@ -13,120 +13,22 @@ import (
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
-// branchParams bundles the dependencies needed by prepareBranch and its helpers.
-type branchParams struct {
-	git     git.GitOps
-	backend tasks.Backend
-	state   *state.Store
-	logger  *logging.Logger
-}
-
-// prepareBranch is the package-level implementation of branch setup for a task.
-// Called by the Loop method wrapper which passes its fields as a branchParams.
-func prepareBranch(ctx context.Context, p branchParams, taskID, title string) error {
-	p.git.PrepareForNextTask(taskID)
-
-	if p.git.GetWorktreeBranch() != "" && p.git.GetWorkDir() != p.git.GetProjectDir() {
-		setStackHead(p.git, p.backend, p.state, p.logger)
-		if p.git.GetPrevBranch() == "" {
-			p.git.ResetToDefaultBranch()
-		}
-		if err := p.git.EnsureUpToDate(ctx); err != nil {
-			return err
-		}
-	} else {
-		setStackHead(p.git, p.backend, p.state, p.logger)
-	}
-
-	if _, err := checkoutExistingBranch(p.git, p.backend, p.logger, taskID, title); err != nil {
-		return err
-	}
-	p.state.WriteRunBranch(p.git.GetWorktreeBranch())
-	return nil
-}
-
-// setStackHead finds the most recent branch that's cleanly ahead of main
-// and sets it as the stack base for the next task. When gh is available,
-// fetches only branches with open PRs (one API call). Otherwise falls
-// back to checking all completed task branches.
-func setStackHead(g git.GitOps, backend tasks.Backend, st *state.Store, logger *logging.Logger) {
-	g.SetPrevBranch("")
-
+// buildCompletedBranches fetches branches of completed tasks from state and the
+// task backend. The result is passed to git.BranchForTask for stack head detection.
+func buildCompletedBranches(st *state.Store, backend tasks.Backend) []string {
 	completedTasks, err := st.GetCompletedTasks()
 	if err != nil || len(completedTasks) == 0 {
-		return
+		return nil
 	}
-
-	openBranches, err := g.ListOpenPRBranches()
-	if err != nil || len(openBranches) == 0 {
-		return
-	}
-	openSet := make(map[string]bool, len(openBranches))
-	for _, b := range openBranches {
-		openSet[b] = true
-	}
-
-	for i := len(completedTasks) - 1; i >= 0; i-- {
-		id := completedTasks[i].ID
-		if id == "" {
+	branches := make([]string, 0, len(completedTasks))
+	for _, ct := range completedTasks {
+		if ct.ID == "" {
 			continue
 		}
-		branch, _ := backend.GetMetadata(id, "branch")
-		if branch == "" || !openSet[branch] {
-			continue
-		}
-		if err := g.FetchBranch(branch); err != nil {
-			continue
-		}
-		if !g.RemoteBranchHasCommits(branch) {
-			continue
-		}
-		if !g.BranchIsAheadOfMain(branch) {
-			logger.Emit(logging.Opts{Domain: logging.Git}, "Branch %s not ahead of main — skipping", branch)
-			continue
-		}
-		g.SetPrevBranch(branch)
-		logger.Emit(logging.Opts{Domain: logging.Git}, "Stack head: %s (from %s)", branch, id)
-		return
+		branch, _ := backend.GetMetadata(ct.ID, "branch")
+		branches = append(branches, branch)
 	}
-	logger.Emit(logging.Opts{Domain: logging.Git}, "No stacked parents — starting from %s", g.DetectDefaultBranch())
-}
-
-// checkoutExistingBranch checks metadata for a branch from a previous
-// iteration. If the remote has that branch with work, it checks it out.
-// Otherwise, it renames the current branch for the task and stores the
-// new name in metadata. Returns true if an existing remote branch was
-// checked out. Returns an error if the branch rename fails.
-func checkoutExistingBranch(g git.GitOps, backend tasks.Backend, logger *logging.Logger, taskID, nextTask string) (bool, error) {
-	storedBranch := ""
-	if taskID != "" {
-		storedBranch, _ = backend.GetMetadata(taskID, "branch")
-	}
-	if storedBranch != "" {
-		_ = g.FetchBranch(storedBranch)
-		if g.RemoteBranchHasCommits(storedBranch) {
-			if g.RemoteBranchIsOnMain(storedBranch) {
-				g.CheckoutRemoteBranch(storedBranch)
-				return true, nil
-			}
-			logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Remote branch %s diverged from main — cleaning up", storedBranch)
-			ref, _ := backend.GetExternalRef(taskID)
-			if parsePRNumber(ref) == 0 {
-				if err := g.DeleteRemoteBranchByName(storedBranch); err != nil {
-					logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to delete stale remote branch: %v", err)
-				}
-			}
-		}
-		g.RenameBranchTo(storedBranch)
-		return false, nil
-	}
-	if err := g.RenameBranchForTask(nextTask, taskID); err != nil {
-		return false, fmt.Errorf("branch rename failed: %w", err)
-	}
-	if taskID != "" && g.GetWorktreeBranch() != "" && strings.Contains(g.GetWorktreeBranch(), taskID) {
-		_ = backend.SetMetadata(taskID, "branch", g.GetWorktreeBranch())
-	}
-	return false, nil
+	return branches
 }
 
 // prLink builds a logging.Link for a PR number using the loop's git remote URL.

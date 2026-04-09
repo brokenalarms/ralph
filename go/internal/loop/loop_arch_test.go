@@ -27,7 +27,7 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 	// Uncomment each section when the corresponding bead lands.
 	checked := map[string]bool{
 		// --- Bead 1: git.BranchForTask (ralph-sh1e) ---
-		// "branchParams": true,
+		"branchParams": true,
 
 		// --- Bead 2: git.ResumeTask (ralph-o8sb) ---
 		"resumeViaPRParams":      true,

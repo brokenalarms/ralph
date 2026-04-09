@@ -202,7 +202,7 @@ func TestFinalizePR_AutoMerge_MergesAndCloses(t *testing.T) {
 }
 
 // completeTask closes the bead (not skips) when merge fails — work is verified
-// and the branch should be findable by setStackHead for the next task.
+// and the branch is findable by stack head detection for the next task.
 func TestFinalizePR_MergeFailure_ClosesTask(t *testing.T) {
 	dir, _ := setupTestDir(t)
 
@@ -276,7 +276,7 @@ func TestFinalizePR_CIFailure_TaskStaysOpen(t *testing.T) {
 }
 
 // When merge fails, the task still appears in completed_tasks with merged=false
-// so setStackHead can find the unmerged branch for the next task.
+// so stack head detection can find the unmerged branch for the next task.
 func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testing.T) {
 	dir, st := setupTestDir(t)
 

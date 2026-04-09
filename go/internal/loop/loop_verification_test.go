@@ -495,7 +495,7 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 
 // Verifies that after MaxMergeFailures consecutive merge failures, the loop
 // When merge fails, the task is closed (not skipped) — the PR exists, work is
-// verified done. setStackHead can find the unmerged branch for the next task.
+// verified done. Stack head detection can find the unmerged branch for the next task.
 func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
