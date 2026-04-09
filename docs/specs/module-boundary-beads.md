@@ -195,13 +195,16 @@ remains is: verify → ship → close bead → record completion → notify.
 That's 5 concerns, each one call.
 
 **AC:**
-1. `completeTask` exists in the loop package with ≤10 fields in its params
+1. `completeTask` exists in the loop package
 2. `handlePostSignal` and `pushSignalPR` are deleted
 3. `handlePostSignalOpts` and `runAndCompleteParams` structs are deleted
 4. `loop.go:Run()` calls: run agent → `completeTask`. Two phases, not one
    35-field mega-delegation
-5. No params struct in `go/internal/loop/` has more than 10 fields
-6. All existing integration tests pass unchanged
+5. No params struct in the loop package carries a module reference
+   (interface or pointer-to-struct-with-methods). Only data, callbacks,
+   and `*logging.Logger`.
+6. `TestOrchestratorParamsNoModules` exists and passes
+7. All existing integration tests pass unchanged
 
 **Greppable assertion:** `grep -r 'handlePostSignal\|pushSignalPR\|runAndCompleteParams' go/internal/loop/` returns zero matches.
 
@@ -262,39 +265,51 @@ func TestGitHubIsInternal(t *testing.T) {
 }
 ```
 
-### Test: git.Repo not threaded through loop params structs
+### Test: no modules in orchestrator params structs
 
 ```go
-func TestGitNotThreaded(t *testing.T) {
-    // Parse all type *Params struct in loop_*.go (non-test)
-    // Fail if any field type is git.Repo or git.GitOps
-    // The Loop struct itself may hold git.Repo — that's the one reference
-    // point. But it must not be copied into params structs for downstream
-    // functions. The orchestrator calls g.Method() directly.
+func TestOrchestratorParamsNoModules(t *testing.T) {
+    // Parse all type *Params/*Opts struct fields in loop_*.go (non-test)
+    // For each field, check its type:
+    //
+    //   Allowed:
+    //     - Primitives: string, int, bool, time.Duration, etc.
+    //     - Data structs: structs with no methods (git.TaskMeta, git.ShipResult)
+    //     - Function types: func(...) ... (callbacks for composition)
+    //     - *logging.Logger (cross-cutting, ubiquitous)
+    //     - context.Context
+    //
+    //   Forbidden:
+    //     - Interfaces with methods (tasks.Backend, git.GitOps, git.Ops)
+    //     - Pointers to structs with methods (*state.Store, *attempts.Tracker,
+    //       *Verifier, *ratelimit.Limiter, *analyzer.Analyzer, *git.Repo)
+    //     — except *logging.Logger
+    //
+    // This applies ONLY to the loop package (the orchestrator). Other
+    // packages can structure their internals however they want.
+    //
+    // The Loop struct itself may hold module references — that's where
+    // the orchestrator calls them from. But those references must not be
+    // copied into params structs for downstream functions.
 }
 ```
 
-### Test: no params struct exceeds 10 fields
-
-```go
-func TestNoGodParams(t *testing.T) {
-    // Parse loop_*.go (non-test), find type *Params struct
-    // Fail if any has >10 fields
-}
-```
+Function callbacks (`func(string) bool`, `func(ctx) error`) are allowed
+and encouraged — they enable composition without dependency threading.
+The orchestrator controls what backs the callback; the downstream function
+only sees the operation.
 
 ### AGENTS.md addition
 
-> The `git.Repo` interface has intent-level methods ("ship this work"), not
-> implementation-level methods ("squash commits"). Add implementation
-> detail as internal methods on the concrete type, or as options on an
-> existing interface method (e.g. a field on `ShipOpts`).
+> The orchestrator (loop package) holds module references on the `Loop`
+> struct and calls them directly. Params structs in the loop package must
+> not carry module references — only data (primitives, data structs),
+> callbacks (`func` types for composition), and `*logging.Logger`.
+> `TestOrchestratorParamsNoModules` enforces this.
 >
-> The orchestrator holds one `git.Repo` reference and calls it directly.
-> Do not thread `git.Repo` through params structs to downstream functions.
-> If a downstream function needs a git result, the orchestrator calls the
-> git method and passes the result as data. `TestGitNotThreaded` enforces
-> this.
+> If a downstream function needs a module's result, the orchestrator calls
+> the module and passes the result as data. If a downstream function needs
+> to perform a module operation, the orchestrator passes a callback.
 >
 > GitHub is git's internal persistence layer. Do not reference `git.GitHub`,
 > `git.StubGitHub`, or any GitHub type outside `go/internal/git/`.
