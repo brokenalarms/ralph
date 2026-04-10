@@ -38,7 +38,7 @@ func (l *Loop) initWorktree(ctx context.Context) error {
 	// One-time sync: rebase onto latest base so the first iteration
 	// starts from a clean state. BranchForTask handles this on subsequent
 	// iterations, but we need it here before the loop starts.
-	completedBranches := buildCompletedBranches(l.state, l.cfg.TaskBackend)
+	completedBranches := l.completedBranches()
 	if err := l.git.SyncWorktreeBase(ctx, completedBranches); err != nil {
 		if ctx.Err() != nil {
 			l.state.Write("status", "stopped")

@@ -10,26 +10,42 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
-// buildPRBody assembles description, acceptance criteria, and agent summary
-// into a structured PR body when all context is available.
-// buildPRBody is a standalone function — takes backend directly, no Loop needed.
-func TestBuildPRBody_FullContext(t *testing.T) {
+// loopWithBackend constructs a minimal Loop with the given backend, used by
+// the prBody tests. The Loop reads l.cfg.TaskBackend via the receiver to
+// build PR descriptions.
+func loopWithBackend(t *testing.T, backend tasks.Backend) *Loop {
+	t.Helper()
+	dir, st := setupTestDir(t)
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	return New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm)
+}
+
+// (l *Loop).prBody assembles description, acceptance criteria, and agent
+// summary into a structured PR body when all context is available.
+func TestLoopPRBody_FullContext(t *testing.T) {
 	backend := &testutil.StubBackend{
 		Description: "Fix the auth middleware to validate tokens",
 		Acceptance:  "1. Tokens are validated\n2. Invalid tokens return 401",
 	}
+	l := loopWithBackend(t, backend)
 
-	body := buildPRBody(backend, "ralph-abc", "Fixed auth middleware token validation")
+	body := l.prBody("ralph-abc", "Fixed auth middleware token validation")
 
 	if !strings.Contains(body, "## Description") {
 		t.Error("body should contain Description section")
 	}
 	if !strings.Contains(body, "Fix the auth middleware") {
-		t.Error("body should contain bead description")
+		t.Error("body should contain task description")
 	}
 	if !strings.Contains(body, "## Acceptance Criteria") {
 		t.Error("body should contain Acceptance Criteria section")
@@ -45,10 +61,10 @@ func TestBuildPRBody_FullContext(t *testing.T) {
 	}
 }
 
-func TestBuildPRBody_NoTaskDescription(t *testing.T) {
-	backend := &testutil.StubBackend{}
+func TestLoopPRBody_NoTaskDescription(t *testing.T) {
+	l := loopWithBackend(t, &testutil.StubBackend{})
 
-	body := buildPRBody(backend, "ralph-abc", "Implemented the feature")
+	body := l.prBody("ralph-abc", "Implemented the feature")
 
 	if strings.Contains(body, "## Description") {
 		t.Error("body should not contain Description when task has none")
@@ -61,22 +77,23 @@ func TestBuildPRBody_NoTaskDescription(t *testing.T) {
 	}
 }
 
-func TestBuildPRBody_NoContext(t *testing.T) {
-	backend := &testutil.StubBackend{}
+func TestLoopPRBody_NoContext(t *testing.T) {
+	l := loopWithBackend(t, &testutil.StubBackend{})
 
-	body := buildPRBody(backend, "", "")
+	body := l.prBody("", "")
 
 	if body != "" {
 		t.Errorf("body should be empty when no context is available, got %q", body)
 	}
 }
 
-func TestBuildPRBody_NeverGeneric(t *testing.T) {
+func TestLoopPRBody_NeverGeneric(t *testing.T) {
 	backend := &testutil.StubBackend{
 		Description: "Some task description",
 	}
+	l := loopWithBackend(t, backend)
 
-	body := buildPRBody(backend, "ralph-abc", "completed task")
+	body := l.prBody("ralph-abc", "completed task")
 
 	if strings.Contains(body, "Automated PR for") {
 		t.Error("body must not contain generic 'Automated PR for' text")

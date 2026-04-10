@@ -421,7 +421,7 @@ iterLoop:
 		if task.changed || !l.git.IsBranchRenamed() {
 			storedBranch, _ := l.cfg.TaskBackend.GetMetadata(task.id, "branch")
 			storedExternalRef, _ := l.cfg.TaskBackend.GetExternalRef(task.id)
-			completedBranches := buildCompletedBranches(l.state, l.cfg.TaskBackend)
+			completedBranches := l.completedBranches()
 			branch, err := l.git.BranchForTask(ctx, task.id, task.title, git.BranchTaskMeta{
 				Branch:            storedBranch,
 				ExternalRef:       storedExternalRef,
@@ -471,7 +471,7 @@ iterLoop:
 		}, git.ResumeTaskOpts{
 			AutoMerge:       l.cfg.AutoMerge,
 			Reviewers:       l.activeReviewers,
-			ReviewAddressed: readReviewAddressedForTask(l.state, task.id, l.activeReviewers),
+			ReviewAddressed: l.reviewAddressedForTask(task.id, l.activeReviewers),
 		})
 		if resumeErr != nil {
 			logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "ResumeTask: %v", resumeErr)
@@ -543,7 +543,7 @@ iterLoop:
 // then reviewer polling and merge (Phase 2, only when AutoMerge is enabled).
 // Retries up to 5 times on review fix requests or CI failures.
 func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, workDir string) (prNumber int, prResultURL string, merged bool, ciFailure bool, stacked bool) {
-	prBody := buildPRBody(l.cfg.TaskBackend, taskID, summary)
+	prBody := l.prBody(taskID, summary)
 
 	callShip := func(opts git.ShipOpts) (git.ShipResult, error) {
 		result, err := l.git.Ship(ctx, opts)
@@ -637,7 +637,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 		if mergeResult.ReviewFixNeeded {
 			// Review fix needed: spawn fix agent, mark addressed, retry.
 			l.tryFixReviewComments(ctx, mergeResult.PendingReviewer, mergeResult.PendingReview, prResultNum, title, workDir, rawLogPath)
-			l.state.Write("review_addressed:"+mergeResult.PendingReviewer+":"+taskID, "true") //nolint:errcheck
+			l.markReviewAddressed(taskID, mergeResult.PendingReviewer)
 			reviewAddressed[mergeResult.PendingReviewer] = true
 			continue
 		}
