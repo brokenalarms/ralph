@@ -92,8 +92,8 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	gm.BaseBranch = cfg.BaseBranch
 	gm.Logger = log
 	gm.CIPollTimeout = cfg.CIPollTimeout
-	gm.CopilotGatedTimeout = cfg.CopilotReviewTimeout
-	gm.CopilotOpportunisticTimeout = cfg.CopilotOpportunisticTimeout
+	gm.CopilotGatedTimeout = cfg.ReviewerGatedTimeout
+	gm.CopilotOpportunisticTimeout = cfg.ReviewerOpportunisticTimeout
 	gm.CodeRabbitTimeout = cfg.CodeRabbitReviewTimeout
 
 	// Initialize .ralph directory and check for resume. This must happen
@@ -199,38 +199,38 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 	// Execution phase.
 	execLoop := loop.New(loop.Config{
-		Dirs:                dirs,
-		PlanFile:            planFile,
-		MaxIterations:       cfg.MaxIterations,
-		Refactor:            cfg.Refactor,
-		Quiet:               cfg.Quiet,
-		Verbose:             cfg.Verbose,
-		AutoMerge:           cfg.AutoMerge,
-		Evolve:              cfg.Evolve,
-		CallsPerHour:        cfg.CallsPerHour,
-		TaskBackend:         backend,
-		IdleTimeout:         cfg.IdleTimeout,
-		IdleTimeoutProgress: cfg.IdleTimeoutProgress,
-		PostSignalTimeout:   cfg.PostSignalTimeout,
-		PostTask:            cfg.PostTask,
-		VerifyBuild:         cfg.VerifyBuild,
-		Notify:              cfg.Notify,
-		Wait:                cfg.Wait,
-		Model:                cfg.Model,
-		AgentEscalationModel: cfg.AgentEscalationModel,
-		ModelCap:             modelCap(cfg),
-		Version:             config.Version,
-		OnRebaseConflict:    autoRebaseRecovery(),
-		VerifyDir:             dirs.WorkDir,
-		VerifyModel:           cfg.VerifyModel,
-		VerifyEscalationModel: cfg.VerifyEscalationModel,
-		MaxPromptAttempts:      cfg.MaxPromptAttempts,
-		MaxMergeFailures:       cfg.MaxMergeFailures,
-		MaxIdleTimeoutFailures: cfg.MaxIdleTimeoutFailures,
-		MaxLLMVerifyAttempts:   cfg.MaxLLMVerifyAttempts,
-		MaxTestFixAttempts:     cfg.MaxTestFixAttempts,
-		TestTimeout:            cfg.TestTimeout,
-		CompileCheckTimeout:    cfg.CompileCheckTimeout,
+		Dirs:                     dirs,
+		PlanFile:                 planFile,
+		MaxIterations:            cfg.MaxIterations,
+		Refactor:                 cfg.Refactor,
+		Quiet:                    cfg.Quiet,
+		Verbose:                  cfg.Verbose,
+		AutoMerge:                cfg.AutoMerge,
+		Evolve:                   cfg.Evolve,
+		CallsPerHour:             cfg.CallsPerHour,
+		TaskBackend:              backend,
+		IdleTimeout:              cfg.IdleTimeout,
+		IdleTimeoutProgress:      cfg.IdleTimeoutProgress,
+		PostSignalTimeout:        cfg.PostSignalTimeout,
+		PostTask:                 cfg.PostTask,
+		VerifyBuild:              cfg.VerifyBuild,
+		Notify:                   cfg.Notify,
+		Wait:                     cfg.Wait,
+		Model:                    cfg.Model,
+		AgentEscalationModel:     cfg.AgentEscalationModel,
+		ModelCap:                 modelCap(cfg),
+		Version:                  config.Version,
+		OnRebaseConflict:         autoRebaseRecovery(),
+		VerifyDir:                dirs.WorkDir,
+		VerifyModel:              cfg.VerifyModel,
+		VerifyEscalationModel:    cfg.VerifyEscalationModel,
+		MaxPromptAttempts:        cfg.MaxPromptAttempts,
+		MaxMergeFailures:         cfg.MaxMergeFailures,
+		MaxIdleTimeoutFailures:   cfg.MaxIdleTimeoutFailures,
+		MaxLLMVerifyAttempts:     cfg.MaxLLMVerifyAttempts,
+		MaxTestFixAttempts:       cfg.MaxTestFixAttempts,
+		TestTimeout:              cfg.TestTimeout,
+		CompileCheckTimeout:      cfg.CompileCheckTimeout,
 		ConnectivityCheckTimeout: cfg.ConnectivityCheckTimeout,
 		InternetRestoreInterval:  cfg.InternetRestoreInterval,
 		OnIterationStart: func() {

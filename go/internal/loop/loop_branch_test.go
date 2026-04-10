@@ -958,4 +958,3 @@ func TestLoop_BranchForTask_RenameFailure_AbortsIteration(t *testing.T) {
 		t.Error("Ship must not be called when branch setup fails")
 	}
 }
-

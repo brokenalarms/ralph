@@ -88,6 +88,7 @@ func isOnline(timeout time.Duration) bool {
 // waitForInternet blocks until internet connectivity is restored.
 // Shows a single updating line in the terminal log, writes one summary
 // line to the log file when restored. Returns false if context is cancelled.
+// The logger parameter is the cross-module exception — see Loop.logger.
 func waitForInternet(ctx context.Context, logger *logging.Logger, interval, checkTimeout time.Duration) bool {
 	if isOnline(checkTimeout) {
 		return true

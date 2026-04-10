@@ -75,7 +75,6 @@ func (r *mergeStubRunner) neverCalledWith(args ...string) bool {
 // Compile-time check that mergeStubRunner satisfies git.Runner.
 var _ git.Runner = (*mergeStubRunner)(nil)
 
-
 // buildGM creates a git.Repo with the given stubs for merge tests.
 // Uses a temp dir for RalphDir so worktree paths are predictable.
 func buildGM(t *testing.T, runner git.Runner) (*git.Repo, string) {

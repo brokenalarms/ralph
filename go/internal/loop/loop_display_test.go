@@ -66,7 +66,7 @@ func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 			}, st, gm, logger)
 
 			l.cfg.CheckGitHub = func(context.Context) error { return nil }
-	l.Run(context.Background())
+			l.Run(context.Background())
 
 			output := logBuf.String()
 			if !strings.Contains(output, tt.want) {
@@ -762,7 +762,7 @@ func TestOnResumeDone_Merged_NotifyEnabled(t *testing.T) {
 			StubBackend: testutil.StubBackend{
 				Remaining: 1,
 				Total:     1,
-				NextTask:   "Fix login",
+				NextTask:  "Fix login",
 				NextID:    "ralph-rm1",
 			},
 		},
@@ -815,7 +815,7 @@ func TestOnResumeDone_Open_NotifyEnabled(t *testing.T) {
 			StubBackend: testutil.StubBackend{
 				Remaining: 1,
 				Total:     1,
-				NextTask:   "Add cache",
+				NextTask:  "Add cache",
 				NextID:    "ralph-ro1",
 			},
 		},
@@ -867,7 +867,7 @@ func TestOnResumeDone_Merged_NotifyDisabled(t *testing.T) {
 			StubBackend: testutil.StubBackend{
 				Remaining: 1,
 				Total:     1,
-				NextTask:   "Fix logout",
+				NextTask:  "Fix logout",
 				NextID:    "ralph-rd1",
 			},
 		},

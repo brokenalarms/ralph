@@ -22,28 +22,28 @@ import (
 
 // Config holds all parameters needed by the execution loop.
 type Config struct {
-	Dirs                workctx.WorkContext
-	PlanFile            string
-	MaxIterations       int
-	Refactor            bool
-	Quiet               bool
-	AutoMerge           bool
-	Evolve              bool
-	CallsPerHour        int
-	TaskBackend         tasks.Backend
-	IdleTimeout         time.Duration
-	IdleTimeoutProgress time.Duration
-	PostSignalTimeout   time.Duration
-	PostTask            string
-	VerifyBuild         string
-	Notify              bool
-	Wait                bool
-	Verbose             bool
-	Model                  string
-	AgentEscalationModel   string // model for agent on retry attempts; defaults to opus
-	ModelCap               string // maximum model tier for all LLM calls; empty means no cap
-	OnRebaseConflict    func(err error) git.RebaseRecovery
-	Version             string
+	Dirs                  workctx.WorkContext
+	PlanFile              string
+	MaxIterations         int
+	Refactor              bool
+	Quiet                 bool
+	AutoMerge             bool
+	Evolve                bool
+	CallsPerHour          int
+	TaskBackend           tasks.Backend
+	IdleTimeout           time.Duration
+	IdleTimeoutProgress   time.Duration
+	PostSignalTimeout     time.Duration
+	PostTask              string
+	VerifyBuild           string
+	Notify                bool
+	Wait                  bool
+	Verbose               bool
+	Model                 string
+	AgentEscalationModel  string // model for agent on retry attempts; defaults to opus
+	ModelCap              string // maximum model tier for all LLM calls; empty means no cap
+	OnRebaseConflict      func(err error) git.RebaseRecovery
+	Version               string
 	VerifyDir             string // project root where tests are run; empty disables verification
 	VerifyModel           string // model for the first LLM verification attempt; defaults to haiku
 	VerifyEscalationModel string // model for subsequent LLM verification attempts; defaults to sonnet
@@ -99,24 +99,33 @@ type CompletedTask struct {
 
 // Loop orchestrates the execution phase: task selection, prompt building,
 // rate limiting, branch rotation, Claude invocation, and response analysis.
+//
+// The logger field holds the single cross-module exception to the
+// "no module objects passed through" rule. Logging is genuinely
+// cross-cutting — every package needs to log — and package-level state
+// would leak across parallel tests. The logger is constructed once in
+// cmd/ralph/main.go and threaded into Loop and other modules at
+// construction time. This is the only such exception in the codebase.
 type Loop struct {
-	cfg                  Config
-	state                *state.Store
-	git                  git.Ops
-	limiter              *ratelimit.Limiter
-	runner               claudeRunner
-	verifier             *Verifier
-	analyzer             *analyzer.Analyzer
-	attempts             *attempts.Tracker
-	logger               *logging.Logger
-	signals              claude.SignalPaths
-	completedTasks      []CompletedTask
-	activeReviewers     []git.Reviewer
-	reviewersDetected   bool
+	cfg               Config
+	state             *state.Store
+	git               git.Ops
+	limiter           *ratelimit.Limiter
+	runner            claudeRunner
+	verifier          *Verifier
+	analyzer          *analyzer.Analyzer
+	attempts          *attempts.Tracker
+	logger            *logging.Logger
+	signals           claude.SignalPaths
+	completedTasks    []CompletedTask
+	activeReviewers   []git.Reviewer
+	reviewersDetected bool
 }
 
 // New creates an execution loop from the given configuration. All agent
-// invocations go through the centralized agent module.
+// invocations go through the centralized agent module. The logger is the
+// single cross-module dependency threaded through Loop construction —
+// see the Loop type comment for the rationale.
 func New(cfg Config, st *state.Store, gm git.Ops, logger *logging.Logger) *Loop {
 	signals := claude.DefaultSignalPaths(cfg.Dirs.RalphDir)
 
@@ -422,7 +431,7 @@ iterLoop:
 		if task.changed || !l.git.IsBranchRenamed() {
 			storedBranch, _ := l.cfg.TaskBackend.GetMetadata(task.id, "branch")
 			storedExternalRef, _ := l.cfg.TaskBackend.GetExternalRef(task.id)
-			completedBranches := buildCompletedBranches(l.state, l.cfg.TaskBackend)
+			completedBranches := l.completedBranches()
 			branch, err := l.git.BranchForTask(ctx, task.id, task.title, git.BranchTaskMeta{
 				Branch:            storedBranch,
 				ExternalRef:       storedExternalRef,
@@ -472,7 +481,7 @@ iterLoop:
 		}, git.ResumeTaskOpts{
 			AutoMerge:       l.cfg.AutoMerge,
 			Reviewers:       l.activeReviewers,
-			ReviewAddressed: readReviewAddressedForTask(l.state, task.id, l.activeReviewers),
+			ReviewAddressed: l.reviewAddressedForTask(task.id, l.activeReviewers),
 		})
 		if resumeErr != nil {
 			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "ResumeTask: %v", resumeErr)
@@ -544,7 +553,7 @@ iterLoop:
 // then reviewer polling and merge (Phase 2, only when AutoMerge is enabled).
 // Retries up to 5 times on review fix requests or CI failures.
 func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, workDir string) (prNumber int, prResultURL string, merged bool, ciFailure bool, stacked bool) {
-	prBody := buildPRBody(l.cfg.TaskBackend, taskID, summary)
+	prBody := l.prBody(taskID, summary)
 
 	callShip := func(opts git.ShipOpts) (git.ShipResult, error) {
 		result, err := l.git.Ship(ctx, opts)
@@ -638,7 +647,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 		if mergeResult.ReviewFixNeeded {
 			// Review fix needed: spawn fix agent, mark addressed, retry.
 			l.tryFixReviewComments(ctx, mergeResult.PendingReviewer, mergeResult.PendingReview, prResultNum, title, workDir, rawLogPath)
-			l.state.Write("review_addressed:"+mergeResult.PendingReviewer+":"+taskID, "true") //nolint:errcheck
+			l.markReviewAddressed(taskID, mergeResult.PendingReviewer)
 			reviewAddressed[mergeResult.PendingReviewer] = true
 			continue
 		}

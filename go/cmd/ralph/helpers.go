@@ -152,4 +152,3 @@ func clearSignalFiles(ralphDir string) {
 		os.Remove(filepath.Join(ralphDir, f))
 	}
 }
-

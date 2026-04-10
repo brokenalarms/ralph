@@ -609,4 +609,3 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 		t.Errorf("expected PostMergeUpdateMain to be called, got 0")
 	}
 }
-

@@ -326,7 +326,7 @@ func TestIntegration_ResumeViaPR_MergedFoundViaBranchMetadata(t *testing.T) {
 
 	agentCalled := false
 	runner := &stubRunner{
-		onRun: func() { agentCalled = true },
+		onRun:  func() { agentCalled = true },
 		result: claude.Result{},
 	}
 
@@ -1333,7 +1333,7 @@ func TestIntegration_AgentExitsWithoutSignal_Retries(t *testing.T) {
 
 	runCount := 0
 	runner := &stubRunner{
-		onRun: func() { runCount++ },
+		onRun:  func() { runCount++ },
 		result: claude.Result{SignalDetected: false}, // no signal
 	}
 
@@ -2704,11 +2704,11 @@ func TestIntegration_LifecycleOrdering_BranchRenameAndReviewers(t *testing.T) {
 	// No existing open PR — OpenPR=0 prevents the initWorktree resume path
 	// from firing and ensures the agent actually runs.
 	gm := &git.StubRepo{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		WorktreeBranch: "ralph/next",
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		OnRenameBranch: func(_, _ string) { record("rename") },
+		ProjectDir:              dir,
+		WorkDir:                 dir,
+		WorktreeBranch:          "ralph/next",
+		RemoteURLValue:          "https://github.com/owner/repo.git",
+		OnRenameBranch:          func(_, _ string) { record("rename") },
 		OnDetectActiveReviewers: func() { record("detect_reviewers") },
 	}
 

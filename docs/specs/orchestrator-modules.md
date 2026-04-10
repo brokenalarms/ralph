@@ -5,6 +5,160 @@ domain modules it composes. It supersedes the "How to prevent regression"
 section of `module-boundary-beads.md`, which contained a loophole that
 agents have repeatedly satisfied in letter while violating in spirit.
 
+## The two load-bearing rules
+
+> **Rule A (boundary):** Module types from package P never appear in the
+> public API surface of any other package, anywhere, in any form —
+> except as parameters to the orchestrator's constructor (`loop.New`),
+> which is the named composition point where modules from many
+> packages meet.
+
+> **Rule B (immutability):** A module's state changes only through its
+> own public API methods. Construction is the one allowed entry point;
+> after that, no external code — not other packages, not tests, not the
+> orchestrator — mutates the module's fields directly. The public API
+> methods are the only path in.
+
+A module's public API surface is its exported names: function/method
+signatures (parameters and return values), exported struct field types,
+exported interface methods, and exported package-level variables.
+Inside its own package, a module is free to compose, mutate, and hold
+whatever internal state it needs — but nothing module-shaped escapes
+through the package's exported boundary, except through the one
+designated DI seam.
+
+Every other rule in this document is a corollary of that one. If a
+proposal puts a module type into a parameter list (other than
+`loop.New`), a return value, an exported struct field, or an
+interface method that crosses a package boundary, it's forbidden —
+regardless of how convenient it would be.
+
+The only named cross-cutting exception is `*logging.Logger` (rule 5),
+which is allowed to appear in module constructors (not just `loop.New`)
+as the one stateful utility threaded through the entire program.
+
+### Why `loop.New` is the only carve-out
+
+Loop's role IS to compose modules from many packages — that's what
+"orchestrator" means. The composition has to happen somewhere. Putting
+module types in `loop.New`'s parameter list is the explicit, named,
+single point in the dependency graph where production code wires real
+implementations and test code wires stubs. **Construction-time DI via
+the constructor parameter list is the test injection seam.**
+
+```go
+// Production (cmd/ralph/main.go):
+gm := git.New(git.Config{...})
+st := state.NewStore(ralphDir)
+backend := initTaskBackend(cfg, ...)
+logger := logging.New(logFileWriter)
+
+execLoop := loop.New(loop.Config{...}, st, gm, backend, logger)
+execLoop.Run(ctx)
+```
+
+```go
+// Test (internal/loop/some_test.go):
+gm := &git.StubRepo{...}              // stub git.Ops
+st := newTestState(t)                  // stub or real state.Store
+backend := &testutil.StubBackend{...}  // stub tasks.Backend
+logger := logging.New(nil)             // discarding logger
+
+l := loop.New(loop.Config{...}, st, gm, backend, logger)
+l.Run(ctx)
+// assertions about what l did to the stubs
+```
+
+Production and tests use **the same constructor**. The constructor
+parameter list is the seam. There is no separate `loop.NewForTest(...)`,
+no `TestStub{}` injection struct, no `loop.SetGit(...)` mutator after
+construction. One constructor, used identically by both.
+
+**Implications for Rule A:**
+
+- Loop's New is the **only** function in the codebase whose public API
+  contains module types. Every other helper, method, factory, and
+  package function either takes data (no modules) or operates entirely
+  inside its own package's boundary.
+- Tests substitute behavior by constructing module instances (real or
+  stub) and passing them through Loop's constructor. They never reach
+  inside Loop after construction to swap fields or attach callbacks.
+- If you find yourself wanting to add a second module-typed constructor
+  (e.g. `loop.NewWithRunner(cfg, ..., runner)`), you're adding a second
+  composition point and breaking the rule. The fix is to add the
+  parameter to `loop.New` itself.
+
+### Why Rule B exists
+
+Rule B is the universal corollary of Go's encapsulation model: the
+exported names of a package are its API, and exported writable struct
+fields are an API surface that lets external code mutate state without
+going through the type's methods. That's a leak — the type loses
+control over its own invariants because anyone with a pointer can
+write to its fields.
+
+**Every module in this codebase has unexported fields and exposes
+state changes only through methods.** The constructor is the one
+exception: it accepts construction-time data and places it on fields
+the type itself owns thereafter.
+
+```go
+// ❌ Forbidden — exported writable fields let external code mutate
+// after construction.
+package git
+type Repo struct {
+    BaseBranch string  // ❌ exported, writable from outside
+    CIPollTimeout time.Duration  // ❌
+}
+
+// External code:
+gm := git.New(...)
+gm.BaseBranch = "main"          // ❌ external mutation
+gm.CIPollTimeout = 30 * time.Second  // ❌
+
+// ✅ Correct — fields are unexported; values enter through the
+// constructor's data struct.
+package git
+type Config struct {
+    BaseBranch    string
+    CIPollTimeout time.Duration
+    // ... whatever the module needs to know at construction
+}
+
+type Repo struct {
+    baseBranch    string  // unexported, only git's own methods write
+    ciPollTimeout time.Duration
+}
+
+func New(cfg Config) *Repo {
+    return &Repo{
+        baseBranch:    cfg.BaseBranch,
+        ciPollTimeout: cfg.CIPollTimeout,
+    }
+}
+
+// External code:
+gm := git.New(git.Config{
+    BaseBranch:    cfg.BaseBranch,
+    CIPollTimeout: cfg.CIPollTimeout,
+})
+// No mutation possible — the fields are unexported.
+```
+
+**Setter methods are the same antipattern in disguise.** A
+`SetBaseBranch(b string)` method is just an exported writable field
+with extra ceremony. Don't add setters as a workaround for unexported
+fields. If a value needs to be configurable, it's a constructor input
+or it's part of the operation that needs it (passed via the method
+call's data argument).
+
+**This applies to tests too.** Same-package test files have visibility
+into unexported fields, but the rule says modules' state changes go
+through their public API methods only. Tests construct stub modules
+*before* calling `loop.New(...)` and pass them through the
+constructor. They never construct Loop and then poke at its fields
+afterward to substitute behavior.
+
 ## The shape
 
 ```
@@ -15,45 +169,47 @@ internal/loop (Loop)     — THE orchestrator. Owns the iteration sequence,
                             that read its own fields and call modules.
   ↓
 internal/git, /verify,   — domain modules. Each owns its own state, retries,
-/state, /attempts, etc.    error handling, healing within its domain. Modules
-                            never hold references to other modules and never
-                            accept other modules as parameters.
+/state, /attempts, etc.    error handling, healing within its domain. A module
+                            may internally compose sub-modules for clarity, but
+                            those sub-module references never escape the
+                            parent module's public API and the orchestrator
+                            never sees them.
   ↓
-internal/git/<github>    — a module's internal sub-modules are unexported
-                            and never escape the parent module's API. Loop
-                            never sees github types; it sees git types.
+internal/git/<github>    — internal sub-module, unexported, never escapes the
+                            parent's API. The canonical example. Loop never
+                            sees github types; it sees git types.
 ```
 
 ## The five rules
 
-### 1. Loop is the only struct that holds module references
+### 1. `Loop` is the only orchestrator that composes modules from other packages
 
-`Loop` is the orchestrator. It legitimately holds module instances as fields,
-constructed in `Loop.New()` (or per iteration where the module's lifecycle
-demands it). No other struct in the codebase may hold a field whose type is a
-module from another package.
+`Loop` is the orchestrator: its job is to compose modules from multiple
+packages and call them in sequence. Modules from other packages enter Loop at
+construction time via `loop.New(...)`'s parameter list, the same way
+`state.Store` and `git.Repo` enter today, and live as direct private fields
+on the Loop struct.
 
 ```go
 // Allowed — Loop is the orchestrator.
 type Loop struct {
-    cfg      Config
-    git      *git.Repo
-    state    *state.Store
-    attempts *attempts.Tracker
-    limiter  *ratelimit.Limiter
-    agent    *agent.Agent
-    backend  tasks.Backend
-    analyzer *analyzer.Analyzer
+    cfg         Config
+    git         *git.Repo
+    state       *state.Store
+    attempts    *attempts.Tracker
+    limiter     *ratelimit.Limiter
+    agent       *agent.Agent
+    taskBackend tasks.Backend
+    analyzer    *analyzer.Analyzer
     // ... iteration state and run state below
 }
 
-// Forbidden — Verifier is a module, not the orchestrator. Cannot hold
-// other modules. Replace with package-level functions or with a struct
-// that holds only its own state + config.
+// Forbidden — Verifier is a module, not the orchestrator. It is not a
+// composer of other modules from external packages.
 type Verifier struct {
-    git     git.Ops          // ❌ holds another module
-    state   *state.Store     // ❌ holds another module
-    backend tasks.Backend    // ❌ holds another module
+    git     git.Ops          // ❌ holds another module from a different package
+    state   *state.Store     // ❌
+    backend tasks.Backend    // ❌
 }
 
 // Forbidden — Deps/Opts/Params struct that bundles modules is the same
@@ -64,12 +220,45 @@ type VerifierDeps struct {
 }
 ```
 
-**Exception: a module's own internal sub-modules.** A module may compose an
-unexported sub-module that lives inside the same package (or an internal
-package nested under it) and is never exposed across the module boundary. The
-canonical example is `internal/git` holding a private `github` client for
-GitHub API calls — Loop never sees `*github.Client`, only `git.Repo` methods
-that internally route through it.
+**Modules may internally compose sub-modules** for their own implementation
+clarity, with two constraints:
+
+1. The sub-module reference **never escapes the parent module's public API**.
+   The orchestrator never sees the sub-module type and never knows it exists.
+2. The sub-module follows the same rules internally: no callback fields, no
+   functions taking modules as parameters from outside the parent package, no
+   field mutation across the parent/sub-module boundary from outside.
+
+The canonical example is `internal/git` holding an internal `github` client.
+`git.Repo`'s public API returns git-package types only; `Loop` calls
+`g.Ship(...)` and never imports the github package.
+
+```go
+// ✅ Allowed — git internally composes github for clarity.
+package git
+
+type Repo struct {
+    workDir string
+    gh      *github.Client  // internal sub-module, never escapes
+    // ...
+}
+
+func (r *Repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
+    // calls r.gh internally; Loop never sees github
+}
+
+// ❌ Forbidden — git.Repo exposes github across its public API.
+func (r *Repo) GitHub() *github.Client { ... }  // ❌
+type ShipOpts struct {
+    Reviewer *github.User  // ❌ — github type leaks through the boundary
+}
+```
+
+The "Loop is special" framing is about the **orchestrator role**, not about
+the literal struct name. Loop is the only struct whose *purpose* is to
+compose modules from many packages. Other modules can have internal
+composition without violating this rule, as long as that composition stays
+inside their own package's boundary.
 
 ### 2. Modules don't accept other modules as parameters
 
@@ -217,26 +406,34 @@ func (r *Repo) BranchForTask(ctx context.Context, ...) (string, error) { ... }
 The line: methods + public API → module → call only the API, never field
 access. No methods, no API → state organization → field access fine.
 
-### 5. Logger is imported, not held
+### 5. Logger is the single named cross-module exception
 
-`logging` provides package-level functions (`logging.Emit(opts, format,
-args...)`). It is not a module that needs DI. No struct holds a
-`*logging.Logger` field; no function takes a `*logging.Logger` parameter.
-Where logging is needed, the package imports `logging` and calls
-`logging.Emit(...)` directly. The same applies to any future stateless
-utility package.
+`*logging.Logger` is the **only** module type allowed to be passed
+through, held as a struct field, or used as a function parameter. Logging
+is genuinely cross-cutting — every package needs to log — and
+package-level state would leak across parallel tests. So the logger gets
+constructed once in `cmd/ralph/main.go` and threaded through `loop.New`
+and module constructors that need it.
+
+This is the only such exception in the codebase. Every other module
+follows the no-passing-through rule strictly. The exception is named in
+the spec, named in the arch tests (or rather: those tests are explicit
+no-ops with a comment pointing here), and applies to no other type.
 
 ```go
-// Forbidden
-type Verifier struct {
-    logger *logging.Logger  // ❌
+// Allowed — logger is the named exception.
+type Loop struct {
+    logger *logging.Logger
+    // ... other state
 }
-func helper(logger *logging.Logger, msg string) { ... }  // ❌
 
-// Correct
-import "github.com/brokenalarms/ralph/internal/logging"
-func helper(msg string) {
-    logging.Emit(logging.Opts{Domain: logging.Git}, "%s", msg)
+func New(cfg Config, st *state.Store, gm git.Ops, logger *logging.Logger) *Loop {
+    return &Loop{logger: logger, ...}
+}
+
+// Forbidden — git.Ops is not the exception.
+type Verifier struct {
+    git git.Ops  // ❌ — only Loop holds module references
 }
 ```
 

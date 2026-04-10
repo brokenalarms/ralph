@@ -38,6 +38,11 @@ type VerifierConfig struct {
 }
 
 // VerifierDeps holds the injected dependencies for the Verifier.
+//
+// Logger is the cross-module exception (see Loop.logger documentation).
+// Git, State, and TaskBackend are module references that will be removed
+// in C6 when the Verifier struct is stripped entirely; the verifier will
+// become methods on Loop reading l.iter and calling l.git/l.state directly.
 type VerifierDeps struct {
 	Logger      *logging.Logger
 	Git         git.Ops
@@ -112,15 +117,15 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed (%s)", elapsed)
 	}
 
-	beadDesc := getBeadDescription(v.deps.TaskBackend, p.taskID)
-	beadAcceptance := getBeadAcceptance(v.deps.TaskBackend, p.taskID)
+	taskDesc := v.taskDescription(p.taskID)
+	taskAcceptance := v.taskAcceptance(p.taskID)
 
 	if !testResult.Passed {
 		if testResult.ScriptMissing {
 			v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "ralph:verify script not found — cannot verify")
 			return false
 		}
-		if !v.testFixLoop(p, beadDesc, beadAcceptance, testResult.Details) {
+		if !v.testFixLoop(p, taskDesc, taskAcceptance, testResult.Details) {
 			return false
 		}
 	}
@@ -128,19 +133,19 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 	// Run compile check (go build / tsc --noEmit) after tests pass.
 	// Pre-existing type errors are the agent's responsibility to fix.
 	if v.cfg.VerifyDir != "" {
-		if !v.compileFixLoop(p, beadAcceptance) {
+		if !v.compileFixLoop(p, taskAcceptance) {
 			return false
 		}
 	}
 
-	if !v.verifyWithFixLoop(p, beadDesc, beadAcceptance) {
+	if !v.verifyWithFixLoop(p, taskDesc, taskAcceptance) {
 		return false
 	}
 
 	// Re-run compile check after LLM verification — fix agents spawned
 	// during verification may have introduced new build errors.
 	if v.cfg.VerifyDir != "" {
-		if !v.compileFixLoop(p, beadAcceptance) {
+		if !v.compileFixLoop(p, taskAcceptance) {
 			return false
 		}
 	}
@@ -151,7 +156,7 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 // testFixLoop spawns fix agents to address test failures, re-running tests
 // after each fix attempt. Returns true when tests pass, false when attempts
 // are exhausted or the fix agent fails to signal.
-func (v *Verifier) testFixLoop(p signalParams, beadDesc, beadAcceptance, testDetails string) bool {
+func (v *Verifier) testFixLoop(p signalParams, taskDesc, taskAcceptance, testDetails string) bool {
 	for {
 		v.testFixAttempts++
 		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Tests failed (attempt %d/%d)", v.testFixAttempts, v.cfg.MaxTestFixAttempts)
@@ -161,7 +166,7 @@ func (v *Verifier) testFixLoop(p signalParams, beadDesc, beadAcceptance, testDet
 			return false
 		}
 
-		if !v.tryFixTests(p, beadDesc, beadAcceptance, testDetails) {
+		if !v.tryFixTests(p, taskDesc, taskAcceptance, testDetails) {
 			return false
 		}
 
@@ -177,13 +182,14 @@ func (v *Verifier) testFixLoop(p signalParams, beadDesc, beadAcceptance, testDet
 }
 
 // tryFixTests spawns a fix agent to address test failures.
-func (v *Verifier) tryFixTests(p signalParams, beadDesc, beadAcceptance, testDetails string) bool {
+func (v *Verifier) tryFixTests(p signalParams, taskDesc, taskAcceptance, testDetails string) bool {
+	_ = taskDesc // reserved for future fix-prompt template additions
 	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Spawning fix agent for test failures (attempt %d/%d)", v.testFixAttempts, v.cfg.MaxTestFixAttempts)
 
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 	fixPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{
 		"{{TASK_TITLE}}":       p.nextTask,
-		"{{TASK_DESCRIPTION}}": fmt.Sprintf("Tests failed after completion. Fix the failures.\n\nAcceptance criteria:\n%s", beadAcceptance),
+		"{{TASK_DESCRIPTION}}": fmt.Sprintf("Tests failed after completion. Fix the failures.\n\nAcceptance criteria:\n%s", taskAcceptance),
 		"{{TEST_OUTPUT}}":      testDetails,
 		"{{SIGNAL_COMPLETE}}":  signalPath,
 	})
@@ -196,7 +202,7 @@ func (v *Verifier) tryFixTests(p signalParams, beadDesc, beadAcceptance, testDet
 // resolve build/type errors. Returns true when compilation passes, false
 // when attempts are exhausted. Uses its own attempt counter separate from
 // test fix attempts.
-func (v *Verifier) compileFixLoop(p signalParams, beadAcceptance string) bool {
+func (v *Verifier) compileFixLoop(p signalParams, taskAcceptance string) bool {
 	compileResult := verify.CompileCheck(p.ctx, v.cfg.CompileCheckTimeout, v.cfg.VerifyDir)
 	if compileResult.Passed {
 		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build}, "Compile check passed")
@@ -220,7 +226,7 @@ func (v *Verifier) compileFixLoop(p signalParams, beadAcceptance string) bool {
 		signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 		fixPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{
 			"{{TASK_TITLE}}":       p.nextTask,
-			"{{TASK_DESCRIPTION}}": fmt.Sprintf("Build/type check failed after completion. Fix the compile errors.\n\nAcceptance criteria:\n%s", beadAcceptance),
+			"{{TASK_DESCRIPTION}}": fmt.Sprintf("Build/type check failed after completion. Fix the compile errors.\n\nAcceptance criteria:\n%s", taskAcceptance),
 			"{{TEST_OUTPUT}}":      details,
 			"{{SIGNAL_COMPLETE}}":  signalPath,
 		})
@@ -246,24 +252,24 @@ func (v *Verifier) compileFixLoop(p signalParams, beadAcceptance string) bool {
 // agent within the same iteration. Loops until verified or max attempts
 // exhausted. All fix attempts happen in a single OnSignal call — no new
 // iteration is created.
-func (v *Verifier) verifyWithFixLoop(p signalParams, beadDesc, beadAcceptance string) bool {
+func (v *Verifier) verifyWithFixLoop(p signalParams, taskDesc, taskAcceptance string) bool {
 	for {
 		v.llmVerifyAttempts++
 		model := v.verifyModel()
 		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Running LLM verification (attempt %d/%d)...", v.llmVerifyAttempts, v.cfg.MaxLLMVerifyAttempts)
 		diff, diffSource := v.fetchVerifyDiff(p.taskID, p.headBefore)
 		llmResult := v.deps.LLMVerify(verify.VerifyOpts{
-			Ctx:             p.ctx,
-			WorkDir:         p.workDir,
-			PromptsDir:      v.cfg.PromptsDir,
-			TaskID:          p.taskID,
-			BeadTitle:       p.nextTask,
-			BeadDescription: beadDesc,
-			BeadAcceptance:  beadAcceptance,
-			Diff:            diff,
-			DiffSource:      diffSource,
-			QueryFn:         v.deps.QueryFn,
-			Model:           model,
+			Ctx:         p.ctx,
+			WorkDir:     p.workDir,
+			PromptsDir:  v.cfg.PromptsDir,
+			TaskID:      p.taskID,
+			Title:       p.nextTask,
+			Description: taskDesc,
+			Acceptance:  taskAcceptance,
+			Diff:        diff,
+			DiffSource:  diffSource,
+			QueryFn:     v.deps.QueryFn,
+			Model:       model,
 		})
 
 		if llmResult.Passed {
@@ -281,7 +287,7 @@ func (v *Verifier) verifyWithFixLoop(p signalParams, beadDesc, beadAcceptance st
 			return false
 		}
 
-		if !v.tryFixVerification(p, beadDesc, beadAcceptance, llmResult.Details) {
+		if !v.tryFixVerification(p, taskDesc, taskAcceptance, llmResult.Details) {
 			return false
 		}
 
@@ -296,16 +302,16 @@ func (v *Verifier) verifyWithFixLoop(p signalParams, beadDesc, beadAcceptance st
 }
 
 // tryFixVerification spawns a fix agent to address LLM verification rejection.
-func (v *Verifier) tryFixVerification(p signalParams, beadDesc, beadAcceptance, rejectionDetails string) bool {
+func (v *Verifier) tryFixVerification(p signalParams, taskDesc, taskAcceptance, rejectionDetails string) bool {
 	v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: v.fixModel()}, "Spawning fix agent for verification rejection (attempt %d/%d)", v.llmVerifyAttempts, v.cfg.MaxLLMVerifyAttempts)
 
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 	fixPrompt := v.loadVerifyPrompt("verify-fix.md", map[string]string{
-		"{{TASK_TITLE}}":         p.nextTask,
-		"{{TASK_DESCRIPTION}}":   beadDesc,
-		"{{ACCEPTANCE_CRITERIA}}": beadAcceptance,
-		"{{REJECTION_REASON}}":   rejectionDetails,
-		"{{SIGNAL_COMPLETE}}":    signalPath,
+		"{{TASK_TITLE}}":          p.nextTask,
+		"{{TASK_DESCRIPTION}}":    taskDesc,
+		"{{ACCEPTANCE_CRITERIA}}": taskAcceptance,
+		"{{REJECTION_REASON}}":    rejectionDetails,
+		"{{SIGNAL_COMPLETE}}":     signalPath,
 	})
 
 	fixResult := v.runFixAgent(p.ctx, "verification rejection", fixPrompt, p.workDir, p.rawLogPath)
@@ -573,7 +579,6 @@ func (v *Verifier) TryFixConflict(ctx context.Context, conflictDiff, beadDesc, n
 	return fixResult.SignalDetected
 }
 
-
 func (v *Verifier) runFixAgent(ctx context.Context, description, prompt, workDir, rawLogPath string) claude.Result {
 	v.deps.Runner().StopStreaming()
 	v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: v.fixModel()}, "Spawning fix agent: %s", description)
@@ -618,11 +623,29 @@ func (v *Verifier) loadVerifyPrompt(filename string, vars map[string]string) str
 	return s
 }
 
-func getBeadAcceptance(backend tasks.Backend, taskID string) string {
-	if taskID == "" || backend == nil {
+// taskDescription fetches the task description from the verifier's
+// configured backend, returning empty string when none exists.
+// Reads v.deps.TaskBackend via the receiver. The Verifier struct will be
+// stripped in C6, at which point these helpers move to Loop methods.
+func (v *Verifier) taskDescription(taskID string) string {
+	if taskID == "" || v.deps.TaskBackend == nil {
 		return ""
 	}
-	ac, err := backend.GetAcceptance(taskID)
+	desc, err := v.deps.TaskBackend.GetDescription(taskID)
+	if err != nil {
+		return ""
+	}
+	return desc
+}
+
+// taskAcceptance fetches the task acceptance criteria from the verifier's
+// configured backend, returning empty string when none exist.
+// Reads v.deps.TaskBackend via the receiver.
+func (v *Verifier) taskAcceptance(taskID string) string {
+	if taskID == "" || v.deps.TaskBackend == nil {
+		return ""
+	}
+	ac, err := v.deps.TaskBackend.GetAcceptance(taskID)
 	if err != nil {
 		return ""
 	}

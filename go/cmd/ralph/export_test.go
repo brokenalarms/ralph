@@ -19,9 +19,9 @@ func NewStackPR(number int, head string) StackPR {
 	return stackPR{number: number, head: head}
 }
 
-func StackResultPRs(r StackResult) []StackPR    { return r.prs }
+func StackResultPRs(r StackResult) []StackPR     { return r.prs }
 func StackResultBaseBranch(r StackResult) string { return r.baseBranch }
-func StackPRNumber(p StackPR) int               { return p.number }
+func StackPRNumber(p StackPR) int                { return p.number }
 func StackPRHead(p StackPR) string               { return p.head }
 
 // RunMergeForTest wraps runMerge for external tests.

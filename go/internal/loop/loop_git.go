@@ -9,14 +9,14 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
-	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
-// buildCompletedBranches fetches branches of completed tasks from state and the
-// task backend. The result is passed to git.BranchForTask for stack head detection.
-func buildCompletedBranches(st *state.Store, backend tasks.Backend) []string {
-	completedTasks, err := st.GetCompletedTasks()
+// completedBranches returns the branches of completed tasks fetched from
+// state and the task backend. The result is passed to git.BranchForTask for
+// stack head detection. Reads l.state and l.cfg.TaskBackend via the receiver.
+func (l *Loop) completedBranches() []string {
+	completedTasks, err := l.state.GetCompletedTasks()
 	if err != nil || len(completedTasks) == 0 {
 		return nil
 	}
@@ -25,7 +25,7 @@ func buildCompletedBranches(st *state.Store, backend tasks.Backend) []string {
 		if ct.ID == "" {
 			continue
 		}
-		branch, _ := backend.GetMetadata(ct.ID, "branch")
+		branch, _ := l.cfg.TaskBackend.GetMetadata(ct.ID, "branch")
 		branches = append(branches, branch)
 	}
 	return branches
@@ -101,15 +101,16 @@ func (l *Loop) onResumeDone(ctx context.Context, taskID, taskTitle string, resul
 	}
 }
 
-// readReviewAddressedForTask reads from state which reviewers had their
+// reviewAddressedForTask reads from state which reviewers had their
 // feedback addressed for the given task, returning a map of botUsername → true.
-func readReviewAddressedForTask(st *state.Store, taskID string, reviewers []git.Reviewer) map[string]bool {
-	if st == nil || taskID == "" || len(reviewers) == 0 {
+// Reads l.state via the receiver.
+func (l *Loop) reviewAddressedForTask(taskID string, reviewers []git.Reviewer) map[string]bool {
+	if l.state == nil || taskID == "" || len(reviewers) == 0 {
 		return nil
 	}
 	result := make(map[string]bool, len(reviewers))
 	for _, r := range reviewers {
-		v, _ := st.Read("review_addressed:" + r.BotUsername + ":" + taskID)
+		v, _ := l.state.Read("review_addressed:" + r.BotUsername + ":" + taskID)
 		if v == "true" {
 			result[r.BotUsername] = true
 		}
@@ -117,13 +118,14 @@ func readReviewAddressedForTask(st *state.Store, taskID string, reviewers []git.
 	return result
 }
 
-// writeReviewAddressed records that a reviewer's feedback was addressed for
+// markReviewAddressed records that a reviewer's feedback was addressed for
 // the given task so subsequent Ship calls skip re-polling.
-func writeReviewAddressed(st *state.Store, taskID, botUsername string) {
-	if st == nil || taskID == "" || botUsername == "" {
+// Writes to l.state via the receiver.
+func (l *Loop) markReviewAddressed(taskID, botUsername string) {
+	if l.state == nil || taskID == "" || botUsername == "" {
 		return
 	}
-	st.Write("review_addressed:"+botUsername+":"+taskID, "true")
+	l.state.Write("review_addressed:"+botUsername+":"+taskID, "true")
 }
 
 // flushUnpushedWork pushes any unpushed commits and optionally merges before
@@ -141,17 +143,18 @@ func (l *Loop) flushUnpushedWork(ctx context.Context, lastTaskMerged bool) {
 	}
 }
 
-// buildPRBody assembles a PR description from bead context and agent summary.
-// Uses whatever context is available — bead description, acceptance criteria,
-// agent summary — and composes them into a coherent body.
-func buildPRBody(backend tasks.Backend, taskID, summary string) string {
+// prBody assembles a PR description from task context and agent summary.
+// Uses whatever context is available — task description, acceptance criteria,
+// agent summary — and composes them into a coherent body. Reads
+// l.cfg.TaskBackend via the receiver.
+func (l *Loop) prBody(taskID, summary string) string {
 	var sections []string
 
 	if taskID != "" {
-		if desc, err := backend.GetDescription(taskID); err == nil && desc != "" {
+		if desc, err := l.cfg.TaskBackend.GetDescription(taskID); err == nil && desc != "" {
 			sections = append(sections, "## Description\n"+desc)
 		}
-		if ac, err := backend.GetAcceptance(taskID); err == nil && ac != "" {
+		if ac, err := l.cfg.TaskBackend.GetAcceptance(taskID); err == nil && ac != "" {
 			sections = append(sections, "## Acceptance Criteria\n"+ac)
 		}
 	}

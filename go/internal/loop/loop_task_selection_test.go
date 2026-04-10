@@ -21,8 +21,8 @@ func newTestLoopForSelection(t *testing.T, backend *testutil.StubBackend) (*Loop
 			Dirs:          workctx.WorkContext{RalphDir: dir + "/.ralph"},
 		},
 		state:  st,
-		logger: logging.New(nil),
 		git:    &git.StubRepo{ProjectDir: dir, WorkDir: dir},
+		logger: logging.New(nil),
 	}
 	return l, dir
 }
@@ -132,8 +132,8 @@ func TestSelectNextTask_FlushesUnpushedWorkWhenNoTasks(t *testing.T) {
 			Dirs:          workctx.WorkContext{RalphDir: dir + "/.ralph"},
 		},
 		state:  st,
-		logger: logging.New(nil),
 		git:    stubGit,
+		logger: logging.New(nil),
 	}
 
 	l.selectNextTask(context.Background(), selectNextTaskParams{
@@ -176,7 +176,7 @@ func TestLoop_selectNextTask_DelegatesToPackageFunc(t *testing.T) {
 		completedIDs[ct.ID] = true
 	}
 	tc, action := l.selectNextTask(context.Background(), selectNextTaskParams{
-		runIteration: 0,
+		runIteration:  0,
 		maxIterations: l.cfg.MaxIterations,
 		wait:          l.cfg.Wait,
 		completedIDs:  completedIDs,

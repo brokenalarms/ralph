@@ -28,14 +28,14 @@ func TestInitialize_WritesConfigAndLoadsSkipped(t *testing.T) {
 			Total:     1,
 		},
 	}
-	logger := logging.New(nil)
+
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	l := New(Config{
 		MaxIterations: 7,
 		TaskBackend:   backend,
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, gm, logger)
+	}, st, gm, logging.New(nil))
 
 	err := l.initialize(context.Background())
 	if err != nil {
@@ -65,7 +65,6 @@ func TestInitialize_WritesConfigAndLoadsSkipped(t *testing.T) {
 func TestLoop_ActiveReviewersNotDetectedAtStartup(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
-	logger := logging.New(nil)
 
 	gm := &git.StubRepo{
 		ProjectDir: dir,
@@ -85,7 +84,7 @@ func TestLoop_ActiveReviewersNotDetectedAtStartup(t *testing.T) {
 		QueryFn:         func(_ context.Context, _, _, _ string) (string, error) { return "", nil },
 	}
 
-	l := New(cfg, st, gm, logger)
+	l := New(cfg, st, gm, logging.New(nil))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately — no tasks will run
@@ -105,7 +104,6 @@ func TestLoop_ActiveReviewersNotDetectedAtStartup(t *testing.T) {
 func TestLoop_EnsureActiveReviewers_LazyInitAndCache(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
-	logger := logging.New(nil)
 
 	reviewer := git.Reviewer{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second, ReviewOnPush: true}
 	gm := &git.StubRepo{
@@ -117,7 +115,7 @@ func TestLoop_EnsureActiveReviewers_LazyInitAndCache(t *testing.T) {
 		Dirs:        workctx.WorkContext{ProjectDir: dir, RalphDir: ralphDir},
 		TaskBackend: &testutil.StubBackend{},
 	}
-	l := New(cfg, st, gm, logger)
+	l := New(cfg, st, gm, logging.New(nil))
 
 	// Before first call: no reviewers cached, detection not run.
 	if l.reviewersDetected {
@@ -151,7 +149,6 @@ func TestLoop_EnsureActiveReviewers_LazyInitAndCache(t *testing.T) {
 func TestLoop_ReviewersDetectedViaEnsureReviewersFn(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
-	logger := logging.New(nil)
 
 	reviewer := git.Reviewer{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second, ReviewOnPush: true}
 	gm := &git.StubRepo{
@@ -163,7 +160,7 @@ func TestLoop_ReviewersDetectedViaEnsureReviewersFn(t *testing.T) {
 		Dirs:        workctx.WorkContext{ProjectDir: dir, RalphDir: ralphDir},
 		TaskBackend: &testutil.StubBackend{},
 	}
-	l := New(cfg, st, gm, logger)
+	l := New(cfg, st, gm, logging.New(nil))
 
 	// Build the same ensureReviewersFn closure that loop.go passes to completeTaskParams.
 	ensureReviewersFn := func() []git.Reviewer { l.ensureActiveReviewers(); return l.activeReviewers }
@@ -196,7 +193,7 @@ func TestLoop_ReviewersDetectedViaEnsureReviewersFn(t *testing.T) {
 // condition works.
 func TestInitWorktree_NoopWhenNoWorktreeBranch(t *testing.T) {
 	dir, st := setupTestDir(t)
-	logger := logging.New(nil)
+
 	backend := &testutil.StubBackend{}
 	// StubGit with WorkDir == ProjectDir means no worktree → early return.
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
@@ -204,7 +201,7 @@ func TestInitWorktree_NoopWhenNoWorktreeBranch(t *testing.T) {
 	l := New(Config{
 		TaskBackend: backend,
 		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, gm, logger)
+	}, st, gm, logging.New(nil))
 
 	err := l.initWorktree(context.Background())
 	if err != nil {

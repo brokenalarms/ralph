@@ -38,7 +38,6 @@ func (r *promptCapturingFixRunner) StopStreaming() {}
 
 func (r *promptCapturingFixRunner) InjectMessage(_ string) error { return nil }
 
-
 func newTestVerifier(t *testing.T, opts ...func(*Verifier)) *Verifier {
 	t.Helper()
 	dir := t.TempDir()

@@ -17,7 +17,7 @@ func TestLoop_MaybeRefactor_DisabledByDefault(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	l := New(Config{
-		Dirs:    workctx.WorkContext{RalphDir: ralphDir},
+		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: false,
 	}, st, &git.StubRepo{WorkDir: dir}, logging.New(nil))
 
@@ -34,7 +34,7 @@ func TestLoop_MaybeRefactor_SkipsBelow5Completions(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	l := New(Config{
-		Dirs:    workctx.WorkContext{RalphDir: ralphDir},
+		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: true,
 	}, st, &git.StubRepo{WorkDir: dir}, logging.New(nil))
 
@@ -52,7 +52,7 @@ func TestLoop_MaybeRefactor_LLMSaysNo(t *testing.T) {
 
 	queryFnCalled := false
 	l := New(Config{
-		Dirs:    workctx.WorkContext{RalphDir: ralphDir},
+		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: true,
 		QueryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			queryFnCalled = true
@@ -113,7 +113,7 @@ func TestLoop_MaybeRefactor_TriggersAtMultiplesOf5(t *testing.T) {
 
 	queryCalls := 0
 	l := New(Config{
-		Dirs:    workctx.WorkContext{RalphDir: ralphDir},
+		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: true,
 		QueryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			queryCalls++

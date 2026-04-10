@@ -340,12 +340,12 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{
-		ProjectDir:          dir,
-		WorkDir:             filepath.Join(dir, "worktree"),
-		WorktreeBranch:      "ralph/project/01-ci-fix",
-		ShipResult:          git.ShipResult{PRNumber: 42},
-		PRState:             "OPEN",
-		MergeRetryResult:    true,
+		ProjectDir:       dir,
+		WorkDir:          filepath.Join(dir, "worktree"),
+		WorktreeBranch:   "ralph/project/01-ci-fix",
+		ShipResult:       git.ShipResult{PRNumber: 42},
+		PRState:          "OPEN",
+		MergeRetryResult: true,
 	}
 
 	l := New(Config{
@@ -857,7 +857,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 			}
 
 			l.cfg.CheckGitHub = func(context.Context) error { return nil }
-	_ = l.Run(context.Background())
+			_ = l.Run(context.Background())
 
 			output := logBuf.String()
 			if !strings.Contains(output, tt.wantMsg) {
