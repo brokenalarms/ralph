@@ -9,7 +9,6 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
-	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
@@ -17,7 +16,7 @@ import (
 )
 
 // loopWithBackend constructs a minimal Loop with the given backend, used by
-// the prBody tests. The Loop reads l.cfg.TaskBackend via the receiver to
+// the prBody tests. The Loop reads l.taskBackend via the receiver to
 // build PR descriptions.
 func loopWithBackend(t *testing.T, backend tasks.Backend) *Loop {
 	t.Helper()
@@ -27,8 +26,7 @@ func loopWithBackend(t *testing.T, backend tasks.Backend) *Loop {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 }
 
 // (l *Loop).prBody assembles description, acceptance criteria, and agent
@@ -149,10 +147,9 @@ func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *tes
 	}
 	autoMerge := ship.merged || ship.ciFailure || ship.stacked
 	l := New(Config{
-		TaskBackend: backend,
-		AutoMerge:   autoMerge,
-		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, gm, logging.New(nil))
+		AutoMerge: autoMerge,
+		Dirs:      workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+	}, newTestModules(t, st, gm, backend))
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	return finalizeSetup{
 		loop: l,
@@ -309,10 +306,9 @@ func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testi
 		return git.ShipResult{PRNumber: opts.PRNumber, Merged: false}, nil
 	}
 	l := New(Config{
-		TaskBackend: backend,
-		AutoMerge:   false,
-		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, gm, logging.New(nil))
+		AutoMerge: false,
+		Dirs:      workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+	}, newTestModules(t, st, gm, backend))
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	p := completeTaskParams{
@@ -495,9 +491,8 @@ func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
 	dir, st := setupTestDir(t)
 	backend := &testutil.StubBackend{}
 	l := New(Config{
-		TaskBackend: backend,
-		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, &git.StubRepo{ProjectDir: dir, WorkDir: dir}, logging.New(nil))
+		Dirs: workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+	}, newTestModules(t, st, &git.StubRepo{ProjectDir: dir, WorkDir: dir}, backend))
 
 	l.skipTask("ralph-xyz", "merge_failed")
 
@@ -521,9 +516,8 @@ func TestSkipTask_EmptyID(t *testing.T) {
 	dir, st := setupTestDir(t)
 	backend := &testutil.StubBackend{}
 	l := New(Config{
-		TaskBackend: backend,
-		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, &git.StubRepo{ProjectDir: dir, WorkDir: dir}, logging.New(nil))
+		Dirs: workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+	}, newTestModules(t, st, &git.StubRepo{ProjectDir: dir, WorkDir: dir}, backend))
 
 	l.skipTask("", "reason")
 

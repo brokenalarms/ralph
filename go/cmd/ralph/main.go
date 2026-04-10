@@ -208,7 +208,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		AutoMerge:                cfg.AutoMerge,
 		Evolve:                   cfg.Evolve,
 		CallsPerHour:             cfg.CallsPerHour,
-		TaskBackend:              backend,
 		IdleTimeout:              cfg.IdleTimeout,
 		IdleTimeoutProgress:      cfg.IdleTimeoutProgress,
 		PostSignalTimeout:        cfg.PostSignalTimeout,
@@ -236,7 +235,12 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		OnIterationStart: func() {
 			generateResumeScript(cfg, ralphDir, scriptPath, args, log)
 		},
-	}, st, gm, log)
+	}, loop.Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      log,
+	})
 
 	if err := execLoop.Run(ctx); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Execution failed: %v", err)

@@ -39,8 +39,7 @@ func TestLoop_AllTasksComplete(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
@@ -78,8 +77,7 @@ func TestLoop_NoTasksError(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
@@ -120,8 +118,7 @@ func TestLoop_StopFileDetection(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
@@ -167,8 +164,7 @@ func TestLoop_ContextCancellation(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(ctx)
@@ -206,8 +202,7 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
@@ -270,9 +265,8 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		Wait:          true,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = runner
 
 	waitCount := 0
@@ -332,9 +326,8 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		Wait:          true,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	l.cfg.OnWait = func() { cancel() }
@@ -374,9 +367,8 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		Wait:          true,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 
 	l.cfg.OnWait = func() {
 		os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
@@ -418,9 +410,8 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		Wait:          false,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 
 	start := time.Now()
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -502,8 +493,7 @@ func TestLoop_LifecycleStates(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return true, ""
@@ -563,8 +553,7 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return false, "tests failed"
@@ -640,11 +629,10 @@ func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
 		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		OnIterationStart: func() {
 			callCount++
 		},
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -685,9 +673,8 @@ func TestLoop_WaitMode_ReReadsSkippedTasksOnTick(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		Wait:          true,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 
 	l.cfg.OnWait = func() {
 		s, _ := st.Load()

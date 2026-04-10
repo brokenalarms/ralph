@@ -44,8 +44,7 @@ func TestLoop_CompleteTask_ClosesTask(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -88,8 +87,7 @@ func TestLoop_CompleteTask_VerificationFailure(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
@@ -131,8 +129,7 @@ func TestCompleteTask_SkippedTask_DoesNotPush(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -194,9 +191,8 @@ func TestCompleteTask_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:     1,
 		CallsPerHour:      80,
-		TaskBackend:       backend,
 		PostSignalTimeout: 50 * time.Millisecond,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipFunc = func(ctx context.Context, _ git.ShipOpts) (git.ShipResult, error) {
@@ -256,9 +252,8 @@ func TestCompleteTask_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
 		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:     1,
 		CallsPerHour:      80,
-		TaskBackend:       backend,
 		PostSignalTimeout: 5 * time.Second,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
@@ -302,10 +297,9 @@ func TestCompleteTask_PostSignalTimeout_CancelsMerge(t *testing.T) {
 		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:     1,
 		CallsPerHour:      80,
-		TaskBackend:       backend,
 		AutoMerge:         true,
 		PostSignalTimeout: 50 * time.Millisecond,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
@@ -358,10 +352,9 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		PostTask:      scriptPath,
 		AutoMerge:     true,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.MergeRetryResult = true
@@ -412,9 +405,8 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		PostTask:      scriptPath,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
@@ -456,9 +448,8 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		PostTask:      scriptPath,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 50}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -507,9 +498,8 @@ func TestLoop_PostTaskScript_LogsWhenNotConfigured(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		AutoMerge:     true,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -550,9 +540,8 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		PostTask:      scriptPath,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -609,9 +598,8 @@ func TestLoop_PostTaskScript_PackageJSONDetection(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		AutoMerge:     true,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -664,9 +652,8 @@ func TestCompleteTask_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		Notify:        true,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -718,9 +705,8 @@ func TestCompleteTask_NotifyDisabled_NoNotification(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		Notify:        false,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -769,9 +755,8 @@ func TestCompleteTask_NotifyOnNoCommitsPath(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		Notify:        true,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -822,8 +807,7 @@ func TestCompleteTask_FeedbackFileStopsPostSignal(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 

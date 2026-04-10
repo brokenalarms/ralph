@@ -142,9 +142,8 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		VerifyDir:     dir,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 
 	l.cfg.NewRunner = func() claudeRunner {
 		fixAgentCalled = true
@@ -207,9 +206,8 @@ func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		VerifyDir:     dir,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 
 	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: false, Details: "missing error handling in parseConfig"}
@@ -269,9 +267,8 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		VerifyDir:     dir,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 
 	llmCalls := 0
 	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
@@ -351,9 +348,8 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		VerifyDir:     dir,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 
 	l.cfg.NewRunner = func() claudeRunner {
 		fixAttempts++
@@ -406,8 +402,7 @@ func TestCompleteTask_CancelledCtx_NoCommits_BeadStaysOpen(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -451,8 +446,7 @@ func TestCompleteTask_CancelledCtx_NoPR_BeadStaysOpen(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -510,9 +504,8 @@ func TestCompleteTask_NoNewCommits_ExistingOpenPR_MergesViaFinalize(t *testing.T
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		AutoMerge:     true,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -586,9 +579,8 @@ func TestCompleteTask_NoNewCommits_ExistingMergedPR_ClosesDirectly(t *testing.T)
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		AutoMerge:     true,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -642,9 +634,8 @@ func TestCompleteTask_CancelledCtx_FinalizePR_BeadStaysOpen(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		AutoMerge:     false, // skip merge attempt, go straight to close
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 

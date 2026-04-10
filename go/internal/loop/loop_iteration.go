@@ -120,7 +120,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 
 	// Preflight: check bead wasn't prematurely closed by the agent.
 	if p.taskID != "" {
-		phase, _ := l.cfg.TaskBackend.GetState(p.taskID, "phase")
+		phase, _ := l.taskBackend.GetState(p.taskID, "phase")
 		if phase != "implementing" {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s phase is %q (expected implementing) — agent may have tampered with task state", p.taskID, phase)
 		}
@@ -140,7 +140,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	}
 
 	if p.taskID != "" {
-		if err := l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", "ralph: tests passed, commits present"); err != nil {
+		if err := l.taskBackend.SetState(p.taskID, "phase", "verified", "ralph: tests passed, commits present"); err != nil {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=verified: %v", err)
 		} else {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads}, "%s → verified", p.taskID)
@@ -158,7 +158,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 
 		// Check for an existing PR from a prior attempt that still needs merging.
 		if p.taskID != "" {
-			ref, _ := l.cfg.TaskBackend.GetExternalRef(p.taskID)
+			ref, _ := l.taskBackend.GetExternalRef(p.taskID)
 			if prNum := parsePRNumber(ref); prNum != 0 {
 				prState, _ := l.git.GetPRState(prNum)
 				if prState == git.PRStateOpen {
@@ -170,7 +170,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 					if merged {
 						closeReason = fmt.Sprintf("Fixed in %s", prRef)
 					}
-					_ = l.cfg.TaskBackend.CloseTask(p.taskID, closeReason)
+					_ = l.taskBackend.CloseTask(p.taskID, closeReason)
 					l.git.TagTaskEnd(p.taskID)
 					l.execRunPostTask(ctx, p.taskID, prNum, merged)
 					if p.notify {
@@ -200,8 +200,8 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 				return completeTaskOut{action: signalComplete}
 			}
 			closeReason := "verified complete (no new commits)"
-			_ = l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", closeReason)
-			if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
+			_ = l.taskBackend.SetState(p.taskID, "phase", "verified", closeReason)
+			if err := l.taskBackend.CloseTask(p.taskID, closeReason); err != nil {
 				skipReason := "close_failed"
 				if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
 					l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
@@ -232,7 +232,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 
 	// Recovery: if ship didn't produce a PR, find any existing PR in any state.
 	if prNumber == 0 && p.taskID != "" {
-		if ref, _ := l.cfg.TaskBackend.GetExternalRef(p.taskID); ref != "" {
+		if ref, _ := l.taskBackend.GetExternalRef(p.taskID); ref != "" {
 			if n := parsePRNumber(ref); n != 0 {
 				prNumber = n
 			}
@@ -271,7 +271,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 			if branch != "" {
 				closeReason = fmt.Sprintf("Verified — branch %s, no PR", branch)
 			}
-			if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
+			if err := l.taskBackend.CloseTask(p.taskID, closeReason); err != nil {
 				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
 			}
 		}
@@ -305,11 +305,11 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 			closeReason = fmt.Sprintf("Fixed in %s", prRef)
 		}
 		l.attempts.ClearMergeFailures(p.taskID)
-		_ = l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", "ralph: PR open or stacked")
+		_ = l.taskBackend.SetState(p.taskID, "phase", "verified", "ralph: PR open or stacked")
 		if merged {
-			_ = l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", "ralph: PR merged")
+			_ = l.taskBackend.SetState(p.taskID, "phase", "verified", "ralph: PR merged")
 		}
-		if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
+		if err := l.taskBackend.CloseTask(p.taskID, closeReason); err != nil {
 			skipReason := "close_failed"
 			if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
 				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
@@ -408,7 +408,7 @@ type iterationPrompt struct {
 // false if Run() should break (internet or rate limit unavailable).
 func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask string) (iterationPrompt, bool) {
 	if taskID != "" {
-		if err := l.cfg.TaskBackend.SetState(taskID, "phase", "implementing", "ralph: starting task"); err != nil {
+		if err := l.taskBackend.SetState(taskID, "phase", "implementing", "ralph: starting task"); err != nil {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=implementing: %v", err)
 		}
 	}

@@ -69,8 +69,7 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		AutoMerge:     false,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -119,8 +118,7 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -163,8 +161,7 @@ func TestLoop_PushCalledAfterSignal(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true, OnSignalUsed: true},
@@ -220,9 +217,8 @@ func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		Wait:          false,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -281,9 +277,8 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		Wait:          true,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -348,10 +343,9 @@ func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		AutoMerge:     true,
 		Wait:          false,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -408,10 +402,9 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		AutoMerge:     true,
 		Wait:          true,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -475,10 +468,9 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		AutoMerge:     false,
 		Wait:          false,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -536,10 +528,9 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		AutoMerge:     true,
 		Wait:          false,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 999}
 	gm.MergeRetryResult = true
@@ -601,10 +592,9 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		AutoMerge:     true,
 		Wait:          false,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -669,8 +659,7 @@ func TestLoop_ShipRetriesOnTransientGitHubError(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }

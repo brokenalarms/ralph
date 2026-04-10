@@ -55,10 +55,21 @@ var forbiddenModuleTypes = map[string]bool{
 // allowedNonLoopStructHolders names structs that are allowed to hold
 // module-typed fields. This is the whitelist for rule 1 in the spec.
 //
-// As the refactor progresses this list should never grow. The only
-// permanent entry is "Loop" itself.
+// As the refactor progresses this list should never grow. The permanent
+// entries are:
+//
+//   - "Loop" — the orchestrator itself; this is Rule 1.
+//   - "Modules" — the struct form of loop.New's module-reference
+//     parameter list. Modules is owned by nobody after construction:
+//     cmd/ralph/main.go builds one, hands it to loop.New, and loop.New
+//     copies each field onto Loop's private fields and discards the
+//     struct. It IS the constructor's parameter list, just packaged as
+//     a struct. Rule A's carve-out for loop.New's parameters applies
+//     to Modules the same way it applies to positional parameters.
+//     See docs/specs/orchestrator-modules.md.
 var allowedModuleHolders = map[string]bool{
-	"Loop": true,
+	"Loop":    true,
+	"Modules": true,
 }
 
 // internalDir returns the absolute path to go/internal/ from any test

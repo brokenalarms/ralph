@@ -71,8 +71,7 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.MergeRetryResult = true
@@ -145,8 +144,7 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = runner
 	gm.MergeRetryResult = true
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
@@ -238,8 +236,7 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = runner
 	gm.MergeRetryResult = true
 
@@ -333,8 +330,7 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = runner
 	gm.MergeRetryResult = true
 
@@ -420,8 +416,7 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = runner
 	gm.MergeRetryResult = true
 
@@ -507,8 +502,7 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = runner
 	gm.MergeRetryResult = true
 
@@ -590,8 +584,7 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.MergeRetryResult = true

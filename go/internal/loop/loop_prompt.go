@@ -14,14 +14,14 @@ import (
 const maxCrossTaskReflections = 3
 
 // buildTaskPrompt constructs the per-task assignment prompt from the task
-// backend's full context. Reads l.cfg.TaskBackend, l.cfg.Dirs.PromptsDir,
+// backend's full context. Reads l.taskBackend, l.cfg.Dirs.PromptsDir,
 // and l.cfg.Dirs.RalphDir via the receiver.
 func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 	if taskID == "" {
 		return fmt.Sprintf("Complete this task: %s", nextTask)
 	}
-	if l.cfg.TaskBackend != nil {
-		full, err := l.cfg.TaskBackend.GetFullContext(taskID)
+	if l.taskBackend != nil {
+		full, err := l.taskBackend.GetFullContext(taskID)
 		if err == nil && full != "" {
 			tmplPath := filepath.Join(l.cfg.Dirs.PromptsDir, "task-assignment.md")
 			if data, readErr := os.ReadFile(tmplPath); readErr == nil {
@@ -41,10 +41,10 @@ func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 
 // buildPrompt assembles the full prompt for the agent from the task prompt,
 // attempt history, test status, and tasks context fetched from the backend.
-// Reads l.cfg.TaskBackend, l.cfg.Dirs.*, l.cfg.PlanFile, and l.signals via
+// Reads l.taskBackend, l.cfg.Dirs.*, l.cfg.PlanFile, and l.signals via
 // the receiver.
 func (l *Loop) buildPrompt(taskPrompt, attemptHistory, testStatus string) (string, error) {
-	tasksContext, err := l.cfg.TaskBackend.ProjectContext()
+	tasksContext, err := l.taskBackend.ProjectContext()
 	if err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ProjectContext: %v", err)
 	}

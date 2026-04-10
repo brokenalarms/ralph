@@ -62,8 +62,7 @@ func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 				},
 				MaxIterations: 5,
 				CallsPerHour:  80,
-				TaskBackend:   tt.backend,
-			}, st, gm, logger)
+			}, newTestModules(t, st, gm, tt.backend, logger))
 
 			l.cfg.CheckGitHub = func(context.Context) error { return nil }
 			l.Run(context.Background())
@@ -108,8 +107,7 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = &stubRunner{
 		onRun: func() {
 			backend.Remaining = 0
@@ -173,8 +171,7 @@ func TestLoop_LongDescriptionTruncatedInStream(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = &stubRunner{
 		onRun: func() {
 			backend.Remaining = 0
@@ -233,8 +230,7 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = &stubRunner{
 		onRun: func() {
 			backend.Remaining = 0
@@ -315,8 +311,7 @@ func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
 		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -374,8 +369,7 @@ func TestLoop_TaskBannerOnNewTask(t *testing.T) {
 		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -437,8 +431,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.NewWithWriter(&logBuf))
+	}, newTestModules(t, st, gm, backend, logging.NewWithWriter(&logBuf)))
 
 	// Override the runner to return different results per iteration.
 	l.runner = &rateLimitStubRunner{
@@ -544,8 +537,7 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 		Version:       "1.2.3",
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, backend, logger))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -581,7 +573,7 @@ func newHandleRunResultLoop(t *testing.T) (*Loop, string) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, nil, logger))
 
 	return l, ralphDir
 }
@@ -674,7 +666,7 @@ func TestHandleRunResult_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 	l.cfg.IsOnline = func() bool { return true }
 
 	backend := &testutil.StubBackend{}
-	l.cfg.TaskBackend = backend
+	l.taskBackend = backend
 
 	tracker := attempts.New(ralphDir)
 	for i := 0; i < l.attempts.MaxIdleTimeoutFailures-1; i++ {
@@ -778,9 +770,8 @@ func TestOnResumeDone_Merged_NotifyEnabled(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		Notify:        true,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer
@@ -831,9 +822,8 @@ func TestOnResumeDone_Open_NotifyEnabled(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		Notify:        true,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer
@@ -883,9 +873,8 @@ func TestOnResumeDone_Merged_NotifyDisabled(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		Notify:        false,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer

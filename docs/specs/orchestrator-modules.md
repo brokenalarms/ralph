@@ -53,7 +53,12 @@ st := state.NewStore(ralphDir)
 backend := initTaskBackend(cfg, ...)
 logger := logging.New(logFileWriter)
 
-execLoop := loop.New(loop.Config{...}, st, gm, backend, logger)
+execLoop := loop.New(loop.Config{...}, loop.Modules{
+    State:       st,
+    Git:         gm,
+    TaskBackend: backend,
+    Logger:      logger,
+})
 execLoop.Run(ctx)
 ```
 
@@ -62,12 +67,21 @@ execLoop.Run(ctx)
 gm := &git.StubRepo{...}              // stub git.Ops
 st := newTestState(t)                  // stub or real state.Store
 backend := &testutil.StubBackend{...}  // stub tasks.Backend
-logger := logging.New(nil)             // discarding logger
 
-l := loop.New(loop.Config{...}, st, gm, backend, logger)
+l := loop.New(loop.Config{...}, newTestModules(t, st, gm, backend))
 l.Run(ctx)
 // assertions about what l did to the stubs
 ```
+
+`loop.Modules` is the struct form of `loop.New`'s module-reference parameter
+list. It is the **only** exported struct in the codebase permitted to hold
+module references outside `Loop` itself. Its purpose is purely to name the
+fields of `loop.New`'s call: `cmd/ralph/main.go` constructs a `Modules`
+literal, passes it to `loop.New`, and `loop.New` copies each field onto
+`Loop`'s private fields and discards the struct. After `loop.New` returns,
+`Modules` is gone. It is the constructor's parameter list, packaged as a
+struct; Rule A's carve-out for `loop.New`'s parameters applies to `Modules`
+exactly as it would to a positional parameter list.
 
 Production and tests use **the same constructor**. The constructor
 parameter list is the seam. There is no separate `loop.NewForTest(...)`,
@@ -427,8 +441,23 @@ type Loop struct {
     // ... other state
 }
 
-func New(cfg Config, st *state.Store, gm git.Ops, logger *logging.Logger) *Loop {
-    return &Loop{logger: logger, ...}
+// Modules is the struct form of loop.New's parameter list — see the
+// "Why loop.New is the only carve-out" section above.
+type Modules struct {
+    State       *state.Store
+    Git         git.Ops
+    TaskBackend tasks.Backend
+    Logger      *logging.Logger
+}
+
+func New(cfg Config, mods Modules) *Loop {
+    return &Loop{
+        state:       mods.State,
+        git:         mods.Git,
+        taskBackend: mods.TaskBackend,
+        logger:      mods.Logger,
+        // ... other fields derived from cfg
+    }
 }
 
 // Forbidden — git.Ops is not the exception.
@@ -472,7 +501,7 @@ them.
 
 | Module | Holds state? | Public surface | Notes |
 |---|---|---|---|
-| `loop` (`Loop` struct) | yes — modules + run state + iteration state | `New(cfg) *Loop`, `(l *Loop) Run(ctx) error`, `(l *Loop) SessionTasks() []CompletedTask` | The only struct that holds module references. Has private methods organized around orchestration steps. |
+| `loop` (`Loop` struct) | yes — modules + run state + iteration state | `New(cfg Config, mods Modules) *Loop`, `(l *Loop) Run(ctx) error`, `(l *Loop) SessionTasks() []CompletedTask` | The only struct that holds module references. Has private methods organized around orchestration steps. `loop.Modules` is the struct form of `New`'s module-reference parameter list. |
 | `git` (`Repo` struct) | yes — workdir, branch, internal github client | `New(...)`, `BranchForTask`, `ResumeTask`, `Ship`, `FlushUnpushedWork`, query methods | Owns all git+GitHub retries/backoffs/healing internally. Surfaces `Stuck*` data when external code change is needed. Internal sub-module: github. |
 | `verify` | no — package functions | `RunTests`, `CompileCheck`, `Check`, `DetectTestCommand`, `CapModel` | The Verifier struct from the loop package is deleted. Verification is stateless functions. Counters that were on Verifier move to `Loop.iter`. |
 | `agent` | yes if streaming/cancellation state matters | `Run`, `Query`, `StopStreaming`, `InjectMessage` (or package functions if no per-instance state) | TBD on inspection during refactor — instance vs package functions. |
@@ -598,10 +627,15 @@ func TestLoop_HappyPath_SequencesModuleCallsInOrder(t *testing.T) {
     lim := stublimit.New(rec)
 
     l := loop.New(loop.Config{
+        // ... cfg fields (no module references)
+    }, loop.Modules{
+        State:       s,
+        Git:         g,
         TaskBackend: bk,
-        // ... cfg
+        Logger:      logging.New(nil),
+        // agent, attempts, limiter, analyzer join Modules as rule-1
+        // cleanup lands; they remain private on Loop either way.
     })
-    l.WireModules(g, a, s, at, lim)  // or via New() options
 
     if err := l.Run(context.Background()); err != nil {
         t.Fatalf("Run: %v", err)
@@ -645,27 +679,22 @@ remaining in the refactor. They are the executable form of the rules above.
 
 ### `TestNoModulesInNonLoopStructs`
 Walks every `type X struct` in `go/internal/`. Whitelist: structs in package
-`loop` named `Loop` (the orchestrator). Forbidden: any field whose type
-resolves to a struct or interface from another package that has methods.
-Specifically banned types include `git.Ops`, `*git.Repo`, `*state.Store`,
-`*attempts.Tracker`, `*ratelimit.Limiter`, `*analyzer.Analyzer`,
-`tasks.Backend`, `*agent.Agent`, `*Verifier`, `claudeRunner`. Whitelisted:
-primitives, data structs from this package, `context.Context`,
-`claude.SignalPaths` and similar pure data types.
+`loop` named `Loop` (the orchestrator) and `Modules` (the struct form of
+`loop.New`'s parameter list — see "Why `loop.New` is the only carve-out"
+above). Forbidden: any field whose type resolves to a struct or interface
+from another package that has methods. Specifically banned types include
+`git.Ops`, `*git.Repo`, `*state.Store`, `*attempts.Tracker`,
+`*ratelimit.Limiter`, `*analyzer.Analyzer`, `tasks.Backend`, `*agent.Agent`,
+`*Verifier`, `claudeRunner`. Whitelisted: primitives, data structs from this
+package, `context.Context`, `claude.SignalPaths` and similar pure data types.
 
 ### `TestNoModulesInFunctionParams`
 Walks every `FuncDecl` in `go/internal/`. Fails when a parameter type is a
-module. Constructors (`New*`) exempt. `Loop` private methods exempt for
-modules they hold (because they access via the receiver, not via the
-parameter — but the test doesn't need a special case because Loop methods
-shouldn't take module parameters at all).
-
-### `TestNoLoggerAsField`
-Walks all struct fields in `go/internal/`. Fails on any field of type
-`*logging.Logger`. Logger is imported.
-
-### `TestNoLoggerInFunctionParams`
-Walks all function parameters. Fails on any `*logging.Logger` parameter.
+module. Constructors (`New*`) exempt — this is how `loop.New` legitimately
+receives a `Modules` value. `Loop` private methods exempt for modules they
+hold (because they access via the receiver, not via the parameter — but the
+test doesn't need a special case because Loop methods shouldn't take module
+parameters at all).
 
 ### `TestNoImplementationLeakInExportedNames`
 Walks all exported type names, field names, and function names in

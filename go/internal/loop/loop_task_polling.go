@@ -18,7 +18,7 @@ func (l *Loop) pollForTasks() (found, done bool) {
 		return false, true
 	}
 	skipped, _ := l.state.GetSkippedTasks()
-	hasRemaining, err := tasks.Poll(l.cfg.TaskBackend, skipped)
+	hasRemaining, err := tasks.Poll(l.taskBackend, skipped)
 	if err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task check error during wait: %v", err)
 		return false, false
@@ -78,7 +78,7 @@ type logIterationBannerParams struct {
 
 // logIterationBanner gathers context and delegates to the logger.
 func (l *Loop) logIterationBanner(p logIterationBannerParams, runIteration, maxIter, iteration int, task taskContext, lastAction analyzer.Action) {
-	completed, total := tasks.Progress(l.cfg.TaskBackend)
+	completed, total := tasks.Progress(l.taskBackend)
 
 	if runIteration > 1 {
 		l.logger.DashedSeparator(logging.Yellow)

@@ -9,13 +9,12 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
-	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
 // loopForPromptTest constructs a minimal Loop with the given backend and
-// dirs for the buildTaskPrompt tests, which read l.cfg.TaskBackend,
+// dirs for the buildTaskPrompt tests, which read l.taskBackend,
 // l.cfg.Dirs.PromptsDir, and l.cfg.Dirs.RalphDir via the receiver.
 func loopForPromptTest(t *testing.T, dir, ralphDir, promptsDir string, backend *testutil.StubBackend) *Loop {
 	t.Helper()
@@ -25,8 +24,7 @@ func loopForPromptTest(t *testing.T, dir, ralphDir, promptsDir string, backend *
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 }
 
 // Verifies that buildTaskPrompt includes the bd ID when one is present,
@@ -169,9 +167,8 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		VerifyDir:     dir,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	// Capture the prompt passed to Claude
 	l.runner = &stubRunner{
@@ -257,8 +254,7 @@ func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = &stubRunner{}
 
 	prep, ok := l.prepareAndBuildPrompt(context.Background(), "ralph-xyz", "Fix login")
@@ -328,8 +324,7 @@ func TestLoop_HasProgress_SnapshotsDiffState(t *testing.T) {
 				Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 				MaxIterations: 1,
 				CallsPerHour:  80,
-				TaskBackend:   backend,
-			}, st, gm, logging.New(nil))
+			}, newTestModules(t, st, gm, backend))
 
 			var capturedHasProgress func() bool
 			l.runner = &stubRunner{
