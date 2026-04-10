@@ -13,15 +13,33 @@ import (
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
+// loopForPromptTest constructs a minimal Loop with the given backend and
+// dirs for the buildTaskPrompt tests, which read l.cfg.TaskBackend,
+// l.cfg.Dirs.PromptsDir, and l.cfg.Dirs.RalphDir via the receiver.
+func loopForPromptTest(t *testing.T, dir, ralphDir, promptsDir string, backend *testutil.StubBackend) *Loop {
+	t.Helper()
+	_, st := setupTestDir(t)
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	return New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm)
+}
+
 // Verifies that buildTaskPrompt includes the bd ID when one is present,
 // matching the shell's task prompt format.
 func TestLoop_BuildTaskPrompt(t *testing.T) {
-	got := buildTaskPrompt("Implement feature X", "ralph-abc", nil, "", "")
+	dir := t.TempDir()
+	l := loopForPromptTest(t, dir, filepath.Join(dir, ".ralph"), "", &testutil.StubBackend{})
+
+	got := l.buildTaskPrompt("Implement feature X", "ralph-abc")
 	if got != "Complete this task (bd id: ralph-abc): Implement feature X" {
 		t.Errorf("unexpected prompt with ID: %q", got)
 	}
 
-	got = buildTaskPrompt("Implement feature X", "", nil, "", "")
+	got = l.buildTaskPrompt("Implement feature X", "")
 	if got != "Complete this task: Implement feature X" {
 		t.Errorf("unexpected prompt without ID: %q", got)
 	}
@@ -42,8 +60,9 @@ func TestLoop_BuildTaskPrompt_WithScreenshots(t *testing.T) {
 	}
 
 	backend := &testutil.StubBackend{NextID: "ralph-abc", NextTask: "Fix modal", FullContext: "○ ralph-abc · Fix modal [● P3 · OPEN]"}
+	l := loopForPromptTest(t, dir, ralphDir, pDir, backend)
 
-	got := buildTaskPrompt("Fix modal", "ralph-abc", backend, pDir, ralphDir)
+	got := l.buildTaskPrompt("Fix modal", "ralph-abc")
 
 	if !strings.Contains(got, "## Screenshots") {
 		t.Error("task prompt should include screenshots section when screenshots exist")
@@ -65,8 +84,9 @@ func TestLoop_BuildTaskPrompt_NoScreenshots(t *testing.T) {
 	}
 
 	backend := &testutil.StubBackend{NextID: "ralph-xyz", NextTask: "Fix layout", FullContext: "○ ralph-xyz · Fix layout [● P3 · OPEN]"}
+	l := loopForPromptTest(t, dir, ralphDir, pDir, backend)
 
-	got := buildTaskPrompt("Fix layout", "ralph-xyz", backend, pDir, ralphDir)
+	got := l.buildTaskPrompt("Fix layout", "ralph-xyz")
 
 	if strings.Contains(got, "## Screenshots") {
 		t.Error("task prompt should not include screenshots section when none exist")

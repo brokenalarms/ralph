@@ -6,30 +6,30 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/brokenalarms/ralph/internal/attempts"
-	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/prompt"
-	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
 const maxCrossTaskReflections = 3
 
-func buildTaskPrompt(nextTask, taskID string, backend tasks.Backend, promptsDir, ralphDir string) string {
+// buildTaskPrompt constructs the per-task assignment prompt from the task
+// backend's full context. Reads l.cfg.TaskBackend, l.cfg.Dirs.PromptsDir,
+// and l.cfg.Dirs.RalphDir via the receiver.
+func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 	if taskID == "" {
 		return fmt.Sprintf("Complete this task: %s", nextTask)
 	}
-	if backend != nil {
-		full, err := backend.GetFullContext(taskID)
+	if l.cfg.TaskBackend != nil {
+		full, err := l.cfg.TaskBackend.GetFullContext(taskID)
 		if err == nil && full != "" {
-			tmplPath := filepath.Join(promptsDir, "task-assignment.md")
+			tmplPath := filepath.Join(l.cfg.Dirs.PromptsDir, "task-assignment.md")
 			if data, readErr := os.ReadFile(tmplPath); readErr == nil {
 				p := string(data)
 				p = strings.ReplaceAll(p, "{{TASK_ID}}", taskID)
 				p = strings.ReplaceAll(p, "{{TASK_CONTEXT}}", full)
 
-				screenshots := prompt.ScreenshotsForBead(ralphDir, taskID)
+				screenshots := prompt.ScreenshotsForBead(l.cfg.Dirs.RalphDir, taskID)
 				p += prompt.FormatScreenshotContext(screenshots)
 
 				return p
@@ -39,21 +39,25 @@ func buildTaskPrompt(nextTask, taskID string, backend tasks.Backend, promptsDir,
 	return fmt.Sprintf("Complete this task (bd id: %s): %s", taskID, nextTask)
 }
 
-func buildPrompt(taskPrompt, attemptHistory, testStatus string, backend tasks.Backend, promptsDir, projectDir, workDir, ralphDir, planFile string, signals claude.SignalPaths) (string, error) {
-	tasksContext, err := backend.ProjectContext()
+// buildPrompt assembles the full prompt for the agent from the task prompt,
+// attempt history, test status, and tasks context fetched from the backend.
+// Reads l.cfg.TaskBackend, l.cfg.Dirs.*, l.cfg.PlanFile, and l.signals via
+// the receiver.
+func (l *Loop) buildPrompt(taskPrompt, attemptHistory, testStatus string) (string, error) {
+	tasksContext, err := l.cfg.TaskBackend.ProjectContext()
 	if err != nil {
 		logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ProjectContext: %v", err)
 	}
 
 	return prompt.BuildPrompt(prompt.Vars{
-		PromptsDir:       promptsDir,
-		ProjectDir:       projectDir,
-		WorkDir:          workDir,
-		RalphDir:         ralphDir,
-		PlanFile:         planFile,
-		SignalToken:      signals.Complete,
-		CurrentTaskToken: signals.CurrentTask,
-		AllCompleteToken: signals.AllComplete,
+		PromptsDir:       l.cfg.Dirs.PromptsDir,
+		ProjectDir:       l.cfg.Dirs.ProjectDir,
+		WorkDir:          l.git.GetWorkDir(),
+		RalphDir:         l.cfg.Dirs.RalphDir,
+		PlanFile:         l.cfg.PlanFile,
+		SignalToken:      l.signals.Complete,
+		CurrentTaskToken: l.signals.CurrentTask,
+		AllCompleteToken: l.signals.AllComplete,
 		TaskPrompt:       taskPrompt,
 		AttemptHistory:   attemptHistory,
 		TestStatus:       testStatus,
@@ -62,19 +66,20 @@ func buildPrompt(taskPrompt, attemptHistory, testStatus string, backend tasks.Ba
 	})
 }
 
-// buildAttemptContext assembles attempt history, reflections, and cross-task
+// attemptContext assembles attempt history, reflections, and cross-task
 // learnings into a single block for the prompt. Returns empty string if no
-// prior context exists.
-func buildAttemptContext(taskID, taskName string, tracker *attempts.Tracker, ralphDir string) string {
+// prior context exists. Reads l.attempts and l.cfg.Dirs.RalphDir via the
+// receiver.
+func (l *Loop) attemptContext(taskID, taskName string) string {
 	var parts []string
 
 	// Same-task attempt history (retries of this specific task)
-	if history := tracker.Read(taskID, taskName); history != "" {
+	if history := l.attempts.Read(taskID, taskName); history != "" {
 		parts = append(parts, "## Previous attempts on this task\n"+history)
 	}
 
 	// Same-task reflection
-	if reflection := readReflection(ralphDir, taskID, taskName); reflection != "" {
+	if reflection := readReflection(l.cfg.Dirs.RalphDir, taskID, taskName); reflection != "" {
 		parts = append(parts, "### Previous reflection\n"+reflection)
 	}
 
@@ -84,7 +89,7 @@ func buildAttemptContext(taskID, taskName string, tracker *attempts.Tracker, ral
 		excludeKey = git.Slugify(taskName)
 	}
 
-	reflections := tracker.RecentReflections(excludeKey, maxCrossTaskReflections)
+	reflections := l.attempts.RecentReflections(excludeKey, maxCrossTaskReflections)
 	if len(reflections) > 0 {
 		var crossParts []string
 		for _, r := range reflections {
@@ -97,7 +102,8 @@ func buildAttemptContext(taskID, taskName string, tracker *attempts.Tracker, ral
 }
 
 // readReflection returns the content of a previous reflection file for a task.
-// Uses task ID if available, falls back to slugified task name.
+// Uses task ID if available, falls back to slugified task name. Pure data
+// helper — takes only paths and string keys.
 func readReflection(ralphDir, taskID, taskName string) string {
 	key := taskID
 	if key == "" {
