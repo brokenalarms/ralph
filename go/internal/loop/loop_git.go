@@ -46,7 +46,7 @@ func (l *Loop) closeResumedTask(ctx context.Context, taskID, taskTitle string, r
 		return
 	}
 	if ctx.Err() != nil {
-		logging.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", taskID)
+		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", taskID)
 		return
 	}
 	prRef := prURL(l.git.RemoteURL(), result.PRNumber)
@@ -75,16 +75,16 @@ func (l *Loop) closeResumedTask(ctx context.Context, taskID, taskTitle string, r
 	if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
 		skipReason := "close_failed"
 		if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
-			logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", taskID, blockers)
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", taskID, blockers)
 			skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
 		} else {
-			logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
 		}
 		l.skipTask(taskID, skipReason)
 	} else {
-		logging.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", taskID, closeReason)
+		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", taskID, closeReason)
 		if err := l.state.AddCompletedTask(taskID, merged); err != nil {
-			logging.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
+			l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
 		}
 	}
 }
@@ -136,7 +136,7 @@ func (l *Loop) flushUnpushedWork(ctx context.Context, lastTaskMerged bool) {
 	taskDesc, _ := l.state.Read("last_task")
 	merged, err := l.git.FlushUnpushedWork(ctx, taskID, taskDesc, l.cfg.AutoMerge && !lastTaskMerged)
 	if err != nil {
-		logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Flush: %v", err)
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Flush: %v", err)
 	}
 	if merged {
 		notify.TaskMerged(taskID, taskDesc)

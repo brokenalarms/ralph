@@ -144,10 +144,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	}
 	defer logFileWriter.Close()
 	log = logging.New(logFileWriter)
-	// Install the configured logger as the package-level default so every
-	// caller can use logging.Emit(...) instead of threading a *Logger field
-	// or parameter through every struct and helper.
-	logging.SetDefault(log)
 
 	// Initialize task backend.
 	backend, err := initTaskBackend(cfg, promptsDir, log)
@@ -240,7 +236,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		OnIterationStart: func() {
 			generateResumeScript(cfg, ralphDir, scriptPath, args, log)
 		},
-	}, st, gm)
+	}, st, gm, log)
 
 	if err := execLoop.Run(ctx); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Execution failed: %v", err)

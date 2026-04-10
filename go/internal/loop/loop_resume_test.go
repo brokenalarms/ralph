@@ -7,6 +7,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -48,10 +49,10 @@ func TestResumeTask_HandledFalseRunsAgent(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
-	l.cfg.WaitForInternet = func(context.Context) bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	if err := l.Run(context.Background()); err != nil {

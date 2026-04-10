@@ -18,13 +18,14 @@ import (
 // tasks remaining, without requiring any params struct.
 func TestPollForTasks_PackageFunction(t *testing.T) {
 	dir, st := setupTestDir(t)
-
+	logger := logging.New(nil)
 	backend := &testutil.StubBackend{Remaining: 1}
 	_ = dir
 
 	l := &Loop{
-		cfg:   Config{TaskBackend: backend},
-		state: st,
+		cfg:    Config{TaskBackend: backend},
+		state:  st,
+		logger: logger,
 	}
 	found, done := l.pollForTasks()
 
@@ -40,6 +41,7 @@ func TestPollForTasks_PackageFunction(t *testing.T) {
 // and returns true.
 func TestWaitForTasks_PackageFunction(t *testing.T) {
 	_, st := setupTestDir(t)
+	logger := logging.New(nil)
 
 	backend := &testutil.MutableBackend{
 		StubBackend: testutil.StubBackend{Remaining: 0},
@@ -56,7 +58,8 @@ func TestWaitForTasks_PackageFunction(t *testing.T) {
 				backend.Unlock()
 			},
 		},
-		state: st,
+		state:  st,
+		logger: logger,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -79,7 +82,7 @@ func TestBeginIteration_PackageFunction(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	task := taskContext{id: "ralph-abc", title: "Fix auth"}
 
-	l := &Loop{state: st, git: gm}
+	l := &Loop{state: st, git: gm, logger: logging.New(nil)}
 	l.beginIteration(task, 3)
 
 	storeState, _ := st.Load()
@@ -100,7 +103,7 @@ func TestWaitForRate_AllowsWhenUnderLimit(t *testing.T) {
 	l := New(Config{
 		Dirs:         workctx.WorkContext{RalphDir: ralphDir},
 		CallsPerHour: 80,
-	}, st, &git.StubRepo{})
+	}, st, &git.StubRepo{}, logging.New(nil))
 
 	allowed := l.waitForRate(context.Background())
 
@@ -121,12 +124,13 @@ func TestLogIterationBanner_PackageFunction(t *testing.T) {
 	}
 
 	var logBuf bytes.Buffer
-	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&logBuf)))
+	logger := logging.NewWithWriter(&logBuf)
 	task := taskContext{id: "ralph-abc", title: "Fix login"}
 
 	l := &Loop{
-		cfg:   Config{TaskBackend: backend},
-		state: st,
+		cfg:    Config{TaskBackend: backend},
+		state:  st,
+		logger: logger,
 	}
 	l.logIterationBanner(logIterationBannerParams{version: "1.0.0"}, 1, 10, 1, task, analyzer.Warn)
 

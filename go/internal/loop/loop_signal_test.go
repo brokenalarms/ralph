@@ -34,6 +34,7 @@ func TestVerifier_runFixAgent(t *testing.T) {
 			IdleTimeout: 30 * time.Second,
 		},
 		deps: VerifierDeps{
+			Logger:  logging.New(nil),
 			Runner:  func() claudeRunner { return mainRunner },
 			Signals: signals,
 			NewRunner: func() claudeRunner {
@@ -87,6 +88,7 @@ func TestVerifier_runFixAgent_logsSummary(t *testing.T) {
 			IdleTimeout: 30 * time.Second,
 		},
 		deps: VerifierDeps{
+			Logger:  logging.NewWithWriter(&logBuf),
 			Runner:  func() claudeRunner { return &stubRunner{} },
 			Signals: signals,
 			NewRunner: func() claudeRunner {
@@ -94,7 +96,6 @@ func TestVerifier_runFixAgent_logsSummary(t *testing.T) {
 			},
 		},
 	}
-	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&logBuf)))
 
 	ctx := context.Background()
 	v.runFixAgent(ctx, "test failures", "fix the tests", "/work", "/logs/raw.log")
@@ -128,7 +129,7 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var logBuf bytes.Buffer
-	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&logBuf)))
+	logger := logging.NewWithWriter(&logBuf)
 
 	fixAgentCalled := false
 
@@ -143,7 +144,7 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		VerifyDir:     dir,
-	}, st, gm)
+	}, st, gm, logger)
 
 	l.cfg.NewRunner = func() claudeRunner {
 		fixAgentCalled = true
@@ -195,6 +196,7 @@ func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -207,7 +209,7 @@ func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		VerifyDir:     dir,
-	}, st, gm)
+	}, st, gm, logger)
 
 	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: false, Details: "missing error handling in parseConfig"}
@@ -256,7 +258,7 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var logBuf bytes.Buffer
-	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&logBuf)))
+	logger := logging.NewWithWriter(&logBuf)
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -269,7 +271,7 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		VerifyDir:     dir,
-	}, st, gm)
+	}, st, gm, logger)
 
 	llmCalls := 0
 	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
@@ -337,6 +339,7 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	logger := logging.New(nil)
 
 	fixAttempts := 0
 	l := New(Config{
@@ -350,7 +353,7 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		VerifyDir:     dir,
-	}, st, gm)
+	}, st, gm, logger)
 
 	l.cfg.NewRunner = func() claudeRunner {
 		fixAttempts++
@@ -404,7 +407,7 @@ func TestCompleteTask_CancelledCtx_NoCommits_BeadStaysOpen(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -449,7 +452,7 @@ func TestCompleteTask_CancelledCtx_NoPR_BeadStaysOpen(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -509,7 +512,7 @@ func TestCompleteTask_NoNewCommits_ExistingOpenPR_MergesViaFinalize(t *testing.T
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		AutoMerge:     true,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -585,7 +588,7 @@ func TestCompleteTask_NoNewCommits_ExistingMergedPR_ClosesDirectly(t *testing.T)
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		AutoMerge:     true,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -641,7 +644,7 @@ func TestCompleteTask_CancelledCtx_FinalizePR_BeadStaysOpen(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		AutoMerge:     false, // skip merge attempt, go straight to close
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 

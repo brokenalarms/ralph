@@ -9,6 +9,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -25,7 +26,7 @@ func loopForPromptTest(t *testing.T, dir, ralphDir, promptsDir string, backend *
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 }
 
 // Verifies that buildTaskPrompt includes the bd ID when one is present,
@@ -170,7 +171,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		VerifyDir:     dir,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 
 	// Capture the prompt passed to Claude
 	l.runner = &stubRunner{
@@ -257,7 +258,7 @@ func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.runner = &stubRunner{}
 
 	prep, ok := l.prepareAndBuildPrompt(context.Background(), "ralph-xyz", "Fix login")
@@ -328,7 +329,7 @@ func TestLoop_HasProgress_SnapshotsDiffState(t *testing.T) {
 				MaxIterations: 1,
 				CallsPerHour:  80,
 				TaskBackend:   backend,
-			}, st, gm)
+			}, st, gm, logging.New(nil))
 
 			var capturedHasProgress func() bool
 			l.runner = &stubRunner{

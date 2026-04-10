@@ -51,7 +51,7 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return false, "test suite failed"
@@ -125,7 +125,7 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return true, ""
@@ -195,7 +195,7 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		// VerifyDir deliberately not set
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -252,7 +252,7 @@ func TestLoop_CIFailureLeavesTaskOpen(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
@@ -309,7 +309,7 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
@@ -359,7 +359,7 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
@@ -406,7 +406,7 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.PRState = "OPEN"
@@ -470,7 +470,7 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.PRState = "OPEN"
@@ -481,7 +481,8 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	defer logging.SetDefault(logging.SetDefault(logging.New(&buf)))
+	logger := logging.New(&buf)
+	l.logger = logger
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
@@ -531,7 +532,7 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	gm.PRState = "OPEN"
@@ -595,7 +596,7 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 
 	gm.ShipResult = git.ShipResult{PRNumber: 50}
 	gm.PRState = "OPEN"
@@ -663,7 +664,7 @@ func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	gm.PRState = "OPEN"
@@ -722,7 +723,7 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		VerifyDir:     dir,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -825,7 +826,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 			}
 
 			var logBuf bytes.Buffer
-			defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&logBuf)))
+			logger := logging.NewWithWriter(&logBuf)
 
 			gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
@@ -846,7 +847,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				CallsPerHour:  80,
 				TaskBackend:   backend,
 				VerifyDir:     dir,
-			}, st, gm)
+			}, st, gm, logger)
 			l.runner = runner
 			l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
 				return llmResult

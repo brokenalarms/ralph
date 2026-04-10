@@ -9,6 +9,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -69,7 +70,7 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     false,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -119,7 +120,7 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -163,7 +164,7 @@ func TestLoop_PushCalledAfterSignal(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true, OnSignalUsed: true},
@@ -196,6 +197,7 @@ func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
 		},
 	}
 
+	logger := logging.New(nil)
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
@@ -220,7 +222,7 @@ func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Wait:          false,
-	}, st, gm)
+	}, st, gm, logger)
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -255,6 +257,7 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 		},
 	}
 
+	logger := logging.New(nil)
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
@@ -280,10 +283,10 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Wait:          true,
-	}, st, gm)
+	}, st, gm, logger)
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
-	l.cfg.WaitForInternet = func(context.Context) bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	waitEntered := make(chan struct{}, 1)
@@ -323,6 +326,7 @@ func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
 		},
 	}
 
+	logger := logging.New(nil)
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
@@ -347,7 +351,7 @@ func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
 		TaskBackend:   backend,
 		AutoMerge:     true,
 		Wait:          false,
-	}, st, gm)
+	}, st, gm, logger)
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -380,6 +384,7 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 		},
 	}
 
+	logger := logging.New(nil)
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
@@ -406,10 +411,10 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 		TaskBackend:   backend,
 		AutoMerge:     true,
 		Wait:          true,
-	}, st, gm)
+	}, st, gm, logger)
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
-	l.cfg.WaitForInternet = func(context.Context) bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	waitEntered := make(chan struct{}, 1)
@@ -448,6 +453,7 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 		},
 	}
 
+	logger := logging.New(nil)
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
@@ -472,7 +478,7 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 		TaskBackend:   backend,
 		AutoMerge:     false,
 		Wait:          false,
-	}, st, gm)
+	}, st, gm, logger)
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -508,6 +514,7 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 		},
 	}
 
+	logger := logging.New(nil)
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
@@ -532,7 +539,7 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 		TaskBackend:   backend,
 		AutoMerge:     true,
 		Wait:          false,
-	}, st, gm)
+	}, st, gm, logger)
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 999}
 	gm.MergeRetryResult = true
@@ -572,6 +579,7 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 		},
 	}
 
+	logger := logging.New(nil)
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
@@ -596,7 +604,7 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 		TaskBackend:   backend,
 		AutoMerge:     true,
 		Wait:          false,
-	}, st, gm)
+	}, st, gm, logger)
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -662,10 +670,10 @@ func TestLoop_ShipRetriesOnTransientGitHubError(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
-	l.cfg.WaitForInternet = func(context.Context) bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	l.cfg.ShipRetryBackoffs = []time.Duration{0, 0, 0}
 

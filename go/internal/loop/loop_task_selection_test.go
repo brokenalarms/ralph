@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -19,8 +20,9 @@ func newTestLoopForSelection(t *testing.T, backend *testutil.StubBackend) (*Loop
 			TaskBackend:   backend,
 			Dirs:          workctx.WorkContext{RalphDir: dir + "/.ralph"},
 		},
-		state: st,
-		git:   &git.StubRepo{ProjectDir: dir, WorkDir: dir},
+		state:  st,
+		git:    &git.StubRepo{ProjectDir: dir, WorkDir: dir},
+		logger: logging.New(nil),
 	}
 	return l, dir
 }
@@ -129,8 +131,9 @@ func TestSelectNextTask_FlushesUnpushedWorkWhenNoTasks(t *testing.T) {
 			TaskBackend:   backend,
 			Dirs:          workctx.WorkContext{RalphDir: dir + "/.ralph"},
 		},
-		state: st,
-		git:   stubGit,
+		state:  st,
+		git:    stubGit,
+		logger: logging.New(nil),
 	}
 
 	l.selectNextTask(context.Background(), selectNextTaskParams{

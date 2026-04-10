@@ -46,7 +46,7 @@ func (l *Loop) buildTaskPrompt(nextTask, taskID string) string {
 func (l *Loop) buildPrompt(taskPrompt, attemptHistory, testStatus string) (string, error) {
 	tasksContext, err := l.cfg.TaskBackend.ProjectContext()
 	if err != nil {
-		logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ProjectContext: %v", err)
+		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ProjectContext: %v", err)
 	}
 
 	return prompt.BuildPrompt(prompt.Vars{

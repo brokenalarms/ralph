@@ -74,7 +74,7 @@ type Config struct {
 	OnVerify        func(ctx context.Context, dir, headBefore string) (bool, string)
 	OnPostTask      func(ctx context.Context, taskID string, prNumber int, merged bool) // called instead of runPostTask when set
 	IsOnline        func() bool
-	WaitForInternet func(ctx context.Context) bool
+	WaitForInternet func(ctx context.Context, logger *logging.Logger) bool
 	OnWait          func()
 	NewRunner       func() claudeRunner
 	QueryFn         func(ctx context.Context, workDir, prompt, model string) (string, error)
@@ -99,6 +99,13 @@ type CompletedTask struct {
 
 // Loop orchestrates the execution phase: task selection, prompt building,
 // rate limiting, branch rotation, Claude invocation, and response analysis.
+//
+// The logger field holds the single cross-module exception to the
+// "no module objects passed through" rule. Logging is genuinely
+// cross-cutting — every package needs to log — and package-level state
+// would leak across parallel tests. The logger is constructed once in
+// cmd/ralph/main.go and threaded into Loop and other modules at
+// construction time. This is the only such exception in the codebase.
 type Loop struct {
 	cfg               Config
 	state             *state.Store
@@ -108,6 +115,7 @@ type Loop struct {
 	verifier          *Verifier
 	analyzer          *analyzer.Analyzer
 	attempts          *attempts.Tracker
+	logger            *logging.Logger
 	signals           claude.SignalPaths
 	completedTasks    []CompletedTask
 	activeReviewers   []git.Reviewer
@@ -115,16 +123,16 @@ type Loop struct {
 }
 
 // New creates an execution loop from the given configuration. All agent
-// invocations go through the centralized agent module. Logging goes through
-// the package-level logging.Default(); cmd/ralph configures it once at
-// startup via logging.SetDefault before constructing the loop.
-func New(cfg Config, st *state.Store, gm git.Ops) *Loop {
+// invocations go through the centralized agent module. The logger is the
+// single cross-module dependency threaded through Loop construction —
+// see the Loop type comment for the rationale.
+func New(cfg Config, st *state.Store, gm git.Ops, logger *logging.Logger) *Loop {
 	signals := claude.DefaultSignalPaths(cfg.Dirs.RalphDir)
 
 	limiter := ratelimit.New(cfg.Dirs.RalphDir, cfg.CallsPerHour)
 	limiter.StopFile = filepath.Join(cfg.Dirs.RalphDir, "stop")
 
-	agentRunner := agent.New(logging.Default())
+	agentRunner := agent.New(logger)
 
 	if cfg.CheckGitHub == nil {
 		cfg.CheckGitHub = checkGitHubConnectivity
@@ -148,12 +156,12 @@ func New(cfg Config, st *state.Store, gm git.Ops) *Loop {
 	if cfg.WaitForInternet == nil {
 		interval := cfg.InternetRestoreInterval
 		checkTimeout := cfg.ConnectivityCheckTimeout
-		cfg.WaitForInternet = func(ctx context.Context) bool {
-			return waitForInternet(ctx, interval, checkTimeout)
+		cfg.WaitForInternet = func(ctx context.Context, logger *logging.Logger) bool {
+			return waitForInternet(ctx, logger, interval, checkTimeout)
 		}
 	}
 	if cfg.NewRunner == nil {
-		cfg.NewRunner = func() claudeRunner { return agent.New(logging.Default()) }
+		cfg.NewRunner = func() claudeRunner { return agent.New(logger) }
 	}
 	if cfg.QueryFn == nil {
 		cfg.QueryFn = agentRunner.Query
@@ -177,6 +185,7 @@ func New(cfg Config, st *state.Store, gm git.Ops) *Loop {
 		runner:   agentRunner,
 		analyzer: analyzer.New(),
 		attempts: at,
+		logger:   logger,
 		signals:  signals,
 	}
 	l.verifier = NewVerifier(VerifierConfig{
@@ -193,6 +202,7 @@ func New(cfg Config, st *state.Store, gm git.Ops) *Loop {
 		TestTimeout:           cfg.TestTimeout,
 		CompileCheckTimeout:   cfg.CompileCheckTimeout,
 	}, VerifierDeps{
+		Logger:      logger,
 		Git:         gm,
 		State:       st,
 		TaskBackend: cfg.TaskBackend,
@@ -218,12 +228,12 @@ func (l *Loop) skipTask(id, reason string) {
 	if id == "" {
 		return
 	}
-	logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Skipping task %s: %s", id, reason)
+	l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Skipping task %s: %s", id, reason)
 	if err := l.cfg.TaskBackend.SkipTask(id, reason); err != nil {
-		logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to skip task %s in backend: %v", id, err)
+		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to skip task %s in backend: %v", id, err)
 	}
 	if err := l.state.AddSkippedTask(id); err != nil {
-		logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to persist skip for %s: %v", id, err)
+		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to persist skip for %s: %v", id, err)
 	}
 	skipped, _ := l.state.GetSkippedTasks()
 	l.cfg.TaskBackend.SetSkippedIDs(skipped)
@@ -238,19 +248,19 @@ func (l *Loop) ensureActiveReviewers() {
 	l.reviewersDetected = true
 	reviewers, err := l.git.DetectActiveReviewers()
 	if err != nil {
-		logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Could not detect active reviewers: %v", err)
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Could not detect active reviewers: %v", err)
 		return
 	}
 	l.activeReviewers = reviewers
 	for _, r := range reviewers {
 		if r.AppSlug == "copilot-code-review" {
 			if r.ReviewOnPush {
-				logging.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=true)")
+				l.logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=true)")
 			} else {
-				logging.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=false, opportunistic)")
+				l.logger.Emit(logging.Opts{Domain: logging.Git}, "Copilot code review is enabled (review_on_push=false, opportunistic)")
 			}
 		} else {
-			logging.Emit(logging.Opts{Domain: logging.Git}, "%s code review is enabled", r.AppSlug)
+			l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s code review is enabled", r.AppSlug)
 		}
 	}
 }
@@ -274,10 +284,10 @@ func (l *Loop) waitForRate(ctx context.Context) bool {
 		return true
 	}
 
-	logging.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Rate limit reached (%d/%d calls this hour)", l.limiter.Count(), l.cfg.CallsPerHour)
+	l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn}, "Rate limit reached (%d/%d calls this hour)", l.limiter.Count(), l.cfg.CallsPerHour)
 
 	err := l.limiter.WaitForReset(ctx, func(secs int) {
-		logging.Emit(logging.Opts{Domain: logging.LLM}, "Rate limit: %ds until reset", secs)
+		l.logger.Emit(logging.Opts{Domain: logging.LLM}, "Rate limit: %ds until reset", secs)
 	})
 	return err == nil
 }
@@ -294,7 +304,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 		agentModel = l.cfg.AgentEscalationModel
 	}
 	agentModel = verify.CapModel(l.cfg.ModelCap, agentModel)
-	logging.Emit(logging.Opts{Domain: logging.LLM, Model: agentModel}, "Agent model: %s", agentModel)
+	l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: agentModel}, "Agent model: %s", agentModel)
 	result, runErr := l.runner.Run(claude.RunConfig{
 		Ctx:                 ctx,
 		WorkDir:             prep.workDir,
@@ -442,7 +452,7 @@ iterLoop:
 		}
 
 		if err := l.maybeRefactor(ctx, len(sessionTasks)); err != nil {
-			logging.Emit(logging.Opts{Level: logging.Warn}, "Refactor iteration error: %v", err)
+			l.logger.Emit(logging.Opts{Level: logging.Warn}, "Refactor iteration error: %v", err)
 		}
 
 		if l.cfg.OnIterationStart != nil {
@@ -474,7 +484,7 @@ iterLoop:
 			ReviewAddressed: l.reviewAddressedForTask(task.id, l.activeReviewers),
 		})
 		if resumeErr != nil {
-			logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "ResumeTask: %v", resumeErr)
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "ResumeTask: %v", resumeErr)
 		}
 		if resumeResult.PRURLToStore != "" && task.id != "" {
 			_ = l.cfg.TaskBackend.SetExternalRef(task.id, resumeResult.PRURLToStore)
@@ -549,8 +559,8 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 		result, err := l.git.Ship(ctx, opts)
 		if err != nil {
 			if !l.cfg.IsOnline() {
-				logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed — internet appears down")
-				l.cfg.WaitForInternet(ctx)
+				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed — internet appears down")
+				l.cfg.WaitForInternet(ctx, l.logger)
 				result, err = l.git.Ship(ctx, opts)
 			} else if isTransientGitHubError(err) {
 				backoffs := l.cfg.ShipRetryBackoffs
@@ -561,7 +571,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 					if err == nil {
 						break
 					}
-					logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed with transient error (%v) — retrying in %s", err, delay)
+					l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed with transient error (%v) — retrying in %s", err, delay)
 					select {
 					case <-ctx.Done():
 						return result, err
@@ -571,7 +581,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 				}
 			}
 			if err != nil {
-				logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship: %v", err)
+				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship: %v", err)
 			}
 		}
 		return result, err
@@ -590,9 +600,9 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 			ref = prURL(l.git.RemoteURL(), result.PRNumber)
 		}
 		if ref != "" {
-			logging.Emit(logging.Opts{Domain: logging.Git}, "Linking task %s to %s (branch: %s)", taskID, ref, l.git.GetWorktreeBranch())
+			l.logger.Emit(logging.Opts{Domain: logging.Git}, "Linking task %s to %s (branch: %s)", taskID, ref, l.git.GetWorktreeBranch())
 			if refErr := l.cfg.TaskBackend.SetExternalRef(taskID, ref); refErr != nil {
-				logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetExternalRef: %v", refErr)
+				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetExternalRef: %v", refErr)
 			}
 		}
 	}
@@ -631,7 +641,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 			ReviewAddressed: reviewAddressed,
 		})
 		if mergeErr != nil {
-			logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship (merge): %v", mergeErr)
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship (merge): %v", mergeErr)
 			return prResultNum, prResultURL, false, false, false
 		}
 		if mergeResult.ReviewFixNeeded {

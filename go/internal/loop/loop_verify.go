@@ -23,19 +23,19 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask
 
 	// Fix agent may leave uncommitted changes — commit them before checking HEAD.
 	if l.git.HasUncommittedChanges() {
-		logging.Emit(logging.Opts{Domain: logging.Git}, "Fix agent left uncommitted changes — auto-committing")
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent left uncommitted changes — auto-committing")
 		l.git.CommitAll("fix: auto-commit CI fix agent changes")
 	}
 
 	headAfter := l.git.HeadRev()
 	if headBefore == headAfter {
-		logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Fix agent made no new commits — likely infrastructure failure")
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Fix agent made no new commits — likely infrastructure failure")
 		return git.CIFixNoCommits
 	}
 
-	logging.Emit(logging.Opts{Domain: logging.Git}, "Fix agent committed — pushing")
+	l.logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent committed — pushing")
 	if err := l.git.Push(ctx); err != nil {
-		logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after CI fix failed: %v", err)
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after CI fix failed: %v", err)
 		return git.CIFixFailed
 	}
 	return git.CIFixApplied
@@ -54,12 +54,12 @@ func (l *Loop) tryFixConflict(ctx context.Context, taskID, nextTask, workDir, ra
 
 	headAfter := l.git.HeadRev()
 	if headBefore == headAfter {
-		logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Conflict agent made no new commits — nothing to push")
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Conflict agent made no new commits — nothing to push")
 		return false
 	}
 
 	if err := l.git.Push(ctx); err != nil {
-		logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after conflict resolution failed: %v", err)
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after conflict resolution failed: %v", err)
 		return false
 	}
 	return true
@@ -133,17 +133,17 @@ func formatReviewContext(reviewerName string, prNumber int, comments []git.Revie
 func (l *Loop) tryFixReviewComments(ctx context.Context, reviewerName string, review *git.AutoReview, prNumber int, nextTask, workDir, rawLogPath string) bool {
 	actionable := filterActionableComments(review.Comments)
 	if len(actionable) == 0 {
-		logging.Emit(logging.Opts{Domain: logging.Git}, "%s review: no actionable comments — proceeding to merge", reviewerName)
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s review: no actionable comments — proceeding to merge", reviewerName)
 		return false
 	}
 
-	logging.Emit(logging.Opts{Domain: logging.Git}, "%s review: %d actionable comment(s) — spawning fix agent", reviewerName, len(actionable))
+	l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s review: %d actionable comment(s) — spawning fix agent", reviewerName, len(actionable))
 	for _, c := range actionable {
 		firstLine := c.Body
 		if i := strings.IndexByte(c.Body, '\n'); i >= 0 {
 			firstLine = c.Body[:i]
 		}
-		logging.Emit(logging.Opts{Domain: logging.Git}, "%s: %s:%d — %s", reviewerName, c.Path, c.Line, firstLine)
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s: %s:%d — %s", reviewerName, c.Path, c.Line, firstLine)
 	}
 	reviewCtx := formatReviewContext(reviewerName, prNumber, actionable)
 	headBefore := l.git.HeadRev()
@@ -153,18 +153,18 @@ func (l *Loop) tryFixReviewComments(ctx context.Context, reviewerName string, re
 	}
 
 	if l.git.HasUncommittedChanges() {
-		logging.Emit(logging.Opts{Domain: logging.Git}, "Fix agent left uncommitted changes — auto-committing")
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent left uncommitted changes — auto-committing")
 		l.git.CommitAll("fix: address " + reviewerName + " review feedback")
 	}
 
 	if l.git.HeadRev() == headBefore {
-		logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%s fix agent made no new commits — proceeding to merge anyway", reviewerName)
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%s fix agent made no new commits — proceeding to merge anyway", reviewerName)
 		return false
 	}
 
-	logging.Emit(logging.Opts{Domain: logging.Git}, "%s fix committed — pushing", reviewerName)
+	l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s fix committed — pushing", reviewerName)
 	if err := l.git.Push(ctx); err != nil {
-		logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after %s fix failed: %v", reviewerName, err)
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after %s fix failed: %v", reviewerName, err)
 		return false
 	}
 	return true

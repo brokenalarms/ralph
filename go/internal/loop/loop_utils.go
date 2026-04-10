@@ -88,13 +88,14 @@ func isOnline(timeout time.Duration) bool {
 // waitForInternet blocks until internet connectivity is restored.
 // Shows a single updating line in the terminal log, writes one summary
 // line to the log file when restored. Returns false if context is cancelled.
-func waitForInternet(ctx context.Context, interval, checkTimeout time.Duration) bool {
+// The logger parameter is the cross-module exception — see Loop.logger.
+func waitForInternet(ctx context.Context, logger *logging.Logger, interval, checkTimeout time.Duration) bool {
 	if isOnline(checkTimeout) {
 		return true
 	}
 
 	start := time.Now()
-	logging.Emit(logging.Opts{Level: logging.Warn}, "Internet unreachable — waiting for connectivity...")
+	logger.Emit(logging.Opts{Level: logging.Warn}, "Internet unreachable — waiting for connectivity...")
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -106,11 +107,11 @@ func waitForInternet(ctx context.Context, interval, checkTimeout time.Duration) 
 		case <-ticker.C:
 			if isOnline(checkTimeout) {
 				elapsed := time.Since(start).Truncate(time.Second)
-				logging.Emit(logging.Opts{Level: logging.Success}, "Internet restored after %s", elapsed)
+				logger.Emit(logging.Opts{Level: logging.Success}, "Internet restored after %s", elapsed)
 				return true
 			}
 			elapsed := time.Since(start).Truncate(time.Second)
-			logging.Emit(logging.Opts{}, "Internet still unreachable (%s elapsed)", elapsed)
+			logger.Emit(logging.Opts{}, "Internet still unreachable (%s elapsed)", elapsed)
 		}
 	}
 }
@@ -134,6 +135,7 @@ type runVerifyBuildParams struct {
 	verifyBuild string
 	projectDir  string
 	testTimeout time.Duration
+	logger      *logging.Logger
 }
 
 // runVerifyBuild executes the --verify-build script if configured. Runs in
@@ -148,14 +150,14 @@ func runVerifyBuild(ctx context.Context, p runVerifyBuildParams) string {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "-c", p.verifyBuild)
 	cmd.Dir = p.projectDir
-	logging.Emit(logging.Opts{Domain: "build"}, "Running verify-build: %s", p.verifyBuild)
+	p.logger.Emit(logging.Opts{Domain: "build"}, "Running verify-build: %s", p.verifyBuild)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		logging.Emit(logging.Opts{Domain: "build", Level: logging.Success}, "Build health check passed")
+		p.logger.Emit(logging.Opts{Domain: "build", Level: logging.Success}, "Build health check passed")
 		return ""
 	}
 	output := strings.TrimSpace(string(out))
-	logging.Emit(logging.Opts{Domain: "build", Level: logging.Warn}, "Build health check failed: %v", err)
+	p.logger.Emit(logging.Opts{Domain: "build", Level: logging.Warn}, "Build health check failed: %v", err)
 	msg := "\n- BUILD IS BROKEN. Fix the build before working on your task. Do not start the task until the build is healthy."
 	if output != "" {
 		msg += "\n  Build failure output:\n  " + strings.ReplaceAll(output, "\n", "\n  ")
@@ -167,6 +169,7 @@ type runPostTaskParams struct {
 	postTask    string
 	worktreeDir string
 	projectDir  string
+	logger      *logging.Logger
 }
 
 // runPostTask executes the post-task script if configured. Checks for a
@@ -181,13 +184,13 @@ func runPostTask(ctx context.Context, p runPostTaskParams, taskID string, prNumb
 	if tc != nil {
 		script = tc.Cmd + " " + strings.Join(tc.Args, " ")
 		scriptDir = tc.Dir
-		logging.Emit(logging.Opts{Domain: "post-task"}, "Detected ralph:post-task script: %s (in %s)", script, scriptDir)
+		p.logger.Emit(logging.Opts{Domain: "post-task"}, "Detected ralph:post-task script: %s (in %s)", script, scriptDir)
 	} else if p.postTask != "" {
 		script = p.postTask
 		scriptDir = p.projectDir
-		logging.Emit(logging.Opts{Domain: "post-task"}, "Using --post-task CLI flag: %s (in %s)", script, scriptDir)
+		p.logger.Emit(logging.Opts{Domain: "post-task"}, "Using --post-task CLI flag: %s (in %s)", script, scriptDir)
 	} else {
-		logging.Emit(logging.Opts{Domain: "post-task"}, "No ralph:post-task script found in package.json and no --post-task CLI flag — skipping post-task")
+		p.logger.Emit(logging.Opts{Domain: "post-task"}, "No ralph:post-task script found in package.json and no --post-task CLI flag — skipping post-task")
 		return
 	}
 	prStr := strconv.Itoa(prNumber)
@@ -200,8 +203,8 @@ func runPostTask(ctx context.Context, p runPostTaskParams, taskID string, prNumb
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	logging.Emit(logging.Opts{Domain: "post-task"}, "Running %s (task=%s pr=%d merged=%t)", script, taskID, prNumber, merged)
+	p.logger.Emit(logging.Opts{Domain: "post-task"}, "Running %s (task=%s pr=%d merged=%t)", script, taskID, prNumber, merged)
 	if err := cmd.Run(); err != nil {
-		logging.Emit(logging.Opts{Domain: "post-task", Level: logging.Warn}, "Script exited with error: %v", err)
+		p.logger.Emit(logging.Opts{Domain: "post-task", Level: logging.Warn}, "Script exited with error: %v", err)
 	}
 }

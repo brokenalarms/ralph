@@ -9,6 +9,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
@@ -27,7 +28,7 @@ func loopWithBackend(t *testing.T, backend tasks.Backend) *Loop {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 }
 
 // (l *Loop).prBody assembles description, acceptance criteria, and agent
@@ -151,7 +152,7 @@ func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *tes
 		TaskBackend: backend,
 		AutoMerge:   autoMerge,
 		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	return finalizeSetup{
 		loop: l,
@@ -311,7 +312,7 @@ func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testi
 		TaskBackend: backend,
 		AutoMerge:   false,
 		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	p := completeTaskParams{
@@ -496,7 +497,7 @@ func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
 	l := New(Config{
 		TaskBackend: backend,
 		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, &git.StubRepo{ProjectDir: dir, WorkDir: dir})
+	}, st, &git.StubRepo{ProjectDir: dir, WorkDir: dir}, logging.New(nil))
 
 	l.skipTask("ralph-xyz", "merge_failed")
 
@@ -522,7 +523,7 @@ func TestSkipTask_EmptyID(t *testing.T) {
 	l := New(Config{
 		TaskBackend: backend,
 		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, &git.StubRepo{ProjectDir: dir, WorkDir: dir})
+	}, st, &git.StubRepo{ProjectDir: dir, WorkDir: dir}, logging.New(nil))
 
 	l.skipTask("", "reason")
 

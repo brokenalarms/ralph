@@ -217,26 +217,34 @@ func (r *Repo) BranchForTask(ctx context.Context, ...) (string, error) { ... }
 The line: methods + public API → module → call only the API, never field
 access. No methods, no API → state organization → field access fine.
 
-### 5. Logger is imported, not held
+### 5. Logger is the single named cross-module exception
 
-`logging` provides package-level functions (`logging.Emit(opts, format,
-args...)`). It is not a module that needs DI. No struct holds a
-`*logging.Logger` field; no function takes a `*logging.Logger` parameter.
-Where logging is needed, the package imports `logging` and calls
-`logging.Emit(...)` directly. The same applies to any future stateless
-utility package.
+`*logging.Logger` is the **only** module type allowed to be passed
+through, held as a struct field, or used as a function parameter. Logging
+is genuinely cross-cutting — every package needs to log — and
+package-level state would leak across parallel tests. So the logger gets
+constructed once in `cmd/ralph/main.go` and threaded through `loop.New`
+and module constructors that need it.
+
+This is the only such exception in the codebase. Every other module
+follows the no-passing-through rule strictly. The exception is named in
+the spec, named in the arch tests (or rather: those tests are explicit
+no-ops with a comment pointing here), and applies to no other type.
 
 ```go
-// Forbidden
-type Verifier struct {
-    logger *logging.Logger  // ❌
+// Allowed — logger is the named exception.
+type Loop struct {
+    logger *logging.Logger
+    // ... other state
 }
-func helper(logger *logging.Logger, msg string) { ... }  // ❌
 
-// Correct
-import "github.com/brokenalarms/ralph/internal/logging"
-func helper(msg string) {
-    logging.Emit(logging.Opts{Domain: logging.Git}, "%s", msg)
+func New(cfg Config, st *state.Store, gm git.Ops, logger *logging.Logger) *Loop {
+    return &Loop{logger: logger, ...}
+}
+
+// Forbidden — git.Ops is not the exception.
+type Verifier struct {
+    git git.Ops  // ❌ — only Loop holds module references
 }
 ```
 

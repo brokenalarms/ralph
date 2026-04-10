@@ -10,6 +10,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -72,10 +73,10 @@ func TestRun_ExitsOnGitHubUnreachable(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   &testutil.TrackingBackend{},
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 
 	l.cfg.IsOnline = func() bool { return true }
-	l.cfg.WaitForInternet = func(context.Context) bool { return true }
+	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
 	l.cfg.CheckGitHub = func(context.Context) error {
 		return errors.New("GitHub connectivity check timed out after 10s")
 	}
@@ -115,7 +116,7 @@ func TestLoopTaskDescription_Standalone(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 
 	if got := l.taskDescription("ralph-abc"); got != "Fix auth middleware" {
 		t.Errorf("expected description, got %q", got)
@@ -130,7 +131,7 @@ func TestLoopTaskDescription_Standalone(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   nil,
-	}, st, gm)
+	}, st, gm, logging.New(nil))
 	if got := lNil.taskDescription("ralph-abc"); got != "" {
 		t.Errorf("nil backend should return empty, got %q", got)
 	}
