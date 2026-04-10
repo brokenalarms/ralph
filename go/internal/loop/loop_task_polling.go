@@ -96,6 +96,6 @@ func (l *Loop) logIterationBanner(p logIterationBannerParams, runIteration, maxI
 		Priority:     task.info.Priority,
 		Version:      p.version,
 		WarnPhase:    lastAction == analyzer.Warn,
-		Description:  getTaskDescription(l.cfg.TaskBackend, task.id),
+		Description:  l.taskDescription(task.id),
 	})
 }

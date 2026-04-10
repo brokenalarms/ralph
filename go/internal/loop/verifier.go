@@ -111,8 +111,8 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 		logging.Emit(logging.Opts{Domain: logging.Test}, "Tests passed (%s)", elapsed)
 	}
 
-	taskDesc := getTaskDescription(v.deps.TaskBackend, p.taskID)
-	taskAcceptance := getTaskAcceptance(v.deps.TaskBackend, p.taskID)
+	taskDesc := v.taskDescription(p.taskID)
+	taskAcceptance := v.taskAcceptance(p.taskID)
 
 	if !testResult.Passed {
 		if testResult.ScriptMissing {
@@ -617,11 +617,29 @@ func (v *Verifier) loadVerifyPrompt(filename string, vars map[string]string) str
 	return s
 }
 
-func getTaskAcceptance(backend tasks.Backend, taskID string) string {
-	if taskID == "" || backend == nil {
+// taskDescription fetches the task description from the verifier's
+// configured backend, returning empty string when none exists.
+// Reads v.deps.TaskBackend via the receiver. The Verifier struct will be
+// stripped in C6, at which point these helpers move to Loop methods.
+func (v *Verifier) taskDescription(taskID string) string {
+	if taskID == "" || v.deps.TaskBackend == nil {
 		return ""
 	}
-	ac, err := backend.GetAcceptance(taskID)
+	desc, err := v.deps.TaskBackend.GetDescription(taskID)
+	if err != nil {
+		return ""
+	}
+	return desc
+}
+
+// taskAcceptance fetches the task acceptance criteria from the verifier's
+// configured backend, returning empty string when none exist.
+// Reads v.deps.TaskBackend via the receiver.
+func (v *Verifier) taskAcceptance(taskID string) string {
+	if taskID == "" || v.deps.TaskBackend == nil {
+		return ""
+	}
+	ac, err := v.deps.TaskBackend.GetAcceptance(taskID)
 	if err != nil {
 		return ""
 	}

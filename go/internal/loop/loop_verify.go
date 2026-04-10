@@ -7,7 +7,6 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
-	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
 // tryFixCI spawns a fix agent to address CI failures, force-pushes the
@@ -47,7 +46,7 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask
 // merge retry). Mirrors tryFixCI.
 func (l *Loop) tryFixConflict(ctx context.Context, taskID, nextTask, workDir, rawLogPath string) bool {
 	conflictDiff := l.git.ConflictDiff()
-	taskDesc := getTaskDescription(l.cfg.TaskBackend, taskID)
+	taskDesc := l.taskDescription(taskID)
 	headBefore := l.git.HeadRev()
 	if !l.verifier.TryFixConflict(ctx, conflictDiff, taskDesc, nextTask, workDir, rawLogPath) {
 		return false
@@ -66,11 +65,14 @@ func (l *Loop) tryFixConflict(ctx context.Context, taskID, nextTask, workDir, ra
 	return true
 }
 
-func getTaskDescription(backend tasks.Backend, taskID string) string {
-	if taskID == "" || backend == nil {
+// taskDescription fetches the task description from the configured backend,
+// returning empty string when no description exists or the call fails.
+// Reads l.cfg.TaskBackend via the receiver.
+func (l *Loop) taskDescription(taskID string) string {
+	if taskID == "" || l.cfg.TaskBackend == nil {
 		return ""
 	}
-	desc, err := backend.GetDescription(taskID)
+	desc, err := l.cfg.TaskBackend.GetDescription(taskID)
 	if err != nil {
 		return ""
 	}

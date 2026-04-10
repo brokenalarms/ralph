@@ -104,21 +104,34 @@ func createPromptTemplates(t *testing.T, dir string) {
 	}
 }
 
-func TestGetTaskDescription_Standalone(t *testing.T) {
+// (l *Loop).taskDescription returns the backend's description for the
+// given task ID, or empty string for missing or nil backend cases.
+func TestLoopTaskDescription_Standalone(t *testing.T) {
+	dir, st := setupTestDir(t)
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	backend := &testutil.StubBackend{Description: "Fix auth middleware"}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   backend,
+	}, st, gm)
 
-	desc := getTaskDescription(backend, "ralph-abc")
-	if desc != "Fix auth middleware" {
-		t.Errorf("expected description, got %q", desc)
+	if got := l.taskDescription("ralph-abc"); got != "Fix auth middleware" {
+		t.Errorf("expected description, got %q", got)
+	}
+	if got := l.taskDescription(""); got != "" {
+		t.Errorf("empty taskID should return empty, got %q", got)
 	}
 
-	desc = getTaskDescription(backend, "")
-	if desc != "" {
-		t.Errorf("empty taskID should return empty, got %q", desc)
-	}
-
-	desc = getTaskDescription(nil, "ralph-abc")
-	if desc != "" {
-		t.Errorf("nil backend should return empty, got %q", desc)
+	// nil backend → empty
+	lNil := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		TaskBackend:   nil,
+	}, st, gm)
+	if got := lNil.taskDescription("ralph-abc"); got != "" {
+		t.Errorf("nil backend should return empty, got %q", got)
 	}
 }
