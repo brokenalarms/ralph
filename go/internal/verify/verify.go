@@ -12,15 +12,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/config"
 )
 
-// GitQuerier abstracts the git operations that verify needs, allowing the
-// package to work without calling git package-level functions directly.
-type GitQuerier interface {
-	HeadRev() string
-	DiffStatRange(from, to string) string
-	DiffFull(from, to string) string
-	LogOneline(from, to string) string
-}
-
 // Model IDs used as defaults for verification escalation.
 const (
 	ModelHaiku  = config.ModelHaiku
@@ -180,12 +171,11 @@ func RunTests(ctx context.Context, timeout time.Duration, dirs ...string) Result
 
 // CheckCommits returns a Result indicating whether HEAD moved since the
 // given baseline revision. A signal with no new commits is suspicious.
-func CheckCommits(gq GitQuerier, headBefore string) Result {
+// The caller pre-fetches headAfter so this function operates on data only.
+func CheckCommits(headBefore, headAfter string) Result {
 	if headBefore == "" {
 		return Result{Passed: true, Reason: "no baseline to compare"}
 	}
-
-	headAfter := gq.HeadRev()
 	if headAfter == "" {
 		return Result{Passed: true, Reason: "could not read HEAD"}
 	}
@@ -241,58 +231,41 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// PreflightResult describes the outcome of pre-verification checks.
-type PreflightResult struct {
-	FilesChanged bool
-	HasCommits   bool
-	BeadOpen     bool // true if bead is still in_progress (not prematurely closed)
-}
-
-// PreflightChecks runs lightweight shell checks before the full test suite.
-// These are cheap and catch obvious failures: no files changed, no commits,
-// or bead prematurely closed by the agent.
-func PreflightChecks(gq GitQuerier, headBefore string, beadStatus string) PreflightResult {
-	return PreflightResult{
-		FilesChanged: gq.DiffStatRange(headBefore, "HEAD") != "",
-		HasCommits:   gq.LogOneline(headBefore, "HEAD") != "",
-		BeadOpen:     beadStatus == "in_progress",
-	}
-}
-
-// VerifyOpts holds the parameters for LLMVerifyPR.
+// VerifyOpts holds the parameters for LLMVerifyPR. The caller pre-fetches
+// the diff (PR diff or iteration diff) and passes it as data — verify never
+// reaches into git itself.
 type VerifyOpts struct {
 	Ctx             context.Context
-	Git             GitQuerier
 	WorkDir         string
 	PromptsDir      string
 	TaskID          string
-	HeadBefore      string
 	BeadTitle       string
 	BeadDescription string
 	BeadAcceptance  string
-	PRDiff          string // pre-fetched PR diff; empty falls back to iteration diff
+	Diff            string // pre-fetched diff (PR diff preferred, fall back to iteration)
+	DiffSource      string // human label for the diff origin: "PR" or "iteration"
 	QueryFn         QueryFunc
 	Model           string
 }
 
 // LLMVerifyPR verifies that a task's acceptance criteria are satisfied.
-// Prefers the PR diff (which covers work from prior iterations) over the
-// current iteration's diff. Falls back to iteration diff when no PR exists.
+// The caller is responsible for choosing between PR diff and iteration diff
+// and passing it via opts.Diff. An empty Diff returns NoDiff=true.
 // Uses prompts/verify-review.md as the review template when available.
 // When QueryFn is non-nil, LLM calls go through the centralized agent module.
 func LLMVerifyPR(opts VerifyOpts) Result {
-	diff := opts.PRDiff
-	source := "PR"
+	diff := opts.Diff
 	if diff == "" {
-		diff = opts.Git.DiffFull(opts.HeadBefore, "HEAD")
-		if diff == "" {
-			return Result{Passed: true, NoDiff: true, Reason: "no PR found and no new commits — agent confirms task complete"}
-		}
-		source = "iteration"
+		return Result{Passed: true, NoDiff: true, Reason: "no PR found and no new commits — agent confirms task complete"}
 	}
 
 	if len(diff) > 100000 {
 		diff = diff[:100000] + "\n\n[diff truncated at 100000 chars]"
+	}
+
+	source := opts.DiffSource
+	if source == "" {
+		source = "PR"
 	}
 
 	prompt := loadReviewPrompt(opts.PromptsDir, opts.BeadTitle, opts.BeadDescription, opts.BeadAcceptance, source, diff)

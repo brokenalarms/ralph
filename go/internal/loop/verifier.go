@@ -100,7 +100,7 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 	v.llmVerifyAttempts = 0
 	v.testFixAttempts = 0
 
-	commitResult := verify.CheckCommits(v.deps.Git, p.headBefore)
+	commitResult := verify.CheckCommits(p.headBefore, v.deps.Git.HeadRev())
 	if !commitResult.Passed {
 		v.deps.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "No commits found — task was not worked")
 		return false
@@ -251,17 +251,17 @@ func (v *Verifier) verifyWithFixLoop(p signalParams, beadDesc, beadAcceptance st
 		v.llmVerifyAttempts++
 		model := v.verifyModel()
 		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Running LLM verification (attempt %d/%d)...", v.llmVerifyAttempts, v.cfg.MaxLLMVerifyAttempts)
+		diff, diffSource := v.fetchVerifyDiff(p.taskID, p.headBefore)
 		llmResult := v.deps.LLMVerify(verify.VerifyOpts{
 			Ctx:             p.ctx,
-			Git:             v.deps.Git,
 			WorkDir:         p.workDir,
 			PromptsDir:      v.cfg.PromptsDir,
 			TaskID:          p.taskID,
-			HeadBefore:      p.headBefore,
 			BeadTitle:       p.nextTask,
 			BeadDescription: beadDesc,
 			BeadAcceptance:  beadAcceptance,
-			PRDiff:          v.deps.Git.PRDiffForTask(p.taskID),
+			Diff:            diff,
+			DiffSource:      diffSource,
 			QueryFn:         v.deps.QueryFn,
 			Model:           model,
 		})
@@ -310,6 +310,20 @@ func (v *Verifier) tryFixVerification(p signalParams, beadDesc, beadAcceptance, 
 
 	fixResult := v.runFixAgent(p.ctx, "verification rejection", fixPrompt, p.workDir, p.rawLogPath)
 	return fixResult.SignalDetected
+}
+
+// fetchVerifyDiff returns the diff and its label to feed to LLMVerifyPR.
+// Prefers the PR diff (which covers prior iterations) and falls back to the
+// current iteration diff. Returns empty strings when neither is available —
+// LLMVerifyPR treats that as a no-op pass.
+func (v *Verifier) fetchVerifyDiff(taskID, headBefore string) (string, string) {
+	if diff := v.deps.Git.PRDiffForTask(taskID); diff != "" {
+		return diff, "PR"
+	}
+	if diff := v.deps.Git.DiffFull(headBefore, "HEAD"); diff != "" {
+		return diff, "iteration"
+	}
+	return "", ""
 }
 
 // ResetCounters resets the test and LLM verify attempt counters.
@@ -380,7 +394,7 @@ func (v *Verifier) VerifyCompletion(ctx context.Context, workDir, headBefore str
 		return true, ""
 	}
 
-	commitResult := verify.CheckCommits(v.deps.Git, headBefore)
+	commitResult := verify.CheckCommits(headBefore, v.deps.Git.HeadRev())
 	if !commitResult.Passed {
 		return false, commitResult.Reason
 	}

@@ -499,14 +499,23 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 	var buf bytes.Buffer
 	logger := logging.NewWithWriter(&buf)
 
-	v := newTestVerifier(t, func(v *Verifier) {
-		v.deps.Logger = logger
-		v.deps.NewRunner = func() claudeRunner {
-			return &stubRunner{result: stubResult(true, "fixed")}
-		}
-	})
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{HeadRevValue: "abc123"}
+	gm := &git.StubRepo{HeadRevValue: "abc123", ProjectDir: dir, WorkDir: dir}
+	l := New(Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		VerifyDir:     dir,
+	}, st, gm, logger)
+	l.verifier.deps.NewRunner = func() claudeRunner {
+		return &stubRunner{result: stubResult(true, "fixed")}
+	}
+
 	review := &git.AutoReview{
 		Comments: []git.ReviewComment{
 			{Path: "src/foo.go", Line: 42, Body: "Should use pointer receiver for consistency\nMore detail here"},
@@ -514,7 +523,7 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 		},
 	}
 
-	tryFixReviewComments(context.Background(), gm, v, logger, "copilot-pull-request-reviewer", review, 1, "task", t.TempDir(), t.TempDir()+"/raw.log")
+	l.tryFixReviewComments(context.Background(), "copilot-pull-request-reviewer", review, 1, "task", t.TempDir(), t.TempDir()+"/raw.log")
 
 	output := buf.String()
 	if !strings.Contains(output, "src/foo.go:42") {

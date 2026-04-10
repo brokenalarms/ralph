@@ -10,46 +10,14 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/config"
-	"github.com/brokenalarms/ralph/internal/git"
 )
 
-// dirQuerier implements GitQuerier for test repos by shelling out to git.
-type dirQuerier struct {
-	dir string
-}
-
-func (q *dirQuerier) HeadRev() string {
-	out, _ := exec.Command("git", "-C", q.dir, "rev-parse", "HEAD").Output()
+// gitHeadRev returns the current HEAD revision of the repo at dir,
+// shelling out to git so tests don't need a git package dependency.
+func gitHeadRev(dir string) string {
+	out, _ := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
 	return strings.TrimSpace(string(out))
 }
-
-func (q *dirQuerier) DiffStatRange(from, to string) string {
-	if from == "" || to == "" || from == to {
-		return ""
-	}
-	out, _ := exec.Command("git", "-C", q.dir, "diff", "--stat", from, to).Output()
-	return strings.TrimSpace(string(out))
-}
-
-func (q *dirQuerier) DiffFull(from, to string) string {
-	out, _ := exec.Command("git", "-C", q.dir, "diff", from+".."+to).Output()
-	return strings.TrimSpace(string(out))
-}
-
-func (q *dirQuerier) LogOneline(from, to string) string {
-	out, _ := exec.Command("git", "-C", q.dir, "log", "--oneline", from+".."+to).Output()
-	return strings.TrimSpace(string(out))
-}
-
-func newQuerier(dir string) *dirQuerier {
-	return &dirQuerier{dir: dir}
-}
-
-// Compile-time check that dirQuerier satisfies GitQuerier.
-var _ GitQuerier = (*dirQuerier)(nil)
-
-// Compile-time check that git.Repo satisfies GitQuerier.
-var _ GitQuerier = (*git.Repo)(nil)
 
 // DetectTestCommand finds a Makefile test target when present,
 // proving ralph can auto-detect the project's test runner.
@@ -303,10 +271,9 @@ func TestDetectPostTaskCommand_FallbackDir(t *testing.T) {
 // the case where Claude signals completion without making code changes.
 func TestCheckCommits_NoNewCommits(t *testing.T) {
 	dir := setupGitRepo(t)
-	gq := newQuerier(dir)
+	head := gitHeadRev(dir)
 
-	head := gq.HeadRev()
-	result := CheckCommits(gq, head)
+	result := CheckCommits(head, head)
 	if result.Passed {
 		t.Error("expected failure when HEAD hasn't moved")
 	}
@@ -319,16 +286,14 @@ func TestCheckCommits_NoNewCommits(t *testing.T) {
 // produced actual code changes before signaling completion.
 func TestCheckCommits_WithNewCommits(t *testing.T) {
 	dir := setupGitRepo(t)
-	gq := newQuerier(dir)
-
-	headBefore := gq.HeadRev()
+	headBefore := gitHeadRev(dir)
 
 	// Make a new commit
 	os.WriteFile(filepath.Join(dir, "new.txt"), []byte("change"), 0o644)
 	exec.Command("git", "-C", dir, "add", ".").Run()
 	exec.Command("git", "-C", dir, "commit", "-m", "new").Run()
 
-	result := CheckCommits(gq, headBefore)
+	result := CheckCommits(headBefore, gitHeadRev(dir))
 	if !result.Passed {
 		t.Errorf("expected pass with new commits, got: %s", result.Reason)
 	}
@@ -337,9 +302,7 @@ func TestCheckCommits_WithNewCommits(t *testing.T) {
 // CheckCommits passes when no baseline is provided (first iteration),
 // so we don't block on edge cases.
 func TestCheckCommits_EmptyBaseline(t *testing.T) {
-	gq := newQuerier(t.TempDir())
-
-	result := CheckCommits(gq, "")
+	result := CheckCommits("", "abc123")
 	if !result.Passed {
 		t.Errorf("expected pass with empty baseline, got: %s", result.Reason)
 	}
@@ -395,58 +358,6 @@ func TestFilterFailures_NoPassingLines(t *testing.T) {
 	}
 }
 
-// PreflightChecks detects when files changed and new commits exist,
-// confirming the orchestrator can verify work was done before running
-// the full test suite.
-func TestPreflightChecks_WithChanges(t *testing.T) {
-	dir := setupGitRepo(t)
-	gq := newQuerier(dir)
-	headBefore := gq.HeadRev()
-
-	os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main"), 0o644)
-	exec.Command("git", "-C", dir, "add", ".").Run()
-	exec.Command("git", "-C", dir, "commit", "-m", "add feature").Run()
-
-	result := PreflightChecks(gq, headBefore, "in_progress")
-	if !result.FilesChanged {
-		t.Error("expected FilesChanged=true after adding a file")
-	}
-	if !result.HasCommits {
-		t.Error("expected HasCommits=true after committing")
-	}
-	if !result.BeadOpen {
-		t.Error("expected BeadOpen=true when status is in_progress")
-	}
-}
-
-// PreflightChecks detects premature bead close when the agent
-// closes the task before the orchestrator verifies it.
-func TestPreflightChecks_PrematureClose(t *testing.T) {
-	dir := setupGitRepo(t)
-	gq := newQuerier(dir)
-	headBefore := gq.HeadRev()
-
-	result := PreflightChecks(gq, headBefore, "closed")
-	if result.BeadOpen {
-		t.Error("expected BeadOpen=false when status is closed (premature close)")
-	}
-}
-
-// PreflightChecks correctly reports no changes when HEAD hasn't moved.
-func TestPreflightChecks_NoChanges(t *testing.T) {
-	dir := setupGitRepo(t)
-	gq := newQuerier(dir)
-	headBefore := gq.HeadRev()
-
-	result := PreflightChecks(gq, headBefore, "in_progress")
-	if result.FilesChanged {
-		t.Error("expected FilesChanged=false when no files changed")
-	}
-	if result.HasCommits {
-		t.Error("expected HasCommits=false when HEAD hasn't moved")
-	}
-}
-
 // loadReviewPrompt includes guidance that prompt/config changes are valid
 // implementations and that code-specific criteria (tests, error handling)
 // should not be required for non-code changes.
@@ -491,16 +402,12 @@ func TestLoadReviewPrompt_Fallback(t *testing.T) {
 // proving the struct-based API compiles and works end-to-end.
 func TestLLMVerifyPR_AcceptsVerifyOpts(t *testing.T) {
 	dir := setupGitRepo(t)
-	gq := newQuerier(dir)
-	head := gq.HeadRev()
 
 	result := LLMVerifyPR(VerifyOpts{
 		Ctx:             context.Background(),
-		Git:             gq,
 		WorkDir:         dir,
 		PromptsDir:      t.TempDir(),
 		TaskID:          "struct-test",
-		HeadBefore:      head,
 		BeadTitle:       "struct api test",
 		BeadDescription: "proves VerifyOpts struct works",
 		BeadAcceptance:  "accepts struct",
@@ -517,16 +424,12 @@ func TestLLMVerifyPR_AcceptsVerifyOpts(t *testing.T) {
 // LLMVerifyPR passes when no PR and no diff exist — agent confirmed task complete.
 func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
 	dir := setupGitRepo(t)
-	gq := newQuerier(dir)
-	head := gq.HeadRev()
 
 	result := LLMVerifyPR(VerifyOpts{
 		Ctx:             context.Background(),
-		Git:             gq,
 		WorkDir:         dir,
 		PromptsDir:      t.TempDir(),
 		TaskID:          "nonexistent-task",
-		HeadBefore:      head,
 		BeadTitle:       "some task",
 		BeadDescription: "some description",
 	})
@@ -538,23 +441,20 @@ func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
 	}
 }
 
-// LLMVerifyPR uses the pre-fetched PRDiff field when available,
-// preferring it over the iteration diff.
-func TestLLMVerifyPR_UsesPRDiffField(t *testing.T) {
+// LLMVerifyPR uses the pre-fetched Diff field when available, treating it
+// as the source of truth — verify never reaches into git itself.
+func TestLLMVerifyPR_UsesDiffField(t *testing.T) {
 	dir := setupGitRepo(t)
-	gq := newQuerier(dir)
-	head := gq.HeadRev()
 
 	result := LLMVerifyPR(VerifyOpts{
 		Ctx:             context.Background(),
-		Git:             gq,
 		WorkDir:         dir,
 		PromptsDir:      t.TempDir(),
 		TaskID:          "test-task",
-		HeadBefore:      head,
 		BeadTitle:       "test",
 		BeadDescription: "test desc",
-		PRDiff:          "+new line from PR\n",
+		Diff:            "+new line from PR\n",
+		DiffSource:      "PR",
 	})
 
 	// LLM call will fail (no claude binary in test), so we expect pass with skip reason
