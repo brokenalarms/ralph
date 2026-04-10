@@ -503,7 +503,7 @@ its own multi-hour focused commit.
 
 ### Commit C — `git.New(git.Config{...})` and stop field mutation in cmd/ralph
 
-**Rule 7.** The user's original concern in this PR thread.
+**Rule B.** The user's original concern in this PR thread.
 
 1. Add `git.Config` struct in the git package containing every value
    `cmd/ralph/main.go` currently mutates: `WorkDir`, `RalphDir`, `BaseBranch`,
@@ -523,6 +523,60 @@ its own multi-hour focused commit.
    value whose type comes from a foreign module package. Test stub
    types (`*git.StubRepo`) excluded by name explicitly in the
    whitelist, with a comment.
+
+### Commit C2 — Move PR body construction into git/github
+
+**Rule A** + the principle that modules own their domain's protocol
+formatting. The current `(l *Loop) prBody(taskID, summary string) string`
+in `loop_git.go` reads task description + acceptance from the backend,
+formats them as PR markdown, and passes the string into
+`git.Ship(ctx, ShipOpts{Body: ...})`. The orchestrator is doing
+GitHub-specific markdown formatting that belongs inside git/github.
+
+The corrected shape:
+
+1. Add `Description`, `Acceptance`, `Summary` fields to `git.ShipOpts`
+   (pure data — strings).
+2. Remove `Body` field from `git.ShipOpts`.
+3. `git.Repo.Ship` constructs the body internally by handing the data
+   to the github sub-module: `body := r.gh.formatPRBody(opts.TaskTitle,
+   opts.Description, opts.Acceptance, opts.Summary)`.
+4. The github sub-module owns the markdown format. Looks roughly like
+   the current `(l *Loop) prBody` body, but inside git/github.
+5. In Loop's `doShip`, pre-fetch the task data from the backend and
+   pass it as ShipOpts fields:
+   ```go
+   var desc, acceptance string
+   if taskID != "" {
+       desc, _ = l.taskBackend.GetDescription(taskID)
+       acceptance, _ = l.taskBackend.GetAcceptance(taskID)
+   }
+   result, err := l.git.Ship(ctx, git.ShipOpts{
+       TaskID:      taskID,
+       TaskTitle:   title,
+       Description: desc,
+       Acceptance:  acceptance,
+       Summary:     summary,
+       AutoMerge:   ...,
+       Reviewers:   ...,
+   })
+   ```
+6. Delete `(l *Loop) prBody` from `loop_git.go`.
+7. The `TestLoopPRBody_*` tests in `loop_finalize_test.go` move into
+   the git package as github sub-module unit tests, or get deleted as
+   redundant with end-to-end Ship tests.
+
+This is the same pattern as "git owns CI retry/backoff/healing
+internally and only escalates with structured stuck-state data" — the
+PR body's markdown format is git/github's protocol concern, and the
+orchestrator just hands over the underlying task data. The orchestrator
+never knows what `## Description` or `## Summary` means; it just
+populates the data fields.
+
+The Rule A check: after this commit, `git.ShipOpts` is pure data
+(`string` and `bool` and `[]Reviewer` fields, where `Reviewer` is a
+git-package data type). No module references. The orchestrator pre-
+fetches the data and hands it across the boundary as data.
 
 ### Commit D — Other modules get module-scoped Config structs
 
