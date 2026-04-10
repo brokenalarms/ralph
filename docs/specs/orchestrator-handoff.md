@@ -37,27 +37,88 @@ These are the rules as they stand after many corrections. Earlier
 versions of the spec contained loopholes and ambiguities that agents
 exploited. This list is the final form.
 
-### Rule 1 — Only `Loop` holds module references
+### Rule 0 — The single load-bearing rule that subsumes everything else
 
-Modules (`git.Repo`, `state.Store`, `tasks.Backend`, `attempts.Tracker`,
-`ratelimit.Limiter`, `agent.Agent`, etc.) are constructed once and held
-as **direct private fields** on the `Loop` struct. No other struct in
-the codebase holds a module reference. Specifically:
+**Module types from package P never appear in the public API surface
+of any other package, anywhere, in any form.**
+
+A module's public API surface is its exported names: function/method
+signatures (parameters and return values), exported struct field
+types, exported interface methods, and exported package-level
+variables. Inside its own package, a module is free to compose,
+mutate, and hold whatever internal state it needs — but nothing
+module-shaped escapes through the package's exported boundary.
+
+Every rule below is a corollary of Rule 0. The only named exception
+is `*logging.Logger` (rule 5), which is the single cross-cutting type
+allowed to cross package boundaries.
+
+If you find yourself debating whether some pattern is allowed, ask:
+**does it put a module type into the public API surface that other
+packages consume?** If yes, it's forbidden. If no (purely internal),
+it's fine. Every "trap" in the trap list below was a case where I
+violated this rule and then rationalized why it was OK.
+
+### Rule 1 — `Loop` is the only orchestrator that composes modules from other packages
+
+`Loop` is the orchestrator: its job is to compose modules from multiple
+packages (`git`, `state`, `tasks`, `attempts`, `ratelimit`, `agent`) and
+call them in sequence. Modules from other packages enter Loop **at
+construction time** via `loop.New(...)`'s parameter list and live as
+**direct private fields** on the Loop struct.
 
 - ✅ `Loop.git`, `Loop.state`, `Loop.taskBackend`, `Loop.attempts`,
-  `Loop.limiter`, `Loop.agent` — direct fields, accessed via the
-  receiver
+  `Loop.limiter`, `Loop.agent` — direct fields, accessed via the receiver
 - ❌ `Loop.cfg.TaskBackend` — `cfg` is data, not a transport for modules
 - ❌ `VerifierDeps.Git`, `VerifierDeps.State`, `VerifierDeps.TaskBackend`
   — `VerifierDeps` is a struct that bundles module references, exactly
   the antipattern
 - ❌ Any `*Params`/`*Opts`/`*Deps` struct holding a module reference
 
-Modules enter Loop **at construction time** via `loop.New(...)`'s
-parameter list, the same way `state.Store` and `git.Repo` already enter
-today. The constructor parameter is the one allowed entry point.
-Modules are then placed on Loop's direct fields and accessed only via
-the receiver.
+**Modules may internally compose sub-modules.** A module is allowed to
+split its implementation into smaller pieces for clarity. The
+constraints on those internal sub-modules:
+
+1. The sub-module reference **never escapes the parent module's public
+   API**. The orchestrator never sees the sub-module type and never
+   knows it exists.
+2. The sub-module follows the same rules internally: no callback fields,
+   no functions taking modules as parameters from outside the parent
+   package, no field mutation across the parent/sub-module boundary
+   from outside the parent's package.
+
+The canonical example: `git.Repo` holds an internal `github` client.
+`git.Repo`'s public API returns git-package types (like
+`git.ReviewComment`) and never returns or accepts a github type.
+`Loop` calls `g.Ship(...)` and never imports the github package, never
+references a github type, never knows github exists.
+
+```go
+// ✅ Allowed — git internally composes github for clarity.
+package git
+
+type Repo struct {
+    workDir string
+    gh      *github.Client  // internal sub-module, never escapes
+    // ...
+}
+
+func (r *Repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
+    // calls r.gh internally
+}
+
+// ❌ Forbidden — git.Repo exposes github through its API.
+func (r *Repo) GitHub() *github.Client { ... }  // ❌
+type ShipOpts struct {
+    Reviewer *github.User  // ❌ — github type leaks across the boundary
+}
+```
+
+The "Loop is special" framing is about the **orchestrator role**, not
+about the literal struct name. Loop is the only struct whose *purpose*
+is to compose modules from many packages. Other modules can have
+internal composition without violating this rule, as long as that
+composition stays inside their own package's boundary.
 
 ### Rule 2 — No function or method takes a module as a parameter
 
