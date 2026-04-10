@@ -5,25 +5,159 @@ domain modules it composes. It supersedes the "How to prevent regression"
 section of `module-boundary-beads.md`, which contained a loophole that
 agents have repeatedly satisfied in letter while violating in spirit.
 
-## The single load-bearing rule
+## The two load-bearing rules
 
-> **Module types from package P never appear in the public API surface
-> of any other package, anywhere, in any form.** A module's public API
-> is its exported names: function/method signatures (parameters and
-> return values), exported struct field types, exported interface
-> methods, and exported package-level variables. Inside its own
-> package, a module is free to compose, mutate, and hold whatever
-> internal state it needs — but nothing module-shaped escapes through
-> the package's exported boundary.
+> **Rule A (boundary):** Module types from package P never appear in the
+> public API surface of any other package, anywhere, in any form —
+> except as parameters to the orchestrator's constructor (`loop.New`),
+> which is the named composition point where modules from many
+> packages meet.
+
+> **Rule B (immutability):** A module's state changes only through its
+> own public API methods. Construction is the one allowed entry point;
+> after that, no external code — not other packages, not tests, not the
+> orchestrator — mutates the module's fields directly. The public API
+> methods are the only path in.
+
+A module's public API surface is its exported names: function/method
+signatures (parameters and return values), exported struct field types,
+exported interface methods, and exported package-level variables.
+Inside its own package, a module is free to compose, mutate, and hold
+whatever internal state it needs — but nothing module-shaped escapes
+through the package's exported boundary, except through the one
+designated DI seam.
 
 Every other rule in this document is a corollary of that one. If a
-proposal puts a module type into a parameter list, a return value, an
-exported struct field, or an interface method that crosses a package
-boundary, it's forbidden — regardless of how convenient it would be.
+proposal puts a module type into a parameter list (other than
+`loop.New`), a return value, an exported struct field, or an
+interface method that crosses a package boundary, it's forbidden —
+regardless of how convenient it would be.
 
-The only named exception is `*logging.Logger` (rule 5), which is the
-single cross-cutting type allowed to appear in cross-package API
-surfaces. It's the only such exception in the codebase.
+The only named cross-cutting exception is `*logging.Logger` (rule 5),
+which is allowed to appear in module constructors (not just `loop.New`)
+as the one stateful utility threaded through the entire program.
+
+### Why `loop.New` is the only carve-out
+
+Loop's role IS to compose modules from many packages — that's what
+"orchestrator" means. The composition has to happen somewhere. Putting
+module types in `loop.New`'s parameter list is the explicit, named,
+single point in the dependency graph where production code wires real
+implementations and test code wires stubs. **Construction-time DI via
+the constructor parameter list is the test injection seam.**
+
+```go
+// Production (cmd/ralph/main.go):
+gm := git.New(git.Config{...})
+st := state.NewStore(ralphDir)
+backend := initTaskBackend(cfg, ...)
+logger := logging.New(logFileWriter)
+
+execLoop := loop.New(loop.Config{...}, st, gm, backend, logger)
+execLoop.Run(ctx)
+```
+
+```go
+// Test (internal/loop/some_test.go):
+gm := &git.StubRepo{...}              // stub git.Ops
+st := newTestState(t)                  // stub or real state.Store
+backend := &testutil.StubBackend{...}  // stub tasks.Backend
+logger := logging.New(nil)             // discarding logger
+
+l := loop.New(loop.Config{...}, st, gm, backend, logger)
+l.Run(ctx)
+// assertions about what l did to the stubs
+```
+
+Production and tests use **the same constructor**. The constructor
+parameter list is the seam. There is no separate `loop.NewForTest(...)`,
+no `TestStub{}` injection struct, no `loop.SetGit(...)` mutator after
+construction. One constructor, used identically by both.
+
+**Implications for Rule A:**
+
+- Loop's New is the **only** function in the codebase whose public API
+  contains module types. Every other helper, method, factory, and
+  package function either takes data (no modules) or operates entirely
+  inside its own package's boundary.
+- Tests substitute behavior by constructing module instances (real or
+  stub) and passing them through Loop's constructor. They never reach
+  inside Loop after construction to swap fields or attach callbacks.
+- If you find yourself wanting to add a second module-typed constructor
+  (e.g. `loop.NewWithRunner(cfg, ..., runner)`), you're adding a second
+  composition point and breaking the rule. The fix is to add the
+  parameter to `loop.New` itself.
+
+### Why Rule B exists
+
+Rule B is the universal corollary of Go's encapsulation model: the
+exported names of a package are its API, and exported writable struct
+fields are an API surface that lets external code mutate state without
+going through the type's methods. That's a leak — the type loses
+control over its own invariants because anyone with a pointer can
+write to its fields.
+
+**Every module in this codebase has unexported fields and exposes
+state changes only through methods.** The constructor is the one
+exception: it accepts construction-time data and places it on fields
+the type itself owns thereafter.
+
+```go
+// ❌ Forbidden — exported writable fields let external code mutate
+// after construction.
+package git
+type Repo struct {
+    BaseBranch string  // ❌ exported, writable from outside
+    CIPollTimeout time.Duration  // ❌
+}
+
+// External code:
+gm := git.New(...)
+gm.BaseBranch = "main"          // ❌ external mutation
+gm.CIPollTimeout = 30 * time.Second  // ❌
+
+// ✅ Correct — fields are unexported; values enter through the
+// constructor's data struct.
+package git
+type Config struct {
+    BaseBranch    string
+    CIPollTimeout time.Duration
+    // ... whatever the module needs to know at construction
+}
+
+type Repo struct {
+    baseBranch    string  // unexported, only git's own methods write
+    ciPollTimeout time.Duration
+}
+
+func New(cfg Config) *Repo {
+    return &Repo{
+        baseBranch:    cfg.BaseBranch,
+        ciPollTimeout: cfg.CIPollTimeout,
+    }
+}
+
+// External code:
+gm := git.New(git.Config{
+    BaseBranch:    cfg.BaseBranch,
+    CIPollTimeout: cfg.CIPollTimeout,
+})
+// No mutation possible — the fields are unexported.
+```
+
+**Setter methods are the same antipattern in disguise.** A
+`SetBaseBranch(b string)` method is just an exported writable field
+with extra ceremony. Don't add setters as a workaround for unexported
+fields. If a value needs to be configurable, it's a constructor input
+or it's part of the operation that needs it (passed via the method
+call's data argument).
+
+**This applies to tests too.** Same-package test files have visibility
+into unexported fields, but the rule says modules' state changes go
+through their public API methods only. Tests construct stub modules
+*before* calling `loop.New(...)` and pass them through the
+constructor. They never construct Loop and then poke at its fields
+afterward to substitute behavior.
 
 ## The shape
 

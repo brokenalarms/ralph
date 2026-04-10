@@ -37,27 +37,102 @@ These are the rules as they stand after many corrections. Earlier
 versions of the spec contained loopholes and ambiguities that agents
 exploited. This list is the final form.
 
-### Rule 0 — The single load-bearing rule that subsumes everything else
+### Rule 0 — The two load-bearing rules that subsume everything else
 
-**Module types from package P never appear in the public API surface
-of any other package, anywhere, in any form.**
+These two rules together define the architecture. Every other rule in
+this document is a corollary of one or both.
+
+**Rule A (boundary):** Module types from package P never appear in the
+public API surface of any other package, anywhere, in any form —
+except as parameters to the orchestrator's constructor (`loop.New`),
+which is the named composition point where modules from many packages
+meet.
+
+**Rule B (immutability):** A module's state changes only through its
+own public API methods. Construction is the one allowed entry point;
+after that, no external code — not other packages, not tests, not the
+orchestrator — mutates the module's fields directly. The public API
+methods are the only path in.
+
+#### Rule A explained
 
 A module's public API surface is its exported names: function/method
 signatures (parameters and return values), exported struct field
 types, exported interface methods, and exported package-level
 variables. Inside its own package, a module is free to compose,
 mutate, and hold whatever internal state it needs — but nothing
-module-shaped escapes through the package's exported boundary.
+module-shaped escapes through the package's exported boundary, except
+through the one designated DI seam.
 
-Every rule below is a corollary of Rule 0. The only named exception
-is `*logging.Logger` (rule 5), which is the single cross-cutting type
-allowed to cross package boundaries.
+**Why `loop.New` is the carve-out**: Loop's role IS to compose
+modules from many packages. The composition has to happen somewhere.
+Construction-time DI via `loop.New`'s parameter list is the explicit,
+single, named point where production wires real implementations and
+tests wire stubs. **The constructor parameter list is the test
+injection seam.** Production calls
+`loop.New(cfg, st, gm, backend, logger)` with real implementations;
+tests call the same `loop.New(cfg, st, stubGm, stubBackend, logger)`
+with stubs. One constructor, used identically by both. There is no
+separate "for tests" injection mechanism (no `NewForTest`, no
+`TestStub{}`, no `SetX` mutators).
 
-If you find yourself debating whether some pattern is allowed, ask:
-**does it put a module type into the public API surface that other
-packages consume?** If yes, it's forbidden. If no (purely internal),
-it's fine. Every "trap" in the trap list below was a case where I
-violated this rule and then rationalized why it was OK.
+#### Rule B explained
+
+Every module's fields are **unexported**. The constructor (`X.New(cfg)`
+or `X.New(args...)`) is the only entry point for placing values onto a
+module. After construction, the module's public methods are the only
+way to change its state.
+
+This forbids:
+- External field mutation: `gm.BaseBranch = "main"` (exported field
+  written from outside) — the field must be unexported
+- Setter methods: `gm.SetBaseBranch("main")` — same antipattern with
+  ceremony; don't add setters as a workaround for unexported fields
+- Test field substitution: `l.git = stubGit` after `loop.New(...)` —
+  even with same-package visibility, modules enter via the
+  constructor, not via field mutation
+
+If a value is configurable, it's either a constructor input (set
+once, never mutated) or part of the operation that needs it (passed
+via the method's data argument).
+
+The current `cmd/ralph/main.go` violates Rule B for git.Repo:
+
+```go
+gm := git.New(cfg.ProjectDir, ralphDir, nil)
+gm.BaseBranch = cfg.BaseBranch                                 // ❌
+gm.Logger = log                                                // ❌
+gm.CIPollTimeout = cfg.CIPollTimeout                           // ❌
+gm.CopilotGatedTimeout = cfg.ReviewerGatedTimeout              // ❌
+// etc.
+```
+
+The fix (Commit C below) is `git.New(git.Config{...})` taking all
+those values at construction; the fields on git.Repo become unexported.
+
+#### What to ask when in doubt
+
+If you find yourself debating whether some pattern is allowed, ask
+both questions:
+
+1. **Rule A**: Does it put a module type into a public API surface
+   other than `loop.New`'s constructor parameters? If yes → forbidden.
+2. **Rule B**: Does it modify a module's state from outside the
+   module's own methods (whether via field mutation, setter methods,
+   or any other mechanism)? If yes → forbidden.
+
+If both answers are "no" (the pattern is purely internal to a
+package, or it goes through `loop.New`, or it goes through a
+module's own public methods), it's fine.
+
+Every "trap" in the trap list below was a case where I violated one
+of these two rules and then rationalized why it was OK.
+
+The only named cross-cutting exception is `*logging.Logger` (rule 5),
+which is allowed to appear in module constructors (not just
+`loop.New`) as the one stateful utility threaded through the program.
+Logger is still subject to Rule B (you don't mutate `*logging.Logger`
+fields after construction; you call its methods).
 
 ### Rule 1 — `Loop` is the only orchestrator that composes modules from other packages
 
