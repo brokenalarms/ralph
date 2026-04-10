@@ -20,6 +20,32 @@ import (
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
+// Modules is the struct form of loop.New's module-reference parameter
+// list. It is the single composition point where modules from many
+// packages meet: cmd/ralph/main.go constructs a Modules literal and
+// passes it to loop.New, which copies each field onto Loop's private
+// fields and discards the struct. After loop.New returns, the Modules
+// struct no longer exists anywhere.
+//
+// This is the ONLY exported struct in the codebase permitted to hold
+// module references. It is distinct in kind from the forbidden *Deps/
+// *Opts/*Params antipattern because:
+//
+//   - It is owned by nobody after construction — not held on any
+//     module, not stored as a field anywhere.
+//   - It IS loop.New's parameter list, just packaged as a struct for
+//     self-documentation and partial-override ergonomics in tests.
+//   - Rule A's carve-out for loop.New's parameters applies to Modules
+//     just as it does to positional parameters.
+//
+// See docs/specs/orchestrator-modules.md for the full rationale.
+type Modules struct {
+	State       *state.Store
+	Git         git.Ops
+	TaskBackend tasks.Backend
+	Logger      *logging.Logger
+}
+
 // Config holds all parameters needed by the execution loop.
 type Config struct {
 	Dirs                  workctx.WorkContext
@@ -30,7 +56,6 @@ type Config struct {
 	AutoMerge             bool
 	Evolve                bool
 	CallsPerHour          int
-	TaskBackend           tasks.Backend
 	IdleTimeout           time.Duration
 	IdleTimeoutProgress   time.Duration
 	PostSignalTimeout     time.Duration
@@ -110,6 +135,7 @@ type Loop struct {
 	cfg               Config
 	state             *state.Store
 	git               git.Ops
+	taskBackend       tasks.Backend
 	limiter           *ratelimit.Limiter
 	runner            claudeRunner
 	verifier          *Verifier
@@ -122,11 +148,17 @@ type Loop struct {
 	reviewersDetected bool
 }
 
-// New creates an execution loop from the given configuration. All agent
-// invocations go through the centralized agent module. The logger is the
-// single cross-module dependency threaded through Loop construction —
-// see the Loop type comment for the rationale.
-func New(cfg Config, st *state.Store, gm git.Ops, logger *logging.Logger) *Loop {
+// New creates an execution loop from the given configuration and module
+// references. mods is the single composition point where modules from
+// many packages meet — see the Modules type comment for the rule that
+// carves it out from the "no module types in exported struct fields"
+// prohibition.
+func New(cfg Config, mods Modules) *Loop {
+	st := mods.State
+	gm := mods.Git
+	logger := mods.Logger
+	taskBackend := mods.TaskBackend
+
 	signals := claude.DefaultSignalPaths(cfg.Dirs.RalphDir)
 
 	limiter := ratelimit.New(cfg.Dirs.RalphDir, cfg.CallsPerHour)
@@ -178,15 +210,16 @@ func New(cfg Config, st *state.Store, gm git.Ops, logger *logging.Logger) *Loop 
 		at.MaxIdleTimeoutFailures = cfg.MaxIdleTimeoutFailures
 	}
 	l := &Loop{
-		cfg:      cfg,
-		state:    st,
-		git:      gm,
-		limiter:  limiter,
-		runner:   agentRunner,
-		analyzer: analyzer.New(),
-		attempts: at,
-		logger:   logger,
-		signals:  signals,
+		cfg:         cfg,
+		state:       st,
+		git:         gm,
+		taskBackend: taskBackend,
+		limiter:     limiter,
+		runner:      agentRunner,
+		analyzer:    analyzer.New(),
+		attempts:    at,
+		logger:      logger,
+		signals:     signals,
 	}
 	l.verifier = NewVerifier(VerifierConfig{
 		VerifyDir:             cfg.VerifyDir,
@@ -205,7 +238,7 @@ func New(cfg Config, st *state.Store, gm git.Ops, logger *logging.Logger) *Loop 
 		Logger:      logger,
 		Git:         gm,
 		State:       st,
-		TaskBackend: cfg.TaskBackend,
+		TaskBackend: taskBackend,
 		Runner:      func() claudeRunner { return l.runner },
 		Signals:     signals,
 		NewRunner:   func() claudeRunner { return l.cfg.NewRunner() },
@@ -229,14 +262,14 @@ func (l *Loop) skipTask(id, reason string) {
 		return
 	}
 	l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Skipping task %s: %s", id, reason)
-	if err := l.cfg.TaskBackend.SkipTask(id, reason); err != nil {
+	if err := l.taskBackend.SkipTask(id, reason); err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to skip task %s in backend: %v", id, err)
 	}
 	if err := l.state.AddSkippedTask(id); err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to persist skip for %s: %v", id, err)
 	}
 	skipped, _ := l.state.GetSkippedTasks()
-	l.cfg.TaskBackend.SetSkippedIDs(skipped)
+	l.taskBackend.SetSkippedIDs(skipped)
 }
 
 // ensureActiveReviewers populates l.activeReviewers on first call. Subsequent
@@ -429,8 +462,8 @@ iterLoop:
 
 		// ── Branch setup ──
 		if task.changed || !l.git.IsBranchRenamed() {
-			storedBranch, _ := l.cfg.TaskBackend.GetMetadata(task.id, "branch")
-			storedExternalRef, _ := l.cfg.TaskBackend.GetExternalRef(task.id)
+			storedBranch, _ := l.taskBackend.GetMetadata(task.id, "branch")
+			storedExternalRef, _ := l.taskBackend.GetExternalRef(task.id)
 			completedBranches := l.completedBranches()
 			branch, err := l.git.BranchForTask(ctx, task.id, task.title, git.BranchTaskMeta{
 				Branch:            storedBranch,
@@ -447,7 +480,7 @@ iterLoop:
 			}
 			l.state.WriteRunBranch(branch)
 			if task.id != "" && branch != "" && strings.Contains(branch, task.id) {
-				_ = l.cfg.TaskBackend.SetMetadata(task.id, "branch", branch)
+				_ = l.taskBackend.SetMetadata(task.id, "branch", branch)
 			}
 		}
 
@@ -465,11 +498,11 @@ iterLoop:
 		l.beginIteration(task, iteration)
 
 		// ── Resume check: does a PR already exist for this task? ──
-		branch, _ := l.cfg.TaskBackend.GetMetadata(task.id, "branch")
+		branch, _ := l.taskBackend.GetMetadata(task.id, "branch")
 		if branch != "" && !strings.Contains(branch, task.id) {
 			branch = ""
 		}
-		externalRef, _ := l.cfg.TaskBackend.GetExternalRef(task.id)
+		externalRef, _ := l.taskBackend.GetExternalRef(task.id)
 		if externalRef != "" {
 			l.ensureActiveReviewers()
 		}
@@ -487,14 +520,14 @@ iterLoop:
 			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "ResumeTask: %v", resumeErr)
 		}
 		if resumeResult.PRURLToStore != "" && task.id != "" {
-			_ = l.cfg.TaskBackend.SetExternalRef(task.id, resumeResult.PRURLToStore)
+			_ = l.taskBackend.SetExternalRef(task.id, resumeResult.PRURLToStore)
 		}
 		if resumeResult.ClearMetadata && task.id != "" {
-			_ = l.cfg.TaskBackend.SetExternalRef(task.id, "")
+			_ = l.taskBackend.SetExternalRef(task.id, "")
 			if resumeResult.NewBranch != "" {
-				_ = l.cfg.TaskBackend.SetMetadata(task.id, "branch", resumeResult.NewBranch)
+				_ = l.taskBackend.SetMetadata(task.id, "branch", resumeResult.NewBranch)
 			} else {
-				_ = l.cfg.TaskBackend.SetMetadata(task.id, "branch", "")
+				_ = l.taskBackend.SetMetadata(task.id, "branch", "")
 			}
 		}
 		if resumeResult.Handled {
@@ -601,7 +634,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 		}
 		if ref != "" {
 			l.logger.Emit(logging.Opts{Domain: logging.Git}, "Linking task %s to %s (branch: %s)", taskID, ref, l.git.GetWorktreeBranch())
-			if refErr := l.cfg.TaskBackend.SetExternalRef(taskID, ref); refErr != nil {
+			if refErr := l.taskBackend.SetExternalRef(taskID, ref); refErr != nil {
 				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetExternalRef: %v", refErr)
 			}
 		}

@@ -67,12 +67,12 @@ func (l *Loop) tryFixConflict(ctx context.Context, taskID, nextTask, workDir, ra
 
 // taskDescription fetches the task description from the configured backend,
 // returning empty string when no description exists or the call fails.
-// Reads l.cfg.TaskBackend via the receiver.
+// Reads l.taskBackend via the receiver.
 func (l *Loop) taskDescription(taskID string) string {
-	if taskID == "" || l.cfg.TaskBackend == nil {
+	if taskID == "" || l.taskBackend == nil {
 		return ""
 	}
-	desc, err := l.cfg.TaskBackend.GetDescription(taskID)
+	desc, err := l.taskBackend.GetDescription(taskID)
 	if err != nil {
 		return ""
 	}

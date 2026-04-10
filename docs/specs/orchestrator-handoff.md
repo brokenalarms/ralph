@@ -18,18 +18,17 @@ PR #520 merged: spec doc + 5 strict arch tests, 4 of which currently
 pass. The fifth (`TestNoModulesInNonLoopStructs`) is intentionally red
 and will be turned green by the work below.
 
-PR #521 (this PR) is in review with 6 commits:
-1. `e276420` — neutralize Bead*/Copilot* naming on cross-module surfaces
-2. `a1276ed` — **wrong direction**: logger as package import (followed by
-   the fix below)
-3. `b0312a8` — delete `loop_git.go` helpers that took modules as params
-4. `69b21de` — delete `loop_prompt.go` helpers that took modules as params
-5. `81e577c` — delete `getTaskDescription`/`getTaskAcceptance` helpers
-6. `a458381` — **fix to commit 2**: restore `*logging.Logger` as the
-   single named cross-module exception
+PR #521 merged: neutralized Bead*/Copilot* naming, deleted helpers that
+took modules as params, restored `*logging.Logger` as the single named
+cross-module exception. Four arch tests green after #521.
 
-After PR #521 merges, four arch tests are green. The remaining work
-breaks down into focused commits below.
+Commit A (this PR) lands: `loop.cfg.TaskBackend` moved to
+`Loop.taskBackend`, `loop.Modules` struct introduced as the struct form
+of `loop.New`'s module-reference parameter list, `newTestModules(t, ...)`
+helper in place and used by every loop test. `TestNoModulesInNonLoopStructs`
+drops from 4 violations to 3 (only the three `VerifierDeps.*` fields
+remain — Commit B's scope). Remaining work breaks down into focused
+commits below.
 
 ## The corrected rules — read before touching code
 
@@ -70,11 +69,20 @@ Construction-time DI via `loop.New`'s parameter list is the explicit,
 single, named point where production wires real implementations and
 tests wire stubs. **The constructor parameter list is the test
 injection seam.** Production calls
-`loop.New(cfg, st, gm, backend, logger)` with real implementations;
-tests call the same `loop.New(cfg, st, stubGm, stubBackend, logger)`
-with stubs. One constructor, used identically by both. There is no
-separate "for tests" injection mechanism (no `NewForTest`, no
-`TestStub{}`, no `SetX` mutators).
+`loop.New(cfg, loop.Modules{State: st, Git: gm, TaskBackend: backend, Logger: log})`
+with real implementations; tests call the same `loop.New(cfg, mods)`
+with stub modules via the `newTestModules(t, ...)` helper. One
+constructor, used identically by both. There is no separate "for
+tests" injection mechanism (no `NewForTest`, no `TestStub{}`, no
+`SetX` mutators).
+
+`loop.Modules` is the struct form of `loop.New`'s parameter list — it
+is the only exported struct outside `Loop` itself that holds module
+references, because it *is* the constructor's parameter list, just
+packaged as a named-field struct rather than positional args.
+`loop.New` copies each field onto `Loop`'s private fields and discards
+the `Modules` value. The arch test whitelists `Modules` by name for
+this reason.
 
 #### Rule B explained
 
@@ -306,12 +314,15 @@ unexported. See "C8" below.
 
 ### Rule 8 — Test injection without violating the rules
 
-Tests that need to inject stub modules use a clearly-named
-**unexported** test seam in the loop package. Production code calls
-`loop.New(cfg, st, gm, taskBackend, logger)`. Tests call something like
-`loop.newWithStubs(cfg, stubs)` where `stubs` is a struct of optional
-module references. The seam is unexported so production cannot reach it.
-The arch test allows the seam by name.
+Tests inject stub modules through **the same public constructor
+production uses**. Production code calls
+`loop.New(cfg, loop.Modules{State: st, Git: gm, TaskBackend: backend, Logger: log})`.
+Tests call `loop.New(cfg, newTestModules(t, st, gm, backend))` — the
+`newTestModules` helper lives in `loop_test.go`, takes explicit stub
+values for the modules the test cares about, and fills in a no-op
+`*logging.Logger` by default. The seam is the public constructor; the
+helper is a test-only convenience for shaping the `Modules` value.
+There is no separate unexported constructor.
 
 The user has been clear that this is the right pattern. **Do not**
 revert to:
@@ -416,47 +427,40 @@ green) and reduces violations of the rules above. **Read the rule
 before doing each commit.** Do not propose alternatives that violate
 the rules even if they seem easier.
 
-### Commit A — Move `Loop.cfg.TaskBackend` to `Loop.taskBackend`
+### Commit A — Move `Loop.cfg.TaskBackend` to `Loop.taskBackend` ✅ DONE
 
-**Rule 1, Rule 4.** This is the next commit. Status: I attempted it,
-got 80% done, reverted because the inline `TaskBackend: &testutil.StubBackend{...}`
-patterns in test files needed manual extraction and I ran out of
-context. The work is mechanical:
+**Rule 1, Rule 4.** Landed. What it did:
 
-1. Add `taskBackend tasks.Backend` field to `Loop` struct (next to
-   `state`, `git`).
-2. Add `taskBackend tasks.Backend` parameter to `loop.New(cfg, st, gm,
-   taskBackend, logger)`.
-3. `loop.New` stores it: `l.taskBackend = taskBackend`.
-4. Delete `TaskBackend` field from `Config` struct.
-5. Sed-replace every `l.cfg.TaskBackend` with `l.taskBackend` in
-   `internal/loop/*.go` (non-test files). Done by:
-   `find internal/loop -type f -name '*.go' ! -name '*_test.go' -exec sed -i '' 's|l\.cfg\.TaskBackend|l.taskBackend|g' {} \;`
-6. `cmd/ralph/main.go`: remove `TaskBackend: backend` from the
-   `loop.Config{...}` literal; change `loop.New(..., st, gm, log)` to
-   `loop.New(..., st, gm, backend, log)`.
-7. **Test files (the painful part)**: every test that constructs a Loop
-   has `TaskBackend: ...` in its `Config{...}` literal and `}, st, gm,
-   logging.New(nil))` (or similar) at the call site. The fix:
-   - Where `TaskBackend: backend,` appears with a `backend := ...`
-     declaration above, sed handles it: drop the field, add `backend` to
-     the New call.
-   - Where `TaskBackend: tt.backend,` appears (table-driven tests), the
-     value is `tt.backend` — needs per-file Edit.
-   - Where `TaskBackend: &testutil.StubBackend{...},` appears inline,
-     extract the literal to a `backend := &testutil.StubBackend{...}`
-     declaration before the Config literal, then drop the field from
-     Config and add `backend` to the New call.
-   - Where `TaskBackend: nil,` appears (one case in `loop_test.go`),
-     pass `nil` as the backend arg to New.
-   - Where `Config{TaskBackend: backend}` appears as a single-line
-     literal (in `loop_task_polling_test.go`), needs careful Edit.
-8. After all test fixes, build green and tests pass (1278 expected,
-   only `TestNoModulesInNonLoopStructs` failing on the 3 remaining
-   `VerifierDeps.*` violations).
+1. `loop.Modules` struct introduced with `State`, `Git`, `TaskBackend`,
+   `Logger` fields. Comment explains it is the struct form of
+   `loop.New`'s parameter list and is the only exported non-`Loop`
+   struct permitted to hold module references.
+2. `loop.New` signature changed from
+   `New(cfg Config, st *state.Store, gm git.Ops, logger *logging.Logger) *Loop`
+   to `New(cfg Config, mods Modules) *Loop`. All four fields copied
+   onto the corresponding private fields on `Loop`.
+3. `Loop.taskBackend` added alongside `state`, `git`.
+4. `TaskBackend` field deleted from `Config` struct. Every
+   `l.cfg.TaskBackend` rewritten to `l.taskBackend` across
+   `internal/loop/*.go`.
+5. `cmd/ralph/main.go` constructs a `loop.Modules{State, Git,
+   TaskBackend, Logger}` literal and passes it to `loop.New`.
+6. `newTestModules(t *testing.T, st, gm, backend, loggerOpt...)` helper
+   added in `loop_test.go`. ~185 test call sites migrated from
+   `Modules{State: ..., Git: ..., TaskBackend: ..., Logger: ...}`
+   literals to `newTestModules(t, ...)` calls.
+7. `orchestrator_arch_test.go` whitelists `Modules` by name alongside
+   `Loop` (only permitted struct outside the orchestrator to hold
+   module references, because it *is* the constructor's parameter
+   list).
+8. `TestNoModulesInNonLoopStructs` dropped from 4 violations to 3. The
+   remaining three (`VerifierDeps.Git`, `VerifierDeps.State`,
+   `VerifierDeps.TaskBackend`) are Commit B's scope. Everything else
+   green.
 
-There are about 25–30 sites across 7–8 test files. Mostly mechanical.
-The traps are the inline literal cases — those need manual extraction.
+Spec doc (`docs/specs/orchestrator-modules.md`) updated in the same PR
+to describe `Modules`, the arch-test whitelist, and the `loop.New`
+signature. Handoff doc (this file) updated to mark Commit A done.
 
 ### Commit B — Strip the `Verifier` struct entirely
 

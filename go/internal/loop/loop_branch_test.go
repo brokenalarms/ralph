@@ -47,8 +47,7 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
@@ -91,8 +90,7 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
@@ -165,8 +163,7 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = runner
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
@@ -213,12 +210,11 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		OnRebaseConflict: func(err error) git.RebaseRecovery {
 			handlerCalled = true
 			return git.RebaseFreshWorktree
 		},
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	err := l.git.EnsureUpToDate(context.Background())
 	// With stacked PRs, rebase conflicts cause stack to diverge — not an error.
@@ -255,8 +251,7 @@ func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	err := l.git.EnsureUpToDate(context.Background())
 	if err != nil {
@@ -291,8 +286,7 @@ func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	err := l.git.EnsureUpToDate(context.Background())
 	if err != nil {
@@ -332,12 +326,11 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		OnRebaseConflict: func(err error) git.RebaseRecovery {
 			handlerCalled = true
 			return git.RebaseAbort
 		},
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	err := l.Run(ctx)
 	if err != nil {
@@ -411,8 +404,7 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 		},
 		MaxIterations: 2,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	// Stub out Claude runner to avoid actually running claude.
 	// Just create a stop file after 2 iterations.
@@ -472,8 +464,7 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 		},
 		MaxIterations: 3,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	l.runner = &stubRunner{
 		onRun: func() {
@@ -540,8 +531,7 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 		},
 		MaxIterations: 3,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	l.runner = &stubRunner{
 		onRun: func() {
@@ -604,8 +594,7 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		Evolve:        true,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	l.runner = &stubRunner{
 		// Simulate agent work by changing HeadRev so the loop sees new commits.
@@ -661,8 +650,7 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		Evolve:        true,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
@@ -743,8 +731,7 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	l.runner = &stubRunner{}
 
@@ -813,8 +800,7 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	l.runner = &stubRunner{}
 
@@ -871,8 +857,7 @@ func TestResumeTask_ClosedPR_ClearsMetadataAndReruns(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: gm.WorkDir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -944,8 +929,7 @@ func TestLoop_BranchForTask_RenameFailure_AbortsIteration(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: gm.WorkDir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	_ = l.Run(context.Background())

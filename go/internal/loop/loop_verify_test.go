@@ -30,9 +30,8 @@ func TestOnSignal_HappyPath(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}))
 
 	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: true, Reason: "looks good"}
@@ -67,9 +66,8 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
 		VerifyDir:     dir,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	l.verifier.deps.NewRunner = func() claudeRunner {
 		return &stubRunner{result: stubResult(true, "attempted fix")}
@@ -110,9 +108,8 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}))
 
 	l.verifier.deps.NewRunner = func() claudeRunner {
 		return &stubRunner{result: stubResult(true, "attempted fix")}
@@ -165,11 +162,10 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 		Dirs:                  workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:         5,
 		CallsPerHour:          80,
-		TaskBackend:           &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:             dir,
 		VerifyModel:           customFirst,
 		VerifyEscalationModel: customEscalation,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}))
 
 	l.verifier.deps.NewRunner = func() claudeRunner {
 		return &stubRunner{result: stubResult(true, "attempted fix")}
@@ -219,9 +215,8 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"},
 		VerifyDir:     dir,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"}))
 
 	fixAgentSpawned := false
 	l.verifier.deps.NewRunner = func() claudeRunner {
@@ -269,9 +264,8 @@ func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"},
 		VerifyDir:     dir,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"}))
 
 	var capturedPrompt string
 	l.verifier.deps.NewRunner = func() claudeRunner {
@@ -319,9 +313,8 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}))
 
 	l.verifier.deps.NewRunner = func() claudeRunner {
 		return &stubRunner{result: stubResult(false, "")}
@@ -356,9 +349,8 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}))
 
 	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
@@ -402,10 +394,9 @@ func TestAgentModelEscalation(t *testing.T) {
 		Dirs:                 workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:        1,
 		CallsPerHour:         80,
-		TaskBackend:          &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-abc"},
 		Model:                firstModel,
 		AgentEscalationModel: escalationModel,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-abc"}))
 
 	var capturedModels []string
 	l.runner = &stubRunner{
@@ -449,11 +440,10 @@ func TestAgentModelEscalation_ModelCapApplied(t *testing.T) {
 		Dirs:                 workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:        1,
 		CallsPerHour:         80,
-		TaskBackend:          &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-cap"},
 		Model:                verify.ModelSonnet,
 		AgentEscalationModel: verify.ModelOpus,
 		ModelCap:             verify.ModelHaiku, // cap everything to haiku
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-cap"}))
 
 	var capturedModels []string
 	l.runner = &stubRunner{
@@ -499,9 +489,8 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
-	}, st, gm, logger)
+	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}, logger))
 	l.verifier.deps.NewRunner = func() claudeRunner {
 		return &stubRunner{result: stubResult(true, "fixed")}
 	}

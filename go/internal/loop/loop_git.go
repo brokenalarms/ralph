@@ -14,7 +14,7 @@ import (
 
 // completedBranches returns the branches of completed tasks fetched from
 // state and the task backend. The result is passed to git.BranchForTask for
-// stack head detection. Reads l.state and l.cfg.TaskBackend via the receiver.
+// stack head detection. Reads l.state and l.taskBackend via the receiver.
 func (l *Loop) completedBranches() []string {
 	completedTasks, err := l.state.GetCompletedTasks()
 	if err != nil || len(completedTasks) == 0 {
@@ -25,7 +25,7 @@ func (l *Loop) completedBranches() []string {
 		if ct.ID == "" {
 			continue
 		}
-		branch, _ := l.cfg.TaskBackend.GetMetadata(ct.ID, "branch")
+		branch, _ := l.taskBackend.GetMetadata(ct.ID, "branch")
 		branches = append(branches, branch)
 	}
 	return branches
@@ -71,8 +71,8 @@ func (l *Loop) closeResumedTask(ctx context.Context, taskID, taskTitle string, r
 	if merged {
 		stateReason = "ralph: PR merged"
 	}
-	_ = l.cfg.TaskBackend.SetState(taskID, "phase", "verified", stateReason)
-	if err := l.cfg.TaskBackend.CloseTask(taskID, closeReason); err != nil {
+	_ = l.taskBackend.SetState(taskID, "phase", "verified", stateReason)
+	if err := l.taskBackend.CloseTask(taskID, closeReason); err != nil {
 		skipReason := "close_failed"
 		if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", taskID, blockers)
@@ -146,15 +146,15 @@ func (l *Loop) flushUnpushedWork(ctx context.Context, lastTaskMerged bool) {
 // prBody assembles a PR description from task context and agent summary.
 // Uses whatever context is available — task description, acceptance criteria,
 // agent summary — and composes them into a coherent body. Reads
-// l.cfg.TaskBackend via the receiver.
+// l.taskBackend via the receiver.
 func (l *Loop) prBody(taskID, summary string) string {
 	var sections []string
 
 	if taskID != "" {
-		if desc, err := l.cfg.TaskBackend.GetDescription(taskID); err == nil && desc != "" {
+		if desc, err := l.taskBackend.GetDescription(taskID); err == nil && desc != "" {
 			sections = append(sections, "## Description\n"+desc)
 		}
-		if ac, err := l.cfg.TaskBackend.GetAcceptance(taskID); err == nil && ac != "" {
+		if ac, err := l.taskBackend.GetAcceptance(taskID); err == nil && ac != "" {
 			sections = append(sections, "## Acceptance Criteria\n"+ac)
 		}
 	}

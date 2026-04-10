@@ -18,7 +18,7 @@ func (l *Loop) initialize(ctx context.Context) error {
 	l.state.WriteConfig(l.cfg.MaxIterations)
 
 	if skipped, err := l.state.GetSkippedTasks(); err == nil && len(skipped) > 0 {
-		l.cfg.TaskBackend.SetSkippedIDs(skipped)
+		l.taskBackend.SetSkippedIDs(skipped)
 		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Loaded %d skipped tasks from state", len(skipped))
 	}
 
@@ -51,9 +51,9 @@ func (l *Loop) initWorktree(ctx context.Context) error {
 	// If resuming the same task, mark the branch as already renamed so
 	// BranchForTask doesn't re-rename it on the first iteration.
 	if lastID, _ := l.state.Read("last_task_id"); lastID != "" {
-		l.cfg.TaskBackend.SetResumeTaskID(lastID)
+		l.taskBackend.SetResumeTaskID(lastID)
 	}
-	nextInfo, _ := l.cfg.TaskBackend.GetNextTaskInfo()
+	nextInfo, _ := l.taskBackend.GetNextTaskInfo()
 	lastID, _ := l.state.Read("last_task_id")
 	lastTask, _ := l.state.Read("last_task")
 	if !isNewTask(lastID, lastTask, nextInfo.ID, nextInfo.Title) {
@@ -104,8 +104,8 @@ func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, ru
 		l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: l.cfg.Model}, "Summary: %s", result.Summary)
 	}
 
-	completed, _ := l.cfg.TaskBackend.CountCompleted()
-	total, _ := l.cfg.TaskBackend.CountTotal()
+	completed, _ := l.taskBackend.CountCompleted()
+	total, _ := l.taskBackend.CountTotal()
 	l.logger.Emit(logging.Opts{}, "Run iteration %d complete (%dm%ds). %d/%d tasks done.",
 		runIteration, int(elapsed.Minutes()), int(elapsed.Seconds())%60, completed, total)
 

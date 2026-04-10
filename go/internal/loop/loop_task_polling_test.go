@@ -23,9 +23,9 @@ func TestPollForTasks_PackageFunction(t *testing.T) {
 	_ = dir
 
 	l := &Loop{
-		cfg:    Config{TaskBackend: backend},
-		state:  st,
-		logger: logger,
+		state:       st,
+		logger:      logger,
+		taskBackend: backend,
 	}
 	found, done := l.pollForTasks()
 
@@ -50,7 +50,6 @@ func TestWaitForTasks_PackageFunction(t *testing.T) {
 	onWaitCalled := false
 	l := &Loop{
 		cfg: Config{
-			TaskBackend: backend,
 			OnWait: func() {
 				onWaitCalled = true
 				backend.Lock()
@@ -58,8 +57,9 @@ func TestWaitForTasks_PackageFunction(t *testing.T) {
 				backend.Unlock()
 			},
 		},
-		state:  st,
-		logger: logger,
+		state:       st,
+		logger:      logger,
+		taskBackend: backend,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -103,7 +103,7 @@ func TestWaitForRate_AllowsWhenUnderLimit(t *testing.T) {
 	l := New(Config{
 		Dirs:         workctx.WorkContext{RalphDir: ralphDir},
 		CallsPerHour: 80,
-	}, st, &git.StubRepo{}, logging.New(nil))
+	}, newTestModules(t, st, &git.StubRepo{}, nil))
 
 	allowed := l.waitForRate(context.Background())
 
@@ -128,9 +128,9 @@ func TestLogIterationBanner_PackageFunction(t *testing.T) {
 	task := taskContext{id: "ralph-abc", title: "Fix login"}
 
 	l := &Loop{
-		cfg:    Config{TaskBackend: backend},
-		state:  st,
-		logger: logger,
+		state:       st,
+		logger:      logger,
+		taskBackend: backend,
 	}
 	l.logIterationBanner(logIterationBannerParams{version: "1.0.0"}, 1, 10, 1, task, analyzer.Warn)
 

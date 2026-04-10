@@ -17,12 +17,12 @@ func newTestLoopForSelection(t *testing.T, backend *testutil.StubBackend) (*Loop
 	l := &Loop{
 		cfg: Config{
 			MaxIterations: 100,
-			TaskBackend:   backend,
 			Dirs:          workctx.WorkContext{RalphDir: dir + "/.ralph"},
 		},
-		state:  st,
-		git:    &git.StubRepo{ProjectDir: dir, WorkDir: dir},
-		logger: logging.New(nil),
+		state:       st,
+		git:         &git.StubRepo{ProjectDir: dir, WorkDir: dir},
+		logger:      logging.New(nil),
+		taskBackend: backend,
 	}
 	return l, dir
 }
@@ -128,12 +128,12 @@ func TestSelectNextTask_FlushesUnpushedWorkWhenNoTasks(t *testing.T) {
 	l := &Loop{
 		cfg: Config{
 			MaxIterations: 100,
-			TaskBackend:   backend,
 			Dirs:          workctx.WorkContext{RalphDir: dir + "/.ralph"},
 		},
-		state:  st,
-		git:    stubGit,
-		logger: logging.New(nil),
+		state:       st,
+		git:         stubGit,
+		logger:      logging.New(nil),
+		taskBackend: backend,
 	}
 
 	l.selectNextTask(context.Background(), selectNextTaskParams{

@@ -73,7 +73,7 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		return taskContext{}, actionDone
 	}
 
-	avail, err := tasks.CheckAvailability(l.cfg.TaskBackend)
+	avail, err := tasks.CheckAvailability(l.taskBackend)
 	if err != nil {
 		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task check error: %v", err)
 	}
@@ -107,7 +107,7 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 		resumeID, _ = l.state.Read("last_task_id")
 	}
 	skippedIDs, _ := l.state.GetSkippedTasks()
-	taskInfo, _ := tasks.Next(l.cfg.TaskBackend, resumeID, skippedIDs)
+	taskInfo, _ := tasks.Next(l.taskBackend, resumeID, skippedIDs)
 	taskID, nextTask := taskInfo.ID, taskInfo.Title
 
 	if taskID == "" && nextTask == "" {

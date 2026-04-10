@@ -12,9 +12,28 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
+	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
+
+// newTestModules returns the Modules literal that loop.New expects, populated
+// from the values the test already has in scope. It is the single entry point
+// for constructing a Modules value in tests — tests do not build Modules
+// literals directly. An optional logger may be passed as the final argument;
+// when omitted the helper uses a no-op logger.
+//
+// The helper exists so tests can stub out all-but-one module without
+// repeating every field name on every call site, and so future fields added
+// to Modules land in exactly one place in the test code.
+func newTestModules(t *testing.T, st *state.Store, gm git.Ops, backend tasks.Backend, loggerOpt ...*logging.Logger) Modules {
+	t.Helper()
+	logger := logging.New(nil)
+	if len(loggerOpt) > 0 && loggerOpt[0] != nil {
+		logger = loggerOpt[0]
+	}
+	return Modules{State: st, Git: gm, TaskBackend: backend, Logger: logger}
+}
 
 type stubRunner struct {
 	onRun    func()
@@ -72,8 +91,7 @@ func TestRun_ExitsOnGitHubUnreachable(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		TaskBackend:   &testutil.TrackingBackend{},
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, &testutil.TrackingBackend{}))
 
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -115,8 +133,7 @@ func TestLoopTaskDescription_Standalone(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, backend))
 
 	if got := l.taskDescription("ralph-abc"); got != "Fix auth middleware" {
 		t.Errorf("expected description, got %q", got)
@@ -130,8 +147,7 @@ func TestLoopTaskDescription_Standalone(t *testing.T) {
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-		TaskBackend:   nil,
-	}, st, gm, logging.New(nil))
+	}, newTestModules(t, st, gm, nil))
 	if got := lNil.taskDescription("ralph-abc"); got != "" {
 		t.Errorf("nil backend should return empty, got %q", got)
 	}
