@@ -289,68 +289,26 @@ inside the git package. No external caller references it.
 
 ## How to prevent regression
 
-The architecture must be enforced mechanically. Documentation alone doesn't
-work — agents satisfy the letter of guidance while drifting from the intent.
+**See [`orchestrator-modules.md`](./orchestrator-modules.md) for the binding
+rules.** That spec supersedes the regression guidance that was in this
+file. The summary:
 
-### Test: GitHub not referenced outside git package
+1. Only `Loop` may hold module references as fields. Every other struct in
+   the codebase is either a module (with its own internal state) or pure
+   data.
+2. No function or method anywhere takes a module type as a parameter.
+   Modules expose intent methods that take module-specific data structs.
+3. Methods on `Loop` take parameters only for `context.Context` and
+   per-call data that just arrived from a sibling call. Iteration/run
+   state lives as private fields on `Loop`, accessed through the receiver.
+4. State organization (unexported struct, no methods, no public API) is
+   field-accessible from its containing package. Modules (constructor +
+   methods) are accessed only through their public API.
+5. Logger is imported, not held. No `*logging.Logger` field or parameter.
+6. Cross-module data structs use neutral names. No `Bead*`/`Github*`/
+   `Claude*` leaking implementation through API surfaces.
 
-```go
-func TestGitHubIsInternal(t *testing.T) {
-    // Scan all .go files outside go/internal/git/
-    // Fail if any reference git.GitHub, git.StubGitHub, or git.NewStubGitHub
-}
-```
-
-### Test: no modules in orchestrator params structs
-
-```go
-func TestOrchestratorParamsNoModules(t *testing.T) {
-    // A `checked` set lists structs that must pass the data-only rule.
-    // Each bead uncomments its structs. Agents only see failures for
-    // the structs they're responsible for — not all 35 at once.
-    //
-    // For each checked struct, every field is validated:
-    //
-    //   Allowed:
-    //     - Primitives: string, int, bool, time.Duration, etc.
-    //     - Data structs: structs with no methods (git.TaskMeta, git.ShipResult)
-    //     - *logging.Logger (cross-cutting, ubiquitous)
-    //     - context.Context
-    //
-    //   Forbidden:
-    //     - Interfaces with methods (tasks.Backend, git.GitOps, git.Ops)
-    //     - Pointers to structs with methods (*state.Store, *attempts.Tracker,
-    //       *Verifier, *ratelimit.Limiter, *analyzer.Analyzer, *git.Repo)
-    //       — except *logging.Logger
-    //     - Function types: func(...) ... — callbacks are module references
-    //       in disguise. If a downstream function needs a module's result,
-    //       the caller obtains it and passes the result as data.
-    //
-    // Top-level structs (Loop, Verifier, git.Repo) may hold module
-    // references as fields — that's dependency injection at construction.
-    // But params/opts structs passed to functions must not carry them.
-}
-```
-
-Function callbacks (`func(...)`) are **forbidden** in params/opts structs.
-They are module references in disguise — wrapping `v.TryFixCI` in
-`func(*CIFailureError) CIFixResult` still threads the verifier module
-through the params struct. The orchestrator calls modules directly and
-passes results as data.
-
-### AGENTS.md addition
-
-> The orchestrator (loop package) holds module references on the `Loop`
-> struct and calls them directly. Params/opts structs passed to functions
-> must carry only data: primitives, data structs (no methods), and
-> `*logging.Logger`. No interfaces, no struct-with-methods pointers, and
-> no function types. `TestOrchestratorParamsNoModules` enforces this.
->
-> If a downstream function needs a module's result, the orchestrator calls
-> the module first and passes the result as data. If a module operation
-> requires a decision from another module, the called module returns data
-> describing the situation and the orchestrator makes the decision.
->
-> GitHub is git's internal persistence layer. Do not reference `git.GitHub`,
-> `git.StubGitHub`, or any GitHub type outside `go/internal/git/`.
-> `TestGitHubIsInternal` enforces this.
+The strict arch tests in `orchestrator-modules.md` enforce all six rules
+mechanically. The prior single-paragraph carve-out — "Top-level structs
+(Loop, Verifier, git.Repo) may hold module references" — was the loophole
+that agents have repeatedly exploited and is removed.
