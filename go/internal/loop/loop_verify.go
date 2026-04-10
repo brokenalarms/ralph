@@ -15,28 +15,28 @@ import (
 //   - CIFixApplied:   fix was pushed, ready for merge retry
 //   - CIFixNoCommits: agent ran but made no commits (infrastructure failure)
 //   - CIFixFailed:    agent error or push failure
-func tryFixCI(ctx context.Context, g git.Ops, v *Verifier, logger *logging.Logger, ciErr *git.CIFailureError, nextTask, workDir, rawLogPath string) git.CIFixResult {
-	ciLog := g.GetCIFailureLog(ciErr.PRNumber)
-	headBefore := g.HeadRev()
-	if !v.TryFixCI(ctx, ciLog, ciErr, nextTask, workDir, rawLogPath) {
+func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask, workDir, rawLogPath string) git.CIFixResult {
+	ciLog := l.git.GetCIFailureLog(ciErr.PRNumber)
+	headBefore := l.git.HeadRev()
+	if !l.verifier.TryFixCI(ctx, ciLog, ciErr, nextTask, workDir, rawLogPath) {
 		return git.CIFixFailed
 	}
 
 	// Fix agent may leave uncommitted changes — commit them before checking HEAD.
-	if g.HasUncommittedChanges() {
-		logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent left uncommitted changes — auto-committing")
-		g.CommitAll("fix: auto-commit CI fix agent changes")
+	if l.git.HasUncommittedChanges() {
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent left uncommitted changes — auto-committing")
+		l.git.CommitAll("fix: auto-commit CI fix agent changes")
 	}
 
-	headAfter := g.HeadRev()
+	headAfter := l.git.HeadRev()
 	if headBefore == headAfter {
-		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Fix agent made no new commits — likely infrastructure failure")
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Fix agent made no new commits — likely infrastructure failure")
 		return git.CIFixNoCommits
 	}
 
-	logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent committed — pushing")
-	if err := g.Push(ctx); err != nil {
-		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after CI fix failed: %v", err)
+	l.logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent committed — pushing")
+	if err := l.git.Push(ctx); err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after CI fix failed: %v", err)
 		return git.CIFixFailed
 	}
 	return git.CIFixApplied
@@ -45,22 +45,22 @@ func tryFixCI(ctx context.Context, g git.Ops, v *Verifier, logger *logging.Logge
 // tryFixConflict spawns a conflict resolution agent, force-pushes the
 // resolved commits, and returns true if the fix was pushed (ready for
 // merge retry). Mirrors tryFixCI.
-func tryFixConflict(ctx context.Context, g git.Ops, v *Verifier, logger *logging.Logger, backend tasks.Backend, taskID, nextTask, workDir, rawLogPath string) bool {
-	conflictDiff := g.ConflictDiff()
-	beadDesc := getBeadDescription(backend, taskID)
-	headBefore := g.HeadRev()
-	if !v.TryFixConflict(ctx, conflictDiff, beadDesc, nextTask, workDir, rawLogPath) {
+func (l *Loop) tryFixConflict(ctx context.Context, taskID, nextTask, workDir, rawLogPath string) bool {
+	conflictDiff := l.git.ConflictDiff()
+	beadDesc := getBeadDescription(l.cfg.TaskBackend, taskID)
+	headBefore := l.git.HeadRev()
+	if !l.verifier.TryFixConflict(ctx, conflictDiff, beadDesc, nextTask, workDir, rawLogPath) {
 		return false
 	}
 
-	headAfter := g.HeadRev()
+	headAfter := l.git.HeadRev()
 	if headBefore == headAfter {
-		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Conflict agent made no new commits — nothing to push")
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Conflict agent made no new commits — nothing to push")
 		return false
 	}
 
-	if err := g.Push(ctx); err != nil {
-		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after conflict resolution failed: %v", err)
+	if err := l.git.Push(ctx); err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after conflict resolution failed: %v", err)
 		return false
 	}
 	return true
@@ -128,41 +128,41 @@ func formatReviewContext(reviewerName string, prNumber int, comments []git.Revie
 // tryFixReviewComments filters actionable comments from the review, spawns a
 // fix agent to address them, and force-pushes the result. Returns true when
 // the fix was committed and pushed successfully.
-func tryFixReviewComments(ctx context.Context, g git.Ops, v *Verifier, logger *logging.Logger, reviewerName string, review *git.AutoReview, prNumber int, nextTask, workDir, rawLogPath string) bool {
+func (l *Loop) tryFixReviewComments(ctx context.Context, reviewerName string, review *git.AutoReview, prNumber int, nextTask, workDir, rawLogPath string) bool {
 	actionable := filterActionableComments(review.Comments)
 	if len(actionable) == 0 {
-		logger.Emit(logging.Opts{Domain: logging.Git}, "%s review: no actionable comments — proceeding to merge", reviewerName)
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s review: no actionable comments — proceeding to merge", reviewerName)
 		return false
 	}
 
-	logger.Emit(logging.Opts{Domain: logging.Git}, "%s review: %d actionable comment(s) — spawning fix agent", reviewerName, len(actionable))
+	l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s review: %d actionable comment(s) — spawning fix agent", reviewerName, len(actionable))
 	for _, c := range actionable {
 		firstLine := c.Body
 		if i := strings.IndexByte(c.Body, '\n'); i >= 0 {
 			firstLine = c.Body[:i]
 		}
-		logger.Emit(logging.Opts{Domain: logging.Git}, "%s: %s:%d — %s", reviewerName, c.Path, c.Line, firstLine)
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s: %s:%d — %s", reviewerName, c.Path, c.Line, firstLine)
 	}
 	reviewCtx := formatReviewContext(reviewerName, prNumber, actionable)
-	headBefore := g.HeadRev()
+	headBefore := l.git.HeadRev()
 
-	if !v.TryCopilotFix(ctx, reviewCtx, nextTask, workDir, rawLogPath) {
+	if !l.verifier.TryCopilotFix(ctx, reviewCtx, nextTask, workDir, rawLogPath) {
 		return false
 	}
 
-	if g.HasUncommittedChanges() {
-		logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent left uncommitted changes — auto-committing")
-		g.CommitAll("fix: address " + reviewerName + " review feedback")
+	if l.git.HasUncommittedChanges() {
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent left uncommitted changes — auto-committing")
+		l.git.CommitAll("fix: address " + reviewerName + " review feedback")
 	}
 
-	if g.HeadRev() == headBefore {
-		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%s fix agent made no new commits — proceeding to merge anyway", reviewerName)
+	if l.git.HeadRev() == headBefore {
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%s fix agent made no new commits — proceeding to merge anyway", reviewerName)
 		return false
 	}
 
-	logger.Emit(logging.Opts{Domain: logging.Git}, "%s fix committed — pushing", reviewerName)
-	if err := g.Push(ctx); err != nil {
-		logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after %s fix failed: %v", reviewerName, err)
+	l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s fix committed — pushing", reviewerName)
+	if err := l.git.Push(ctx); err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after %s fix failed: %v", reviewerName, err)
 		return false
 	}
 	return true

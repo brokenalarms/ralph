@@ -637,14 +637,14 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 		}
 		if mergeResult.ReviewFixNeeded {
 			// Review fix needed: spawn fix agent, mark addressed, retry.
-			tryFixReviewComments(ctx, l.git, l.verifier, l.logger, mergeResult.PendingReviewer, mergeResult.PendingReview, prResultNum, title, workDir, rawLogPath)
+			l.tryFixReviewComments(ctx, mergeResult.PendingReviewer, mergeResult.PendingReview, prResultNum, title, workDir, rawLogPath)
 			l.state.Write("review_addressed:"+mergeResult.PendingReviewer+":"+taskID, "true") //nolint:errcheck
 			reviewAddressed[mergeResult.PendingReviewer] = true
 			continue
 		}
 		if mergeResult.CIFailure && mergeResult.CIFailureDetail != nil {
 			// CI fix: spawn fix agent; if it pushed new commits, retry merge.
-			fixResult := tryFixCI(ctx, l.git, l.verifier, l.logger, mergeResult.CIFailureDetail, title, workDir, rawLogPath)
+			fixResult := l.tryFixCI(ctx, mergeResult.CIFailureDetail, title, workDir, rawLogPath)
 			if fixResult == git.CIFixApplied {
 				continue
 			}

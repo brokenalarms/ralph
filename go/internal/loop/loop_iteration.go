@@ -244,7 +244,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		}
 	}
 
-	ct := buildCompletedTask(p.taskID, p.nextTask, p.result.Summary, prNumber, l.git)
+	ct := l.buildCompletedTask(p.taskID, p.nextTask, p.result.Summary, prNumber)
 	if shipURL != "" {
 		ct.PRURL = shipURL
 	}
@@ -376,14 +376,14 @@ func (l *Loop) execRunPostTask(ctx context.Context, taskID string, prNumber int,
 }
 
 // buildCompletedTask assembles the CompletedTask record for a signal.
-func buildCompletedTask(taskID, nextTask, summary string, prNumber int, g git.Ops) CompletedTask {
+func (l *Loop) buildCompletedTask(taskID, nextTask, summary string, prNumber int) CompletedTask {
 	ct := CompletedTask{
 		ID:      taskID,
 		Title:   nextTask,
 		Summary: summary,
 		PRNum:   prNumber,
 	}
-	if num, t, u, err := g.FindPRForBranch(g.GetWorktreeBranch()); err == nil && num != 0 {
+	if num, t, u, err := l.git.FindPRForBranch(l.git.GetWorktreeBranch()); err == nil && num != 0 {
 		ct.PRNum = num
 		ct.PRTitle = t
 		ct.PRURL = u

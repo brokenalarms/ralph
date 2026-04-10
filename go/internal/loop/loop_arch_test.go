@@ -160,3 +160,68 @@ func isInterfaceType(expr ast.Expr) bool {
 	_, ok := expr.(*ast.InterfaceType)
 	return ok
 }
+
+// TestNoGitInFunctionArgs ensures git module references are never passed as
+// function arguments anywhere in the loop package. The Loop holds git on its
+// struct (constructor injection); helpers reach it via the receiver, not via
+// a parameter. Catches the escape hatch where agents wrap git in a free
+// function param to dodge the params-struct rule.
+//
+// Constructors (functions whose name starts with "New") are exempt — that's
+// where dependency injection happens.
+func TestNoGitInFunctionArgs(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	dir := filepath.Dir(thisFile)
+
+	forbidden := map[string]bool{
+		"git.Ops":     true,
+		"git.Repo":    true,
+		"git.Manager": true,
+		"git.GitOps":  true,
+	}
+
+	fset := token.NewFileSet()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("cannot read dir: %v", err)
+	}
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", e.Name(), err)
+		}
+
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Type.Params == nil {
+				continue
+			}
+			if strings.HasPrefix(fd.Name.Name, "New") {
+				continue
+			}
+			for _, field := range fd.Type.Params.List {
+				ts := typeString(field.Type)
+				bare := strings.TrimPrefix(ts, "*")
+				if !forbidden[ts] && !forbidden[bare] {
+					continue
+				}
+				names := []string{"_"}
+				if len(field.Names) > 0 {
+					names = nil
+					for _, n := range field.Names {
+						names = append(names, n.Name)
+					}
+				}
+				for _, name := range names {
+					t.Errorf("%s: %s parameter %q has type %s — git references must not be passed as function args; use l.git on a Loop method or pass pre-fetched data instead",
+						e.Name(), fd.Name.Name, name, ts)
+				}
+			}
+		}
+	}
+}
