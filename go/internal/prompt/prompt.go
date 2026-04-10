@@ -24,19 +24,21 @@ const (
 )
 
 // Vars holds all substitution values for prompt template assembly.
+// Field names are neutral — the prompt module doesn't care whether the
+// task list comes from beads, files, or any other backend.
 type Vars struct {
 	PromptsDir       string
 	ProjectDir       string
 	WorkDir          string
 	RalphDir         string
 	PlanFile         string
-	SignalToken       string
+	SignalToken      string
 	CurrentTaskToken string
 	AllCompleteToken string
 	TaskPrompt       string
 	AttemptHistory   string
 	TestStatus       string
-	BeadsContext     string
+	TasksContext     string
 	TaskBackend      TaskBackend
 }
 
@@ -92,7 +94,10 @@ func BuildPrompt(v Vars) (string, error) {
 		"{{TASK_PROMPT}}", v.TaskPrompt,
 		"{{ATTEMPT_HISTORY}}", attemptSection,
 		"{{TEST_STATUS}}", v.TestStatus,
-		"{{BEADS_CONTEXT}}", v.BeadsContext,
+		// {{BEADS_CONTEXT}} is the template placeholder name; the Go field
+		// is neutralized to TasksContext but the template token stays for
+		// backwards compatibility with existing prompt template files.
+		"{{BEADS_CONTEXT}}", v.TasksContext,
 	)
 	return r.Replace(result), nil
 }

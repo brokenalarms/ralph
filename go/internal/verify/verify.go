@@ -233,19 +233,20 @@ func fileExists(path string) bool {
 
 // VerifyOpts holds the parameters for LLMVerifyPR. The caller pre-fetches
 // the diff (PR diff or iteration diff) and passes it as data — verify never
-// reaches into git itself.
+// reaches into git itself. Field names are neutral: the verifier doesn't
+// know whether the task came from beads, files, or any other backend.
 type VerifyOpts struct {
-	Ctx             context.Context
-	WorkDir         string
-	PromptsDir      string
-	TaskID          string
-	BeadTitle       string
-	BeadDescription string
-	BeadAcceptance  string
-	Diff            string // pre-fetched diff (PR diff preferred, fall back to iteration)
-	DiffSource      string // human label for the diff origin: "PR" or "iteration"
-	QueryFn         QueryFunc
-	Model           string
+	Ctx         context.Context
+	WorkDir     string
+	PromptsDir  string
+	TaskID      string
+	Title       string
+	Description string
+	Acceptance  string
+	Diff        string // pre-fetched diff (PR diff preferred, fall back to iteration)
+	DiffSource  string // human label for the diff origin: "PR" or "iteration"
+	QueryFn     QueryFunc
+	Model       string
 }
 
 // LLMVerifyPR verifies that a task's acceptance criteria are satisfied.
@@ -268,7 +269,7 @@ func LLMVerifyPR(opts VerifyOpts) Result {
 		source = "PR"
 	}
 
-	prompt := loadReviewPrompt(opts.PromptsDir, opts.BeadTitle, opts.BeadDescription, opts.BeadAcceptance, source, diff)
+	prompt := loadReviewPrompt(opts.PromptsDir, opts.Title, opts.Description, opts.Acceptance, source, diff)
 	var model []string
 	if opts.Model != "" {
 		model = []string{opts.Model}
@@ -276,14 +277,14 @@ func LLMVerifyPR(opts VerifyOpts) Result {
 	return callLLM(opts.Ctx, opts.WorkDir, prompt, opts.QueryFn, model...)
 }
 
-func loadReviewPrompt(promptsDir, beadTitle, beadDescription, beadAcceptance, source, diff string) string {
+func loadReviewPrompt(promptsDir, title, description, acceptance, source, diff string) string {
 	tmplPath := filepath.Join(promptsDir, "verify-review.md")
 	data, err := os.ReadFile(tmplPath)
 	if err == nil {
 		prompt := string(data)
-		prompt = strings.ReplaceAll(prompt, "{{TASK_TITLE}}", beadTitle)
-		prompt = strings.ReplaceAll(prompt, "{{TASK_DESCRIPTION}}", beadDescription)
-		prompt = strings.ReplaceAll(prompt, "{{ACCEPTANCE_CRITERIA}}", beadAcceptance)
+		prompt = strings.ReplaceAll(prompt, "{{TASK_TITLE}}", title)
+		prompt = strings.ReplaceAll(prompt, "{{TASK_DESCRIPTION}}", description)
+		prompt = strings.ReplaceAll(prompt, "{{ACCEPTANCE_CRITERIA}}", acceptance)
 		prompt = strings.ReplaceAll(prompt, "{{DIFF_SOURCE}}", source)
 		prompt = strings.ReplaceAll(prompt, "{{DIFF}}", diff)
 		return prompt
@@ -305,7 +306,7 @@ Answer these questions:
 
 Some tasks are implemented through prompt or configuration changes (markdown files, .md templates) rather than traditional code. For these changes, only question 1 applies — do not reject for missing tests or error handling.
 
-Reply with exactly one line: YES or NO followed by a one-sentence reason.`, beadTitle, beadDescription, source, diff)
+Reply with exactly one line: YES or NO followed by a one-sentence reason.`, title, description, source, diff)
 }
 
 

@@ -47,9 +47,9 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask
 // merge retry). Mirrors tryFixCI.
 func (l *Loop) tryFixConflict(ctx context.Context, taskID, nextTask, workDir, rawLogPath string) bool {
 	conflictDiff := l.git.ConflictDiff()
-	beadDesc := getBeadDescription(l.cfg.TaskBackend, taskID)
+	taskDesc := getTaskDescription(l.cfg.TaskBackend, taskID)
 	headBefore := l.git.HeadRev()
-	if !l.verifier.TryFixConflict(ctx, conflictDiff, beadDesc, nextTask, workDir, rawLogPath) {
+	if !l.verifier.TryFixConflict(ctx, conflictDiff, taskDesc, nextTask, workDir, rawLogPath) {
 		return false
 	}
 
@@ -66,7 +66,7 @@ func (l *Loop) tryFixConflict(ctx context.Context, taskID, nextTask, workDir, ra
 	return true
 }
 
-func getBeadDescription(backend tasks.Backend, taskID string) string {
+func getTaskDescription(backend tasks.Backend, taskID string) string {
 	if taskID == "" || backend == nil {
 		return ""
 	}

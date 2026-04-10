@@ -372,10 +372,10 @@ var Flags = []FlagDef{
 			if err != nil {
 				return err
 			}
-			cfg.CopilotReviewTimeout = d
+			cfg.ReviewerGatedTimeout = d
 			return nil
 		},
-		Read: func(cfg *Config) string { return cfg.CopilotReviewTimeout.String() },
+		Read: func(cfg *Config) string { return cfg.ReviewerGatedTimeout.String() },
 	},
 	{
 		Long: "--copilot-opportunistic-timeout", MetaVar: "<dur>",
@@ -387,10 +387,10 @@ var Flags = []FlagDef{
 			if err != nil {
 				return err
 			}
-			cfg.CopilotOpportunisticTimeout = d
+			cfg.ReviewerOpportunisticTimeout = d
 			return nil
 		},
-		Read: func(cfg *Config) string { return cfg.CopilotOpportunisticTimeout.String() },
+		Read: func(cfg *Config) string { return cfg.ReviewerOpportunisticTimeout.String() },
 	},
 	{
 		Long: "--coderabbit-review-timeout", MetaVar: "<dur>",

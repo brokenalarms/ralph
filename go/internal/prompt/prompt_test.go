@@ -496,29 +496,29 @@ func TestBuildPrompt_DemandsConciseOutput(t *testing.T) {
 	}
 }
 
-// Proves: beads context is injected into the prompt when provided,
+// Proves: tasks context is injected into the prompt when provided,
 // giving the agent immediate awareness of project state at startup.
-func TestBuildPrompt_BeadsContextIncluded(t *testing.T) {
+func TestBuildPrompt_TasksContextIncluded(t *testing.T) {
 	v := testVars(t)
 	v.TaskBackend = BackendBD
-	v.BeadsContext = "○ task-1 [● P1] - Fix auth\n✓ task-0 ● P1 - Bootstrap"
+	v.TasksContext = "○ task-1 [● P1] - Fix auth\n✓ task-0 ● P1 - Bootstrap"
 	result, err := BuildPrompt(v)
 	if err != nil {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
 	if !strings.Contains(result, "task-1") {
-		t.Error("prompt missing beads context content")
+		t.Error("prompt missing tasks context content")
 	}
 	if strings.Contains(result, "{{BEADS_CONTEXT}}") {
 		t.Error("prompt still contains unsubstituted {{BEADS_CONTEXT}}")
 	}
 }
 
-// Proves: no beads context placeholder remains when context is empty.
-func TestBuildPrompt_BeadsContextEmpty(t *testing.T) {
+// Proves: no tasks context placeholder remains when context is empty.
+func TestBuildPrompt_TasksContextEmpty(t *testing.T) {
 	v := testVars(t)
 	v.TaskBackend = BackendBD
-	v.BeadsContext = ""
+	v.TasksContext = ""
 	result, err := BuildPrompt(v)
 	if err != nil {
 		t.Fatalf("BuildPrompt: %v", err)

@@ -404,14 +404,14 @@ func TestLLMVerifyPR_AcceptsVerifyOpts(t *testing.T) {
 	dir := setupGitRepo(t)
 
 	result := LLMVerifyPR(VerifyOpts{
-		Ctx:             context.Background(),
-		WorkDir:         dir,
-		PromptsDir:      t.TempDir(),
-		TaskID:          "struct-test",
-		BeadTitle:       "struct api test",
-		BeadDescription: "proves VerifyOpts struct works",
-		BeadAcceptance:  "accepts struct",
-		Model:           ModelHaiku,
+		Ctx:         context.Background(),
+		WorkDir:     dir,
+		PromptsDir:  t.TempDir(),
+		TaskID:      "struct-test",
+		Title:       "struct api test",
+		Description: "proves VerifyOpts struct works",
+		Acceptance:  "accepts struct",
+		Model:       ModelHaiku,
 	})
 	if !result.Passed {
 		t.Errorf("expected pass with no diff, got: %s", result.Reason)
@@ -426,12 +426,12 @@ func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
 	dir := setupGitRepo(t)
 
 	result := LLMVerifyPR(VerifyOpts{
-		Ctx:             context.Background(),
-		WorkDir:         dir,
-		PromptsDir:      t.TempDir(),
-		TaskID:          "nonexistent-task",
-		BeadTitle:       "some task",
-		BeadDescription: "some description",
+		Ctx:         context.Background(),
+		WorkDir:     dir,
+		PromptsDir:  t.TempDir(),
+		TaskID:      "nonexistent-task",
+		Title:       "some task",
+		Description: "some description",
 	})
 	if !result.Passed {
 		t.Errorf("expected pass when agent confirms complete with no new work needed, got: %s", result.Reason)
@@ -447,14 +447,14 @@ func TestLLMVerifyPR_UsesDiffField(t *testing.T) {
 	dir := setupGitRepo(t)
 
 	result := LLMVerifyPR(VerifyOpts{
-		Ctx:             context.Background(),
-		WorkDir:         dir,
-		PromptsDir:      t.TempDir(),
-		TaskID:          "test-task",
-		BeadTitle:       "test",
-		BeadDescription: "test desc",
-		Diff:            "+new line from PR\n",
-		DiffSource:      "PR",
+		Ctx:         context.Background(),
+		WorkDir:     dir,
+		PromptsDir:  t.TempDir(),
+		TaskID:      "test-task",
+		Title:       "test",
+		Description: "test desc",
+		Diff:        "+new line from PR\n",
+		DiffSource:  "PR",
 	})
 
 	// LLM call will fail (no claude binary in test), so we expect pass with skip reason

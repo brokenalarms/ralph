@@ -40,7 +40,7 @@ func buildTaskPrompt(nextTask, taskID string, backend tasks.Backend, promptsDir,
 }
 
 func buildPrompt(taskPrompt, attemptHistory, testStatus string, backend tasks.Backend, promptsDir, projectDir, workDir, ralphDir, planFile string, signals claude.SignalPaths, logger *logging.Logger) (string, error) {
-	beadsContext, err := backend.ProjectContext()
+	tasksContext, err := backend.ProjectContext()
 	if err != nil {
 		logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ProjectContext: %v", err)
 	}
@@ -57,7 +57,7 @@ func buildPrompt(taskPrompt, attemptHistory, testStatus string, backend tasks.Ba
 		TaskPrompt:       taskPrompt,
 		AttemptHistory:   attemptHistory,
 		TestStatus:       testStatus,
-		BeadsContext:     beadsContext,
+		TasksContext:     tasksContext,
 		TaskBackend:      prompt.BackendBD,
 	})
 }

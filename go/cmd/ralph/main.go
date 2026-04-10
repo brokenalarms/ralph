@@ -92,8 +92,8 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	gm.BaseBranch = cfg.BaseBranch
 	gm.Logger = log
 	gm.CIPollTimeout = cfg.CIPollTimeout
-	gm.CopilotGatedTimeout = cfg.CopilotReviewTimeout
-	gm.CopilotOpportunisticTimeout = cfg.CopilotOpportunisticTimeout
+	gm.CopilotGatedTimeout = cfg.ReviewerGatedTimeout
+	gm.CopilotOpportunisticTimeout = cfg.ReviewerOpportunisticTimeout
 	gm.CodeRabbitTimeout = cfg.CodeRabbitReviewTimeout
 
 	// Initialize .ralph directory and check for resume. This must happen

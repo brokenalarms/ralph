@@ -46,13 +46,13 @@ func TestBuildPRBody_FullContext(t *testing.T) {
 	}
 }
 
-func TestBuildPRBody_NoBeadDescription(t *testing.T) {
+func TestBuildPRBody_NoTaskDescription(t *testing.T) {
 	backend := &testutil.StubBackend{}
 
 	body := buildPRBody(backend, "ralph-abc", "Implemented the feature")
 
 	if strings.Contains(body, "## Description") {
-		t.Error("body should not contain Description when bead has none")
+		t.Error("body should not contain Description when task has none")
 	}
 	if !strings.Contains(body, "## Summary") {
 		t.Error("body should contain Summary section as fallback")

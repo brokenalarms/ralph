@@ -88,8 +88,11 @@ type Config struct {
 	CIPollTimeout           time.Duration
 
 	// Review timeouts — how long to wait for automated code reviewers.
-	CopilotReviewTimeout        time.Duration
-	CopilotOpportunisticTimeout time.Duration
+	// Field names are neutral: the config package doesn't know about
+	// specific reviewer implementations (Copilot, CodeRabbit). Those are
+	// internal details of the git module.
+	ReviewerGatedTimeout        time.Duration
+	ReviewerOpportunisticTimeout time.Duration
 	CodeRabbitReviewTimeout     time.Duration
 
 	// Attempt limits — maximum retries before giving up or skipping.
