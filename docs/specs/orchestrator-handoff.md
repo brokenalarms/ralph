@@ -1,12 +1,13 @@
 # Orchestrator/module-boundary refactor — handoff notes
 
 This document is the binding direction for the next agent picking up the
-orchestrator/module-boundary refactor (PRs #520, #521, and the work that
-follows). It exists because the refactor has been started, drifted,
-corrected, drifted, corrected, repeatedly. Every drift came from the
-agent reading existing code patterns and unconsciously preserving them
-instead of holding the architectural rules in mind. **This document is
-the source of truth. Read it before touching any code.**
+orchestrator/module-boundary refactor (PRs #520, #521, #522, and the
+work that follows). It exists because the refactor has been started,
+drifted, corrected, drifted, corrected, repeatedly. Every drift came
+from the agent reading existing code patterns and unconsciously
+preserving them instead of holding the architectural rules in mind.
+**This document is the source of truth. Read it before touching any
+code.**
 
 The authoritative spec is `docs/specs/orchestrator-modules.md`. This
 document is the field guide that explains what to do, what NOT to do,
@@ -14,21 +15,77 @@ and the specific traps that have caught every prior agent.
 
 ## Where things stand
 
-PR #520 merged: spec doc + 5 strict arch tests, 4 of which currently
-pass. The fifth (`TestNoModulesInNonLoopStructs`) is intentionally red
-and will be turned green by the work below.
+**PR #520 merged.** Spec doc + 5 strict arch tests. Four pass, the
+fifth (`TestNoModulesInNonLoopStructs`) is the expected-red punch list
+that turns green commit-by-commit.
 
-PR #521 merged: neutralized Bead*/Copilot* naming, deleted helpers that
-took modules as params, restored `*logging.Logger` as the single named
-cross-module exception. Four arch tests green after #521.
+**PR #521 merged.** Neutralized Bead*/Copilot* naming, deleted helpers
+that took modules as params, restored `*logging.Logger` as the single
+named cross-module exception.
 
-Commit A (this PR) lands: `loop.cfg.TaskBackend` moved to
-`Loop.taskBackend`, `loop.Modules` struct introduced as the struct form
-of `loop.New`'s module-reference parameter list, `newTestModules(t, ...)`
-helper in place and used by every loop test. `TestNoModulesInNonLoopStructs`
-drops from 4 violations to 3 (only the three `VerifierDeps.*` fields
-remain — Commit B's scope). Remaining work breaks down into focused
-commits below.
+**PR #522 (Commit A) merged.** `loop.cfg.TaskBackend` → `Loop.taskBackend`.
+`loop.Modules{State, Git, TaskBackend, Logger}` introduced as the struct
+form of `loop.New`'s module-reference parameter list. `loop.New` is now
+`New(cfg Config, mods Modules) *Loop`. `newTestModules(t, st, gm, backend,
+loggerOpt...)` helper lives in `loop_test.go` and every loop test uses it.
+`orchestrator_arch_test.go` whitelists `Modules` by name alongside `Loop`.
+`TestNoModulesInNonLoopStructs` dropped from 4 violations to 3 — the three
+remaining are all on `VerifierDeps` in `internal/loop/verifier.go`:
+
+```
+loop/verifier.go: VerifierDeps.Git         has type git.Ops
+loop/verifier.go: VerifierDeps.State       has type *state.Store
+loop/verifier.go: VerifierDeps.TaskBackend has type tasks.Backend
+```
+
+**Commit B (next) turns those three violations green** by eliminating
+the `Verifier` struct entirely and moving its methods onto `Loop`. This
+is the single largest commit in the refactor. Read the Commit B section
+below carefully before starting.
+
+## Lessons from Commit A (apply to Commit B)
+
+These are observations from landing Commit A that will save the next
+agent time and context:
+
+- **Stay in scope.** During Commit A I drifted into reading the Verifier
+  code and reasoning about Commit B. The user pulled me back with the
+  full acceptance criteria re-pasted. The lesson: do not read verifier.go
+  or design its replacement until you are ready to land Commit B.
+  Reading ahead burns context and creates the temptation to "fix both at
+  once," which is exactly how prior agents caused cascading merges.
+- **No beads, no loop, iterate conversationally.** User was explicit:
+  "it goes wrong every time" when beads are created for this work. One
+  PR at a time, each reviewed before moving on. 100% finish required.
+- **Test call sites migrate mechanically with a brace-tracking
+  Python transformer.** Commit A had ~185 `Modules{...}` literals to
+  rewrite into `newTestModules(...)` calls. A regex-with-brace-balancing
+  script in `/tmp/migrate_to_helper.py` (no longer in the tree but in
+  the conversation transcript) handled every call site except three
+  edge cases in `loop_test.go` (where the helper lives) plus a few
+  `cfg := Config{...}` patterns that the script's `New(Config{` regex
+  didn't match. Budget: one pass of the script + 5–10 manual edits for
+  stragglers + `goimports -w` to clean up unused imports. Do not try to
+  do 185 edits by hand.
+- **`go vet ./...` is the right "find the next compile error" loop.**
+  Vet points at one malformed file at a time; fix it, re-run vet, repeat
+  until clean. Then `go build ./...`, then `go test ./...`.
+- **`goimports` is at `$(go env GOPATH)/bin/goimports`, not on PATH.**
+  After bulk test rewrites, imports get stale and go vet complains.
+  Run `$(go env GOPATH)/bin/goimports -w go/internal/loop/` to fix in
+  one call.
+- **The arch test is the scoreboard, not an acceptance criterion.** The
+  arch test file itself says "Tests will turn green commit-by-commit as
+  the refactor lands." The user accepted Commit A landing with 3
+  remaining `VerifierDeps` violations because those are Commit B's
+  scope. When you land Commit B, the arch test should go fully green
+  (0 violations). That IS Commit B's acceptance.
+- **The `Modules` struct is now the pattern; `VerifierDeps` is its
+  inverse.** `Modules` is allowed because it IS the constructor's
+  parameter list — it is owned by nobody after construction. `VerifierDeps`
+  is forbidden because it is held long-term by a `Verifier` instance as a
+  field, which makes `Verifier` a second composer of modules from other
+  packages. Commit B deletes `VerifierDeps` along with `Verifier`.
 
 ## The corrected rules — read before touching code
 
@@ -427,83 +484,244 @@ green) and reduces violations of the rules above. **Read the rule
 before doing each commit.** Do not propose alternatives that violate
 the rules even if they seem easier.
 
-### Commit A — Move `Loop.cfg.TaskBackend` to `Loop.taskBackend` ✅ DONE
+### Commit A — Move `Loop.cfg.TaskBackend` to `Loop.taskBackend` ✅ MERGED (#522)
 
-**Rule 1, Rule 4.** Landed. What it did:
+Landed `loop.Modules` struct, `loop.New(cfg Config, mods Modules)`
+signature, `Loop.taskBackend` field, `newTestModules(t, ...)` helper,
+and whitelisted `Modules` in `orchestrator_arch_test.go`. See the
+"Where things stand" section at the top of this document for the full
+post-merge state.
 
-1. `loop.Modules` struct introduced with `State`, `Git`, `TaskBackend`,
-   `Logger` fields. Comment explains it is the struct form of
-   `loop.New`'s parameter list and is the only exported non-`Loop`
-   struct permitted to hold module references.
-2. `loop.New` signature changed from
-   `New(cfg Config, st *state.Store, gm git.Ops, logger *logging.Logger) *Loop`
-   to `New(cfg Config, mods Modules) *Loop`. All four fields copied
-   onto the corresponding private fields on `Loop`.
-3. `Loop.taskBackend` added alongside `state`, `git`.
-4. `TaskBackend` field deleted from `Config` struct. Every
-   `l.cfg.TaskBackend` rewritten to `l.taskBackend` across
-   `internal/loop/*.go`.
-5. `cmd/ralph/main.go` constructs a `loop.Modules{State, Git,
-   TaskBackend, Logger}` literal and passes it to `loop.New`.
-6. `newTestModules(t *testing.T, st, gm, backend, loggerOpt...)` helper
-   added in `loop_test.go`. ~185 test call sites migrated from
-   `Modules{State: ..., Git: ..., TaskBackend: ..., Logger: ...}`
-   literals to `newTestModules(t, ...)` calls.
-7. `orchestrator_arch_test.go` whitelists `Modules` by name alongside
-   `Loop` (only permitted struct outside the orchestrator to hold
-   module references, because it *is* the constructor's parameter
-   list).
-8. `TestNoModulesInNonLoopStructs` dropped from 4 violations to 3. The
-   remaining three (`VerifierDeps.Git`, `VerifierDeps.State`,
-   `VerifierDeps.TaskBackend`) are Commit B's scope. Everything else
-   green.
+### Commit B — Strip the `Verifier` struct entirely ← NEXT
 
-Spec doc (`docs/specs/orchestrator-modules.md`) updated in the same PR
-to describe `Modules`, the arch-test whitelist, and the `loop.New`
-signature. Handoff doc (this file) updated to mark Commit A done.
+**Rule 1.** This is the largest commit in the refactor. `verifier.go`
+is 653 lines and `verifier_test.go` is 1037 lines — expect ~1800 lines
+of churn across the pair plus edits to `loop.go`, `loop_iteration.go`,
+`loop_verify.go`, and test files that exercise the verifier indirectly.
+The end state turns `TestNoModulesInNonLoopStructs` fully green.
 
-### Commit B — Strip the `Verifier` struct entirely
+#### Current shape — what to delete
 
-**Rule 1.** This is the largest commit in the refactor (~1500 lines
-including test rewrites). The user's spec calls for it.
+`go/internal/loop/verifier.go` defines:
 
-1. Add `iterationState` private struct on `Loop` with the verifier
-   counters (`testFixAttempts`, `llmVerifyAttempts`) and the per-iteration
-   data the verifier currently reads from `signalParams` (`headBefore`,
-   `workDir`, `rawLogPath`, `taskID`, `nextTask`).
-2. Add `iter iterationState` field on `Loop`. Add a `(l *Loop) beginIteration(...)`
-   method that resets it.
-3. Move all 18 `*Verifier` methods to private Loop methods. Each method:
-   - Takes `(ctx context.Context)` only (plus per-call data passed in by
-     sibling calls)
-   - Reads from `l.iter.*` instead of `signalParams`
-   - Calls `l.git.X()`, `l.taskBackend.X()`, `l.state.X()`, `l.runner.X()`
-     directly via the receiver
-   - Uses `l.logger.Emit(...)` directly
-4. The five callback factories on `VerifierDeps` get unwound:
-   - `Runner func() claudeRunner` → `l.runner` directly
-   - `NewRunner func() claudeRunner` → calls a Loop helper that creates a
-     fresh runner via `agent.New(l.logger)`
-   - `QueryFn` → reads from a Loop field set at construction
-   - `LLMVerify` → reads from a Loop field set at construction (test seam)
-   - `SkipTask` → calls `l.skipTask(...)` directly
-5. Delete `signalParams`, `Verifier`, `VerifierConfig`, `VerifierDeps`,
-   `NewVerifier`. Delete `internal/loop/verifier.go` (the file).
-6. Update call sites in `loop.go`, `loop_iteration.go`, `loop_verify.go`
-   to call the new Loop methods (`l.onSignal(ctx)`, `l.verifyCompletion(ctx)`,
-   `l.runPreIterationTests(ctx)`, etc.).
-7. Rewrite `verifier_test.go` (29 tests) to construct a `Loop` instead of
-   a `Verifier`. Same for `loop_signal_test.go` (11 tests),
-   `loop_verify_test.go` (parts of it). Each test that previously did
-   `v := newTestVerifier(t, ...)` becomes `l := newTestLoop(t, ...)` and
-   the test exercises `l.onSignal(...)` instead of `v.OnSignal(...)`.
-8. Build + test pass. `TestNoModulesInNonLoopStructs` drops to zero
-   violations and turns green.
+- `type VerifierConfig struct` — 13 fields: `VerifyDir`, `ProjectDir`,
+  `VerifyModel`, `VerifyEscalationModel`, `FixModel`, `ModelCap`,
+  `PromptsDir`, `RalphDir`, `IdleTimeout`, `MaxLLMVerifyAttempts`,
+  `MaxTestFixAttempts`, `TestTimeout`, `CompileCheckTimeout`. All pure
+  data — all already on `cfg` on Loop.
+- `type VerifierDeps struct` — **the three Rule 1 violations live here**:
+  `Git git.Ops`, `State *state.Store`, `TaskBackend tasks.Backend`. Plus
+  `Logger *logging.Logger` (allowed — rule 5 exception), `Runner func()
+  claudeRunner`, `Signals claude.SignalPaths`, `NewRunner func()
+  claudeRunner`, `QueryFn verify.QueryFunc`, `LLMVerify func(verify.VerifyOpts)
+  verify.Result`, `SkipTask func(id, reason string)`.
+- `type Verifier struct { cfg VerifierConfig; deps VerifierDeps;
+  testFixAttempts int; llmVerifyAttempts int }` — the struct that Rule 1
+  explicitly calls out as forbidden (it's a second composer of modules
+  from other packages).
+- `type signalParams struct { ctx, headBefore, workDir, rawLogPath,
+  taskID, nextTask }` — per-iteration data threaded through every
+  verifier method. Becomes `iterationState` fields on Loop.
+- `func NewVerifier(cfg, deps) *Verifier` — the constructor. Deleted.
+- **20 `(v *Verifier)` methods** — all move to Loop (or get deleted):
 
-**This commit is genuinely large.** Don't try to land it in pieces — the
-intermediate states won't compile because removing `Verifier` while it
-still has callers requires moving everything in lockstep. Schedule it as
-its own multi-hour focused commit.
+```
+OnSignal, testFixLoop, tryFixTests, compileFixLoop, verifyWithFixLoop,
+tryFixVerification, fetchVerifyDiff, ResetCounters, runTestsWithHeartbeat,
+verifyModel, fixModel, VerifyCompletion, RunPreIterationTests, TryFixCI,
+TryCopilotFix, TryFixConflict, runFixAgent, loadVerifyPrompt,
+taskDescription, taskAcceptance
+```
+
+(Use `grep -n '^func (v \*Verifier)' go/internal/loop/verifier.go` to
+see the exact line list.)
+
+#### Current integration points — what to rewrite
+
+Four files outside `verifier.go` reach into the Verifier today:
+
+- **`loop.go:141`** — `verifier *Verifier` field on Loop. Delete.
+- **`loop.go:224–248`** — `l.verifier = NewVerifier(VerifierConfig{...}, VerifierDeps{...})`
+  block inside `loop.New`. Delete entirely. Anything the VerifierConfig
+  fields fed is already available via `l.cfg.*`; anything the VerifierDeps
+  callbacks fed is already available as `l.runner`, `l.taskBackend`,
+  `l.git`, `l.state`, `l.logger`, or `l.skipTask(...)` (existing method).
+- **`loop.go:366`** — `l.verifier.OnSignal(signalParams{...})` inside
+  the `OnSignal` callback closure. Becomes `l.onSignal(ctx)` — but the
+  per-iteration data (`headBefore`, `workDir`, `rawLogPath`, `taskID`,
+  `nextTask`) must live on `l.iter` by then, populated by
+  `l.beginIteration(...)` earlier in the run.
+- **`loop.go:460`** — `l.verifier.ResetCounters()`. Replaced by resetting
+  `l.iter` at iteration boundary (already where `beginIteration` runs).
+- **`loop_verify.go:20`** — `l.verifier.TryFixCI(ctx, ciLog, ciErr,
+  nextTask, workDir, rawLogPath)`. Becomes `l.tryFixCI(ctx, ciLog, ciErr)`
+  — `nextTask`, `workDir`, `rawLogPath` come from `l.iter.*`.
+- **`loop_verify.go:51`** — `l.verifier.TryFixConflict(ctx, conflictDiff,
+  taskDesc, nextTask, workDir, rawLogPath)`. Becomes
+  `l.tryFixConflict(ctx, conflictDiff, taskDesc)` — same reasoning.
+- **`loop_verify.go:151`** — `l.verifier.TryCopilotFix(ctx, reviewCtx,
+  nextTask, workDir, rawLogPath)`. Becomes `l.tryCopilotFix(ctx, reviewCtx)`.
+- **`loop_iteration.go:351`** — `l.verifier.VerifyCompletion(ctx,
+  l.git.GetWorkDir(), headBefore)`. Becomes `l.verifyCompletion(ctx)` —
+  reads `l.iter.workDir`, `l.iter.headBefore`.
+- **`loop_iteration.go:425`** — `l.verifier.RunPreIterationTests(ctx)`.
+  Becomes `l.runPreIterationTests(ctx)`.
+
+Every signature above loses its per-iteration string parameters because
+those become `l.iter.*` reads. This is Rule 3.
+
+#### Target shape — what to add
+
+```go
+// In loop.go, next to the other state sections:
+type iterationState struct {
+    // Set by beginIteration when a task starts.
+    task       taskContext  // or split to taskID/nextTask if taskContext isn't a good fit
+    headBefore string
+    workDir    string
+    rawLogPath string
+
+    // Per-iteration counters — replace Verifier.testFixAttempts and
+    // Verifier.llmVerifyAttempts. Reset by beginIteration.
+    testFixAttempts   int
+    llmVerifyAttempts int
+}
+
+type Loop struct {
+    // ... existing fields
+    iter iterationState
+    // Former VerifierDeps callbacks, now direct fields set in loop.New:
+    queryFn   verify.QueryFunc
+    llmVerify func(verify.VerifyOpts) verify.Result
+    signals   claude.SignalPaths  // already exists
+    // Note: Runner/NewRunner stop being callbacks — they read l.runner
+    // directly (for the current runner) or call a new helper
+    // l.newFixRunner() that wraps the existing cfg.NewRunner() call.
+}
+
+func (l *Loop) beginIteration(task taskContext, prep iterationPrep) {
+    l.iter = iterationState{
+        task:       task,
+        headBefore: prep.headBefore,
+        workDir:    prep.workDir,
+        rawLogPath: prep.rawLogPath,
+    }
+}
+```
+
+`loop.New` stops constructing a Verifier; it copies VerifierDeps'
+non-module callback fields (`QueryFn`, `LLMVerify`) onto Loop from
+`cfg.QueryFn` and from `verify.LLMVerifyPR` (with the nil-fallback
+defaulting the test seam).
+
+#### Callback unwind table
+
+| VerifierDeps field        | Target on Loop                                 |
+|---------------------------|-----------------------------------------------|
+| `Logger`                  | Already `l.logger` (keep)                     |
+| `Git`                     | `l.git` (already)                             |
+| `State`                   | `l.state` (already)                           |
+| `TaskBackend`             | `l.taskBackend` (already — Commit A)          |
+| `Runner func() claudeRunner` | `l.runner` direct field (already)          |
+| `Signals`                 | `l.signals` (already)                         |
+| `NewRunner func() claudeRunner` | `l.newFixRunner()` helper that calls `l.cfg.NewRunner()` |
+| `QueryFn`                 | `l.queryFn` direct field set from `cfg.QueryFn` |
+| `LLMVerify`               | `l.llmVerify` direct field set from `cfg.LLMVerify`, defaulting to `verify.LLMVerifyPR` when nil |
+| `SkipTask`                | `l.skipTask(id, reason)` (already exists)     |
+
+None of the unwinds require Config changes — `QueryFn` and `LLMVerify`
+already exist on `Config` as test seams and are just being read once at
+`loop.New` time rather than passed through VerifierDeps. If the next
+agent finds that `cfg.LLMVerify` doesn't exist today (it might not),
+add it as a Config field, because that's how tests inject their stub
+verifier. This is NOT the "callbacks forbidden" case — QueryFn and
+LLMVerify are crossing `cmd/ralph → loop.New`, which is the one allowed
+DI point.
+
+#### Method rename convention
+
+Public Verifier methods (e.g. `OnSignal`, `VerifyCompletion`,
+`RunPreIterationTests`) become **unexported** Loop methods
+(`onSignal`, `verifyCompletion`, `runPreIterationTests`). They were
+exported only because the Verifier struct was exported; as private
+Loop methods they're only called from within the loop package.
+
+Private Verifier methods (e.g. `testFixLoop`, `tryFixTests`,
+`compileFixLoop`) stay private on Loop with the same name.
+
+#### Test rewrite
+
+`verifier_test.go` is 1037 lines. Every test that previously did:
+
+```go
+v := NewVerifier(VerifierConfig{...}, VerifierDeps{State: st, Git: gm, ...})
+v.OnSignal(signalParams{headBefore: ..., workDir: ..., ...})
+```
+
+becomes:
+
+```go
+l := New(Config{...}, newTestModules(t, st, gm, backend))
+l.beginIteration(task, iterationPrep{headBefore: ..., workDir: ..., ...})
+l.onSignal(ctx)
+```
+
+There are also tests in `loop_signal_test.go`, `loop_verify_test.go`,
+and `loop_verifybuild_test.go` that construct a Verifier — grep for
+`NewVerifier\|newTestVerifier\|VerifierDeps` across `*_test.go` to find
+them. Each becomes a Loop construction.
+
+The test helper pattern to add (if it doesn't land inline): a
+`newTestLoopForVerify(t, ...) *Loop` helper in one of the verifier
+test files, mirroring `newTestLoopForSelection` in
+`loop_task_selection_test.go`. Use it to shape the Loop + `l.iter`
+state the test needs.
+
+#### Landing strategy
+
+**Do NOT try to land this incrementally.** Removing Verifier while it
+still has callers produces intermediate states that don't compile,
+because `loop.go` will reference methods that don't exist yet OR
+`verifier.go` will reference state that's already been moved. The
+commit is "all or nothing" at the compile level.
+
+Practical sequence inside the single commit:
+
+1. Add `iterationState` struct, `l.iter` field, `l.beginIteration(...)`
+   method. Don't delete anything yet.
+2. Move each Verifier method into a corresponding Loop method, rewriting
+   `v.cfg.X` → `l.cfg.X`, `v.deps.X` → `l.X`, `p.headBefore` →
+   `l.iter.headBefore`, `v.testFixAttempts` → `l.iter.testFixAttempts`,
+   etc. Each method lands in `loop_verify.go` or a new `loop_signal.go`
+   grouped by topic. Do this method-by-method; between methods the file
+   compiles but has both old and new definitions.
+3. Once all methods exist on Loop, update the call sites in `loop.go`,
+   `loop_iteration.go`, `loop_verify.go` to call the Loop methods
+   instead of the Verifier methods.
+4. Delete `verifier.go` (the whole file) and the `l.verifier` field
+   on `Loop` and the `NewVerifier` block in `loop.New`. Rewrite
+   `verifier_test.go` to use Loop.
+5. `go vet ./...` → `go build ./...` → `go test ./...` until green.
+6. Confirm `TestNoModulesInNonLoopStructs` is now fully green (0
+   violations).
+
+#### Commit B acceptance
+
+1. `internal/loop/verifier.go` does not exist.
+2. No `Verifier`, `VerifierConfig`, `VerifierDeps`, `NewVerifier`,
+   or `signalParams` symbols anywhere in the tree.
+3. `Loop.iter iterationState` field exists; `beginIteration` populates
+   it; the 20 former Verifier methods are Loop methods reading
+   `l.iter.*`.
+4. No method in the loop package that used to live on Verifier still
+   takes `taskID`/`nextTask`/`headBefore`/`workDir`/`rawLogPath` as
+   parameters — they all read `l.iter.*`.
+5. `go build ./...` and `go test ./...` both fully green.
+6. `TestNoModulesInNonLoopStructs` passes (0 violations).
+7. `verifier_test.go` rewritten to construct Loop rather than Verifier,
+   or split across `loop_signal_test.go`/`loop_verify_test.go`.
+8. Spec doc (`docs/specs/orchestrator-modules.md`) and this handoff doc
+   updated in the same PR to mark Commit B done and Commit C next.
 
 ### Commit C — `git.New(git.Config{...})` and stop field mutation in cmd/ralph
 
