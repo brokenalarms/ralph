@@ -9,7 +9,6 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
-	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -111,10 +110,10 @@ func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *tes
 	t.Helper()
 	_, st := setupTestDir(t)
 	gm := &git.StubRepo{
-		ProjectDir: dir,
-		WorkDir:    dir,
+		ProjectDir:   dir,
+		WorkDir:      dir,
 		HeadRevValue: "after-sha",
-		PRState:    git.PRStateOpen,
+		PRState:      git.PRStateOpen,
 	}
 	gm.ShipFunc = func(_ context.Context, opts git.ShipOpts) (git.ShipResult, error) {
 		if opts.PRNumber == 0 {
@@ -135,7 +134,7 @@ func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *tes
 		TaskBackend: backend,
 		AutoMerge:   autoMerge,
 		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	return finalizeSetup{
 		loop: l,
@@ -295,7 +294,7 @@ func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testi
 		TaskBackend: backend,
 		AutoMerge:   false,
 		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	p := completeTaskParams{
@@ -480,7 +479,7 @@ func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
 	l := New(Config{
 		TaskBackend: backend,
 		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, &git.StubRepo{ProjectDir: dir, WorkDir: dir}, logging.New(nil))
+	}, st, &git.StubRepo{ProjectDir: dir, WorkDir: dir})
 
 	l.skipTask("ralph-xyz", "merge_failed")
 
@@ -506,7 +505,7 @@ func TestSkipTask_EmptyID(t *testing.T) {
 	l := New(Config{
 		TaskBackend: backend,
 		Dirs:        workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, st, &git.StubRepo{ProjectDir: dir, WorkDir: dir}, logging.New(nil))
+	}, st, &git.StubRepo{ProjectDir: dir, WorkDir: dir})
 
 	l.skipTask("", "reason")
 

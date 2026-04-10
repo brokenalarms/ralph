@@ -49,37 +49,37 @@ const maxSelectionAttempts = 50
 
 func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, attempts int) (taskContext, loopAction) {
 	if attempts >= maxSelectionAttempts {
-		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Exhausted %d task selection attempts", maxSelectionAttempts)
+		logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Exhausted %d task selection attempts", maxSelectionAttempts)
 		l.state.Write("status", "error")
 		return taskContext{}, actionDone
 	}
 	maxIter := l.state.ReadMaxIterations(p.maxIterations)
 
 	if p.runIteration >= maxIter {
-		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Max iterations (%d) reached", maxIter)
+		logging.Emit(logging.Opts{Level: logging.Warn}, "Max iterations (%d) reached", maxIter)
 		l.state.Write("status", "max_iterations_reached")
 		return taskContext{}, actionDone
 	}
 
 	if err := ctx.Err(); err != nil {
-		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Interrupted — stopping")
+		logging.Emit(logging.Opts{Level: logging.Warn}, "Interrupted — stopping")
 		l.state.Write("status", "stopped")
 		return taskContext{}, actionDone
 	}
 
 	if l.state.CheckStop() {
-		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Stop file detected - halting")
+		logging.Emit(logging.Opts{Level: logging.Warn}, "Stop file detected - halting")
 		l.state.Write("status", "stopped")
 		return taskContext{}, actionDone
 	}
 
 	avail, err := tasks.CheckAvailability(l.cfg.TaskBackend)
 	if err != nil {
-		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task check error: %v", err)
+		logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task check error: %v", err)
 	}
 	if !avail.HasRemaining {
 		if p.runIteration == 0 && !avail.HasAny && !p.wait {
-			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Error}, "No tasks found — run ralph task to create tasks")
+			logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Error}, "No tasks found — run ralph task to create tasks")
 			l.state.Write("status", "error")
 			return taskContext{}, actionDone
 		}
@@ -87,7 +87,7 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 			l.flushUnpushedWork(ctx, p.lastTaskMerged)
 		}
 		if !p.wait {
-			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Success}, "All tasks complete!")
+			logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Success}, "All tasks complete!")
 			l.state.Write("status", "completed")
 			return taskContext{}, actionDone
 		}
@@ -111,7 +111,7 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 	taskID, nextTask := taskInfo.ID, taskInfo.Title
 
 	if taskID == "" && nextTask == "" {
-		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task backend returned empty — no task to run")
+		logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task backend returned empty — no task to run")
 		if p.wait {
 			if resumed := l.waitForTasks(ctx); !resumed {
 				return taskContext{}, actionDone
@@ -122,7 +122,7 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 	}
 
 	if p.completedIDs[taskID] {
-		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s already completed this session — skipping", taskID)
+		logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s already completed this session — skipping", taskID)
 		l.skipTask(taskID, "already_completed_this_session")
 		// Recurse to try the next task. runIteration stays the same since
 		// we didn't actually run anything.

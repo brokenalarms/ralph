@@ -38,7 +38,6 @@ func (r *promptCapturingFixRunner) StopStreaming() {}
 
 func (r *promptCapturingFixRunner) InjectMessage(_ string) error { return nil }
 
-
 func newTestVerifier(t *testing.T, opts ...func(*Verifier)) *Verifier {
 	t.Helper()
 	dir := t.TempDir()
@@ -55,7 +54,6 @@ func newTestVerifier(t *testing.T, opts ...func(*Verifier)) *Verifier {
 		PromptsDir: promptsDir,
 		RalphDir:   ralphDir,
 	}, VerifierDeps{
-		Logger:      logging.New(nil),
 		Git:         &git.StubRepo{HeadRevValue: "def456"},
 		State:       st,
 		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
@@ -110,7 +108,7 @@ func TestVerifier_OnSignal_ZeroCommits_Rejected(t *testing.T) {
 	})
 
 	var buf strings.Builder
-	v.deps.Logger = logging.NewWithWriter(&buf)
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&buf)))
 
 	result := v.OnSignal(signalParams{
 		ctx:        context.Background(),
@@ -516,10 +514,9 @@ func TestVerifier_OnSignal_ResetsAttemptsEachIteration(t *testing.T) {
 // message body), so operators can visually scan which model is running.
 func TestVerifier_VerificationLog_ShowsModelSubTag(t *testing.T) {
 	var logOut strings.Builder
-	logger := logging.NewWithWriter(&logOut)
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&logOut)))
 
 	v := newTestVerifier(t, func(v *Verifier) {
-		v.deps.Logger = logger
 		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 			return verify.Result{Passed: true, Reason: "looks good"}
 		}
@@ -548,11 +545,10 @@ func TestVerifier_VerificationLog_ShowsModelSubTag(t *testing.T) {
 // message body.
 func TestVerifier_FixAgentSpawnLog_ShowsModelSubTag(t *testing.T) {
 	var logOut strings.Builder
-	logger := logging.NewWithWriter(&logOut)
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&logOut)))
 
 	llmCalls := 0
 	v := newTestVerifier(t, func(v *Verifier) {
-		v.deps.Logger = logger
 		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 			llmCalls++
 			if llmCalls == 1 {
@@ -645,14 +641,13 @@ func TestVerifier_ModelCap_FixAgent(t *testing.T) {
 // progress, so operators can confirm the loop is alive during long test suites.
 func TestVerifier_RunTestsWithHeartbeat_EmitsHeartbeat(t *testing.T) {
 	var logOut strings.Builder
-	logger := logging.NewWithWriter(&logOut)
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&logOut)))
 
 	orig := HeartbeatInterval
 	HeartbeatInterval = 10 * time.Millisecond
 	defer func() { HeartbeatInterval = orig }()
 
 	v := newTestVerifier(t, func(v *Verifier) {
-		v.deps.Logger = logger
 		os.WriteFile(filepath.Join(v.cfg.VerifyDir, "Makefile"), []byte("ralph-verify:\n\t@sleep 0.1\n"), 0o644)
 	})
 
@@ -673,10 +668,9 @@ func TestVerifier_RunTestsWithHeartbeat_EmitsHeartbeat(t *testing.T) {
 // so operators can see how long the test suite took without digging in logs.
 func TestVerifier_OnSignal_ElapsedInFinalLine(t *testing.T) {
 	var logOut strings.Builder
-	logger := logging.NewWithWriter(&logOut)
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&logOut)))
 
 	v := newTestVerifier(t, func(v *Verifier) {
-		v.deps.Logger = logger
 		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 			return verify.Result{Passed: true, Reason: "looks good"}
 		}
@@ -739,9 +733,9 @@ func TestVerifier_ModelCap_OpusUnchanged(t *testing.T) {
 func TestVerifier_TestDomainSpawnLine_NoModelTag(t *testing.T) {
 	var buf strings.Builder
 
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&buf)))
 	v := newTestVerifier(t, func(v *Verifier) {
 		v.cfg.FixModel = verify.ModelOpus
-		v.deps.Logger = logging.NewWithWriter(&buf)
 		v.deps.Runner = func() claudeRunner { return &stubRunner{} }
 		v.deps.NewRunner = func() claudeRunner {
 			return &stubRunner{result: stubResult(true, "fixed")}
@@ -776,8 +770,8 @@ func TestVerifier_TestDomainSpawnLine_NoModelTag(t *testing.T) {
 func TestVerifier_LLMDomainVerifyLine_HasModelTag(t *testing.T) {
 	var buf strings.Builder
 
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&buf)))
 	v := newTestVerifier(t, func(v *Verifier) {
-		v.deps.Logger = logging.NewWithWriter(&buf)
 		v.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 			return verify.Result{Passed: true, Reason: "looks good"}
 		}
@@ -848,7 +842,7 @@ func TestVerifier_TryCopilotFix_NoSignal_ReturnsFalse(t *testing.T) {
 // proving the pre-iteration log shows what ran without being generic.
 func TestVerifier_RunPreIterationTests_LogsDetectedCommand(t *testing.T) {
 	var buf strings.Builder
-	logger := logging.NewWithWriter(&buf)
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&buf)))
 
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -861,7 +855,6 @@ func TestVerifier_RunPreIterationTests_LogsDetectedCommand(t *testing.T) {
 		PromptsDir: filepath.Join(dir, "prompts"),
 		RalphDir:   ralphDir,
 	}, VerifierDeps{
-		Logger:      logger,
 		Git:         &git.StubRepo{HeadRevValue: "abc123"},
 		State:       st,
 		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1},
@@ -884,7 +877,7 @@ func TestVerifier_RunPreIterationTests_LogsDetectedCommand(t *testing.T) {
 // proving the operator knows what ran without diving into raw output.
 func TestVerifier_RunPreIterationTests_LogsCommandOnFailure(t *testing.T) {
 	var buf strings.Builder
-	logger := logging.NewWithWriter(&buf)
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&buf)))
 
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -897,7 +890,6 @@ func TestVerifier_RunPreIterationTests_LogsCommandOnFailure(t *testing.T) {
 		PromptsDir: filepath.Join(dir, "prompts"),
 		RalphDir:   ralphDir,
 	}, VerifierDeps{
-		Logger:      logger,
 		Git:         &git.StubRepo{HeadRevValue: "abc123"},
 		State:       st,
 		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1},
@@ -936,7 +928,7 @@ func TestVerifier_OnSignal_MissingScript_NoFixAgent(t *testing.T) {
 	})
 
 	var buf strings.Builder
-	v.deps.Logger = logging.NewWithWriter(&buf)
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&buf)))
 
 	result := v.OnSignal(signalParams{
 		ctx:        context.Background(),
@@ -962,7 +954,7 @@ func TestVerifier_OnSignal_MissingScript_NoFixAgent(t *testing.T) {
 // error instead of treating it as a test failure.
 func TestVerifier_RunPreIterationTests_MissingScript(t *testing.T) {
 	var buf strings.Builder
-	logger := logging.NewWithWriter(&buf)
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&buf)))
 
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -975,7 +967,6 @@ func TestVerifier_RunPreIterationTests_MissingScript(t *testing.T) {
 		PromptsDir: filepath.Join(dir, "prompts"),
 		RalphDir:   ralphDir,
 	}, VerifierDeps{
-		Logger:      logger,
 		Git:         &git.StubRepo{HeadRevValue: "abc123"},
 		State:       st,
 		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1},
@@ -999,7 +990,7 @@ func TestVerifier_RunPreIterationTests_MissingScript(t *testing.T) {
 
 func TestVerifier_RunPreIterationTests_LogsCompileCommand(t *testing.T) {
 	var buf strings.Builder
-	logger := logging.NewWithWriter(&buf)
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&buf)))
 
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -1018,7 +1009,6 @@ func TestVerifier_RunPreIterationTests_LogsCompileCommand(t *testing.T) {
 		PromptsDir: filepath.Join(dir, "prompts"),
 		RalphDir:   ralphDir,
 	}, VerifierDeps{
-		Logger:      logger,
 		Git:         &git.StubRepo{HeadRevValue: "abc123"},
 		State:       st,
 		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1},

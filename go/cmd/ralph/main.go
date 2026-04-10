@@ -144,6 +144,10 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	}
 	defer logFileWriter.Close()
 	log = logging.New(logFileWriter)
+	// Install the configured logger as the package-level default so every
+	// caller can use logging.Emit(...) instead of threading a *Logger field
+	// or parameter through every struct and helper.
+	logging.SetDefault(log)
 
 	// Initialize task backend.
 	backend, err := initTaskBackend(cfg, promptsDir, log)
@@ -199,44 +203,44 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 	// Execution phase.
 	execLoop := loop.New(loop.Config{
-		Dirs:                dirs,
-		PlanFile:            planFile,
-		MaxIterations:       cfg.MaxIterations,
-		Refactor:            cfg.Refactor,
-		Quiet:               cfg.Quiet,
-		Verbose:             cfg.Verbose,
-		AutoMerge:           cfg.AutoMerge,
-		Evolve:              cfg.Evolve,
-		CallsPerHour:        cfg.CallsPerHour,
-		TaskBackend:         backend,
-		IdleTimeout:         cfg.IdleTimeout,
-		IdleTimeoutProgress: cfg.IdleTimeoutProgress,
-		PostSignalTimeout:   cfg.PostSignalTimeout,
-		PostTask:            cfg.PostTask,
-		VerifyBuild:         cfg.VerifyBuild,
-		Notify:              cfg.Notify,
-		Wait:                cfg.Wait,
-		Model:                cfg.Model,
-		AgentEscalationModel: cfg.AgentEscalationModel,
-		ModelCap:             modelCap(cfg),
-		Version:             config.Version,
-		OnRebaseConflict:    autoRebaseRecovery(),
-		VerifyDir:             dirs.WorkDir,
-		VerifyModel:           cfg.VerifyModel,
-		VerifyEscalationModel: cfg.VerifyEscalationModel,
-		MaxPromptAttempts:      cfg.MaxPromptAttempts,
-		MaxMergeFailures:       cfg.MaxMergeFailures,
-		MaxIdleTimeoutFailures: cfg.MaxIdleTimeoutFailures,
-		MaxLLMVerifyAttempts:   cfg.MaxLLMVerifyAttempts,
-		MaxTestFixAttempts:     cfg.MaxTestFixAttempts,
-		TestTimeout:            cfg.TestTimeout,
-		CompileCheckTimeout:    cfg.CompileCheckTimeout,
+		Dirs:                     dirs,
+		PlanFile:                 planFile,
+		MaxIterations:            cfg.MaxIterations,
+		Refactor:                 cfg.Refactor,
+		Quiet:                    cfg.Quiet,
+		Verbose:                  cfg.Verbose,
+		AutoMerge:                cfg.AutoMerge,
+		Evolve:                   cfg.Evolve,
+		CallsPerHour:             cfg.CallsPerHour,
+		TaskBackend:              backend,
+		IdleTimeout:              cfg.IdleTimeout,
+		IdleTimeoutProgress:      cfg.IdleTimeoutProgress,
+		PostSignalTimeout:        cfg.PostSignalTimeout,
+		PostTask:                 cfg.PostTask,
+		VerifyBuild:              cfg.VerifyBuild,
+		Notify:                   cfg.Notify,
+		Wait:                     cfg.Wait,
+		Model:                    cfg.Model,
+		AgentEscalationModel:     cfg.AgentEscalationModel,
+		ModelCap:                 modelCap(cfg),
+		Version:                  config.Version,
+		OnRebaseConflict:         autoRebaseRecovery(),
+		VerifyDir:                dirs.WorkDir,
+		VerifyModel:              cfg.VerifyModel,
+		VerifyEscalationModel:    cfg.VerifyEscalationModel,
+		MaxPromptAttempts:        cfg.MaxPromptAttempts,
+		MaxMergeFailures:         cfg.MaxMergeFailures,
+		MaxIdleTimeoutFailures:   cfg.MaxIdleTimeoutFailures,
+		MaxLLMVerifyAttempts:     cfg.MaxLLMVerifyAttempts,
+		MaxTestFixAttempts:       cfg.MaxTestFixAttempts,
+		TestTimeout:              cfg.TestTimeout,
+		CompileCheckTimeout:      cfg.CompileCheckTimeout,
 		ConnectivityCheckTimeout: cfg.ConnectivityCheckTimeout,
 		InternetRestoreInterval:  cfg.InternetRestoreInterval,
 		OnIterationStart: func() {
 			generateResumeScript(cfg, ralphDir, scriptPath, args, log)
 		},
-	}, st, gm, log)
+	}, st, gm)
 
 	if err := execLoop.Run(ctx); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Execution failed: %v", err)

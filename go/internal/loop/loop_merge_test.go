@@ -9,7 +9,6 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
-	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -72,7 +71,7 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.MergeRetryResult = true
@@ -146,7 +145,7 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 	l.runner = runner
 	gm.MergeRetryResult = true
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
@@ -239,7 +238,7 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 	l.runner = runner
 	gm.MergeRetryResult = true
 
@@ -334,7 +333,7 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 	l.runner = runner
 	gm.MergeRetryResult = true
 
@@ -421,7 +420,7 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 	l.runner = runner
 	gm.MergeRetryResult = true
 
@@ -508,7 +507,7 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 	l.runner = runner
 	gm.MergeRetryResult = true
 
@@ -579,7 +578,6 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	logger := logging.New(nil)
 	l := New(Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -591,7 +589,7 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, st, gm)
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.MergeRetryResult = true
@@ -609,4 +607,3 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 		t.Errorf("expected PostMergeUpdateMain to be called, got 0")
 	}
 }
-

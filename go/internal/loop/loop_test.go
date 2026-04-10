@@ -10,7 +10,6 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
-	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -73,10 +72,10 @@ func TestRun_ExitsOnGitHubUnreachable(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   &testutil.TrackingBackend{},
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 
 	l.cfg.IsOnline = func() bool { return true }
-	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
+	l.cfg.WaitForInternet = func(context.Context) bool { return true }
 	l.cfg.CheckGitHub = func(context.Context) error {
 		return errors.New("GitHub connectivity check timed out after 10s")
 	}
@@ -123,4 +122,3 @@ func TestGetTaskDescription_Standalone(t *testing.T) {
 		t.Errorf("nil backend should return empty, got %q", desc)
 	}
 }
-

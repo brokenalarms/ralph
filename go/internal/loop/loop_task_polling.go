@@ -13,18 +13,18 @@ import (
 // are available, (false, done=true) if a stop condition was hit.
 func (l *Loop) pollForTasks() (found, done bool) {
 	if l.state.CheckStop() {
-		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Stop file detected - halting")
+		logging.Emit(logging.Opts{Level: logging.Warn}, "Stop file detected - halting")
 		l.state.Write("status", "stopped")
 		return false, true
 	}
 	skipped, _ := l.state.GetSkippedTasks()
 	hasRemaining, err := tasks.Poll(l.cfg.TaskBackend, skipped)
 	if err != nil {
-		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task check error during wait: %v", err)
+		logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task check error during wait: %v", err)
 		return false, false
 	}
 	if hasRemaining {
-		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Success}, "New tasks detected!")
+		logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Success}, "New tasks detected!")
 		l.state.TouchPlanRefresh()
 		return true, false
 	}
@@ -33,7 +33,7 @@ func (l *Loop) pollForTasks() (found, done bool) {
 
 func (l *Loop) waitForTasks(ctx context.Context) bool {
 	const waitPollInterval = 5 * time.Second
-	l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Waiting for new tasks (polling every %s)...", waitPollInterval)
+	logging.Emit(logging.Opts{Domain: logging.Beads}, "Waiting for new tasks (polling every %s)...", waitPollInterval)
 	l.state.Write("status", "waiting")
 	l.state.UpdateStreamTask("", "Waiting for tasks...", nil)
 	l.state.TouchPlanRefresh()
@@ -81,10 +81,10 @@ func (l *Loop) logIterationBanner(p logIterationBannerParams, runIteration, maxI
 	completed, total := tasks.Progress(l.cfg.TaskBackend)
 
 	if runIteration > 1 {
-		l.logger.DashedSeparator(logging.Yellow)
+		logging.DashedSeparator(logging.Yellow)
 	}
 
-	l.logger.IterationBanner(logging.BannerOpts{
+	logging.IterationBanner(logging.BannerOpts{
 		RunIteration: runIteration,
 		MaxIteration: maxIter,
 		Lifetime:     iteration,

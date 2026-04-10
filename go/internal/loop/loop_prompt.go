@@ -39,10 +39,10 @@ func buildTaskPrompt(nextTask, taskID string, backend tasks.Backend, promptsDir,
 	return fmt.Sprintf("Complete this task (bd id: %s): %s", taskID, nextTask)
 }
 
-func buildPrompt(taskPrompt, attemptHistory, testStatus string, backend tasks.Backend, promptsDir, projectDir, workDir, ralphDir, planFile string, signals claude.SignalPaths, logger *logging.Logger) (string, error) {
+func buildPrompt(taskPrompt, attemptHistory, testStatus string, backend tasks.Backend, promptsDir, projectDir, workDir, ralphDir, planFile string, signals claude.SignalPaths) (string, error) {
 	tasksContext, err := backend.ProjectContext()
 	if err != nil {
-		logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ProjectContext: %v", err)
+		logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "ProjectContext: %v", err)
 	}
 
 	return prompt.BuildPrompt(prompt.Vars{

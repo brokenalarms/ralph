@@ -25,7 +25,6 @@ func TestOnSignal_HappyPath(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	logger := logging.New(nil)
 
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
@@ -33,7 +32,7 @@ func TestOnSignal_HappyPath(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
-	}, st, gm, logger)
+	}, st, gm)
 
 	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: true, Reason: "looks good"}
@@ -61,7 +60,7 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	logger := logging.New(nil)
+
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}
 
 	l := New(Config{
@@ -70,7 +69,7 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		VerifyDir:     dir,
-	}, st, gm, logger)
+	}, st, gm)
 
 	l.verifier.deps.NewRunner = func() claudeRunner {
 		return &stubRunner{result: stubResult(true, "attempted fix")}
@@ -106,7 +105,6 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	logger := logging.New(nil)
 
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
@@ -114,7 +112,7 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
-	}, st, gm, logger)
+	}, st, gm)
 
 	l.verifier.deps.NewRunner = func() claudeRunner {
 		return &stubRunner{result: stubResult(true, "attempted fix")}
@@ -159,7 +157,6 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	logger := logging.New(nil)
 
 	customFirst := "claude-haiku-custom"
 	customEscalation := "claude-sonnet-custom"
@@ -172,7 +169,7 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 		VerifyDir:             dir,
 		VerifyModel:           customFirst,
 		VerifyEscalationModel: customEscalation,
-	}, st, gm, logger)
+	}, st, gm)
 
 	l.verifier.deps.NewRunner = func() claudeRunner {
 		return &stubRunner{result: stubResult(true, "attempted fix")}
@@ -217,7 +214,6 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	logger := logging.New(nil)
 
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
@@ -225,7 +221,7 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"},
 		VerifyDir:     dir,
-	}, st, gm, logger)
+	}, st, gm)
 
 	fixAgentSpawned := false
 	l.verifier.deps.NewRunner = func() claudeRunner {
@@ -268,7 +264,6 @@ func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	logger := logging.New(nil)
 
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
@@ -276,7 +271,7 @@ func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"},
 		VerifyDir:     dir,
-	}, st, gm, logger)
+	}, st, gm)
 
 	var capturedPrompt string
 	l.verifier.deps.NewRunner = func() claudeRunner {
@@ -319,7 +314,6 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	logger := logging.New(nil)
 
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
@@ -327,7 +321,7 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
-	}, st, gm, logger)
+	}, st, gm)
 
 	l.verifier.deps.NewRunner = func() claudeRunner {
 		return &stubRunner{result: stubResult(false, "")}
@@ -357,7 +351,6 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	logger := logging.New(nil)
 
 	l := New(Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
@@ -365,7 +358,7 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
-	}, st, gm, logger)
+	}, st, gm)
 
 	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
 		return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
@@ -391,7 +384,6 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 	}
 }
 
-
 // Proves: first agent attempt uses cfg.Model; subsequent attempts (when prior
 // attempts exist on disk) use cfg.AgentEscalationModel, with ModelCap applied
 // as a ceiling over both.
@@ -402,7 +394,6 @@ func TestAgentModelEscalation(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	logger := logging.New(nil)
 
 	const firstModel = verify.ModelSonnet
 	const escalationModel = verify.ModelOpus
@@ -414,7 +405,7 @@ func TestAgentModelEscalation(t *testing.T) {
 		TaskBackend:          &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-abc"},
 		Model:                firstModel,
 		AgentEscalationModel: escalationModel,
-	}, st, gm, logger)
+	}, st, gm)
 
 	var capturedModels []string
 	l.runner = &stubRunner{
@@ -453,7 +444,6 @@ func TestAgentModelEscalation_ModelCapApplied(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	logger := logging.New(nil)
 
 	l := New(Config{
 		Dirs:                 workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
@@ -463,7 +453,7 @@ func TestAgentModelEscalation_ModelCapApplied(t *testing.T) {
 		Model:                verify.ModelSonnet,
 		AgentEscalationModel: verify.ModelOpus,
 		ModelCap:             verify.ModelHaiku, // cap everything to haiku
-	}, st, gm, logger)
+	}, st, gm)
 
 	var capturedModels []string
 	l.runner = &stubRunner{
@@ -497,7 +487,7 @@ func stubResult(signal bool, summary string) claude.Result {
 // agent will address without requiring them to check GitHub.
 func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 	var buf bytes.Buffer
-	logger := logging.NewWithWriter(&buf)
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&buf)))
 
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -511,7 +501,7 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
 		VerifyDir:     dir,
-	}, st, gm, logger)
+	}, st, gm)
 	l.verifier.deps.NewRunner = func() claudeRunner {
 		return &stubRunner{result: stubResult(true, "fixed")}
 	}

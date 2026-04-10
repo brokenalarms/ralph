@@ -10,7 +10,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
-	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -59,7 +58,7 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
@@ -122,7 +121,7 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
@@ -181,7 +180,7 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "no commits" }
@@ -226,7 +225,7 @@ func TestLoop_RecordsAttemptAfterIteration(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 
 	l.runner = &stubRunner{}
 
@@ -270,7 +269,7 @@ func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
 		MaxIterations: 2,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 
 	l.runner = &stubRunner{
 		onRun: func() {
@@ -323,7 +322,7 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 
 	// Seed an existing attempt
 	l.attempts.Record("ralph-done", "Done task", "first try failed", "", "continue")
@@ -505,7 +504,7 @@ func TestLoop_RecordsCompletedTasks(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 	l.runner = runner
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
@@ -558,7 +557,7 @@ func TestLoop_ClearsCompletedTasksOnStart(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
@@ -612,7 +611,7 @@ func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 	l.runner = runner
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
@@ -673,7 +672,7 @@ func TestLoop_SessionTasksRecordsCompletedWork(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return true, ""
@@ -729,7 +728,7 @@ func TestLoop_SessionTasksEmptyOnVerificationFailure(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return false, "tests failed"
@@ -788,7 +787,7 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 
 	l.runner = runner
 	gm.PRNumber = 42
@@ -834,7 +833,7 @@ func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())

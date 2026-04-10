@@ -88,7 +88,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 				case <-ticker.C:
 					if _, err := os.Stat(feedbackFile); err == nil {
 						os.Remove(feedbackFile)
-						l.logger.Emit(logging.Opts{Domain: logging.Git}, "Feedback signal detected during post-signal pipeline — cancelling")
+						logging.Emit(logging.Opts{Domain: logging.Git}, "Feedback signal detected during post-signal pipeline — cancelling")
 						cancel()
 						return
 					}
@@ -107,12 +107,12 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	if p.taskID != "" {
 		skipped, err := l.state.GetSkippedTasks()
 		if err != nil {
-			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to load skipped tasks for %s: %v — conservatively not pushing", p.taskID, err)
+			logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Failed to load skipped tasks for %s: %v — conservatively not pushing", p.taskID, err)
 			return completeTaskOut{action: signalSkipped}
 		}
 		for _, id := range skipped {
 			if id == p.taskID {
-				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s was skipped during verification — not pushing", p.taskID)
+				logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s was skipped during verification — not pushing", p.taskID)
 				return completeTaskOut{action: signalSkipped}
 			}
 		}
@@ -122,7 +122,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	if p.taskID != "" {
 		phase, _ := l.cfg.TaskBackend.GetState(p.taskID, "phase")
 		if phase != "implementing" {
-			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s phase is %q (expected implementing) — agent may have tampered with task state", p.taskID, phase)
+			logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Task %s phase is %q (expected implementing) — agent may have tampered with task state", p.taskID, phase)
 		}
 	}
 
@@ -130,7 +130,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	// If not (legacy/test path), run verification here as fallback.
 	if !p.result.OnSignalUsed {
 		if passed, reason := l.verifyCompletion(ctx, p.headBefore); !passed {
-			l.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Verification failed: %s", reason)
+			logging.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Verification failed: %s", reason)
 			l.attempts.Record(p.taskID, p.nextTask,
 				"Signal received but verification failed: "+reason,
 				p.diffStat,
@@ -141,9 +141,9 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 
 	if p.taskID != "" {
 		if err := l.cfg.TaskBackend.SetState(p.taskID, "phase", "verified", "ralph: tests passed, commits present"); err != nil {
-			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=verified: %v", err)
+			logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=verified: %v", err)
 		} else {
-			l.logger.Emit(logging.Opts{Domain: logging.Beads}, "%s → verified", p.taskID)
+			logging.Emit(logging.Opts{Domain: logging.Beads}, "%s → verified", p.taskID)
 		}
 	}
 
@@ -154,7 +154,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	headAfterSignal := l.git.HeadRev()
 	if p.headBefore != "" && headAfterSignal == p.headBefore {
 		// No new commits but verification passed (agent + LLM + tests agree).
-		l.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits — verified complete")
+		logging.Emit(logging.Opts{Domain: logging.Git}, "No new commits — verified complete")
 
 		// Check for an existing PR from a prior attempt that still needs merging.
 		if p.taskID != "" {
@@ -162,7 +162,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 			if prNum := parsePRNumber(ref); prNum != 0 {
 				prState, _ := l.git.GetPRState(prNum)
 				if prState == git.PRStateOpen {
-					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through merge", prNum)
+					logging.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through merge", prNum)
 					_, _, merged, _, _ := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
 					l.attempts.ClearMergeFailures(p.taskID)
 					prRef := fmt.Sprintf("PR #%d", prNum)
@@ -180,23 +180,23 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 						}
 					}
 					if merged && p.evolve {
-						l.logger.Phase("Evolve: restarting with latest main")
+						logging.Phase("Evolve: restarting with latest main")
 						l.state.Write("status", "evolve_restart") //nolint:errcheck
 						return completeTaskOut{action: signalEvolve, merged: true}
 					}
 					return completeTaskOut{action: signalSkipped, merged: merged}
 				}
 				if prState == git.PRStateMerged {
-					l.logger.Emit(logging.Opts{Domain: logging.Git}, "PR #%d already merged", prNum)
+					logging.Emit(logging.Opts{Domain: logging.Git}, "PR #%d already merged", prNum)
 				}
 			}
 		}
 
 		// No existing PR to merge — close the bead directly.
-		l.logger.Emit(logging.Opts{Domain: logging.Git}, "Closing bead (no PR to merge)")
+		logging.Emit(logging.Opts{Domain: logging.Git}, "Closing bead (no PR to merge)")
 		if p.taskID != "" {
 			if ctx.Err() != nil {
-				l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+				logging.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
 				return completeTaskOut{action: signalComplete}
 			}
 			closeReason := "verified complete (no new commits)"
@@ -204,14 +204,14 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 			if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
 				skipReason := "close_failed"
 				if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
-					l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
+					logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
 					skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
 				} else {
-					l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
+					logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
 				}
 				l.skipTask(p.taskID, skipReason)
 			} else {
-				l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
+				logging.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
 				l.persistCompleted(p.taskID, false)
 			}
 		}
@@ -224,7 +224,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	}
 
 	if ctx.Err() != nil {
-		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Post-signal timeout — aborting before push")
+		logging.Emit(logging.Opts{Level: logging.Warn}, "Post-signal timeout — aborting before push")
 		return completeTaskOut{action: signalComplete}
 	}
 
@@ -255,15 +255,15 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	}
 
 	if ctx.Err() != nil {
-		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Post-signal timeout — aborting before merge")
+		logging.Emit(logging.Opts{Level: logging.Warn}, "Post-signal timeout — aborting before merge")
 		return completeTaskOut{action: signalComplete, ct: &ct}
 	}
 
 	if prNumber == 0 {
-		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No PR created — closing bead for task %s", p.taskID)
+		logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No PR created — closing bead for task %s", p.taskID)
 		if p.taskID != "" {
 			if ctx.Err() != nil {
-				l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+				logging.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
 				return completeTaskOut{action: signalComplete, ct: &ct}
 			}
 			branch := l.git.GetWorktreeBranch()
@@ -272,7 +272,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 				closeReason = fmt.Sprintf("Verified — branch %s, no PR", branch)
 			}
 			if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
-				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
+				logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
 			}
 		}
 		return completeTaskOut{action: signalComplete, ct: &ct}
@@ -280,7 +280,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 
 	// CI is failing — leave task open for manual investigation or next loop.
 	if ciFailure {
-		l.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI failing on PR #%d — leaving task %s open.", prNumber, p.taskID)
+		logging.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI failing on PR #%d — leaving task %s open.", prNumber, p.taskID)
 		l.git.TagTaskEnd(p.taskID)
 		l.execRunPostTask(ctx, p.taskID, prNumber, false)
 		return completeTaskOut{action: signalComplete, ct: &ct}
@@ -289,7 +289,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	// Close the task based on merge outcome.
 	if p.taskID != "" {
 		if ctx.Err() != nil {
-			l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+			logging.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
 			return completeTaskOut{action: signalComplete, ct: &ct}
 		}
 		prRef := ct.PRURL
@@ -312,14 +312,14 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		if err := l.cfg.TaskBackend.CloseTask(p.taskID, closeReason); err != nil {
 			skipReason := "close_failed"
 			if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
-				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
+				logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
 				skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
 			} else {
-				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
+				logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
 			}
 			l.skipTask(p.taskID, skipReason)
 		} else {
-			l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
+			logging.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
 			l.persistCompleted(p.taskID, merged)
 		}
 	}
@@ -334,7 +334,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		notify.TaskMerged(p.taskID, p.nextTask)
 		if p.evolve {
 			l.git.TagTaskEnd(p.taskID)
-			l.logger.Phase("Evolve: restarting with latest main")
+			logging.Phase("Evolve: restarting with latest main")
 			l.state.Write("status", "evolve_restart") //nolint:errcheck
 			return completeTaskOut{action: signalEvolve, ct: &ct, merged: true}
 		}
@@ -357,7 +357,7 @@ func (l *Loop) persistCompleted(taskID string, merged bool) {
 		return
 	}
 	if err := l.state.AddCompletedTask(taskID, merged); err != nil {
-		l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
+		logging.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddCompletedTask: %v", err)
 	}
 }
 
@@ -371,7 +371,6 @@ func (l *Loop) execRunPostTask(ctx context.Context, taskID string, prNumber int,
 		postTask:    l.cfg.PostTask,
 		worktreeDir: l.cfg.VerifyDir,
 		projectDir:  l.cfg.Dirs.ProjectDir,
-		logger:      l.logger,
 	}, taskID, prNumber, merged)
 }
 
@@ -409,7 +408,7 @@ type iterationPrompt struct {
 func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask string) (iterationPrompt, bool) {
 	if taskID != "" {
 		if err := l.cfg.TaskBackend.SetState(taskID, "phase", "implementing", "ralph: starting task"); err != nil {
-			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=implementing: %v", err)
+			logging.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=implementing: %v", err)
 		}
 	}
 
@@ -421,11 +420,10 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 		verifyBuild: l.cfg.VerifyBuild,
 		projectDir:  l.cfg.Dirs.ProjectDir,
 		testTimeout: l.cfg.TestTimeout,
-		logger:      l.logger,
 	})
 	testStatus := buildStatus + l.verifier.RunPreIterationTests(ctx)
 
-	if !l.cfg.WaitForInternet(ctx, l.logger) {
+	if !l.cfg.WaitForInternet(ctx) {
 		return iterationPrompt{}, false
 	}
 	if !l.waitForRate(ctx) {
@@ -449,13 +447,13 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 			if reflectionCount > 0 {
 				parts = append(parts, "learnings from other tasks")
 			}
-			l.logger.Emit(logging.Opts{}, "Including %s", strings.Join(parts, " + "))
+			logging.Emit(logging.Opts{}, "Including %s", strings.Join(parts, " + "))
 		}
 	}
 
-	fullPrompt, err := buildPrompt(taskPrompt, attemptContext, testStatus, l.cfg.TaskBackend, promptsDir, l.cfg.Dirs.ProjectDir, l.git.GetWorkDir(), ralphDir, l.cfg.PlanFile, l.signals, l.logger)
+	fullPrompt, err := buildPrompt(taskPrompt, attemptContext, testStatus, l.cfg.TaskBackend, promptsDir, l.cfg.Dirs.ProjectDir, l.git.GetWorkDir(), ralphDir, l.cfg.PlanFile, l.signals)
 	if err != nil {
-		l.logger.Emit(logging.Opts{Level: logging.Error}, "Prompt build failed: %v", err)
+		logging.Emit(logging.Opts{Level: logging.Error}, "Prompt build failed: %v", err)
 		return iterationPrompt{}, false
 	}
 
@@ -476,16 +474,16 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr error, taskID, nextTask, headBefore string, runIteration int) loopAction {
 	if runErr != nil {
 		if !l.cfg.IsOnline() {
-			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Claude failed — internet appears down")
-			if !l.cfg.WaitForInternet(ctx, l.logger) {
+			logging.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Claude failed — internet appears down")
+			if !l.cfg.WaitForInternet(ctx) {
 				return actionDone
 			}
 			return actionRetry
 		}
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Claude failed on iteration %d, continuing...", runIteration)
+		logging.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Claude failed on iteration %d, continuing...", runIteration)
 	}
 	if result.FeedbackKill {
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Restarting iteration %d — user feedback received", runIteration)
+		logging.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Restarting iteration %d — user feedback received", runIteration)
 		diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
 		l.attempts.Record(taskID, nextTask,
 			"Killed: user feedback received (see bead notes for content)",
@@ -494,7 +492,7 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 		return actionRetry
 	}
 	if result.IdleTimeout {
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Restarting iteration %d after idle timeout", runIteration)
+		logging.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Restarting iteration %d after idle timeout", runIteration)
 		diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
 		l.attempts.Record(taskID, nextTask,
 			"Killed: idle timeout (no output for configured duration)",
@@ -502,7 +500,7 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 			"idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output")
 		count, _ := l.attempts.RecordIdleTimeoutFailure(taskID)
 		if count >= l.attempts.MaxIdleTimeoutFailures {
-			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Idle timeout %d times for %s — skipping task", count, taskID)
+			logging.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Idle timeout %d times for %s — skipping task", count, taskID)
 			l.skipTask(taskID, "idle_timeout_max_failures")
 			return actionRetry
 		}
@@ -510,15 +508,15 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 	}
 	if result.RateLimited {
 		waitDur := claude.FormatWaitDuration(time.Until(result.ResetAt))
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Claude rate limit — waiting %s until %s", waitDur, result.ResetAt.Format("3:04pm"))
+		logging.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Claude rate limit — waiting %s until %s", waitDur, result.ResetAt.Format("3:04pm"))
 		err := l.limiter.WaitUntil(ctx, result.ResetAt, func(secs int) {
-			l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: l.cfg.Model}, "Rate limit: %ds until reset", secs)
+			logging.Emit(logging.Opts{Domain: logging.LLM, Model: l.cfg.Model}, "Rate limit: %ds until reset", secs)
 		})
 		if err != nil {
-			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Rate limit wait interrupted: %v", err)
+			logging.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Rate limit wait interrupted: %v", err)
 			return actionDone
 		}
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: l.cfg.Model}, "Rate limit reset — resuming")
+		logging.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: l.cfg.Model}, "Rate limit reset — resuming")
 		return actionRetry
 	}
 

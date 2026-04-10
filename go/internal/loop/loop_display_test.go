@@ -50,7 +50,7 @@ func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 			ralphDir := filepath.Join(dir, ".ralph")
 
 			var logBuf strings.Builder
-			logger := logging.New(&logBuf)
+			defer logging.SetDefault(logging.SetDefault(logging.New(&logBuf)))
 
 			gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
@@ -63,10 +63,10 @@ func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 				MaxIterations: 5,
 				CallsPerHour:  80,
 				TaskBackend:   tt.backend,
-			}, st, gm, logger)
+			}, st, gm)
 
 			l.cfg.CheckGitHub = func(context.Context) error { return nil }
-	l.Run(context.Background())
+			l.Run(context.Background())
 
 			output := logBuf.String()
 			if !strings.Contains(output, tt.want) {
@@ -85,7 +85,7 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	var logBuf strings.Builder
-	logger := logging.New(&logBuf)
+	defer logging.SetDefault(logging.SetDefault(logging.New(&logBuf)))
 
 	backend := &testutil.StubBackend{
 		Remaining:    1,
@@ -109,7 +109,7 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, st, gm)
 	l.runner = &stubRunner{
 		onRun: func() {
 			backend.Remaining = 0
@@ -148,7 +148,7 @@ func TestLoop_LongDescriptionTruncatedInStream(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	var streamBuf bytes.Buffer
-	logger := logging.NewWithWriter(&streamBuf)
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&streamBuf)))
 
 	desc := "Line one of the description\nLine two goes here\nLine three is next\nLine four is hidden\nLine five is hidden"
 
@@ -174,7 +174,7 @@ func TestLoop_LongDescriptionTruncatedInStream(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, st, gm)
 	l.runner = &stubRunner{
 		onRun: func() {
 			backend.Remaining = 0
@@ -211,7 +211,7 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	var logBuf strings.Builder
-	logger := logging.New(&logBuf)
+	defer logging.SetDefault(logging.SetDefault(logging.New(&logBuf)))
 
 	backend := &testutil.StubBackend{
 		Remaining:    1,
@@ -234,7 +234,7 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, st, gm)
 	l.runner = &stubRunner{
 		onRun: func() {
 			backend.Remaining = 0
@@ -304,7 +304,7 @@ func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var logBuf bytes.Buffer
-	logger := logging.NewWithWriter(&logBuf)
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&logBuf)))
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -316,7 +316,7 @@ func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, st, gm)
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -363,7 +363,7 @@ func TestLoop_TaskBannerOnNewTask(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var logBuf bytes.Buffer
-	logger := logging.NewWithWriter(&logBuf)
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&logBuf)))
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -375,7 +375,7 @@ func TestLoop_TaskBannerOnNewTask(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, st, gm)
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -427,6 +427,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	var logBuf bytes.Buffer
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&logBuf)))
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -438,7 +439,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logging.NewWithWriter(&logBuf))
+	}, st, gm)
 
 	// Override the runner to return different results per iteration.
 	l.runner = &rateLimitStubRunner{
@@ -532,7 +533,7 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var logBuf bytes.Buffer
-	logger := logging.NewWithWriter(&logBuf)
+	defer logging.SetDefault(logging.SetDefault(logging.NewWithWriter(&logBuf)))
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -545,7 +546,7 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		TaskBackend:   backend,
-	}, st, gm, logger)
+	}, st, gm)
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -571,7 +572,6 @@ func newHandleRunResultLoop(t *testing.T) (*Loop, string) {
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	logger := logging.New(nil)
 
 	l := New(Config{
 		Dirs: workctx.WorkContext{
@@ -581,7 +581,7 @@ func newHandleRunResultLoop(t *testing.T) (*Loop, string) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-	}, st, gm, logger)
+	}, st, gm)
 
 	return l, ralphDir
 }
@@ -592,7 +592,7 @@ func TestHandleRunResult_OfflineReturnsRetry(t *testing.T) {
 	l, _ := newHandleRunResultLoop(t)
 
 	l.cfg.IsOnline = func() bool { return false }
-	l.cfg.WaitForInternet = func(_ context.Context, _ *logging.Logger) bool { return true }
+	l.cfg.WaitForInternet = func(_ context.Context) bool { return true }
 
 	runIter := 3
 	action := handleRunResultCall(l, context.Background(), claude.Result{}, fmt.Errorf("connection refused"),
@@ -609,7 +609,7 @@ func TestHandleRunResult_OfflineContextCancelledReturnsBreak(t *testing.T) {
 	l, _ := newHandleRunResultLoop(t)
 
 	l.cfg.IsOnline = func() bool { return false }
-	l.cfg.WaitForInternet = func(_ context.Context, _ *logging.Logger) bool { return false }
+	l.cfg.WaitForInternet = func(_ context.Context) bool { return false }
 
 	runIter := 3
 	action := handleRunResultCall(l, context.Background(), claude.Result{}, fmt.Errorf("connection refused"),
@@ -762,7 +762,7 @@ func TestOnResumeDone_Merged_NotifyEnabled(t *testing.T) {
 			StubBackend: testutil.StubBackend{
 				Remaining: 1,
 				Total:     1,
-				NextTask:   "Fix login",
+				NextTask:  "Fix login",
 				NextID:    "ralph-rm1",
 			},
 		},
@@ -780,7 +780,7 @@ func TestOnResumeDone_Merged_NotifyEnabled(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Notify:        true,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer
@@ -815,7 +815,7 @@ func TestOnResumeDone_Open_NotifyEnabled(t *testing.T) {
 			StubBackend: testutil.StubBackend{
 				Remaining: 1,
 				Total:     1,
-				NextTask:   "Add cache",
+				NextTask:  "Add cache",
 				NextID:    "ralph-ro1",
 			},
 		},
@@ -833,7 +833,7 @@ func TestOnResumeDone_Open_NotifyEnabled(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Notify:        true,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer
@@ -867,7 +867,7 @@ func TestOnResumeDone_Merged_NotifyDisabled(t *testing.T) {
 			StubBackend: testutil.StubBackend{
 				Remaining: 1,
 				Total:     1,
-				NextTask:   "Fix logout",
+				NextTask:  "Fix logout",
 				NextID:    "ralph-rd1",
 			},
 		},
@@ -885,7 +885,7 @@ func TestOnResumeDone_Merged_NotifyDisabled(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		Notify:        false,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer

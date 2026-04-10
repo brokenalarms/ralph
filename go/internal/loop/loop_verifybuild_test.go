@@ -10,7 +10,6 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
-	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -56,7 +55,7 @@ func TestLoop_VerifyBuild_FailureInjectedIntoPrompt(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		VerifyBuild:   scriptPath,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 
 	inner := &stubRunner{
 		onRun: func() {
@@ -118,7 +117,7 @@ func TestLoop_VerifyBuild_PassDoesNotInjectContext(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		VerifyBuild:   scriptPath,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 
 	inner := &stubRunner{
 		onRun: func() {
@@ -172,7 +171,7 @@ func TestLoop_VerifyBuild_NotConfigured_NoEffect(t *testing.T) {
 		CallsPerHour:  80,
 		TaskBackend:   backend,
 		// VerifyBuild intentionally not set
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 
 	inner := &stubRunner{
 		onRun: func() {
@@ -235,7 +234,7 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 		TaskBackend:   backend,
 		VerifyBuild:   scriptPath,
 		VerifyDir:     dir,
-	}, st, gm, logging.New(nil))
+	}, st, gm)
 
 	inner := &stubRunner{
 		onRun: func() {

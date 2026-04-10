@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/git"
-	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -17,9 +16,9 @@ func TestLoop_MaybeRefactor_DisabledByDefault(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	l := New(Config{
-		Dirs:    workctx.WorkContext{RalphDir: ralphDir},
+		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: false,
-	}, st, &git.StubRepo{WorkDir: dir}, logging.New(nil))
+	}, st, &git.StubRepo{WorkDir: dir})
 
 	err := l.maybeRefactor(context.Background(), 5)
 	if err != nil {
@@ -34,9 +33,9 @@ func TestLoop_MaybeRefactor_SkipsBelow5Completions(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	l := New(Config{
-		Dirs:    workctx.WorkContext{RalphDir: ralphDir},
+		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: true,
-	}, st, &git.StubRepo{WorkDir: dir}, logging.New(nil))
+	}, st, &git.StubRepo{WorkDir: dir})
 
 	err := l.maybeRefactor(context.Background(), 3)
 	if err != nil {
@@ -52,13 +51,13 @@ func TestLoop_MaybeRefactor_LLMSaysNo(t *testing.T) {
 
 	queryFnCalled := false
 	l := New(Config{
-		Dirs:    workctx.WorkContext{RalphDir: ralphDir},
+		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: true,
 		QueryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			queryFnCalled = true
 			return "NO\nCode looks fine.", nil
 		},
-	}, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, logging.New(nil))
+	}, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"})
 
 	err := l.maybeRefactor(context.Background(), 5)
 	if err != nil {
@@ -90,7 +89,7 @@ func TestLoop_MaybeRefactor_LLMSaysYes(t *testing.T) {
 		QueryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			return "YES\nThere is significant duplication.", nil
 		},
-	}, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, logging.New(nil))
+	}, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"})
 	l.runner = &stubRunner{
 		onRun: func() {
 			runnerCalled = true
@@ -113,13 +112,13 @@ func TestLoop_MaybeRefactor_TriggersAtMultiplesOf5(t *testing.T) {
 
 	queryCalls := 0
 	l := New(Config{
-		Dirs:    workctx.WorkContext{RalphDir: ralphDir},
+		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: true,
 		QueryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			queryCalls++
 			return "NO\nAll good.", nil
 		},
-	}, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, logging.New(nil))
+	}, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"})
 
 	// 7 completions: should NOT trigger (not a multiple of 5)
 	queryCalls = 0

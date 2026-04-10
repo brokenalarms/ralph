@@ -41,11 +41,11 @@ func (l *Loop) maybeRefactor(ctx context.Context, sessionCount int) error {
 	}
 
 	if !shouldRefactor {
-		l.logger.Emit(logging.Opts{Domain: "refactor"}, "LLM says no refactoring needed — skipping")
+		logging.Emit(logging.Opts{Domain: "refactor"}, "LLM says no refactoring needed — skipping")
 		return nil
 	}
 
-	l.logger.Phase("--- Adaptive refactor (LLM recommended) ---")
+	logging.Phase("--- Adaptive refactor (LLM recommended) ---")
 
 	ralphDir := l.cfg.Dirs.RalphDir
 	refactorPrompt, err := prompt.BuildRefactorPrompt(prompt.Vars{
@@ -77,7 +77,7 @@ func (l *Loop) maybeRefactor(ctx context.Context, sessionCount int) error {
 	})
 	l.limiter.Increment()
 
-	l.logger.Emit(logging.Opts{Level: logging.Success}, "Refactor iteration complete")
+	logging.Emit(logging.Opts{Level: logging.Success}, "Refactor iteration complete")
 
 	return err
 }

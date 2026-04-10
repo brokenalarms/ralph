@@ -39,7 +39,6 @@ type VerifierConfig struct {
 
 // VerifierDeps holds the injected dependencies for the Verifier.
 type VerifierDeps struct {
-	Logger      *logging.Logger
 	Git         git.Ops
 	State       *state.Store
 	TaskBackend tasks.Backend
@@ -102,14 +101,14 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 
 	commitResult := verify.CheckCommits(p.headBefore, v.deps.Git.HeadRev())
 	if !commitResult.Passed {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "No commits found — task was not worked")
+		logging.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "No commits found — task was not worked")
 		return false
 	}
 
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Running post-signal test suite...")
+	logging.Emit(logging.Opts{Domain: logging.Test}, "Running post-signal test suite...")
 	testResult, elapsed := v.runTestsWithHeartbeat(p.ctx, v.cfg.VerifyDir)
 	if testResult.Passed {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed (%s)", elapsed)
+		logging.Emit(logging.Opts{Domain: logging.Test}, "Tests passed (%s)", elapsed)
 	}
 
 	taskDesc := getTaskDescription(v.deps.TaskBackend, p.taskID)
@@ -117,7 +116,7 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 
 	if !testResult.Passed {
 		if testResult.ScriptMissing {
-			v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "ralph:verify script not found — cannot verify")
+			logging.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "ralph:verify script not found — cannot verify")
 			return false
 		}
 		if !v.testFixLoop(p, taskDesc, taskAcceptance, testResult.Details) {
@@ -154,10 +153,10 @@ func (v *Verifier) OnSignal(p signalParams) bool {
 func (v *Verifier) testFixLoop(p signalParams, taskDesc, taskAcceptance, testDetails string) bool {
 	for {
 		v.testFixAttempts++
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Tests failed (attempt %d/%d)", v.testFixAttempts, v.cfg.MaxTestFixAttempts)
+		logging.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Tests failed (attempt %d/%d)", v.testFixAttempts, v.cfg.MaxTestFixAttempts)
 
 		if v.testFixAttempts > v.cfg.MaxTestFixAttempts {
-			v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "Tests still failing after %d attempts — giving up", v.cfg.MaxTestFixAttempts)
+			logging.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "Tests still failing after %d attempts — giving up", v.cfg.MaxTestFixAttempts)
 			return false
 		}
 
@@ -165,10 +164,10 @@ func (v *Verifier) testFixLoop(p signalParams, taskDesc, taskAcceptance, testDet
 			return false
 		}
 
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Re-running test suite after test fix agent...")
+		logging.Emit(logging.Opts{Domain: logging.Test}, "Re-running test suite after test fix agent...")
 		rerun, rerunElapsed := v.runTestsWithHeartbeat(p.ctx, v.cfg.VerifyDir)
 		if rerun.Passed {
-			v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed after fix agent (%s)", rerunElapsed)
+			logging.Emit(logging.Opts{Domain: logging.Test}, "Tests passed after fix agent (%s)", rerunElapsed)
 			v.testFixAttempts = 0
 			return true
 		}
@@ -179,7 +178,7 @@ func (v *Verifier) testFixLoop(p signalParams, taskDesc, taskAcceptance, testDet
 // tryFixTests spawns a fix agent to address test failures.
 func (v *Verifier) tryFixTests(p signalParams, taskDesc, taskAcceptance, testDetails string) bool {
 	_ = taskDesc // reserved for future fix-prompt template additions
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Spawning fix agent for test failures (attempt %d/%d)", v.testFixAttempts, v.cfg.MaxTestFixAttempts)
+	logging.Emit(logging.Opts{Domain: logging.Test}, "Spawning fix agent for test failures (attempt %d/%d)", v.testFixAttempts, v.cfg.MaxTestFixAttempts)
 
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 	fixPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{
@@ -200,7 +199,7 @@ func (v *Verifier) tryFixTests(p signalParams, taskDesc, taskAcceptance, testDet
 func (v *Verifier) compileFixLoop(p signalParams, taskAcceptance string) bool {
 	compileResult := verify.CompileCheck(p.ctx, v.cfg.CompileCheckTimeout, v.cfg.VerifyDir)
 	if compileResult.Passed {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build}, "Compile check passed")
+		logging.Emit(logging.Opts{Domain: logging.Build}, "Compile check passed")
 		return true
 	}
 
@@ -212,11 +211,11 @@ func (v *Verifier) compileFixLoop(p signalParams, taskAcceptance string) bool {
 	for {
 		compileAttempts++
 		if compileAttempts > v.cfg.MaxTestFixAttempts {
-			v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Error}, "Compile check still failing after %d fix attempts — giving up", v.cfg.MaxTestFixAttempts)
+			logging.Emit(logging.Opts{Domain: logging.Build, Level: logging.Error}, "Compile check still failing after %d fix attempts — giving up", v.cfg.MaxTestFixAttempts)
 			return false
 		}
 
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Compile check failed — spawning fix agent (attempt %d/%d)", compileAttempts, v.cfg.MaxTestFixAttempts)
+		logging.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Compile check failed — spawning fix agent (attempt %d/%d)", compileAttempts, v.cfg.MaxTestFixAttempts)
 
 		signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 		fixPrompt := v.loadVerifyPrompt("verify-tests.md", map[string]string{
@@ -233,7 +232,7 @@ func (v *Verifier) compileFixLoop(p signalParams, taskAcceptance string) bool {
 
 		recheck := verify.CompileCheck(p.ctx, v.cfg.CompileCheckTimeout, v.cfg.VerifyDir)
 		if recheck.Passed {
-			v.deps.Logger.Emit(logging.Opts{Domain: logging.Build}, "Compile check passed after fix agent")
+			logging.Emit(logging.Opts{Domain: logging.Build}, "Compile check passed after fix agent")
 			return true
 		}
 		details = recheck.Reason
@@ -251,7 +250,7 @@ func (v *Verifier) verifyWithFixLoop(p signalParams, taskDesc, taskAcceptance st
 	for {
 		v.llmVerifyAttempts++
 		model := v.verifyModel()
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Running LLM verification (attempt %d/%d)...", v.llmVerifyAttempts, v.cfg.MaxLLMVerifyAttempts)
+		logging.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Running LLM verification (attempt %d/%d)...", v.llmVerifyAttempts, v.cfg.MaxLLMVerifyAttempts)
 		diff, diffSource := v.fetchVerifyDiff(p.taskID, p.headBefore)
 		llmResult := v.deps.LLMVerify(verify.VerifyOpts{
 			Ctx:         p.ctx,
@@ -268,12 +267,12 @@ func (v *Verifier) verifyWithFixLoop(p signalParams, taskDesc, taskAcceptance st
 		})
 
 		if llmResult.Passed {
-			v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: model}, "LLM verified: %s", llmResult.Reason)
+			logging.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: model}, "LLM verified: %s", llmResult.Reason)
 			v.llmVerifyAttempts = 0
 			return true
 		}
 
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: model}, "LLM verification rejected (attempt %d/%d): %s", v.llmVerifyAttempts, v.cfg.MaxLLMVerifyAttempts, llmResult.Details)
+		logging.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: model}, "LLM verification rejected (attempt %d/%d): %s", v.llmVerifyAttempts, v.cfg.MaxLLMVerifyAttempts, llmResult.Details)
 
 		if v.llmVerifyAttempts >= v.cfg.MaxLLMVerifyAttempts {
 			if p.taskID != "" {
@@ -286,19 +285,19 @@ func (v *Verifier) verifyWithFixLoop(p signalParams, taskDesc, taskAcceptance st
 			return false
 		}
 
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Re-running test suite after fix agent...")
+		logging.Emit(logging.Opts{Domain: logging.Test}, "Re-running test suite after fix agent...")
 		testResult, testElapsed := v.runTestsWithHeartbeat(p.ctx, v.cfg.VerifyDir)
 		if !testResult.Passed {
-			v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "Tests failed after fix agent (%s): %s", testElapsed, testResult.Reason)
+			logging.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "Tests failed after fix agent (%s): %s", testElapsed, testResult.Reason)
 			return false
 		}
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed after fix agent (%s)", testElapsed)
+		logging.Emit(logging.Opts{Domain: logging.Test}, "Tests passed after fix agent (%s)", testElapsed)
 	}
 }
 
 // tryFixVerification spawns a fix agent to address LLM verification rejection.
 func (v *Verifier) tryFixVerification(p signalParams, taskDesc, taskAcceptance, rejectionDetails string) bool {
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: v.fixModel()}, "Spawning fix agent for verification rejection (attempt %d/%d)", v.llmVerifyAttempts, v.cfg.MaxLLMVerifyAttempts)
+	logging.Emit(logging.Opts{Domain: logging.LLM, Model: v.fixModel()}, "Spawning fix agent for verification rejection (attempt %d/%d)", v.llmVerifyAttempts, v.cfg.MaxLLMVerifyAttempts)
 
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 	fixPrompt := v.loadVerifyPrompt("verify-fix.md", map[string]string{
@@ -350,7 +349,7 @@ func (v *Verifier) runTestsWithHeartbeat(ctx context.Context, dir string) (verif
 			case <-done:
 				return
 			case <-ticker.C:
-				v.deps.Logger.Emit(logging.Opts{Domain: logging.Test},
+				logging.Emit(logging.Opts{Domain: logging.Test},
 					"Tests still running... (%s elapsed)", time.Since(start).Truncate(time.Millisecond))
 			}
 		}
@@ -406,7 +405,7 @@ func (v *Verifier) VerifyCompletion(ctx context.Context, workDir, headBefore str
 		v.deps.State.Write("last_test_result", "fail")
 		v.deps.State.Write("last_test_time", now)
 		if testResult.Details != "" {
-			v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "Test output:\n%s", testResult.Details)
+			logging.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "Test output:\n%s", testResult.Details)
 		}
 		return false, testResult.Reason
 	}
@@ -426,23 +425,23 @@ func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 
 	var msg string
 
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Running pre-iteration test suite...")
+	logging.Emit(logging.Opts{Domain: logging.Test}, "Running pre-iteration test suite...")
 	testStart := time.Now()
 	result := verify.RunTests(ctx, v.cfg.TestTimeout, v.cfg.VerifyDir, v.cfg.ProjectDir)
 	testElapsed := time.Since(testStart).Truncate(10 * time.Millisecond)
 	now := time.Now().Format(time.RFC3339)
 
 	if result.Command != "" {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test}, "Using: %s (in %s)", result.Command, result.Dir)
+		logging.Emit(logging.Opts{Domain: logging.Test}, "Using: %s (in %s)", result.Command, result.Dir)
 	}
 
 	if result.Passed {
 		v.deps.State.Write("last_test_result", "pass")
 		v.deps.State.Write("last_test_time", now)
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Success}, "Pre-iteration tests: all passing (%s, %s)", result.Command, testElapsed)
+		logging.Emit(logging.Opts{Domain: logging.Test, Level: logging.Success}, "Pre-iteration tests: all passing (%s, %s)", result.Command, testElapsed)
 		msg += "\n- Test suite status: all tests passing as of start."
 	} else if result.ScriptMissing {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "ralph:verify script not found — skipping test suite")
+		logging.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "ralph:verify script not found — skipping test suite")
 	} else {
 		v.deps.State.Write("last_test_result", "fail")
 		v.deps.State.Write("last_test_time", now)
@@ -450,7 +449,7 @@ func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 		if cmdInfo == "" {
 			cmdInfo = "unknown command"
 		}
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Pre-iteration tests: failures detected (%s, %s, %s)", cmdInfo, result.Reason, testElapsed)
+		logging.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Pre-iteration tests: failures detected (%s, %s, %s)", cmdInfo, result.Reason, testElapsed)
 		msg += "\n- Test suite status: some tests are FAILING. Fix them before your task. If the tests pass when you run them, they were fixed externally — proceed with your task."
 		if result.Details != "" {
 			details := result.Details
@@ -467,7 +466,7 @@ func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 	compileElapsed := time.Since(compileStart).Truncate(10 * time.Millisecond)
 
 	if compileResult.Command != "" {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build}, "Using: %s (in %s)", compileResult.Command, compileResult.Dir)
+		logging.Emit(logging.Opts{Domain: logging.Build}, "Using: %s (in %s)", compileResult.Command, compileResult.Dir)
 	}
 
 	if compileResult.Passed {
@@ -475,13 +474,13 @@ func (v *Verifier) RunPreIterationTests(ctx context.Context) string {
 		if cmdInfo == "" {
 			cmdInfo = "skipped"
 		}
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Success}, "Pre-iteration compile check: passing (%s, %s)", cmdInfo, compileElapsed)
+		logging.Emit(logging.Opts{Domain: logging.Build, Level: logging.Success}, "Pre-iteration compile check: passing (%s, %s)", cmdInfo, compileElapsed)
 	} else {
 		cmdInfo := compileResult.Command
 		if cmdInfo == "" {
 			cmdInfo = "unknown command"
 		}
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Pre-iteration compile check: failures detected (%s, %s, %s)", cmdInfo, compileResult.Reason, compileElapsed)
+		logging.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Pre-iteration compile check: failures detected (%s, %s, %s)", cmdInfo, compileResult.Reason, compileElapsed)
 		msg += "\n- Build status: compile check is FAILING. Fix the build errors before your task."
 		details := compileResult.Details
 		if details == "" {
@@ -512,15 +511,15 @@ func (v *Verifier) TryFixCI(ctx context.Context, ciLog string, ciErr *git.CIFail
 		}
 	}
 	if len(optionalNames) > 0 {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.CI}, "Ignoring optional/deploy check failures: %s", strings.Join(optionalNames, ", "))
+		logging.Emit(logging.Opts{Domain: logging.CI}, "Ignoring optional/deploy check failures: %s", strings.Join(optionalNames, ", "))
 	}
 
 	if len(required) == 0 {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.CI}, "Only optional checks failed on PR #%d — skipping fix agent", ciErr.PRNumber)
+		logging.Emit(logging.Opts{Domain: logging.CI}, "Only optional checks failed on PR #%d — skipping fix agent", ciErr.PRNumber)
 		return false
 	}
 
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.CI}, "CI failed on PR #%d — spawning fix agent for required checks", ciErr.PRNumber)
+	logging.Emit(logging.Opts{Domain: logging.CI}, "CI failed on PR #%d — spawning fix agent for required checks", ciErr.PRNumber)
 
 	var checkNames []string
 	for _, f := range required {
@@ -544,7 +543,7 @@ func (v *Verifier) TryFixCI(ctx context.Context, ciLog string, ciErr *git.CIFail
 // paths and line numbers. Returns false without spawning if the fix agent
 // exits without signaling.
 func (v *Verifier) TryCopilotFix(ctx context.Context, reviewContext, nextTask, workDir, rawLogPath string) bool {
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.Git}, "Spawning Copilot review fix agent")
+	logging.Emit(logging.Opts{Domain: logging.Git}, "Spawning Copilot review fix agent")
 
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 	fixPrompt := v.loadVerifyPrompt("verify-copilot-review.md", map[string]string{
@@ -560,7 +559,7 @@ func (v *Verifier) TryCopilotFix(ctx context.Context, reviewContext, nextTask, w
 // TryFixConflict spawns a conflict resolution agent when automatic rebase
 // could not resolve merge conflicts.
 func (v *Verifier) TryFixConflict(ctx context.Context, conflictDiff, beadDesc, nextTask, workDir, rawLogPath string) bool {
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.Git}, "Unresolvable merge conflict — spawning conflict resolution agent")
+	logging.Emit(logging.Opts{Domain: logging.Git}, "Unresolvable merge conflict — spawning conflict resolution agent")
 
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 	fixPrompt := v.loadVerifyPrompt("resolve-conflict.md", map[string]string{
@@ -574,10 +573,9 @@ func (v *Verifier) TryFixConflict(ctx context.Context, conflictDiff, beadDesc, n
 	return fixResult.SignalDetected
 }
 
-
 func (v *Verifier) runFixAgent(ctx context.Context, description, prompt, workDir, rawLogPath string) claude.Result {
 	v.deps.Runner().StopStreaming()
-	v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: v.fixModel()}, "Spawning fix agent: %s", description)
+	logging.Emit(logging.Opts{Domain: logging.LLM, Model: v.fixModel()}, "Spawning fix agent: %s", description)
 
 	runner := v.deps.NewRunner()
 	result, _ := runner.Run(claude.RunConfig{
@@ -594,9 +592,9 @@ func (v *Verifier) runFixAgent(ctx context.Context, description, prompt, workDir
 	})
 
 	if !result.SignalDetected {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: v.fixModel()}, "Fix agent exited without signal (%s)", description)
+		logging.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: v.fixModel()}, "Fix agent exited without signal (%s)", description)
 	} else if result.Summary != "" {
-		v.deps.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: v.fixModel()}, "Fix agent (%s): %s", description, result.Summary)
+		logging.Emit(logging.Opts{Domain: logging.LLM, Model: v.fixModel()}, "Fix agent (%s): %s", description, result.Summary)
 	}
 
 	return result
