@@ -19,7 +19,9 @@ import (
 	"github.com/brokenalarms/ralph/internal/pidfile"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
+	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/tmux"
+	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -197,6 +199,23 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 	st.Write("started_at", time.Now().UTC().Format("2006-01-02T15:04:05Z"))
 
+	// Construct the verifier module. Verifier holds no module references —
+	// it exposes stateless operations that Loop orchestrates. See
+	// internal/verifier/verifier.go for the rationale.
+	vrf := verifier.New(verifier.Config{
+		VerifyDir:             dirs.WorkDir,
+		ProjectDir:            dirs.ProjectDir,
+		VerifyModel:           cfg.VerifyModel,
+		VerifyEscalationModel: cfg.VerifyEscalationModel,
+		ModelCap:              modelCap(cfg),
+		PromptsDir:            dirs.PromptsDir,
+		RalphDir:              ralphDir,
+		IdleTimeout:           cfg.IdleTimeout,
+		TestTimeout:           cfg.TestTimeout,
+		CompileCheckTimeout:   cfg.CompileCheckTimeout,
+		Signals:               claude.DefaultSignalPaths(ralphDir),
+	}, log, nil)
+
 	// Execution phase.
 	execLoop := loop.New(loop.Config{
 		Dirs:                     dirs,
@@ -240,6 +259,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		Git:         gm,
 		TaskBackend: backend,
 		Logger:      log,
+		Verifier:    vrf,
 	})
 
 	if err := execLoop.Run(ctx); err != nil {

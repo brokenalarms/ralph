@@ -7,104 +7,19 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
-	"github.com/brokenalarms/ralph/internal/verify"
+	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
-// Verifier.runFixAgent stops the main runner's streaming, creates a new
-// runner via NewRunner, passes the standard RunConfig, and returns the result.
-func TestVerifier_runFixAgent(t *testing.T) {
-	dir, _ := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-
-	mainRunner := &stubRunner{}
-	var capturedCfg claude.RunConfig
-	fixRunner := &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
-
-	signals := claude.DefaultSignalPaths(ralphDir)
-	v := &Verifier{
-		cfg: VerifierConfig{
-			RalphDir:    ralphDir,
-			IdleTimeout: 30 * time.Second,
-		},
-		deps: VerifierDeps{
-			Logger:  logging.New(nil),
-			Runner:  func() claudeRunner { return mainRunner },
-			Signals: signals,
-			NewRunner: func() claudeRunner {
-				return &configCapturingRunner{inner: fixRunner, captured: &capturedCfg}
-			},
-		},
-	}
-
-	ctx := context.Background()
-	result := v.runFixAgent(ctx, "test failures", "fix the tests", "/work", "/logs/raw.log")
-
-	if !result.SignalDetected {
-		t.Error("expected SignalDetected from fix agent result")
-	}
-	if capturedCfg.Prompt != "fix the tests" {
-		t.Errorf("expected prompt %q, got %q", "fix the tests", capturedCfg.Prompt)
-	}
-	if capturedCfg.WorkDir != "/work" {
-		t.Errorf("expected WorkDir %q, got %q", "/work", capturedCfg.WorkDir)
-	}
-	if capturedCfg.RawLog != "/logs/raw.log" {
-		t.Errorf("expected RawLog %q, got %q", "/logs/raw.log", capturedCfg.RawLog)
-	}
-	if capturedCfg.RalphDir != ralphDir {
-		t.Errorf("expected RalphDir %q, got %q", ralphDir, capturedCfg.RalphDir)
-	}
-	if !capturedCfg.Quiet {
-		t.Error("expected Quiet=true for fix agent")
-	}
-	if capturedCfg.IdleTimeout != 30*time.Second {
-		t.Errorf("expected IdleTimeout 30s, got %v", capturedCfg.IdleTimeout)
-	}
-}
-
-// Verifies that a fix agent's summary is logged when the signal includes
-// a descriptive message (not just "done").
-func TestVerifier_runFixAgent_logsSummary(t *testing.T) {
-	dir, _ := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-
-	var logBuf bytes.Buffer
-	fixRunner := &stubRunner{result: claude.Result{
-		SignalDetected: true,
-		Summary:        "added missing nil check in parseConfig",
-	}}
-
-	signals := claude.DefaultSignalPaths(ralphDir)
-	v := &Verifier{
-		cfg: VerifierConfig{
-			RalphDir:    ralphDir,
-			IdleTimeout: 30 * time.Second,
-		},
-		deps: VerifierDeps{
-			Logger:  logging.NewWithWriter(&logBuf),
-			Runner:  func() claudeRunner { return &stubRunner{} },
-			Signals: signals,
-			NewRunner: func() claudeRunner {
-				return fixRunner
-			},
-		},
-	}
-
-	ctx := context.Background()
-	v.runFixAgent(ctx, "test failures", "fix the tests", "/work", "/logs/raw.log")
-
-	output := logBuf.String()
-	if !strings.Contains(output, "Fix agent (test failures): added missing nil check in parseConfig") {
-		t.Errorf("expected fix agent summary in log output, got: %s", output)
-	}
-}
+// Note: TestVerifier_runFixAgent and TestVerifier_runFixAgent_logsSummary
+// were removed during the Verifier-extraction migration. runFixAgent is now
+// a private method of package verifier; the equivalent coverage belongs in
+// package verifier's own test suite.
 
 // Verifies that when post-signal tests fail, a fix agent is spawned with the
 // failure output in its prompt — no stdin injection. The fix agent runs within
@@ -145,14 +60,14 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 		VerifyDir:     dir,
 	}, newTestModules(t, st, gm, backend, logger))
 
-	l.cfg.NewRunner = func() claudeRunner {
+	syncVerifierWithConfig(t, l, func() verifier.Runner {
 		fixAgentCalled = true
 		// Fix agent "fixes" by replacing the failing Makefile with a passing one
 		os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\ttrue\n"), 0o644)
 		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed tests"}}
-	}
+	})
 
-	p := signalParams{
+	p := verifyPipelineInput{
 		ctx:        context.Background(),
 		headBefore: "abc123",
 		workDir:    dir,
@@ -161,7 +76,10 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 		nextTask:   "Fix something",
 	}
 
-	accepted := l.verifier.OnSignal(p)
+	accepted, skipReason := l.runVerifyPipeline(p)
+	if skipReason != "" {
+		l.skipTask("ralph-test1", skipReason)
+	}
 
 	if !accepted {
 		t.Error("onSignal should return true after fix agent fixes tests")
@@ -194,7 +112,7 @@ func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		NextID:    "ralph-llm1",
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 	logger := logging.New(nil)
 
 	l := New(Config{
@@ -209,17 +127,17 @@ func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		VerifyDir:     dir,
 	}, newTestModules(t, st, gm, backend, logger))
 
-	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
-		return verify.Result{Passed: false, Details: "missing error handling in parseConfig"}
+	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
+		return "NO: missing error handling in parseConfig", nil
 	}
 
 	fixAgentCalled := false
-	l.cfg.NewRunner = func() claudeRunner {
+	syncVerifierWithConfig(t, l, func() verifier.Runner {
 		fixAgentCalled = true
 		return &stubRunner{result: claude.Result{}}
-	}
+	})
 
-	p := signalParams{
+	p := verifyPipelineInput{
 		ctx:        context.Background(),
 		headBefore: "abc123",
 		workDir:    dir,
@@ -228,7 +146,10 @@ func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		nextTask:   "Add feature",
 	}
 
-	accepted := l.verifier.OnSignal(p)
+	accepted, skipReason := l.runVerifyPipeline(p)
+	if skipReason != "" {
+		l.skipTask("ralph-llm1", skipReason)
+	}
 
 	if accepted {
 		t.Error("onSignal should return false when fix agent exits without signal")
@@ -253,7 +174,7 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 		NextID:    "ralph-fb1",
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
@@ -271,21 +192,21 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 	}, newTestModules(t, st, gm, backend, logger))
 
 	llmCalls := 0
-	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
+	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
 		llmCalls++
 		if llmCalls == 1 {
-			return verify.Result{Passed: false, Details: "incomplete implementation"}
+			return "NO: incomplete implementation", nil
 		}
-		return verify.Result{Passed: true, Reason: "approved"}
+		return "YES: approved", nil
 	}
 
 	fixAgentCalled := false
-	l.cfg.NewRunner = func() claudeRunner {
+	syncVerifierWithConfig(t, l, func() verifier.Runner {
 		fixAgentCalled = true
 		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
-	}
+	})
 
-	p := signalParams{
+	p := verifyPipelineInput{
 		ctx:        context.Background(),
 		headBefore: "abc123",
 		workDir:    dir,
@@ -294,7 +215,10 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 		nextTask:   "Fix bug",
 	}
 
-	accepted := l.verifier.OnSignal(p)
+	accepted, skipReason := l.runVerifyPipeline(p)
+	if skipReason != "" {
+		l.skipTask("ralph-fb1", skipReason)
+	}
 
 	if !accepted {
 		t.Error("onSignal should return true after fix agent + re-verify succeeds")
@@ -351,13 +275,13 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 		VerifyDir:     dir,
 	}, newTestModules(t, st, gm, backend, logger))
 
-	l.cfg.NewRunner = func() claudeRunner {
+	syncVerifierWithConfig(t, l, func() verifier.Runner {
 		fixAttempts++
 		// Fix agent signals success but tests keep failing
 		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "attempted fix"}}
-	}
+	})
 
-	p := signalParams{
+	p := verifyPipelineInput{
 		ctx:        context.Background(),
 		headBefore: "abc123",
 		workDir:    dir,
@@ -367,13 +291,16 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 	}
 
 	// Single onSignal call exhausts all fix attempts internally.
-	result := l.verifier.OnSignal(p)
+	result, skipReason := l.runVerifyPipeline(p)
+	if skipReason != "" {
+		l.skipTask("ralph-tr1", skipReason)
+	}
 
 	if result {
 		t.Error("expected onSignal to return false after exhausting test fix attempts")
 	}
-	if fixAttempts != l.verifier.cfg.MaxTestFixAttempts {
-		t.Errorf("expected %d fix agent spawns, got %d", l.verifier.cfg.MaxTestFixAttempts, fixAttempts)
+	if fixAttempts != l.maxTestFixAttempts() {
+		t.Errorf("expected %d fix agent spawns, got %d", l.maxTestFixAttempts(), fixAttempts)
 	}
 
 	// Task must NOT be closed — tests are still failing, leave open for investigation.

@@ -15,7 +15,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/notify"
 	"github.com/brokenalarms/ralph/internal/testutil"
-	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -439,8 +438,8 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		counter: &iterationCount,
 	}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
-		return verify.Result{Passed: true}
+	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
+		return "YES: looks good", nil
 	}
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }

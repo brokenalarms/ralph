@@ -231,6 +231,7 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 		VerifyBuild:   scriptPath,
 		VerifyDir:     dir,
 	}, newTestModules(t, st, gm, backend))
+	syncVerifierWithConfig(t, l, nil)
 
 	inner := &stubRunner{
 		onRun: func() {

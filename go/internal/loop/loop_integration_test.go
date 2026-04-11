@@ -18,7 +18,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
-	"github.com/brokenalarms/ralph/internal/verify"
+	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -539,15 +539,15 @@ func TestIntegration_TestFailureThenFixAgentPasses(t *testing.T) {
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
-	l.cfg.NewRunner = func() claudeRunner {
+	syncVerifierWithConfig(t, l, func() verifier.Runner {
 		fixAgentCalls++
 		// Fix agent "fixes" by removing the failing Makefile.
 		os.Remove(filepath.Join(dir, "Makefile"))
 		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed tests"}}
-	}
+	})
 
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
-		return verify.Result{Passed: true, Reason: "approved"}
+	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
+		return "YES: approved", nil
 	}
 
 	err := l.Run(context.Background())
@@ -949,15 +949,15 @@ func TestIntegration_TestFailureFixedByAgent(t *testing.T) {
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
-	l.cfg.NewRunner = func() claudeRunner {
+	syncVerifierWithConfig(t, l, func() verifier.Runner {
 		fixCalls++
 		// Fix agent removes the failing Makefile so tests pass.
 		os.Remove(filepath.Join(dir, "Makefile"))
 		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed tests"}}
-	}
+	})
 
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
-		return verify.Result{Passed: true, Reason: "approved"}
+	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
+		return "YES: approved", nil
 	}
 
 	err := l.Run(context.Background())
@@ -1659,9 +1659,9 @@ func TestIntegration_TestsRunBeforeAndAfterAgent(t *testing.T) {
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	// Track pre-iteration test call
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
 		sequence = append(sequence, "llm-verify")
-		return verify.Result{Passed: true, Reason: "approved"}
+		return "YES: approved", nil
 	}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		sequence = append(sequence, "post-signal-verify")
@@ -2122,11 +2122,11 @@ func TestIntegration_LifecycleCI_FailureFixRetry(t *testing.T) {
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	// Fix agent changes the HEAD SHA, proving tryFixCI sees a new commit and
 	// returns CIFixApplied so MergeWithRetry continues to a second attempt.
-	l.cfg.NewRunner = func() claudeRunner {
+	syncVerifierWithConfig(t, l, func() verifier.Runner {
 		fixAgentCalled = true
 		stub.HeadRevValue = "sha-after-fix"
 		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "ci fixed"}}
-	}
+	})
 
 	if err := l.Run(context.Background()); err != nil {
 		t.Fatalf("Run returned unexpected error: %v", err)
@@ -2223,11 +2223,11 @@ func TestIntegration_CIFailureTriggersFixAgent(t *testing.T) {
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
-	l.cfg.NewRunner = func() claudeRunner {
+	syncVerifierWithConfig(t, l, func() verifier.Runner {
 		fixAgentCalled = true
 		stub.HeadRevValue = "sha-after-fix"
 		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "ci fixed"}}
-	}
+	})
 
 	if err := l.Run(context.Background()); err != nil {
 		t.Fatalf("Run returned unexpected error: %v", err)
@@ -2617,11 +2617,11 @@ func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
 	// still fails on re-check, so MergeWithRetry exhausts MaxMergeAttempts
 	// and returns CIFailureError — proving the failing checks weren't filtered.
 	fixAttempt := 0
-	l.cfg.NewRunner = func() claudeRunner {
+	syncVerifierWithConfig(t, l, func() verifier.Runner {
 		fixAttempt++
 		stub.HeadRevValue = fmt.Sprintf("sha-after-fix-%d", fixAttempt)
 		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "ci fix attempted"}}
-	}
+	})
 
 	if err := l.Run(context.Background()); err != nil {
 		t.Fatalf("Run returned unexpected error: %v", err)
@@ -3277,10 +3277,11 @@ func TestIntegration_PreIterationTestsRunBeforeAgent(t *testing.T) {
 		CallsPerHour:  80,
 		VerifyDir:     dir,
 	}, newTestModules(t, st, gm, backend))
+	syncVerifierWithConfig(t, l, nil)
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
-		return verify.Result{Passed: true, Reason: "ok"}
+	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
+		return "YES: ok", nil
 	}
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -3306,7 +3307,7 @@ func TestIntegration_LLMVerifyRejectThenFixThenPass(t *testing.T) {
 	backend.NextID = "ralph-llm1"
 	backend.BackendLabel = "beads"
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 
 	var seq []string
 	runner := &signalCallingRunner{
@@ -3337,23 +3338,23 @@ func TestIntegration_LLMVerifyRejectThenFixThenPass(t *testing.T) {
 
 	// LLM rejects first attempt, approves second.
 	llmCalls := 0
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
+	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
 		llmCalls++
 		if llmCalls == 1 {
 			seq = append(seq, "llm_reject")
-			return verify.Result{Passed: false, Reason: "missing tests", Details: "no test for auth"}
+			return "NO: no test for auth", nil
 		}
 		seq = append(seq, "llm_approve")
-		return verify.Result{Passed: true, Reason: "looks good"}
+		return "YES: looks good", nil
 	}
 
 	// Fix agent is spawned after rejection.
 	fixCalls := 0
-	l.cfg.NewRunner = func() claudeRunner {
+	syncVerifierWithConfig(t, l, func() verifier.Runner {
 		fixCalls++
 		seq = append(seq, "fix_agent")
 		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "added tests"}}
-	}
+	})
 
 	l.Run(context.Background())
 

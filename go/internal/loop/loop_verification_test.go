@@ -14,7 +14,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
-	"github.com/brokenalarms/ralph/internal/verify"
+	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -415,9 +415,9 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-	l.cfg.NewRunner = func() claudeRunner {
+	syncVerifierWithConfig(t, l, func() verifier.Runner {
 		return &stubRunner{result: claude.Result{SignalDetected: true}}
-	}
+	})
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
@@ -761,26 +761,22 @@ func (s *signalCallingRunner) InjectMessage(_ string) error { return nil }
 // and LLM verification reject logs with red (Error) color.
 func TestLoop_LLMVerificationLogColors(t *testing.T) {
 	tests := []struct {
-		name      string
-		passed    bool
-		reason    string
-		details   string
-		wantColor string
-		wantMsg   string
+		name       string
+		queryReply string
+		wantColor  string
+		wantMsg    string
 	}{
 		{
-			name:      "LLM pass logs green",
-			passed:    true,
-			reason:    "diff matches requirements",
-			wantColor: logging.Green,
-			wantMsg:   "LLM verified: diff matches requirements",
+			name:       "LLM pass logs green",
+			queryReply: "YES: diff matches requirements",
+			wantColor:  logging.Green,
+			wantMsg:    "LLM verified: LLM verified: YES: diff matches requirements",
 		},
 		{
-			name:      "LLM reject logs red",
-			passed:    false,
-			details:   "missing error handling",
-			wantColor: logging.Red,
-			wantMsg:   "LLM verification rejected (attempt 1/3): missing error handling",
+			name:       "LLM reject logs red",
+			queryReply: "NO: missing error handling",
+			wantColor:  logging.Red,
+			wantMsg:    "LLM verification rejected (attempt 1/3): NO: missing error handling",
 		},
 	}
 
@@ -803,26 +799,23 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				},
 			}
 
+			gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before", DiffFullValue: "diff --git a/x b/x"}
+
 			runner := &signalCallingRunner{
 				onRun: func() {
 					backend.Lock()
 					backend.Completed = 1
 					backend.Remaining = 0
 					backend.Unlock()
+					// Simulate the agent making a commit before signaling so the
+					// post-signal commit check passes (HeadRev changes).
+					gm.HeadRevValue = "after"
 				},
 				result: claude.Result{Summary: "done"},
 			}
 
 			var logBuf bytes.Buffer
 			logger := logging.NewWithWriter(&logBuf)
-
-			gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-			llmResult := verify.Result{
-				Passed:  tt.passed,
-				Reason:  tt.reason,
-				Details: tt.details,
-			}
 
 			l := New(Config{
 				Dirs: workctx.WorkContext{
@@ -836,12 +829,13 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				VerifyDir:     dir,
 			}, newTestModules(t, st, gm, backend, logger))
 			l.runner = runner
-			l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
-				return llmResult
+			reply := tt.queryReply
+			l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				return reply, nil
 			}
-			l.cfg.NewRunner = func() claudeRunner {
+			syncVerifierWithConfig(t, l, func() verifier.Runner {
 				return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
-			}
+			})
 
 			l.cfg.CheckGitHub = func(context.Context) error { return nil }
 			_ = l.Run(context.Background())

@@ -14,6 +14,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
+	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -32,7 +33,35 @@ func newTestModules(t *testing.T, st *state.Store, gm git.Ops, backend tasks.Bac
 	if len(loggerOpt) > 0 && loggerOpt[0] != nil {
 		logger = loggerOpt[0]
 	}
-	return Modules{State: st, Git: gm, TaskBackend: backend, Logger: logger}
+	vrf := verifier.New(verifier.Config{
+		Signals: claude.SignalPaths{},
+	}, logger, nil)
+	return Modules{State: st, Git: gm, TaskBackend: backend, Logger: logger, Verifier: vrf}
+}
+
+// syncVerifierWithConfig reconstructs l.verifier so its internal Config mirrors
+// the loop's Config fields that the verifier cares about (VerifyDir, ProjectDir,
+// VerifyModel, etc.). Call after loop.New in tests that exercise verifier
+// operations relying on these fields — e.g. pre-iteration tests (which early-
+// return on empty VerifyDir) or model selection.
+//
+// newRunner is the fix-agent runner factory the test wants verifier to use;
+// pass nil to get the production default (agent.New).
+func syncVerifierWithConfig(t *testing.T, l *Loop, newRunner verifier.RunnerFactory) {
+	t.Helper()
+	l.verifier = verifier.New(verifier.Config{
+		VerifyDir:             l.cfg.VerifyDir,
+		ProjectDir:            l.cfg.Dirs.ProjectDir,
+		VerifyModel:           l.cfg.VerifyModel,
+		VerifyEscalationModel: l.cfg.VerifyEscalationModel,
+		ModelCap:              l.cfg.ModelCap,
+		PromptsDir:            l.cfg.Dirs.PromptsDir,
+		RalphDir:              l.cfg.Dirs.RalphDir,
+		IdleTimeout:           l.cfg.IdleTimeout,
+		TestTimeout:           l.cfg.TestTimeout,
+		CompileCheckTimeout:   l.cfg.CompileCheckTimeout,
+		Signals:               l.signals,
+	}, l.logger, newRunner)
 }
 
 type stubRunner struct {

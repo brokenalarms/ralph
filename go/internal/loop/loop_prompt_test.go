@@ -169,6 +169,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		CallsPerHour:  80,
 		VerifyDir:     dir,
 	}, newTestModules(t, st, gm, backend))
+	syncVerifierWithConfig(t, l, nil)
 
 	// Capture the prompt passed to Claude
 	l.runner = &stubRunner{

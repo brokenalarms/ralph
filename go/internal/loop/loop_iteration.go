@@ -343,12 +343,14 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	return completeTaskOut{action: signalComplete, ct: &ct, merged: merged}
 }
 
-// verifyCompletion delegates to OnVerify when set, otherwise runs the standard verifier.
+// verifyCompletion delegates to OnVerify when set, otherwise runs the standard
+// simple-path verification (commit check + single test run + state write).
+// This is the non-fix-loop variant used outside the post-signal pipeline.
 func (l *Loop) verifyCompletion(ctx context.Context, headBefore string) (bool, string) {
 	if l.cfg.OnVerify != nil {
 		return l.cfg.OnVerify(ctx, l.git.GetWorkDir(), headBefore)
 	}
-	return l.verifier.VerifyCompletion(ctx, l.git.GetWorkDir(), headBefore)
+	return l.runSimpleVerifyCompletion(ctx, headBefore)
 }
 
 // persistCompleted records a completed task in the persistent state store.
@@ -422,7 +424,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 		testTimeout: l.cfg.TestTimeout,
 		logger:      l.logger,
 	})
-	testStatus := buildStatus + l.verifier.RunPreIterationTests(ctx)
+	testStatus := buildStatus + l.runPreIterationTests(ctx)
 
 	if !l.cfg.WaitForInternet(ctx, l.logger) {
 		return iterationPrompt{}, false

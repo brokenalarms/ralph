@@ -1,5 +1,18 @@
 # Orchestrator/module-boundary refactor — handoff notes
 
+> **Status (Commit B complete):** This doc described the original Commit B
+> plan as "eliminate the Verifier struct entirely and move its methods
+> onto Loop." That plan was **rejected during implementation**. Commit B
+> instead **extracted Verifier into its own package** at
+> `internal/verifier`, as a **peer module** of git/state/tasks. Verifier
+> holds zero references to other peer modules; Loop owns the verification
+> state machine in `runVerifyPipeline` and threads pre-fetched diffs/HEAD
+> data into stateless verifier operations. The fix-agent runner factory
+> remains as verifier's internal sub-module. The peer-module rule is now
+> documented in `orchestrator-modules.md` (rule 1, "Peer modules vs
+> sub-modules"). The text below this banner is preserved as historical
+> record of the rejected plan; do not follow it.
+
 This document is the binding direction for the next agent picking up the
 orchestrator/module-boundary refactor (PRs #520, #521, #522, and the
 work that follows). It exists because the refactor has been started,

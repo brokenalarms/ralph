@@ -274,6 +274,65 @@ compose modules from many packages. Other modules can have internal
 composition without violating this rule, as long as that composition stays
 inside their own package's boundary.
 
+#### Peer modules vs sub-modules
+
+A **peer module** lives in its own top-level package under `internal/`,
+gets constructed in `cmd/ralph/main.go` alongside other modules, and is
+passed into `loop.Modules` for the orchestrator to call. Peer modules are
+peers of `git`, `state`, `tasks`, etc. — they have the same status. The
+canonical example is `internal/verifier`: verification has enough cohesive
+state and behavior (configs, models, fix-agent submodule, retry-aware
+operations) to deserve its own package, but it is not the orchestrator.
+
+A peer module:
+
+- Holds **zero references to other peer modules**. No git, no state, no
+  tasks, no other peer fields. The orchestrator owns the cross-module
+  composition; peer modules expose stateless operations the orchestrator
+  calls in sequence, threading data between them.
+- May own **internal sub-modules** (rule 1's existing carve-out). The
+  fix-agent runner factory inside `verifier` is a sub-module: it never
+  escapes verifier's public API.
+- Is constructed in `main.go` exactly like every other module. `loop.New`
+  receives it through `loop.Modules`, never reaches into it, and
+  references it via a single private field on `Loop`.
+
+A **sub-module**, by contrast, lives *inside* its parent package
+(`internal/git/<github>`), is unexported, and never appears in
+`loop.Modules` or any public API outside its parent. The github client
+inside `git.Repo` is the canonical example.
+
+```go
+// ✅ Allowed — verifier is a peer module. main.go constructs it
+// alongside the others; loop.Modules carries it in.
+package verifier
+
+type Verifier struct {
+    cfg       Config              // pure data
+    logger    *logging.Logger
+    newRunner func() Runner       // sub-module factory, internal
+    // NO git, state, tasks, or other peer modules.
+}
+
+func New(cfg Config, logger *logging.Logger, newRunner RunnerFactory) *Verifier
+```
+
+```go
+// ✅ Allowed — main.go composes peer modules and hands them to loop.New.
+gm := git.New(...)
+st := state.NewStore(...)
+backend := tasks.New(...)
+vrf := verifier.New(verifier.Config{...}, logger, nil)
+
+loop.New(loop.Config{...}, loop.Modules{
+    State:       st,
+    Git:         gm,
+    TaskBackend: backend,
+    Verifier:    vrf,
+    Logger:      logger,
+})
+```
+
 ### 2. Modules don't accept other modules as parameters
 
 A module's public methods take **module-specific data structs** for the data
