@@ -52,8 +52,7 @@ func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 			logger := logging.New(&logBuf)
 
 			gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-			l := New(Config{
+			cfg := Config{
 				Dirs: workctx.WorkContext{
 					ProjectDir: dir,
 					WorkDir:    dir,
@@ -61,7 +60,8 @@ func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 				},
 				MaxIterations: 5,
 				CallsPerHour:  80,
-			}, newTestModules(t, st, gm, tt.backend, logger))
+			}
+			l := New(cfg, newTestModules(t, cfg, st, gm, tt.backend, testStubs{logger: logger}))
 
 			l.cfg.CheckGitHub = func(context.Context) error { return nil }
 			l.Run(context.Background())
@@ -96,8 +96,7 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -106,7 +105,8 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
 	l.runner = &stubRunner{
 		onRun: func() {
 			backend.Remaining = 0
@@ -160,8 +160,7 @@ func TestLoop_LongDescriptionTruncatedInStream(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -170,7 +169,8 @@ func TestLoop_LongDescriptionTruncatedInStream(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
 	l.runner = &stubRunner{
 		onRun: func() {
 			backend.Remaining = 0
@@ -219,8 +219,7 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -229,7 +228,8 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
 	l.runner = &stubRunner{
 		onRun: func() {
 			backend.Remaining = 0
@@ -300,8 +300,7 @@ func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
 
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -310,7 +309,8 @@ func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
 		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -358,8 +358,7 @@ func TestLoop_TaskBannerOnNewTask(t *testing.T) {
 
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -368,7 +367,8 @@ func TestLoop_TaskBannerOnNewTask(t *testing.T) {
 		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -420,8 +420,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	var logBuf bytes.Buffer
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -430,7 +429,13 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend, logging.NewWithWriter(&logBuf)))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
+		logger: logging.NewWithWriter(&logBuf),
+		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+			return "YES: looks good", nil
+		}},
+	}))
 
 	// Override the runner to return different results per iteration.
 	l.runner = &rateLimitStubRunner{
@@ -438,9 +443,6 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		counter: &iterationCount,
 	}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
-		return "YES: looks good", nil
-	}
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
@@ -487,6 +489,10 @@ func (r *rateLimitStubRunner) StopStreaming() {}
 
 func (r *rateLimitStubRunner) InjectMessage(_ string) error { return nil }
 
+func (r *rateLimitStubRunner) Query(_ context.Context, _, _, _ string) (string, error) {
+	return "NO: stub", nil
+}
+
 // Health dashboard is logged between iterations in verbose mode so operators
 // can detect process leaks, stale signal files, and growing state.json.
 
@@ -525,8 +531,7 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -536,7 +541,8 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 		Version:       "1.2.3",
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -563,8 +569,7 @@ func newHandleRunResultLoop(t *testing.T) (*Loop, string) {
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -572,7 +577,8 @@ func newHandleRunResultLoop(t *testing.T) (*Loop, string) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, nil, logger))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, nil, testStubs{logger: logger}))
 
 	return l, ralphDir
 }
@@ -764,13 +770,13 @@ func TestOnResumeDone_Merged_NotifyEnabled(t *testing.T) {
 		WorkDir:        dir,
 		RemoteURLValue: "https://github.com/owner/repo.git",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		Notify:        true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer
@@ -816,13 +822,13 @@ func TestOnResumeDone_Open_NotifyEnabled(t *testing.T) {
 		WorkDir:        dir,
 		RemoteURLValue: "https://github.com/owner/repo.git",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		Notify:        true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer
@@ -867,13 +873,13 @@ func TestOnResumeDone_Merged_NotifyDisabled(t *testing.T) {
 		WorkDir:        dir,
 		RemoteURLValue: "https://github.com/owner/repo.git",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		Notify:        false,
-	}, newTestModules(t, st, gm, backend))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer

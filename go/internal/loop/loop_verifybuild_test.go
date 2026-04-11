@@ -44,7 +44,7 @@ func TestLoop_VerifyBuild_FailureInjectedIntoPrompt(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -54,7 +54,8 @@ func TestLoop_VerifyBuild_FailureInjectedIntoPrompt(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		VerifyBuild:   scriptPath,
-	}, newTestModules(t, st, gm, backend))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 
 	inner := &stubRunner{
 		onRun: func() {
@@ -105,7 +106,7 @@ func TestLoop_VerifyBuild_PassDoesNotInjectContext(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -115,7 +116,8 @@ func TestLoop_VerifyBuild_PassDoesNotInjectContext(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		VerifyBuild:   scriptPath,
-	}, newTestModules(t, st, gm, backend))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 
 	inner := &stubRunner{
 		onRun: func() {
@@ -158,7 +160,7 @@ func TestLoop_VerifyBuild_NotConfigured_NoEffect(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -168,7 +170,8 @@ func TestLoop_VerifyBuild_NotConfigured_NoEffect(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		// VerifyBuild intentionally not set
-	}, newTestModules(t, st, gm, backend))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 
 	inner := &stubRunner{
 		onRun: func() {
@@ -219,7 +222,7 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -230,8 +233,8 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 		CallsPerHour:  80,
 		VerifyBuild:   scriptPath,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, backend))
-	syncVerifierWithConfig(t, l, nil)
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 
 	inner := &stubRunner{
 		onRun: func() {

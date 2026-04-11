@@ -47,8 +47,7 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 	logger := logging.NewWithWriter(&logBuf)
 
 	fixAgentCalled := false
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -58,14 +57,16 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, backend, logger))
-
-	syncVerifierWithConfig(t, l, func() verifier.Runner {
-		fixAgentCalled = true
-		// Fix agent "fixes" by replacing the failing Makefile with a passing one
-		os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\ttrue\n"), 0o644)
-		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed tests"}}
-	})
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
+		logger: logger,
+		newRunner: func() verifier.Runner {
+			fixAgentCalled = true
+			// Fix agent "fixes" by replacing the failing Makefile with a passing one
+			os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\ttrue\n"), 0o644)
+			return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed tests"}}
+		},
+	}))
 
 	p := verifyPipelineInput{
 		ctx:        context.Background(),
@@ -114,8 +115,7 @@ func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 	logger := logging.New(nil)
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -125,17 +125,18 @@ func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, backend, logger))
-
-	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
-		return "NO: missing error handling in parseConfig", nil
 	}
-
 	fixAgentCalled := false
-	syncVerifierWithConfig(t, l, func() verifier.Runner {
-		fixAgentCalled = true
-		return &stubRunner{result: claude.Result{}}
-	})
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
+		logger: logger,
+		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+			return "NO: missing error handling in parseConfig", nil
+		}},
+		newRunner: func() verifier.Runner {
+			fixAgentCalled = true
+			return &stubRunner{result: claude.Result{}}
+		},
+	}))
 
 	p := verifyPipelineInput{
 		ctx:        context.Background(),
@@ -178,8 +179,7 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -189,22 +189,23 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, backend, logger))
-
-	llmCalls := 0
-	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
-		llmCalls++
-		if llmCalls == 1 {
-			return "NO: incomplete implementation", nil
-		}
-		return "YES: approved", nil
 	}
-
+	llmCalls := 0
 	fixAgentCalled := false
-	syncVerifierWithConfig(t, l, func() verifier.Runner {
-		fixAgentCalled = true
-		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
-	})
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
+		logger: logger,
+		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+			llmCalls++
+			if llmCalls == 1 {
+				return "NO: incomplete implementation", nil
+			}
+			return "YES: approved", nil
+		}},
+		newRunner: func() verifier.Runner {
+			fixAgentCalled = true
+			return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
+		},
+	}))
 
 	p := verifyPipelineInput{
 		ctx:        context.Background(),
@@ -263,7 +264,7 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 	logger := logging.New(nil)
 
 	fixAttempts := 0
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -273,13 +274,15 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, backend, logger))
-
-	syncVerifierWithConfig(t, l, func() verifier.Runner {
-		fixAttempts++
-		// Fix agent signals success but tests keep failing
-		return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "attempted fix"}}
-	})
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
+		logger: logger,
+		newRunner: func() verifier.Runner {
+			fixAttempts++
+			// Fix agent signals success but tests keep failing
+			return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "attempted fix"}}
+		},
+	}))
 
 	p := verifyPipelineInput{
 		ctx:        context.Background(),
@@ -325,11 +328,12 @@ func TestCompleteTask_CancelledCtx_NoCommits_BeadStaysOpen(t *testing.T) {
 
 	// HeadRevValue == headBefore triggers the no-commits branch.
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "same-sha"}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -369,11 +373,12 @@ func TestCompleteTask_CancelledCtx_NoPR_BeadStaysOpen(t *testing.T) {
 	// ShipResult with PRNumber=0 means no PR was created.
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	gm.ShipResult = git.ShipResult{PRNumber: 0}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -427,12 +432,13 @@ func TestCompleteTask_NoNewCommits_ExistingOpenPR_MergesViaFinalize(t *testing.T
 		ShipResult:       git.ShipResult{PRNumber: 42},
 		MergeRetryResult: true,
 	}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -502,12 +508,13 @@ func TestCompleteTask_NoNewCommits_ExistingMergedPR_ClosesDirectly(t *testing.T)
 		HeadRevValue: "same-sha",
 		PRState:      git.PRStateMerged,
 	}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -557,12 +564,13 @@ func TestCompleteTask_CancelledCtx_FinalizePR_BeadStaysOpen(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	gm.ShipResult = git.ShipResult{PRNumber: 99, PRURL: "https://github.com/example/repo/pull/99"}
 	gm.PRState = git.PRStateOpen
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     false, // skip merge attempt, go straight to close
-	}, newTestModules(t, st, gm, backend))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 

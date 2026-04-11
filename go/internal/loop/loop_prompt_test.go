@@ -20,11 +20,12 @@ func loopForPromptTest(t *testing.T, dir, ralphDir, promptsDir string, backend *
 	t.Helper()
 	_, st := setupTestDir(t)
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	return New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	return New(cfg, newTestModules(t, cfg, st, gm, backend))
 }
 
 // Verifies that buildTaskPrompt includes the bd ID when one is present,
@@ -157,8 +158,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -168,8 +168,8 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, backend))
-	syncVerifierWithConfig(t, l, nil)
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 
 	// Capture the prompt passed to Claude
 	l.runner = &stubRunner{
@@ -236,6 +236,10 @@ func (p *promptCapturingRunner) InjectMessage(msg string) error {
 	return p.inner.InjectMessage(msg)
 }
 
+func (p *promptCapturingRunner) Query(ctx context.Context, workDir, prompt, model string) (string, error) {
+	return p.inner.Query(ctx, workDir, prompt, model)
+}
+
 // Verifies that push is called after signal detection. The sync guard
 // (fetch + rebase) is enforced internally by PushAndCreatePR's EnsureUpToDate
 // — tested in git module.
@@ -251,11 +255,12 @@ func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-xyz"}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 	l.runner = &stubRunner{}
 
 	prep, ok := l.prepareAndBuildPrompt(context.Background(), "ralph-xyz", "Fix login")
@@ -321,11 +326,12 @@ func TestLoop_HasProgress_SnapshotsDiffState(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HasDiffValue: tc.diffAtStart}
-			l := New(Config{
+			cfg := Config{
 				Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 				MaxIterations: 1,
 				CallsPerHour:  80,
-			}, newTestModules(t, st, gm, backend))
+			}
+			l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 
 			var capturedHasProgress func() bool
 			l.runner = &stubRunner{

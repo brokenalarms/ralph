@@ -214,7 +214,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		TestTimeout:           cfg.TestTimeout,
 		CompileCheckTimeout:   cfg.CompileCheckTimeout,
 		Signals:               claude.DefaultSignalPaths(ralphDir),
-	}, log, nil)
+	}, log, nil, nil)
 
 	// Execution phase.
 	execLoop := loop.New(loop.Config{

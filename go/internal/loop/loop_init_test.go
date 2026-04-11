@@ -30,11 +30,11 @@ func TestInitialize_WritesConfigAndLoadsSkipped(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		MaxIterations: 7,
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, newTestModules(t, st, gm, backend))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 
 	err := l.initialize(context.Background())
 	if err != nil {
@@ -79,10 +79,9 @@ func TestLoop_ActiveReviewersNotDetectedAtStartup(t *testing.T) {
 		IsOnline:        func() bool { return true },
 		WaitForInternet: func(_ context.Context, _ *logging.Logger) bool { return true },
 		NewRunner:       func() claudeRunner { return &stubRunner{result: claude.Result{}} },
-		QueryFn:         func(_ context.Context, _, _, _ string) (string, error) { return "", nil },
 	}
 
-	l := New(cfg, newTestModules(t, st, gm, backend))
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately — no tasks will run
@@ -112,7 +111,7 @@ func TestLoop_EnsureActiveReviewers_LazyInitAndCache(t *testing.T) {
 	cfg := Config{
 		Dirs: workctx.WorkContext{ProjectDir: dir, RalphDir: ralphDir},
 	}
-	l := New(cfg, newTestModules(t, st, gm, &testutil.StubBackend{}))
+	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{}))
 
 	// Before first call: no reviewers cached, detection not run.
 	if l.reviewersDetected {
@@ -156,7 +155,7 @@ func TestLoop_ReviewersDetectedViaEnsureReviewersFn(t *testing.T) {
 	cfg := Config{
 		Dirs: workctx.WorkContext{ProjectDir: dir, RalphDir: ralphDir},
 	}
-	l := New(cfg, newTestModules(t, st, gm, &testutil.StubBackend{}))
+	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{}))
 
 	// Build the same ensureReviewersFn closure that loop.go passes to completeTaskParams.
 	ensureReviewersFn := func() []git.Reviewer { l.ensureActiveReviewers(); return l.activeReviewers }
@@ -193,10 +192,10 @@ func TestInitWorktree_NoopWhenNoWorktreeBranch(t *testing.T) {
 	backend := &testutil.StubBackend{}
 	// StubGit with WorkDir == ProjectDir means no worktree → early return.
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
-	}, newTestModules(t, st, gm, backend))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
 
 	err := l.initWorktree(context.Background())
 	if err != nil {

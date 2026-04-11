@@ -26,17 +26,18 @@ func TestOnSignal_HappyPath(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}))
-
-	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
-		return "YES: looks good", nil
 	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}, testStubs{
+		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+			return "YES: looks good", nil
+		}},
+	}))
+
 	l.cfg.OnVerify = func(ctx context.Context, dir, headBefore string) (bool, string) {
 		return true, ""
 	}
@@ -65,23 +66,22 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, backend))
-
-	syncVerifierWithConfig(t, l, func() verifier.Runner {
-		return &stubRunner{result: stubResult(true, "attempted fix")}
-	})
-
-	llmCalls := 0
-	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
-		llmCalls++
-		return "NO: diff doesn't match bead", nil
 	}
+	llmCalls := 0
+	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
+		newRunner: func() verifier.Runner {
+			return &stubRunner{result: stubResult(true, "attempted fix")}
+		},
+		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+			llmCalls++
+			return "NO: diff doesn't match bead", nil
+		}},
+	}))
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
@@ -110,28 +110,27 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}))
-
-	syncVerifierWithConfig(t, l, func() verifier.Runner {
-		return &stubRunner{result: stubResult(true, "attempted fix")}
-	})
-
+	}
 	var modelsUsed []string
 	llmCalls := 0
-	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
-		llmCalls++
-		modelsUsed = append(modelsUsed, model)
-		if llmCalls <= 2 {
-			return "NO: needs work", nil
-		}
-		return "YES: approved", nil
-	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}, testStubs{
+		newRunner: func() verifier.Runner {
+			return &stubRunner{result: stubResult(true, "attempted fix")}
+		},
+		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+			llmCalls++
+			modelsUsed = append(modelsUsed, model)
+			if llmCalls <= 2 {
+				return "NO: needs work", nil
+			}
+			return "YES: approved", nil
+		}},
+	}))
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
@@ -168,28 +167,27 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 
 	customFirst := "claude-haiku-custom"
 	customEscalation := "claude-sonnet-custom"
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:                  workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:         5,
 		CallsPerHour:          80,
 		VerifyDir:             dir,
 		VerifyModel:           customFirst,
 		VerifyEscalationModel: customEscalation,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}))
-
-	syncVerifierWithConfig(t, l, func() verifier.Runner {
-		return &stubRunner{result: stubResult(true, "attempted fix")}
-	})
-
-	var modelsUsed []string
-	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
-		modelsUsed = append(modelsUsed, model)
-		if len(modelsUsed) < 3 {
-			return "NO: needs work", nil
-		}
-		return "YES: approved", nil
 	}
+	var modelsUsed []string
+	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}, testStubs{
+		newRunner: func() verifier.Runner {
+			return &stubRunner{result: stubResult(true, "attempted fix")}
+		},
+		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+			modelsUsed = append(modelsUsed, model)
+			if len(modelsUsed) < 3 {
+				return "NO: needs work", nil
+			}
+			return "YES: approved", nil
+		}},
+	}))
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
@@ -225,28 +223,27 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"}))
-
-	fixAgentSpawned := false
-	syncVerifierWithConfig(t, l, func() verifier.Runner {
-		fixAgentSpawned = true
-		return &stubRunner{result: stubResult(true, "fixed error handling")}
-	})
-
-	llmCalls := 0
-	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
-		llmCalls++
-		if llmCalls == 1 {
-			return "NO: missing error handling", nil
-		}
-		return "YES: looks good after fix", nil
 	}
+	fixAgentSpawned := false
+	llmCalls := 0
+	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"}, testStubs{
+		newRunner: func() verifier.Runner {
+			fixAgentSpawned = true
+			return &stubRunner{result: stubResult(true, "fixed error handling")}
+		},
+		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+			llmCalls++
+			if llmCalls == 1 {
+				return "NO: missing error handling", nil
+			}
+			return "YES: looks good after fix", nil
+		}},
+	}))
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
@@ -277,31 +274,30 @@ func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"}))
-
+	}
 	var capturedPrompt string
-	syncVerifierWithConfig(t, l, func() verifier.Runner {
-		return &promptCapturingRunner{
-			inner:    &stubRunner{result: stubResult(true, "fixed")},
-			captured: &capturedPrompt,
-		}
-	})
-
 	rejectionMsg := "function foo() ignores the error return from bar()"
 	llmCalls := 0
-	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
-		llmCalls++
-		if llmCalls == 1 {
-			return "NO: " + rejectionMsg, nil
-		}
-		return "YES: approved", nil
-	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"}, testStubs{
+		newRunner: func() verifier.Runner {
+			return &promptCapturingRunner{
+				inner:    &stubRunner{result: stubResult(true, "fixed")},
+				captured: &capturedPrompt,
+			}
+		},
+		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+			llmCalls++
+			if llmCalls == 1 {
+				return "NO: " + rejectionMsg, nil
+			}
+			return "YES: approved", nil
+		}},
+	}))
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
@@ -330,21 +326,20 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}))
-
-	syncVerifierWithConfig(t, l, func() verifier.Runner {
-		return &stubRunner{result: stubResult(false, "")}
-	})
-
-	l.cfg.QueryFn = func(ctx context.Context, workDir, prompt, model string) (string, error) {
-		return "NO: bad code", nil
 	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}, testStubs{
+		newRunner: func() verifier.Runner {
+			return &stubRunner{result: stubResult(false, "")}
+		},
+		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+			return "NO: bad code", nil
+		}},
+	}))
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
@@ -369,21 +364,21 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}))
-
+	}
 	// With no PR diff and no iteration diff, LLMVerifyPR short-circuits
 	// to NoDiff=true without invoking QueryFn.
 	runnerSpawned := false
-	syncVerifierWithConfig(t, l, func() verifier.Runner {
-		runnerSpawned = true
-		return &stubRunner{result: stubResult(true, "confirmed")}
-	})
+	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}, testStubs{
+		newRunner: func() verifier.Runner {
+			runnerSpawned = true
+			return &stubRunner{result: stubResult(true, "confirmed")}
+		},
+	}))
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
@@ -415,14 +410,14 @@ func TestAgentModelEscalation(t *testing.T) {
 
 	const firstModel = verify.ModelSonnet
 	const escalationModel = verify.ModelOpus
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:                 workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:        1,
 		CallsPerHour:         80,
 		Model:                firstModel,
 		AgentEscalationModel: escalationModel,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-abc"}))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-abc"}))
 
 	var capturedModels []string
 	l.runner = &stubRunner{
@@ -461,15 +456,15 @@ func TestAgentModelEscalation_ModelCapApplied(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:                 workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:        1,
 		CallsPerHour:         80,
 		Model:                verify.ModelSonnet,
 		AgentEscalationModel: verify.ModelOpus,
 		ModelCap:             verify.ModelHaiku, // cap everything to haiku
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-cap"}))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-cap"}))
 
 	var capturedModels []string
 	l.runner = &stubRunner{
@@ -511,15 +506,18 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{HeadRevValue: "abc123", ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}, logger))
-	syncVerifierWithConfig(t, l, func() verifier.Runner {
-		return &stubRunner{result: stubResult(true, "fixed")}
-	})
+	}
+	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}, testStubs{
+		logger: logger,
+		newRunner: func() verifier.Runner {
+			return &stubRunner{result: stubResult(true, "fixed")}
+		},
+	}))
 
 	review := &git.AutoReview{
 		Comments: []git.ReviewComment{

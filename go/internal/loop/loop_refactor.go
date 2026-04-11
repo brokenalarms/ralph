@@ -35,7 +35,7 @@ func (l *Loop) maybeRefactor(ctx context.Context, sessionCount int) error {
 
 	archSpec := readArchSpec(l.git.GetWorkDir())
 
-	shouldRefactor, err := llmShouldRefactor(ctx, l.cfg.QueryFn, l.git.GetWorkDir(), archSpec, recentFiles)
+	shouldRefactor, err := llmShouldRefactor(ctx, l.runner.Query, l.git.GetWorkDir(), archSpec, recentFiles)
 	if err != nil {
 		return fmt.Errorf("refactor check: %w", err)
 	}

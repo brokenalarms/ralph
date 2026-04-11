@@ -99,11 +99,11 @@ func TestBeginIteration_PackageFunction(t *testing.T) {
 func TestWaitForRate_AllowsWhenUnderLimit(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:         workctx.WorkContext{RalphDir: ralphDir},
 		CallsPerHour: 80,
-	}, newTestModules(t, st, &git.StubRepo{}, nil))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, &git.StubRepo{}, nil))
 
 	allowed := l.waitForRate(context.Background())
 

@@ -104,14 +104,18 @@ type Config struct {
 	WaitForInternet func(ctx context.Context, logger *logging.Logger) bool
 	OnWait          func()
 	NewRunner       func() claudeRunner
-	QueryFn         func(ctx context.Context, workDir, prompt, model string) (string, error)
 }
 
 // claudeRunner abstracts the Claude execution interface for testability.
+// Run/StopStreaming/InjectMessage drive the streaming-agent session;
+// Query is the one-shot LLM call used by Loop's refactor-decision helper.
+// Verifier defines its own (narrower) Querier interface internally — the
+// production *agent.Runner satisfies both.
 type claudeRunner interface {
 	Run(cfg claude.RunConfig) (claude.Result, error)
 	StopStreaming()
 	InjectMessage(msg string) error
+	Query(ctx context.Context, workDir, prompt, model string) (string, error)
 }
 
 // CompletedTask holds summary info for a task completed during this session.
@@ -196,9 +200,6 @@ func New(cfg Config, mods Modules) *Loop {
 	}
 	if cfg.NewRunner == nil {
 		cfg.NewRunner = func() claudeRunner { return agent.New(logger) }
-	}
-	if cfg.QueryFn == nil {
-		cfg.QueryFn = agentRunner.Query
 	}
 
 	at := attempts.New(cfg.Dirs.RalphDir)

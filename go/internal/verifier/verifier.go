@@ -10,11 +10,16 @@
 // local variables, and writes state-store side effects. Verifier never holds
 // or reaches into git / state / tasks modules.
 //
-// Verifier does own one submodule: the fix-agent runner factory. Spawning a
-// fresh claude subprocess to fix tests, compile errors, CI failures, etc. is
-// intrinsic to what verifier does, so verifier owns that capability. In
-// production the factory returns a `*agent.Runner`; in tests it returns a
-// stub. See docs/specs/orchestrator-modules.md for the peer-module rule.
+// Verifier owns two submodules at construction time:
+//
+//   - newRunner: a factory that produces fix-agent subprocess runners. In
+//     production it returns *agent.Runner; in tests it returns a stub.
+//   - querier: the one-shot LLM query function used for LLM verification. In
+//     production it shells out to `claude --print`; in tests it returns
+//     canned YES/NO responses.
+//
+// Both submodules are explicit constructor parameters (not Config function
+// fields). See docs/specs/orchestrator-modules.md for the peer-module rule.
 package verifier
 
 import (
@@ -69,26 +74,40 @@ type Config struct {
 // what verifier does (same relationship git has to github).
 type RunnerFactory func() Runner
 
+// Querier is verifier's local interface for one-shot LLM queries. Defined
+// here (not imported from elsewhere) so verifier holds no peer-module
+// references — same dependency-inversion pattern git uses with StateStore.
+// In production *agent.Runner satisfies this interface via its Query
+// method; tests provide stubs that return canned YES/NO responses.
+type Querier interface {
+	Query(ctx context.Context, workDir, prompt, model string) (string, error)
+}
+
 // Verifier owns the individual verification operations. It holds its
-// configuration, a logger, and its fix-agent runner factory (submodule).
-// It holds no function hooks for behavior injection: LLM verification
-// calls verify.LLMVerifyPR directly as a plain package function, and tests
-// control LLM behavior via the per-call QueryFn in LLMVerifyOpts. Verifier
-// never reaches into git, state, or taskBackend.
+// configuration, a logger, and two submodules: a fix-agent runner factory
+// and an LLM querier. It holds no peer-module references and no function
+// hooks for behavior injection — the submodules are explicit constructor
+// parameters. Verifier never reaches into git, state, or taskBackend.
 type Verifier struct {
 	cfg       Config
 	logger    *logging.Logger
 	newRunner RunnerFactory
+	querier   Querier
 }
 
-// New creates a Verifier from a pure-data Config, a logger, and an explicit
-// fix-agent runner factory. When newRunner is nil, it defaults to
-// agent.New(logger), which is the production choice. Tests pass their own
-// factory to inject stub runners — this is the ONLY behavioral injection
-// point, and it is an explicit constructor parameter, not a config field.
-func New(cfg Config, logger *logging.Logger, newRunner RunnerFactory) *Verifier {
+// New creates a Verifier from a pure-data Config, a logger, an explicit
+// fix-agent runner factory, and an explicit LLM querier. When newRunner is
+// nil it defaults to agent.New(logger). When querier is nil it also
+// defaults to agent.New(logger), which satisfies the Querier interface via
+// its Query method. Tests pass their own stubs — these are the ONLY
+// behavioral injection points, and they are explicit constructor
+// parameters, not Config fields.
+func New(cfg Config, logger *logging.Logger, newRunner RunnerFactory, querier Querier) *Verifier {
 	if newRunner == nil {
 		newRunner = func() Runner { return agent.New(logger) }
+	}
+	if querier == nil {
+		querier = agent.New(logger)
 	}
 	if cfg.TestTimeout == 0 {
 		cfg.TestTimeout = 5 * time.Minute
@@ -96,7 +115,7 @@ func New(cfg Config, logger *logging.Logger, newRunner RunnerFactory) *Verifier 
 	if cfg.CompileCheckTimeout == 0 {
 		cfg.CompileCheckTimeout = 60 * time.Second
 	}
-	return &Verifier{cfg: cfg, logger: logger, newRunner: newRunner}
+	return &Verifier{cfg: cfg, logger: logger, newRunner: newRunner, querier: querier}
 }
 
 // Cfg returns a copy of the verifier's configuration. This is a read-only
@@ -106,8 +125,12 @@ func (v *Verifier) Cfg() Config {
 }
 
 // RunTests runs the ralph:verify test suite in dir with a heartbeat log line
-// every HeartbeatInterval. Returns the test result and elapsed duration.
+// every HeartbeatInterval. Verifier owns the start/result narrative for its
+// own operation; callers (Loop) only log orchestration concerns like retry
+// counters. Returns the test result and elapsed duration.
 func (v *Verifier) RunTests(ctx context.Context, dir string) (verify.Result, time.Duration) {
+	v.logger.Emit(logging.Opts{Domain: logging.Test}, "Running test suite...")
+
 	start := time.Now()
 	done := make(chan struct{})
 	defer close(done)
@@ -127,17 +150,37 @@ func (v *Verifier) RunTests(ctx context.Context, dir string) (verify.Result, tim
 	}()
 
 	result := verify.RunTests(ctx, v.cfg.TestTimeout, dir, v.cfg.ProjectDir)
-	return result, time.Since(start).Truncate(time.Millisecond)
+	elapsed := time.Since(start).Truncate(time.Millisecond)
+
+	switch {
+	case result.ScriptMissing:
+		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "ralph:verify script not found — cannot verify")
+	case result.Passed:
+		v.logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed (%s)", elapsed)
+	default:
+		v.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Tests failed (%s): %s", elapsed, result.Reason)
+	}
+
+	return result, elapsed
 }
 
 // CompileCheck runs the build/type check (go build / tsc --noEmit) in dir.
+// Verifier owns its own start/result narrative; callers only log
+// orchestration concerns.
 func (v *Verifier) CompileCheck(ctx context.Context, dir string) verify.Result {
-	return verify.CompileCheck(ctx, v.cfg.CompileCheckTimeout, dir)
+	v.logger.Emit(logging.Opts{Domain: logging.Build}, "Running compile check...")
+	result := verify.CompileCheck(ctx, v.cfg.CompileCheckTimeout, dir)
+	if result.Passed {
+		v.logger.Emit(logging.Opts{Domain: logging.Build}, "Compile check passed")
+	} else {
+		v.logger.Emit(logging.Opts{Domain: logging.Build, Level: logging.Warn}, "Compile check failed: %s", result.Reason)
+	}
+	return result
 }
 
-// LLMVerifyOpts carries per-call inputs to LLMVerify. It exists so callers
-// don't have to construct verify.VerifyOpts directly (verifier fills in the
-// static config fields).
+// LLMVerifyOpts carries per-call inputs to LLMVerify. Pure data — no
+// callbacks, no module references. The diff is pre-fetched by Loop and
+// passed in as a string.
 type LLMVerifyOpts struct {
 	Ctx         context.Context
 	WorkDir     string
@@ -147,36 +190,56 @@ type LLMVerifyOpts struct {
 	Acceptance  string
 	Diff        string
 	DiffSource  string
-	QueryFn     verify.QueryFunc
 	// Attempt is the 1-indexed attempt number within a single verification
 	// flow; attempt 1 uses the base verify model, subsequent attempts
 	// escalate to the escalation model.
 	Attempt int
 }
 
-// LLMVerify calls the configured LLM verification function with the given
-// opts. It selects the appropriate model based on attempt number and
-// ModelCap. The returned Result reports whether the LLM approved the diff.
-// The selected model is returned alongside so callers can log it.
+// LLMVerify runs LLM verification with the given opts. It selects the
+// appropriate model, builds the prompt via verify.BuildReviewPrompt (pure
+// helper), calls v.querier (verifier's submodule) to actually run the LLM,
+// then parses the response via verify.ParseReviewResponse (pure helper).
+// Verifier owns the start/result narrative — callers (Loop) only log
+// orchestration concerns like retry counters. The returned Result reports
+// whether the LLM approved the diff. The selected model is returned
+// alongside so callers can include it in orchestration logs.
+//
+// An empty Diff short-circuits to NoDiff: the agent confirmed completion
+// but no PR/diff exists to verify. An LLM call error is treated as a
+// pass-through (verification skipped) so transient LLM failures do not
+// block task completion.
 func (v *Verifier) LLMVerify(opts LLMVerifyOpts) (verify.Result, string) {
 	model := v.verifyModel(opts.Attempt)
-	queryFn := opts.QueryFn
-	if queryFn == nil {
-		queryFn = agent.New(v.logger).Query
+
+	if opts.Diff == "" {
+		return verify.Result{Passed: true, NoDiff: true, Reason: "no PR found and no new commits — agent confirms task complete"}, model
 	}
-	result := verify.LLMVerifyPR(verify.VerifyOpts{
-		Ctx:         opts.Ctx,
-		WorkDir:     opts.WorkDir,
+
+	prompt := verify.BuildReviewPrompt(verify.ReviewPromptInput{
 		PromptsDir:  v.cfg.PromptsDir,
-		TaskID:      opts.TaskID,
 		Title:       opts.Title,
 		Description: opts.Description,
 		Acceptance:  opts.Acceptance,
 		Diff:        opts.Diff,
 		DiffSource:  opts.DiffSource,
-		QueryFn:     queryFn,
-		Model:       model,
 	})
+
+	v.logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Running LLM verification...")
+	response, err := v.querier.Query(opts.Ctx, opts.WorkDir, prompt, model)
+	if err != nil {
+		result := verify.Result{Passed: true, Reason: "LLM verification skipped: " + err.Error()}
+		v.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: model}, "LLM verification skipped: %v", err)
+		return result, model
+	}
+
+	result := verify.ParseReviewResponse(response)
+	if result.Passed {
+		v.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: model}, "LLM verified: %s", result.Reason)
+	} else {
+		v.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: model}, "LLM verification rejected: %s", result.Details)
+	}
+
 	return result, model
 }
 

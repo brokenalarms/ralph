@@ -15,10 +15,11 @@ func TestLoop_MaybeRefactor_DisabledByDefault(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	l := New(Config{
+	cfg := Config{
 		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: false,
-	}, newTestModules(t, st, &git.StubRepo{WorkDir: dir}, nil))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, &git.StubRepo{WorkDir: dir}, nil))
 
 	err := l.maybeRefactor(context.Background(), 5)
 	if err != nil {
@@ -32,10 +33,11 @@ func TestLoop_MaybeRefactor_SkipsBelow5Completions(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	l := New(Config{
+	cfg := Config{
 		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: true,
-	}, newTestModules(t, st, &git.StubRepo{WorkDir: dir}, nil))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, &git.StubRepo{WorkDir: dir}, nil))
 
 	err := l.maybeRefactor(context.Background(), 3)
 	if err != nil {
@@ -50,14 +52,17 @@ func TestLoop_MaybeRefactor_LLMSaysNo(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	queryFnCalled := false
-	l := New(Config{
+	cfg := Config{
 		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: true,
-		QueryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+	}
+	l := New(cfg, newTestModules(t, cfg, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, nil))
+	l.runner = &stubRunner{
+		queryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			queryFnCalled = true
 			return "NO\nCode looks fine.", nil
 		},
-	}, newTestModules(t, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, nil))
+	}
 
 	err := l.maybeRefactor(context.Background(), 5)
 	if err != nil {
@@ -78,7 +83,7 @@ func TestLoop_MaybeRefactor_LLMSaysYes(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	runnerCalled := false
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			RalphDir:   ralphDir,
 			WorkDir:    dir,
@@ -86,13 +91,14 @@ func TestLoop_MaybeRefactor_LLMSaysYes(t *testing.T) {
 		},
 		Refactor:     true,
 		CallsPerHour: 80,
-		QueryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
-			return "YES\nThere is significant duplication.", nil
-		},
-	}, newTestModules(t, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, nil))
+	}
+	l := New(cfg, newTestModules(t, cfg, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, nil))
 	l.runner = &stubRunner{
 		onRun: func() {
 			runnerCalled = true
+		},
+		queryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+			return "YES\nThere is significant duplication.", nil
 		},
 	}
 
@@ -111,14 +117,17 @@ func TestLoop_MaybeRefactor_TriggersAtMultiplesOf5(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	queryCalls := 0
-	l := New(Config{
+	cfg := Config{
 		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: true,
-		QueryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+	}
+	l := New(cfg, newTestModules(t, cfg, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, nil))
+	l.runner = &stubRunner{
+		queryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			queryCalls++
 			return "NO\nAll good.", nil
 		},
-	}, newTestModules(t, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, nil))
+	}
 
 	// 7 completions: should NOT trigger (not a multiple of 5)
 	queryCalls = 0

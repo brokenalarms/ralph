@@ -28,7 +28,9 @@ type verifyPipelineInput struct {
 // compile check. Loop owns the retry counters (local variables) and fetches
 // fresh HEAD/diff from l.git between fix-agent calls. Verifier provides the
 // individual stateless operations (RunTests, CompileCheck, LLMVerify, and
-// the Spawn*FixAgent helpers).
+// the Spawn*FixAgent helpers) and owns the start/result logging for each
+// of those operations — Loop only emits orchestration-level information
+// (retry counters, attempts exhausted, sequencing decisions).
 //
 // Returns (verified, skipReason). When skipReason is non-empty the caller
 // should call l.skipTask(taskID, skipReason) — that action is Loop's, not
@@ -59,14 +61,11 @@ func (l *Loop) runVerifyPipeline(p verifyPipelineInput) (verified bool, skipReas
 	}
 
 	// ── Test fix loop ──
-	l.logger.Emit(logging.Opts{Domain: logging.Test}, "Running post-signal test suite...")
-	testResult, testElapsed := l.verifier.RunTests(p.ctx, l.cfg.VerifyDir)
-	if testResult.Passed {
-		l.logger.Emit(logging.Opts{Domain: logging.Test}, "Tests passed (%s)", testElapsed)
-	} else if testResult.ScriptMissing {
-		l.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Error}, "ralph:verify script not found — cannot verify")
+	testResult, _ := l.verifier.RunTests(p.ctx, l.cfg.VerifyDir)
+	if testResult.ScriptMissing {
 		return false, ""
-	} else {
+	}
+	if !testResult.Passed {
 		if !l.runTestFixLoop(spawn, taskAccept, testResult.Details, maxTestFix) {
 			return false, ""
 		}
@@ -181,7 +180,7 @@ func (l *Loop) runLLMVerifyFixLoop(p verifyPipelineInput, spawn verifier.FixAgen
 
 		diff, diffSource := l.fetchVerifyDiff(p.taskID, p.headBefore)
 
-		llmResult, model := l.verifier.LLMVerify(verifier.LLMVerifyOpts{
+		llmResult, _ := l.verifier.LLMVerify(verifier.LLMVerifyOpts{
 			Ctx:         p.ctx,
 			WorkDir:     p.workDir,
 			TaskID:      p.taskID,
@@ -190,17 +189,12 @@ func (l *Loop) runLLMVerifyFixLoop(p verifyPipelineInput, spawn verifier.FixAgen
 			Acceptance:  taskAccept,
 			Diff:        diff,
 			DiffSource:  diffSource,
-			QueryFn:     l.cfg.QueryFn,
 			Attempt:     attempts,
 		})
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Running LLM verification (attempt %d/%d)...", attempts, maxLLMAttempts)
 
 		if llmResult.Passed {
-			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: model}, "LLM verified: %s", llmResult.Reason)
 			return true, ""
 		}
-
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Error, Model: model}, "LLM verification rejected (attempt %d/%d): %s", attempts, maxLLMAttempts, llmResult.Details)
 
 		if attempts >= maxLLMAttempts {
 			if p.taskID != "" {
