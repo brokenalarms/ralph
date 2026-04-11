@@ -467,22 +467,24 @@ func TestPushAndCreatePR_PassesBodyToCreatePR(t *testing.T) {
 		logger:         discardLog{},
 	}
 
-	body := "## Description\nFix auth middleware\n\n## Summary\nDone"
-	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix auth", body)
+	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix auth", "Done")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if capturedOpts.Body != body {
-		t.Errorf("CreatePR body = %q, want %q", capturedOpts.Body, body)
+	// PushAndCreatePR forwards the summary string into the Summary
+	// section that formatPRBody constructs.
+	wantBody := "## Summary\nDone"
+	if capturedOpts.Body != wantBody {
+		t.Errorf("CreatePR body = %q, want %q", capturedOpts.Body, wantBody)
 	}
 	if !strings.HasPrefix(capturedOpts.Title, "[ralph-abc]") {
 		t.Errorf("title should start with [ralph-abc], got %q", capturedOpts.Title)
 	}
 }
 
-// PushAndCreatePR uses the task description as body when no explicit body
-// is provided, avoiding completely empty PR descriptions.
+// PushAndCreatePR uses the task description as body when no summary is
+// provided, avoiding completely empty PR descriptions.
 func TestPushAndCreatePR_FallsBackToTaskDescWhenNoBody(t *testing.T) {
 	r := newStubRunner()
 	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)

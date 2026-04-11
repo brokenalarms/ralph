@@ -125,13 +125,17 @@ func (m *Repo) reopenClosedPR(gh GitHub, repoURL, title, body string) (int, erro
 	return reopenClosedPR(gh, m.WorkDir, m.WorktreeBranch, nwo, repoURL, title, body, m.logger)
 }
 
-// EnsurePROpts configures the CreatePR package function.
+// EnsurePROpts configures the CreatePR package function. Description,
+// Acceptance, and Summary are pure data the caller pre-fetches; CreatePR
+// passes them to formatPRBody (in github.go) to build the body.
 type EnsurePROpts struct {
-	TaskID     string
-	TaskDesc   string
-	Body       string
-	BaseBranch string
-	Logger     Log
+	TaskID      string
+	TaskDesc    string
+	Description string
+	Acceptance  string
+	Summary     string
+	BaseBranch  string
+	Logger      Log
 }
 
 // CreatePR ensures a PR exists for the given branch. If one is already open,
@@ -147,13 +151,14 @@ func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string,
 
 	nwo := NWOFromRemote(remoteURL)
 	title := prTitle(opts.TaskID, opts.TaskDesc, branch)
+	body := formatPRBody(opts.Description, opts.Acceptance, opts.Summary)
 
 	// Existing PR — update and return.
 	prNumber, _ := gh.FindOpenPR(branch, remoteURL)
 	if prNumber != 0 {
 		prLink := logging.PRLinkOpt(nwo, prNumber)
 		if opts.TaskID != "" {
-			if err := gh.EditPR(prNumber, remoteURL, title, opts.Body); err != nil {
+			if err := gh.EditPR(prNumber, remoteURL, title, body); err != nil {
 				opts.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "Failed to update: %v", err)
 			}
 		}
@@ -161,8 +166,8 @@ func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string,
 		return prNumber, nil
 	}
 
-	// New PR.
-	body := opts.Body
+	// New PR — fall back to task description as the body when nothing
+	// else is available.
 	if body == "" {
 		body = opts.TaskDesc
 	}
@@ -212,12 +217,15 @@ func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string,
 	return newPR, nil
 }
 
-// Repo.CreatePR delegates to the package function.
-func (m *Repo) CreatePR(ctx context.Context, taskID, taskDesc, body string) (int, error) {
+// Repo.CreatePR delegates to the package function. The summary string is
+// passed through formatPRBody as the Summary section; callers needing
+// description / acceptance criteria use the package function CreatePR
+// directly.
+func (m *Repo) CreatePR(ctx context.Context, taskID, taskDesc, summary string) (int, error) {
 	return CreatePR(ctx, m.gh(), m.WorkDir, m.WorktreeBranch, m.RemoteURL(), EnsurePROpts{
 		TaskID:     taskID,
 		TaskDesc:   taskDesc,
-		Body:       body,
+		Summary:    summary,
 		BaseBranch: m.resolveBaseBranch(),
 		Logger:     m.logger,
 	})
@@ -228,7 +236,16 @@ func (m *Repo) CreatePR(ctx context.Context, taskID, taskDesc, body string) (int
 type ShipOpts struct {
 	TaskID    string
 	TaskTitle string
-	Body      string
+
+	// Description, Acceptance, Summary are pure data (strings) that the
+	// caller pre-fetches from whatever task backend it uses. git/github
+	// formats them into the PR body via formatPRBody — the orchestrator
+	// never knows what "## Description" means, only that the data fields
+	// exist.
+	Description string
+	Acceptance  string
+	Summary     string
+
 	BaseBranch string
 
 	// PRNumber, when non-zero, tells Ship to skip push+PR creation and proceed
@@ -355,11 +372,13 @@ func shipPR(ctx context.Context, runner Runner, gh GitHub, workDir, branch, remo
 
 	baseBranch := opts.BaseBranch
 	prNumber, err := CreatePR(ctx, gh, workDir, branch, remoteURL, EnsurePROpts{
-		TaskID:     opts.TaskID,
-		TaskDesc:   opts.TaskTitle,
-		Body:       opts.Body,
-		BaseBranch: baseBranch,
-		Logger:     infra.logger,
+		TaskID:      opts.TaskID,
+		TaskDesc:    opts.TaskTitle,
+		Description: opts.Description,
+		Acceptance:  opts.Acceptance,
+		Summary:     opts.Summary,
+		BaseBranch:  baseBranch,
+		Logger:      infra.logger,
 	})
 	if err != nil {
 		return ShipResult{PRNumber: prNumber}, err
@@ -505,9 +524,10 @@ func (m *Repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 }
 
 // PushAndCreatePR composes Push and CreatePR. Squashes, force-pushes, then
-// ensures a PR exists. Returns the PR number.
-func (m *Repo) PushAndCreatePR(ctx context.Context, taskID, taskDesc, body string) (int, error) {
-	result, err := m.Ship(ctx, ShipOpts{TaskID: taskID, TaskTitle: taskDesc, Body: body})
+// ensures a PR exists. Returns the PR number. The summary argument flows
+// into the Summary section of the formatted PR body.
+func (m *Repo) PushAndCreatePR(ctx context.Context, taskID, taskDesc, summary string) (int, error) {
+	result, err := m.Ship(ctx, ShipOpts{TaskID: taskID, TaskTitle: taskDesc, Summary: summary})
 	return result.PRNumber, err
 }
 

@@ -143,32 +143,6 @@ func (l *Loop) flushUnpushedWork(ctx context.Context, lastTaskMerged bool) {
 	}
 }
 
-// prBody assembles a PR description from task context and agent summary.
-// Uses whatever context is available — task description, acceptance criteria,
-// agent summary — and composes them into a coherent body. Reads
-// l.taskBackend via the receiver.
-func (l *Loop) prBody(taskID, summary string) string {
-	var sections []string
-
-	if taskID != "" {
-		if desc, err := l.taskBackend.GetDescription(taskID); err == nil && desc != "" {
-			sections = append(sections, "## Description\n"+desc)
-		}
-		if ac, err := l.taskBackend.GetAcceptance(taskID); err == nil && ac != "" {
-			sections = append(sections, "## Acceptance Criteria\n"+ac)
-		}
-	}
-
-	if summary != "" {
-		sections = append(sections, "## Summary\n"+summary)
-	}
-
-	if len(sections) == 0 {
-		return ""
-	}
-	return strings.Join(sections, "\n\n")
-}
-
 // prURL builds the canonical PR URL from the remote URL and PR number.
 // Always returns a full URL; never returns a "gh-" prefixed string.
 func prURL(remoteURL string, prNumber int) string {

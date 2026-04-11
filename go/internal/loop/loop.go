@@ -572,7 +572,14 @@ iterLoop:
 // then reviewer polling and merge (Phase 2, only when AutoMerge is enabled).
 // Retries up to 5 times on review fix requests or CI failures.
 func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, workDir string) (prNumber int, prResultURL string, merged bool, ciFailure bool, stacked bool) {
-	prBody := l.prBody(taskID, summary)
+	// Pre-fetch task description and acceptance criteria so git/github can
+	// build the PR body internally. The orchestrator owns the data, the
+	// git package owns the markdown formatting.
+	var taskDesc, taskAccept string
+	if taskID != "" && l.taskBackend != nil {
+		taskDesc, _ = l.taskBackend.GetDescription(taskID)
+		taskAccept, _ = l.taskBackend.GetAcceptance(taskID)
+	}
 
 	callShip := func(opts git.ShipOpts) (git.ShipResult, error) {
 		result, err := l.git.Ship(ctx, opts)
@@ -607,7 +614,13 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 	}
 
 	// Phase 1: push + PR (no merge yet) so push happens before reviewer detection.
-	result, err := callShip(git.ShipOpts{TaskID: taskID, TaskTitle: title, Body: prBody})
+	result, err := callShip(git.ShipOpts{
+		TaskID:      taskID,
+		TaskTitle:   title,
+		Description: taskDesc,
+		Acceptance:  taskAccept,
+		Summary:     summary,
+	})
 	if err != nil {
 		return result.PRNumber, result.PRURL, false, false, false
 	}
