@@ -114,8 +114,17 @@ func (m *Repo) HeadRev() string {
 }
 
 func (m *Repo) HasUncommittedChanges() bool {
-	return m.gitCmdErr(m.WorkDir, "diff", "--quiet") != nil ||
-		m.gitCmdErr(m.WorkDir, "diff", "--cached", "--quiet") != nil
+	return m.hasUncommittedChangesIn(m.WorkDir)
+}
+
+// hasUncommittedChangesIn returns true when the given dir has unstaged or
+// staged changes. Init calls this with m.ProjectDir explicitly, because
+// Init runs the dirty-tree check before SetupWorktree has had a chance to
+// move WorkDir to a worktree subdirectory — so checking WorkDir would be
+// the wrong question.
+func (m *Repo) hasUncommittedChangesIn(dir string) bool {
+	return m.gitCmdErr(dir, "diff", "--quiet") != nil ||
+		m.gitCmdErr(dir, "diff", "--cached", "--quiet") != nil
 }
 
 func (m *Repo) CommitAll(message string) {
