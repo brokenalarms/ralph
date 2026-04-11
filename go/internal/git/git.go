@@ -163,25 +163,31 @@ func (m *Repo) SetKnownPRNumber(n int) {
 // sequence:
 //
 //   1. ValidateRemoteBranch — checks the configured base branch exists
-//      on the remote.
-//   2. HasUncommittedChanges (only on fresh runs, not on resume) —
-//      refuses to start with a dirty working tree on a fresh run, so
-//      the .gitignore commit doesn't sweep in unrelated staged work.
-//   3. EnsureGitignored — adds .ralph to .gitignore.
-//   4. PruneOrphanedWorktrees — cleans up stale worktrees from
-//      previous runs.
+//      on the remote. Returns an error on failure (init aborts).
+//   2. Dirty-tree check (only on fresh runs, not on resume) — refuses to
+//      start with a dirty working tree in the project repo, so the
+//      .gitignore commit below doesn't sweep in unrelated staged work.
+//      Returns an error on failure (init aborts). This explicitly
+//      checks m.ProjectDir, not m.WorkDir, because Init runs before
+//      SetupWorktree has moved WorkDir to a worktree subdirectory.
+//   3. EnsureGitignored — adds .ralph to .gitignore. Best-effort: any
+//      filesystem failure is silently swallowed by the helper, so this
+//      step never returns an error from Init.
+//   4. PruneOrphanedWorktrees — cleans up stale worktrees from previous
+//      runs. Best-effort: any cleanup failure is silently swallowed.
 //   5. SetupWorktree — creates (or resumes) the iteration worktree.
+//      Returns an error on failure (init aborts).
 //
-// Returns an error if any step fails. Init should be called once
-// immediately after New, before any task execution. Production callers
-// (cmd/ralph) call this; tests that don't exercise worktree setup can
-// skip it and use the constructed Repo directly.
+// Init should be called once immediately after New, before any task
+// execution. Production callers (cmd/ralph) call this; tests that don't
+// exercise worktree setup can skip it and use the constructed Repo
+// directly.
 func (m *Repo) Init(ctx context.Context) error {
 	if err := m.ValidateRemoteBranch(ctx); err != nil {
 		return err
 	}
 	if !m.resume {
-		if IsGitRepo(m.ProjectDir) && m.HasUncommittedChanges() {
+		if IsGitRepo(m.ProjectDir) && m.hasUncommittedChangesIn(m.ProjectDir) {
 			return fmt.Errorf("uncommitted changes in %s — please commit or stash before running ralph.", m.ProjectDir)
 		}
 	}
