@@ -152,23 +152,12 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		CodeRabbitTimeout:           cfg.CodeRabbitReviewTimeout,
 	})
 
-	// Phase 4 — git pre-flight checks. Run after git.New so the methods
-	// have the logger/state they need.
-	if err := gm.ValidateRemoteBranch(ctx); err != nil {
+	// Phase 4 — git pre-flight checks and worktree setup. gm.Init bundles
+	// ValidateRemoteBranch + dirty-tree check + EnsureGitignored +
+	// PruneOrphanedWorktrees + SetupWorktree so callers can't forget the
+	// sequence and a future caller gets one method to call.
+	if err := gm.Init(ctx); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
-		return 1
-	}
-	if !fileExists(stateFile) {
-		if git.IsGitRepo(cfg.ProjectDir) && gm.HasUncommittedChanges() {
-			log.Emit(logging.Opts{Level: logging.Error}, "uncommitted changes in %s — please commit or stash before running ralph.", cfg.ProjectDir)
-			return 1
-		}
-	}
-	gm.EnsureGitignored(".ralph")
-	gm.PruneOrphanedWorktrees()
-
-	if err := gm.SetupWorktree(ctx); err != nil {
-		log.Emit(logging.Opts{Level: logging.Error}, "Worktree setup failed: %v", err)
 		return 1
 	}
 	dirs.WorkDir = gm.GetWorkDir()

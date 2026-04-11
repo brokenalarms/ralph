@@ -157,6 +157,47 @@ func (m *Repo) SetKnownPRNumber(n int) {
 	m.KnownPRNumber = n
 }
 
+// Init runs the git pre-flight checks and worktree setup that must
+// complete before the orchestrator can use this Repo. Bundles the
+// individual operations so callers don't have to know the right
+// sequence:
+//
+//   1. ValidateRemoteBranch — checks the configured base branch exists
+//      on the remote. Returns an error on failure (init aborts).
+//   2. Dirty-tree check (only on fresh runs, not on resume) — refuses to
+//      start with a dirty working tree in the project repo, so the
+//      .gitignore commit below doesn't sweep in unrelated staged work.
+//      Returns an error on failure (init aborts). This explicitly
+//      checks m.ProjectDir, not m.WorkDir, because Init runs before
+//      SetupWorktree has moved WorkDir to a worktree subdirectory.
+//   3. EnsureGitignored — adds .ralph to .gitignore. Best-effort: any
+//      filesystem failure is silently swallowed by the helper, so this
+//      step never returns an error from Init.
+//   4. PruneOrphanedWorktrees — cleans up stale worktrees from previous
+//      runs. Best-effort: any cleanup failure is silently swallowed.
+//   5. SetupWorktree — creates (or resumes) the iteration worktree.
+//      Returns an error on failure (init aborts).
+//
+// Init should be called once immediately after New, before any task
+// execution. Production callers (cmd/ralph) call this; tests that don't
+// exercise worktree setup can skip it and use the constructed Repo
+// directly.
+func (m *Repo) Init(ctx context.Context) error {
+	if err := m.ValidateRemoteBranch(ctx); err != nil {
+		return err
+	}
+	if !m.resume {
+		if IsGitRepo(m.ProjectDir) && m.hasUncommittedChangesIn(m.ProjectDir) {
+			return fmt.Errorf("uncommitted changes in %s — please commit or stash before running ralph.", m.ProjectDir)
+		}
+	}
+	m.EnsureGitignored(".ralph")
+	m.PruneOrphanedWorktrees()
+	if err := m.SetupWorktree(ctx); err != nil {
+		return fmt.Errorf("worktree setup failed: %w", err)
+	}
+	return nil
+}
 
 // SetupWorktree creates (or resumes) a git worktree for isolated work.
 func (m *Repo) SetupWorktree(ctx context.Context) error {
