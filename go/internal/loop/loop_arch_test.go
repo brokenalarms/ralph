@@ -11,66 +11,19 @@ import (
 	"testing"
 )
 
-// TestOrchestratorParamsNoModules enforces that params/opts structs in the
-// loop package carry only data — no module references, no interfaces, and
-// no func types (callbacks are module references in disguise).
+// TestOrchestratorParamsNoModules enforces that every *Params/*Opts struct
+// in the loop package carries only data — no func types (callbacks are
+// module references in disguise) and no interface types (interfaces are
+// usually module abstractions).
 //
-// Structs are added to the `checked` set as each bead lands. The agent
-// completing each bead uncomments their structs, making the test enforce
-// the rule for those structs only. Once all beads land, every *Params/*Opts
-// struct will be checked.
+// The orchestrator/module-boundary refactor that introduced this test landed
+// bead-by-bead with an explicit allowlist. The refactor is now complete,
+// so the test walks every *Params/*Opts struct in the loop package
+// unconditionally. Adding a new params struct that holds a callback or
+// interface should fail this test immediately.
 func TestOrchestratorParamsNoModules(t *testing.T) {
 	_, thisFile, _, _ := runtime.Caller(0)
 	dir := filepath.Dir(thisFile)
-
-	// checked lists structs that must pass the data-only rule.
-	// Uncomment each section when the corresponding bead lands.
-	checked := map[string]bool{
-		// --- Bead 1: git.BranchForTask (ralph-sh1e) ---
-		"branchParams": true,
-
-		// --- Bead 2: git.ResumeTask (ralph-o8sb) ---
-		"resumeViaPRParams":      true,
-		"resolveByPRStateParams": true,
-
-		// --- Bead 3: git.Ship (ralph-bk7m) ---
-		"finalizePRParams": true,
-
-		// --- Bead 4 rework: completeTaskParams data-only (ralph-93jq) ---
-		"completeTaskParams": true,
-
-		// --- Bead 6: task selection → tasks module (ralph-u4c7) ---
-		// selectNextTaskParams and logIterationBannerParams are data-only structs.
-		// pollForTasksParams, waitForTasksParams, and beginIterationParams were
-		// converted to Loop methods — no longer exist as params structs.
-		"selectNextTaskParams":     true,
-		"pollForTasksParams":       true,
-		"waitForTasksParams":       true,
-		"beginIterationParams":     true,
-		"logIterationBannerParams": true,
-
-		// --- Bead 7: state/attempts out of params (ralph-eycr) ---
-		// Structs converted to Loop methods — no longer exist as params structs.
-		"processRunOutcomeParams": true,
-		"handleRunResultParams":   true,
-		"initParams":              true,
-		"initWorktreeParams":      true,
-		"flushUnpushedWorkParams": true,
-
-		// --- Bead 8: limiter/analyzer out of params (ralph-r7my) ---
-		"waitForRateParams":           true,
-		"maybeRefactorParams":         true,
-		"llmShouldRefactorParams":     true,
-		"analyzeIterationParams":      true,
-		"prepareAndBuildPromptParams": true,
-
-		// --- Bead 9: merge/iteration params (ralph-bk7m / ralph-93jq) ---
-		"mergeWithRetryParams": true,
-	}
-
-	if len(checked) == 0 {
-		t.Skip("all sections commented out — uncomment as beads land")
-	}
 
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(dir)
@@ -99,7 +52,7 @@ func TestOrchestratorParamsNoModules(t *testing.T) {
 					continue
 				}
 				structName := ts.Name.Name
-				if !checked[structName] {
+				if !isParamsOrOpts(structName) {
 					continue
 				}
 				st, ok := ts.Type.(*ast.StructType)
