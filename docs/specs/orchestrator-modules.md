@@ -102,6 +102,146 @@ construction. One constructor, used identically by both.
   composition point and breaking the rule. The fix is to add the
   parameter to `loop.New` itself.
 
+### Rule A.1: Structural sealing — how Rule A is mechanically enforced
+
+Rule A's prose forbids module types from crossing package boundaries as
+typed values. An agent can satisfy that letter while breaking its spirit
+by exposing capabilities in shapes the type check doesn't catch: an
+interface declared in the same package that mirrors an internal
+sub-module, a method taking `args ...string` that forwards to a
+subprocess, a callback receiving an internal handle. Every past "seal
+the boundary" attempt in this codebase has eventually regressed through
+one of those shapes.
+
+Naming rules don't stop this. Forbidding `Run` / `Exec` / `Handle` /
+`Client` in method names just moves the leak into a method named `Fetch`
+whose `refs ...string` parameter carries argv. Names can lie;
+**structure cannot**.
+
+Rule A.1 constrains the *structure* of every module package's public
+API. It is enforced by arch tests (see "Strict arch tests" below), not
+by review.
+
+#### A.1.1 — One method-bearing type per module package
+
+A module package exports **exactly one** named type with methods: the
+module type itself (`git.Repo`, `state.Store`, `attempts.Tracker`,
+`verifier.Verifier`). Every other exported name in the package is
+pure data:
+
+- Structs with no methods whose fields are primitives,
+  `context.Context`, other pure-data structs, or method-less interfaces.
+- Constants, enums, and data-returning functions whose signatures
+  contain only the same allow-list.
+- The module's own constructor(s) (`New`, `NewStore`, etc.).
+
+There are no exported method-bearing interfaces declared in a module
+package. There are no exported method-bearing struct types besides the
+module itself. There are no exported package-level functions that
+return or receive any method-bearing type other than the module type.
+
+**What this kills:**
+
+| Shape | Why it fails |
+|---|---|
+| `(r *Repo) GH() GitHub` | `GitHub` is an exported method-bearing interface in `git` |
+| `(r *Repo) GetRunner() Runner` | `Runner` is an exported method-bearing interface in `git` |
+| `git.StubRepo` as an exported struct with methods | Second method-bearing type in the `git` package |
+| `git.NewStubGitHub(...) *StubGitHub` | Factory returning a method-bearing non-module type |
+| `git.Ops` as an exported interface | Method-bearing interface declared inside a module package |
+
+**Where test stubs live after A.1.1.** Test interfaces like `git.Ops`
+move to the *consumer* package, not the module's own package. Go's
+structural typing means `*git.Repo` satisfies a `gitOps` interface
+declared in `internal/loop` without any explicit declaration or import:
+
+```go
+// ❌ Forbidden — interface lives in the module's own package.
+package git
+type Ops interface { BranchForTask(...) (string, error); ... }
+
+// ✅ Correct — interface lives in the consumer, unexported.
+package loop
+type gitOps interface { BranchForTask(...) (string, error); ... }
+// *git.Repo satisfies gitOps structurally; cmd/ralph/main.go passes a
+// *git.Repo into loop.Modules{Git: gm} and Go handles the implicit
+// conversion.
+```
+
+Test stubs that previously lived as `git.StubRepo` move into
+`internal/loop`'s test files as unexported types implementing `gitOps`.
+The `internal/git` package ships one exported type: `*Repo`.
+
+#### A.1.2 — Caller parameters do not flow into subprocess argv
+
+An exported method parameter on a module type may not appear as an
+element of the argv slice passed to any subprocess invocation inside
+the method body. Caller parameters enter the module's decision logic;
+they do not flow unchanged into a subprocess command line.
+
+This closes the hole A.1.1 doesn't catch: a method named
+`(r *Repo) Fetch(remote string, refs ...string) error` has a plausible
+domain name, but if `refs` is expanded into
+`runner.Run(ctx, dir, "fetch", refs...)`, the caller is choosing what
+git actually does. The method is an argv forwarder wearing a domain
+costume.
+
+```go
+// ✅ Correct — parameter enters decision logic; subcommand is fixed.
+func (r *Repo) RebaseOnto(ctx context.Context, base string) error {
+    if !r.isKnownBranch(base) {
+        return errUnknownBase
+    }
+    _, err := r.runner.Run(ctx, r.projectDir, "rebase", base)
+    return err
+}
+
+// ❌ Forbidden — caller params flow straight into argv.
+func (r *Repo) Fetch(ctx context.Context, args ...string) error {
+    _, err := r.runner.Run(ctx, r.projectDir,
+        append([]string{"fetch"}, args...)...)
+    return err
+}
+```
+
+AST enforcement: walk every exported method on a module type, find
+every `runner.Run` / `exec.Command` / `exec.CommandContext` call site
+in the method body, and fail if any variadic expansion (`args...`,
+`refs...`, `append([]string{...}, params...)...`) references a
+parameter of the enclosing exported method. The whitelist is empty.
+
+#### A.1.3 — Subprocess imports are scoped to the one module that owns them
+
+Only `internal/git/` may import `os/exec`. Every other package under
+`internal/` and every package under `cmd/` is subprocess-forbidden at
+the import graph level. If a caller outside `internal/git/` wants to
+run git, it has no path — the import physically isn't there.
+
+This is belt-and-suspenders for A.1.1 and A.1.2: even a hypothetical
+new leak shape would need a subprocess import to reach real git, and
+the import denylist blocks that at arch-test time, which runs on every
+build.
+
+#### Why these three together are sufficient
+
+- **A.1.1** eliminates sub-module handles as return values, parameters,
+  or exported interfaces — there is no method-bearing type in the
+  module package for a caller to obtain.
+- **A.1.2** eliminates argv smuggled through domain-looking signatures —
+  a method that accepts parameters has to do something with them other
+  than pass them through to a subprocess.
+- **A.1.3** eliminates the fallback of bypassing the module entirely
+  via a direct subprocess call — no non-git package can shell out at
+  all.
+
+There is no combination of legal code across the three rules that
+reconstructs the "caller composes git's internal operations" shape
+Rule A exists to prevent. Vocabulary guidance — name methods after
+what they do in the domain, not after the tool that implements them —
+remains valuable as a **review checklist** and lives in the
+"Module-boundary data structs use neutral names" section below. It is
+not enforcement. When names diverge from structure, structure wins.
+
 ### Why Rule B exists
 
 Rule B is the universal corollary of Go's encapsulation model: the
@@ -765,6 +905,38 @@ that implementation.
 Walks all assignment statements. Fails when the left-hand side is a field
 selector on a value whose type comes from another package and has methods.
 Catches `l.git.WorktreeBranch = "x"` style violations.
+
+### `TestOneMethodBearingTypePerModule`
+Enforces Rule A.1.1. Walks each package under `internal/`, collects
+exported type declarations and counts those that have methods. Fails
+when any package exports more than one method-bearing type, except
+`loop` (which owns `Loop` + `Modules`) and any package explicitly
+whitelisted with a one-line rationale in the test's whitelist constant.
+Also fails on exported method-bearing interface declarations in any
+module package. This is the mechanical form of the rule "one exported
+type per module package" — agents can't reintroduce `git.Ops`,
+`git.GitHub`, `git.Runner`, or `git.StubRepo` without this test
+failing.
+
+### `TestNoCallerParametersInSubprocessArgv`
+Enforces Rule A.1.2. Walks every exported method on a module type,
+inspects each `runner.Run` / `exec.Command*` / subprocess call site in
+the body, and fails when a parameter of the enclosing method flows
+(directly or via `append(...)`) into the argv slice. The whitelist is
+empty; every method either fully consumes its parameters into its own
+decision logic or is refactored until it does. This catches the
+"argv smuggled through a domain-looking signature" shape that vocabulary
+rules can't see.
+
+### `TestSubprocessImportsWhitelisted`
+Enforces Rule A.1.3. Walks every `.go` file outside `internal/git/`,
+parses its import list, and fails on any import from the subprocess
+denylist (`os/exec` at minimum; extend as new subprocess-capable
+packages are introduced or discovered). The test is small and fast
+enough to run on every build. It is the belt-and-suspenders backstop
+for A.1.1 and A.1.2: even a hypothetical new leak shape can't reach
+real git from a non-git package, because the import physically isn't
+allowed.
 
 ### `TestSequenceLockedDown` (the integration sequence test)
 The canonical happy-path sequence test plus its sister tests. They exist
