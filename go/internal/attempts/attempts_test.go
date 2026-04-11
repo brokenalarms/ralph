@@ -11,7 +11,7 @@ import (
 
 func newTestTracker(t *testing.T) *Tracker {
 	t.Helper()
-	return New(filepath.Join(t.TempDir(), ".ralph"))
+	return New(Config{RalphDir: filepath.Join(t.TempDir(), ".ralph")})
 }
 
 // Proves: attempt log files are created in the attempts directory
@@ -175,7 +175,7 @@ func TestRead_ReturnsAllWhenUnderCap(t *testing.T) {
 // sorted by modification time, excluding the current task.
 func TestRecentReflections_ReturnsLastNByMtime(t *testing.T) {
 	tr := newTestTracker(t)
-	refDir := filepath.Join(tr.RalphDir, "reflections")
+	refDir := filepath.Join(tr.ralphDir, "reflections")
 	os.MkdirAll(refDir, 0o755)
 
 	// Write 4 reflections with staggered mtimes

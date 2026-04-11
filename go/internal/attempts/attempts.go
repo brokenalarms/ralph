@@ -10,28 +10,54 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 )
 
-// Tracker records and retrieves attempt history for tasks, enabling
-// the prompt to include context about previous failed attempts.
-type Tracker struct {
+// Config bundles the construction-time inputs for attempts.New. Pure
+// data — no callbacks, no module references. Zero values default to 3
+// for the Max* fields.
+type Config struct {
 	RalphDir               string
 	MaxPromptAttempts      int
 	MaxMergeFailures       int
 	MaxIdleTimeoutFailures int
 }
 
-// New creates a Tracker that stores attempt logs in ralphDir/attempts/.
-// Limits default to 3 and are overridden by the loop config via public fields.
-func New(ralphDir string) *Tracker {
+// Tracker records and retrieves attempt history for tasks, enabling
+// the prompt to include context about previous failed attempts. All
+// fields are unexported; the orchestrator constructs a Tracker via
+// New(Config) and never mutates it afterward (Rule B — immutability).
+type Tracker struct {
+	ralphDir               string
+	maxPromptAttempts      int
+	maxMergeFailures       int
+	maxIdleTimeoutFailures int
+}
+
+// New creates a Tracker from a Config. Zero values for the Max* fields
+// default to 3.
+func New(cfg Config) *Tracker {
+	max := func(v, def int) int {
+		if v <= 0 {
+			return def
+		}
+		return v
+	}
 	return &Tracker{
-		RalphDir:               ralphDir,
-		MaxPromptAttempts:      3,
-		MaxMergeFailures:       3,
-		MaxIdleTimeoutFailures: 3,
+		ralphDir:               cfg.RalphDir,
+		maxPromptAttempts:      max(cfg.MaxPromptAttempts, 3),
+		maxMergeFailures:       max(cfg.MaxMergeFailures, 3),
+		maxIdleTimeoutFailures: max(cfg.MaxIdleTimeoutFailures, 3),
 	}
 }
 
+// MaxMergeFailures returns the configured cap on consecutive merge
+// failures before a task is treated as stuck.
+func (t *Tracker) MaxMergeFailures() int { return t.maxMergeFailures }
+
+// MaxIdleTimeoutFailures returns the configured cap on consecutive idle
+// timeout failures before a task is treated as stuck.
+func (t *Tracker) MaxIdleTimeoutFailures() int { return t.maxIdleTimeoutFailures }
+
 func (t *Tracker) attemptsDir() string {
-	return filepath.Join(t.RalphDir, "attempts")
+	return filepath.Join(t.ralphDir, "attempts")
 }
 
 func (t *Tracker) attemptFile(taskID, taskName string) string {
@@ -89,7 +115,7 @@ func (t *Tracker) Read(taskID, taskName string) string {
 	if err != nil {
 		return ""
 	}
-	return lastNAttempts(string(data), t.MaxPromptAttempts)
+	return lastNAttempts(string(data), t.maxPromptAttempts)
 }
 
 func lastNAttempts(content string, n int) string {
@@ -120,7 +146,7 @@ type ReflectionEntry struct {
 // RecentReflections returns the n most recent reflection files sorted by
 // modification time (oldest first), excluding the file matching excludeKey.
 func (t *Tracker) RecentReflections(excludeKey string, n int) []ReflectionEntry {
-	refDir := filepath.Join(t.RalphDir, "reflections")
+	refDir := filepath.Join(t.ralphDir, "reflections")
 	entries, err := os.ReadDir(refDir)
 	if err != nil {
 		return nil

@@ -502,7 +502,7 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 			diffStat,
 			"idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output")
 		count, _ := l.attempts.RecordIdleTimeoutFailure(taskID)
-		if count >= l.attempts.MaxIdleTimeoutFailures {
+		if count >= l.attempts.MaxIdleTimeoutFailures() {
 			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Idle timeout %d times for %s — skipping task", count, taskID)
 			l.skipTask(taskID, "idle_timeout_max_failures")
 			return actionRetry

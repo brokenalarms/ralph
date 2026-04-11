@@ -278,7 +278,7 @@ func postReviewCleanup(ralphDir string, log *logging.Logger) {
 		for i, t := range tasks {
 			ids[i] = t.ID
 		}
-		tracker := attempts.New(ralphDir)
+		tracker := attempts.New(attempts.Config{RalphDir: ralphDir})
 		tracker.ClearForTasks(ids)
 		log.Emit(logging.Opts{Domain: "review"}, "Cleared attempt data for %d tasks", len(tasks))
 	}

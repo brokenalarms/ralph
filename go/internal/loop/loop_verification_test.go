@@ -710,7 +710,7 @@ func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
 	}
 
 	// Seed 2 prior failures.
-	tracker := attempts.New(ralphDir)
+	tracker := attempts.New(attempts.Config{RalphDir: ralphDir})
 	tracker.RecordMergeFailure("ralph-rec")
 	tracker.RecordMergeFailure("ralph-rec")
 	cfg := Config{
