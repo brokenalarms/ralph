@@ -164,7 +164,6 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 				if prState == git.PRStateOpen {
 					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through merge", prNum)
 					_, _, merged, _, _ := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
-					l.attempts.ClearMergeFailures(p.taskID)
 					prRef := fmt.Sprintf("PR #%d", prNum)
 					closeReason := fmt.Sprintf("Verified — %s open, merge pending", prRef)
 					if merged {
@@ -304,7 +303,6 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		} else {
 			closeReason = fmt.Sprintf("Fixed in %s", prRef)
 		}
-		l.attempts.ClearMergeFailures(p.taskID)
 		_ = l.taskBackend.SetState(p.taskID, "phase", "verified", "ralph: PR open or stacked")
 		if merged {
 			_ = l.taskBackend.SetState(p.taskID, "phase", "verified", "ralph: PR merged")

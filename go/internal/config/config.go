@@ -97,7 +97,6 @@ type Config struct {
 
 	// Attempt limits — maximum retries before giving up or skipping.
 	MaxPromptAttempts      int
-	MaxMergeFailures       int
 	MaxIdleTimeoutFailures int
 	MaxLLMVerifyAttempts   int
 	MaxTestFixAttempts     int

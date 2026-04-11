@@ -16,7 +16,6 @@ import (
 type Config struct {
 	RalphDir               string
 	MaxPromptAttempts      int
-	MaxMergeFailures       int
 	MaxIdleTimeoutFailures int
 }
 
@@ -27,14 +26,13 @@ type Config struct {
 type Tracker struct {
 	ralphDir               string
 	maxPromptAttempts      int
-	maxMergeFailures       int
 	maxIdleTimeoutFailures int
 }
 
 // New creates a Tracker from a Config. Zero values for the Max* fields
 // default to 3.
 func New(cfg Config) *Tracker {
-	max := func(v, def int) int {
+	intOrDefault := func(v, def int) int {
 		if v <= 0 {
 			return def
 		}
@@ -42,15 +40,10 @@ func New(cfg Config) *Tracker {
 	}
 	return &Tracker{
 		ralphDir:               cfg.RalphDir,
-		maxPromptAttempts:      max(cfg.MaxPromptAttempts, 3),
-		maxMergeFailures:       max(cfg.MaxMergeFailures, 3),
-		maxIdleTimeoutFailures: max(cfg.MaxIdleTimeoutFailures, 3),
+		maxPromptAttempts:      intOrDefault(cfg.MaxPromptAttempts, 3),
+		maxIdleTimeoutFailures: intOrDefault(cfg.MaxIdleTimeoutFailures, 3),
 	}
 }
-
-// MaxMergeFailures returns the configured cap on consecutive merge
-// failures before a task is treated as stuck.
-func (t *Tracker) MaxMergeFailures() int { return t.maxMergeFailures }
 
 // MaxIdleTimeoutFailures returns the configured cap on consecutive idle
 // timeout failures before a task is treated as stuck.
@@ -210,44 +203,6 @@ func (t *Tracker) Clear(taskID, taskName string) {
 func (t *Tracker) ClearForTasks(taskIDs []string) {
 	for _, id := range taskIDs {
 		t.Clear(id, "")
-	}
-}
-
-func (t *Tracker) mergeFailureFile(taskID string) string {
-	return filepath.Join(t.attemptsDir(), taskID+".merge-failures")
-}
-
-// RecordMergeFailure increments the merge failure count for a task.
-func (t *Tracker) RecordMergeFailure(taskID string) (int, error) {
-	if taskID == "" {
-		return 0, nil
-	}
-	if err := os.MkdirAll(t.attemptsDir(), 0o755); err != nil {
-		return 0, err
-	}
-	count := t.MergeFailureCount(taskID) + 1
-	path := t.mergeFailureFile(taskID)
-	return count, os.WriteFile(path, []byte(fmt.Sprintf("%d", count)), 0o644)
-}
-
-// MergeFailureCount returns the number of consecutive merge failures for a task.
-func (t *Tracker) MergeFailureCount(taskID string) int {
-	if taskID == "" {
-		return 0
-	}
-	data, err := os.ReadFile(t.mergeFailureFile(taskID))
-	if err != nil {
-		return 0
-	}
-	n := 0
-	fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &n)
-	return n
-}
-
-// ClearMergeFailures removes the merge failure counter for a task.
-func (t *Tracker) ClearMergeFailures(taskID string) {
-	if taskID != "" {
-		os.Remove(t.mergeFailureFile(taskID))
 	}
 }
 

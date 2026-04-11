@@ -78,7 +78,6 @@ type Config struct {
 
 	// Attempt limits — overrides package defaults when set.
 	MaxPromptAttempts      int
-	MaxMergeFailures       int
 	MaxIdleTimeoutFailures int
 	MaxLLMVerifyAttempts   int
 	MaxTestFixAttempts     int
@@ -204,7 +203,6 @@ func New(cfg Config, mods Modules) *Loop {
 	at := attempts.New(attempts.Config{
 		RalphDir:               cfg.Dirs.RalphDir,
 		MaxPromptAttempts:      cfg.MaxPromptAttempts,
-		MaxMergeFailures:       cfg.MaxMergeFailures,
 		MaxIdleTimeoutFailures: cfg.MaxIdleTimeoutFailures,
 	})
 	l := &Loop{
