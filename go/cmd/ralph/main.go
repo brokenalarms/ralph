@@ -230,7 +230,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		VerifyModel:              cfg.VerifyModel,
 		VerifyEscalationModel:    cfg.VerifyEscalationModel,
 		MaxPromptAttempts:        cfg.MaxPromptAttempts,
-		MaxMergeFailures:         cfg.MaxMergeFailures,
 		MaxIdleTimeoutFailures:   cfg.MaxIdleTimeoutFailures,
 		MaxLLMVerifyAttempts:     cfg.MaxLLMVerifyAttempts,
 		MaxTestFixAttempts:       cfg.MaxTestFixAttempts,

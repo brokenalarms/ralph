@@ -78,7 +78,6 @@ type Config struct {
 
 	// Attempt limits — overrides package defaults when set.
 	MaxPromptAttempts      int
-	MaxMergeFailures       int
 	MaxIdleTimeoutFailures int
 	MaxLLMVerifyAttempts   int
 	MaxTestFixAttempts     int
@@ -168,7 +167,6 @@ func New(cfg Config, mods Modules) *Loop {
 	signals := claude.DefaultSignalPaths(cfg.Dirs.RalphDir)
 
 	limiter := ratelimit.New(cfg.Dirs.RalphDir, cfg.CallsPerHour)
-	limiter.StopFile = filepath.Join(cfg.Dirs.RalphDir, "stop")
 
 	agentRunner := agent.New(logger)
 
@@ -202,16 +200,11 @@ func New(cfg Config, mods Modules) *Loop {
 		cfg.NewRunner = func() claudeRunner { return agent.New(logger) }
 	}
 
-	at := attempts.New(cfg.Dirs.RalphDir)
-	if cfg.MaxPromptAttempts > 0 {
-		at.MaxPromptAttempts = cfg.MaxPromptAttempts
-	}
-	if cfg.MaxMergeFailures > 0 {
-		at.MaxMergeFailures = cfg.MaxMergeFailures
-	}
-	if cfg.MaxIdleTimeoutFailures > 0 {
-		at.MaxIdleTimeoutFailures = cfg.MaxIdleTimeoutFailures
-	}
+	at := attempts.New(attempts.Config{
+		RalphDir:               cfg.Dirs.RalphDir,
+		MaxPromptAttempts:      cfg.MaxPromptAttempts,
+		MaxIdleTimeoutFailures: cfg.MaxIdleTimeoutFailures,
+	})
 	l := &Loop{
 		cfg:         cfg,
 		state:       st,

@@ -10,28 +10,47 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 )
 
-// Tracker records and retrieves attempt history for tasks, enabling
-// the prompt to include context about previous failed attempts.
-type Tracker struct {
+// Config bundles the construction-time inputs for attempts.New. Pure
+// data — no callbacks, no module references. Zero values default to 3
+// for the Max* fields.
+type Config struct {
 	RalphDir               string
 	MaxPromptAttempts      int
-	MaxMergeFailures       int
 	MaxIdleTimeoutFailures int
 }
 
-// New creates a Tracker that stores attempt logs in ralphDir/attempts/.
-// Limits default to 3 and are overridden by the loop config via public fields.
-func New(ralphDir string) *Tracker {
+// Tracker records and retrieves attempt history for tasks, enabling
+// the prompt to include context about previous failed attempts. All
+// fields are unexported; the orchestrator constructs a Tracker via
+// New(Config) and never mutates it afterward (Rule B — immutability).
+type Tracker struct {
+	ralphDir               string
+	maxPromptAttempts      int
+	maxIdleTimeoutFailures int
+}
+
+// New creates a Tracker from a Config. Zero values for the Max* fields
+// default to 3.
+func New(cfg Config) *Tracker {
+	intOrDefault := func(v, def int) int {
+		if v <= 0 {
+			return def
+		}
+		return v
+	}
 	return &Tracker{
-		RalphDir:               ralphDir,
-		MaxPromptAttempts:      3,
-		MaxMergeFailures:       3,
-		MaxIdleTimeoutFailures: 3,
+		ralphDir:               cfg.RalphDir,
+		maxPromptAttempts:      intOrDefault(cfg.MaxPromptAttempts, 3),
+		maxIdleTimeoutFailures: intOrDefault(cfg.MaxIdleTimeoutFailures, 3),
 	}
 }
 
+// MaxIdleTimeoutFailures returns the configured cap on consecutive idle
+// timeout failures before a task is treated as stuck.
+func (t *Tracker) MaxIdleTimeoutFailures() int { return t.maxIdleTimeoutFailures }
+
 func (t *Tracker) attemptsDir() string {
-	return filepath.Join(t.RalphDir, "attempts")
+	return filepath.Join(t.ralphDir, "attempts")
 }
 
 func (t *Tracker) attemptFile(taskID, taskName string) string {
@@ -89,7 +108,7 @@ func (t *Tracker) Read(taskID, taskName string) string {
 	if err != nil {
 		return ""
 	}
-	return lastNAttempts(string(data), t.MaxPromptAttempts)
+	return lastNAttempts(string(data), t.maxPromptAttempts)
 }
 
 func lastNAttempts(content string, n int) string {
@@ -120,7 +139,7 @@ type ReflectionEntry struct {
 // RecentReflections returns the n most recent reflection files sorted by
 // modification time (oldest first), excluding the file matching excludeKey.
 func (t *Tracker) RecentReflections(excludeKey string, n int) []ReflectionEntry {
-	refDir := filepath.Join(t.RalphDir, "reflections")
+	refDir := filepath.Join(t.ralphDir, "reflections")
 	entries, err := os.ReadDir(refDir)
 	if err != nil {
 		return nil
@@ -184,44 +203,6 @@ func (t *Tracker) Clear(taskID, taskName string) {
 func (t *Tracker) ClearForTasks(taskIDs []string) {
 	for _, id := range taskIDs {
 		t.Clear(id, "")
-	}
-}
-
-func (t *Tracker) mergeFailureFile(taskID string) string {
-	return filepath.Join(t.attemptsDir(), taskID+".merge-failures")
-}
-
-// RecordMergeFailure increments the merge failure count for a task.
-func (t *Tracker) RecordMergeFailure(taskID string) (int, error) {
-	if taskID == "" {
-		return 0, nil
-	}
-	if err := os.MkdirAll(t.attemptsDir(), 0o755); err != nil {
-		return 0, err
-	}
-	count := t.MergeFailureCount(taskID) + 1
-	path := t.mergeFailureFile(taskID)
-	return count, os.WriteFile(path, []byte(fmt.Sprintf("%d", count)), 0o644)
-}
-
-// MergeFailureCount returns the number of consecutive merge failures for a task.
-func (t *Tracker) MergeFailureCount(taskID string) int {
-	if taskID == "" {
-		return 0
-	}
-	data, err := os.ReadFile(t.mergeFailureFile(taskID))
-	if err != nil {
-		return 0
-	}
-	n := 0
-	fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &n)
-	return n
-}
-
-// ClearMergeFailures removes the merge failure counter for a task.
-func (t *Tracker) ClearMergeFailures(taskID string) {
-	if taskID != "" {
-		os.Remove(t.mergeFailureFile(taskID))
 	}
 }
 

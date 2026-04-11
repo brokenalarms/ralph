@@ -627,8 +627,8 @@ func (r *Repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Pre-merge push failed: %v", pushErr)
 	}
 	// When the push succeeds but is a no-op (same SHA before and after), no new
-	// CI is triggered. The existing checks are the only relevant results �� skip
-	// the pushedAt filter so they are not discarded. Without this, the loop
+	// CI is triggered. The existing checks are the only relevant results — so
+	// skip the pushedAt filter so they are not discarded. Without this, the loop
 	// evaluates only post-push checks and misses pre-existing failures.
 	awaitPushedAt := pushedAt
 	if pushErr == nil && headBefore != "" && r.HeadRev() == headBefore {

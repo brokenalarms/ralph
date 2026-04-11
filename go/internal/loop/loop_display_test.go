@@ -687,7 +687,7 @@ func TestHandleRunResult_FeedbackKillReturnsRetry(t *testing.T) {
 		t.Fatalf("expected actionRetry, got %d", action)
 	}
 
-	tracker := attempts.New(ralphDir)
+	tracker := attempts.New(attempts.Config{RalphDir: ralphDir})
 	history := tracker.Read("task-fk", "Feedback task")
 	if !strings.Contains(history, "user feedback") {
 		t.Errorf("expected attempt recorded with feedback context, got: %s", history)
@@ -710,7 +710,7 @@ func TestHandleRunResult_IdleTimeoutReturnsRetry(t *testing.T) {
 		t.Fatalf("expected actionRetry, got %d", action)
 	}
 
-	tracker := attempts.New(ralphDir)
+	tracker := attempts.New(attempts.Config{RalphDir: ralphDir})
 	history := tracker.Read("task-it", "Idle task")
 	if !strings.Contains(history, "idle timeout") {
 		t.Errorf("expected attempt recorded with idle timeout, got: %s", history)
@@ -727,8 +727,8 @@ func TestHandleRunResult_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 	backend := &testutil.StubBackend{}
 	l.taskBackend = backend
 
-	tracker := attempts.New(ralphDir)
-	for i := 0; i < l.attempts.MaxIdleTimeoutFailures-1; i++ {
+	tracker := attempts.New(attempts.Config{RalphDir: ralphDir})
+	for i := 0; i < l.attempts.MaxIdleTimeoutFailures()-1; i++ {
 		tracker.RecordIdleTimeoutFailure("task-it-max")
 	}
 

@@ -11,7 +11,7 @@ import (
 
 func newTestTracker(t *testing.T) *Tracker {
 	t.Helper()
-	return New(filepath.Join(t.TempDir(), ".ralph"))
+	return New(Config{RalphDir: filepath.Join(t.TempDir(), ".ralph")})
 }
 
 // Proves: attempt log files are created in the attempts directory
@@ -175,7 +175,7 @@ func TestRead_ReturnsAllWhenUnderCap(t *testing.T) {
 // sorted by modification time, excluding the current task.
 func TestRecentReflections_ReturnsLastNByMtime(t *testing.T) {
 	tr := newTestTracker(t)
-	refDir := filepath.Join(tr.RalphDir, "reflections")
+	refDir := filepath.Join(tr.ralphDir, "reflections")
 	os.MkdirAll(refDir, 0o755)
 
 	// Write 4 reflections with staggered mtimes
@@ -219,63 +219,6 @@ func TestRecentReflections_EmptyWhenNoneExist(t *testing.T) {
 	result := tr.RecentReflections("ralph-xxx", 3)
 	if len(result) != 0 {
 		t.Errorf("expected empty, got %d reflections", len(result))
-	}
-}
-
-// Proves: merge failures are tracked per-task with incrementing count.
-func TestRecordMergeFailure_IncrementsCount(t *testing.T) {
-	tr := newTestTracker(t)
-
-	count, err := tr.RecordMergeFailure("ralph-abc")
-	if err != nil {
-		t.Fatalf("RecordMergeFailure: %v", err)
-	}
-	if count != 1 {
-		t.Errorf("expected count 1, got %d", count)
-	}
-
-	count, err = tr.RecordMergeFailure("ralph-abc")
-	if err != nil {
-		t.Fatalf("RecordMergeFailure: %v", err)
-	}
-	if count != 2 {
-		t.Errorf("expected count 2, got %d", count)
-	}
-
-	if got := tr.MergeFailureCount("ralph-abc"); got != 2 {
-		t.Errorf("MergeFailureCount: expected 2, got %d", got)
-	}
-}
-
-// Proves: merge failure count returns 0 for tasks with no failures.
-func TestMergeFailureCount_ZeroForNewTask(t *testing.T) {
-	tr := newTestTracker(t)
-	if got := tr.MergeFailureCount("ralph-new"); got != 0 {
-		t.Errorf("expected 0, got %d", got)
-	}
-}
-
-// Proves: ClearMergeFailures resets the counter so retries start fresh.
-func TestClearMergeFailures_ResetsCount(t *testing.T) {
-	tr := newTestTracker(t)
-	tr.RecordMergeFailure("ralph-abc")
-	tr.RecordMergeFailure("ralph-abc")
-	tr.ClearMergeFailures("ralph-abc")
-
-	if got := tr.MergeFailureCount("ralph-abc"); got != 0 {
-		t.Errorf("expected 0 after clear, got %d", got)
-	}
-}
-
-// Proves: empty taskID is a no-op for merge failure tracking.
-func TestRecordMergeFailure_EmptyTaskIDNoOp(t *testing.T) {
-	tr := newTestTracker(t)
-	count, err := tr.RecordMergeFailure("")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if count != 0 {
-		t.Errorf("expected 0 for empty task ID, got %d", count)
 	}
 }
 

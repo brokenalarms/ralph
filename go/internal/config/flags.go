@@ -424,21 +424,6 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxPromptAttempts) },
 	},
 	{
-		Long: "--max-merge-failures", MetaVar: "<N>",
-		Help: "Max consecutive merge failures before skipping a task", Default: "3",
-		ConfigKey: "max_merge_failures",
-		Kind:      KindInt, TrackCLI: true,
-		Apply: func(cfg *Config, val string) error {
-			n, err := strconv.Atoi(val)
-			if err != nil {
-				return err
-			}
-			cfg.MaxMergeFailures = n
-			return nil
-		},
-		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxMergeFailures) },
-	},
-	{
 		Long: "--max-idle-timeout-failures", MetaVar: "<N>",
 		Help: "Max consecutive idle timeout failures before skipping a task", Default: "3",
 		ConfigKey: "max_idle_timeout_failures",

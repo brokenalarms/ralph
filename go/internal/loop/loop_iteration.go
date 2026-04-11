@@ -164,7 +164,6 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 				if prState == git.PRStateOpen {
 					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through merge", prNum)
 					_, _, merged, _, _ := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
-					l.attempts.ClearMergeFailures(p.taskID)
 					prRef := fmt.Sprintf("PR #%d", prNum)
 					closeReason := fmt.Sprintf("Verified — %s open, merge pending", prRef)
 					if merged {
@@ -304,7 +303,6 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		} else {
 			closeReason = fmt.Sprintf("Fixed in %s", prRef)
 		}
-		l.attempts.ClearMergeFailures(p.taskID)
 		_ = l.taskBackend.SetState(p.taskID, "phase", "verified", "ralph: PR open or stacked")
 		if merged {
 			_ = l.taskBackend.SetState(p.taskID, "phase", "verified", "ralph: PR merged")
@@ -502,7 +500,7 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 			diffStat,
 			"idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output")
 		count, _ := l.attempts.RecordIdleTimeoutFailure(taskID)
-		if count >= l.attempts.MaxIdleTimeoutFailures {
+		if count >= l.attempts.MaxIdleTimeoutFailures() {
 			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Idle timeout %d times for %s — skipping task", count, taskID)
 			l.skipTask(taskID, "idle_timeout_max_failures")
 			return actionRetry

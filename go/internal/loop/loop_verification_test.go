@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -542,7 +541,6 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	}
 }
 
-// Verifies that after MaxMergeFailures consecutive merge failures, the loop
 // When merge fails, the task is closed (not skipped) — the PR exists, work is
 // verified done. Stack head detection can find the unmerged branch for the next task.
 func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
@@ -680,72 +678,6 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 	defer backend.SkipMu.Unlock()
 	if len(backend.SkippedIDs) != 0 {
 		t.Errorf("task should not be skipped when merge fails, got %v", backend.SkippedIDs)
-	}
-}
-
-// Verifies that successful merge clears the merge failure counter.
-func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
-
-	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{
-			StubBackend: testutil.StubBackend{
-				Remaining:    1,
-				Completed:    0,
-				Total:        1,
-				NextTask:     "Recovering task",
-				NextID:       "ralph-rec",
-				BackendLabel: "beads",
-			},
-		},
-	}
-
-	gm := &git.StubRepo{
-		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
-		WorktreeBranch: "ralph/project/01-recover",
-	}
-
-	// Seed 2 prior failures.
-	tracker := attempts.New(ralphDir)
-	tracker.RecordMergeFailure("ralph-rec")
-	tracker.RecordMergeFailure("ralph-rec")
-	cfg := Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
-			RalphDir:   ralphDir,
-			PromptsDir: promptsDir,
-		},
-		MaxIterations: 1,
-		CallsPerHour:  80,
-		AutoMerge:     true,
-	}
-	logger := logging.New(nil)
-	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
-	})
-
-	gm.ShipResult = git.ShipResult{PRNumber: 42}
-	gm.PRState = "OPEN"
-	gm.MergeRetryResult = true
-
-	l.runner = &stubRunner{
-		result: claude.Result{SignalDetected: true},
-	}
-
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
-	_ = l.Run(context.Background())
-
-	if count := tracker.MergeFailureCount("ralph-rec"); count != 0 {
-		t.Errorf("expected merge failures cleared after successful merge, got %d", count)
 	}
 }
 
