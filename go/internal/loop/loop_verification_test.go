@@ -14,7 +14,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
-	"github.com/brokenalarms/ralph/internal/verify"
+	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -40,8 +40,7 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -50,7 +49,15 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return false, "test suite failed"
@@ -113,8 +120,7 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 		ShipResult: git.ShipResult{PRNumber: 42},
 		PRState:    "OPEN",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -123,7 +129,15 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return true, ""
@@ -181,8 +195,7 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		ShipResult: git.ShipResult{PRNumber: 99},
 		PRState:    "OPEN",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -192,7 +205,15 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		// VerifyDir deliberately not set
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -237,8 +258,7 @@ func TestLoop_CIFailureLeavesTaskOpen(t *testing.T) {
 			},
 		}
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -248,7 +268,15 @@ func TestLoop_CIFailureLeavesTaskOpen(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
@@ -293,8 +321,7 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 		merged = true
 		return true, nil
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -304,7 +331,15 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
@@ -342,8 +377,7 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 		PRState:          "OPEN",
 		MergeRetryResult: true,
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -353,7 +387,15 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
@@ -388,8 +430,7 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-ci-exhaust",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -399,7 +440,19 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: claude.Result{SignalDetected: true}}
+			},
+		}),
+	})
 
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.PRState = "OPEN"
@@ -414,9 +467,6 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
-	}
-	l.cfg.NewRunner = func() claudeRunner {
-		return &stubRunner{result: claude.Result{SignalDetected: true}}
 	}
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -451,8 +501,7 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-mixed",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -462,7 +511,15 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.PRState = "OPEN"
@@ -473,7 +530,7 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	logger := logging.New(&buf)
+	logger = logging.New(&buf)
 	l.logger = logger
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -512,8 +569,7 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-stubborn",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -523,7 +579,15 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	gm.PRState = "OPEN"
@@ -575,8 +639,7 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-fixable",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -586,7 +649,15 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	gm.ShipResult = git.ShipResult{PRNumber: 50}
 	gm.PRState = "OPEN"
@@ -642,8 +713,7 @@ func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
 	tracker := attempts.New(ralphDir)
 	tracker.RecordMergeFailure("ralph-rec")
 	tracker.RecordMergeFailure("ralph-rec")
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -653,7 +723,15 @@ func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	gm.PRState = "OPEN"
@@ -700,8 +778,7 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -711,7 +788,15 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -754,6 +839,10 @@ func (s *signalCallingRunner) StopStreaming() {}
 
 func (s *signalCallingRunner) InjectMessage(_ string) error { return nil }
 
+func (s *signalCallingRunner) Query(_ context.Context, _, _, _ string) (string, error) {
+	return "NO: stub", nil
+}
+
 // Verifies that LLM verification pass logs with green (Success) color
 // and LLM verification reject logs with red (Error) color.
 
@@ -761,26 +850,26 @@ func (s *signalCallingRunner) InjectMessage(_ string) error { return nil }
 // and LLM verification reject logs with red (Error) color.
 func TestLoop_LLMVerificationLogColors(t *testing.T) {
 	tests := []struct {
-		name      string
-		passed    bool
-		reason    string
-		details   string
-		wantColor string
-		wantMsg   string
+		name       string
+		queryReply string
+		wantColor  string
+		wantMsg    string
 	}{
 		{
-			name:      "LLM pass logs green",
-			passed:    true,
-			reason:    "diff matches requirements",
-			wantColor: logging.Green,
-			wantMsg:   "LLM verified: diff matches requirements",
+			name:       "LLM pass logs green",
+			queryReply: "YES: diff matches requirements",
+			wantColor:  logging.Green,
+			wantMsg:    "LLM verified: LLM verified: YES: diff matches requirements",
 		},
 		{
-			name:      "LLM reject logs red",
-			passed:    false,
-			details:   "missing error handling",
-			wantColor: logging.Red,
-			wantMsg:   "LLM verification rejected (attempt 1/3): missing error handling",
+			name:       "LLM reject logs red",
+			queryReply: "NO: missing error handling",
+			wantColor:  logging.Red,
+			// Verifier owns its operation narrative — the retry counter
+			// is Loop's orchestration concern and is logged separately
+			// (or not at all when one attempt suffices). Verifier's log
+			// for a rejection is just "rejected: <details>".
+			wantMsg: "LLM verification rejected: NO: missing error handling",
 		},
 	}
 
@@ -803,28 +892,24 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				},
 			}
 
+			gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before", DiffFullValue: "diff --git a/x b/x"}
+
 			runner := &signalCallingRunner{
 				onRun: func() {
 					backend.Lock()
 					backend.Completed = 1
 					backend.Remaining = 0
 					backend.Unlock()
+					// Simulate the agent making a commit before signaling so the
+					// post-signal commit check passes (HeadRev changes).
+					gm.HeadRevValue = "after"
 				},
 				result: claude.Result{Summary: "done"},
 			}
 
 			var logBuf bytes.Buffer
 			logger := logging.NewWithWriter(&logBuf)
-
-			gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-			llmResult := verify.Result{
-				Passed:  tt.passed,
-				Reason:  tt.reason,
-				Details: tt.details,
-			}
-
-			l := New(Config{
+			cfg := Config{
 				Dirs: workctx.WorkContext{
 					ProjectDir: dir,
 					WorkDir:    dir,
@@ -834,14 +919,23 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				MaxIterations: 1,
 				CallsPerHour:  80,
 				VerifyDir:     dir,
-			}, newTestModules(t, st, gm, backend, logger))
+			}
+			reply := tt.queryReply
+			l := New(cfg, Modules{
+				State:       st,
+				Git:         gm,
+				TaskBackend: backend,
+				Logger:      logger,
+				Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+					querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+						return reply, nil
+					}},
+					newRunner: func() verifier.Runner {
+						return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
+					},
+				}),
+			})
 			l.runner = runner
-			l.verifier.deps.LLMVerify = func(verify.VerifyOpts) verify.Result {
-				return llmResult
-			}
-			l.cfg.NewRunner = func() claudeRunner {
-				return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
-			}
 
 			l.cfg.CheckGitHub = func(context.Context) error { return nil }
 			_ = l.Run(context.Background())

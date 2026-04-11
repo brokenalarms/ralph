@@ -58,8 +58,7 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true},
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -69,7 +68,15 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 		AutoMerge:     false,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -107,8 +114,7 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -118,7 +124,15 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		AutoMerge:     true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -151,8 +165,7 @@ func TestLoop_PushCalledAfterSignal(t *testing.T) {
 		NextTask:  "Fix the bug",
 		NextID:    "ralph-fix1",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -161,7 +174,15 @@ func TestLoop_PushCalledAfterSignal(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true, OnSignalUsed: true},
@@ -207,8 +228,7 @@ func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true},
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -218,7 +238,14 @@ func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		Wait:          false,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -267,8 +294,7 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -278,7 +304,14 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		Wait:          true,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -333,8 +366,7 @@ func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true},
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -345,7 +377,14 @@ func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		Wait:          false,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -392,8 +431,7 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -404,7 +442,14 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		Wait:          true,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -458,8 +503,7 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true},
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -470,7 +514,14 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     false,
 		Wait:          false,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -518,8 +569,7 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true},
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -530,7 +580,14 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		Wait:          false,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 999}
 	gm.MergeRetryResult = true
@@ -582,8 +639,7 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: false},
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -594,7 +650,14 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		Wait:          false,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -649,8 +712,7 @@ func TestLoop_ShipRetriesOnTransientGitHubError(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true},
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -659,7 +721,15 @@ func TestLoop_ShipRetriesOnTransientGitHubError(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }

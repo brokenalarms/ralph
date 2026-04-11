@@ -358,10 +358,10 @@ func TestFilterFailures_NoPassingLines(t *testing.T) {
 	}
 }
 
-// loadReviewPrompt includes guidance that prompt/config changes are valid
+// BuildReviewPrompt includes guidance that prompt/config changes are valid
 // implementations and that code-specific criteria (tests, error handling)
 // should not be required for non-code changes.
-func TestLoadReviewPrompt_PromptChangeGuidance(t *testing.T) {
+func TestBuildReviewPrompt_PromptChangeGuidance(t *testing.T) {
 	promptsDir := t.TempDir()
 	src := filepath.Join("..", "..", "cmd", "ralph", "prompts", "verify-review.md")
 	data, err := os.ReadFile(src)
@@ -370,7 +370,13 @@ func TestLoadReviewPrompt_PromptChangeGuidance(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(promptsDir, "verify-review.md"), data, 0o644)
 
-	prompt := loadReviewPrompt(promptsDir, "Update agent instructions", "Change the prompt template", "", "PR", "diff content")
+	prompt := BuildReviewPrompt(ReviewPromptInput{
+		PromptsDir:  promptsDir,
+		Title:       "Update agent instructions",
+		Description: "Change the prompt template",
+		DiffSource:  "PR",
+		Diff:        "diff content",
+	})
 
 	checks := []struct {
 		desc    string
@@ -387,9 +393,15 @@ func TestLoadReviewPrompt_PromptChangeGuidance(t *testing.T) {
 	}
 }
 
-// loadReviewPrompt fallback (no template file) still produces a usable prompt.
-func TestLoadReviewPrompt_Fallback(t *testing.T) {
-	prompt := loadReviewPrompt("/nonexistent", "task title", "task desc", "", "iteration", "some diff")
+// BuildReviewPrompt fallback (no template file) still produces a usable prompt.
+func TestBuildReviewPrompt_Fallback(t *testing.T) {
+	prompt := BuildReviewPrompt(ReviewPromptInput{
+		PromptsDir:  "/nonexistent",
+		Title:       "task title",
+		Description: "task desc",
+		DiffSource:  "iteration",
+		Diff:        "some diff",
+	})
 	if !strings.Contains(prompt, "task title") {
 		t.Error("fallback prompt should contain task title")
 	}
@@ -398,67 +410,24 @@ func TestLoadReviewPrompt_Fallback(t *testing.T) {
 	}
 }
 
-// LLMVerifyPR accepts a VerifyOpts struct instead of positional parameters,
-// proving the struct-based API compiles and works end-to-end.
-func TestLLMVerifyPR_AcceptsVerifyOpts(t *testing.T) {
-	dir := setupGitRepo(t)
-
-	result := LLMVerifyPR(VerifyOpts{
-		Ctx:         context.Background(),
-		WorkDir:     dir,
-		PromptsDir:  t.TempDir(),
-		TaskID:      "struct-test",
-		Title:       "struct api test",
-		Description: "proves VerifyOpts struct works",
-		Acceptance:  "accepts struct",
-		Model:       ModelHaiku,
-	})
-	if !result.Passed {
-		t.Errorf("expected pass with no diff, got: %s", result.Reason)
-	}
-	if !result.NoDiff {
-		t.Error("expected NoDiff=true when no PR and no iteration diff exist")
+// ParseReviewResponse interprets a YES line as Passed=true.
+func TestParseReviewResponse_Yes(t *testing.T) {
+	r := ParseReviewResponse("YES: looks good")
+	if !r.Passed {
+		t.Errorf("expected Passed=true, got Reason=%q", r.Reason)
 	}
 }
 
-// LLMVerifyPR passes when no PR and no diff exist — agent confirmed task complete.
-func TestLLMVerifyPR_NoPRNoDiff(t *testing.T) {
-	dir := setupGitRepo(t)
-
-	result := LLMVerifyPR(VerifyOpts{
-		Ctx:         context.Background(),
-		WorkDir:     dir,
-		PromptsDir:  t.TempDir(),
-		TaskID:      "nonexistent-task",
-		Title:       "some task",
-		Description: "some description",
-	})
-	if !result.Passed {
-		t.Errorf("expected pass when agent confirms complete with no new work needed, got: %s", result.Reason)
+// ParseReviewResponse interprets a NO line as Passed=false with the response
+// in Details.
+func TestParseReviewResponse_No(t *testing.T) {
+	r := ParseReviewResponse("NO: missing tests")
+	if r.Passed {
+		t.Error("expected Passed=false")
 	}
-	if !result.NoDiff {
-		t.Error("expected NoDiff=true when no PR and no iteration diff exist")
+	if !strings.Contains(r.Details, "missing tests") {
+		t.Errorf("expected Details to contain rejection reason, got %q", r.Details)
 	}
-}
-
-// LLMVerifyPR uses the pre-fetched Diff field when available, treating it
-// as the source of truth — verify never reaches into git itself.
-func TestLLMVerifyPR_UsesDiffField(t *testing.T) {
-	dir := setupGitRepo(t)
-
-	result := LLMVerifyPR(VerifyOpts{
-		Ctx:         context.Background(),
-		WorkDir:     dir,
-		PromptsDir:  t.TempDir(),
-		TaskID:      "test-task",
-		Title:       "test",
-		Description: "test desc",
-		Diff:        "+new line from PR\n",
-		DiffSource:  "PR",
-	})
-
-	// LLM call will fail (no claude binary in test), so we expect pass with skip reason
-	_ = result
 }
 
 // ModelShortName extracts a human-friendly name from a full model ID,

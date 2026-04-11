@@ -16,6 +16,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/ratelimit"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/tasks"
+	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -44,6 +45,7 @@ type Modules struct {
 	Git         git.Ops
 	TaskBackend tasks.Backend
 	Logger      *logging.Logger
+	Verifier    *verifier.Verifier
 }
 
 // Config holds all parameters needed by the execution loop.
@@ -102,14 +104,18 @@ type Config struct {
 	WaitForInternet func(ctx context.Context, logger *logging.Logger) bool
 	OnWait          func()
 	NewRunner       func() claudeRunner
-	QueryFn         func(ctx context.Context, workDir, prompt, model string) (string, error)
 }
 
 // claudeRunner abstracts the Claude execution interface for testability.
+// Run/StopStreaming/InjectMessage drive the streaming-agent session;
+// Query is the one-shot LLM call used by Loop's refactor-decision helper.
+// Verifier defines its own (narrower) Querier interface internally — the
+// production *agent.Runner satisfies both.
 type claudeRunner interface {
 	Run(cfg claude.RunConfig) (claude.Result, error)
 	StopStreaming()
 	InjectMessage(msg string) error
+	Query(ctx context.Context, workDir, prompt, model string) (string, error)
 }
 
 // CompletedTask holds summary info for a task completed during this session.
@@ -138,7 +144,7 @@ type Loop struct {
 	taskBackend       tasks.Backend
 	limiter           *ratelimit.Limiter
 	runner            claudeRunner
-	verifier          *Verifier
+	verifier          *verifier.Verifier
 	analyzer          *analyzer.Analyzer
 	attempts          *attempts.Tracker
 	logger            *logging.Logger
@@ -195,9 +201,6 @@ func New(cfg Config, mods Modules) *Loop {
 	if cfg.NewRunner == nil {
 		cfg.NewRunner = func() claudeRunner { return agent.New(logger) }
 	}
-	if cfg.QueryFn == nil {
-		cfg.QueryFn = agentRunner.Query
-	}
 
 	at := attempts.New(cfg.Dirs.RalphDir)
 	if cfg.MaxPromptAttempts > 0 {
@@ -216,36 +219,12 @@ func New(cfg Config, mods Modules) *Loop {
 		taskBackend: taskBackend,
 		limiter:     limiter,
 		runner:      agentRunner,
+		verifier:    mods.Verifier,
 		analyzer:    analyzer.New(),
 		attempts:    at,
 		logger:      logger,
 		signals:     signals,
 	}
-	l.verifier = NewVerifier(VerifierConfig{
-		VerifyDir:             cfg.VerifyDir,
-		ProjectDir:            cfg.Dirs.ProjectDir,
-		VerifyModel:           cfg.VerifyModel,
-		VerifyEscalationModel: cfg.VerifyEscalationModel,
-		ModelCap:              cfg.ModelCap,
-		PromptsDir:            cfg.Dirs.PromptsDir,
-		RalphDir:              cfg.Dirs.RalphDir,
-		IdleTimeout:           cfg.IdleTimeout,
-		MaxLLMVerifyAttempts:  cfg.MaxLLMVerifyAttempts,
-		MaxTestFixAttempts:    cfg.MaxTestFixAttempts,
-		TestTimeout:           cfg.TestTimeout,
-		CompileCheckTimeout:   cfg.CompileCheckTimeout,
-	}, VerifierDeps{
-		Logger:      logger,
-		Git:         gm,
-		State:       st,
-		TaskBackend: taskBackend,
-		Runner:      func() claudeRunner { return l.runner },
-		Signals:     signals,
-		NewRunner:   func() claudeRunner { return l.cfg.NewRunner() },
-		QueryFn:     cfg.QueryFn,
-		LLMVerify:   verify.LLMVerifyPR,
-		SkipTask:    func(id, reason string) { l.skipTask(id, reason) },
-	})
 	return l
 }
 
@@ -363,7 +342,11 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 			return l.git.HasDiff()
 		},
 		OnSignal: func(summary string) bool {
-			return l.verifier.OnSignal(signalParams{
+			// Stop the main runner before spawning fix-agent subprocesses
+			// inside runVerifyPipeline. The main agent session is wrapping
+			// up anyway (it just signaled completion).
+			l.runner.StopStreaming()
+			verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 				ctx:        ctx,
 				headBefore: prep.headBefore,
 				workDir:    prep.workDir,
@@ -371,6 +354,10 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 				taskID:     task.id,
 				nextTask:   task.title,
 			})
+			if skipReason != "" {
+				l.skipTask(task.id, skipReason)
+			}
+			return verified
 		},
 		FeedbackFile: filepath.Join(l.cfg.Dirs.RalphDir, "feedback"),
 	})
@@ -456,9 +443,8 @@ iterLoop:
 		iteration++
 		lastTaskMerged = false
 
-		if task.changed {
-			l.verifier.ResetCounters()
-		}
+		// Retry counters are local variables inside runVerifyPipeline, so
+		// they are naturally scoped per-iteration — no reset needed.
 
 		// ── Branch setup ──
 		if task.changed || !l.git.IsBranchRenamed() {

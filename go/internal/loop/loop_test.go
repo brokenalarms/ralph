@@ -12,33 +12,56 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
-	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
+	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
-// newTestModules returns the Modules literal that loop.New expects, populated
-// from the values the test already has in scope. It is the single entry point
-// for constructing a Modules value in tests — tests do not build Modules
-// literals directly. An optional logger may be passed as the final argument;
-// when omitted the helper uses a no-op logger.
+// newTestVerifier constructs a *verifier.Verifier for tests, deriving the
+// verifier's config from the loop's Config. It's the only module where
+// construction has enough boilerplate (11 fields to copy from loop.Config)
+// to justify a helper — state/git/backend/logger are 1-liners that tests
+// construct directly. Tests then build Modules{} inline.
 //
-// The helper exists so tests can stub out all-but-one module without
-// repeating every field name on every call site, and so future fields added
-// to Modules land in exactly one place in the test code.
-func newTestModules(t *testing.T, st *state.Store, gm git.Ops, backend tasks.Backend, loggerOpt ...*logging.Logger) Modules {
+// Optional stubs override the production defaults for verifier's two
+// sub-modules: newRunner (fix-agent runner factory) and querier (one-shot
+// LLM caller). Both default to agent.New(logger) when nil.
+func newTestVerifier(t *testing.T, cfg Config, logger *logging.Logger, stubs ...verifierTestStubs) *verifier.Verifier {
 	t.Helper()
-	logger := logging.New(nil)
-	if len(loggerOpt) > 0 && loggerOpt[0] != nil {
-		logger = loggerOpt[0]
+	var s verifierTestStubs
+	if len(stubs) > 0 {
+		s = stubs[0]
 	}
-	return Modules{State: st, Git: gm, TaskBackend: backend, Logger: logger}
+	return verifier.New(verifier.Config{
+		VerifyDir:             cfg.VerifyDir,
+		ProjectDir:            cfg.Dirs.ProjectDir,
+		VerifyModel:           cfg.VerifyModel,
+		VerifyEscalationModel: cfg.VerifyEscalationModel,
+		ModelCap:              cfg.ModelCap,
+		PromptsDir:            cfg.Dirs.PromptsDir,
+		RalphDir:              cfg.Dirs.RalphDir,
+		IdleTimeout:           cfg.IdleTimeout,
+		TestTimeout:           cfg.TestTimeout,
+		CompileCheckTimeout:   cfg.CompileCheckTimeout,
+		Signals:               claude.DefaultSignalPaths(cfg.Dirs.RalphDir),
+	}, logger, s.newRunner, s.querier)
+}
+
+// verifierTestStubs bundles optional verifier sub-module stubs. Zero
+// values fall back to production defaults.
+type verifierTestStubs struct {
+	newRunner verifier.RunnerFactory
+	querier   verifier.Querier
 }
 
 type stubRunner struct {
 	onRun    func()
 	onRunCfg func(cfg claude.RunConfig)
 	result   claude.Result
+	// queryFn is the per-test override for the Query method. When nil,
+	// Query returns "NO: stub" so refactor checks short-circuit without
+	// an actual LLM call.
+	queryFn func(ctx context.Context, workDir, prompt, model string) (string, error)
 }
 
 func (s *stubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
@@ -54,6 +77,31 @@ func (s *stubRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
 func (s *stubRunner) StopStreaming() {}
 
 func (s *stubRunner) InjectMessage(_ string) error { return nil }
+
+// Query satisfies claudeRunner. Tests that exercise the refactor-decision
+// path set s.queryFn to control the response; the default returns "NO" so
+// refactor checks short-circuit without an actual LLM call.
+func (s *stubRunner) Query(ctx context.Context, workDir, prompt, model string) (string, error) {
+	if s.queryFn != nil {
+		return s.queryFn(ctx, workDir, prompt, model)
+	}
+	return "NO: stub runner default", nil
+}
+
+// stubQuerier satisfies verifier.Querier for tests that need to control
+// LLM verification responses without going through the full agent runner.
+// Tests construct &stubQuerier{fn: func(...) (string, error) { ... }} and
+// pass it into newTestModules.
+type stubQuerier struct {
+	fn func(ctx context.Context, workDir, prompt, model string) (string, error)
+}
+
+func (s *stubQuerier) Query(ctx context.Context, workDir, prompt, model string) (string, error) {
+	if s.fn == nil {
+		return "YES: stub querier default", nil
+	}
+	return s.fn(ctx, workDir, prompt, model)
+}
 
 func setupTestDir(t *testing.T) (string, *state.Store) {
 	t.Helper()
@@ -81,8 +129,7 @@ func TestRun_ExitsOnGitHubUnreachable(t *testing.T) {
 		WorkDir:        dir,
 		RemoteURLValue: "https://github.com/owner/repo.git",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -91,7 +138,15 @@ func TestRun_ExitsOnGitHubUnreachable(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, &testutil.TrackingBackend{}))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.TrackingBackend{},
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -129,11 +184,19 @@ func TestLoopTaskDescription_Standalone(t *testing.T) {
 	dir, st := setupTestDir(t)
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	backend := &testutil.StubBackend{Description: "Fix auth middleware"}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	if got := l.taskDescription("ralph-abc"); got != "Fix auth middleware" {
 		t.Errorf("expected description, got %q", got)
@@ -141,13 +204,20 @@ func TestLoopTaskDescription_Standalone(t *testing.T) {
 	if got := l.taskDescription(""); got != "" {
 		t.Errorf("empty taskID should return empty, got %q", got)
 	}
-
 	// nil backend → empty
-	lNil := New(Config{
+	cfgNil := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, nil))
+	}
+	loggerNil := logging.New(nil)
+	lNil := New(cfgNil, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: nil,
+		Logger:      loggerNil,
+		Verifier:    newTestVerifier(t, cfgNil, loggerNil),
+	})
 	if got := lNil.taskDescription("ralph-abc"); got != "" {
 		t.Errorf("nil backend should return empty, got %q", got)
 	}

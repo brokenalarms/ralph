@@ -30,8 +30,7 @@ func TestLoop_AllTasksComplete(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -39,7 +38,14 @@ func TestLoop_AllTasksComplete(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
@@ -68,8 +74,7 @@ func TestLoop_NoTasksError(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -77,7 +82,14 @@ func TestLoop_NoTasksError(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
@@ -109,8 +121,7 @@ func TestLoop_StopFileDetection(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -118,7 +129,14 @@ func TestLoop_StopFileDetection(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
@@ -155,8 +173,7 @@ func TestLoop_ContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -164,7 +181,14 @@ func TestLoop_ContextCancellation(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(ctx)
@@ -193,8 +217,7 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -202,7 +225,14 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
@@ -255,8 +285,7 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -266,7 +295,14 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		Wait:          true,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 
 	waitCount := 0
@@ -317,8 +353,7 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 
 	logger := logging.New(nil)
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -327,7 +362,14 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		Wait:          true,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	l.cfg.OnWait = func() { cancel() }
@@ -358,8 +400,7 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 
 	logger := logging.New(nil)
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -368,7 +409,14 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		Wait:          true,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.cfg.OnWait = func() {
 		os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
@@ -401,8 +449,7 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 
 	logger := logging.New(nil)
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -411,7 +458,14 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		Wait:          false,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	start := time.Now()
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -483,8 +537,7 @@ func TestLoop_LifecycleStates(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -493,7 +546,15 @@ func TestLoop_LifecycleStates(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return true, ""
@@ -543,8 +604,7 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -553,7 +613,15 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return false, "tests failed"
@@ -619,8 +687,7 @@ func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -632,7 +699,15 @@ func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
 		OnIterationStart: func() {
 			callCount++
 		},
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -664,8 +739,7 @@ func TestLoop_WaitMode_ReReadsSkippedTasksOnTick(t *testing.T) {
 
 	logger := logging.New(nil)
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -674,7 +748,14 @@ func TestLoop_WaitMode_ReReadsSkippedTasksOnTick(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		Wait:          true,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.cfg.OnWait = func() {
 		s, _ := st.Load()

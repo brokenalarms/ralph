@@ -59,11 +59,6 @@ func CapModel(cap, model string) string {
 	return model
 }
 
-// QueryFunc runs a prompt through an agent and returns the response text.
-// This is injected by the orchestrator so LLM verification goes through
-// the centralized agent module rather than directly spawning processes.
-type QueryFunc func(ctx context.Context, workDir, prompt, model string) (string, error)
-
 // Result describes the outcome of a post-signal verification.
 type Result struct {
 	Passed        bool
@@ -231,60 +226,42 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// VerifyOpts holds the parameters for LLMVerifyPR. The caller pre-fetches
-// the diff (PR diff or iteration diff) and passes it as data — verify never
-// reaches into git itself. Field names are neutral: the verifier doesn't
-// know whether the task came from beads, files, or any other backend.
-type VerifyOpts struct {
-	Ctx         context.Context
-	WorkDir     string
+// ReviewPromptInput is the pure-data input to BuildReviewPrompt. No
+// callbacks, no functions, no module references — just the strings needed
+// to fill in the verify-review.md template.
+type ReviewPromptInput struct {
 	PromptsDir  string
-	TaskID      string
 	Title       string
 	Description string
 	Acceptance  string
-	Diff        string // pre-fetched diff (PR diff preferred, fall back to iteration)
-	DiffSource  string // human label for the diff origin: "PR" or "iteration"
-	QueryFn     QueryFunc
-	Model       string
+	Diff        string // pre-fetched diff
+	DiffSource  string // "PR" or "iteration"
 }
 
-// LLMVerifyPR verifies that a task's acceptance criteria are satisfied.
-// The caller is responsible for choosing between PR diff and iteration diff
-// and passing it via opts.Diff. An empty Diff returns NoDiff=true.
-// Uses prompts/verify-review.md as the review template when available.
-// When QueryFn is non-nil, LLM calls go through the centralized agent module.
-func LLMVerifyPR(opts VerifyOpts) Result {
-	diff := opts.Diff
-	if diff == "" {
-		return Result{Passed: true, NoDiff: true, Reason: "no PR found and no new commits — agent confirms task complete"}
-	}
-
+// BuildReviewPrompt loads prompts/verify-review.md from the configured
+// promptsDir, substitutes task variables into the template, and returns
+// the resulting prompt string. Falls back to an embedded template when the
+// file is missing. Pure function: data in, string out, no I/O beyond the
+// template read, no LLM calls.
+//
+// Diffs longer than 100000 characters are truncated with a marker.
+func BuildReviewPrompt(in ReviewPromptInput) string {
+	diff := in.Diff
 	if len(diff) > 100000 {
 		diff = diff[:100000] + "\n\n[diff truncated at 100000 chars]"
 	}
-
-	source := opts.DiffSource
+	source := in.DiffSource
 	if source == "" {
 		source = "PR"
 	}
 
-	prompt := loadReviewPrompt(opts.PromptsDir, opts.Title, opts.Description, opts.Acceptance, source, diff)
-	var model []string
-	if opts.Model != "" {
-		model = []string{opts.Model}
-	}
-	return callLLM(opts.Ctx, opts.WorkDir, prompt, opts.QueryFn, model...)
-}
-
-func loadReviewPrompt(promptsDir, title, description, acceptance, source, diff string) string {
-	tmplPath := filepath.Join(promptsDir, "verify-review.md")
+	tmplPath := filepath.Join(in.PromptsDir, "verify-review.md")
 	data, err := os.ReadFile(tmplPath)
 	if err == nil {
 		prompt := string(data)
-		prompt = strings.ReplaceAll(prompt, "{{TASK_TITLE}}", title)
-		prompt = strings.ReplaceAll(prompt, "{{TASK_DESCRIPTION}}", description)
-		prompt = strings.ReplaceAll(prompt, "{{ACCEPTANCE_CRITERIA}}", acceptance)
+		prompt = strings.ReplaceAll(prompt, "{{TASK_TITLE}}", in.Title)
+		prompt = strings.ReplaceAll(prompt, "{{TASK_DESCRIPTION}}", in.Description)
+		prompt = strings.ReplaceAll(prompt, "{{ACCEPTANCE_CRITERIA}}", in.Acceptance)
 		prompt = strings.ReplaceAll(prompt, "{{DIFF_SOURCE}}", source)
 		prompt = strings.ReplaceAll(prompt, "{{DIFF}}", diff)
 		return prompt
@@ -306,34 +283,14 @@ Answer these questions:
 
 Some tasks are implemented through prompt or configuration changes (markdown files, .md templates) rather than traditional code. For these changes, only question 1 applies — do not reject for missing tests or error handling.
 
-Reply with exactly one line: YES or NO followed by a one-sentence reason.`, title, description, source, diff)
+Reply with exactly one line: YES or NO followed by a one-sentence reason.`, in.Title, in.Description, source, diff)
 }
 
-
-// callLLM sends a prompt to a Claude model and interprets YES/NO response.
-// When queryFn is non-nil, the call goes through the centralized agent module.
-// Falls back to direct exec.Command when queryFn is nil (tests, standalone use).
-func callLLM(ctx context.Context, workDir, prompt string, queryFn QueryFunc, model ...string) Result {
-	m := ModelSonnet
-	if len(model) > 0 && model[0] != "" {
-		m = model[0]
-	}
-
-	var response string
-	var err error
-	if queryFn != nil {
-		response, err = queryFn(ctx, workDir, prompt, m)
-	} else {
-		cmd := exec.CommandContext(ctx, "claude", "--print", "--model", m, "-p", prompt)
-		cmd.Dir = workDir
-		out, cmdErr := cmd.CombinedOutput()
-		response = string(out)
-		err = cmdErr
-	}
-	if err != nil {
-		return Result{Passed: true, Reason: "LLM verification skipped: " + err.Error()}
-	}
-
+// ParseReviewResponse interprets a YES/NO LLM response and returns a Result.
+// Pure function: string in, Result out. The leading "YES" or "NO" token
+// (case-insensitive) determines pass/fail; the remainder of the response
+// becomes the Reason / Details. Whitespace is trimmed.
+func ParseReviewResponse(response string) Result {
 	response = strings.TrimSpace(response)
 	if strings.HasPrefix(strings.ToUpper(response), "NO") {
 		return Result{
@@ -342,7 +299,6 @@ func callLLM(ctx context.Context, workDir, prompt string, queryFn QueryFunc, mod
 			Details: response,
 		}
 	}
-
 	return Result{Passed: true, Reason: "LLM verified: " + response}
 }
 

@@ -40,11 +40,19 @@ func TestLoop_CompleteTask_ClosesTask(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -83,11 +91,19 @@ func TestLoop_CompleteTask_VerificationFailure(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
@@ -124,12 +140,18 @@ func TestCompleteTask_SkippedTask_DoesNotPush(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	var logBuf bytes.Buffer
 	logger := logging.New(&logBuf)
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -186,13 +208,19 @@ func TestCompleteTask_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	var logBuf bytes.Buffer
 	logger := logging.New(&logBuf)
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:     1,
 		CallsPerHour:      80,
 		PostSignalTimeout: 50 * time.Millisecond,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipFunc = func(ctx context.Context, _ git.ShipOpts) (git.ShipResult, error) {
@@ -248,12 +276,20 @@ func TestCompleteTask_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
-	l := New(Config{
+	cfg := Config{
 		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:     1,
 		CallsPerHour:      80,
 		PostSignalTimeout: 5 * time.Second,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
@@ -293,13 +329,21 @@ func TestCompleteTask_PostSignalTimeout_CancelsMerge(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
-	l := New(Config{
+	cfg := Config{
 		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:     1,
 		CallsPerHour:      80,
 		AutoMerge:         true,
 		PostSignalTimeout: 50 * time.Millisecond,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
@@ -348,13 +392,21 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		PostTask:      scriptPath,
 		AutoMerge:     true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.MergeRetryResult = true
@@ -401,12 +453,20 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		PostTask:      scriptPath,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
@@ -444,12 +504,19 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		PostTask:      scriptPath,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 50}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -492,14 +559,22 @@ func TestLoop_PostTaskScript_LogsWhenNotConfigured(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	gm.ShipResult = git.ShipResult{PRNumber: 10}
 	gm.MergeRetryResult = true
+	cfg :=
 
-	// No PostTask CLI flag and no package.json — must log "skipping post-task".
-	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		MaxIterations: 1,
-		CallsPerHour:  80,
-		AutoMerge:     true,
-	}, newTestModules(t, st, gm, backend, logger))
+		// No PostTask CLI flag and no package.json — must log "skipping post-task".
+		Config{
+			Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+			MaxIterations: 1,
+			CallsPerHour:  80,
+			AutoMerge:     true,
+		}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -535,13 +610,20 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before"}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		PostTask:      scriptPath,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -592,14 +674,23 @@ func TestLoop_PostTaskScript_PackageJSONDetection(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	gm.ShipResult = git.ShipResult{PRNumber: 77}
 	gm.MergeRetryResult = true
+	cfg :=
 
-	// No PostTask CLI flag — detection must come from package.json alone.
-	l := New(Config{
-		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		MaxIterations: 1,
-		CallsPerHour:  80,
-		AutoMerge:     true,
-	}, newTestModules(t, st, gm, backend))
+		// No PostTask CLI flag — detection must come from package.json alone.
+		Config{
+			Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+			MaxIterations: 1,
+			CallsPerHour:  80,
+			AutoMerge:     true,
+		}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -648,12 +739,20 @@ func TestCompleteTask_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		Notify:        true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -701,12 +800,20 @@ func TestCompleteTask_NotifyDisabled_NoNotification(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		Notify:        false,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -751,12 +858,20 @@ func TestCompleteTask_NotifyOnNoCommitsPath(t *testing.T) {
 	}
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before"}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 		Notify:        true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -802,12 +917,18 @@ func TestCompleteTask_FeedbackFileStopsPostSignal(t *testing.T) {
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	var logBuf bytes.Buffer
 	logger := logging.New(&logBuf)
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend, logger))
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 

@@ -43,12 +43,19 @@ func TestResumeTask_HandledFalseRunsAgent(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true, Summary: "Fix auth done"},
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }

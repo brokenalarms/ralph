@@ -12,6 +12,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
+	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -25,27 +26,38 @@ func TestOnSignal_HappyPath(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}))
-
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
-		return verify.Result{Passed: true, Reason: "looks good"}
 	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				return "YES: looks good", nil
+			}},
+		}),
+	})
+
 	l.cfg.OnVerify = func(ctx context.Context, dir, headBefore string) (bool, string) {
 		return true, ""
 	}
 
-	result := l.verifier.OnSignal(signalParams{
+	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-123", nextTask: "Test task",
 	})
-	if !result {
+	if skipReason != "" {
+		l.skipTask("test-123", skipReason)
+	}
+	if !verified {
 		t.Fatal("expected onSignal to return true when verification passes")
 	}
 }
@@ -58,37 +70,46 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, backend))
-
-	l.verifier.deps.NewRunner = func() claudeRunner {
-		return &stubRunner{result: stubResult(true, "attempted fix")}
 	}
-
 	llmCalls := 0
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
-		llmCalls++
-		return verify.Result{Passed: false, Details: "diff doesn't match bead"}
-	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: stubResult(true, "attempted fix")}
+			},
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				llmCalls++
+				return "NO: diff doesn't match bead", nil
+			}},
+		}),
+	})
 
-	result := l.verifier.OnSignal(signalParams{
+	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-123", nextTask: "Test task",
 	})
-	if result {
+	if skipReason != "" {
+		l.skipTask("test-123", skipReason)
+	}
+	if verified {
 		t.Fatal("expected onSignal to return false when LLM verification exhausts retries")
 	}
-	if llmCalls != l.verifier.cfg.MaxLLMVerifyAttempts {
-		t.Fatalf("expected %d LLM verify calls, got %d", l.verifier.cfg.MaxLLMVerifyAttempts, llmCalls)
+	if llmCalls != l.maxLLMVerifyAttempts() {
+		t.Fatalf("expected %d LLM verify calls, got %d", l.maxLLMVerifyAttempts(), llmCalls)
 	}
 	if backend.SkippedTask != "test-123" {
 		t.Fatalf("expected test-123 deferred in backend, got %q", backend.SkippedTask)
@@ -102,35 +123,45 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}))
-
-	l.verifier.deps.NewRunner = func() claudeRunner {
-		return &stubRunner{result: stubResult(true, "attempted fix")}
 	}
-
 	var modelsUsed []string
 	llmCalls := 0
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
-		llmCalls++
-		modelsUsed = append(modelsUsed, opts.Model)
-		if llmCalls <= 2 {
-			return verify.Result{Passed: false, Details: "needs work"}
-		}
-		return verify.Result{Passed: true, Reason: "approved"}
-	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: stubResult(true, "attempted fix")}
+			},
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				llmCalls++
+				modelsUsed = append(modelsUsed, model)
+				if llmCalls <= 2 {
+					return "NO: needs work", nil
+				}
+				return "YES: approved", nil
+			}},
+		}),
+	})
 
-	l.verifier.OnSignal(signalParams{
+	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-escalation", nextTask: "Escalation test",
 	})
+	if skipReason != "" {
+		l.skipTask("test-escalation", skipReason)
+	}
+	_ = verified
 
 	if len(modelsUsed) != 3 {
 		t.Fatalf("expected 3 LLM calls, got %d", len(modelsUsed))
@@ -153,38 +184,48 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 
 	customFirst := "claude-haiku-custom"
 	customEscalation := "claude-sonnet-custom"
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:                  workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:         5,
 		CallsPerHour:          80,
 		VerifyDir:             dir,
 		VerifyModel:           customFirst,
 		VerifyEscalationModel: customEscalation,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}))
-
-	l.verifier.deps.NewRunner = func() claudeRunner {
-		return &stubRunner{result: stubResult(true, "attempted fix")}
 	}
-
 	var modelsUsed []string
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
-		modelsUsed = append(modelsUsed, opts.Model)
-		if len(modelsUsed) < 3 {
-			return verify.Result{Passed: false, Details: "needs work"}
-		}
-		return verify.Result{Passed: true, Reason: "approved"}
-	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: stubResult(true, "attempted fix")}
+			},
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				modelsUsed = append(modelsUsed, model)
+				if len(modelsUsed) < 3 {
+					return "NO: needs work", nil
+				}
+				return "YES: approved", nil
+			}},
+		}),
+	})
 
-	l.verifier.OnSignal(signalParams{
+	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-config-models", nextTask: "Config models test",
 	})
+	if skipReason != "" {
+		l.skipTask("test-config-models", skipReason)
+	}
+	_ = verified
 
 	if len(modelsUsed) != 3 {
 		t.Fatalf("expected 3 LLM calls, got %d", len(modelsUsed))
@@ -209,37 +250,46 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"}))
-
+	}
 	fixAgentSpawned := false
-	l.verifier.deps.NewRunner = func() claudeRunner {
-		fixAgentSpawned = true
-		return &stubRunner{result: stubResult(true, "fixed error handling")}
-	}
-
 	llmCalls := 0
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
-		llmCalls++
-		if llmCalls == 1 {
-			return verify.Result{Passed: false, Details: "missing error handling"}
-		}
-		return verify.Result{Passed: true, Reason: "looks good after fix"}
-	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				fixAgentSpawned = true
+				return &stubRunner{result: stubResult(true, "fixed error handling")}
+			},
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				llmCalls++
+				if llmCalls == 1 {
+					return "NO: missing error handling", nil
+				}
+				return "YES: looks good after fix", nil
+			}},
+		}),
+	})
 
-	result := l.verifier.OnSignal(signalParams{
+	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-retry", nextTask: "Retry test",
 	})
+	if skipReason != "" {
+		l.skipTask("test-retry", skipReason)
+	}
 
-	if !result {
+	if !verified {
 		t.Fatal("expected onSignal to return true after fix agent + re-verify")
 	}
 	if llmCalls != 2 {
@@ -258,38 +308,48 @@ func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"}))
-
-	var capturedPrompt string
-	l.verifier.deps.NewRunner = func() claudeRunner {
-		return &promptCapturingRunner{
-			inner:    &stubRunner{result: stubResult(true, "fixed")},
-			captured: &capturedPrompt,
-		}
 	}
-
+	var capturedPrompt string
 	rejectionMsg := "function foo() ignores the error return from bar()"
 	llmCalls := 0
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
-		llmCalls++
-		if llmCalls == 1 {
-			return verify.Result{Passed: false, Details: rejectionMsg}
-		}
-		return verify.Result{Passed: true, Reason: "approved"}
-	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &promptCapturingRunner{
+					inner:    &stubRunner{result: stubResult(true, "fixed")},
+					captured: &capturedPrompt,
+				}
+			},
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				llmCalls++
+				if llmCalls == 1 {
+					return "NO: " + rejectionMsg, nil
+				}
+				return "YES: approved", nil
+			}},
+		}),
+	})
 
-	l.verifier.OnSignal(signalParams{
+	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-prompt", nextTask: "Prompt test",
 	})
+	if skipReason != "" {
+		l.skipTask("test-prompt", skipReason)
+	}
+	_ = verified
 
 	if !strings.Contains(capturedPrompt, rejectionMsg) {
 		t.Fatalf("fix agent prompt should contain rejection reason %q, got:\n%s", rejectionMsg, capturedPrompt)
@@ -307,30 +367,39 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}))
-
-	l.verifier.deps.NewRunner = func() claudeRunner {
-		return &stubRunner{result: stubResult(false, "")}
 	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: stubResult(false, "")}
+			},
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				return "NO: bad code", nil
+			}},
+		}),
+	})
 
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
-		return verify.Result{Passed: false, Details: "bad code"}
-	}
-
-	result := l.verifier.OnSignal(signalParams{
+	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-nosignal", nextTask: "No signal test",
 	})
+	if skipReason != "" {
+		l.skipTask("test-nosignal", skipReason)
+	}
 
-	if result {
+	if verified {
 		t.Fatal("expected onSignal to return false when fix agent exits without signal")
 	}
 }
@@ -344,31 +413,39 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}))
-
-	l.verifier.deps.LLMVerify = func(opts verify.VerifyOpts) verify.Result {
-		return verify.Result{Passed: true, NoDiff: true, Reason: "no diff"}
 	}
-
+	// With no PR diff and no iteration diff, LLMVerifyPR short-circuits
+	// to NoDiff=true without invoking QueryFn.
 	runnerSpawned := false
-	l.verifier.deps.NewRunner = func() claudeRunner {
-		runnerSpawned = true
-		return &stubRunner{result: stubResult(true, "confirmed")}
-	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				runnerSpawned = true
+				return &stubRunner{result: stubResult(true, "confirmed")}
+			},
+		}),
+	})
 
-	result := l.verifier.OnSignal(signalParams{
+	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
 		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
 		taskID: "test-fire", nextTask: "Fire test",
 	})
+	if skipReason != "" {
+		l.skipTask("test-fire", skipReason)
+	}
 
-	if !result {
+	if !verified {
 		t.Fatal("fire mode should accept no-diff completion")
 	}
 	if runnerSpawned {
@@ -389,14 +466,21 @@ func TestAgentModelEscalation(t *testing.T) {
 
 	const firstModel = verify.ModelSonnet
 	const escalationModel = verify.ModelOpus
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:                 workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:        1,
 		CallsPerHour:         80,
 		Model:                firstModel,
 		AgentEscalationModel: escalationModel,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-abc"}))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-abc"},
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	var capturedModels []string
 	l.runner = &stubRunner{
@@ -435,15 +519,22 @@ func TestAgentModelEscalation_ModelCapApplied(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:                 workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:        1,
 		CallsPerHour:         80,
 		Model:                verify.ModelSonnet,
 		AgentEscalationModel: verify.ModelOpus,
 		ModelCap:             verify.ModelHaiku, // cap everything to haiku
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-cap"}))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-cap"},
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	var capturedModels []string
 	l.runner = &stubRunner{
@@ -485,15 +576,23 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 	os.MkdirAll(promptsDir, 0o755)
 
 	gm := &git.StubRepo{HeadRevValue: "abc123", ProjectDir: dir, WorkDir: dir}
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
 		CallsPerHour:  80,
 		VerifyDir:     dir,
-	}, newTestModules(t, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}, logger))
-	l.verifier.deps.NewRunner = func() claudeRunner {
-		return &stubRunner{result: stubResult(true, "fixed")}
 	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: stubResult(true, "fixed")}
+			},
+		}),
+	})
 
 	review := &git.AutoReview{
 		Comments: []git.ReviewComment{

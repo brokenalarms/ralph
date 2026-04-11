@@ -38,8 +38,7 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/myproject/01-previous-task",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -47,7 +46,15 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
@@ -81,8 +88,7 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/myproject/01-ongoing-task",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -90,7 +96,15 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
@@ -153,8 +167,7 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 		ProjectDir: dir,
 		WorkDir:    dir,
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -163,7 +176,15 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
@@ -202,7 +223,7 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 	}
 
 	handlerCalled := false
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -214,7 +235,15 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 			handlerCalled = true
 			return git.RebaseFreshWorktree
 		},
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	err := l.git.EnsureUpToDate(context.Background())
 	// With stacked PRs, rebase conflicts cause stack to diverge — not an error.
@@ -242,8 +271,7 @@ func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 		Total:     1,
 		NextTask:  "Some task",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -251,7 +279,15 @@ func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	err := l.git.EnsureUpToDate(context.Background())
 	if err != nil {
@@ -277,8 +313,7 @@ func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
 		Total:     1,
 		NextTask:  "Some task",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -286,7 +321,15 @@ func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	err := l.git.EnsureUpToDate(context.Background())
 	if err != nil {
@@ -316,21 +359,30 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 
 	handlerCalled := false
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // simulate Ctrl-C already received
+	cancel()
+	cfg := // simulate Ctrl-C already received
 
-	l := New(Config{
-		Dirs: workctx.WorkContext{
-			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
-			RalphDir:   ralphDir,
-		},
-		MaxIterations: 5,
-		CallsPerHour:  80,
-		OnRebaseConflict: func(err error) git.RebaseRecovery {
-			handlerCalled = true
-			return git.RebaseAbort
-		},
-	}, newTestModules(t, st, gm, backend))
+		Config{
+			Dirs: workctx.WorkContext{
+				ProjectDir: dir,
+				WorkDir:    gm.WorkDir,
+				RalphDir:   ralphDir,
+			},
+			MaxIterations: 5,
+			CallsPerHour:  80,
+			OnRebaseConflict: func(err error) git.RebaseRecovery {
+				handlerCalled = true
+				return git.RebaseAbort
+			},
+		}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	err := l.Run(ctx)
 	if err != nil {
@@ -394,8 +446,7 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 		NextTask:  "Fix the login bug",
 		NextID:    "ralph-abc",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -404,7 +455,15 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 		},
 		MaxIterations: 2,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	// Stub out Claude runner to avoid actually running claude.
 	// Just create a stop file after 2 iterations.
@@ -454,8 +513,7 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 			NextID:    "ralph-1",
 		},
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -464,7 +522,15 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 		},
 		MaxIterations: 3,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.runner = &stubRunner{
 		onRun: func() {
@@ -521,8 +587,7 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 		NextTask:  "Build feature X",
 		NextID:    "ralph-feat",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -531,7 +596,15 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 		},
 		MaxIterations: 3,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.runner = &stubRunner{
 		onRun: func() {
@@ -582,8 +655,7 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/wip-branch",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    dir,
@@ -594,7 +666,15 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		Evolve:        true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.runner = &stubRunner{
 		// Simulate agent work by changing HeadRev so the loop sees new commits.
@@ -638,8 +718,7 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 		NextTask:  "Improve feature Y",
 		NextID:    "ralph-imp2",
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -650,7 +729,15 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 		Evolve:        true,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
@@ -721,8 +808,7 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 	backend.Total = 1
 	backend.NextTask = "Fix auth bug"
 	backend.NextID = "ralph-abc"
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -731,7 +817,15 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.runner = &stubRunner{}
 
@@ -790,8 +884,7 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 	backend.Total = 1
 	backend.NextTask = "Fix login flow"
 	backend.NextID = "ralph-xyz"
-
-	l := New(Config{
+	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
 			WorkDir:    gm.WorkDir,
@@ -800,7 +893,15 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 		},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.runner = &stubRunner{}
 
@@ -852,12 +953,19 @@ func TestResumeTask_ClosedPR_ClearsMetadataAndReruns(t *testing.T) {
 
 	agentCalled := false
 	runner := &stubRunner{onRun: func() { agentCalled = true }, result: claude.Result{}}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: gm.WorkDir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -924,12 +1032,19 @@ func TestLoop_BranchForTask_RenameFailure_AbortsIteration(t *testing.T) {
 		WorktreeBranch:  "ralph/next",
 		RenameBranchErr: fmt.Errorf("git branch -m: fatal: branch already exists"),
 	}
-
-	l := New(Config{
+	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: gm.WorkDir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
-	}, newTestModules(t, st, gm, backend))
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	_ = l.Run(context.Background())

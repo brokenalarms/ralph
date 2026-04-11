@@ -7,6 +7,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
+	"github.com/brokenalarms/ralph/internal/verifier"
 )
 
 // tryFixCI spawns a fix agent to address CI failures, force-pushes the
@@ -17,7 +18,33 @@ import (
 func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask, workDir, rawLogPath string) git.CIFixResult {
 	ciLog := l.git.GetCIFailureLog(ciErr.PRNumber)
 	headBefore := l.git.HeadRev()
-	if !l.verifier.TryFixCI(ctx, ciLog, ciErr, nextTask, workDir, rawLogPath) {
+
+	// Pre-filter required vs optional check failures. Verifier does not
+	// import the git package, so Loop flattens the typed git.CheckFailure
+	// slice into plain string slices before handing off.
+	var requiredNames, optionalNames []string
+	for _, f := range git.RequiredFailedChecks(ciErr.Failures) {
+		requiredNames = append(requiredNames, f.Name)
+	}
+	for _, f := range ciErr.Failures {
+		if !f.IsRequired {
+			optionalNames = append(optionalNames, f.Name)
+		}
+	}
+
+	fixResult := l.verifier.SpawnCIFixAgent(verifier.CIFixInput{
+		Spawn: verifier.FixAgentSpawn{
+			Ctx:        ctx,
+			TaskTitle:  nextTask,
+			WorkDir:    workDir,
+			RawLogPath: rawLogPath,
+		},
+		CILog:            ciLog,
+		PRNumber:         ciErr.PRNumber,
+		RequiredFailures: requiredNames,
+		OptionalFailures: optionalNames,
+	})
+	if !fixResult.SignalDetected {
 		return git.CIFixFailed
 	}
 
@@ -48,7 +75,13 @@ func (l *Loop) tryFixConflict(ctx context.Context, taskID, nextTask, workDir, ra
 	conflictDiff := l.git.ConflictDiff()
 	taskDesc := l.taskDescription(taskID)
 	headBefore := l.git.HeadRev()
-	if !l.verifier.TryFixConflict(ctx, conflictDiff, taskDesc, nextTask, workDir, rawLogPath) {
+	fixResult := l.verifier.SpawnConflictFixAgent(verifier.FixAgentSpawn{
+		Ctx:        ctx,
+		TaskTitle:  nextTask,
+		WorkDir:    workDir,
+		RawLogPath: rawLogPath,
+	}, conflictDiff, taskDesc)
+	if !fixResult.SignalDetected {
 		return false
 	}
 
@@ -148,7 +181,13 @@ func (l *Loop) tryFixReviewComments(ctx context.Context, reviewerName string, re
 	reviewCtx := formatReviewContext(reviewerName, prNumber, actionable)
 	headBefore := l.git.HeadRev()
 
-	if !l.verifier.TryCopilotFix(ctx, reviewCtx, nextTask, workDir, rawLogPath) {
+	fixResult := l.verifier.SpawnCopilotFixAgent(verifier.FixAgentSpawn{
+		Ctx:        ctx,
+		TaskTitle:  nextTask,
+		WorkDir:    workDir,
+		RawLogPath: rawLogPath,
+	}, reviewCtx)
+	if !fixResult.SignalDetected {
 		return false
 	}
 
