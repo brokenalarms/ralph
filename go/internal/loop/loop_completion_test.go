@@ -64,13 +64,13 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: passingVerifyHook(),
 	})
 
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	backend.CloseMu.Lock()
@@ -133,15 +133,15 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: passingVerifyHook(),
 	})
 
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	gm.MergeRetryResult = true
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.AutoMerge = true
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	backend.CloseMu.Lock()
@@ -198,12 +198,12 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: &stubVerifyHook{passed: false, reason: "no commits"},
 	})
 
 	l.runner = runner
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "no commits" }
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	backend.CloseMu.Lock()
@@ -249,11 +249,11 @@ func TestLoop_RecordsAttemptAfterIteration(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	l.runner = &stubRunner{}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	history := l.attempts.Read("ralph-auth", "Fix the auth bug")
@@ -299,6 +299,7 @@ func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	l.runner = &stubRunner{
@@ -315,7 +316,6 @@ func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
 		result: claude.Result{IdleTimeout: true},
 	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	history := l.attempts.Read("ralph-slow", "Slow task")
@@ -358,6 +358,7 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	// Seed an existing attempt
@@ -367,7 +368,6 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "task completed"},
 	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	history := l.attempts.Read("ralph-done", "Done task")
@@ -568,9 +568,9 @@ func TestLoop_RecordsCompletedTasks(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	if err := l.Run(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -627,9 +627,9 @@ func TestLoop_ClearsCompletedTasksOnStart(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	if _, err := os.Stat(filepath.Join(ralphDir, ".completed-tasks")); !os.IsNotExist(err) {
@@ -687,9 +687,9 @@ func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	if err := l.Run(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -754,13 +754,11 @@ func TestLoop_SessionTasksRecordsCompletedWork(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
-		return true, ""
-	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	tasks := l.SessionTasks()
@@ -816,13 +814,11 @@ func TestLoop_SessionTasksEmptyOnVerificationFailure(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: &stubVerifyHook{passed: false, reason: "tests failed"},
 	})
 	l.runner = runner
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
-		return false, "tests failed"
-	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	tasks := l.SessionTasks()
@@ -881,13 +877,13 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: passingVerifyHook(),
 	})
 
 	l.runner = runner
 	gm.PRNumber = 42
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	tasks, err := st.GetCompletedTasks()
@@ -933,9 +929,9 @@ func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	tasks, err := st.GetCompletedTasks()

@@ -81,20 +81,19 @@ func TestLoop_ActiveReviewersNotDetectedAtStartup(t *testing.T) {
 	}
 	backend := &testutil.StubBackend{Remaining: 0, Completed: 0, Total: 0}
 	cfg := Config{
-		Dirs:            workctx.WorkContext{ProjectDir: dir, RalphDir: ralphDir},
-		MaxIterations:   1,
-		IsOnline:        func() bool { return true },
-		WaitForInternet: func(_ context.Context, _ *logging.Logger) bool { return true },
-		NewRunner:       func() claudeRunner { return &stubRunner{result: claude.Result{}} },
+		Dirs:          workctx.WorkContext{ProjectDir: dir, RalphDir: ralphDir},
+		MaxIterations: 1,
 	}
 
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		Runner:       &stubRunner{result: claude.Result{}},
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

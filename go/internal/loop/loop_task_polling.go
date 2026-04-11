@@ -37,8 +37,8 @@ func (l *Loop) waitForTasks(ctx context.Context) bool {
 	l.state.Write("status", "waiting")
 	l.state.UpdateStreamTask("", "Waiting for tasks...", nil)
 	l.state.TouchPlanRefresh()
-	if l.cfg.OnWait != nil {
-		l.cfg.OnWait()
+	if l.waitHook != nil {
+		l.waitHook.OnWait()
 	}
 
 	// Check immediately before waiting for the first tick.

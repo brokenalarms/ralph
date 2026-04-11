@@ -732,16 +732,6 @@ func TestInitRalphDir_NoWaitCompletedBlocksOnPrompt(t *testing.T) {
 	}
 }
 
-// Verifies that rebase conflict always auto-chooses fresh worktree.
-func TestAutoRebaseRecovery_AlwaysChoosesFreshWorktree(t *testing.T) {
-	handler := autoRebaseRecovery()
-	result := handler(fmt.Errorf("test conflict"))
-
-	if result != git.RebaseFreshWorktree {
-		t.Errorf("expected RebaseFreshWorktree, got %v", result)
-	}
-}
-
 // Verifies printSessionSummary displays bead ID, title, agent summary, and PR
 // reference for each completed task, giving the operator a clear picture of
 // what was accomplished before evolve restart or exit.

@@ -43,11 +43,9 @@ func TestOnSignal_HappyPath(t *testing.T) {
 				return "YES: looks good", nil
 			}},
 		}),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
 	})
-
-	l.cfg.OnVerify = func(ctx context.Context, dir, headBefore string) (bool, string) {
-		return true, ""
-	}
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",

@@ -49,17 +49,15 @@ func TestWaitForTasks_PackageFunction(t *testing.T) {
 
 	onWaitCalled := false
 	l := &Loop{
-		cfg: Config{
-			OnWait: func() {
-				onWaitCalled = true
-				backend.Lock()
-				backend.Remaining = 1
-				backend.Unlock()
-			},
-		},
 		state:       st,
 		logger:      logger,
 		taskBackend: backend,
+		waitHook: &stubWaitHook{fn: func() {
+			onWaitCalled = true
+			backend.Lock()
+			backend.Remaining = 1
+			backend.Unlock()
+		}},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

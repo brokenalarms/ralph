@@ -225,7 +225,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		AgentEscalationModel:     cfg.AgentEscalationModel,
 		ModelCap:                 modelCap(cfg),
 		Version:                  config.Version,
-		OnRebaseConflict:         autoRebaseRecovery(),
 		VerifyDir:                dirs.WorkDir,
 		VerifyModel:              cfg.VerifyModel,
 		VerifyEscalationModel:    cfg.VerifyEscalationModel,
@@ -237,15 +236,15 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		CompileCheckTimeout:      cfg.CompileCheckTimeout,
 		ConnectivityCheckTimeout: cfg.ConnectivityCheckTimeout,
 		InternetRestoreInterval:  cfg.InternetRestoreInterval,
-		OnIterationStart: func() {
-			generateResumeScript(cfg, ralphDir, scriptPath, args, log)
-		},
 	}, loop.Modules{
 		State:       st,
 		Git:         gm,
 		TaskBackend: backend,
 		Logger:      log,
 		Verifier:    vrf,
+		IterationHook: &resumeScriptHook{
+			cfg: cfg, ralphDir: ralphDir, scriptPath: scriptPath, args: args, log: log,
+		},
 	})
 
 	if err := execLoop.Run(ctx); err != nil {
@@ -342,6 +341,23 @@ func (p *compileCheckPrePusher) PrePush(ctx context.Context, workDir string) err
 	}
 	p.log.Emit(logging.Opts{Domain: "build"}, "Pre-push compile check passed")
 	return nil
+}
+
+// resumeScriptHook implements loop.IterationHook by regenerating the
+// resume script at the start of each loop iteration. The script captures
+// the current task / branch / state so the user can resume from the most
+// recent point.
+type resumeScriptHook struct {
+	cfg        config.Config
+	ralphDir   string
+	scriptPath string
+	args       []string
+	log        *logging.Logger
+}
+
+// OnIterationStart implements loop.IterationHook.
+func (h *resumeScriptHook) OnIterationStart() {
+	generateResumeScript(h.cfg, h.ralphDir, h.scriptPath, h.args, h.log)
 }
 
 // initTaskBackend initializes the bd task backend. BD is required — if

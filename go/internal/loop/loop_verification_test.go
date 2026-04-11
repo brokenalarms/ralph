@@ -56,13 +56,11 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: &stubVerifyHook{passed: false, reason: "test suite failed"},
 	})
 	l.runner = runner
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
-		return false, "test suite failed"
-	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	if gm.ShipCalls > 0 {
@@ -136,13 +134,11 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
-		return true, ""
-	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	if gm.ShipCalls == 0 {
@@ -212,10 +208,10 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	if gm.ShipCalls == 0 {
@@ -275,13 +271,13 @@ func TestLoop_CIFailureLeavesTaskOpen(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	backend.CloseMu.Lock()
@@ -338,13 +334,13 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	if !merged {
@@ -394,13 +390,13 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	tasks := l.SessionTasks()
@@ -451,6 +447,7 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 				return &stubRunner{result: claude.Result{SignalDetected: true}}
 			},
 		}),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
@@ -468,7 +465,6 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// Task should remain open since merge failed.
@@ -518,6 +514,7 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
@@ -532,7 +529,6 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	logger = logging.New(&buf)
 	l.logger = logger
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	output := buf.String()
@@ -585,6 +581,7 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
@@ -595,7 +592,6 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// Task should be closed — merge failed but PR exists, work is done.
@@ -655,6 +651,7 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	gm.ShipResult = git.ShipResult{PRNumber: 50}
@@ -665,7 +662,6 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// Task should be closed — merge failed but PR exists, work is done. No retrying.
@@ -728,11 +724,11 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	s, err := st.Load()
@@ -866,10 +862,10 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 						return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
 					},
 				}),
+				Connectivity: onlineStubConnectivity(),
 			})
 			l.runner = runner
 
-			l.cfg.CheckGitHub = func(context.Context) error { return nil }
 			_ = l.Run(context.Background())
 
 			output := logBuf.String()

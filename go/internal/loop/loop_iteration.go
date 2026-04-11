@@ -341,12 +341,13 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	return completeTaskOut{action: signalComplete, ct: &ct, merged: merged}
 }
 
-// verifyCompletion delegates to OnVerify when set, otherwise runs the standard
-// simple-path verification (commit check + single test run + state write).
-// This is the non-fix-loop variant used outside the post-signal pipeline.
+// verifyCompletion delegates to the VerifyHook when set, otherwise runs
+// the standard simple-path verification (commit check + single test run +
+// state write). This is the non-fix-loop variant used outside the
+// post-signal pipeline.
 func (l *Loop) verifyCompletion(ctx context.Context, headBefore string) (bool, string) {
-	if l.cfg.OnVerify != nil {
-		return l.cfg.OnVerify(ctx, l.git.GetWorkDir(), headBefore)
+	if l.verifyHook != nil {
+		return l.verifyHook.Verify(ctx, l.git.GetWorkDir(), headBefore)
 	}
 	return l.runSimpleVerifyCompletion(ctx, headBefore)
 }
@@ -362,9 +363,11 @@ func (l *Loop) persistCompleted(taskID string, merged bool) {
 }
 
 // execRunPostTask runs the configured post-task hook after a task completes.
+// When PostTaskHook is set (test path), it fires; otherwise the production
+// runPostTask script path runs.
 func (l *Loop) execRunPostTask(ctx context.Context, taskID string, prNumber int, merged bool) {
-	if l.cfg.OnPostTask != nil {
-		l.cfg.OnPostTask(ctx, taskID, prNumber, merged)
+	if l.postTaskHook != nil {
+		l.postTaskHook.OnPostTask(ctx, taskID, prNumber, merged)
 		return
 	}
 	runPostTask(ctx, runPostTaskParams{
@@ -424,7 +427,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	})
 	testStatus := buildStatus + l.runPreIterationTests(ctx)
 
-	if !l.cfg.WaitForInternet(ctx, l.logger) {
+	if !l.connectivity.WaitForInternet(ctx, l.logger) {
 		return iterationPrompt{}, false
 	}
 	if !l.waitForRate(ctx) {
@@ -474,9 +477,9 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 // is responsible for not counting this iteration.
 func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr error, taskID, nextTask, headBefore string, runIteration int) loopAction {
 	if runErr != nil {
-		if !l.cfg.IsOnline() {
+		if !l.connectivity.IsOnline() {
 			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Claude failed — internet appears down")
-			if !l.cfg.WaitForInternet(ctx, l.logger) {
+			if !l.connectivity.WaitForInternet(ctx, l.logger) {
 				return actionDone
 			}
 			return actionRetry

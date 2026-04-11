@@ -63,6 +63,8 @@ func TestLoop_VerifyBuild_FailureInjectedIntoPrompt(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: passingVerifyHook(),
 	})
 
 	inner := &stubRunner{
@@ -73,8 +75,6 @@ func TestLoop_VerifyBuild_FailureInjectedIntoPrompt(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 	l.runner = &promptCapturingRunner{inner: inner, captured: &capturedPrompt}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	_ = l.Run(context.Background())
 
@@ -132,6 +132,8 @@ func TestLoop_VerifyBuild_PassDoesNotInjectContext(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: passingVerifyHook(),
 	})
 
 	inner := &stubRunner{
@@ -142,8 +144,6 @@ func TestLoop_VerifyBuild_PassDoesNotInjectContext(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 	l.runner = &promptCapturingRunner{inner: inner, captured: &capturedPrompt}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	_ = l.Run(context.Background())
 
@@ -193,6 +193,8 @@ func TestLoop_VerifyBuild_NotConfigured_NoEffect(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: passingVerifyHook(),
 	})
 
 	inner := &stubRunner{
@@ -203,8 +205,6 @@ func TestLoop_VerifyBuild_NotConfigured_NoEffect(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 	l.runner = &promptCapturingRunner{inner: inner, captured: &capturedPrompt}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	_ = l.Run(context.Background())
 
@@ -263,6 +263,8 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: passingVerifyHook(),
 	})
 
 	inner := &stubRunner{
@@ -273,8 +275,6 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 	l.runner = &promptCapturingRunner{inner: inner, captured: &capturedPrompt}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	_ = l.Run(context.Background())
 

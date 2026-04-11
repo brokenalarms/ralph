@@ -67,9 +67,9 @@ func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 				TaskBackend: tt.backend,
 				Logger:      logger,
 				Verifier:    newTestVerifier(t, cfg, logger),
+				Connectivity: onlineStubConnectivity(),
 			})
 
-			l.cfg.CheckGitHub = func(context.Context) error { return nil }
 			l.Run(context.Background())
 
 			output := logBuf.String()
@@ -118,6 +118,7 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = &stubRunner{
 		onRun: func() {
@@ -126,7 +127,6 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	l.Run(context.Background())
 
 	output := logBuf.String()
@@ -188,6 +188,7 @@ func TestLoop_LongDescriptionTruncatedInStream(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = &stubRunner{
 		onRun: func() {
@@ -196,7 +197,6 @@ func TestLoop_LongDescriptionTruncatedInStream(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	l.Run(context.Background())
 
 	output := streamBuf.String()
@@ -253,6 +253,7 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = &stubRunner{
 		onRun: func() {
@@ -261,7 +262,6 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 		},
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	l.Run(context.Background())
 
 	output := logBuf.String()
@@ -340,10 +340,10 @@ func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	output := logBuf.String()
@@ -404,10 +404,10 @@ func TestLoop_TaskBannerOnNewTask(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	output := logBuf.String()
@@ -477,6 +477,8 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 				return "YES: looks good", nil
 			}},
 		}),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: passingVerifyHook(),
 	})
 
 	// Override the runner to return different results per iteration.
@@ -484,9 +486,7 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		backend: backend,
 		counter: &iterationCount,
 	}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	output := logBuf.String()
@@ -590,10 +590,10 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	output := logBuf.String()
@@ -610,7 +610,9 @@ func handleRunResultCall(l *Loop, ctx context.Context, result claude.Result, run
 }
 
 // newHandleRunResultLoop creates a minimal Loop for testing handleRunResult.
-func newHandleRunResultLoop(t *testing.T) (*Loop, string) {
+// conn is the Connectivity stub to inject; pass onlineStubConnectivity() for the
+// default online case.
+func newHandleRunResultLoop(t *testing.T, conn Connectivity) (*Loop, string) {
 	t.Helper()
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -627,11 +629,12 @@ func newHandleRunResultLoop(t *testing.T) (*Loop, string) {
 		CallsPerHour:  80,
 	}
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: nil,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  nil,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: conn,
 	})
 
 	return l, ralphDir
@@ -640,10 +643,7 @@ func newHandleRunResultLoop(t *testing.T) (*Loop, string) {
 // Verifies that when Claude returns an error and the machine is offline,
 // handleRunResult waits for internet and returns actionRetry with decremented counters.
 func TestHandleRunResult_OfflineReturnsRetry(t *testing.T) {
-	l, _ := newHandleRunResultLoop(t)
-
-	l.cfg.IsOnline = func() bool { return false }
-	l.cfg.WaitForInternet = func(_ context.Context, _ *logging.Logger) bool { return true }
+	l, _ := newHandleRunResultLoop(t, &stubConnectivity{offline: true})
 
 	runIter := 3
 	action := handleRunResultCall(l, context.Background(), claude.Result{}, fmt.Errorf("connection refused"),
@@ -657,10 +657,7 @@ func TestHandleRunResult_OfflineReturnsRetry(t *testing.T) {
 // Verifies that when offline and the context is cancelled while waiting,
 // handleRunResult returns actionDone.
 func TestHandleRunResult_OfflineContextCancelledReturnsBreak(t *testing.T) {
-	l, _ := newHandleRunResultLoop(t)
-
-	l.cfg.IsOnline = func() bool { return false }
-	l.cfg.WaitForInternet = func(_ context.Context, _ *logging.Logger) bool { return false }
+	l, _ := newHandleRunResultLoop(t, &stubConnectivity{offline: true, waitDeclined: true})
 
 	runIter := 3
 	action := handleRunResultCall(l, context.Background(), claude.Result{}, fmt.Errorf("connection refused"),
@@ -674,9 +671,7 @@ func TestHandleRunResult_OfflineContextCancelledReturnsBreak(t *testing.T) {
 // Verifies that the FeedbackKill path records an attempt and returns actionRetry
 // with decremented counters.
 func TestHandleRunResult_FeedbackKillReturnsRetry(t *testing.T) {
-	l, ralphDir := newHandleRunResultLoop(t)
-
-	l.cfg.IsOnline = func() bool { return true }
+	l, ralphDir := newHandleRunResultLoop(t, onlineStubConnectivity())
 
 	runIter := 3
 	result := claude.Result{FeedbackKill: true}
@@ -697,9 +692,7 @@ func TestHandleRunResult_FeedbackKillReturnsRetry(t *testing.T) {
 // Verifies that the IdleTimeout path records an attempt and returns actionRetry
 // with decremented counters.
 func TestHandleRunResult_IdleTimeoutReturnsRetry(t *testing.T) {
-	l, ralphDir := newHandleRunResultLoop(t)
-
-	l.cfg.IsOnline = func() bool { return true }
+	l, ralphDir := newHandleRunResultLoop(t, onlineStubConnectivity())
 
 	runIter := 3
 	result := claude.Result{IdleTimeout: true}
@@ -720,9 +713,7 @@ func TestHandleRunResult_IdleTimeoutReturnsRetry(t *testing.T) {
 // Verifies that after MaxIdleTimeoutFailures consecutive idle timeouts,
 // handleRunResult skips the task instead of retrying.
 func TestHandleRunResult_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
-	l, ralphDir := newHandleRunResultLoop(t)
-
-	l.cfg.IsOnline = func() bool { return true }
+	l, ralphDir := newHandleRunResultLoop(t, onlineStubConnectivity())
 
 	backend := &testutil.StubBackend{}
 	l.taskBackend = backend
@@ -749,9 +740,7 @@ func TestHandleRunResult_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 // Verifies the RateLimited path calls WaitUntil on the limiter and returns
 // actionRetry with decremented counters.
 func TestHandleRunResult_RateLimitedReturnsRetry(t *testing.T) {
-	l, _ := newHandleRunResultLoop(t)
-
-	l.cfg.IsOnline = func() bool { return true }
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
 
 	resetAt := time.Now().Add(-1 * time.Second)
 	runIter := 3
@@ -767,9 +756,7 @@ func TestHandleRunResult_RateLimitedReturnsRetry(t *testing.T) {
 // Verifies that when the rate limit wait is interrupted by context cancellation,
 // handleRunResult returns actionDone.
 func TestHandleRunResult_RateLimitedContextCancelledReturnsBreak(t *testing.T) {
-	l, _ := newHandleRunResultLoop(t)
-
-	l.cfg.IsOnline = func() bool { return true }
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -788,9 +775,7 @@ func TestHandleRunResult_RateLimitedContextCancelledReturnsBreak(t *testing.T) {
 // Verifies that a normal successful result returns actionProceed without
 // modifying the iteration counters.
 func TestHandleRunResult_NormalReturnsResultProceed(t *testing.T) {
-	l, _ := newHandleRunResultLoop(t)
-
-	l.cfg.IsOnline = func() bool { return true }
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
 
 	runIter := 3
 	action := handleRunResultCall(l, context.Background(), claude.Result{}, nil,
