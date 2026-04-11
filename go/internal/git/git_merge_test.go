@@ -432,9 +432,10 @@ func TestPushAndCreatePR_NoBeadID(t *testing.T) {
 	}
 }
 
-// PushAndCreatePR passes the body parameter through to CreatePR, so the
-// PR description uses bead context instead of generic boilerplate.
-func TestPushAndCreatePR_PassesBodyToCreatePR(t *testing.T) {
+// PushAndCreatePR forwards its summary argument into the Summary section
+// of the formatted PR body, so the PR description uses task context
+// instead of generic boilerplate.
+func TestPushAndCreatePR_WrapsSummaryIntoFormattedBody(t *testing.T) {
 	r := newStubRunner()
 	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
 	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
@@ -485,7 +486,7 @@ func TestPushAndCreatePR_PassesBodyToCreatePR(t *testing.T) {
 
 // PushAndCreatePR uses the task description as body when no summary is
 // provided, avoiding completely empty PR descriptions.
-func TestPushAndCreatePR_FallsBackToTaskDescWhenNoBody(t *testing.T) {
+func TestPushAndCreatePR_FallsBackToTaskDescWhenNoSummary(t *testing.T) {
 	r := newStubRunner()
 	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
 	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
