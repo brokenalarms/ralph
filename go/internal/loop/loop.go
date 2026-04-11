@@ -42,9 +42,11 @@ import (
 // Connectivity bundles the network-reachability checks the loop runs at
 // startup and between iterations. Defined locally in the loop package
 // (same dependency-inversion pattern as git.StateStore) so the loop
-// holds no peer-module reference and no function fields. Production:
-// main.go provides a real implementation backed by gh CLI / network
-// pings. Tests: provide stubs that report online/offline.
+// holds no peer-module reference and no function fields. When the
+// caller passes a nil Modules.Connectivity, loop.New defaults it to
+// liveConnectivity (which uses the package-level checkGitHubConnectivity
+// / isOnline / waitForInternet helpers). Tests pass non-nil stub
+// implementations to override the live network behavior.
 type Connectivity interface {
 	// CheckGitHub returns nil when GitHub is reachable; an error otherwise.
 	// Run once at startup before any task execution.
@@ -154,9 +156,15 @@ type Config struct {
 }
 
 // liveConnectivity is the production Connectivity implementation. It
-// uses the package-level checkGitHubConnectivity, isOnline, and
-// waitForInternet helpers, configured with the loop's connectivity
-// timeouts.
+// delegates to the package-level helpers in loop_utils.go.
+//
+// IsOnline and WaitForInternet honor the loop-level cfg.ConnectivityCheckTimeout
+// (typically 3 seconds — these are fast local-network reachability pings).
+// CheckGitHub uses its own hardcoded 10-second timeout inside
+// checkGitHubConnectivity, because the gh api round-trip is a different
+// kind of check (auth + GitHub server latency) and the same 3s budget
+// would produce false negatives. The two timeouts measure different
+// things and should not share a value.
 type liveConnectivity struct {
 	checkTimeout    time.Duration
 	restoreInterval time.Duration

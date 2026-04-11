@@ -242,10 +242,11 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 
 	err := l.git.EnsureUpToDate(context.Background())
 	// With stacked PRs, rebase conflicts cause stack to diverge — not an error.
+	// The loop has no recovery hook to invoke; the test asserts only the
+	// EnsureUpToDate return value.
 	if err != nil {
 		t.Fatalf("expected nil (stack diverges), got: %v", err)
 	}
-	// OnRebaseConflict is dead code; intentionally no assertions.
 }
 
 // Verifies that handleRebase returns nil on real conflicts — EnsureUpToDate
@@ -378,7 +379,8 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 		t.Fatalf("expected nil error (clean exit), got %v", err)
 	}
 
-	// OnRebaseConflict is dead code; intentionally no assertions.
+	// The loop has no recovery hook to invoke when the context is
+	// cancelled mid-rebase; the test asserts only the final state below.
 
 	finalState, _ := st.Load()
 	if finalState.Status != "stopped" {
