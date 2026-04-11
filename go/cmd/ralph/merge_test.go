@@ -182,24 +182,27 @@ func TestCollectStack_NonMainBaseBranch(t *testing.T) {
 	}
 }
 
-// ── rebaseStackAndPush tests ─────────────────────────────────────────────────
+// ── RebaseStack tests ─────────────────────────────────────────────────────────
 
 // Proves: when a worktree directory exists but the bottom branch is not
-// rebased onto origin/main (merge-base --is-ancestor fails), rebaseStackAndPush
+// rebased onto origin/main (merge-base --is-ancestor fails), RebaseStack
 // removes the stale worktree and recreates it (worktree remove then worktree add).
-func TestRebaseStackAndPush_StaleWorktreeRecreated(t *testing.T) {
+func TestRebaseStack_StaleWorktreeRecreated(t *testing.T) {
 	runner := newMergeStubRunner()
 	// merge-base --is-ancestor fails → stale worktree
 	runner.errOnArgs("merge-base --is-ancestor", fmt.Errorf("not an ancestor"))
-	// worktree add succeeds; rebase succeeds
-	gm, tmp := buildGM(t, runner)
-	_ = tmp
+	gm, _ := buildGM(t, runner)
 
 	// Create a fake .git inside the worktree dir to simulate an existing worktree.
 	wtDir := filepath.Join(gm.GetRalphDir(), "worktrees", "merge-pr2")
 	os.MkdirAll(filepath.Join(wtDir, ".git"), 0o755)
 
-	RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr2", 999, []string{"pr1", "pr2"}, gm, logging.New(nil))
+	gm.RebaseStack(context.Background(), git.RebaseStackOpts{
+		TopBranch:   "pr2",
+		BaseBranch:  "main",
+		TopPR:       999,
+		AllBranches: []string{"pr1", "pr2"},
+	})
 
 	if !runner.calledWith("worktree", "remove", "--force", wtDir) {
 		t.Error("expected 'git worktree remove --force' to be called for stale worktree")
@@ -209,13 +212,18 @@ func TestRebaseStackAndPush_StaleWorktreeRecreated(t *testing.T) {
 	}
 }
 
-// Proves: on the fresh path, rebaseStackAndPush fetches origin/main AND
-// every individual stack branch before creating the worktree.
-func TestRebaseStackAndPush_FetchesAllBranches(t *testing.T) {
+// Proves: on the fresh path, RebaseStack fetches origin/main AND every
+// individual stack branch before creating the worktree.
+func TestRebaseStack_FetchesAllBranches(t *testing.T) {
 	runner := newMergeStubRunner()
-	gm, tmp := buildGM(t, runner)
+	gm, _ := buildGM(t, runner)
 
-	RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr3", 123, []string{"pr1", "pr2", "pr3"}, gm, logging.New(nil))
+	gm.RebaseStack(context.Background(), git.RebaseStackOpts{
+		TopBranch:   "pr3",
+		BaseBranch:  "main",
+		TopPR:       123,
+		AllBranches: []string{"pr1", "pr2", "pr3"},
+	})
 
 	if !runner.calledWith("fetch", "origin", "main") {
 		t.Error("expected fetch of origin/main")
@@ -227,16 +235,20 @@ func TestRebaseStackAndPush_FetchesAllBranches(t *testing.T) {
 	}
 }
 
-// Proves: when rebase succeeds, rebaseStackAndPush force-pushes every branch
-// in the stack.
-func TestRebaseStackAndPush_PushesAllBranchesOnSuccess(t *testing.T) {
+// Proves: when rebase succeeds, RebaseStack force-pushes every branch in the stack.
+func TestRebaseStack_PushesAllBranchesOnSuccess(t *testing.T) {
 	runner := newMergeStubRunner()
-	gm, tmp := buildGM(t, runner)
+	gm, _ := buildGM(t, runner)
 
-	code := RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr2", 42, []string{"pr1", "pr2"}, gm, logging.New(nil))
+	err := gm.RebaseStack(context.Background(), git.RebaseStackOpts{
+		TopBranch:   "pr2",
+		BaseBranch:  "main",
+		TopPR:       42,
+		AllBranches: []string{"pr1", "pr2"},
+	})
 
-	if code != 0 {
-		t.Errorf("expected exit 0, got %d", code)
+	if err != nil {
+		t.Errorf("expected nil error, got %v", err)
 	}
 	for _, br := range []string{"pr1", "pr2"} {
 		if !runner.calledWith("push", "--force", "origin", br) {
@@ -245,17 +257,22 @@ func TestRebaseStackAndPush_PushesAllBranchesOnSuccess(t *testing.T) {
 	}
 }
 
-// Proves: when rebase fails and auto-resolve also fails, rebaseStackAndPush
-// returns non-zero and does NOT attempt to push any branch.
-func TestRebaseStackAndPush_RebaseConflictNoPush(t *testing.T) {
+// Proves: when rebase fails and auto-resolve also fails, RebaseStack returns
+// a non-nil error and does NOT attempt to push any branch.
+func TestRebaseStack_RebaseConflictNoPush(t *testing.T) {
 	runner := newMergeStubRunner()
 	runner.errOnArgs("rebase --update-refs", fmt.Errorf("conflict"))
-	gm, tmp := buildGM(t, runner)
+	gm, _ := buildGM(t, runner)
 
-	code := RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr1", 7, []string{"pr1"}, gm, logging.New(nil))
+	err := gm.RebaseStack(context.Background(), git.RebaseStackOpts{
+		TopBranch:   "pr1",
+		BaseBranch:  "main",
+		TopPR:       7,
+		AllBranches: []string{"pr1"},
+	})
 
-	if code == 0 {
-		t.Error("expected non-zero exit when rebase conflicts")
+	if err == nil {
+		t.Error("expected non-nil error when rebase conflicts")
 	}
 	if !runner.neverCalledWith("push", "--force") {
 		t.Error("expected no push when rebase fails")
@@ -264,11 +281,16 @@ func TestRebaseStackAndPush_RebaseConflictNoPush(t *testing.T) {
 
 // Proves: the worktree directory is created under .ralph/worktrees/ (not the
 // project root or some other temp location).
-func TestRebaseStackAndPush_WorktreeUnderRalphDir(t *testing.T) {
+func TestRebaseStack_WorktreeUnderRalphDir(t *testing.T) {
 	runner := newMergeStubRunner()
-	gm, tmp := buildGM(t, runner)
+	gm, _ := buildGM(t, runner)
 
-	RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr1", 5, []string{"pr1"}, gm, logging.New(nil))
+	gm.RebaseStack(context.Background(), git.RebaseStackOpts{
+		TopBranch:   "pr1",
+		BaseBranch:  "main",
+		TopPR:       5,
+		AllBranches: []string{"pr1"},
+	})
 
 	expectedPrefix := filepath.Join(gm.GetRalphDir(), "worktrees") + string(filepath.Separator)
 	// Find the worktree add call and verify its path argument.

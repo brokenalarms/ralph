@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
-	"github.com/brokenalarms/ralph/internal/git/rebasecontinue"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 )
@@ -90,13 +88,15 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 	}
 
 	log.Phase("Rebasing stack onto %s", defaultBranch)
-	topPR := prs[len(prs)-1].number
-	if code := rebaseStackAndPush(ctx, gm.GetRunner(), projectDir, defaultBranch, topBranch, topPR, allBranches, gm, log); code != 0 {
-		return code
+	if err := gm.RebaseStack(ctx, git.RebaseStackOpts{
+		TopBranch:   topBranch,
+		BaseBranch:  defaultBranch,
+		TopPR:       prs[len(prs)-1].number,
+		AllBranches: allBranches,
+	}); err != nil {
+		return 1
 	}
 
-	runner := gm.GetRunner()
-	gh := gm.GH()
 	merged := 0
 	repoURL := gm.RemoteURL()
 	for _, pr := range prs {
@@ -110,30 +110,16 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 			// Main moved after previous merge. Rebase this branch onto
 			// the new main and force-push so CI runs against the correct base.
 			log.Emit(logging.Opts{Domain: logging.Git}, "Rebasing %s onto updated %s...", pr.head, defaultBranch)
-			runner.Run(ctx, projectDir, "fetch", "origin", defaultBranch)
-			runner.Run(ctx, projectDir, "fetch", "origin", pr.head)
-
-			// Rebase in a detached state to avoid needing a worktree.
-			runner.Run(ctx, projectDir, "checkout", "origin/"+pr.head)
-			if _, rebaseErr := runner.Run(ctx, projectDir, "rebase", "origin/"+defaultBranch); rebaseErr != nil {
-				log.Emit(logging.Opts{Domain: logging.Git}, "Rebase conflict on %s — attempting auto-resolve...", pr.head)
-				if autoErr := rebasecontinue.Run(projectDir, rebasecontinue.Options{Auto: true}); autoErr != nil {
-					log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error},
-						"Rebase conflicts on PR #%d (%s): %v", pr.number, pr.head, autoErr)
-					log.Emit(logging.Opts{Domain: logging.Git},
-						"Resolve manually in: %s", projectDir)
-					log.Emit(logging.Opts{Domain: logging.Git},
-						"Then run: cd %s && git-rebase-continue", projectDir)
-					return 1
-				}
-			}
 			pushedAt = time.Now()
-			if _, pushErr := runner.Run(ctx, projectDir, "push", "--force-with-lease", "origin", "HEAD:"+pr.head); pushErr != nil {
-				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Force-push failed for %s: %v", pr.head, pushErr)
+			if err := gm.RebaseBranchOntoRemote(ctx, pr.head, defaultBranch); err != nil {
+				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error},
+					"Rebase conflicts on PR #%d (%s): %v", pr.number, pr.head, err)
+				log.Emit(logging.Opts{Domain: logging.Git},
+					"Resolve manually in: %s", projectDir)
+				log.Emit(logging.Opts{Domain: logging.Git},
+					"Then run: cd %s && git-rebase-continue", projectDir)
 				return 1
 			}
-			// Return to default branch.
-			runner.Run(ctx, projectDir, "checkout", defaultBranch)
 		}
 
 		// Wait for CI on the current HEAD.
@@ -150,8 +136,7 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 
 		// Merge.
 		log.Emit(logging.Opts{Domain: logging.Git}, "Merging PR #%d...", pr.number)
-		opts := git.MergeOpts{DeleteBranch: true}
-		result := gh.MergePR(pr.number, repoURL, opts)
+		result := gm.MergeStackPR(pr.number, git.MergeOpts{DeleteBranch: true})
 		if !result.Merged {
 			if result.Conflict {
 				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "PR #%d has merge conflicts — cannot merge", pr.number)
@@ -168,9 +153,7 @@ func runMerge(ctx context.Context, prs []stackPR, projectDir, defaultBranch stri
 		log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Success}, "PR #%d merged (%d/%d)", pr.number, merged, len(prs))
 
 		// Update local main to include the merge.
-		runner.Run(ctx, projectDir, "fetch", "origin", defaultBranch)
-		runner.Run(ctx, projectDir, "checkout", defaultBranch)
-		runner.Run(ctx, projectDir, "reset", "--hard", "origin/"+defaultBranch)
+		gm.ResetBranchToRemote(ctx, defaultBranch)
 	}
 
 	log.Emit(logging.Opts{Level: logging.Success}, "Stack complete — %d PRs merged", merged)
@@ -248,99 +231,6 @@ func collectStack(g git.Ops, workDir, topPR string, log *logging.Logger) stackRe
 		chain[i], chain[j] = chain[j], chain[i]
 	}
 	return stackResult{prs: chain, baseBranch: currentBase}
-}
-
-// rebaseStackAndPush creates a temp worktree on the top branch, rebases
-// with --update-refs onto main, then force-pushes all branches.
-// If a worktree already exists (from a previous conflict resolution),
-// skips rebase and goes straight to push.
-func rebaseStackAndPush(ctx context.Context, runner git.Runner, projectDir, defaultBranch, topBranch string, topPR int, allBranches []string, gm *git.Repo, log *logging.Logger) int {
-	slug := strings.ReplaceAll(topBranch, "/", "-")
-	wtDir := filepath.Join(gm.GetRalphDir(), "worktrees", "merge-"+slug)
-	tmpBranch := "ralph-merge/" + slug
-
-	// Check if worktree exists from a previous run (conflict was resolved manually).
-	// Verify the branches are actually rebased — if not, the worktree is stale
-	// (e.g. from a ctrl-c'd or failed run) and must be recreated.
-	worktreeReady := false
-	if _, err := os.Stat(filepath.Join(wtDir, ".git")); err == nil {
-		bottomBranch := allBranches[0]
-		_, ancestryErr := runner.Run(ctx, wtDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, bottomBranch)
-		if ancestryErr != nil {
-			log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Stale worktree found — branches not rebased onto %s, recreating", defaultBranch)
-			runner.Run(ctx, projectDir, "worktree", "remove", "--force", wtDir)
-			runner.Run(ctx, projectDir, "worktree", "prune")
-		} else {
-			log.Emit(logging.Opts{Domain: logging.Git}, "Resuming from existing worktree: %s", wtDir)
-			worktreeReady = true
-		}
-	}
-	if !worktreeReady {
-		// Fresh worktree.
-		os.RemoveAll(wtDir)
-		runner.Run(ctx, projectDir, "worktree", "prune")
-		runner.Run(ctx, projectDir, "branch", "-D", tmpBranch)
-
-		// Fetch main and all stack branches so --update-refs has current refs.
-		log.Emit(logging.Opts{Domain: logging.Git}, "Fetching %s and %d stack branches...", defaultBranch, len(allBranches))
-		runner.Run(ctx, projectDir, "fetch", "origin", defaultBranch)
-		for _, b := range allBranches {
-			runner.Run(ctx, projectDir, "fetch", "origin", b)
-		}
-
-		// Create worktree on the top branch.
-		out, err := runner.Run(ctx, projectDir, "worktree", "add", "-b", tmpBranch, wtDir, "origin/"+topBranch)
-		if err != nil {
-			log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Worktree failed: %s", out)
-			return 1
-		}
-
-		// Set up local tracking branches for --update-refs.
-		for _, b := range allBranches {
-			runner.Run(ctx, wtDir, "branch", "-f", b, "origin/"+b)
-		}
-
-		// Rebase with --update-refs onto main.
-		log.Emit(logging.Opts{Domain: logging.Git}, "Rebasing with --update-refs onto origin/%s...", defaultBranch)
-		if _, rebaseErr := runner.Run(ctx, wtDir, "rebase", "--update-refs", "origin/"+defaultBranch); rebaseErr != nil {
-			log.Emit(logging.Opts{Domain: logging.Git}, "Rebase conflict — attempting auto-resolve...")
-			if autoErr := rebasecontinue.Run(wtDir, rebasecontinue.Options{Auto: true}); autoErr != nil {
-				log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Rebase has conflicts — resolve manually in:\n  %s", wtDir)
-				log.Emit(logging.Opts{Domain: logging.Git}, "Then run: cd %s && git-rebase-continue", wtDir)
-				log.Emit(logging.Opts{Domain: logging.Git}, "Then re-run: ralph merge %d", topPR)
-				log.Emit(logging.Opts{}, "\n%s", autoErr.Error())
-				return 1
-			}
-		}
-	}
-
-	cleanup := func() {
-		runner.Run(ctx, projectDir, "worktree", "remove", "--force", wtDir)
-		runner.Run(ctx, projectDir, "branch", "-D", tmpBranch)
-	}
-
-	// Force-push all branches.
-	log.Emit(logging.Opts{Domain: logging.Git}, "Force-pushing %d branches...", len(allBranches))
-	for _, b := range allBranches {
-		log.Emit(logging.Opts{Domain: logging.Git}, "  Pushing %s", b)
-		if _, pushErr := runner.Run(ctx, wtDir, "push", "--force", "origin", b); pushErr != nil {
-			cleanup()
-			log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "Push failed for %s: %v", b, pushErr)
-			return 1
-		}
-	}
-
-	cleanup()
-	gm.WorkDir = projectDir
-	log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Success}, "All branches rebased and pushed")
-	return 0
-}
-
-func cmdOutputDir(dir, name string, args ...string) string {
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
-	out, _ := cmd.Output()
-	return string(out)
 }
 
 func printMergeUsage() {
