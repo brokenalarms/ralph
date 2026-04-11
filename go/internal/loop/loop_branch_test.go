@@ -333,10 +333,9 @@ func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
 	}
 }
 
-// Verifies that when context is cancelled (Ctrl-C) during a rebase that
-// would normally trigger OnRebaseConflict, the handler is NOT called and
-// the loop exits cleanly with "stopped" status instead of showing the
-// interactive recovery prompt.
+// Verifies that when context is cancelled (Ctrl-C) during a rebase, the
+// loop exits cleanly with "stopped" status instead of treating the
+// interruption as a conflict that needs interactive recovery.
 func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")

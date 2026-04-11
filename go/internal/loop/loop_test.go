@@ -117,9 +117,15 @@ type stubConnectivity struct {
 
 func (c *stubConnectivity) CheckGitHub(_ context.Context) error { return c.githubErr }
 func (c *stubConnectivity) IsOnline() bool                      { return !c.offline }
-func (c *stubConnectivity) WaitForInternet(_ context.Context, _ *logging.Logger) bool {
+func (c *stubConnectivity) WaitForInternet(ctx context.Context, _ *logging.Logger) bool {
 	if c.onWaitInternet != nil {
 		c.onWaitInternet()
+	}
+	// Honor the Connectivity contract: a cancelled context must produce
+	// a false return so cancellation-dependent code paths are exercised
+	// rather than masked.
+	if ctx.Err() != nil {
+		return false
 	}
 	return !c.waitDeclined
 }
