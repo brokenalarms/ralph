@@ -157,6 +157,41 @@ func (m *Repo) SetKnownPRNumber(n int) {
 	m.KnownPRNumber = n
 }
 
+// Init runs the git pre-flight checks and worktree setup that must
+// complete before the orchestrator can use this Repo. Bundles the
+// individual operations so callers don't have to know the right
+// sequence:
+//
+//   1. ValidateRemoteBranch — checks the configured base branch exists
+//      on the remote.
+//   2. HasUncommittedChanges (only on fresh runs, not on resume) —
+//      refuses to start with a dirty working tree on a fresh run, so
+//      the .gitignore commit doesn't sweep in unrelated staged work.
+//   3. EnsureGitignored — adds .ralph to .gitignore.
+//   4. PruneOrphanedWorktrees — cleans up stale worktrees from
+//      previous runs.
+//   5. SetupWorktree — creates (or resumes) the iteration worktree.
+//
+// Returns an error if any step fails. Init should be called once
+// immediately after New, before any task execution. Production callers
+// (cmd/ralph) call this; tests that don't exercise worktree setup can
+// skip it and use the constructed Repo directly.
+func (m *Repo) Init(ctx context.Context) error {
+	if err := m.ValidateRemoteBranch(ctx); err != nil {
+		return err
+	}
+	if !m.resume {
+		if IsGitRepo(m.ProjectDir) && m.HasUncommittedChanges() {
+			return fmt.Errorf("uncommitted changes in %s — please commit or stash before running ralph.", m.ProjectDir)
+		}
+	}
+	m.EnsureGitignored(".ralph")
+	m.PruneOrphanedWorktrees()
+	if err := m.SetupWorktree(ctx); err != nil {
+		return fmt.Errorf("worktree setup failed: %w", err)
+	}
+	return nil
+}
 
 // SetupWorktree creates (or resumes) a git worktree for isolated work.
 func (m *Repo) SetupWorktree(ctx context.Context) error {
