@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -20,7 +19,7 @@ import (
 func loopForPromptTest(t *testing.T, dir, ralphDir, promptsDir string, backend *testutil.StubBackend) *Loop {
 	t.Helper()
 	_, st := setupTestDir(t)
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -165,7 +164,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -179,13 +178,13 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:   passingVerifyHook(),
 	})
 
 	// Capture the prompt passed to Claude
@@ -269,7 +268,7 @@ func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
 
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-xyz"}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -347,7 +346,7 @@ func TestLoop_HasProgress_SnapshotsDiffState(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HasDiffValue: tc.diffAtStart}
+			gm := &stubGit{ProjectDir: dir, WorkDir: dir, HasDiffValue: tc.diffAtStart}
 			cfg := Config{
 				Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 				MaxIterations: 1,

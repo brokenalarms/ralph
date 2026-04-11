@@ -25,7 +25,7 @@ func TestOnSignal_HappyPath(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
@@ -68,7 +68,7 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}
 	cfg := Config{
@@ -121,7 +121,7 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
@@ -182,7 +182,7 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 
 	customFirst := "claude-haiku-custom"
 	customEscalation := "claude-sonnet-custom"
@@ -248,7 +248,7 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
@@ -306,7 +306,7 @@ func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
@@ -365,7 +365,7 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
@@ -410,7 +410,7 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
@@ -460,7 +460,7 @@ func TestAgentModelEscalation(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 
 	const firstModel = verify.ModelSonnet
 	const escalationModel = verify.ModelOpus
@@ -516,7 +516,7 @@ func TestAgentModelEscalation_ModelCapApplied(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs:                 workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:        1,
@@ -573,7 +573,7 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{HeadRevValue: "abc123", ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{HeadRevValue: "abc123", ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,

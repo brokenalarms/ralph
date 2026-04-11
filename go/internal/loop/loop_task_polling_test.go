@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/analyzer"
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -77,7 +76,7 @@ func TestWaitForTasks_PackageFunction(t *testing.T) {
 // in state.
 func TestBeginIteration_PackageFunction(t *testing.T) {
 	dir, st := setupTestDir(t)
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 	task := taskContext{id: "ralph-abc", title: "Fix auth"}
 
 	l := &Loop{state: st, git: gm, logger: logging.New(nil)}
@@ -104,7 +103,7 @@ func TestWaitForRate_AllowsWhenUnderLimit(t *testing.T) {
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
-		Git:         &git.StubRepo{},
+		Git:         &stubGit{},
 		TaskBackend: nil,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),

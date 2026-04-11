@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -44,7 +43,7 @@ func TestLoop_VerifyBuild_FailureInjectedIntoPrompt(t *testing.T) {
 		BackendLabel: "beads",
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -58,13 +57,13 @@ func TestLoop_VerifyBuild_FailureInjectedIntoPrompt(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:   passingVerifyHook(),
 	})
 
 	inner := &stubRunner{
@@ -113,7 +112,7 @@ func TestLoop_VerifyBuild_PassDoesNotInjectContext(t *testing.T) {
 		BackendLabel: "beads",
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -127,13 +126,13 @@ func TestLoop_VerifyBuild_PassDoesNotInjectContext(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:   passingVerifyHook(),
 	})
 
 	inner := &stubRunner{
@@ -174,7 +173,7 @@ func TestLoop_VerifyBuild_NotConfigured_NoEffect(t *testing.T) {
 		BackendLabel: "beads",
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -188,13 +187,13 @@ func TestLoop_VerifyBuild_NotConfigured_NoEffect(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:   passingVerifyHook(),
 	})
 
 	inner := &stubRunner{
@@ -243,7 +242,7 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 		BackendLabel: "beads",
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -258,13 +257,13 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:   passingVerifyHook(),
 	})
 
 	inner := &stubRunner{

@@ -95,7 +95,7 @@ type VerifyHook interface {
 // override behavior.
 type Modules struct {
 	State        *state.Store
-	Git          git.Ops
+	Git          gitOps
 	TaskBackend  tasks.Backend
 	Logger       *logging.Logger
 	Verifier     *verifier.Verifier
@@ -212,7 +212,7 @@ type CompletedTask struct {
 type Loop struct {
 	cfg               Config
 	state             *state.Store
-	git               git.Ops
+	git               gitOps
 	taskBackend       tasks.Backend
 	limiter           *ratelimit.Limiter
 	runner            claudeRunner

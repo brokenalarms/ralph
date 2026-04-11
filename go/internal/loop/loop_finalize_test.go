@@ -27,7 +27,7 @@ type shipResult struct {
 // finalizeSetup bundles a Loop and pre-built params for finalize tests.
 type finalizeSetup struct {
 	loop *Loop
-	gm   *git.StubRepo
+	gm   *stubGit
 	st   *state.Store
 	p    completeTaskParams
 }
@@ -38,7 +38,7 @@ type finalizeSetup struct {
 func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *testutil.TrackingBackend, ship shipResult) finalizeSetup {
 	t.Helper()
 	_, st := setupTestDir(t)
-	gm := &git.StubRepo{
+	gm := &stubGit{
 		ProjectDir:   dir,
 		WorkDir:      dir,
 		HeadRevValue: "after-sha",
@@ -219,7 +219,7 @@ func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testi
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after-sha"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after-sha"}
 	gm.ShipFunc = func(_ context.Context, opts git.ShipOpts) (git.ShipResult, error) {
 		if opts.PRNumber == 0 {
 			return git.ShipResult{PRNumber: 99}, nil
@@ -425,7 +425,7 @@ func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
-		Git:         &git.StubRepo{ProjectDir: dir, WorkDir: dir},
+		Git:         &stubGit{ProjectDir: dir, WorkDir: dir},
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
@@ -458,7 +458,7 @@ func TestSkipTask_EmptyID(t *testing.T) {
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
-		Git:         &git.StubRepo{ProjectDir: dir, WorkDir: dir},
+		Git:         &stubGit{ProjectDir: dir, WorkDir: dir},
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),

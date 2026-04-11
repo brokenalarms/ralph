@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -23,7 +22,7 @@ func TestLoop_MaybeRefactor_DisabledByDefault(t *testing.T) {
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
-		Git:         &git.StubRepo{WorkDir: dir},
+		Git:         &stubGit{WorkDir: dir},
 		TaskBackend: nil,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
@@ -48,7 +47,7 @@ func TestLoop_MaybeRefactor_SkipsBelow5Completions(t *testing.T) {
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
-		Git:         &git.StubRepo{WorkDir: dir},
+		Git:         &stubGit{WorkDir: dir},
 		TaskBackend: nil,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
@@ -74,7 +73,7 @@ func TestLoop_MaybeRefactor_LLMSaysNo(t *testing.T) {
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
-		Git:         &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"},
+		Git:         &stubGit{WorkDir: dir, RecentFilesValue: "file.go\nother.go"},
 		TaskBackend: nil,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
@@ -117,7 +116,7 @@ func TestLoop_MaybeRefactor_LLMSaysYes(t *testing.T) {
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
-		Git:         &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"},
+		Git:         &stubGit{WorkDir: dir, RecentFilesValue: "file.go\nother.go"},
 		TaskBackend: nil,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
@@ -153,7 +152,7 @@ func TestLoop_MaybeRefactor_TriggersAtMultiplesOf5(t *testing.T) {
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
-		Git:         &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"},
+		Git:         &stubGit{WorkDir: dir, RecentFilesValue: "file.go\nother.go"},
 		TaskBackend: nil,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),

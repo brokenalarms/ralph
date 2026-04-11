@@ -22,7 +22,7 @@ func TestResumeTask_EmptyTaskID(t *testing.T) {
 // ResumeTask finds an existing PR via external-ref and delegates to Ship.
 // When Ship reports AlreadyMerged, returns Handled=true with AlreadyMerged=true.
 func TestResumeTask_AlreadyMergedViaPRURL(t *testing.T) {
-	gh := NewStubGitHub()
+	gh := newStubGitHub()
 	gh.PRState = PRStateMerged
 	gh.PRNumber = 42
 	mgr := stubManager(t.TempDir(), nil, gh)
@@ -48,7 +48,7 @@ func TestResumeTask_AlreadyMergedViaPRURL(t *testing.T) {
 
 // ResumeTask handles a closed PR by clearing metadata and returning Handled=false.
 func TestResumeTask_ClosedPRClearsMetadata(t *testing.T) {
-	gh := NewStubGitHub()
+	gh := newStubGitHub()
 	gh.PRState = PRStateClosed
 	gh.PRNumber = 99
 	mgr := stubManager(t.TempDir(), nil, gh)
@@ -76,7 +76,7 @@ func TestResumeTask_ClosedPRClearsMetadata(t *testing.T) {
 
 // ResumeTask handles a closed PR: the branch is renamed to a task-specific name.
 func TestResumeTask_ClosedPRRenamesBranch(t *testing.T) {
-	gh := NewStubGitHub()
+	gh := newStubGitHub()
 	gh.PRState = PRStateClosed
 	gh.PRNumber = 439
 
@@ -92,7 +92,7 @@ func TestResumeTask_ClosedPRRenamesBranch(t *testing.T) {
 		WorktreeBranch: "ralph/next",
 		BranchRenamed:  true, // stale from previous run
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -122,7 +122,7 @@ func TestResumeTask_ClosedPRRenamesBranch(t *testing.T) {
 // ResumeTask returns no result when neither external-ref nor branch metadata
 // points to an existing PR, and the remote branch is absent.
 func TestResumeTask_NoPriorWork(t *testing.T) {
-	gh := NewStubGitHub()
+	gh := newStubGitHub()
 	gh.FindPRErr = errors.New("not found")
 	gh.PRNumber = 0
 	runner := newStubRunner()
@@ -147,7 +147,7 @@ func TestResumeTask_NoPriorWork(t *testing.T) {
 
 // ResumeTask stores the external-ref URL when PR was found via branch (not external-ref).
 func TestResumeTask_FoundViaBranchStoresPRURL(t *testing.T) {
-	gh := NewStubGitHub()
+	gh := newStubGitHub()
 	gh.PRState = PRStateMerged
 	gh.PRNumber = 55
 

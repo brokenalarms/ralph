@@ -58,10 +58,11 @@ type Config struct {
 	RalphDir                    string
 	BaseBranch                  string
 	Resume                      bool
-	GitHub                      GitHub    // optional; nil falls back to ghCLI
+	GitHub                      gitHub    // optional; nil falls back to ghCLI
 	State                       StateStore
 	Logger                      Log
 	PrePush                     PrePusher // optional; nil disables the pre-push hook
+	Runner                      runner    // optional; nil uses the default exec runner
 	CIPollTimeout               time.Duration
 	CopilotGatedTimeout         time.Duration
 	CopilotOpportunisticTimeout time.Duration
@@ -88,13 +89,13 @@ type Repo struct {
 
 	LocalTestsPassed bool
 	KnownPRNumber    int
-	Runner           Runner
 
 	// Construction-time inputs — set once via Config, never mutated.
+	runner                      runner
 	ralphDir                    string
 	baseBranch                  string
 	resume                      bool
-	github                      GitHub
+	github                      gitHub
 	state                       StateStore
 	logger                      Log
 	prePush                     PrePusher
@@ -116,6 +117,7 @@ func New(cfg Config) *Repo {
 	return &Repo{
 		ProjectDir:                  projectDir,
 		WorkDir:                     cfg.WorkDir,
+		runner:                      cfg.Runner,
 		ralphDir:                    cfg.RalphDir,
 		baseBranch:                  cfg.BaseBranch,
 		resume:                      cfg.Resume,
@@ -130,9 +132,7 @@ func New(cfg Config) *Repo {
 	}
 }
 
-// GH returns the GitHub interface, using the injected stub if set (tests)
-// or a live ghCLI wrapper in production.
-func (r *Repo) GH() GitHub {
+func (r *Repo) gh() gitHub {
 	if r.github != nil {
 		return r.github
 	}
@@ -141,10 +141,6 @@ func (r *Repo) GH() GitHub {
 		CopilotOpportunisticTimeout: r.copilotOpportunisticTimeout,
 		CodeRabbitTimeout:           r.codeRabbitTimeout,
 	}
-}
-
-func (r *Repo) gh() GitHub {
-	return r.GH()
 }
 
 func (r *Repo) SetLocalTestsPassed(v bool) {
