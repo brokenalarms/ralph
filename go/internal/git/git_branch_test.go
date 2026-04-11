@@ -15,8 +15,8 @@ func TestSetStackHead_SkipsWhenNoBranchesAvailable(t *testing.T) {
 	log := &testLog{}
 	gh := &StubGitHub{IsAvailable: true, OpenPRBranches: nil}
 	m := &Repo{
-		Logger: log,
-		GitHub: gh,
+		logger: log,
+		github: gh,
 	}
 
 	setStackHead(m, []string{"ralph/some-task"})
@@ -35,7 +35,7 @@ func TestSetStackHead_SkipsWhenNoBranchesAvailable(t *testing.T) {
 // empty — the early-return path is silent.
 func TestSetStackHead_SilentWhenNoCompletedBranches(t *testing.T) {
 	log := &testLog{}
-	m := &Repo{Logger: log}
+	m := &Repo{logger: log}
 
 	setStackHead(m, nil)
 
@@ -57,7 +57,7 @@ func TestCheckoutExistingBranch_NoStoredBranch_RenamesBranch(t *testing.T) {
 		WorkDir:        "/project/worktrees/wt1",
 		WorktreeBranch: "ralph/wip-branch",
 		Runner:         runner,
-		Logger:         logging.New(nil),
+		logger:         logging.New(nil),
 	}
 
 	checkedOut, err := checkoutExistingBranch(m, BranchTaskMeta{}, "ralph-xyz", "Fix login")
@@ -84,7 +84,7 @@ func TestCheckoutExistingBranch_RenameFailure_ReturnsError(t *testing.T) {
 		WorkDir:        "/project/worktrees/wt1",
 		WorktreeBranch: "ralph/next",
 		Runner:         runner,
-		Logger:         logging.New(nil),
+		logger:         logging.New(nil),
 	}
 
 	_, err := checkoutExistingBranch(m, BranchTaskMeta{}, "ralph-xyz", "Fix login")
@@ -110,8 +110,8 @@ func TestBranchForTask_UsesStoredBranchWhenRemoteEmpty(t *testing.T) {
 		WorkDir:        "/project/worktrees/wt1",
 		WorktreeBranch: "ralph/wip-branch",
 		Runner:         runner,
-		Logger:         logging.New(nil),
-		GitHub:         &StubGitHub{},
+		logger:         logging.New(nil),
+		github:         &StubGitHub{},
 	}
 
 	branch, err := m.BranchForTask(context.Background(), "ralph-abc", "My task", BranchTaskMeta{

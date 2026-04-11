@@ -236,7 +236,7 @@ func (m *Repo) EnsureGitignored(entry string) {
 }
 
 func (m *Repo) PruneOrphanedWorktrees() {
-	worktreeRoot := filepath.Join(m.RalphDir, "worktrees")
+	worktreeRoot := filepath.Join(m.ralphDir, "worktrees")
 	entries, err := os.ReadDir(worktreeRoot)
 	if err != nil {
 		return
@@ -267,8 +267,8 @@ func (m *Repo) PruneOrphanedWorktrees() {
 		if tracked[dirPath] || tracked[resolved] {
 			continue
 		}
-		if m.Logger != nil {
-			m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Removing orphaned worktree directory: %s", dirPath)
+		if m.logger != nil {
+			m.logger.Emit(logging.Opts{Domain: logging.Git}, "Removing orphaned worktree directory: %s", dirPath)
 		}
 		os.RemoveAll(dirPath)
 	}

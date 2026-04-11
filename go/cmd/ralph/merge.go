@@ -43,9 +43,12 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 
 	ralphDir := filepath.Join(projectDir, ".ralph")
 	st := state.NewStore(filepath.Join(ralphDir, "state.json"))
-	gm := git.New(projectDir, ralphDir, nil)
-	gm.State = st
-	gm.Logger = log
+	gm := git.New(git.Config{
+		WorkDir:  projectDir,
+		RalphDir: ralphDir,
+		State:    st,
+		Logger:   log,
+	})
 	if !gm.GitHubAvailable() {
 		log.Emit(logging.Opts{Level: logging.Error}, "gh CLI not available")
 		return 1
@@ -253,7 +256,7 @@ func collectStack(g git.Ops, workDir, topPR string, log *logging.Logger) stackRe
 // skips rebase and goes straight to push.
 func rebaseStackAndPush(ctx context.Context, runner git.Runner, projectDir, defaultBranch, topBranch string, topPR int, allBranches []string, gm *git.Repo, log *logging.Logger) int {
 	slug := strings.ReplaceAll(topBranch, "/", "-")
-	wtDir := filepath.Join(gm.RalphDir, "worktrees", "merge-"+slug)
+	wtDir := filepath.Join(gm.GetRalphDir(), "worktrees", "merge-"+slug)
 	tmpBranch := "ralph-merge/" + slug
 
 	// Check if worktree exists from a previous run (conflict was resolved manually).

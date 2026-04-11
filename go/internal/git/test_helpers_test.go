@@ -161,11 +161,11 @@ func stubManager(dir string, runner *stubRunner, gh *StubGitHub) *Repo {
 	return &Repo{
 		ProjectDir: dir,
 		WorkDir:    dir,
-		BaseBranch: "main",
+		baseBranch: "main",
 		Runner:     runner,
-		GitHub:     gh,
-		State:      newMemState(),
-		Logger:     discardLog{},
+		github:     gh,
+		state:      newMemState(),
+		logger:     discardLog{},
 	}
 }
 

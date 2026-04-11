@@ -101,7 +101,7 @@ func TestManager_DetectDefaultBranch_ReturnsBaseBranch(t *testing.T) {
 func TestManager_DetectDefaultBranch_ExplicitDevelop(t *testing.T) {
 	r := newStubRunner()
 	mgr := stubManager(t.TempDir(), r, nil)
-	mgr.BaseBranch = "develop"
+	mgr.baseBranch = "develop"
 	branch := mgr.detectDefaultBranch()
 	if branch != "develop" {
 		t.Errorf("expected develop, got %q", branch)
@@ -136,13 +136,13 @@ func TestManager_PushAndCreatePR_NoRealProcesses(t *testing.T) {
 	dir := t.TempDir()
 	mgr := &Repo{
 		ProjectDir:     dir,
-		BaseBranch: "main",
+		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
-		GitHub:         gh,
-		State:          newMemState(),
-		Logger:         discardLog{},
+		github:         gh,
+		state:          newMemState(),
+		logger:         discardLog{},
 	}
 
 	_, err := mgr.PushAndCreatePR(context.Background(), "test-123", "test feature", "")
@@ -174,13 +174,13 @@ func TestManager_PushAndCreatePR_PushesEvenWhenPRExists(t *testing.T) {
 	dir := t.TempDir()
 	mgr := &Repo{
 		ProjectDir:     dir,
-		BaseBranch: "main",
+		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
-		GitHub:         gh,
-		State:          newMemState(),
-		Logger:         discardLog{},
+		github:         gh,
+		state:          newMemState(),
+		logger:         discardLog{},
 	}
 
 	prNum, err := mgr.PushAndCreatePR(context.Background(), "test-123", "test feature", "")
@@ -210,13 +210,13 @@ func TestManager_PushAndCreatePR_UpdatesTitleWhenPRExists(t *testing.T) {
 	dir := t.TempDir()
 	mgr := &Repo{
 		ProjectDir:     dir,
-		BaseBranch: "main",
+		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
-		GitHub:         gh,
-		State:          newMemState(),
-		Logger:         discardLog{},
+		github:         gh,
+		state:          newMemState(),
+		logger:         discardLog{},
 	}
 
 	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix: some bug", "")
@@ -245,13 +245,13 @@ func TestManager_PushAndCreatePR_StripsComponentPrefix(t *testing.T) {
 	dir := t.TempDir()
 	mgr := &Repo{
 		ProjectDir:     dir,
-		BaseBranch: "main",
+		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
-		GitHub:         gh,
-		State:          newMemState(),
-		Logger:         discardLog{},
+		github:         gh,
+		state:          newMemState(),
+		logger:         discardLog{},
 	}
 
 	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "ralph loop: fix signal cleanup", "")
@@ -279,13 +279,13 @@ func TestManager_PushAndCreatePR_NoEditWithoutTaskID(t *testing.T) {
 	dir := t.TempDir()
 	mgr := &Repo{
 		ProjectDir:     dir,
-		BaseBranch: "main",
+		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
-		GitHub:         gh,
-		State:          newMemState(),
-		Logger:         discardLog{},
+		github:         gh,
+		state:          newMemState(),
+		logger:         discardLog{},
 	}
 
 	_, err := mgr.PushAndCreatePR(context.Background(), "", "fix: some bug", "")
@@ -313,13 +313,13 @@ func TestManager_PushAndCreatePR_LogsAlreadyOpen(t *testing.T) {
 	log := &testLog{}
 	mgr := &Repo{
 		ProjectDir:     dir,
-		BaseBranch: "main",
+		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
-		GitHub:         gh,
-		State:          newMemState(),
-		Logger:         log,
+		github:         gh,
+		state:          newMemState(),
+		logger:         log,
 	}
 
 	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix: some bug", "")
@@ -351,13 +351,13 @@ func TestManager_PushAndCreatePR_LogsCreatedPR(t *testing.T) {
 	log := &testLog{}
 	mgr := &Repo{
 		ProjectDir:     dir,
-		BaseBranch: "main",
+		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
 		Runner:         r,
-		GitHub:         gh,
-		State:          newMemState(),
-		Logger:         log,
+		github:         gh,
+		state:          newMemState(),
+		logger:         log,
 	}
 
 	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix: some bug", "")

@@ -82,11 +82,14 @@ func buildGM(t *testing.T, runner git.Runner) (*git.Repo, string) {
 	tmp := t.TempDir()
 	ralphDir := filepath.Join(tmp, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
-	repo, _ := git.NewRepoForTesting(tmp, ralphDir)
+	repo, _ := git.NewRepoForTesting(git.Config{
+		WorkDir:    tmp,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.New(nil),
+	})
 	repo.Runner = runner
-	repo.State = state.NewStore(filepath.Join(ralphDir, "state.json"))
-	repo.Logger = logging.New(nil)
-	repo.BaseBranch = "main"
 	return repo, tmp
 }
 
@@ -190,10 +193,10 @@ func TestRebaseStackAndPush_StaleWorktreeRecreated(t *testing.T) {
 	runner.errOnArgs("merge-base --is-ancestor", fmt.Errorf("not an ancestor"))
 	// worktree add succeeds; rebase succeeds
 	gm, tmp := buildGM(t, runner)
-	gm.RalphDir = filepath.Join(tmp, ".ralph")
+	_ = tmp
 
 	// Create a fake .git inside the worktree dir to simulate an existing worktree.
-	wtDir := filepath.Join(gm.RalphDir, "worktrees", "merge-pr2")
+	wtDir := filepath.Join(gm.GetRalphDir(), "worktrees", "merge-pr2")
 	os.MkdirAll(filepath.Join(wtDir, ".git"), 0o755)
 
 	RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr2", 999, []string{"pr1", "pr2"}, gm, logging.New(nil))
@@ -267,7 +270,7 @@ func TestRebaseStackAndPush_WorktreeUnderRalphDir(t *testing.T) {
 
 	RebaseStackAndPush(context.Background(), runner, tmp, "main", "pr1", 5, []string{"pr1"}, gm, logging.New(nil))
 
-	expectedPrefix := filepath.Join(gm.RalphDir, "worktrees") + string(filepath.Separator)
+	expectedPrefix := filepath.Join(gm.GetRalphDir(), "worktrees") + string(filepath.Separator)
 	// Find the worktree add call and verify its path argument.
 	found := false
 	for _, call := range runner.calls {
@@ -296,12 +299,15 @@ func TestRunMerge_CIFailureStops(t *testing.T) {
 	tmp := t.TempDir()
 	ralphDir := filepath.Join(tmp, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
-	gm, ghStub := git.NewRepoForTesting(tmp, ralphDir)
-	gm.Runner = runner
-	gm.State = state.NewStore(filepath.Join(ralphDir, "state.json"))
-	gm.Logger = logging.New(nil)
-	gm.BaseBranch = "main"
+	gm, ghStub := git.NewRepoForTesting(git.Config{
+		WorkDir:    tmp,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.New(nil),
+	})
 	ghStub.Checks = []git.CICheckResult{{Bucket: "check", State: "FAILURE"}}
+	gm.Runner = runner
 
 	prs := []StackPR{
 		NewStackPR(1, "pr1"),
@@ -325,11 +331,14 @@ func TestRunMerge_MergeConflictLogsMessage(t *testing.T) {
 	tmp := t.TempDir()
 	ralphDir := filepath.Join(tmp, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
-	gm, ghStub := git.NewRepoForTesting(tmp, ralphDir)
+	gm, ghStub := git.NewRepoForTesting(git.Config{
+		WorkDir:    tmp,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.NewWithWriter(&logBuf),
+	})
 	gm.Runner = runner
-	gm.State = state.NewStore(filepath.Join(ralphDir, "state.json"))
-	gm.Logger = logging.NewWithWriter(&logBuf)
-	gm.BaseBranch = "main"
 	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 	ghStub.MergeResult = git.MergeResult{Conflict: true}
 
@@ -351,11 +360,14 @@ func TestRunMerge_SecondPRRebased(t *testing.T) {
 	tmp := t.TempDir()
 	ralphDir := filepath.Join(tmp, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
-	gm, ghStub := git.NewRepoForTesting(tmp, ralphDir)
+	gm, ghStub := git.NewRepoForTesting(git.Config{
+		WorkDir:    tmp,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.New(nil),
+	})
 	gm.Runner = runner
-	gm.State = state.NewStore(filepath.Join(ralphDir, "state.json"))
-	gm.Logger = logging.New(nil)
-	gm.BaseBranch = "main"
 	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 	_ = ghStub
 
@@ -400,11 +412,14 @@ func TestRunMerge_SecondPRRebaseConflictAttemptsAutoResolve(t *testing.T) {
 	tmp := t.TempDir()
 	ralphDir := filepath.Join(tmp, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
-	gm, ghStub := git.NewRepoForTesting(tmp, ralphDir)
+	gm, ghStub := git.NewRepoForTesting(git.Config{
+		WorkDir:    tmp,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.NewWithWriter(&logBuf),
+	})
 	gm.Runner = runner
-	gm.State = state.NewStore(filepath.Join(ralphDir, "state.json"))
-	gm.Logger = logging.NewWithWriter(&logBuf)
-	gm.BaseBranch = "main"
 	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 	_ = ghStub
 
@@ -483,10 +498,13 @@ func TestRunMerge_SecondPRWaitsForFreshCI(t *testing.T) {
 	ralphDir := filepath.Join(workDir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
-	gm, ghStub := git.NewRepoForTesting(workDir, ralphDir)
-	gm.State = state.NewStore(filepath.Join(ralphDir, "state.json"))
-	gm.Logger = logging.New(nil)
-	gm.BaseBranch = "main"
+	gm, ghStub := git.NewRepoForTesting(git.Config{
+		WorkDir:    workDir,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.New(nil),
+	})
 	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 
 	// Simulate GitHub advancing main when PR 1 is merged: fast-forward
@@ -545,10 +563,13 @@ func TestRunMerge_SinglePRMergesSuccessfully(t *testing.T) {
 	ralphDir := filepath.Join(workDir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
-	gm, ghStub := git.NewRepoForTesting(workDir, ralphDir)
-	gm.State = state.NewStore(filepath.Join(ralphDir, "state.json"))
-	gm.Logger = logging.New(nil)
-	gm.BaseBranch = "main"
+	gm, ghStub := git.NewRepoForTesting(git.Config{
+		WorkDir:    workDir,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.New(nil),
+	})
 	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 
 	code := RunMerge(context.Background(), []StackPR{NewStackPR(1, "pr1")}, workDir, "main", gm, logging.New(nil))
@@ -569,10 +590,13 @@ func TestRunMerge_BlockedLogsMessage(t *testing.T) {
 	ralphDir := filepath.Join(workDir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
-	gm, ghStub := git.NewRepoForTesting(workDir, ralphDir)
-	gm.State = state.NewStore(filepath.Join(ralphDir, "state.json"))
-	gm.Logger = logging.NewWithWriter(&logBuf)
-	gm.BaseBranch = "main"
+	gm, ghStub := git.NewRepoForTesting(git.Config{
+		WorkDir:    workDir,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.NewWithWriter(&logBuf),
+	})
 	ghStub.MergeResult = git.MergeResult{Blocked: true, Message: "requires admin approval"}
 	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 
@@ -672,10 +696,13 @@ func TestRunMerge_PerPRRebaseMechanicalConflictAutoResolves(t *testing.T) {
 
 	ralphDir := filepath.Join(workDir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
-	gm, ghStub := git.NewRepoForTesting(workDir, ralphDir)
-	gm.State = state.NewStore(filepath.Join(ralphDir, "state.json"))
-	gm.Logger = logging.New(nil)
-	gm.BaseBranch = "main"
+	gm, ghStub := git.NewRepoForTesting(git.Config{
+		WorkDir:    workDir,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.New(nil),
+	})
 	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 	mergeCount := 0
 	ghStub.OnMerge = func() {
@@ -709,10 +736,13 @@ func TestRunMerge_PerPRRebaseRealDivergenceStopsWithError(t *testing.T) {
 	var logBuf bytes.Buffer
 	ralphDir := filepath.Join(workDir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
-	gm, ghStub := git.NewRepoForTesting(workDir, ralphDir)
-	gm.State = state.NewStore(filepath.Join(ralphDir, "state.json"))
-	gm.Logger = logging.NewWithWriter(&logBuf)
-	gm.BaseBranch = "main"
+	gm, ghStub := git.NewRepoForTesting(git.Config{
+		WorkDir:    workDir,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.NewWithWriter(&logBuf),
+	})
 	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 	mergeCount := 0
 	ghStub.OnMerge = func() {
@@ -756,10 +786,13 @@ func TestRunMerge_ConflictLogsDistinctMessage(t *testing.T) {
 	ralphDir := filepath.Join(workDir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
 
-	gm, ghStub := git.NewRepoForTesting(workDir, ralphDir)
-	gm.State = state.NewStore(filepath.Join(ralphDir, "state.json"))
-	gm.Logger = logging.NewWithWriter(&logBuf)
-	gm.BaseBranch = "main"
+	gm, ghStub := git.NewRepoForTesting(git.Config{
+		WorkDir:    workDir,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
+		Logger:     logging.NewWithWriter(&logBuf),
+	})
 	ghStub.MergeResult = git.MergeResult{Conflict: true}
 	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 

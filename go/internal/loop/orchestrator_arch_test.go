@@ -325,3 +325,13 @@ func TestNoImplementationLeakInExportedNames(t *testing.T) {
 	})
 	reportViolations(t, "exported name leaks implementation prefix", violations)
 }
+
+// Rule B (immutability) is enforced for construction-time fields by
+// Go's visibility system: those fields are unexported on git.Repo (and
+// will be unexported on other modules' Repo types in subsequent commits),
+// so external packages literally cannot assign to them — the compiler
+// catches the violation. No arch test is needed for the unexported
+// fields. The runtime-mutable fields that remain exported (e.g.
+// git.Repo.WorktreeBranch, git.Repo.Runner) are still subject to Rule B
+// in spirit; a future arch test using go/types could catch those, but
+// the current scope (Commit C) is the construction-time inputs.
