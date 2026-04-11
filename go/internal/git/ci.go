@@ -183,7 +183,7 @@ func (m *Repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushed
 	// When required status checks are configured on the base branch, filter to
 	// only those checks. Non-required checks (deploy previews, tag workflows)
 	// must not gate merging — only branch-protection-required checks count.
-	if requiredChecks, err := gh.GetRequiredChecks(nwo, m.BaseBranch); err == nil && len(requiredChecks) > 0 {
+	if requiredChecks, err := gh.GetRequiredChecks(nwo, m.baseBranch); err == nil && len(requiredChecks) > 0 {
 		required := make(map[string]bool, len(requiredChecks))
 		for _, c := range requiredChecks {
 			required[c] = true
@@ -205,7 +205,7 @@ func (m *Repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushed
 	}
 
 	if !pushedAt.IsZero() {
-		m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "Waiting for fresh CI checks (pushed at %s)...", pushedAt.Format("15:04:05"))
+		m.logger.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "Waiting for fresh CI checks (pushed at %s)...", pushedAt.Format("15:04:05"))
 		baseFetch := fetch
 		fetch = func(prNumber int, repoURL string) ([]CICheckResult, error) {
 			checks, err := baseFetch(prNumber, repoURL)
@@ -223,21 +223,21 @@ func (m *Repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushed
 		}
 	}
 
-	timeout := m.CIPollTimeout
+	timeout := m.ciPollTimeout
 	if timeout == 0 {
 		timeout = DefaultCIPollTimeout
 	}
 
 	checks, fetchErr := fetch(prNumber, repoURL)
 	if fetchErr != nil || len(checks) == 0 {
-		m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "CI checks not available yet — waiting...")
-		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, m.Logger)
+		m.logger.Emit(logging.Opts{Domain: logging.CI, Link: logging.PRLinkOpt(nwo, prNumber)}, "CI checks not available yet — waiting...")
+		return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, m.logger)
 	}
 	status := evaluateChecks(checks)
 	if status != CIPending {
 		return checks, status, nil
 	}
-	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, m.Logger)
+	return waitForCI(ctx, fetch, prNumber, repoURL, nwo, DefaultCIPollInterval, timeout, m.logger)
 }
 
 // waitForCI polls PR checks until they complete or timeout is reached.

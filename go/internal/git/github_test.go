@@ -167,7 +167,7 @@ func TestGetPR_ReturnsAllFields(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if pr.State != "OPEN" {
-		t.Errorf("State: want %q, got %q", "OPEN", pr.State)
+		t.Errorf("state: want %q, got %q", "OPEN", pr.State)
 	}
 	if pr.BaseRef != "main" {
 		t.Errorf("BaseRef: want %q, got %q", "main", pr.BaseRef)
@@ -186,8 +186,8 @@ func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
 	stub := NewStubGitHub()
 	stub.RunLogValue = "test failure output line 1\nline 2"
 	mgr := &Repo{
-		BaseBranch: "main",
-		GitHub: stub,
+		baseBranch: "main",
+		github: stub,
 	}
 
 	result := mgr.GetCIFailureLog(42)

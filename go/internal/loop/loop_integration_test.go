@@ -2055,14 +2055,17 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 
 	// realMgr drives CI through the real AwaitCI → evaluateChecks code path.
 	// realGH drives CI results and HeadSHA is updated per task so the fast path triggers.
-	realMgr, realGH := git.NewRepoForTesting(dir, ralphDir)
+	realMgr, realGH := git.NewRepoForTesting(git.Config{
+		ProjectDir: dir,
+		WorkDir:    dir + "/wt",
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      newGitMemState(),
+		Logger:     logging.New(nil),
+	})
 	realGH.OpenPR = 0
 	realGH.PRBase = "main"
 	realGH.PRState = git.PRStateOpen
-	realMgr.State = newGitMemState()
-	realMgr.Logger = logging.New(nil)
-	realMgr.BaseBranch = "main"
-	realMgr.WorkDir = dir + "/wt"
 	realMgr.WorktreeBranch = "ralph/lifecycle-seq"
 
 	// ChecksFunc records ci_poll and returns a passing check. The real
@@ -2225,15 +2228,18 @@ func TestIntegration_LifecycleCI_FailureFixRetry(t *testing.T) {
 	backend.NextID = "ralph-cifr1"
 	backend.BackendLabel = "beads"
 
-	realMgr, realGH := git.NewRepoForTesting(dir, ralphDir)
+	realMgr, realGH := git.NewRepoForTesting(git.Config{
+		ProjectDir: dir,
+		WorkDir:    dir + "/wt",
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      newGitMemState(),
+		Logger:     logging.New(nil),
+	})
 	realGH.OpenPR = 0
 	realGH.PRBase = "main"
 	realGH.PRState = git.PRStateOpen
 	realGH.PRNumber = 55
-	realMgr.State = newGitMemState()
-	realMgr.Logger = logging.New(nil)
-	realMgr.BaseBranch = "main"
-	realMgr.WorkDir = dir + "/wt"
 	realMgr.WorktreeBranch = "ralph/cifr-test"
 
 	// ChecksFunc returns failure on the first call (AutoMergeCurrentBranch attempt
@@ -2526,16 +2532,19 @@ func TestIntegration_CIAlreadyPassing_SkipsPushAndMerges(t *testing.T) {
 
 	// realGH drives the real git.Repo's GitHub calls. HeadSHA matches
 	// the local SHA so the fast path triggers and CI is already resolved.
-	realMgr, realGH := git.NewRepoForTesting(dir, ralphDir)
+	realMgr, realGH := git.NewRepoForTesting(git.Config{
+		ProjectDir: dir,
+		WorkDir:    dir + "/wt",
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      newGitMemState(),
+		Logger:     logging.New(nil),
+	})
 	realGH.OpenPR = 99
 	realGH.PRNumber = 99
 	realGH.PRTitle = "CI already passing task"
 	realGH.HeadSHA = localSHA
 	realGH.Checks = []git.CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-	realMgr.State = newGitMemState()
-	realMgr.Logger = logging.New(nil)
-	realMgr.BaseBranch = "main"
-	realMgr.WorkDir = dir + "/wt"
 	realMgr.WorktreeBranch = "ralph/cap1-ci-already-passing"
 	realMgr.Runner = tracker
 
@@ -2640,16 +2649,19 @@ func TestIntegration_CIAlreadyPassing_FallsThrough_WhenHeadDiffers(t *testing.T)
 	// realGH has a HeadSHA that differs from localSHA so the fast path does
 	// not trigger and the normal rebase+push+AwaitCI flow runs instead.
 	var logBuf strings.Builder
-	realMgr, realGH := git.NewRepoForTesting(dir, ralphDir)
+	realMgr, realGH := git.NewRepoForTesting(git.Config{
+		ProjectDir: dir,
+		WorkDir:    dir + "/wt",
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      newGitMemState(),
+		Logger:     logging.NewWithWriter(&logBuf),
+	})
 	realGH.OpenPR = 100
 	realGH.PRNumber = 100
 	realGH.PRTitle = "SHA differs normal flow task"
 	realGH.HeadSHA = prHeadSHA
 	realGH.Checks = []git.CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-	realMgr.State = newGitMemState()
-	realMgr.Logger = logging.NewWithWriter(&logBuf)
-	realMgr.BaseBranch = "main"
-	realMgr.WorkDir = dir + "/wt"
 	realMgr.WorktreeBranch = "ralph/cap2-sha-differs"
 	realMgr.Runner = tracker
 
@@ -2756,7 +2768,13 @@ func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
 	backend.NextID = taskID
 	backend.BackendLabel = "beads"
 
-	realMgr, realGH := git.NewRepoForTesting(dir, ralphDir)
+	realMgr, realGH := git.NewRepoForTesting(git.Config{
+		WorkDir:    dir,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		State:      newGitMemState(),
+		Logger:     logging.New(nil),
+	})
 	realGH.OpenPR = 0
 	realGH.PRBase = "main"
 	realGH.PRState = git.PRStateOpen
@@ -2765,9 +2783,6 @@ func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
 	realGH.ChecksFunc = func(_ int) []git.CICheckResult {
 		return []git.CICheckResult{{Name: "tests", State: "FAILURE", Bucket: "fail"}}
 	}
-	realMgr.State = newGitMemState()
-	realMgr.Logger = logging.New(nil)
-	realMgr.BaseBranch = "main"
 	realMgr.WorkDir = dir + "/wt"
 	realMgr.WorktreeBranch = "ralph/nop-push-test"
 

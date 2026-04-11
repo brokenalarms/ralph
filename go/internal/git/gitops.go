@@ -114,6 +114,9 @@ var _ Ops = (*Repo)(nil)
 // GetProjectDir returns the project root directory.
 func (m *Repo) GetProjectDir() string { return m.ProjectDir }
 
+// GetRalphDir returns the ralph state directory (typically <project>/.ralph).
+func (m *Repo) GetRalphDir() string { return m.ralphDir }
+
 // GetWorkDir returns the worktree working directory.
 func (m *Repo) GetWorkDir() string { return m.WorkDir }
 

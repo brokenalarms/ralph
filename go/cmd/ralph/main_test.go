@@ -266,13 +266,13 @@ func TestPrintSummary_TaskCounts(t *testing.T) {
 		Total:     3,
 	}
 
-	gm := &git.Repo{
-		ProjectDir: dir,
-		BaseBranch: "main",
-		WorkDir:    dir,
-	}
-
 	log := logging.New(nil)
+	gm := git.New(git.Config{
+		WorkDir:    dir,
+		BaseBranch: "main",
+		Logger:     log,
+	})
+
 	planFile := filepath.Join(ralphDir, "plan.md")
 
 	// Should not panic or error.
@@ -289,7 +289,7 @@ func TestInitRalphDir_CreatesDirectory(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir}
 
 	log := logging.New(nil)
-	resume, exitCode := initRalphDir(context.Background(), cfg, &git.Repo{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue (exitCode < 0), got %d", exitCode)
@@ -336,30 +336,30 @@ func TestClearSignalFiles_PreservesState(t *testing.T) {
 	}
 }
 
-// Verifies initRalphDir exits with error when working tree has uncommitted changes,
-// preventing the .gitignore commit from sweeping in unrelated staged work.
-func TestInitRalphDir_DirtyWorkingTreeExitsWithError(t *testing.T) {
+// Verifies the dirty-working-tree check rejects working trees with
+// uncommitted changes, preventing the .gitignore commit from sweeping
+// in unrelated staged work. The check itself lives inline in runMain
+// after git.Repo construction; this test exercises gm.HasUncommittedChanges
+// directly with a real git repo.
+func TestDirtyWorkingTree_HasUncommittedChanges(t *testing.T) {
 	dir := t.TempDir()
 
-	// Init a git repo so isGitRepo returns true
 	runCmd(t, "git", "init", "-b", "main", dir)
 	runCmd(t, "git", "-C", dir, "commit", "--allow-empty", "-m", "init")
 
-	// Create uncommitted changes
 	os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("uncommitted"), 0o644)
 	runCmd(t, "git", "-C", dir, "add", "dirty.txt")
 
-	ralphDir := filepath.Join(dir, ".ralph")
-	logFile := filepath.Join(ralphDir, "loop.log")
-	stateFile := filepath.Join(ralphDir, "state.json")
-
-	cfg := config.Config{ProjectDir: dir}
 	log := logging.New(nil)
+	gm := git.New(git.Config{
+		WorkDir:    dir,
+		RalphDir:   filepath.Join(dir, ".ralph"),
+		BaseBranch: "main",
+		Logger:     log,
+	})
 
-	_, exitCode := initRalphDir(context.Background(), cfg, &git.Repo{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}, ralphDir, logFile, stateFile, log)
-
-	if exitCode != 1 {
-		t.Errorf("expected exit code 1, got %d", exitCode)
+	if !gm.HasUncommittedChanges() {
+		t.Error("expected HasUncommittedChanges() to return true with staged file")
 	}
 }
 
@@ -378,7 +378,7 @@ func TestInitRalphDir_DetectsResume(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir}
 	log := logging.New(nil)
 
-	resume, exitCode := initRalphDir(context.Background(), cfg, &git.Repo{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue, got exit code %d", exitCode)
@@ -568,7 +568,7 @@ func TestCleanup_InterruptedWritesStopped(t *testing.T) {
 	st.Init(5)
 	st.Write("status", "halted_stagnation")
 
-	gm := &git.Repo{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := git.New(git.Config{WorkDir: dir, BaseBranch: "main"})
 	backend := &testutil.StubBackend{Total: 1, Remaining: 1}
 	log := logging.New(nil)
 	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
@@ -592,7 +592,7 @@ func TestCleanup_NotInterruptedPreservesStatus(t *testing.T) {
 	st.Init(5)
 	st.Write("status", "completed")
 
-	gm := &git.Repo{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := git.New(git.Config{WorkDir: dir, BaseBranch: "main"})
 	backend := &testutil.StubBackend{Total: 3, Completed: 3}
 	log := logging.New(nil)
 	cfg := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
@@ -623,7 +623,7 @@ func TestCleanup_ClearsCLIConfig(t *testing.T) {
 		t.Fatal("cli_config should exist before cleanup")
 	}
 
-	gm := &git.Repo{ProjectDir: dir, WorkDir: dir, BaseBranch: "main"}
+	gm := git.New(git.Config{WorkDir: dir, BaseBranch: "main"})
 	backend := &testutil.StubBackend{Total: 1}
 	log := logging.New(nil)
 	c := config.Config{ProjectDir: dir, MaxIterations: 5, CallsPerHour: 80}
@@ -691,7 +691,7 @@ func TestInitRalphDir_WaitAutoResetsOnCompleted(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir, Wait: true}
 	log := logging.New(nil)
 
-	resume, exitCode := initRalphDir(context.Background(), cfg, &git.Repo{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue (exitCode < 0), got %d — --wait should auto-reset", exitCode)
@@ -706,8 +706,8 @@ func TestInitRalphDir_WaitAutoResetsOnCompleted(t *testing.T) {
 	}
 }
 
-// Verifies that without --wait, initRalphDir blocks on the interactive prompt
-// and exits 0 when context is cancelled (simulating no user input).
+// Verifies that without --wait, initRalphDir blocks on the interactive
+// prompt and exits 0 when context is cancelled (simulating no user input).
 func TestInitRalphDir_NoWaitCompletedBlocksOnPrompt(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -725,7 +725,7 @@ func TestInitRalphDir_NoWaitCompletedBlocksOnPrompt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, exitCode := initRalphDir(ctx, cfg, &git.Repo{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}, ralphDir, logFile, stateFile, log)
+	_, exitCode := initRalphDir(ctx, cfg, ralphDir, logFile, stateFile, log)
 
 	if exitCode != 0 {
 		t.Errorf("expected exit code 0 (prompt cancelled), got %d", exitCode)

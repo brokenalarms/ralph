@@ -54,7 +54,7 @@ func (m *Repo) EnforceAdmins() error {
 
 	nwo := repoNWO(remoteURL)
 	if nwo == "" {
-		m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Could not parse repo owner/name from remote URL — skipping enforce_admins")
+		m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Could not parse repo owner/name from remote URL — skipping enforce_admins")
 		return nil
 	}
 
@@ -63,23 +63,23 @@ func (m *Repo) EnforceAdmins() error {
 
 	enforced, err := gh.CheckEnforceAdmins(nwo, branch)
 	if err != nil {
-		m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Could not check enforce_admins status: %v — skipping", err)
+		m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Could not check enforce_admins status: %v — skipping", err)
 		return nil
 	}
 	if enforced {
-		m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Branch protection: enforce_admins already enabled on %s", branch)
+		m.logger.Emit(logging.Opts{Domain: logging.Git}, "Branch protection: enforce_admins already enabled on %s", branch)
 		return nil
 	}
 
 	output, err := gh.PostEnforceAdmins(nwo, branch)
 	if err != nil {
 		if strings.Contains(output, "Branch not protected") || strings.Contains(output, "Not Found") {
-			m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No branch protection rules on %s — cannot enable enforce_admins. Configure branch protection in GitHub settings first.", branch)
+			m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No branch protection rules on %s — cannot enable enforce_admins. Configure branch protection in GitHub settings first.", branch)
 			return nil
 		}
 		return fmt.Errorf("failed to enable enforce_admins on %s: %s", branch, output)
 	}
 
-	m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Branch protection: enabled enforce_admins on %s", branch)
+	m.logger.Emit(logging.Opts{Domain: logging.Git}, "Branch protection: enabled enforce_admins on %s", branch)
 	return nil
 }

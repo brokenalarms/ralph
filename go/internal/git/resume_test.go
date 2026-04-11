@@ -91,11 +91,11 @@ func TestResumeTask_ClosedPRRenamesBranch(t *testing.T) {
 		WorkDir:        worktreeDir, // distinct from ProjectDir so rename is allowed
 		WorktreeBranch: "ralph/next",
 		BranchRenamed:  true, // stale from previous run
-		BaseBranch:     "main",
+		baseBranch:     "main",
 		Runner:         runner,
-		GitHub:         gh,
-		State:          newMemState(),
-		Logger:         discardLog{},
+		github:         gh,
+		state:          newMemState(),
+		logger:         discardLog{},
 	}
 
 	result, err := mgr.ResumeTask(context.Background(), ResumeTaskMeta{

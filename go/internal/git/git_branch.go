@@ -78,14 +78,14 @@ func setStackHead(m *Repo, completedBranches []string) {
 			continue
 		}
 		if !m.BranchIsAheadOfMain(branch) {
-			m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Branch %s not ahead of main — skipping", branch)
+			m.logger.Emit(logging.Opts{Domain: logging.Git}, "Branch %s not ahead of main — skipping", branch)
 			continue
 		}
 		m.PrevBranch = branch
-		m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Stack head: %s", branch)
+		m.logger.Emit(logging.Opts{Domain: logging.Git}, "Stack head: %s", branch)
 		return
 	}
-	m.Logger.Emit(logging.Opts{Domain: logging.Git}, "No stacked parents — starting from %s", m.DetectDefaultBranch())
+	m.logger.Emit(logging.Opts{Domain: logging.Git}, "No stacked parents — starting from %s", m.DetectDefaultBranch())
 }
 
 // checkoutExistingBranch checks meta for a branch from a previous iteration.
@@ -101,10 +101,10 @@ func checkoutExistingBranch(m *Repo, meta BranchTaskMeta, taskID, nextTask strin
 				m.CheckoutRemoteBranch(storedBranch)
 				return true, nil
 			}
-			m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Remote branch %s diverged from main — cleaning up", storedBranch)
+			m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Remote branch %s diverged from main — cleaning up", storedBranch)
 			if parsePRNumber(meta.ExternalRef) == 0 {
 				if err := m.DeleteRemoteBranchByName(storedBranch); err != nil {
-					m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to delete stale remote branch: %v", err)
+					m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to delete stale remote branch: %v", err)
 				}
 			}
 		}

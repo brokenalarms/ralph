@@ -41,8 +41,8 @@ func (m *Repo) Push(ctx context.Context) error {
 		return nil
 	}
 
-	if m.PrePush != nil {
-		if err := m.PrePush(ctx); err != nil {
+	if m.prePush != nil {
+		if err := m.prePush.PrePush(ctx, m.WorkDir); err != nil {
 			return fmt.Errorf("pre-push check failed: %w", err)
 		}
 	}
@@ -63,9 +63,9 @@ func (m *Repo) Push(ctx context.Context) error {
 		// diverged from its parent (e.g. parent was squash-pushed since
 		// this branch was created) and needs rebasing first.
 		if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", baseSHA, "HEAD") != nil {
-			m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Branch diverged from %s — rebasing before push", baseBranch)
+			m.logger.Emit(logging.Opts{Domain: logging.Git}, "Branch diverged from %s — rebasing before push", baseBranch)
 			if err := m.EnsureUpToDate(ctx); err != nil {
-				m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Rebase before push failed: %v", err)
+				m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Rebase before push failed: %v", err)
 			}
 			// Re-fetch after rebase since origin may have moved.
 			_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", baseBranch)
@@ -76,13 +76,13 @@ func (m *Repo) Push(ctx context.Context) error {
 			if headSHA != baseSHA {
 				commitMsg := m.gitOutput(m.WorkDir, "log", "-1", "--format=%s")
 				if err := m.SquashToOneCommit(baseSHA, commitMsg); err != nil {
-					m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Squash: %v", err)
+					m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Squash: %v", err)
 				}
 			}
 		}
 	}
 
-	m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Pushing %s...", m.WorktreeBranch)
+	m.logger.Emit(logging.Opts{Domain: logging.Git}, "Pushing %s...", m.WorktreeBranch)
 	// Try force-with-lease first (safe update of existing branch).
 	// Fall back to regular push for new branches.
 	if err := m.gitCmdErrCtx(ctx, m.WorkDir, "push", "--force-with-lease", "-u", "origin", m.WorktreeBranch); err != nil {
@@ -122,7 +122,7 @@ func reopenClosedPR(gh GitHub, workDir, branch, nwo, repoURL, title, body string
 
 func (m *Repo) reopenClosedPR(gh GitHub, repoURL, title, body string) (int, error) {
 	nwo := NWOFromRemote(repoURL)
-	return reopenClosedPR(gh, m.WorkDir, m.WorktreeBranch, nwo, repoURL, title, body, m.Logger)
+	return reopenClosedPR(gh, m.WorkDir, m.WorktreeBranch, nwo, repoURL, title, body, m.logger)
 }
 
 // EnsurePROpts configures the CreatePR package function.
@@ -219,7 +219,7 @@ func (m *Repo) CreatePR(ctx context.Context, taskID, taskDesc, body string) (int
 		TaskDesc:   taskDesc,
 		Body:       body,
 		BaseBranch: m.resolveBaseBranch(),
-		Logger:     m.Logger,
+		Logger:     m.logger,
 	})
 }
 
@@ -423,7 +423,7 @@ func (m *Repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 			hasUncommitted:    m.HasUncommittedChanges,
 			commitAll:         m.CommitAll,
 			branchAheadOfMain: m.BranchIsAheadOfMain,
-			logger:            m.Logger,
+			logger:            m.logger,
 		}
 		result, err = shipPR(ctx, m.run(), m.gh(), m.WorkDir, m.WorktreeBranch, m.RemoteURL(), opts, infra)
 		if err != nil {
@@ -447,17 +447,17 @@ func (m *Repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 		}
 		review, pollErr := m.PollReview(reviewer.BotUsername, result.PRNumber, reviewer.DefaultTimeout)
 		if pollErr != nil {
-			m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "%s review poll: %v", reviewer.BotUsername, pollErr)
+			m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "%s review poll: %v", reviewer.BotUsername, pollErr)
 			continue
 		}
 		if review != nil {
-			m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "%s review received (%d comments)", reviewer.BotUsername, len(review.Comments))
+			m.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "%s review received (%d comments)", reviewer.BotUsername, len(review.Comments))
 			result.ReviewFixNeeded = true
 			result.PendingReview = review
 			result.PendingReviewer = reviewer.BotUsername
 			return result, nil
 		}
-		m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "No %s review arrived within timeout — proceeding to merge", reviewer.BotUsername)
+		m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "No %s review arrived within timeout — proceeding to merge", reviewer.BotUsername)
 	}
 
 	// Check if stacked (PR targets non-default branch — merge skipped).
@@ -468,7 +468,7 @@ func (m *Repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 		prBase = prDetail.BaseRef
 	}
 	if prBase != "" && prBase != defaultBranch {
-		m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "targets %s (not %s) — stacked, closing bead", prBase, defaultBranch)
+		m.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "targets %s (not %s) — stacked, closing bead", prBase, defaultBranch)
 		result.Stacked = true
 		return result, nil
 	}
@@ -479,7 +479,7 @@ func (m *Repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 	defer m.SetKnownPRNumber(0)
 
 	merged, mergeErr := m.MergeWithRetry(ctx, MergeRetryOpts{
-		Logger:    m.Logger,
+		Logger:    m.logger,
 		RemoteURL: repoURL,
 	})
 	if mergeErr != nil {
@@ -545,7 +545,7 @@ func (m *Repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 
 	repoURL := m.gitOutput(m.WorkDir, "remote", "get-url", "origin")
 	if repoURL == "" {
-		m.Logger.Emit(logging.Opts{Domain: logging.Git}, "No remote URL — skipping auto-merge")
+		m.logger.Emit(logging.Opts{Domain: logging.Git}, "No remote URL — skipping auto-merge")
 		return false, nil
 	}
 
@@ -563,7 +563,7 @@ func (m *Repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 				return false, err
 			}
 			if prNumber == 0 {
-				m.Logger.Emit(logging.Opts{Domain: logging.Git}, "No PR found for %s — skipping auto-merge", m.WorktreeBranch)
+				m.logger.Emit(logging.Opts{Domain: logging.Git}, "No PR found for %s — skipping auto-merge", m.WorktreeBranch)
 				return false, nil
 			}
 		}
@@ -578,11 +578,11 @@ func (m *Repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		prBase = prDetail.BaseRef
 	}
 	if prBase != "" && prBase != defaultBranch {
-		m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "targets %s (not %s) — waiting for base PRs to merge first", prBase, defaultBranch)
+		m.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "targets %s (not %s) — waiting for base PRs to merge first", prBase, defaultBranch)
 		return false, ErrStackedPRWaiting
 	}
 
-	m.Logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch, Link: prLink}, "Auto-merging...")
+	m.logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch, Link: prLink}, "Auto-merging...")
 
 	// Fast path: when local HEAD already matches the PR head SHA and CI is already
 	// passing, skip the rebase+push cycle — no new tree to test, no push needed.
@@ -590,7 +590,7 @@ func (m *Repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	if prDetail != nil && prDetail.HeadSHA != "" && prDetail.HeadSHA == m.HeadRev() {
 		_, fastStatus, _ := m.AwaitCI(ctx, prNumber, repoURL, time.Time{})
 		if fastStatus == CIPassed {
-			m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "CI already passing on %s — merging", prDetail.HeadSHA)
+			m.logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "CI already passing on %s — merging", prDetail.HeadSHA)
 			return m.executeMerge(ctx, prNumber, repoURL)
 		}
 	}
@@ -598,13 +598,13 @@ func (m *Repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	// Rebase onto latest main and push so CI runs on the final tree.
 	// This avoids the updatePRBranch round-trip and double CI wait.
 	if err := m.EnsureUpToDate(ctx); err != nil {
-		m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Pre-merge rebase failed: %v", err)
+		m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Pre-merge rebase failed: %v", err)
 	}
 	headBefore := m.HeadRev()
 	pushedAt := time.Now()
 	pushErr := m.Push(ctx)
 	if pushErr != nil {
-		m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Pre-merge push failed: %v", pushErr)
+		m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Pre-merge push failed: %v", pushErr)
 	}
 	// When the push succeeds but is a no-op (same SHA before and after), no new
 	// CI is triggered. The existing checks are the only relevant results �� skip
@@ -612,24 +612,24 @@ func (m *Repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	// evaluates only post-push checks and misses pre-existing failures.
 	awaitPushedAt := pushedAt
 	if pushErr == nil && headBefore != "" && m.HeadRev() == headBefore {
-		m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "Push was no-op (SHA unchanged) — evaluating existing checks")
+		m.logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "Push was no-op (SHA unchanged) — evaluating existing checks")
 		awaitPushedAt = time.Time{}
 	}
 
 	checks, status, ciErr := m.AwaitCI(ctx, prNumber, repoURL, awaitPushedAt)
 	if ciErr != nil {
-		m.Logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI did not complete within timeout — leaving PR open")
+		m.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI did not complete within timeout — leaving PR open")
 		return false, ciErr
 	}
 	if status == CIFailed {
 		return false, &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
 	}
 	if status == CIPassed {
-		m.Logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "CI passed — merging")
+		m.logger.Emit(logging.Opts{Domain: logging.CI, Link: prLink}, "CI passed — merging")
 	}
 
 	if m.branchNeedsUpdate() {
-		m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Main moved while CI was running — will rebase and retry")
+		m.logger.Emit(logging.Opts{Domain: logging.Git}, "Main moved while CI was running — will rebase and retry")
 		return false, &MergeConflictError{PRNumber: prNumber}
 	}
 
@@ -660,12 +660,12 @@ func (m *Repo) resolveClosedPR(gh GitHub, repoURL string) (int, error) {
 
 	switch prDetail.State {
 	case PRStateMerged:
-		m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "already merged — nothing to do")
+		m.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "already merged — nothing to do")
 		return 0, ErrPRAlreadyMerged
 	case PRStateClosed:
-		m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "is closed — reopening")
+		m.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "is closed — reopening")
 		if err := gh.ReopenPR(number, repoURL); err != nil {
-			m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "Failed to reopen: %v — creating new PR", err)
+			m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "Failed to reopen: %v — creating new PR", err)
 			baseBranch := m.resolveBaseBranch()
 			opts := CreatePROpts{
 				Head: m.WorktreeBranch,
@@ -674,12 +674,12 @@ func (m *Repo) resolveClosedPR(gh GitHub, repoURL string) (int, error) {
 				Dir:  m.WorkDir,
 			}
 			if apiPR, apiErr := gh.CreatePRViaAPI(nwo, opts); apiErr == nil && apiPR != 0 {
-				m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: logging.PRLinkOpt(nwo, apiPR)}, "Created for %s (via API fallback)", m.WorktreeBranch)
+				m.logger.Emit(logging.Opts{Domain: logging.Git, Link: logging.PRLinkOpt(nwo, apiPR)}, "Created for %s (via API fallback)", m.WorktreeBranch)
 				return apiPR, nil
 			}
 			return 0, nil
 		}
-		m.Logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "reopened")
+		m.logger.Emit(logging.Opts{Domain: logging.Git, Link: prLink}, "reopened")
 		return number, nil
 	default:
 		return 0, nil
@@ -788,7 +788,7 @@ func (m *Repo) executeMerge(ctx context.Context, prNumber int, repoURL string) (
 		DefaultBranch:  m.detectDefaultBranch(),
 		MergeOpts:      m.mergeOpts(),
 		AwaitCI:        m.AwaitCI,
-	}, m.Logger)
+	}, m.logger)
 }
 
 // GetCIFailureLog retrieves the failed CI run's log output for the given PR.
@@ -890,7 +890,7 @@ type MergeRetryOpts struct {
 // signaling that retrying will not help.
 func (m *Repo) ResolveConflict(ctx context.Context) error {
 	baseBranch := m.resolveBaseBranch()
-	m.Logger.Emit(logging.Opts{Domain: logging.Git, Branch: baseBranch}, "Rebasing onto %s to resolve merge conflicts...", baseBranch)
+	m.logger.Emit(logging.Opts{Domain: logging.Git, Branch: baseBranch}, "Rebasing onto %s to resolve merge conflicts...", baseBranch)
 	if err := m.EnsureUpToDate(ctx); err != nil {
 		return fmt.Errorf("conflict resolution rebase failed: %w", err)
 	}
@@ -900,7 +900,7 @@ func (m *Repo) ResolveConflict(ctx context.Context) error {
 	// would just repeat the same conflict on GitHub.
 	if m.refExists(m.WorkDir, "origin/"+baseBranch) {
 		if m.gitCmdErr(m.WorkDir, "merge-base", "--is-ancestor", "origin/"+baseBranch, "HEAD") != nil {
-			m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Rebase did not resolve conflicts with origin/%s — skipping force-push", baseBranch)
+			m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Rebase did not resolve conflicts with origin/%s — skipping force-push", baseBranch)
 			return &UnresolvedConflictError{}
 		}
 	}
@@ -1019,7 +1019,7 @@ func (m *Repo) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, e
 		opts.AwaitCI = m.AwaitCI
 	}
 	if opts.Logger == nil {
-		opts.Logger = m.Logger
+		opts.Logger = m.logger
 	}
 	if opts.RemoteURL == "" {
 		opts.RemoteURL = m.RemoteURL()
@@ -1086,7 +1086,7 @@ func (m *Repo) PostMergeUpdateMain() {
 	// the merged work is on main and stale stack commits are expendable.
 	if m.gitCmdErr(m.WorkDir, "rebase", "origin/"+defaultBranch) != nil {
 		m.gitCmd(m.WorkDir, "rebase", "--abort")
-		m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Post-merge rebase failed — resetting worktree to origin/%s", defaultBranch)
+		m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Post-merge rebase failed — resetting worktree to origin/%s", defaultBranch)
 		m.gitCmd(m.WorkDir, "reset", "--hard", "origin/"+defaultBranch)
 	}
 

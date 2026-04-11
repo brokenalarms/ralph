@@ -113,7 +113,7 @@ func (m *Repo) ResumeTask(ctx context.Context, meta ResumeTaskMeta, opts ResumeT
 	if found {
 		// When found via branch (no existing external-ref), capture the URL for the loop to persist.
 		if parsePRNumber(meta.ExternalRef) == 0 && meta.Branch != "" {
-			m.Logger.Emit(logging.Opts{Domain: "git", Link: m.buildPRLink(prNumber)}, "Found for %s (task %s) — resolving", meta.Branch, meta.TaskID)
+			m.logger.Emit(logging.Opts{Domain: "git", Link: m.buildPRLink(prNumber)}, "Found for %s (task %s) — resolving", meta.Branch, meta.TaskID)
 			prURLToStore = m.buildPRURL(prNumber)
 		}
 		result, err := m.resolveByState(ctx, prNumber, meta, opts)
@@ -130,18 +130,18 @@ func (m *Repo) ResumeTask(ctx context.Context, meta ResumeTaskMeta, opts ResumeT
 		return ResumeTaskResult{}, nil
 	}
 	if !m.RemoteBranchIsOnMain(meta.Branch) {
-		m.Logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Remote branch %s diverged from main — abandoning stale work", meta.Branch)
+		m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Remote branch %s diverged from main — abandoning stale work", meta.Branch)
 		_ = m.DeleteRemoteBranchByName(meta.Branch)
 		return ResumeTaskResult{}, nil
 	}
 	if !m.BranchIsAheadOfMain(meta.Branch) {
-		m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Remote branch %s has no commits ahead of main — already resolved, cleaning up", meta.Branch)
+		m.logger.Emit(logging.Opts{Domain: logging.Git}, "Remote branch %s has no commits ahead of main — already resolved, cleaning up", meta.Branch)
 		_ = m.DeleteRemoteBranchByName(meta.Branch)
 		return ResumeTaskResult{}, nil
 	}
 
 	// Branch has clean work but no PR — create one via Ship.
-	m.Logger.Emit(logging.Opts{Domain: logging.Git}, "Remote branch %s has clean work but no PR — creating PR", meta.Branch)
+	m.logger.Emit(logging.Opts{Domain: logging.Git}, "Remote branch %s has clean work but no PR — creating PR", meta.Branch)
 	m.CheckoutRemoteBranch(meta.Branch)
 	shipResult, err := m.Ship(ctx, ShipOpts{TaskID: meta.TaskID, TaskTitle: meta.TaskTitle})
 	prNum := shipResult.PRNumber
@@ -149,7 +149,7 @@ func (m *Repo) ResumeTask(ctx context.Context, meta ResumeTaskMeta, opts ResumeT
 		return ResumeTaskResult{}, nil
 	}
 	prURLToStore = m.buildPRURL(prNum)
-	m.Logger.Emit(logging.Opts{Domain: "git", Link: m.buildPRLink(prNum)}, "Created for %s (task %s)", meta.Branch, meta.TaskID)
+	m.logger.Emit(logging.Opts{Domain: "git", Link: m.buildPRLink(prNum)}, "Created for %s (task %s)", meta.Branch, meta.TaskID)
 	result, err := m.resolveByState(ctx, prNum, meta, opts)
 	result.PRURLToStore = prURLToStore
 	return result, err
@@ -164,17 +164,17 @@ func (m *Repo) resolveByState(ctx context.Context, prNumber int, meta ResumeTask
 		ReviewAddressed: opts.ReviewAddressed,
 	})
 	if err != nil {
-		m.Logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: m.buildPRLink(prNumber)}, "Ship (resume): %v", err)
+		m.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: m.buildPRLink(prNumber)}, "Ship (resume): %v", err)
 		return ResumeTaskResult{PRNumber: prNumber}, nil
 	}
 
 	switch {
 	case shipResult.AlreadyMerged:
-		m.Logger.Emit(logging.Opts{Domain: "git", Level: logging.Success, Link: m.buildPRLink(prNumber)}, "already merged — closing bead and moving on")
+		m.logger.Emit(logging.Opts{Domain: "git", Level: logging.Success, Link: m.buildPRLink(prNumber)}, "already merged — closing bead and moving on")
 		return ResumeTaskResult{Handled: true, AlreadyMerged: true, Merged: true, PRNumber: prNumber}, nil
 
 	case shipResult.Closed:
-		m.Logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: m.buildPRLink(prNumber)}, "is closed (not merged) — re-running agent")
+		m.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: m.buildPRLink(prNumber)}, "is closed (not merged) — re-running agent")
 		m.PrepareForNextTask(meta.TaskID)
 		_ = m.RenameBranchForTask(meta.TaskTitle, meta.TaskID)
 		newBranch := ""
@@ -186,7 +186,7 @@ func (m *Repo) resolveByState(ctx context.Context, prNumber int, meta ResumeTask
 	default:
 		// PR is open — Ship already attempted merge if AutoMerge was set.
 		if ok, reason := m.PRChainIsHealthy(prNumber); !ok {
-			m.Logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: m.buildPRLink(prNumber)}, "chain unhealthy: %s — re-running agent", reason)
+			m.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: m.buildPRLink(prNumber)}, "chain unhealthy: %s — re-running agent", reason)
 			return ResumeTaskResult{PRNumber: prNumber}, nil
 		}
 		return ResumeTaskResult{Handled: true, Merged: shipResult.Merged, PRNumber: prNumber}, nil

@@ -38,10 +38,10 @@ func setupRebaseMgr(t *testing.T, project, bare string) *Repo {
 
 	mgr := &Repo{
 		ProjectDir:  project,
-		BaseBranch: "main",
-		RalphDir:    ralphDir,
-				State:       state,
-		Logger:      &testLog{},
+		baseBranch: "main",
+		ralphDir:    ralphDir,
+				state:       state,
+		logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -131,7 +131,7 @@ func TestRebaseOntoDefaultBranch_AlreadyUpToDate(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	log := mgr.Logger.(*testLog)
+	log := mgr.logger.(*testLog)
 	if !log.contains("Already up to date") {
 		t.Error("expected 'Already up to date' log message")
 	}
@@ -160,7 +160,7 @@ func TestRebaseOntoDefaultBranch_FastForwardsWhenBehind(t *testing.T) {
 		t.Error("newfeature.txt should exist after rebasing onto advanced main")
 	}
 
-	log := mgr.Logger.(*testLog)
+	log := mgr.logger.(*testLog)
 	if log.contains("Already up to date") {
 		t.Error("should NOT say 'Already up to date' when HEAD is behind origin/main")
 	}
@@ -180,7 +180,7 @@ func TestRebaseOntoDefaultBranch_SkipsWhenAhead(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	log := mgr.Logger.(*testLog)
+	log := mgr.logger.(*testLog)
 	if !log.contains("Already up to date") {
 		t.Error("expected 'Already up to date' when HEAD is ahead of origin/main")
 	}
@@ -202,8 +202,8 @@ func TestTryResumeWorktree_FetchesOriginOnResume(t *testing.T) {
 	pushToOrigin(t, project)
 
 	// Simulate resume: store worktree state, then call tryResumeWorktree
-	_ = mgr.State.Write("worktree_dir", mgr.WorkDir)
-	_ = mgr.State.Write("worktree_branch", mgr.WorktreeBranch)
+	_ = mgr.state.Write("worktree_dir", mgr.WorkDir)
+	_ = mgr.state.Write("worktree_branch", mgr.WorktreeBranch)
 
 	if err := mgr.tryResumeWorktree(); err != nil {
 		t.Fatalf("tryResumeWorktree: %v", err)
@@ -224,10 +224,10 @@ func TestTagTaskStart_WithTaskID(t *testing.T) {
 
 	mgr := &Repo{
 		ProjectDir:  project,
-		BaseBranch: "main",
-		RalphDir:    ralphDir,
-				State:       newMemState(),
-		Logger:      &testLog{},
+		baseBranch: "main",
+		ralphDir:    ralphDir,
+				state:       newMemState(),
+		logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -247,10 +247,10 @@ func TestTagTaskEnd_WithTaskID(t *testing.T) {
 
 	mgr := &Repo{
 		ProjectDir:  project,
-		BaseBranch: "main",
-		RalphDir:    ralphDir,
-				State:       newMemState(),
-		Logger:      &testLog{},
+		baseBranch: "main",
+		ralphDir:    ralphDir,
+				state:       newMemState(),
+		logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -270,10 +270,10 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 
 	mgr := &Repo{
 		ProjectDir:  project,
-		BaseBranch: "main",
-		RalphDir:    ralphDir,
-				State:       newMemState(),
-		Logger:      &testLog{},
+		baseBranch: "main",
+		ralphDir:    ralphDir,
+				state:       newMemState(),
+		logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -291,9 +291,9 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 func TestTagTaskStart_NoOpWithoutWorktree(t *testing.T) {
 	mgr := &Repo{
 		ProjectDir: "/some/dir",
-		BaseBranch: "main",
+		baseBranch: "main",
 		WorkDir:    "/some/dir",
-		Logger:     &testLog{},
+		logger:     &testLog{},
 	}
 	mgr.TagTaskStart("ralph-abc")
 }
@@ -305,10 +305,10 @@ func TestTagTaskStart_SkipsWipBranch(t *testing.T) {
 
 	mgr := &Repo{
 		ProjectDir:  project,
-		BaseBranch: "main",
-		RalphDir:    ralphDir,
-				State:       newMemState(),
-		Logger:      &testLog{},
+		baseBranch: "main",
+		ralphDir:    ralphDir,
+				state:       newMemState(),
+		logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -330,10 +330,10 @@ func TestTagStartEnd_DifferentCommits(t *testing.T) {
 
 	mgr := &Repo{
 		ProjectDir:  project,
-		BaseBranch: "main",
-		RalphDir:    ralphDir,
-				State:       newMemState(),
-		Logger:      &testLog{},
+		baseBranch: "main",
+		ralphDir:    ralphDir,
+				state:       newMemState(),
+		logger:      &testLog{},
 	}
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
@@ -364,7 +364,7 @@ func TestEnsureUpToDate_FallsBackSilentlyWhenPrevBranchMissing(t *testing.T) {
 
 	mgr.PrevBranch = "nonexistent-branch"
 
-	log := mgr.Logger.(*testLog)
+	log := mgr.logger.(*testLog)
 	log.messages = nil
 
 	err := mgr.EnsureUpToDate(context.Background())

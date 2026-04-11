@@ -98,7 +98,7 @@ func (m *Repo) DetectDefaultBranch() string {
 }
 
 func (m *Repo) detectDefaultBranch() string {
-	return detectDefaultBranch(m.ProjectDir, m.BaseBranch, m.run())
+	return detectDefaultBranch(m.ProjectDir, m.baseBranch, m.run())
 }
 
 // OriginRev returns the commit hash of origin/<branch>.
@@ -135,9 +135,9 @@ func (m *Repo) CheckoutRemoteBranch(branch string) {
 	_ = m.gitCmdErr(m.WorkDir, "checkout", "-B", branch, "origin/"+branch)
 	m.WorktreeBranch = branch
 	m.BranchRenamed = true
-	if m.State != nil {
-		_ = m.State.Write("worktree_branch", branch)
-		_ = m.State.Write("branch_renamed", "true")
+	if m.state != nil {
+		_ = m.state.Write("worktree_branch", branch)
+		_ = m.state.Write("branch_renamed", "true")
 	}
 }
 

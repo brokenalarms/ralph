@@ -1,30 +1,91 @@
 # Orchestrator/module-boundary refactor — handoff notes
 
-> **Status (Commit B complete):** This doc described the original Commit B
-> plan as "eliminate the Verifier struct entirely and move its methods
-> onto Loop." That plan was **rejected during implementation**. Commit B
-> instead **extracted Verifier into its own package** at
-> `internal/verifier`, as a **peer module** of git/state/tasks. Verifier
-> holds zero references to other peer modules; Loop owns the verification
-> state machine in `runVerifyPipeline` and threads pre-fetched diffs/HEAD
-> data into stateless verifier operations. The fix-agent runner factory
-> remains as verifier's internal sub-module. The peer-module rule is now
-> documented in `orchestrator-modules.md` (rule 1, "Peer modules vs
-> sub-modules"). The text below this banner is preserved as historical
-> record of the rejected plan; do not follow it.
+> **Status (after Commit B): roadmap halfway complete.** PRs #520, #521,
+> #522, #523 merged. Commit B's original plan ("inline Verifier into
+> Loop") was **rejected during implementation** in favour of a different
+> shape: Verifier was extracted to its own package as a **peer module**.
+> See "Where things stand — current state" below for the full status. The
+> text below the next two sections is the original handoff doc, preserved
+> as historical record. Some of it (the Commit C/D/E/F sections) is still
+> the live roadmap; some of it (the original "Commit B — Strip the
+> Verifier struct entirely" section, and parts of the Traps section that
+> assumed verifier was loop-internal) is stale historical record. Read
+> "Where things stand — current state" first, then jump straight to the
+> live commit you're working on.
 
 This document is the binding direction for the next agent picking up the
-orchestrator/module-boundary refactor (PRs #520, #521, #522, and the
-work that follows). It exists because the refactor has been started,
-drifted, corrected, drifted, corrected, repeatedly. Every drift came
-from the agent reading existing code patterns and unconsciously
-preserving them instead of holding the architectural rules in mind.
-**This document is the source of truth. Read it before touching any
-code.**
+orchestrator/module-boundary refactor. It exists because the refactor
+has been started, drifted, corrected, drifted, corrected, repeatedly.
+Every drift came from the agent reading existing code patterns and
+unconsciously preserving them instead of holding the architectural rules
+in mind. **This document is the source of truth. Read it before touching
+any code.**
 
 The authoritative spec is `docs/specs/orchestrator-modules.md`. This
 document is the field guide that explains what to do, what NOT to do,
 and the specific traps that have caught every prior agent.
+
+## Where things stand — current state
+
+**Merged PRs (chronological):**
+
+- **#520** — Spec doc + 5 strict arch tests landed.
+- **#521** — Naming cleanup (Bead*/Copilot* prefixes), helper deletion,
+  `*logging.Logger` restored as the single named cross-module exception.
+- **#522 — Commit A** — `loop.Modules{State, Git, TaskBackend, Logger}`
+  introduced as the struct form of `loop.New`'s parameter list.
+  `loop.cfg.TaskBackend` → `Loop.taskBackend` field.
+- **#523 — Commit B** — Verifier extracted to `internal/verifier` as a
+  peer module of git/state/tasks. Verifier holds **zero peer-module
+  references**; its only sub-modules are a `RunnerFactory` (fix-agent
+  runner) and a `Querier` (one-shot LLM caller), both as explicit
+  constructor parameters (not Config fields). Loop owns the verification
+  state machine in `runVerifyPipeline` and threads pre-fetched
+  diffs/HEAD data into stateless verifier operations.
+  - Same PR also: split `verify.LLMVerifyPR` into pure-data helpers
+    (`BuildReviewPrompt` + `ParseReviewResponse`) — no function fields
+    on params anywhere in `verify`/`verifier`. Deleted
+    `loop.Config.QueryFn`. `claudeRunner` interface gained `Query` so
+    `llmShouldRefactor` can call `l.runner.Query` directly. Tests
+    migrated off `newTestModules` (asymmetric composer) to inline
+    `Modules{}` construction with a single `newTestVerifier(t, cfg,
+    logger, ...stubs)` helper for verifier's boilerplate.
+  - Arch tests: all 5 passing. `forbiddenModuleTypes` updated to include
+    `*verifier.Verifier`. `TestOrchestratorParamsNoModules` simplified
+    to walk every `*Params`/`*Opts` struct unconditionally (the
+    bead-by-bead allowlist is gone).
+
+**Roadmap (remaining):**
+
+- **Commit C — `git.New(git.Config{...})` and stop field mutation** ←
+  NEXT. Rule B (immutability). Replaces 11 field mutations on `git.Repo`
+  in `cmd/ralph/main.go` with a single constructor call. Adds
+  `TestNoCrossModuleFieldAssignments` arch test. Section "Commit C"
+  below is still accurate.
+- **Commit C2 — Move PR body construction into git/github**. Rule A.
+  Section "Commit C2" below is still accurate.
+- **Commit D — Other modules' Config audit**. Most are clean already
+  (`state.NewStore` is one arg, no mutation, etc). Audit `state`,
+  `attempts`, `ratelimit`, `agent`, `tasks`, `analyzer` for actual
+  violations. May be a no-op commit.
+- **Commit E — Ban remaining callbacks across module boundaries**.
+  Adds `TestNoCallbacksAcrossModuleBoundaries`. Deletes the 8 remaining
+  func fields on `loop.Config`: `OnVerify`, `OnIterationStart`,
+  `OnPostTask`, `IsOnline`, `WaitForInternet`, `NewRunner`,
+  `CheckGitHub`, `OnRebaseConflict`. (`QueryFn` and `LLMVerify` already
+  gone — Commit B.) This is the most invasive test migration in the
+  whole refactor.
+- **Commit F — Final pass**. Run full suite, confirm arch tests, push.
+
+**Stale sections in this doc** (read but discount):
+
+- "Commit B — Strip the Verifier struct entirely" further down: the
+  inline-into-Loop plan was rejected. Commit B is done; the actual shape
+  was peer-module extraction.
+- "Lessons from Commit A (apply to Commit B)" further down: still
+  partially relevant (most lessons generalize), but the specific framing
+  about VerifierDeps no longer applies.
+- The Traps section is still useful as a checklist of antipattern temptations.
 
 ## Where things stand
 

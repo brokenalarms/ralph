@@ -88,20 +88,9 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	stateFile := filepath.Join(ralphDir, "state.json")
 	logFile := filepath.Join(ralphDir, "loop.log")
 
-	// Create git manager early so pre-setup calls use it instead of
-	// package-level functions. SetupWorktree is called after state init.
-	gm := git.New(cfg.ProjectDir, ralphDir, nil)
-	gm.BaseBranch = cfg.BaseBranch
-	gm.Logger = log
-	gm.CIPollTimeout = cfg.CIPollTimeout
-	gm.CopilotGatedTimeout = cfg.ReviewerGatedTimeout
-	gm.CopilotOpportunisticTimeout = cfg.ReviewerOpportunisticTimeout
-	gm.CodeRabbitTimeout = cfg.CodeRabbitReviewTimeout
-
-	// Initialize .ralph directory and check for resume. This must happen
-	// before anything else so a completed run can be reset or exited
-	// without side effects like PID files or branch validation.
-	resume, exitCode := initRalphDir(ctx, cfg, gm, ralphDir, logFile, stateFile, log)
+	// Phase 1 — initialize the .ralph state directory and detect resume
+	// status. Pure local-state setup; no git operations.
+	resume, exitCode := initRalphDir(ctx, cfg, ralphDir, logFile, stateFile, log)
 	if exitCode >= 0 {
 		return exitCode
 	}
@@ -119,26 +108,18 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 	planFile := filepath.Join(ralphDir, "plan.md")
 
-	// Validate base branch before initializing state — a failed validation
-	// must not leave state that causes a false resume on retry.
-	if err := gm.ValidateRemoteBranch(ctx); err != nil {
-		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
-		return 1
-	}
-
+	// Phase 2 — state and backend init. Pure data-store setup, no git.
 	st := state.NewStore(ralphDir)
 	if err := st.Init(cfg.MaxIterations); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Failed to initialize state: %v", err)
 		return 1
 	}
-
-	// Persist semantic config as an audit record in state.json.
 	if err := st.SaveCLIConfig(config.ConfigToState(&cfg)); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Failed to save CLI config to state: %v", err)
 		return 1
 	}
 
-	// Set up log file writer.
+	// Open the log file and switch the logger over to file-backed writes.
 	logFileWriter, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Failed to open log file: %v", err)
@@ -147,7 +128,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	defer logFileWriter.Close()
 	log = logging.New(logFileWriter)
 
-	// Initialize task backend.
 	backend, err := initTaskBackend(cfg, promptsDir, log)
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Task backend init failed: %v", err)
@@ -155,25 +135,43 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	}
 	st.Write("task_backend", backend.Label())
 
-	// Wire remaining fields now that state and logger are ready.
-	gm.Resume = resume
-	gm.State = st
-	gm.Logger = log
+	// Phase 3 — construct git.Repo. All inputs are ready: state, logger,
+	// resume flag, the pre-push hook implementation. After this point, no
+	// field on gm is mutated externally.
+	gm := git.New(git.Config{
+		WorkDir:                     cfg.ProjectDir,
+		RalphDir:                    ralphDir,
+		BaseBranch:                  cfg.BaseBranch,
+		Resume:                      resume,
+		State:                       st,
+		Logger:                      log,
+		PrePush:                     &compileCheckPrePusher{cfg: cfg, log: log},
+		CIPollTimeout:               cfg.CIPollTimeout,
+		CopilotGatedTimeout:         cfg.ReviewerGatedTimeout,
+		CopilotOpportunisticTimeout: cfg.ReviewerOpportunisticTimeout,
+		CodeRabbitTimeout:           cfg.CodeRabbitReviewTimeout,
+	})
+
+	// Phase 4 — git pre-flight checks. Run after git.New so the methods
+	// have the logger/state they need.
+	if err := gm.ValidateRemoteBranch(ctx); err != nil {
+		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
+		return 1
+	}
+	if !fileExists(stateFile) {
+		if git.IsGitRepo(cfg.ProjectDir) && gm.HasUncommittedChanges() {
+			log.Emit(logging.Opts{Level: logging.Error}, "uncommitted changes in %s — please commit or stash before running ralph.", cfg.ProjectDir)
+			return 1
+		}
+	}
+	gm.EnsureGitignored(".ralph")
+	gm.PruneOrphanedWorktrees()
 
 	if err := gm.SetupWorktree(ctx); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Worktree setup failed: %v", err)
 		return 1
 	}
-	dirs.WorkDir = gm.WorkDir
-
-	gm.PrePush = func(ctx context.Context) error {
-		result := verify.CompileCheck(ctx, cfg.CompileCheckTimeout, dirs.WorkDir)
-		if !result.Passed {
-			return fmt.Errorf("%s\n%s", result.Reason, result.Details)
-		}
-		log.Emit(logging.Opts{Domain: "build"}, "Pre-push compile check passed")
-		return nil
-	}
+	dirs.WorkDir = gm.GetWorkDir()
 
 	// Write initial branch label for the pane title updater. On resume,
 	// the old task branch is still checked out until the loop renames it,
@@ -281,34 +279,31 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 // initRalphDir creates .ralph, checks for dirty working tree, handles resume
 // detection. Returns (resume, exitCode). exitCode < 0 means continue.
-func initRalphDir(ctx context.Context, cfg config.Config, gm *git.Repo, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
+// initRalphDir creates the .ralph state directory (mkdir + touched log
+// files + reflections subdirectory) and detects resume status from
+// state.json. When the previous run completed, it prompts the user to
+// run fresh (or auto-resets under --wait).
+//
+// This is pure local-state setup — it does not touch git, GitHub, or
+// the task backend. The git pre-flight checks (uncommitted changes,
+// gitignore, prune worktrees) live separately in runMain after git.New.
+//
+// Returns:
+//   - resume=true, exitCode=-1: resume from previous run
+//   - resume=false, exitCode=-1: fresh run
+//   - exitCode=0: clean exit (user declined to rerun completed task)
+//   - exitCode=1: hard error
+func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
 	if err := os.MkdirAll(ralphDir, 0o755); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Failed to create .ralph dir: %v", err)
 		return false, 1
 	}
 
-	// Touch log files.
 	touchFile(logFile)
 	touchFile(filepath.Join(ralphDir, "raw.log"))
-
-	// Ensure reflections directory exists for post-task reflections.
 	os.MkdirAll(filepath.Join(ralphDir, "reflections"), 0o755)
 
-	// Check for uncommitted changes (skip on resume).
-	if !fileExists(stateFile) {
-		if git.IsGitRepo(cfg.ProjectDir) && gm.HasUncommittedChanges() {
-			log.Emit(logging.Opts{Level: logging.Error}, "uncommitted changes in %s — please commit or stash before running ralph.", cfg.ProjectDir)
-			return false, 1
-		}
-	}
-
-	// Ensure .ralph is gitignored.
-	gm.EnsureGitignored(".ralph")
-
-	// Clean up orphaned worktrees from previous runs.
-	gm.PruneOrphanedWorktrees()
-
-	// Check for existing state (resume detection).
+	// Resume detection — pure state-file check, no git involved.
 	if fileExists(stateFile) {
 		st := state.NewStore(ralphDir)
 		status, _ := st.Read("status")
@@ -340,6 +335,25 @@ func initRalphDir(ctx context.Context, cfg config.Config, gm *git.Repo, ralphDir
 	}
 
 	return false, -1
+}
+
+// compileCheckPrePusher implements git.PrePusher by running the project's
+// compile check before each push. It is constructed once in runMain and
+// passed to git.New via git.Config — no field mutation, no callbacks.
+type compileCheckPrePusher struct {
+	cfg config.Config
+	log *logging.Logger
+}
+
+// PrePush runs verify.CompileCheck in workDir (passed by git.Repo at push
+// time, so the implementer doesn't need a back-reference to *git.Repo).
+func (p *compileCheckPrePusher) PrePush(ctx context.Context, workDir string) error {
+	result := verify.CompileCheck(ctx, p.cfg.CompileCheckTimeout, workDir)
+	if !result.Passed {
+		return fmt.Errorf("%s\n%s", result.Reason, result.Details)
+	}
+	p.log.Emit(logging.Opts{Domain: "build"}, "Pre-push compile check passed")
+	return nil
 }
 
 // initTaskBackend initializes the bd task backend. BD is required — if

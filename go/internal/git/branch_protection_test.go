@@ -72,9 +72,9 @@ func TestEnforceAdmins_NoRemote(t *testing.T) {
 	log := &testLog{}
 	mgr := &Repo{
 		ProjectDir: tmp,
-		BaseBranch: "main",
+		baseBranch: "main",
 		WorkDir:    tmp,
-		Logger:     log,
+		logger:     log,
 	}
 
 	err := mgr.EnforceAdmins()
@@ -93,7 +93,7 @@ func TestEnforceAdmins_EnablesSuccessfully(t *testing.T) {
 		EnforceAdmins:     false,
 		PostEnforceOutput: `{"enabled":true}`,
 	}
-	mgr.GitHub = stub
+	mgr.github = stub
 
 	err := mgr.EnforceAdmins()
 	if err != nil {
@@ -115,7 +115,7 @@ func TestEnforceAdmins_AlreadyEnabled(t *testing.T) {
 		IsAvailable:     true,
 		EnforceAdmins: true,
 	}
-	mgr.GitHub = stub
+	mgr.github = stub
 
 	err := mgr.EnforceAdmins()
 	if err != nil {
@@ -139,7 +139,7 @@ func TestEnforceAdmins_BranchNotProtected(t *testing.T) {
 		PostEnforceOutput: "Branch not protected",
 		PostEnforceErr:    fmt.Errorf("exit status 1"),
 	}
-	mgr.GitHub = stub
+	mgr.github = stub
 
 	err := mgr.EnforceAdmins()
 	if err != nil {
@@ -158,7 +158,7 @@ func TestEnforceAdmins_CheckAPIError(t *testing.T) {
 		IsAvailable:        true,
 		EnforceAdminsErr: fmt.Errorf("network timeout"),
 	}
-	mgr.GitHub = stub
+	mgr.github = stub
 
 	err := mgr.EnforceAdmins()
 	if err != nil {
@@ -182,7 +182,7 @@ func TestEnforceAdmins_PostAPIError(t *testing.T) {
 		PostEnforceOutput: "internal server error",
 		PostEnforceErr:    fmt.Errorf("exit status 1"),
 	}
-	mgr.GitHub = stub
+	mgr.github = stub
 
 	err := mgr.EnforceAdmins()
 	if err == nil {
@@ -201,9 +201,9 @@ func enforceAdminsManager(t *testing.T) (*Repo, *testLog) {
 	log := &testLog{}
 	mgr := &Repo{
 		ProjectDir: project,
-		BaseBranch: "main",
+		baseBranch: "main",
 		WorkDir:    project,
-		Logger:     log,
+		logger:     log,
 	}
 	return mgr, log
 }
