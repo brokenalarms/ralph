@@ -279,8 +279,8 @@ func TestPrintSummary_TaskCounts(t *testing.T) {
 	printSummary(config.Config{ProjectDir: dir}, gm, st, backend, ralphDir, planFile, log)
 }
 
-// Verifies preGitBootstrap creates the .ralph directory and log files.
-func TestPreGitBootstrap_CreatesDirectory(t *testing.T) {
+// Verifies initRalphDir creates the .ralph directory and log files.
+func TestInitRalphDir_CreatesDirectory(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	logFile := filepath.Join(ralphDir, "loop.log")
@@ -289,7 +289,7 @@ func TestPreGitBootstrap_CreatesDirectory(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir}
 
 	log := logging.New(nil)
-	resume, exitCode := preGitBootstrap(context.Background(), cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue (exitCode < 0), got %d", exitCode)
@@ -363,8 +363,8 @@ func TestDirtyWorkingTree_HasUncommittedChanges(t *testing.T) {
 	}
 }
 
-// Verifies preGitBootstrap detects an existing state file and enables resume.
-func TestPreGitBootstrap_DetectsResume(t *testing.T) {
+// Verifies initRalphDir detects an existing state file and enables resume.
+func TestInitRalphDir_DetectsResume(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
@@ -378,7 +378,7 @@ func TestPreGitBootstrap_DetectsResume(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir}
 	log := logging.New(nil)
 
-	resume, exitCode := preGitBootstrap(context.Background(), cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue, got exit code %d", exitCode)
@@ -677,7 +677,7 @@ func TestCLIConfig_NeverReadForExecution(t *testing.T) {
 
 // Verifies that --wait auto-resets when a previous run completed, skipping
 // the interactive "Run fresh?" prompt so unattended operation isn't blocked.
-func TestPreGitBootstrap_WaitAutoResetsOnCompleted(t *testing.T) {
+func TestInitRalphDir_WaitAutoResetsOnCompleted(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
@@ -691,7 +691,7 @@ func TestPreGitBootstrap_WaitAutoResetsOnCompleted(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir, Wait: true}
 	log := logging.New(nil)
 
-	resume, exitCode := preGitBootstrap(context.Background(), cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue (exitCode < 0), got %d — --wait should auto-reset", exitCode)
@@ -706,9 +706,9 @@ func TestPreGitBootstrap_WaitAutoResetsOnCompleted(t *testing.T) {
 	}
 }
 
-// Verifies that without --wait, preGitBootstrap blocks on the interactive
+// Verifies that without --wait, initRalphDir blocks on the interactive
 // prompt and exits 0 when context is cancelled (simulating no user input).
-func TestPreGitBootstrap_NoWaitCompletedBlocksOnPrompt(t *testing.T) {
+func TestInitRalphDir_NoWaitCompletedBlocksOnPrompt(t *testing.T) {
 	dir := t.TempDir()
 	ralphDir := filepath.Join(dir, ".ralph")
 	os.MkdirAll(ralphDir, 0o755)
@@ -725,7 +725,7 @@ func TestPreGitBootstrap_NoWaitCompletedBlocksOnPrompt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, exitCode := preGitBootstrap(ctx, cfg, ralphDir, logFile, stateFile, log)
+	_, exitCode := initRalphDir(ctx, cfg, ralphDir, logFile, stateFile, log)
 
 	if exitCode != 0 {
 		t.Errorf("expected exit code 0 (prompt cancelled), got %d", exitCode)

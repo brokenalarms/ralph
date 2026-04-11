@@ -88,10 +88,9 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	stateFile := filepath.Join(ralphDir, "state.json")
 	logFile := filepath.Join(ralphDir, "loop.log")
 
-	// Phase 1 — pre-git bootstrap. Create the .ralph directory, open log
-	// files, detect resume status from the state file. None of this needs
-	// a git.Repo yet.
-	resume, exitCode := preGitBootstrap(ctx, cfg, ralphDir, logFile, stateFile, log)
+	// Phase 1 — initialize the .ralph state directory and detect resume
+	// status. Pure local-state setup; no git operations.
+	resume, exitCode := initRalphDir(ctx, cfg, ralphDir, logFile, stateFile, log)
 	if exitCode >= 0 {
 		return exitCode
 	}
@@ -280,18 +279,21 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 // initRalphDir creates .ralph, checks for dirty working tree, handles resume
 // detection. Returns (resume, exitCode). exitCode < 0 means continue.
-// preGitBootstrap creates the .ralph directory, touches log files, detects
-// resume status from the state file, and returns (resume, exitCode). It
-// runs BEFORE git.New, so it must not depend on a *git.Repo. The git
-// pre-flight checks (uncommitted changes, gitignore, prune worktrees)
-// happen later in runMain after git is constructed.
+// initRalphDir creates the .ralph state directory (mkdir + touched log
+// files + reflections subdirectory) and detects resume status from
+// state.json. When the previous run completed, it prompts the user to
+// run fresh (or auto-resets under --wait).
+//
+// This is pure local-state setup — it does not touch git, GitHub, or
+// the task backend. The git pre-flight checks (uncommitted changes,
+// gitignore, prune worktrees) live separately in runMain after git.New.
 //
 // Returns:
 //   - resume=true, exitCode=-1: resume from previous run
 //   - resume=false, exitCode=-1: fresh run
 //   - exitCode=0: clean exit (user declined to rerun completed task)
 //   - exitCode=1: hard error
-func preGitBootstrap(ctx context.Context, cfg config.Config, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
+func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
 	if err := os.MkdirAll(ralphDir, 0o755); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Failed to create .ralph dir: %v", err)
 		return false, 1
