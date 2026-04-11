@@ -34,7 +34,14 @@ func TestInitialize_WritesConfigAndLoadsSkipped(t *testing.T) {
 		MaxIterations: 7,
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	err := l.initialize(context.Background())
 	if err != nil {
@@ -81,7 +88,14 @@ func TestLoop_ActiveReviewersNotDetectedAtStartup(t *testing.T) {
 		NewRunner:       func() claudeRunner { return &stubRunner{result: claude.Result{}} },
 	}
 
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately — no tasks will run
@@ -111,7 +125,14 @@ func TestLoop_EnsureActiveReviewers_LazyInitAndCache(t *testing.T) {
 	cfg := Config{
 		Dirs: workctx.WorkContext{ProjectDir: dir, RalphDir: ralphDir},
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{},
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	// Before first call: no reviewers cached, detection not run.
 	if l.reviewersDetected {
@@ -155,7 +176,14 @@ func TestLoop_ReviewersDetectedViaEnsureReviewersFn(t *testing.T) {
 	cfg := Config{
 		Dirs: workctx.WorkContext{ProjectDir: dir, RalphDir: ralphDir},
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{},
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	// Build the same ensureReviewersFn closure that loop.go passes to completeTaskParams.
 	ensureReviewersFn := func() []git.Reviewer { l.ensureActiveReviewers(); return l.activeReviewers }
@@ -195,7 +223,14 @@ func TestInitWorktree_NoopWhenNoWorktreeBranch(t *testing.T) {
 	cfg := Config{
 		Dirs: workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	err := l.initWorktree(context.Background())
 	if err != nil {

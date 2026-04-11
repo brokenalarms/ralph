@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -19,7 +20,14 @@ func TestLoop_MaybeRefactor_DisabledByDefault(t *testing.T) {
 		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: false,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, &git.StubRepo{WorkDir: dir}, nil))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         &git.StubRepo{WorkDir: dir},
+		TaskBackend: nil,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	err := l.maybeRefactor(context.Background(), 5)
 	if err != nil {
@@ -37,7 +45,14 @@ func TestLoop_MaybeRefactor_SkipsBelow5Completions(t *testing.T) {
 		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, &git.StubRepo{WorkDir: dir}, nil))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         &git.StubRepo{WorkDir: dir},
+		TaskBackend: nil,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	err := l.maybeRefactor(context.Background(), 3)
 	if err != nil {
@@ -56,7 +71,14 @@ func TestLoop_MaybeRefactor_LLMSaysNo(t *testing.T) {
 		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, nil))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"},
+		TaskBackend: nil,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{
 		queryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			queryFnCalled = true
@@ -92,7 +114,14 @@ func TestLoop_MaybeRefactor_LLMSaysYes(t *testing.T) {
 		Refactor:     true,
 		CallsPerHour: 80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, nil))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"},
+		TaskBackend: nil,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{
 		onRun: func() {
 			runnerCalled = true
@@ -121,7 +150,14 @@ func TestLoop_MaybeRefactor_TriggersAtMultiplesOf5(t *testing.T) {
 		Dirs:     workctx.WorkContext{RalphDir: ralphDir},
 		Refactor: true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"}, nil))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"},
+		TaskBackend: nil,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{
 		queryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			queryCalls++

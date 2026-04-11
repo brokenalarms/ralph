@@ -10,6 +10,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
+	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
@@ -55,7 +56,14 @@ func TestLoop_VerifyBuild_FailureInjectedIntoPrompt(t *testing.T) {
 		CallsPerHour:  80,
 		VerifyBuild:   scriptPath,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	inner := &stubRunner{
 		onRun: func() {
@@ -117,7 +125,14 @@ func TestLoop_VerifyBuild_PassDoesNotInjectContext(t *testing.T) {
 		CallsPerHour:  80,
 		VerifyBuild:   scriptPath,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	inner := &stubRunner{
 		onRun: func() {
@@ -171,7 +186,14 @@ func TestLoop_VerifyBuild_NotConfigured_NoEffect(t *testing.T) {
 		CallsPerHour:  80,
 		// VerifyBuild intentionally not set
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	inner := &stubRunner{
 		onRun: func() {
@@ -234,7 +256,14 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 		VerifyBuild:   scriptPath,
 		VerifyDir:     dir,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	inner := &stubRunner{
 		onRun: func() {

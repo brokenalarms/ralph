@@ -45,7 +45,14 @@ func TestLoop_CompleteTask_ClosesTask(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -89,7 +96,14 @@ func TestLoop_CompleteTask_VerificationFailure(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
@@ -131,7 +145,13 @@ func TestCompleteTask_SkippedTask_DoesNotPush(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -194,7 +214,13 @@ func TestCompleteTask_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 		CallsPerHour:      80,
 		PostSignalTimeout: 50 * time.Millisecond,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipFunc = func(ctx context.Context, _ git.ShipOpts) (git.ShipResult, error) {
@@ -256,7 +282,14 @@ func TestCompleteTask_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
 		CallsPerHour:      80,
 		PostSignalTimeout: 5 * time.Second,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
@@ -303,7 +336,14 @@ func TestCompleteTask_PostSignalTimeout_CancelsMerge(t *testing.T) {
 		AutoMerge:         true,
 		PostSignalTimeout: 50 * time.Millisecond,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
@@ -359,7 +399,14 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 		PostTask:      scriptPath,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.MergeRetryResult = true
@@ -412,7 +459,14 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 		CallsPerHour:  80,
 		PostTask:      scriptPath,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
@@ -456,7 +510,13 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 		CallsPerHour:  80,
 		PostTask:      scriptPath,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 50}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -508,7 +568,13 @@ func TestLoop_PostTaskScript_LogsWhenNotConfigured(t *testing.T) {
 			CallsPerHour:  80,
 			AutoMerge:     true,
 		}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -550,7 +616,14 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 		CallsPerHour:  80,
 		PostTask:      scriptPath,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -610,7 +683,14 @@ func TestLoop_PostTaskScript_PackageJSONDetection(t *testing.T) {
 			CallsPerHour:  80,
 			AutoMerge:     true,
 		}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -665,7 +745,14 @@ func TestCompleteTask_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 		CallsPerHour:  80,
 		Notify:        true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -719,7 +806,14 @@ func TestCompleteTask_NotifyDisabled_NoNotification(t *testing.T) {
 		CallsPerHour:  80,
 		Notify:        false,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -770,7 +864,14 @@ func TestCompleteTask_NotifyOnNoCommitsPath(t *testing.T) {
 		CallsPerHour:  80,
 		Notify:        true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -821,7 +922,13 @@ func TestCompleteTask_FeedbackFileStopsPostSignal(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 

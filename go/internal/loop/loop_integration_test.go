@@ -155,7 +155,14 @@ func TestIntegration_HappyPath_SignalVerifyPushMergeClose(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -260,7 +267,14 @@ func TestIntegration_ResumeViaPR_Merged(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -337,7 +351,14 @@ func TestIntegration_ResumeViaPR_MergedFoundViaBranchMetadata(t *testing.T) {
 		MaxIterations: 3,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -398,7 +419,14 @@ func TestIntegration_ResumeViaPR_OpenAutoMerge(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -465,7 +493,14 @@ func TestIntegration_ResumeViaPR_Closed(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -533,17 +568,24 @@ func TestIntegration_TestFailureThenFixAgentPasses(t *testing.T) {
 		CallsPerHour:  80,
 		VerifyDir:     dir,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
-		newRunner: func() verifier.Runner {
-			fixAgentCalls++
-			// Fix agent "fixes" by removing the failing Makefile.
-			os.Remove(filepath.Join(dir, "Makefile"))
-			return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed tests"}}
-		},
-		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
-			return "YES: approved", nil
-		}},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				fixAgentCalls++
+				// Fix agent "fixes" by removing the failing Makefile.
+				os.Remove(filepath.Join(dir, "Makefile"))
+				return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed tests"}}
+			},
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				return "YES: approved", nil
+			}},
+		}),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -606,7 +648,14 @@ func TestIntegration_CIFailureThenFixThenMerge(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 55}
@@ -665,7 +714,14 @@ func TestIntegration_MaxIterationsReached(t *testing.T) {
 		MaxIterations: 2,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -729,7 +785,14 @@ func TestIntegration_ExternalRefFormat(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 77}
@@ -805,7 +868,14 @@ func TestIntegration_PushCalledOnSignal(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
@@ -867,7 +937,14 @@ func TestIntegration_WaitModePicksUpNewTask(t *testing.T) {
 		CallsPerHour:  80,
 		Wait:          true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -940,17 +1017,24 @@ func TestIntegration_TestFailureFixedByAgent(t *testing.T) {
 		CallsPerHour:  80,
 		VerifyDir:     dir,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
-		newRunner: func() verifier.Runner {
-			fixCalls++
-			// Fix agent removes the failing Makefile so tests pass.
-			os.Remove(filepath.Join(dir, "Makefile"))
-			return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed tests"}}
-		},
-		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
-			return "YES: approved", nil
-		}},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				fixCalls++
+				// Fix agent removes the failing Makefile so tests pass.
+				os.Remove(filepath.Join(dir, "Makefile"))
+				return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed tests"}}
+			},
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				return "YES: approved", nil
+			}},
+		}),
+	})
 
 	l.runner = &signalCallingRunner{
 		result: claude.Result{Summary: "done"},
@@ -1053,7 +1137,14 @@ func TestIntegration_ResumeTask_AllStates(t *testing.T) {
 				CallsPerHour:  80,
 				AutoMerge:     true,
 			}
-			l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+			logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 			l.runner = &stubRunner{onRun: func() { agentCalled = true }}
 			l.cfg.IsOnline = func() bool { return true }
 			l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -1135,7 +1226,14 @@ func TestIntegration_TwoTasksCompleteSequentially(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
@@ -1213,7 +1311,14 @@ func TestIntegration_StackedPRSkipsMergeButCloses(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
@@ -1276,7 +1381,14 @@ func TestIntegration_MergeConflictThenRetrySucceeds(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 60}
@@ -1327,7 +1439,14 @@ func TestIntegration_AgentExitsWithoutSignal_Retries(t *testing.T) {
 		MaxIterations: 3,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -1385,7 +1504,14 @@ func TestIntegration_CompletedTaskNotReselected(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
@@ -1435,7 +1561,14 @@ func TestIntegration_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -1488,7 +1621,14 @@ func TestIntegration_FeedbackKillRestartsIteration(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -1541,7 +1681,14 @@ func TestIntegration_StopFileHaltsLoop(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -1599,7 +1746,14 @@ func TestIntegration_EvolveExitsAfterMerge(t *testing.T) {
 		AutoMerge:     true,
 		Evolve:        true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
@@ -1651,12 +1805,19 @@ func TestIntegration_TestsRunBeforeAndAfterAgent(t *testing.T) {
 		CallsPerHour:  80,
 		VerifyDir:     dir, // enables verification
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
-		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
-			sequence = append(sequence, "llm-verify")
-			return "YES: approved", nil
-		}},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				sequence = append(sequence, "llm-verify")
+				return "YES: approved", nil
+			}},
+		}),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -1728,7 +1889,14 @@ func TestIntegration_DependencyBlockedTaskIsSkipped(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 77}
@@ -1966,7 +2134,14 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = agentRunner
 	l.cfg.OnVerify = func(_ context.Context, _, _ string) (bool, string) {
 		record("verify")
@@ -2116,13 +2291,20 @@ func TestIntegration_LifecycleCI_FailureFixRetry(t *testing.T) {
 	}
 	// Fix agent changes the HEAD SHA, proving tryFixCI sees a new commit and
 	// returns CIFixApplied so MergeWithRetry continues to a second attempt.
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
-		newRunner: func() verifier.Runner {
-			fixAgentCalled = true
-			stub.HeadRevValue = "sha-after-fix"
-			return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "ci fixed"}}
-		},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				fixAgentCalled = true
+				stub.HeadRevValue = "sha-after-fix"
+				return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "ci fixed"}}
+			},
+		}),
+	})
 	l.runner = agentRunner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
@@ -2219,13 +2401,20 @@ func TestIntegration_CIFailureTriggersFixAgent(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, stub, backend, testStubs{
-		newRunner: func() verifier.Runner {
-			fixAgentCalled = true
-			stub.HeadRevValue = "sha-after-fix"
-			return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "ci fixed"}}
-		},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         stub,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				fixAgentCalled = true
+				stub.HeadRevValue = "sha-after-fix"
+				return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "ci fixed"}}
+			},
+		}),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
@@ -2385,7 +2574,14 @@ func TestIntegration_CIAlreadyPassing_SkipsPushAndMerges(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
@@ -2492,7 +2688,14 @@ func TestIntegration_CIAlreadyPassing_FallsThrough_WhenHeadDiffers(t *testing.T)
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
@@ -2614,13 +2817,20 @@ func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
 	// still fails on re-check, so MergeWithRetry exhausts MaxMergeAttempts
 	// and returns CIFailureError — proving the failing checks weren't filtered.
 	fixAttempt := 0
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
-		newRunner: func() verifier.Runner {
-			fixAttempt++
-			stub.HeadRevValue = fmt.Sprintf("sha-after-fix-%d", fixAttempt)
-			return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "ci fix attempted"}}
-		},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				fixAttempt++
+				stub.HeadRevValue = fmt.Sprintf("sha-after-fix-%d", fixAttempt)
+				return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "ci fix attempted"}}
+			},
+		}),
+	})
 	l.runner = agentRunner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
@@ -2712,7 +2922,14 @@ func TestIntegration_LifecycleOrdering_BranchRenameAndReviewers(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(_ context.Context, _, _ string) (bool, string) {
 		record("verify")
@@ -2815,7 +3032,14 @@ func TestIntegration_LifecycleOrdering_NoReviewerDetectionWithoutTasks(t *testin
 		MaxIterations: 5,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -2906,7 +3130,14 @@ func TestIntegration_LifecycleOrdering_FlushNoopAfterShip(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(_ context.Context, _, _ string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
@@ -3052,7 +3283,14 @@ func TestIntegration_EvolveRebasePreservesUserCommits(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
@@ -3151,7 +3389,14 @@ func TestIntegration_ResumeViaPR_DetectsExistingOpenPR(t *testing.T) {
 		MaxIterations: 3,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -3207,7 +3452,14 @@ func TestIntegration_VerifyBuildRunsBeforeAgent(t *testing.T) {
 		CallsPerHour:  80,
 		VerifyBuild:   "echo 'ERROR: missing import' && exit 1",
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		seq = append(seq, "verify")
@@ -3280,11 +3532,18 @@ func TestIntegration_PreIterationTestsRunBeforeAgent(t *testing.T) {
 		CallsPerHour:  80,
 		VerifyDir:     dir,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
-		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
-			return "YES: ok", nil
-		}},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				return "YES: ok", nil
+			}},
+		}),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	l.cfg.IsOnline = func() bool { return true }
@@ -3338,22 +3597,29 @@ func TestIntegration_LLMVerifyRejectThenFixThenPass(t *testing.T) {
 	llmCalls := 0
 	// Fix agent is spawned after rejection.
 	fixCalls := 0
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
-		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
-			llmCalls++
-			if llmCalls == 1 {
-				seq = append(seq, "llm_reject")
-				return "NO: no test for auth", nil
-			}
-			seq = append(seq, "llm_approve")
-			return "YES: looks good", nil
-		}},
-		newRunner: func() verifier.Runner {
-			fixCalls++
-			seq = append(seq, "fix_agent")
-			return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "added tests"}}
-		},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				llmCalls++
+				if llmCalls == 1 {
+					seq = append(seq, "llm_reject")
+					return "NO: no test for auth", nil
+				}
+				seq = append(seq, "llm_approve")
+				return "YES: looks good", nil
+			}},
+			newRunner: func() verifier.Runner {
+				fixCalls++
+				seq = append(seq, "fix_agent")
+				return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "added tests"}}
+			},
+		}),
+	})
 	l.runner = runner
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }

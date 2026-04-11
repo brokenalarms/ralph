@@ -32,11 +32,18 @@ func TestOnSignal_HappyPath(t *testing.T) {
 		CallsPerHour:  80,
 		VerifyDir:     dir,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}, testStubs{
-		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
-			return "YES: looks good", nil
-		}},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				return "YES: looks good", nil
+			}},
+		}),
+	})
 
 	l.cfg.OnVerify = func(ctx context.Context, dir, headBefore string) (bool, string) {
 		return true, ""
@@ -73,15 +80,22 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 		VerifyDir:     dir,
 	}
 	llmCalls := 0
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
-		newRunner: func() verifier.Runner {
-			return &stubRunner{result: stubResult(true, "attempted fix")}
-		},
-		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
-			llmCalls++
-			return "NO: diff doesn't match bead", nil
-		}},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: stubResult(true, "attempted fix")}
+			},
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				llmCalls++
+				return "NO: diff doesn't match bead", nil
+			}},
+		}),
+	})
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
@@ -118,19 +132,26 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	}
 	var modelsUsed []string
 	llmCalls := 0
-	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}, testStubs{
-		newRunner: func() verifier.Runner {
-			return &stubRunner{result: stubResult(true, "attempted fix")}
-		},
-		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
-			llmCalls++
-			modelsUsed = append(modelsUsed, model)
-			if llmCalls <= 2 {
-				return "NO: needs work", nil
-			}
-			return "YES: approved", nil
-		}},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: stubResult(true, "attempted fix")}
+			},
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				llmCalls++
+				modelsUsed = append(modelsUsed, model)
+				if llmCalls <= 2 {
+					return "NO: needs work", nil
+				}
+				return "YES: approved", nil
+			}},
+		}),
+	})
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
@@ -176,18 +197,25 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 		VerifyEscalationModel: customEscalation,
 	}
 	var modelsUsed []string
-	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}, testStubs{
-		newRunner: func() verifier.Runner {
-			return &stubRunner{result: stubResult(true, "attempted fix")}
-		},
-		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
-			modelsUsed = append(modelsUsed, model)
-			if len(modelsUsed) < 3 {
-				return "NO: needs work", nil
-			}
-			return "YES: approved", nil
-		}},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: stubResult(true, "attempted fix")}
+			},
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				modelsUsed = append(modelsUsed, model)
+				if len(modelsUsed) < 3 {
+					return "NO: needs work", nil
+				}
+				return "YES: approved", nil
+			}},
+		}),
+	})
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
@@ -231,19 +259,26 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 	}
 	fixAgentSpawned := false
 	llmCalls := 0
-	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"}, testStubs{
-		newRunner: func() verifier.Runner {
-			fixAgentSpawned = true
-			return &stubRunner{result: stubResult(true, "fixed error handling")}
-		},
-		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
-			llmCalls++
-			if llmCalls == 1 {
-				return "NO: missing error handling", nil
-			}
-			return "YES: looks good after fix", nil
-		}},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				fixAgentSpawned = true
+				return &stubRunner{result: stubResult(true, "fixed error handling")}
+			},
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				llmCalls++
+				if llmCalls == 1 {
+					return "NO: missing error handling", nil
+				}
+				return "YES: looks good after fix", nil
+			}},
+		}),
+	})
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
@@ -283,21 +318,28 @@ func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
 	var capturedPrompt string
 	rejectionMsg := "function foo() ignores the error return from bar()"
 	llmCalls := 0
-	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"}, testStubs{
-		newRunner: func() verifier.Runner {
-			return &promptCapturingRunner{
-				inner:    &stubRunner{result: stubResult(true, "fixed")},
-				captured: &capturedPrompt,
-			}
-		},
-		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
-			llmCalls++
-			if llmCalls == 1 {
-				return "NO: " + rejectionMsg, nil
-			}
-			return "YES: approved", nil
-		}},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task", Acceptance: "must handle errors"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &promptCapturingRunner{
+					inner:    &stubRunner{result: stubResult(true, "fixed")},
+					captured: &capturedPrompt,
+				}
+			},
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				llmCalls++
+				if llmCalls == 1 {
+					return "NO: " + rejectionMsg, nil
+				}
+				return "YES: approved", nil
+			}},
+		}),
+	})
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
@@ -332,14 +374,21 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		CallsPerHour:  80,
 		VerifyDir:     dir,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}, testStubs{
-		newRunner: func() verifier.Runner {
-			return &stubRunner{result: stubResult(false, "")}
-		},
-		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
-			return "NO: bad code", nil
-		}},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: stubResult(false, "")}
+			},
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				return "NO: bad code", nil
+			}},
+		}),
+	})
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
@@ -373,12 +422,19 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 	// With no PR diff and no iteration diff, LLMVerifyPR short-circuits
 	// to NoDiff=true without invoking QueryFn.
 	runnerSpawned := false
-	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}, testStubs{
-		newRunner: func() verifier.Runner {
-			runnerSpawned = true
-			return &stubRunner{result: stubResult(true, "confirmed")}
-		},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				runnerSpawned = true
+				return &stubRunner{result: stubResult(true, "confirmed")}
+			},
+		}),
+	})
 
 	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
 		ctx: context.Background(), headBefore: "abc123",
@@ -417,7 +473,14 @@ func TestAgentModelEscalation(t *testing.T) {
 		Model:                firstModel,
 		AgentEscalationModel: escalationModel,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-abc"}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-abc"},
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	var capturedModels []string
 	l.runner = &stubRunner{
@@ -464,7 +527,14 @@ func TestAgentModelEscalation_ModelCapApplied(t *testing.T) {
 		AgentEscalationModel: verify.ModelOpus,
 		ModelCap:             verify.ModelHaiku, // cap everything to haiku
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-cap"}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-cap"},
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	var capturedModels []string
 	l.runner = &stubRunner{
@@ -512,12 +582,17 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 		CallsPerHour:  80,
 		VerifyDir:     dir,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}, testStubs{
-		logger: logger,
-		newRunner: func() verifier.Runner {
-			return &stubRunner{result: stubResult(true, "fixed")}
-		},
-	}))
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: stubResult(true, "fixed")}
+			},
+		}),
+	})
 
 	review := &git.AutoReview{
 		Comments: []git.ReviewComment{

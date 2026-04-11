@@ -71,7 +71,14 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.MergeRetryResult = true
@@ -144,7 +151,14 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	gm.MergeRetryResult = true
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
@@ -236,7 +250,14 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	gm.MergeRetryResult = true
 
@@ -330,7 +351,14 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	gm.MergeRetryResult = true
 
@@ -416,7 +444,14 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	gm.MergeRetryResult = true
 
@@ -502,7 +537,14 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	gm.MergeRetryResult = true
 
@@ -585,7 +627,13 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.MergeRetryResult = true

@@ -103,7 +103,14 @@ func TestWaitForRate_AllowsWhenUnderLimit(t *testing.T) {
 		Dirs:         workctx.WorkContext{RalphDir: ralphDir},
 		CallsPerHour: 80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, &git.StubRepo{}, nil))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         &git.StubRepo{},
+		TaskBackend: nil,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	allowed := l.waitForRate(context.Background())
 

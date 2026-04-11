@@ -12,32 +12,27 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
-	"github.com/brokenalarms/ralph/internal/tasks"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
-// newTestModules constructs a Modules literal for tests. The cfg argument
-// is used to derive the verifier's config — verifier is built once with
-// the right config from the start, so no post-construction syncing is
-// needed. Tests that need stub sub-modules pass them via the testStubs
-// struct (zero values get production defaults).
+// newTestVerifier constructs a *verifier.Verifier for tests, deriving the
+// verifier's config from the loop's Config. It's the only module where
+// construction has enough boilerplate (11 fields to copy from loop.Config)
+// to justify a helper — state/git/backend/logger are 1-liners that tests
+// construct directly. Tests then build Modules{} inline.
 //
-// This is the single entry point for constructing a Modules value in
-// tests — tests do not build Modules literals directly. Future fields
-// added to Modules land in exactly one place in the test code.
-func newTestModules(t *testing.T, cfg Config, st *state.Store, gm git.Ops, backend tasks.Backend, stubs ...testStubs) Modules {
+// Optional stubs override the production defaults for verifier's two
+// sub-modules: newRunner (fix-agent runner factory) and querier (one-shot
+// LLM caller). Both default to agent.New(logger) when nil.
+func newTestVerifier(t *testing.T, cfg Config, logger *logging.Logger, stubs ...verifierTestStubs) *verifier.Verifier {
 	t.Helper()
-	var s testStubs
+	var s verifierTestStubs
 	if len(stubs) > 0 {
 		s = stubs[0]
 	}
-	logger := s.logger
-	if logger == nil {
-		logger = logging.New(nil)
-	}
-	vrf := verifier.New(verifier.Config{
+	return verifier.New(verifier.Config{
 		VerifyDir:             cfg.VerifyDir,
 		ProjectDir:            cfg.Dirs.ProjectDir,
 		VerifyModel:           cfg.VerifyModel,
@@ -50,13 +45,11 @@ func newTestModules(t *testing.T, cfg Config, st *state.Store, gm git.Ops, backe
 		CompileCheckTimeout:   cfg.CompileCheckTimeout,
 		Signals:               claude.DefaultSignalPaths(cfg.Dirs.RalphDir),
 	}, logger, s.newRunner, s.querier)
-	return Modules{State: st, Git: gm, TaskBackend: backend, Logger: logger, Verifier: vrf}
 }
 
-// testStubs bundles optional test stubs for newTestModules. Zero values
-// fall back to production defaults.
-type testStubs struct {
-	logger    *logging.Logger
+// verifierTestStubs bundles optional verifier sub-module stubs. Zero
+// values fall back to production defaults.
+type verifierTestStubs struct {
 	newRunner verifier.RunnerFactory
 	querier   verifier.Querier
 }
@@ -146,7 +139,14 @@ func TestRun_ExitsOnGitHubUnreachable(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, &testutil.TrackingBackend{}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.TrackingBackend{},
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.cfg.IsOnline = func() bool { return true }
 	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
@@ -189,7 +189,14 @@ func TestLoopTaskDescription_Standalone(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	if got := l.taskDescription("ralph-abc"); got != "Fix auth middleware" {
 		t.Errorf("expected description, got %q", got)
@@ -203,7 +210,14 @@ func TestLoopTaskDescription_Standalone(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 	}
-	lNil := New(cfgNil, newTestModules(t, cfgNil, st, gm, nil))
+	loggerNil := logging.New(nil)
+	lNil := New(cfgNil, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: nil,
+		Logger:      loggerNil,
+		Verifier:    newTestVerifier(t, cfgNil, loggerNil),
+	})
 	if got := lNil.taskDescription("ralph-abc"); got != "" {
 		t.Errorf("nil backend should return empty, got %q", got)
 	}

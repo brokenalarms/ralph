@@ -50,7 +50,14 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return false, "test suite failed"
@@ -123,7 +130,14 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
 		return true, ""
@@ -192,7 +206,14 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		CallsPerHour:  80,
 		// VerifyDir deliberately not set
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -248,7 +269,14 @@ func TestLoop_CIFailureLeavesTaskOpen(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
@@ -304,7 +332,14 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
@@ -353,7 +388,14 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
@@ -399,11 +441,18 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
-		newRunner: func() verifier.Runner {
-			return &stubRunner{result: claude.Result{SignalDetected: true}}
-		},
-	}))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: claude.Result{SignalDetected: true}}
+			},
+		}),
+	})
 
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.PRState = "OPEN"
@@ -463,7 +512,14 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.PRState = "OPEN"
@@ -474,7 +530,7 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	logger := logging.New(&buf)
+	logger = logging.New(&buf)
 	l.logger = logger
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -524,7 +580,14 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	gm.PRState = "OPEN"
@@ -587,7 +650,14 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	gm.ShipResult = git.ShipResult{PRNumber: 50}
 	gm.PRState = "OPEN"
@@ -654,7 +724,14 @@ func TestLoop_SuccessfulMergeClearsMergeFailures(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	gm.PRState = "OPEN"
@@ -712,7 +789,14 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 		CallsPerHour:  80,
 		VerifyDir:     dir,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
@@ -837,15 +921,20 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				VerifyDir:     dir,
 			}
 			reply := tt.queryReply
-			l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
-				logger: logger,
-				querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
-					return reply, nil
-				}},
-				newRunner: func() verifier.Runner {
-					return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
-				},
-			}))
+			l := New(cfg, Modules{
+				State:       st,
+				Git:         gm,
+				TaskBackend: backend,
+				Logger:      logger,
+				Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+					querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+						return reply, nil
+					}},
+					newRunner: func() verifier.Runner {
+						return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "fixed"}}
+					},
+				}),
+			})
 			l.runner = runner
 
 			l.cfg.CheckGitHub = func(context.Context) error { return nil }

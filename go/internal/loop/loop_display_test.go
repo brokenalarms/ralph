@@ -61,7 +61,13 @@ func TestLoop_OrchestratorMessagesUseLoopPrefix(t *testing.T) {
 				MaxIterations: 5,
 				CallsPerHour:  80,
 			}
-			l := New(cfg, newTestModules(t, cfg, st, gm, tt.backend, testStubs{logger: logger}))
+			l := New(cfg, Modules{
+				State:       st,
+				Git:         gm,
+				TaskBackend: tt.backend,
+				Logger:      logger,
+				Verifier:    newTestVerifier(t, cfg, logger),
+			})
 
 			l.cfg.CheckGitHub = func(context.Context) error { return nil }
 			l.Run(context.Background())
@@ -106,7 +112,13 @@ func TestLoop_LogsTaskDescription(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{
 		onRun: func() {
 			backend.Remaining = 0
@@ -170,7 +182,13 @@ func TestLoop_LongDescriptionTruncatedInStream(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{
 		onRun: func() {
 			backend.Remaining = 0
@@ -229,7 +247,13 @@ func TestLoop_NoDescriptionOmitsLine(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{
 		onRun: func() {
 			backend.Remaining = 0
@@ -310,7 +334,13 @@ func TestLoop_DashedSeparatorBetweenIterations(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -368,7 +398,13 @@ func TestLoop_TaskBannerOnNewTask(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -430,12 +466,18 @@ func TestLoop_RateLimitWaitsAndRetries(t *testing.T) {
 		MaxIterations: 10,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{
-		logger: logging.NewWithWriter(&logBuf),
-		querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
-			return "YES: looks good", nil
-		}},
-	}))
+	logger := logging.NewWithWriter(&logBuf)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				return "YES: looks good", nil
+			}},
+		}),
+	})
 
 	// Override the runner to return different results per iteration.
 	l.runner = &rateLimitStubRunner{
@@ -542,7 +584,13 @@ func TestLoop_IterationBannerShowsVersion(t *testing.T) {
 		MaxIterations: 1,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend, testStubs{logger: logger}))
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = runner
 
 	l.cfg.CheckGitHub = func(context.Context) error { return nil }
@@ -578,7 +626,13 @@ func newHandleRunResultLoop(t *testing.T) (*Loop, string) {
 		MaxIterations: 5,
 		CallsPerHour:  80,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, nil, testStubs{logger: logger}))
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: nil,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 
 	return l, ralphDir
 }
@@ -776,7 +830,14 @@ func TestOnResumeDone_Merged_NotifyEnabled(t *testing.T) {
 		CallsPerHour:  80,
 		Notify:        true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer
@@ -828,7 +889,14 @@ func TestOnResumeDone_Open_NotifyEnabled(t *testing.T) {
 		CallsPerHour:  80,
 		Notify:        true,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer
@@ -879,7 +947,14 @@ func TestOnResumeDone_Merged_NotifyDisabled(t *testing.T) {
 		CallsPerHour:  80,
 		Notify:        false,
 	}
-	l := New(cfg, newTestModules(t, cfg, st, gm, backend))
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
 	l.runner = &stubRunner{}
 
 	var buf bytes.Buffer
