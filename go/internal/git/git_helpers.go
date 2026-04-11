@@ -102,37 +102,37 @@ func parseBranchList(out string) []string {
 // Repo methods that mirror the package-level helpers but route
 // through the Repo's injected Runner.
 
-func (m *Repo) HasDiff() bool {
-	if m.gitOutput(m.WorkDir, "diff", "--stat") != "" {
+func (r *Repo) HasDiff() bool {
+	if r.gitOutput(r.WorkDir, "diff", "--stat") != "" {
 		return true
 	}
-	return m.gitOutput(m.WorkDir, "diff", "--cached", "--stat") != ""
+	return r.gitOutput(r.WorkDir, "diff", "--cached", "--stat") != ""
 }
 
-func (m *Repo) HeadRev() string {
-	return m.gitOutput(m.WorkDir, "rev-parse", "HEAD")
+func (r *Repo) HeadRev() string {
+	return r.gitOutput(r.WorkDir, "rev-parse", "HEAD")
 }
 
-func (m *Repo) HasUncommittedChanges() bool {
-	return m.hasUncommittedChangesIn(m.WorkDir)
+func (r *Repo) HasUncommittedChanges() bool {
+	return r.hasUncommittedChangesIn(r.WorkDir)
 }
 
 // hasUncommittedChangesIn returns true when the given dir has unstaged or
-// staged changes. Init calls this with m.ProjectDir explicitly, because
+// staged changes. Init calls this with r.ProjectDir explicitly, because
 // Init runs the dirty-tree check before SetupWorktree has had a chance to
 // move WorkDir to a worktree subdirectory — so checking WorkDir would be
 // the wrong question.
-func (m *Repo) hasUncommittedChangesIn(dir string) bool {
-	return m.gitCmdErr(dir, "diff", "--quiet") != nil ||
-		m.gitCmdErr(dir, "diff", "--cached", "--quiet") != nil
+func (r *Repo) hasUncommittedChangesIn(dir string) bool {
+	return r.gitCmdErr(dir, "diff", "--quiet") != nil ||
+		r.gitCmdErr(dir, "diff", "--cached", "--quiet") != nil
 }
 
-func (m *Repo) CommitAll(message string) {
-	m.gitCmd(m.WorkDir, "add", "-A")
-	_ = m.gitCmdErr(m.WorkDir, "commit", "-m", message)
+func (r *Repo) CommitAll(message string) {
+	r.gitCmd(r.WorkDir, "add", "-A")
+	_ = r.gitCmdErr(r.WorkDir, "commit", "-m", message)
 }
 
-func (m *Repo) ChangedFiles(headBefore, headAfter string) []string {
+func (r *Repo) ChangedFiles(headBefore, headAfter string) []string {
 	seen := make(map[string]bool)
 	var result []string
 
@@ -146,78 +146,78 @@ func (m *Repo) ChangedFiles(headBefore, headAfter string) []string {
 		}
 	}
 
-	add(m.gitOutput(m.WorkDir, "diff", "--name-only"))
-	add(m.gitOutput(m.WorkDir, "diff", "--cached", "--name-only"))
+	add(r.gitOutput(r.WorkDir, "diff", "--name-only"))
+	add(r.gitOutput(r.WorkDir, "diff", "--cached", "--name-only"))
 
 	if headBefore != "" && headAfter != "" && headBefore != headAfter {
-		add(m.gitOutput(m.WorkDir, "diff", "--name-only", headBefore+"..."+headAfter))
+		add(r.gitOutput(r.WorkDir, "diff", "--name-only", headBefore+"..."+headAfter))
 	}
 
 	return result
 }
 
-func (m *Repo) DiffStatRange(from, to string) string {
+func (r *Repo) DiffStatRange(from, to string) string {
 	if from == "" || to == "" || from == to {
 		return ""
 	}
-	return m.gitOutput(m.WorkDir, "diff", "--stat", from, to)
+	return r.gitOutput(r.WorkDir, "diff", "--stat", from, to)
 }
 
 // WorktreeMatchesMain returns true if the worktree tree is identical to
 // origin's default branch. Uses tree diff so squash-merge hash mismatches
 // don't cause false negatives.
-func (m *Repo) WorktreeMatchesMain() bool {
-	defaultBranch := m.detectDefaultBranch()
-	_ = m.gitCmdErr(m.WorkDir, "fetch", "origin", defaultBranch)
-	return m.gitOutput(m.WorkDir, "diff", "--stat", "HEAD", "origin/"+defaultBranch) == ""
+func (r *Repo) WorktreeMatchesMain() bool {
+	defaultBranch := r.detectDefaultBranch()
+	_ = r.gitCmdErr(r.WorkDir, "fetch", "origin", defaultBranch)
+	return r.gitOutput(r.WorkDir, "diff", "--stat", "HEAD", "origin/"+defaultBranch) == ""
 }
 
-func (m *Repo) DiffFull(from, to string) string {
-	return m.gitOutput(m.WorkDir, "diff", from+".."+to)
+func (r *Repo) DiffFull(from, to string) string {
+	return r.gitOutput(r.WorkDir, "diff", from+".."+to)
 }
 
 // ConflictDiff returns the three-way merge diff between HEAD and the base
 // branch (or the default branch), showing what diverges. Used to give a
 // conflict resolution agent context about the conflicting changes.
-func (m *Repo) ConflictDiff() string {
-	baseBranch := m.detectDefaultBranch()
-	if m.PrevBranch != "" {
-		baseBranch = m.PrevBranch
+func (r *Repo) ConflictDiff() string {
+	baseBranch := r.detectDefaultBranch()
+	if r.PrevBranch != "" {
+		baseBranch = r.PrevBranch
 	}
 	remote := "origin/" + baseBranch
-	files := m.gitOutput(m.WorkDir, "diff", "--name-only", remote+"...HEAD")
-	diff := m.gitOutput(m.WorkDir, "diff", remote+"...HEAD")
+	files := r.gitOutput(r.WorkDir, "diff", "--name-only", remote+"...HEAD")
+	diff := r.gitOutput(r.WorkDir, "diff", remote+"...HEAD")
 	if files == "" && diff == "" {
 		return ""
 	}
 	return "Conflicting files:\n" + files + "\n\nDiff (ours vs base):\n" + diff
 }
 
-func (m *Repo) LogOneline(from, to string) string {
-	return m.gitOutput(m.WorkDir, "log", "--oneline", from+".."+to)
+func (r *Repo) LogOneline(from, to string) string {
+	return r.gitOutput(r.WorkDir, "log", "--oneline", from+".."+to)
 }
 
-func (m *Repo) RecentChangedFiles(n int) string {
-	return m.gitOutput(m.WorkDir, "diff", "--name-only", fmt.Sprintf("HEAD~%d", n), "HEAD")
+func (r *Repo) RecentChangedFiles(n int) string {
+	return r.gitOutput(r.WorkDir, "diff", "--name-only", fmt.Sprintf("HEAD~%d", n), "HEAD")
 }
 
-func (m *Repo) ListProjectBranches() []string {
-	out := m.gitOutput(m.ProjectDir, "branch", "--list", BranchListPattern(), "--sort=refname")
+func (r *Repo) ListProjectBranches() []string {
+	out := r.gitOutput(r.ProjectDir, "branch", "--list", BranchListPattern(), "--sort=refname")
 	return parseBranchList(out)
 }
 
 
-func (m *Repo) ValidateRemoteBranch(ctx context.Context) error {
-	branch := m.detectDefaultBranch()
-	m.gitCmdCtx(ctx, m.ProjectDir, "fetch", "origin", branch)
-	if !m.refExists(m.ProjectDir, "origin/"+branch) {
+func (r *Repo) ValidateRemoteBranch(ctx context.Context) error {
+	branch := r.detectDefaultBranch()
+	r.gitCmdCtx(ctx, r.ProjectDir, "fetch", "origin", branch)
+	if !r.refExists(r.ProjectDir, "origin/"+branch) {
 		return fmt.Errorf("base branch %q does not exist on remote — create it or set --base-branch", branch)
 	}
 	return nil
 }
 
-func (m *Repo) EnsureGitignored(entry string) {
-	gitignorePath := filepath.Join(m.ProjectDir, ".gitignore")
+func (r *Repo) EnsureGitignored(entry string) {
+	gitignorePath := filepath.Join(r.ProjectDir, ".gitignore")
 	existing := ""
 	if data, err := os.ReadFile(gitignorePath); err == nil {
 		existing = string(data)
@@ -238,14 +238,14 @@ func (m *Repo) EnsureGitignored(entry string) {
 	existing += entry + "\n"
 	os.WriteFile(gitignorePath, []byte(existing), 0o644)
 
-	if IsGitRepo(m.ProjectDir) {
-		m.gitCmd(m.ProjectDir, "add", ".gitignore")
-		m.gitCmd(m.ProjectDir, "commit", "-m", "Add "+entry+" to .gitignore")
+	if IsGitRepo(r.ProjectDir) {
+		r.gitCmd(r.ProjectDir, "add", ".gitignore")
+		r.gitCmd(r.ProjectDir, "commit", "-m", "Add "+entry+" to .gitignore")
 	}
 }
 
-func (m *Repo) PruneOrphanedWorktrees() {
-	worktreeRoot := filepath.Join(m.ralphDir, "worktrees")
+func (r *Repo) PruneOrphanedWorktrees() {
+	worktreeRoot := filepath.Join(r.ralphDir, "worktrees")
 	entries, err := os.ReadDir(worktreeRoot)
 	if err != nil {
 		return
@@ -254,9 +254,9 @@ func (m *Repo) PruneOrphanedWorktrees() {
 		return
 	}
 
-	m.gitCmd(m.ProjectDir, "worktree", "prune")
+	r.gitCmd(r.ProjectDir, "worktree", "prune")
 
-	out := m.gitOutput(m.ProjectDir, "worktree", "list", "--porcelain")
+	out := r.gitOutput(r.ProjectDir, "worktree", "list", "--porcelain")
 	tracked := make(map[string]bool)
 	for _, line := range strings.Split(out, "\n") {
 		if strings.HasPrefix(line, "worktree ") {
@@ -276,8 +276,8 @@ func (m *Repo) PruneOrphanedWorktrees() {
 		if tracked[dirPath] || tracked[resolved] {
 			continue
 		}
-		if m.logger != nil {
-			m.logger.Emit(logging.Opts{Domain: logging.Git}, "Removing orphaned worktree directory: %s", dirPath)
+		if r.logger != nil {
+			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Removing orphaned worktree directory: %s", dirPath)
 		}
 		os.RemoveAll(dirPath)
 	}

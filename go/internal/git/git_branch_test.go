@@ -14,15 +14,15 @@ import (
 func TestSetStackHead_SkipsWhenNoBranchesAvailable(t *testing.T) {
 	log := &testLog{}
 	gh := &StubGitHub{IsAvailable: true, OpenPRBranches: nil}
-	m := &Repo{
+	r := &Repo{
 		logger: log,
 		github: gh,
 	}
 
-	setStackHead(m, []string{"ralph/some-task"})
+	setStackHead(r, []string{"ralph/some-task"})
 
-	if m.PrevBranch != "" {
-		t.Errorf("PrevBranch should be empty when no open PR branches, got %q", m.PrevBranch)
+	if r.PrevBranch != "" {
+		t.Errorf("PrevBranch should be empty when no open PR branches, got %q", r.PrevBranch)
 	}
 	for _, msg := range log.messages {
 		if strings.Contains(msg, "Stack head") {
@@ -35,9 +35,9 @@ func TestSetStackHead_SkipsWhenNoBranchesAvailable(t *testing.T) {
 // empty — the early-return path is silent.
 func TestSetStackHead_SilentWhenNoCompletedBranches(t *testing.T) {
 	log := &testLog{}
-	m := &Repo{logger: log}
+	r := &Repo{logger: log}
 
-	setStackHead(m, nil)
+	setStackHead(r, nil)
 
 	for _, msg := range log.messages {
 		if strings.Contains(msg, "No stacked parents") {
@@ -52,7 +52,7 @@ func TestCheckoutExistingBranch_NoStoredBranch_RenamesBranch(t *testing.T) {
 	runner := newStubRunner()
 	runner.On("branch", "", nil)
 
-	m := &Repo{
+	r := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/worktrees/wt1",
 		WorktreeBranch: "ralph/wip-branch",
@@ -60,14 +60,14 @@ func TestCheckoutExistingBranch_NoStoredBranch_RenamesBranch(t *testing.T) {
 		logger:         logging.New(nil),
 	}
 
-	checkedOut, err := checkoutExistingBranch(m, BranchTaskMeta{}, "ralph-xyz", "Fix login")
+	checkedOut, err := checkoutExistingBranch(r, BranchTaskMeta{}, "ralph-xyz", "Fix login")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if checkedOut {
 		t.Error("expected checkedOut=false when no stored branch, got true")
 	}
-	if m.WorktreeBranch == "ralph/wip-branch" {
+	if r.WorktreeBranch == "ralph/wip-branch" {
 		t.Error("expected branch to be renamed, got original name")
 	}
 }
@@ -79,7 +79,7 @@ func TestCheckoutExistingBranch_RenameFailure_ReturnsError(t *testing.T) {
 	runner := newStubRunner()
 	runner.On("branch", "", renameErr)
 
-	m := &Repo{
+	r := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/worktrees/wt1",
 		WorktreeBranch: "ralph/next",
@@ -87,11 +87,11 @@ func TestCheckoutExistingBranch_RenameFailure_ReturnsError(t *testing.T) {
 		logger:         logging.New(nil),
 	}
 
-	_, err := checkoutExistingBranch(m, BranchTaskMeta{}, "ralph-xyz", "Fix login")
+	_, err := checkoutExistingBranch(r, BranchTaskMeta{}, "ralph-xyz", "Fix login")
 	if err == nil {
 		t.Fatal("expected error when rename fails, got nil")
 	}
-	if m.BranchRenamed {
+	if r.BranchRenamed {
 		t.Error("BranchRenamed should remain false after rename failure")
 	}
 }
@@ -105,7 +105,7 @@ func TestBranchForTask_UsesStoredBranchWhenRemoteEmpty(t *testing.T) {
 	// rev-list returns "" (no commits ahead) — RemoteBranchHasCommits returns false
 	runner.On("rev-list", "", nil)
 
-	m := &Repo{
+	r := &Repo{
 		ProjectDir:     "/project",
 		WorkDir:        "/project/worktrees/wt1",
 		WorktreeBranch: "ralph/wip-branch",
@@ -114,7 +114,7 @@ func TestBranchForTask_UsesStoredBranchWhenRemoteEmpty(t *testing.T) {
 		github:         &StubGitHub{},
 	}
 
-	branch, err := m.BranchForTask(context.Background(), "ralph-abc", "My task", BranchTaskMeta{
+	branch, err := r.BranchForTask(context.Background(), "ralph-abc", "My task", BranchTaskMeta{
 		Branch: "ralph/ralph-abc-my-task",
 	})
 	if err != nil {

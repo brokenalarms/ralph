@@ -432,9 +432,10 @@ func TestPushAndCreatePR_NoBeadID(t *testing.T) {
 	}
 }
 
-// PushAndCreatePR passes the body parameter through to CreatePR, so the
-// PR description uses bead context instead of generic boilerplate.
-func TestPushAndCreatePR_PassesBodyToCreatePR(t *testing.T) {
+// PushAndCreatePR forwards its summary argument into the Summary section
+// of the formatted PR body, so the PR description uses task context
+// instead of generic boilerplate.
+func TestPushAndCreatePR_WrapsSummaryIntoFormattedBody(t *testing.T) {
 	r := newStubRunner()
 	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
 	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
@@ -467,23 +468,25 @@ func TestPushAndCreatePR_PassesBodyToCreatePR(t *testing.T) {
 		logger:         discardLog{},
 	}
 
-	body := "## Description\nFix auth middleware\n\n## Summary\nDone"
-	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix auth", body)
+	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix auth", "Done")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if capturedOpts.Body != body {
-		t.Errorf("CreatePR body = %q, want %q", capturedOpts.Body, body)
+	// PushAndCreatePR forwards the summary string into the Summary
+	// section that formatPRBody constructs.
+	wantBody := "## Summary\nDone"
+	if capturedOpts.Body != wantBody {
+		t.Errorf("CreatePR body = %q, want %q", capturedOpts.Body, wantBody)
 	}
 	if !strings.HasPrefix(capturedOpts.Title, "[ralph-abc]") {
 		t.Errorf("title should start with [ralph-abc], got %q", capturedOpts.Title)
 	}
 }
 
-// PushAndCreatePR uses the task description as body when no explicit body
-// is provided, avoiding completely empty PR descriptions.
-func TestPushAndCreatePR_FallsBackToTaskDescWhenNoBody(t *testing.T) {
+// PushAndCreatePR uses the task description as body when no summary is
+// provided, avoiding completely empty PR descriptions.
+func TestPushAndCreatePR_FallsBackToTaskDescWhenNoSummary(t *testing.T) {
 	r := newStubRunner()
 	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
 	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)

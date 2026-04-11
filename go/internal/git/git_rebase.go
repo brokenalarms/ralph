@@ -32,16 +32,16 @@ func (e *RebaseConflictError) Error() string {
 // and continue. For each conflicted file: if only one side changed from base,
 // take that side. If both changed but ours is a subset of theirs, take theirs.
 // Returns true if the rebase completed successfully.
-func (m *Repo) autoResolveAndContinue(ctx context.Context, defaultBranch string) bool {
+func (r *Repo) autoResolveAndContinue(ctx context.Context, defaultBranch string) bool {
 	for i := 0; i < 50; i++ { // max steps to prevent infinite loop
-		conflicted := m.gitOutput(m.WorkDir, "diff", "--name-only", "--diff-filter=U")
+		conflicted := r.gitOutput(r.WorkDir, "diff", "--name-only", "--diff-filter=U")
 		if conflicted == "" {
 			// No conflicts — try to continue
-			if err := m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--continue"); err == nil {
+			if err := r.gitCmdErrCtx(ctx, r.WorkDir, "rebase", "--continue"); err == nil {
 				return true
 			}
 			// Might be done
-			if !m.mRebaseInProgress() {
+			if !r.mRebaseInProgress() {
 				return true
 			}
 			continue
@@ -54,34 +54,34 @@ func (m *Repo) autoResolveAndContinue(ctx context.Context, defaultBranch string)
 				continue
 			}
 
-			ours := m.gitOutput(m.WorkDir, "show", ":2:"+f)
-			theirs := m.gitOutput(m.WorkDir, "show", ":3:"+f)
-			base := m.gitOutput(m.WorkDir, "show", ":1:"+f)
+			ours := r.gitOutput(r.WorkDir, "show", ":2:"+f)
+			theirs := r.gitOutput(r.WorkDir, "show", ":3:"+f)
+			base := r.gitOutput(r.WorkDir, "show", ":1:"+f)
 
 			if ours == theirs {
-				m.logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (identical): %s", f)
-				m.gitCmd(m.WorkDir, "checkout", "--theirs", f)
-				m.gitCmd(m.WorkDir, "add", f)
+				r.logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (identical): %s", f)
+				r.gitCmd(r.WorkDir, "checkout", "--theirs", f)
+				r.gitCmd(r.WorkDir, "add", f)
 				resolvedAny = true
 			} else if ours == base {
-				m.logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (only theirs changed): %s", f)
-				m.gitCmd(m.WorkDir, "checkout", "--theirs", f)
-				m.gitCmd(m.WorkDir, "add", f)
+				r.logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (only theirs changed): %s", f)
+				r.gitCmd(r.WorkDir, "checkout", "--theirs", f)
+				r.gitCmd(r.WorkDir, "add", f)
 				resolvedAny = true
 			} else if theirs == base {
-				m.logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (only ours changed): %s", f)
-				m.gitCmd(m.WorkDir, "checkout", "--ours", f)
-				m.gitCmd(m.WorkDir, "add", f)
+				r.logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (only ours changed): %s", f)
+				r.gitCmd(r.WorkDir, "checkout", "--ours", f)
+				r.gitCmd(r.WorkDir, "add", f)
 				resolvedAny = true
 			} else {
 				// Both changed — check if ours is subset of theirs
 				if strings.Contains(theirs, ours) || isSubsetByLines(base, ours, theirs) {
-					m.logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (ours is subset of theirs): %s", f)
-					m.gitCmd(m.WorkDir, "checkout", "--theirs", f)
-					m.gitCmd(m.WorkDir, "add", f)
+					r.logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (ours is subset of theirs): %s", f)
+					r.gitCmd(r.WorkDir, "checkout", "--theirs", f)
+					r.gitCmd(r.WorkDir, "add", f)
 					resolvedAny = true
 				} else {
-					m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Real conflict in %s — cannot auto-resolve", f)
+					r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Real conflict in %s — cannot auto-resolve", f)
 					return false
 				}
 			}
@@ -92,8 +92,8 @@ func (m *Repo) autoResolveAndContinue(ctx context.Context, defaultBranch string)
 		}
 
 		// Continue the rebase
-		if err := m.gitCmdErrCtx(ctx, m.WorkDir, "rebase", "--continue"); err != nil {
-			if !m.mRebaseInProgress() {
+		if err := r.gitCmdErrCtx(ctx, r.WorkDir, "rebase", "--continue"); err != nil {
+			if !r.mRebaseInProgress() {
 				return true
 			}
 			// Another step with conflicts — loop again
@@ -127,6 +127,6 @@ func isSubsetByLines(base, ours, theirs string) bool {
 
 // RebaseOntoDefaultBranch delegates to EnsureUpToDate, which is the single
 // sync point for all rebase operations.
-func (m *Repo) RebaseOntoDefaultBranch(ctx context.Context) error {
-	return m.EnsureUpToDate(ctx)
+func (r *Repo) RebaseOntoDefaultBranch(ctx context.Context) error {
+	return r.EnsureUpToDate(ctx)
 }

@@ -17,47 +17,47 @@ type BranchTaskMeta struct {
 // SyncWorktreeBase detects the current stack head and rebases the worktree onto
 // it (or the default branch if no stack exists). Called once on startup before
 // the first iteration, before any task-specific branch setup.
-func (m *Repo) SyncWorktreeBase(ctx context.Context, completedBranches []string) error {
-	setStackHead(m, completedBranches)
-	if m.PrevBranch == "" {
-		m.ResetToDefaultBranch()
+func (r *Repo) SyncWorktreeBase(ctx context.Context, completedBranches []string) error {
+	setStackHead(r, completedBranches)
+	if r.PrevBranch == "" {
+		r.ResetToDefaultBranch()
 	}
-	return m.EnsureUpToDate(ctx)
+	return r.EnsureUpToDate(ctx)
 }
 
 // BranchForTask prepares a branch for the given task: detects the stack head,
 // resets/rebases if in a worktree, and checks out or renames to the task branch.
 // Returns the resulting branch name.
-func (m *Repo) BranchForTask(ctx context.Context, taskID, title string, meta BranchTaskMeta) (string, error) {
-	m.PrepareForNextTask(taskID)
+func (r *Repo) BranchForTask(ctx context.Context, taskID, title string, meta BranchTaskMeta) (string, error) {
+	r.PrepareForNextTask(taskID)
 
-	if m.WorktreeBranch != "" && m.WorkDir != m.ProjectDir {
-		setStackHead(m, meta.CompletedBranches)
-		if m.PrevBranch == "" {
-			m.ResetToDefaultBranch()
+	if r.WorktreeBranch != "" && r.WorkDir != r.ProjectDir {
+		setStackHead(r, meta.CompletedBranches)
+		if r.PrevBranch == "" {
+			r.ResetToDefaultBranch()
 		}
-		if err := m.EnsureUpToDate(ctx); err != nil {
+		if err := r.EnsureUpToDate(ctx); err != nil {
 			return "", err
 		}
 	} else {
-		setStackHead(m, meta.CompletedBranches)
+		setStackHead(r, meta.CompletedBranches)
 	}
 
-	if _, err := checkoutExistingBranch(m, meta, taskID, title); err != nil {
+	if _, err := checkoutExistingBranch(r, meta, taskID, title); err != nil {
 		return "", err
 	}
-	return m.WorktreeBranch, nil
+	return r.WorktreeBranch, nil
 }
 
 // setStackHead finds the most recent completed branch that is cleanly ahead of
 // main and sets it as the stack base for the next task.
-func setStackHead(m *Repo, completedBranches []string) {
-	m.PrevBranch = ""
+func setStackHead(r *Repo, completedBranches []string) {
+	r.PrevBranch = ""
 	if len(completedBranches) == 0 {
 		return
 	}
 
-	openBranches, err := m.ListOpenPRBranches()
+	openBranches, err := r.ListOpenPRBranches()
 	if err != nil || len(openBranches) == 0 {
 		return
 	}
@@ -71,47 +71,47 @@ func setStackHead(m *Repo, completedBranches []string) {
 		if branch == "" || !openSet[branch] {
 			continue
 		}
-		if err := m.FetchBranch(branch); err != nil {
+		if err := r.FetchBranch(branch); err != nil {
 			continue
 		}
-		if !m.RemoteBranchHasCommits(branch) {
+		if !r.RemoteBranchHasCommits(branch) {
 			continue
 		}
-		if !m.BranchIsAheadOfMain(branch) {
-			m.logger.Emit(logging.Opts{Domain: logging.Git}, "Branch %s not ahead of main — skipping", branch)
+		if !r.BranchIsAheadOfMain(branch) {
+			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Branch %s not ahead of main — skipping", branch)
 			continue
 		}
-		m.PrevBranch = branch
-		m.logger.Emit(logging.Opts{Domain: logging.Git}, "Stack head: %s", branch)
+		r.PrevBranch = branch
+		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Stack head: %s", branch)
 		return
 	}
-	m.logger.Emit(logging.Opts{Domain: logging.Git}, "No stacked parents — starting from %s", m.DetectDefaultBranch())
+	r.logger.Emit(logging.Opts{Domain: logging.Git}, "No stacked parents — starting from %s", r.DetectDefaultBranch())
 }
 
 // checkoutExistingBranch checks meta for a branch from a previous iteration.
 // If the remote has that branch with clean work, it checks it out.
 // Otherwise it renames the current branch for the task.
 // Returns true if an existing remote branch was checked out.
-func checkoutExistingBranch(m *Repo, meta BranchTaskMeta, taskID, nextTask string) (bool, error) {
+func checkoutExistingBranch(r *Repo, meta BranchTaskMeta, taskID, nextTask string) (bool, error) {
 	storedBranch := meta.Branch
 	if storedBranch != "" {
-		_ = m.FetchBranch(storedBranch)
-		if m.RemoteBranchHasCommits(storedBranch) {
-			if m.RemoteBranchIsOnMain(storedBranch) {
-				m.CheckoutRemoteBranch(storedBranch)
+		_ = r.FetchBranch(storedBranch)
+		if r.RemoteBranchHasCommits(storedBranch) {
+			if r.RemoteBranchIsOnMain(storedBranch) {
+				r.CheckoutRemoteBranch(storedBranch)
 				return true, nil
 			}
-			m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Remote branch %s diverged from main — cleaning up", storedBranch)
+			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Remote branch %s diverged from main — cleaning up", storedBranch)
 			if parsePRNumber(meta.ExternalRef) == 0 {
-				if err := m.DeleteRemoteBranchByName(storedBranch); err != nil {
-					m.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to delete stale remote branch: %v", err)
+				if err := r.DeleteRemoteBranchByName(storedBranch); err != nil {
+					r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to delete stale remote branch: %v", err)
 				}
 			}
 		}
-		m.RenameBranchTo(storedBranch)
+		r.RenameBranchTo(storedBranch)
 		return false, nil
 	}
-	if err := m.RenameBranchForTask(nextTask, taskID); err != nil {
+	if err := r.RenameBranchForTask(nextTask, taskID); err != nil {
 		return false, fmt.Errorf("branch rename failed: %w", err)
 	}
 	return false, nil

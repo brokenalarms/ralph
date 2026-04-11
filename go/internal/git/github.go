@@ -81,6 +81,32 @@ type CreatePROpts struct {
 	Dir  string
 }
 
+// formatPRBody assembles a PR description from task context (description,
+// acceptance criteria, agent summary). The caller pre-fetches the data
+// from whatever task backend it uses and passes it as plain strings —
+// git/github owns the GitHub-specific markdown layout, the caller owns
+// the data.
+//
+// Returns an empty string when no context is available. Never produces
+// generic boilerplate ("Automated PR for X" or similar) — if the caller
+// has nothing to say, the body is empty.
+func formatPRBody(description, acceptance, summary string) string {
+	var sections []string
+	if description != "" {
+		sections = append(sections, "## Description\n"+description)
+	}
+	if acceptance != "" {
+		sections = append(sections, "## Acceptance Criteria\n"+acceptance)
+	}
+	if summary != "" {
+		sections = append(sections, "## Summary\n"+summary)
+	}
+	if len(sections) == 0 {
+		return ""
+	}
+	return strings.Join(sections, "\n\n")
+}
+
 // MergeOpts configures a PR merge operation.
 type MergeOpts struct {
 	DeleteBranch bool

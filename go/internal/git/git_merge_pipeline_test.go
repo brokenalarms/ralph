@@ -204,7 +204,7 @@ func TestShip_PackageFunction_CreatesPR(t *testing.T) {
 	opts := ShipOpts{
 		TaskID:     "ralph-gmxa",
 		TaskTitle:  "ship as package fn",
-		Body:       "extracted ship body",
+		Summary:    "extracted ship body",
 		BaseBranch: "main",
 	}
 	infra := shipInfra{
