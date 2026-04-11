@@ -360,9 +360,9 @@ func TestCompleteTask_CancelledCtx_NoCommits_BeadStaysOpen(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel to simulate Ctrl-C
@@ -412,9 +412,9 @@ func TestCompleteTask_CancelledCtx_NoPR_BeadStaysOpen(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel to simulate Ctrl-C
@@ -472,23 +472,23 @@ func TestCompleteTask_NoNewCommits_ExistingOpenPR_MergesViaFinalize(t *testing.T
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	logger := logging.New(nil)
-	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
-	})
-	l.runner = &stubRunner{}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
-
 	var postTaskPR int
 	var postTaskMerged bool
-	l.cfg.OnPostTask = func(_ context.Context, _ string, prNumber int, merged bool) {
-		postTaskPR = prNumber
-		postTaskMerged = merged
-	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		Runner:       &stubRunner{},
+		VerifyHook:   passingVerifyHook(),
+		PostTaskHook: &stubPostTaskHook{fn: func(_ context.Context, _ string, prNumber int, merged bool) {
+			postTaskPR = prNumber
+			postTaskMerged = merged
+		}},
+	})
 
 	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
@@ -562,9 +562,9 @@ func TestCompleteTask_NoNewCommits_ExistingMergedPR_ClosesDirectly(t *testing.T)
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
@@ -625,9 +625,9 @@ func TestCompleteTask_CancelledCtx_FinalizePR_BeadStaysOpen(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel to simulate Ctrl-C

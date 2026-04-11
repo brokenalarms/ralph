@@ -55,11 +55,9 @@ func TestResumeTask_HandledFalseRunsAgent(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
-	l.cfg.IsOnline = func() bool { return true }
-	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	if err := l.Run(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)

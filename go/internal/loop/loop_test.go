@@ -103,6 +103,96 @@ func (s *stubQuerier) Query(ctx context.Context, workDir, prompt, model string) 
 	return s.fn(ctx, workDir, prompt, model)
 }
 
+// stubConnectivity satisfies the Connectivity interface for tests.
+// The default zero value reports online + GitHub reachable + waits
+// succeed instantly — the configuration most tests want. Tests that
+// need to exercise offline / unreachable paths set the corresponding
+// override fields.
+type stubConnectivity struct {
+	githubErr      error
+	offline        bool
+	waitDeclined   bool
+	onWaitInternet func()
+}
+
+func (c *stubConnectivity) CheckGitHub(_ context.Context) error { return c.githubErr }
+func (c *stubConnectivity) IsOnline() bool                      { return !c.offline }
+func (c *stubConnectivity) WaitForInternet(ctx context.Context, _ *logging.Logger) bool {
+	if c.onWaitInternet != nil {
+		c.onWaitInternet()
+	}
+	// Honor the Connectivity contract: a cancelled context must produce
+	// a false return so cancellation-dependent code paths are exercised
+	// rather than masked.
+	if ctx.Err() != nil {
+		return false
+	}
+	return !c.waitDeclined
+}
+
+// onlineStubConnectivity returns a Connectivity stub that reports
+// fully-online state — the configuration most loop tests want when they
+// just need to skip the real GitHub / network checks.
+func onlineStubConnectivity() *stubConnectivity { return &stubConnectivity{} }
+
+// stubVerifyHook satisfies VerifyHook by returning the configured
+// (passed, reason) result on every call. Used by tests that bypass the
+// runVerifyPipeline / runSimpleVerifyCompletion paths.
+type stubVerifyHook struct {
+	passed bool
+	reason string
+	onCall func(ctx context.Context, dir, headBefore string)
+}
+
+func (s *stubVerifyHook) Verify(ctx context.Context, dir, headBefore string) (bool, string) {
+	if s.onCall != nil {
+		s.onCall(ctx, dir, headBefore)
+	}
+	return s.passed, s.reason
+}
+
+// passingVerifyHook is the most common test stub: returns (true, "")
+// from Verify so the caller's verification step is treated as a pass.
+func passingVerifyHook() *stubVerifyHook { return &stubVerifyHook{passed: true} }
+
+// stubPostTaskHook satisfies PostTaskHook by recording each call into
+// the provided fn. Tests use this to assert that post-task fired with
+// the expected arguments.
+type stubPostTaskHook struct {
+	fn func(ctx context.Context, taskID string, prNumber int, merged bool)
+}
+
+func (s *stubPostTaskHook) OnPostTask(ctx context.Context, taskID string, prNumber int, merged bool) {
+	if s.fn != nil {
+		s.fn(ctx, taskID, prNumber, merged)
+	}
+}
+
+// stubWaitHook satisfies WaitHook by calling the provided fn on every
+// OnWait. Tests use this to detect that the wait-for-tasks path was
+// reached.
+type stubWaitHook struct {
+	fn func()
+}
+
+func (s *stubWaitHook) OnWait() {
+	if s.fn != nil {
+		s.fn()
+	}
+}
+
+// stubIterationHook satisfies IterationHook by calling the provided fn
+// on every OnIterationStart.
+type stubIterationHook struct {
+	fn func()
+}
+
+func (s *stubIterationHook) OnIterationStart() {
+	if s.fn != nil {
+		s.fn()
+	}
+}
+
 func setupTestDir(t *testing.T) (string, *state.Store) {
 	t.Helper()
 	dir := t.TempDir()
@@ -141,18 +231,13 @@ func TestRun_ExitsOnGitHubUnreachable(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: &testutil.TrackingBackend{},
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  &testutil.TrackingBackend{},
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: &stubConnectivity{githubErr: errors.New("GitHub connectivity check timed out after 10s")},
 	})
-
-	l.cfg.IsOnline = func() bool { return true }
-	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
-	l.cfg.CheckGitHub = func(context.Context) error {
-		return errors.New("GitHub connectivity check timed out after 10s")
-	}
 
 	err := l.Run(context.Background())
 	if err == nil {

@@ -49,14 +49,14 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// With stacked PRs, no rotation to /next — branch keeps its task name
@@ -104,9 +104,9 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// Same task — branch should NOT have been rotated
@@ -184,9 +184,9 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -222,7 +222,6 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 		Total:     1,
 	}
 
-	handlerCalled := false
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -231,10 +230,6 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		OnRebaseConflict: func(err error) git.RebaseRecovery {
-			handlerCalled = true
-			return git.RebaseFreshWorktree
-		},
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
@@ -247,10 +242,11 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 
 	err := l.git.EnsureUpToDate(context.Background())
 	// With stacked PRs, rebase conflicts cause stack to diverge — not an error.
+	// The loop has no recovery hook to invoke; the test asserts only the
+	// EnsureUpToDate return value.
 	if err != nil {
 		t.Fatalf("expected nil (stack diverges), got: %v", err)
 	}
-	_ = handlerCalled
 }
 
 // Verifies that handleRebase returns nil on real conflicts — EnsureUpToDate
@@ -337,10 +333,9 @@ func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
 	}
 }
 
-// Verifies that when context is cancelled (Ctrl-C) during a rebase that
-// would normally trigger OnRebaseConflict, the handler is NOT called and
-// the loop exits cleanly with "stopped" status instead of showing the
-// interactive recovery prompt.
+// Verifies that when context is cancelled (Ctrl-C) during a rebase, the
+// loop exits cleanly with "stopped" status instead of treating the
+// interruption as a conflict that needs interactive recovery.
 func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -357,31 +352,25 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 		NextTask:  "Some task",
 	}
 
-	handlerCalled := false
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	cfg := // simulate Ctrl-C already received
-
-		Config{
-			Dirs: workctx.WorkContext{
-				ProjectDir: dir,
-				WorkDir:    gm.WorkDir,
-				RalphDir:   ralphDir,
-			},
-			MaxIterations: 5,
-			CallsPerHour:  80,
-			OnRebaseConflict: func(err error) git.RebaseRecovery {
-				handlerCalled = true
-				return git.RebaseAbort
-			},
-		}
+	cancel() // simulate Ctrl-C already received
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    gm.WorkDir,
+			RalphDir:   ralphDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	err := l.Run(ctx)
@@ -389,9 +378,8 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 		t.Fatalf("expected nil error (clean exit), got %v", err)
 	}
 
-	if handlerCalled {
-		t.Error("OnRebaseConflict should NOT be called when context is cancelled")
-	}
+	// The loop has no recovery hook to invoke when the context is
+	// cancelled mid-rebase; the test asserts only the final state below.
 
 	finalState, _ := st.Load()
 	if finalState.Status != "stopped" {
@@ -463,6 +451,7 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	// Stub out Claude runner to avoid actually running claude.
@@ -476,7 +465,6 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 		},
 	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// Branch should be the task branch, NOT rotated to /next
@@ -530,6 +518,7 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	l.runner = &stubRunner{
@@ -548,7 +537,6 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 		},
 	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// Branch should now be the second task
@@ -604,6 +592,7 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	l.runner = &stubRunner{
@@ -615,7 +604,6 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 		},
 	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// Branch should be the task branch — refactor didn't create a new one
@@ -674,6 +662,7 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	l.runner = &stubRunner{
@@ -685,7 +674,6 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	}
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 	gm.MergeRetryResult = true
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -737,13 +725,13 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	finalState, _ := st.Load()
@@ -825,11 +813,11 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	l.runner = &stubRunner{}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	branch, _ := backend.GetMetadata("ralph-abc", "branch")
@@ -901,11 +889,11 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	l.runner = &stubRunner{}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	// Branch should be ralph/<project>/ralph-xyz-fix-login-flow (no 01- prefix)
@@ -965,11 +953,9 @@ func TestResumeTask_ClosedPR_ClearsMetadataAndReruns(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
-	l.cfg.IsOnline = func() bool { return true }
-	l.cfg.WaitForInternet = func(context.Context, *logging.Logger) bool { return true }
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	if err := l.Run(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1044,8 +1030,8 @@ func TestLoop_BranchForTask_RenameFailure_AbortsIteration(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 
 	_ = l.Run(context.Background())
 

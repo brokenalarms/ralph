@@ -11,7 +11,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 )
 
@@ -54,14 +53,6 @@ func touchFile(path string) {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-func autoRebaseRecovery() func(err error) git.RebaseRecovery {
-	return func(err error) git.RebaseRecovery {
-		fmt.Printf("\n%sRebase conflict:%s %v\n", logging.Red, logging.Reset, err)
-		fmt.Printf("Recreating worktree from main\n")
-		return git.RebaseFreshWorktree
-	}
 }
 
 func evolveRestart(projectDir, sourceDir, scriptPath, baseBranch string, args []string, log *logging.Logger) error {

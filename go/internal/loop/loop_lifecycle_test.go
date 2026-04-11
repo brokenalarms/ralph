@@ -45,9 +45,9 @@ func TestLoop_AllTasksComplete(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -89,9 +89,9 @@ func TestLoop_NoTasksError(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -136,9 +136,9 @@ func TestLoop_StopFileDetection(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -188,9 +188,9 @@ func TestLoop_ContextCancellation(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(ctx)
 	if err != nil {
 		t.Fatalf("expected no error on context cancel, got %v", err)
@@ -232,9 +232,9 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	maxIter := st.ReadMaxIterations(0)
@@ -296,21 +296,22 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 		CallsPerHour:  80,
 		Wait:          true,
 	}
-	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
-	})
-	l.runner = runner
-
 	waitCount := 0
 	waitEntered := make(chan struct{}, 2)
-	l.cfg.OnWait = func() {
+	waitHook := &stubWaitHook{fn: func() {
 		waitCount++
 		waitEntered <- struct{}{}
-	}
+	}}
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		Runner:       runner,
+		WaitHook:     waitHook,
+	})
 
 	go func() {
 		<-waitEntered
@@ -325,7 +326,6 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 		cancel()
 	}()
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -363,18 +363,17 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 		CallsPerHour:  80,
 		Wait:          true,
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		WaitHook:     &stubWaitHook{fn: func() { cancel() }},
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	l.cfg.OnWait = func() { cancel() }
-
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -411,18 +410,17 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 		Wait:          true,
 	}
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		WaitHook: &stubWaitHook{fn: func() {
+			os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
+		}},
 	})
 
-	l.cfg.OnWait = func() {
-		os.WriteFile(filepath.Join(ralphDir, "stop"), nil, 0o644)
-	}
-
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -465,10 +463,10 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
 	})
 
 	start := time.Now()
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	elapsed := time.Since(start)
 
@@ -554,13 +552,11 @@ func TestLoop_LifecycleStates(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
-		return true, ""
-	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	if len(backend.stateCalls) < 2 {
@@ -621,13 +617,11 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: &stubVerifyHook{passed: false, reason: "tests failed"},
 	})
 	l.runner = runner
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) {
-		return false, "tests failed"
-	}
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	for _, call := range backend.stateCalls {
@@ -696,21 +690,19 @@ func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
 		},
 		MaxIterations: 10,
 		CallsPerHour:  80,
-		OnIterationStart: func() {
-			callCount++
-		},
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:         st,
+		Git:           gm,
+		TaskBackend:   backend,
+		Logger:        logger,
+		Verifier:      newTestVerifier(t, cfg, logger),
+		Connectivity:  onlineStubConnectivity(),
+		Runner:        runner,
+		IterationHook: &stubIterationHook{fn: func() { callCount++ }},
 	})
-	l.runner = runner
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	err := l.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -750,21 +742,21 @@ func TestLoop_WaitMode_ReReadsSkippedTasksOnTick(t *testing.T) {
 		Wait:          true,
 	}
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		WaitHook: &stubWaitHook{fn: func() {
+			s, _ := st.Load()
+			s.SkippedTasks = nil
+			st.Save(s)
+			backend.Lock()
+			backend.Remaining = 1
+			backend.Unlock()
+		}},
 	})
-
-	l.cfg.OnWait = func() {
-		s, _ := st.Load()
-		s.SkippedTasks = nil
-		st.Save(s)
-		backend.Lock()
-		backend.Remaining = 1
-		backend.Unlock()
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()

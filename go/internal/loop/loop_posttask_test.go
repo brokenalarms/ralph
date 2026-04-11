@@ -52,10 +52,10 @@ func TestLoop_CompleteTask_ClosesTask(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
@@ -103,9 +103,9 @@ func TestLoop_CompleteTask_VerificationFailure(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: &stubVerifyHook{passed: false, reason: "tests failed"},
 	})
 	l.runner = &stubRunner{}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
 	out := l.completeTask(context.Background(), completeTaskParams{
 		result:   claude.Result{},
@@ -151,10 +151,10 @@ func TestCompleteTask_SkippedTask_DoesNotPush(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	// Mark the task as skipped in state before calling completeTask.
 	if err := st.AddSkippedTask("ralph-skipped"); err != nil {
@@ -220,9 +220,9 @@ func TestCompleteTask_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipFunc = func(ctx context.Context, _ git.ShipOpts) (git.ShipResult, error) {
 		<-ctx.Done()
 		return git.ShipResult{}, ctx.Err()
@@ -289,9 +289,9 @@ func TestCompleteTask_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
 
 	out := l.completeTask(context.Background(), completeTaskParams{
@@ -343,9 +343,9 @@ func TestCompleteTask_PostSignalTimeout_CancelsMerge(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.MergeRetryFunc = func(ctx context.Context) (bool, error) {
 		<-ctx.Done()
@@ -406,11 +406,11 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
 	gm.MergeRetryResult = true
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
@@ -466,9 +466,9 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: &stubVerifyHook{passed: false, reason: "tests failed"},
 	})
 	l.runner = &stubRunner{}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return false, "tests failed" }
 
 	out := l.completeTask(context.Background(), completeTaskParams{
 		result:   claude.Result{},
@@ -516,10 +516,10 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 50}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
@@ -574,9 +574,9 @@ func TestLoop_PostTaskScript_LogsWhenNotConfigured(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
@@ -623,9 +623,9 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{OnSignalUsed: true},
@@ -690,9 +690,9 @@ func TestLoop_PostTaskScript_PackageJSONDetection(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
@@ -752,10 +752,10 @@ func TestCompleteTask_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	var buf bytes.Buffer
 	prev := notify.SetWriter(&buf)
@@ -813,10 +813,10 @@ func TestCompleteTask_NotifyDisabled_NoNotification(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
 	gm.ShipResult = git.ShipResult{PRNumber: 42}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	var buf bytes.Buffer
 	prev := notify.SetWriter(&buf)
@@ -871,9 +871,9 @@ func TestCompleteTask_NotifyOnNoCommitsPath(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	var buf bytes.Buffer
 	prev := notify.SetWriter(&buf)
@@ -928,9 +928,9 @@ func TestCompleteTask_FeedbackFileStopsPostSignal(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	// Ship blocks until context is cancelled, simulating a stuck CI/merge step.
 	gm.ShipFunc = func(ctx context.Context, _ git.ShipOpts) (git.ShipResult, error) {

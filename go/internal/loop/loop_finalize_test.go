@@ -70,8 +70,8 @@ func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *tes
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 	return finalizeSetup{
 		loop: l,
 		gm:   gm,
@@ -237,8 +237,8 @@ func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testi
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
 	})
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
 	p := completeTaskParams{
 		result:     claude.Result{SignalDetected: true, OnSignalUsed: true},

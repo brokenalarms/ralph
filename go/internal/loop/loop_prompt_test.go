@@ -184,6 +184,8 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook: passingVerifyHook(),
 	})
 
 	// Capture the prompt passed to Claude
@@ -199,9 +201,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		inner:    origRunner,
 		captured: &capturedPrompt,
 	}
-	l.cfg.OnVerify = func(context.Context, string, string) (bool, string) { return true, "" }
 
-	l.cfg.CheckGitHub = func(context.Context) error { return nil }
 	_ = l.Run(context.Background())
 
 	if !strings.Contains(capturedPrompt, "tests passing") {

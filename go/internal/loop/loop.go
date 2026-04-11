@@ -39,16 +39,77 @@ import (
 //   - Rule A's carve-out for loop.New's parameters applies to Modules
 //     just as it does to positional parameters.
 //
-// See docs/specs/orchestrator-modules.md for the full rationale.
-type Modules struct {
-	State       *state.Store
-	Git         git.Ops
-	TaskBackend tasks.Backend
-	Logger      *logging.Logger
-	Verifier    *verifier.Verifier
+// Connectivity bundles the network-reachability checks the loop runs at
+// startup and between iterations. Defined locally in the loop package
+// (same dependency-inversion pattern as git.StateStore) so the loop
+// holds no peer-module reference and no function fields. When the
+// caller passes a nil Modules.Connectivity, loop.New defaults it to
+// liveConnectivity (which uses the package-level checkGitHubConnectivity
+// / isOnline / waitForInternet helpers). Tests pass non-nil stub
+// implementations to override the live network behavior.
+type Connectivity interface {
+	// CheckGitHub returns nil when GitHub is reachable; an error otherwise.
+	// Run once at startup before any task execution.
+	CheckGitHub(ctx context.Context) error
+	// IsOnline returns whether the local network is currently reachable.
+	IsOnline() bool
+	// WaitForInternet blocks until the network is reachable or the context
+	// is cancelled. Returns true on success, false on cancellation.
+	WaitForInternet(ctx context.Context, logger *logging.Logger) bool
 }
 
-// Config holds all parameters needed by the execution loop.
+// IterationHook fires once at the start of every loop iteration. Production
+// uses it to regenerate the resume script so the user can resume from the
+// most recent state. Tests can omit it (nil = no-op).
+type IterationHook interface {
+	OnIterationStart()
+}
+
+// PostTaskHook fires after each task completes. Production has its own
+// runPostTask path (driven by cfg.PostTask script + RALPH_TASK_ID env);
+// this interface exists to let tests observe completions or to let
+// alternative orchestrators short-circuit the script path.
+type PostTaskHook interface {
+	OnPostTask(ctx context.Context, taskID string, prNumber int, merged bool)
+}
+
+// WaitHook fires when the loop enters its wait-for-tasks state. Tests
+// use it to detect that the wait path was reached. Production uses nil.
+type WaitHook interface {
+	OnWait()
+}
+
+// VerifyHook is the legacy fallback verification path used when the
+// runner did not run verification via OnSignal. Production uses
+// runSimpleVerifyCompletion when nil. Tests can stub this to bypass
+// the test/LLM verification entirely.
+type VerifyHook interface {
+	Verify(ctx context.Context, dir, headBefore string) (bool, string)
+}
+
+// See docs/specs/orchestrator-modules.md for the full rationale on the
+// Modules carve-out. Modules holds the construction-time dependencies
+// the loop composes; loop.New copies each field onto Loop's private
+// fields and discards the struct. The interfaces below all default to
+// production implementations when nil — tests pass non-nil stubs to
+// override behavior.
+type Modules struct {
+	State        *state.Store
+	Git          git.Ops
+	TaskBackend  tasks.Backend
+	Logger       *logging.Logger
+	Verifier     *verifier.Verifier
+	Runner       claudeRunner   // nil → agent.New(logger)
+	Connectivity Connectivity   // nil → live gh CLI / net checks
+	IterationHook IterationHook // nil → no-op
+	PostTaskHook PostTaskHook   // nil → fallback to runPostTask script path
+	WaitHook     WaitHook       // nil → no-op
+	VerifyHook   VerifyHook     // nil → fallback to runSimpleVerifyCompletion
+}
+
+// Config holds all parameters needed by the execution loop. Pure data —
+// no function fields, no module references. The behavioral injection
+// points (Connectivity, hooks, runner) live on Modules.
 type Config struct {
 	Dirs                  workctx.WorkContext
 	PlanFile              string
@@ -69,12 +130,10 @@ type Config struct {
 	Model                 string
 	AgentEscalationModel  string // model for agent on retry attempts; defaults to opus
 	ModelCap              string // maximum model tier for all LLM calls; empty means no cap
-	OnRebaseConflict      func(err error) git.RebaseRecovery
 	Version               string
 	VerifyDir             string // project root where tests are run; empty disables verification
 	VerifyModel           string // model for the first LLM verification attempt; defaults to haiku
 	VerifyEscalationModel string // model for subsequent LLM verification attempts; defaults to sonnet
-	OnIterationStart      func() // called at the start of each iteration (e.g. to regenerate resume script)
 
 	// Attempt limits — overrides package defaults when set.
 	MaxPromptAttempts      int
@@ -94,15 +153,29 @@ type Config struct {
 	// errors (default: 5s, 15s, 30s). Set to zero-duration slices in tests to
 	// avoid sleeping.
 	ShipRetryBackoffs []time.Duration
+}
 
-	// hooks for test injection; nil uses the real implementation
-	CheckGitHub     func(ctx context.Context) error // startup GitHub reachability check; nil uses real implementation
-	OnVerify        func(ctx context.Context, dir, headBefore string) (bool, string)
-	OnPostTask      func(ctx context.Context, taskID string, prNumber int, merged bool) // called instead of runPostTask when set
-	IsOnline        func() bool
-	WaitForInternet func(ctx context.Context, logger *logging.Logger) bool
-	OnWait          func()
-	NewRunner       func() claudeRunner
+// liveConnectivity is the production Connectivity implementation. It
+// delegates to the package-level helpers in loop_utils.go.
+//
+// IsOnline and WaitForInternet honor the loop-level cfg.ConnectivityCheckTimeout
+// (typically 3 seconds — these are fast local-network reachability pings).
+// CheckGitHub uses its own hardcoded 10-second timeout inside
+// checkGitHubConnectivity, because the gh api round-trip is a different
+// kind of check (auth + GitHub server latency) and the same 3s budget
+// would produce false negatives. The two timeouts measure different
+// things and should not share a value.
+type liveConnectivity struct {
+	checkTimeout    time.Duration
+	restoreInterval time.Duration
+}
+
+func (c *liveConnectivity) CheckGitHub(ctx context.Context) error {
+	return checkGitHubConnectivity(ctx)
+}
+func (c *liveConnectivity) IsOnline() bool { return isOnline(c.checkTimeout) }
+func (c *liveConnectivity) WaitForInternet(ctx context.Context, logger *logging.Logger) bool {
+	return waitForInternet(ctx, logger, c.restoreInterval, c.checkTimeout)
 }
 
 // claudeRunner abstracts the Claude execution interface for testability.
@@ -148,6 +221,11 @@ type Loop struct {
 	attempts          *attempts.Tracker
 	logger            *logging.Logger
 	signals           claude.SignalPaths
+	connectivity      Connectivity
+	iterationHook     IterationHook
+	postTaskHook      PostTaskHook
+	waitHook          WaitHook
+	verifyHook        VerifyHook
 	completedTasks    []CompletedTask
 	activeReviewers   []git.Reviewer
 	reviewersDetected bool
@@ -157,7 +235,8 @@ type Loop struct {
 // references. mods is the single composition point where modules from
 // many packages meet — see the Modules type comment for the rule that
 // carves it out from the "no module types in exported struct fields"
-// prohibition.
+// prohibition. Nil interface fields on mods default to production
+// implementations.
 func New(cfg Config, mods Modules) *Loop {
 	st := mods.State
 	gm := mods.Git
@@ -168,11 +247,6 @@ func New(cfg Config, mods Modules) *Loop {
 
 	limiter := ratelimit.New(cfg.Dirs.RalphDir, cfg.CallsPerHour)
 
-	agentRunner := agent.New(logger)
-
-	if cfg.CheckGitHub == nil {
-		cfg.CheckGitHub = checkGitHubConnectivity
-	}
 	if cfg.ConnectivityCheckTimeout == 0 {
 		cfg.ConnectivityCheckTimeout = 3 * time.Second
 	}
@@ -185,19 +259,18 @@ func New(cfg Config, mods Modules) *Loop {
 	if cfg.CompileCheckTimeout == 0 {
 		cfg.CompileCheckTimeout = 60 * time.Second
 	}
-	if cfg.IsOnline == nil {
-		checkTimeout := cfg.ConnectivityCheckTimeout
-		cfg.IsOnline = func() bool { return isOnline(checkTimeout) }
-	}
-	if cfg.WaitForInternet == nil {
-		interval := cfg.InternetRestoreInterval
-		checkTimeout := cfg.ConnectivityCheckTimeout
-		cfg.WaitForInternet = func(ctx context.Context, logger *logging.Logger) bool {
-			return waitForInternet(ctx, logger, interval, checkTimeout)
+
+	connectivity := mods.Connectivity
+	if connectivity == nil {
+		connectivity = &liveConnectivity{
+			checkTimeout:    cfg.ConnectivityCheckTimeout,
+			restoreInterval: cfg.InternetRestoreInterval,
 		}
 	}
-	if cfg.NewRunner == nil {
-		cfg.NewRunner = func() claudeRunner { return agent.New(logger) }
+
+	runner := mods.Runner
+	if runner == nil {
+		runner = agent.New(logger)
 	}
 
 	at := attempts.New(attempts.Config{
@@ -206,17 +279,22 @@ func New(cfg Config, mods Modules) *Loop {
 		MaxIdleTimeoutFailures: cfg.MaxIdleTimeoutFailures,
 	})
 	l := &Loop{
-		cfg:         cfg,
-		state:       st,
-		git:         gm,
-		taskBackend: taskBackend,
-		limiter:     limiter,
-		runner:      agentRunner,
-		verifier:    mods.Verifier,
-		analyzer:    analyzer.New(),
-		attempts:    at,
-		logger:      logger,
-		signals:     signals,
+		cfg:           cfg,
+		state:         st,
+		git:           gm,
+		taskBackend:   taskBackend,
+		limiter:       limiter,
+		runner:        runner,
+		verifier:      mods.Verifier,
+		analyzer:      analyzer.New(),
+		attempts:      at,
+		logger:        logger,
+		signals:       signals,
+		connectivity:  connectivity,
+		iterationHook: mods.IterationHook,
+		postTaskHook:  mods.PostTaskHook,
+		waitHook:      mods.WaitHook,
+		verifyHook:    mods.VerifyHook,
 	}
 	return l
 }
@@ -392,7 +470,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		return fmt.Errorf("no ralph:verify script found in %s — add a \"ralph:verify\" script to package.json (or a make ralph-verify target) so the loop can verify task completion", l.cfg.Dirs.ProjectDir)
 	}
 
-	if err := l.cfg.CheckGitHub(ctx); err != nil {
+	if err := l.connectivity.CheckGitHub(ctx); err != nil {
 		if ctx.Err() != nil {
 			l.state.Write("status", "stopped")
 			return nil
@@ -467,8 +545,8 @@ iterLoop:
 			l.logger.Emit(logging.Opts{Level: logging.Warn}, "Refactor iteration error: %v", err)
 		}
 
-		if l.cfg.OnIterationStart != nil {
-			l.cfg.OnIterationStart()
+		if l.iterationHook != nil {
+			l.iterationHook.OnIterationStart()
 		}
 
 		l.logIterationBanner(logIterationBannerParams{
@@ -577,9 +655,9 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 	callShip := func(opts git.ShipOpts) (git.ShipResult, error) {
 		result, err := l.git.Ship(ctx, opts)
 		if err != nil {
-			if !l.cfg.IsOnline() {
+			if !l.connectivity.IsOnline() {
 				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship failed — internet appears down")
-				l.cfg.WaitForInternet(ctx, l.logger)
+				l.connectivity.WaitForInternet(ctx, l.logger)
 				result, err = l.git.Ship(ctx, opts)
 			} else if isTransientGitHubError(err) {
 				backoffs := l.cfg.ShipRetryBackoffs
