@@ -206,5 +206,8 @@ func (l *Loop) tryFixReviewComments(ctx context.Context, reviewerName string, re
 		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after %s fix failed: %v", reviewerName, err)
 		return false
 	}
+	if err := l.git.ReplyToAndResolveComments(prNumber, actionable); err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Reply and resolve %s review comments: %v", reviewerName, err)
+	}
 	return true
 }

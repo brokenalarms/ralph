@@ -82,6 +82,11 @@ type Ops interface {
 	// PollReview polls for a review from the given bot username on the given PR.
 	// Returns nil without error when timeout expires before a review arrives.
 	PollReview(botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error)
+	// ReplyToAndResolveComments replies to each review comment and resolves its
+	// thread via the GitHub GraphQL API. Called after a fix is pushed so review
+	// threads are closed in one step alongside the code change. Errors are
+	// non-fatal — the fix was already pushed successfully.
+	ReplyToAndResolveComments(prNumber int, comments []ReviewComment) error
 
 	// ResumeTask checks whether prior work exists for the task (open PR, merged PR,
 	// remote branch) and resolves it. The loop passes task metadata extracted from
@@ -229,6 +234,44 @@ func (r *Repo) PollReview(botUsername string, prNumber int, timeout time.Duratio
 		return nil, nil
 	}
 	return gh.PollReview(nwo, botUsername, prNumber, timeout)
+}
+
+// ReplyToAndResolveComments replies to each review comment and resolves its
+// thread. Errors from individual reply/resolve calls are logged but do not
+// stop processing — the fix was already pushed.
+func (r *Repo) ReplyToAndResolveComments(prNumber int, comments []ReviewComment) error {
+	nwo := NWOFromRemote(r.RemoteURL())
+	if nwo == "" {
+		return nil
+	}
+	var commentIDs []int
+	for _, c := range comments {
+		if c.ID != 0 {
+			commentIDs = append(commentIDs, c.ID)
+		}
+	}
+	if len(commentIDs) == 0 {
+		return nil
+	}
+	threadIDs, err := r.github.FetchReviewThreadIDs(nwo, prNumber, commentIDs)
+	if err != nil {
+		return fmt.Errorf("fetching review thread IDs: %w", err)
+	}
+	const replyBody = "Addressed — fix committed and pushed."
+	for _, c := range comments {
+		if c.ID == 0 {
+			continue
+		}
+		if replyErr := r.github.ReplyToReviewComment(nwo, prNumber, c.ID, replyBody); replyErr != nil {
+			fmt.Printf("reply to review comment %d: %v\n", c.ID, replyErr)
+		}
+		if threadID, ok := threadIDs[c.ID]; ok {
+			if resolveErr := r.github.ResolveReviewThread(threadID); resolveErr != nil {
+				fmt.Printf("resolve review thread for comment %d: %v\n", c.ID, resolveErr)
+			}
+		}
+	}
+	return nil
 }
 
 // PRDiffForTask searches for a PR matching the task ID and returns its diff.
