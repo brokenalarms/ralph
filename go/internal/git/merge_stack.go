@@ -143,7 +143,9 @@ func collectStackFromPRs(allPRs []PRInfo, topPR string) stackResult {
 	}
 
 	topNum := 0
-	fmt.Sscanf(topPR, "%d", &topNum)
+	if n, _ := fmt.Sscanf(topPR, "%d", &topNum); n == 0 || topNum <= 0 {
+		return stackResult{}
+	}
 	start, ok := byNumber[topNum]
 	if !ok {
 		return stackResult{}

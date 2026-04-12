@@ -89,6 +89,9 @@ func (s *fileStateStore) Write(key, value string) error {
 		os.Remove(tmp.Name())
 		return err
 	}
-	tmp.Close()
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
 	return os.Rename(tmp.Name(), s.path)
 }

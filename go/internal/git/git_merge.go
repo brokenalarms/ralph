@@ -45,7 +45,7 @@ func (r *Repo) Push(ctx context.Context) error {
 	if r.compileCheckTimeout > 0 {
 		result := verify.CompileCheck(ctx, r.compileCheckTimeout, r.workDir)
 		if !result.Passed {
-			return fmt.Errorf("pre-push compile check failed: %s\n%s", result.Reason, result.Details)
+			return fmt.Errorf("%s\n%s", result.Reason, result.Details)
 		}
 		r.logger.Emit(logging.Opts{Domain: "build"}, "Pre-push compile check passed")
 	}
