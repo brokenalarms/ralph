@@ -34,6 +34,10 @@ type stackResult struct {
 // bottom-up: waiting for CI, merging, and rebasing the next PR onto the
 // updated base branch.
 func (r *Repo) MergeStack(ctx context.Context, opts MergeStackOpts) (MergeStackResult, error) {
+	if r.hasUncommittedChangesIn(r.projectDir) {
+		return MergeStackResult{}, fmt.Errorf("uncommitted changes in %s — commit or stash before merging", r.projectDir)
+	}
+
 	stack := r.collectStack(opts.TopPR)
 	if len(stack.prs) == 0 {
 		return MergeStackResult{}, fmt.Errorf("no open PRs found starting from #%s", opts.TopPR)
