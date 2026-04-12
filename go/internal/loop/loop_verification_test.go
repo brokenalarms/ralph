@@ -38,7 +38,7 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "fixed it"},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -111,7 +111,7 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &git.StubRepo{
+	gm := &stubGit{
 		ProjectDir: dir,
 		WorkDir:    dir,
 		ShipResult: git.ShipResult{PRNumber: 42},
@@ -184,7 +184,7 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.StubRepo{
+	gm := &stubGit{
 		ProjectDir: dir,
 		WorkDir:    dir,
 		ShipResult: git.ShipResult{PRNumber: 99},
@@ -238,7 +238,7 @@ func TestLoop_CIFailureLeavesTaskOpen(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{
+	gm := &stubGit{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-ci-test",
@@ -303,7 +303,7 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 		NextID:    "ralph-mc1",
 	}
 
-	gm := &git.StubRepo{
+	gm := &stubGit{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-conflict-test",
@@ -364,7 +364,7 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 		NextID:    "ralph-ci2",
 	}
 
-	gm := &git.StubRepo{
+	gm := &stubGit{
 		ProjectDir:       dir,
 		WorkDir:          filepath.Join(dir, "worktree"),
 		WorktreeBranch:   "ralph/project/01-ci-fix",
@@ -420,7 +420,7 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 		NextID:    "ralph-ci3",
 	}
 
-	gm := &git.StubRepo{
+	gm := &stubGit{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-ci-exhaust",
@@ -491,7 +491,7 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 		NextID:    "ralph-mixed",
 	}
 
-	gm := &git.StubRepo{
+	gm := &stubGit{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-mixed",
@@ -558,7 +558,7 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{
+	gm := &stubGit{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-stubborn",
@@ -628,7 +628,7 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{
+	gm := &stubGit{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/project/01-fixable",
@@ -705,7 +705,7 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -820,7 +820,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				},
 			}
 
-			gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before", DiffFullValue: "diff --git a/x b/x"}
+			gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before", DiffFullValue: "diff --git a/x b/x"}
 
 			runner := &signalCallingRunner{
 				onRun: func() {

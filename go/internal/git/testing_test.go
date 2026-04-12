@@ -8,15 +8,15 @@ import (
 	"testing"
 )
 
-// Proves StubGitHub satisfies the GitHub interface at compile time.
+// Proves stubGitHub satisfies the gitHub interface at compile time.
 func TestStubGitHub_ImplementsGitHub(t *testing.T) {
-	var _ GitHub = (*StubGitHub)(nil)
+	var _ gitHub = (*stubGitHub)(nil)
 }
 
-// NewStubGitHub returns a stub with the defaults that represent the overwhelmingly
+// newStubGitHub returns a stub with the defaults that represent the overwhelmingly
 // common case: available GitHub, open PR #42 against main, merges successfully.
 func TestNewStubGitHub_Defaults(t *testing.T) {
-	gh := NewStubGitHub()
+	gh := newStubGitHub()
 
 	if !gh.Available() {
 		t.Error("IsAvailable should default to true")
@@ -41,7 +41,7 @@ func TestNewStubGitHub_Defaults(t *testing.T) {
 // GetPR auto-generates a deterministic HeadSHA when HeadSHA is not configured,
 // so tests do not need to set it explicitly for non-fast-path scenarios.
 func TestStubGitHub_GetPR_AutoGeneratesHeadSHA(t *testing.T) {
-	gh := &StubGitHub{}
+	gh := &stubGitHub{}
 
 	pr, _ := gh.GetPR("", 42)
 	if pr.HeadSHA != "stub-sha-42" {
@@ -56,21 +56,27 @@ func TestStubGitHub_GetPR_AutoGeneratesHeadSHA(t *testing.T) {
 	}
 }
 
-// TestGitHubIsInternal proves that git.GitHub, git.StubGitHub, and
-// git.NewStubGitHub are not referenced in any .go file outside go/internal/git/.
-// This enforces that the GitHub type is internal to the git package.
+// TestGitHubIsInternal proves that git.Ops and git.StubRepo are not referenced
+// in any .go file outside go/internal/git/. These types were deleted as part of
+// collapsing the git abstraction — the compiler enforces it, but this test
+// provides a readable failure message if they somehow reappear.
 func TestGitHubIsInternal(t *testing.T) {
 	_, thisFile, _, _ := runtime.Caller(0)
 	// goDir is go/  (two levels up from go/internal/git/)
 	goDir := filepath.Join(filepath.Dir(thisFile), "..", "..")
 
-	forbidden := []string{"git.GitHub", "git.StubGitHub", "git.NewStubGitHub"}
+	forbidden := []string{"git.Ops", "git.StubRepo"}
 
 	err := filepath.Walk(goDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return err
 		}
 		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		// Skip test files — arch tests legitimately reference these as string
+		// literals in pattern guards, not as actual type references.
+		if strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
 		// Skip files within internal/git/ itself.

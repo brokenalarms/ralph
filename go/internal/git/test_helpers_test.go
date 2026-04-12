@@ -138,7 +138,7 @@ func (discardLog) EmitFinalInPlace()                        {}
 
 // capturingGitHub captures CreatePR calls for assertion.
 type capturingGitHub struct {
-	StubGitHub
+	stubGitHub
 	createPR func(CreatePROpts) (int, error)
 }
 
@@ -151,26 +151,26 @@ func (c *capturingGitHub) CreatePR(opts CreatePROpts) (int, error) {
 
 // stubManager creates a Manager wired to stubs for both git commands and
 // GitHub operations. The Manager's dirs are set to the given directory.
-func stubManager(dir string, runner *stubRunner, gh *StubGitHub) *Repo {
+func stubManager(dir string, runner *stubRunner, gh *stubGitHub) *Repo {
 	if runner == nil {
 		runner = newStubRunner()
 	}
 	if gh == nil {
-		gh = NewStubGitHub()
+		gh = newStubGitHub()
 	}
 	return &Repo{
 		ProjectDir: dir,
 		WorkDir:    dir,
 		baseBranch: "main",
-		Runner:     runner,
+		runner:     runner,
 		github:     gh,
 		state:      newMemState(),
 		logger:     discardLog{},
 	}
 }
 
-// errRunner returns a Runner where every call returns an error.
-func errRunner(msg string) Runner {
+// errRunner returns a runner where every call returns an error.
+func errRunner(msg string) runner {
 	return &errRunnerImpl{stubRunner: newStubRunner(), err: fmt.Errorf("%s", msg)}
 }
 

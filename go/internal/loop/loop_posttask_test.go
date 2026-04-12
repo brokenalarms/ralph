@@ -39,7 +39,7 @@ func TestLoop_CompleteTask_ClosesTask(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -90,7 +90,7 @@ func TestLoop_CompleteTask_VerificationFailure(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-abc"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -137,7 +137,7 @@ func TestCompleteTask_SkippedTask_DoesNotPush(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-skipped"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	var logBuf bytes.Buffer
 	logger := logging.New(&logBuf)
 	cfg := Config{
@@ -205,7 +205,7 @@ func TestCompleteTask_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-timeout"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	var logBuf bytes.Buffer
 	logger := logging.New(&logBuf)
 	cfg := Config{
@@ -275,7 +275,7 @@ func TestCompleteTask_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-fast"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	cfg := Config{
 		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:     1,
@@ -328,7 +328,7 @@ func TestCompleteTask_PostSignalTimeout_CancelsMerge(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Slow merge", NextID: "ralph-slow"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	cfg := Config{
 		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:     1,
@@ -391,7 +391,7 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-pt1"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -452,7 +452,7 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-pt2"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -503,7 +503,7 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-pt3"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -556,7 +556,7 @@ func TestLoop_PostTaskScript_LogsWhenNotConfigured(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-npt"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	gm.ShipResult = git.ShipResult{PRNumber: 10}
 	gm.MergeRetryResult = true
 	cfg :=
@@ -609,7 +609,7 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-pt4"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before"}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -671,7 +671,7 @@ func TestLoop_PostTaskScript_PackageJSONDetection(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-pkg1"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	gm.ShipResult = git.ShipResult{PRNumber: 77}
 	gm.MergeRetryResult = true
 	cfg :=
@@ -738,7 +738,7 @@ func TestCompleteTask_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -799,7 +799,7 @@ func TestCompleteTask_NotifyDisabled_NoNotification(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -857,7 +857,7 @@ func TestCompleteTask_NotifyOnNoCommitsPath(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before"}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -914,7 +914,7 @@ func TestCompleteTask_FeedbackFileStopsPostSignal(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-feedback"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	var logBuf bytes.Buffer
 	logger := logging.New(&logBuf)
 	cfg := Config{

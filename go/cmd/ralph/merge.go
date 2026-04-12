@@ -170,10 +170,16 @@ type stackResult struct {
 	baseBranch string // what the bottom PR targets (e.g. "main")
 }
 
+// prLister abstracts the PR listing operation collectStack needs. *git.Repo
+// satisfies this interface structurally.
+type prLister interface {
+	ListAllPRs(workDir string) ([]git.PRInfo, error)
+}
+
 // collectStack walks the base chain from the given PR down to main,
 // collecting the full stack in bottom-up order. Uses g.ListAllPRs
 // to get all open PRs in one call, then walks the base references.
-func collectStack(g git.Ops, workDir, topPR string, log *logging.Logger) stackResult {
+func collectStack(g prLister, workDir, topPR string, log *logging.Logger) stackResult {
 	allPRs, err := g.ListAllPRs(workDir)
 	if err != nil {
 		log.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to list PRs: %v", err)

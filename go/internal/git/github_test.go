@@ -158,10 +158,10 @@ func TestPRDiff_UsesGhAPI(t *testing.T) {
 	}
 }
 
-// The StubGitHub type satisfies the GitHub interface, proving that test stubs
+// The stubGitHub type satisfies the GitHub interface, proving that test stubs
 // can replace all GitHub CLI operations without shelling out.
 func TestStubGitHub_SatisfiesInterface(t *testing.T) {
-	var _ GitHub = &StubGitHub{}
+	var _ gitHub = &stubGitHub{}
 }
 
 // CreatePROpts carries all parameters in a single struct so callers avoid
@@ -193,7 +193,7 @@ func TestCreatePROpts_FieldsPreserved(t *testing.T) {
 // GetRunLog returns the stub's configured RunLogValue, proving the interface
 // method can be stubbed for CI failure log testing.
 func TestGetRunLog_Stubbable(t *testing.T) {
-	stub := NewStubGitHub()
+	stub := newStubGitHub()
 	if result := stub.GetRunLog(42, "/tmp"); result != "" {
 		t.Errorf("expected empty string from default stub, got %q", result)
 	}
@@ -207,7 +207,7 @@ func TestGetRunLog_Stubbable(t *testing.T) {
 // ListChecks replaces the former FetchChecks method, returning CI check results
 // that callers use to determine merge readiness.
 func TestListChecks_Stubbable(t *testing.T) {
-	stub := NewStubGitHub()
+	stub := newStubGitHub()
 	stub.Checks = []CICheckResult{
 		{Name: "build", State: "SUCCESS", Bucket: "pass"},
 		{Name: "lint", State: "FAILURE", Bucket: "fail"},
@@ -228,7 +228,7 @@ func TestListChecks_Stubbable(t *testing.T) {
 // GetPR returns a PRDetail with all fields populated and a deterministic
 // HeadSHA derived from the PR number.
 func TestGetPR_ReturnsAllFields(t *testing.T) {
-	stub := NewStubGitHub()
+	stub := newStubGitHub()
 	stub.PRHead = "feature-branch"
 	stub.HeadSHA = "abc123"
 
@@ -253,7 +253,7 @@ func TestGetPR_ReturnsAllFields(t *testing.T) {
 // Manager.GetCIFailureLog delegates to the injected GitHub interface's GetRunLog,
 // confirming that loop code can get CI logs without shelling out.
 func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
-	stub := NewStubGitHub()
+	stub := newStubGitHub()
 	stub.RunLogValue = "test failure output line 1\nline 2"
 	mgr := &Repo{
 		baseBranch: "main",
@@ -383,10 +383,10 @@ func TestDetectActiveReviewers_NoCopilotRuleset(t *testing.T) {
 	}
 }
 
-// StubGitHub.DetectActiveReviewers returns the configured ActiveReviewers slice,
+// stubGitHub.DetectActiveReviewers returns the configured ActiveReviewers slice,
 // proving tests can control the reviewer list without shelling out.
 func TestStubGitHub_DetectActiveReviewers(t *testing.T) {
-	stub := &StubGitHub{
+	stub := &stubGitHub{
 		ActiveReviewers: []Reviewer{
 			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second, ReviewOnPush: true},
 		},

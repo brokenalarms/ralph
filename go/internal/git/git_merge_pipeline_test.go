@@ -104,7 +104,7 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("rev-parse HEAD", "abc123", nil)
 
-	gh := &StubGitHub{
+	gh := &stubGitHub{
 		IsAvailable: true,
 		OpenPR:      42,
 		PRTitle:     "some PR",
@@ -117,7 +117,7 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-main-moved",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -157,7 +157,7 @@ func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("rev-parse HEAD", "abc123", nil)
 
-	gh := &StubGitHub{
+	gh := &stubGitHub{
 		IsAvailable: true,
 		OpenPR:      88,
 		PRTitle:     "some PR",
@@ -171,7 +171,7 @@ func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-not-mergeable",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -193,7 +193,7 @@ func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 // Proves AC #1: Ship(ctx, runner, gh, workDir, branch, remoteURL, opts) is a
 // callable package function independent of Manager.
 func TestShip_PackageFunction_CreatesPR(t *testing.T) {
-	gh := &StubGitHub{
+	gh := &stubGitHub{
 		IsAvailable: true,
 		OpenPR:      77,
 		PRTitle:     "fix: ship as package fn",
@@ -232,7 +232,7 @@ func TestShip_PackageFunction_CreatesPR(t *testing.T) {
 func TestShip_SkipsCreatePRWhenNotAheadOfMain(t *testing.T) {
 	createPRCalled := false
 	gh := &capturingGitHub{
-		StubGitHub: StubGitHub{IsAvailable: true},
+		stubGitHub: stubGitHub{IsAvailable: true},
 		createPR: func(opts CreatePROpts) (int, error) {
 			createPRCalled = true
 			return 42, nil
@@ -278,7 +278,7 @@ func TestAutoMerge_InfraFailure_ReturnsCIFailureError(t *testing.T) {
 	runner.On("rev-parse HEAD", "abc123", nil)
 	runner.On("reset --hard", "", nil)
 
-	gh := &StubGitHub{
+	gh := &stubGitHub{
 		IsAvailable:  true,
 		OpenPR:       99,
 		PRTitle:      "infra failure test",
@@ -291,7 +291,7 @@ func TestAutoMerge_InfraFailure_ReturnsCIFailureError(t *testing.T) {
 		WorkDir:          "/project/wt",
 		WorktreeBranch:   "ralph/test/01-infra-failure",
 		baseBranch:       "main",
-		Runner:           runner,
+		runner:           runner,
 		github:           gh,
 		state:            newMemState(),
 		logger:           &testLog{},
@@ -324,7 +324,7 @@ func TestAutoMerge_CIFailure_AlwaysReturnsCIFailureError(t *testing.T) {
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("rev-parse HEAD", "abc123", nil)
 
-	gh := &StubGitHub{
+	gh := &stubGitHub{
 		IsAvailable: true,
 		OpenPR:      100,
 		PRTitle:     "ci failure test",
@@ -336,7 +336,7 @@ func TestAutoMerge_CIFailure_AlwaysReturnsCIFailureError(t *testing.T) {
 		WorkDir:          "/project/wt",
 		WorktreeBranch:   "ralph/test/01-ci-failure",
 		baseBranch:       "main",
-		Runner:           runner,
+		runner:           runner,
 		github:           gh,
 		state:            newMemState(),
 		logger:           &testLog{},
@@ -371,7 +371,7 @@ func TestAutoMerge_CITimeout_ReturnsErrorWithoutMerging(t *testing.T) {
 	runner.On("rev-parse HEAD", "abc123", nil)
 	runner.On("reset --hard", "", nil)
 
-	gh := &StubGitHub{
+	gh := &stubGitHub{
 		IsAvailable: true,
 		OpenPR:      102,
 		PRTitle:     "ci timeout test",
@@ -384,7 +384,7 @@ func TestAutoMerge_CITimeout_ReturnsErrorWithoutMerging(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-ci-timeout",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -414,11 +414,11 @@ func TestCreatePR_StackedPRTargetsParentBranch(t *testing.T) {
 
 	var capturedOpts CreatePROpts
 	gh := &capturingGitHub{
-		StubGitHub: StubGitHub{IsAvailable: true, CreatedPR: 200},
+		stubGitHub: stubGitHub{IsAvailable: true, CreatedPR: 200},
 	}
 	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
-		gh.StubGitHub.OpenPR = 200
+		gh.stubGitHub.OpenPR = 200
 		return 200, nil
 	}
 
@@ -428,7 +428,7 @@ func TestCreatePR_StackedPRTargetsParentBranch(t *testing.T) {
 		WorktreeBranch: "ralph/test/02-child-task",
 		baseBranch:     "main",
 		PrevBranch:     "ralph/parent-task",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -457,7 +457,7 @@ func TestCreatePR_NonStackedTargetsMain(t *testing.T) {
 
 	var capturedOpts CreatePROpts
 	gh := &capturingGitHub{
-		StubGitHub: StubGitHub{IsAvailable: true, CreatedPR: 201},
+		stubGitHub: stubGitHub{IsAvailable: true, CreatedPR: 201},
 		createPR: func(opts CreatePROpts) (int, error) {
 			capturedOpts = opts
 			return 201, nil
@@ -469,7 +469,7 @@ func TestCreatePR_NonStackedTargetsMain(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-solo-task",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -564,7 +564,7 @@ func TestMergeWithRetry_CIFailureWithNoCallback_ReturnsError(t *testing.T) {
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("rev-parse HEAD", "abc123", nil)
 
-	gh := &StubGitHub{
+	gh := &stubGitHub{
 		IsAvailable: true,
 		OpenPR:      55,
 
@@ -576,7 +576,7 @@ func TestMergeWithRetry_CIFailureWithNoCallback_ReturnsError(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-ci-no-callback",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -613,7 +613,7 @@ func TestMergeWithRetry_InfraRetryBackoff(t *testing.T) {
 	runner.On("rev-parse HEAD", "abc123", nil)
 	runner.On("reset --hard", "", nil)
 
-	gh := &StubGitHub{
+	gh := &stubGitHub{
 		IsAvailable: true,
 		OpenPR:      101,
 		PRTitle:     "infra retry",
@@ -631,7 +631,7 @@ func TestMergeWithRetry_InfraRetryBackoff(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-infra-retry",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -673,7 +673,7 @@ func TestMergeWithRetry_InfraRetryBackoff(t *testing.T) {
 func TestExecuteMerge_PackageFunc_MergesSuccessfully(t *testing.T) {
 	stubCISleep(t)
 
-	gh := &StubGitHub{
+	gh := &stubGitHub{
 		IsAvailable: true,
 		PRTitle:     "test PR",
 		PRNumber:    42,
@@ -821,7 +821,7 @@ func TestExecuteMerge_CIGatedRetryPath(t *testing.T) {
 	runner.On("rev-parse HEAD", "abc123", nil)
 	runner.On("reset --hard", "", nil)
 
-	gh := &StubGitHub{
+	gh := &stubGitHub{
 		IsAvailable: true,
 		OpenPR:      120,
 		PRTitle:     "CI gated test",
@@ -842,7 +842,7 @@ func TestExecuteMerge_CIGatedRetryPath(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-ci-gated",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -867,7 +867,7 @@ func TestAutoMerge_StackedPR_WaitsForBase(t *testing.T) {
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 
-	gh := &StubGitHub{
+	gh := &stubGitHub{
 		IsAvailable: true,
 		OpenPR:      150,
 		PRBase:      "ralph/parent-branch",
@@ -878,7 +878,7 @@ func TestAutoMerge_StackedPR_WaitsForBase(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/02-stacked-child",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -909,7 +909,7 @@ func TestBranchNeedsUpdate_ReturnsTrueWhenMainNotAncestorOfHEAD(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-needs-update",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		state:          newMemState(),
 		logger:         discardLog{},
 	}
@@ -933,7 +933,7 @@ func TestBranchNeedsUpdate_ReturnsFalseWhenMainIsAncestorOfHEAD(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-up-to-date",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		state:          newMemState(),
 		logger:         discardLog{},
 	}
@@ -960,7 +960,7 @@ func TestAutoMerge_KnownPRNumber_SkipsFindOpenPR(t *testing.T) {
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("rev-parse HEAD", "abc123", nil)
 
-	gh := &StubGitHub{
+	gh := &stubGitHub{
 		IsAvailable: true,
 		OpenPR:      0, // FindOpenPR would return nothing
 		PRBase:      "main",
@@ -974,7 +974,7 @@ func TestAutoMerge_KnownPRNumber_SkipsFindOpenPR(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-known-pr",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -1005,7 +1005,7 @@ func TestAutoMerge_CIAlreadyPassing_SkipsPushAndMergesDirectly(t *testing.T) {
 	// rev-parse HEAD returns the same SHA as the PR head
 	runner.On("rev-parse HEAD", "sha-already-passing", nil)
 
-	gh := &StubGitHub{
+	gh := &stubGitHub{
 		IsAvailable: true,
 		OpenPR:      77,
 		PRTitle:     "already passing",
@@ -1019,7 +1019,7 @@ func TestAutoMerge_CIAlreadyPassing_SkipsPushAndMergesDirectly(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-ci-fast-path",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         log,
@@ -1065,7 +1065,7 @@ func TestAutoMerge_LocalHeadDiffersFromPRHead_UsesNormalFlow(t *testing.T) {
 	// Local HEAD differs from PR head SHA → fast path does not trigger.
 	runner.On("rev-parse HEAD", "sha-new-local-commit", nil)
 
-	gh := &StubGitHub{
+	gh := &stubGitHub{
 		IsAvailable: true,
 		OpenPR:      78,
 		PRTitle:     "new local commits",
@@ -1078,7 +1078,7 @@ func TestAutoMerge_LocalHeadDiffersFromPRHead_UsesNormalFlow(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-sha-mismatch",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -1122,7 +1122,7 @@ func TestAutoMerge_NoOpPush_CIFailureDetected(t *testing.T) {
 	// pushedAt filter would discard it and the loop would see no checks.
 	failStart := time.Now().Add(-5 * time.Minute)
 
-	gh := &StubGitHub{
+	gh := &stubGitHub{
 		IsAvailable: true,
 		OpenPR:      88,
 		PRTitle:     "no-op push regression",
@@ -1140,7 +1140,7 @@ func TestAutoMerge_NoOpPush_CIFailureDetected(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-no-op-push",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
