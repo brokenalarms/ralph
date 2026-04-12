@@ -121,19 +121,6 @@ type Link struct {
 	URL  string // click target, e.g. "https://github.com/owner/repo/pull/42"
 }
 
-// Append controls how Emit writes partial lines. The zero value writes a
-// full tagged line with a trailing newline (normal behavior).
-type Append int
-
-const (
-	// AppendStart begins an in-place line: tag + message, no trailing newline.
-	AppendStart Append = iota + 1
-	// AppendContinue appends raw text: no tag, no trailing newline.
-	AppendContinue
-	// AppendEnd closes an in-place line: writes a trailing newline only.
-	AppendEnd
-)
-
 // Opts is the structured parameter for Emit. All log context is a field.
 type Opts struct {
 	Domain Domain
@@ -141,7 +128,7 @@ type Opts struct {
 	Link   *Link  // clickable reference appended at end of line
 	Branch string // appended as colored tag
 	Model  string // when set, appended as a color-coded [model] sub-tag after the domain tag
-	Append Append // controls in-place line assembly; zero = full line with newline
+	Append bool   // when true, omit trailing newline
 }
 
 // ModelTag returns a color-coded [model-short-name] sub-tag for the given model ID.
@@ -202,23 +189,9 @@ func NewWithWriter(w io.Writer) *Logger {
 	}
 }
 
-// Emit writes a log message with structured options. Opts.Append controls
-// partial-line assembly:
-//   - zero (default): tag + message + newline (full line)
-//   - AppendStart: tag + message, no newline (begins an in-place line)
-//   - AppendContinue: raw message only, no tag or newline
-//   - AppendEnd: writes a newline only (closes an in-place line)
+// Emit writes a log message with structured options. When Append is true,
+// the trailing newline is omitted — use this for partial-line assembly.
 func (l *Logger) Emit(o Opts, format string, args ...any) {
-	switch o.Append {
-	case AppendContinue:
-		s := fmt.Sprintf(format, args...)
-		l.write(s)
-		return
-	case AppendEnd:
-		l.write("\n")
-		return
-	}
-
 	msg := fmt.Sprintf(format, args...)
 	if o.Link != nil {
 		if o.Link.URL != "" {
@@ -231,14 +204,19 @@ func (l *Logger) Emit(o Opts, format string, args ...any) {
 		msg += "  " + BranchTag(o.Branch)
 	}
 
-	tag := Tag(o.Level.color(), Orch, o.Domain)
-	if o.Model != "" {
-		tag += ModelTag(o.Model)
+	var content string
+	if o.Domain == "" && o.Level == 0 && o.Model == "" {
+		content = msg
+	} else {
+		tag := Tag(o.Level.color(), Orch, o.Domain)
+		if o.Model != "" {
+			tag += ModelTag(o.Model)
+		}
+		content = fmt.Sprintf("%s %s", tag, msg)
 	}
-	content := fmt.Sprintf("%s %s", tag, msg)
 
-	if o.Append == AppendStart {
-		l.write(l.Fmt.Format(content))
+	if o.Append {
+		l.write(content)
 	} else {
 		l.write(l.Fmt.Format(content) + "\n")
 	}
@@ -260,20 +238,20 @@ func (l *Logger) write(s string) {
 	fmt.Fprint(l.logFile, s)
 }
 
-// EmitInPlace delegates to Emit with AppendStart.
+// EmitInPlace delegates to Emit with Append: true.
 func (l *Logger) EmitInPlace(o Opts, format string, args ...any) {
-	o.Append = AppendStart
+	o.Append = true
 	l.Emit(o, format, args...)
 }
 
-// EmitAppend delegates to Emit with AppendContinue.
+// EmitAppend delegates to Emit with Append: true and no tag fields.
 func (l *Logger) EmitAppend(format string, args ...any) {
-	l.Emit(Opts{Append: AppendContinue}, format, args...)
+	l.Emit(Opts{Append: true}, format, args...)
 }
 
-// EmitFinalInPlace delegates to Emit with AppendEnd.
+// EmitFinalInPlace writes a trailing newline.
 func (l *Logger) EmitFinalInPlace() {
-	l.Emit(Opts{Append: AppendEnd}, "")
+	l.write("\n")
 }
 
 // AgentLog writes an info-level message with [r] actor prefix.

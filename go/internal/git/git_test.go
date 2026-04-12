@@ -59,18 +59,17 @@ func (l *testLog) format(o logging.Opts, format string, args ...any) string {
 }
 
 func (l *testLog) Emit(o logging.Opts, format string, args ...any) {
-	switch o.Append {
-	case logging.AppendStart:
-		l.lineBuffer = l.format(o, format, args...)
-	case logging.AppendContinue:
-		l.lineBuffer += fmt.Sprintf(format, args...)
-	case logging.AppendEnd:
+	if o.Append {
+		l.lineBuffer += l.format(o, format, args...)
+	} else {
 		if l.lineBuffer != "" {
 			l.messages = append(l.messages, l.lineBuffer)
 			l.lineBuffer = ""
 		}
-	default:
-		l.messages = append(l.messages, l.format(o, format, args...))
+		msg := l.format(o, format, args...)
+		if msg != "\n" && msg != "" {
+			l.messages = append(l.messages, msg)
+		}
 	}
 }
 

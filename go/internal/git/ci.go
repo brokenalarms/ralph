@@ -259,16 +259,16 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nw
 
 	emitPoll := func(duration string) {
 		if !polled {
-			log.Emit(logging.Opts{Domain: logging.CI, Link: prLink, Append: logging.AppendStart}, "CI polled %s", duration)
+			log.Emit(logging.Opts{Domain: logging.CI, Link: prLink, Append: true}, "CI polled %s", duration)
 		} else {
-			log.Emit(logging.Opts{Append: logging.AppendContinue}, "..%s", duration)
+			log.Emit(logging.Opts{Append: true}, "..%s", duration)
 		}
 		polled = true
 	}
 
 	finalize := func() {
 		if polled {
-			log.Emit(logging.Opts{Append: logging.AppendEnd}, "")
+			log.Emit(logging.Opts{}, "\n")
 		}
 	}
 
