@@ -26,17 +26,19 @@ type Log interface {
 // SignalPaths holds the file paths used for inter-process signaling between
 // the ralph loop and the Claude process.
 type SignalPaths struct {
-	Complete    string // written when current task finishes
-	CurrentTask string // written when Claude picks up a task
-	AllComplete string // written when all tasks are done
+	Complete      string // written when current task finishes
+	CurrentTask   string // written when Claude picks up a task
+	AllComplete   string // written when all tasks are done
+	NoCodeNeeded  string // written when investigation confirms no code changes are needed
 }
 
 // DefaultSignalPaths returns signal file paths under the given ralph dir.
 func DefaultSignalPaths(ralphDir string) SignalPaths {
 	return SignalPaths{
-		Complete:    filepath.Join(ralphDir, ".signal_complete"),
-		CurrentTask: filepath.Join(ralphDir, ".signal_current_task"),
-		AllComplete: filepath.Join(ralphDir, ".signal_all_complete"),
+		Complete:     filepath.Join(ralphDir, ".signal_complete"),
+		CurrentTask:  filepath.Join(ralphDir, ".signal_current_task"),
+		AllComplete:  filepath.Join(ralphDir, ".signal_all_complete"),
+		NoCodeNeeded: filepath.Join(ralphDir, ".signal_no_code_needed"),
 	}
 }
 
@@ -94,6 +96,7 @@ type RunConfig struct {
 type Result struct {
 	SignalDetected     bool      // true if a completion signal was found
 	AllComplete        bool      // true if the all-complete signal was found
+	NoCodeNeeded       bool      // true if agent confirmed no code changes required (already fixed / not a bug)
 	IdleTimeout        bool      // true if the session was killed due to idle timeout
 	FeedbackKill       bool      // true if killed because user feedback arrived
 	RateLimited        bool      // true if Claude reported hitting its usage limit
@@ -319,7 +322,15 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	// Final signal check — Claude may have written a signal just before exiting.
 	// Skip if feedback was detected — the agent should restart, not complete.
 	if !result.SignalDetected && !result.FeedbackKill {
-		if hasSignal(cfg.Signals.Complete) || hasSignal(cfg.Signals.AllComplete) {
+		if cfg.Signals.NoCodeNeeded != "" && hasSignal(cfg.Signals.NoCodeNeeded) {
+			result.SignalDetected = true
+			result.NoCodeNeeded = true
+			result.Summary = readFirstLine(cfg.Signals.NoCodeNeeded)
+			if result.Summary == "" {
+				result.Summary = "confirmed no code changes needed"
+			}
+			r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: cfg.Model}, "Task completed via no-code-needed signal")
+		} else if hasSignal(cfg.Signals.Complete) || hasSignal(cfg.Signals.AllComplete) {
 			result.SignalDetected = true
 			result.AllComplete = hasSignal(cfg.Signals.AllComplete)
 			result.Summary = readSignalSummary(cfg.Signals)
@@ -421,6 +432,29 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Model: cfg.Model}, "Feedback signal detected — restarting agent")
 					gracefulKill(cmd, processDone)
 					return Result{FeedbackKill: true}
+				}
+			}
+
+			// Detect no-code-needed signal: agent confirmed no code changes
+			// required (bug already fixed, not a bug, etc.). Bypasses
+			// OnSignal verification — no commit check applies.
+			if cfg.Signals.NoCodeNeeded != "" && hasSignal(cfg.Signals.NoCodeNeeded) {
+				summary := readFirstLine(cfg.Signals.NoCodeNeeded)
+				if summary == "" {
+					summary = "confirmed no code changes needed"
+				}
+				if cfg.TaskID != "" {
+					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: cfg.Model}, "%s: %s", cfg.TaskID, summary)
+				} else {
+					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Success, Model: cfg.Model}, "%s", summary)
+				}
+				waitForOutputSettle(cfg.RawLog, processDone)
+				gracefulKill(cmd, processDone)
+				return Result{
+					SignalDetected: true,
+					NoCodeNeeded:   true,
+					TaskDesc:       readFirstLine(cfg.Signals.CurrentTask),
+					Summary:        summary,
 				}
 			}
 
@@ -563,6 +597,7 @@ func clearSignals(s SignalPaths) {
 	os.Remove(s.Complete)
 	os.Remove(s.CurrentTask)
 	os.Remove(s.AllComplete)
+	os.Remove(s.NoCodeNeeded)
 }
 
 func hasSignal(path string) bool {

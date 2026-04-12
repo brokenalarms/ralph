@@ -126,6 +126,37 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		}
 	}
 
+	// NoCodeNeeded: agent confirmed investigation found no code changes
+	// required (already fixed, not a bug, etc.). Close directly — no
+	// commit check, no verification pipeline.
+	if p.result.NoCodeNeeded {
+		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "No code changes needed — closing task %s", p.taskID)
+		if p.taskID != "" {
+			if ctx.Err() != nil {
+				l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+				return completeTaskOut{action: signalComplete}
+			}
+			closeReason := p.result.Summary
+			if closeReason == "" {
+				closeReason = "confirmed no code changes needed"
+			}
+			_ = l.taskBackend.SetState(p.taskID, "phase", "verified", closeReason)
+			if err := l.taskBackend.CloseTask(p.taskID, closeReason); err != nil {
+				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
+				l.skipTask(p.taskID, "close_failed")
+			} else {
+				l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
+				l.persistCompleted(p.taskID, false)
+			}
+		}
+		l.git.TagTaskEnd(p.taskID)
+		l.execRunPostTask(ctx, p.taskID, 0, false)
+		if p.notify {
+			notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
+		}
+		return completeTaskOut{action: signalSkipped}
+	}
+
 	// If OnSignal was set, verification already passed in the runner.
 	// If not (legacy/test path), run verification here as fallback.
 	if !p.result.OnSignalUsed {

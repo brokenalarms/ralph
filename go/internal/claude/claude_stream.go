@@ -283,7 +283,7 @@ func (f *StreamFormatter) FormatOutput(text string) []string {
 	return f.emitLine(colorTags("[r] " + text))
 }
 
-var signalRe = regexp.MustCompile(`^\[Bash\] echo ["'](.+?)["'] > .+/\.signal_(current_task|complete|all_complete)$`)
+var signalRe = regexp.MustCompile(`^\[Bash\] echo ["'](.+?)["'] > .+/\.signal_(current_task|complete|all_complete|no_code_needed)$`)
 
 // parseSignalLine detects Bash commands that write to .signal_* files.
 // Returns the signal name (e.g. "current_task") and message content.
