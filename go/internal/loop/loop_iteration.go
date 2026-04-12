@@ -152,8 +152,20 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	l.state.TouchPlanFlash()
 
 	headAfterSignal := l.git.HeadRev()
+	hasPriorIterationCommits := false
 	if p.headBefore != "" && headAfterSignal == p.headBefore {
-		// No new commits but verification passed (agent + LLM + tests agree).
+		// No new commits this iteration. Check if prior iterations left
+		// commits ahead of origin/main — if so, fall through to Ship
+		// instead of closing without a PR.
+		baseBranch := l.git.DetectDefaultBranch()
+		if priorLog := l.git.LogOneline("origin/"+baseBranch, "HEAD"); priorLog != "" {
+			l.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits this iteration, but prior-iteration commits ahead of origin/%s — routing through Ship", baseBranch)
+			hasPriorIterationCommits = true
+		}
+	}
+	if p.headBefore != "" && headAfterSignal == p.headBefore && !hasPriorIterationCommits {
+		// No new commits and no prior-iteration commits — verification passed
+		// but there's nothing to push.
 		l.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits — verified complete")
 
 		// Check for an existing PR from a prior attempt that still needs merging.

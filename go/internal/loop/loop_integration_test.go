@@ -3584,5 +3584,127 @@ func TestIntegration_LLMVerifyRejectThenFixThenPass(t *testing.T) {
 	}
 }
 
+// Scenario: Iteration 1 commits work but exits without signaling. Iteration 2
+// signals completion without new commits. The verify pipeline must detect the
+// prior-iteration commits ahead of origin/main and proceed to Ship + close.
+// This prevents stagnation when the agent's signal is lost but work is valid.
+func TestIntegration_PriorIterationCommit_SignalOnRetry_ShipsAndCloses(t *testing.T) {
+	dir, ralphDir, promptsDir, st := setupIntegrationTest(t)
+
+	backend := newIntegrationBackend()
+	backend.Remaining = 1
+	backend.Completed = 0
+	backend.Total = 1
+	backend.NextTask = "Collapse git package"
+	backend.NextID = "ralph-prior1"
+	backend.BackendLabel = "beads"
+
+	gm := &git.StubRepo{
+		ProjectDir:      dir,
+		WorkDir:         dir,
+		WorktreeBranch:  "ralph/prior-test",
+		RemoteURLValue:  "https://github.com/owner/repo.git",
+		DefaultBranch:   "main",
+		LogOnelineValue: "", // updated per iteration
+	}
+	gm.ShipResult = git.ShipResult{PRNumber: 99}
+	gm.MergeRetryResult = true
+
+	iteration := 0
+	// multiIterationRunner: iteration 1 commits but no signal; iteration 2
+	// signals via OnSignal but makes no new commits.
+	runner := &multiIterationRunner{
+		onRun: func(cfg claude.RunConfig) (claude.Result, error) {
+			iteration++
+			if iteration == 1 {
+				// Iteration 1: agent commits work (changes HEAD) but exits without signal.
+				gm.HeadRevValue = "commit-from-iter1"
+				gm.LogOnelineValue = "commit-from-iter1 refactor git package"
+				return claude.Result{SignalDetected: false}, nil
+			}
+			// Iteration 2+: agent signals complete. HEAD unchanged (no new commits
+			// this iteration). LogOnelineValue is non-empty because iter1's commit
+			// is ahead of origin/main.
+			if cfg.OnSignal != nil {
+				cfg.OnSignal("Collapsed git package — all tests pass")
+			}
+			backend.Lock()
+			backend.Remaining = 0
+			backend.Completed = 1
+			backend.Unlock()
+			return claude.Result{
+				SignalDetected: true,
+				OnSignalUsed:   true,
+				Summary:        "Collapsed git package — all tests pass",
+			}, nil
+		},
+	}
+
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 3,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+		VerifyDir:     dir,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				return "YES: all acceptance criteria met", nil
+			}},
+		}),
+		Connectivity: onlineStubConnectivity(),
+	})
+	l.runner = runner
+
+	l.Run(context.Background())
+
+	// Task must have been closed — Ship ran and merged.
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) == 0 {
+		t.Fatal("expected task to be closed after prior-iteration commit + retry signal")
+	}
+	if backend.ClosedIDs[0] != "ralph-prior1" {
+		t.Errorf("expected close for ralph-prior1, got %q", backend.ClosedIDs[0])
+	}
+	if !strings.Contains(backend.CloseReasons[0], "99") {
+		t.Errorf("close reason should reference PR #99, got %q", backend.CloseReasons[0])
+	}
+
+	// Must have taken at least 2 iterations.
+	if iteration < 2 {
+		t.Errorf("expected at least 2 iterations (commit + signal), got %d", iteration)
+	}
+}
+
+// multiIterationRunner delegates Run to a closure that receives the full
+// RunConfig, allowing per-iteration control over OnSignal invocation.
+type multiIterationRunner struct {
+	onRun func(cfg claude.RunConfig) (claude.Result, error)
+}
+
+func (m *multiIterationRunner) Run(cfg claude.RunConfig) (claude.Result, error) {
+	return m.onRun(cfg)
+}
+
+func (m *multiIterationRunner) StopStreaming() {}
+
+func (m *multiIterationRunner) InjectMessage(_ string) error { return nil }
+
+func (m *multiIterationRunner) Query(_ context.Context, _, _, _ string) (string, error) {
+	return "NO: stub", nil
+}
+
 // Ensure the integrationBackend satisfies tasks.Backend.
 var _ tasks.Backend = (*integrationBackend)(nil)
