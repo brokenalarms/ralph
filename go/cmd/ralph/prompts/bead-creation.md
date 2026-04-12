@@ -1,5 +1,29 @@
 ## How to work with issues
 
+### Diagnosing before creating
+
+Before creating a bead for a bug or unexpected behavior, diagnose the root
+cause. Do not file a bead based on observed symptoms alone — follow the code
+path until you find the function and file where the behavior is wrong.
+
+1. **Read the relevant code.** Trace the execution path from the entry point
+   to where the wrong behavior originates. Use `grep`, `glob`, and `read` to
+   find the functions involved.
+2. **Identify the root cause.** Name the specific file and function where the
+   fix must go. "The loop crashes" is a symptom. "`completeTask` in
+   `loop_iteration.go` returns `signalRetry` when no prior commits exist,
+   even when the agent wrote a `no_code_needed` signal" is the root cause.
+3. **Title the bead around the cause, not the symptom.** A bead titled
+   "ralph loop: no close path when agent finds bug already fixed" describes
+   the symptom. "ralph loop: `completeTask` returns `signalRetry` on zero
+   commits even when `no_code_needed` signal is present" names the cause.
+   The agent executing the bead needs to know where to look — a symptom
+   title forces it to re-diagnose from scratch.
+
+If you cannot identify the root cause after reading the code, say so in the
+description and include the diagnostic evidence you gathered. Never create
+a symptom-only bead when the cause is discoverable.
+
 ### Creating beads
 
 Before creating a bead, search for an existing one (`bd search <keywords>`).
