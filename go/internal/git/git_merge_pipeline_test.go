@@ -51,10 +51,10 @@ func TestPush_RebasesWhenOriginMainDiverged(t *testing.T) {
 	mainSHA := strings.TrimSpace(cmdOutput(t, "git", "-C", tmpClone, "rev-parse", "HEAD"))
 
 	mgr := &Repo{
-		ProjectDir:     project,
+		projectDir:     project,
 		baseBranch:     "main",
-		WorkDir:        wtDir,
-		WorktreeBranch: "ralph/test-rebase-push",
+		workDir:        wtDir,
+		worktreeBranch: "ralph/test-rebase-push",
 		state:          newMemState(),
 		logger:         &testLog{},
 	}
@@ -113,11 +113,11 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 	}
 
 	mgr := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/wt",
-		WorktreeBranch: "ralph/test/01-main-moved",
+		projectDir:     "/project",
+		workDir:        "/project/wt",
+		worktreeBranch: "ralph/test/01-main-moved",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -167,11 +167,11 @@ func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 	}
 
 	mgr := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/wt",
-		WorktreeBranch: "ralph/test/01-not-mergeable",
+		projectDir:     "/project",
+		workDir:        "/project/wt",
+		worktreeBranch: "ralph/test/01-not-mergeable",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -287,15 +287,15 @@ func TestAutoMerge_InfraFailure_ReturnsCIFailureError(t *testing.T) {
 	}
 
 	mgr := &Repo{
-		ProjectDir:       "/project",
-		WorkDir:          "/project/wt",
-		WorktreeBranch:   "ralph/test/01-infra-failure",
+		projectDir:       "/project",
+		workDir:          "/project/wt",
+		worktreeBranch:   "ralph/test/01-infra-failure",
 		baseBranch:       "main",
-		Runner:           runner,
+		runner:           runner,
 		github:           gh,
 		state:            newMemState(),
 		logger:           &testLog{},
-		LocalTestsPassed: true,
+		localTestsPassed: true,
 	}
 
 	_, err := mgr.AutoMergeCurrentBranch(context.Background())
@@ -332,15 +332,15 @@ func TestAutoMerge_CIFailure_AlwaysReturnsCIFailureError(t *testing.T) {
 	}
 
 	mgr := &Repo{
-		ProjectDir:       "/project",
-		WorkDir:          "/project/wt",
-		WorktreeBranch:   "ralph/test/01-ci-failure",
+		projectDir:       "/project",
+		workDir:          "/project/wt",
+		worktreeBranch:   "ralph/test/01-ci-failure",
 		baseBranch:       "main",
-		Runner:           runner,
+		runner:           runner,
 		github:           gh,
 		state:            newMemState(),
 		logger:           &testLog{},
-		LocalTestsPassed: false,
+		localTestsPassed: false,
 	}
 
 	_, err := mgr.AutoMergeCurrentBranch(context.Background())
@@ -380,11 +380,11 @@ func TestAutoMerge_CITimeout_ReturnsErrorWithoutMerging(t *testing.T) {
 	}
 
 	mgr := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/wt",
-		WorktreeBranch: "ralph/test/01-ci-timeout",
+		projectDir:     "/project",
+		workDir:        "/project/wt",
+		worktreeBranch: "ralph/test/01-ci-timeout",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -423,12 +423,12 @@ func TestCreatePR_StackedPRTargetsParentBranch(t *testing.T) {
 	}
 
 	mgr := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/wt",
-		WorktreeBranch: "ralph/test/02-child-task",
+		projectDir:     "/project",
+		workDir:        "/project/wt",
+		worktreeBranch: "ralph/test/02-child-task",
 		baseBranch:     "main",
-		PrevBranch:     "ralph/parent-task",
-		Runner:         runner,
+		prevBranch:     "ralph/parent-task",
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -465,11 +465,11 @@ func TestCreatePR_NonStackedTargetsMain(t *testing.T) {
 	}
 
 	mgr := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/wt",
-		WorktreeBranch: "ralph/test/01-solo-task",
+		projectDir:     "/project",
+		workDir:        "/project/wt",
+		worktreeBranch: "ralph/test/01-solo-task",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -492,7 +492,7 @@ func TestPostMergeUpdateMain_RebasesWorktree(t *testing.T) {
 	st := newMemState()
 
 	mgr := &Repo{
-		ProjectDir: project,
+		projectDir: project,
 		ralphDir:   ralphDir,
 		baseBranch: "main",
 		state:      st,
@@ -505,10 +505,10 @@ func TestPostMergeUpdateMain_RebasesWorktree(t *testing.T) {
 	mgr.RenameBranchForTask("post merge task", "")
 
 	// Add a commit in the worktree so it diverges from main.
-	writeFile(t, mgr.WorkDir, "worktree-file.txt", "worktree content\n")
-	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "worktree commit")
+	writeFile(t, mgr.workDir, "worktree-file.txt", "worktree content\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "worktree commit")
 
-	worktreeCommitBefore := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
+	worktreeCommitBefore := gitOutput(mgr.workDir, "rev-parse", "HEAD")
 
 	// Advance origin/main (simulating a merged PR).
 	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
@@ -532,18 +532,18 @@ func TestPostMergeUpdateMain_RebasesWorktree(t *testing.T) {
 	}
 
 	// Worktree HEAD should have changed (rebased).
-	worktreeCommitAfter := gitOutput(mgr.WorkDir, "rev-parse", "HEAD")
+	worktreeCommitAfter := gitOutput(mgr.workDir, "rev-parse", "HEAD")
 	if worktreeCommitAfter == worktreeCommitBefore {
 		t.Error("worktree HEAD should have changed after rebase onto new main")
 	}
 
 	// origin/main should be an ancestor of the worktree HEAD (rebase succeeded).
-	if gitCmdErr(mgr.WorkDir, "merge-base", "--is-ancestor", originMainSHA, "HEAD") != nil {
+	if gitCmdErr(mgr.workDir, "merge-base", "--is-ancestor", originMainSHA, "HEAD") != nil {
 		t.Error("origin/main should be ancestor of worktree HEAD after rebase")
 	}
 
 	// The worktree file should still exist (rebase preserved the worktree commit).
-	if gitCmdErr(mgr.WorkDir, "show", "HEAD:worktree-file.txt") != nil {
+	if gitCmdErr(mgr.workDir, "show", "HEAD:worktree-file.txt") != nil {
 		t.Error("worktree-file.txt should still exist after rebase")
 	}
 }
@@ -572,11 +572,11 @@ func TestMergeWithRetry_CIFailureWithNoCallback_ReturnsError(t *testing.T) {
 	}
 
 	mgr := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/wt",
-		WorktreeBranch: "ralph/test/01-ci-no-callback",
+		projectDir:     "/project",
+		workDir:        "/project/wt",
+		worktreeBranch: "ralph/test/01-ci-no-callback",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -627,11 +627,11 @@ func TestMergeWithRetry_InfraRetryBackoff(t *testing.T) {
 	}
 
 	mgr := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/wt",
-		WorktreeBranch: "ralph/test/01-infra-retry",
+		projectDir:     "/project",
+		workDir:        "/project/wt",
+		worktreeBranch: "ralph/test/01-infra-retry",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -838,11 +838,11 @@ func TestExecuteMerge_CIGatedRetryPath(t *testing.T) {
 		},
 	}
 	mgr := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/wt",
-		WorktreeBranch: "ralph/test/01-ci-gated",
+		projectDir:     "/project",
+		workDir:        "/project/wt",
+		worktreeBranch: "ralph/test/01-ci-gated",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -874,11 +874,11 @@ func TestAutoMerge_StackedPR_WaitsForBase(t *testing.T) {
 	}
 
 	mgr := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/wt",
-		WorktreeBranch: "ralph/test/02-stacked-child",
+		projectDir:     "/project",
+		workDir:        "/project/wt",
+		worktreeBranch: "ralph/test/02-stacked-child",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -905,11 +905,11 @@ func TestBranchNeedsUpdate_ReturnsTrueWhenMainNotAncestorOfHEAD(t *testing.T) {
 	runner.On("merge-base --is-ancestor", "", errors.New("not ancestor"))
 
 	mgr := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/wt",
-		WorktreeBranch: "ralph/test/01-needs-update",
+		projectDir:     "/project",
+		workDir:        "/project/wt",
+		worktreeBranch: "ralph/test/01-needs-update",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		state:          newMemState(),
 		logger:         discardLog{},
 	}
@@ -929,11 +929,11 @@ func TestBranchNeedsUpdate_ReturnsFalseWhenMainIsAncestorOfHEAD(t *testing.T) {
 	runner.On("merge-base --is-ancestor", "", nil)
 
 	mgr := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/wt",
-		WorktreeBranch: "ralph/test/01-up-to-date",
+		projectDir:     "/project",
+		workDir:        "/project/wt",
+		worktreeBranch: "ralph/test/01-up-to-date",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		state:          newMemState(),
 		logger:         discardLog{},
 	}
@@ -970,15 +970,15 @@ func TestAutoMerge_KnownPRNumber_SkipsFindOpenPR(t *testing.T) {
 	}
 
 	mgr := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/wt",
-		WorktreeBranch: "ralph/test/01-known-pr",
+		projectDir:     "/project",
+		workDir:        "/project/wt",
+		worktreeBranch: "ralph/test/01-known-pr",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
-		KnownPRNumber:  42,
+		knownPRNumber:  42,
 	}
 
 	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
@@ -1015,11 +1015,11 @@ func TestAutoMerge_CIAlreadyPassing_SkipsPushAndMergesDirectly(t *testing.T) {
 
 	log := &testLog{}
 	mgr := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/wt",
-		WorktreeBranch: "ralph/test/01-ci-fast-path",
+		projectDir:     "/project",
+		workDir:        "/project/wt",
+		worktreeBranch: "ralph/test/01-ci-fast-path",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         log,
@@ -1074,11 +1074,11 @@ func TestAutoMerge_LocalHeadDiffersFromPRHead_UsesNormalFlow(t *testing.T) {
 	}
 
 	mgr := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/wt",
-		WorktreeBranch: "ralph/test/01-sha-mismatch",
+		projectDir:     "/project",
+		workDir:        "/project/wt",
+		worktreeBranch: "ralph/test/01-sha-mismatch",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -1136,11 +1136,11 @@ func TestAutoMerge_NoOpPush_CIFailureDetected(t *testing.T) {
 	}
 
 	mgr := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/wt",
-		WorktreeBranch: "ralph/test/01-no-op-push",
+		projectDir:     "/project",
+		workDir:        "/project/wt",
+		worktreeBranch: "ralph/test/01-no-op-push",
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},

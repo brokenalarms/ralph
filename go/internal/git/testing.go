@@ -302,21 +302,7 @@ func NewStubRepo() *StubRepo {
 	}
 }
 
-// NewRepoForTesting returns a *Repo wired to a StubGitHub for tests that need
-// real git operations (branch creation, worktrees, etc.) with GitHub stubbed.
-// The returned StubGitHub can be configured before use.
-//
-// cfg supplies the construction-time inputs the test wants on the Repo.
-// Any GitHub field on cfg is overridden by the freshly-created StubGitHub.
-// The cfg approach preserves the Rule-B no-mutation pattern: tests pass
-// Config values rather than mutating fields after construction. This
-// helper is the only sanctioned way to obtain a StubGitHub from outside
-// the git package — tests must not reference git.NewStubGitHub directly.
-func NewRepoForTesting(cfg Config) (*Repo, *StubGitHub) {
-	gh := NewStubGitHub()
-	cfg.GitHub = gh
-	return New(cfg), gh
-}
+
 
 func (s *StubRepo) GetProjectDir() string     { return s.ProjectDir }
 func (s *StubRepo) GetWorkDir() string         { return s.WorkDir }
@@ -608,7 +594,12 @@ func (s *StubRepo) DeleteRemoteBranchByName(_ string) error {
 	return s.DeleteBranchErr
 }
 
+func (s *StubRepo) Init(_ context.Context) error { return nil }
 func (s *StubRepo) RemoveWorktree() {}
+func (s *StubRepo) MergeStack(_ context.Context, _ MergeStackOpts) (MergeStackResult, error) {
+	return MergeStackResult{}, nil
+}
+func (s *StubRepo) ListProjectBranches() []string { return nil }
 
 func (s *StubRepo) GitHubAvailable() bool {
 	return s.GH != nil && s.GH.Available()

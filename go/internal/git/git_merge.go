@@ -9,6 +9,7 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/tasks"
+	"github.com/brokenalarms/ralph/internal/verify"
 )
 
 // CIFixResult describes the outcome of a CI fix attempt.
@@ -27,8 +28,8 @@ const (
 // resolveBaseBranch returns PrevBranch if set, otherwise the default branch.
 // Single source of truth for "what is this branch based on."
 func (r *Repo) resolveBaseBranch() string {
-	if r.PrevBranch != "" {
-		return r.PrevBranch
+	if r.prevBranch != "" {
+		return r.prevBranch
 	}
 	return r.detectDefaultBranch()
 }
@@ -37,44 +38,46 @@ func (r *Repo) resolveBaseBranch() string {
 // Always uses --force-with-lease (safe — only forces if remote matches
 // last fetch). Squash ensures stacked PRs cascade cleanly on merge.
 func (r *Repo) Push(ctx context.Context) error {
-	if r.WorktreeBranch == "" || r.WorkDir == r.ProjectDir {
+	if r.worktreeBranch == "" || r.workDir == r.projectDir {
 		return nil
 	}
 
-	if r.prePush != nil {
-		if err := r.prePush.PrePush(ctx, r.WorkDir); err != nil {
-			return fmt.Errorf("pre-push check failed: %w", err)
+	if r.compileCheckTimeout > 0 {
+		result := verify.CompileCheck(ctx, r.compileCheckTimeout, r.workDir)
+		if !result.Passed {
+			return fmt.Errorf("pre-push compile check failed: %s\n%s", result.Reason, result.Details)
 		}
+		r.logger.Emit(logging.Opts{Domain: "build"}, "Pre-push compile check passed")
 	}
 
 	baseBranch := r.resolveBaseBranch()
-	_ = r.gitCmdErr(r.WorkDir, "fetch", "origin", baseBranch)
+	_ = r.gitCmdErr(r.workDir, "fetch", "origin", baseBranch)
 	baseRef := "origin/" + baseBranch
-	if !r.refExists(r.WorkDir, baseRef) {
+	if !r.refExists(r.workDir, baseRef) {
 		baseRef = baseBranch
 	}
 
 	// Squash only commits ahead of the parent branch tip. Using rev-parse
 	// (not merge-base) preserves the ancestry link so each stacked PR is
 	// exactly one commit ahead of its parent — GitHub merge is a clean no-op.
-	baseSHA := r.gitOutput(r.WorkDir, "rev-parse", baseRef)
+	baseSHA := r.gitOutput(r.workDir, "rev-parse", baseRef)
 	if baseSHA != "" {
 		// Verify parent tip is an ancestor of HEAD. If not, the branch
 		// diverged from its parent (e.g. parent was squash-pushed since
 		// this branch was created) and needs rebasing first.
-		if r.gitCmdErr(r.WorkDir, "merge-base", "--is-ancestor", baseSHA, "HEAD") != nil {
+		if r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", baseSHA, "HEAD") != nil {
 			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Branch diverged from %s — rebasing before push", baseBranch)
 			if err := r.EnsureUpToDate(ctx); err != nil {
 				r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Rebase before push failed: %v", err)
 			}
 			// Re-fetch after rebase since origin may have moved.
-			_ = r.gitCmdErr(r.WorkDir, "fetch", "origin", baseBranch)
-			baseSHA = r.gitOutput(r.WorkDir, "rev-parse", baseRef)
+			_ = r.gitCmdErr(r.workDir, "fetch", "origin", baseBranch)
+			baseSHA = r.gitOutput(r.workDir, "rev-parse", baseRef)
 		}
-		if baseSHA != "" && r.gitCmdErr(r.WorkDir, "merge-base", "--is-ancestor", baseSHA, "HEAD") == nil {
-			headSHA := r.gitOutput(r.WorkDir, "rev-parse", "HEAD")
+		if baseSHA != "" && r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", baseSHA, "HEAD") == nil {
+			headSHA := r.gitOutput(r.workDir, "rev-parse", "HEAD")
 			if headSHA != baseSHA {
-				commitMsg := r.gitOutput(r.WorkDir, "log", "-1", "--format=%s")
+				commitMsg := r.gitOutput(r.workDir, "log", "-1", "--format=%s")
 				if err := r.SquashToOneCommit(baseSHA, commitMsg); err != nil {
 					r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Squash: %v", err)
 				}
@@ -82,11 +85,11 @@ func (r *Repo) Push(ctx context.Context) error {
 		}
 	}
 
-	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Pushing %s...", r.WorktreeBranch)
+	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Pushing %s...", r.worktreeBranch)
 	// Try force-with-lease first (safe update of existing branch).
 	// Fall back to regular push for new branches.
-	if err := r.gitCmdErrCtx(ctx, r.WorkDir, "push", "--force-with-lease", "-u", "origin", r.WorktreeBranch); err != nil {
-		return r.gitCmdErrCtx(ctx, r.WorkDir, "push", "-u", "origin", r.WorktreeBranch)
+	if err := r.gitCmdErrCtx(ctx, r.workDir, "push", "--force-with-lease", "-u", "origin", r.worktreeBranch); err != nil {
+		return r.gitCmdErrCtx(ctx, r.workDir, "push", "-u", "origin", r.worktreeBranch)
 	}
 	return nil
 }
@@ -94,7 +97,7 @@ func (r *Repo) Push(ctx context.Context) error {
 // reopenClosedPR finds a closed (not merged) PR for the given branch and
 // reopens it. Returns the PR number on success or 0 if no closed PR was
 // found or reopen failed.
-func reopenClosedPR(gh GitHub, workDir, branch, nwo, repoURL, title, body string, logger Log) (int, error) {
+func reopenClosedPR(gh gitHub, workDir, branch, nwo, repoURL, title, body string, logger Log) (int, error) {
 	number, _, _, findErr := gh.FindPR(branch, repoURL)
 	if findErr != nil || number == 0 {
 		return 0, findErr
@@ -120,9 +123,9 @@ func reopenClosedPR(gh GitHub, workDir, branch, nwo, repoURL, title, body string
 	return number, nil
 }
 
-func (r *Repo) reopenClosedPR(gh GitHub, repoURL, title, body string) (int, error) {
+func (r *Repo) reopenClosedPR(gh gitHub, repoURL, title, body string) (int, error) {
 	nwo := NWOFromRemote(repoURL)
-	return reopenClosedPR(gh, r.WorkDir, r.WorktreeBranch, nwo, repoURL, title, body, r.logger)
+	return reopenClosedPR(gh, r.workDir, r.worktreeBranch, nwo, repoURL, title, body, r.logger)
 }
 
 // EnsurePROpts configures the CreatePR package function. Description,
@@ -141,7 +144,7 @@ type EnsurePROpts struct {
 // CreatePR ensures a PR exists for the given branch. If one is already open,
 // updates its title and body. Otherwise creates a new PR targeting BaseBranch.
 // Returns the PR number.
-func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string, opts EnsurePROpts) (int, error) {
+func CreatePR(ctx context.Context, gh gitHub, workDir, branch, remoteURL string, opts EnsurePROpts) (int, error) {
 	if remoteURL == "" {
 		return 0, nil
 	}
@@ -222,7 +225,7 @@ func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string,
 // description / acceptance criteria use the package function CreatePR
 // directly.
 func (r *Repo) CreatePR(ctx context.Context, taskID, taskDesc, summary string) (int, error) {
-	return CreatePR(ctx, r.gh(), r.WorkDir, r.WorktreeBranch, r.RemoteURL(), EnsurePROpts{
+	return CreatePR(ctx, r.github, r.workDir, r.worktreeBranch, r.RemoteURL(), EnsurePROpts{
 		TaskID:     taskID,
 		TaskDesc:   taskDesc,
 		Summary:    summary,
@@ -317,7 +320,7 @@ type shipInfra struct {
 // shipPR is the single "get work into a PR" pipeline: auto-commit any
 // uncommitted changes, push (squash + rebase + force-push), and create
 // or update a PR. Returns the PR number and URL.
-func shipPR(ctx context.Context, runner Runner, gh GitHub, workDir, branch, remoteURL string, opts ShipOpts, infra shipInfra) (ShipResult, error) {
+func shipPR(ctx context.Context, runner Runner, gh gitHub, workDir, branch, remoteURL string, opts ShipOpts, infra shipInfra) (ShipResult, error) {
 	hasChanges := infra.hasUncommitted
 	if hasChanges == nil {
 		r := runner
@@ -444,7 +447,7 @@ func (r *Repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 			branchAheadOfMain: r.BranchIsAheadOfMain,
 			logger:            r.logger,
 		}
-		result, err = shipPR(ctx, r.run(), r.gh(), r.WorkDir, r.WorktreeBranch, r.RemoteURL(), opts, infra)
+		result, err = shipPR(ctx, r.run(), r.github, r.workDir, r.worktreeBranch, r.RemoteURL(), opts, infra)
 		if err != nil {
 			return result, err
 		}
@@ -454,7 +457,7 @@ func (r *Repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 		return result, nil
 	}
 
-	gh := r.gh()
+	gh := r.github
 	nwo := NWOFromRemote(r.RemoteURL())
 	repoURL := r.RemoteURL()
 	prLink := logging.PRLinkOpt(nwo, result.PRNumber)
@@ -546,7 +549,7 @@ func prTitle(taskID, taskDesc, fallback string) string {
 }
 
 func (r *Repo) prTitle(taskID, taskDesc string) string {
-	return prTitle(taskID, taskDesc, r.WorktreeBranch)
+	return prTitle(taskID, taskDesc, r.worktreeBranch)
 }
 
 // AutoMergeCurrentBranch rebases onto main, pushes, waits for CI, and
@@ -554,26 +557,26 @@ func (r *Repo) prTitle(taskID, taskDesc string) string {
 // back to rebase+push again. Returns typed errors (CIFailureError,
 // MergeConflictError) that callers can handle.
 func (r *Repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
-	if r.WorktreeBranch == "" || r.WorkDir == r.ProjectDir {
+	if r.worktreeBranch == "" || r.workDir == r.projectDir {
 		return false, nil
 	}
 
-	gh := r.gh()
+	gh := r.github
 	if !gh.Available() {
 		return false, fmt.Errorf("gh CLI not found — cannot auto-merge")
 	}
 
-	repoURL := r.gitOutput(r.WorkDir, "remote", "get-url", "origin")
+	repoURL := r.gitOutput(r.workDir, "remote", "get-url", "origin")
 	if repoURL == "" {
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "No remote URL — skipping auto-merge")
 		return false, nil
 	}
 
 	nwo := NWOFromRemote(repoURL)
-	prNumber := r.KnownPRNumber
+	prNumber := r.knownPRNumber
 	if prNumber == 0 {
 		var err error
-		prNumber, err = gh.FindOpenPR(r.WorktreeBranch, repoURL)
+		prNumber, err = gh.FindOpenPR(r.worktreeBranch, repoURL)
 		if err != nil || prNumber == 0 {
 			prNumber, err = r.resolveClosedPR(gh, repoURL)
 			if errors.Is(err, ErrPRAlreadyMerged) {
@@ -583,7 +586,7 @@ func (r *Repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 				return false, err
 			}
 			if prNumber == 0 {
-				r.logger.Emit(logging.Opts{Domain: logging.Git}, "No PR found for %s — skipping auto-merge", r.WorktreeBranch)
+				r.logger.Emit(logging.Opts{Domain: logging.Git}, "No PR found for %s — skipping auto-merge", r.worktreeBranch)
 				return false, nil
 			}
 		}
@@ -664,8 +667,8 @@ var ErrPRAlreadyMerged = fmt.Errorf("PR already merged")
 // It checks whether a PR exists in another state (merged or closed). If
 // merged, returns ErrPRAlreadyMerged. If closed, reopens and returns the
 // PR number so the caller can proceed with the normal merge flow.
-func (r *Repo) resolveClosedPR(gh GitHub, repoURL string) (int, error) {
-	number, _, _, findErr := gh.FindPR(r.WorktreeBranch, repoURL)
+func (r *Repo) resolveClosedPR(gh gitHub, repoURL string) (int, error) {
+	number, _, _, findErr := gh.FindPR(r.worktreeBranch, repoURL)
 	if findErr != nil || number == 0 {
 		return 0, nil
 	}
@@ -688,13 +691,13 @@ func (r *Repo) resolveClosedPR(gh GitHub, repoURL string) (int, error) {
 			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn, Link: prLink}, "Failed to reopen: %v — creating new PR", err)
 			baseBranch := r.resolveBaseBranch()
 			opts := CreatePROpts{
-				Head: r.WorktreeBranch,
+				Head: r.worktreeBranch,
 				Base: baseBranch,
 				Repo: repoURL,
-				Dir:  r.WorkDir,
+				Dir:  r.workDir,
 			}
 			if apiPR, apiErr := gh.CreatePRViaAPI(nwo, opts); apiErr == nil && apiPR != 0 {
-				r.logger.Emit(logging.Opts{Domain: logging.Git, Link: logging.PRLinkOpt(nwo, apiPR)}, "Created for %s (via API fallback)", r.WorktreeBranch)
+				r.logger.Emit(logging.Opts{Domain: logging.Git, Link: logging.PRLinkOpt(nwo, apiPR)}, "Created for %s (via API fallback)", r.worktreeBranch)
 				return apiPR, nil
 			}
 			return 0, nil
@@ -712,11 +715,11 @@ func (r *Repo) resolveClosedPR(gh GitHub, repoURL string) (int, error) {
 // before merging. Uses a local ancestry check to avoid creating merge commits.
 func (r *Repo) branchNeedsUpdate() bool {
 	baseBranch := r.resolveBaseBranch()
-	_ = r.gitCmdErr(r.WorkDir, "fetch", "origin", baseBranch)
-	if !r.refExists(r.WorkDir, "origin/"+baseBranch) {
+	_ = r.gitCmdErr(r.workDir, "fetch", "origin", baseBranch)
+	if !r.refExists(r.workDir, "origin/"+baseBranch) {
 		return false
 	}
-	return r.gitCmdErr(r.WorkDir, "merge-base", "--is-ancestor", "origin/"+baseBranch, "HEAD") != nil
+	return r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", "origin/"+baseBranch, "HEAD") != nil
 }
 
 // ExecuteMergeOpts holds all parameters for the executeMerge package function.
@@ -734,7 +737,7 @@ type ExecuteMergeOpts struct {
 // executeMerge attempts the squash-merge and handles CI-gated retries.
 // It is a package function — callers compose it without a Repo receiver.
 // Repo.executeMerge delegates here.
-func executeMerge(ctx context.Context, gh GitHub, opts ExecuteMergeOpts, logger Log) (bool, error) {
+func executeMerge(ctx context.Context, gh gitHub, opts ExecuteMergeOpts, logger Log) (bool, error) {
 	nwo := NWOFromRemote(opts.RepoURL)
 	prLink := logging.PRLinkOpt(nwo, opts.PRNumber)
 	mergeOpts := opts.MergeOpts
@@ -800,11 +803,11 @@ func postMergeLog(nwo string, prNumber int, defaultBranch string, logger Log) (b
 
 // Repo.executeMerge delegates to the package-level executeMerge function.
 func (r *Repo) executeMerge(ctx context.Context, prNumber int, repoURL string) (bool, error) {
-	return executeMerge(ctx, r.gh(), ExecuteMergeOpts{
+	return executeMerge(ctx, r.github, ExecuteMergeOpts{
 		PRNumber:       prNumber,
 		RepoURL:        repoURL,
-		WorktreeBranch: r.WorktreeBranch,
-		WorkDir:        r.WorkDir,
+		WorktreeBranch: r.worktreeBranch,
+		WorkDir:        r.workDir,
 		DefaultBranch:  r.detectDefaultBranch(),
 		MergeOpts:      r.mergeOpts(),
 		AwaitCI:        r.AwaitCI,
@@ -813,7 +816,7 @@ func (r *Repo) executeMerge(ctx context.Context, prNumber int, repoURL string) (
 
 // GetCIFailureLog retrieves the failed CI run's log output for the given PR.
 func (r *Repo) GetCIFailureLog(prNumber int) string {
-	return r.gh().GetRunLog(prNumber, r.WorkDir)
+	return r.github.GetRunLog(prNumber, r.workDir)
 }
 
 // mergeOpts returns the merge options for the current Repo configuration.
@@ -843,10 +846,10 @@ func NWOFromRemote(remoteURL string) string {
 // DeleteRemoteBranch removes the current branch from the remote. Used to
 // clean up after a PR has been merged externally.
 func (r *Repo) DeleteRemoteBranch() {
-	if r.WorktreeBranch == "" {
+	if r.worktreeBranch == "" {
 		return
 	}
-	_ = r.gitCmdErr(r.WorkDir, "push", "origin", "--delete", r.WorktreeBranch)
+	_ = r.gitCmdErr(r.workDir, "push", "origin", "--delete", r.worktreeBranch)
 }
 
 // MaxMergeAttempts is the total number of merge attempts including retries
@@ -918,8 +921,8 @@ func (r *Repo) ResolveConflict(ctx context.Context) error {
 	// Check if the rebase actually resolved the divergence. If origin/base
 	// is still not an ancestor of HEAD, auto-resolve failed and force-pushing
 	// would just repeat the same conflict on GitHub.
-	if r.refExists(r.WorkDir, "origin/"+baseBranch) {
-		if r.gitCmdErr(r.WorkDir, "merge-base", "--is-ancestor", "origin/"+baseBranch, "HEAD") != nil {
+	if r.refExists(r.workDir, "origin/"+baseBranch) {
+		if r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", "origin/"+baseBranch, "HEAD") != nil {
 			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Rebase did not resolve conflicts with origin/%s — skipping force-push", baseBranch)
 			return &UnresolvedConflictError{}
 		}
@@ -1050,21 +1053,21 @@ func (r *Repo) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, e
 // FlushUnpushedWork pushes any unpushed commits and optionally merges
 // the PR. This is the safety net called before exiting or entering wait mode.
 func (r *Repo) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, autoMerge bool) (merged bool, err error) {
-	if r.WorktreeBranch == WipBranchName() {
+	if r.worktreeBranch == WipBranchName() {
 		return false, nil
 	}
 	// When a PR is already known (set during finalizePR), just push —
 	// don't try to create/find the PR again. The PR already exists.
-	if r.KnownPRNumber != 0 {
+	if r.knownPRNumber != 0 {
 		if pushErr := r.Push(ctx); pushErr != nil {
 			return false, pushErr
 		}
 	} else {
-		remoteRef := "origin/" + r.WorktreeBranch
-		if r.refExists(r.WorkDir, remoteRef) {
+		remoteRef := "origin/" + r.worktreeBranch
+		if r.refExists(r.workDir, remoteRef) {
 			// origin/<branch> exists — bail if HEAD is already there to avoid
 			// a spurious API call that would produce a "Problems parsing JSON" 400.
-			count := strings.TrimSpace(r.gitOutput(r.WorkDir, "rev-list", remoteRef+"..HEAD", "--count"))
+			count := strings.TrimSpace(r.gitOutput(r.workDir, "rev-list", remoteRef+"..HEAD", "--count"))
 			if count == "0" {
 				return false, nil
 			}
@@ -1073,7 +1076,7 @@ func (r *Repo) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, a
 			// HEAD has no commits ahead of origin/main — nothing left to flush.
 			defaultBranch := r.detectDefaultBranch()
 			mainRef := "origin/" + defaultBranch
-			count := strings.TrimSpace(r.gitOutput(r.WorkDir, "rev-list", mainRef+"..HEAD", "--count"))
+			count := strings.TrimSpace(r.gitOutput(r.workDir, "rev-list", mainRef+"..HEAD", "--count"))
 			if count == "0" {
 				return false, nil
 			}
@@ -1100,14 +1103,14 @@ func (r *Repo) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, a
 // deletes the stale task branch. It does not modify the ProjectDir checkout.
 func (r *Repo) PostMergeUpdateMain() {
 	defaultBranch := r.detectDefaultBranch()
-	r.gitCmd(r.ProjectDir, "fetch", "origin", defaultBranch)
+	r.gitCmd(r.projectDir, "fetch", "origin", defaultBranch)
 
 	// Sync worktree with updated main. If rebase conflicts, reset —
 	// the merged work is on main and stale stack commits are expendable.
-	if r.gitCmdErr(r.WorkDir, "rebase", "origin/"+defaultBranch) != nil {
-		r.gitCmd(r.WorkDir, "rebase", "--abort")
+	if r.gitCmdErr(r.workDir, "rebase", "origin/"+defaultBranch) != nil {
+		r.gitCmd(r.workDir, "rebase", "--abort")
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Post-merge rebase failed — resetting worktree to origin/%s", defaultBranch)
-		r.gitCmd(r.WorkDir, "reset", "--hard", "origin/"+defaultBranch)
+		r.gitCmd(r.workDir, "reset", "--hard", "origin/"+defaultBranch)
 	}
 
 	// Move worktree to placeholder branch and delete the stale task branch.

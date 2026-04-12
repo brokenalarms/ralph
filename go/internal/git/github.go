@@ -124,9 +124,10 @@ type MergeResult struct {
 	Conflict bool
 }
 
-// GitHub abstracts GitHub CLI operations for testability. Production code
-// uses ghCLI; tests inject stubs to avoid shelling out to gh.
-type GitHub interface {
+// gitHub abstracts GitHub CLI operations. Unexported — the production
+// implementation (ghCLI) is always constructed by New(). Git-package
+// tests inject StubGitHub via same-package construction.
+type gitHub interface {
 	Available() bool
 	FindOpenPR(branch, repoURL string) (prNumber int, err error)
 	CreatePR(opts CreatePROpts) (prNumber int, err error)

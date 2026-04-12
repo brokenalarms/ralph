@@ -121,6 +121,19 @@ type Link struct {
 	URL  string // click target, e.g. "https://github.com/owner/repo/pull/42"
 }
 
+// Append controls how Emit writes partial lines. The zero value writes a
+// full tagged line with a trailing newline (normal behavior).
+type Append int
+
+const (
+	// AppendStart begins an in-place line: tag + message, no trailing newline.
+	AppendStart Append = iota + 1
+	// AppendContinue appends raw text: no tag, no trailing newline.
+	AppendContinue
+	// AppendEnd closes an in-place line: writes a trailing newline only.
+	AppendEnd
+)
+
 // Opts is the structured parameter for Emit. All log context is a field.
 type Opts struct {
 	Domain Domain
@@ -128,6 +141,7 @@ type Opts struct {
 	Link   *Link  // clickable reference appended at end of line
 	Branch string // appended as colored tag
 	Model  string // when set, appended as a color-coded [model] sub-tag after the domain tag
+	Append Append // controls in-place line assembly; zero = full line with newline
 }
 
 // ModelTag returns a color-coded [model-short-name] sub-tag for the given model ID.
@@ -188,13 +202,24 @@ func NewWithWriter(w io.Writer) *Logger {
 	}
 }
 
-// Emit writes a log message with structured options. This is the single
-// log method — Level controls severity/color, Domain controls the tag,
-// PR and Branch are appended as formatted suffixes.
+// Emit writes a log message with structured options. Opts.Append controls
+// partial-line assembly:
+//   - zero (default): tag + message + newline (full line)
+//   - AppendStart: tag + message, no newline (begins an in-place line)
+//   - AppendContinue: raw message only, no tag or newline
+//   - AppendEnd: writes a newline only (closes an in-place line)
 func (l *Logger) Emit(o Opts, format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
+	switch o.Append {
+	case AppendContinue:
+		s := fmt.Sprintf(format, args...)
+		l.write(s)
+		return
+	case AppendEnd:
+		l.write("\n")
+		return
+	}
 
-	// Append structured fields as suffixes.
+	msg := fmt.Sprintf(format, args...)
 	if o.Link != nil {
 		if o.Link.URL != "" {
 			msg += "  (" + Hyperlink(o.Link.URL, o.Link.Text) + ")"
@@ -211,7 +236,12 @@ func (l *Logger) Emit(o Opts, format string, args ...any) {
 		tag += ModelTag(o.Model)
 	}
 	content := fmt.Sprintf("%s %s", tag, msg)
-	l.write(l.Fmt.Format(content) + "\n")
+
+	if o.Append == AppendStart {
+		l.write(l.Fmt.Format(content))
+	} else {
+		l.write(l.Fmt.Format(content) + "\n")
+	}
 }
 
 // SetStreaming enables or disables streaming mode. In streaming mode, the
@@ -230,47 +260,20 @@ func (l *Logger) write(s string) {
 	fmt.Fprint(l.logFile, s)
 }
 
-// EmitInPlace writes the first segment of an in-place log line in append mode —
-// no carriage return, no trailing newline. Writes to both stdout and the log file.
-// Follow with EmitAppend for subsequent segments and EmitFinalInPlace to close the line.
+// EmitInPlace delegates to Emit with AppendStart.
 func (l *Logger) EmitInPlace(o Opts, format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
-	if o.Link != nil {
-		if o.Link.URL != "" {
-			msg += "  (" + Hyperlink(o.Link.URL, o.Link.Text) + ")"
-		} else if o.Link.Text != "" {
-			msg += "  (" + o.Link.Text + ")"
-		}
-	}
-	tag := Tag(o.Level.color(), Orch, o.Domain)
-	if o.Model != "" {
-		tag += ModelTag(o.Model)
-	}
-	content := fmt.Sprintf("%s %s", tag, msg)
-	formatted := l.Fmt.Format(content)
-	if !l.streaming {
-		fmt.Fprint(l.out, formatted)
-	}
-	fmt.Fprint(l.logFile, formatted)
+	o.Append = AppendStart
+	l.Emit(o, format, args...)
 }
 
-// EmitAppend appends raw text to the current in-place log line — no tag, no
-// carriage return, no trailing newline. Writes to both stdout and the log file.
+// EmitAppend delegates to Emit with AppendContinue.
 func (l *Logger) EmitAppend(format string, args ...any) {
-	s := fmt.Sprintf(format, args...)
-	if !l.streaming {
-		fmt.Fprint(l.out, s)
-	}
-	fmt.Fprint(l.logFile, s)
+	l.Emit(Opts{Append: AppendContinue}, format, args...)
 }
 
-// EmitFinalInPlace closes an in-place log line with a newline.
-// Writes to both stdout and the log file.
+// EmitFinalInPlace delegates to Emit with AppendEnd.
 func (l *Logger) EmitFinalInPlace() {
-	if !l.streaming {
-		fmt.Fprint(l.out, "\n")
-	}
-	fmt.Fprint(l.logFile, "\n")
+	l.Emit(Opts{Append: AppendEnd}, "")
 }
 
 // AgentLog writes an info-level message with [r] actor prefix.

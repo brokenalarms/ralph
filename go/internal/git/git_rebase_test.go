@@ -37,7 +37,7 @@ func setupRebaseMgr(t *testing.T, project, bare string) *Repo {
 	state := newMemState()
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       state,
@@ -48,12 +48,12 @@ func setupRebaseMgr(t *testing.T, project, bare string) *Repo {
 	}
 
 	// Point worktree's origin at the bare repo
-	run(t, "git", "-C", mgr.WorkDir, "remote", "set-url", "origin", bare)
-	run(t, "git", "-C", mgr.WorkDir, "fetch", "origin")
+	run(t, "git", "-C", mgr.workDir, "remote", "set-url", "origin", bare)
+	run(t, "git", "-C", mgr.workDir, "fetch", "origin")
 	// Ensure git identity is configured (worktrees share config with parent,
 	// but set explicitly so tests don't depend on global git config in CI)
-	run(t, "git", "-C", mgr.WorkDir, "config", "user.name", "test")
-	run(t, "git", "-C", mgr.WorkDir, "config", "user.email", "test@test")
+	run(t, "git", "-C", mgr.workDir, "config", "user.name", "test")
+	run(t, "git", "-C", mgr.workDir, "config", "user.email", "test@test")
 
 	return mgr
 }
@@ -85,18 +85,18 @@ func TestRebaseOntoDefaultBranch_CleanRebase(t *testing.T) {
 	pushToOrigin(t, project)
 
 	// Add a commit in the worktree
-	writeFile(t, mgr.WorkDir, "workfile.txt", "worktree file\n")
-	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add workfile")
+	writeFile(t, mgr.workDir, "workfile.txt", "worktree file\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "add workfile")
 
 	if err := mgr.RebaseOntoDefaultBranch(context.Background()); err != nil {
 		t.Fatalf("RebaseOntoDefaultBranch failed: %v", err)
 	}
 
 	// Both files should be present after rebase
-	if _, err := os.Stat(filepath.Join(mgr.WorkDir, "mainfile.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(mgr.workDir, "mainfile.txt")); err != nil {
 		t.Error("mainfile.txt should exist after rebase")
 	}
-	if _, err := os.Stat(filepath.Join(mgr.WorkDir, "workfile.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(mgr.workDir, "workfile.txt")); err != nil {
 		t.Error("workfile.txt should exist after rebase")
 	}
 }
@@ -108,8 +108,8 @@ func TestRebaseOntoDefaultBranch_DivergesOnConflict(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	mgr := setupRebaseMgr(t, project, bare)
 
-	writeFile(t, mgr.WorkDir, "conflict.txt", "worktree version\n")
-	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "worktree change")
+	writeFile(t, mgr.workDir, "conflict.txt", "worktree version\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "worktree change")
 
 	writeFile(t, project, "conflict.txt", "main version\n")
 	run(t, "git", "-C", project, "commit", "-m", "main change")
@@ -156,7 +156,7 @@ func TestRebaseOntoDefaultBranch_FastForwardsWhenBehind(t *testing.T) {
 	}
 
 	// The new file from main should be present after rebase
-	if _, err := os.Stat(filepath.Join(mgr.WorkDir, "newfeature.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(mgr.workDir, "newfeature.txt")); err != nil {
 		t.Error("newfeature.txt should exist after rebasing onto advanced main")
 	}
 
@@ -173,8 +173,8 @@ func TestRebaseOntoDefaultBranch_SkipsWhenAhead(t *testing.T) {
 	mgr := setupRebaseMgr(t, project, bare)
 
 	// Add a local commit — HEAD is ahead of origin/main
-	writeFile(t, mgr.WorkDir, "local.txt", "local work\n")
-	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "local commit")
+	writeFile(t, mgr.workDir, "local.txt", "local work\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "local commit")
 
 	if err := mgr.RebaseOntoDefaultBranch(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -194,7 +194,7 @@ func TestTryResumeWorktree_FetchesOriginOnResume(t *testing.T) {
 	mgr := setupRebaseMgr(t, project, bare)
 
 	// Record origin/main before any new commits
-	oldRef := gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
+	oldRef := gitOutput(mgr.workDir, "rev-parse", "origin/main")
 
 	// Push a new commit to origin (simulates main advancing while ralph was idle)
 	writeFile(t, project, "newfile.txt", "pushed while idle\n")
@@ -202,15 +202,15 @@ func TestTryResumeWorktree_FetchesOriginOnResume(t *testing.T) {
 	pushToOrigin(t, project)
 
 	// Simulate resume: store worktree state, then call tryResumeWorktree
-	_ = mgr.state.Write("worktree_dir", mgr.WorkDir)
-	_ = mgr.state.Write("worktree_branch", mgr.WorktreeBranch)
+	_ = mgr.state.Write("worktree_dir", mgr.workDir)
+	_ = mgr.state.Write("worktree_branch", mgr.worktreeBranch)
 
 	if err := mgr.tryResumeWorktree(); err != nil {
 		t.Fatalf("tryResumeWorktree: %v", err)
 	}
 
 	// After resume, origin/main should point at the new commit
-	newRef := gitOutput(mgr.WorkDir, "rev-parse", "origin/main")
+	newRef := gitOutput(mgr.workDir, "rev-parse", "origin/main")
 	if newRef == oldRef {
 		t.Error("origin/main was not updated on resume — fetch did not run or failed silently")
 	}
@@ -223,7 +223,7 @@ func TestTagTaskStart_WithTaskID(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       newMemState(),
@@ -235,7 +235,7 @@ func TestTagTaskStart_WithTaskID(t *testing.T) {
 
 	mgr.TagTaskStart("ralph-abc")
 
-	if !refExists(mgr.WorkDir, "task/ralph-abc/start") {
+	if !refExists(mgr.workDir, "task/ralph-abc/start") {
 		t.Error("expected tag task/ralph-abc/start to exist")
 	}
 }
@@ -246,7 +246,7 @@ func TestTagTaskEnd_WithTaskID(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       newMemState(),
@@ -258,7 +258,7 @@ func TestTagTaskEnd_WithTaskID(t *testing.T) {
 
 	mgr.TagTaskEnd("ralph-abc")
 
-	if !refExists(mgr.WorkDir, "task/ralph-abc/end") {
+	if !refExists(mgr.workDir, "task/ralph-abc/end") {
 		t.Error("expected tag task/ralph-abc/end to exist")
 	}
 }
@@ -269,7 +269,7 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       newMemState(),
@@ -282,7 +282,7 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 	mgr.RenameBranchForTask("Add user auth", "")
 	mgr.TagTaskStart("")
 
-	if !refExists(mgr.WorkDir, "task/add-user-auth/start") {
+	if !refExists(mgr.workDir, "task/add-user-auth/start") {
 		t.Error("expected tag task/add-user-auth/start to exist")
 	}
 }
@@ -290,9 +290,9 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 // Tags are no-ops when running without a worktree (WorkDir == ProjectDir)
 func TestTagTaskStart_NoOpWithoutWorktree(t *testing.T) {
 	mgr := &Repo{
-		ProjectDir: "/some/dir",
+		projectDir: "/some/dir",
 		baseBranch: "main",
-		WorkDir:    "/some/dir",
+		workDir:    "/some/dir",
 		logger:     &testLog{},
 	}
 	mgr.TagTaskStart("ralph-abc")
@@ -304,7 +304,7 @@ func TestTagTaskStart_SkipsWipBranch(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       newMemState(),
@@ -317,7 +317,7 @@ func TestTagTaskStart_SkipsWipBranch(t *testing.T) {
 	// Branch is still ralph/project/wip — no task ID → no tag
 	mgr.TagTaskStart("")
 
-	tags := gitOutput(mgr.WorkDir, "tag", "-l", "task/*")
+	tags := gitOutput(mgr.workDir, "tag", "-l", "task/*")
 	if tags != "" {
 		t.Errorf("expected no tags on /wip branch, got: %s", tags)
 	}
@@ -329,7 +329,7 @@ func TestTagStartEnd_DifferentCommits(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       newMemState(),
@@ -340,13 +340,13 @@ func TestTagStartEnd_DifferentCommits(t *testing.T) {
 	}
 
 	mgr.TagTaskStart("ralph-xyz")
-	startRev := gitOutput(mgr.WorkDir, "rev-parse", "task/ralph-xyz/start")
+	startRev := gitOutput(mgr.workDir, "rev-parse", "task/ralph-xyz/start")
 
-	writeFile(t, mgr.WorkDir, "work.txt", "some work\n")
-	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "do work")
+	writeFile(t, mgr.workDir, "work.txt", "some work\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "do work")
 
 	mgr.TagTaskEnd("ralph-xyz")
-	endRev := gitOutput(mgr.WorkDir, "rev-parse", "task/ralph-xyz/end")
+	endRev := gitOutput(mgr.workDir, "rev-parse", "task/ralph-xyz/end")
 
 	if startRev == endRev {
 		t.Error("start and end tags should point at different commits after work was done")
@@ -362,7 +362,7 @@ func TestEnsureUpToDate_FallsBackSilentlyWhenPrevBranchMissing(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	mgr := setupRebaseMgr(t, project, bare)
 
-	mgr.PrevBranch = "nonexistent-branch"
+	mgr.prevBranch = "nonexistent-branch"
 
 	log := mgr.logger.(*testLog)
 	log.messages = nil
@@ -372,8 +372,8 @@ func TestEnsureUpToDate_FallsBackSilentlyWhenPrevBranchMissing(t *testing.T) {
 		t.Fatalf("EnsureUpToDate should not error, got: %v", err)
 	}
 
-	if mgr.PrevBranch != "" {
-		t.Errorf("PrevBranch should be cleared after fallback, got %q", mgr.PrevBranch)
+	if mgr.prevBranch != "" {
+		t.Errorf("PrevBranch should be cleared after fallback, got %q", mgr.prevBranch)
 	}
 
 	for _, msg := range log.messages {
@@ -391,8 +391,8 @@ func TestRebaseOntoDefaultBranch_CancelledContextReturnsContextError(t *testing.
 	run(t, "git", "-C", project, "commit", "-m", "advance main")
 	pushToOrigin(t, project)
 
-	writeFile(t, mgr.WorkDir, "workfile.txt", "worktree content\n")
-	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "worktree commit")
+	writeFile(t, mgr.workDir, "workfile.txt", "worktree content\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "worktree commit")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

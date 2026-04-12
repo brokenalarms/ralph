@@ -34,10 +34,10 @@ func (e *RebaseConflictError) Error() string {
 // Returns true if the rebase completed successfully.
 func (r *Repo) autoResolveAndContinue(ctx context.Context, defaultBranch string) bool {
 	for i := 0; i < 50; i++ { // max steps to prevent infinite loop
-		conflicted := r.gitOutput(r.WorkDir, "diff", "--name-only", "--diff-filter=U")
+		conflicted := r.gitOutput(r.workDir, "diff", "--name-only", "--diff-filter=U")
 		if conflicted == "" {
 			// No conflicts — try to continue
-			if err := r.gitCmdErrCtx(ctx, r.WorkDir, "rebase", "--continue"); err == nil {
+			if err := r.gitCmdErrCtx(ctx, r.workDir, "rebase", "--continue"); err == nil {
 				return true
 			}
 			// Might be done
@@ -54,31 +54,31 @@ func (r *Repo) autoResolveAndContinue(ctx context.Context, defaultBranch string)
 				continue
 			}
 
-			ours := r.gitOutput(r.WorkDir, "show", ":2:"+f)
-			theirs := r.gitOutput(r.WorkDir, "show", ":3:"+f)
-			base := r.gitOutput(r.WorkDir, "show", ":1:"+f)
+			ours := r.gitOutput(r.workDir, "show", ":2:"+f)
+			theirs := r.gitOutput(r.workDir, "show", ":3:"+f)
+			base := r.gitOutput(r.workDir, "show", ":1:"+f)
 
 			if ours == theirs {
 				r.logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (identical): %s", f)
-				r.gitCmd(r.WorkDir, "checkout", "--theirs", f)
-				r.gitCmd(r.WorkDir, "add", f)
+				r.gitCmd(r.workDir, "checkout", "--theirs", f)
+				r.gitCmd(r.workDir, "add", f)
 				resolvedAny = true
 			} else if ours == base {
 				r.logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (only theirs changed): %s", f)
-				r.gitCmd(r.WorkDir, "checkout", "--theirs", f)
-				r.gitCmd(r.WorkDir, "add", f)
+				r.gitCmd(r.workDir, "checkout", "--theirs", f)
+				r.gitCmd(r.workDir, "add", f)
 				resolvedAny = true
 			} else if theirs == base {
 				r.logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (only ours changed): %s", f)
-				r.gitCmd(r.WorkDir, "checkout", "--ours", f)
-				r.gitCmd(r.WorkDir, "add", f)
+				r.gitCmd(r.workDir, "checkout", "--ours", f)
+				r.gitCmd(r.workDir, "add", f)
 				resolvedAny = true
 			} else {
 				// Both changed — check if ours is subset of theirs
 				if strings.Contains(theirs, ours) || isSubsetByLines(base, ours, theirs) {
 					r.logger.Emit(logging.Opts{Domain: logging.Git}, "Auto-resolved (ours is subset of theirs): %s", f)
-					r.gitCmd(r.WorkDir, "checkout", "--theirs", f)
-					r.gitCmd(r.WorkDir, "add", f)
+					r.gitCmd(r.workDir, "checkout", "--theirs", f)
+					r.gitCmd(r.workDir, "add", f)
 					resolvedAny = true
 				} else {
 					r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Real conflict in %s — cannot auto-resolve", f)
@@ -92,7 +92,7 @@ func (r *Repo) autoResolveAndContinue(ctx context.Context, defaultBranch string)
 		}
 
 		// Continue the rebase
-		if err := r.gitCmdErrCtx(ctx, r.WorkDir, "rebase", "--continue"); err != nil {
+		if err := r.gitCmdErrCtx(ctx, r.workDir, "rebase", "--continue"); err != nil {
 			if !r.mRebaseInProgress() {
 				return true
 			}

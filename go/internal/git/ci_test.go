@@ -362,23 +362,6 @@ func TestWaitForCI_CancelledContext(t *testing.T) {
 	}
 }
 
-// gh() returns the default ghCLI when no GitHub interface is injected.
-func TestGh_DefaultsToGhCLI(t *testing.T) {
-	mgr := &Repo{}
-	gh := mgr.gh()
-	if gh == nil {
-		t.Fatal("gh() returned nil")
-	}
-}
-
-// gh() returns the injected GitHub interface when one is set.
-func TestGh_UsesInjectedGitHub(t *testing.T) {
-	stub := NewStubGitHub()
-	mgr := &Repo{github: stub}
-	if mgr.gh() != stub {
-		t.Error("gh() should return the injected GitHub interface")
-	}
-}
 
 
 // AwaitCI returns CIPassed immediately when checks already pass,
@@ -682,7 +665,7 @@ func setupAutoMergeManager(t *testing.T, gh *StubGitHub) *Repo {
 	st := newMemState()
 
 	mgr := &Repo{
-		ProjectDir: project,
+		projectDir: project,
 		baseBranch: "main",
 		ralphDir:   ralphDir,
 		github:     gh,
@@ -783,7 +766,7 @@ func TestAutoMerge_PassesMergeOptsToGitHub(t *testing.T) {
 	st := newMemState()
 
 	mgr := &Repo{
-		ProjectDir: project,
+		projectDir: project,
 		baseBranch: "main",
 		ralphDir:   ralphDir,
 		github:     gh,

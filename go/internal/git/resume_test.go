@@ -52,8 +52,8 @@ func TestResumeTask_ClosedPRClearsMetadata(t *testing.T) {
 	gh.PRState = PRStateClosed
 	gh.PRNumber = 99
 	mgr := stubManager(t.TempDir(), nil, gh)
-	mgr.WorktreeBranch = "ralph/next"
-	mgr.BranchRenamed = true // stale from previous run
+	mgr.worktreeBranch = "ralph/next"
+	mgr.branchRenamed = true // stale from previous run
 
 	result, err := mgr.ResumeTask(context.Background(), ResumeTaskMeta{
 		TaskID:      "ralph-cdr3",
@@ -87,12 +87,12 @@ func TestResumeTask_ClosedPRRenamesBranch(t *testing.T) {
 	runner.On("branch", "", nil)
 
 	mgr := &Repo{
-		ProjectDir:     dir,
-		WorkDir:        worktreeDir, // distinct from ProjectDir so rename is allowed
-		WorktreeBranch: "ralph/next",
-		BranchRenamed:  true, // stale from previous run
+		projectDir:     dir,
+		workDir:        worktreeDir, // distinct from ProjectDir so rename is allowed
+		worktreeBranch: "ralph/next",
+		branchRenamed:  true, // stale from previous run
 		baseBranch:     "main",
-		Runner:         runner,
+		runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -111,7 +111,7 @@ func TestResumeTask_ClosedPRRenamesBranch(t *testing.T) {
 	}
 
 	// Branch must be renamed from ralph/next to a task-specific name.
-	if mgr.WorktreeBranch == "ralph/next" {
+	if mgr.worktreeBranch == "ralph/next" {
 		t.Error("branch should be renamed from ralph/next")
 	}
 	if result.NewBranch == "" {

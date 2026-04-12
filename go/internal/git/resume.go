@@ -178,8 +178,8 @@ func (r *Repo) resolveByState(ctx context.Context, prNumber int, meta ResumeTask
 		r.PrepareForNextTask(meta.TaskID)
 		_ = r.RenameBranchForTask(meta.TaskTitle, meta.TaskID)
 		newBranch := ""
-		if meta.TaskID != "" && strings.Contains(r.WorktreeBranch, meta.TaskID) {
-			newBranch = r.WorktreeBranch
+		if meta.TaskID != "" && strings.Contains(r.worktreeBranch, meta.TaskID) {
+			newBranch = r.worktreeBranch
 		}
 		return ResumeTaskResult{PRNumber: prNumber, ClearMetadata: true, NewBranch: newBranch}, nil
 

@@ -9,6 +9,10 @@ import (
 // Ops abstracts the git operations that the execution loop needs.
 // Production code uses *Repo; tests use *StubRepo.
 type Ops interface {
+	// Init runs git pre-flight checks and worktree setup. Must be called
+	// once after construction, before any task execution.
+	Init(ctx context.Context) error
+
 	// State accessors — replace direct field reads on *Repo.
 	GetProjectDir() string
 	GetWorkDir() string
@@ -90,6 +94,11 @@ type Ops interface {
 	FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, autoMerge bool) (merged bool, err error)
 	PostMergeUpdateMain()
 
+	// MergeStack merges a stack of PRs bottom-up: collects the chain from
+	// the given top PR, rebases onto the base branch, then iterates
+	// merging with CI waits between each.
+	MergeStack(ctx context.Context, opts MergeStackOpts) (MergeStackResult, error)
+
 	// Remote branch operations.
 	FetchBranch(branch string) error
 	CheckoutRemoteBranch(branch string)
@@ -102,39 +111,29 @@ type Ops interface {
 	// Worktree lifecycle.
 	RemoveWorktree()
 
-	// GitHub availability and PR listing — used by cmd/ralph/merge without
-	// exposing the GitHub interface type outside this package.
+	// GitHub availability and PR listing.
 	GitHubAvailable() bool
 	ListAllPRs(workDir string) ([]PRInfo, error)
+
+	// ListProjectBranches returns ralph-managed branches for the project.
+	ListProjectBranches() []string
 }
 
 // Compile-time check that *Repo satisfies Ops.
 var _ Ops = (*Repo)(nil)
 
 // GetProjectDir returns the project root directory.
-func (r *Repo) GetProjectDir() string { return r.ProjectDir }
-
-// GetRalphDir returns the ralph state directory (typically <project>/.ralph).
-func (r *Repo) GetRalphDir() string { return r.ralphDir }
-
-// GetWorkDir returns the worktree working directory.
-func (r *Repo) GetWorkDir() string { return r.WorkDir }
-
-// GetWorktreeBranch returns the current worktree branch name.
-func (r *Repo) GetWorktreeBranch() string { return r.WorktreeBranch }
-
-// GetPrevBranch returns the previous branch for stacked PR targeting.
-func (r *Repo) GetPrevBranch() string { return r.PrevBranch }
-
-// IsBranchRenamed returns whether the branch has been renamed for the current task.
-func (r *Repo) IsBranchRenamed() bool { return r.BranchRenamed }
-
-// SetBranchRenamed sets the branch renamed state.
-func (r *Repo) SetBranchRenamed(v bool) { r.BranchRenamed = v }
+func (r *Repo) GetProjectDir() string     { return r.projectDir }
+func (r *Repo) GetRalphDir() string       { return r.ralphDir }
+func (r *Repo) GetWorkDir() string        { return r.workDir }
+func (r *Repo) GetWorktreeBranch() string { return r.worktreeBranch }
+func (r *Repo) GetPrevBranch() string     { return r.prevBranch }
+func (r *Repo) IsBranchRenamed() bool     { return r.branchRenamed }
+func (r *Repo) SetBranchRenamed(v bool)   { r.branchRenamed = v }
 
 // FindOpenPRForBranch finds an open PR for the given branch.
 func (r *Repo) FindOpenPRForBranch(branch string) (int, error) {
-	gh := r.gh()
+	gh := r.github
 	if !gh.Available() {
 		return 0, nil
 	}
@@ -143,7 +142,7 @@ func (r *Repo) FindOpenPRForBranch(branch string) (int, error) {
 
 // GetPRState returns the state (OPEN/CLOSED/MERGED) of a PR.
 func (r *Repo) GetPRState(prNumber int) (PRState, error) {
-	gh := r.gh()
+	gh := r.github
 	if !gh.Available() {
 		return "", nil
 	}
@@ -156,7 +155,7 @@ func (r *Repo) GetPRState(prNumber int) (PRState, error) {
 
 // ListOpenPRBranches returns branch names that have open PRs.
 func (r *Repo) ListOpenPRBranches() ([]string, error) {
-	gh := r.gh()
+	gh := r.github
 	repoURL := r.RemoteURL()
 	if repoURL == "" || !gh.Available() {
 		return nil, nil
@@ -166,7 +165,7 @@ func (r *Repo) ListOpenPRBranches() ([]string, error) {
 
 // GetPRBase returns the base branch of a PR.
 func (r *Repo) GetPRBase(prNumber int) string {
-	gh := r.gh()
+	gh := r.github
 	if !gh.Available() {
 		return ""
 	}
@@ -179,7 +178,7 @@ func (r *Repo) GetPRBase(prNumber int) string {
 
 // FindPRForBranch finds any PR (open or closed) for the given branch.
 func (r *Repo) FindPRForBranch(branch string) (int, string, string, error) {
-	gh := r.gh()
+	gh := r.github
 	if !gh.Available() {
 		return 0, "", "", nil
 	}
@@ -189,7 +188,7 @@ func (r *Repo) FindPRForBranch(branch string) (int, string, string, error) {
 // PRChainIsHealthy checks that the PR's head branch exists on the remote
 // and hasn't been merged into main already.
 func (r *Repo) PRChainIsHealthy(prNumber int) (bool, string) {
-	gh := r.gh()
+	gh := r.github
 	if !gh.Available() {
 		return false, "gh CLI not available"
 	}
@@ -214,7 +213,7 @@ func (r *Repo) PRChainIsHealthy(prNumber int) (bool, string) {
 // DetectActiveReviewers queries the repo's installed GitHub Apps and returns
 // the subset matching the Known reviewer registry.
 func (r *Repo) DetectActiveReviewers() ([]Reviewer, error) {
-	gh := r.gh()
+	gh := r.github
 	nwo := NWOFromRemote(r.RemoteURL())
 	if nwo == "" {
 		return nil, nil
@@ -224,7 +223,7 @@ func (r *Repo) DetectActiveReviewers() ([]Reviewer, error) {
 
 // PollReview polls for a review from the given bot username on the given PR.
 func (r *Repo) PollReview(botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error) {
-	gh := r.gh()
+	gh := r.github
 	nwo := NWOFromRemote(r.RemoteURL())
 	if nwo == "" {
 		return nil, nil
@@ -234,11 +233,11 @@ func (r *Repo) PollReview(botUsername string, prNumber int, timeout time.Duratio
 
 // PRDiffForTask searches for a PR matching the task ID and returns its diff.
 func (r *Repo) PRDiffForTask(taskID string) string {
-	gh := r.gh()
+	gh := r.github
 	if !gh.Available() {
 		return ""
 	}
-	prNumber, err := gh.SearchPR(r.WorkDir, taskID)
+	prNumber, err := gh.SearchPR(r.workDir, taskID)
 	if err != nil || prNumber == 0 {
 		return ""
 	}
@@ -251,10 +250,10 @@ func (r *Repo) PRDiffForTask(taskID string) string {
 
 // GitHubAvailable returns true when the gh CLI is available and configured.
 func (r *Repo) GitHubAvailable() bool {
-	return r.gh().Available()
+	return r.github.Available()
 }
 
 // ListAllPRs returns all PRs (open and closed) for the repo.
 func (r *Repo) ListAllPRs(workDir string) ([]PRInfo, error) {
-	return r.gh().ListAllPRs(workDir)
+	return r.github.ListAllPRs(workDir)
 }
