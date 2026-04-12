@@ -317,12 +317,13 @@ func TestClearSignalFiles_PreservesState(t *testing.T) {
 	os.WriteFile(filepath.Join(ralphDir, ".signal_complete"), []byte("done"), 0o644)
 	os.WriteFile(filepath.Join(ralphDir, ".signal_current_task"), []byte("task"), 0o644)
 	os.WriteFile(filepath.Join(ralphDir, ".signal_all_complete"), []byte("all done"), 0o644)
+	os.WriteFile(filepath.Join(ralphDir, ".signal_no_code_needed"), []byte("already fixed"), 0o644)
 	os.WriteFile(filepath.Join(ralphDir, ".stream-task"), []byte("stream"), 0o644)
 
 	clearSignalFiles(ralphDir)
 
 	// Signal files should be gone
-	for _, f := range []string{".signal_complete", ".signal_current_task", ".signal_all_complete", ".stream-task"} {
+	for _, f := range []string{".signal_complete", ".signal_current_task", ".signal_all_complete", ".signal_no_code_needed", ".stream-task"} {
 		if _, err := os.Stat(filepath.Join(ralphDir, f)); !os.IsNotExist(err) {
 			t.Errorf("signal file %s should be removed", f)
 		}

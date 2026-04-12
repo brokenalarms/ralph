@@ -32,9 +32,10 @@ type Vars struct {
 	WorkDir          string
 	RalphDir         string
 	PlanFile         string
-	SignalToken      string
-	CurrentTaskToken string
-	AllCompleteToken string
+	SignalToken        string
+	CurrentTaskToken   string
+	AllCompleteToken   string
+	NoCodeNeededToken  string
 	TaskPrompt       string
 	AttemptHistory   string
 	TestStatus       string
@@ -91,6 +92,7 @@ func BuildPrompt(v Vars) (string, error) {
 		"{{SIGNAL_TOKEN}}", v.SignalToken,
 		"{{CURRENT_TASK_TOKEN}}", v.CurrentTaskToken,
 		"{{ALL_COMPLETE_TOKEN}}", v.AllCompleteToken,
+		"{{NO_CODE_NEEDED_TOKEN}}", v.NoCodeNeededToken,
 		"{{TASK_PROMPT}}", v.TaskPrompt,
 		"{{ATTEMPT_HISTORY}}", attemptSection,
 		"{{TEST_STATUS}}", v.TestStatus,
@@ -126,6 +128,7 @@ func BuildRefactorPrompt(v Vars, recentFiles string) (string, error) {
 		"{{SIGNAL_TOKEN}}", v.SignalToken,
 		"{{CURRENT_TASK_TOKEN}}", v.CurrentTaskToken,
 		"{{ALL_COMPLETE_TOKEN}}", v.AllCompleteToken,
+		"{{NO_CODE_NEEDED_TOKEN}}", v.NoCodeNeededToken,
 	)
 	return r.Replace(result), nil
 }

@@ -155,6 +155,80 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 	}
 }
 
+// Verifies that when the agent signals .signal_no_code_needed (NoCodeNeeded=true),
+// the task is closed directly without a commit check or verification pipeline.
+// This is the "already fixed / not a bug" close path that prevents stagnation
+// when an agent investigates and confirms no code changes are needed.
+func TestLoop_NoCodeNeeded_ClosesTaskWithoutCommits(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "Investigate stagnation bug",
+				NextID:       "ralph-7y9s",
+				BackendLabel: "beads",
+			},
+		},
+	}
+
+	runner := &stubRunner{
+		result: claude.Result{
+			SignalDetected: true,
+			NoCodeNeeded:   true,
+			Summary:        "bug already fixed in main — 8 tests pass",
+		},
+	}
+
+	// No commits — same head before and after. The no-code-needed path must
+	// close the bead regardless.
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "abc123"}
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+	}
+	logger := logging.New(nil)
+	// VerifyHook set to fail — proves NoCodeNeeded bypasses verification entirely.
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   &stubVerifyHook{passed: false, reason: "no commits"},
+	})
+	l.runner = runner
+
+	_ = l.Run(context.Background())
+
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 {
+		t.Fatalf("expected 1 CloseTask call for no-code-needed path, got %d", len(backend.ClosedIDs))
+	}
+	if backend.ClosedIDs[0] != "ralph-7y9s" {
+		t.Errorf("expected CloseTask for ralph-7y9s, got %q", backend.ClosedIDs[0])
+	}
+	// Close reason must be the agent's summary, not a generic "no commits" message.
+	reason := backend.CloseReasons[0]
+	if !strings.Contains(reason, "bug already fixed in main") {
+		t.Errorf("close reason should contain agent summary, got %q", reason)
+	}
+}
+
 // Verifies the orchestrator does NOT call CloseTask when verification fails,
 // ensuring tasks aren't closed prematurely.
 func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {

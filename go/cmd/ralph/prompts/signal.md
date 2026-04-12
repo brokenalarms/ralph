@@ -5,6 +5,11 @@
    echo "<one-line summary of what you did>" > {{SIGNAL_TOKEN}}
 3. When ALL tasks are complete and no work remains:
    echo "<one-line summary>" > {{ALL_COMPLETE_TOKEN}}
+4. When investigation confirms the bug is already fixed or no code changes are needed:
+   echo "<one-line explanation of what you found>" > {{NO_CODE_NEEDED_TOKEN}}
+   Use this INSTEAD OF the regular completion signal when you investigated and confirmed that no code
+   changes are required (e.g. "bug already fixed in main", "not reproducible", "works as designed").
+   This closes the task without requiring commits.
 
 IMPORTANT: These are ABSOLUTE paths. You MUST use the exact paths shown above.
 Do NOT use relative paths or the Write tool — use echo with the full path.

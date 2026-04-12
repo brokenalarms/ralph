@@ -47,7 +47,7 @@ func TestClearSignals(t *testing.T) {
 	s := DefaultSignalPaths(dir)
 
 	// Create all signal files.
-	for _, p := range []string{s.Complete, s.CurrentTask, s.AllComplete} {
+	for _, p := range []string{s.Complete, s.CurrentTask, s.AllComplete, s.NoCodeNeeded} {
 		if err := os.WriteFile(p, []byte("test"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -55,7 +55,7 @@ func TestClearSignals(t *testing.T) {
 
 	ClearSignals(s)
 
-	for _, p := range []string{s.Complete, s.CurrentTask, s.AllComplete} {
+	for _, p := range []string{s.Complete, s.CurrentTask, s.AllComplete, s.NoCodeNeeded} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Errorf("signal file should be removed: %s", p)
 		}
@@ -74,6 +74,9 @@ func TestDefaultSignalPaths(t *testing.T) {
 	}
 	if s.AllComplete != "/tmp/.ralph/.signal_all_complete" {
 		t.Errorf("unexpected all complete path: %s", s.AllComplete)
+	}
+	if s.NoCodeNeeded != "/tmp/.ralph/.signal_no_code_needed" {
+		t.Errorf("unexpected no-code-needed path: %s", s.NoCodeNeeded)
 	}
 }
 
@@ -1220,7 +1223,14 @@ func runWithCommand(t *testing.T, r *Runner, cfg RunConfig, name string, args ..
 	// Final signal check (mirrors Run behavior).
 	// Skip if feedback was detected — the agent should restart, not complete.
 	if !result.SignalDetected && !result.FeedbackKill {
-		if hasSignal(cfg.Signals.Complete) || hasSignal(cfg.Signals.AllComplete) {
+		if cfg.Signals.NoCodeNeeded != "" && hasSignal(cfg.Signals.NoCodeNeeded) {
+			result.SignalDetected = true
+			result.NoCodeNeeded = true
+			result.Summary = readFirstLine(cfg.Signals.NoCodeNeeded)
+			if result.Summary == "" {
+				result.Summary = "confirmed no code changes needed"
+			}
+		} else if hasSignal(cfg.Signals.Complete) || hasSignal(cfg.Signals.AllComplete) {
 			result.SignalDetected = true
 			result.AllComplete = hasSignal(cfg.Signals.AllComplete)
 			result.Summary = readSignalSummary(cfg.Signals)
@@ -1588,5 +1598,97 @@ func TestRun_LLMEmitsIncludeModel(t *testing.T) {
 	}
 	if !hasLLMLine {
 		t.Error("expected at least one LLM-domain log line to be emitted")
+	}
+}
+
+// Verifies that writing .signal_no_code_needed causes the poll loop to return
+// Result{SignalDetected: true, NoCodeNeeded: true} without calling OnSignal.
+// This is the "already fixed / not a bug" close path — no commit check.
+func TestRun_DetectsNoCodeNeededSignal(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	onSignalCalled := false
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		tmp := signals.NoCodeNeeded + ".tmp"
+		os.WriteFile(tmp, []byte("bug already fixed in main"), 0o644)
+		os.Rename(tmp, signals.NoCodeNeeded)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 100 * time.Millisecond,
+		OnSignal: func(summary string) bool {
+			onSignalCalled = true
+			return true
+		},
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "1")
+
+	if !result.SignalDetected {
+		t.Error("expected SignalDetected to be true")
+	}
+	if !result.NoCodeNeeded {
+		t.Error("expected NoCodeNeeded to be true")
+	}
+	if result.Summary != "bug already fixed in main" {
+		t.Errorf("Summary = %q, want %q", result.Summary, "bug already fixed in main")
+	}
+	if result.OnSignalUsed {
+		t.Error("expected OnSignalUsed to be false — no-code-needed bypasses OnSignal")
+	}
+	if onSignalCalled {
+		t.Error("OnSignal should not be called when NoCodeNeeded signal is detected")
+	}
+}
+
+// Verifies that .signal_no_code_needed is detected after process exit (final
+// signal check in runWithCommand), matching how .signal_complete is handled.
+// The process writes the signal file itself before exiting so it's present
+// when the final check runs.
+func TestRun_DetectsNoCodeNeededSignalAfterExit(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		// Long poll interval so the signal is not caught mid-run.
+		PollInterval: 2 * time.Second,
+	}
+
+	// The process writes the signal file and exits immediately. The poll loop
+	// won't fire before exit (PollInterval > process lifetime), so detection
+	// must happen in the final signal check.
+	result := runWithCommand(t, &runner, cfg, "bash", "-c",
+		"echo 'confirmed not a bug' > "+signals.NoCodeNeeded)
+
+	if !result.SignalDetected {
+		t.Error("expected SignalDetected to be true after process exit")
+	}
+	if !result.NoCodeNeeded {
+		t.Error("expected NoCodeNeeded to be true after process exit")
+	}
+	if result.Summary != "confirmed not a bug" {
+		t.Errorf("Summary = %q, want %q", result.Summary, "confirmed not a bug")
 	}
 }
