@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// Ops abstracts the git operations that the execution loop needs.
-// Production code uses *Repo; tests use *StubRepo.
+// Ops is the public API of the git module. git.New(Config) returns Ops.
+// External tests use *StubRepo; git-package tests construct &Repo{} directly.
 type Ops interface {
 	// Init runs git pre-flight checks and worktree setup. Must be called
 	// once after construction, before any task execution.
