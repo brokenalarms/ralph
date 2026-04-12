@@ -451,6 +451,98 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 	}
 }
 
+// When headBefore == HeadRev (no iteration-local commits) but the branch is
+// ahead of origin/main (prior-iteration commits exist), runVerifyPipeline
+// must proceed to verification instead of rejecting with "No commits found".
+// This prevents stagnation when iteration N commits but exits without
+// signaling, and iteration N+1 signals without new commits.
+func TestOnSignal_PriorIterationCommits_Proceeds(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	gm := &git.StubRepo{
+		ProjectDir:      dir,
+		WorkDir:         dir,
+		HeadRevValue:    "same-sha",
+		LogOnelineValue: "abc1234 prior iteration commit",
+	}
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		VerifyDir:     dir,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			querier: &stubQuerier{fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+				return "YES: looks good", nil
+			}},
+		}),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+
+	verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
+		ctx: context.Background(), headBefore: "same-sha",
+		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID: "test-prior", nextTask: "Prior iteration test",
+	})
+	if skipReason != "" {
+		l.skipTask("test-prior", skipReason)
+	}
+	if !verified {
+		t.Fatal("expected verification to proceed when prior-iteration commits exist ahead of origin/main")
+	}
+}
+
+// When headBefore == HeadRev AND no prior-iteration commits exist (branch is
+// not ahead of origin/main), runVerifyPipeline must still reject.
+func TestOnSignal_NoPriorCommits_Rejects(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	gm := &git.StubRepo{
+		ProjectDir:      dir,
+		WorkDir:         dir,
+		HeadRevValue:    "same-sha",
+		LogOnelineValue: "", // no prior-iteration commits
+	}
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		VerifyDir:     dir,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+
+	verified, _ := l.runVerifyPipeline(verifyPipelineInput{
+		ctx: context.Background(), headBefore: "same-sha",
+		workDir: dir, rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID: "test-none", nextTask: "No commits test",
+	})
+	if verified {
+		t.Fatal("expected verification to reject when no commits exist at all")
+	}
+}
+
 // Proves: first agent attempt uses cfg.Model; subsequent attempts (when prior
 // attempts exist on disk) use cfg.AgentEscalationModel, with ModelCap applied
 // as a ceiling over both.
