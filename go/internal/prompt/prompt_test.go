@@ -1200,6 +1200,52 @@ func TestInternalPrompt_RebaseBaselineInstruction(t *testing.T) {
 	}
 }
 
+// Proves: bead-creation.md requires diagnosing the root cause before creating
+// a bead — agents must identify the specific file/function/cause and title the
+// bead around the cause, not the observed symptom.
+func TestBeadCreation_RequiresDiagnosisBeforeCreating(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(promptsDir(t), "bead-creation.md"))
+	if err != nil {
+		t.Fatalf("reading bead-creation.md: %v", err)
+	}
+	s := string(content)
+	lower := strings.ToLower(s)
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"diagnos", "must require diagnosis before creating a bead"},
+		{"root cause", "must require identifying the root cause"},
+		{"symptom", "must distinguish symptom from cause in bead titles"},
+		{"cause", "must instruct titling beads around the cause"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(lower, tc.substr) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
+// Proves: the assembled loop-agent prompt includes the diagnosis-before-creating
+// requirement from bead-creation.md so loop agents investigate before filing bugs.
+func TestBuildPrompt_IncludesDiagnosisRequirement(t *testing.T) {
+	v := testVars(t)
+	result, err := BuildPrompt(v)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+	lower := strings.ToLower(result)
+
+	if !strings.Contains(lower, "root cause") {
+		t.Error("loop prompt must include root cause diagnosis requirement from bead-creation.md")
+	}
+	if !strings.Contains(lower, "symptom") {
+		t.Error("loop prompt must include symptom vs cause distinction from bead-creation.md")
+	}
+}
+
 // Proves: the assembled prompt includes the rebase baseline instruction even
 // when the agent has stale attempt history referencing pre-rebase state —
 // simulating evolve pulling user commits while reflections say "regressed".
