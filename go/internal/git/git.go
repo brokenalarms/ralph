@@ -26,12 +26,6 @@ type stateStore interface {
 	Write(key, value string) error
 }
 
-// prePusher is git's internal interface for the pre-push hook. Unexported —
-// git constructs the production implementation internally from Config data.
-// Tests use stubs via same-package construction.
-type prePusher interface {
-	PrePush(ctx context.Context, workDir string) error
-}
 
 // Config bundles the construction-time data inputs for git.New. Pure data
 // plus the Logger (Rule 5 exception). No module interfaces, no function
