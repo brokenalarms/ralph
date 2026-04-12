@@ -56,12 +56,10 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		cancel()
 	}()
 
-	result, err := gm.MergeStack(ctx, git.MergeStackOpts{TopPR: prNumber})
-	if err != nil {
+	if _, err := gm.MergeStack(ctx, git.MergeStackOpts{TopPR: prNumber}); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
 		return 1
 	}
-	_ = result
 	return 0
 }
 

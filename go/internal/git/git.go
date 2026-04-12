@@ -102,8 +102,17 @@ func New(cfg Config) Ops {
 			CopilotOpportunisticTimeout: cfg.CopilotOpportunisticTimeout,
 			CodeRabbitTimeout:           cfg.CodeRabbitTimeout,
 		},
-		state: newFileStateStore(cfg.RalphDir),
+		state: newStateStore(cfg.RalphDir),
 	}
+}
+
+// newStateStore returns a file-backed state store when ralphDir is set,
+// or nil when empty (disabling state persistence).
+func newStateStore(ralphDir string) stateStore {
+	if ralphDir == "" {
+		return nil
+	}
+	return newFileStateStore(ralphDir)
 }
 
 

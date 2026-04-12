@@ -54,13 +54,21 @@ func (s *fileStateStore) Read(key string) (string, error) {
 }
 
 func (s *fileStateStore) Write(key, value string) error {
-	data, _ := os.ReadFile(s.path)
+	data, err := os.ReadFile(s.path)
 	var m map[string]any
-	if len(data) > 0 {
+	switch {
+	case os.IsNotExist(err):
+		m = make(map[string]any)
+	case err != nil:
+		return err
+	case len(data) > 0:
 		if err := json.Unmarshal(data, &m); err != nil {
+			return err
+		}
+		if m == nil {
 			m = make(map[string]any)
 		}
-	} else {
+	default:
 		m = make(map[string]any)
 	}
 	m[key] = value
