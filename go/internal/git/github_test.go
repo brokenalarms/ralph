@@ -413,7 +413,7 @@ func TestPollReview_ReturnsAutoReview(t *testing.T) {
 	logFile := filepath.Join(bin, "gh.log")
 
 	reviewJSON := `[{"id":1001,"user":{"login":"copilot-pull-request-reviewer"},"state":"COMMENTED","body":"LGTM with suggestions"}]`
-	commentsJSON := `[{"path":"main.go","line":42,"body":"Consider using constants","pull_request_review_id":1001}]`
+	commentsJSON := `[{"id":5001,"path":"main.go","line":42,"body":"Consider using constants","pull_request_review_id":1001}]`
 	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\nif echo \"$@\" | grep -q 'comments'; then\n  echo '" + commentsJSON + "'\nelse\n  echo '" + reviewJSON + "'\nfi\n"
 	ghPath := filepath.Join(bin, "gh")
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
@@ -443,6 +443,9 @@ func TestPollReview_ReturnsAutoReview(t *testing.T) {
 	}
 	if review.Comments[0].Body != "Consider using constants" {
 		t.Errorf("Body: want %q, got %q", "Consider using constants", review.Comments[0].Body)
+	}
+	if review.Comments[0].ID != 5001 {
+		t.Errorf("ID: want 5001, got %d", review.Comments[0].ID)
 	}
 }
 
@@ -1171,6 +1174,107 @@ func TestCreatePRViaAPI_SpecialCharsProduceValidJSON(t *testing.T) {
 	}
 	if parsed["body"] != opts.Body {
 		t.Errorf("body mismatch: got %q, want %q", parsed["body"], opts.Body)
+	}
+}
+
+// ReplyToReviewComment POSTs a reply body to the correct REST endpoint for
+// the given PR and comment ID.
+func TestReplyToReviewComment_POSTsToCorrectEndpoint(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	stdinFile := filepath.Join(bin, "gh.stdin")
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\ncat - > " + stdinFile + "\necho '{}'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	if err := g.ReplyToReviewComment("owner/repo", 42, 5001, "Addressed — fix committed and pushed."); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	invocation := string(raw)
+	if !strings.Contains(invocation, "repos/owner/repo/pulls/42/comments/5001/replies") {
+		t.Errorf("expected replies endpoint, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "POST") {
+		t.Errorf("expected POST method, got: %q", invocation)
+	}
+
+	body, _ := os.ReadFile(stdinFile)
+	var parsed map[string]string
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("request body is not valid JSON: %v\nbody: %s", err, body)
+	}
+	if parsed["body"] != "Addressed — fix committed and pushed." {
+		t.Errorf("reply body mismatch: got %q", parsed["body"])
+	}
+}
+
+// FetchReviewThreadIDs queries the GraphQL API and maps REST comment IDs to
+// thread node IDs for the given PR.
+func TestFetchReviewThreadIDs_MapsCommentIDsToThreadIDs(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	threadsResp := `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[` +
+		`{"id":"T_abc123","comments":{"nodes":[{"databaseId":5001},{"databaseId":5002}]}},` +
+		`{"id":"T_def456","comments":{"nodes":[{"databaseId":5003}]}}` +
+		`]}}}}}`
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho '" + threadsResp + "'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	result, err := g.FetchReviewThreadIDs("owner/repo", 42, []int{5001, 5003})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result[5001] != "T_abc123" {
+		t.Errorf("comment 5001: want T_abc123, got %q", result[5001])
+	}
+	if result[5003] != "T_def456" {
+		t.Errorf("comment 5003: want T_def456, got %q", result[5003])
+	}
+	if _, ok := result[5002]; ok {
+		t.Errorf("comment 5002 should not be in result (not in requested IDs)")
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	if !strings.Contains(string(raw), "graphql") {
+		t.Errorf("expected graphql endpoint, got: %q", string(raw))
+	}
+}
+
+// ResolveReviewThread calls the GraphQL resolveReviewThread mutation with the
+// correct thread ID.
+func TestResolveReviewThread_CallsGraphQLMutation(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(bin, "gh.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\necho '{\"data\":{\"resolveReviewThread\":{\"thread\":{\"id\":\"T_abc\"}}}}\n'"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	g := &ghCLI{}
+	if err := g.ResolveReviewThread("T_abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	raw, _ := os.ReadFile(logFile)
+	invocation := string(raw)
+	if !strings.Contains(invocation, "graphql") {
+		t.Errorf("expected graphql endpoint, got: %q", invocation)
+	}
+	if !strings.Contains(invocation, "T_abc123") {
+		t.Errorf("expected thread ID T_abc123 in args, got: %q", invocation)
 	}
 }
 

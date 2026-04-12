@@ -49,6 +49,7 @@ type AutoReview struct {
 
 // ReviewComment is an inline comment from a pull request review.
 type ReviewComment struct {
+	ID   int // GitHub REST comment database ID, used for replies and thread resolution
 	Path string
 	Line int
 	Body string
@@ -159,6 +160,14 @@ type gitHub interface {
 	// given branch from branch protection rulesets. Returns an empty slice when
 	// no required checks are configured, which means all checks are evaluated.
 	GetRequiredChecks(nwo, branch string) ([]string, error)
+	// ReplyToReviewComment posts a reply to an inline review comment thread.
+	ReplyToReviewComment(nwo string, prNumber, commentID int, body string) error
+	// FetchReviewThreadIDs returns a map from REST comment database ID to GraphQL
+	// thread node ID for all review threads on the given PR. Used to resolve threads
+	// after addressing review feedback.
+	FetchReviewThreadIDs(nwo string, prNumber int, commentIDs []int) (map[int]string, error)
+	// ResolveReviewThread resolves a review thread by its GraphQL node ID.
+	ResolveReviewThread(threadID string) error
 }
 
 // ghCLI implements GitHub using the gh CLI tool.
@@ -449,6 +458,105 @@ func (g *ghCLI) GetRequiredChecks(nwo, branch string) ([]string, error) {
 		}
 	}
 	return checks, nil
+}
+
+func (g *ghCLI) ReplyToReviewComment(nwo string, prNumber, commentID int, body string) error {
+	endpoint := fmt.Sprintf("repos/%s/pulls/%d/comments/%d/replies", nwo, prNumber, commentID)
+	input, err := json.Marshal(struct {
+		Body string `json:"body"`
+	}{Body: body})
+	if err != nil {
+		return fmt.Errorf("marshaling reply body: %w", err)
+	}
+	cmd := exec.Command("gh", "api", "--method", "POST", endpoint, "--input", "-")
+	cmd.Stdin = bytes.NewReader(input)
+	if _, err := cmd.Output(); err != nil {
+		return fmt.Errorf("gh api reply to review comment: %w", err)
+	}
+	return nil
+}
+
+func (g *ghCLI) FetchReviewThreadIDs(nwo string, prNumber int, commentIDs []int) (map[int]string, error) {
+	parts := strings.SplitN(nwo, "/", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid nwo: %q", nwo)
+	}
+	const q = `query($owner: String!, $repo: String!, $prNumber: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $prNumber) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          comments(first: 20) {
+            nodes {
+              databaseId
+            }
+          }
+        }
+      }
+    }
+  }
+}`
+	cmd := exec.Command("gh", "api", "graphql",
+		"-f", "query="+q,
+		"-f", "owner="+parts[0],
+		"-f", "repo="+parts[1],
+		"-F", fmt.Sprintf("prNumber=%d", prNumber),
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("gh api graphql review threads: %w", err)
+	}
+	var resp struct {
+		Data struct {
+			Repository struct {
+				PullRequest struct {
+					ReviewThreads struct {
+						Nodes []struct {
+							ID       string `json:"id"`
+							Comments struct {
+								Nodes []struct {
+									DatabaseID int `json:"databaseId"`
+								} `json:"nodes"`
+							} `json:"comments"`
+						} `json:"nodes"`
+					} `json:"reviewThreads"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("parsing review threads: %w", err)
+	}
+	idSet := make(map[int]bool, len(commentIDs))
+	for _, id := range commentIDs {
+		idSet[id] = true
+	}
+	result := make(map[int]string)
+	for _, thread := range resp.Data.Repository.PullRequest.ReviewThreads.Nodes {
+		for _, comment := range thread.Comments.Nodes {
+			if idSet[comment.DatabaseID] {
+				result[comment.DatabaseID] = thread.ID
+			}
+		}
+	}
+	return result, nil
+}
+
+func (g *ghCLI) ResolveReviewThread(threadID string) error {
+	const q = `mutation($threadId: ID!) {
+  resolveReviewThread(input: {threadId: $threadId}) {
+    thread { id }
+  }
+}`
+	cmd := exec.Command("gh", "api", "graphql",
+		"-f", "query="+q,
+		"-f", "threadId="+threadID,
+	)
+	if _, err := cmd.Output(); err != nil {
+		return fmt.Errorf("gh api graphql resolve thread: %w", err)
+	}
+	return nil
 }
 
 func (g *ghCLI) GetRunLog(prNumber int, workDir string) string {
@@ -827,13 +935,14 @@ func (g *ghCLI) fetchReview(nwo, botUsername string, prNumber int) (*AutoReview,
 
 func (g *ghCLI) fetchReviewComments(nwo string, prNumber, reviewID int) ([]ReviewComment, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d/comments", nwo, prNumber)
-	jqFilter := fmt.Sprintf("[.[] | select(.pull_request_review_id == %d) | {path: .path, line: (.line // .original_line // 0), body: .body}]", reviewID)
+	jqFilter := fmt.Sprintf("[.[] | select(.pull_request_review_id == %d) | {id: .id, path: .path, line: (.line // .original_line // 0), body: .body}]", reviewID)
 	cmd := exec.Command("gh", "api", endpoint, "--jq", jqFilter)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("gh api pr comments: %w", err)
 	}
 	var raw []struct {
+		ID   int    `json:"id"`
 		Path string `json:"path"`
 		Line int    `json:"line"`
 		Body string `json:"body"`
@@ -843,7 +952,7 @@ func (g *ghCLI) fetchReviewComments(nwo string, prNumber, reviewID int) ([]Revie
 	}
 	comments := make([]ReviewComment, len(raw))
 	for i, c := range raw {
-		comments[i] = ReviewComment{Path: c.Path, Line: c.Line, Body: c.Body}
+		comments[i] = ReviewComment{ID: c.ID, Path: c.Path, Line: c.Line, Body: c.Body}
 	}
 	return comments, nil
 }

@@ -653,6 +653,70 @@ func stubResult(signal bool, summary string) claude.Result {
 	}
 }
 
+// After a successful fix push, tryFixReviewComments calls ReplyToAndResolveComments
+// with the actionable comments so review threads are automatically closed on GitHub.
+func TestTryFixReviewComments_RepliesAndResolvesAfterPush(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	// HeadRev returns a different value after the fix agent "commits",
+	// so tryFixReviewComments proceeds past the no-commits guard to push.
+	headCallCount := 0
+	gm := &git.StubRepo{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		HeadRevFunc: func() string {
+			headCallCount++
+			if headCallCount == 1 {
+				return "abc123"
+			}
+			return "def456"
+		},
+	}
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+		VerifyDir:     dir,
+	}
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
+		Logger:      logging.New(nil),
+		Verifier: newTestVerifier(t, cfg, logging.New(nil), verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: stubResult(true, "fixed")}
+			},
+		}),
+	})
+
+	review := &git.AutoReview{
+		Comments: []git.ReviewComment{
+			{ID: 5001, Path: "src/foo.go", Line: 42, Body: "Missing nil check before dereferencing ptr"},
+			{ID: 5002, Path: "pkg/bar.go", Line: 7, Body: "Should use constants here"},
+		},
+	}
+
+	result := l.tryFixReviewComments(context.Background(), "copilot-pull-request-reviewer", review, 99, "task", t.TempDir(), t.TempDir()+"/raw.log")
+
+	if !result {
+		t.Fatal("expected tryFixReviewComments to return true after successful push")
+	}
+	if !gm.ReplyToAndResolveCommentsCalled {
+		t.Fatal("expected ReplyToAndResolveComments to be called after push")
+	}
+	if gm.ReplyToAndResolveCommentsPRNumber != 99 {
+		t.Errorf("expected PR number 99, got %d", gm.ReplyToAndResolveCommentsPRNumber)
+	}
+	if len(gm.ReplyToAndResolveCommentsArgs) != 2 {
+		t.Fatalf("expected 2 comments passed to ReplyToAndResolveComments, got %d", len(gm.ReplyToAndResolveCommentsArgs))
+	}
+}
+
 // tryFixReviewComments logs each actionable comment as "reviewer: file:line — first line"
 // before spawning the fix agent, giving the operator visibility into what the
 // agent will address without requiring them to check GitHub.

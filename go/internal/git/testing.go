@@ -61,6 +61,11 @@ type StubGitHub struct {
 	PollReviewErr      error
 	RequiredChecks     []string
 	RequiredChecksErr  error
+
+	ReplyToReviewCommentErr   error
+	FetchReviewThreadIDsErr   error
+	FetchReviewThreadIDsResult map[int]string
+	ResolveReviewThreadErr    error
 }
 
 // NewStubGitHub returns a StubGitHub with sensible defaults for the common
@@ -185,6 +190,15 @@ func (s *StubGitHub) PollReview(nwo string, botUsername string, prNumber int, ti
 func (s *StubGitHub) GetRequiredChecks(nwo, branch string) ([]string, error) {
 	return s.RequiredChecks, s.RequiredChecksErr
 }
+func (s *StubGitHub) ReplyToReviewComment(_ string, _, _ int, _ string) error {
+	return s.ReplyToReviewCommentErr
+}
+func (s *StubGitHub) FetchReviewThreadIDs(_ string, _ int, _ []int) (map[int]string, error) {
+	return s.FetchReviewThreadIDsResult, s.FetchReviewThreadIDsErr
+}
+func (s *StubGitHub) ResolveReviewThread(_ string) error {
+	return s.ResolveReviewThreadErr
+}
 
 // StubRepo implements git.Ops for testing without spawning real git
 // subprocesses. Configure fields to control return values; all methods
@@ -283,6 +297,15 @@ type StubRepo struct {
 	PollReviewLastUsername         string
 	PollReviewLastTimeout          time.Duration
 
+	ReplyToAndResolveCommentsCalled   bool
+	ReplyToAndResolveCommentsErr      error
+	ReplyToAndResolveCommentsPRNumber int
+	ReplyToAndResolveCommentsArgs     []ReviewComment
+
+	// HeadRevFunc overrides HeadRevValue when set, enabling tests to return
+	// different values across sequential calls (e.g. before/after a commit).
+	HeadRevFunc func() string
+
 	PushAndCreatePRCalls  int
 	FlushUnpushedWorkFunc func(ctx context.Context, taskID, taskDesc string, autoMerge bool) (bool, error)
 
@@ -374,7 +397,12 @@ func (s *StubRepo) PRChainIsHealthy(prNumber int) (bool, string) {
 	return true, ""
 }
 
-func (s *StubRepo) HeadRev() string                                    { return s.HeadRevValue }
+func (s *StubRepo) HeadRev() string {
+	if s.HeadRevFunc != nil {
+		return s.HeadRevFunc()
+	}
+	return s.HeadRevValue
+}
 func (s *StubRepo) HasDiff() bool                                      { return s.HasDiffValue }
 func (s *StubRepo) HasUncommittedChanges() bool                        { return s.HasUncommittedValue }
 func (s *StubRepo) ChangedFiles(_, _ string) []string                  { return s.ChangedFilesValue }
@@ -576,6 +604,13 @@ func (s *StubRepo) PollReview(botUsername string, _ int, timeout time.Duration) 
 	s.PollReviewLastUsername = botUsername
 	s.PollReviewLastTimeout = timeout
 	return s.PollReviewResult, s.PollReviewErr
+}
+
+func (s *StubRepo) ReplyToAndResolveComments(prNumber int, comments []ReviewComment) error {
+	s.ReplyToAndResolveCommentsCalled = true
+	s.ReplyToAndResolveCommentsPRNumber = prNumber
+	s.ReplyToAndResolveCommentsArgs = comments
+	return s.ReplyToAndResolveCommentsErr
 }
 
 func (s *StubRepo) ResumeTask(_ context.Context, _ ResumeTaskMeta, _ ResumeTaskOpts) (ResumeTaskResult, error) {
