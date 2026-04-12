@@ -37,11 +37,19 @@ type verifyPipelineInput struct {
 // verifier's.
 func (l *Loop) runVerifyPipeline(p verifyPipelineInput) (verified bool, skipReason string) {
 	// Zero-commit guard: if the agent signaled completion without committing,
-	// the task was not worked.
+	// the task was not worked. First check iteration-local commits; if none,
+	// fall back to checking whether prior iterations left commits ahead of
+	// origin/main. This prevents stagnation when iteration N commits but
+	// exits without signaling, and iteration N+1 signals without new commits.
 	commitResult := verify.CheckCommits(p.headBefore, l.git.HeadRev())
 	if !commitResult.Passed {
-		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "No commits found — task was not worked")
-		return false, ""
+		baseBranch := l.git.DetectDefaultBranch()
+		priorCommits := l.git.LogOneline("origin/"+baseBranch, "HEAD")
+		if priorCommits == "" {
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "No commits found — task was not worked")
+			return false, ""
+		}
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits this iteration, but prior-iteration commits found ahead of origin/%s — proceeding", baseBranch)
 	}
 
 	// Task context for LLM verification and fix-agent prompts. Pre-fetched
@@ -299,7 +307,12 @@ func (l *Loop) runSimpleVerifyCompletion(ctx context.Context, headBefore string)
 
 	commitResult := verify.CheckCommits(headBefore, l.git.HeadRev())
 	if !commitResult.Passed {
-		return false, commitResult.Reason
+		baseBranch := l.git.DetectDefaultBranch()
+		priorCommits := l.git.LogOneline("origin/"+baseBranch, "HEAD")
+		if priorCommits == "" {
+			return false, commitResult.Reason
+		}
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits this iteration, but prior-iteration commits found ahead of origin/%s — proceeding", baseBranch)
 	}
 
 	testResult, _ := l.verifier.RunTests(ctx, l.cfg.VerifyDir)
