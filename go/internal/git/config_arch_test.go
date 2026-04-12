@@ -14,9 +14,9 @@ import (
 // StateStore, PrePusher, and Runner were injected via Config.
 func TestConfigIsDataOnly(t *testing.T) {
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "git.go", nil, 0)
+	pkgs, err := parser.ParseDir(fset, ".", nil, 0)
 	if err != nil {
-		t.Fatalf("parse git.go: %v", err)
+		t.Fatalf("parse package: %v", err)
 	}
 
 	allowedTypes := map[string]bool{
@@ -26,29 +26,38 @@ func TestConfigIsDataOnly(t *testing.T) {
 		"Log":           true, // Rule 5 exception: logger
 	}
 
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.TYPE {
-			continue
-		}
-		for _, spec := range gd.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok || ts.Name.Name != "Config" {
-				continue
-			}
-			st, ok := ts.Type.(*ast.StructType)
-			if !ok {
-				t.Fatal("Config is not a struct")
-			}
-			for _, field := range st.Fields.List {
-				typeName := typeStr(field.Type)
-				if allowedTypes[typeName] {
+	found := false
+	for _, pkg := range pkgs {
+		for _, f := range pkg.Files {
+			for _, decl := range f.Decls {
+				gd, ok := decl.(*ast.GenDecl)
+				if !ok || gd.Tok != token.TYPE {
 					continue
 				}
-				names := fieldNames(field)
-				t.Errorf("Config.%s has type %s — Config must be data-only (no interfaces, funcs, or module types)", names, typeName)
+				for _, spec := range gd.Specs {
+					ts, ok := spec.(*ast.TypeSpec)
+					if !ok || ts.Name.Name != "Config" {
+						continue
+					}
+					found = true
+					st, ok := ts.Type.(*ast.StructType)
+					if !ok {
+						t.Fatal("Config is not a struct")
+					}
+					for _, field := range st.Fields.List {
+						typeName := typeStr(field.Type)
+						if allowedTypes[typeName] {
+							continue
+						}
+						names := fieldNames(field)
+						t.Errorf("Config.%s has type %s — Config must be data-only (no interfaces, funcs, or module types)", names, typeName)
+					}
+				}
 			}
 		}
+	}
+	if !found {
+		t.Fatal("Config struct not found in git package — test cannot verify data-only constraint")
 	}
 }
 
