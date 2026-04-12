@@ -111,11 +111,11 @@ func TestManager_DetectDefaultBranch_ExplicitDevelop(t *testing.T) {
 	}
 }
 
-// stubRunner satisfies the runner interface, proving test doubles can
+// stubRunner satisfies the Runner interface, proving test doubles can
 // replace all git command execution without implementing exec.Command.
 func TestStubRunner_SatisfiesInterface(t *testing.T) {
-	var _ runner = &stubRunner{}
-	var _ runner = newStubRunner()
+	var _ Runner = &stubRunner{}
+	var _ Runner = newStubRunner()
 }
 
 
@@ -131,7 +131,7 @@ func TestManager_PushAndCreatePR_NoRealProcesses(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &stubGitHub{IsAvailable: true, OpenPR: 0}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: 0}
 
 	dir := t.TempDir()
 	mgr := &Repo{
@@ -139,7 +139,7 @@ func TestManager_PushAndCreatePR_NoRealProcesses(t *testing.T) {
 		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
-		runner:         r,
+		Runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -169,7 +169,7 @@ func TestManager_PushAndCreatePR_PushesEvenWhenPRExists(t *testing.T) {
 	r.On("push", "", nil)
 	r.On("ref-exists", "", nil)
 
-	gh := &stubGitHub{IsAvailable: true, OpenPR: 42}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
 
 	dir := t.TempDir()
 	mgr := &Repo{
@@ -177,7 +177,7 @@ func TestManager_PushAndCreatePR_PushesEvenWhenPRExists(t *testing.T) {
 		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
-		runner:         r,
+		Runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -205,7 +205,7 @@ func TestManager_PushAndCreatePR_UpdatesTitleWhenPRExists(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &stubGitHub{IsAvailable: true, OpenPR: 42}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
 
 	dir := t.TempDir()
 	mgr := &Repo{
@@ -213,7 +213,7 @@ func TestManager_PushAndCreatePR_UpdatesTitleWhenPRExists(t *testing.T) {
 		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
-		runner:         r,
+		Runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -240,7 +240,7 @@ func TestManager_PushAndCreatePR_StripsComponentPrefix(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &stubGitHub{IsAvailable: true, OpenPR: 42}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
 
 	dir := t.TempDir()
 	mgr := &Repo{
@@ -248,7 +248,7 @@ func TestManager_PushAndCreatePR_StripsComponentPrefix(t *testing.T) {
 		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
-		runner:         r,
+		Runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -274,7 +274,7 @@ func TestManager_PushAndCreatePR_NoEditWithoutTaskID(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &stubGitHub{IsAvailable: true, OpenPR: 42}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
 
 	dir := t.TempDir()
 	mgr := &Repo{
@@ -282,7 +282,7 @@ func TestManager_PushAndCreatePR_NoEditWithoutTaskID(t *testing.T) {
 		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
-		runner:         r,
+		Runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -307,7 +307,7 @@ func TestManager_PushAndCreatePR_LogsAlreadyOpen(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &stubGitHub{IsAvailable: true, OpenPR: 42}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
 
 	dir := t.TempDir()
 	log := &testLog{}
@@ -316,7 +316,7 @@ func TestManager_PushAndCreatePR_LogsAlreadyOpen(t *testing.T) {
 		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
-		runner:         r,
+		Runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         log,
@@ -345,7 +345,7 @@ func TestManager_PushAndCreatePR_LogsCreatedPR(t *testing.T) {
 	r.On("fetch", "", nil)
 	r.On("merge-base --is-ancestor", "", nil)
 
-	gh := &stubGitHub{IsAvailable: true, OpenPR: 0, CreatedPR: 99}
+	gh := &StubGitHub{IsAvailable: true, OpenPR: 0, CreatedPR: 99}
 
 	dir := t.TempDir()
 	log := &testLog{}
@@ -354,7 +354,7 @@ func TestManager_PushAndCreatePR_LogsCreatedPR(t *testing.T) {
 		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
-		runner:         r,
+		Runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         log,

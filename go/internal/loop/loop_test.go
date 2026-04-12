@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
@@ -213,7 +214,7 @@ func TestRun_ExitsOnGitHubUnreachable(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		RemoteURLValue: "https://github.com/owner/repo.git",
@@ -266,7 +267,7 @@ func createPromptTemplates(t *testing.T, dir string) {
 // given task ID, or empty string for missing or nil backend cases.
 func TestLoopTaskDescription_Standalone(t *testing.T) {
 	dir, st := setupTestDir(t)
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	backend := &testutil.StubBackend{Description: "Fix auth middleware"}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},

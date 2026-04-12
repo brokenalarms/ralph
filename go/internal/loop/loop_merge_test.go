@@ -36,7 +36,7 @@ func TestLoop_AutoMergeFiresPerTask(t *testing.T) {
 		},
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -120,7 +120,7 @@ func TestLoop_PostMergeResetResetsWorktree(t *testing.T) {
 		},
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -196,11 +196,11 @@ func TestLoop_StackHeadBranchesFromLastCompletedTask(t *testing.T) {
 	iterationCount := 0
 	taskABranch := "ralph-aaa-task-a"
 
-	gm := newStubGit()
+	gm := git.NewStubRepo()
 	gm.ProjectDir = dir
 	gm.WorkDir = dir
 	gm.WorktreeBranch = "main"
-	gm.OpenBranches = []string{taskABranch}
+	gm.GH.OpenPRBranches = []string{taskABranch}
 	gm.RemoteURLValue = "https://github.com/example/repo"
 	gm.RemoteBranchCommits = true
 	gm.BranchAheadOfMain = true
@@ -297,11 +297,11 @@ func TestLoop_StackHeadSkipsMergedPR(t *testing.T) {
 	iterationCount := 0
 	taskABranch := "ralph-aaa-task-a"
 
-	gm := newStubGit()
+	gm := git.NewStubRepo()
 	gm.ProjectDir = dir
 	gm.WorkDir = dir
 	gm.WorktreeBranch = "main"
-	gm.OpenBranches = []string{taskABranch}
+	gm.GH.OpenPRBranches = []string{taskABranch}
 	gm.RemoteURLValue = "https://github.com/example/repo"
 	gm.RemoteBranchCommits = false
 	gm.BranchAheadOfMain = false
@@ -392,11 +392,11 @@ func TestLoop_StackHeadSkipsBranchAncestorOfMain(t *testing.T) {
 	iterationCount := 0
 	taskABranch := "ralph-aaa-task-a"
 
-	gm := newStubGit()
+	gm := git.NewStubRepo()
 	gm.ProjectDir = dir
 	gm.WorkDir = dir
 	gm.WorktreeBranch = "main"
-	gm.OpenBranches = []string{taskABranch}
+	gm.GH.OpenPRBranches = []string{taskABranch}
 	gm.RemoteURLValue = "https://github.com/example/repo"
 	gm.RemoteBranchCommits = true
 	gm.BranchAheadOfMain = false
@@ -497,7 +497,7 @@ func TestLoop_PostMergeRenamesCycleFull(t *testing.T) {
 		},
 	}
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "main",
@@ -590,7 +590,7 @@ func TestLoop_NoDoubleResetAfterMerge(t *testing.T) {
 		},
 	}
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "main",

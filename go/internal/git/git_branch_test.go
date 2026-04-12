@@ -13,7 +13,7 @@ import (
 // PrevBranch stays empty.
 func TestSetStackHead_SkipsWhenNoBranchesAvailable(t *testing.T) {
 	log := &testLog{}
-	gh := &stubGitHub{IsAvailable: true, OpenPRBranches: nil}
+	gh := &StubGitHub{IsAvailable: true, OpenPRBranches: nil}
 	r := &Repo{
 		logger: log,
 		github: gh,
@@ -56,7 +56,7 @@ func TestCheckoutExistingBranch_NoStoredBranch_RenamesBranch(t *testing.T) {
 		ProjectDir:     "/project",
 		WorkDir:        "/project/worktrees/wt1",
 		WorktreeBranch: "ralph/wip-branch",
-		runner:         runner,
+		Runner:         runner,
 		logger:         logging.New(nil),
 	}
 
@@ -83,7 +83,7 @@ func TestCheckoutExistingBranch_RenameFailure_ReturnsError(t *testing.T) {
 		ProjectDir:     "/project",
 		WorkDir:        "/project/worktrees/wt1",
 		WorktreeBranch: "ralph/next",
-		runner:         runner,
+		Runner:         runner,
 		logger:         logging.New(nil),
 	}
 
@@ -109,9 +109,9 @@ func TestBranchForTask_UsesStoredBranchWhenRemoteEmpty(t *testing.T) {
 		ProjectDir:     "/project",
 		WorkDir:        "/project/worktrees/wt1",
 		WorktreeBranch: "ralph/wip-branch",
-		runner:         runner,
+		Runner:         runner,
 		logger:         logging.New(nil),
-		github:         &stubGitHub{},
+		github:         &StubGitHub{},
 	}
 
 	branch, err := r.BranchForTask(context.Background(), "ralph-abc", "My task", BranchTaskMeta{

@@ -41,7 +41,7 @@ func TestLoop_onSignal_TestFailure_SpawnsFixAgent(t *testing.T) {
 		NextID:    "ralph-test1",
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
@@ -118,7 +118,7 @@ func TestLoop_onSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 		NextID:    "ralph-llm1",
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 	logger := logging.New(nil)
 	cfg := Config{
 		Dirs: workctx.WorkContext{
@@ -185,7 +185,7 @@ func TestLoop_onSignal_LLMReject_SpawnsFixAgent(t *testing.T) {
 		NextID:    "ralph-fb1",
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 
 	var logBuf bytes.Buffer
 	logger := logging.NewWithWriter(&logBuf)
@@ -275,7 +275,7 @@ func TestLoop_onSignal_TestFixAttemptsExhausted(t *testing.T) {
 		},
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	logger := logging.New(nil)
 
 	fixAttempts := 0
@@ -347,7 +347,7 @@ func TestCompleteTask_CancelledCtx_NoCommits_BeadStaysOpen(t *testing.T) {
 	}
 
 	// HeadRevValue == headBefore triggers the no-commits branch.
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "same-sha"}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "same-sha"}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -398,7 +398,7 @@ func TestCompleteTask_CancelledCtx_NoPR_BeadStaysOpen(t *testing.T) {
 
 	// HeadRevValue != headBefore so the no-commits branch is skipped.
 	// ShipResult with PRNumber=0 means no PR was created.
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	gm.ShipResult = git.ShipResult{PRNumber: 0}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
@@ -456,7 +456,7 @@ func TestCompleteTask_NoNewCommits_ExistingOpenPR_MergesViaFinalize(t *testing.T
 
 	// HeadRevValue == headBefore triggers the no-commits branch.
 	// PRState is open — simulates a PR from a prior attempt that wasn't merged.
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:       dir,
 		WorkDir:          dir,
 		HeadRevValue:     "same-sha",
@@ -543,7 +543,7 @@ func TestCompleteTask_NoNewCommits_ExistingMergedPR_ClosesDirectly(t *testing.T)
 		},
 	}
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:   dir,
 		WorkDir:      dir,
 		HeadRevValue: "same-sha",
@@ -609,7 +609,7 @@ func TestCompleteTask_CancelledCtx_FinalizePR_BeadStaysOpen(t *testing.T) {
 
 	// HeadRevValue != headBefore so no-commits branch is skipped.
 	// Ship returns a PR so finalizePR is called.
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
 	gm.ShipResult = git.ShipResult{PRNumber: 99, PRURL: "https://github.com/example/repo/pull/99"}
 	gm.PRState = git.PRStateOpen
 	cfg := Config{

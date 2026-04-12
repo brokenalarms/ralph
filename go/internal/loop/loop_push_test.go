@@ -36,7 +36,7 @@ func TestLoop_PushAndCreatePROnSignal(t *testing.T) {
 		},
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -113,7 +113,7 @@ func TestLoop_NoPushPRWithoutSignal(t *testing.T) {
 		result: claude.Result{SignalDetected: false},
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -153,7 +153,7 @@ func TestLoop_PushCalledAfterSignal(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/test/01-task",
@@ -216,7 +216,7 @@ func TestLoop_FlushesUnpushedWorkBeforeExit(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -281,7 +281,7 @@ func TestLoop_FlushesUnpushedWorkBeforeWait(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -352,7 +352,7 @@ func TestLoop_FlushSquashMergesBeforeExit(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -415,7 +415,7 @@ func TestLoop_FlushSquashMergesBeforeWait(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -486,7 +486,7 @@ func TestLoop_FlushSkipsMergeWhenAutoMergeDisabled(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -552,7 +552,7 @@ func TestLoop_FlushSkipsMergeWhenAlreadyMerged(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -622,7 +622,7 @@ func TestLoop_FlushMergesWhenSignalNotDetected(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -686,7 +686,7 @@ func TestLoop_ShipRetriesOnTransientGitHubError(t *testing.T) {
 		},
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	shipAttempts := 0
 	gm.ShipFunc = func(_ context.Context, _ git.ShipOpts) (git.ShipResult, error) {

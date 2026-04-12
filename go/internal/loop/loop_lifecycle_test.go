@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
 	"github.com/brokenalarms/ralph/internal/workctx"
@@ -26,7 +27,7 @@ func TestLoop_AllTasksComplete(t *testing.T) {
 		Total:     3,
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
 	cfg := Config{
@@ -39,11 +40,11 @@ func TestLoop_AllTasksComplete(t *testing.T) {
 		CallsPerHour:  80,
 	}
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -70,7 +71,7 @@ func TestLoop_NoTasksError(t *testing.T) {
 		Total:     0,
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
 	cfg := Config{
@@ -83,11 +84,11 @@ func TestLoop_NoTasksError(t *testing.T) {
 		CallsPerHour:  80,
 	}
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -117,7 +118,7 @@ func TestLoop_StopFileDetection(t *testing.T) {
 		NextTask:  "Some task",
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
 	cfg := Config{
@@ -130,11 +131,11 @@ func TestLoop_StopFileDetection(t *testing.T) {
 		CallsPerHour:  80,
 	}
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -166,7 +167,7 @@ func TestLoop_ContextCancellation(t *testing.T) {
 		NextTask:  "Some task",
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
 
@@ -182,11 +183,11 @@ func TestLoop_ContextCancellation(t *testing.T) {
 		CallsPerHour:  80,
 	}
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -213,7 +214,7 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 		Total:     1,
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	logger := logging.New(nil)
 	cfg := Config{
@@ -226,11 +227,11 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 		CallsPerHour:  80,
 	}
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -264,7 +265,7 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var (
 		callsMu sync.Mutex
@@ -351,7 +352,7 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -397,7 +398,7 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -445,7 +446,7 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -457,11 +458,11 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 		Wait:          false,
 	}
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -533,7 +534,7 @@ func TestLoop_LifecycleStates(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -546,13 +547,13 @@ func TestLoop_LifecycleStates(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
 
@@ -598,7 +599,7 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -611,13 +612,13 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   &stubVerifyHook{passed: false, reason: "tests failed"},
+		VerifyHook: &stubVerifyHook{passed: false, reason: "tests failed"},
 	})
 	l.runner = runner
 
@@ -679,7 +680,7 @@ func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -729,7 +730,7 @@ func TestLoop_WaitMode_ReReadsSkippedTasksOnTick(t *testing.T) {
 	backend.BackendLabel = "beads"
 
 	logger := logging.New(nil)
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,

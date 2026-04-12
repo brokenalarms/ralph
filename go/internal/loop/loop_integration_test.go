@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -125,13 +126,13 @@ func TestIntegration_HappyPath_SignalVerifyPushMergeClose(t *testing.T) {
 	backend.NextID = "ralph-hp1"
 	backend.BackendLabel = "beads"
 
-	gm := newStubGit()
+	gm := git.NewStubRepo()
 	gm.ProjectDir = dir
 	gm.WorkDir = dir
 	gm.WorktreeBranch = "ralph/next"
 	gm.RemoteURLValue = "https://github.com/owner/repo.git"
-	gm.OpenPR = 0
-	gm.PRNumber = 0
+	gm.GH.OpenPR = 0
+	gm.GH.PRNumber = 0
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -156,13 +157,13 @@ func TestIntegration_HappyPath_SignalVerifyPushMergeClose(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 
 	l.runner = runner
@@ -235,12 +236,12 @@ func TestIntegration_ResumeViaPR_Merged(t *testing.T) {
 	backend.BackendLabel = "beads"
 	backend.externalRefs["ralph-m1"] = "https://github.com/owner/repo/pull/100"
 
-	gm := newStubGit()
+	gm := git.NewStubRepo()
 	gm.ProjectDir = dir
 	gm.WorkDir = dir
 	gm.WorktreeBranch = "ralph/next"
 	gm.RemoteURLValue = "https://github.com/owner/repo.git"
-	gm.PRState = "MERGED"
+	gm.GH.PRState = "MERGED"
 	gm.ResumeResult = git.ResumeTaskResult{
 		Handled:       true,
 		AlreadyMerged: true,
@@ -266,11 +267,11 @@ func TestIntegration_ResumeViaPR_Merged(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
@@ -314,16 +315,16 @@ func TestIntegration_ResumeViaPR_MergedFoundViaBranchMetadata(t *testing.T) {
 	// Simulate prior iteration: branch was stored in metadata, but no external-ref set.
 	_ = backend.SetMetadata("ralph-ac6", "branch", "ralph/ralph-ac6-already-landed-task")
 
-	gm := newStubGit()
+	gm := git.NewStubRepo()
 	gm.ProjectDir = dir
 	gm.WorkDir = dir
 	gm.WorktreeBranch = "ralph/ralph-ac6-already-landed-task"
 	gm.RemoteURLValue = "https://github.com/owner/repo.git"
-	gm.OpenPR = 0
-	gm.PRNumber = 200
-	gm.PRState = git.PRStateMerged
-	gm.PRTitle = "Already landed task"
-	gm.PRURL = "https://github.com/owner/repo/pull/200"
+	gm.GH.OpenPR = 0
+	gm.GH.PRNumber = 200
+	gm.GH.PRState = git.PRStateMerged
+	gm.GH.PRTitle = "Already landed task"
+	gm.GH.PRURL = "https://github.com/owner/repo/pull/200"
 	gm.BranchRenamed = true
 	gm.ResumeResult = git.ResumeTaskResult{
 		Handled:       true,
@@ -348,11 +349,11 @@ func TestIntegration_ResumeViaPR_MergedFoundViaBranchMetadata(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
@@ -389,11 +390,12 @@ func TestIntegration_ResumeViaPR_OpenAutoMerge(t *testing.T) {
 	backend.BackendLabel = "beads"
 	backend.externalRefs["ralph-o1"] = "https://github.com/owner/repo/pull/200"
 
-	gm := newStubGit()
+	gm := git.NewStubRepo()
 	gm.ProjectDir = dir
 	gm.WorkDir = dir
 	gm.WorktreeBranch = "ralph/next"
 	gm.RemoteURLValue = "https://github.com/owner/repo.git"
+	gm.GH.PRHead = "ralph-o1-open-pr-task"
 	gm.RemoteBranchCommits = true
 	gm.ResumeResult = git.ResumeTaskResult{
 		Handled:  true,
@@ -413,11 +415,11 @@ func TestIntegration_ResumeViaPR_OpenAutoMerge(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = &stubRunner{}
@@ -453,12 +455,12 @@ func TestIntegration_ResumeViaPR_Closed(t *testing.T) {
 	backend.externalRefs["ralph-c1"] = "gh-300"
 	backend.metadata["ralph-c1"] = map[string]string{"branch": "ralph-c1-old-branch"}
 
-	gm := newStubGit()
+	gm := git.NewStubRepo()
 	gm.ProjectDir = dir
 	gm.WorkDir = dir
 	gm.WorktreeBranch = "ralph/next"
 	gm.RemoteURLValue = "https://github.com/owner/repo.git"
-	gm.PRState = "CLOSED"
+	gm.GH.PRState = "CLOSED"
 	gm.ResumeResult = git.ResumeTaskResult{
 		Handled:       false,
 		ClearMetadata: true,
@@ -485,11 +487,11 @@ func TestIntegration_ResumeViaPR_Closed(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
@@ -539,7 +541,7 @@ func TestIntegration_TestFailureThenFixAgentPasses(t *testing.T) {
 	backend.NextID = "ralph-tf1"
 	backend.BackendLabel = "beads"
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	fixAgentCalls := 0
 	runner := &signalCallingRunner{
@@ -606,12 +608,12 @@ func TestIntegration_CIFailureThenFixThenMerge(t *testing.T) {
 	backend.NextID = "ralph-ci1"
 	backend.BackendLabel = "beads"
 
-	gm := newStubGit()
+	gm := git.NewStubRepo()
 	gm.ProjectDir = dir
 	gm.WorkDir = dir
 	gm.WorktreeBranch = "ralph/next"
 	gm.RemoteURLValue = "https://github.com/owner/repo.git"
-	gm.OpenPR = 0
+	gm.GH.OpenPR = 0
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -636,13 +638,13 @@ func TestIntegration_CIFailureThenFixThenMerge(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 55}
@@ -680,7 +682,7 @@ func TestIntegration_MaxIterationsReached(t *testing.T) {
 		},
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -700,11 +702,11 @@ func TestIntegration_MaxIterationsReached(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
@@ -738,14 +740,14 @@ func TestIntegration_ExternalRefFormat(t *testing.T) {
 	backend.NextID = "ralph-ref1"
 	backend.BackendLabel = "beads"
 
-	gm := newStubGit()
+	gm := git.NewStubRepo()
 	gm.ProjectDir = dir
 	gm.WorkDir = dir
 	gm.WorktreeBranch = "ralph/next"
 	gm.RemoteURLValue = "https://github.com/owner/repo.git"
-	gm.PRNumber = 77
-	gm.PRTitle = "Ref format task"
-	gm.PRURL = "https://github.com/owner/repo/pull/77"
+	gm.GH.PRNumber = 77
+	gm.GH.PRTitle = "Ref format task"
+	gm.GH.PRURL = "https://github.com/owner/repo/pull/77"
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -769,13 +771,13 @@ func TestIntegration_ExternalRefFormat(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 77}
@@ -822,7 +824,7 @@ func TestIntegration_PushCalledOnSignal(t *testing.T) {
 	backend.NextID = "ralph-push1"
 	backend.BackendLabel = "beads"
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -850,13 +852,13 @@ func TestIntegration_PushCalledOnSignal(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
 
@@ -888,7 +890,7 @@ func TestIntegration_WaitModePicksUpNewTask(t *testing.T) {
 		},
 	}
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	agentCalled := false
 	runner := &stubRunner{
@@ -979,7 +981,7 @@ func TestIntegration_TestFailureFixedByAgent(t *testing.T) {
 	backend.NextID = "ralph-tf2"
 	backend.BackendLabel = "beads"
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	fixCalls := 0
 	cfg := Config{
@@ -1098,7 +1100,7 @@ func TestIntegration_ResumeTask_AllStates(t *testing.T) {
 			backend.externalRefs["ralph-test"] = "https://github.com/owner/repo/pull/99"
 
 			agentCalled := false
-			gm := &stubGit{
+			gm := &git.StubRepo{
 				ProjectDir:     dir,
 				WorkDir:        dir,
 				WorktreeBranch: "ralph/next",
@@ -1112,14 +1114,14 @@ func TestIntegration_ResumeTask_AllStates(t *testing.T) {
 				AutoMerge:     true,
 			}
 			logger := logging.New(nil)
-			l := New(cfg, Modules{
-				State:        st,
-				Git:          gm,
-				TaskBackend:  backend,
-				Logger:       logger,
-				Verifier:     newTestVerifier(t, cfg, logger),
-				Connectivity: onlineStubConnectivity(),
-			})
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+	})
 			l.runner = &stubRunner{onRun: func() { agentCalled = true }}
 
 			if err := l.Run(context.Background()); err != nil {
@@ -1164,7 +1166,7 @@ func TestIntegration_TwoTasksCompleteSequentially(t *testing.T) {
 	backend.NextID = "ralph-a1"
 	backend.BackendLabel = "beads"
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -1200,13 +1202,13 @@ func TestIntegration_TwoTasksCompleteSequentially(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
 
@@ -1251,7 +1253,7 @@ func TestIntegration_StackedPRSkipsMergeButCloses(t *testing.T) {
 	backend.NextID = "ralph-stk1"
 	backend.BackendLabel = "beads"
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -1283,13 +1285,13 @@ func TestIntegration_StackedPRSkipsMergeButCloses(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
 
@@ -1321,12 +1323,12 @@ func TestIntegration_MergeConflictThenRetrySucceeds(t *testing.T) {
 	backend.NextID = "ralph-conf1"
 	backend.BackendLabel = "beads"
 
-	gm := newStubGit()
+	gm := git.NewStubRepo()
 	gm.ProjectDir = dir
 	gm.WorkDir = dir
 	gm.WorktreeBranch = "ralph/next"
 	gm.RemoteURLValue = "https://github.com/owner/repo.git"
-	gm.OpenPR = 0
+	gm.GH.OpenPR = 0
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -1351,13 +1353,13 @@ func TestIntegration_MergeConflictThenRetrySucceeds(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 60}
@@ -1390,7 +1392,7 @@ func TestIntegration_AgentExitsWithoutSignal_Retries(t *testing.T) {
 	backend.NextID = "ralph-ns1"
 	backend.BackendLabel = "beads"
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runCount := 0
 	runner := &stubRunner{
@@ -1407,11 +1409,11 @@ func TestIntegration_AgentExitsWithoutSignal_Retries(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
@@ -1442,7 +1444,7 @@ func TestIntegration_CompletedTaskNotReselected(t *testing.T) {
 	backend.NextID = "ralph-dup1"
 	backend.BackendLabel = "beads"
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	taskIDs := []string{}
 	runCount := 0
@@ -1470,13 +1472,13 @@ func TestIntegration_CompletedTaskNotReselected(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
 
@@ -1510,7 +1512,7 @@ func TestIntegration_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 	backend.NextID = "ralph-idle1"
 	backend.BackendLabel = "beads"
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runner := &stubRunner{
 		result: claude.Result{IdleTimeout: true},
@@ -1525,11 +1527,11 @@ func TestIntegration_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
@@ -1557,7 +1559,7 @@ func TestIntegration_FeedbackKillRestartsIteration(t *testing.T) {
 	backend.NextID = "ralph-fb1"
 	backend.BackendLabel = "beads"
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runCount := 0
 	runner := &stubRunner{
@@ -1583,13 +1585,13 @@ func TestIntegration_FeedbackKillRestartsIteration(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
 
@@ -1620,7 +1622,7 @@ func TestIntegration_StopFileHaltsLoop(t *testing.T) {
 	backend.NextID = "ralph-stop1"
 	backend.BackendLabel = "beads"
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	runCount := 0
 	runner := &stubRunner{
@@ -1641,11 +1643,11 @@ func TestIntegration_StopFileHaltsLoop(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
@@ -1674,13 +1676,13 @@ func TestIntegration_EvolveExitsAfterMerge(t *testing.T) {
 	backend.NextID = "ralph-ev1"
 	backend.BackendLabel = "beads"
 
-	gm := newStubGit()
+	gm := git.NewStubRepo()
 	gm.ProjectDir = dir
 	gm.WorkDir = dir
 	gm.WorktreeBranch = "ralph/next"
 	gm.RemoteURLValue = "https://github.com/owner/repo.git"
-	gm.OpenPR = 0
-	gm.PRNumber = 0
+	gm.GH.OpenPR = 0
+	gm.GH.PRNumber = 0
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -1704,13 +1706,13 @@ func TestIntegration_EvolveExitsAfterMerge(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 99}
@@ -1736,7 +1738,7 @@ func TestIntegration_TestsRunBeforeAndAfterAgent(t *testing.T) {
 	backend.NextID = "ralph-tt1"
 	backend.BackendLabel = "beads"
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	sequence := []string{}
 	runner := &stubRunner{
@@ -1814,12 +1816,12 @@ func TestIntegration_DependencyBlockedTaskIsSkipped(t *testing.T) {
 	// CloseTask will return a dependency error
 	backend.CloseErr = fmt.Errorf("blocked by dependency: ralph-parent1 is not closed")
 
-	gm := newStubGit()
+	gm := git.NewStubRepo()
 	gm.ProjectDir = dir
 	gm.WorkDir = dir
 	gm.WorktreeBranch = "ralph/next"
 	gm.RemoteURLValue = "https://github.com/owner/repo.git"
-	gm.OpenPR = 0
+	gm.GH.OpenPR = 0
 
 	runner := &stubRunner{
 		onRun: func() {
@@ -1842,13 +1844,13 @@ func TestIntegration_DependencyBlockedTaskIsSkipped(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
 	gm.ShipResult = git.ShipResult{PRNumber: 77}
@@ -1868,12 +1870,12 @@ func TestIntegration_DependencyBlockedTaskIsSkipped(t *testing.T) {
 // enabling tests to verify the CI failure → fix agent path through the full loop
 // without a real GitHub connection.
 type ciTriggerGit struct {
-	*stubGit
+	*git.StubRepo
 	triggerCI bool // if true, next MergeWithRetry call triggers OnCIFailure once
 }
 
 func (g *ciTriggerGit) MergeWithRetry(ctx context.Context, opts git.MergeRetryOpts) (bool, error) {
-	g.stubGit.MergeRetryCalls++
+	g.StubRepo.MergeRetryCalls++
 	if g.triggerCI && opts.OnCIFailure != nil {
 		g.triggerCI = false
 		ciErr := &git.CIFailureError{
@@ -1886,10 +1888,10 @@ func (g *ciTriggerGit) MergeWithRetry(ctx context.Context, opts git.MergeRetryOp
 		}
 		return false, ciErr
 	}
-	if g.stubGit.MergeRetryFunc != nil {
-		return g.stubGit.MergeRetryFunc(ctx)
+	if g.StubRepo.MergeRetryFunc != nil {
+		return g.StubRepo.MergeRetryFunc(ctx)
 	}
-	return g.stubGit.MergeRetryResult, g.stubGit.MergeRetryErr
+	return g.StubRepo.MergeRetryResult, g.StubRepo.MergeRetryErr
 }
 
 // testGitRunner is a git.Runner for lifecycle integration tests. It handles the
@@ -1918,21 +1920,21 @@ func (r *testGitRunner) Run(_ context.Context, _ string, args ...string) (string
 // AutoMergeCurrentBranch → AwaitCI → evaluateChecks pipeline driven by
 // StubGitHub, proving CI results flow through the real code path.
 type realMergeGit struct {
-	*stubGit
+	*git.StubRepo
 	realMgr *git.Repo
 }
 
 // SetKnownPRNumber keeps the real manager in sync with the stub so
 // AutoMergeCurrentBranch skips FindOpenPR (no network call needed).
 func (g *realMergeGit) SetKnownPRNumber(n int) {
-	g.stubGit.SetKnownPRNumber(n)
+	g.StubRepo.SetKnownPRNumber(n)
 	g.realMgr.KnownPRNumber = n
 }
 
 // MergeWithRetry delegates to the real git.Repo, passing opts including
 // OnCIFailure so the full CI failure → fix agent path can be exercised.
 func (g *realMergeGit) MergeWithRetry(ctx context.Context, opts git.MergeRetryOpts) (bool, error) {
-	g.stubGit.MergeRetryCalls++
+	g.StubRepo.MergeRetryCalls++
 	return g.realMgr.MergeWithRetry(ctx, opts)
 }
 
@@ -1943,19 +1945,19 @@ func (g *realMergeGit) MergeWithRetry(ctx context.Context, opts git.MergeRetryOp
 //     so the full AwaitCI → evaluateChecks → MergePR pipeline runs.
 func (g *realMergeGit) Ship(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error) {
 	if !opts.AutoMerge {
-		return g.stubGit.Ship(ctx, opts)
+		return g.StubRepo.Ship(ctx, opts)
 	}
-	g.stubGit.ShipCalls++
-	g.stubGit.LastShipOpts = opts
+	g.StubRepo.ShipCalls++
+	g.StubRepo.LastShipOpts = opts
 	// Mirror real Ship: check PR state when PRNumber is set.
 	if opts.PRNumber != 0 {
-		prState, stateErr := g.stubGit.GetPRState(opts.PRNumber)
+		prState, stateErr := g.StubRepo.GetPRState(opts.PRNumber)
 		if stateErr != nil {
 			return git.ShipResult{PRNumber: opts.PRNumber}, stateErr
 		}
 		switch prState {
 		case git.PRStateMerged:
-			g.stubGit.PostMergeUpdateMain()
+			g.StubRepo.PostMergeUpdateMain()
 			return git.ShipResult{PRNumber: opts.PRNumber, AlreadyMerged: true, Merged: true}, nil
 		case git.PRStateClosed:
 			return git.ShipResult{PRNumber: opts.PRNumber, Closed: true}, nil
@@ -2002,22 +2004,6 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 	backend.NextID = "ralph-seq1"
 	backend.BackendLabel = "beads"
 
-	// testGitRunner handles the two commands AutoMergeCurrentBranch needs.
-	// headSHA reads from the stub so fast-path (HeadSHA == HeadRev) triggers.
-	stub := &stubGit{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		WorktreeBranch: "ralph/next",
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		PRBase:         "main",
-		DefaultBranch:  "main",
-		PRHealthy:      true,
-	}
-	runner2 := &testGitRunner{
-		remoteURL: "https://github.com/owner/repo.git",
-		headSHA:   func() string { return stub.HeadRevValue },
-	}
-
 	// realMgr drives CI through the real AwaitCI → evaluateChecks code path.
 	// realGH drives CI results and HeadSHA is updated per task so the fast path triggers.
 	realMgr, realGH := git.NewRepoForTesting(git.Config{
@@ -2027,7 +2013,6 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 		BaseBranch: "main",
 		State:      newGitMemState(),
 		Logger:     logging.New(nil),
-		Runner:     runner2,
 	})
 	realGH.OpenPR = 0
 	realGH.PRBase = "main"
@@ -2041,7 +2026,23 @@ func TestIntegration_FullLifecycleSequenceOrdering(t *testing.T) {
 		return []git.CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 	}
 
-	gm := &realMergeGit{stubGit: stub, realMgr: realMgr}
+	// testGitRunner handles the two commands AutoMergeCurrentBranch needs.
+	// headSHA reads from the stub so fast-path (HeadSHA == HeadRev) triggers.
+	stub := &git.StubRepo{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/next",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		PRBase:         "main",
+		DefaultBranch:  "main",
+		PRHealthy:      true,
+	}
+	runner2 := &testGitRunner{
+		remoteURL: "https://github.com/owner/repo.git",
+		headSHA:   func() string { return stub.HeadRevValue },
+	}
+	realMgr.Runner = runner2
+	gm := &realMergeGit{StubRepo: stub, realMgr: realMgr}
 
 	prCounter := 0
 	stub.ShipFunc = func(_ context.Context, _ git.ShipOpts) (git.ShipResult, error) {
@@ -2177,21 +2178,6 @@ func TestIntegration_LifecycleCI_FailureFixRetry(t *testing.T) {
 	backend.NextID = "ralph-cifr1"
 	backend.BackendLabel = "beads"
 
-	stub := &stubGit{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		WorktreeBranch: "ralph/next",
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		PRBase:         "main",
-		DefaultBranch:  "main",
-		PRHealthy:      true,
-		ShipResult:     git.ShipResult{PRNumber: 55},
-	}
-	gitRunner := &testGitRunner{
-		remoteURL: "https://github.com/owner/repo.git",
-		headSHA:   func() string { return stub.HeadRevValue },
-	}
-
 	realMgr, realGH := git.NewRepoForTesting(git.Config{
 		ProjectDir: dir,
 		WorkDir:    dir + "/wt",
@@ -2199,7 +2185,6 @@ func TestIntegration_LifecycleCI_FailureFixRetry(t *testing.T) {
 		BaseBranch: "main",
 		State:      newGitMemState(),
 		Logger:     logging.New(nil),
-		Runner:     gitRunner,
 	})
 	realGH.OpenPR = 0
 	realGH.PRBase = "main"
@@ -2216,7 +2201,22 @@ func TestIntegration_LifecycleCI_FailureFixRetry(t *testing.T) {
 		return []git.CICheckResult{{Name: "tests", State: "SUCCESS", Bucket: "pass"}}
 	}
 
-	gm := &realMergeGit{stubGit: stub, realMgr: realMgr}
+	stub := &git.StubRepo{
+		ProjectDir:     dir,
+		WorkDir:        dir,
+		WorktreeBranch: "ralph/next",
+		RemoteURLValue: "https://github.com/owner/repo.git",
+		PRBase:         "main",
+		DefaultBranch:  "main",
+		PRHealthy:      true,
+		ShipResult:     git.ShipResult{PRNumber: 55},
+	}
+	gitRunner := &testGitRunner{
+		remoteURL: "https://github.com/owner/repo.git",
+		headSHA:   func() string { return stub.HeadRevValue },
+	}
+	realMgr.Runner = gitRunner
+	gm := &realMergeGit{StubRepo: stub, realMgr: realMgr}
 	gm.SetKnownPRNumber(55)
 
 	agentRunner := &stubRunner{
@@ -2261,7 +2261,7 @@ func TestIntegration_LifecycleCI_FailureFixRetry(t *testing.T) {
 			},
 		}),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = agentRunner
 
@@ -2303,7 +2303,7 @@ func TestIntegration_CIFailureTriggersFixAgent(t *testing.T) {
 	backend.NextID = "ralph-ci2"
 	backend.BackendLabel = "beads"
 
-	stub := &stubGit{
+	stub := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -2369,7 +2369,7 @@ func TestIntegration_CIFailureTriggersFixAgent(t *testing.T) {
 			},
 		}),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
 
@@ -2485,7 +2485,6 @@ func TestIntegration_CIAlreadyPassing_SkipsPushAndMerges(t *testing.T) {
 		BaseBranch: "main",
 		State:      newGitMemState(),
 		Logger:     logging.New(nil),
-		Runner:     tracker,
 	})
 	realGH.OpenPR = 99
 	realGH.PRNumber = 99
@@ -2493,8 +2492,9 @@ func TestIntegration_CIAlreadyPassing_SkipsPushAndMerges(t *testing.T) {
 	realGH.HeadSHA = localSHA
 	realGH.Checks = []git.CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 	realMgr.WorktreeBranch = "ralph/cap1-ci-already-passing"
+	realMgr.Runner = tracker
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -2531,13 +2531,13 @@ func TestIntegration_CIAlreadyPassing_SkipsPushAndMerges(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
 
@@ -2600,7 +2600,6 @@ func TestIntegration_CIAlreadyPassing_FallsThrough_WhenHeadDiffers(t *testing.T)
 		BaseBranch: "main",
 		State:      newGitMemState(),
 		Logger:     logging.NewWithWriter(&logBuf),
-		Runner:     tracker,
 	})
 	realGH.OpenPR = 100
 	realGH.PRNumber = 100
@@ -2608,8 +2607,9 @@ func TestIntegration_CIAlreadyPassing_FallsThrough_WhenHeadDiffers(t *testing.T)
 	realGH.HeadSHA = prHeadSHA
 	realGH.Checks = []git.CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 	realMgr.WorktreeBranch = "ralph/cap2-sha-differs"
+	realMgr.Runner = tracker
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -2646,13 +2646,13 @@ func TestIntegration_CIAlreadyPassing_FallsThrough_WhenHeadDiffers(t *testing.T)
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
 
@@ -2710,19 +2710,12 @@ func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
 	backend.NextID = taskID
 	backend.BackendLabel = "beads"
 
-	// testGitRunner always returns the same SHA — push is a no-op.
-	runner2 := &testGitRunner{
-		remoteURL: "https://github.com/owner/repo.git",
-		headSHA:   func() string { return localSHA },
-	}
-
 	realMgr, realGH := git.NewRepoForTesting(git.Config{
 		WorkDir:    dir,
 		RalphDir:   ralphDir,
 		BaseBranch: "main",
 		State:      newGitMemState(),
 		Logger:     logging.New(nil),
-		Runner:     runner2,
 	})
 	realGH.OpenPR = 0
 	realGH.PRBase = "main"
@@ -2735,7 +2728,7 @@ func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
 	realMgr.WorkDir = dir + "/wt"
 	realMgr.WorktreeBranch = "ralph/nop-push-test"
 
-	stub := &stubGit{
+	stub := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -2746,7 +2739,13 @@ func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
 		ShipResult:     git.ShipResult{PRNumber: 77},
 	}
 
-	gm := &realMergeGit{stubGit: stub, realMgr: realMgr}
+	// testGitRunner always returns the same SHA — push is a no-op.
+	runner2 := &testGitRunner{
+		remoteURL: "https://github.com/owner/repo.git",
+		headSHA:   func() string { return localSHA },
+	}
+	realMgr.Runner = runner2
+	gm := &realMergeGit{StubRepo: stub, realMgr: realMgr}
 	gm.SetKnownPRNumber(77)
 
 	agentRunner := &stubRunner{
@@ -2789,7 +2788,7 @@ func TestIntegration_SameSHA_NoOpPush_FailingChecksNotFiltered(t *testing.T) {
 			},
 		}),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = agentRunner
 
@@ -2843,7 +2842,7 @@ func TestIntegration_LifecycleOrdering_BranchRenameAndReviewers(t *testing.T) {
 
 	// No existing open PR — OpenPR=0 prevents the initWorktree resume path
 	// from firing and ensures the agent actually runs.
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:              dir,
 		WorkDir:                 dir,
 		WorktreeBranch:          "ralph/next",
@@ -2959,7 +2958,7 @@ func TestIntegration_LifecycleOrdering_NoReviewerDetectionWithoutTasks(t *testin
 	backend.Total = 0
 	backend.BackendLabel = "beads"
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -2988,11 +2987,11 @@ func TestIntegration_LifecycleOrdering_NoReviewerDetectionWithoutTasks(t *testin
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -3035,7 +3034,7 @@ func TestIntegration_LifecycleOrdering_FlushNoopAfterShip(t *testing.T) {
 
 	// No existing open PR — OpenPR=0 prevents initWorktree from taking the
 	// resume-from-PR path before the agent runs.
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/next",
@@ -3110,6 +3109,60 @@ func TestIntegration_LifecycleOrdering_FlushNoopAfterShip(t *testing.T) {
 	}
 }
 
+// TestIntegration_CreatePRViaAPI_SpecialCharsJSON verifies that CreatePRViaAPI
+// produces valid JSON when the PR title and body contain newlines, quotes,
+// backticks, and Unicode — characters that previously caused GitHub 400 errors
+// when fmt.Sprintf was used instead of json.Marshal.
+func TestIntegration_CreatePRViaAPI_SpecialCharsJSON(t *testing.T) {
+	bin := t.TempDir()
+	stdinFile := filepath.Join(bin, "stdin.json")
+	script := "#!/bin/sh\ncat > " + stdinFile + "\necho '{\"number\":42}'\n"
+	ghPath := filepath.Join(bin, "gh")
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	m := &git.Repo{}
+	gh := m.GH()
+
+	opts := git.CreatePROpts{
+		Title: "Fix `backtick` and \"double quotes\"",
+		Body:  "Line one\nLine two\tTabbed\nBackslash: \\\nUnicode: éàü\nBacktick: `code`\nQuote: \"hello\"",
+		Head:  "ralph/task-branch",
+		Base:  "main",
+	}
+	prNum, err := gh.CreatePRViaAPI("owner/repo", opts)
+	if err != nil {
+		t.Fatalf("CreatePRViaAPI returned error: %v", err)
+	}
+	if prNum != 42 {
+		t.Errorf("expected PR number 42, got %d", prNum)
+	}
+
+	raw, readErr := os.ReadFile(stdinFile)
+	if readErr != nil {
+		t.Fatalf("gh was never called or stdin not captured: %v", readErr)
+	}
+
+	var parsed map[string]string
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("request body is not valid JSON: %v\nbody: %s", err, raw)
+	}
+	if parsed["title"] != opts.Title {
+		t.Errorf("title mismatch: got %q, want %q", parsed["title"], opts.Title)
+	}
+	if parsed["body"] != opts.Body {
+		t.Errorf("body mismatch: got %q, want %q", parsed["body"], opts.Body)
+	}
+	if parsed["head"] != opts.Head {
+		t.Errorf("head mismatch: got %q, want %q", parsed["head"], opts.Head)
+	}
+	if parsed["base"] != opts.Base {
+		t.Errorf("base mismatch: got %q, want %q", parsed["base"], opts.Base)
+	}
+}
+
 // Simulate evolve rebase pulling a user commit from main: the agent receives
 // the rebase-baseline instruction in its prompt, verification passes, and the
 // user's file changes survive — proving the agent does not revert them.
@@ -3146,13 +3199,13 @@ func TestIntegration_EvolveRebasePreservesUserCommits(t *testing.T) {
 	backend.NextID = "ralph-rb1"
 	backend.BackendLabel = "beads"
 
-	gm := newStubGit()
+	gm := git.NewStubRepo()
 	gm.ProjectDir = dir
 	gm.WorkDir = dir
 	gm.WorktreeBranch = "ralph/next"
 	gm.RemoteURLValue = "https://github.com/owner/repo.git"
-	gm.OpenPR = 0
-	gm.PRNumber = 0
+	gm.GH.OpenPR = 0
+	gm.GH.PRNumber = 0
 	gm.DiffStatValue = "config.go | 3 +++\n 1 file changed, 3 insertions(+)"
 
 	var capturedPrompt string
@@ -3181,13 +3234,13 @@ func TestIntegration_EvolveRebasePreservesUserCommits(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 
 	l.runner = runner
@@ -3249,16 +3302,19 @@ func TestIntegration_ResumeViaPR_DetectsExistingOpenPR(t *testing.T) {
 	backend.BackendLabel = "beads"
 	_ = backend.SetMetadata("ralph-peou", "branch", "ralph/ralph-peou-refactor-hints")
 
-	gm := newStubGit()
+	gm := git.NewStubRepo()
 	gm.ProjectDir = dir
 	gm.WorkDir = dir
 	gm.WorktreeBranch = "ralph/ralph-peou-refactor-hints"
 	gm.RemoteURLValue = "https://github.com/owner/repo.git"
-	gm.OpenPR = 0
-	gm.PRNumber = 303
-	gm.PRState = git.PRStateOpen
-	gm.PRTitle = "Refactor hints"
-	gm.PRURL = "https://github.com/owner/repo/pull/303"
+	gm.GH.OpenPR = 0
+	gm.GH.PRNumber = 303
+	gm.GH.PRState = git.PRStateOpen
+	gm.GH.PRTitle = "Refactor hints"
+	gm.GH.PRURL = "https://github.com/owner/repo/pull/303"
+	gm.GH.Checks = []git.CICheckResult{
+		{Name: "build", State: "SUCCESS", Bucket: "pass"},
+	}
 	gm.BranchRenamed = true
 	gm.ResumeResult = git.ResumeTaskResult{
 		Handled:  true,
@@ -3282,11 +3338,11 @@ func TestIntegration_ResumeViaPR_DetectsExistingOpenPR(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:        st,
-		Git:          gm,
-		TaskBackend:  backend,
-		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
@@ -3316,7 +3372,7 @@ func TestIntegration_VerifyBuildRunsBeforeAgent(t *testing.T) {
 	// build failure message lands in the assembled prompt.
 	os.WriteFile(filepath.Join(promptsDir, "internal.md"), []byte("{{TEST_STATUS}}"), 0o644)
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var seq []string
 	var capturedPrompt string
@@ -3396,7 +3452,7 @@ func TestIntegration_PreIterationTestsRunBeforeAgent(t *testing.T) {
 	backend.NextID = "ralph-pit1"
 	backend.BackendLabel = "beads"
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
 
 	var capturedPrompt string
 	runner := &stubRunner{
@@ -3431,7 +3487,7 @@ func TestIntegration_PreIterationTestsRunBeforeAgent(t *testing.T) {
 			}},
 		}),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   passingVerifyHook(),
+		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = runner
 
@@ -3455,7 +3511,7 @@ func TestIntegration_LLMVerifyRejectThenFixThenPass(t *testing.T) {
 	backend.NextID = "ralph-llm1"
 	backend.BackendLabel = "beads"
 
-	gm := &stubGit{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
 
 	var seq []string
 	runner := &signalCallingRunner{

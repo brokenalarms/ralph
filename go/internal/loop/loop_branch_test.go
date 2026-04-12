@@ -33,7 +33,7 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 		NextID:    "ralph-new",
 	}
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/myproject/01-previous-task",
@@ -83,7 +83,7 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 		NextID:    "ralph-same",
 	}
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/myproject/01-ongoing-task",
@@ -163,7 +163,7 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir: dir,
 		WorkDir:    dir,
 	}
@@ -209,7 +209,7 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:        dir,
 		WorkDir:           filepath.Join(dir, "worktree"),
 		WorktreeBranch:    "ralph/wip-branch",
@@ -255,7 +255,7 @@ func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:        dir,
 		WorkDir:           filepath.Join(dir, "worktree"),
 		WorktreeBranch:    "ralph/wip-branch",
@@ -297,7 +297,7 @@ func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:        dir,
 		WorkDir:           filepath.Join(dir, "worktree"),
 		WorktreeBranch:    "ralph/wip-branch",
@@ -340,7 +340,7 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/wip-branch",
@@ -418,7 +418,7 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/wip-branch",
@@ -486,7 +486,7 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/wip-branch",
@@ -562,7 +562,7 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/wip-branch",
@@ -638,7 +638,7 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 		NextID:    "ralph-imp",
 	}
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/wip-branch",
@@ -694,7 +694,7 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/wip-branch",
@@ -785,7 +785,7 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/wip-branch",
@@ -837,7 +837,7 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 func TestLoop_BranchForTask_NoStoredBranch_RenamesBranch(t *testing.T) {
 	dir, _ := setupTestDir(t)
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/wip-branch",
@@ -861,7 +861,7 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/wip-branch",
@@ -926,7 +926,7 @@ func TestResumeTask_ClosedPR_ClearsMetadataAndReruns(t *testing.T) {
 
 	// ResumeTask reports: PR was closed, branch was renamed to task-specific name.
 	renamedBranch := "ralph/ralph-cdr3-fix-auth-bug"
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:     dir,
 		WorkDir:        filepath.Join(dir, "worktree"),
 		WorktreeBranch: "ralph/next",
@@ -984,7 +984,7 @@ func TestResumeTask_ClosedPR_ClearsMetadataAndReruns(t *testing.T) {
 func TestLoop_BranchForTask_RenameFailure_ReturnsError(t *testing.T) {
 	dir, _ := setupTestDir(t)
 
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:      dir,
 		WorkDir:         filepath.Join(dir, "worktree"),
 		WorktreeBranch:  "ralph/next",
@@ -1012,7 +1012,7 @@ func TestLoop_BranchForTask_RenameFailure_AbortsIteration(t *testing.T) {
 	createPromptTemplates(t, promptsDir)
 
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login"}
-	gm := &stubGit{
+	gm := &git.StubRepo{
 		ProjectDir:      dir,
 		WorkDir:         filepath.Join(dir, "worktree"),
 		WorktreeBranch:  "ralph/next",

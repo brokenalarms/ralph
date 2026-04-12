@@ -94,7 +94,7 @@ func (r *Repo) Push(ctx context.Context) error {
 // reopenClosedPR finds a closed (not merged) PR for the given branch and
 // reopens it. Returns the PR number on success or 0 if no closed PR was
 // found or reopen failed.
-func reopenClosedPR(gh gitHub, workDir, branch, nwo, repoURL, title, body string, logger Log) (int, error) {
+func reopenClosedPR(gh GitHub, workDir, branch, nwo, repoURL, title, body string, logger Log) (int, error) {
 	number, _, _, findErr := gh.FindPR(branch, repoURL)
 	if findErr != nil || number == 0 {
 		return 0, findErr
@@ -120,7 +120,7 @@ func reopenClosedPR(gh gitHub, workDir, branch, nwo, repoURL, title, body string
 	return number, nil
 }
 
-func (r *Repo) reopenClosedPR(gh gitHub, repoURL, title, body string) (int, error) {
+func (r *Repo) reopenClosedPR(gh GitHub, repoURL, title, body string) (int, error) {
 	nwo := NWOFromRemote(repoURL)
 	return reopenClosedPR(gh, r.WorkDir, r.WorktreeBranch, nwo, repoURL, title, body, r.logger)
 }
@@ -141,7 +141,7 @@ type EnsurePROpts struct {
 // CreatePR ensures a PR exists for the given branch. If one is already open,
 // updates its title and body. Otherwise creates a new PR targeting BaseBranch.
 // Returns the PR number.
-func CreatePR(ctx context.Context, gh gitHub, workDir, branch, remoteURL string, opts EnsurePROpts) (int, error) {
+func CreatePR(ctx context.Context, gh GitHub, workDir, branch, remoteURL string, opts EnsurePROpts) (int, error) {
 	if remoteURL == "" {
 		return 0, nil
 	}
@@ -317,7 +317,7 @@ type shipInfra struct {
 // shipPR is the single "get work into a PR" pipeline: auto-commit any
 // uncommitted changes, push (squash + rebase + force-push), and create
 // or update a PR. Returns the PR number and URL.
-func shipPR(ctx context.Context, runner runner, gh gitHub, workDir, branch, remoteURL string, opts ShipOpts, infra shipInfra) (ShipResult, error) {
+func shipPR(ctx context.Context, runner Runner, gh GitHub, workDir, branch, remoteURL string, opts ShipOpts, infra shipInfra) (ShipResult, error) {
 	hasChanges := infra.hasUncommitted
 	if hasChanges == nil {
 		r := runner
@@ -664,7 +664,7 @@ var ErrPRAlreadyMerged = fmt.Errorf("PR already merged")
 // It checks whether a PR exists in another state (merged or closed). If
 // merged, returns ErrPRAlreadyMerged. If closed, reopens and returns the
 // PR number so the caller can proceed with the normal merge flow.
-func (r *Repo) resolveClosedPR(gh gitHub, repoURL string) (int, error) {
+func (r *Repo) resolveClosedPR(gh GitHub, repoURL string) (int, error) {
 	number, _, _, findErr := gh.FindPR(r.WorktreeBranch, repoURL)
 	if findErr != nil || number == 0 {
 		return 0, nil
@@ -734,7 +734,7 @@ type ExecuteMergeOpts struct {
 // executeMerge attempts the squash-merge and handles CI-gated retries.
 // It is a package function — callers compose it without a Repo receiver.
 // Repo.executeMerge delegates here.
-func executeMerge(ctx context.Context, gh gitHub, opts ExecuteMergeOpts, logger Log) (bool, error) {
+func executeMerge(ctx context.Context, gh GitHub, opts ExecuteMergeOpts, logger Log) (bool, error) {
 	nwo := NWOFromRemote(opts.RepoURL)
 	prLink := logging.PRLinkOpt(nwo, opts.PRNumber)
 	mergeOpts := opts.MergeOpts

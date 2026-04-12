@@ -289,9 +289,9 @@ func TestPushAndCreatePR_UsesBaseBranch(t *testing.T) {
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
 	var capturedOpts CreatePROpts
-	ghBase := newStubGitHub()
+	ghBase := NewStubGitHub()
 	ghBase.OpenPR = 0 // no existing PR — force creation path
-	gh := &capturingGitHub{stubGitHub: *ghBase}
+	gh := &capturingGitHub{StubGitHub: *ghBase}
 	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
 		return 0, nil
@@ -327,9 +327,9 @@ func TestPushAndCreatePR_BaseBranchMainTargetsMain(t *testing.T) {
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
 	var capturedOpts CreatePROpts
-	ghBase := newStubGitHub()
+	ghBase := NewStubGitHub()
 	ghBase.OpenPR = 0 // no existing PR — force creation path
-	gh := &capturingGitHub{stubGitHub: *ghBase}
+	gh := &capturingGitHub{StubGitHub: *ghBase}
 	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
 		return 0, nil
@@ -365,9 +365,9 @@ func TestPushAndCreatePR_IncludesBeadIDInTitle(t *testing.T) {
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
 	var capturedOpts CreatePROpts
-	ghBase := newStubGitHub()
+	ghBase := NewStubGitHub()
 	ghBase.OpenPR = 0
-	gh := &capturingGitHub{stubGitHub: *ghBase}
+	gh := &capturingGitHub{StubGitHub: *ghBase}
 	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
 		return 0, nil
@@ -404,9 +404,9 @@ func TestPushAndCreatePR_NoBeadID(t *testing.T) {
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
 	var capturedOpts CreatePROpts
-	ghBase := newStubGitHub()
+	ghBase := NewStubGitHub()
 	ghBase.OpenPR = 0
-	gh := &capturingGitHub{stubGitHub: *ghBase}
+	gh := &capturingGitHub{StubGitHub: *ghBase}
 	gh.createPR = func(opts CreatePROpts) (int, error) {
 		capturedOpts = opts
 		return 0, nil
@@ -445,11 +445,11 @@ func TestPushAndCreatePR_WrapsSummaryIntoFormattedBody(t *testing.T) {
 	r.On("merge-base --is-ancestor", "", nil)
 
 	var capturedOpts CreatePROpts
-	ghBase := newStubGitHub()
+	ghBase := NewStubGitHub()
 	ghBase.OpenPR = 0 // no existing PR — force creation path
 	ghBase.CreatedPR = 55
 	gh := &capturingGitHub{
-		stubGitHub: *ghBase,
+		StubGitHub: *ghBase,
 		createPR: func(opts CreatePROpts) (int, error) {
 			capturedOpts = opts
 			return 55, nil
@@ -462,7 +462,7 @@ func TestPushAndCreatePR_WrapsSummaryIntoFormattedBody(t *testing.T) {
 		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
-		runner:         r,
+		Runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -496,11 +496,11 @@ func TestPushAndCreatePR_FallsBackToTaskDescWhenNoSummary(t *testing.T) {
 	r.On("merge-base --is-ancestor", "", nil)
 
 	var capturedOpts CreatePROpts
-	ghBase := newStubGitHub()
+	ghBase := NewStubGitHub()
 	ghBase.OpenPR = 0 // no existing PR — force creation path
 	ghBase.CreatedPR = 55
 	gh := &capturingGitHub{
-		stubGitHub: *ghBase,
+		StubGitHub: *ghBase,
 		createPR: func(opts CreatePROpts) (int, error) {
 			capturedOpts = opts
 			return 55, nil
@@ -513,7 +513,7 @@ func TestPushAndCreatePR_FallsBackToTaskDescWhenNoSummary(t *testing.T) {
 		baseBranch: "main",
 		WorkDir:        dir + "/worktree",
 		WorktreeBranch: "ralph/test/01-feature",
-		runner:         r,
+		Runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -679,7 +679,7 @@ func TestMergeWithRetry_RecoversFromConflict(t *testing.T) {
 	}
 
 	mergeCalls := 0
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 	gh.MergeResults = []MergeResult{
 		{Conflict: true, Message: "merge conflict"},
@@ -702,7 +702,7 @@ func TestMergeWithRetry_RecoversFromConflict(t *testing.T) {
 	runner.On("rev-list --count", "1", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 	runner.On("rev-parse --verify", "", nil)
-	mgr.runner = runner
+	mgr.Runner = runner
 
 	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{})
 	if err != nil {
@@ -732,7 +732,7 @@ func TestMergeWithRetry_DelegatesCIFailure(t *testing.T) {
 		logger:         &testLog{},
 	}
 
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 55
 	// First AwaitCI returns failure (triggers OnCIFailure). After CI fix,
 	// subsequent checks return success so the merge retry proceeds.
@@ -754,7 +754,7 @@ func TestMergeWithRetry_DelegatesCIFailure(t *testing.T) {
 	runner.On("rev-parse --verify", "", nil)
 	runner.On("diff --quiet", "", nil)
 	runner.On("diff --cached --quiet", "", nil)
-	mgr.runner = runner
+	mgr.Runner = runner
 
 	ciFixCalled := false
 	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
@@ -787,7 +787,7 @@ func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 		logger:         &testLog{},
 	}
 
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 99
 	gh.Checks = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
 	gh.MergeResult = MergeResult{Blocked: true, Message: "CI failed"}
@@ -802,7 +802,7 @@ func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 	runner.On("rev-parse --verify", "", nil)
 	runner.On("diff --quiet", "", nil)
 	runner.On("diff --cached --quiet", "", nil)
-	mgr.runner = runner
+	mgr.Runner = runner
 
 	ciFixCalls := 0
 	_, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
@@ -834,7 +834,7 @@ func TestMergeWithRetry_StopsOnUnresolvableConflict(t *testing.T) {
 	}
 
 	mergeCalls := 0
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 50
 	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 	gh.MergeResults = []MergeResult{
@@ -873,7 +873,7 @@ func TestMergeWithRetry_StopsOnUnresolvableConflict(t *testing.T) {
 	runner.On("reset --soft", "", nil)
 	runner.On("commit", "", nil)
 	runner.On("push", "", nil)
-	mgr.runner = runner
+	mgr.Runner = runner
 
 	_, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{})
 	if err == nil {
@@ -906,7 +906,7 @@ func TestAutoMergeCurrentBranch_PassesPRTitleAsSubject(t *testing.T) {
 		logger:         &testLog{},
 	}
 
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 77
 	gh.PRTitle = "[ralph-31w] Fix squash-merge subject"
 	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
@@ -922,7 +922,7 @@ func TestAutoMergeCurrentBranch_PassesPRTitleAsSubject(t *testing.T) {
 	runner.On("diff --quiet", "", nil)
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("reset --hard", "", nil)
-	mgr.runner = runner
+	mgr.Runner = runner
 
 	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
 	if err != nil {
@@ -959,7 +959,7 @@ func TestMergeWithRetry_PushesFixAgentWorkBeforeRetry(t *testing.T) {
 	// OnCIFailure and the merge retry.
 	var events []string
 
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 60
 	gh.ChecksFunc = func(call int) []CICheckResult {
 		if call == 1 {
@@ -982,7 +982,7 @@ func TestMergeWithRetry_PushesFixAgentWorkBeforeRetry(t *testing.T) {
 	runner.On("rev-parse --verify", "", nil)
 	runner.On("diff --quiet", "", nil)
 	runner.On("diff --cached --quiet", "", nil)
-	mgr.runner = runner
+	mgr.Runner = runner
 
 	ciFixCalled := false
 	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
@@ -1048,7 +1048,7 @@ func TestMergeWithRetry_SpawnsConflictAgent(t *testing.T) {
 	}
 
 	mergeCalls := 0
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 70
 	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 	gh.MergeResults = []MergeResult{{Conflict: true, Message: "merge conflict"}}
@@ -1078,7 +1078,7 @@ func TestMergeWithRetry_SpawnsConflictAgent(t *testing.T) {
 	runner.On("rev-parse --verify", "", nil)
 	runner.On("diff --quiet", "", nil)
 	runner.On("diff --cached --quiet", "", nil)
-	mgr.runner = runner
+	mgr.Runner = runner
 
 	conflictAgentCalled := false
 	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
@@ -1119,7 +1119,7 @@ func TestMergeWithRetry_SkipsAfterConflictAgentFails(t *testing.T) {
 	}
 
 	mergeCalls := 0
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 71
 	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 	gh.MergeResults = []MergeResult{
@@ -1148,7 +1148,7 @@ func TestMergeWithRetry_SkipsAfterConflictAgentFails(t *testing.T) {
 	runner.On("rev-parse --verify", "", nil)
 	runner.On("diff --quiet", "", nil)
 	runner.On("diff --cached --quiet", "", nil)
-	mgr.runner = runner
+	mgr.Runner = runner
 
 	conflictAgentCalled := false
 	_, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
@@ -1468,7 +1468,7 @@ func TestAutoMergeCurrentBranch_ReturnsMergedForAlreadyMergedPR(t *testing.T) {
 	runner := newStubRunner()
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 0        // no open PR
 	gh.PRNumber = 438    // FindPR returns this
 	gh.PRState = "MERGED" // GetPRState returns this
@@ -1478,7 +1478,7 @@ func TestAutoMergeCurrentBranch_ReturnsMergedForAlreadyMergedPR(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-merged",
 		baseBranch:     "main",
-		runner:         runner,
+		Runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -1516,7 +1516,7 @@ func TestAutoMergeCurrentBranch_ReopensClosedPR(t *testing.T) {
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("reset --hard", "", nil)
 
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 0          // no open PR initially
 	gh.PRNumber = 438       // FindPR returns this
 	gh.PRState = "CLOSED"   // GetPRState returns this
@@ -1528,7 +1528,7 @@ func TestAutoMergeCurrentBranch_ReopensClosedPR(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-reopen",
 		baseBranch:     "main",
-		runner:         runner,
+		Runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -1557,7 +1557,7 @@ func TestCreatePR_APIFallbackWhenReopenFails(t *testing.T) {
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 0
 	gh.CreatePRErr = fmt.Errorf("a pull request already exists for branch")
 	gh.PRNumber = 438
@@ -1570,7 +1570,7 @@ func TestCreatePR_APIFallbackWhenReopenFails(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/diverged-branch",
 		baseBranch:     "main",
-		runner:         runner,
+		Runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -1598,7 +1598,7 @@ func TestCreatePR_ReopensClosedPROnCreateFailure(t *testing.T) {
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 0                                                      // no open PR
 	gh.CreatePRErr = fmt.Errorf("a pull request already exists for branch") // create fails
 	gh.PRNumber = 438                                                   // FindPR returns this
@@ -1609,7 +1609,7 @@ func TestCreatePR_ReopensClosedPROnCreateFailure(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/test/01-reopen-create",
 		baseBranch:     "main",
-		runner:         runner,
+		Runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -1635,7 +1635,7 @@ func TestCreatePR_ReturnsMergedPRNumberOnAlreadyExists(t *testing.T) {
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 0                                                               // no open PR found
 	gh.CreatePRErr = fmt.Errorf("A pull request already exists for brokenalarms:ralph/already-merged-branch") // create fails with 422
 	gh.PRNumber = 438                                                            // FindPR returns this
@@ -1646,7 +1646,7 @@ func TestCreatePR_ReturnsMergedPRNumberOnAlreadyExists(t *testing.T) {
 		WorkDir:        "/project/wt",
 		WorktreeBranch: "ralph/already-merged-branch",
 		baseBranch:     "main",
-		runner:         runner,
+		Runner:         runner,
 		github:         gh,
 		state:          newMemState(),
 		logger:         &testLog{},
@@ -1683,7 +1683,7 @@ func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
 		logger:         &testLog{},
 	}
 
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 77
 	gh.Checks = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
 	gh.MergeResult = MergeResult{Blocked: true, Message: "CI failed"}
@@ -1698,7 +1698,7 @@ func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
 	runner.On("rev-parse --verify", "", nil)
 	runner.On("diff --quiet", "", nil)
 	runner.On("diff --cached --quiet", "", nil)
-	mgr.runner = runner
+	mgr.Runner = runner
 
 	noCommitCalls := 0
 	var sleepDelays []time.Duration
@@ -1751,7 +1751,7 @@ func TestMergeWithRetry_InfraFailureRecovery(t *testing.T) {
 	}
 
 	callCount := 0
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 88
 	gh.ChecksFunc = func(call int) []CICheckResult {
 		if call == 1 {
@@ -1771,7 +1771,7 @@ func TestMergeWithRetry_InfraFailureRecovery(t *testing.T) {
 	runner.On("rev-parse --verify", "", nil)
 	runner.On("diff --quiet", "", nil)
 	runner.On("diff --cached --quiet", "", nil)
-	mgr.runner = runner
+	mgr.Runner = runner
 
 	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
 		OnCIFailure: func(ciErr *CIFailureError) CIFixResult {
@@ -1795,7 +1795,7 @@ func TestMergeWithRetry_InfraFailureRecovery(t *testing.T) {
 // MergePR returns Blocked when branch protection blocks the merge.
 // No admin retry is ever attempted — branch protection is the hard gate.
 func TestMergeOpts_BlockedReturnsBlocked(t *testing.T) {
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.MergeResult = MergeResult{Blocked: true, Message: "branch protection rules"}
 	result := gh.MergePR(42, "https://github.com/test/repo.git", MergeOpts{DeleteBranch: true})
 	if result.Merged {
@@ -1826,7 +1826,7 @@ func TestAutoMergeCurrentBranch_InfraFailureReturnsCIFailureError(t *testing.T) 
 		LocalTestsPassed: true,
 	}
 
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 55
 	gh.Checks = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
 	gh.JobStepCount = 0 // zero steps = infrastructure failure
@@ -1842,7 +1842,7 @@ func TestAutoMergeCurrentBranch_InfraFailureReturnsCIFailureError(t *testing.T) 
 	runner.On("diff --quiet", "", nil)
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("reset --hard", "", nil)
-	mgr.runner = runner
+	mgr.Runner = runner
 
 	_, err := mgr.AutoMergeCurrentBranch(context.Background())
 	if err == nil {
@@ -1869,7 +1869,7 @@ func TestAutoMergeCurrentBranch_BlockedMergeReturnsError(t *testing.T) {
 		logger:         &testLog{},
 	}
 
-	gh := newStubGitHub()
+	gh := NewStubGitHub()
 	gh.OpenPR = 55
 	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
 	gh.MergeResult = MergeResult{Blocked: true, Message: "branch protection"}
@@ -1885,7 +1885,7 @@ func TestAutoMergeCurrentBranch_BlockedMergeReturnsError(t *testing.T) {
 	runner.On("diff --quiet", "", nil)
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("reset --hard", "", nil)
-	mgr.runner = runner
+	mgr.Runner = runner
 
 	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
 	if merged {

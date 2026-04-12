@@ -9,10 +9,10 @@ import (
 	"strings"
 )
 
-// runner abstracts git command execution for testability. Production code
+// Runner abstracts git command execution for testability. Production code
 // uses execRunner (which shells out to git); tests inject stubs to avoid
 // spawning real processes.
-type runner interface {
+type Runner interface {
 	Run(ctx context.Context, dir string, args ...string) (output string, err error)
 }
 
@@ -27,7 +27,7 @@ func (r *execRunner) Run(ctx context.Context, dir string, args ...string) (strin
 }
 
 // defaultRunner is the package-level runner used by IsGitRepo and test helpers.
-var defaultRunner runner = &execRunner{}
+var defaultRunner Runner = &execRunner{}
 
 func gitCmd(dir string, args ...string) {
 	defaultRunner.Run(context.Background(), dir, args...)
@@ -51,11 +51,18 @@ func refExists(dir, ref string) bool {
 // These mirror the standalone wrappers above but route through r.run()
 // so tests can intercept all git calls.
 
-func (r *Repo) run() runner {
-	if r.runner != nil {
-		return r.runner
+func (r *Repo) run() Runner {
+	if r.Runner != nil {
+		return r.Runner
 	}
 	return defaultRunner
+}
+
+// GetRunner returns the injected Runner, or the package default if none is set.
+// Used by cmd/ralph functions that need to route git commands through the same
+// runner as the Repo for testability.
+func (r *Repo) GetRunner() Runner {
+	return r.run()
 }
 
 func (r *Repo) gitCmd(dir string, args ...string) {
@@ -243,6 +250,6 @@ func parseWorktreeForBranch(porcelainOutput, branch string) string {
 // detectDefaultBranch returns the configured base branch.
 // BaseBranch is always set after config parsing (--base-branch defaults to "develop"),
 // so no fallback to git symbolic-ref or hardcoded values is needed.
-func detectDefaultBranch(_, override string, _ ...runner) string {
+func detectDefaultBranch(_, override string, _ ...Runner) string {
 	return override
 }

@@ -72,9 +72,12 @@ func (r *mergeStubRunner) neverCalledWith(args ...string) bool {
 	return !r.calledWith(args...)
 }
 
+// Compile-time check that mergeStubRunner satisfies git.Runner.
+var _ git.Runner = (*mergeStubRunner)(nil)
+
 // buildGM creates a git.Repo with the given stubs for merge tests.
 // Uses a temp dir for RalphDir so worktree paths are predictable.
-func buildGM(t *testing.T, runner *mergeStubRunner) (*git.Repo, string) {
+func buildGM(t *testing.T, runner git.Runner) (*git.Repo, string) {
 	t.Helper()
 	tmp := t.TempDir()
 	ralphDir := filepath.Join(tmp, ".ralph")
@@ -85,8 +88,8 @@ func buildGM(t *testing.T, runner *mergeStubRunner) (*git.Repo, string) {
 		BaseBranch: "main",
 		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
 		Logger:     logging.New(nil),
-		Runner:     runner,
 	})
+	repo.Runner = runner
 	return repo, tmp
 }
 
@@ -102,27 +105,18 @@ func mergeRunCmd(t *testing.T, name string, args ...string) {
 	}
 }
 
-// mergeStubPRLister is a minimal prLister stub for collectStack tests.
-type mergeStubPRLister struct {
-	allPRs []git.PRInfo
-	err    error
-}
-
-func (s *mergeStubPRLister) ListAllPRs(_ string) ([]git.PRInfo, error) {
-	return s.allPRs, s.err
-}
-
 // ── collectStack tests ────────────────────────────────────────────────────────
 
 // Proves: collectStack walks a chain of PRs from the top PR down to main,
 // returning them in bottom-up order with the correct baseBranch.
 func TestCollectStack_BottomUpOrder(t *testing.T) {
 	// PR 460 → 459 → 452 → main
-	sg := &mergeStubPRLister{allPRs: []git.PRInfo{
+	sg := git.NewStubRepo()
+	sg.GH.AllPRs = []git.PRInfo{
 		{Number: 452, Head: "feature/a", Base: "main", State: "OPEN"},
 		{Number: 459, Head: "feature/b", Base: "feature/a", State: "OPEN"},
 		{Number: 460, Head: "feature/c", Base: "feature/b", State: "OPEN"},
-	}}
+	}
 
 	result := CollectStack(sg, "/any", "460", logging.New(nil))
 	prs := StackResultPRs(result)
@@ -148,11 +142,12 @@ func TestCollectStack_BottomUpOrder(t *testing.T) {
 // returned stack (closed ones are still used as chain links).
 func TestCollectStack_SkipsClosedPRs(t *testing.T) {
 	// PR 459 is CLOSED (already merged), 460 is still open on top.
-	sg := &mergeStubPRLister{allPRs: []git.PRInfo{
+	sg := git.NewStubRepo()
+	sg.GH.AllPRs = []git.PRInfo{
 		{Number: 452, Head: "feature/a", Base: "main", State: "OPEN"},
 		{Number: 459, Head: "feature/b", Base: "feature/a", State: "CLOSED"},
 		{Number: 460, Head: "feature/c", Base: "feature/b", State: "OPEN"},
-	}}
+	}
 
 	result := CollectStack(sg, "/any", "460", logging.New(nil))
 	prs := StackResultPRs(result)
@@ -171,9 +166,10 @@ func TestCollectStack_SkipsClosedPRs(t *testing.T) {
 // Proves: when the bottom PR targets a non-main branch (e.g. 'develop'),
 // baseBranch reflects that target, not 'main'.
 func TestCollectStack_NonMainBaseBranch(t *testing.T) {
-	sg := &mergeStubPRLister{allPRs: []git.PRInfo{
+	sg := git.NewStubRepo()
+	sg.GH.AllPRs = []git.PRInfo{
 		{Number: 100, Head: "feature/x", Base: "develop", State: "OPEN"},
-	}}
+	}
 
 	result := CollectStack(sg, "/any", "100", logging.New(nil))
 
@@ -331,9 +327,9 @@ func TestRunMerge_CIFailureStops(t *testing.T) {
 		BaseBranch: "main",
 		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
 		Logger:     logging.New(nil),
-		Runner:     runner,
 	})
 	ghStub.Checks = []git.CICheckResult{{Bucket: "check", State: "FAILURE"}}
+	gm.Runner = runner
 
 	prs := []StackPR{
 		NewStackPR(1, "pr1"),
@@ -363,8 +359,8 @@ func TestRunMerge_MergeConflictLogsMessage(t *testing.T) {
 		BaseBranch: "main",
 		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
 		Logger:     logging.NewWithWriter(&logBuf),
-		Runner:     runner,
 	})
+	gm.Runner = runner
 	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 	ghStub.MergeResult = git.MergeResult{Conflict: true}
 
@@ -392,8 +388,8 @@ func TestRunMerge_SecondPRRebased(t *testing.T) {
 		BaseBranch: "main",
 		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
 		Logger:     logging.New(nil),
-		Runner:     runner,
 	})
+	gm.Runner = runner
 	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 	_ = ghStub
 
@@ -444,8 +440,8 @@ func TestRunMerge_SecondPRRebaseConflictAttemptsAutoResolve(t *testing.T) {
 		BaseBranch: "main",
 		State:      state.NewStore(filepath.Join(ralphDir, "state.json")),
 		Logger:     logging.NewWithWriter(&logBuf),
-		Runner:     runner,
 	})
+	gm.Runner = runner
 	ghStub.Checks = []git.CICheckResult{{Bucket: "pass", State: "SUCCESS"}}
 	_ = ghStub
 
