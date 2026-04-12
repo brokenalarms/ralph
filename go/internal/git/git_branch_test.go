@@ -21,8 +21,8 @@ func TestSetStackHead_SkipsWhenNoBranchesAvailable(t *testing.T) {
 
 	setStackHead(r, []string{"ralph/some-task"})
 
-	if r.PrevBranch != "" {
-		t.Errorf("PrevBranch should be empty when no open PR branches, got %q", r.PrevBranch)
+	if r.prevBranch != "" {
+		t.Errorf("PrevBranch should be empty when no open PR branches, got %q", r.prevBranch)
 	}
 	for _, msg := range log.messages {
 		if strings.Contains(msg, "Stack head") {
@@ -53,10 +53,10 @@ func TestCheckoutExistingBranch_NoStoredBranch_RenamesBranch(t *testing.T) {
 	runner.On("branch", "", nil)
 
 	r := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/worktrees/wt1",
-		WorktreeBranch: "ralph/wip-branch",
-		Runner:         runner,
+		projectDir:     "/project",
+		workDir:        "/project/worktrees/wt1",
+		worktreeBranch: "ralph/wip-branch",
+		runner:         runner,
 		logger:         logging.New(nil),
 	}
 
@@ -67,7 +67,7 @@ func TestCheckoutExistingBranch_NoStoredBranch_RenamesBranch(t *testing.T) {
 	if checkedOut {
 		t.Error("expected checkedOut=false when no stored branch, got true")
 	}
-	if r.WorktreeBranch == "ralph/wip-branch" {
+	if r.worktreeBranch == "ralph/wip-branch" {
 		t.Error("expected branch to be renamed, got original name")
 	}
 }
@@ -80,10 +80,10 @@ func TestCheckoutExistingBranch_RenameFailure_ReturnsError(t *testing.T) {
 	runner.On("branch", "", renameErr)
 
 	r := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/worktrees/wt1",
-		WorktreeBranch: "ralph/next",
-		Runner:         runner,
+		projectDir:     "/project",
+		workDir:        "/project/worktrees/wt1",
+		worktreeBranch: "ralph/next",
+		runner:         runner,
 		logger:         logging.New(nil),
 	}
 
@@ -91,7 +91,7 @@ func TestCheckoutExistingBranch_RenameFailure_ReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when rename fails, got nil")
 	}
-	if r.BranchRenamed {
+	if r.branchRenamed {
 		t.Error("BranchRenamed should remain false after rename failure")
 	}
 }
@@ -106,10 +106,10 @@ func TestBranchForTask_UsesStoredBranchWhenRemoteEmpty(t *testing.T) {
 	runner.On("rev-list", "", nil)
 
 	r := &Repo{
-		ProjectDir:     "/project",
-		WorkDir:        "/project/worktrees/wt1",
-		WorktreeBranch: "ralph/wip-branch",
-		Runner:         runner,
+		projectDir:     "/project",
+		workDir:        "/project/worktrees/wt1",
+		worktreeBranch: "ralph/wip-branch",
+		runner:         runner,
 		logger:         logging.New(nil),
 		github:         &StubGitHub{},
 	}

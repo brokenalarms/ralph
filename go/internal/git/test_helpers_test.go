@@ -132,9 +132,6 @@ func (s *stubRunner) OnSequence(key string, responses []stubResponse) *stubRunne
 type discardLog struct{}
 
 func (discardLog) Emit(logging.Opts, string, ...any) {}
-func (discardLog) EmitInPlace(logging.Opts, string, ...any) {}
-func (discardLog) EmitAppend(string, ...any)                {}
-func (discardLog) EmitFinalInPlace()                        {}
 
 // capturingGitHub captures CreatePR calls for assertion.
 type capturingGitHub struct {
@@ -159,10 +156,10 @@ func stubManager(dir string, runner *stubRunner, gh *StubGitHub) *Repo {
 		gh = NewStubGitHub()
 	}
 	return &Repo{
-		ProjectDir: dir,
-		WorkDir:    dir,
+		projectDir: dir,
+		workDir:    dir,
 		baseBranch: "main",
-		Runner:     runner,
+		runner:     runner,
 		github:     gh,
 		state:      newMemState(),
 		logger:     discardLog{},

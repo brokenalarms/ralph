@@ -22,7 +22,6 @@ import (
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/tmux"
 	"github.com/brokenalarms/ralph/internal/verifier"
-	"github.com/brokenalarms/ralph/internal/verify"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -135,17 +134,15 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	}
 	st.Write("task_backend", backend.Label())
 
-	// Phase 3 — construct git.Repo. All inputs are ready: state, logger,
-	// resume flag, the pre-push hook implementation. After this point, no
-	// field on gm is mutated externally.
+	// Phase 3 — construct git module. All data inputs are ready. Git
+	// constructs its own sub-modules (GitHub CLI, state store) internally.
 	gm := git.New(git.Config{
 		WorkDir:                     cfg.ProjectDir,
 		RalphDir:                    ralphDir,
 		BaseBranch:                  cfg.BaseBranch,
 		Resume:                      resume,
-		State:                       st,
 		Logger:                      log,
-		PrePush:                     &compileCheckPrePusher{cfg: cfg, log: log},
+		CompileCheckTimeout:         cfg.CompileCheckTimeout,
 		CIPollTimeout:               cfg.CIPollTimeout,
 		CopilotGatedTimeout:         cfg.ReviewerGatedTimeout,
 		CopilotOpportunisticTimeout: cfg.ReviewerOpportunisticTimeout,
@@ -166,10 +163,10 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	// the old task branch is still checked out until the loop renames it,
 	// so show a transitional label instead of the stale branch name.
 	runBranchFile := filepath.Join(ralphDir, ".run-branch")
-	if resume && gm.WorktreeBranch != "" && !strings.HasSuffix(gm.WorktreeBranch, "/next") {
+	if resume && gm.GetWorktreeBranch() != "" && !strings.HasSuffix(gm.GetWorktreeBranch(), "/next") {
 		os.WriteFile(runBranchFile, []byte("resuming…"), 0o644)
 	} else {
-		branch := gm.WorktreeBranch
+		branch := gm.GetWorktreeBranch()
 		if branch == "" {
 			branch = "ralph"
 		}
@@ -324,24 +321,6 @@ func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, sta
 	return false, -1
 }
 
-// compileCheckPrePusher implements git.PrePusher by running the project's
-// compile check before each push. It is constructed once in runMain and
-// passed to git.New via git.Config — no field mutation, no callbacks.
-type compileCheckPrePusher struct {
-	cfg config.Config
-	log *logging.Logger
-}
-
-// PrePush runs verify.CompileCheck in workDir (passed by git.Repo at push
-// time, so the implementer doesn't need a back-reference to *git.Repo).
-func (p *compileCheckPrePusher) PrePush(ctx context.Context, workDir string) error {
-	result := verify.CompileCheck(ctx, p.cfg.CompileCheckTimeout, workDir)
-	if !result.Passed {
-		return fmt.Errorf("%s\n%s", result.Reason, result.Details)
-	}
-	p.log.Emit(logging.Opts{Domain: "build"}, "Pre-push compile check passed")
-	return nil
-}
 
 // resumeScriptHook implements loop.IterationHook by regenerating the
 // resume script at the start of each loop iteration. The script captures
@@ -374,7 +353,7 @@ func initTaskBackend(cfg config.Config, promptsDir string, log *logging.Logger) 
 }
 
 // cleanup generates resume script, prints summary, and removes unused worktrees.
-func cleanup(cfg config.Config, gm *git.Repo, st *state.Store, backend tasks.Backend, ralphDir, planFile, scriptPath string, args []string, sessionTasks []loop.CompletedTask, interrupted bool, log *logging.Logger) {
+func cleanup(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backend, ralphDir, planFile, scriptPath string, args []string, sessionTasks []loop.CompletedTask, interrupted bool, log *logging.Logger) {
 	clearSignalFiles(ralphDir)
 
 	// Clear cli_config so stale flags don't persist across manual restarts.
@@ -387,9 +366,9 @@ func cleanup(cfg config.Config, gm *git.Repo, st *state.Store, backend tasks.Bac
 	}
 
 	// Remove unused worktree (branch still named /next = no work committed).
-	if gm.WorktreeBranch != "" &&
-		strings.HasSuffix(gm.WorktreeBranch, "/next") &&
-		gm.WorkDir != cfg.ProjectDir {
+	if gm.GetWorktreeBranch() != "" &&
+		strings.HasSuffix(gm.GetWorktreeBranch(), "/next") &&
+		gm.GetWorkDir() != cfg.ProjectDir {
 		if interrupted {
 			gm.RemoveWorktree()
 		}
@@ -465,7 +444,7 @@ func printSessionSummary(tasks []loop.CompletedTask, log *logging.Logger) {
 }
 
 // printSummary displays the end-of-run summary.
-func printSummary(cfg config.Config, gm *git.Repo, st *state.Store, backend tasks.Backend, ralphDir, planFile string, log *logging.Logger) {
+func printSummary(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backend, ralphDir, planFile string, log *logging.Logger) {
 	fmt.Println()
 	log.Phase("=== SUMMARY ===")
 
@@ -481,8 +460,8 @@ func printSummary(cfg config.Config, gm *git.Repo, st *state.Store, backend task
 
 	log.Emit(logging.Opts{}, "Log:        %s", filepath.Join(ralphDir, "loop.log"))
 
-	if gm.WorktreeBranch != "" && gm.ProjectName != "" {
-		log.Emit(logging.Opts{}, "Worktree:   %s", gm.WorkDir)
+	if gm.GetWorktreeBranch() != "" && gm.GetProjectDir() != "" {
+		log.Emit(logging.Opts{}, "Worktree:   %s", gm.GetWorkDir())
 
 		branches := gm.ListProjectBranches()
 		if len(branches) > 1 {
@@ -491,9 +470,9 @@ func printSummary(cfg config.Config, gm *git.Repo, st *state.Store, backend task
 				log.Emit(logging.Opts{}, "  %s", b)
 			}
 		} else {
-			log.Emit(logging.Opts{}, "Branch:     %s", gm.WorktreeBranch)
+			log.Emit(logging.Opts{}, "Branch:     %s", gm.GetWorktreeBranch())
 		}
-		log.Emit(logging.Opts{}, "To merge:   git merge %s", gm.WorktreeBranch)
+		log.Emit(logging.Opts{}, "To merge:   git merge %s", gm.GetWorktreeBranch())
 	}
 
 	hasRemaining, _ := backend.HasRemaining()

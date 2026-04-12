@@ -158,10 +158,10 @@ func TestPRDiff_UsesGhAPI(t *testing.T) {
 	}
 }
 
-// The StubGitHub type satisfies the GitHub interface, proving that test stubs
+// The StubGitHub type satisfies the gitHub interface, proving that test stubs
 // can replace all GitHub CLI operations without shelling out.
 func TestStubGitHub_SatisfiesInterface(t *testing.T) {
-	var _ GitHub = &StubGitHub{}
+	var _ gitHub = &StubGitHub{}
 }
 
 // CreatePROpts carries all parameters in a single struct so callers avoid

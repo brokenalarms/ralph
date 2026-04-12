@@ -19,7 +19,7 @@ type BranchTaskMeta struct {
 // the first iteration, before any task-specific branch setup.
 func (r *Repo) SyncWorktreeBase(ctx context.Context, completedBranches []string) error {
 	setStackHead(r, completedBranches)
-	if r.PrevBranch == "" {
+	if r.prevBranch == "" {
 		r.ResetToDefaultBranch()
 	}
 	return r.EnsureUpToDate(ctx)
@@ -31,9 +31,9 @@ func (r *Repo) SyncWorktreeBase(ctx context.Context, completedBranches []string)
 func (r *Repo) BranchForTask(ctx context.Context, taskID, title string, meta BranchTaskMeta) (string, error) {
 	r.PrepareForNextTask(taskID)
 
-	if r.WorktreeBranch != "" && r.WorkDir != r.ProjectDir {
+	if r.worktreeBranch != "" && r.workDir != r.projectDir {
 		setStackHead(r, meta.CompletedBranches)
-		if r.PrevBranch == "" {
+		if r.prevBranch == "" {
 			r.ResetToDefaultBranch()
 		}
 		if err := r.EnsureUpToDate(ctx); err != nil {
@@ -46,13 +46,13 @@ func (r *Repo) BranchForTask(ctx context.Context, taskID, title string, meta Bra
 	if _, err := checkoutExistingBranch(r, meta, taskID, title); err != nil {
 		return "", err
 	}
-	return r.WorktreeBranch, nil
+	return r.worktreeBranch, nil
 }
 
 // setStackHead finds the most recent completed branch that is cleanly ahead of
 // main and sets it as the stack base for the next task.
 func setStackHead(r *Repo, completedBranches []string) {
-	r.PrevBranch = ""
+	r.prevBranch = ""
 	if len(completedBranches) == 0 {
 		return
 	}
@@ -81,7 +81,7 @@ func setStackHead(r *Repo, completedBranches []string) {
 			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Branch %s not ahead of main — skipping", branch)
 			continue
 		}
-		r.PrevBranch = branch
+		r.prevBranch = branch
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Stack head: %s", branch)
 		return
 	}

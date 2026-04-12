@@ -103,22 +103,22 @@ func parseBranchList(out string) []string {
 // through the Repo's injected Runner.
 
 func (r *Repo) HasDiff() bool {
-	if r.gitOutput(r.WorkDir, "diff", "--stat") != "" {
+	if r.gitOutput(r.workDir, "diff", "--stat") != "" {
 		return true
 	}
-	return r.gitOutput(r.WorkDir, "diff", "--cached", "--stat") != ""
+	return r.gitOutput(r.workDir, "diff", "--cached", "--stat") != ""
 }
 
 func (r *Repo) HeadRev() string {
-	return r.gitOutput(r.WorkDir, "rev-parse", "HEAD")
+	return r.gitOutput(r.workDir, "rev-parse", "HEAD")
 }
 
 func (r *Repo) HasUncommittedChanges() bool {
-	return r.hasUncommittedChangesIn(r.WorkDir)
+	return r.hasUncommittedChangesIn(r.workDir)
 }
 
 // hasUncommittedChangesIn returns true when the given dir has unstaged or
-// staged changes. Init calls this with r.ProjectDir explicitly, because
+// staged changes. Init calls this with r.projectDir explicitly, because
 // Init runs the dirty-tree check before SetupWorktree has had a chance to
 // move WorkDir to a worktree subdirectory — so checking WorkDir would be
 // the wrong question.
@@ -128,8 +128,8 @@ func (r *Repo) hasUncommittedChangesIn(dir string) bool {
 }
 
 func (r *Repo) CommitAll(message string) {
-	r.gitCmd(r.WorkDir, "add", "-A")
-	_ = r.gitCmdErr(r.WorkDir, "commit", "-m", message)
+	r.gitCmd(r.workDir, "add", "-A")
+	_ = r.gitCmdErr(r.workDir, "commit", "-m", message)
 }
 
 func (r *Repo) ChangedFiles(headBefore, headAfter string) []string {
@@ -146,11 +146,11 @@ func (r *Repo) ChangedFiles(headBefore, headAfter string) []string {
 		}
 	}
 
-	add(r.gitOutput(r.WorkDir, "diff", "--name-only"))
-	add(r.gitOutput(r.WorkDir, "diff", "--cached", "--name-only"))
+	add(r.gitOutput(r.workDir, "diff", "--name-only"))
+	add(r.gitOutput(r.workDir, "diff", "--cached", "--name-only"))
 
 	if headBefore != "" && headAfter != "" && headBefore != headAfter {
-		add(r.gitOutput(r.WorkDir, "diff", "--name-only", headBefore+"..."+headAfter))
+		add(r.gitOutput(r.workDir, "diff", "--name-only", headBefore+"..."+headAfter))
 	}
 
 	return result
@@ -160,7 +160,7 @@ func (r *Repo) DiffStatRange(from, to string) string {
 	if from == "" || to == "" || from == to {
 		return ""
 	}
-	return r.gitOutput(r.WorkDir, "diff", "--stat", from, to)
+	return r.gitOutput(r.workDir, "diff", "--stat", from, to)
 }
 
 // WorktreeMatchesMain returns true if the worktree tree is identical to
@@ -168,12 +168,12 @@ func (r *Repo) DiffStatRange(from, to string) string {
 // don't cause false negatives.
 func (r *Repo) WorktreeMatchesMain() bool {
 	defaultBranch := r.detectDefaultBranch()
-	_ = r.gitCmdErr(r.WorkDir, "fetch", "origin", defaultBranch)
-	return r.gitOutput(r.WorkDir, "diff", "--stat", "HEAD", "origin/"+defaultBranch) == ""
+	_ = r.gitCmdErr(r.workDir, "fetch", "origin", defaultBranch)
+	return r.gitOutput(r.workDir, "diff", "--stat", "HEAD", "origin/"+defaultBranch) == ""
 }
 
 func (r *Repo) DiffFull(from, to string) string {
-	return r.gitOutput(r.WorkDir, "diff", from+".."+to)
+	return r.gitOutput(r.workDir, "diff", from+".."+to)
 }
 
 // ConflictDiff returns the three-way merge diff between HEAD and the base
@@ -181,12 +181,12 @@ func (r *Repo) DiffFull(from, to string) string {
 // conflict resolution agent context about the conflicting changes.
 func (r *Repo) ConflictDiff() string {
 	baseBranch := r.detectDefaultBranch()
-	if r.PrevBranch != "" {
-		baseBranch = r.PrevBranch
+	if r.prevBranch != "" {
+		baseBranch = r.prevBranch
 	}
 	remote := "origin/" + baseBranch
-	files := r.gitOutput(r.WorkDir, "diff", "--name-only", remote+"...HEAD")
-	diff := r.gitOutput(r.WorkDir, "diff", remote+"...HEAD")
+	files := r.gitOutput(r.workDir, "diff", "--name-only", remote+"...HEAD")
+	diff := r.gitOutput(r.workDir, "diff", remote+"...HEAD")
 	if files == "" && diff == "" {
 		return ""
 	}
@@ -194,30 +194,30 @@ func (r *Repo) ConflictDiff() string {
 }
 
 func (r *Repo) LogOneline(from, to string) string {
-	return r.gitOutput(r.WorkDir, "log", "--oneline", from+".."+to)
+	return r.gitOutput(r.workDir, "log", "--oneline", from+".."+to)
 }
 
 func (r *Repo) RecentChangedFiles(n int) string {
-	return r.gitOutput(r.WorkDir, "diff", "--name-only", fmt.Sprintf("HEAD~%d", n), "HEAD")
+	return r.gitOutput(r.workDir, "diff", "--name-only", fmt.Sprintf("HEAD~%d", n), "HEAD")
 }
 
 func (r *Repo) ListProjectBranches() []string {
-	out := r.gitOutput(r.ProjectDir, "branch", "--list", BranchListPattern(), "--sort=refname")
+	out := r.gitOutput(r.projectDir, "branch", "--list", BranchListPattern(), "--sort=refname")
 	return parseBranchList(out)
 }
 
 
 func (r *Repo) ValidateRemoteBranch(ctx context.Context) error {
 	branch := r.detectDefaultBranch()
-	r.gitCmdCtx(ctx, r.ProjectDir, "fetch", "origin", branch)
-	if !r.refExists(r.ProjectDir, "origin/"+branch) {
+	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", branch)
+	if !r.refExists(r.projectDir, "origin/"+branch) {
 		return fmt.Errorf("base branch %q does not exist on remote — create it or set --base-branch", branch)
 	}
 	return nil
 }
 
 func (r *Repo) EnsureGitignored(entry string) {
-	gitignorePath := filepath.Join(r.ProjectDir, ".gitignore")
+	gitignorePath := filepath.Join(r.projectDir, ".gitignore")
 	existing := ""
 	if data, err := os.ReadFile(gitignorePath); err == nil {
 		existing = string(data)
@@ -238,9 +238,9 @@ func (r *Repo) EnsureGitignored(entry string) {
 	existing += entry + "\n"
 	os.WriteFile(gitignorePath, []byte(existing), 0o644)
 
-	if IsGitRepo(r.ProjectDir) {
-		r.gitCmd(r.ProjectDir, "add", ".gitignore")
-		r.gitCmd(r.ProjectDir, "commit", "-m", "Add "+entry+" to .gitignore")
+	if IsGitRepo(r.projectDir) {
+		r.gitCmd(r.projectDir, "add", ".gitignore")
+		r.gitCmd(r.projectDir, "commit", "-m", "Add "+entry+" to .gitignore")
 	}
 }
 
@@ -254,9 +254,9 @@ func (r *Repo) PruneOrphanedWorktrees() {
 		return
 	}
 
-	r.gitCmd(r.ProjectDir, "worktree", "prune")
+	r.gitCmd(r.projectDir, "worktree", "prune")
 
-	out := r.gitOutput(r.ProjectDir, "worktree", "list", "--porcelain")
+	out := r.gitOutput(r.projectDir, "worktree", "list", "--porcelain")
 	tracked := make(map[string]bool)
 	for _, line := range strings.Split(out, "\n") {
 		if strings.HasPrefix(line, "worktree ") {

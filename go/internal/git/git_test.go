@@ -33,7 +33,8 @@ func (s *memState) Write(key, value string) error {
 	return nil
 }
 
-// testLog captures log output for assertion.
+// testLog captures log output for assertion. Handles AppendStart/Continue/End
+// to accumulate in-place lines into a single messages entry.
 type testLog struct {
 	messages   []string
 	lineBuffer string
@@ -58,24 +59,17 @@ func (l *testLog) format(o logging.Opts, format string, args ...any) string {
 }
 
 func (l *testLog) Emit(o logging.Opts, format string, args ...any) {
-	l.messages = append(l.messages, l.format(o, format, args...))
-}
-
-// EmitInPlace starts an in-place line by recording the formatted first segment.
-func (l *testLog) EmitInPlace(o logging.Opts, format string, args ...any) {
-	l.lineBuffer = l.format(o, format, args...)
-}
-
-// EmitAppend appends raw text to the current in-place line buffer.
-func (l *testLog) EmitAppend(format string, args ...any) {
-	l.lineBuffer += fmt.Sprintf(format, args...)
-}
-
-// EmitFinalInPlace commits the accumulated line buffer to messages.
-func (l *testLog) EmitFinalInPlace() {
-	if l.lineBuffer != "" {
-		l.messages = append(l.messages, l.lineBuffer)
-		l.lineBuffer = ""
+	if o.Append {
+		l.lineBuffer += l.format(o, format, args...)
+	} else {
+		if l.lineBuffer != "" {
+			l.messages = append(l.messages, l.lineBuffer)
+			l.lineBuffer = ""
+		}
+		msg := l.format(o, format, args...)
+		if msg != "\n" && msg != "" {
+			l.messages = append(l.messages, msg)
+		}
 	}
 }
 
@@ -152,9 +146,9 @@ func cmdOutput(t *testing.T, name string, args ...string) string {
 func TestBranchIsAncestorOfMain(t *testing.T) {
 	project, _ := initBareRepo(t)
 	mgr := &Repo{
-		ProjectDir: project,
+		projectDir: project,
 		baseBranch: "main",
-		WorkDir:    project,
+		workDir:    project,
 		logger:     &testLog{},
 	}
 
@@ -186,9 +180,9 @@ func TestBranchIsAncestorOfMain(t *testing.T) {
 func TestBranchIsAheadOfMain(t *testing.T) {
 	project, _ := initBareRepo(t)
 	mgr := &Repo{
-		ProjectDir: project,
+		projectDir: project,
 		baseBranch: "main",
-		WorkDir:    project,
+		workDir:    project,
 		logger:     &testLog{},
 	}
 
@@ -359,7 +353,7 @@ func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 	log := &testLog{}
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       state,
@@ -371,22 +365,22 @@ func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 	}
 
 	// Worktree directory must exist
-	if _, err := os.Stat(mgr.WorkDir); err != nil {
+	if _, err := os.Stat(mgr.workDir); err != nil {
 		t.Fatalf("WorkDir does not exist: %v", err)
 	}
 
 	// State must be recorded
-	if got, _ := state.Read("worktree_dir"); got != mgr.WorkDir {
-		t.Errorf("state worktree_dir = %q, want %q", got, mgr.WorkDir)
+	if got, _ := state.Read("worktree_dir"); got != mgr.workDir {
+		t.Errorf("state worktree_dir = %q, want %q", got, mgr.workDir)
 	}
-	if got, _ := state.Read("worktree_branch"); got != mgr.WorktreeBranch {
-		t.Errorf("state worktree_branch = %q, want %q", got, mgr.WorktreeBranch)
+	if got, _ := state.Read("worktree_branch"); got != mgr.worktreeBranch {
+		t.Errorf("state worktree_branch = %q, want %q", got, mgr.worktreeBranch)
 	}
 
 	// Branch name must be exactly ralph/next (placeholder between tasks)
 	wantBranch := "ralph/next"
-	if mgr.WorktreeBranch != wantBranch {
-		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, wantBranch)
+	if mgr.worktreeBranch != wantBranch {
+		t.Errorf("branch = %q, want %q", mgr.worktreeBranch, wantBranch)
 	}
 }
 
@@ -394,7 +388,7 @@ func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 func TestSetupWorktree_NonGitDirErrors(t *testing.T) {
 	tmp := t.TempDir()
 	mgr := &Repo{
-		ProjectDir:  tmp,
+		projectDir:  tmp,
 		baseBranch: "main",
 		ralphDir:    filepath.Join(tmp, ".ralph"),
 				logger:      &testLog{},
@@ -418,7 +412,7 @@ func TestSetupWorktree_Resume(t *testing.T) {
 
 	// First run: create worktree
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       state,
@@ -427,12 +421,12 @@ func TestSetupWorktree_Resume(t *testing.T) {
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("first SetupWorktree: %v", err)
 	}
-	firstWorkDir := mgr.WorkDir
-	firstBranch := mgr.WorktreeBranch
+	firstWorkDir := mgr.workDir
+	firstBranch := mgr.worktreeBranch
 
 	// Second run: resume
 	mgr2 := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				resume:      true,
@@ -443,11 +437,11 @@ func TestSetupWorktree_Resume(t *testing.T) {
 		t.Fatalf("resume SetupWorktree: %v", err)
 	}
 
-	if mgr2.WorkDir != firstWorkDir {
-		t.Errorf("resumed WorkDir = %q, want %q", mgr2.WorkDir, firstWorkDir)
+	if mgr2.workDir != firstWorkDir {
+		t.Errorf("resumed WorkDir = %q, want %q", mgr2.workDir, firstWorkDir)
 	}
-	if mgr2.WorktreeBranch != firstBranch {
-		t.Errorf("resumed branch = %q, want %q", mgr2.WorktreeBranch, firstBranch)
+	if mgr2.worktreeBranch != firstBranch {
+		t.Errorf("resumed branch = %q, want %q", mgr2.worktreeBranch, firstBranch)
 	}
 }
 
@@ -460,7 +454,7 @@ func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 	log := &testLog{}
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       state,
@@ -471,12 +465,12 @@ func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 	}
 
 	mgr.RenameBranchForTask("old task name", "")
-	oldBranch := mgr.WorktreeBranch
+	oldBranch := mgr.worktreeBranch
 
 	log.messages = nil
 
 	mgr2 := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				resume:      true,
@@ -505,7 +499,7 @@ func TestRenameBranchForTask_DoesNotSetPrevBranch(t *testing.T) {
 	log := &testLog{}
 
 	mgr := &Repo{
-		ProjectDir: project,
+		projectDir: project,
 		baseBranch: "main",
 		ralphDir:   ralphDir,
 		state:      state,
@@ -519,8 +513,8 @@ func TestRenameBranchForTask_DoesNotSetPrevBranch(t *testing.T) {
 	mgr.PrepareForNextTask("ralph-bbb")
 	mgr.RenameBranchForTask("second task", "ralph-bbb")
 
-	if mgr.PrevBranch != "" {
-		t.Errorf("PrevBranch = %q, want empty (set by setStackHead, not rename)", mgr.PrevBranch)
+	if mgr.prevBranch != "" {
+		t.Errorf("PrevBranch = %q, want empty (set by setStackHead, not rename)", mgr.prevBranch)
 	}
 }
 
@@ -532,7 +526,7 @@ func TestPrepareForNextTask_CreatesFreshBranch(t *testing.T) {
 	state := newMemState()
 
 	mgr := &Repo{
-		ProjectDir: project,
+		projectDir: project,
 		baseBranch: "main",
 		ralphDir:   ralphDir,
 		state:      state,
@@ -543,25 +537,25 @@ func TestPrepareForNextTask_CreatesFreshBranch(t *testing.T) {
 	}
 
 	mgr.RenameBranchForTask("first task", "ralph-aaa")
-	firstBranch := mgr.WorktreeBranch
+	firstBranch := mgr.worktreeBranch
 	if firstBranch == "ralph/next" {
 		t.Fatal("branch should have been renamed from ralph/next")
 	}
 
 	mgr.PrepareForNextTask("ralph-bbb")
 
-	if mgr.WorktreeBranch != "ralph/next" {
-		t.Errorf("after PrepareForNextTask, branch = %q, want ralph/next", mgr.WorktreeBranch)
+	if mgr.worktreeBranch != "ralph/next" {
+		t.Errorf("after PrepareForNextTask, branch = %q, want ralph/next", mgr.worktreeBranch)
 	}
-	if mgr.BranchRenamed {
+	if mgr.branchRenamed {
 		t.Error("BranchRenamed should be false after PrepareForNextTask")
 	}
 
 	mgr.RenameBranchForTask("second task", "ralph-bbb")
-	if mgr.WorktreeBranch == firstBranch {
+	if mgr.worktreeBranch == firstBranch {
 		t.Errorf("second task reused first task's branch %q", firstBranch)
 	}
-	if mgr.WorktreeBranch == "ralph/next" {
+	if mgr.worktreeBranch == "ralph/next" {
 		t.Error("second task should have been renamed from ralph/next")
 	}
 }
@@ -573,7 +567,7 @@ func TestPrepareForNextTask_DiscardsUncommittedChanges(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 
 	mgr := &Repo{
-		ProjectDir: project,
+		projectDir: project,
 		baseBranch: "main",
 		ralphDir:   ralphDir,
 		state:      newMemState(),
@@ -586,19 +580,19 @@ func TestPrepareForNextTask_DiscardsUncommittedChanges(t *testing.T) {
 	mgr.RenameBranchForTask("first task", "ralph-aaa")
 
 	// Simulate dirty state: tracked modification and untracked file.
-	trackedFile := filepath.Join(mgr.WorkDir, "tracked.txt")
+	trackedFile := filepath.Join(mgr.workDir, "tracked.txt")
 	if err := os.WriteFile(trackedFile, []byte("initial"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run(t, "git", "-C", mgr.WorkDir, "add", "tracked.txt")
-	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add tracked")
+	run(t, "git", "-C", mgr.workDir, "add", "tracked.txt")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "add tracked")
 
 	// Modify the tracked file without committing.
 	if err := os.WriteFile(trackedFile, []byte("dirty"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Create an untracked file.
-	untrackedFile := filepath.Join(mgr.WorkDir, "untracked.txt")
+	untrackedFile := filepath.Join(mgr.workDir, "untracked.txt")
 	if err := os.WriteFile(untrackedFile, []byte("untracked"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -627,7 +621,7 @@ func TestPrepareForNextTask_DeletesOldBranch(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 
 	mgr := &Repo{
-		ProjectDir: project,
+		projectDir: project,
 		baseBranch: "main",
 		ralphDir:   ralphDir,
 		state:      newMemState(),
@@ -638,18 +632,18 @@ func TestPrepareForNextTask_DeletesOldBranch(t *testing.T) {
 	}
 
 	mgr.RenameBranchForTask("task to clean up", "ralph-del1")
-	taskBranch := mgr.WorktreeBranch
+	taskBranch := mgr.worktreeBranch
 
 	// Commit so the task branch has history and can be deleted.
-	writeFile(t, mgr.WorkDir, "work.txt", "done\n")
-	run(t, "git", "-C", mgr.WorkDir, "add", "work.txt")
-	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "task work")
+	writeFile(t, mgr.workDir, "work.txt", "done\n")
+	run(t, "git", "-C", mgr.workDir, "add", "work.txt")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "task work")
 
 	mgr.PrepareForNextTask("ralph-next1")
 
 	// Worktree must be on the placeholder branch.
-	if mgr.WorktreeBranch != WipBranchName() {
-		t.Errorf("WorktreeBranch = %q, want %q", mgr.WorktreeBranch, WipBranchName())
+	if mgr.worktreeBranch != WipBranchName() {
+		t.Errorf("WorktreeBranch = %q, want %q", mgr.worktreeBranch, WipBranchName())
 	}
 
 	// Old task branch must no longer exist.
@@ -668,7 +662,7 @@ func TestPrepareForNextTask_CleansOnTaskSwitch(t *testing.T) {
 	_ = state.Write("last_task_id", "ralph-aaa")
 
 	mgr := &Repo{
-		ProjectDir: project,
+		projectDir: project,
 		baseBranch: "main",
 		ralphDir:   ralphDir,
 		state:      state,
@@ -680,16 +674,16 @@ func TestPrepareForNextTask_CleansOnTaskSwitch(t *testing.T) {
 
 	mgr.RenameBranchForTask("first task", "ralph-aaa")
 
-	trackedFile := filepath.Join(mgr.WorkDir, "tracked.txt")
+	trackedFile := filepath.Join(mgr.workDir, "tracked.txt")
 	if err := os.WriteFile(trackedFile, []byte("initial"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run(t, "git", "-C", mgr.WorkDir, "add", "tracked.txt")
-	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add tracked")
+	run(t, "git", "-C", mgr.workDir, "add", "tracked.txt")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "add tracked")
 	if err := os.WriteFile(trackedFile, []byte("dirty"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	untrackedFile := filepath.Join(mgr.WorkDir, "untracked.txt")
+	untrackedFile := filepath.Join(mgr.workDir, "untracked.txt")
 	if err := os.WriteFile(untrackedFile, []byte("untracked"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -717,7 +711,7 @@ func TestPrepareForNextTask_PreservesChangesWhenResumingSameTask(t *testing.T) {
 	_ = state.Write("last_task_id", "ralph-aaa")
 
 	mgr := &Repo{
-		ProjectDir: project,
+		projectDir: project,
 		baseBranch: "main",
 		ralphDir:   ralphDir,
 		state:      state,
@@ -729,16 +723,16 @@ func TestPrepareForNextTask_PreservesChangesWhenResumingSameTask(t *testing.T) {
 
 	mgr.RenameBranchForTask("first task", "ralph-aaa")
 
-	trackedFile := filepath.Join(mgr.WorkDir, "tracked.txt")
+	trackedFile := filepath.Join(mgr.workDir, "tracked.txt")
 	if err := os.WriteFile(trackedFile, []byte("initial"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run(t, "git", "-C", mgr.WorkDir, "add", "tracked.txt")
-	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "add tracked")
+	run(t, "git", "-C", mgr.workDir, "add", "tracked.txt")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "add tracked")
 	if err := os.WriteFile(trackedFile, []byte("in-progress"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	untrackedFile := filepath.Join(mgr.WorkDir, "wip.txt")
+	untrackedFile := filepath.Join(mgr.workDir, "wip.txt")
 	if err := os.WriteFile(untrackedFile, []byte("work in progress"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -762,8 +756,8 @@ func TestSetPrevBranch(t *testing.T) {
 	state := newMemState()
 	mgr := &Repo{state: state, logger: &testLog{}}
 	mgr.SetPrevBranch("ralph/ralph-abc-task")
-	if mgr.PrevBranch != "ralph/ralph-abc-task" {
-		t.Errorf("PrevBranch = %q, want ralph/ralph-abc-task", mgr.PrevBranch)
+	if mgr.prevBranch != "ralph/ralph-abc-task" {
+		t.Errorf("PrevBranch = %q, want ralph/ralph-abc-task", mgr.prevBranch)
 	}
 	v, _ := state.Read("prev_branch")
 	if v != "ralph/ralph-abc-task" {
@@ -781,7 +775,7 @@ func TestSetupWorktree_ResumeKeepsValidBranch(t *testing.T) {
 	log := &testLog{}
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       state,
@@ -791,13 +785,13 @@ func TestSetupWorktree_ResumeKeepsValidBranch(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 	mgr.RenameBranchForTask("in progress work", "")
-	writeFile(t, mgr.WorkDir, "wip.txt", "work in progress\n")
-	run(t, "git", "-C", mgr.WorkDir, "commit", "-m", "wip commit")
-	branchBefore := mgr.WorktreeBranch
+	writeFile(t, mgr.workDir, "wip.txt", "work in progress\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "wip commit")
+	branchBefore := mgr.worktreeBranch
 
 	// Resume without squash-merging — branch should be preserved
 	mgr2 := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				resume:      true,
@@ -808,8 +802,8 @@ func TestSetupWorktree_ResumeKeepsValidBranch(t *testing.T) {
 		t.Fatalf("resume SetupWorktree: %v", err)
 	}
 
-	if mgr2.WorktreeBranch != branchBefore {
-		t.Errorf("branch = %q, want %q (valid branch should be preserved)", mgr2.WorktreeBranch, branchBefore)
+	if mgr2.worktreeBranch != branchBefore {
+		t.Errorf("branch = %q, want %q (valid branch should be preserved)", mgr2.worktreeBranch, branchBefore)
 	}
 	if log.contains("Stale branch detected") {
 		t.Error("should not detect stale branch for valid in-progress work")
@@ -824,7 +818,7 @@ func TestRenameBranchForTask_RenamesBranch(t *testing.T) {
 	state := newMemState()
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       state,
@@ -839,10 +833,10 @@ func TestRenameBranchForTask_RenamesBranch(t *testing.T) {
 	}
 
 	wantBranch := "ralph/fix-auth-bug"
-	if mgr.WorktreeBranch != wantBranch {
-		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, wantBranch)
+	if mgr.worktreeBranch != wantBranch {
+		t.Errorf("branch = %q, want %q", mgr.worktreeBranch, wantBranch)
 	}
-	if !mgr.BranchRenamed {
+	if !mgr.branchRenamed {
 		t.Error("BranchRenamed should be true")
 	}
 
@@ -858,7 +852,7 @@ func TestRenameBranchForTask_IncludesTaskID(t *testing.T) {
 	state := newMemState()
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       state,
@@ -873,8 +867,8 @@ func TestRenameBranchForTask_IncludesTaskID(t *testing.T) {
 	}
 
 	wantBranch := "ralph/ralph-abc1-fix-auth-bug"
-	if mgr.WorktreeBranch != wantBranch {
-		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, wantBranch)
+	if mgr.worktreeBranch != wantBranch {
+		t.Errorf("branch = %q, want %q", mgr.worktreeBranch, wantBranch)
 	}
 }
 
@@ -885,7 +879,7 @@ func TestRenameBranchForTask_OnlyRenamesOnce(t *testing.T) {
 	state := newMemState()
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       state,
@@ -898,28 +892,28 @@ func TestRenameBranchForTask_OnlyRenamesOnce(t *testing.T) {
 	if err := mgr.RenameBranchForTask("First task", ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	firstBranch := mgr.WorktreeBranch
+	firstBranch := mgr.worktreeBranch
 
 	if err := mgr.RenameBranchForTask("Second task", ""); err != nil {
 		t.Fatalf("unexpected error on second call: %v", err)
 	}
-	if mgr.WorktreeBranch != firstBranch {
-		t.Errorf("branch changed on second call: %q → %q", firstBranch, mgr.WorktreeBranch)
+	if mgr.worktreeBranch != firstBranch {
+		t.Errorf("branch changed on second call: %q → %q", firstBranch, mgr.worktreeBranch)
 	}
 }
 
 // RenameBranchForTask is a no-op when running without a worktree
 func TestRenameBranchForTask_NoOpWithoutWorktree(t *testing.T) {
 	mgr := &Repo{
-		ProjectDir: "/some/dir",
+		projectDir: "/some/dir",
 		baseBranch: "main",
-		WorkDir:    "/some/dir",
+		workDir:    "/some/dir",
 		logger:     &testLog{},
 	}
 	if err := mgr.RenameBranchForTask("anything", ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if mgr.BranchRenamed {
+	if mgr.branchRenamed {
 		t.Error("should not rename when WorkDir == ProjectDir")
 	}
 }
@@ -932,7 +926,7 @@ func TestWorktreeDirUsesDateBasedName(t *testing.T) {
 	state := newMemState()
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       state,
@@ -944,8 +938,8 @@ func TestWorktreeDirUsesDateBasedName(t *testing.T) {
 
 	today := time.Now().Format("20060102")
 	expected := fmt.Sprintf("ralph-%s-01", today)
-	if !strings.Contains(mgr.WorkDir, "/worktrees/"+expected) {
-		t.Errorf("WorkDir = %q, want it to contain %q", mgr.WorkDir, expected)
+	if !strings.Contains(mgr.workDir, "/worktrees/"+expected) {
+		t.Errorf("WorkDir = %q, want it to contain %q", mgr.workDir, expected)
 	}
 }
 
@@ -959,7 +953,7 @@ func TestSecondRunSameDayIncrementsSuffix(t *testing.T) {
 	os.MkdirAll(filepath.Join(ralphDir, "worktrees", "ralph-"+today+"-01"), 0o755)
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       state,
@@ -970,8 +964,8 @@ func TestSecondRunSameDayIncrementsSuffix(t *testing.T) {
 	}
 
 	expected := fmt.Sprintf("ralph-%s-02", today)
-	if !strings.Contains(mgr.WorkDir, "/worktrees/"+expected) {
-		t.Errorf("WorkDir = %q, want it to contain %q", mgr.WorkDir, expected)
+	if !strings.Contains(mgr.workDir, "/worktrees/"+expected) {
+		t.Errorf("WorkDir = %q, want it to contain %q", mgr.workDir, expected)
 	}
 }
 
@@ -984,7 +978,7 @@ func TestBranchNamingIgnoresStale(t *testing.T) {
 	run(t, "git", "-C", project, "branch", "ralph/project/old-stale")
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       state,
@@ -997,8 +991,8 @@ func TestBranchNamingIgnoresStale(t *testing.T) {
 	mgr.RenameBranchForTask("First task", "")
 
 	want := "ralph/first-task"
-	if mgr.WorktreeBranch != want {
-		t.Errorf("branch = %q, want %q", mgr.WorktreeBranch, want)
+	if mgr.worktreeBranch != want {
+		t.Errorf("branch = %q, want %q", mgr.worktreeBranch, want)
 	}
 }
 
@@ -1010,7 +1004,7 @@ func TestStaleWorktreeBranchCleanedUpViaPrune(t *testing.T) {
 	state := newMemState()
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       state,
@@ -1019,12 +1013,12 @@ func TestStaleWorktreeBranchCleanedUpViaPrune(t *testing.T) {
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("first SetupWorktree: %v", err)
 	}
-	firstWorkDir := mgr.WorkDir
+	firstWorkDir := mgr.workDir
 
 	os.RemoveAll(firstWorkDir)
 
 	mgr2 := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       newMemState(),
@@ -1033,7 +1027,7 @@ func TestStaleWorktreeBranchCleanedUpViaPrune(t *testing.T) {
 	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("second SetupWorktree after prune: %v", err)
 	}
-	if _, err := os.Stat(mgr2.WorkDir); err != nil {
+	if _, err := os.Stat(mgr2.workDir); err != nil {
 		t.Errorf("new worktree dir should exist: %v", err)
 	}
 }
@@ -1045,7 +1039,7 @@ func TestLiveRalphWorktreeRemovedWhenBranchExists(t *testing.T) {
 	state := newMemState()
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       state,
@@ -1054,10 +1048,10 @@ func TestLiveRalphWorktreeRemovedWhenBranchExists(t *testing.T) {
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("first SetupWorktree: %v", err)
 	}
-	firstWorkDir := mgr.WorkDir
+	firstWorkDir := mgr.workDir
 
 	mgr2 := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       newMemState(),
@@ -1067,7 +1061,7 @@ func TestLiveRalphWorktreeRemovedWhenBranchExists(t *testing.T) {
 		t.Fatalf("second SetupWorktree: %v", err)
 	}
 
-	if _, err := os.Stat(mgr2.WorkDir); err != nil {
+	if _, err := os.Stat(mgr2.workDir); err != nil {
 		t.Error("new worktree dir should exist")
 	}
 	if _, err := os.Stat(firstWorkDir); err == nil {
@@ -1080,13 +1074,13 @@ func TestWorktreeInheritsGitignore(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	preSetupMgr := &Repo{ProjectDir: project, WorkDir: project, ralphDir: ralphDir, baseBranch: "main", logger: &testLog{}}
+	preSetupMgr := &Repo{projectDir: project, workDir: project, ralphDir: ralphDir, baseBranch: "main", logger: &testLog{}}
 	preSetupMgr.EnsureGitignored(".ralph")
 	run(t, "git", "-C", project, "push", "origin", "main", "-q")
 
 	state := newMemState()
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       state,
@@ -1096,7 +1090,7 @@ func TestWorktreeInheritsGitignore(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(mgr.WorkDir, ".gitignore"))
+	data, err := os.ReadFile(filepath.Join(mgr.workDir, ".gitignore"))
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
 	}
@@ -1113,7 +1107,7 @@ func TestExistingGitignoreContentPreserved(t *testing.T) {
 	run(t, "git", "-C", project, "add", ".gitignore")
 	run(t, "git", "-C", project, "commit", "-m", "add gitignore")
 
-	mgr := &Repo{ProjectDir: project, WorkDir: project, logger: &testLog{}, baseBranch: "main"}
+	mgr := &Repo{projectDir: project, workDir: project, logger: &testLog{}, baseBranch: "main"}
 	mgr.EnsureGitignored(".ralph")
 
 	data, err := os.ReadFile(filepath.Join(project, ".gitignore"))
@@ -1136,7 +1130,7 @@ func TestDirtyWorkingTreeDetected(t *testing.T) {
 	os.WriteFile(filepath.Join(project, "dirty.txt"), []byte("uncommitted\n"), 0o644)
 	run(t, "git", "-C", project, "add", "dirty.txt")
 
-	dirtyMgr := &Repo{ProjectDir: project, WorkDir: project, logger: &testLog{}, baseBranch: "main"}
+	dirtyMgr := &Repo{projectDir: project, workDir: project, logger: &testLog{}, baseBranch: "main"}
 	if !dirtyMgr.HasUncommittedChanges() {
 		t.Error("should detect uncommitted changes")
 	}
@@ -1149,7 +1143,7 @@ func TestRenameBranchForTask_RenamesAndSetsFlag(t *testing.T) {
 	st := newMemState()
 
 	mgr := &Repo{
-		ProjectDir:  project,
+		projectDir:  project,
 		baseBranch: "main",
 		ralphDir:    ralphDir,
 				state:       st,
@@ -1159,13 +1153,13 @@ func TestRenameBranchForTask_RenamesAndSetsFlag(t *testing.T) {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	origBranch := mgr.WorktreeBranch
+	origBranch := mgr.worktreeBranch
 	mgr.RenameBranchForTask("First task", "")
 
-	if mgr.WorktreeBranch == origBranch {
+	if mgr.worktreeBranch == origBranch {
 		t.Error("should rename the branch")
 	}
-	if !mgr.BranchRenamed {
+	if !mgr.branchRenamed {
 		t.Error("BranchRenamed should be true after rename")
 	}
 }
@@ -1189,7 +1183,7 @@ func TestPruneOrphanedWorktrees_RemovesOrphaned(t *testing.T) {
 	activeDir := filepath.Join(worktreeRoot, "ralph-20260322-active")
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/next", activeDir, "HEAD")
 
-	mgr := &Repo{ProjectDir: project, WorkDir: project, ralphDir: ralphDir, logger: log, baseBranch: "main"}
+	mgr := &Repo{projectDir: project, workDir: project, ralphDir: ralphDir, logger: log, baseBranch: "main"}
 	mgr.PruneOrphanedWorktrees()
 
 	// Orphaned directory should be removed
@@ -1213,7 +1207,7 @@ func TestPruneOrphanedWorktrees_NoWorktreeDir(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	log := &testLog{}
 
-	mgr := &Repo{ProjectDir: project, WorkDir: project, ralphDir: ralphDir, logger: log, baseBranch: "main"}
+	mgr := &Repo{projectDir: project, workDir: project, ralphDir: ralphDir, logger: log, baseBranch: "main"}
 	mgr.PruneOrphanedWorktrees()
 
 	if len(log.messages) > 0 {
@@ -1232,7 +1226,7 @@ func TestPruneOrphanedWorktrees_IgnoresFiles(t *testing.T) {
 	filePath := filepath.Join(worktreeRoot, "some-file.txt")
 	os.WriteFile(filePath, []byte("keep"), 0o644)
 
-	mgr := &Repo{ProjectDir: project, WorkDir: project, ralphDir: ralphDir, logger: log, baseBranch: "main"}
+	mgr := &Repo{projectDir: project, workDir: project, ralphDir: ralphDir, logger: log, baseBranch: "main"}
 	mgr.PruneOrphanedWorktrees()
 
 	if _, err := os.Stat(filePath); err != nil {

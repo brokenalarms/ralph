@@ -42,9 +42,9 @@ func repoNWO(remoteURL string) string {
 // Requires: gh CLI authenticated with admin access to the repo, and existing
 // branch protection rules on the target branch.
 func (r *Repo) EnforceAdmins() error {
-	dir := r.WorkDir
+	dir := r.workDir
 	if dir == "" {
-		dir = r.ProjectDir
+		dir = r.projectDir
 	}
 
 	remoteURL := r.gitOutput(dir, "remote", "get-url", "origin")
@@ -59,7 +59,7 @@ func (r *Repo) EnforceAdmins() error {
 	}
 
 	branch := r.detectDefaultBranch()
-	gh := r.gh()
+	gh := r.github
 
 	enforced, err := gh.CheckEnforceAdmins(nwo, branch)
 	if err != nil {

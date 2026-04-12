@@ -71,9 +71,9 @@ func TestEnforceAdmins_NoRemote(t *testing.T) {
 
 	log := &testLog{}
 	mgr := &Repo{
-		ProjectDir: tmp,
+		projectDir: tmp,
 		baseBranch: "main",
-		WorkDir:    tmp,
+		workDir:    tmp,
 		logger:     log,
 	}
 
@@ -200,9 +200,9 @@ func enforceAdminsManager(t *testing.T) (*Repo, *testLog) {
 
 	log := &testLog{}
 	mgr := &Repo{
-		ProjectDir: project,
+		projectDir: project,
 		baseBranch: "main",
-		WorkDir:    project,
+		workDir:    project,
 		logger:     log,
 	}
 	return mgr, log

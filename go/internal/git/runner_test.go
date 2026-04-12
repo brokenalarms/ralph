@@ -69,7 +69,7 @@ func TestManager_UsesInjectedRunner(t *testing.T) {
 
 	mgr := stubManager(t.TempDir(), r, nil)
 
-	if !mgr.refExists(mgr.WorkDir, "refs/heads/main") {
+	if !mgr.refExists(mgr.workDir, "refs/heads/main") {
 		t.Error("refExists should return true when runner succeeds")
 	}
 
@@ -135,11 +135,11 @@ func TestManager_PushAndCreatePR_NoRealProcesses(t *testing.T) {
 
 	dir := t.TempDir()
 	mgr := &Repo{
-		ProjectDir:     dir,
+		projectDir:     dir,
 		baseBranch: "main",
-		WorkDir:        dir + "/worktree",
-		WorktreeBranch: "ralph/test/01-feature",
-		Runner:         r,
+		workDir:        dir + "/worktree",
+		worktreeBranch: "ralph/test/01-feature",
+		runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -173,11 +173,11 @@ func TestManager_PushAndCreatePR_PushesEvenWhenPRExists(t *testing.T) {
 
 	dir := t.TempDir()
 	mgr := &Repo{
-		ProjectDir:     dir,
+		projectDir:     dir,
 		baseBranch: "main",
-		WorkDir:        dir + "/worktree",
-		WorktreeBranch: "ralph/test/01-feature",
-		Runner:         r,
+		workDir:        dir + "/worktree",
+		worktreeBranch: "ralph/test/01-feature",
+		runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -209,11 +209,11 @@ func TestManager_PushAndCreatePR_UpdatesTitleWhenPRExists(t *testing.T) {
 
 	dir := t.TempDir()
 	mgr := &Repo{
-		ProjectDir:     dir,
+		projectDir:     dir,
 		baseBranch: "main",
-		WorkDir:        dir + "/worktree",
-		WorktreeBranch: "ralph/test/01-feature",
-		Runner:         r,
+		workDir:        dir + "/worktree",
+		worktreeBranch: "ralph/test/01-feature",
+		runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -244,11 +244,11 @@ func TestManager_PushAndCreatePR_StripsComponentPrefix(t *testing.T) {
 
 	dir := t.TempDir()
 	mgr := &Repo{
-		ProjectDir:     dir,
+		projectDir:     dir,
 		baseBranch: "main",
-		WorkDir:        dir + "/worktree",
-		WorktreeBranch: "ralph/test/01-feature",
-		Runner:         r,
+		workDir:        dir + "/worktree",
+		worktreeBranch: "ralph/test/01-feature",
+		runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -278,11 +278,11 @@ func TestManager_PushAndCreatePR_NoEditWithoutTaskID(t *testing.T) {
 
 	dir := t.TempDir()
 	mgr := &Repo{
-		ProjectDir:     dir,
+		projectDir:     dir,
 		baseBranch: "main",
-		WorkDir:        dir + "/worktree",
-		WorktreeBranch: "ralph/test/01-feature",
-		Runner:         r,
+		workDir:        dir + "/worktree",
+		worktreeBranch: "ralph/test/01-feature",
+		runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         discardLog{},
@@ -312,11 +312,11 @@ func TestManager_PushAndCreatePR_LogsAlreadyOpen(t *testing.T) {
 	dir := t.TempDir()
 	log := &testLog{}
 	mgr := &Repo{
-		ProjectDir:     dir,
+		projectDir:     dir,
 		baseBranch: "main",
-		WorkDir:        dir + "/worktree",
-		WorktreeBranch: "ralph/test/01-feature",
-		Runner:         r,
+		workDir:        dir + "/worktree",
+		worktreeBranch: "ralph/test/01-feature",
+		runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         log,
@@ -350,11 +350,11 @@ func TestManager_PushAndCreatePR_LogsCreatedPR(t *testing.T) {
 	dir := t.TempDir()
 	log := &testLog{}
 	mgr := &Repo{
-		ProjectDir:     dir,
+		projectDir:     dir,
 		baseBranch: "main",
-		WorkDir:        dir + "/worktree",
-		WorktreeBranch: "ralph/test/01-feature",
-		Runner:         r,
+		workDir:        dir + "/worktree",
+		worktreeBranch: "ralph/test/01-feature",
+		runner:         r,
 		github:         gh,
 		state:          newMemState(),
 		logger:         log,
@@ -419,7 +419,7 @@ func TestManager_GitOutput_EmptyOnError(t *testing.T) {
 	r.On("diff", "", fmt.Errorf("not a git repo"))
 
 	mgr := stubManager(t.TempDir(), r, nil)
-	out := mgr.gitOutput(mgr.WorkDir, "diff", "--stat")
+	out := mgr.gitOutput(mgr.workDir, "diff", "--stat")
 	if out != "" {
 		t.Errorf("expected empty on error, got %q", out)
 	}
@@ -432,7 +432,7 @@ func TestManager_GitCmdErr_PropagatesError(t *testing.T) {
 	r.On("push", "", fmt.Errorf("push rejected"))
 
 	mgr := stubManager(t.TempDir(), r, nil)
-	err := mgr.gitCmdErr(mgr.WorkDir, "push", "-u", "origin", "feature")
+	err := mgr.gitCmdErr(mgr.workDir, "push", "-u", "origin", "feature")
 	if err == nil || err.Error() != "push rejected" {
 		t.Errorf("expected 'push rejected', got %v", err)
 	}

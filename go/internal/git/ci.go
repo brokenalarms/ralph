@@ -116,7 +116,7 @@ func (r *Repo) isInfrastructureFailure(ctx context.Context, prNumber int) bool {
 	if nwo == "" {
 		return false
 	}
-	gh := r.gh()
+	gh := r.github
 	if gh == nil || !gh.Available() {
 		return false
 	}
@@ -176,7 +176,7 @@ type CIFetchFunc func(prNumber int, repoURL string) ([]CICheckResult, error)
 // previous push from gating the merge.
 func (r *Repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushedAt time.Time) ([]CICheckResult, CIStatus, error) {
 	nwo := NWOFromRemote(repoURL)
-	gh := r.gh()
+	gh := r.github
 
 	fetch := gh.ListChecks
 
@@ -259,16 +259,16 @@ func waitForCI(ctx context.Context, fetch CIFetchFunc, prNumber int, repoURL, nw
 
 	emitPoll := func(duration string) {
 		if !polled {
-			log.EmitInPlace(logging.Opts{Domain: logging.CI, Link: prLink}, "CI polled %s", duration)
+			log.Emit(logging.Opts{Domain: logging.CI, Link: prLink, Append: true}, "CI polled %s", duration)
 		} else {
-			log.EmitAppend("..%s", duration)
+			log.Emit(logging.Opts{Append: true}, "..%s", duration)
 		}
 		polled = true
 	}
 
 	finalize := func() {
 		if polled {
-			log.EmitFinalInPlace()
+			log.Emit(logging.Opts{}, "\n")
 		}
 	}
 

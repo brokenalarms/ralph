@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// Proves StubGitHub satisfies the GitHub interface at compile time.
+// Proves StubGitHub satisfies the gitHub interface at compile time.
 func TestStubGitHub_ImplementsGitHub(t *testing.T) {
-	var _ GitHub = (*StubGitHub)(nil)
+	var _ gitHub = (*StubGitHub)(nil)
 }
 
 // NewStubGitHub returns a stub with the defaults that represent the overwhelmingly

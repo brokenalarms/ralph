@@ -11,150 +11,119 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 )
 
-// StateStore abstracts reading and writing ralph JSON state. Defined locally
-// in the git package so git holds no peer-module references — production
-// passes *state.Store; tests pass stub stores.
-type StateStore interface {
+// Log is the logging interface used by Repo and its helpers. A single Emit
+// method handles full lines and in-place partial lines via logging.Opts.Append.
+// *logging.Logger satisfies this; tests provide stubs.
+type Log interface {
+	Emit(o logging.Opts, format string, args ...any)
+}
+
+// stateStore abstracts reading and writing ralph JSON state. Unexported —
+// git constructs the production implementation internally from ralphDir.
+// Tests use memState via same-package construction.
+type stateStore interface {
 	Read(key string) (string, error)
 	Write(key, value string) error
 }
 
-// Log is the logging interface used by Repo. Defined locally for the same
-// reason as StateStore.
-type Log interface {
-	Emit(o logging.Opts, format string, args ...any)
-	// EmitInPlace writes the first segment of an in-place line in append mode —
-	// no carriage return, no trailing newline. Writes to stdout and the log file.
-	EmitInPlace(o logging.Opts, format string, args ...any)
-	// EmitAppend appends raw text to the current in-place line — no tag, no
-	// carriage return, no trailing newline. Writes to stdout and the log file.
-	EmitAppend(format string, args ...any)
-	// EmitFinalInPlace closes the current in-place line with a newline.
-	EmitFinalInPlace()
-}
-
-// PrePusher is git's local interface for the pre-push hook. The
-// orchestrator (cmd/ralph) provides an implementation that runs the
-// project's compile check before each push. Defined here as an interface
-// so git holds no module reference and no function field — production
-// wires a real implementation; tests provide stubs. The workDir argument
-// is the current worktree directory at push time, so implementations
-// don't need a back-reference to *Repo.
-type PrePusher interface {
+// prePusher is git's internal interface for the pre-push hook. Unexported —
+// git constructs the production implementation internally from Config data.
+// Tests use stubs via same-package construction.
+type prePusher interface {
 	PrePush(ctx context.Context, workDir string) error
 }
 
-// Config bundles the construction-time inputs for git.New. Pure data plus
-// locally-defined interface dependencies (StateStore, Log, GitHub,
-// PrePusher) — no peer-module references, no function fields. The
-// orchestrator (cmd/ralph) builds one of these once and passes it in;
-// nothing on Repo is mutated after construction.
+// Config bundles the construction-time data inputs for git.New. Pure data
+// plus the Logger (Rule 5 exception). No module interfaces, no function
+// fields. The orchestrator builds one of these once and passes it in.
 type Config struct {
-	// ProjectDir is the original project root. WorkDir starts equal to it
-	// and may later become a worktree subdirectory after SetupWorktree.
-	// When ProjectDir is empty, it defaults to WorkDir.
 	ProjectDir                  string
 	WorkDir                     string
 	RalphDir                    string
 	BaseBranch                  string
 	Resume                      bool
-	GitHub                      GitHub    // optional; nil falls back to ghCLI
-	State                       StateStore
 	Logger                      Log
-	PrePush                     PrePusher // optional; nil disables the pre-push hook
+	CompileCheckTimeout         time.Duration
 	CIPollTimeout               time.Duration
 	CopilotGatedTimeout         time.Duration
 	CopilotOpportunisticTimeout time.Duration
 	CodeRabbitTimeout           time.Duration
 }
 
-// Repo handles git worktree creation, branch naming, and sync. The fields
-// below split into two groups:
-//
-//   - Construction-time inputs: set once via New(Config{...}), never mutated
-//     externally. These are unexported.
-//   - Runtime state: ProjectName, WorkDir, WorktreeBranch, PrevBranch, etc.
-//     are still exported because the package's own helpers and tests mutate
-//     them as worktree setup progresses. Cleanup of those is a separate
-//     commit.
+// Repo implements Ops. Constructed by New(); tests in the git package
+// construct it directly for stub injection.
 type Repo struct {
-	// Runtime state — still exported pending a separate cleanup commit.
-	ProjectDir     string
-	ProjectName    string
-	WorkDir        string
-	WorktreeBranch string
-	PrevBranch     string
-	BranchRenamed  bool
+	projectDir     string
+	projectName    string
+	workDir        string
+	worktreeBranch string
+	prevBranch     string
+	branchRenamed  bool
 
-	LocalTestsPassed bool
-	KnownPRNumber    int
-	Runner           Runner
+	localTestsPassed bool
+	knownPRNumber    int
+	runner           Runner
 
-	// Construction-time inputs — set once via Config, never mutated.
 	ralphDir                    string
 	baseBranch                  string
 	resume                      bool
-	github                      GitHub
-	state                       StateStore
+	github                      gitHub
+	state                       stateStore
 	logger                      Log
-	prePush                     PrePusher
+	compileCheckTimeout         time.Duration
 	ciPollTimeout               time.Duration
 	copilotGatedTimeout         time.Duration
 	copilotOpportunisticTimeout time.Duration
 	codeRabbitTimeout           time.Duration
 }
 
-// New creates a Repo from a Config. The orchestrator (cmd/ralph) calls
-// this once with all construction-time inputs; no field is mutated
-// externally afterward. Pass a non-nil cfg.GitHub to inject a stub for
-// testing; nil falls back to the default gh CLI wrapper.
-func New(cfg Config) *Repo {
+// New creates a git module from data-only Config. Constructs all internal
+// sub-modules (GitHub CLI wrapper, state store, runner) from Config data.
+// Returns the Ops interface — the only public API surface.
+func New(cfg Config) Ops {
 	projectDir := cfg.ProjectDir
 	if projectDir == "" {
 		projectDir = cfg.WorkDir
 	}
 	return &Repo{
-		ProjectDir:                  projectDir,
-		WorkDir:                     cfg.WorkDir,
+		projectDir:                  projectDir,
+		workDir:                     cfg.WorkDir,
 		ralphDir:                    cfg.RalphDir,
 		baseBranch:                  cfg.BaseBranch,
 		resume:                      cfg.Resume,
-		github:                      cfg.GitHub,
-		state:                       cfg.State,
 		logger:                      cfg.Logger,
-		prePush:                     cfg.PrePush,
+		compileCheckTimeout:         cfg.CompileCheckTimeout,
 		ciPollTimeout:               cfg.CIPollTimeout,
 		copilotGatedTimeout:         cfg.CopilotGatedTimeout,
 		copilotOpportunisticTimeout: cfg.CopilotOpportunisticTimeout,
 		codeRabbitTimeout:           cfg.CodeRabbitTimeout,
+		github: &ghCLI{
+			CopilotGatedTimeout:         cfg.CopilotGatedTimeout,
+			CopilotOpportunisticTimeout: cfg.CopilotOpportunisticTimeout,
+			CodeRabbitTimeout:           cfg.CodeRabbitTimeout,
+		},
+		state: newStateStore(cfg.RalphDir),
 	}
 }
 
-// GH returns the GitHub interface, using the injected stub if set (tests)
-// or a live ghCLI wrapper in production.
-func (r *Repo) GH() GitHub {
-	if r.github != nil {
-		return r.github
+// newStateStore returns a file-backed state store when ralphDir is set,
+// or nil when empty (disabling state persistence).
+func newStateStore(ralphDir string) stateStore {
+	if ralphDir == "" {
+		return nil
 	}
-	return &ghCLI{
-		CopilotGatedTimeout:         r.copilotGatedTimeout,
-		CopilotOpportunisticTimeout: r.copilotOpportunisticTimeout,
-		CodeRabbitTimeout:           r.codeRabbitTimeout,
-	}
+	return newFileStateStore(ralphDir)
 }
 
-func (r *Repo) gh() GitHub {
-	return r.GH()
-}
 
 func (r *Repo) SetLocalTestsPassed(v bool) {
-	r.LocalTestsPassed = v
+	r.localTestsPassed = v
 }
 
 // SetKnownPRNumber stores a PR number discovered earlier (e.g. during Ship)
 // so that AutoMergeCurrentBranch and FlushUnpushedWork can skip the FindOpenPR lookup.
 func (r *Repo) SetKnownPRNumber(n int) {
-	r.KnownPRNumber = n
+	r.knownPRNumber = n
 }
 
 // Init runs the git pre-flight checks and worktree setup that must
@@ -168,7 +137,7 @@ func (r *Repo) SetKnownPRNumber(n int) {
 //      start with a dirty working tree in the project repo, so the
 //      .gitignore commit below doesn't sweep in unrelated staged work.
 //      Returns an error on failure (init aborts). This explicitly
-//      checks r.ProjectDir, not r.WorkDir, because Init runs before
+//      checks r.projectDir, not r.workDir, because Init runs before
 //      SetupWorktree has moved WorkDir to a worktree subdirectory.
 //   3. EnsureGitignored — adds .ralph to .gitignore. Best-effort: any
 //      filesystem failure is silently swallowed by the helper, so this
@@ -187,8 +156,8 @@ func (r *Repo) Init(ctx context.Context) error {
 		return err
 	}
 	if !r.resume {
-		if IsGitRepo(r.ProjectDir) && r.hasUncommittedChangesIn(r.ProjectDir) {
-			return fmt.Errorf("uncommitted changes in %s — please commit or stash before running ralph.", r.ProjectDir)
+		if IsGitRepo(r.projectDir) && r.hasUncommittedChangesIn(r.projectDir) {
+			return fmt.Errorf("uncommitted changes in %s — please commit or stash before running ralph.", r.projectDir)
 		}
 	}
 	r.EnsureGitignored(".ralph")
@@ -201,9 +170,9 @@ func (r *Repo) Init(ctx context.Context) error {
 
 // SetupWorktree creates (or resumes) a git worktree for isolated work.
 func (r *Repo) SetupWorktree(ctx context.Context) error {
-	r.WorkDir = r.ProjectDir
+	r.workDir = r.projectDir
 
-	if !IsGitRepo(r.ProjectDir) {
+	if !IsGitRepo(r.projectDir) {
 		return fmt.Errorf("not a git repo — ralph requires git")
 	}
 
@@ -213,7 +182,7 @@ func (r *Repo) SetupWorktree(ctx context.Context) error {
 		}
 	}
 
-	r.ProjectName = filepath.Base(r.ProjectDir)
+	r.projectName = filepath.Base(r.projectDir)
 
 	today := time.Now().Format("20060102")
 	runSeq := 1
@@ -229,49 +198,49 @@ func (r *Repo) SetupWorktree(ctx context.Context) error {
 
 	// Use a placeholder branch name; RenameBranchForTask will rename it
 	// to a proper task branch before the first commit.
-	r.WorktreeBranch = WipBranchName()
-	r.WorkDir = filepath.Join(r.ralphDir, "worktrees", fmt.Sprintf("ralph-%s-%02d", today, runSeq))
+	r.worktreeBranch = WipBranchName()
+	r.workDir = filepath.Join(r.ralphDir, "worktrees", fmt.Sprintf("ralph-%s-%02d", today, runSeq))
 
 	if err := os.MkdirAll(filepath.Join(r.ralphDir, "worktrees"), 0o755); err != nil {
 		return fmt.Errorf("creating worktrees dir: %w", err)
 	}
 
-	r.gitCmd(r.ProjectDir, "worktree", "prune")
+	r.gitCmd(r.projectDir, "worktree", "prune")
 
-	if _, err := os.Stat(r.WorkDir); err == nil {
-		os.RemoveAll(r.WorkDir)
+	if _, err := os.Stat(r.workDir); err == nil {
+		os.RemoveAll(r.workDir)
 	}
 
 	// Clean up leftover wip branch from a previous run.
-	if r.refExists(r.ProjectDir, r.WorktreeBranch) {
-		if wt := r.findWorktreeForBranch(r.ProjectDir, r.WorktreeBranch); wt != "" && strings.Contains(wt, "/.ralph/worktrees/") {
-			r.gitCmd(r.ProjectDir, "worktree", "remove", "--force", wt)
+	if r.refExists(r.projectDir, r.worktreeBranch) {
+		if wt := r.findWorktreeForBranch(r.projectDir, r.worktreeBranch); wt != "" && strings.Contains(wt, "/.ralph/worktrees/") {
+			r.gitCmd(r.projectDir, "worktree", "remove", "--force", wt)
 		}
-		_ = r.gitCmdErr(r.ProjectDir, "branch", "-D", r.WorktreeBranch)
+		_ = r.gitCmdErr(r.projectDir, "branch", "-D", r.worktreeBranch)
 	}
 
 	defaultBranch := r.detectDefaultBranch()
-	r.gitCmdCtx(ctx, r.ProjectDir, "fetch", "origin", defaultBranch)
+	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", defaultBranch)
 
-	if !r.refExists(r.ProjectDir, "origin/"+defaultBranch) &&
-		r.refExists(r.ProjectDir, "HEAD") &&
+	if !r.refExists(r.projectDir, "origin/"+defaultBranch) &&
+		r.refExists(r.projectDir, "HEAD") &&
 		r.remoteExists() {
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Pushing %s to origin (empty remote — ensures correct default branch)", defaultBranch)
-		r.gitCmdCtx(ctx, r.ProjectDir, "push", "-u", "origin", defaultBranch)
+		r.gitCmdCtx(ctx, r.projectDir, "push", "-u", "origin", defaultBranch)
 	}
 
-	if err := r.gitCmdErr(r.ProjectDir, "worktree", "add", "-b", r.WorktreeBranch, r.WorkDir, "origin/"+defaultBranch); err != nil {
-		if err := r.gitCmdErr(r.ProjectDir, "worktree", "add", "-b", r.WorktreeBranch, r.WorkDir, "HEAD"); err != nil {
+	if err := r.gitCmdErr(r.projectDir, "worktree", "add", "-b", r.worktreeBranch, r.workDir, "origin/"+defaultBranch); err != nil {
+		if err := r.gitCmdErr(r.projectDir, "worktree", "add", "-b", r.worktreeBranch, r.workDir, "HEAD"); err != nil {
 			return fmt.Errorf("failed to create worktree: %w", err)
 		}
 	}
 
-	r.gitCmd(r.WorkDir, "config", "rebase.updateRefs", "true")
-	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Worktree: %s (branch: %s)", r.WorkDir, r.WorktreeBranch)
+	r.gitCmd(r.workDir, "config", "rebase.updateRefs", "true")
+	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Worktree: %s (branch: %s)", r.workDir, r.worktreeBranch)
 
 	if r.state != nil {
-		_ = r.state.Write("worktree_dir", r.WorkDir)
-		_ = r.state.Write("worktree_branch", r.WorktreeBranch)
+		_ = r.state.Write("worktree_dir", r.workDir)
+		_ = r.state.Write("worktree_branch", r.worktreeBranch)
 	}
 
 	return nil
@@ -294,15 +263,15 @@ func (r *Repo) tryResumeWorktree() error {
 		return fmt.Errorf("stored worktree missing")
 	}
 
-	r.WorkDir = stored
+	r.workDir = stored
 	branch, _ := r.state.Read("worktree_branch")
-	r.WorktreeBranch = branch
-	r.ProjectName = filepath.Base(r.ProjectDir)
+	r.worktreeBranch = branch
+	r.projectName = filepath.Base(r.projectDir)
 	if renamed, _ := r.state.Read("branch_renamed"); renamed == "true" {
-		r.BranchRenamed = true
+		r.branchRenamed = true
 	}
 
-	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Resuming worktree: %s", r.WorkDir)
+	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Resuming worktree: %s", r.workDir)
 	return nil
 }
 
@@ -310,21 +279,21 @@ func (r *Repo) tryResumeWorktree() error {
 // Used by EnsureUpToDate and RebaseOntoDefaultBranch to avoid duplicating
 // the stash/pop logic.
 func (r *Repo) withStash(stashMsg string, fn func()) {
-	dirty := r.gitCmdErr(r.WorkDir, "diff", "--quiet") != nil ||
-		r.gitCmdErr(r.WorkDir, "diff", "--cached", "--quiet") != nil
+	dirty := r.gitCmdErr(r.workDir, "diff", "--quiet") != nil ||
+		r.gitCmdErr(r.workDir, "diff", "--cached", "--quiet") != nil
 	if dirty {
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Stashing uncommitted changes before rebase...")
-		r.gitCmd(r.WorkDir, "stash", "push", "-m", stashMsg)
+		r.gitCmd(r.workDir, "stash", "push", "-m", stashMsg)
 	}
 
 	fn()
 
 	if dirty {
-		if err := r.gitCmdErr(r.WorkDir, "stash", "pop"); err != nil {
+		if err := r.gitCmdErr(r.workDir, "stash", "pop"); err != nil {
 			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Stash pop conflict — committing stash as WIP")
-			r.gitCmd(r.WorkDir, "checkout", "--theirs", ".")
-			r.gitCmd(r.WorkDir, "add", "-A")
-			r.gitCmd(r.WorkDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
+			r.gitCmd(r.workDir, "checkout", "--theirs", ".")
+			r.gitCmd(r.workDir, "add", "-A")
+			r.gitCmd(r.workDir, "commit", "-m", "WIP: reapply stashed changes after rebase (may need review)")
 		} else {
 			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Re-applied stashed changes")
 		}
@@ -336,26 +305,26 @@ func (r *Repo) withStash(stashMsg string, fn func()) {
 // after auto-resolve, it aborts and returns an error — the caller decides
 // what to do (e.g. push anyway and let GitHub handle merge conflicts).
 func (r *Repo) EnsureUpToDate(ctx context.Context) error {
-	if r.WorkDir == "" || r.WorkDir == r.ProjectDir {
+	if r.workDir == "" || r.workDir == r.projectDir {
 		return nil
 	}
 
 	// Rebase onto stack head if set, otherwise the default branch.
 	baseBranch := r.detectDefaultBranch()
-	if r.PrevBranch != "" {
-		baseBranch = r.PrevBranch
+	if r.prevBranch != "" {
+		baseBranch = r.prevBranch
 	}
 
-	if err := r.gitCmdErrCtx(ctx, r.WorkDir, "fetch", "origin", baseBranch); err != nil {
+	if err := r.gitCmdErrCtx(ctx, r.workDir, "fetch", "origin", baseBranch); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if r.PrevBranch != "" {
+		if r.prevBranch != "" {
 			// Stack head branch missing from remote — likely merged and deleted.
 			// Fall back to the default branch silently.
 			r.SetPrevBranch("")
 			baseBranch = r.detectDefaultBranch()
-			if err2 := r.gitCmdErrCtx(ctx, r.WorkDir, "fetch", "origin", baseBranch); err2 != nil {
+			if err2 := r.gitCmdErrCtx(ctx, r.workDir, "fetch", "origin", baseBranch); err2 != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
@@ -368,20 +337,20 @@ func (r *Repo) EnsureUpToDate(ctx context.Context) error {
 		}
 	}
 
-	if !r.refExists(r.WorkDir, "origin/"+baseBranch) {
+	if !r.refExists(r.workDir, "origin/"+baseBranch) {
 		return nil
 	}
 
-	if r.gitCmdErr(r.WorkDir, "merge-base", "--is-ancestor", "origin/"+baseBranch, "HEAD") == nil {
+	if r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", "origin/"+baseBranch, "HEAD") == nil {
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: baseBranch}, "Already up to date with origin/%s", baseBranch)
 		return nil
 	}
 
 	// No local commits ahead of base → safe to force-reset (fresh start).
-	localCommits := r.gitOutput(r.WorkDir, "rev-list", "--count", "origin/"+baseBranch+"..HEAD")
+	localCommits := r.gitOutput(r.workDir, "rev-list", "--count", "origin/"+baseBranch+"..HEAD")
 	if localCommits == "" || localCommits == "0" {
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: baseBranch}, "Resetting to origin/%s (no local work)", baseBranch)
-		r.gitCmd(r.WorkDir, "reset", "--hard", "origin/"+baseBranch)
+		r.gitCmd(r.workDir, "reset", "--hard", "origin/"+baseBranch)
 		return nil
 	}
 
@@ -405,14 +374,14 @@ func (r *Repo) EnsureUpToDate(ctx context.Context) error {
 
 		// Stack diverges — abort rebase, keep local commits, let merge handle it.
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Rebase conflict with local work — stack diverged, continuing")
-		r.gitCmd(r.WorkDir, "rebase", "--abort")
+		r.gitCmd(r.workDir, "rebase", "--abort")
 		result = nil // not an error — diverged stack is expected
 	})
 	return result
 }
 
 func (r *Repo) tryRebase(ctx context.Context, defaultBranch string) bool {
-	if r.gitCmdErrCtx(ctx, r.WorkDir, "rebase", "--update-refs", "origin/"+defaultBranch) == nil {
+	if r.gitCmdErrCtx(ctx, r.workDir, "rebase", "--update-refs", "origin/"+defaultBranch) == nil {
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch}, "Rebased onto origin/%s", defaultBranch)
 		return true
 	}
@@ -424,7 +393,7 @@ func (r *Repo) tryAutoResolve(ctx context.Context, defaultBranch string) bool {
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch}, "Rebased onto origin/%s (auto-resolved)", defaultBranch)
 		return true
 	}
-	r.gitCmd(r.WorkDir, "rebase", "--abort")
+	r.gitCmd(r.workDir, "rebase", "--abort")
 	return false
 }
 
@@ -434,10 +403,10 @@ func (r *Repo) tryAutoResolve(ctx context.Context, defaultBranch string) bool {
 // Only renames once per task (tracked by BranchRenamed).
 // Returns an error if the rename fails — callers must abort the iteration.
 func (r *Repo) RenameBranchForTask(taskDesc, taskID string) error {
-	if r.BranchRenamed || r.WorktreeBranch == "" || taskDesc == "" {
+	if r.branchRenamed || r.worktreeBranch == "" || taskDesc == "" {
 		return nil
 	}
-	if r.WorkDir == r.ProjectDir {
+	if r.workDir == r.projectDir {
 		return nil
 	}
 
@@ -447,16 +416,16 @@ func (r *Repo) RenameBranchForTask(taskDesc, taskID string) error {
 	}
 
 	newBranch := BranchName(taskID, slug)
-	if err := r.gitCmdErr(r.WorkDir, "branch", "-m", r.WorktreeBranch, newBranch); err != nil {
-		_ = r.gitCmdErr(r.WorkDir, "branch", "-D", newBranch)
-		if retryErr := r.gitCmdErr(r.WorkDir, "branch", "-m", r.WorktreeBranch, newBranch); retryErr != nil {
-			return fmt.Errorf("rename branch %s → %s: %w", r.WorktreeBranch, newBranch, retryErr)
+	if err := r.gitCmdErr(r.workDir, "branch", "-m", r.worktreeBranch, newBranch); err != nil {
+		_ = r.gitCmdErr(r.workDir, "branch", "-D", newBranch)
+		if retryErr := r.gitCmdErr(r.workDir, "branch", "-m", r.worktreeBranch, newBranch); retryErr != nil {
+			return fmt.Errorf("rename branch %s → %s: %w", r.worktreeBranch, newBranch, retryErr)
 		}
 	}
-	r.WorktreeBranch = newBranch
-	r.BranchRenamed = true
+	r.worktreeBranch = newBranch
+	r.branchRenamed = true
 	if r.state != nil {
-		_ = r.state.Write("worktree_branch", r.WorktreeBranch)
+		_ = r.state.Write("worktree_branch", r.worktreeBranch)
 		_ = r.state.Write("branch_renamed", "true")
 	}
 	return nil
@@ -465,29 +434,29 @@ func (r *Repo) RenameBranchForTask(taskDesc, taskID string) error {
 // RenameBranchTo renames the current worktree branch to a specific name.
 // Used when the bead already has a stored branch name from a previous run.
 func (r *Repo) RenameBranchTo(name string) {
-	if r.BranchRenamed || r.WorktreeBranch == "" || name == "" {
+	if r.branchRenamed || r.worktreeBranch == "" || name == "" {
 		return
 	}
-	if r.WorktreeBranch == name {
-		r.BranchRenamed = true
+	if r.worktreeBranch == name {
+		r.branchRenamed = true
 		if r.state != nil {
 			_ = r.state.Write("branch_renamed", "true")
 		}
 		return
 	}
-	if err := r.gitCmdErr(r.WorkDir, "branch", "-m", r.WorktreeBranch, name); err != nil {
+	if err := r.gitCmdErr(r.workDir, "branch", "-m", r.worktreeBranch, name); err != nil {
 		// Target branch may exist locally as a stale leftover. Delete it
 		// and retry — the local branch is expendable since work is on the remote.
-		_ = r.gitCmdErr(r.WorkDir, "branch", "-D", name)
-		if retryErr := r.gitCmdErr(r.WorkDir, "branch", "-m", r.WorktreeBranch, name); retryErr != nil {
-			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to rename branch %s → %s: %v", r.WorktreeBranch, name, retryErr)
+		_ = r.gitCmdErr(r.workDir, "branch", "-D", name)
+		if retryErr := r.gitCmdErr(r.workDir, "branch", "-m", r.worktreeBranch, name); retryErr != nil {
+			r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to rename branch %s → %s: %v", r.worktreeBranch, name, retryErr)
 			return
 		}
 	}
-	r.WorktreeBranch = name
-	r.BranchRenamed = true
+	r.worktreeBranch = name
+	r.branchRenamed = true
 	if r.state != nil {
-		_ = r.state.Write("worktree_branch", r.WorktreeBranch)
+		_ = r.state.Write("worktree_branch", r.worktreeBranch)
 		_ = r.state.Write("branch_renamed", "true")
 	}
 }
@@ -497,13 +466,13 @@ func (r *Repo) RenameBranchTo(name string) {
 // No-ops silently when the worktree is already at the target ref.
 func (r *Repo) ResetToDefaultBranch() {
 	defaultBranch := r.detectDefaultBranch()
-	_ = r.gitCmdErr(r.WorkDir, "fetch", "origin", defaultBranch)
+	_ = r.gitCmdErr(r.workDir, "fetch", "origin", defaultBranch)
 	target := "origin/" + defaultBranch
-	if r.refExists(r.WorkDir, target) && r.gitOutput(r.WorkDir, "rev-parse", "HEAD") == r.gitOutput(r.WorkDir, "rev-parse", target) {
+	if r.refExists(r.workDir, target) && r.gitOutput(r.workDir, "rev-parse", "HEAD") == r.gitOutput(r.workDir, "rev-parse", target) {
 		return
 	}
-	r.gitCmd(r.WorkDir, "reset", "--hard", target)
-	r.BranchRenamed = false
+	r.gitCmd(r.workDir, "reset", "--hard", target)
+	r.branchRenamed = false
 	if r.state != nil {
 		_ = r.state.Write("branch_renamed", "false")
 	}
@@ -513,7 +482,7 @@ func (r *Repo) ResetToDefaultBranch() {
 // SetPrevBranch sets the previous branch for stacked PR targeting and
 // persists it to state so it survives process restarts.
 func (r *Repo) SetPrevBranch(branch string) {
-	r.PrevBranch = branch
+	r.prevBranch = branch
 	if r.state != nil {
 		_ = r.state.Write("prev_branch", branch)
 	}
@@ -524,12 +493,12 @@ func (r *Repo) SetPrevBranch(branch string) {
 // name before the first commit. Uncommitted changes are discarded only when
 // switching to a different task; resuming the same task preserves in-progress work.
 func (r *Repo) PrepareForNextTask(nextTaskID string) {
-	r.BranchRenamed = false
+	r.branchRenamed = false
 	if r.state != nil {
 		_ = r.state.Write("branch_renamed", "false")
 	}
 
-	if r.WorkDir == r.ProjectDir || r.WorktreeBranch == "" {
+	if r.workDir == r.projectDir || r.worktreeBranch == "" {
 		return
 	}
 
@@ -538,21 +507,21 @@ func (r *Repo) PrepareForNextTask(nextTaskID string) {
 		lastTaskID, _ = r.state.Read("last_task_id")
 	}
 	if nextTaskID == "" || lastTaskID == "" || nextTaskID != lastTaskID {
-		r.gitCmdErr(r.WorkDir, "checkout", ".")
-		r.gitCmdErr(r.WorkDir, "clean", "-fd", "--exclude=.ralph/")
+		r.gitCmdErr(r.workDir, "checkout", ".")
+		r.gitCmdErr(r.workDir, "clean", "-fd", "--exclude=.ralph/")
 	}
 
 	newBranch := WipBranchName()
-	oldBranch := r.WorktreeBranch
+	oldBranch := r.worktreeBranch
 	if oldBranch == newBranch {
 		return
 	}
-	if err := r.gitCmdErr(r.WorkDir, "checkout", "-B", newBranch); err == nil {
-		r.WorktreeBranch = newBranch
+	if err := r.gitCmdErr(r.workDir, "checkout", "-B", newBranch); err == nil {
+		r.worktreeBranch = newBranch
 		if r.state != nil {
 			_ = r.state.Write("worktree_branch", newBranch)
 		}
-		if err := r.gitCmdErr(r.ProjectDir, "branch", "-D", oldBranch); err == nil {
+		if err := r.gitCmdErr(r.projectDir, "branch", "-D", oldBranch); err == nil {
 			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Deleted local branch %s", oldBranch)
 		}
 	}
@@ -562,7 +531,7 @@ func (r *Repo) PrepareForNextTask(nextTaskID string) {
 // with the given message. No-op if there is already exactly one commit
 // ahead of base. Returns an error if there are no commits to squash.
 func (r *Repo) SquashToOneCommit(baseSHA, message string) error {
-	countStr := r.gitOutput(r.WorkDir, "rev-list", "--count", baseSHA+"..HEAD")
+	countStr := r.gitOutput(r.workDir, "rev-list", "--count", baseSHA+"..HEAD")
 	count := 0
 	if countStr != "" {
 		fmt.Sscanf(countStr, "%d", &count)
@@ -574,14 +543,14 @@ func (r *Repo) SquashToOneCommit(baseSHA, message string) error {
 		return nil
 	}
 	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Squashing %d commits into one", count)
-	r.gitCmd(r.WorkDir, "reset", "--soft", baseSHA)
-	return r.gitCmdErr(r.WorkDir, "commit", "-m", message)
+	r.gitCmd(r.workDir, "reset", "--soft", baseSHA)
+	return r.gitCmdErr(r.workDir, "commit", "-m", message)
 }
 
 // RemoveWorktree force-removes a worktree and deletes its branch.
 func (r *Repo) RemoveWorktree() {
-	r.gitCmd(r.ProjectDir, "worktree", "remove", "--force", r.WorkDir)
-	r.gitCmd(r.ProjectDir, "branch", "-D", r.WorktreeBranch)
+	r.gitCmd(r.projectDir, "worktree", "remove", "--force", r.workDir)
+	r.gitCmd(r.projectDir, "branch", "-D", r.worktreeBranch)
 }
 
 // TagTaskStart creates a lightweight git tag marking the start of a task iteration.
@@ -592,7 +561,7 @@ func (r *Repo) TagTaskStart(taskID string) {
 	if tag == "" {
 		return
 	}
-	if err := r.gitCmdErr(r.WorkDir, "tag", "-f", tag); err == nil {
+	if err := r.gitCmdErr(r.workDir, "tag", "-f", tag); err == nil {
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Tag: %s", tag)
 	}
 }
@@ -603,7 +572,7 @@ func (r *Repo) TagTaskEnd(taskID string) {
 	if tag == "" {
 		return
 	}
-	if err := r.gitCmdErr(r.WorkDir, "tag", "-f", tag); err == nil {
+	if err := r.gitCmdErr(r.workDir, "tag", "-f", tag); err == nil {
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Tag: %s", tag)
 	}
 }
@@ -611,13 +580,13 @@ func (r *Repo) TagTaskEnd(taskID string) {
 // taskTag builds a tag name like task/{id}/{suffix}. Returns empty
 // string if there's not enough info to build a meaningful tag.
 func (r *Repo) taskTag(taskID, suffix string) string {
-	if r.WorkDir == "" || r.WorkDir == r.ProjectDir {
+	if r.workDir == "" || r.workDir == r.projectDir {
 		return ""
 	}
 	if taskID != "" {
 		return fmt.Sprintf("task/%s/%s", taskID, suffix)
 	}
-	seqSlug := extractSeqSlug(r.WorktreeBranch)
+	seqSlug := extractSeqSlug(r.worktreeBranch)
 	if seqSlug == "" {
 		return ""
 	}
