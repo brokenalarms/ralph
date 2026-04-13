@@ -1801,13 +1801,12 @@ func TestAutoMergeCurrentBranch_InfraFailureReturnsCIFailureError(t *testing.T) 
 	stubCISleep(t)
 
 	mgr := &Repo{
-		projectDir:       project,
-		baseBranch:       "main",
-		workDir:          filepath.Join(t.TempDir(), "wt"),
-		worktreeBranch:   "ralph/test/01-infra-no-bypass",
-		state:            newMemState(),
-		logger:           &testLog{},
-		localTestsPassed: true,
+		projectDir:     project,
+		baseBranch:     "main",
+		workDir:        filepath.Join(t.TempDir(), "wt"),
+		worktreeBranch: "ralph/test/01-infra-no-bypass",
+		state:          newMemState(),
+		logger:         &testLog{},
 	}
 
 	gh := NewStubGitHub()

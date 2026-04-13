@@ -662,7 +662,7 @@ iterLoop:
 // doShip executes the full two-phase ship pipeline: push + PR creation (Phase 1),
 // then reviewer polling and merge (Phase 2, only when AutoMerge is enabled).
 // Retries up to 5 times on review fix requests or CI failures.
-func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, workDir string) (prNumber int, prResultURL string, merged bool, ciFailure bool, stacked bool) {
+func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, workDir string) (prNumber int, prResultURL string, merged bool, ciFailure bool, ciInfraFailure bool, stacked bool) {
 	// Pre-fetch task description and acceptance criteria so git/github can
 	// build the PR body internally. The orchestrator owns the data, the
 	// git package owns the markdown formatting.
@@ -713,7 +713,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 		Summary:     summary,
 	})
 	if err != nil {
-		return result.PRNumber, result.PRURL, false, false, false
+		return result.PRNumber, result.PRURL, false, false, false, false
 	}
 
 	// Link task to PR as soon as PR is available.
@@ -735,7 +735,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 	l.ensureActiveReviewers()
 
 	if !l.cfg.AutoMerge || result.PRNumber == 0 {
-		return result.PRNumber, result.PRURL, false, false, false
+		return result.PRNumber, result.PRURL, false, false, false, false
 	}
 
 	// Phase 2: Ship with merge enabled. Pass the PR number so Ship
@@ -770,7 +770,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 		})
 		if mergeErr != nil {
 			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship (merge): %v", mergeErr)
-			return prResultNum, prResultURL, false, false, false
+			return prResultNum, prResultURL, false, false, false, false
 		}
 		if mergeResult.ReviewFixNeeded {
 			// Review fix needed: spawn fix agent, mark addressed, retry.
@@ -785,7 +785,15 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 			if fixResult == git.CIFixApplied {
 				continue
 			}
-			// Transient infrastructure failure — re-trigger CI and retry with backoff.
+			// Infrastructure failure: fix agent found nothing to fix and CI never
+			// ran (zero job steps). Work is verified locally — signal the caller to
+			// close the bead and leave the PR open for merge when CI recovers.
+			if fixResult == git.CIFixNoCommits && mergeResult.InfrastructureFailure {
+				l.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn},
+					"CI infrastructure failure (zero job steps) — closing bead, PR open for merge when CI recovers")
+				return prResultNum, prResultURL, false, true, true, false
+			}
+			// Transient CI failure — re-trigger CI and retry with backoff.
 			if fixResult == git.CIFixNoCommits && infraRetries < len(infraRetryBackoffs) {
 				delay := infraRetryBackoffs[infraRetries]
 				infraRetries++
@@ -799,13 +807,13 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 				}
 				select {
 				case <-ctx.Done():
-					return prResultNum, prResultURL, false, false, false
+					return prResultNum, prResultURL, false, false, false, false
 				case <-time.After(delay):
 				}
 				continue
 			}
 		}
-		return prResultNum, prResultURL, mergeResult.Merged, mergeResult.CIFailure, mergeResult.Stacked
+		return prResultNum, prResultURL, mergeResult.Merged, mergeResult.CIFailure, false, mergeResult.Stacked
 	}
-	return prResultNum, prResultURL, mergeResult.Merged, mergeResult.CIFailure, mergeResult.Stacked
+	return prResultNum, prResultURL, mergeResult.Merged, mergeResult.CIFailure, false, mergeResult.Stacked
 }

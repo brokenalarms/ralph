@@ -337,7 +337,6 @@ func (s *StubRepo) GetWorktreeBranch() string  { return s.WorktreeBranch }
 func (s *StubRepo) GetPrevBranch() string      { return s.PrevBranch }
 func (s *StubRepo) IsBranchRenamed() bool      { return s.BranchRenamed }
 func (s *StubRepo) SetBranchRenamed(v bool)    { s.BranchRenamed = v }
-func (s *StubRepo) SetLocalTestsPassed(v bool) {}
 func (s *StubRepo) SetKnownPRNumber(n int)     { s.KnownPRNumber = n }
 
 func (s *StubRepo) FindOpenPRForBranch(branch string) (int, error) {

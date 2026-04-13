@@ -293,9 +293,8 @@ func TestAutoMerge_InfraFailure_ReturnsCIFailureError(t *testing.T) {
 		baseBranch:       "main",
 		runner:           runner,
 		github:           gh,
-		state:            newMemState(),
-		logger:           &testLog{},
-		localTestsPassed: true,
+		state:  newMemState(),
+		logger: &testLog{},
 	}
 
 	_, err := mgr.AutoMergeCurrentBranch(context.Background())
@@ -338,9 +337,8 @@ func TestAutoMerge_CIFailure_AlwaysReturnsCIFailureError(t *testing.T) {
 		baseBranch:       "main",
 		runner:           runner,
 		github:           gh,
-		state:            newMemState(),
-		logger:           &testLog{},
-		localTestsPassed: false,
+		state:  newMemState(),
+		logger: &testLog{},
 	}
 
 	_, err := mgr.AutoMergeCurrentBranch(context.Background())
@@ -351,6 +349,87 @@ func TestAutoMerge_CIFailure_AlwaysReturnsCIFailureError(t *testing.T) {
 	var ciErr *CIFailureError
 	if !errors.As(err, &ciErr) {
 		t.Fatalf("expected CIFailureError, got %T: %v", err, err)
+	}
+}
+
+// Ship sets ShipResult.InfrastructureFailure when CI fails with zero job steps
+// executed (billing/runner allocation failure). The git module classifies the
+// failure; the loop uses the field to decide whether to close the bead.
+func TestShip_InfrastructureFailure_SetOnCIFailure(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("rev-parse HEAD", "abc123", nil)
+	runner.On("reset --hard", "", nil)
+
+	gh := NewStubGitHub()
+	gh.OpenPR = 99
+	gh.PRBase = "main"
+	gh.Checks = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail", IsRequired: true}}
+	gh.JobStepCount = 0 // zero steps = infrastructure failure
+
+	mgr := stubManager("/project", runner, gh)
+	mgr.workDir = "/project/wt"
+	mgr.worktreeBranch = "ralph/test/01-ship-infra"
+	mgr.baseBranch = "main"
+
+	result, err := mgr.Ship(context.Background(), ShipOpts{AutoMerge: true, PRNumber: 99})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.CIFailure {
+		t.Error("expected CIFailure=true")
+	}
+	if !result.InfrastructureFailure {
+		t.Error("expected InfrastructureFailure=true when GetJobStepCount returns 0")
+	}
+}
+
+// Ship sets ShipResult.InfrastructureFailure=false when CI fails with job steps
+// executed — actual test failures, not infrastructure issues.
+func TestShip_InfrastructureFailure_FalseWhenJobStepsExecuted(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("rev-parse HEAD", "abc123", nil)
+	runner.On("reset --hard", "", nil)
+
+	gh := NewStubGitHub()
+	gh.OpenPR = 100
+	gh.PRBase = "main"
+	gh.Checks = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail", IsRequired: true}}
+	gh.JobStepCount = 5 // non-zero steps = actual test failure
+
+	mgr := stubManager("/project", runner, gh)
+	mgr.workDir = "/project/wt"
+	mgr.worktreeBranch = "ralph/test/01-ship-real-failure"
+	mgr.baseBranch = "main"
+
+	result, err := mgr.Ship(context.Background(), ShipOpts{AutoMerge: true, PRNumber: 100})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.CIFailure {
+		t.Error("expected CIFailure=true")
+	}
+	if result.InfrastructureFailure {
+		t.Error("expected InfrastructureFailure=false when job steps were executed")
 	}
 }
 

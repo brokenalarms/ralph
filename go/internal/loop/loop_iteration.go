@@ -217,7 +217,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 				prState, _ := l.git.GetPRState(prNum)
 				if prState == git.PRStateOpen {
 					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through merge", prNum)
-					_, _, merged, _, _ := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
+					_, _, merged, _, _, _ := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
 					prRef := fmt.Sprintf("PR #%d", prNum)
 					closeReason := fmt.Sprintf("Verified — %s open, merge pending", prRef)
 					if merged {
@@ -296,7 +296,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		return completeTaskOut{action: signalComplete}
 	}
 
-	prNumber, shipURL, merged, ciFailure, stacked := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
+	prNumber, shipURL, merged, ciFailure, ciInfraFailure, stacked := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
 
 	// Recovery: if ship didn't produce a PR, find any existing PR in any state.
 	if prNumber == 0 && p.taskID != "" {
@@ -346,8 +346,39 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		return completeTaskOut{action: signalComplete, ct: &ct}
 	}
 
-	// CI is failing — leave task open for manual investigation or next loop.
+	// CI is failing — decide whether to close or leave open based on failure type.
 	if ciFailure {
+		if ciInfraFailure && p.taskID != "" {
+			// Infrastructure failure (zero job steps): work is verified locally,
+			// CI never ran due to billing/runner issues. Close the bead and leave
+			// the PR open — it will merge when CI infrastructure recovers.
+			if ctx.Err() != nil {
+				l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+				return completeTaskOut{action: signalComplete}
+			}
+			prRef := ct.PRURL
+			if prRef == "" {
+				prRef = fmt.Sprintf("PR #%d", prNumber)
+			}
+			closeReason := fmt.Sprintf("Verified — %s open, merge pending CI recovery", prRef)
+			if err := l.taskBackend.CloseTask(p.taskID, closeReason); err != nil {
+				skipReason := "close_failed"
+				if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
+					l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %s blocked by %v", p.taskID, blockers)
+					skipReason = fmt.Sprintf("dependency_blocked_by:%s", strings.Join(blockers, ","))
+				} else {
+					l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask failed: %v", err)
+				}
+				l.skipTask(p.taskID, skipReason)
+			} else {
+				l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
+				l.persistCompleted(p.taskID, false)
+			}
+			l.git.TagTaskEnd(p.taskID)
+			l.execRunPostTask(ctx, p.taskID, prNumber, false)
+			return completeTaskOut{action: signalComplete, ct: &ct}
+		}
+		// Actual test failures — leave task open for manual investigation.
 		l.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI failing on PR #%d — leaving task %s open.", prNumber, p.taskID)
 		l.git.TagTaskEnd(p.taskID)
 		l.execRunPostTask(ctx, p.taskID, prNumber, false)
