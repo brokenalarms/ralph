@@ -774,3 +774,137 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 		t.Errorf("expected log to contain first line of second comment, got: %s", output)
 	}
 }
+
+// tryFixCI reverts out-of-scope files when the CI fix agent modifies files
+// that weren't in the task's original diff against origin/main.
+func TestTryFixCI_RevertsOutOfScopeFiles(t *testing.T) {
+	dir, _ := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-ci.md"), []byte("fix CI: {{TASK_TITLE}} {{FAILED_CHECKS}} {{CI_LOG}} {{SIGNAL_COMPLETE}}"), 0o644)
+
+	headCalls := 0
+	gm := &git.StubRepo{
+		ProjectDir:   dir,
+		WorkDir:      dir,
+		DefaultBranch: "main",
+		HeadRevFunc: func() string {
+			headCalls++
+			if headCalls <= 1 {
+				return "before-sha"
+			}
+			return "after-sha"
+		},
+		DiffFilesBetweenFunc: func(from, to string) []string {
+			if from == "origin/main" && to == "before-sha" {
+				// Task's original diff: only src/app.ts
+				return []string{"src/app.ts"}
+			}
+			if from == "before-sha" && to == "after-sha" {
+				// Fix agent changed src/app.ts AND .github/workflows/test.yml
+				return []string{"src/app.ts", ".github/workflows/test.yml"}
+			}
+			return nil
+		},
+	}
+
+	var logBuf bytes.Buffer
+	logger := logging.New(&logBuf)
+	cfg := Config{
+		Dirs: workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+	}
+	_, st := setupTestDir(t)
+	l := New(cfg, Modules{
+		State:  st,
+		Git:    gm,
+		Logger: logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: stubResult(true, "fixed CI")}
+			},
+		}),
+		Connectivity: onlineStubConnectivity(),
+	})
+
+	ciErr := &git.CIFailureError{
+		PRNumber: 42,
+		Failures: []git.CICheckResult{{Name: "test", Bucket: "fail"}},
+	}
+	result := l.tryFixCI(context.Background(), ciErr, "test task", dir, filepath.Join(ralphDir, "raw.log"))
+
+	if result != git.CIFixApplied {
+		t.Fatalf("expected CIFixApplied, got %v", result)
+	}
+	if len(gm.RevertedFiles) != 1 || gm.RevertedFiles[0] != ".github/workflows/test.yml" {
+		t.Fatalf("expected RevertFilesToRef called with [.github/workflows/test.yml], got %v", gm.RevertedFiles)
+	}
+	if gm.RevertedRef != "origin/main" {
+		t.Fatalf("expected revert ref origin/main, got %s", gm.RevertedRef)
+	}
+	output := logBuf.String()
+	if !strings.Contains(output, "outside task scope") {
+		t.Errorf("expected log to mention out-of-scope files, got: %s", output)
+	}
+}
+
+// tryFixCI does NOT revert files that are already in the task's diff.
+func TestTryFixCI_DoesNotRevertInScopeFiles(t *testing.T) {
+	dir, _ := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+	os.WriteFile(filepath.Join(promptsDir, "verify-ci.md"), []byte("fix CI: {{TASK_TITLE}} {{FAILED_CHECKS}} {{CI_LOG}} {{SIGNAL_COMPLETE}}"), 0o644)
+
+	headCalls := 0
+	gm := &git.StubRepo{
+		ProjectDir:   dir,
+		WorkDir:      dir,
+		DefaultBranch: "main",
+		HeadRevFunc: func() string {
+			headCalls++
+			if headCalls <= 1 {
+				return "before-sha"
+			}
+			return "after-sha"
+		},
+		DiffFilesBetweenFunc: func(from, to string) []string {
+			if from == "origin/main" && to == "before-sha" {
+				return []string{"src/app.ts", "src/utils.ts"}
+			}
+			if from == "before-sha" && to == "after-sha" {
+				// Fix agent only modified files already in the task diff
+				return []string{"src/app.ts"}
+			}
+			return nil
+		},
+	}
+
+	logger := logging.New(nil)
+	cfg := Config{
+		Dirs: workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+	}
+	l := New(cfg, Modules{
+		Git:    gm,
+		Logger: logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{result: stubResult(true, "fixed CI")}
+			},
+		}),
+		Connectivity: onlineStubConnectivity(),
+	})
+
+	ciErr := &git.CIFailureError{
+		PRNumber: 42,
+		Failures: []git.CICheckResult{{Name: "test", Bucket: "fail"}},
+	}
+	result := l.tryFixCI(context.Background(), ciErr, "test task", dir, filepath.Join(ralphDir, "raw.log"))
+
+	if result != git.CIFixApplied {
+		t.Fatalf("expected CIFixApplied, got %v", result)
+	}
+	if len(gm.RevertedFiles) != 0 {
+		t.Fatalf("expected no files reverted when all changes are in scope, got %v", gm.RevertedFiles)
+	}
+}

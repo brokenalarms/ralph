@@ -42,6 +42,7 @@ type Ops interface {
 	HasDiff() bool
 	HasUncommittedChanges() bool
 	ChangedFiles(headBefore, headAfter string) []string
+	DiffFilesBetween(from, to string) []string
 	DiffStatRange(from, to string) string
 	DiffFull(from, to string) string
 	LogOneline(from, to string) string
@@ -66,6 +67,7 @@ type Ops interface {
 
 	// Commit operations.
 	CommitAll(message string)
+	RevertFilesToRef(files []string, ref string)
 
 	// Sync operations.
 	EnsureUpToDate(ctx context.Context) error

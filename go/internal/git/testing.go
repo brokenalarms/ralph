@@ -220,8 +220,12 @@ type StubRepo struct {
 	HeadRevValue        string
 	HasDiffValue        bool
 	HasUncommittedValue bool
-	ChangedFilesValue   []string
-	DiffStatValue       string
+	ChangedFilesValue       []string
+	DiffFilesBetweenValue   []string
+	DiffFilesBetweenFunc    func(from, to string) []string
+	RevertedFiles           []string
+	RevertedRef             string
+	DiffStatValue           string
 	DiffFullValue       string
 	LogOnelineValue     string
 	ConflictDiffValue   string
@@ -406,6 +410,12 @@ func (s *StubRepo) HeadRev() string {
 func (s *StubRepo) HasDiff() bool                                      { return s.HasDiffValue }
 func (s *StubRepo) HasUncommittedChanges() bool                        { return s.HasUncommittedValue }
 func (s *StubRepo) ChangedFiles(_, _ string) []string                  { return s.ChangedFilesValue }
+func (s *StubRepo) DiffFilesBetween(from, to string) []string {
+	if s.DiffFilesBetweenFunc != nil {
+		return s.DiffFilesBetweenFunc(from, to)
+	}
+	return s.DiffFilesBetweenValue
+}
 func (s *StubRepo) DiffStatRange(_, _ string) string                   { return s.DiffStatValue }
 func (s *StubRepo) DiffFull(_, _ string) string                        { return s.DiffFullValue }
 func (s *StubRepo) LogOneline(_, _ string) string                      { return s.LogOnelineValue }
@@ -514,6 +524,12 @@ func (s *StubRepo) TagTaskEnd(taskID string) {
 
 func (s *StubRepo) CommitAll(message string) {
 	s.CommitMessages = append(s.CommitMessages, message)
+}
+
+func (s *StubRepo) RevertFilesToRef(files []string, ref string) {
+	s.RevertedFiles = files
+	s.RevertedRef = ref
+	s.CommitMessages = append(s.CommitMessages, "revert-out-of-scope")
 }
 
 func (s *StubRepo) EnsureUpToDate(_ context.Context) error { return s.EnsureUpToDateErr }

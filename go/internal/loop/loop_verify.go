@@ -19,6 +19,15 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask
 	ciLog := l.git.GetCIFailureLog(ciErr.PRNumber)
 	headBefore := l.git.HeadRev()
 
+	// Snapshot files in the task diff before the fix agent runs.
+	// Used post-fix to detect out-of-scope modifications.
+	baseBranch := l.git.DetectDefaultBranch()
+	taskFiles := l.git.DiffFilesBetween("origin/"+baseBranch, headBefore)
+	taskFileSet := make(map[string]bool, len(taskFiles))
+	for _, f := range taskFiles {
+		taskFileSet[f] = true
+	}
+
 	// Pre-filter required vs optional check failures. Verifier does not
 	// import the git package, so Loop flattens the typed git.CheckFailure
 	// slice into plain string slices before handing off.
@@ -58,6 +67,24 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask
 	if headBefore == headAfter {
 		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Fix agent made no new commits — likely infrastructure failure")
 		return git.CIFixNoCommits
+	}
+
+	// Guard: detect if the fix agent modified files outside the task's
+	// original scope. These are files that differ from origin/main in the
+	// fix agent's commit but were NOT in the task diff before the fix agent
+	// ran — likely concurrent main changes being silently reverted.
+	fixFiles := l.git.DiffFilesBetween(headBefore, headAfter)
+	var outOfScope []string
+	for _, f := range fixFiles {
+		if !taskFileSet[f] {
+			outOfScope = append(outOfScope, f)
+		}
+	}
+	if len(outOfScope) > 0 {
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+			"Fix agent modified %d file(s) outside task scope: %s — reverting out-of-scope changes",
+			len(outOfScope), strings.Join(outOfScope, ", "))
+		l.git.RevertFilesToRef(outOfScope, "origin/"+baseBranch)
 	}
 
 	l.logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent committed — pushing")

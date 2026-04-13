@@ -12,6 +12,12 @@ You are a fix agent. The previous agent completed a task but LLM verification re
 ## Rejection Reason
 {{REJECTION_REASON}}
 
+## Scope constraint
+Your worktree has been rebased onto the latest main. Files may have been
+modified by other contributors since the branch was created. **Do not revert
+or undo those changes.** Only modify files directly related to the rejection
+reason and acceptance criteria.
+
 ## Your job
 1. Read the rejection reason carefully. It tells you exactly what is wrong or missing.
 2. Fix the issues identified in the rejection. The acceptance criteria above are the bar — every criterion must be met.

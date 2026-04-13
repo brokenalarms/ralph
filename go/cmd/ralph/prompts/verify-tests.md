@@ -9,6 +9,12 @@ You are a verification agent. The previous agent completed a task but tests are 
 ## Failing tests
 {{TEST_OUTPUT}}
 
+## Scope constraint
+Your worktree has been rebased onto the latest main. Files may have been
+modified by other contributors since the branch was created. **Do not revert
+or undo those changes.** Only modify files directly related to the test
+failures and task implementation.
+
 ## Your job
 1. Fix ALL failing tests. Run the full test suite to confirm green.
 2. Verify: does the diff actually implement what the task asks for? Are the tests meaningful (not just assert true)?
