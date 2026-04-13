@@ -136,8 +136,6 @@ type gitHub interface {
 	ListChecks(prNumber int, repoURL string) ([]CICheckResult, error)
 	EditPR(prNumber int, repoURL, title, body string) error
 	GetRunLog(prNumber int, workDir string) string
-	CheckEnforceAdmins(nwo, branch string) (enabled bool, err error)
-	PostEnforceAdmins(nwo, branch string) (output string, err error)
 	FindPR(branch, repoURL string) (number int, title, url string, err error)
 	SearchPR(workDir, query string) (prNumber int, err error)
 	PRDiff(repoURL string, prNumber int) (string, error)
@@ -405,32 +403,6 @@ func mapCheckRun(name, status string, conclusion *string, startedAt *time.Time) 
 	}
 	return CICheckResult{Name: name, State: state, Bucket: bucket, StartedAt: t}
 }
-
-
-func (g *ghCLI) CheckEnforceAdmins(nwo, branch string) (bool, error) {
-	endpoint := fmt.Sprintf("/repos/%s/branches/%s/protection/enforce_admins", nwo, branch)
-	cmd := exec.Command("gh", "api", endpoint)
-	out, err := cmd.Output()
-	if err != nil {
-		return false, fmt.Errorf("gh api failed: %w", err)
-	}
-
-	var resp struct {
-		Enabled bool `json:"enabled"`
-	}
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return false, fmt.Errorf("parsing response: %w", err)
-	}
-	return resp.Enabled, nil
-}
-
-func (g *ghCLI) PostEnforceAdmins(nwo, branch string) (string, error) {
-	endpoint := fmt.Sprintf("/repos/%s/branches/%s/protection/enforce_admins", nwo, branch)
-	cmd := exec.Command("gh", "api", "-X", "POST", endpoint)
-	out, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out)), err
-}
-
 func (g *ghCLI) GetRequiredChecks(nwo, branch string) ([]string, error) {
 	endpoint := fmt.Sprintf("repos/%s/rules/branches/%s", nwo, branch)
 	cmd := exec.Command("gh", "api", endpoint)

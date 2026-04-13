@@ -118,12 +118,6 @@ func New(cfg Config, logger *logging.Logger, newRunner RunnerFactory, querier Qu
 	return &Verifier{cfg: cfg, logger: logger, newRunner: newRunner, querier: querier}
 }
 
-// Cfg returns a copy of the verifier's configuration. This is a read-only
-// view — verifier's internal config must not be mutated after construction.
-func (v *Verifier) Cfg() Config {
-	return v.cfg
-}
-
 // RunTests runs the ralph:verify test suite in dir with a heartbeat log line
 // every HeartbeatInterval. Verifier owns the start/result narrative for its
 // own operation; callers (Loop) only log orchestration concerns like retry
