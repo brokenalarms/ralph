@@ -68,6 +68,8 @@ type Ops interface {
 	// Commit operations.
 	CommitAll(message string)
 	RevertFilesToRef(files []string, ref string)
+	// EmptyCommit creates a commit even if there are no file changes, to re-trigger CI.
+	EmptyCommit(message string)
 
 	// Sync operations.
 	EnsureUpToDate(ctx context.Context) error

@@ -142,6 +142,10 @@ func (r *Repo) RevertFilesToRef(files []string, ref string) {
 	_ = r.gitCmdErr(r.workDir, "commit", "--amend", "--no-edit")
 }
 
+func (r *Repo) EmptyCommit(message string) {
+	_ = r.gitCmdErr(r.workDir, "commit", "--allow-empty", "-m", message)
+}
+
 func (r *Repo) ChangedFiles(headBefore, headAfter string) []string {
 	seen := make(map[string]bool)
 	var result []string
