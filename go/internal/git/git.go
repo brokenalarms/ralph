@@ -54,8 +54,7 @@ type Repo struct {
 	prevBranch     string
 	branchRenamed  bool
 
-	localTestsPassed bool
-	knownPRNumber    int
+	knownPRNumber int
 	runner           Runner
 
 	ralphDir                    string
@@ -109,10 +108,6 @@ func newStateStore(ralphDir string) stateStore {
 	return newFileStateStore(ralphDir)
 }
 
-
-func (r *Repo) SetLocalTestsPassed(v bool) {
-	r.localTestsPassed = v
-}
 
 // SetKnownPRNumber stores a PR number discovered earlier (e.g. during Ship)
 // so that AutoMergeCurrentBranch and FlushUnpushedWork can skip the FindOpenPR lookup.

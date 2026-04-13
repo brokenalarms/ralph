@@ -296,6 +296,12 @@ type ShipResult struct {
 	// Populated when CIFailure is true.
 	CIFailureDetail *CIFailureError
 
+	// InfrastructureFailure is true when CIFailure is true and the failure is
+	// due to infrastructure (billing, runner allocation — zero job steps executed)
+	// rather than actual test failures. The loop closes the bead and leaves the
+	// PR open for merge when CI infrastructure recovers.
+	InfrastructureFailure bool
+
 	// ReviewFixNeeded is true when a reviewer returned actionable comments.
 	// The loop should run tryFixReviewComments and retry Ship.
 	ReviewFixNeeded bool
@@ -496,7 +502,6 @@ func (r *Repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 	}
 
 	// Attempt merge (no OnCIFailure/OnConflict — return errors for loop to handle).
-	r.SetLocalTestsPassed(true)
 	r.SetKnownPRNumber(result.PRNumber)
 	defer r.SetKnownPRNumber(0)
 
@@ -514,6 +519,7 @@ func (r *Repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 		if errors.As(mergeErr, &ciFailure) {
 			result.CIFailure = true
 			result.CIFailureDetail = ciFailure
+			result.InfrastructureFailure = r.isInfrastructureFailure(ctx, ciFailure.PRNumber)
 			return result, nil
 		}
 		return result, mergeErr
