@@ -157,7 +157,9 @@ type Config struct {
 
 	// InfraRetryBackoffs overrides the backoff delays between infrastructure CI
 	// retries (default: 1min, 2min, 4min). Set to zero-duration slices in tests
-	// to avoid sleeping. Length determines maxInfraRetries.
+	// to avoid sleeping. The slice length defines the configured infra-retry
+	// backoff schedule, but actual infra retries may also be limited by the
+	// overall ship retry budget.
 	InfraRetryBackoffs []time.Duration
 }
 
@@ -790,14 +792,14 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
 					"Transient CI failure — re-triggering and retrying in %s (%d/%d)",
 					delay, infraRetries, len(infraRetryBackoffs))
-				l.git.EmptyCommit("[ci skip] trigger CI re-run")
+				l.git.EmptyCommit("trigger CI re-run")
 				if pushErr := l.git.Push(ctx); pushErr != nil {
 					l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
 						"Push for CI re-trigger failed: %v", pushErr)
 				}
 				select {
 				case <-ctx.Done():
-					return prResultNum, prResultURL, false, true, false
+					return prResultNum, prResultURL, false, false, false
 				case <-time.After(delay):
 				}
 				continue

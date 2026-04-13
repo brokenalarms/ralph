@@ -68,7 +68,7 @@ type Ops interface {
 	// Commit operations.
 	CommitAll(message string)
 	RevertFilesToRef(files []string, ref string)
-	// EmptyCommit creates a commit with no file changes to re-trigger CI.
+	// EmptyCommit creates a commit even if there are no file changes, to re-trigger CI.
 	EmptyCommit(message string)
 
 	// Sync operations.

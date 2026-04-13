@@ -79,8 +79,8 @@ func TestDoShip_InfraRetry_EventuallySucceeds(t *testing.T) {
 }
 
 // doShip gives up after maxInfraRetries consecutive transient CI failures
-// (CIFixNoCommits), returning ciFailure=true so the caller can close the
-// task and leave the PR open for manual investigation.
+// (CIFixNoCommits), returning ciFailure=true so the caller can leave the
+// task open and leave the PR open for manual investigation.
 func TestDoShip_InfraRetry_GivesUpAfterMax(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
