@@ -813,6 +813,14 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 				continue
 			}
 		}
+		if mergeResult.ConflictDetail != nil {
+			// Conflict fix: spawn fix agent; if it resolved and pushed, retry merge.
+			if l.tryFixConflict(ctx, taskID, title, workDir, rawLogPath) {
+				continue
+			}
+			// Agent could not resolve — give up.
+			return prResultNum, prResultURL, false, false, false, false
+		}
 		return prResultNum, prResultURL, mergeResult.Merged, mergeResult.CIFailure, false, mergeResult.Stacked
 	}
 	return prResultNum, prResultURL, mergeResult.Merged, mergeResult.CIFailure, false, mergeResult.Stacked

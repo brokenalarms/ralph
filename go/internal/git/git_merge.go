@@ -311,6 +311,10 @@ type ShipResult struct {
 
 	// PendingReviewer is the bot username whose review needs addressing.
 	PendingReviewer string
+
+	// ConflictDetail is set when MergeWithRetry encountered an unresolvable
+	// merge conflict. The loop should call tryFixConflict and retry Ship.
+	ConflictDetail *UnresolvedConflictError
 }
 
 // shipInfra holds the infrastructure callbacks used by shipPR. These are
@@ -520,6 +524,11 @@ func (r *Repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 			result.CIFailure = true
 			result.CIFailureDetail = ciFailure
 			result.InfrastructureFailure = r.isInfrastructureFailure(ctx, ciFailure.PRNumber)
+			return result, nil
+		}
+		var conflictErr *UnresolvedConflictError
+		if errors.As(mergeErr, &conflictErr) {
+			result.ConflictDetail = conflictErr
 			return result, nil
 		}
 		return result, mergeErr

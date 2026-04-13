@@ -493,3 +493,121 @@ func TestCompleteTask_LeavesBeadOpenOnCIFailure(t *testing.T) {
 		t.Errorf("expected bead left open on CI test failure, got CloseTask for %v", backend.ClosedIDs)
 	}
 }
+
+// doShip calls tryFixConflict when Ship returns ConflictDetail, retries merge
+// after the agent resolves the conflict, and returns merged=true on success.
+func TestDoShip_ConflictFixAgent_RetriesOnSuccess(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	conflictErr := &git.UnresolvedConflictError{PRNumber: 42}
+
+	var mergeAttempts atomic.Int32
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before-fix"}
+	gm.ShipFunc = func(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error) {
+		if !opts.AutoMerge {
+			return git.ShipResult{PRNumber: 42}, nil
+		}
+		attempt := mergeAttempts.Add(1)
+		if attempt == 1 {
+			// First merge attempt: conflict.
+			return git.ShipResult{PRNumber: 42, ConflictDetail: conflictErr}, nil
+		}
+		// Second attempt: conflict resolved, merge succeeds.
+		return git.ShipResult{PRNumber: 42, Merged: true}, nil
+	}
+
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				return &stubRunner{
+					onRun: func() {
+						// Simulate agent pushing a fix commit.
+						gm.HeadRevValue = "after-fix"
+					},
+					result: claude.Result{SignalDetected: true},
+				}
+			},
+		}),
+		Connectivity: onlineStubConnectivity(),
+	})
+
+	_, _, merged, ciFailure, _, _ := l.doShip(context.Background(), "ralph-test", "Fix conflict", "summary", filepath.Join(ralphDir, "raw.log"), dir)
+
+	if !merged {
+		t.Error("expected merged=true after conflict fix agent resolved and retry succeeded")
+	}
+	if ciFailure {
+		t.Error("expected ciFailure=false — conflict, not CI, was the blocker")
+	}
+	if got := mergeAttempts.Load(); got != 2 {
+		t.Errorf("expected 2 merge attempts (1 conflict + 1 success), got %d", got)
+	}
+}
+
+// doShip returns merged=false when the conflict fix agent fails to resolve.
+// The loop gives up rather than retrying endlessly.
+func TestDoShip_ConflictFixAgent_GivesUpOnFailure(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	conflictErr := &git.UnresolvedConflictError{PRNumber: 42}
+
+	var mergeAttempts atomic.Int32
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "stable"}
+	gm.ShipFunc = func(ctx context.Context, opts git.ShipOpts) (git.ShipResult, error) {
+		if !opts.AutoMerge {
+			return git.ShipResult{PRNumber: 42}, nil
+		}
+		mergeAttempts.Add(1)
+		return git.ShipResult{PRNumber: 42, ConflictDetail: conflictErr}, nil
+	}
+
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1},
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				// Agent exits without signal — conflict not resolved.
+				return &stubRunner{result: claude.Result{SignalDetected: false}}
+			},
+		}),
+		Connectivity: onlineStubConnectivity(),
+	})
+
+	_, _, merged, ciFailure, _, _ := l.doShip(context.Background(), "ralph-test", "Fix conflict", "summary", filepath.Join(ralphDir, "raw.log"), dir)
+
+	if merged {
+		t.Error("expected merged=false when conflict fix agent failed")
+	}
+	if ciFailure {
+		t.Error("expected ciFailure=false — conflict was the blocker, not CI")
+	}
+	if got := mergeAttempts.Load(); got != 1 {
+		t.Errorf("expected 1 merge attempt (conflict on first try, give up), got %d", got)
+	}
+}
