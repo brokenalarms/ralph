@@ -64,10 +64,13 @@ func (r *Runner) InjectMessage(msg string) error {
 // Query runs a quick non-interactive agent for verification (LLM review).
 // Returns the raw response text. This is the single code path for all
 // prompt-response style invocations (no signal polling, no streaming).
-func (r *Runner) Query(ctx context.Context, workDir, prompt, model string) (string, error) {
+func (r *Runner) Query(ctx context.Context, workDir, prompt, model string, allowedTools []string) (string, error) {
 	args := []string{"--print"}
 	if model != "" {
 		args = append(args, "--model", model)
+	}
+	if len(allowedTools) > 0 {
+		args = append(args, "--allowedTools", strings.Join(allowedTools, ","))
 	}
 	args = append(args, "-p", prompt)
 

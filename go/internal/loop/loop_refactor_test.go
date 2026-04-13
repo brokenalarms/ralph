@@ -79,8 +79,8 @@ func TestLoop_MaybeRefactor_LLMSaysNo(t *testing.T) {
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
 	})
-	l.runner = &stubRunner{
-		queryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+	l.querier = &stubQuerier{
+		fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			queryFnCalled = true
 			return "NO\nCode looks fine.", nil
 		},
@@ -126,7 +126,9 @@ func TestLoop_MaybeRefactor_LLMSaysYes(t *testing.T) {
 		onRun: func() {
 			runnerCalled = true
 		},
-		queryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+	}
+	l.querier = &stubQuerier{
+		fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			return "YES\nThere is significant duplication.", nil
 		},
 	}
@@ -158,8 +160,8 @@ func TestLoop_MaybeRefactor_TriggersAtMultiplesOf5(t *testing.T) {
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
 	})
-	l.runner = &stubRunner{
-		queryFn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
+	l.querier = &stubQuerier{
+		fn: func(ctx context.Context, workDir, prompt, model string) (string, error) {
 			queryCalls++
 			return "NO\nAll good.", nil
 		},
@@ -200,15 +202,28 @@ func TestLoop_LLMShouldRefactor_ParsesResponses(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			queryFn := func(ctx context.Context, workDir, prompt, model string) (string, error) {
-				return tt.response, nil
-			}
-			got, err := llmShouldRefactor(context.Background(), queryFn, t.TempDir(), "arch spec", "file1.go\nfile2.go")
+			resp := tt.response
+			dir, st := setupTestDir(t)
+			ralphDir := filepath.Join(dir, ".ralph")
+			cfg := Config{Dirs: workctx.WorkContext{RalphDir: ralphDir}}
+			logger := logging.New(nil)
+			l := New(cfg, Modules{
+				State: st,
+				Git:   &git.StubRepo{WorkDir: dir},
+				Querier: &stubQuerier{
+					fn: func(_ context.Context, _, _, _ string) (string, error) {
+						return resp, nil
+					},
+				},
+				Logger:   logger,
+				Verifier: newTestVerifier(t, cfg, logger),
+			})
+			got, err := l.llmShouldRefactor(context.Background(), "arch spec", "file1.go\nfile2.go")
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if got != tt.want {
-				t.Errorf("llmShouldRefactor(%q) = %v, want %v", tt.response, got, tt.want)
+				t.Errorf("llmShouldRefactor(%q) = %v, want %v", resp, got, tt.want)
 			}
 		})
 	}

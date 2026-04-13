@@ -32,6 +32,13 @@ func newTestVerifier(t *testing.T, cfg Config, logger *logging.Logger, stubs ...
 	if len(stubs) > 0 {
 		s = stubs[0]
 	}
+	q := s.querier
+	if q == nil && s.queryResponse != "" {
+		resp := s.queryResponse
+		q = &stubQuerier{fn: func(_ context.Context, _, _, _ string) (string, error) {
+			return resp, nil
+		}}
+	}
 	return verifier.New(verifier.Config{
 		VerifyDir:             cfg.VerifyDir,
 		ProjectDir:            cfg.Dirs.ProjectDir,
@@ -44,14 +51,17 @@ func newTestVerifier(t *testing.T, cfg Config, logger *logging.Logger, stubs ...
 		TestTimeout:           cfg.TestTimeout,
 		CompileCheckTimeout:   cfg.CompileCheckTimeout,
 		Signals:               claude.DefaultSignalPaths(cfg.Dirs.RalphDir),
-	}, logger, s.newRunner, s.querier)
+	}, logger, s.newRunner, q)
 }
 
 // verifierTestStubs bundles optional verifier sub-module stubs. Zero
-// values fall back to production defaults.
+// values fall back to production defaults. queryResponse is a convenience
+// shorthand: when set, it creates a stub querier that always returns that
+// response (overridden if querier is also set).
 type verifierTestStubs struct {
-	newRunner verifier.RunnerFactory
-	querier   verifier.Querier
+	newRunner     verifier.RunnerFactory
+	querier       verifier.Querier
+	queryResponse string
 }
 
 type stubRunner struct {
@@ -81,7 +91,7 @@ func (s *stubRunner) InjectMessage(_ string) error { return nil }
 // Query satisfies claudeRunner. Tests that exercise the refactor-decision
 // path set s.queryFn to control the response; the default returns "NO" so
 // refactor checks short-circuit without an actual LLM call.
-func (s *stubRunner) Query(ctx context.Context, workDir, prompt, model string) (string, error) {
+func (s *stubRunner) Query(ctx context.Context, workDir, prompt, model string, _ []string) (string, error) {
 	if s.queryFn != nil {
 		return s.queryFn(ctx, workDir, prompt, model)
 	}
@@ -96,7 +106,7 @@ type stubQuerier struct {
 	fn func(ctx context.Context, workDir, prompt, model string) (string, error)
 }
 
-func (s *stubQuerier) Query(ctx context.Context, workDir, prompt, model string) (string, error) {
+func (s *stubQuerier) Query(ctx context.Context, workDir, prompt, model string, _ []string) (string, error) {
 	if s.fn == nil {
 		return "YES: stub querier default", nil
 	}

@@ -15,12 +15,15 @@ import (
 // and diff data are fetched inside runVerifyPipeline from l.git as
 // verification progresses.
 type verifyPipelineInput struct {
-	ctx        context.Context
-	headBefore string
-	workDir    string
-	rawLogPath string
-	taskID     string
-	nextTask   string // task title
+	ctx             context.Context
+	headBefore      string
+	workDir         string
+	rawLogPath      string
+	taskID          string
+	nextTask        string // task title
+	skipCommitCheck bool   // true for no_code_needed: no commits expected
+	noCodeNeeded    bool   // agent claims no code changes required
+	agentSummary    string // agent's explanation (for no-code-needed verification)
 }
 
 // runVerifyPipeline runs the full post-signal verification sequence: commit
@@ -41,15 +44,19 @@ func (l *Loop) runVerifyPipeline(p verifyPipelineInput) (verified bool, skipReas
 	// fall back to checking whether prior iterations left commits ahead of
 	// origin/main. This prevents stagnation when iteration N commits but
 	// exits without signaling, and iteration N+1 signals without new commits.
-	commitResult := verify.CheckCommits(p.headBefore, l.git.HeadRev())
-	if !commitResult.Passed {
-		baseBranch := l.git.DetectDefaultBranch()
-		priorCommits := l.git.LogOneline("origin/"+baseBranch, "HEAD")
-		if priorCommits == "" {
-			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "No commits found — task was not worked")
-			return false, ""
+	// Skipped for no_code_needed — the agent explicitly confirmed no code
+	// changes are required.
+	if !p.skipCommitCheck {
+		commitResult := verify.CheckCommits(p.headBefore, l.git.HeadRev())
+		if !commitResult.Passed {
+			baseBranch := l.git.DetectDefaultBranch()
+			priorCommits := l.git.LogOneline("origin/"+baseBranch, "HEAD")
+			if priorCommits == "" {
+				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Error}, "No commits found — task was not worked")
+				return false, ""
+			}
+			l.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits this iteration, but prior-iteration commits found ahead of origin/%s — proceeding", baseBranch)
 		}
-		l.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits this iteration, but prior-iteration commits found ahead of origin/%s — proceeding", baseBranch)
 	}
 
 	// Task context for LLM verification and fix-agent prompts. Pre-fetched
@@ -189,15 +196,17 @@ func (l *Loop) runLLMVerifyFixLoop(p verifyPipelineInput, spawn verifier.FixAgen
 		diff, diffSource := l.fetchVerifyDiff(p.taskID, p.headBefore)
 
 		llmResult, _ := l.verifier.LLMVerify(verifier.LLMVerifyOpts{
-			Ctx:         p.ctx,
-			WorkDir:     p.workDir,
-			TaskID:      p.taskID,
-			Title:       p.nextTask,
-			Description: taskDesc,
-			Acceptance:  taskAccept,
-			Diff:        diff,
-			DiffSource:  diffSource,
-			Attempt:     attempts,
+			Ctx:          p.ctx,
+			WorkDir:      p.workDir,
+			TaskID:       p.taskID,
+			Title:        p.nextTask,
+			Description:  taskDesc,
+			Acceptance:   taskAccept,
+			Diff:         diff,
+			DiffSource:   diffSource,
+			Attempt:      attempts,
+			NoCodeNeeded: p.noCodeNeeded,
+			AgentSummary: p.agentSummary,
 		})
 
 		if llmResult.Passed {

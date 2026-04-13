@@ -127,39 +127,37 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	}
 
 	// NoCodeNeeded: agent confirmed investigation found no code changes
-	// required (already fixed, not a bug, etc.). Close directly — no
-	// commit check, no verification pipeline.
+	// required (already fixed, not a bug, etc.). The no_code_needed signal
+	// bypasses OnSignal (detected post-exit), so run the verify pipeline
+	// here with the commit check skipped — tests and LLM verification
+	// still gate the close.
 	if p.result.NoCodeNeeded {
-		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "No code changes needed — closing task %s", p.taskID)
-		if p.taskID != "" {
-			if ctx.Err() != nil {
-				l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
-				return completeTaskOut{action: signalComplete}
+		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "No code changes needed — verifying before close")
+		verified, skipReason := l.runVerifyPipeline(verifyPipelineInput{
+			ctx:             ctx,
+			headBefore:      p.headBefore,
+			workDir:         p.workDir,
+			rawLogPath:      p.rawLogPath,
+			taskID:          p.taskID,
+			nextTask:        p.nextTask,
+			skipCommitCheck: true,
+			noCodeNeeded:    true,
+			agentSummary:    p.result.Summary,
+		})
+		if !verified {
+			if skipReason != "" {
+				l.skipTask(p.taskID, skipReason)
 			}
-			closeReason := p.result.Summary
-			if closeReason == "" {
-				closeReason = "confirmed no code changes needed"
-			}
-			_ = l.taskBackend.SetState(p.taskID, "phase", "verified", closeReason)
-			if err := l.taskBackend.CloseTask(p.taskID, closeReason); err != nil {
-				l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "CloseTask: %v", err)
-				l.skipTask(p.taskID, "close_failed")
-			} else {
-				l.logger.Emit(logging.Opts{Domain: logging.Beads}, "Closed task %s (%s)", p.taskID, closeReason)
-				l.persistCompleted(p.taskID, false)
-			}
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Verification failed for no-code-needed claim — retrying")
+			l.attempts.Record(p.taskID, p.nextTask,
+				"Agent claimed no code needed but verification failed",
+				p.diffStat,
+				"no_code_needed_rejected: verifier did not confirm the claim")
+			return completeTaskOut{action: signalRetry}
 		}
-		l.git.TagTaskEnd(p.taskID)
-		l.execRunPostTask(ctx, p.taskID, 0, false)
-		if p.notify {
-			notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
-		}
-		return completeTaskOut{action: signalSkipped}
-	}
-
-	// If OnSignal was set, verification already passed in the runner.
-	// If not (legacy/test path), run verification here as fallback.
-	if !p.result.OnSignalUsed {
+	} else if !p.result.OnSignalUsed {
+		// If OnSignal was set, verification already passed in the runner.
+		// If not (legacy/test path), run verification here as fallback.
 		if passed, reason := l.verifyCompletion(ctx, p.headBefore); !passed {
 			l.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Verification failed: %s", reason)
 			l.attempts.Record(p.taskID, p.nextTask,
@@ -171,7 +169,11 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	}
 
 	if p.taskID != "" {
-		if err := l.taskBackend.SetState(p.taskID, "phase", "verified", "ralph: tests passed, commits present"); err != nil {
+		stateReason := "ralph: tests passed, commits present"
+		if p.result.NoCodeNeeded {
+			stateReason = "ralph: no code needed — verifier confirmed"
+		}
+		if err := l.taskBackend.SetState(p.taskID, "phase", "verified", stateReason); err != nil {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=verified: %v", err)
 		} else {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads}, "%s → verified", p.taskID)

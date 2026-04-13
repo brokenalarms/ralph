@@ -531,7 +531,7 @@ func (r *rateLimitStubRunner) StopStreaming() {}
 
 func (r *rateLimitStubRunner) InjectMessage(_ string) error { return nil }
 
-func (r *rateLimitStubRunner) Query(_ context.Context, _, _, _ string) (string, error) {
+func (r *rateLimitStubRunner) Query(_ context.Context, _, _, _ string, _ []string) (string, error) {
 	return "NO: stub", nil
 }
 

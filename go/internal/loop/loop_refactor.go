@@ -35,7 +35,7 @@ func (l *Loop) maybeRefactor(ctx context.Context, sessionCount int) error {
 
 	archSpec := readArchSpec(l.git.GetWorkDir())
 
-	shouldRefactor, err := llmShouldRefactor(ctx, l.runner.Query, l.git.GetWorkDir(), archSpec, recentFiles)
+	shouldRefactor, err := l.llmShouldRefactor(ctx, archSpec, recentFiles)
 	if err != nil {
 		return fmt.Errorf("refactor check: %w", err)
 	}
@@ -95,11 +95,7 @@ func readArchSpec(workDir string) string {
 	return content
 }
 
-func llmShouldRefactor(ctx context.Context, queryFn func(context.Context, string, string, string) (string, error), workDir string, archSpec, recentFiles string) (bool, error) {
-	if queryFn == nil {
-		return false, fmt.Errorf("no query function available")
-	}
-
+func (l *Loop) llmShouldRefactor(ctx context.Context, archSpec, recentFiles string) (bool, error) {
 	refactorPrompt := "You are deciding whether a codebase needs refactoring.\n\n"
 	if archSpec != "" {
 		refactorPrompt += "## Architecture spec\n" + archSpec + "\n\n"
@@ -109,7 +105,7 @@ func llmShouldRefactor(ctx context.Context, queryFn func(context.Context, string
 	refactorPrompt += "Consider: code duplication, unclear naming, files growing too large, architectural drift from the spec, dead code.\n"
 	refactorPrompt += "Reply with exactly YES or NO on the first line, followed by a brief explanation."
 
-	response, err := queryFn(ctx, workDir, refactorPrompt, "")
+	response, err := l.querier.Query(ctx, l.git.GetWorkDir(), refactorPrompt, "", nil)
 	if err != nil {
 		return false, err
 	}

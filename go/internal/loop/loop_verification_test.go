@@ -767,7 +767,7 @@ func (s *signalCallingRunner) StopStreaming() {}
 
 func (s *signalCallingRunner) InjectMessage(_ string) error { return nil }
 
-func (s *signalCallingRunner) Query(_ context.Context, _, _, _ string) (string, error) {
+func (s *signalCallingRunner) Query(_ context.Context, _, _, _ string, _ []string) (string, error) {
 	return "NO: stub", nil
 }
 

@@ -80,7 +80,7 @@ type RunnerFactory func() Runner
 // In production *agent.Runner satisfies this interface via its Query
 // method; tests provide stubs that return canned YES/NO responses.
 type Querier interface {
-	Query(ctx context.Context, workDir, prompt, model string) (string, error)
+	Query(ctx context.Context, workDir, prompt, model string, allowedTools []string) (string, error)
 }
 
 // Verifier owns the individual verification operations. It holds its
@@ -194,6 +194,13 @@ type LLMVerifyOpts struct {
 	// flow; attempt 1 uses the base verify model, subsequent attempts
 	// escalate to the escalation model.
 	Attempt int
+	// NoCodeNeeded is true when the agent claimed no code changes are
+	// required. When set with an empty Diff, the verifier spawns a
+	// tool-using query to read the codebase and confirm the acceptance
+	// criteria are already met, instead of auto-passing.
+	NoCodeNeeded bool
+	// AgentSummary is the agent's explanation of why no code is needed.
+	AgentSummary string
 }
 
 // LLMVerify runs LLM verification with the given opts. It selects the
@@ -212,21 +219,37 @@ type LLMVerifyOpts struct {
 func (v *Verifier) LLMVerify(opts LLMVerifyOpts) (verify.Result, string) {
 	model := v.verifyModel(opts.Attempt)
 
-	if opts.Diff == "" {
+	if opts.Diff == "" && !opts.NoCodeNeeded {
 		return verify.Result{Passed: true, NoDiff: true, Reason: "no PR found and no new commits — agent confirms task complete"}, model
 	}
 
-	prompt := verify.BuildReviewPrompt(verify.ReviewPromptInput{
-		PromptsDir:  v.cfg.PromptsDir,
-		Title:       opts.Title,
-		Description: opts.Description,
-		Acceptance:  opts.Acceptance,
-		Diff:        opts.Diff,
-		DiffSource:  opts.DiffSource,
-	})
+	var prompt string
+	var allowedTools []string
+	if opts.NoCodeNeeded {
+		// Agent claimed no code changes needed. Spawn a tool-using
+		// verifier that can read the codebase to confirm the acceptance
+		// criteria are already met.
+		prompt = v.loadVerifyPrompt("verify-no-code-needed.md", map[string]string{
+			"{{TASK_TITLE}}":          opts.Title,
+			"{{TASK_DESCRIPTION}}":    opts.Description,
+			"{{ACCEPTANCE_CRITERIA}}": opts.Acceptance,
+			"{{AGENT_SUMMARY}}":       opts.AgentSummary,
+		})
+		allowedTools = []string{"Read", "Grep", "Glob"}
+		v.logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Verifying no-code-needed claim...")
+	} else {
+		prompt = verify.BuildReviewPrompt(verify.ReviewPromptInput{
+			PromptsDir:  v.cfg.PromptsDir,
+			Title:       opts.Title,
+			Description: opts.Description,
+			Acceptance:  opts.Acceptance,
+			Diff:        opts.Diff,
+			DiffSource:  opts.DiffSource,
+		})
+		v.logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Running LLM verification...")
+	}
 
-	v.logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Running LLM verification...")
-	response, err := v.querier.Query(opts.Ctx, opts.WorkDir, prompt, model)
+	response, err := v.querier.Query(opts.Ctx, opts.WorkDir, prompt, model, allowedTools)
 	if err != nil {
 		result := verify.Result{Passed: true, Reason: "LLM verification skipped: " + err.Error()}
 		v.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: model}, "LLM verification skipped: %v", err)

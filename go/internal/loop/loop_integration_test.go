@@ -2869,7 +2869,7 @@ func (m *multiIterationRunner) StopStreaming() {}
 
 func (m *multiIterationRunner) InjectMessage(_ string) error { return nil }
 
-func (m *multiIterationRunner) Query(_ context.Context, _, _, _ string) (string, error) {
+func (m *multiIterationRunner) Query(_ context.Context, _, _, _ string, _ []string) (string, error) {
 	return "NO: stub", nil
 }
 

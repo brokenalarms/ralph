@@ -156,9 +156,9 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 }
 
 // Verifies that when the agent signals .signal_no_code_needed (NoCodeNeeded=true),
-// the task is closed directly without a commit check or verification pipeline.
-// This is the "already fixed / not a bug" close path that prevents stagnation
-// when an agent investigates and confirms no code changes are needed.
+// the task goes through the verification pipeline (tests + LLM verify with
+// commit check skipped) before being closed. The LLM verifier receives the
+// agent's claim and reads the codebase to confirm acceptance criteria are met.
 func TestLoop_NoCodeNeeded_ClosesTaskWithoutCommits(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -186,8 +186,9 @@ func TestLoop_NoCodeNeeded_ClosesTaskWithoutCommits(t *testing.T) {
 		},
 	}
 
-	// No commits — same head before and after. The no-code-needed path must
-	// close the bead regardless.
+	// No commits — same head before and after. The no-code-needed path
+	// runs the verify pipeline with skipCommitCheck, then falls through
+	// to the no-commits close path.
 	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "abc123"}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
@@ -200,15 +201,14 @@ func TestLoop_NoCodeNeeded_ClosesTaskWithoutCommits(t *testing.T) {
 		CallsPerHour:  80,
 	}
 	logger := logging.New(nil)
-	// VerifyHook set to fail — proves NoCodeNeeded bypasses verification entirely.
+	// LLM verifier returns YES — confirms the no-code-needed claim.
 	l := New(cfg, Modules{
 		State:        st,
 		Git:          gm,
 		TaskBackend:  backend,
 		Logger:       logger,
-		Verifier:     newTestVerifier(t, cfg, logger),
+		Verifier:     newTestVerifier(t, cfg, logger, verifierTestStubs{queryResponse: "YES: fix already present"}),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook:   &stubVerifyHook{passed: false, reason: "no commits"},
 	})
 	l.runner = runner
 
@@ -221,11 +221,6 @@ func TestLoop_NoCodeNeeded_ClosesTaskWithoutCommits(t *testing.T) {
 	}
 	if backend.ClosedIDs[0] != "ralph-7y9s" {
 		t.Errorf("expected CloseTask for ralph-7y9s, got %q", backend.ClosedIDs[0])
-	}
-	// Close reason must be the agent's summary, not a generic "no commits" message.
-	reason := backend.CloseReasons[0]
-	if !strings.Contains(reason, "bug already fixed in main") {
-		t.Errorf("close reason should contain agent summary, got %q", reason)
 	}
 }
 

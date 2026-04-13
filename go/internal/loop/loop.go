@@ -100,6 +100,7 @@ type Modules struct {
 	Logger       *logging.Logger
 	Verifier     *verifier.Verifier
 	Runner       claudeRunner   // nil → agent.New(logger)
+	Querier      querier        // nil → agent.New(logger); one-shot LLM queries
 	Connectivity Connectivity   // nil → live gh CLI / net checks
 	IterationHook IterationHook // nil → no-op
 	PostTaskHook PostTaskHook   // nil → fallback to runPostTask script path
@@ -178,16 +179,21 @@ func (c *liveConnectivity) WaitForInternet(ctx context.Context, logger *logging.
 	return waitForInternet(ctx, logger, c.restoreInterval, c.checkTimeout)
 }
 
-// claudeRunner abstracts the Claude execution interface for testability.
-// Run/StopStreaming/InjectMessage drive the streaming-agent session;
-// Query is the one-shot LLM call used by Loop's refactor-decision helper.
-// Verifier defines its own (narrower) Querier interface internally — the
-// production *agent.Runner satisfies both.
+// claudeRunner abstracts the streaming-agent session for testability.
+// Run/StopStreaming/InjectMessage drive the interactive agent — this
+// interface does NOT include one-shot queries, which go through querier.
 type claudeRunner interface {
 	Run(cfg claude.RunConfig) (claude.Result, error)
 	StopStreaming()
 	InjectMessage(msg string) error
-	Query(ctx context.Context, workDir, prompt, model string) (string, error)
+}
+
+// querier abstracts one-shot LLM queries (no streaming, no signal polling).
+// Used by the refactor-decision helper. The verifier defines its own
+// identical Querier interface — in production both are satisfied by
+// *agent.Runner, but they are injected separately.
+type querier interface {
+	Query(ctx context.Context, workDir, prompt, model string, allowedTools []string) (string, error)
 }
 
 // CompletedTask holds summary info for a task completed during this session.
@@ -216,6 +222,7 @@ type Loop struct {
 	taskBackend       tasks.Backend
 	limiter           *ratelimit.Limiter
 	runner            claudeRunner
+	querier           querier
 	verifier          *verifier.Verifier
 	analyzer          *analyzer.Analyzer
 	attempts          *attempts.Tracker
@@ -273,6 +280,11 @@ func New(cfg Config, mods Modules) *Loop {
 		runner = agent.New(logger)
 	}
 
+	q := mods.Querier
+	if q == nil {
+		q = agent.New(logger)
+	}
+
 	at := attempts.New(attempts.Config{
 		RalphDir:               cfg.Dirs.RalphDir,
 		MaxPromptAttempts:      cfg.MaxPromptAttempts,
@@ -285,6 +297,7 @@ func New(cfg Config, mods Modules) *Loop {
 		taskBackend:   taskBackend,
 		limiter:       limiter,
 		runner:        runner,
+		querier:       q,
 		verifier:      mods.Verifier,
 		analyzer:      analyzer.New(),
 		attempts:      at,

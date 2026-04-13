@@ -251,10 +251,6 @@ func (p *promptCapturingRunner) InjectMessage(msg string) error {
 	return p.inner.InjectMessage(msg)
 }
 
-func (p *promptCapturingRunner) Query(ctx context.Context, workDir, prompt, model string) (string, error) {
-	return p.inner.Query(ctx, workDir, prompt, model)
-}
-
 // Verifies that push is called after signal detection. The sync guard
 // (fetch + rebase) is enforced internally by PushAndCreatePR's EnsureUpToDate
 // — tested in git module.
