@@ -317,7 +317,8 @@ func TestCompleteTask_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
 }
 
 // completeTask cancels a blocking merge when the post-signal timeout
-// fires, so the orchestrator doesn't stall on a rate-limited API call.
+// fires, returning nil ct so the task is not added to completedIDs
+// and remains retryable on the next iteration.
 func TestCompleteTask_PostSignalTimeout_CancelsMerge(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -352,7 +353,7 @@ func TestCompleteTask_PostSignalTimeout_CancelsMerge(t *testing.T) {
 		return false, ctx.Err()
 	}
 
-	done := make(chan postSignalAction, 1)
+	done := make(chan completeTaskOut, 1)
 	go func() {
 		done <- l.completeTask(context.Background(), completeTaskParams{
 			result:            claude.Result{SignalDetected: true},
@@ -363,14 +364,76 @@ func TestCompleteTask_PostSignalTimeout_CancelsMerge(t *testing.T) {
 			nextTask:          "Slow merge",
 			postSignalTimeout: l.cfg.PostSignalTimeout,
 			ralphDir:          ralphDir,
-		}).action
+		})
 	}()
 
 	select {
-	case <-done:
-		// Returned within timeout — merge was cancelled, not hung
+	case out := <-done:
+		if out.ct != nil {
+			t.Errorf("ct should be nil on timeout (bead not closed), got %+v", out.ct)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("completeTask hung — PostSignalTimeout did not cancel merge")
+	}
+}
+
+// A task that times out during merge is not added to completedIDs,
+// so the next iteration can pick it up again instead of permanently skipping it.
+func TestCompleteTask_TimeoutDuringMerge_TaskRetryableNextIteration(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Retry me", NextID: "ralph-retry"}},
+	}
+
+	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	cfg := Config{
+		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations:     1,
+		CallsPerHour:      80,
+		AutoMerge:         true,
+		PostSignalTimeout: 50 * time.Millisecond,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook: passingVerifyHook(),
+	})
+	l.runner = &stubRunner{}
+	gm.ShipResult = git.ShipResult{PRNumber: 99}
+	gm.MergeRetryFunc = func(ctx context.Context) (bool, error) {
+		<-ctx.Done()
+		return false, ctx.Err()
+	}
+
+	out := l.completeTask(context.Background(), completeTaskParams{
+		result:            claude.Result{SignalDetected: true},
+		headBefore:        "",
+		workDir:           dir,
+		rawLogPath:        filepath.Join(ralphDir, "raw.log"),
+		taskID:            "ralph-retry",
+		nextTask:          "Retry me",
+		postSignalTimeout: cfg.PostSignalTimeout,
+		ralphDir:          ralphDir,
+	})
+
+	if out.ct != nil {
+		t.Fatalf("ct should be nil on timeout, got %+v", out.ct)
+	}
+
+	// Simulate next iteration: the task should NOT appear in completedIDs
+	completed, _ := st.GetCompletedTasks()
+	for _, entry := range completed {
+		if entry.ID == "ralph-retry" {
+			t.Fatal("timed-out task should not be in completedIDs — it must be retryable")
+		}
 	}
 }
 

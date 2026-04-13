@@ -324,7 +324,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 
 	if ctx.Err() != nil {
 		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Post-signal timeout — aborting before merge")
-		return completeTaskOut{action: signalComplete, ct: &ct}
+		return completeTaskOut{action: signalComplete}
 	}
 
 	if prNumber == 0 {
@@ -332,7 +332,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		if p.taskID != "" {
 			if ctx.Err() != nil {
 				l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
-				return completeTaskOut{action: signalComplete, ct: &ct}
+				return completeTaskOut{action: signalComplete}
 			}
 			branch := l.git.GetWorktreeBranch()
 			closeReason := "Verified — no PR created"
@@ -358,7 +358,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	if p.taskID != "" {
 		if ctx.Err() != nil {
 			l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
-			return completeTaskOut{action: signalComplete, ct: &ct}
+			return completeTaskOut{action: signalComplete}
 		}
 		prRef := ct.PRURL
 		if prRef == "" {
