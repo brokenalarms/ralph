@@ -27,12 +27,6 @@ type StubGitHub struct {
 	ChecksErr          error
 	MergeCalls         int
 	LastMergeOpts      MergeOpts
-	EnforceAdmins      bool
-	EnforceAdminsErr   error
-	PostEnforceOutput  string
-	PostEnforceErr     error
-	PostEnforceCalled  bool
-	CheckEnforceCalled bool
 	PRNumber           int
 	PRTitle            string
 	PRURL              string
@@ -44,8 +38,6 @@ type StubGitHub struct {
 	PRHead             string
 	HeadSHA    string
 	OpenPRBranches     []string
-	SearchCalled       bool
-	PRDiffCalled       bool
 	RunLogValue        string
 	ReopenPRErr           error
 	ReopenPRCalled        bool
@@ -126,23 +118,13 @@ func (s *StubGitHub) ListChecks(prNumber int, repoURL string) ([]CICheckResult, 
 	return s.Checks, s.ChecksErr
 }
 func (s *StubGitHub) GetRunLog(prNumber int, workDir string) string { return s.RunLogValue }
-func (s *StubGitHub) CheckEnforceAdmins(nwo, branch string) (bool, error) {
-	s.CheckEnforceCalled = true
-	return s.EnforceAdmins, s.EnforceAdminsErr
-}
-func (s *StubGitHub) PostEnforceAdmins(nwo, branch string) (string, error) {
-	s.PostEnforceCalled = true
-	return s.PostEnforceOutput, s.PostEnforceErr
-}
 func (s *StubGitHub) FindPR(branch, repoURL string) (int, string, string, error) {
 	return s.PRNumber, s.PRTitle, s.PRURL, s.FindPRErr
 }
 func (s *StubGitHub) SearchPR(workDir, query string) (int, error) {
-	s.SearchCalled = true
 	return s.SearchPRNumber, nil
 }
 func (s *StubGitHub) PRDiff(repoURL string, prNumber int) (string, error) {
-	s.PRDiffCalled = true
 	return s.PRDiffOutput, nil
 }
 func (s *StubGitHub) GetPR(nwo string, prNumber int) (*PRDetail, error) {

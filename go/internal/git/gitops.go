@@ -130,7 +130,6 @@ var _ Ops = (*Repo)(nil)
 
 // GetProjectDir returns the project root directory.
 func (r *Repo) GetProjectDir() string     { return r.projectDir }
-func (r *Repo) GetRalphDir() string       { return r.ralphDir }
 func (r *Repo) GetWorkDir() string        { return r.workDir }
 func (r *Repo) GetWorktreeBranch() string { return r.worktreeBranch }
 func (r *Repo) GetPrevBranch() string     { return r.prevBranch }

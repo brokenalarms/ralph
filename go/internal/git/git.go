@@ -48,7 +48,6 @@ type Config struct {
 // construct it directly for stub injection.
 type Repo struct {
 	projectDir     string
-	projectName    string
 	workDir        string
 	worktreeBranch string
 	prevBranch     string
@@ -171,8 +170,6 @@ func (r *Repo) SetupWorktree(ctx context.Context) error {
 		}
 	}
 
-	r.projectName = filepath.Base(r.projectDir)
-
 	today := time.Now().Format("20060102")
 	runSeq := 1
 	worktreeRoot := filepath.Join(r.ralphDir, "worktrees")
@@ -255,7 +252,6 @@ func (r *Repo) tryResumeWorktree() error {
 	r.workDir = stored
 	branch, _ := r.state.Read("worktree_branch")
 	r.worktreeBranch = branch
-	r.projectName = filepath.Base(r.projectDir)
 	if renamed, _ := r.state.Read("branch_renamed"); renamed == "true" {
 		r.branchRenamed = true
 	}

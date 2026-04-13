@@ -31,15 +31,6 @@ func (l *Loop) completedBranches() []string {
 	return branches
 }
 
-// prLink builds a logging.Link for a PR number using the loop's git remote URL.
-func (l *Loop) prLink(prNumber int) *logging.Link {
-	url := prURL(l.git.RemoteURL(), prNumber)
-	if url == "" {
-		return nil
-	}
-	return &logging.Link{Text: fmt.Sprintf("PR #%d", prNumber), URL: url}
-}
-
 // closeResumedTask closes the bead after the resume path resolves the PR.
 func (l *Loop) closeResumedTask(ctx context.Context, taskID, taskTitle string, result git.ResumeTaskResult) {
 	if taskID == "" {
