@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -432,9 +433,10 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
-		MaxIterations: 1,
-		CallsPerHour:  80,
-		AutoMerge:     true,
+		MaxIterations:      1,
+		CallsPerHour:       80,
+		AutoMerge:          true,
+		InfraRetryBackoffs: make([]time.Duration, 3),
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
