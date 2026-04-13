@@ -532,6 +532,10 @@ func (s *StubRepo) RevertFilesToRef(files []string, ref string) {
 	s.CommitMessages = append(s.CommitMessages, "revert-out-of-scope")
 }
 
+func (s *StubRepo) EmptyCommit(message string) {
+	s.CommitMessages = append(s.CommitMessages, message)
+}
+
 func (s *StubRepo) EnsureUpToDate(_ context.Context) error { return s.EnsureUpToDateErr }
 func (s *StubRepo) Push(_ context.Context) error            { return s.PushErr }
 

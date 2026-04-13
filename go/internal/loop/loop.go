@@ -154,6 +154,11 @@ type Config struct {
 	// errors (default: 5s, 15s, 30s). Set to zero-duration slices in tests to
 	// avoid sleeping.
 	ShipRetryBackoffs []time.Duration
+
+	// InfraRetryBackoffs overrides the backoff delays between infrastructure CI
+	// retries (default: 1min, 2min, 4min). Set to zero-duration slices in tests
+	// to avoid sleeping. Length determines maxInfraRetries.
+	InfraRetryBackoffs []time.Duration
 }
 
 // liveConnectivity is the production Connectivity implementation. It
@@ -747,6 +752,11 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 
 	// Retry loop: Ship may return ReviewFixNeeded or CIFailure; fix and retry.
 	const maxShipRetries = 5
+	infraRetryBackoffs := l.cfg.InfraRetryBackoffs
+	if infraRetryBackoffs == nil {
+		infraRetryBackoffs = []time.Duration{1 * time.Minute, 2 * time.Minute, 4 * time.Minute}
+	}
+	infraRetries := 0
 	var mergeResult git.ShipResult
 	for attempt := 0; attempt < maxShipRetries; attempt++ {
 		var mergeErr error
@@ -771,6 +781,25 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 			// CI fix: spawn fix agent; if it pushed new commits, retry merge.
 			fixResult := l.tryFixCI(ctx, mergeResult.CIFailureDetail, title, workDir, rawLogPath)
 			if fixResult == git.CIFixApplied {
+				continue
+			}
+			// Transient infrastructure failure — re-trigger CI and retry with backoff.
+			if fixResult == git.CIFixNoCommits && infraRetries < len(infraRetryBackoffs) {
+				delay := infraRetryBackoffs[infraRetries]
+				infraRetries++
+				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+					"Transient CI failure — re-triggering and retrying in %s (%d/%d)",
+					delay, infraRetries, len(infraRetryBackoffs))
+				l.git.EmptyCommit("[ci skip] trigger CI re-run")
+				if pushErr := l.git.Push(ctx); pushErr != nil {
+					l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+						"Push for CI re-trigger failed: %v", pushErr)
+				}
+				select {
+				case <-ctx.Done():
+					return prResultNum, prResultURL, false, true, false
+				case <-time.After(delay):
+				}
 				continue
 			}
 		}
