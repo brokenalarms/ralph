@@ -351,7 +351,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		l.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Error}, "CI failing on PR #%d — leaving task %s open.", prNumber, p.taskID)
 		l.git.TagTaskEnd(p.taskID)
 		l.execRunPostTask(ctx, p.taskID, prNumber, false)
-		return completeTaskOut{action: signalComplete, ct: &ct}
+		return completeTaskOut{action: signalComplete}
 	}
 
 	// Close the task based on merge outcome.

@@ -179,12 +179,15 @@ func TestFinalizePR_CIFixExhausted_TaskStaysOpen(t *testing.T) {
 		ciFailure: true,
 	})
 
-	fs.loop.completeTask(context.Background(), fs.p)
+	out := fs.loop.completeTask(context.Background(), fs.p)
 
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
 	if len(backend.ClosedIDs) != 0 {
 		t.Errorf("CloseTask must not be called when CI failure, got %v", backend.ClosedIDs)
+	}
+	if out.ct != nil {
+		t.Errorf("CI failure must not return CompletedTask (would prevent retry), got %+v", out.ct)
 	}
 }
 
@@ -201,12 +204,15 @@ func TestFinalizePR_CIFailure_TaskStaysOpen(t *testing.T) {
 		ciFailure: true,
 	})
 
-	fs.loop.completeTask(context.Background(), fs.p)
+	out := fs.loop.completeTask(context.Background(), fs.p)
 
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
 	if len(backend.ClosedIDs) != 0 {
 		t.Errorf("CloseTask must not be called when CI fails, got %v", backend.ClosedIDs)
+	}
+	if out.ct != nil {
+		t.Errorf("CI failure must not return CompletedTask (would prevent retry), got %+v", out.ct)
 	}
 }
 

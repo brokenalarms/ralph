@@ -158,6 +158,22 @@ func TestRequiredFailedChecks_NoneFailedReturnsEmpty(t *testing.T) {
 	}
 }
 
+// When IsRequired is populated, RequiredFailedChecks only returns required failures.
+func TestRequiredFailedChecks_FiltersByIsRequired(t *testing.T) {
+	checks := []CICheckResult{
+		{Name: "test", State: "FAILURE", Bucket: "fail", IsRequired: true},
+		{Name: "deploy/preview", State: "FAILURE", Bucket: "fail", IsRequired: false},
+		{Name: "lint", State: "SUCCESS", Bucket: "pass", IsRequired: true},
+	}
+	required := RequiredFailedChecks(checks)
+	if len(required) != 1 {
+		t.Fatalf("expected 1 required failed check, got %d", len(required))
+	}
+	if required[0].Name != "test" {
+		t.Errorf("expected 'test', got %q", required[0].Name)
+	}
+}
+
 // CIFailureError produces a human-readable message listing the failed
 // check names, suitable for feedback to the next iteration.
 func TestCIFailureError_Message(t *testing.T) {

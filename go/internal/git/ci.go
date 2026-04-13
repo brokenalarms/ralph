@@ -128,12 +128,20 @@ func (r *Repo) isInfrastructureFailure(ctx context.Context, prNumber int) bool {
 }
 
 // RequiredFailedChecks returns failed checks that the fix agent should address.
-// Currently returns all failed checks — gh pr checks does not expose an
-// isRequired field, so we treat every check as required.
+// When IsRequired is populated (branch protection was queried successfully),
+// only required failed checks are returned. When no check has IsRequired set
+// (branch protection unavailable), all failed checks are treated as required.
 func RequiredFailedChecks(checks []CICheckResult) []CICheckResult {
+	hasRequired := false
+	for _, c := range checks {
+		if c.IsRequired {
+			hasRequired = true
+			break
+		}
+	}
 	var failed []CICheckResult
 	for _, c := range checks {
-		if c.Bucket == "fail" {
+		if c.Bucket == "fail" && (!hasRequired || c.IsRequired) {
 			failed = append(failed, c)
 		}
 	}
@@ -197,6 +205,7 @@ func (r *Repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushed
 			var filtered []CICheckResult
 			for _, c := range checks {
 				if required[c.Name] {
+					c.IsRequired = true
 					filtered = append(filtered, c)
 				}
 			}
