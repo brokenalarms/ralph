@@ -8,26 +8,9 @@
 ## Your task this iteration
 {{TASK_PROMPT}}
 
-## Creating beads
-
-If you create a bead with `bd create`, always include `--acceptance` with
-specific, testable acceptance criteria. Without acceptance criteria, the
-verifier LLM cannot reject bad work and agents take shortcuts. Be concrete:
-"No package-level git wrappers remain in runner.go" not "improve git module."
-
-Always echo back the details so the log shows what was created — not the raw
-command with all its flags. Show one concise line of the command, then echo
-back: ID, priority, type, labels, title, and description — truncate the
-description to ~3 lines if longer.
-
-Example:
-> Created **ralph-abc** · P2 task · `orchestrator` `git`
-> **ralph loop: force-reset worktree after merge**
-> Resets the worktree to origin/main after each squash-merge so stale
-> branches don't accumulate.
-
 ## Invariants
 - The `.beads` directory is the project's permanent task history. Never delete, clear, or reinitialize it. Do not remove it with shell commands or force-reinitialize the task backend. Only `.ralph` state is ephemeral — `.beads` persists across all runs.
+- NEVER run any `bd` commands — the orchestrator owns all bead operations (create, update, close, delete, set-state). Running bd directly corrupts the task the orchestrator is tracking.
 - NEVER run `bd init` — ralph handles backend initialization. Running `bd init` from the wrong directory creates orphan databases.
 - NEVER create directories named after task IDs. Work only in the worktree at {{WORK_DIR}}.
 
@@ -60,5 +43,5 @@ Never skip a failing test. If any test fails — even one unrelated to your task
 2. Write your post-task reflection.
 3. Signal completion by writing to the signal file. This MUST be the very last thing you do — Ralph will kill your process immediately when it detects the signal.
 
-Do NOT run `bd close` — the orchestrator closes your assigned task automatically after verifying your work.
+Do NOT run any `bd` commands — the orchestrator owns the full bead lifecycle (create, close, delete, set-state). Running bd directly can destroy the task being tracked.
 Do NOT run `git push` or `gh pr create` — the orchestrator handles pushing, PR creation, and merging. You do not have access to these commands.

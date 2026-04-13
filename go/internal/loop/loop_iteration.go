@@ -200,9 +200,18 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		l.logger.Emit(logging.Opts{Domain: logging.Git}, "No new commits — verified complete")
 
 		// Check for an existing PR from a prior attempt that still needs merging.
+		// Try external ref first, then fall back to branch-based PR discovery.
 		if p.taskID != "" {
-			ref, _ := l.taskBackend.GetExternalRef(p.taskID)
-			if prNum := parsePRNumber(ref); prNum != 0 {
+			var prNum int
+			if ref, _ := l.taskBackend.GetExternalRef(p.taskID); ref != "" {
+				prNum = parsePRNumber(ref)
+			}
+			if prNum == 0 {
+				if n, _, _, err := l.git.FindPRForBranch(l.git.GetWorktreeBranch()); err == nil && n != 0 {
+					prNum = n
+				}
+			}
+			if prNum != 0 {
 				prState, _ := l.git.GetPRState(prNum)
 				if prState == git.PRStateOpen {
 					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through merge", prNum)
@@ -229,7 +238,23 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 					return completeTaskOut{action: signalSkipped, merged: merged}
 				}
 				if prState == git.PRStateMerged {
-					l.logger.Emit(logging.Opts{Domain: logging.Git}, "PR #%d already merged", prNum)
+					l.logger.Emit(logging.Opts{Domain: logging.Git}, "PR #%d already merged — closing bead", prNum)
+					prRef := fmt.Sprintf("PR #%d", prNum)
+					closeReason := fmt.Sprintf("Fixed in %s (already merged)", prRef)
+					_ = l.taskBackend.CloseTask(p.taskID, closeReason)
+					l.persistCompleted(p.taskID, true)
+					l.git.TagTaskEnd(p.taskID)
+					l.execRunPostTask(ctx, p.taskID, prNum, true)
+					if p.notify {
+						notify.TaskCompleted(p.taskID, p.nextTask, p.result.Summary)
+						notify.TaskMerged(p.taskID, p.nextTask)
+					}
+					if p.evolve {
+						l.logger.Phase("Evolve: restarting with latest main")
+						l.state.Write("status", "evolve_restart") //nolint:errcheck
+						return completeTaskOut{action: signalEvolve, merged: true}
+					}
+					return completeTaskOut{action: signalSkipped, merged: true}
 				}
 			}
 		}
@@ -242,7 +267,6 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 				return completeTaskOut{action: signalComplete}
 			}
 			closeReason := "verified complete (no new commits)"
-			_ = l.taskBackend.SetState(p.taskID, "phase", "verified", closeReason)
 			if err := l.taskBackend.CloseTask(p.taskID, closeReason); err != nil {
 				skipReason := "close_failed"
 				if blockers := tasks.ParseDependencyBlock(err); len(blockers) > 0 {
@@ -345,10 +369,6 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 			closeReason = fmt.Sprintf("Verified — %s open, merge pending", prRef)
 		} else {
 			closeReason = fmt.Sprintf("Fixed in %s", prRef)
-		}
-		_ = l.taskBackend.SetState(p.taskID, "phase", "verified", "ralph: PR open or stacked")
-		if merged {
-			_ = l.taskBackend.SetState(p.taskID, "phase", "verified", "ralph: PR merged")
 		}
 		if err := l.taskBackend.CloseTask(p.taskID, closeReason); err != nil {
 			skipReason := "close_failed"

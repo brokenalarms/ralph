@@ -290,30 +290,16 @@ func TestExecutionBD_ReinforcesBoyScoutRule(t *testing.T) {
 	}
 }
 
-// Proves: execution-bd.md instructs the agent to echo bead details neatly
-// after bd create — ID, priority, type, labels, title, description — instead
-// of dumping the raw command with all flags.
-func TestExecutionBD_BeadEchoBack(t *testing.T) {
+// Proves: execution-bd.md prohibits the agent from running any bd commands —
+// the orchestrator owns all bead operations.
+func TestExecutionBD_ProhibitsBdCommands(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
 	if err != nil {
 		t.Fatalf("reading execution-bd.md: %v", err)
 	}
 	s := string(content)
-
-	required := []struct {
-		substr string
-		reason string
-	}{
-		{"echo back", "should instruct echoing bead details after creation"},
-		{"priority", "echo should include priority"},
-		{"labels", "echo should include labels"},
-		{"truncat", "echo should mention truncation for long descriptions"},
-	}
-
-	for _, tc := range required {
-		if !strings.Contains(s, tc.substr) {
-			t.Errorf("execution-bd.md missing %q: %s", tc.substr, tc.reason)
-		}
+	if !strings.Contains(s, "NEVER run any `bd` commands") {
+		t.Error("execution-bd.md must prohibit all bd commands — orchestrator owns bead lifecycle")
 	}
 }
 
@@ -911,20 +897,16 @@ func TestTaskManagerPrompt_StartupIncludesBdReady(t *testing.T) {
 	}
 }
 
-// Proves: execution-bd.md requires --acceptance flag on bd create so every
-// bead created by the execution agent has testable acceptance criteria.
-func TestExecutionBD_RequiresAcceptanceCriteria(t *testing.T) {
+// Proves: execution-bd.md no longer instructs bd create — agent must not
+// run any bd commands. The orchestrator owns the full bead lifecycle.
+func TestExecutionBD_NoBdCreateInstruction(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
 	if err != nil {
 		t.Fatalf("reading execution-bd.md: %v", err)
 	}
 	s := string(content)
-
-	if !strings.Contains(s, "--acceptance") {
-		t.Error("execution-bd.md should require --acceptance flag on bd create")
-	}
-	if !strings.Contains(s, "acceptance criteria") {
-		t.Error("execution-bd.md should mention acceptance criteria requirement")
+	if strings.Contains(s, "bd create") {
+		t.Error("execution-bd.md must not instruct bd create — agent should not run any bd commands")
 	}
 }
 

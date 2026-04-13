@@ -401,7 +401,10 @@ func (b *BD) CloseTask(id string, reason string) error {
 	run := b.runner()
 
 	// Prevent closing unless the task has reached phase:verified.
-	phase, _ := b.GetState(id, "phase")
+	phase, err := b.GetState(id, "phase")
+	if err != nil {
+		return fmt.Errorf("cannot close %s: GetState failed: %w", id, err)
+	}
 	if phase != "verified" {
 		return fmt.Errorf("cannot close %s: phase is %q, must be \"verified\"", id, phase)
 	}
@@ -409,7 +412,7 @@ func (b *BD) CloseTask(id string, reason string) error {
 	if reason == "" {
 		reason = "completed by ralph"
 	}
-	_, err := run(b.ctx(), b.ProjectDir, "close", id, "--reason", reason)
+	_, err = run(b.ctx(), b.ProjectDir, "close", id, "--reason", reason)
 	return err
 }
 
