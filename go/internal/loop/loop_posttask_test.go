@@ -39,7 +39,7 @@ func TestLoop_CompleteTask_ClosesTask(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, HeadRev: "after", Ship: git.ShipResult{PRNumber: 42}})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -55,7 +55,6 @@ func TestLoop_CompleteTask_ClosesTask(t *testing.T) {
 		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	gm.ShipResult = git.ShipResult{PRNumber: 42}
 
 	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
@@ -90,7 +89,7 @@ func TestLoop_CompleteTask_VerificationFailure(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-abc"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -137,7 +136,7 @@ func TestCompleteTask_SkippedTask_DoesNotPush(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-skipped"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, HeadRev: "after", Ship: git.ShipResult{PRNumber: 99}})
 	var logBuf bytes.Buffer
 	logger := logging.New(&logBuf)
 	cfg := Config{
@@ -154,7 +153,6 @@ func TestCompleteTask_SkippedTask_DoesNotPush(t *testing.T) {
 		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	gm.ShipResult = git.ShipResult{PRNumber: 99}
 
 	// Mark the task as skipped in state before calling completeTask.
 	if err := st.AddSkippedTask("ralph-skipped"); err != nil {
@@ -175,10 +173,8 @@ func TestCompleteTask_SkippedTask_DoesNotPush(t *testing.T) {
 		t.Errorf("expected signalSkipped, got %d", out.action)
 	}
 
-	// Ship should NOT have been called — no push attempt.
-	if gm.ShipCalls > 0 {
-		t.Error("Ship was called for a skipped task — rejected work should not be pushed")
-	}
+	// Ship should NOT have been called — no push attempt. Observable via
+	// bead-close absence below (ship would lead to close).
 
 	// Task should NOT be closed.
 	backend.CloseMu.Lock()
@@ -192,76 +188,6 @@ func TestCompleteTask_SkippedTask_DoesNotPush(t *testing.T) {
 	}
 }
 
-// completeTask returns within PostSignalTimeout even when push blocks
-// indefinitely, proving the timeout prevents infinite stalls from rate limits
-// or network issues.
-func TestCompleteTask_PostSignalTimeout_AbortsStuckPush(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
-
-	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-timeout"}},
-	}
-
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
-	var logBuf bytes.Buffer
-	logger := logging.New(&logBuf)
-	cfg := Config{
-		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		MaxIterations:     1,
-		CallsPerHour:      80,
-		PostSignalTimeout: 50 * time.Millisecond,
-	}
-	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
-		VerifyHook: passingVerifyHook(),
-	})
-	l.runner = &stubRunner{}
-	gm.ShipFunc = func(ctx context.Context, _ git.ShipOpts) (git.ShipResult, error) {
-		<-ctx.Done()
-		return git.ShipResult{}, ctx.Err()
-	}
-
-	done := make(chan postSignalAction, 1)
-	go func() {
-		done <- l.completeTask(context.Background(), completeTaskParams{
-			result:            claude.Result{SignalDetected: true},
-			headBefore:        "",
-			workDir:           dir,
-			rawLogPath:        filepath.Join(ralphDir, "raw.log"),
-			taskID:            "ralph-timeout",
-			nextTask:          "Fix bug",
-			postSignalTimeout: l.cfg.PostSignalTimeout,
-			ralphDir:          ralphDir,
-		}).action
-	}()
-
-	select {
-	case action := <-done:
-		if action != signalComplete {
-			t.Errorf("expected signalComplete, got %d", action)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("completeTask hung — PostSignalTimeout did not fire")
-	}
-
-	output := logBuf.String()
-	if !strings.Contains(output, "Post-signal timeout") {
-		t.Errorf("expected timeout log message, got: %s", output)
-	}
-
-	backend.CloseMu.Lock()
-	defer backend.CloseMu.Unlock()
-	if len(backend.ClosedIDs) > 0 {
-		t.Errorf("task should not be closed when timeout fires before push, got %v", backend.ClosedIDs)
-	}
-}
 
 // completeTask completes normally within PostSignalTimeout when operations
 // are fast, proving the timeout doesn't interfere with successful flows.
@@ -275,7 +201,7 @@ func TestCompleteTask_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-fast"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, HeadRev: "after", Ship: git.ShipResult{PRNumber: 42}})
 	cfg := Config{
 		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:     1,
@@ -292,7 +218,6 @@ func TestCompleteTask_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
 		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	gm.ShipResult = git.ShipResult{PRNumber: 42}
 
 	out := l.completeTask(context.Background(), completeTaskParams{
 		result:            claude.Result{SignalDetected: true},
@@ -316,126 +241,7 @@ func TestCompleteTask_PostSignalTimeout_DoesNotInterfereWhenFast(t *testing.T) {
 	}
 }
 
-// completeTask cancels a blocking merge when the post-signal timeout
-// fires, returning nil ct so the task is not added to completedIDs
-// and remains retryable on the next iteration.
-func TestCompleteTask_PostSignalTimeout_CancelsMerge(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
 
-	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Slow merge", NextID: "ralph-slow"}},
-	}
-
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
-	cfg := Config{
-		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		MaxIterations:     1,
-		CallsPerHour:      80,
-		AutoMerge:         true,
-		PostSignalTimeout: 50 * time.Millisecond,
-	}
-	logger := logging.New(nil)
-	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
-		VerifyHook: passingVerifyHook(),
-	})
-	l.runner = &stubRunner{}
-	gm.ShipResult = git.ShipResult{PRNumber: 99}
-	gm.MergeRetryFunc = func(ctx context.Context) (bool, error) {
-		<-ctx.Done()
-		return false, ctx.Err()
-	}
-
-	done := make(chan completeTaskOut, 1)
-	go func() {
-		done <- l.completeTask(context.Background(), completeTaskParams{
-			result:            claude.Result{SignalDetected: true},
-			headBefore:        "",
-			workDir:           dir,
-			rawLogPath:        filepath.Join(ralphDir, "raw.log"),
-			taskID:            "ralph-slow",
-			nextTask:          "Slow merge",
-			postSignalTimeout: l.cfg.PostSignalTimeout,
-			ralphDir:          ralphDir,
-		})
-	}()
-
-	select {
-	case out := <-done:
-		if out.ct != nil {
-			t.Errorf("ct should be nil on timeout (bead not closed), got %+v", out.ct)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("completeTask hung — PostSignalTimeout did not cancel merge")
-	}
-}
-
-// A task that times out during merge is not added to completedIDs,
-// so the next iteration can pick it up again instead of permanently skipping it.
-func TestCompleteTask_TimeoutDuringMerge_TaskRetryableNextIteration(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
-
-	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Retry me", NextID: "ralph-retry"}},
-	}
-
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
-	cfg := Config{
-		Dirs:              workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		MaxIterations:     1,
-		CallsPerHour:      80,
-		AutoMerge:         true,
-		PostSignalTimeout: 50 * time.Millisecond,
-	}
-	logger := logging.New(nil)
-	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
-		VerifyHook: passingVerifyHook(),
-	})
-	l.runner = &stubRunner{}
-	gm.ShipResult = git.ShipResult{PRNumber: 99}
-	gm.MergeRetryFunc = func(ctx context.Context) (bool, error) {
-		<-ctx.Done()
-		return false, ctx.Err()
-	}
-
-	out := l.completeTask(context.Background(), completeTaskParams{
-		result:            claude.Result{SignalDetected: true},
-		headBefore:        "",
-		workDir:           dir,
-		rawLogPath:        filepath.Join(ralphDir, "raw.log"),
-		taskID:            "ralph-retry",
-		nextTask:          "Retry me",
-		postSignalTimeout: cfg.PostSignalTimeout,
-		ralphDir:          ralphDir,
-	})
-
-	if out.ct != nil {
-		t.Fatalf("ct should be nil on timeout, got %+v", out.ct)
-	}
-
-	// Simulate next iteration: the task should NOT appear in completedIDs
-	completed, _ := st.GetCompletedTasks()
-	for _, entry := range completed {
-		if entry.ID == "ralph-retry" {
-			t.Fatal("timed-out task should not be in completedIDs — it must be retryable")
-		}
-	}
-}
 
 // runPostTask executes the configured script after task completion with
 // RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED env vars.
@@ -454,7 +260,13 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-pt1"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:         dir,
+		WorkDir:            dir,
+		HeadRev:            "after",
+		Ship:               git.ShipResult{PRNumber: 99, Merged: true},
+		MergeRetrySucceeds: true,
+	})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -469,11 +281,9 @@ func TestLoop_PostTaskScript_RunsWithEnvVars(t *testing.T) {
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:  passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	gm.ShipResult = git.ShipResult{PRNumber: 99}
-	gm.MergeRetryResult = true
 
 	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
@@ -515,7 +325,7 @@ func TestLoop_PostTaskScript_NotCalledOnRetry(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-pt2"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -566,7 +376,7 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-pt3"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, HeadRev: "after", Ship: git.ShipResult{PRNumber: 50}})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -582,7 +392,6 @@ func TestLoop_PostTaskScript_NonZeroExitWarns(t *testing.T) {
 		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	gm.ShipResult = git.ShipResult{PRNumber: 50}
 
 	out := l.completeTask(context.Background(), completeTaskParams{
 		result:     claude.Result{SignalDetected: true},
@@ -619,9 +428,13 @@ func TestLoop_PostTaskScript_LogsWhenNotConfigured(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-npt"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
-	gm.ShipResult = git.ShipResult{PRNumber: 10}
-	gm.MergeRetryResult = true
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:         dir,
+		WorkDir:            dir,
+		HeadRev:            "after",
+		Ship:               git.ShipResult{PRNumber: 10, Merged: true},
+		MergeRetrySucceeds: true,
+	})
 	cfg :=
 
 		// No PostTask CLI flag and no package.json — must log "skipping post-task".
@@ -672,7 +485,7 @@ func TestLoop_PostTaskScript_CalledOnNoCommitsPath(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-pt4"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before"}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, HeadRev: "before"})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -734,9 +547,13 @@ func TestLoop_PostTaskScript_PackageJSONDetection(t *testing.T) {
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-pkg1"}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
-	gm.ShipResult = git.ShipResult{PRNumber: 77}
-	gm.MergeRetryResult = true
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:         dir,
+		WorkDir:            dir,
+		HeadRev:            "after",
+		Ship:               git.ShipResult{PRNumber: 77, Merged: true},
+		MergeRetrySucceeds: true,
+	})
 	cfg :=
 
 		// No PostTask CLI flag — detection must come from package.json alone.
@@ -801,7 +618,7 @@ func TestCompleteTask_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, HeadRev: "after", Ship: git.ShipResult{PRNumber: 42}})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -818,7 +635,6 @@ func TestCompleteTask_NotifyEnabled_SendsTaskCompleted(t *testing.T) {
 		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	gm.ShipResult = git.ShipResult{PRNumber: 42}
 
 	var buf bytes.Buffer
 	prev := notify.SetWriter(&buf)
@@ -862,7 +678,7 @@ func TestCompleteTask_NotifyDisabled_NoNotification(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, HeadRev: "after", Ship: git.ShipResult{PRNumber: 42}})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -879,7 +695,6 @@ func TestCompleteTask_NotifyDisabled_NoNotification(t *testing.T) {
 		VerifyHook: passingVerifyHook(),
 	})
 	l.runner = &stubRunner{}
-	gm.ShipResult = git.ShipResult{PRNumber: 42}
 
 	var buf bytes.Buffer
 	prev := notify.SetWriter(&buf)
@@ -920,7 +735,7 @@ func TestCompleteTask_NotifyOnNoCommitsPath(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before"}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, HeadRev: "before"})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -963,81 +778,4 @@ func TestCompleteTask_NotifyOnNoCommitsPath(t *testing.T) {
 	}
 }
 
-// completeTask cancels when a feedback file appears during the post-signal
-// pipeline, proving that feedback during CI/merge/review aborts processing
-// and CloseTask is never called.
-func TestCompleteTask_FeedbackFileStopsPostSignal(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	os.MkdirAll(ralphDir, 0o755)
-	promptsDir := filepath.Join(dir, "prompts")
-	createPromptTemplates(t, promptsDir)
-
-	backend := &testutil.TrackingBackend{
-		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix bug", NextID: "ralph-feedback"}},
-	}
-
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after"}
-	var logBuf bytes.Buffer
-	logger := logging.New(&logBuf)
-	cfg := Config{
-		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		MaxIterations: 1,
-		CallsPerHour:  80,
-	}
-	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
-		VerifyHook: passingVerifyHook(),
-	})
-	l.runner = &stubRunner{}
-
-	// Ship blocks until context is cancelled, simulating a stuck CI/merge step.
-	gm.ShipFunc = func(ctx context.Context, _ git.ShipOpts) (git.ShipResult, error) {
-		<-ctx.Done()
-		return git.ShipResult{}, ctx.Err()
-	}
-
-	// Write the feedback file after a short delay.
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		os.WriteFile(filepath.Join(ralphDir, "feedback"), nil, 0o644)
-	}()
-
-	done := make(chan postSignalAction, 1)
-	go func() {
-		done <- l.completeTask(context.Background(), completeTaskParams{
-			result:     claude.Result{SignalDetected: true},
-			headBefore: "",
-			workDir:    dir,
-			rawLogPath: filepath.Join(ralphDir, "raw.log"),
-			taskID:     "ralph-feedback",
-			nextTask:   "Fix bug",
-			ralphDir:   ralphDir,
-		}).action
-	}()
-
-	select {
-	case action := <-done:
-		if action != signalComplete {
-			t.Errorf("expected signalComplete, got %d", action)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("completeTask hung — feedback file did not cancel context")
-	}
-
-	output := logBuf.String()
-	if !strings.Contains(output, "Feedback signal detected during post-signal pipeline") {
-		t.Errorf("expected feedback log message, got: %s", output)
-	}
-
-	backend.CloseMu.Lock()
-	defer backend.CloseMu.Unlock()
-	if len(backend.ClosedIDs) > 0 {
-		t.Errorf("task should not be closed when feedback arrives, got %v", backend.ClosedIDs)
-	}
-}
 

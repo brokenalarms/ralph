@@ -21,7 +21,6 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	// Last run worked on a different task
 	st.Write("last_task", "previous task")
 	st.Write("last_task_id", "ralph-old")
 
@@ -33,15 +32,16 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 		NextID:    "ralph-new",
 	}
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/myproject/01-previous-task",
-	}
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 		},
 		MaxIterations: 5,
@@ -60,8 +60,8 @@ func TestLoop_ResumeRotatesBranchWhenTaskChanged(t *testing.T) {
 	_ = l.Run(context.Background())
 
 	// With stacked PRs, no rotation to /next — branch keeps its task name
-	if strings.HasSuffix(gm.WorktreeBranch, "/next") {
-		t.Errorf("branch should not be /next with stacked PRs, got %q", gm.WorktreeBranch)
+	if strings.HasSuffix(gm.GetWorktreeBranch(), "/next") {
+		t.Errorf("branch should not be /next with stacked PRs, got %q", gm.GetWorktreeBranch())
 	}
 }
 
@@ -83,15 +83,16 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 		NextID:    "ralph-same",
 	}
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/myproject/01-ongoing-task",
-	}
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 		},
 		MaxIterations: 5,
@@ -99,21 +100,20 @@ func TestLoop_ResumeKeepsBranchWhenSameTask(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
 	_ = l.Run(context.Background())
 
-	// Same task — branch should NOT have been rotated
-	if gm.WorktreeBranch != "ralph/myproject/01-ongoing-task" {
-		t.Errorf("expected branch to stay as ralph/myproject/01-ongoing-task, got %q", gm.WorktreeBranch)
+	if gm.GetWorktreeBranch() != "ralph/myproject/01-ongoing-task" {
+		t.Errorf("expected branch to stay as ralph/myproject/01-ongoing-task, got %q", gm.GetWorktreeBranch())
 	}
-	if !gm.BranchRenamed {
+	if !gm.IsBranchRenamed() {
 		t.Error("BranchRenamed should be true to prevent re-renaming")
 	}
 }
@@ -143,7 +143,6 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 		onRun: func() {
 			iterationCount++
 			if iterationCount == 1 {
-				// Simulate: task A completes and a new task B is added externally
 				backend.Lock()
 				backend.Completed = 1
 				backend.Remaining = 1
@@ -152,7 +151,6 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 				backend.NextID = "ralph-bbb"
 				backend.Unlock()
 			} else if iterationCount == 2 {
-				// Task B completes, no more tasks
 				backend.Lock()
 				backend.Completed = 2
 				backend.Remaining = 0
@@ -163,10 +161,10 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.StubRepo{
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir: dir,
 		WorkDir:    dir,
-	}
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -179,11 +177,11 @@ func TestLoop_NewTasksPickedUpBetweenIterations(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
@@ -209,12 +207,12 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.StubRepo{
-		ProjectDir:        dir,
-		WorkDir:           filepath.Join(dir, "worktree"),
-		WorktreeBranch:    "ralph/wip-branch",
-		EnsureUpToDateErr: nil,
-	}
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:     dir,
+		WorkDir:        workDir,
+		WorktreeBranch: "ralph/wip-branch",
+	})
 
 	backend := &testutil.StubBackend{
 		Remaining: 0,
@@ -225,7 +223,7 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 		},
 		MaxIterations: 5,
@@ -241,9 +239,6 @@ func TestLoop_HandleRebase_RecoversByResetAndReplay(t *testing.T) {
 	})
 
 	err := l.git.EnsureUpToDate(context.Background())
-	// With stacked PRs, rebase conflicts cause stack to diverge — not an error.
-	// The loop has no recovery hook to invoke; the test asserts only the
-	// EnsureUpToDate return value.
 	if err != nil {
 		t.Fatalf("expected nil (stack diverges), got: %v", err)
 	}
@@ -255,12 +250,12 @@ func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.StubRepo{
-		ProjectDir:        dir,
-		WorkDir:           filepath.Join(dir, "worktree"),
-		WorktreeBranch:    "ralph/wip-branch",
-		EnsureUpToDateErr: nil,
-	}
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:     dir,
+		WorkDir:        workDir,
+		WorktreeBranch: "ralph/wip-branch",
+	})
 
 	backend := &testutil.StubBackend{
 		Remaining: 1,
@@ -270,7 +265,7 @@ func TestLoop_HandleRebase_RecoversContinues(t *testing.T) {
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 		},
 		MaxIterations: 5,
@@ -297,12 +292,12 @@ func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.StubRepo{
-		ProjectDir:        dir,
-		WorkDir:           filepath.Join(dir, "worktree"),
-		WorktreeBranch:    "ralph/wip-branch",
-		EnsureUpToDateErr: nil,
-	}
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:     dir,
+		WorkDir:        workDir,
+		WorktreeBranch: "ralph/wip-branch",
+	})
 
 	backend := &testutil.StubBackend{
 		Remaining: 1,
@@ -312,7 +307,7 @@ func TestLoop_HandleRebase_PropagatesNilOnDivergedStack(t *testing.T) {
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 		},
 		MaxIterations: 5,
@@ -340,11 +335,12 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/wip-branch",
-	}
+	})
 
 	backend := &testutil.StubBackend{
 		Remaining: 1,
@@ -353,11 +349,11 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // simulate Ctrl-C already received
+	cancel()
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 		},
 		MaxIterations: 5,
@@ -377,9 +373,6 @@ func TestLoop_HandleRebase_ContextCancelledSkipsPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil error (clean exit), got %v", err)
 	}
-
-	// The loop has no recovery hook to invoke when the context is
-	// cancelled mid-rebase; the test asserts only the final state below.
 
 	finalState, _ := st.Load()
 	if finalState.Status != "stopped" {
@@ -418,15 +411,13 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/wip-branch",
-	}
+	})
 
-	// Simulate two iterations of the same task.
-	// After iteration 1, the branch should be renamed for the task.
-	// After iteration 2, it should still be the SAME branch.
 	callCount := 0
 	backend := &testutil.StubBackend{
 		Remaining: 1,
@@ -437,7 +428,7 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -446,16 +437,14 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
-	// Stub out Claude runner to avoid actually running claude.
-	// Just create a stop file after 2 iterations.
 	l.runner = &stubRunner{
 		onRun: func() {
 			callCount++
@@ -467,13 +456,11 @@ func TestLoop_SameTaskStaysOnOneBranch(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Branch should be the task branch, NOT rotated to /next
-	if !strings.Contains(gm.WorktreeBranch, "fix-the-login-bug") {
-		t.Errorf("expected branch to contain 'fix-the-login-bug', got %q", gm.WorktreeBranch)
+	if !strings.Contains(gm.GetWorktreeBranch(), "fix-the-login-bug") {
+		t.Errorf("expected branch to contain 'fix-the-login-bug', got %q", gm.GetWorktreeBranch())
 	}
 
-	// Branch should have been renamed exactly once (same task)
-	if !gm.BranchRenamed {
+	if !gm.IsBranchRenamed() {
 		t.Error("expected BranchRenamed=true after one rename")
 	}
 }
@@ -486,11 +473,12 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/wip-branch",
-	}
+	})
 
 	callCount := 0
 	backend := &testutil.MutableBackend{
@@ -504,7 +492,7 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -513,11 +501,11 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -525,7 +513,6 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 		onRun: func() {
 			callCount++
 			if callCount == 1 {
-				// After first iteration, switch to a different task
 				backend.Lock()
 				backend.NextTask = "Second task"
 				backend.NextID = "ralph-2"
@@ -539,34 +526,34 @@ func TestLoop_TaskChangeRotatesBranch(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Branch should now be the second task
-	if !strings.Contains(gm.WorktreeBranch, "second-task") {
-		t.Errorf("expected branch for second task, got %q", gm.WorktreeBranch)
+	if !strings.Contains(gm.GetWorktreeBranch(), "second-task") {
+		t.Errorf("expected branch for second task, got %q", gm.GetWorktreeBranch())
 	}
 
-	// Branch should have been renamed for the second task
-	if !gm.BranchRenamed {
+	if !gm.IsBranchRenamed() {
 		t.Error("expected BranchRenamed=true after task change")
 	}
-
-	// With stacked PRs, the branch is renamed for each task —
-	// the first task's branch name is replaced by the second.
 }
 
 // Verifies that refactor iterations commit to the current task branch
 // without creating a separate branch, proving refactors are internal
 // housekeeping on the task's branch.
+//
+// Phase C migration: dropped `gm.RenameBranchCalls != 1` assertion (pure
+// stub call count). The observable "branch is the task branch, not a
+// refactor branch" and IsBranchRenamed=true together cover the invariant.
 func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/wip-branch",
-	}
+	})
 
 	callCount := 0
 	backend := &testutil.StubBackend{
@@ -578,7 +565,7 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -587,11 +574,11 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -606,19 +593,12 @@ func TestLoop_RefactorStaysOnTaskBranch(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Branch should be the task branch — refactor didn't create a new one
-	if !strings.Contains(gm.WorktreeBranch, "build-feature-x") {
-		t.Errorf("expected task branch after refactor, got %q", gm.WorktreeBranch)
+	if !strings.Contains(gm.GetWorktreeBranch(), "build-feature-x") {
+		t.Errorf("expected task branch after refactor, got %q", gm.GetWorktreeBranch())
 	}
 
-	// Only one branch rename should have happened (for the task, not refactor)
-	if !gm.BranchRenamed {
+	if !gm.IsBranchRenamed() {
 		t.Error("expected BranchRenamed=true after task rename")
-	}
-
-	// Only one rename call should have been made
-	if gm.RenameBranchCalls != 1 {
-		t.Errorf("expected exactly 1 branch rename, got %d", gm.RenameBranchCalls)
 	}
 }
 
@@ -638,11 +618,13 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 		NextID:    "ralph-imp",
 	}
 
-	gm := &git.StubRepo{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		WorktreeBranch: "ralph/wip-branch",
-	}
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:         dir,
+		WorkDir:            dir,
+		WorktreeBranch:     "ralph/wip-branch",
+		Ship:               git.ShipResult{PRNumber: 42, Merged: true},
+		MergeRetrySucceeds: true,
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -657,23 +639,19 @@ func TestLoop_EvolveRestartsAfterMerge(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
 	l.runner = &stubRunner{
-		// Simulate agent work by changing HeadRev so the loop sees new commits.
-		onRun: func() {
-			gm.HeadRevValue = "abc123"
-		},
+		// Simulate agent work by committing so the loop sees new HEAD.
+		onRun:  func() { gm.CommitAll("simulated agent commit") },
 		result: claude.Result{SignalDetected: true},
 	}
-	gm.ShipResult = git.ShipResult{PRNumber: 42}
-	gm.MergeRetryResult = true
 
 	err := l.Run(context.Background())
 	if err != nil {
@@ -694,11 +672,12 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/wip-branch",
-	}
+	})
 
 	backend := &testutil.StubBackend{
 		Remaining: 1,
@@ -709,7 +688,7 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -720,11 +699,11 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -742,8 +721,8 @@ func TestLoop_EvolveNoRestartOnMergeFailure(t *testing.T) {
 
 type metadataBackend struct {
 	testutil.StubBackend
-	metadata     map[string]map[string]string // id -> key -> value
-	externalRefs map[string]string            // id -> ref
+	metadata     map[string]map[string]string
+	externalRefs map[string]string
 }
 
 func newMetadataBackend() *metadataBackend {
@@ -785,11 +764,12 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/wip-branch",
-	}
+	})
 
 	backend := newMetadataBackend()
 	backend.Remaining = 1
@@ -799,7 +779,7 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -808,11 +788,11 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -837,17 +817,18 @@ func TestLoop_StoresBranchInMetadata(t *testing.T) {
 func TestLoop_BranchForTask_NoStoredBranch_RenamesBranch(t *testing.T) {
 	dir, _ := setupTestDir(t)
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/wip-branch",
-	}
+	})
 
 	branch, err := gm.BranchForTask(context.Background(), "ralph-xyz", "Fix login", git.BranchTaskMeta{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !gm.BranchRenamed {
+	if !gm.IsBranchRenamed() {
 		t.Error("expected BranchRenamed=true after rename, got false")
 	}
 	if !strings.Contains(branch, "ralph-xyz") {
@@ -861,11 +842,12 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/wip-branch",
-	}
+	})
 
 	backend := newMetadataBackend()
 	backend.Remaining = 1
@@ -875,7 +857,7 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -884,11 +866,11 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -896,14 +878,12 @@ func TestLoop_BranchFormat_NoSequenceNumber(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Branch should be ralph/<project>/ralph-xyz-fix-login-flow (no 01- prefix)
 	wantSuffix := "ralph-xyz-fix-login-flow"
-	if !strings.HasSuffix(gm.WorktreeBranch, wantSuffix) {
-		t.Errorf("branch %q should end with %q (no sequence number)", gm.WorktreeBranch, wantSuffix)
+	if !strings.HasSuffix(gm.GetWorktreeBranch(), wantSuffix) {
+		t.Errorf("branch %q should end with %q (no sequence number)", gm.GetWorktreeBranch(), wantSuffix)
 	}
-	// Must NOT contain a sequence number like /01- or /02-
-	if matched := strings.Contains(gm.WorktreeBranch, "/01-") || strings.Contains(gm.WorktreeBranch, "/02-"); matched {
-		t.Errorf("branch %q must not contain sequence number prefix", gm.WorktreeBranch)
+	if matched := strings.Contains(gm.GetWorktreeBranch(), "/01-") || strings.Contains(gm.GetWorktreeBranch(), "/02-"); matched {
+		t.Errorf("branch %q must not contain sequence number prefix", gm.GetWorktreeBranch())
 	}
 }
 
@@ -920,39 +900,38 @@ func TestResumeTask_ClosedPR_ClearsMetadataAndReruns(t *testing.T) {
 	backend.Total = 1
 	backend.NextTask = "Fix auth bug"
 	backend.NextID = "ralph-cdr3"
-	// Simulate a closed PR linked to this task.
 	backend.externalRefs["ralph-cdr3"] = "https://github.com/owner/repo/pull/439"
 	_ = backend.SetMetadata("ralph-cdr3", "branch", "ralph/next")
 
-	// ResumeTask reports: PR was closed, branch was renamed to task-specific name.
 	renamedBranch := "ralph/ralph-cdr3-fix-auth-bug"
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/next",
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		ResumeResult: git.ResumeTaskResult{
+		RemoteURL:      "https://github.com/owner/repo.git",
+		ResumeTaskResult: git.ResumeTaskResult{
 			Handled:       false,
 			ClearMetadata: true,
 			NewBranch:     renamedBranch,
 			PRNumber:      439,
 		},
-	}
+	})
 
 	agentCalled := false
 	runner := &stubRunner{onRun: func() { agentCalled = true }, result: claude.Result{}}
 	cfg := Config{
-		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: gm.WorkDir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: workDir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
@@ -961,19 +940,16 @@ func TestResumeTask_ClosedPR_ClearsMetadataAndReruns(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// External-ref must be cleared so the closed PR isn't re-discovered.
 	ref, _ := backend.GetExternalRef("ralph-cdr3")
 	if ref != "" {
 		t.Errorf("external-ref should be cleared, got %q", ref)
 	}
 
-	// Branch metadata should be updated with the new task-specific name.
 	branch, _ := backend.GetMetadata("ralph-cdr3", "branch")
 	if branch != renamedBranch {
 		t.Errorf("branch metadata should be %q, got %q", renamedBranch, branch)
 	}
 
-	// Agent must be called since ResumeTask returned Handled=false.
 	if !agentCalled {
 		t.Error("agent should run when ResumeTask returns Handled=false")
 	}
@@ -984,52 +960,63 @@ func TestResumeTask_ClosedPR_ClearsMetadataAndReruns(t *testing.T) {
 func TestLoop_BranchForTask_RenameFailure_ReturnsError(t *testing.T) {
 	dir, _ := setupTestDir(t)
 
-	gm := &git.StubRepo{
-		ProjectDir:      dir,
-		WorkDir:         filepath.Join(dir, "worktree"),
-		WorktreeBranch:  "ralph/next",
-		RenameBranchErr: fmt.Errorf("git branch -m: fatal: branch already exists"),
-	}
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:             dir,
+		WorkDir:                workDir,
+		WorktreeBranch:         "ralph/next",
+		RenameBranchForTaskErr: fmt.Errorf("git branch -m: fatal: branch already exists"),
+	})
 
 	_, err := gm.BranchForTask(context.Background(), "ralph-xyz", "Fix login", git.BranchTaskMeta{})
 	if err == nil {
 		t.Fatal("expected error when rename fails, got nil")
 	}
-	if gm.WorktreeBranch != "ralph/next" {
-		t.Errorf("branch should stay unchanged on rename failure, got %q", gm.WorktreeBranch)
+	if gm.GetWorktreeBranch() != "ralph/next" {
+		t.Errorf("branch should stay unchanged on rename failure, got %q", gm.GetWorktreeBranch())
 	}
-	if gm.BranchRenamed {
+	if gm.IsBranchRenamed() {
 		t.Error("BranchRenamed should remain false after rename failure")
 	}
 }
 
 // BranchForTask failure aborts the iteration — the agent must never run on a
-// placeholder branch like ralph/next.
+// placeholder branch like ralph/next. Observable via status="error" and the
+// backend receiving no close.
+//
+// Phase C migration: dropped `gm.ShipCalls > 0` assertion (pure call count).
+// The status=error assertion and absence of any bead close capture the same
+// end-state: the iteration aborted before reaching ship.
 func TestLoop_BranchForTask_RenameFailure_AbortsIteration(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login"}
-	gm := &git.StubRepo{
-		ProjectDir:      dir,
-		WorkDir:         filepath.Join(dir, "worktree"),
-		WorktreeBranch:  "ralph/next",
-		RenameBranchErr: fmt.Errorf("git branch -m: fatal: branch already exists"),
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login"},
+		},
 	}
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:             dir,
+		WorkDir:                workDir,
+		WorktreeBranch:         "ralph/next",
+		RenameBranchForTaskErr: fmt.Errorf("git branch -m: fatal: branch already exists"),
+	})
 	cfg := Config{
-		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: gm.WorkDir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: workDir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
 		CallsPerHour:  80,
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -1039,7 +1026,9 @@ func TestLoop_BranchForTask_RenameFailure_AbortsIteration(t *testing.T) {
 	if status != "error" {
 		t.Errorf("expected status=error when BranchForTask fails, got %q", status)
 	}
-	if gm.ShipCalls > 0 {
-		t.Error("Ship must not be called when branch setup fails")
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 0 {
+		t.Errorf("no bead should be closed when branch setup fails, got %v", backend.ClosedIDs)
 	}
 }

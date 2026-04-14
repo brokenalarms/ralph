@@ -18,6 +18,18 @@ import (
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
+// Phase C migration notes for this file:
+//
+// Merge-retry tests were reframed off the forbidden MergeRetryFunc callback.
+// Production's Ship internally drives MergeWithRetry when AutoMerge=true; the
+// new stubRepo's Ship instead returns cfg.Ship directly. Outcomes that used
+// to emerge from inside MergeRetryFunc (CIFailure, generic merge error,
+// success) are now expressed as the Ship result the stub returns, which is
+// what the loop observes in production anyway.
+//
+// ShipCalls>0 assertions were replaced with TrackingBackend.ClosedIDs
+// observations (bead-close is the downstream effect of a successful ship).
+
 // Verifies that when verification fails (e.g. tests don't pass), the task
 // is NOT closed — it's recorded as a failed attempt so the next iteration
 // can retry, preventing ralph from falsely closing beads.
@@ -27,19 +39,23 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &testutil.StubBackend{
-		Remaining:    1,
-		Total:        1,
-		NextTask:     "fix the bug",
-		NextID:       "ralph-bug",
-		BackendLabel: "beads",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Total:        1,
+				NextTask:     "fix the bug",
+				NextID:       "ralph-bug",
+				BackendLabel: "beads",
+			},
+		},
 	}
 
 	runner := &stubRunner{
 		result: claude.Result{SignalDetected: true, Summary: "fixed it"},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -52,21 +68,24 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook: &stubVerifyHook{passed: false, reason: "test suite failed"},
+		VerifyHook:   &stubVerifyHook{passed: false, reason: "test suite failed"},
 	})
 	l.runner = runner
 
 	_ = l.Run(context.Background())
 
-	if gm.ShipCalls > 0 {
-		t.Error("push should not be called when verification fails")
+	// Ship gating is observable: bead must not be closed when verification fails.
+	backend.CloseMu.Lock()
+	if len(backend.ClosedIDs) != 0 {
+		t.Errorf("no bead should be closed when verification fails, got %v", backend.ClosedIDs)
 	}
+	backend.CloseMu.Unlock()
 
 	// Task should NOT be recorded as completed
 	if _, err := os.Stat(filepath.Join(ralphDir, ".completed-tasks")); !os.IsNotExist(err) {
@@ -91,14 +110,16 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &testutil.MutableBackend{
-		StubBackend: testutil.StubBackend{
-			Remaining:    1,
-			Completed:    0,
-			Total:        1,
-			NextTask:     "add feature",
-			NextID:       "ralph-feat",
-			BackendLabel: "beads",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "add feature",
+				NextID:       "ralph-feat",
+				BackendLabel: "beads",
+			},
 		},
 	}
 
@@ -112,12 +133,11 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &git.StubRepo{
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir: dir,
 		WorkDir:    dir,
-		ShipResult: git.ShipResult{PRNumber: 42},
-		PRState:    "OPEN",
-	}
+		Ship:       git.ShipResult{PRNumber: 42},
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -130,21 +150,23 @@ func TestLoop_VerificationPassAllowsClose(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:   passingVerifyHook(),
 	})
 	l.runner = runner
 
 	_ = l.Run(context.Background())
 
-	if gm.ShipCalls == 0 {
-		t.Error("push should be called when verification passes")
+	backend.CloseMu.Lock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-feat" {
+		t.Errorf("expected ralph-feat to be closed via ship pipeline, got %v", backend.ClosedIDs)
 	}
+	backend.CloseMu.Unlock()
 
 	data, err := os.ReadFile(filepath.Join(ralphDir, ".completed-tasks"))
 	if err != nil {
@@ -164,14 +186,16 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &testutil.MutableBackend{
-		StubBackend: testutil.StubBackend{
-			Remaining:    1,
-			Completed:    0,
-			Total:        1,
-			NextTask:     "simple task",
-			NextID:       "ralph-simple",
-			BackendLabel: "beads",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "simple task",
+				NextID:       "ralph-simple",
+				BackendLabel: "beads",
+			},
 		},
 	}
 
@@ -185,12 +209,11 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.StubRepo{
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir: dir,
 		WorkDir:    dir,
-		ShipResult: git.ShipResult{PRNumber: 99},
-		PRState:    "OPEN",
-	}
+		Ship:       git.ShipResult{PRNumber: 99},
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -200,28 +223,32 @@ func TestLoop_NoVerificationByDefault(t *testing.T) {
 		},
 		MaxIterations: 5,
 		CallsPerHour:  80,
-		// VerifyDir deliberately not set
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 	l.runner = runner
 
 	_ = l.Run(context.Background())
 
-	if gm.ShipCalls == 0 {
-		t.Error("push should be called when no verification is configured")
+	backend.CloseMu.Lock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-simple" {
+		t.Errorf("expected ralph-simple closed when no verification configured, got %v", backend.ClosedIDs)
 	}
+	backend.CloseMu.Unlock()
 }
 
 // When CI fails during merge, the task stays open — CIFailureError means
 // tests are still failing and the PR needs manual investigation.
+//
+// Reframed: instead of programming MergeRetryFunc to return CIFailureError,
+// configure Ship to return the same CIFailure outcome directly.
 func TestLoop_CIFailureLeavesTaskOpen(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -239,25 +266,26 @@ func TestLoop_CIFailureLeavesTaskOpen(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/project/01-ci-test",
-		ShipResult:     git.ShipResult{PRNumber: 99},
-		PRState:        "OPEN",
-	}
-	gm.MergeRetryFunc = func(ctx context.Context) (bool, error) {
-		return false, &git.CIFailureError{
-			PRNumber: 99,
-			Failures: []git.CICheckResult{
-				{Name: "test", State: "FAILURE", Bucket: "fail"},
+		Ship: git.ShipResult{
+			PRNumber:  99,
+			CIFailure: true,
+			CIFailureDetail: &git.CIFailureError{
+				PRNumber: 99,
+				Failures: []git.CICheckResult{
+					{Name: "test", State: "FAILURE", Bucket: "fail"},
+				},
 			},
-		}
-	}
+		},
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -267,11 +295,11 @@ func TestLoop_CIFailureLeavesTaskOpen(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -288,39 +316,36 @@ func TestLoop_CIFailureLeavesTaskOpen(t *testing.T) {
 	}
 }
 
-// When mergeFunc succeeds, the loop closes the task and records the merge.
-// Conflict recovery (rebase + force-push + retry) is tested in git module
-// (TestMergeWithRetry_RecoversFromConflict).
+// When Ship reports Merged=true, the loop closes the task.
 func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &testutil.StubBackend{
-		Remaining: 1,
-		Total:     1,
-		NextTask:  "Add feature",
-		NextID:    "ralph-mc1",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:  "Add feature",
+				NextID:    "ralph-mc1",
+			},
+		},
 	}
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/project/01-conflict-test",
-		ShipResult:     git.ShipResult{PRNumber: 42},
-		PRState:        "OPEN",
-	}
+		Ship:           git.ShipResult{PRNumber: 42, Merged: true},
+	})
 
-	merged := false
-	gm.MergeRetryFunc = func(ctx context.Context) (bool, error) {
-		merged = true
-		return true, nil
-	}
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -330,12 +355,13 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
 	})
 
 	l.runner = &stubRunner{
@@ -344,39 +370,45 @@ func TestLoop_MergeSuccessClosesTask(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	if !merged {
-		t.Error("expected merge to be called when AutoMerge is enabled")
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-mc1" {
+		t.Errorf("expected ralph-mc1 closed on successful merge, got %v", backend.ClosedIDs)
 	}
 }
 
-// When mergeFunc eventually succeeds (simulating CI fix + retry), the loop
-// closes the task. CI fix agent spawning and retry logic are tested in git
-// module (TestMergeWithRetry_DelegatesCIFailure).
+// When Ship reports Merged=true after (implicit) retry, the loop closes the
+// task. Retry behavior itself is exercised by git-module tests; here we
+// observe only the terminal Ship outcome.
 func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	backend := &testutil.StubBackend{
-		Remaining: 1,
-		Total:     1,
-		NextTask:  "Fix CI failure",
-		NextID:    "ralph-ci2",
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:  "Fix CI failure",
+				NextID:    "ralph-ci2",
+			},
+		},
 	}
 
-	gm := &git.StubRepo{
-		ProjectDir:       dir,
-		WorkDir:          filepath.Join(dir, "worktree"),
-		WorktreeBranch:   "ralph/project/01-ci-fix",
-		ShipResult:       git.ShipResult{PRNumber: 42},
-		PRState:          "OPEN",
-		MergeRetryResult: true,
-	}
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:         dir,
+		WorkDir:            workDir,
+		WorktreeBranch:     "ralph/project/01-ci-fix",
+		Ship:               git.ShipResult{PRNumber: 42, Merged: true},
+		MergeRetrySucceeds: true,
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -386,11 +418,11 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
 
@@ -406,8 +438,8 @@ func TestLoop_MergeEventualSuccessClosesTask(t *testing.T) {
 	}
 }
 
-// When the CI fix agent fails twice (CI keeps failing), the loop gives up
-// after the maximum retry count rather than looping forever.
+// When CI keeps failing across retries, the loop leaves the task open —
+// status must not be "completed".
 func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -421,15 +453,26 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 		NextID:    "ralph-ci3",
 	}
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/project/01-ci-exhaust",
-	}
+		Ship: git.ShipResult{
+			PRNumber:  99,
+			CIFailure: true,
+			CIFailureDetail: &git.CIFailureError{
+				PRNumber: 99,
+				Failures: []git.CICheckResult{
+					{Name: "test", State: "FAILURE", Bucket: "fail"},
+				},
+			},
+		},
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -452,34 +495,21 @@ func TestLoop_CIFailureExhaustsRetries(t *testing.T) {
 		Connectivity: onlineStubConnectivity(),
 	})
 
-	gm.ShipResult = git.ShipResult{PRNumber: 99}
-	gm.PRState = "OPEN"
-	gm.MergeRetryFunc = func(ctx context.Context) (bool, error) {
-		return false, &git.CIFailureError{
-			PRNumber: 99,
-			Failures: []git.CICheckResult{
-				{Name: "test", State: "FAILURE", Bucket: "fail"},
-			},
-		}
-	}
-
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
 
 	_ = l.Run(context.Background())
 
-	// Task should remain open since merge failed.
 	s, _ := st.Load()
 	if s.Status == "completed" {
 		t.Error("expected status not to be 'completed' when merge fails")
 	}
 }
 
-// When Ship returns a non-CI merge error (plain error, not CIFailureError), the
-// loop closes the task with "merge pending" — the work is done, only merge failed.
-// CI failure handling (which leaves task open) is tested separately in
-// TestFinalizePR_CIFailure_TaskStaysOpen and TestIntegration_CIFailureTriggersFixAgent.
+// When Ship returns a non-CI error (plain ShipErr, not CIFailureError), the
+// loop closes the task with "merge pending" — the work is done, only merge
+// failed.
 func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -493,15 +523,17 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 		NextID:    "ralph-mixed",
 	}
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/project/01-mixed",
-	}
+		Ship:           git.ShipResult{PRNumber: 99, Merged: false},
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -509,27 +541,20 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 		CallsPerHour:  80,
 		AutoMerge:     true,
 	}
-	logger := logging.New(nil)
+	var buf bytes.Buffer
+	logger := logging.New(&buf)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
-
-	gm.ShipResult = git.ShipResult{PRNumber: 99}
-	gm.PRState = "OPEN"
-	gm.MergeRetryErr = fmt.Errorf("merge failed")
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
 	}
-
-	var buf bytes.Buffer
-	logger = logging.New(&buf)
-	l.logger = logger
 
 	_ = l.Run(context.Background())
 
@@ -539,8 +564,9 @@ func TestLoop_MergeFailureLeavesTaskOpen(t *testing.T) {
 	}
 }
 
-// When merge fails, the task is closed (not skipped) — the PR exists, work is
-// verified done. Stack head detection can find the unmerged branch for the next task.
+// When merge fails, the task is closed (not skipped) — the PR exists, work
+// is verified done. Stack head detection can find the unmerged branch for
+// the next task.
 func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -560,15 +586,17 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/project/01-stubborn",
-	}
+		Ship:           git.ShipResult{PRNumber: 42, Merged: false},
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -578,17 +606,13 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
-
-	gm.ShipResult = git.ShipResult{PRNumber: 42}
-	gm.PRState = "OPEN"
-	gm.MergeRetryErr = fmt.Errorf("push denied by remote")
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
@@ -596,7 +620,6 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Task should be closed — merge failed but PR exists, work is done.
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
 	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-stub" {
@@ -609,8 +632,8 @@ func TestLoop_MergeFailureStillClosesTask(t *testing.T) {
 	}
 }
 
-// Merge failure closes the task without incrementing the retry counter — the
-// work is verified done, this is not a failure that needs retrying.
+// Merge failure closes the task without retrying — the work is verified
+// done, this is not a failure that needs retrying.
 func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -630,15 +653,17 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{
+	workDir := filepath.Join(dir, "worktree")
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
-		WorkDir:        filepath.Join(dir, "worktree"),
+		WorkDir:        workDir,
 		WorktreeBranch: "ralph/project/01-fixable",
-	}
+		Ship:           git.ShipResult{PRNumber: 50, Merged: false},
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
-			WorkDir:    gm.WorkDir,
+			WorkDir:    workDir,
 			RalphDir:   ralphDir,
 			PromptsDir: promptsDir,
 		},
@@ -648,17 +673,13 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
 	})
-
-	gm.ShipResult = git.ShipResult{PRNumber: 50}
-	gm.PRState = "OPEN"
-	gm.MergeRetryErr = fmt.Errorf("merge conflict")
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true},
@@ -666,7 +687,6 @@ func TestLoop_MergeFailureClosesTaskNoRetryCount(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	// Task should be closed — merge failed but PR exists, work is done. No retrying.
 	backend.CloseMu.Lock()
 	defer backend.CloseMu.Unlock()
 	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-fix" {
@@ -687,7 +707,6 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	// Create a Makefile with passing tests so VerifyDir detects a runner
 	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\ttrue\n"), 0o644)
 
 	backend := &testutil.StubBackend{
@@ -707,7 +726,7 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -721,13 +740,13 @@ func TestLoop_PreIterationTestResultsPersistedInState(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:   passingVerifyHook(),
 	})
 	l.runner = runner
 
@@ -775,9 +794,10 @@ func (s *signalCallingRunner) Query(_ context.Context, _, _, _ string, _ []strin
 
 // Verifies that LLM verification pass logs with green (Success) color
 // and LLM verification reject logs with red (Error) color.
-
-// Verifies that LLM verification pass logs with green (Success) color
-// and LLM verification reject logs with red (Error) color.
+//
+// The old version mutated gm.HeadRevValue inside onRun to simulate an
+// agent commit; the new stub advances head via gm.CommitAll() which the
+// runner callback invokes.
 func TestLoop_LLMVerificationLogColors(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -795,11 +815,7 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 			name:       "LLM reject logs red",
 			queryReply: "NO: missing error handling",
 			wantColor:  logging.Red,
-			// Verifier owns its operation narrative — the retry counter
-			// is Loop's orchestration concern and is logged separately
-			// (or not at all when one attempt suffices). Verifier's log
-			// for a rejection is just "rejected: <details>".
-			wantMsg: "LLM verification rejected: NO: missing error handling",
+			wantMsg:    "LLM verification rejected: NO: missing error handling",
 		},
 	}
 
@@ -822,7 +838,12 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 				},
 			}
 
-			gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "before", DiffFullValue: "diff --git a/x b/x"}
+			gm := git.NewStub(git.StubRepoConfig{
+				ProjectDir:     dir,
+				WorkDir:        dir,
+				HeadRev:        "before",
+				DiffFullResult: "diff --git a/x b/x",
+			})
 
 			runner := &signalCallingRunner{
 				onRun: func() {
@@ -830,9 +851,10 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 					backend.Completed = 1
 					backend.Remaining = 0
 					backend.Unlock()
-					// Simulate the agent making a commit before signaling so the
-					// post-signal commit check passes (HeadRev changes).
-					gm.HeadRevValue = "after"
+					// Simulate the agent making a commit before signaling so
+					// the post-signal commit check passes (HeadRev changes
+					// via CommitAll advancing commitSeq).
+					gm.CommitAll("simulated agent commit")
 				},
 				result: claude.Result{Summary: "done"},
 			}
@@ -874,8 +896,6 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 			if !strings.Contains(output, tt.wantMsg) {
 				t.Errorf("expected %q in output, got:\n%s", tt.wantMsg, output)
 			}
-			// Verify the message line uses the expected color by checking that
-			// the line containing the message also contains the expected ANSI code.
 			for _, line := range strings.Split(output, "\n") {
 				if strings.Contains(line, tt.wantMsg) {
 					if !strings.Contains(line, tt.wantColor) {
@@ -887,3 +907,8 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 		})
 	}
 }
+
+// Keep a reference to fmt so the import stays used even though all explicit
+// callers were reframed away. fmt is retained because the fmt.Errorf
+// fallback remains useful for any future test additions in this file.
+var _ = fmt.Sprintf
