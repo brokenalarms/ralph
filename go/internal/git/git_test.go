@@ -615,7 +615,9 @@ func TestPrepareForNextTask_DiscardsUncommittedChanges(t *testing.T) {
 }
 
 // PrepareForNextTask deletes the old task branch after moving to the
-// placeholder, so completed task branches don't accumulate locally.
+// placeholder when the task's commits are merged into main — the common
+// post-completion cleanup path. Completed task branches don't accumulate
+// locally.
 func TestPrepareForNextTask_DeletesOldBranch(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
@@ -634,10 +636,11 @@ func TestPrepareForNextTask_DeletesOldBranch(t *testing.T) {
 	mgr.RenameBranchForTask("task to clean up", "ralph-del1")
 	taskBranch := mgr.worktreeBranch
 
-	// Commit so the task branch has history and can be deleted.
+	// Commit and then fast-forward main to the task branch, simulating a merged PR.
 	writeFile(t, mgr.workDir, "work.txt", "done\n")
 	run(t, "git", "-C", mgr.workDir, "add", "work.txt")
 	run(t, "git", "-C", mgr.workDir, "commit", "-m", "task work")
+	run(t, "git", "-C", project, "merge", "--ff-only", taskBranch)
 
 	mgr.PrepareForNextTask("ralph-next1")
 
@@ -646,10 +649,123 @@ func TestPrepareForNextTask_DeletesOldBranch(t *testing.T) {
 		t.Errorf("WorktreeBranch = %q, want %q", mgr.worktreeBranch, WipBranchName())
 	}
 
-	// Old task branch must no longer exist.
+	// Old task branch must no longer exist — its commits are now on main.
 	branches := gitOutput(project, "branch", "--list")
 	if strings.Contains(branches, taskBranch) {
 		t.Errorf("old task branch %q should be deleted after PrepareForNextTask, still in: %s", taskBranch, branches)
+	}
+}
+
+// PrepareForNextTask preserves a task branch when it has unmerged local
+// commits. This protects in-progress work from prior sessions when the loop
+// resumes and picks a different next task — force-deleting the branch would
+// silently drop commits that represent open work. Regression: see
+// log excerpt where ralph/tabi-6p4-ralph-command-tests-playwright was
+// deleted during resume of an unrelated task.
+func TestPrepareForNextTask_PreservesUnmergedTaskBranch(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	log := &testLog{}
+	mgr := &Repo{
+		projectDir: project,
+		baseBranch: "main",
+		ralphDir:   ralphDir,
+		state:      newMemState(),
+		logger:     log,
+	}
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("in progress task", "ralph-wip1")
+	taskBranch := mgr.worktreeBranch
+
+	// Commit local work but do NOT merge into main — simulates an in-progress
+	// task whose PR is not yet merged.
+	writeFile(t, mgr.workDir, "work.txt", "pending\n")
+	run(t, "git", "-C", mgr.workDir, "add", "work.txt")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "in-progress work")
+	commitSHA := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "HEAD"))
+
+	mgr.PrepareForNextTask("ralph-different")
+
+	// Worktree must be on the placeholder branch.
+	if mgr.worktreeBranch != WipBranchName() {
+		t.Errorf("WorktreeBranch = %q, want %q", mgr.worktreeBranch, WipBranchName())
+	}
+
+	// Old task branch must still exist — it holds unmerged work.
+	branches := gitOutput(project, "branch", "--list")
+	if !strings.Contains(branches, taskBranch) {
+		t.Errorf("task branch %q with unmerged work should be preserved, branches: %s", taskBranch, branches)
+	}
+
+	// The branch must still point at the original commit (not reset).
+	got := strings.TrimSpace(gitOutput(project, "rev-parse", taskBranch))
+	if got != commitSHA {
+		t.Errorf("task branch %q tip = %q, want preserved commit %q", taskBranch, got, commitSHA)
+	}
+
+	// A warning must be logged explaining the preservation.
+	foundWarning := false
+	for _, msg := range log.messages {
+		if strings.Contains(msg, "Preserving local branch") && strings.Contains(msg, taskBranch) {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Errorf("expected 'Preserving local branch' log for unmerged branch %q, got: %v", taskBranch, log.messages)
+	}
+}
+
+// ResetToDefaultBranch preserves local commits instead of force-resetting.
+// When the worktree is on a branch with unpushed work (e.g. after loop
+// interruption), resume must not destroy those commits — EnsureUpToDate is
+// responsible for safely rebasing or aborting.
+func TestResetToDefaultBranch_PreservesLocalCommits(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	log := &testLog{}
+	mgr := &Repo{
+		projectDir: project,
+		baseBranch: "main",
+		ralphDir:   ralphDir,
+		state:      newMemState(),
+		logger:     log,
+	}
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	mgr.RenameBranchForTask("in progress task", "ralph-wip2")
+
+	// Commit local work without merging into main.
+	writeFile(t, mgr.workDir, "work.txt", "pending\n")
+	run(t, "git", "-C", mgr.workDir, "add", "work.txt")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "in-progress work")
+	commitSHA := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "HEAD"))
+
+	mgr.ResetToDefaultBranch()
+
+	// HEAD must still point at the local commit — reset must have been skipped.
+	got := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "HEAD"))
+	if got != commitSHA {
+		t.Errorf("HEAD = %q after ResetToDefaultBranch, want preserved commit %q (local work was destroyed)", got, commitSHA)
+	}
+
+	// A preservation log must be emitted so operators see why the reset no-op'd.
+	foundLog := false
+	for _, msg := range log.messages {
+		if strings.Contains(msg, "Preserving") && strings.Contains(msg, "deferring to rebase") {
+			foundLog = true
+			break
+		}
+	}
+	if !foundLog {
+		t.Errorf("expected preservation log, got: %v", log.messages)
 	}
 }
 

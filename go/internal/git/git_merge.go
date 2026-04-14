@@ -1128,6 +1128,15 @@ func (r *Repo) PostMergeUpdateMain() {
 		r.gitCmd(r.workDir, "reset", "--hard", "origin/"+defaultBranch)
 	}
 
-	// Move worktree to placeholder branch and delete the stale task branch.
+	// The PR for this branch was just squash-merged — the branch is logically
+	// merged even if git-ancestry says otherwise (squash rewrites history).
+	// Force-delete is safe here and intentional; PrepareForNextTask's
+	// conservative delete would spuriously preserve the branch.
+	staleTaskBranch := r.worktreeBranch
 	r.PrepareForNextTask("")
+	if staleTaskBranch != "" && staleTaskBranch != WipBranchName() && staleTaskBranch != r.worktreeBranch {
+		if err := r.gitCmdErr(r.projectDir, "branch", "-D", staleTaskBranch); err == nil {
+			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Deleted local branch %s", staleTaskBranch)
+		}
+	}
 }

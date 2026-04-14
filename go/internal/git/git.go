@@ -446,14 +446,24 @@ func (r *Repo) RenameBranchTo(name string) {
 	}
 }
 
-// ResetToDefaultBranch resets the worktree to origin's default branch.
-// Used on resume when no stack exists — stale local commits are discarded.
+// ResetToDefaultBranch resets the worktree to origin's default branch when
+// the current branch has no local commits to lose. If local commits exist
+// (in-progress work on a task branch), the reset is skipped so EnsureUpToDate
+// can rebase them safely — preserving work across loop restarts.
 // No-ops silently when the worktree is already at the target ref.
 func (r *Repo) ResetToDefaultBranch() {
 	defaultBranch := r.detectDefaultBranch()
 	_ = r.gitCmdErr(r.workDir, "fetch", "origin", defaultBranch)
 	target := "origin/" + defaultBranch
-	if r.refExists(r.workDir, target) && r.gitOutput(r.workDir, "rev-parse", "HEAD") == r.gitOutput(r.workDir, "rev-parse", target) {
+	if !r.refExists(r.workDir, target) {
+		return
+	}
+	if r.gitOutput(r.workDir, "rev-parse", "HEAD") == r.gitOutput(r.workDir, "rev-parse", target) {
+		return
+	}
+	// Preserve local work — let EnsureUpToDate rebase or abort safely.
+	if localCommits := r.gitOutput(r.workDir, "rev-list", "--count", target+"..HEAD"); localCommits != "" && localCommits != "0" {
+		r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: r.worktreeBranch}, "Preserving %s local commit(s) on %s — deferring to rebase", localCommits, r.worktreeBranch)
 		return
 	}
 	r.gitCmd(r.workDir, "reset", "--hard", target)
@@ -471,6 +481,24 @@ func (r *Repo) SetPrevBranch(branch string) {
 	if r.state != nil {
 		_ = r.state.Write("prev_branch", branch)
 	}
+}
+
+// branchSafeToDelete returns true when the branch has no commits beyond the
+// default branch (local or origin's), meaning all its work is already merged
+// and the ref can be dropped without data loss. Unlike `git branch -d`, this
+// ignores the upstream-tracking config (which is preserved across renames and
+// gives false negatives when a task branch inherits origin/main as upstream).
+func (r *Repo) branchSafeToDelete(branch string) bool {
+	defaultBranch := r.detectDefaultBranch()
+	for _, ref := range []string{"origin/" + defaultBranch, defaultBranch} {
+		if !r.refExists(r.projectDir, ref) {
+			continue
+		}
+		if r.gitCmdErr(r.projectDir, "merge-base", "--is-ancestor", branch, ref) == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // PrepareForNextTask creates a fresh wip branch from HEAD so the next task
@@ -506,8 +534,15 @@ func (r *Repo) PrepareForNextTask(nextTaskID string) {
 		if r.state != nil {
 			_ = r.state.Write("worktree_branch", newBranch)
 		}
-		if err := r.gitCmdErr(r.projectDir, "branch", "-D", oldBranch); err == nil {
-			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Deleted local branch %s", oldBranch)
+		// Only delete if oldBranch has no commits beyond the default branch —
+		// i.e. all its work is already merged. Otherwise preserve it so
+		// in-progress work from a prior session isn't silently destroyed.
+		if r.branchSafeToDelete(oldBranch) {
+			if err := r.gitCmdErr(r.projectDir, "branch", "-D", oldBranch); err == nil {
+				r.logger.Emit(logging.Opts{Domain: logging.Git}, "Deleted local branch %s", oldBranch)
+			}
+		} else {
+			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Preserving local branch %s — unmerged commits ahead of %s", oldBranch, r.detectDefaultBranch())
 		}
 	}
 }
