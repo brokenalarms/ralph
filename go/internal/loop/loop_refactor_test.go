@@ -23,7 +23,7 @@ func TestLoop_MaybeRefactor_DisabledByDefault(t *testing.T) {
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
-		Git:         &git.StubRepo{WorkDir: dir},
+		Git:         git.NewStub(git.StubRepoConfig{WorkDir: dir}),
 		TaskBackend: nil,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
@@ -48,7 +48,7 @@ func TestLoop_MaybeRefactor_SkipsBelow5Completions(t *testing.T) {
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
-		Git:         &git.StubRepo{WorkDir: dir},
+		Git:         git.NewStub(git.StubRepoConfig{WorkDir: dir}),
 		TaskBackend: nil,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
@@ -74,7 +74,7 @@ func TestLoop_MaybeRefactor_LLMSaysNo(t *testing.T) {
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
-		Git:         &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"},
+		Git:         git.NewStub(git.StubRepoConfig{WorkDir: dir, RecentChangedFiles: "file.go\nother.go"}),
 		TaskBackend: nil,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
@@ -117,7 +117,7 @@ func TestLoop_MaybeRefactor_LLMSaysYes(t *testing.T) {
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
-		Git:         &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"},
+		Git:         git.NewStub(git.StubRepoConfig{WorkDir: dir, RecentChangedFiles: "file.go\nother.go"}),
 		TaskBackend: nil,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
@@ -155,7 +155,7 @@ func TestLoop_MaybeRefactor_TriggersAtMultiplesOf5(t *testing.T) {
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
-		Git:         &git.StubRepo{WorkDir: dir, RecentFilesValue: "file.go\nother.go"},
+		Git:         git.NewStub(git.StubRepoConfig{WorkDir: dir, RecentChangedFiles: "file.go\nother.go"}),
 		TaskBackend: nil,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
@@ -209,7 +209,7 @@ func TestLoop_LLMShouldRefactor_ParsesResponses(t *testing.T) {
 			logger := logging.New(nil)
 			l := New(cfg, Modules{
 				State: st,
-				Git:   &git.StubRepo{WorkDir: dir},
+				Git:   git.NewStub(git.StubRepoConfig{WorkDir: dir}),
 				Querier: &stubQuerier{
 					fn: func(_ context.Context, _, _, _ string) (string, error) {
 						return resp, nil
