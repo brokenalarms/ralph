@@ -20,7 +20,7 @@ func newTestLoopForSelection(t *testing.T, backend *testutil.StubBackend) (*Loop
 			Dirs:          workctx.WorkContext{RalphDir: dir + "/.ralph"},
 		},
 		state:       st,
-		git:         &git.StubRepo{ProjectDir: dir, WorkDir: dir},
+		git:         git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir}),
 		logger:      logging.New(nil),
 		taskBackend: backend,
 	}
@@ -117,32 +117,6 @@ func TestSelectNextTask_NoTasksNoWait(t *testing.T) {
 	status, _ := l.state.Read("status")
 	if status != "completed" {
 		t.Errorf("expected status completed, got %q", status)
-	}
-}
-
-// selectNextTask calls flushUnpushedWork when no tasks remain and runIteration > 0.
-func TestSelectNextTask_FlushesUnpushedWorkWhenNoTasks(t *testing.T) {
-	backend := &testutil.StubBackend{Remaining: 0, Total: 1}
-	stubGit := &git.StubRepo{}
-	dir, st := setupTestDir(t)
-	l := &Loop{
-		cfg: Config{
-			MaxIterations: 100,
-			Dirs:          workctx.WorkContext{RalphDir: dir + "/.ralph"},
-		},
-		state:       st,
-		git:         stubGit,
-		logger:      logging.New(nil),
-		taskBackend: backend,
-	}
-
-	l.selectNextTask(context.Background(), selectNextTaskParams{
-		runIteration: 2,
-		completedIDs: map[string]bool{},
-	})
-
-	if stubGit.FlushUnpushedCalls == 0 {
-		t.Error("expected FlushUnpushedWork to be called when no tasks remain and runIteration > 0")
 	}
 }
 

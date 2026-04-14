@@ -224,11 +224,11 @@ func TestRun_ExitsOnGitHubUnreachable(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &git.StubRepo{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		RemoteURLValue: "https://github.com/owner/repo.git",
-	}
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		RemoteURL:  "https://github.com/owner/repo.git",
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -277,7 +277,7 @@ func createPromptTemplates(t *testing.T, dir string) {
 // given task ID, or empty string for missing or nil backend cases.
 func TestLoopTaskDescription_Standalone(t *testing.T) {
 	dir, st := setupTestDir(t)
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	backend := &testutil.StubBackend{Description: "Fix auth middleware"}
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
