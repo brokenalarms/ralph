@@ -778,4 +778,75 @@ func TestCompleteTask_NotifyOnNoCommitsPath(t *testing.T) {
 	}
 }
 
+// completeTask: when Ship returns a non-zero PRNumber on a diverged branch,
+// the loop takes the normal PR-created close path and does NOT log "No PR
+// created" or close the bead with the orphan reason "no PR". This is the
+// regression guard for the bug where diverged branches had their work
+// orphaned by Ship returning an empty ShipResult.
+func TestCompleteTask_DivergedBranch_CreatesPR(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining: 1,
+				Total:     1,
+				NextTask:  "Continue work",
+				NextID:    "ralph-div1",
+			},
+		},
+	}
+
+	// Ship returns a non-zero PRNumber — simulating a diverged branch where
+	// BranchHasUnmergedWork=true causes CreatePR to be called and succeed.
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		HeadRev:    "after",
+		Ship:       git.ShipResult{PRNumber: 55},
+	})
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+		VerifyHook:  passingVerifyHook(),
+	})
+	l.runner = &stubRunner{}
+
+	out := l.completeTask(context.Background(), completeTaskParams{
+		result:     claude.Result{SignalDetected: true},
+		headBefore: "",
+		workDir:    dir,
+		rawLogPath: filepath.Join(ralphDir, "raw.log"),
+		taskID:     "ralph-div1",
+		nextTask:   "Continue work",
+		ralphDir:   ralphDir,
+	})
+
+	if out.action != signalComplete {
+		t.Errorf("expected signalComplete, got %d", out.action)
+	}
+
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-div1" {
+		t.Errorf("expected CloseTask for ralph-div1, got %v", backend.ClosedIDs)
+	}
+	for _, reason := range backend.CloseReasons {
+		if strings.Contains(reason, "no PR") {
+			t.Errorf("loop took 'No PR created' path on diverged branch; close reason: %q", reason)
+		}
+	}
+}
 

@@ -212,6 +212,52 @@ func TestBranchIsAheadOfMain(t *testing.T) {
 	}
 }
 
+// BranchHasUnmergedWork returns true when the branch has commits not on main,
+// including diverged branches where main also has commits not on the branch.
+func TestBranchHasUnmergedWork(t *testing.T) {
+	project, _ := initBareRepo(t)
+	mgr := newRepoForTest(Config{ProjectDir: project, WorkDir: project, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}))
+
+	// Branch cleanly ahead of main — has unmerged work.
+	run(t, "git", "-C", project, "checkout", "-b", "ahead-branch")
+	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "ahead work")
+	run(t, "git", "-C", project, "push", "-u", "origin", "ahead-branch")
+	run(t, "git", "-C", project, "checkout", "main")
+
+	if !mgr.BranchHasUnmergedWork("ahead-branch") {
+		t.Error("ahead-branch is cleanly ahead of main, should return true")
+	}
+
+	// Merge ahead-branch, advance main — ahead-branch is now behind, no unmerged work.
+	run(t, "git", "-C", project, "merge", "ahead-branch")
+	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "main moves ahead")
+	run(t, "git", "-C", project, "push", "origin", "main")
+
+	if mgr.BranchHasUnmergedWork("ahead-branch") {
+		t.Error("ahead-branch is landed (behind main), should return false")
+	}
+
+	// Diverged branch: branch and main both have commits the other doesn't.
+	// BranchIsAheadOfMain returns false for this case, but BranchHasUnmergedWork must return true.
+	run(t, "git", "-C", project, "checkout", "-b", "diverged-branch")
+	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "diverged work")
+	run(t, "git", "-C", project, "push", "-u", "origin", "diverged-branch")
+	run(t, "git", "-C", project, "checkout", "main")
+	run(t, "git", "-C", project, "commit", "--allow-empty", "-m", "main diverges")
+	run(t, "git", "-C", project, "push", "origin", "main")
+
+	if mgr.BranchIsAheadOfMain("diverged-branch") {
+		t.Error("precondition: diverged-branch should NOT be ahead of main (BranchIsAheadOfMain must return false)")
+	}
+	if !mgr.BranchHasUnmergedWork("diverged-branch") {
+		t.Error("diverged-branch has commits ahead of main, BranchHasUnmergedWork must return true")
+	}
+
+	if mgr.BranchHasUnmergedWork("no-such-branch") {
+		t.Error("non-existent branch should return false")
+	}
+}
+
 // BranchName returns a canonical branch name from beadID and slug
 func TestBranchName(t *testing.T) {
 	// With bead ID: ralph/<beadID>-<slug>

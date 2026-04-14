@@ -320,11 +320,11 @@ type ShipResult struct {
 // shipInfra holds the infrastructure callbacks used by shipPR. These are
 // separated from ShipOpts to keep ShipOpts data-only.
 type shipInfra struct {
-	push              func(context.Context) error
-	hasUncommitted    func() bool
-	commitAll         func(string)
-	branchAheadOfMain func(string) bool
-	logger            Log
+	push                 func(context.Context) error
+	hasUncommitted       func() bool
+	commitAll            func(string)
+	branchHasUnmergedWork func(string) bool
+	logger               Log
 }
 
 // shipPR is the single "get work into a PR" pipeline: auto-commit any
@@ -376,9 +376,9 @@ func shipPR(ctx context.Context, runner Runner, gh gitHub, workDir, branch, remo
 		}
 	}
 
-	if infra.branchAheadOfMain != nil && !infra.branchAheadOfMain(branch) {
+	if infra.branchHasUnmergedWork != nil && !infra.branchHasUnmergedWork(branch) {
 		if infra.logger != nil {
-			infra.logger.Emit(logging.Opts{Domain: logging.Git}, "Ship: branch %s is not ahead of main — skipping PR creation", branch)
+			infra.logger.Emit(logging.Opts{Domain: logging.Git}, "Ship: branch %s has no commits ahead of main — skipping PR creation", branch)
 		}
 		return ShipResult{}, nil
 	}
@@ -451,11 +451,11 @@ func (r *repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 		// PRStateOpen — fall through to merge phase.
 	} else {
 		infra := shipInfra{
-			push:              r.Push,
-			hasUncommitted:    r.HasUncommittedChanges,
-			commitAll:         r.CommitAll,
-			branchAheadOfMain: r.BranchIsAheadOfMain,
-			logger:            r.logger,
+			push:                 r.Push,
+			hasUncommitted:       r.HasUncommittedChanges,
+			commitAll:            r.CommitAll,
+			branchHasUnmergedWork: r.BranchHasUnmergedWork,
+			logger:               r.logger,
 		}
 		result, err = shipPR(ctx, r.run(), r.github, r.workDir, r.worktreeBranch, r.RemoteURL(), opts, infra)
 		if err != nil {
