@@ -44,7 +44,7 @@ func TestLoop_VerifyBuild_FailureInjectedIntoPrompt(t *testing.T) {
 		BackendLabel: "beads",
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -113,7 +113,7 @@ func TestLoop_VerifyBuild_PassDoesNotInjectContext(t *testing.T) {
 		BackendLabel: "beads",
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -174,7 +174,7 @@ func TestLoop_VerifyBuild_NotConfigured_NoEffect(t *testing.T) {
 		BackendLabel: "beads",
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -243,7 +243,7 @@ func TestLoop_VerifyBuild_RunsBeforePreIterationTests(t *testing.T) {
 		BackendLabel: "beads",
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
