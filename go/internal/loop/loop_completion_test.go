@@ -46,7 +46,11 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		Ship:       git.ShipResult{PRNumber: 99},
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -59,17 +63,16 @@ func TestLoop_OrchestratorClosesTaskAfterSignal(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:   passingVerifyHook(),
 	})
 
 	l.runner = runner
-	gm.ShipResult = git.ShipResult{PRNumber: 99}
 
 	_ = l.Run(context.Background())
 
@@ -104,11 +107,16 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:         dir,
+		WorkDir:            dir,
+		Ship:               git.ShipResult{PRNumber: 42, Merged: true},
+		MergeRetrySucceeds: true,
+	})
 
 	runner := &stubRunner{
 		onRun: func() {
-			gm.HeadRevValue = "abc123"
+			gm.CommitAll("simulated agent commit")
 			backend.Lock()
 			backend.Completed = 1
 			backend.Remaining = 0
@@ -128,18 +136,16 @@ func TestLoop_CloseReasonIncludesPRNumber(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:   passingVerifyHook(),
 	})
 
 	l.runner = runner
-	gm.ShipResult = git.ShipResult{PRNumber: 42}
-	gm.MergeRetryResult = true
 	l.cfg.AutoMerge = true
 
 	_ = l.Run(context.Background())
@@ -189,7 +195,7 @@ func TestLoop_NoCodeNeeded_ClosesTaskWithoutCommits(t *testing.T) {
 	// No commits — same head before and after. The no-code-needed path
 	// runs the verify pipeline with skipCommitCheck, then falls through
 	// to the no-commits close path.
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "abc123"}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, HeadRev: "abc123"})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -249,7 +255,7 @@ func TestLoop_NoCloseOnVerificationFailure(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -300,7 +306,7 @@ func TestLoop_RecordsAttemptAfterIteration(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -350,7 +356,7 @@ func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -409,7 +415,7 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 		BackendLabel: "beads",
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -451,7 +457,7 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 func loopForAttemptContextTest(t *testing.T, dir, ralphDir string) *Loop {
 	t.Helper()
 	_, st := setupTestDir(t)
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir},
 		MaxIterations: 1,
@@ -616,10 +622,10 @@ func TestLoop_RecordsCompletedTasks(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.StubRepo{
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir: dir,
 		WorkDir:    dir,
-	}
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -676,10 +682,10 @@ func TestLoop_ClearsCompletedTasksOnStart(t *testing.T) {
 		Total:     1,
 	}
 
-	gm := &git.StubRepo{
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir: dir,
 		WorkDir:    dir,
-	}
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -735,10 +741,10 @@ func TestLoop_RecordsCompletedTaskTitle_WhenNoID(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.StubRepo{
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir: dir,
 		WorkDir:    dir,
-	}
+	})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -805,7 +811,7 @@ func TestLoop_SessionTasksRecordsCompletedWork(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "added session summary before evolve"},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -865,7 +871,7 @@ func TestLoop_SessionTasksEmptyOnVerificationFailure(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "tried to fix it"},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -917,11 +923,15 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 		},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		Ship:       git.ShipResult{PRNumber: 42},
+	})
 
 	runner := &stubRunner{
 		onRun: func() {
-			gm.HeadRevValue = "abc123"
+			gm.CommitAll("simulated agent commit")
 			backend.Lock()
 			backend.Completed = 1
 			backend.Remaining = 0
@@ -941,17 +951,16 @@ func TestLoop_PersistsCompletedTaskToState(t *testing.T) {
 	}
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: backend,
-		Logger:      logger,
-		Verifier:    newTestVerifier(t, cfg, logger),
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
 		Connectivity: onlineStubConnectivity(),
-		VerifyHook: passingVerifyHook(),
+		VerifyHook:   passingVerifyHook(),
 	})
 
 	l.runner = runner
-	gm.PRNumber = 42
 
 	_ = l.Run(context.Background())
 
@@ -981,7 +990,7 @@ func TestLoop_CompletedTasksPersistAcrossRestarts(t *testing.T) {
 		Total:     1,
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
