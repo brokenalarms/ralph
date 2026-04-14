@@ -980,3 +980,414 @@ func sortInts(a []int) {
 		}
 	}
 }
+
+// --- stubRepo: true in-memory fake of Ops for external-package unit tests ---
+//
+// StubRepoConfig declares the starting world state and prescribed outcomes for
+// a stubRepo. All fields are plain data; no callbacks, no sequenced slices.
+// Construction is the one and only configuration seam — state mutations after
+// construction happen only through Ops interface methods driven by the SUT.
+//
+// PR-related methods delegate to an inner stubGitHub constructed from
+// cfg.GitHub. Git-module-local methods read from cfg/mutable state.
+type StubRepoConfig struct {
+	// World state — the git-module view of the repo.
+	ProjectDir     string
+	WorkDir        string
+	RalphDir       string
+	BaseBranch     string // default "main" if empty
+	WorktreeBranch string
+	PrevBranch     string
+	BranchRenamed  bool
+	RemoteURL      string
+	HeadRev        string // returned by HeadRev()
+	DefaultBranch  string // returned by DetectDefaultBranch(); defaults to BaseBranch
+	HasUncommitted bool
+	HasDiff        bool
+	KnownPRNumber  int
+
+	// Inner GitHub fake config. NewStub builds a stubGitHub from this and
+	// delegates PR-related methods to it.
+	GitHub StubGitHubConfig
+
+	// Static returns for read-only queries.
+	ChangedFiles           []string
+	DiffFilesBetweenResult []string
+	DiffStat               string
+	DiffFullResult         string
+	LogOnelineResult       string
+	ConflictDiff           string
+	RecentChangedFiles     string
+	CIFailureLog           string
+	ProjectBranches        []string
+
+	// Ship / merge results — prescribed outcomes where deriving from state
+	// would require an unreasonable modeling burden.
+	Ship               ShipResult
+	ShipErr            error
+	PushAndCreatePRNum int
+	PushAndCreatePRErr error
+	MergeRetrySucceeds bool
+	MergeRetryErr      error
+	FlushMerged        bool
+	FlushErr           error
+	MergeStackResult   MergeStackResult
+	MergeStackErr      error
+	ResumeTaskResult   ResumeTaskResult
+	ResumeTaskErr      error
+
+	// Per-method fault injection for simple methods.
+	InitErr                      error
+	SyncWorktreeBaseErr          error
+	BranchForTaskResult          string // override for BranchForTask; default derived from taskID
+	BranchForTaskErr             error
+	EnsureUpToDateErr            error
+	PushErr                      error
+	FetchBranchErr               error
+	DeleteRemoteBranchByNameErr  error
+	ReplyToAndResolveCommentsErr error
+	RenameBranchForTaskErr       error
+
+	// Remote branch state — map of branch name → property. Missing entries
+	// return zero values.
+	RemoteBranchHasCommits map[string]bool
+	RemoteBranchIsOnMain   map[string]bool
+	BranchIsAheadOfMain    map[string]bool
+	BranchIsAncestorOfMain map[string]bool
+
+	// PRChainHealthy overrides PRChainIsHealthy output. When PRChainHealthyMsg
+	// is non-empty, PRChainIsHealthy returns (PRChainHealthy, PRChainHealthyMsg).
+	// Otherwise returns (true, "").
+	PRChainHealthy    bool
+	PRChainHealthyMsg string
+
+	// PRDiffForTaskResult is returned by PRDiffForTask.
+	PRDiffForTaskResult string
+}
+
+// stubRepo is an unexported fake of Ops. Tests receive it only through the
+// Ops interface via NewStub. All mutable state is unexported.
+type stubRepo struct {
+	cfg StubRepoConfig
+	gh  gitHub
+
+	// Mutable state. Initialized from cfg, mutated by SUT-driven Ops methods
+	// so subsequent reads reflect what the SUT did.
+	worktreeBranch string
+	prevBranch     string
+	branchRenamed  bool
+	headRev        string
+	knownPRNumber  int
+	commitSeq      int
+}
+
+// Compile-time check that *stubRepo satisfies Ops.
+var _ Ops = (*stubRepo)(nil)
+
+// NewStub returns a stubRepo as the Ops interface. External packages use
+// this to isolate unit tests from the git module.
+func NewStub(cfg StubRepoConfig) Ops {
+	if cfg.BaseBranch == "" {
+		cfg.BaseBranch = "main"
+	}
+	if cfg.DefaultBranch == "" {
+		cfg.DefaultBranch = cfg.BaseBranch
+	}
+	return &stubRepo{
+		cfg:            cfg,
+		gh:             newStubGitHub(cfg.GitHub),
+		worktreeBranch: cfg.WorktreeBranch,
+		prevBranch:     cfg.PrevBranch,
+		branchRenamed:  cfg.BranchRenamed,
+		headRev:        cfg.HeadRev,
+		knownPRNumber:  cfg.KnownPRNumber,
+	}
+}
+
+// --- State accessors ---
+
+func (s *stubRepo) GetProjectDir() string    { return s.cfg.ProjectDir }
+func (s *stubRepo) GetWorkDir() string       { return s.cfg.WorkDir }
+func (s *stubRepo) GetWorktreeBranch() string { return s.worktreeBranch }
+func (s *stubRepo) GetPrevBranch() string    { return s.prevBranch }
+func (s *stubRepo) IsBranchRenamed() bool    { return s.branchRenamed }
+func (s *stubRepo) SetBranchRenamed(v bool)  { s.branchRenamed = v }
+func (s *stubRepo) SetKnownPRNumber(n int)   { s.knownPRNumber = n }
+
+// --- PR operations: delegate to inner gh, mirroring *Repo's delegation ---
+
+func (s *stubRepo) FindOpenPRForBranch(branch string) (int, error) {
+	if !s.gh.Available() {
+		return 0, nil
+	}
+	return s.gh.FindOpenPR(branch, s.cfg.RemoteURL)
+}
+
+func (s *stubRepo) GetPRState(prNumber int) (PRState, error) {
+	if !s.gh.Available() {
+		return "", nil
+	}
+	pr, err := s.gh.GetPR(NWOFromRemote(s.cfg.RemoteURL), prNumber)
+	if err != nil {
+		return "", err
+	}
+	if pr == nil {
+		return "", nil
+	}
+	return pr.State, nil
+}
+
+func (s *stubRepo) ListOpenPRBranches() ([]string, error) {
+	if s.cfg.RemoteURL == "" || !s.gh.Available() {
+		return nil, nil
+	}
+	return s.gh.ListOpenPRBranches(s.cfg.RemoteURL)
+}
+
+func (s *stubRepo) GetPRBase(prNumber int) string {
+	if !s.gh.Available() {
+		return ""
+	}
+	pr, err := s.gh.GetPR(NWOFromRemote(s.cfg.RemoteURL), prNumber)
+	if err != nil || pr == nil {
+		return ""
+	}
+	return pr.BaseRef
+}
+
+func (s *stubRepo) FindPRForBranch(branch string) (int, string, string, error) {
+	if !s.gh.Available() {
+		return 0, "", "", nil
+	}
+	return s.gh.FindPR(branch, s.cfg.RemoteURL)
+}
+
+func (s *stubRepo) PRChainIsHealthy(prNumber int) (bool, string) {
+	if s.cfg.PRChainHealthyMsg != "" {
+		return s.cfg.PRChainHealthy, s.cfg.PRChainHealthyMsg
+	}
+	return true, ""
+}
+
+func (s *stubRepo) PRDiffForTask(taskID string) string {
+	return s.cfg.PRDiffForTaskResult
+}
+
+// --- Diff and status queries ---
+
+func (s *stubRepo) HeadRev() string                        { return s.headRev }
+func (s *stubRepo) HasDiff() bool                          { return s.cfg.HasDiff }
+func (s *stubRepo) HasUncommittedChanges() bool            { return s.cfg.HasUncommitted }
+func (s *stubRepo) ChangedFiles(_, _ string) []string      { return s.cfg.ChangedFiles }
+func (s *stubRepo) DiffFilesBetween(_, _ string) []string  { return s.cfg.DiffFilesBetweenResult }
+func (s *stubRepo) DiffStatRange(_, _ string) string       { return s.cfg.DiffStat }
+func (s *stubRepo) DiffFull(_, _ string) string            { return s.cfg.DiffFullResult }
+func (s *stubRepo) LogOneline(_, _ string) string          { return s.cfg.LogOnelineResult }
+func (s *stubRepo) ConflictDiff() string                   { return s.cfg.ConflictDiff }
+func (s *stubRepo) RemoteURL() string                      { return s.cfg.RemoteURL }
+func (s *stubRepo) DetectDefaultBranch() string            { return s.cfg.DefaultBranch }
+func (s *stubRepo) RecentChangedFiles(_ int) string        { return s.cfg.RecentChangedFiles }
+func (s *stubRepo) GetCIFailureLog(_ int) string           { return s.cfg.CIFailureLog }
+
+// --- Branch lifecycle ---
+
+func (s *stubRepo) SyncWorktreeBase(_ context.Context, _ []string) error {
+	return s.cfg.SyncWorktreeBaseErr
+}
+
+// BranchForTask mirrors production's contract: prepare-for-next-task (resets
+// branchRenamed), then rename the branch for the task. Returns the resulting
+// branch name.
+func (s *stubRepo) BranchForTask(_ context.Context, taskID, title string, meta BranchTaskMeta) (string, error) {
+	s.PrepareForNextTask(taskID)
+	if s.cfg.BranchForTaskErr != nil {
+		return "", s.cfg.BranchForTaskErr
+	}
+	if s.cfg.BranchForTaskResult != "" {
+		s.worktreeBranch = s.cfg.BranchForTaskResult
+		s.branchRenamed = true
+		return s.worktreeBranch, nil
+	}
+	if meta.Branch != "" {
+		s.worktreeBranch = meta.Branch
+		s.branchRenamed = true
+		return s.worktreeBranch, nil
+	}
+	if err := s.RenameBranchForTask(title, taskID); err != nil {
+		return "", err
+	}
+	if s.worktreeBranch == "" {
+		// Fall back to a deterministic derived name so callers always get
+		// something back.
+		s.worktreeBranch = "ralph/" + taskID
+		s.branchRenamed = true
+	}
+	return s.worktreeBranch, nil
+}
+
+func (s *stubRepo) PrepareForNextTask(_ string) {
+	s.branchRenamed = false
+	s.prevBranch = s.worktreeBranch
+}
+
+func (s *stubRepo) ResetToDefaultBranch() {
+	s.branchRenamed = false
+}
+
+func (s *stubRepo) RenameBranchForTask(taskDesc, taskID string) error {
+	if s.cfg.RenameBranchForTaskErr != nil {
+		return s.cfg.RenameBranchForTaskErr
+	}
+	if s.branchRenamed || s.worktreeBranch == "" || taskDesc == "" {
+		return nil
+	}
+	slug := Slugify(taskDesc)
+	if slug == "" {
+		return nil
+	}
+	s.worktreeBranch = BranchName(taskID, slug)
+	s.branchRenamed = true
+	return nil
+}
+
+func (s *stubRepo) RenameBranchTo(name string) {
+	if s.branchRenamed || s.worktreeBranch == "" || name == "" {
+		return
+	}
+	s.worktreeBranch = name
+	s.branchRenamed = true
+}
+
+func (s *stubRepo) SetPrevBranch(branch string) {
+	s.prevBranch = branch
+}
+
+// --- Tag operations (no-ops in the stub; tags have no observable effect
+// outside real git) ---
+
+func (s *stubRepo) TagTaskStart(_ string) {}
+func (s *stubRepo) TagTaskEnd(_ string)   {}
+
+// --- Commit operations ---
+
+// CommitAll advances the fake head so subsequent HeadRev calls reflect that
+// a commit was made.
+func (s *stubRepo) CommitAll(_ string) {
+	s.commitSeq++
+	s.headRev = fmt.Sprintf("stub-head-%d", s.commitSeq)
+}
+
+func (s *stubRepo) RevertFilesToRef(_ []string, _ string) {
+	s.commitSeq++
+	s.headRev = fmt.Sprintf("stub-head-%d", s.commitSeq)
+}
+
+func (s *stubRepo) EmptyCommit(_ string) {
+	s.commitSeq++
+	s.headRev = fmt.Sprintf("stub-head-%d", s.commitSeq)
+}
+
+// --- Sync / push operations ---
+
+func (s *stubRepo) EnsureUpToDate(_ context.Context) error { return s.cfg.EnsureUpToDateErr }
+func (s *stubRepo) Push(_ context.Context) error           { return s.cfg.PushErr }
+
+// Ship returns the prescribed outcome. Tests that want observable post-Ship
+// state (e.g. a findable PR) configure cfg.GitHub.PRs accordingly.
+func (s *stubRepo) Ship(_ context.Context, _ ShipOpts) (ShipResult, error) {
+	return s.cfg.Ship, s.cfg.ShipErr
+}
+
+func (s *stubRepo) PushAndCreatePR(_ context.Context, _, _, _ string) (int, error) {
+	return s.cfg.PushAndCreatePRNum, s.cfg.PushAndCreatePRErr
+}
+
+// --- Reviewer / review operations: delegate to gh where possible ---
+
+func (s *stubRepo) DetectActiveReviewers() ([]Reviewer, error) {
+	nwo := NWOFromRemote(s.cfg.RemoteURL)
+	if nwo == "" {
+		return nil, nil
+	}
+	return s.gh.DetectActiveReviewers(nwo)
+}
+
+func (s *stubRepo) PollReview(botUsername string, prNumber int, timeout time.Duration) (*AutoReview, error) {
+	nwo := NWOFromRemote(s.cfg.RemoteURL)
+	if nwo == "" {
+		return nil, nil
+	}
+	return s.gh.PollReview(nwo, botUsername, prNumber, timeout)
+}
+
+func (s *stubRepo) ReplyToAndResolveComments(_ int, _ []ReviewComment) error {
+	return s.cfg.ReplyToAndResolveCommentsErr
+}
+
+// --- Resume / merge operations ---
+
+func (s *stubRepo) ResumeTask(_ context.Context, _ ResumeTaskMeta, _ ResumeTaskOpts) (ResumeTaskResult, error) {
+	return s.cfg.ResumeTaskResult, s.cfg.ResumeTaskErr
+}
+
+func (s *stubRepo) MergeWithRetry(_ context.Context, _ MergeRetryOpts) (bool, error) {
+	return s.cfg.MergeRetrySucceeds, s.cfg.MergeRetryErr
+}
+
+func (s *stubRepo) FlushUnpushedWork(_ context.Context, _, _ string, _ bool) (bool, error) {
+	return s.cfg.FlushMerged, s.cfg.FlushErr
+}
+
+// PostMergeUpdateMain is a no-op in the stub: production fast-forwards the
+// local main branch, but the stub has no local refs to update.
+func (s *stubRepo) PostMergeUpdateMain() {}
+
+func (s *stubRepo) MergeStack(_ context.Context, _ MergeStackOpts) (MergeStackResult, error) {
+	return s.cfg.MergeStackResult, s.cfg.MergeStackErr
+}
+
+// --- Remote branch operations ---
+
+func (s *stubRepo) FetchBranch(_ string) error     { return s.cfg.FetchBranchErr }
+func (s *stubRepo) CheckoutRemoteBranch(_ string)  {}
+
+func (s *stubRepo) RemoteBranchHasCommits(branch string) bool {
+	return s.cfg.RemoteBranchHasCommits[branch]
+}
+
+func (s *stubRepo) RemoteBranchIsOnMain(branch string) bool {
+	return s.cfg.RemoteBranchIsOnMain[branch]
+}
+
+func (s *stubRepo) BranchIsAheadOfMain(branch string) bool {
+	return s.cfg.BranchIsAheadOfMain[branch]
+}
+
+func (s *stubRepo) BranchIsAncestorOfMain(branch string) bool {
+	return s.cfg.BranchIsAncestorOfMain[branch]
+}
+
+func (s *stubRepo) DeleteRemoteBranchByName(_ string) error {
+	return s.cfg.DeleteRemoteBranchByNameErr
+}
+
+// --- Init / worktree lifecycle ---
+
+func (s *stubRepo) Init(_ context.Context) error { return s.cfg.InitErr }
+
+// RemoveWorktree is a no-op: there is no real worktree to remove.
+func (s *stubRepo) RemoveWorktree() {}
+
+// --- GitHub availability and PR listing ---
+
+func (s *stubRepo) GitHubAvailable() bool {
+	return s.gh.Available()
+}
+
+func (s *stubRepo) ListAllPRs(workDir string) ([]PRInfo, error) {
+	return s.gh.ListAllPRs(workDir)
+}
+
+func (s *stubRepo) ListProjectBranches() []string {
+	return s.cfg.ProjectBranches
+}
