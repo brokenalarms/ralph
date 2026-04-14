@@ -215,6 +215,8 @@ func newRepoForTest(cfg Config, gh gitHub, opts ...repoTestOpt) *Repo {
 		state:                       tc.state,
 		worktreeBranch:              tc.worktreeBranch,
 		branchRenamed:               tc.branchRenamed,
+		prevBranch:                  tc.prevBranch,
+		knownPRNumber:               tc.knownPRNumber,
 	}
 }
 
@@ -225,6 +227,8 @@ type repoTestDeps struct {
 	state          stateStore
 	worktreeBranch string
 	branchRenamed  bool
+	prevBranch     string
+	knownPRNumber  int
 }
 
 type repoTestOpt func(*repoTestDeps)
@@ -251,5 +255,19 @@ func withWorktreeBranch(name string) repoTestOpt {
 // sets this inside RenameBranchForTask after a successful rename.
 func withBranchRenamed(v bool) repoTestOpt {
 	return func(d *repoTestDeps) { d.branchRenamed = v }
+}
+
+// withPrevBranch pre-seeds the Repo's prevBranch field, which production
+// populates during stack head detection. Tests use this to exercise
+// stacked-PR paths without running real git to derive the stack.
+func withPrevBranch(name string) repoTestOpt {
+	return func(d *repoTestDeps) { d.prevBranch = name }
+}
+
+// withKnownPRNumber pre-seeds the Repo's knownPRNumber, which production
+// sets via SetKnownPRNumber after discovering a PR during Ship. Tests use
+// this to exercise the "PR already known" fast path.
+func withKnownPRNumber(n int) repoTestOpt {
+	return func(d *repoTestDeps) { d.knownPRNumber = n }
 }
 
