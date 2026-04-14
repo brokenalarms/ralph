@@ -197,35 +197,43 @@ func TestRepoIsUnexported(t *testing.T) {
 	}
 }
 
-// TestNoRepoStructLiterals walks the git package's production files
-// (non-test, excluding git.go which owns the New constructor and
-// testing.go which owns NewStub) and fails on any `&repo{` or
-// `&stubRepo{` composite literal. Production code must route through
-// the constructors. External packages cannot construct either type
-// (both are unexported) — this test defends the package-internal
-// boundary.
+// TestNoRepoStructLiterals walks all .go files in the git package and
+// fails on any `&repo{` or `&stubRepo{` composite literal outside the
+// three approved construction seams:
 //
-// Intentionally exempts:
-//   - git.go (New constructor body legitimately builds &repo{…})
-//   - testing.go (NewStub constructor body legitimately builds &stubRepo{…})
-//   - *_test.go (package-internal tests; a future refactor can migrate
-//     direct &repo{} literals onto the newRepoForTest helper)
+//   - git.go         → New() constructor for production *repo
+//   - testing.go     → NewStub() constructor for stubRepo
+//   - test_helpers_test.go → newRepoForTest() helper for package-internal
+//     tests that need a real *repo with injected dependencies
+//
+// Any other file — production or test — must go through one of the three
+// constructors. External packages cannot construct either type (both are
+// unexported) so this test defends the package-internal boundary.
 func TestNoRepoStructLiterals(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}
+	testFiles, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatalf("glob tests: %v", err)
+	}
+	files = append(files, testFiles...)
+
 	exempt := map[string]bool{
-		"git.go":     true, // the New constructor
-		"testing.go": true, // the NewStub constructor
+		"git.go":               true, // New constructor
+		"testing.go":           true, // NewStub constructor + stubRepo helpers
+		"test_helpers_test.go": true, // newRepoForTest test helper
 	}
 	repoLit := regexp.MustCompile(`&repo\{|&stubRepo\{`)
 	commentLine := regexp.MustCompile(`^\s*//`)
+	seen := map[string]bool{}
 	for _, path := range files {
 		base := filepath.Base(path)
-		if exempt[base] || strings.HasSuffix(base, "_test.go") {
+		if exempt[base] || seen[path] {
 			continue
 		}
+		seen[path] = true
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
@@ -235,7 +243,7 @@ func TestNoRepoStructLiterals(t *testing.T) {
 				continue
 			}
 			if repoLit.MatchString(line) {
-				t.Errorf("%s:%d: repo/stubRepo struct literal in production code — construct via git.New or git.NewStub: %s", path, i+1, strings.TrimSpace(line))
+				t.Errorf("%s:%d: repo/stubRepo struct literal — construct via git.New, git.NewStub, or newRepoForTest: %s", path, i+1, strings.TrimSpace(line))
 			}
 		}
 	}
