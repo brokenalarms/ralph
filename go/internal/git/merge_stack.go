@@ -33,7 +33,7 @@ type stackResult struct {
 // the given top PR, rebases the stack onto the base branch, then iterates
 // bottom-up: waiting for CI, merging, and rebasing the next PR onto the
 // updated base branch.
-func (r *Repo) MergeStack(ctx context.Context, opts MergeStackOpts) (MergeStackResult, error) {
+func (r *repo) MergeStack(ctx context.Context, opts MergeStackOpts) (MergeStackResult, error) {
 	if r.hasUncommittedChangesIn(r.projectDir) {
 		return MergeStackResult{}, fmt.Errorf("uncommitted changes in %s — commit or stash before merging", r.projectDir)
 	}
@@ -53,7 +53,7 @@ func (r *Repo) MergeStack(ctx context.Context, opts MergeStackOpts) (MergeStackR
 	return MergeStackResult{MergedCount: merged, TotalPRs: len(stack.prs)}, err
 }
 
-func (r *Repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch string) (int, error) {
+func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch string) (int, error) {
 	topBranch := prs[len(prs)-1].head
 	allBranches := make([]string, len(prs))
 	for i, pr := range prs {
@@ -116,7 +116,7 @@ func (r *Repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 	return merged, nil
 }
 
-func (r *Repo) collectStack(topPR string) stackResult {
+func (r *repo) collectStack(topPR string) stackResult {
 	allPRs, err := r.github.ListAllPRs(r.projectDir)
 	if err != nil {
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Failed to list PRs: %v", err)

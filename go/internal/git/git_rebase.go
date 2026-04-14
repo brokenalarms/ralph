@@ -32,7 +32,7 @@ func (e *RebaseConflictError) Error() string {
 // and continue. For each conflicted file: if only one side changed from base,
 // take that side. If both changed but ours is a subset of theirs, take theirs.
 // Returns true if the rebase completed successfully.
-func (r *Repo) autoResolveAndContinue(ctx context.Context, defaultBranch string) bool {
+func (r *repo) autoResolveAndContinue(ctx context.Context, defaultBranch string) bool {
 	for i := 0; i < 50; i++ { // max steps to prevent infinite loop
 		conflicted := r.gitOutput(r.workDir, "diff", "--name-only", "--diff-filter=U")
 		if conflicted == "" {
@@ -127,6 +127,6 @@ func isSubsetByLines(base, ours, theirs string) bool {
 
 // RebaseOntoDefaultBranch delegates to EnsureUpToDate, which is the single
 // sync point for all rebase operations.
-func (r *Repo) RebaseOntoDefaultBranch(ctx context.Context) error {
+func (r *repo) RebaseOntoDefaultBranch(ctx context.Context) error {
 	return r.EnsureUpToDate(ctx)
 }

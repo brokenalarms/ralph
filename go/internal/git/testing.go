@@ -468,7 +468,7 @@ func (s *stubRepo) IsBranchRenamed() bool    { return s.branchRenamed }
 func (s *stubRepo) SetBranchRenamed(v bool)  { s.branchRenamed = v }
 func (s *stubRepo) SetKnownPRNumber(n int)   { s.knownPRNumber = n }
 
-// --- PR operations: delegate to inner gh, mirroring *Repo's delegation ---
+// --- PR operations: delegate to inner gh, mirroring *repo's delegation ---
 
 func (s *stubRepo) FindOpenPRForBranch(branch string) (int, error) {
 	if !s.gh.Available() {

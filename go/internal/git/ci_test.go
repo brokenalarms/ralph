@@ -585,7 +585,7 @@ func TestAwaitCI_ZeroPushedAtSkipsFiltering(t *testing.T) {
 // a real bare repo in a temp dir so AutoMergeCurrentBranch can run without
 // a real gh CLI. The worktree branch is renamed to "ralph/test-feature"
 // so tests know exactly which branch FindOpenPR will be queried with.
-func setupAutoMergeManager(t *testing.T, gh gitHub) *Repo {
+func setupAutoMergeManager(t *testing.T, gh gitHub) *repo {
 	t.Helper()
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")

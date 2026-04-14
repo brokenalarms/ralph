@@ -23,7 +23,7 @@ type RebaseStackOpts struct {
 // with --update-refs onto BaseBranch, then force-pushes all AllBranches.
 // If a worktree from a previous conflict resolution already exists and the
 // branches are already rebased, skips the rebase and goes straight to push.
-func (r *Repo) RebaseStack(ctx context.Context, opts RebaseStackOpts) error {
+func (r *repo) RebaseStack(ctx context.Context, opts RebaseStackOpts) error {
 	slug := strings.ReplaceAll(opts.TopBranch, "/", "-")
 	wtDir := filepath.Join(r.ralphDir, "worktrees", "merge-"+slug)
 	tmpBranch := "ralph-merge/" + slug
@@ -109,7 +109,7 @@ func (r *Repo) RebaseStack(ctx context.Context, opts RebaseStackOpts) error {
 // force-pushes the result back to branch with --force-with-lease.
 // Attempts auto-resolution of mechanical conflicts before returning an error.
 // Checks out baseBranch before returning.
-func (r *Repo) RebaseBranchOntoRemote(ctx context.Context, branch, baseBranch string) error {
+func (r *repo) RebaseBranchOntoRemote(ctx context.Context, branch, baseBranch string) error {
 	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", baseBranch)
 	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", branch)
 	r.gitCmdCtx(ctx, r.projectDir, "checkout", "origin/"+branch)
@@ -130,14 +130,14 @@ func (r *Repo) RebaseBranchOntoRemote(ctx context.Context, branch, baseBranch st
 
 // MergeStackPR merges the PR with the given number using opts and returns the
 // full result — merged / conflict / blocked / failed / message.
-func (r *Repo) MergeStackPR(prNumber int, opts MergeOpts) MergeResult {
+func (r *repo) MergeStackPR(prNumber int, opts MergeOpts) MergeResult {
 	return r.github.MergePR(prNumber, r.RemoteURL(), opts)
 }
 
 // ResetBranchToRemote fetches origin/<branch>, checks out branch, and resets
 // --hard to origin/<branch>. Used after each PR merge to sync the local default
 // branch with the updated remote state.
-func (r *Repo) ResetBranchToRemote(ctx context.Context, branch string) {
+func (r *repo) ResetBranchToRemote(ctx context.Context, branch string) {
 	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", branch)
 	r.gitCmdCtx(ctx, r.projectDir, "checkout", branch)
 	r.gitCmdCtx(ctx, r.projectDir, "reset", "--hard", "origin/"+branch)

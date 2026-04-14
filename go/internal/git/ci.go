@@ -111,7 +111,7 @@ func failedChecks(checks []CICheckResult) []CICheckResult {
 // isInfrastructureFailure checks the GitHub Actions API to determine if CI
 // failed due to infrastructure (billing, runner allocation) rather than actual
 // test failures. A job with zero steps executed indicates it never ran.
-func (r *Repo) isInfrastructureFailure(ctx context.Context, prNumber int) bool {
+func (r *repo) isInfrastructureFailure(ctx context.Context, prNumber int) bool {
 	nwo := NWOFromRemote(r.RemoteURL())
 	if nwo == "" {
 		return false
@@ -182,7 +182,7 @@ type CIFetchFunc func(prNumber int, repoURL string) ([]CICheckResult, error)
 // When pushedAt is non-zero, filters out checks that started before the push
 // so only fresh CI results are evaluated. This prevents stale results from a
 // previous push from gating the merge.
-func (r *Repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushedAt time.Time) ([]CICheckResult, CIStatus, error) {
+func (r *repo) AwaitCI(ctx context.Context, prNumber int, repoURL string, pushedAt time.Time) ([]CICheckResult, CIStatus, error) {
 	nwo := NWOFromRemote(repoURL)
 	gh := r.github
 
