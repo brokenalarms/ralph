@@ -10,6 +10,97 @@ import (
 	"github.com/brokenalarms/ralph/internal/verifier"
 )
 
+// fixLoopResult is the tri-state outcome of a fix-and-push cycle. The CI
+// caller is the only one that distinguishes between "fix applied" and
+// "no commits — likely infrastructure failure"; conflict and review fixes
+// collapse no-commits into the failure case at their wrapper layer.
+type fixLoopResult int
+
+const (
+	fixApplied fixLoopResult = iota
+	fixNoCommits
+	fixFailed
+)
+
+// fixLoopOpts parameterizes one cycle of "spawn a fix agent, observe whether
+// it made commits, push if it did". Each tryFix* wrapper supplies its
+// fix-specific spawn callback and (optionally) a post-commit pre-push hook
+// (e.g. for CI's out-of-scope file revert) and a post-push hook (e.g. for
+// review's resolve-comments call).
+type fixLoopOpts struct {
+	// spawn invokes the fix agent. The result's SignalDetected gates the
+	// rest of the loop.
+	spawn func() verifier.FixAgentResult
+
+	// fixName tags log lines (e.g. "CI", "Conflict", "<reviewer>").
+	fixName string
+
+	// autoCommitMsg, when non-empty, instructs the helper to commit any
+	// uncommitted changes the fix agent left behind, with the given
+	// commit message. CI and review use this; conflict does not.
+	autoCommitMsg string
+
+	// noCommitsMsg overrides the default "fix agent made no new commits"
+	// log line — the three callers each phrase it slightly differently.
+	noCommitsMsg string
+
+	// onPushReady is invoked between the no-commits check and the push,
+	// when there ARE new commits to push. It receives headBefore (captured
+	// by fixLoop before spawning) and headAfter so the wrapper can compute
+	// post-fix invariants (e.g. CI's out-of-scope-file detection) without
+	// needing its own HeadRev() calls.
+	onPushReady func(headBefore, headAfter string)
+
+	// onPushed runs after a successful push. Used by the review wrapper to
+	// reply-and-resolve review threads. Errors are logged but not surfaced
+	// (the fix was already pushed).
+	onPushed func() error
+}
+
+// fixLoop owns the shared "spawn → check commits → push" scaffolding for
+// the three fix flows. The two HeadRev() calls in this function are the
+// only HeadRev() reads in the file; the per-fix wrappers compose the
+// scaffold via fixLoopOpts callbacks rather than re-reading state.
+func (l *Loop) fixLoop(ctx context.Context, opts fixLoopOpts) fixLoopResult {
+	headBefore := l.git.HeadRev()
+	fixResult := opts.spawn()
+	if !fixResult.SignalDetected {
+		return fixFailed
+	}
+
+	if opts.autoCommitMsg != "" && l.git.HasUncommittedChanges() {
+		l.logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent left uncommitted changes — auto-committing")
+		l.git.CommitAll(opts.autoCommitMsg)
+	}
+
+	headAfter := l.git.HeadRev()
+	if headBefore == headAfter {
+		msg := opts.noCommitsMsg
+		if msg == "" {
+			msg = fmt.Sprintf("%s fix agent made no new commits", opts.fixName)
+		}
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%s", msg)
+		return fixNoCommits
+	}
+
+	if opts.onPushReady != nil {
+		opts.onPushReady(headBefore, headAfter)
+	}
+
+	l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s fix committed — pushing", opts.fixName)
+	if err := l.git.Push(ctx); err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after %s fix failed: %v", opts.fixName, err)
+		return fixFailed
+	}
+
+	if opts.onPushed != nil {
+		if err := opts.onPushed(); err != nil {
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%s post-push hook: %v", opts.fixName, err)
+		}
+	}
+	return fixApplied
+}
+
 // tryFixCI spawns a fix agent to address CI failures, force-pushes the
 // new commits, and returns a CIFixResult:
 //   - CIFixApplied:   fix was pushed, ready for merge retry
@@ -17,16 +108,7 @@ import (
 //   - CIFixFailed:    agent error or push failure
 func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask, workDir, rawLogPath string) git.CIFixResult {
 	ciLog := l.git.GetCIFailureLog(ciErr.PRNumber)
-	headBefore := l.git.HeadRev()
-
-	// Snapshot files in the task diff before the fix agent runs.
-	// Used post-fix to detect out-of-scope modifications.
 	baseBranch := l.git.DetectDefaultBranch()
-	taskFiles := l.git.DiffFilesBetween("origin/"+baseBranch, headBefore)
-	taskFileSet := make(map[string]bool, len(taskFiles))
-	for _, f := range taskFiles {
-		taskFileSet[f] = true
-	}
 
 	// Pre-filter required vs optional check failures. Verifier does not
 	// import the git package, so Loop flattens the typed git.CheckFailure
@@ -41,58 +123,57 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask
 		}
 	}
 
-	fixResult := l.verifier.SpawnCIFixAgent(verifier.CIFixInput{
-		Spawn: verifier.FixAgentSpawn{
-			Ctx:        ctx,
-			TaskTitle:  nextTask,
-			WorkDir:    workDir,
-			RawLogPath: rawLogPath,
+	result := l.fixLoop(ctx, fixLoopOpts{
+		fixName:       "CI",
+		autoCommitMsg: "fix: auto-commit CI fix agent changes",
+		noCommitsMsg:  "Fix agent made no new commits — likely infrastructure failure",
+		spawn: func() verifier.FixAgentResult {
+			return l.verifier.SpawnCIFixAgent(verifier.CIFixInput{
+				Spawn: verifier.FixAgentSpawn{
+					Ctx:        ctx,
+					TaskTitle:  nextTask,
+					WorkDir:    workDir,
+					RawLogPath: rawLogPath,
+				},
+				CILog:            ciLog,
+				PRNumber:         ciErr.PRNumber,
+				RequiredFailures: requiredNames,
+				OptionalFailures: optionalNames,
+			})
 		},
-		CILog:            ciLog,
-		PRNumber:         ciErr.PRNumber,
-		RequiredFailures: requiredNames,
-		OptionalFailures: optionalNames,
+		onPushReady: func(headBefore, headAfter string) {
+			// Snapshot files in the task diff before the fix agent ran. We
+			// resolve this from headBefore (captured by fixLoop before the
+			// agent spawn), so no extra HeadRev() call is needed here.
+			taskFiles := l.git.DiffFilesBetween("origin/"+baseBranch, headBefore)
+			taskFileSet := make(map[string]bool, len(taskFiles))
+			for _, f := range taskFiles {
+				taskFileSet[f] = true
+			}
+			fixFiles := l.git.DiffFilesBetween(headBefore, headAfter)
+			var outOfScope []string
+			for _, f := range fixFiles {
+				if !taskFileSet[f] {
+					outOfScope = append(outOfScope, f)
+				}
+			}
+			if len(outOfScope) > 0 {
+				l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+					"Fix agent modified %d file(s) outside task scope: %s — reverting out-of-scope changes",
+					len(outOfScope), strings.Join(outOfScope, ", "))
+				l.git.RevertFilesToRef(outOfScope, "origin/"+baseBranch)
+			}
+		},
 	})
-	if !fixResult.SignalDetected {
-		return git.CIFixFailed
-	}
 
-	// Fix agent may leave uncommitted changes — commit them before checking HEAD.
-	if l.git.HasUncommittedChanges() {
-		l.logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent left uncommitted changes — auto-committing")
-		l.git.CommitAll("fix: auto-commit CI fix agent changes")
-	}
-
-	headAfter := l.git.HeadRev()
-	if headBefore == headAfter {
-		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Fix agent made no new commits — likely infrastructure failure")
+	switch result {
+	case fixApplied:
+		return git.CIFixApplied
+	case fixNoCommits:
 		return git.CIFixNoCommits
-	}
-
-	// Guard: detect if the fix agent modified files outside the task's
-	// original scope. These are files that differ from origin/main in the
-	// fix agent's commit but were NOT in the task diff before the fix agent
-	// ran — likely concurrent main changes being silently reverted.
-	fixFiles := l.git.DiffFilesBetween(headBefore, headAfter)
-	var outOfScope []string
-	for _, f := range fixFiles {
-		if !taskFileSet[f] {
-			outOfScope = append(outOfScope, f)
-		}
-	}
-	if len(outOfScope) > 0 {
-		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
-			"Fix agent modified %d file(s) outside task scope: %s — reverting out-of-scope changes",
-			len(outOfScope), strings.Join(outOfScope, ", "))
-		l.git.RevertFilesToRef(outOfScope, "origin/"+baseBranch)
-	}
-
-	l.logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent committed — pushing")
-	if err := l.git.Push(ctx); err != nil {
-		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after CI fix failed: %v", err)
+	default:
 		return git.CIFixFailed
 	}
-	return git.CIFixApplied
 }
 
 // tryFixConflict spawns a conflict resolution agent, force-pushes the
@@ -101,28 +182,20 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask
 func (l *Loop) tryFixConflict(ctx context.Context, taskID, nextTask, workDir, rawLogPath string) bool {
 	conflictDiff := l.git.ConflictDiff()
 	taskDesc := l.taskDescription(taskID)
-	headBefore := l.git.HeadRev()
-	fixResult := l.verifier.SpawnConflictFixAgent(verifier.FixAgentSpawn{
-		Ctx:        ctx,
-		TaskTitle:  nextTask,
-		WorkDir:    workDir,
-		RawLogPath: rawLogPath,
-	}, conflictDiff, taskDesc)
-	if !fixResult.SignalDetected {
-		return false
-	}
 
-	headAfter := l.git.HeadRev()
-	if headBefore == headAfter {
-		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Conflict agent made no new commits — nothing to push")
-		return false
-	}
-
-	if err := l.git.Push(ctx); err != nil {
-		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after conflict resolution failed: %v", err)
-		return false
-	}
-	return true
+	result := l.fixLoop(ctx, fixLoopOpts{
+		fixName:      "Conflict",
+		noCommitsMsg: "Conflict agent made no new commits — nothing to push",
+		spawn: func() verifier.FixAgentResult {
+			return l.verifier.SpawnConflictFixAgent(verifier.FixAgentSpawn{
+				Ctx:        ctx,
+				TaskTitle:  nextTask,
+				WorkDir:    workDir,
+				RawLogPath: rawLogPath,
+			}, conflictDiff, taskDesc)
+		},
+	})
+	return result == fixApplied
 }
 
 // taskDescription fetches the task description from the configured backend,
@@ -206,35 +279,22 @@ func (l *Loop) tryFixReviewComments(ctx context.Context, reviewerName string, re
 		l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s: %s:%d — %s", reviewerName, c.Path, c.Line, firstLine)
 	}
 	reviewCtx := formatReviewContext(reviewerName, prNumber, actionable)
-	headBefore := l.git.HeadRev()
 
-	fixResult := l.verifier.SpawnCopilotFixAgent(verifier.FixAgentSpawn{
-		Ctx:        ctx,
-		TaskTitle:  nextTask,
-		WorkDir:    workDir,
-		RawLogPath: rawLogPath,
-	}, reviewCtx)
-	if !fixResult.SignalDetected {
-		return false
-	}
-
-	if l.git.HasUncommittedChanges() {
-		l.logger.Emit(logging.Opts{Domain: logging.Git}, "Fix agent left uncommitted changes — auto-committing")
-		l.git.CommitAll("fix: address " + reviewerName + " review feedback")
-	}
-
-	if l.git.HeadRev() == headBefore {
-		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%s fix agent made no new commits — proceeding to merge anyway", reviewerName)
-		return false
-	}
-
-	l.logger.Emit(logging.Opts{Domain: logging.Git}, "%s fix committed — pushing", reviewerName)
-	if err := l.git.Push(ctx); err != nil {
-		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Push after %s fix failed: %v", reviewerName, err)
-		return false
-	}
-	if err := l.git.ReplyToAndResolveComments(prNumber, actionable); err != nil {
-		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Reply and resolve %s review comments: %v", reviewerName, err)
-	}
-	return true
+	result := l.fixLoop(ctx, fixLoopOpts{
+		fixName:       reviewerName,
+		autoCommitMsg: "fix: address " + reviewerName + " review feedback",
+		noCommitsMsg:  fmt.Sprintf("%s fix agent made no new commits — proceeding to merge anyway", reviewerName),
+		spawn: func() verifier.FixAgentResult {
+			return l.verifier.SpawnCopilotFixAgent(verifier.FixAgentSpawn{
+				Ctx:        ctx,
+				TaskTitle:  nextTask,
+				WorkDir:    workDir,
+				RawLogPath: rawLogPath,
+			}, reviewCtx)
+		},
+		onPushed: func() error {
+			return l.git.ReplyToAndResolveComments(prNumber, actionable)
+		},
+	})
+	return result == fixApplied
 }
