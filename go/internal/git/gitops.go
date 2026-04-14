@@ -7,7 +7,8 @@ import (
 )
 
 // Ops is the public API of the git module. git.New(Config) returns Ops.
-// External tests use *StubRepo; git-package tests construct &Repo{} directly.
+// External tests build an in-memory Ops via git.NewStub(StubRepoConfig);
+// git-package tests construct &Repo{} directly within the package.
 type Ops interface {
 	// Init runs git pre-flight checks and worktree setup. Must be called
 	// once after construction, before any task execution.

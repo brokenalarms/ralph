@@ -127,7 +127,7 @@ type MergeResult struct {
 
 // gitHub abstracts GitHub CLI operations. Unexported — the production
 // implementation (ghCLI) is always constructed by New(). Git-package
-// tests inject StubGitHub via same-package construction.
+// tests inject stubGitHub via newStubGitHub (same-package, unexported).
 type gitHub interface {
 	Available() bool
 	FindOpenPR(branch, repoURL string) (prNumber int, err error)
