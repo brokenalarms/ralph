@@ -100,9 +100,9 @@ func TestRebaseOntoDefaultBranch_CleanRebase(t *testing.T) {
 	}
 }
 
-// Real conflicts return an error — caller decides what to do
-// Rebase conflicts with local work cause the stack to diverge —
-// returns nil (not an error), logs the divergence.
+// Genuine divergence (both sides modified the same line differently) causes
+// EnsureUpToDate to return *UnresolvedConflictError so callers know the
+// branch could not be synced.
 func TestRebaseOntoDefaultBranch_DivergesOnConflict(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	mgr := setupRebaseMgr(t, project, bare)
@@ -115,8 +115,66 @@ func TestRebaseOntoDefaultBranch_DivergesOnConflict(t *testing.T) {
 	pushToOrigin(t, project)
 
 	err := mgr.RebaseOntoDefaultBranch(context.Background())
+	if err == nil {
+		t.Fatal("expected UnresolvedConflictError, got nil")
+	}
+	var conflictErr *UnresolvedConflictError
+	if !errors.As(err, &conflictErr) {
+		t.Fatalf("expected *UnresolvedConflictError, got %T: %v", err, err)
+	}
+}
+
+// A local commit that was squash-merged into origin/main (different SHA but
+// same diff content) is detected and skipped by rebasecontinue — EnsureUpToDate
+// returns nil without leaving phantom conflicts.
+func TestEnsureUpToDate_SquashMergedCommit(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	// Add a local commit in the worktree.
+	writeFile(t, mgr.workDir, "feature.txt", "new feature\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "add feature")
+
+	// Squash-merge the same change into main with a different commit message/SHA.
+	writeFile(t, project, "feature.txt", "new feature\n")
+	run(t, "git", "-C", project, "commit", "-m", "squash: add feature (#42)")
+	pushToOrigin(t, project)
+
+	err := mgr.EnsureUpToDate(context.Background())
 	if err != nil {
-		t.Fatalf("expected nil (stack diverges), got: %v", err)
+		t.Fatalf("EnsureUpToDate should return nil for squash-merged commit, got: %v", err)
+	}
+}
+
+// Genuine divergence: local commit and origin/main commit both modify the same
+// line differently. EnsureUpToDate must return an *UnresolvedConflictError.
+func TestEnsureUpToDate_GenuineConflictReturnsError(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	// Create a shared file first so both sides can diverge from it.
+	writeFile(t, project, "shared.txt", "original line\n")
+	run(t, "git", "-C", project, "commit", "-m", "add shared")
+	pushToOrigin(t, project)
+	run(t, "git", "-C", mgr.workDir, "fetch", "origin")
+	run(t, "git", "-C", mgr.workDir, "reset", "--hard", "origin/main")
+
+	// Local branch modifies the file one way.
+	writeFile(t, mgr.workDir, "shared.txt", "local change\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "local edit")
+
+	// Main modifies the same file a different way.
+	writeFile(t, project, "shared.txt", "main change\n")
+	run(t, "git", "-C", project, "commit", "-m", "main edit")
+	pushToOrigin(t, project)
+
+	err := mgr.EnsureUpToDate(context.Background())
+	if err == nil {
+		t.Fatal("expected UnresolvedConflictError, got nil")
+	}
+	var conflictErr *UnresolvedConflictError
+	if !errors.As(err, &conflictErr) {
+		t.Fatalf("expected *UnresolvedConflictError, got %T: %v", err, err)
 	}
 }
 

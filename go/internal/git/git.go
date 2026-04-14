@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brokenalarms/ralph/internal/git/rebasecontinue"
 	"github.com/brokenalarms/ralph/internal/logging"
 )
 
@@ -347,39 +348,20 @@ func (r *repo) EnsureUpToDate(ctx context.Context) error {
 			return
 		}
 
-		// 1. Fast-forward rebase
-		if r.tryRebase(ctx, baseBranch) {
+		err := rebasecontinue.Run(r.workDir, rebasecontinue.Options{
+			Auto:       true,
+			OntoTarget: "origin/" + baseBranch,
+		})
+		if err == nil {
+			r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: baseBranch}, "Rebased onto origin/%s", baseBranch)
 			return
 		}
 
-		// 2. Auto-resolve mechanical conflicts
-		if r.tryAutoResolve(ctx, baseBranch) {
-			return
-		}
-
-		// Stack diverges — abort rebase, keep local commits, let merge handle it.
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Rebase conflict with local work — stack diverged, continuing")
 		r.gitCmd(r.workDir, "rebase", "--abort")
-		result = nil // not an error — diverged stack is expected
+		result = &UnresolvedConflictError{}
 	})
 	return result
-}
-
-func (r *repo) tryRebase(ctx context.Context, defaultBranch string) bool {
-	if r.gitCmdErrCtx(ctx, r.workDir, "rebase", "--update-refs", "origin/"+defaultBranch) == nil {
-		r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch}, "Rebased onto origin/%s", defaultBranch)
-		return true
-	}
-	return false
-}
-
-func (r *repo) tryAutoResolve(ctx context.Context, defaultBranch string) bool {
-	if r.autoResolveAndContinue(ctx, defaultBranch) {
-		r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch}, "Rebased onto origin/%s (auto-resolved)", defaultBranch)
-		return true
-	}
-	r.gitCmd(r.workDir, "rebase", "--abort")
-	return false
 }
 
 
