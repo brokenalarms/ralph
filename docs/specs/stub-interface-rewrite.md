@@ -183,7 +183,7 @@ These patterns were present in the codebase before this rewrite and must not app
 
 8. **No `git.Ops` parameter in any data-only config struct.** Config remains pure data. `Config.Logger` is already typed as `Log` (an interface), which is the one allowed exception because logger is ubiquitous infrastructure. No new interface fields on Config.
 
-9. **Factories return the interface type, not the concrete pointer.** `NewStubGitHubCfg(cfg) gitHub`, `NewStub(cfg StubRepoConfig) Ops`, `New(cfg Config) Ops`. There is no `*ForInspection` variant — tests that want to assert on "what happened" assert through the same interface methods production uses (the fake's state after the SUT ran), or on the SUT's own return values.
+9. **Factories return the interface type, not the concrete pointer.** `newStubGitHub(cfg) gitHub` (unexported, package-internal), `NewStub(cfg StubRepoConfig) Ops` (exported for cross-package use), `New(cfg Config) Ops` (exported). There is no `*ForInspection` variant — tests that want to assert on "what happened" assert through the same interface methods production uses (the fake's state after the SUT ran), or on the SUT's own return values.
 
 10. **No-arg constructors are removed.** Every test must state its starting world. `NewStubGitHub()` (zero-arg, with defaults) is deleted. The zero-value config `StubGitHubConfig{}` yields an unavailable GitHub with no PRs — an explicit, auditable starting point.
 
@@ -252,7 +252,7 @@ Do not attempt this as a single commit. Every commit keeps `go test ./...` green
    - Split transition-style tests into static-world variants per the reframing rule.
    - Delete `pollableGitHub`, `capturingGitHub`, `errRunnerImpl` when their last caller is gone.
    - The final commit in this stage deletes the old `StubGitHub`, `NewStubGitHub()` no-arg constructor, and `testing_test.go` (which tested the legacy infrastructure).
-   - Also in this final commit: rename `NewStubGitHubCfg` → `NewStubGitHub` (the legacy no-arg version is gone, so the spec-mandated name is free).
+   - Also in this final commit: rename `NewStubGitHubCfg` → **unexported** `newStubGitHub`. External packages never call this directly (loop tests configure the GitHub world through `StubRepoConfig.GitHub`). Internal/git tests and the inner construction in `NewStub` use same-package access.
 
 4. **Commit 3a — rename `Repo` → `repo` (unexported).** Rename in `git.go` and everywhere `*Repo` or `Repo` appears inside `internal/git`. The `Ops` interface return type for `New()` is unchanged. Outside packages only see `Ops`; they were already using `Ops` where they depended on the interface. Any remaining `*git.Repo` references in loop or cmd get changed to `git.Ops`.
 
