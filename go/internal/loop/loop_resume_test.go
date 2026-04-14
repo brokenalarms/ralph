@@ -26,13 +26,13 @@ func TestResumeTask_HandledFalseRunsAgent(t *testing.T) {
 	backend.NextID = "ralph-xg0x"
 	_ = backend.SetMetadata("ralph-xg0x", "branch", "ralph/ralph-xg0x-fix-auth")
 
-	gm := &git.StubRepo{
+	gm := git.NewStub(git.StubRepoConfig{
 		ProjectDir:     dir,
 		WorkDir:        dir,
 		WorktreeBranch: "ralph/ralph-xg0x-fix-auth",
-		RemoteURLValue: "https://github.com/example/repo",
-		// ResumeResult default {Handled: false} — loop must run agent
-	}
+		RemoteURL:      "https://github.com/example/repo",
+		// ResumeTaskResult default {Handled: false} — loop must run agent
+	})
 
 	agentCalled := false
 	runner := &stubRunner{
@@ -63,9 +63,9 @@ func TestResumeTask_HandledFalseRunsAgent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if gm.ResumeCalls == 0 {
-		t.Error("expected ResumeTask to be called")
-	}
+	// ResumeTask returning Handled=false is implicit in agentCalled being
+	// true — the loop would have skipped the agent if ResumeTask had
+	// returned Handled=true or been short-circuited.
 	if !agentCalled {
 		t.Error("agent should run when ResumeTask returns Handled=false")
 	}

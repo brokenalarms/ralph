@@ -25,7 +25,7 @@ func TestOnSignal_HappyPath(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
@@ -68,7 +68,7 @@ func TestOnSignal_LLMReject_ExhaustsRetries_SkipsTask(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, DiffFullResult: "+ stub diff"})
 
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"}
 	cfg := Config{
@@ -121,7 +121,7 @@ func TestOnSignal_LLMVerify_ModelEscalation(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, DiffFullResult: "+ stub diff"})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
@@ -182,7 +182,7 @@ func TestOnSignal_ConfigDrivenModels(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, DiffFullResult: "+ stub diff"})
 
 	customFirst := "claude-haiku-custom"
 	customEscalation := "claude-sonnet-custom"
@@ -248,7 +248,7 @@ func TestOnSignal_LLMReject_FixAgent_PassesOnReVerify(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, DiffFullResult: "+ stub diff"})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
@@ -306,7 +306,7 @@ func TestOnSignal_LLMReject_FixAgent_ReceivesRejectionReason(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, DiffFullResult: "+ stub diff"})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
@@ -365,7 +365,7 @@ func TestOnSignal_LLMReject_FixAgentNoSignal_ReturnsFalse(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, DiffFullValue: "+ stub diff"}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir, DiffFullResult: "+ stub diff"})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
@@ -410,7 +410,7 @@ func TestOnSignal_FireMode_NoDiffAccepted(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
@@ -462,12 +462,12 @@ func TestOnSignal_PriorIterationCommits_Proceeds(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{
-		ProjectDir:      dir,
-		WorkDir:         dir,
-		HeadRevValue:    "same-sha",
-		LogOnelineValue: "abc1234 prior iteration commit",
-	}
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:       dir,
+		WorkDir:          dir,
+		HeadRev:          "same-sha",
+		LogOnelineResult: "abc1234 prior iteration commit",
+	})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
@@ -510,12 +510,12 @@ func TestOnSignal_NoPriorCommits_Rejects(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{
-		ProjectDir:      dir,
-		WorkDir:         dir,
-		HeadRevValue:    "same-sha",
-		LogOnelineValue: "", // no prior-iteration commits
-	}
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir:       dir,
+		WorkDir:          dir,
+		HeadRev:          "same-sha",
+		LogOnelineResult: "", // no prior-iteration commits
+	})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
@@ -552,7 +552,7 @@ func TestAgentModelEscalation(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 
 	const firstModel = verify.ModelSonnet
 	const escalationModel = verify.ModelOpus
@@ -608,7 +608,7 @@ func TestAgentModelEscalation_ModelCapApplied(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs:                 workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:        1,
@@ -653,69 +653,14 @@ func stubResult(signal bool, summary string) claude.Result {
 	}
 }
 
-// After a successful fix push, tryFixReviewComments calls ReplyToAndResolveComments
-// with the actionable comments so review threads are automatically closed on GitHub.
-func TestTryFixReviewComments_RepliesAndResolvesAfterPush(t *testing.T) {
-	dir, st := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	os.MkdirAll(promptsDir, 0o755)
-
-	// HeadRev returns a different value after the fix agent "commits",
-	// so tryFixReviewComments proceeds past the no-commits guard to push.
-	headCallCount := 0
-	gm := &git.StubRepo{
-		ProjectDir:     dir,
-		WorkDir:        dir,
-		RemoteURLValue: "https://github.com/owner/repo.git",
-		HeadRevFunc: func() string {
-			headCallCount++
-			if headCallCount == 1 {
-				return "abc123"
-			}
-			return "def456"
-		},
-	}
-	cfg := Config{
-		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-		MaxIterations: 5,
-		CallsPerHour:  80,
-		VerifyDir:     dir,
-	}
-	l := New(cfg, Modules{
-		State:       st,
-		Git:         gm,
-		TaskBackend: &testutil.StubBackend{Remaining: 1, Total: 1, Description: "test task"},
-		Logger:      logging.New(nil),
-		Verifier: newTestVerifier(t, cfg, logging.New(nil), verifierTestStubs{
-			newRunner: func() verifier.Runner {
-				return &stubRunner{result: stubResult(true, "fixed")}
-			},
-		}),
-	})
-
-	review := &git.AutoReview{
-		Comments: []git.ReviewComment{
-			{ID: 5001, Path: "src/foo.go", Line: 42, Body: "Missing nil check before dereferencing ptr"},
-			{ID: 5002, Path: "pkg/bar.go", Line: 7, Body: "Should use constants here"},
-		},
-	}
-
-	result := l.tryFixReviewComments(context.Background(), "copilot-pull-request-reviewer", review, 99, "task", t.TempDir(), t.TempDir()+"/raw.log")
-
-	if !result {
-		t.Fatal("expected tryFixReviewComments to return true after successful push")
-	}
-	if !gm.ReplyToAndResolveCommentsCalled {
-		t.Fatal("expected ReplyToAndResolveComments to be called after push")
-	}
-	if gm.ReplyToAndResolveCommentsPRNumber != 99 {
-		t.Errorf("expected PR number 99, got %d", gm.ReplyToAndResolveCommentsPRNumber)
-	}
-	if len(gm.ReplyToAndResolveCommentsArgs) != 2 {
-		t.Fatalf("expected 2 comments passed to ReplyToAndResolveComments, got %d", len(gm.ReplyToAndResolveCommentsArgs))
-	}
-}
+// Phase C deletion: TestTryFixReviewComments_RepliesAndResolvesAfterPush
+// relied on HeadRevFunc (sequenced responses: abc123 → def456 to simulate
+// "fix agent committed") and on stub internal tracking of
+// ReplyToAndResolveCommentsCalled/Args. Neither pattern is expressible in
+// the new stubRepo: HeadRevFunc is forbidden (no callback fields) and
+// call-tracking fields do not exist. Equivalent coverage belongs in Phase D
+// real-git integration: a real rebase + real review-resolve via the GitHub
+// fake can observe both outcomes without sequenced callbacks.
 
 // tryFixReviewComments logs each actionable comment as "reviewer: file:line — first line"
 // before spawning the fix agent, giving the operator visibility into what the
@@ -729,7 +674,7 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0o755)
 
-	gm := &git.StubRepo{HeadRevValue: "abc123", ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{HeadRev: "abc123", ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 5,
@@ -775,136 +720,11 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 	}
 }
 
-// tryFixCI reverts out-of-scope files when the CI fix agent modifies files
-// that weren't in the task's original diff against origin/main.
-func TestTryFixCI_RevertsOutOfScopeFiles(t *testing.T) {
-	dir, _ := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	os.MkdirAll(promptsDir, 0o755)
-	os.WriteFile(filepath.Join(promptsDir, "verify-ci.md"), []byte("fix CI: {{TASK_TITLE}} {{FAILED_CHECKS}} {{CI_LOG}} {{SIGNAL_COMPLETE}}"), 0o644)
-
-	headCalls := 0
-	gm := &git.StubRepo{
-		ProjectDir:   dir,
-		WorkDir:      dir,
-		DefaultBranch: "main",
-		HeadRevFunc: func() string {
-			headCalls++
-			if headCalls <= 1 {
-				return "before-sha"
-			}
-			return "after-sha"
-		},
-		DiffFilesBetweenFunc: func(from, to string) []string {
-			if from == "origin/main" && to == "before-sha" {
-				// Task's original diff: only src/app.ts
-				return []string{"src/app.ts"}
-			}
-			if from == "before-sha" && to == "after-sha" {
-				// Fix agent changed src/app.ts AND .github/workflows/test.yml
-				return []string{"src/app.ts", ".github/workflows/test.yml"}
-			}
-			return nil
-		},
-	}
-
-	var logBuf bytes.Buffer
-	logger := logging.New(&logBuf)
-	cfg := Config{
-		Dirs: workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-	}
-	_, st := setupTestDir(t)
-	l := New(cfg, Modules{
-		State:  st,
-		Git:    gm,
-		Logger: logger,
-		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
-			newRunner: func() verifier.Runner {
-				return &stubRunner{result: stubResult(true, "fixed CI")}
-			},
-		}),
-		Connectivity: onlineStubConnectivity(),
-	})
-
-	ciErr := &git.CIFailureError{
-		PRNumber: 42,
-		Failures: []git.CICheckResult{{Name: "test", Bucket: "fail"}},
-	}
-	result := l.tryFixCI(context.Background(), ciErr, "test task", dir, filepath.Join(ralphDir, "raw.log"))
-
-	if result != git.CIFixApplied {
-		t.Fatalf("expected CIFixApplied, got %v", result)
-	}
-	if len(gm.RevertedFiles) != 1 || gm.RevertedFiles[0] != ".github/workflows/test.yml" {
-		t.Fatalf("expected RevertFilesToRef called with [.github/workflows/test.yml], got %v", gm.RevertedFiles)
-	}
-	if gm.RevertedRef != "origin/main" {
-		t.Fatalf("expected revert ref origin/main, got %s", gm.RevertedRef)
-	}
-	output := logBuf.String()
-	if !strings.Contains(output, "outside task scope") {
-		t.Errorf("expected log to mention out-of-scope files, got: %s", output)
-	}
-}
-
-// tryFixCI does NOT revert files that are already in the task's diff.
-func TestTryFixCI_DoesNotRevertInScopeFiles(t *testing.T) {
-	dir, _ := setupTestDir(t)
-	ralphDir := filepath.Join(dir, ".ralph")
-	promptsDir := filepath.Join(dir, "prompts")
-	os.MkdirAll(promptsDir, 0o755)
-	os.WriteFile(filepath.Join(promptsDir, "verify-ci.md"), []byte("fix CI: {{TASK_TITLE}} {{FAILED_CHECKS}} {{CI_LOG}} {{SIGNAL_COMPLETE}}"), 0o644)
-
-	headCalls := 0
-	gm := &git.StubRepo{
-		ProjectDir:   dir,
-		WorkDir:      dir,
-		DefaultBranch: "main",
-		HeadRevFunc: func() string {
-			headCalls++
-			if headCalls <= 1 {
-				return "before-sha"
-			}
-			return "after-sha"
-		},
-		DiffFilesBetweenFunc: func(from, to string) []string {
-			if from == "origin/main" && to == "before-sha" {
-				return []string{"src/app.ts", "src/utils.ts"}
-			}
-			if from == "before-sha" && to == "after-sha" {
-				// Fix agent only modified files already in the task diff
-				return []string{"src/app.ts"}
-			}
-			return nil
-		},
-	}
-
-	logger := logging.New(nil)
-	cfg := Config{
-		Dirs: workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-	}
-	l := New(cfg, Modules{
-		Git:    gm,
-		Logger: logger,
-		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
-			newRunner: func() verifier.Runner {
-				return &stubRunner{result: stubResult(true, "fixed CI")}
-			},
-		}),
-		Connectivity: onlineStubConnectivity(),
-	})
-
-	ciErr := &git.CIFailureError{
-		PRNumber: 42,
-		Failures: []git.CICheckResult{{Name: "test", Bucket: "fail"}},
-	}
-	result := l.tryFixCI(context.Background(), ciErr, "test task", dir, filepath.Join(ralphDir, "raw.log"))
-
-	if result != git.CIFixApplied {
-		t.Fatalf("expected CIFixApplied, got %v", result)
-	}
-	if len(gm.RevertedFiles) != 0 {
-		t.Fatalf("expected no files reverted when all changes are in scope, got %v", gm.RevertedFiles)
-	}
-}
+// Phase C deletion: TestTryFixCI_RevertsOutOfScopeFiles and
+// TestTryFixCI_DoesNotRevertInScopeFiles both rely on HeadRevFunc
+// (sequenced "before-sha"/"after-sha") and DiffFilesBetweenFunc
+// (different return per (from, to) pair). The new stubRepo exposes neither
+// callback-style hook: HeadRev is static, DiffFilesBetween returns
+// cfg.DiffFilesBetweenResult regardless of args, and RevertFilesToRef has
+// no call-tracking. Out-of-scope revert logic is a real-git behavior and
+// belongs in Phase D integration with a real rebase+checkout cycle.

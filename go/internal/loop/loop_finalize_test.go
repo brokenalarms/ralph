@@ -27,37 +27,32 @@ type shipResult struct {
 // finalizeSetup bundles a Loop and pre-built params for finalize tests.
 type finalizeSetup struct {
 	loop *Loop
-	gm   *git.StubRepo
+	gm   git.Ops
 	st   *state.Store
 	p    completeTaskParams
 }
 
-// buildFinalizeSetup constructs a Loop with StubGit configured to return ship,
-// and a data-only completeTaskParams with headBefore="before-sha" (ensuring
-// the "new commits" path is taken since HeadRev returns "after-sha").
+// buildFinalizeSetup constructs a Loop with a static-world stub where Ship
+// returns a single ShipResult carrying the prescribed outcome. doShip calls
+// Ship twice (phase 1 push+PR, phase 2 merge); the static stub returns the
+// same result for both calls, and the loop's phase-2 logic only inspects
+// fields (PRNumber, Merged, CIFailure, Stacked) whose values describe the
+// end state and apply equally to both calls.
 func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *testutil.TrackingBackend, ship shipResult) finalizeSetup {
 	t.Helper()
 	_, st := setupTestDir(t)
-	gm := &git.StubRepo{
-		ProjectDir:   dir,
-		WorkDir:      dir,
-		HeadRevValue: "after-sha",
-		PRState:      git.PRStateOpen,
-	}
-	gm.ShipFunc = func(_ context.Context, opts git.ShipOpts) (git.ShipResult, error) {
-		if opts.PRNumber == 0 {
-			// Phase 1: push + PR creation
-			return git.ShipResult{PRNumber: ship.prNumber, PRURL: ship.prURL}, nil
-		}
-		// Phase 2: merge
-		return git.ShipResult{
-			PRNumber:  opts.PRNumber,
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		HeadRev:    "after-sha",
+		Ship: git.ShipResult{
+			PRNumber:  ship.prNumber,
 			PRURL:     ship.prURL,
 			Merged:    ship.merged,
 			CIFailure: ship.ciFailure,
 			Stacked:   ship.stacked,
-		}, nil
-	}
+		},
+	})
 	autoMerge := ship.merged || ship.ciFailure || ship.stacked
 	cfg := Config{
 		AutoMerge: autoMerge,
@@ -225,13 +220,12 @@ func TestFinalizePR_MergeFailure_AppearsInCompletedTasksWithMergedFalse(t *testi
 		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HeadRevValue: "after-sha"}
-	gm.ShipFunc = func(_ context.Context, opts git.ShipOpts) (git.ShipResult, error) {
-		if opts.PRNumber == 0 {
-			return git.ShipResult{PRNumber: 99}, nil
-		}
-		return git.ShipResult{PRNumber: opts.PRNumber, Merged: false}, nil
-	}
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		HeadRev:    "after-sha",
+		Ship:       git.ShipResult{PRNumber: 99, Merged: false},
+	})
 	cfg := Config{
 		AutoMerge: false,
 		Dirs:      workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
@@ -431,7 +425,7 @@ func TestSkipTask_SetsOpenAndPersistsToState(t *testing.T) {
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
-		Git:         &git.StubRepo{ProjectDir: dir, WorkDir: dir},
+		Git:         git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir}),
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),
@@ -464,7 +458,7 @@ func TestSkipTask_EmptyID(t *testing.T) {
 	logger := logging.New(nil)
 	l := New(cfg, Modules{
 		State:       st,
-		Git:         &git.StubRepo{ProjectDir: dir, WorkDir: dir},
+		Git:         git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir}),
 		TaskBackend: backend,
 		Logger:      logger,
 		Verifier:    newTestVerifier(t, cfg, logger),

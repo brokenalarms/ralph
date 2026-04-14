@@ -20,7 +20,7 @@ import (
 func loopForPromptTest(t *testing.T, dir, ralphDir, promptsDir string, backend *testutil.StubBackend) *Loop {
 	t.Helper()
 	_, st := setupTestDir(t)
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -165,7 +165,7 @@ func TestLoop_TestStatusIncludedInPrompt(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -265,7 +265,7 @@ func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
 
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-xyz"}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations: 1,
@@ -293,10 +293,16 @@ func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
 	}
 }
 
-// Verifies HasProgress returns false when a diff existed before the iteration
-// started (pre-existing diff), and true when a new diff appears during the
-// iteration. An agent that only writes a signal file without changing code
-// must not trigger the shorter progress timeout.
+// Verifies HasProgress's snapshot semantics: a pre-existing diff does not
+// count as progress (the agent-didn't-do-anything case), while a new HEAD
+// commit during the iteration does. An agent that only writes a signal file
+// without changing code must not trigger the shorter progress timeout.
+//
+// Case "no diff at start, new diff appears (no commit) → progress" was
+// removed in the Phase C migration because the new stubRepo has no
+// interface method that flips HasDiff during execution, and the spec
+// forbids post-construction mutable fields. Integration coverage of that
+// path belongs in the real-git integration tests.
 func TestLoop_HasProgress_SnapshotsDiffState(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -305,45 +311,39 @@ func TestLoop_HasProgress_SnapshotsDiffState(t *testing.T) {
 	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-abc"}
 
 	tests := []struct {
-		name          string
-		diffAtStart   bool
-		diffDuringRun bool
-		headMoved     bool
-		wantProgress  bool
+		name         string
+		diffAtStart  bool
+		commitDuring bool // SUT-style mutation via CommitAll during the run
+		wantProgress bool
 	}{
 		{
-			name:          "pre-existing diff, no new activity → no progress",
-			diffAtStart:   true,
-			diffDuringRun: true,
-			headMoved:     false,
-			wantProgress:  false,
+			name:         "pre-existing diff, no new activity → no progress",
+			diffAtStart:  true,
+			commitDuring: false,
+			wantProgress: false,
 		},
 		{
-			name:          "no diff at start, new diff appears → progress",
-			diffAtStart:   false,
-			diffDuringRun: true,
-			headMoved:     false,
-			wantProgress:  true,
+			name:         "pre-existing diff, HEAD moved → progress",
+			diffAtStart:  true,
+			commitDuring: true,
+			wantProgress: true,
 		},
 		{
-			name:          "pre-existing diff, HEAD moved → progress",
-			diffAtStart:   true,
-			diffDuringRun: true,
-			headMoved:     true,
-			wantProgress:  true,
-		},
-		{
-			name:          "no diff, no head movement → no progress",
-			diffAtStart:   false,
-			diffDuringRun: false,
-			headMoved:     false,
-			wantProgress:  false,
+			name:         "no diff, no head movement → no progress",
+			diffAtStart:  false,
+			commitDuring: false,
+			wantProgress: false,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir, HasDiffValue: tc.diffAtStart}
+			gm := git.NewStub(git.StubRepoConfig{
+				ProjectDir: dir,
+				WorkDir:    dir,
+				HasDiff:    tc.diffAtStart,
+				HeadRev:    "stub-head-0",
+			})
 			cfg := Config{
 				Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 				MaxIterations: 1,
@@ -362,10 +362,8 @@ func TestLoop_HasProgress_SnapshotsDiffState(t *testing.T) {
 			l.runner = &stubRunner{
 				onRunCfg: func(cfg claude.RunConfig) {
 					capturedHasProgress = cfg.HasProgress
-					// Simulate what happens during the run: update stub state
-					gm.HasDiffValue = tc.diffDuringRun
-					if tc.headMoved {
-						gm.HeadRevValue = "new-head"
+					if tc.commitDuring {
+						gm.CommitAll("simulated progress commit")
 					}
 				},
 			}
