@@ -1864,34 +1864,6 @@ func TestIntegration_DependencyBlockedTaskIsSkipped(t *testing.T) {
 	}
 }
 
-// ciTriggerGit extends StubGit to call opts.OnCIFailure once when configured,
-// enabling tests to verify the CI failure → fix agent path through the full loop
-// without a real GitHub connection.
-type ciTriggerGit struct {
-	*git.StubRepo
-	triggerCI bool // if true, next MergeWithRetry call triggers OnCIFailure once
-}
-
-func (g *ciTriggerGit) MergeWithRetry(ctx context.Context, opts git.MergeRetryOpts) (bool, error) {
-	g.StubRepo.MergeRetryCalls++
-	if g.triggerCI && opts.OnCIFailure != nil {
-		g.triggerCI = false
-		ciErr := &git.CIFailureError{
-			PRNumber: 42,
-			Failures: []git.CICheckResult{{Name: "tests", Bucket: "fail"}},
-		}
-		result := opts.OnCIFailure(ciErr)
-		if result == git.CIFixApplied {
-			return true, nil
-		}
-		return false, ciErr
-	}
-	if g.StubRepo.MergeRetryFunc != nil {
-		return g.StubRepo.MergeRetryFunc(ctx)
-	}
-	return g.StubRepo.MergeRetryResult, g.StubRepo.MergeRetryErr
-}
-
 // TestIntegration_CIFailureTriggersFixAgent verifies that when Ship reports a
 // CI failure the loop spawns a fix agent and retries, and the loop completes
 // successfully after the fix.
