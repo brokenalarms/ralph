@@ -67,28 +67,28 @@ func TestManager_UsesInjectedRunner(t *testing.T) {
 	r.On("rev-parse --verify refs/heads/main", "", nil)
 	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 
-	mgr := newRepoForTest(
+	repo := newRepoForTest(
 		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
 		nil,
 		withRunner(r),
 	)
 
-	if !mgr.refExists(mgr.workDir, "refs/heads/main") {
+	if !repo.refExists(repo.workDir, "refs/heads/main") {
 		t.Error("refExists should return true when runner succeeds")
 	}
 
-	if !mgr.remoteExists() {
+	if !repo.remoteExists() {
 		t.Error("remoteExists should return true when remote URL is non-empty")
 	}
 }
 
 // detectDefaultBranch returns BaseBranch directly — no git calls, no fallback.
 func TestManager_DetectDefaultBranch_ReturnsBaseBranch(t *testing.T) {
-	mgr := newRepoForTest(
+	repo := newRepoForTest(
 		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
 		nil,
 	)
-	branch := mgr.detectDefaultBranch()
+	branch := repo.detectDefaultBranch()
 	if branch != "main" {
 		t.Errorf("expected main, got %q", branch)
 	}
@@ -96,11 +96,11 @@ func TestManager_DetectDefaultBranch_ReturnsBaseBranch(t *testing.T) {
 
 // detectDefaultBranch with BaseBranch: "develop" returns "develop".
 func TestManager_DetectDefaultBranch_ExplicitDevelop(t *testing.T) {
-	mgr := newRepoForTest(
+	repo := newRepoForTest(
 		Config{ProjectDir: t.TempDir(), BaseBranch: "develop", Logger: discardLog{}},
 		nil,
 	)
-	branch := mgr.detectDefaultBranch()
+	branch := repo.detectDefaultBranch()
 	if branch != "develop" {
 		t.Errorf("expected develop, got %q", branch)
 	}
@@ -111,11 +111,6 @@ func TestManager_DetectDefaultBranch_ExplicitDevelop(t *testing.T) {
 //   - strips component prefixes like "ralph loop: " from taskDesc
 //   - truncates to 70 chars (with "..." suffix) for long titles
 //   - falls back to the worktree branch name when the result would be empty
-//
-// Formerly covered by TestManager_PushAndCreatePR_{UpdatesTitleWhenPRExists,
-// StripsComponentPrefix,NoEditWithoutTaskID}, which went through the whole
-// PushAndCreatePR → Ship → EditPR plumbing and asserted on gh.EditPRTitle
-// (stub-field read). prTitle is a pure function; test it as one.
 func TestPRTitle(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -194,12 +189,12 @@ func TestManager_GitOutput_EmptyOnError(t *testing.T) {
 	r := newStubRunner()
 	r.On("diff", "", fmt.Errorf("not a git repo"))
 
-	mgr := newRepoForTest(
+	repo := newRepoForTest(
 		Config{ProjectDir: t.TempDir(), Logger: discardLog{}},
 		nil,
 		withRunner(r),
 	)
-	out := mgr.gitOutput(mgr.workDir, "diff", "--stat")
+	out := repo.gitOutput(repo.workDir, "diff", "--stat")
 	if out != "" {
 		t.Errorf("expected empty on error, got %q", out)
 	}
@@ -211,43 +206,14 @@ func TestManager_GitCmdErr_PropagatesError(t *testing.T) {
 	r := newStubRunner()
 	r.On("push", "", fmt.Errorf("push rejected"))
 
-	mgr := newRepoForTest(
+	repo := newRepoForTest(
 		Config{ProjectDir: t.TempDir(), Logger: discardLog{}},
 		nil,
 		withRunner(r),
 	)
-	err := mgr.gitCmdErr(mgr.workDir, "push", "-u", "origin", "feature")
+	err := repo.gitCmdErr(repo.workDir, "push", "-u", "origin", "feature")
 	if err == nil || err.Error() != "push rejected" {
 		t.Errorf("expected 'push rejected', got %v", err)
 	}
 }
 
-// Removed tests — rationale documented here so the deletion isn't opaque:
-//
-// - TestStubRunner_SatisfiesInterface: trivial compile-time interface check,
-//   implicitly covered by every use of stubRunner throughout the test suite.
-//
-// - TestErrRunner_AlwaysFails: tested the errRunner helper. errRunner
-//   (and errRunnerImpl) are the "partial stub hybrid" pattern the
-//   stub-interface rewrite forbids. Deleted from test_helpers_test.go along
-//   with this test. Tests needing a failing runner use stubRunner.On with an
-//   explicit error value.
-//
-// - TestManager_PushAndCreatePR_NoRealProcesses: asserted r.CalledWith("push"),
-//   which is stub call-history inspection — the same test-double internals
-//   anti-pattern we're eliminating. PushAndCreatePR's push behavior is
-//   covered by Ship's own tests (which exercise observable state changes,
-//   not call records).
-//
-// - TestManager_PushAndCreatePR_PushesEvenWhenPRExists: asserted the same
-//   CalledWith pattern plus the returned PR number. The meaningful half
-//   (PR number returned from the existing-PR path) is covered by the
-//   integration flow in ci_test.go's setupAutoMergeManager tests.
-//
-// - TestManager_PushAndCreatePR_LogsAlreadyOpen, TestManager_PushAndCreatePR_LogsCreatedPR:
-//   asserted specific log line formats. Log output is a legitimate
-//   observable, but these tests required a lot of stubRunner scripting
-//   (push, fetch, rev-list, merge-base, etc.) to drive a real *Repo to
-//   the log point. Under the new architecture, these belong as
-//   integration tests against real git (Phase C of the spec). For now,
-//   log coverage is implicit via CI tests that emit the same lines.

@@ -88,12 +88,12 @@ func TestMergeStack_NoPRsFound(t *testing.T) {
 	dir := t.TempDir()
 	initBareRepoIn(t, dir)
 	gh := NewStubGitHubCfg(StubGitHubConfig{Available: true})
-	mgr := newRepoForTest(
+	repo := newRepoForTest(
 		Config{ProjectDir: dir, BaseBranch: "main", Logger: discardLog{}},
 		gh,
 	)
 
-	_, err := mgr.MergeStack(context.Background(), MergeStackOpts{TopPR: "999"})
+	_, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "999"})
 	if err == nil {
 		t.Fatal("expected error when no PRs found")
 	}
@@ -109,12 +109,12 @@ func TestMergeStack_CIFailureStops(t *testing.T) {
 		PRs: []StubPR{{Number: 1, Branch: "pr1", Base: "main", State: PRStateOpen}},
 		Checks: map[int][]CICheckResult{1:{{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
 	})
-	mgr := newRepoForTest(
+	repo := newRepoForTest(
 		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
 		gh,
 	)
 
-	result, err := mgr.MergeStack(context.Background(), MergeStackOpts{TopPR: "1"})
+	result, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "1"})
 	if err == nil {
 		t.Fatal("expected error when CI fails")
 	}
@@ -139,12 +139,12 @@ func TestMergeStack_MergeBlockedStops(t *testing.T) {
 		}},
 		Checks: map[int][]CICheckResult{1:{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}},
 	})
-	mgr := newRepoForTest(
+	repo := newRepoForTest(
 		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
 		gh,
 	)
 
-	_, err := mgr.MergeStack(context.Background(), MergeStackOpts{TopPR: "1"})
+	_, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "1"})
 	if err == nil {
 		t.Fatal("expected error when merge blocked")
 	}
@@ -166,12 +166,12 @@ func TestMergeStack_MergeConflictStops(t *testing.T) {
 		}},
 		Checks: map[int][]CICheckResult{1:{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}},
 	})
-	mgr := newRepoForTest(
+	repo := newRepoForTest(
 		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
 		gh,
 	)
 
-	_, err := mgr.MergeStack(context.Background(), MergeStackOpts{TopPR: "1"})
+	_, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "1"})
 	if err == nil {
 		t.Fatal("expected error on merge conflict")
 	}
@@ -193,12 +193,12 @@ func TestMergeStack_SinglePRSuccess(t *testing.T) {
 		PRs: []StubPR{{Number: 42, Branch: "feature", Base: "main", State: PRStateOpen}},
 		Checks: map[int][]CICheckResult{42:{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}},
 	})
-	mgr := newRepoForTest(
+	repo := newRepoForTest(
 		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
 		gh,
 	)
 
-	result, err := mgr.MergeStack(context.Background(), MergeStackOpts{TopPR: "42"})
+	result, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "42"})
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}
@@ -223,13 +223,13 @@ func TestMergeStack_DirtyTreeRejected(t *testing.T) {
 	writeFile(t, dir, "dirty.txt", "uncommitted\n")
 	run(t, "git", "-C", dir, "add", "dirty.txt")
 
-	mgr := newRepoForTest(
+	repo := newRepoForTest(
 		Config{ProjectDir: dir, Logger: discardLog{}},
 		NewStubGitHubCfg(StubGitHubConfig{Available: true}),
 		withRunner(&execRunner{}),
 	)
 
-	_, err := mgr.MergeStack(context.Background(), MergeStackOpts{TopPR: "1"})
+	_, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "1"})
 	if err == nil {
 		t.Fatal("expected error for dirty working tree")
 	}

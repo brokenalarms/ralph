@@ -199,10 +199,10 @@ func TestMergeConflictError_Message(t *testing.T) {
 	}
 }
 
-// mergeOpts always sets DeleteBranch and never sets Admin (removed).
+// mergeOpts sets DeleteBranch.
 func TestMergeOpts_Defaults(t *testing.T) {
-	mgr := newRepoForTest(Config{}, nil)
-	opts := mgr.mergeOpts()
+	repo := newRepoForTest(Config{}, nil)
+	opts := repo.mergeOpts()
 	if !opts.DeleteBranch {
 		t.Error("expected DeleteBranch=true")
 	}
@@ -387,9 +387,9 @@ func TestAwaitCI_PassedImmediately(t *testing.T) {
 		Available: true,
 		Checks:    map[int][]CICheckResult{1: {{Name: "test", State: "SUCCESS", Bucket: "pass"}}},
 	})
-	mgr := newRepoForTest(Config{Logger: &testLog{}}, gh)
+	repo := newRepoForTest(Config{Logger: &testLog{}}, gh)
 
-	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
+	checks, status, err := repo.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -408,9 +408,9 @@ func TestAwaitCI_FailedImmediately(t *testing.T) {
 		Available: true,
 		Checks:    map[int][]CICheckResult{1: {{Name: "lint", State: "FAILURE", Bucket: "fail"}}},
 	})
-	mgr := newRepoForTest(Config{Logger: &testLog{}}, gh)
+	repo := newRepoForTest(Config{Logger: &testLog{}}, gh)
 
-	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
+	checks, status, err := repo.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -422,13 +422,6 @@ func TestAwaitCI_FailedImmediately(t *testing.T) {
 	}
 }
 
-// TestAwaitCI_PollsWhenPending (removed): exercised a pending→pass transition
-// and asserted "at least 3 polls" — a call-count on the stub's record, not
-// observable SUT behavior. The SUT's two branches are already covered:
-//   - pending forever → times out (TestAwaitCI_UsesManagerCIPollTimeout)
-//   - passing → returns immediately (TestAwaitCI_PassedImmediately)
-// The transition itself is GitHub's behavior, not the SUT's.
-
 // AwaitCI keeps polling (rather than aborting) when ListChecks returns an
 // error. Static-error world proves the error branch: errors don't crash or
 // short-circuit; the poll loop persists until timeout.
@@ -439,9 +432,9 @@ func TestAwaitCI_FetchErrorKeepsPolling(t *testing.T) {
 		Available:     true,
 		ListChecksErr: fmt.Errorf("no checks yet"),
 	})
-	mgr := newRepoForTest(Config{Logger: &testLog{}, CIPollTimeout: 5 * time.Millisecond}, gh)
+	repo := newRepoForTest(Config{Logger: &testLog{}, CIPollTimeout: 5 * time.Millisecond}, gh)
 
-	_, _, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
+	_, _, err := repo.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err == nil {
 		t.Fatal("expected timeout error when ListChecks always fails")
 	}
@@ -458,9 +451,9 @@ func TestAwaitCI_LogUsesPRLink(t *testing.T) {
 		ListChecksErr: fmt.Errorf("no checks yet"),
 	})
 	log := &testLog{}
-	mgr := newRepoForTest(Config{Logger: log, CIPollTimeout: 5 * time.Millisecond}, gh)
+	repo := newRepoForTest(Config{Logger: log, CIPollTimeout: 5 * time.Millisecond}, gh)
 
-	_, _, _ = mgr.AwaitCI(context.Background(), 99, "https://github.com/owner/repo", time.Time{})
+	_, _, _ = repo.AwaitCI(context.Background(), 99, "https://github.com/owner/repo", time.Time{})
 
 	// The "CI checks not available yet" log line must contain a clickable
 	// hyperlink (OSC 8 sequence with the GitHub URL), not plain "PR #99".
@@ -491,9 +484,9 @@ func TestAwaitCI_PushedAtLogUsesPRLink(t *testing.T) {
 		}},
 	})
 	log := &testLog{}
-	mgr := newRepoForTest(Config{Logger: log}, gh)
+	repo := newRepoForTest(Config{Logger: log}, gh)
 
-	_, status, err := mgr.AwaitCI(context.Background(), 88, "https://github.com/owner/repo", now)
+	_, status, err := repo.AwaitCI(context.Background(), 88, "https://github.com/owner/repo", now)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -557,9 +550,9 @@ func TestAwaitCI_AllStaleChecksTimesOut(t *testing.T) {
 			{Name: "test", State: "SUCCESS", Bucket: "pass", StartedAt: pushedAt.Add(-time.Minute)},
 		}},
 	})
-	mgr := newRepoForTest(Config{Logger: &testLog{}, CIPollTimeout: 5 * time.Millisecond}, gh)
+	repo := newRepoForTest(Config{Logger: &testLog{}, CIPollTimeout: 5 * time.Millisecond}, gh)
 
-	_, status, err := mgr.AwaitCI(context.Background(), 1, "repo", pushedAt)
+	_, status, err := repo.AwaitCI(context.Background(), 1, "repo", pushedAt)
 	if err == nil {
 		t.Fatal("expected timeout error when only stale checks exist (filter must hide them)")
 	}
@@ -574,9 +567,9 @@ func TestAwaitCI_ZeroPushedAtSkipsFiltering(t *testing.T) {
 		Available: true,
 		Checks:    map[int][]CICheckResult{1: {{Name: "test", State: "SUCCESS", Bucket: "pass"}}},
 	})
-	mgr := newRepoForTest(Config{Logger: &testLog{}}, gh)
+	repo := newRepoForTest(Config{Logger: &testLog{}}, gh)
 
-	checks, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
+	checks, status, err := repo.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -599,29 +592,17 @@ func setupAutoMergeManager(t *testing.T, gh gitHub) *Repo {
 	// setupAutoMergeManager exercises real git against initBareRepo — SetupWorktree,
 	// RenameBranchForTask, and AutoMergeCurrentBranch all issue real git commands.
 	// Override the default no-op runner with the real exec-backed runner.
-	mgr := newRepoForTest(
+	repo := newRepoForTest(
 		Config{ProjectDir: project, BaseBranch: "main", RalphDir: ralphDir, Logger: &testLog{}},
 		gh,
 		withRunner(&execRunner{}),
 	)
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
+	if err := repo.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
-	mgr.RenameBranchForTask("test feature", "")
-	return mgr
+	repo.RenameBranchForTask("test feature", "")
+	return repo
 }
-
-// TestExecuteMerge_RetriesAfterCIGate (removed): depended on a sequenced
-// merge-result transition (Blocked → Merged) and asserted an exact call
-// count ("expected 2 merge calls"). Both are test-double scripting, not
-// observable SUT behavior. The SUT's branches are covered statically:
-//   - static success (MergeOutcome nil / Merged=true) → returns true
-//     (TestAutoMerge_* success paths via setupAutoMergeManager)
-//   - static block (MergeOutcome=Blocked) → would loop until CI timeout
-//     and return an error; if coverage of that specific path becomes
-//     important, add a static-blocked variant with a short CIPollTimeout.
-// The "blocked then succeeds" transition itself is GitHub's behavior,
-// not the SUT's — untestable without stub scripting.
 
 // AutoMergeCurrentBranch returns a MergeConflictError when the PR has merge
 // conflicts with its base, so the caller can rebase and retry.
@@ -636,9 +617,9 @@ func TestAutoMerge_MergeConflictReturnsTypedError(t *testing.T) {
 		}},
 		Checks: map[int][]CICheckResult{42: {{Name: "test", State: "SUCCESS", Bucket: "pass"}}},
 	})
-	mgr := setupAutoMergeManager(t, gh)
+	repo := setupAutoMergeManager(t, gh)
 
-	_, err := mgr.AutoMergeCurrentBranch(context.Background())
+	_, err := repo.AutoMergeCurrentBranch(context.Background())
 	if err == nil {
 		t.Fatal("expected error from merge conflict")
 	}
@@ -661,9 +642,9 @@ func TestAutoMerge_CIFailureReturnsTypedError(t *testing.T) {
 		}},
 		Checks: map[int][]CICheckResult{42: {{Name: "test", State: "FAILURE", Bucket: "fail"}}},
 	})
-	mgr := setupAutoMergeManager(t, gh)
+	repo := setupAutoMergeManager(t, gh)
 
-	_, err := mgr.AutoMergeCurrentBranch(context.Background())
+	_, err := repo.AutoMergeCurrentBranch(context.Background())
 	if err == nil {
 		t.Fatal("expected error from CI failure")
 	}
@@ -673,13 +654,6 @@ func TestAutoMerge_CIFailureReturnsTypedError(t *testing.T) {
 		t.Errorf("expected CIFailureError, got %T: %v", err, err)
 	}
 }
-
-// TestAutoMerge_PassesMergeOptsToGitHub (removed): asserted on
-// gh.LastMergeOpts.DeleteBranch — a test-double internal field read. Testing
-// "what the SUT passed to its dependency" rather than observable behavior.
-// The coverage gap (that DeleteBranch is always set when MergePR is called)
-// would only manifest against real GitHub, which no stub-based test can
-// verify anyway. Delete rather than reframe.
 
 // AwaitCI uses Manager.CIPollTimeout when non-zero, falling back to
 // DefaultCIPollTimeout when zero. This proves the config value is wired
@@ -698,9 +672,9 @@ func TestAwaitCI_UsesManagerCIPollTimeout(t *testing.T) {
 		Available: true,
 		Checks:    map[int][]CICheckResult{1: {{Name: "test", State: "PENDING", Bucket: "pending"}}},
 	})
-	mgr := newRepoForTest(Config{Logger: &testLog{}, CIPollTimeout: 1 * time.Millisecond}, gh)
+	repo := newRepoForTest(Config{Logger: &testLog{}, CIPollTimeout: 1 * time.Millisecond}, gh)
 
-	_, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
+	_, status, err := repo.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err == nil {
 		t.Fatal("expected timeout error with 1ms CIPollTimeout")
 	}
@@ -718,9 +692,9 @@ func TestAwaitCI_ZeroCIPollTimeoutFallsBackToDefault(t *testing.T) {
 		Available: true,
 		Checks:    map[int][]CICheckResult{1: {{Name: "test", State: "SUCCESS", Bucket: "pass"}}},
 	})
-	mgr := newRepoForTest(Config{Logger: &testLog{}}, gh)
+	repo := newRepoForTest(Config{Logger: &testLog{}}, gh)
 
-	_, status, err := mgr.AwaitCI(context.Background(), 1, "repo", time.Time{})
+	_, status, err := repo.AwaitCI(context.Background(), 1, "repo", time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -743,9 +717,9 @@ func TestAwaitCI_RequiredChecksFilter_IgnoresNonRequired(t *testing.T) {
 		RequiredChecks: []string{"test"}, // only "test" is required
 	})
 
-	mgr := newRepoForTest(Config{Logger: &testLog{}, BaseBranch: "main"}, gh)
+	repo := newRepoForTest(Config{Logger: &testLog{}, BaseBranch: "main"}, gh)
 
-	_, status, err := mgr.AwaitCI(context.Background(), 1, "https://github.com/owner/repo.git", time.Time{})
+	_, status, err := repo.AwaitCI(context.Background(), 1, "https://github.com/owner/repo.git", time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -767,9 +741,9 @@ func TestAwaitCI_RequiredChecksFilter_RequiredFailureBlocks(t *testing.T) {
 		RequiredChecks: []string{"test", "lint"},
 	})
 
-	mgr := newRepoForTest(Config{Logger: &testLog{}, BaseBranch: "main"}, gh)
+	repo := newRepoForTest(Config{Logger: &testLog{}, BaseBranch: "main"}, gh)
 
-	_, status, _ := mgr.AwaitCI(context.Background(), 1, "https://github.com/owner/repo.git", time.Time{})
+	_, status, _ := repo.AwaitCI(context.Background(), 1, "https://github.com/owner/repo.git", time.Time{})
 	if status != CIFailed {
 		t.Errorf("expected CIFailed (required check 'test' failing), got %v", status)
 	}
@@ -787,9 +761,9 @@ func TestAwaitCI_RequiredChecksFilter_FallsBackToAllChecksWhenEmpty(t *testing.T
 		RequiredChecks: nil, // no required checks configured
 	})
 
-	mgr := newRepoForTest(Config{Logger: &testLog{}, BaseBranch: "main"}, gh)
+	repo := newRepoForTest(Config{Logger: &testLog{}, BaseBranch: "main"}, gh)
 
-	_, status, _ := mgr.AwaitCI(context.Background(), 1, "https://github.com/owner/repo.git", time.Time{})
+	_, status, _ := repo.AwaitCI(context.Background(), 1, "https://github.com/owner/repo.git", time.Time{})
 	if status != CIFailed {
 		t.Errorf("expected CIFailed (no required checks → evaluate all, netlify fails), got %v", status)
 	}
