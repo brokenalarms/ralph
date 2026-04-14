@@ -148,6 +148,9 @@ func (c *capturingGitHub) CreatePR(opts CreatePROpts) (int, error) {
 
 // stubManager creates a Manager wired to stubs for both git commands and
 // GitHub operations. The Manager's dirs are set to the given directory.
+//
+// Deprecated: migrating callers to newRepoForTest as part of the
+// stub-interface rewrite. Once no callers remain, this helper is deleted.
 func stubManager(dir string, runner *stubRunner, gh *StubGitHub) *Repo {
 	if runner == nil {
 		runner = newStubRunner()
@@ -163,6 +166,41 @@ func stubManager(dir string, runner *stubRunner, gh *StubGitHub) *Repo {
 		github:     gh,
 		state:      newMemState(),
 		logger:     discardLog{},
+	}
+}
+
+// newRepoForTest constructs a *Repo wired to test-supplied dependencies.
+// This is the one and only seam for building a real Repo with an injected
+// stub gitHub inside internal/git tests. Package-private and _test.go-only:
+// unreachable from production code and from tests in other packages.
+//
+// Callers pass what they need. nil is allowed for runner/state when the
+// SUT path under test doesn't touch them; no auto-defaulting is done inside
+// the helper. Tests state their dependencies explicitly.
+//
+// Fields on Config are copied across verbatim, mirroring what New() does in
+// production; the difference is that github/runner/state come from the test,
+// not from internal construction against real infrastructure.
+func newRepoForTest(cfg Config, gh gitHub, runner Runner, state stateStore) *Repo {
+	projectDir := cfg.ProjectDir
+	if projectDir == "" {
+		projectDir = cfg.WorkDir
+	}
+	return &Repo{
+		projectDir:                  projectDir,
+		workDir:                     cfg.WorkDir,
+		ralphDir:                    cfg.RalphDir,
+		baseBranch:                  cfg.BaseBranch,
+		resume:                      cfg.Resume,
+		logger:                      cfg.Logger,
+		compileCheckTimeout:         cfg.CompileCheckTimeout,
+		ciPollTimeout:               cfg.CIPollTimeout,
+		copilotGatedTimeout:         cfg.CopilotGatedTimeout,
+		copilotOpportunisticTimeout: cfg.CopilotOpportunisticTimeout,
+		codeRabbitTimeout:           cfg.CodeRabbitTimeout,
+		github:                      gh,
+		runner:                      runner,
+		state:                       state,
 	}
 }
 
