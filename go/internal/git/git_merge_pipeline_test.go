@@ -102,7 +102,7 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("rev-parse HEAD", "abc123", nil)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 42,
@@ -156,7 +156,7 @@ func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("rev-parse HEAD", "abc123", nil)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number:  88,
@@ -193,7 +193,7 @@ func TestExecuteMerge_NotMergeableClassifiedAsBlocked(t *testing.T) {
 func TestShip_PackageFunction_CreatesPR(t *testing.T) {
 	// Preload an open PR for the branch so FindOpenPR returns it — shipPR's
 	// CreatePR path finds the existing PR and returns its number.
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 77,
@@ -235,7 +235,7 @@ func TestShip_PackageFunction_CreatesPR(t *testing.T) {
 func TestShip_SkipsCreatePRWhenNotAheadOfMain(t *testing.T) {
 	// Empty world: if CreatePR were called, a PR would appear. We verify it
 	// wasn't by checking ListAllPRs is empty after shipPR returns.
-	gh := NewStubGitHubCfg(StubGitHubConfig{Available: true})
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 
 	opts := ShipOpts{}
 	infra := shipInfra{
@@ -277,7 +277,7 @@ func TestAutoMerge_InfraFailure_ReturnsCIFailureError(t *testing.T) {
 	runner.On("rev-parse HEAD", "abc123", nil)
 	runner.On("reset --hard", "", nil)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 99,
@@ -322,7 +322,7 @@ func TestAutoMerge_CIFailure_AlwaysReturnsCIFailureError(t *testing.T) {
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("rev-parse HEAD", "abc123", nil)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 100,
@@ -369,7 +369,7 @@ func TestShip_InfrastructureFailure_SetOnCIFailure(t *testing.T) {
 	runner.On("rev-parse HEAD", "abc123", nil)
 	runner.On("reset --hard", "", nil)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 99,
@@ -417,7 +417,7 @@ func TestShip_InfrastructureFailure_FalseWhenJobStepsExecuted(t *testing.T) {
 	runner.On("rev-parse HEAD", "abc123", nil)
 	runner.On("reset --hard", "", nil)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 100,
@@ -465,7 +465,7 @@ func TestAutoMerge_CITimeout_ReturnsErrorWithoutMerging(t *testing.T) {
 	runner.On("rev-parse HEAD", "abc123", nil)
 	runner.On("reset --hard", "", nil)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 102,
@@ -512,7 +512,7 @@ func TestCreatePR_StackedPRTargetsParentBranch(t *testing.T) {
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{Available: true})
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 
 	repo := newRepoForTest(
 		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: discardLog{}},
@@ -549,7 +549,7 @@ func TestCreatePR_NonStackedTargetsMain(t *testing.T) {
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{Available: true})
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 
 	repo := newRepoForTest(
 		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: discardLog{}},
@@ -649,7 +649,7 @@ func TestMergeWithRetry_CIFailureWithNoCallback_ReturnsError(t *testing.T) {
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("rev-parse HEAD", "abc123", nil)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 55,
@@ -685,7 +685,7 @@ func TestMergeWithRetry_CIFailureWithNoCallback_ReturnsError(t *testing.T) {
 func TestExecuteMerge_PackageFunc_MergesSuccessfully(t *testing.T) {
 	stubCISleep(t)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 42,
@@ -826,7 +826,7 @@ func TestAutoMerge_StackedPR_WaitsForBase(t *testing.T) {
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 150,
@@ -917,7 +917,7 @@ func TestAutoMerge_KnownPRNumber_SkipsFindOpenPR(t *testing.T) {
 
 	// Note the PR is on a DIFFERENT branch than the worktree — FindOpenPR
 	// would return 0 if called. KnownPRNumber bypasses the branch lookup.
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 42,
@@ -960,7 +960,7 @@ func TestAutoMerge_CIAlreadyPassing_SkipsPushAndMergesDirectly(t *testing.T) {
 	// rev-parse HEAD returns the same SHA as the PR head
 	runner.On("rev-parse HEAD", "sha-already-passing", nil)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number:  77,
@@ -1021,7 +1021,7 @@ func TestAutoMerge_LocalHeadDiffersFromPRHead_UsesNormalFlow(t *testing.T) {
 	// Local HEAD differs from PR head SHA → fast path does not trigger.
 	runner.On("rev-parse HEAD", "sha-new-local-commit", nil)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number:  78,
@@ -1078,7 +1078,7 @@ func TestAutoMerge_NoOpPush_CIFailureDetected(t *testing.T) {
 	// pushedAt filter would discard it and the loop would see no checks.
 	failStart := time.Now().Add(-5 * time.Minute)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number:  88,

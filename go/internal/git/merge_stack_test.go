@@ -87,7 +87,7 @@ func TestCollectStackFromPRs_InvalidPRNumber(t *testing.T) {
 func TestMergeStack_NoPRsFound(t *testing.T) {
 	dir := t.TempDir()
 	initBareRepoIn(t, dir)
-	gh := NewStubGitHubCfg(StubGitHubConfig{Available: true})
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 	repo := newRepoForTest(
 		Config{ProjectDir: dir, BaseBranch: "main", Logger: discardLog{}},
 		gh,
@@ -104,7 +104,7 @@ func TestMergeStack_NoPRsFound(t *testing.T) {
 
 // MergeStack returns error when CI fails on a PR.
 func TestMergeStack_CIFailureStops(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{Number: 1, Branch: "pr1", Base: "main", State: PRStateOpen}},
 		Checks: map[int][]CICheckResult{1:{{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
@@ -128,7 +128,7 @@ func TestMergeStack_CIFailureStops(t *testing.T) {
 
 // MergeStack returns error when merge is blocked by branch protection.
 func TestMergeStack_MergeBlockedStops(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number:  1,
@@ -155,7 +155,7 @@ func TestMergeStack_MergeBlockedStops(t *testing.T) {
 
 // MergeStack returns error when merge has conflicts.
 func TestMergeStack_MergeConflictStops(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number:     1,
@@ -188,7 +188,7 @@ func TestMergeStack_MergeConflictStops(t *testing.T) {
 // it checks the SUT actually caused the state change, not just that it
 // invoked the method.
 func TestMergeStack_SinglePRSuccess(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{Number: 42, Branch: "feature", Base: "main", State: PRStateOpen}},
 		Checks: map[int][]CICheckResult{42:{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}},
@@ -225,7 +225,7 @@ func TestMergeStack_DirtyTreeRejected(t *testing.T) {
 
 	repo := newRepoForTest(
 		Config{ProjectDir: dir, Logger: discardLog{}},
-		NewStubGitHubCfg(StubGitHubConfig{Available: true}),
+		newStubGitHub(StubGitHubConfig{Available: true}),
 		withRunner(&execRunner{}),
 	)
 

@@ -13,7 +13,7 @@ import (
 // PrevBranch stays empty.
 func TestSetStackHead_SkipsWhenNoBranchesAvailable(t *testing.T) {
 	log := &testLog{}
-	gh := NewStubGitHubCfg(StubGitHubConfig{Available: true})
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 	r := newRepoForTest(Config{Logger: log}, gh)
 
 	setStackHead(r, []string{"ralph/some-task"})
@@ -102,7 +102,7 @@ func TestBranchForTask_UsesStoredBranchWhenRemoteEmpty(t *testing.T) {
 
 	r := newRepoForTest(
 		Config{ProjectDir: "/project", WorkDir: "/project/worktrees/wt1", Logger: logging.New(nil)},
-		NewStubGitHubCfg(StubGitHubConfig{}),
+		newStubGitHub(StubGitHubConfig{}),
 		withRunner(runner),
 		withWorktreeBranch("ralph/wip-branch"),
 	)

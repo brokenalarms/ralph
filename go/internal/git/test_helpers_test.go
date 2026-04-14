@@ -132,42 +132,6 @@ type discardLog struct{}
 
 func (discardLog) Emit(logging.Opts, string, ...any) {}
 
-// capturingGitHub captures CreatePR calls for assertion.
-type capturingGitHub struct {
-	StubGitHub
-	createPR func(CreatePROpts) (int, error)
-}
-
-func (c *capturingGitHub) CreatePR(opts CreatePROpts) (int, error) {
-	if c.createPR != nil {
-		return c.createPR(opts)
-	}
-	return 0, nil
-}
-
-// stubManager creates a Manager wired to stubs for both git commands and
-// GitHub operations. The Manager's dirs are set to the given directory.
-//
-// Deprecated: migrating callers to newRepoForTest as part of the
-// stub-interface rewrite. Once no callers remain, this helper is deleted.
-func stubManager(dir string, runner *stubRunner, gh *StubGitHub) *Repo {
-	if runner == nil {
-		runner = newStubRunner()
-	}
-	if gh == nil {
-		gh = NewStubGitHub()
-	}
-	return &Repo{
-		projectDir: dir,
-		workDir:    dir,
-		baseBranch: "main",
-		runner:     runner,
-		github:     gh,
-		state:      newMemState(),
-		logger:     discardLog{},
-	}
-}
-
 // newRepoForTest constructs a *Repo wired to test-supplied dependencies.
 // This is the one and only seam for building a real Repo with an injected
 // stub gitHub inside internal/git tests. Package-private and _test.go-only:
@@ -192,7 +156,7 @@ func newRepoForTest(cfg Config, gh gitHub, opts ...repoTestOpt) *Repo {
 		opt(&tc)
 	}
 	if gh == nil {
-		gh = NewStubGitHubCfg(StubGitHubConfig{})
+		gh = newStubGitHub(StubGitHubConfig{})
 	}
 	projectDir := cfg.ProjectDir
 	if projectDir == "" {

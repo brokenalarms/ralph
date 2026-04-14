@@ -276,7 +276,7 @@ func TestPushAndCreatePR_UsesBaseBranch(t *testing.T) {
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{Available: true})
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 
 	repo := newRepoForTest(
 		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "develop", Logger: &testLog{}},
@@ -311,7 +311,7 @@ func TestPushAndCreatePR_BaseBranchMainTargetsMain(t *testing.T) {
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{Available: true})
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 
 	repo := newRepoForTest(
 		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "main", Logger: &testLog{}},
@@ -344,7 +344,7 @@ func TestPushAndCreatePR_IncludesBeadIDInTitle(t *testing.T) {
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{Available: true})
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 
 	repo := newRepoForTest(
 		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "main", Logger: &testLog{}},
@@ -374,7 +374,7 @@ func TestPushAndCreatePR_NoBeadID(t *testing.T) {
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{Available: true})
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 
 	repo := newRepoForTest(
 		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "main", Logger: &testLog{}},
@@ -439,7 +439,7 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 	log := &testLog{}
 
 	// World with no PRs — FindOpenPR returns 0.
-	gh := NewStubGitHubCfg(StubGitHubConfig{Available: true})
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 
 	repo := newRepoForTest(
 		Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log},
@@ -526,7 +526,7 @@ func TestResolveConflict_RebasesAndForcePushes(t *testing.T) {
 func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 	project, _ := initBareRepo(t)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number:  99,
@@ -849,7 +849,7 @@ func TestAutoMergeCurrentBranch_ReturnsMergedForAlreadyMergedPR(t *testing.T) {
 
 	// World has a merged PR for the branch. FindOpenPR returns 0 (state != open),
 	// FindPR returns the PR so AutoMergeCurrentBranch follows the already-merged path.
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 438,
@@ -901,7 +901,7 @@ func TestAutoMergeCurrentBranch_ReopensClosedPR(t *testing.T) {
 
 	// World starts with a closed PR on the branch. The SUT should reopen it and
 	// then successfully merge it. Observable: final state is Merged.
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 438,
@@ -944,7 +944,7 @@ func TestCreatePR_ReopensClosedPROnCreateFailure(t *testing.T) {
 
 	// World: a closed PR #438 exists for the branch. `gh pr create` fails
 	// with the "already exists" error, triggering the reopen path.
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 438,
@@ -987,7 +987,7 @@ func TestCreatePR_ReturnsMergedPRNumberOnAlreadyExists(t *testing.T) {
 	// World: a merged PR #438 exists for the branch. `gh pr create` fails
 	// with a 422 "already exists" error; code should detect the merged state
 	// and return the merged PR number rather than attempting reopen/API create.
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 438,
@@ -1026,7 +1026,7 @@ func TestCreatePR_ReturnsMergedPRNumberOnAlreadyExists(t *testing.T) {
 func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
 	project, _ := initBareRepo(t)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number:  77,
@@ -1098,7 +1098,7 @@ func TestAutoMergeCurrentBranch_BlockedMergeReturnsError(t *testing.T) {
 	project, _ := initBareRepo(t)
 	stubCISleep(t)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number:  55,

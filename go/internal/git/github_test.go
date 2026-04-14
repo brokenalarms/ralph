@@ -161,7 +161,7 @@ func TestPRDiff_UsesGhAPI(t *testing.T) {
 // Manager.GetCIFailureLog delegates to the injected GitHub interface's GetRunLog,
 // confirming that loop code can get CI logs without shelling out.
 func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		RunLog:    "test failure output line 1\nline 2",
 	})
