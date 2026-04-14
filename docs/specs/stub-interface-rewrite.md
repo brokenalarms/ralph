@@ -1,6 +1,6 @@
 # Stub interface rewrite — handoff
 
-> **Goal**: `StubGitHub` and `StubRepo` must be proper in-memory fakes — each one implements exactly the production interface, is configured only at construction, and exposes no mutation surface. After this work there is no way for a test to change a stub's behavior after `NewStubX(cfg)` returns.
+> **Goal**: `StubGitHub` and `StubRepo` must be proper in-memory fakes — each one implements exactly the production interface and exposes no public surface beyond that interface. The subject under test interacts with the stub through interface methods only, identical to how it would interact with the production type. `NewStubX(cfg)` is a thin factory that hands back an interface value with its internal state pre-loaded from `cfg`; the factory is not a configuration seam in its own right, and there is no other way to get an instance.
 
 Read the **Testing → Stubs and test doubles** section of `AGENTS.md` before touching code. The rules there are binding; this handoff is the concrete migration plan for applying them to the existing `internal/git` scaffolding.
 
