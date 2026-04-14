@@ -21,7 +21,7 @@ func TestResumeTask_EmptyTaskID(t *testing.T) {
 // ResumeTask finds an existing PR via external-ref and delegates to Ship.
 // When Ship reports AlreadyMerged, returns Handled=true with AlreadyMerged=true.
 func TestResumeTask_AlreadyMergedViaPRURL(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs:       []StubPR{{Number: 42, State: PRStateMerged}},
 	})
@@ -48,7 +48,7 @@ func TestResumeTask_AlreadyMergedViaPRURL(t *testing.T) {
 
 // ResumeTask handles a closed PR by clearing metadata and returning Handled=false.
 func TestResumeTask_ClosedPRClearsMetadata(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs:       []StubPR{{Number: 99, State: PRStateClosed}},
 	})
@@ -80,7 +80,7 @@ func TestResumeTask_ClosedPRClearsMetadata(t *testing.T) {
 
 // ResumeTask handles a closed PR: the branch is renamed to a task-specific name.
 func TestResumeTask_ClosedPRRenamesBranch(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs:       []StubPR{{Number: 439, State: PRStateClosed}},
 	})
@@ -124,7 +124,7 @@ func TestResumeTask_ClosedPRRenamesBranch(t *testing.T) {
 // points to an existing PR, and the remote branch is absent.
 func TestResumeTask_NoPriorWork(t *testing.T) {
 	// Empty world → FindPR returns zero values → no PR found.
-	gh := NewStubGitHubCfg(StubGitHubConfig{Available: true})
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 	runner := newStubRunner()
 	// ls-remote returns nothing — remote branch absent.
 	runner.On("ls-remote", "", nil)
@@ -151,7 +151,7 @@ func TestResumeTask_NoPriorWork(t *testing.T) {
 
 // ResumeTask stores the external-ref URL when PR was found via branch (not external-ref).
 func TestResumeTask_FoundViaBranchStoresPRURL(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 55,

@@ -158,109 +158,16 @@ func TestPRDiff_UsesGhAPI(t *testing.T) {
 	}
 }
 
-// The StubGitHub type satisfies the gitHub interface, proving that test stubs
-// can replace all GitHub CLI operations without shelling out.
-func TestStubGitHub_SatisfiesInterface(t *testing.T) {
-	var _ gitHub = &StubGitHub{}
-}
-
-// CreatePROpts carries all parameters in a single struct so callers avoid
-// positional-parameter mistakes.
-func TestCreatePROpts_FieldsPreserved(t *testing.T) {
-	var captured CreatePROpts
-	stub := &capturingGitHub{createPR: func(opts CreatePROpts) (int, error) {
-		captured = opts
-		return 42, nil
-	}}
-
-	opts := CreatePROpts{
-		Head:  "feature-branch",
-		Base:  "main",
-		Title: "Add widget",
-		Body:  "Automated PR",
-		Repo:  "owner/repo",
-		Dir:   "/tmp/work",
-	}
-	if _, err := stub.CreatePR(opts); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if captured != opts {
-		t.Errorf("CreatePR opts not passed through:\ngot:  %+v\nwant: %+v", captured, opts)
-	}
-}
-
-// GetRunLog returns the stub's configured RunLogValue, proving the interface
-// method can be stubbed for CI failure log testing.
-func TestGetRunLog_Stubbable(t *testing.T) {
-	stub := NewStubGitHub()
-	if result := stub.GetRunLog(42, "/tmp"); result != "" {
-		t.Errorf("expected empty string from default stub, got %q", result)
-	}
-
-	stub.RunLogValue = "error TS2307: Cannot find module './Missing'"
-	if result := stub.GetRunLog(42, "/tmp"); result != stub.RunLogValue {
-		t.Errorf("expected configured RunLogValue, got %q", result)
-	}
-}
-
-// ListChecks replaces the former FetchChecks method, returning CI check results
-// that callers use to determine merge readiness.
-func TestListChecks_Stubbable(t *testing.T) {
-	stub := NewStubGitHub()
-	stub.Checks = []CICheckResult{
-		{Name: "build", State: "SUCCESS", Bucket: "pass"},
-		{Name: "lint", State: "FAILURE", Bucket: "fail"},
-	}
-
-	checks, err := stub.ListChecks(99, "owner/repo")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(checks) != 2 {
-		t.Fatalf("expected 2 checks, got %d", len(checks))
-	}
-	if checks[1].Name != "lint" {
-		t.Errorf("expected second check name 'lint', got %q", checks[1].Name)
-	}
-}
-
-// GetPR returns a PRDetail with all fields populated and a deterministic
-// HeadSHA derived from the PR number.
-func TestGetPR_ReturnsAllFields(t *testing.T) {
-	stub := NewStubGitHub()
-	stub.PRHead = "feature-branch"
-	stub.HeadSHA = "abc123"
-
-	pr, err := stub.GetPR("owner/repo", 42)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if pr.State != "OPEN" {
-		t.Errorf("state: want %q, got %q", "OPEN", pr.State)
-	}
-	if pr.BaseRef != "main" {
-		t.Errorf("BaseRef: want %q, got %q", "main", pr.BaseRef)
-	}
-	if pr.HeadRef != "feature-branch" {
-		t.Errorf("HeadRef: want %q, got %q", "feature-branch", pr.HeadRef)
-	}
-	if pr.HeadSHA != "abc123" {
-		t.Errorf("HeadSHA: want %q, got %q", "abc123", pr.HeadSHA)
-	}
-}
-
 // Manager.GetCIFailureLog delegates to the injected GitHub interface's GetRunLog,
 // confirming that loop code can get CI logs without shelling out.
 func TestManager_GetCIFailureLog_DelegatesToGitHub(t *testing.T) {
-	stub := NewStubGitHub()
-	stub.RunLogValue = "test failure output line 1\nline 2"
-	mgr := &Repo{
-		baseBranch: "main",
-		github: stub,
-	}
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		RunLog:    "test failure output line 1\nline 2",
+	})
+	repo := newRepoForTest(Config{BaseBranch: "main"}, gh)
 
-	result := mgr.GetCIFailureLog(42)
+	result := repo.GetCIFailureLog(42)
 	if result != "test failure output line 1\nline 2" {
 		t.Errorf("expected delegated log output, got %q", result)
 	}
@@ -380,29 +287,6 @@ func TestDetectActiveReviewers_NoCopilotRuleset(t *testing.T) {
 	raw, _ := os.ReadFile(logFile)
 	if strings.Contains(string(raw), "installations") {
 		t.Errorf("DetectActiveReviewers must not call /installations endpoint")
-	}
-}
-
-// StubGitHub.DetectActiveReviewers returns the configured ActiveReviewers slice,
-// proving tests can control the reviewer list without shelling out.
-func TestStubGitHub_DetectActiveReviewers(t *testing.T) {
-	stub := &StubGitHub{
-		ActiveReviewers: []Reviewer{
-			{AppSlug: "copilot-code-review", BotUsername: "copilot-pull-request-reviewer", DefaultTimeout: 120 * time.Second, ReviewOnPush: true},
-		},
-	}
-	reviewers, err := stub.DetectActiveReviewers("owner/repo")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(reviewers) != 1 {
-		t.Fatalf("expected 1 reviewer, got %d", len(reviewers))
-	}
-	if reviewers[0].BotUsername != "copilot-pull-request-reviewer" {
-		t.Errorf("expected copilot bot, got %q", reviewers[0].BotUsername)
-	}
-	if !reviewers[0].ReviewOnPush {
-		t.Error("expected ReviewOnPush=true from stub")
 	}
 }
 

@@ -383,7 +383,7 @@ func TestWaitForCI_CancelledContext(t *testing.T) {
 // AwaitCI returns CIPassed immediately when checks already pass,
 // without entering the polling loop.
 func TestAwaitCI_PassedImmediately(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		Checks:    map[int][]CICheckResult{1: {{Name: "test", State: "SUCCESS", Bucket: "pass"}}},
 	})
@@ -404,7 +404,7 @@ func TestAwaitCI_PassedImmediately(t *testing.T) {
 // AwaitCI returns CIFailed immediately when checks have already failed,
 // without entering the polling loop.
 func TestAwaitCI_FailedImmediately(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		Checks:    map[int][]CICheckResult{1: {{Name: "lint", State: "FAILURE", Bucket: "fail"}}},
 	})
@@ -428,7 +428,7 @@ func TestAwaitCI_FailedImmediately(t *testing.T) {
 func TestAwaitCI_FetchErrorKeepsPolling(t *testing.T) {
 	stubCISleep(t)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available:     true,
 		ListChecksErr: fmt.Errorf("no checks yet"),
 	})
@@ -446,7 +446,7 @@ func TestAwaitCI_FetchErrorKeepsPolling(t *testing.T) {
 func TestAwaitCI_LogUsesPRLink(t *testing.T) {
 	stubCISleep(t)
 
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available:     true,
 		ListChecksErr: fmt.Errorf("no checks yet"),
 	})
@@ -477,7 +477,7 @@ func TestAwaitCI_PushedAtLogUsesPRLink(t *testing.T) {
 	stubCISleep(t)
 
 	now := time.Now()
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		Checks: map[int][]CICheckResult{88: {
 			{Name: "test", State: "SUCCESS", Bucket: "pass", StartedAt: now.Add(time.Second)},
@@ -543,7 +543,7 @@ func TestAwaitCI_AllStaleChecksTimesOut(t *testing.T) {
 	stubCISleep(t)
 
 	pushedAt := time.Now()
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		Checks: map[int][]CICheckResult{1: {
 			// The check passes, but was started before pushedAt → stale.
@@ -563,7 +563,7 @@ func TestAwaitCI_AllStaleChecksTimesOut(t *testing.T) {
 
 // AwaitCI with zero pushedAt skips filtering and returns results immediately.
 func TestAwaitCI_ZeroPushedAtSkipsFiltering(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		Checks:    map[int][]CICheckResult{1: {{Name: "test", State: "SUCCESS", Bucket: "pass"}}},
 	})
@@ -607,7 +607,7 @@ func setupAutoMergeManager(t *testing.T, gh gitHub) *Repo {
 // AutoMergeCurrentBranch returns a MergeConflictError when the PR has merge
 // conflicts with its base, so the caller can rebase and retry.
 func TestAutoMerge_MergeConflictReturnsTypedError(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number:     42,
@@ -633,7 +633,7 @@ func TestAutoMerge_MergeConflictReturnsTypedError(t *testing.T) {
 // AutoMergeCurrentBranch returns a CIFailureError when CI checks fail,
 // so the caller can spawn a fix agent and retry.
 func TestAutoMerge_CIFailureReturnsTypedError(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
 			Number: 42,
@@ -668,7 +668,7 @@ func TestAwaitCI_UsesManagerCIPollTimeout(t *testing.T) {
 	defer func() { ciSleep = origSleep }()
 
 	// Manager with a very short custom timeout — pending checks should time out quickly.
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		Checks:    map[int][]CICheckResult{1: {{Name: "test", State: "PENDING", Bucket: "pending"}}},
 	})
@@ -688,7 +688,7 @@ func TestAwaitCI_UsesManagerCIPollTimeout(t *testing.T) {
 func TestAwaitCI_ZeroCIPollTimeoutFallsBackToDefault(t *testing.T) {
 	// Manager with zero CIPollTimeout and checks that pass immediately —
 	// if the fallback is working, it won't time out before the first poll.
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		Checks:    map[int][]CICheckResult{1: {{Name: "test", State: "SUCCESS", Bucket: "pass"}}},
 	})
@@ -708,7 +708,7 @@ func TestAwaitCI_ZeroCIPollTimeoutFallsBackToDefault(t *testing.T) {
 // gate merging. A failing non-required check is ignored; the required check
 // that passes causes CIPassed to be returned.
 func TestAwaitCI_RequiredChecksFilter_IgnoresNonRequired(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		Checks: map[int][]CICheckResult{1: {
 			{Name: "test", State: "SUCCESS", Bucket: "pass"},
@@ -731,7 +731,7 @@ func TestAwaitCI_RequiredChecksFilter_IgnoresNonRequired(t *testing.T) {
 // AwaitCI returns CIFailed when a required check fails, even when non-required
 // checks are also present, proving required-only evaluation is applied correctly.
 func TestAwaitCI_RequiredChecksFilter_RequiredFailureBlocks(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		Checks: map[int][]CICheckResult{1: {
 			{Name: "test", State: "FAILURE", Bucket: "fail"},    // required, failing
@@ -752,7 +752,7 @@ func TestAwaitCI_RequiredChecksFilter_RequiredFailureBlocks(t *testing.T) {
 // AwaitCI evaluates all checks when GetRequiredChecks returns empty, preserving
 // existing behavior for repos without branch protection rules configured.
 func TestAwaitCI_RequiredChecksFilter_FallsBackToAllChecksWhenEmpty(t *testing.T) {
-	gh := NewStubGitHubCfg(StubGitHubConfig{
+	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		Checks: map[int][]CICheckResult{1: {
 			{Name: "test", State: "SUCCESS", Bucket: "pass"},

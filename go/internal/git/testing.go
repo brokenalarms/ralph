@@ -661,7 +661,7 @@ func (s *StubRepo) ListAllPRs(workDir string) ([]PRInfo, error) {
 // world, not by reading stub fields.
 //
 // Added alongside the legacy StubGitHub in this scaffold commit. The final
-// commit of the rewrite deletes the legacy type and renames NewStubGitHubCfg
+// commit of the rewrite deletes the legacy type and renames newStubGitHub
 // to NewStubGitHub.
 
 // StubPR describes a pull request that exists in the fake's world.
@@ -731,7 +731,7 @@ type StubGitHubConfig struct {
 
 // stubGitHub is the unexported fake. Tests never see this type directly;
 // they receive it only through the gitHub interface value returned by
-// NewStubGitHubCfg.
+// newStubGitHub.
 type stubGitHub struct {
 	cfg          StubGitHubConfig
 	prs          map[int]*StubPR
@@ -741,12 +741,12 @@ type stubGitHub struct {
 // Compile-time check that stubGitHub implements the full gitHub interface.
 var _ gitHub = (*stubGitHub)(nil)
 
-// NewStubGitHubCfg returns a stubGitHub initialized with cfg's world, typed
+// newStubGitHub returns a stubGitHub initialized with cfg's world, typed
 // as the gitHub interface so callers cannot reach into its internal state.
-//
-// Migration note: this will be renamed to NewStubGitHub in the final commit
-// of the stub-interface rewrite, once the legacy NewStubGitHub() is deleted.
-func NewStubGitHubCfg(cfg StubGitHubConfig) gitHub {
+// Package-private: external packages configure GitHub behavior through
+// StubRepoConfig.GitHub when they need it; internal/git tests use this
+// constructor directly.
+func newStubGitHub(cfg StubGitHubConfig) gitHub {
 	s := &stubGitHub{
 		cfg: cfg,
 		prs: make(map[int]*StubPR, len(cfg.PRs)),

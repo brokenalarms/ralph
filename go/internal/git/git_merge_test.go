@@ -2,7 +2,6 @@ package git
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,18 +19,16 @@ func TestPostMergeUpdateMain_DoesNotModifyProjectDir(t *testing.T) {
 	bare := filepath.Join(filepath.Dir(project), "bare.git")
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Repo{
-		projectDir: project,
-		ralphDir:   ralphDir,
-		baseBranch: "main",
-		state:      newMemState(),
-		logger:     &testLog{},
-	}
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
+	repo := newRepoForTest(
+		Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}},
+		nil,
+		withRunner(&execRunner{}),
+	)
+	if err := repo.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.RenameBranchForTask("completed task", "")
+	repo.RenameBranchForTask("completed task", "")
 
 	// Record local main SHA before PostMergeUpdateMain.
 	localMainBefore := gitOutput(project, "rev-parse", "main")
@@ -43,7 +40,7 @@ func TestPostMergeUpdateMain_DoesNotModifyProjectDir(t *testing.T) {
 	run(t, "git", "-C", tmpClone, "commit", "-m", "merged PR")
 	run(t, "git", "-C", tmpClone, "push", "origin", "main")
 
-	mgr.PostMergeUpdateMain()
+	repo.PostMergeUpdateMain()
 
 	// Local main must not have been advanced — ProjectDir is untouched.
 	localMainAfter := gitOutput(project, "rev-parse", "main")
@@ -59,8 +56,8 @@ func TestPostMergeUpdateMain_DoesNotModifyProjectDir(t *testing.T) {
 	}
 
 	// Worktree moves to ralph/next after branch cleanup.
-	if mgr.worktreeBranch != "ralph/next" {
-		t.Errorf("worktree branch should be ralph/next after task branch cleanup, got %q", mgr.worktreeBranch)
+	if repo.worktreeBranch != "ralph/next" {
+		t.Errorf("worktree branch should be ralph/next after task branch cleanup, got %q", repo.worktreeBranch)
 	}
 }
 
@@ -78,14 +75,12 @@ func TestPostMergeUpdateMain_PreservesUncommittedWorkingTreeChanges(t *testing.T
 	run(t, "git", "-C", project, "commit", "-m", "add tracked file")
 	run(t, "git", "-C", project, "push", "origin", "main")
 
-	mgr := &Repo{
-		projectDir: project,
-		ralphDir:   ralphDir,
-		baseBranch: "main",
-		state:      newMemState(),
-		logger:     &testLog{},
-	}
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
+	repo := newRepoForTest(
+		Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}},
+		nil,
+		withRunner(&execRunner{}),
+	)
+	if err := repo.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -101,7 +96,7 @@ func TestPostMergeUpdateMain_PreservesUncommittedWorkingTreeChanges(t *testing.T
 	run(t, "git", "-C", tmpClone, "commit", "-m", "squash-merged PR")
 	run(t, "git", "-C", tmpClone, "push", "origin", "main")
 
-	mgr.PostMergeUpdateMain()
+	repo.PostMergeUpdateMain()
 
 	// User's modification to tracked.txt must survive the main-update.
 	got := strings.TrimSpace(gitOutput(project, "diff", "HEAD", "--", "tracked.txt"))
@@ -119,14 +114,12 @@ func TestPostMergeUpdateMain_RebasePathLogsCleanly(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	log := &testLog{}
 
-	mgr := &Repo{
-		projectDir: project,
-		ralphDir:   ralphDir,
-		baseBranch: "main",
-		state:      newMemState(),
-		logger:     log,
-	}
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
+	repo := newRepoForTest(
+		Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log},
+		nil,
+		withRunner(&execRunner{}),
+	)
+	if err := repo.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
@@ -137,7 +130,7 @@ func TestPostMergeUpdateMain_RebasePathLogsCleanly(t *testing.T) {
 	run(t, "git", "-C", tmpClone, "commit", "-m", "merged PR")
 	run(t, "git", "-C", tmpClone, "push", "origin", "main")
 
-	mgr.PostMergeUpdateMain()
+	repo.PostMergeUpdateMain()
 
 	for _, msg := range log.messages {
 		lower := strings.ToLower(msg)
@@ -153,26 +146,23 @@ func TestPostMergeUpdateMain_DeletesLocalTaskBranch(t *testing.T) {
 	project, _ := initBareRepo(t)
 	bare := filepath.Join(filepath.Dir(project), "bare.git")
 	ralphDir := filepath.Join(project, ".ralph")
-	st := newMemState()
 
-	mgr := &Repo{
-		projectDir: project,
-		ralphDir:   ralphDir,
-		baseBranch: "main",
-		state:      st,
-		logger:     &testLog{},
-	}
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
+	repo := newRepoForTest(
+		Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}},
+		nil,
+		withRunner(&execRunner{}),
+	)
+	if err := repo.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.RenameBranchForTask("delete local branch", "ralph-4l32")
-	taskBranch := mgr.worktreeBranch
+	repo.RenameBranchForTask("delete local branch", "ralph-4l32")
+	taskBranch := repo.worktreeBranch
 
 	// Commit on the task branch so it has a distinct local ref.
-	writeFile(t, mgr.workDir, "task-work.txt", "work\n")
-	run(t, "git", "-C", mgr.workDir, "add", "task-work.txt")
-	run(t, "git", "-C", mgr.workDir, "commit", "-m", "task work")
+	writeFile(t, repo.workDir, "task-work.txt", "work\n")
+	run(t, "git", "-C", repo.workDir, "add", "task-work.txt")
+	run(t, "git", "-C", repo.workDir, "commit", "-m", "task work")
 
 	// Push a squash-merge commit to origin/main (simulating a merged PR).
 	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
@@ -181,7 +171,7 @@ func TestPostMergeUpdateMain_DeletesLocalTaskBranch(t *testing.T) {
 	run(t, "git", "-C", tmpClone, "commit", "-m", "merged PR")
 	run(t, "git", "-C", tmpClone, "push", "origin", "main")
 
-	mgr.PostMergeUpdateMain()
+	repo.PostMergeUpdateMain()
 
 	// The task branch must no longer exist as a local ref.
 	branches := gitOutput(project, "branch", "--list")
@@ -197,29 +187,26 @@ func TestPostMergeUpdateMain_MovesToNextBranchWhenOnTaskBranch(t *testing.T) {
 	project, _ := initBareRepo(t)
 	bare := filepath.Join(filepath.Dir(project), "bare.git")
 	ralphDir := filepath.Join(project, ".ralph")
-	st := newMemState()
 
-	mgr := &Repo{
-		projectDir: project,
-		ralphDir:   ralphDir,
-		baseBranch: "main",
-		state:      st,
-		logger:     &testLog{},
-	}
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
+	repo := newRepoForTest(
+		Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}},
+		nil,
+		withRunner(&execRunner{}),
+	)
+	if err := repo.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.RenameBranchForTask("move to next", "ralph-4l32")
-	taskBranch := mgr.worktreeBranch
+	repo.RenameBranchForTask("move to next", "ralph-4l32")
+	taskBranch := repo.worktreeBranch
 
 	// Commit on the task branch.
-	writeFile(t, mgr.workDir, "task-work.txt", "work\n")
-	run(t, "git", "-C", mgr.workDir, "add", "task-work.txt")
-	run(t, "git", "-C", mgr.workDir, "commit", "-m", "task work")
+	writeFile(t, repo.workDir, "task-work.txt", "work\n")
+	run(t, "git", "-C", repo.workDir, "add", "task-work.txt")
+	run(t, "git", "-C", repo.workDir, "commit", "-m", "task work")
 
 	// Verify the worktree is on the task branch before PostMergeUpdateMain.
-	checkedOutBefore := gitOutput(mgr.workDir, "symbolic-ref", "--short", "HEAD")
+	checkedOutBefore := gitOutput(repo.workDir, "symbolic-ref", "--short", "HEAD")
 	if checkedOutBefore != taskBranch {
 		t.Fatalf("expected worktree on %q, got %q", taskBranch, checkedOutBefore)
 	}
@@ -231,17 +218,17 @@ func TestPostMergeUpdateMain_MovesToNextBranchWhenOnTaskBranch(t *testing.T) {
 	run(t, "git", "-C", tmpClone, "commit", "-m", "merged PR")
 	run(t, "git", "-C", tmpClone, "push", "origin", "main")
 
-	mgr.PostMergeUpdateMain()
+	repo.PostMergeUpdateMain()
 
 	// Worktree must now be on ralph/next (not the deleted task branch).
-	checkedOutAfter := gitOutput(mgr.workDir, "symbolic-ref", "--short", "HEAD")
+	checkedOutAfter := gitOutput(repo.workDir, "symbolic-ref", "--short", "HEAD")
 	if checkedOutAfter != "ralph/next" {
 		t.Errorf("worktree should be on ralph/next after branch cleanup, got %q", checkedOutAfter)
 	}
 
 	// WorktreeBranch field must reflect the new branch.
-	if mgr.worktreeBranch != "ralph/next" {
-		t.Errorf("WorktreeBranch should be ralph/next, got %q", mgr.worktreeBranch)
+	if repo.worktreeBranch != "ralph/next" {
+		t.Errorf("WorktreeBranch should be ralph/next, got %q", repo.worktreeBranch)
 	}
 
 	// Old task branch must be gone.
@@ -251,7 +238,7 @@ func TestPostMergeUpdateMain_MovesToNextBranchWhenOnTaskBranch(t *testing.T) {
 	}
 
 	// BranchRenamed must be false so the next task can rename ralph/next.
-	if mgr.branchRenamed {
+	if repo.branchRenamed {
 		t.Error("BranchRenamed should be false after moving to ralph/next")
 	}
 }
@@ -279,6 +266,7 @@ func TestNWOFromRemote_SSHAndHTTPS(t *testing.T) {
 
 // PushAndCreatePR must pass the configured base branch to CreatePR,
 // so PRs target the correct branch (e.g. develop) instead of the repo default (main).
+// Observable via the base of the newly-created PR in the fake's world.
 func TestPushAndCreatePR_UsesBaseBranch(t *testing.T) {
 	project, cleanup := initBareRepoWithBranch(t, "develop")
 	defer cleanup()
@@ -288,32 +276,29 @@ func TestPushAndCreatePR_UsesBaseBranch(t *testing.T) {
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
-	var capturedOpts CreatePROpts
-	ghBase := NewStubGitHub()
-	ghBase.OpenPR = 0 // no existing PR — force creation path
-	gh := &capturingGitHub{StubGitHub: *ghBase}
-	gh.createPR = func(opts CreatePROpts) (int, error) {
-		capturedOpts = opts
-		return 0, nil
-	}
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 
-	log := &testLog{}
-	mgr := &Repo{
-		projectDir:     project,
-		workDir:        wtDir,
-		worktreeBranch: "ralph/test/feature",
-		baseBranch:     "develop",
-		logger:         log,
-		github:         gh,
-	}
+	repo := newRepoForTest(
+		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "develop", Logger: &testLog{}},
+		gh,
+		withRunner(&execRunner{}),
+		withWorktreeBranch("ralph/test/feature"),
+	)
 
-	_, err := mgr.PushAndCreatePR(context.Background(), "", "test task", "")
+	prNum, err := repo.PushAndCreatePR(context.Background(), "", "test task", "")
 	if err != nil {
-		t.Fatalf("PushAndCreatePR failed: %v (log: %v)", err, log.messages)
+		t.Fatalf("PushAndCreatePR failed: %v", err)
+	}
+	if prNum == 0 {
+		t.Fatal("expected non-zero PR number")
 	}
 
-	if capturedOpts.Base != "develop" {
-		t.Errorf("CreatePR should use base=develop, got base=%q", capturedOpts.Base)
+	pr, _ := gh.GetPR("", prNum)
+	if pr == nil {
+		t.Fatal("expected created PR to exist in world")
+	}
+	if pr.BaseRef != "develop" {
+		t.Errorf("CreatePR should use base=develop, got base=%q", pr.BaseRef)
 	}
 }
 
@@ -326,31 +311,26 @@ func TestPushAndCreatePR_BaseBranchMainTargetsMain(t *testing.T) {
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
-	var capturedOpts CreatePROpts
-	ghBase := NewStubGitHub()
-	ghBase.OpenPR = 0 // no existing PR — force creation path
-	gh := &capturingGitHub{StubGitHub: *ghBase}
-	gh.createPR = func(opts CreatePROpts) (int, error) {
-		capturedOpts = opts
-		return 0, nil
-	}
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 
-	mgr := &Repo{
-		projectDir:     project,
-		workDir:        wtDir,
-		worktreeBranch: "ralph/test/feature",
-		baseBranch:     "main",
-		logger:         &testLog{},
-		github:         gh,
-	}
+	repo := newRepoForTest(
+		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "main", Logger: &testLog{}},
+		gh,
+		withRunner(&execRunner{}),
+		withWorktreeBranch("ralph/test/feature"),
+	)
 
-	_, err := mgr.PushAndCreatePR(context.Background(), "", "test task", "")
+	prNum, err := repo.PushAndCreatePR(context.Background(), "", "test task", "")
 	if err != nil {
 		t.Fatalf("PushAndCreatePR failed: %v", err)
 	}
 
-	if capturedOpts.Base != "main" {
-		t.Errorf("CreatePR should use base=main, got base=%q", capturedOpts.Base)
+	pr, _ := gh.GetPR("", prNum)
+	if pr == nil {
+		t.Fatal("expected created PR to exist in world")
+	}
+	if pr.BaseRef != "main" {
+		t.Errorf("CreatePR should use base=main, got base=%q", pr.BaseRef)
 	}
 }
 
@@ -364,32 +344,23 @@ func TestPushAndCreatePR_IncludesBeadIDInTitle(t *testing.T) {
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
-	var capturedOpts CreatePROpts
-	ghBase := NewStubGitHub()
-	ghBase.OpenPR = 0
-	gh := &capturingGitHub{StubGitHub: *ghBase}
-	gh.createPR = func(opts CreatePROpts) (int, error) {
-		capturedOpts = opts
-		return 0, nil
-	}
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 
-	log := &testLog{}
-	mgr := &Repo{
-		projectDir:     project,
-		workDir:        wtDir,
-		worktreeBranch: "ralph/test/feature",
-		baseBranch:     "main",
-		logger:         log,
-		github:         gh,
-	}
+	repo := newRepoForTest(
+		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "main", Logger: &testLog{}},
+		gh,
+		withRunner(&execRunner{}),
+		withWorktreeBranch("ralph/test/feature"),
+	)
 
-	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-hm8", "fix: include bead ID in PR title", "")
+	_, err := repo.PushAndCreatePR(context.Background(), "ralph-hm8", "fix: include bead ID in PR title", "")
 	if err != nil {
 		t.Fatalf("PushAndCreatePR failed: %v", err)
 	}
 
-	if !strings.Contains(capturedOpts.Title, "[ralph-hm8]") {
-		t.Errorf("PR title should contain bead ID prefix [ralph-hm8], got: %q", capturedOpts.Title)
+	_, title, _, _ := gh.FindPR("ralph/test/feature", "")
+	if !strings.Contains(title, "[ralph-hm8]") {
+		t.Errorf("PR title should contain bead ID prefix [ralph-hm8], got: %q", title)
 	}
 }
 
@@ -403,142 +374,34 @@ func TestPushAndCreatePR_NoBeadID(t *testing.T) {
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
 	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
 
-	var capturedOpts CreatePROpts
-	ghBase := NewStubGitHub()
-	ghBase.OpenPR = 0
-	gh := &capturingGitHub{StubGitHub: *ghBase}
-	gh.createPR = func(opts CreatePROpts) (int, error) {
-		capturedOpts = opts
-		return 0, nil
-	}
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 
-	log := &testLog{}
-	mgr := &Repo{
-		projectDir:     project,
-		workDir:        wtDir,
-		worktreeBranch: "ralph/test/feature",
-		baseBranch:     "main",
-		logger:         log,
-		github:         gh,
-	}
+	repo := newRepoForTest(
+		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "main", Logger: &testLog{}},
+		gh,
+		withRunner(&execRunner{}),
+		withWorktreeBranch("ralph/test/feature"),
+	)
 
-	_, err := mgr.PushAndCreatePR(context.Background(), "", "add new feature", "")
+	_, err := repo.PushAndCreatePR(context.Background(), "", "add new feature", "")
 	if err != nil {
 		t.Fatalf("PushAndCreatePR failed: %v", err)
 	}
 
-	if strings.Contains(capturedOpts.Title, "[") {
-		t.Errorf("PR title should not contain brackets when no bead ID, got: %q", capturedOpts.Title)
-	}
-}
-
-// PushAndCreatePR forwards its summary argument into the Summary section
-// of the formatted PR body, so the PR description uses task context
-// instead of generic boilerplate.
-func TestPushAndCreatePR_WrapsSummaryIntoFormattedBody(t *testing.T) {
-	r := newStubRunner()
-	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
-	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	r.On("rev-list --count origin/main..HEAD", "3", nil)
-	r.On("push", "", nil)
-	r.On("fetch", "", nil)
-	r.On("merge-base --is-ancestor", "", nil)
-
-	var capturedOpts CreatePROpts
-	ghBase := NewStubGitHub()
-	ghBase.OpenPR = 0 // no existing PR — force creation path
-	ghBase.CreatedPR = 55
-	gh := &capturingGitHub{
-		StubGitHub: *ghBase,
-		createPR: func(opts CreatePROpts) (int, error) {
-			capturedOpts = opts
-			return 55, nil
-		},
-	}
-
-	dir := t.TempDir()
-	mgr := &Repo{
-		projectDir:     dir,
-		baseBranch: "main",
-		workDir:        dir + "/worktree",
-		worktreeBranch: "ralph/test/01-feature",
-		runner:         r,
-		github:         gh,
-		state:          newMemState(),
-		logger:         discardLog{},
-	}
-
-	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix auth", "Done")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// PushAndCreatePR forwards the summary string into the Summary
-	// section that formatPRBody constructs.
-	wantBody := "## Summary\nDone"
-	if capturedOpts.Body != wantBody {
-		t.Errorf("CreatePR body = %q, want %q", capturedOpts.Body, wantBody)
-	}
-	if !strings.HasPrefix(capturedOpts.Title, "[ralph-abc]") {
-		t.Errorf("title should start with [ralph-abc], got %q", capturedOpts.Title)
-	}
-}
-
-// PushAndCreatePR uses the task description as body when no summary is
-// provided, avoiding completely empty PR descriptions.
-func TestPushAndCreatePR_FallsBackToTaskDescWhenNoSummary(t *testing.T) {
-	r := newStubRunner()
-	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
-	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	r.On("rev-list --count origin/main..HEAD", "3", nil)
-	r.On("push", "", nil)
-	r.On("fetch", "", nil)
-	r.On("merge-base --is-ancestor", "", nil)
-
-	var capturedOpts CreatePROpts
-	ghBase := NewStubGitHub()
-	ghBase.OpenPR = 0 // no existing PR — force creation path
-	ghBase.CreatedPR = 55
-	gh := &capturingGitHub{
-		StubGitHub: *ghBase,
-		createPR: func(opts CreatePROpts) (int, error) {
-			capturedOpts = opts
-			return 55, nil
-		},
-	}
-
-	dir := t.TempDir()
-	mgr := &Repo{
-		projectDir:     dir,
-		baseBranch: "main",
-		workDir:        dir + "/worktree",
-		worktreeBranch: "ralph/test/01-feature",
-		runner:         r,
-		github:         gh,
-		state:          newMemState(),
-		logger:         discardLog{},
-	}
-
-	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix auth middleware", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if capturedOpts.Body != "fix auth middleware" {
-		t.Errorf("CreatePR body should fall back to task desc, got %q", capturedOpts.Body)
+	_, title, _, _ := gh.FindPR("ralph/test/feature", "")
+	if strings.Contains(title, "[") {
+		t.Errorf("PR title should not contain brackets when no bead ID, got: %q", title)
 	}
 }
 
 // AutoMergeCurrentBranch returns nil when no worktree branch is set,
 // so --auto-merge is a safe no-op without worktree isolation.
 func TestAutoMergeCurrentBranch_SkipsWhenNoWorktreeBranch(t *testing.T) {
-	mgr := &Repo{
-		workDir:    "/some/dir",
-		projectDir: "/some/dir",
-		baseBranch: "main",
-		logger:     &testLog{},
-	}
-	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	repo := newRepoForTest(
+		Config{WorkDir: "/some/dir", ProjectDir: "/some/dir", BaseBranch: "main", Logger: &testLog{}},
+		nil,
+	)
+	merged, err := repo.AutoMergeCurrentBranch(context.Background())
 	if err != nil {
 		t.Errorf("expected nil error, got %v", err)
 	}
@@ -550,14 +413,12 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoWorktreeBranch(t *testing.T) {
 // AutoMergeCurrentBranch returns nil when WorkDir equals ProjectDir,
 // avoiding merging from the project dir itself.
 func TestAutoMergeCurrentBranch_SkipsWhenWorkDirIsProjectDir(t *testing.T) {
-	mgr := &Repo{
-		worktreeBranch: "ralph/project/01-some-task",
-		workDir:        "/some/dir",
-		projectDir:     "/some/dir",
-		baseBranch: "main",
-		logger:         &testLog{},
-	}
-	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	repo := newRepoForTest(
+		Config{WorkDir: "/some/dir", ProjectDir: "/some/dir", BaseBranch: "main", Logger: &testLog{}},
+		nil,
+		withWorktreeBranch("ralph/project/01-some-task"),
+	)
+	merged, err := repo.AutoMergeCurrentBranch(context.Background())
 	if err != nil {
 		t.Errorf("expected nil error, got %v", err)
 	}
@@ -575,23 +436,23 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
-	state := newMemState()
+	log := &testLog{}
 
-	mgr := &Repo{
-		projectDir: project,
-		baseBranch: "main",
-		ralphDir:   ralphDir,
-		state:      state,
-		github:     &StubGitHub{IsAvailable: true, OpenPR: 0},
-		logger:     &testLog{},
-	}
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
+	// World with no PRs — FindOpenPR returns 0.
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
+
+	repo := newRepoForTest(
+		Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log},
+		gh,
+		withRunner(&execRunner{}),
+	)
+	if err := repo.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.RenameBranchForTask("unpushed task", "")
+	repo.RenameBranchForTask("unpushed task", "")
 
-	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	merged, err := repo.AutoMergeCurrentBranch(context.Background())
 	if err != nil {
 		t.Errorf("expected nil error (skip), got %v", err)
 	}
@@ -599,7 +460,6 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 		t.Error("expected merged=false when no PR exists")
 	}
 
-	log := mgr.logger.(*testLog)
 	if !log.contains("No PR found") {
 		t.Error("expected 'No PR found' log message")
 	}
@@ -607,8 +467,8 @@ func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
 
 // mergeOpts always sets DeleteBranch=true since each task gets its own branch.
 func TestMergeOpts_AlwaysDeletesBranch(t *testing.T) {
-	mgr := &Repo{}
-	opts := mgr.mergeOpts()
+	repo := newRepoForTest(Config{}, nil)
+	opts := repo.mergeOpts()
 	if !opts.DeleteBranch {
 		t.Fatal("mergeOpts should always set DeleteBranch")
 	}
@@ -619,27 +479,24 @@ func TestMergeOpts_AlwaysDeletesBranch(t *testing.T) {
 func TestResolveConflict_RebasesAndForcePushes(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
-	st := newMemState()
 
-	mgr := &Repo{
-		projectDir: project,
-		ralphDir:   ralphDir,
-		baseBranch: "main",
-		state:      st,
-		logger:     &testLog{},
-	}
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
+	repo := newRepoForTest(
+		Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}},
+		nil,
+		withRunner(&execRunner{}),
+	)
+	if err := repo.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	mgr.RenameBranchForTask("conflict task", "")
+	repo.RenameBranchForTask("conflict task", "")
 
 	// Create a commit in the worktree so we have something to push
-	writeFile(t, mgr.workDir, "feature.txt", "feature content\n")
-	run(t, "git", "-C", mgr.workDir, "commit", "-m", "add feature")
+	writeFile(t, repo.workDir, "feature.txt", "feature content\n")
+	run(t, "git", "-C", repo.workDir, "commit", "-m", "add feature")
 
 	// Push the branch so force-push has a remote tracking branch
-	run(t, "git", "-C", mgr.workDir, "push", "-u", "origin", mgr.worktreeBranch)
+	run(t, "git", "-C", repo.workDir, "push", "-u", "origin", repo.worktreeBranch)
 
 	// Add a commit to origin/main to make rebase non-trivial
 	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
@@ -651,148 +508,34 @@ func TestResolveConflict_RebasesAndForcePushes(t *testing.T) {
 	run(t, "git", "-C", tmpClone, "commit", "-m", "divergent commit")
 	run(t, "git", "-C", tmpClone, "push", "origin", "main")
 
-	err := mgr.ResolveConflict(context.Background())
+	err := repo.ResolveConflict(context.Background())
 	if err != nil {
 		t.Fatalf("ResolveConflict: %v", err)
 	}
 
 	// Verify we rebased onto the latest main (divergent commit should be ancestor)
 	divergentRev := gitOutput(tmpClone, "rev-parse", "HEAD")
-	if gitCmdErr(mgr.workDir, "merge-base", "--is-ancestor", divergentRev, "HEAD") != nil {
+	if gitCmdErr(repo.workDir, "merge-base", "--is-ancestor", divergentRev, "HEAD") != nil {
 		t.Error("expected worktree HEAD to be based on the divergent commit after rebase")
 	}
 }
 
-// MergeWithRetry recovers from a merge conflict by rebasing and force-pushing,
-// then retrying the merge successfully.
-func TestMergeWithRetry_RecoversFromConflict(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
-
-	mgr := &Repo{
-		projectDir:     project,
-		baseBranch: "main",
-		workDir:        filepath.Join(t.TempDir(), "wt"),
-		ralphDir:       ralphDir,
-		worktreeBranch: "ralph/test/01-merge-retry",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
-
-	mergeCalls := 0
-	gh := NewStubGitHub()
-	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-	gh.MergeResults = []MergeResult{
-		{Conflict: true, Message: "merge conflict"},
-		{Merged: true},
-	}
-	gh.OnMerge = func() { mergeCalls++ }
-	mgr.github = gh
-
-	runner := newStubRunner()
-	// Stub git operations that ResolveConflict + AutoMerge use.
-	// merge-base --is-ancestor succeeds → EnsureUpToDate is a no-op,
-	// ResolveConflict sees the branch as resolved and force-pushes.
-	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	runner.On("fetch", "", nil)
-	runner.On("merge-base --is-ancestor", "", nil)
-	runner.On("rebase", "", nil)
-	runner.On("diff --quiet", "", nil)
-	runner.On("diff --cached --quiet", "", nil)
-	runner.On("push --force-with-lease", "", nil)
-	runner.On("rev-list --count", "1", nil)
-	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
-	runner.On("rev-parse --verify", "", nil)
-	mgr.runner = runner
-
-	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{})
-	if err != nil {
-		t.Fatalf("MergeWithRetry: %v", err)
-	}
-	if !merged {
-		t.Error("expected merge to succeed after conflict resolution")
-	}
-	if mergeCalls < 2 {
-		t.Errorf("expected at least 2 merge attempts, got %d", mergeCalls)
-	}
-}
-
-// MergeWithRetry delegates CI failures to the OnCIFailure callback and
-// retries the merge when the callback reports success.
-func TestMergeWithRetry_DelegatesCIFailure(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
-
-	mgr := &Repo{
-		projectDir:     project,
-		baseBranch: "main",
-		workDir:        filepath.Join(t.TempDir(), "wt"),
-		ralphDir:       ralphDir,
-		worktreeBranch: "ralph/test/01-ci-retry",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
-
-	gh := NewStubGitHub()
-	gh.OpenPR = 55
-	// First AwaitCI returns failure (triggers OnCIFailure). After CI fix,
-	// subsequent checks return success so the merge retry proceeds.
-	gh.ChecksFunc = func(call int) []CICheckResult {
-		if call == 1 {
-			return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
-		}
-		return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-	}
-	gh.MergeResults = []MergeResult{{Merged: true}}
-	mgr.github = gh
-
-	runner := newStubRunner()
-	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	runner.On("fetch", "", nil)
-	runner.On("merge-base --is-ancestor", "", nil) // already up to date
-	runner.On("rev-list --count", "1", nil)
-	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
-	runner.On("rev-parse --verify", "", nil)
-	runner.On("diff --quiet", "", nil)
-	runner.On("diff --cached --quiet", "", nil)
-	mgr.runner = runner
-
-	ciFixCalled := false
-	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
-		OnCIFailure: func(ciErr *CIFailureError) CIFixResult {
-			ciFixCalled = true
-			return CIFixApplied
-		},
-	})
-	if err != nil {
-		t.Fatalf("MergeWithRetry: %v", err)
-	}
-	if !merged {
-		t.Error("expected merge to succeed after CI fix")
-	}
-	if !ciFixCalled {
-		t.Error("expected OnCIFailure callback to be called")
-	}
-}
-
 // MergeWithRetry gives up after MaxMergeAttempts, preventing infinite loops.
+// Static-world variant: PR is persistently Blocked, OnCIFailure callback is
+// invoked on each retry but cannot un-block branch protection.
 func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 	project, _ := initBareRepo(t)
 
-	mgr := &Repo{
-		projectDir:     project,
-		baseBranch: "main",
-		workDir:        filepath.Join(t.TempDir(), "wt"),
-		worktreeBranch: "ralph/test/01-exhaust",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
-
-	gh := NewStubGitHub()
-	gh.OpenPR = 99
-	gh.Checks = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
-	gh.MergeResult = MergeResult{Blocked: true, Message: "CI failed"}
-	mgr.github = gh
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number:  99,
+			Branch:  "ralph/test/01-exhaust",
+			State:   PRStateOpen,
+			Blocked: true, // world: branch protection permanently blocks
+		}},
+		Checks: map[int][]CICheckResult{99: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+	})
 
 	runner := newStubRunner()
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
@@ -803,10 +546,21 @@ func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 	runner.On("rev-parse --verify", "", nil)
 	runner.On("diff --quiet", "", nil)
 	runner.On("diff --cached --quiet", "", nil)
-	mgr.runner = runner
+
+	repo := newRepoForTest(
+		Config{
+			ProjectDir: project,
+			WorkDir:    filepath.Join(t.TempDir(), "wt"),
+			BaseBranch: "main",
+			Logger:     &testLog{},
+		},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-exhaust"),
+	)
 
 	ciFixCalls := 0
-	_, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
+	_, err := repo.MergeWithRetry(context.Background(), MergeRetryOpts{
 		OnCIFailure: func(ciErr *CIFailureError) CIFixResult {
 			ciFixCalls++
 			return CIFixApplied
@@ -817,360 +571,6 @@ func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
 	}
 	if ciFixCalls != MaxMergeAttempts {
 		t.Errorf("expected %d CI fix attempts, got %d", MaxMergeAttempts, ciFixCalls)
-	}
-}
-
-// MergeWithRetry stops immediately when ResolveConflict returns an
-// UnresolvedConflictError instead of retrying force-pushes that won't help.
-func TestMergeWithRetry_StopsOnUnresolvableConflict(t *testing.T) {
-	project, _ := initBareRepo(t)
-
-	mgr := &Repo{
-		projectDir:     project,
-		baseBranch: "main",
-		workDir:        filepath.Join(t.TempDir(), "wt"),
-		worktreeBranch: "ralph/test/01-unresolvable",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
-
-	mergeCalls := 0
-	gh := NewStubGitHub()
-	gh.OpenPR = 50
-	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-	gh.MergeResults = []MergeResult{
-		{Conflict: true, Message: "merge conflict"},
-		{Conflict: true, Message: "merge conflict"},
-		{Conflict: true, Message: "merge conflict"},
-		{Conflict: true, Message: "merge conflict"},
-	}
-	gh.OnMerge = func() { mergeCalls++ }
-	mgr.github = gh
-
-	runner := newStubRunner()
-	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	runner.On("fetch", "", nil)
-	// Sequence for merge-base --is-ancestor:
-	//   1. EnsureUpToDate: nil (up to date)
-	//   2-3. Push (baseSHA="abc123"): nil, nil (no divergence, squash check)
-	//   4. branchNeedsUpdate: nil (no update needed → proceed to executeMerge)
-	//   5. ResolveConflict EnsureUpToDate: nil (up to date)
-	//   6. ResolveConflict ancestry check: error (still diverged → UnresolvedConflictError)
-	runner.OnSequence("merge-base --is-ancestor", []stubResponse{
-		{"", nil},
-		{"", nil},
-		{"", nil},
-		{"", nil},
-		{"", nil},
-		{"", fmt.Errorf("not ancestor")},
-	})
-	runner.On("rev-list --count", "1", nil)
-	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
-	runner.On("rev-parse", "abc123", nil)
-	runner.On("rev-parse --verify", "", nil)
-	runner.On("diff --quiet", "", nil)
-	runner.On("diff --cached --quiet", "", nil)
-	runner.On("log -1 --format=%s", "commit msg", nil)
-	runner.On("reset --soft", "", nil)
-	runner.On("commit", "", nil)
-	runner.On("push", "", nil)
-	mgr.runner = runner
-
-	_, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{})
-	if err == nil {
-		t.Fatal("expected error for unresolvable conflict")
-	}
-
-	var unresolved *UnresolvedConflictError
-	if !errors.As(err, &unresolved) {
-		t.Fatalf("expected UnresolvedConflictError, got %T: %v", err, err)
-	}
-
-	// Only 1 merge attempt — should not retry after unresolvable conflict
-	if mergeCalls != 1 {
-		t.Errorf("expected exactly 1 merge attempt, got %d — retried pointlessly", mergeCalls)
-	}
-}
-
-// AutoMergeCurrentBranch passes --subject with the PR title and number so the
-// squash-merge commit message on main matches the PR title, not the single
-// commit message GitHub would otherwise use.
-func TestAutoMergeCurrentBranch_PassesPRTitleAsSubject(t *testing.T) {
-	project, _ := initBareRepo(t)
-
-	mgr := &Repo{
-		projectDir:     project,
-		baseBranch: "main",
-		workDir:        filepath.Join(t.TempDir(), "wt"),
-		worktreeBranch: "ralph/test/01-subject",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
-
-	gh := NewStubGitHub()
-	gh.OpenPR = 77
-	gh.PRTitle = "[ralph-31w] Fix squash-merge subject"
-	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-	mgr.github = gh
-
-	runner := newStubRunner()
-	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	runner.On("fetch", "", nil)
-	runner.On("merge-base --is-ancestor", "", nil)
-	runner.On("rev-list --count", "1", nil)
-	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
-	runner.On("rev-parse --verify", "", nil)
-	runner.On("diff --quiet", "", nil)
-	runner.On("diff --cached --quiet", "", nil)
-	runner.On("reset --hard", "", nil)
-	mgr.runner = runner
-
-	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
-	if err != nil {
-		t.Fatalf("AutoMergeCurrentBranch: %v", err)
-	}
-	if !merged {
-		t.Fatal("expected merge to succeed")
-	}
-
-	want := "[ralph-31w] Fix squash-merge subject (#77)"
-	if gh.LastMergeOpts.Subject != want {
-		t.Errorf("merge subject = %q, want %q", gh.LastMergeOpts.Subject, want)
-	}
-}
-
-// After a fix agent commits and force-pushes, MergeWithRetry must call
-// AwaitCI to wait for fresh CI results on the new HEAD before retrying the
-// merge. This prevents the retry from seeing the old (stale) failure status.
-func TestMergeWithRetry_PushesFixAgentWorkBeforeRetry(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
-
-	mgr := &Repo{
-		projectDir:     project,
-		baseBranch: "main",
-		workDir:        filepath.Join(t.TempDir(), "wt"),
-		ralphDir:       ralphDir,
-		worktreeBranch: "ralph/test/01-ci-push-retry",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
-
-	// Track the order of operations to verify AwaitCI happens between
-	// OnCIFailure and the merge retry.
-	var events []string
-
-	gh := NewStubGitHub()
-	gh.OpenPR = 60
-	gh.ChecksFunc = func(call int) []CICheckResult {
-		if call == 1 {
-			return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
-		}
-		events = append(events, "await-ci")
-		return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-	}
-	gh.OnMerge = func() {
-		events = append(events, "merge-retry")
-	}
-	mgr.github = gh
-
-	runner := newStubRunner()
-	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	runner.On("fetch", "", nil)
-	runner.On("merge-base --is-ancestor", "", nil)
-	runner.On("rev-list --count", "1", nil)
-	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
-	runner.On("rev-parse --verify", "", nil)
-	runner.On("diff --quiet", "", nil)
-	runner.On("diff --cached --quiet", "", nil)
-	mgr.runner = runner
-
-	ciFixCalled := false
-	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
-		OnCIFailure: func(ciErr *CIFailureError) CIFixResult {
-			ciFixCalled = true
-			events = append(events, "fix-applied")
-			return CIFixApplied
-		},
-	})
-	if err != nil {
-		t.Fatalf("MergeWithRetry: %v", err)
-	}
-	if !merged {
-		t.Error("expected merge to succeed after CI fix")
-	}
-	if !ciFixCalled {
-		t.Error("expected OnCIFailure callback to be called")
-	}
-
-	// Verify AwaitCI was called between the fix and the merge retry.
-	fixIdx, awaitIdx, mergeRetryIdx := -1, -1, -1
-	for i, e := range events {
-		switch e {
-		case "fix-applied":
-			fixIdx = i
-		case "await-ci":
-			if fixIdx >= 0 && awaitIdx < 0 {
-				awaitIdx = i
-			}
-		case "merge-retry":
-			if awaitIdx >= 0 && mergeRetryIdx < 0 {
-				mergeRetryIdx = i
-			}
-		}
-	}
-	if fixIdx < 0 {
-		t.Fatal("fix-applied event not recorded")
-	}
-	if awaitIdx < 0 {
-		t.Fatal("AwaitCI not called after fix — new CI status would be stale")
-	}
-	if mergeRetryIdx < 0 {
-		t.Fatal("merge retry not recorded after AwaitCI")
-	}
-	if !(fixIdx < awaitIdx && awaitIdx < mergeRetryIdx) {
-		t.Errorf("wrong order: fix=%d, await=%d, merge=%d — expected fix < await < merge", fixIdx, awaitIdx, mergeRetryIdx)
-	}
-}
-
-// When automatic rebase fails to resolve conflicts, MergeWithRetry calls
-// the OnConflict callback to spawn a conflict resolution agent. If the
-// agent resolves the conflict, the merge is retried and succeeds.
-func TestMergeWithRetry_SpawnsConflictAgent(t *testing.T) {
-	project, _ := initBareRepo(t)
-
-	mgr := &Repo{
-		projectDir:     project,
-		baseBranch: "main",
-		workDir:        filepath.Join(t.TempDir(), "wt"),
-		worktreeBranch: "ralph/test/01-conflict-agent",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
-
-	mergeCalls := 0
-	gh := NewStubGitHub()
-	gh.OpenPR = 70
-	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-	gh.MergeResults = []MergeResult{{Conflict: true, Message: "merge conflict"}}
-	gh.OnMerge = func() { mergeCalls++ }
-	mgr.github = gh
-
-	runner := newStubRunner()
-	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	runner.On("fetch", "", nil)
-	// Sequence (no plain "rev-parse" stub → Push skips merge-base, baseSHA=""):
-	//   1. Attempt 1 EnsureUpToDate: nil (up to date)
-	//   2. Attempt 1 branchNeedsUpdate: nil (no update) → executeMerge → Conflict
-	//   3. ResolveConflict EnsureUpToDate: nil
-	//   4. ResolveConflict ancestry check: error → UnresolvedConflictError → OnConflict(true) → retry
-	//   5. Attempt 2 EnsureUpToDate: nil
-	//   6. Attempt 2 branchNeedsUpdate: nil → executeMerge → Merged
-	runner.OnSequence("merge-base --is-ancestor", []stubResponse{
-		{"", nil},
-		{"", nil},
-		{"", nil},
-		{"", fmt.Errorf("not ancestor")},
-		{"", nil},
-		{"", nil},
-	})
-	runner.On("rev-list --count", "1", nil)
-	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
-	runner.On("rev-parse --verify", "", nil)
-	runner.On("diff --quiet", "", nil)
-	runner.On("diff --cached --quiet", "", nil)
-	mgr.runner = runner
-
-	conflictAgentCalled := false
-	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
-		OnConflict: func(conflictErr *UnresolvedConflictError) bool {
-			conflictAgentCalled = true
-			if conflictErr.PRNumber != 70 {
-				t.Errorf("expected PRNumber=70, got %d", conflictErr.PRNumber)
-			}
-			return true
-		},
-	})
-	if err != nil {
-		t.Fatalf("MergeWithRetry: %v", err)
-	}
-	if !merged {
-		t.Error("expected merge to succeed after conflict agent resolved")
-	}
-	if !conflictAgentCalled {
-		t.Error("expected OnConflict callback to be called")
-	}
-	if mergeCalls != 2 {
-		t.Errorf("expected 2 merge attempts (conflict + retry), got %d", mergeCalls)
-	}
-}
-
-// When the conflict resolution agent cannot resolve, MergeWithRetry returns
-// UnresolvedConflictError without further retries.
-func TestMergeWithRetry_SkipsAfterConflictAgentFails(t *testing.T) {
-	project, _ := initBareRepo(t)
-
-	mgr := &Repo{
-		projectDir:     project,
-		baseBranch: "main",
-		workDir:        filepath.Join(t.TempDir(), "wt"),
-		worktreeBranch: "ralph/test/01-conflict-agent-fail",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
-
-	mergeCalls := 0
-	gh := NewStubGitHub()
-	gh.OpenPR = 71
-	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-	gh.MergeResults = []MergeResult{
-		{Conflict: true, Message: "merge conflict"},
-		{Conflict: true, Message: "merge conflict"},
-	}
-	gh.OnMerge = func() { mergeCalls++ }
-	mgr.github = gh
-
-	runner := newStubRunner()
-	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	runner.On("fetch", "", nil)
-	// Sequence (no plain "rev-parse" stub → Push skips merge-base, baseSHA=""):
-	//   1. Attempt 1 EnsureUpToDate: nil (up to date)
-	//   2. Attempt 1 branchNeedsUpdate: nil (no update) → executeMerge → Conflict
-	//   3. ResolveConflict EnsureUpToDate: nil
-	//   4. ResolveConflict ancestry check: error → UnresolvedConflictError → OnConflict(false) → return
-	runner.OnSequence("merge-base --is-ancestor", []stubResponse{
-		{"", nil},
-		{"", nil},
-		{"", nil},
-		{"", fmt.Errorf("not ancestor")},
-	})
-	runner.On("rev-list --count", "1", nil)
-	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
-	runner.On("rev-parse --verify", "", nil)
-	runner.On("diff --quiet", "", nil)
-	runner.On("diff --cached --quiet", "", nil)
-	mgr.runner = runner
-
-	conflictAgentCalled := false
-	_, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
-		OnConflict: func(conflictErr *UnresolvedConflictError) bool {
-			conflictAgentCalled = true
-			return false // agent could not resolve
-		},
-	})
-
-	if !conflictAgentCalled {
-		t.Error("expected OnConflict callback to be called")
-	}
-
-	var unresolved *UnresolvedConflictError
-	if !errors.As(err, &unresolved) {
-		t.Fatalf("expected UnresolvedConflictError, got %T: %v", err, err)
-	}
-
-	// Only 1 merge attempt — callback returned false, no retry
-	if mergeCalls != 1 {
-		t.Errorf("expected 1 merge attempt, got %d", mergeCalls)
 	}
 }
 
@@ -1194,16 +594,14 @@ func TestPush_SquashesMultipleCommits(t *testing.T) {
 		t.Fatalf("expected 3 commits before push, got %s", countBefore)
 	}
 
-	mgr := &Repo{
-		projectDir:     project,
-		baseBranch: "main",
-		workDir:        wtDir,
-		worktreeBranch: "ralph/test-squash",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
+	repo := newRepoForTest(
+		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "main", Logger: &testLog{}},
+		nil,
+		withRunner(&execRunner{}),
+		withWorktreeBranch("ralph/test-squash"),
+	)
 
-	if err := mgr.Push(context.Background()); err != nil {
+	if err := repo.Push(context.Background()); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -1234,16 +632,14 @@ func TestPush_SingleCommitNoOp(t *testing.T) {
 	run(t, "git", "-C", wtDir, "add", "-A")
 	run(t, "git", "-C", wtDir, "commit", "-m", "single commit")
 
-	mgr := &Repo{
-		projectDir:     project,
-		baseBranch: "main",
-		workDir:        wtDir,
-		worktreeBranch: "ralph/test-single",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
+	repo := newRepoForTest(
+		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "main", Logger: &testLog{}},
+		nil,
+		withRunner(&execRunner{}),
+		withWorktreeBranch("ralph/test-single"),
+	)
 
-	if err := mgr.Push(context.Background()); err != nil {
+	if err := repo.Push(context.Background()); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -1280,16 +676,14 @@ func TestPush_AfterFixAgent(t *testing.T) {
 		t.Fatalf("expected 3 local commits, got %s", countLocal)
 	}
 
-	mgr := &Repo{
-		projectDir:     project,
-		baseBranch: "main",
-		workDir:        wtDir,
-		worktreeBranch: "ralph/test-fix",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
+	repo := newRepoForTest(
+		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "main", Logger: &testLog{}},
+		nil,
+		withRunner(&execRunner{}),
+		withWorktreeBranch("ralph/test-fix"),
+	)
 
-	if err := mgr.Push(context.Background()); err != nil {
+	if err := repo.Push(context.Background()); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -1319,15 +713,13 @@ func TestPush_StackedBranch_PreservesParent(t *testing.T) {
 	run(t, "git", "-C", fooDir, "add", "-A")
 	run(t, "git", "-C", fooDir, "commit", "-m", "foo work")
 
-	fooMgr := &Repo{
-		projectDir:     project,
-		baseBranch: "main",
-		workDir:        fooDir,
-		worktreeBranch: "ralph/foo",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
-	if err := fooMgr.Push(context.Background()); err != nil {
+	fooRepo := newRepoForTest(
+		Config{ProjectDir: project, WorkDir: fooDir, BaseBranch: "main", Logger: &testLog{}},
+		nil,
+		withRunner(&execRunner{}),
+		withWorktreeBranch("ralph/foo"),
+	)
+	if err := fooRepo.Push(context.Background()); err != nil {
 		t.Fatalf("foo Push failed: %v", err)
 	}
 
@@ -1342,16 +734,14 @@ func TestPush_StackedBranch_PreservesParent(t *testing.T) {
 	run(t, "git", "-C", barDir, "add", "-A")
 	run(t, "git", "-C", barDir, "commit", "-m", "bar work 2")
 
-	barMgr := &Repo{
-		projectDir:     project,
-		baseBranch: "main",
-		workDir:        barDir,
-		worktreeBranch: "ralph/bar",
-		prevBranch:     "ralph/foo",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
-	if err := barMgr.Push(context.Background()); err != nil {
+	barRepo := newRepoForTest(
+		Config{ProjectDir: project, WorkDir: barDir, BaseBranch: "main", Logger: &testLog{}},
+		nil,
+		withRunner(&execRunner{}),
+		withWorktreeBranch("ralph/bar"),
+		withPrevBranch("ralph/foo"),
+	)
+	if err := barRepo.Push(context.Background()); err != nil {
 		t.Fatalf("bar Push failed: %v", err)
 	}
 
@@ -1381,7 +771,6 @@ func TestPush_StackedBranch_PreservesParent(t *testing.T) {
 	}
 }
 
-
 // Push calls verify.CompileCheck before pushing when compileCheckTimeout
 // is set. A broken Go project triggers compile check failure which aborts
 // the push rather than sending broken code to the remote.
@@ -1396,17 +785,20 @@ func TestPush_CompileCheckBlocksPush(t *testing.T) {
 	run(t, "git", "-C", wtDir, "add", "-A")
 	run(t, "git", "-C", wtDir, "commit", "-m", "add broken code")
 
-	mgr := &Repo{
-		projectDir:          project,
-		baseBranch:          "main",
-		workDir:             wtDir,
-		worktreeBranch:      "ralph/test-prepush",
-		state:               newMemState(),
-		logger:              &testLog{},
-		compileCheckTimeout: 30 * time.Second,
-	}
+	repo := newRepoForTest(
+		Config{
+			ProjectDir:          project,
+			WorkDir:             wtDir,
+			BaseBranch:          "main",
+			Logger:              &testLog{},
+			CompileCheckTimeout: 30 * time.Second,
+		},
+		nil,
+		withRunner(&execRunner{}),
+		withWorktreeBranch("ralph/test-prepush"),
+	)
 
-	err := mgr.Push(context.Background())
+	err := repo.Push(context.Background())
 	if err == nil {
 		t.Fatal("expected Push to fail when compile check fails")
 	}
@@ -1431,17 +823,20 @@ func TestPush_CompileCheckPasses(t *testing.T) {
 	run(t, "git", "-C", wtDir, "add", "-A")
 	run(t, "git", "-C", wtDir, "commit", "-m", "add feature")
 
-	mgr := &Repo{
-		projectDir:          project,
-		baseBranch:          "main",
-		workDir:             wtDir,
-		worktreeBranch:      "ralph/test-prepush-pass",
-		state:               newMemState(),
-		logger:              &testLog{},
-		compileCheckTimeout: 5 * time.Second,
-	}
+	repo := newRepoForTest(
+		Config{
+			ProjectDir:          project,
+			WorkDir:             wtDir,
+			BaseBranch:          "main",
+			Logger:              &testLog{},
+			CompileCheckTimeout: 5 * time.Second,
+		},
+		nil,
+		withRunner(&execRunner{}),
+		withWorktreeBranch("ralph/test-prepush-pass"),
+	)
 
-	if err := mgr.Push(context.Background()); err != nil {
+	if err := repo.Push(context.Background()); err != nil {
 		t.Fatalf("Push should succeed when compile check passes: %v", err)
 	}
 }
@@ -1452,23 +847,25 @@ func TestAutoMergeCurrentBranch_ReturnsMergedForAlreadyMergedPR(t *testing.T) {
 	runner := newStubRunner()
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 
-	gh := NewStubGitHub()
-	gh.OpenPR = 0        // no open PR
-	gh.PRNumber = 438    // FindPR returns this
-	gh.PRState = "MERGED" // GetPRState returns this
+	// World has a merged PR for the branch. FindOpenPR returns 0 (state != open),
+	// FindPR returns the PR so AutoMergeCurrentBranch follows the already-merged path.
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 438,
+			Branch: "ralph/test/01-merged",
+			State:  PRStateMerged,
+		}},
+	})
 
-	mgr := &Repo{
-		projectDir:     "/project",
-		workDir:        "/project/wt",
-		worktreeBranch: "ralph/test/01-merged",
-		baseBranch:     "main",
-		runner:         runner,
-		github:         gh,
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
+	repo := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: &testLog{}},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-merged"),
+	)
 
-	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	merged, err := repo.AutoMergeCurrentBranch(context.Background())
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -1480,9 +877,11 @@ func TestAutoMergeCurrentBranch_ReturnsMergedForAlreadyMergedPR(t *testing.T) {
 	if runner.CalledWith("push") {
 		t.Error("should not push to an already-merged PR")
 	}
-	// Merge should NOT have been called.
-	if gh.MergeCalls > 0 {
-		t.Error("should not attempt merge on an already-merged PR")
+
+	// PR must remain in Merged state (SUT did not attempt another merge).
+	pr, _ := gh.GetPR("", 438)
+	if pr == nil || pr.State != PRStateMerged {
+		t.Errorf("expected PR 438 to remain merged, got state=%v", pr)
 	}
 }
 
@@ -1500,78 +899,39 @@ func TestAutoMergeCurrentBranch_ReopensClosedPR(t *testing.T) {
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("reset --hard", "", nil)
 
-	gh := NewStubGitHub()
-	gh.OpenPR = 0          // no open PR initially
-	gh.PRNumber = 438       // FindPR returns this
-	gh.PRState = "CLOSED"   // GetPRState returns this
-	gh.PRTitle = "[ralph-rvta] Fix closed PR"
-	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
+	// World starts with a closed PR on the branch. The SUT should reopen it and
+	// then successfully merge it. Observable: final state is Merged.
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 438,
+			Branch: "ralph/test/01-reopen",
+			Title:  "[ralph-rvta] Fix closed PR",
+			State:  PRStateClosed,
+		}},
+		Checks: map[int][]CICheckResult{438: {{Name: "ci", State: "SUCCESS", Bucket: "pass"}}},
+	})
 
-	mgr := &Repo{
-		projectDir:     "/project",
-		workDir:        "/project/wt",
-		worktreeBranch: "ralph/test/01-reopen",
-		baseBranch:     "main",
-		runner:         runner,
-		github:         gh,
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
+	repo := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: &testLog{}},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-reopen"),
+	)
 
-	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	merged, err := repo.AutoMergeCurrentBranch(context.Background())
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 	if !merged {
 		t.Fatal("expected merged=true after reopening closed PR")
 	}
-	if !gh.ReopenPRCalled {
-		t.Error("expected ReopenPR to be called for the closed PR")
-	}
-	if gh.MergeCalls == 0 {
-		t.Error("expected merge to be attempted after reopening")
-	}
-}
 
-// CreatePR falls back to the REST API when both gh pr create and reopen fail.
-// This covers the diverged-branch scenario: the old closed PR can't be reopened
-// because the branch history diverged, so a fresh PR is created via the API.
-func TestCreatePR_APIFallbackWhenReopenFails(t *testing.T) {
-	runner := newStubRunner()
-	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
-
-	gh := NewStubGitHub()
-	gh.OpenPR = 0
-	gh.CreatePRErr = fmt.Errorf("a pull request already exists for branch")
-	gh.PRNumber = 438
-	gh.PRState = "CLOSED"
-	gh.ReopenPRErr = fmt.Errorf("Could not open the pull request")
-	gh.CreatePRViaAPIResult = 500
-
-	mgr := &Repo{
-		projectDir:     "/project",
-		workDir:        "/project/wt",
-		worktreeBranch: "ralph/test/diverged-branch",
-		baseBranch:     "main",
-		runner:         runner,
-		github:         gh,
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
-
-	prNumber, err := mgr.CreatePR(context.Background(), "ralph-test", "Fix diverged", "body")
-	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
-	}
-	if prNumber != 500 {
-		t.Errorf("expected new PR 500 from API fallback, got %d", prNumber)
-	}
-	if !gh.ReopenPRCalled {
-		t.Error("expected ReopenPR to be called before API fallback")
-	}
-	if !gh.CreatePRViaAPICalled {
-		t.Error("expected CreatePRViaAPI to be called as fallback")
+	// After the SUT drives the pipeline, PR #438 must end up merged — proves
+	// both reopen (closed → open) and subsequent merge (open → merged) happened.
+	pr, _ := gh.GetPR("", 438)
+	if pr == nil || pr.State != PRStateMerged {
+		t.Errorf("expected PR 438 to end up merged after reopen + auto-merge, got state=%v", pr)
 	}
 }
 
@@ -1582,32 +942,37 @@ func TestCreatePR_ReopensClosedPROnCreateFailure(t *testing.T) {
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 
-	gh := NewStubGitHub()
-	gh.OpenPR = 0                                                      // no open PR
-	gh.CreatePRErr = fmt.Errorf("a pull request already exists for branch") // create fails
-	gh.PRNumber = 438                                                   // FindPR returns this
-	gh.PRState = "CLOSED"                                               // GetPRState returns this
+	// World: a closed PR #438 exists for the branch. `gh pr create` fails
+	// with the "already exists" error, triggering the reopen path.
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 438,
+			Branch: "ralph/test/01-reopen-create",
+			State:  PRStateClosed,
+		}},
+		CreatePRErr: fmt.Errorf("a pull request already exists for branch"),
+	})
 
-	mgr := &Repo{
-		projectDir:     "/project",
-		workDir:        "/project/wt",
-		worktreeBranch: "ralph/test/01-reopen-create",
-		baseBranch:     "main",
-		runner:         runner,
-		github:         gh,
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
+	repo := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: &testLog{}},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-reopen-create"),
+	)
 
-	prNumber, err := mgr.CreatePR(context.Background(), "ralph-test", "Fix bug", "body")
+	prNumber, err := repo.CreatePR(context.Background(), "ralph-test", "Fix bug", "body")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 	if prNumber != 438 {
 		t.Errorf("expected reopened PR number 438, got %d", prNumber)
 	}
-	if !gh.ReopenPRCalled {
-		t.Error("expected ReopenPR to be called")
+
+	// Reopen observable via state: PR #438 must be Open after the SUT's call.
+	pr, _ := gh.GetPR("", 438)
+	if pr == nil || pr.State != PRStateOpen {
+		t.Errorf("expected PR 438 to be reopened (state=Open), got state=%v", pr)
 	}
 }
 
@@ -1619,35 +984,38 @@ func TestCreatePR_ReturnsMergedPRNumberOnAlreadyExists(t *testing.T) {
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
 
-	gh := NewStubGitHub()
-	gh.OpenPR = 0                                                               // no open PR found
-	gh.CreatePRErr = fmt.Errorf("A pull request already exists for brokenalarms:ralph/already-merged-branch") // create fails with 422
-	gh.PRNumber = 438                                                            // FindPR returns this
-	gh.PRState = "MERGED"                                                        // GetPR returns this
+	// World: a merged PR #438 exists for the branch. `gh pr create` fails
+	// with a 422 "already exists" error; code should detect the merged state
+	// and return the merged PR number rather than attempting reopen/API create.
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 438,
+			Branch: "ralph/already-merged-branch",
+			State:  PRStateMerged,
+		}},
+		CreatePRErr: fmt.Errorf("A pull request already exists for brokenalarms:ralph/already-merged-branch"),
+	})
 
-	mgr := &Repo{
-		projectDir:     "/project",
-		workDir:        "/project/wt",
-		worktreeBranch: "ralph/already-merged-branch",
-		baseBranch:     "main",
-		runner:         runner,
-		github:         gh,
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
+	repo := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: &testLog{}},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/already-merged-branch"),
+	)
 
-	prNumber, err := mgr.CreatePR(context.Background(), "ralph-test", "Fix merged", "body")
+	prNumber, err := repo.CreatePR(context.Background(), "ralph-test", "Fix merged", "body")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 	if prNumber != 438 {
 		t.Errorf("expected merged PR number 438, got %d", prNumber)
 	}
-	if gh.ReopenPRCalled {
-		t.Error("must not attempt to reopen a merged PR")
-	}
-	if gh.CreatePRViaAPICalled {
-		t.Error("must not attempt API PR creation when a merged PR already exists")
+
+	// PR must remain Merged (no reopen attempted).
+	pr, _ := gh.GetPR("", 438)
+	if pr == nil || pr.State != PRStateMerged {
+		t.Errorf("expected PR 438 to remain merged, got state=%v", pr)
 	}
 }
 
@@ -1658,20 +1026,16 @@ func TestCreatePR_ReturnsMergedPRNumberOnAlreadyExists(t *testing.T) {
 func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
 	project, _ := initBareRepo(t)
 
-	mgr := &Repo{
-		projectDir:     project,
-		baseBranch:     "main",
-		workDir:        filepath.Join(t.TempDir(), "wt"),
-		worktreeBranch: "ralph/test/01-infra",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
-
-	gh := NewStubGitHub()
-	gh.OpenPR = 77
-	gh.Checks = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
-	gh.MergeResult = MergeResult{Blocked: true, Message: "CI failed"}
-	mgr.github = gh
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number:  77,
+			Branch:  "ralph/test/01-infra",
+			State:   PRStateOpen,
+			Blocked: true, // world: blocked until CI clears
+		}},
+		Checks: map[int][]CICheckResult{77: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+	})
 
 	runner := newStubRunner()
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
@@ -1682,11 +1046,22 @@ func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
 	runner.On("rev-parse --verify", "", nil)
 	runner.On("diff --quiet", "", nil)
 	runner.On("diff --cached --quiet", "", nil)
-	mgr.runner = runner
+
+	repo := newRepoForTest(
+		Config{
+			ProjectDir: project,
+			WorkDir:    filepath.Join(t.TempDir(), "wt"),
+			BaseBranch: "main",
+			Logger:     &testLog{},
+		},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-infra"),
+	)
 
 	noCommitCalls := 0
 	var sleepDelays []time.Duration
-	_, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
+	_, err := repo.MergeWithRetry(context.Background(), MergeRetryOpts{
 		OnCIFailure: func(ciErr *CIFailureError) CIFixResult {
 			noCommitCalls++
 			return CIFixNoCommits
@@ -1717,146 +1092,22 @@ func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
 	}
 }
 
-// When the fix agent returns CIFixNoCommits but CI eventually passes on retry,
-// the merge succeeds. Infrastructure issues are transient — backoff gives CI
-// time to recover.
-func TestMergeWithRetry_InfraFailureRecovery(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
-
-	mgr := &Repo{
-		projectDir:     project,
-		baseBranch:     "main",
-		workDir:        filepath.Join(t.TempDir(), "wt"),
-		ralphDir:       ralphDir,
-		worktreeBranch: "ralph/test/01-infra-recover",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
-
-	callCount := 0
-	gh := NewStubGitHub()
-	gh.OpenPR = 88
-	gh.ChecksFunc = func(call int) []CICheckResult {
-		if call == 1 {
-			return []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
-		}
-		return []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-	}
-	gh.MergeResults = []MergeResult{{Merged: true}}
-	mgr.github = gh
-
-	runner := newStubRunner()
-	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	runner.On("fetch", "", nil)
-	runner.On("merge-base --is-ancestor", "", nil)
-	runner.On("rev-list --count", "1", nil)
-	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
-	runner.On("rev-parse --verify", "", nil)
-	runner.On("diff --quiet", "", nil)
-	runner.On("diff --cached --quiet", "", nil)
-	mgr.runner = runner
-
-	merged, err := mgr.MergeWithRetry(context.Background(), MergeRetryOpts{
-		OnCIFailure: func(ciErr *CIFailureError) CIFixResult {
-			callCount++
-			return CIFixNoCommits
-		},
-		SleepFunc: func(d time.Duration) {},
-	})
-
-	if err != nil {
-		t.Fatalf("expected merge to succeed after infra recovery, got: %v", err)
-	}
-	if !merged {
-		t.Error("expected merge to succeed")
-	}
-	if callCount != 1 {
-		t.Errorf("expected 1 infra retry before recovery, got %d", callCount)
-	}
-}
-
-// MergePR returns Blocked when branch protection blocks the merge.
-// No admin retry is ever attempted — branch protection is the hard gate.
-func TestMergeOpts_BlockedReturnsBlocked(t *testing.T) {
-	gh := NewStubGitHub()
-	gh.MergeResult = MergeResult{Blocked: true, Message: "branch protection rules"}
-	result := gh.MergePR(42, "https://github.com/test/repo.git", MergeOpts{DeleteBranch: true})
-	if result.Merged {
-		t.Error("expected merge to fail when branch protection blocks")
-	}
-	if !result.Blocked {
-		t.Error("expected Blocked=true when branch protection blocks merge")
-	}
-	if gh.MergeCalls != 1 {
-		t.Errorf("expected exactly 1 merge attempt (no admin retry), got %d", gh.MergeCalls)
-	}
-}
-
-// When CI fails (including infrastructure failures), AutoMergeCurrentBranch
-// returns a CIFailureError. Branch protection is never bypassed — the PR is
-// left open for CI/branch protection to gate naturally.
-func TestAutoMergeCurrentBranch_InfraFailureReturnsCIFailureError(t *testing.T) {
-	project, _ := initBareRepo(t)
-	stubCISleep(t)
-
-	mgr := &Repo{
-		projectDir:     project,
-		baseBranch:     "main",
-		workDir:        filepath.Join(t.TempDir(), "wt"),
-		worktreeBranch: "ralph/test/01-infra-no-bypass",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
-
-	gh := NewStubGitHub()
-	gh.OpenPR = 55
-	gh.Checks = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
-	gh.JobStepCount = 0 // zero steps = infrastructure failure
-	mgr.github = gh
-
-	runner := newStubRunner()
-	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	runner.On("fetch", "", nil)
-	runner.On("merge-base --is-ancestor", "", nil)
-	runner.On("rev-list --count", "1", nil)
-	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
-	runner.On("rev-parse --verify", "", nil)
-	runner.On("diff --quiet", "", nil)
-	runner.On("diff --cached --quiet", "", nil)
-	runner.On("reset --hard", "", nil)
-	mgr.runner = runner
-
-	_, err := mgr.AutoMergeCurrentBranch(context.Background())
-	if err == nil {
-		t.Fatal("expected CIFailureError for infra CI failure, got nil")
-	}
-	var ciErr *CIFailureError
-	if !errors.As(err, &ciErr) {
-		t.Fatalf("expected CIFailureError, got %T: %v", err, err)
-	}
-}
-
 // When branch protection persistently blocks the merge (405), AutoMergeCurrentBranch
 // returns an error without merged=true. No admin bypass is ever used.
 func TestAutoMergeCurrentBranch_BlockedMergeReturnsError(t *testing.T) {
 	project, _ := initBareRepo(t)
 	stubCISleep(t)
 
-	mgr := &Repo{
-		projectDir:     project,
-		baseBranch:     "main",
-		workDir:        filepath.Join(t.TempDir(), "wt"),
-		worktreeBranch: "ralph/test/01-blocked-no-bypass",
-		state:          newMemState(),
-		logger:         &testLog{},
-	}
-
-	gh := NewStubGitHub()
-	gh.OpenPR = 55
-	gh.Checks = []CICheckResult{{Name: "ci", State: "SUCCESS", Bucket: "pass"}}
-	gh.MergeResult = MergeResult{Blocked: true, Message: "branch protection"}
-	mgr.github = gh
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number:  55,
+			Branch:  "ralph/test/01-blocked-no-bypass",
+			State:   PRStateOpen,
+			Blocked: true, // world: branch protection blocks merge
+		}},
+		Checks: map[int][]CICheckResult{55: {{Name: "ci", State: "SUCCESS", Bucket: "pass"}}},
+	})
 
 	runner := newStubRunner()
 	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
@@ -1868,14 +1119,31 @@ func TestAutoMergeCurrentBranch_BlockedMergeReturnsError(t *testing.T) {
 	runner.On("diff --quiet", "", nil)
 	runner.On("diff --cached --quiet", "", nil)
 	runner.On("reset --hard", "", nil)
-	mgr.runner = runner
 
-	merged, err := mgr.AutoMergeCurrentBranch(context.Background())
+	repo := newRepoForTest(
+		Config{
+			ProjectDir: project,
+			WorkDir:    filepath.Join(t.TempDir(), "wt"),
+			BaseBranch: "main",
+			Logger:     &testLog{},
+		},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-blocked-no-bypass"),
+	)
+
+	merged, err := repo.AutoMergeCurrentBranch(context.Background())
 	if merged {
 		t.Error("expected merged=false when branch protection blocks merge")
 	}
 	if err == nil {
 		t.Fatal("expected error when merge is blocked by branch protection")
+	}
+
+	// PR must remain Open (never merged).
+	pr, _ := gh.GetPR("", 55)
+	if pr == nil || pr.State != PRStateOpen {
+		t.Errorf("expected PR 55 to remain open after blocked merge, got state=%v", pr)
 	}
 }
 
@@ -1884,10 +1152,15 @@ func TestAutoMergeCurrentBranch_BlockedMergeReturnsError(t *testing.T) {
 func TestFlushUnpushedWork_SkipsOnPlaceholderBranch(t *testing.T) {
 	dir := t.TempDir()
 	runner := newStubRunner()
-	mgr := stubManager(dir, runner, nil)
-	mgr.worktreeBranch = WipBranchName()
 
-	merged, err := mgr.FlushUnpushedWork(context.Background(), "ralph-test", "test task", false)
+	repo := newRepoForTest(
+		Config{ProjectDir: dir, WorkDir: dir, BaseBranch: "main", Logger: discardLog{}},
+		nil,
+		withRunner(runner),
+		withWorktreeBranch(WipBranchName()),
+	)
+
+	merged, err := repo.FlushUnpushedWork(context.Background(), "ralph-test", "test task", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1909,10 +1182,15 @@ func TestFlushUnpushedWork_SkipsWhenNoUnpushedCommits(t *testing.T) {
 	runner.On("rev-parse", "", nil)
 	// rev-list origin/branch..HEAD --count returns 0 → HEAD is not ahead
 	runner.On("rev-list", "0", nil)
-	mgr := stubManager(dir, runner, nil)
-	mgr.worktreeBranch = "ralph/some-task"
 
-	merged, err := mgr.FlushUnpushedWork(context.Background(), "ralph-ne9f", "skip flush test", false)
+	repo := newRepoForTest(
+		Config{ProjectDir: dir, WorkDir: dir, BaseBranch: "main", Logger: discardLog{}},
+		nil,
+		withRunner(runner),
+		withWorktreeBranch("ralph/some-task"),
+	)
+
+	merged, err := repo.FlushUnpushedWork(context.Background(), "ralph-ne9f", "skip flush test", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1934,10 +1212,15 @@ func TestFlushUnpushedWork_SkipsWhenNoBranchAndNotAheadOfMain(t *testing.T) {
 	runner.On("rev-parse", "", fmt.Errorf("unknown ref"))
 	// rev-list origin/main..HEAD --count returns "0" → HEAD is at origin/main
 	runner.On("rev-list", "0", nil)
-	mgr := stubManager(dir, runner, nil)
-	mgr.worktreeBranch = "ralph/already-merged"
 
-	merged, err := mgr.FlushUnpushedWork(context.Background(), "ralph-k7hl", "already merged task", false)
+	repo := newRepoForTest(
+		Config{ProjectDir: dir, WorkDir: dir, BaseBranch: "main", Logger: discardLog{}},
+		nil,
+		withRunner(runner),
+		withWorktreeBranch("ralph/already-merged"),
+	)
+
+	merged, err := repo.FlushUnpushedWork(context.Background(), "ralph-k7hl", "already merged task", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
