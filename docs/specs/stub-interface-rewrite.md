@@ -46,10 +46,28 @@ For tests *inside* `internal/git` that need to exercise real git behavior agains
 
 ```go
 // internal/git/test_helpers_test.go (or similar _test.go file)
-func newRepoForTest(cfg Config, gh gitHub, runner Runner, state stateStore) *repo
+func newRepoForTest(cfg Config, gh gitHub, opts ...repoTestOpt) *repo
 ```
 
-Lives in a `_test.go` file, so it is unreachable from production code and from any other package's tests. It's the only path for constructing a `*repo` by injecting internal dependencies. No `&repo{}` struct literals anywhere.
+Lives in a `_test.go` file, so it is unreachable from production code and from any other package's tests. It's the only path for constructing a `*repo` by injecting internal dependencies.
+
+Rarely-needed dependencies and runtime-state fields are supplied through variadic functional options, never through direct field mutation after construction. The helper defaults `runner` to `newStubRunner()` (returns `"", nil` for any command) and `state` to `newMemState()`, so every code path the SUT might touch produces sensible no-op behavior. Tests opt in by passing the relevant option:
+
+```go
+// Common case: most tests just need Config and a stub gitHub.
+r := newRepoForTest(Config{Logger: &testLog{}}, gh)
+
+// Test that needs to inspect git subprocess calls:
+r := newRepoForTest(Config{Logger: log}, gh, withRunner(runner))
+
+// Test that needs real git (e.g. via initBareRepo):
+r := newRepoForTest(Config{ProjectDir: project, ...}, gh, withRunner(&execRunner{}))
+
+// Test that needs a pre-seeded worktreeBranch (simulates prior RenameBranchTo):
+r := newRepoForTest(Config{Logger: log}, gh, withWorktreeBranch("ralph/feature"))
+```
+
+Rationale: passing `nil` for unused dependencies is fragile — a code change that touches that path panics rather than failing cleanly. Defaulting inside the helper means every dependency is always wired to something sensible; tests declare only what they specifically care about. No `&repo{}` struct literals anywhere, no post-construction field mutation in tests.
 
 ---
 
@@ -89,14 +107,21 @@ type StubGitHubConfig struct {
 // StubPR describes a PR that exists in the fake's world. Defaults applied at
 // construction: URL → https://github.com/owner/repo/pull/<N>, HeadSHA →
 // stub-sha-<N>, Base → "main", State → PRStateOpen.
+//
+// Conflicted and Blocked describe world-state causes, not prescribed
+// outcomes — the fake's MergePR derives its return value from these
+// properties the same way real GitHub derives its response from the actual
+// world.
 type StubPR struct {
-    Number  int
-    Title   string
-    URL     string
-    Branch  string
-    Base    string
-    HeadSHA string
-    State   PRState
+    Number     int
+    Title      string
+    URL        string
+    Branch     string
+    Base       string
+    HeadSHA    string
+    State      PRState
+    Conflicted bool  // world: this PR has conflicts with its base
+    Blocked    bool  // world: branch protection blocks this PR's merge
 }
 
 type stubGitHub struct {
@@ -179,7 +204,7 @@ These patterns were present in the codebase before this rewrite and must not app
 
 6. **No exported concrete git implementation type.** After the rewrite, `Repo` is renamed to unexported `repo`. `StubRepo` is renamed to unexported `stubRepo`. The only exported type from the git module is the `Ops` interface and the `StubRepoConfig` / `StubGitHubConfig` / `StubPR` data structs.
 
-7. **No `&repo{` or `&stubRepo{` struct literals in any file.** All construction goes through the factory functions. For internal/git tests that need to inject a stub `gitHub` into a real `repo`, the package-private `newRepoForTest` helper in a `_test.go` file is the only seam.
+7. **No `&repo{` or `&stubRepo{` struct literals in any file.** All construction goes through the factory functions. For internal/git tests that need to inject a stub `gitHub` into a real `repo`, the package-private `newRepoForTest` helper in a `_test.go` file is the only seam. Post-construction field mutation (`r.worktreeBranch = ...`, `r.github = ...`) is equivalent to a struct literal and equally forbidden — the `repoTestOpt` functions (`withRunner`, `withWorktreeBranch`, etc.) are the only way to set runtime state that production code would normally set through method calls.
 
 8. **No `git.Ops` parameter in any data-only config struct.** Config remains pure data. `Config.Logger` is already typed as `Log` (an interface), which is the one allowed exception because logger is ubiquitous infrastructure. No new interface fields on Config.
 

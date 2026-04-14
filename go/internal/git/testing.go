@@ -668,14 +668,22 @@ func (s *StubRepo) ListAllPRs(workDir string) ([]PRInfo, error) {
 // Unset fields are filled in with deterministic defaults at construction:
 // URL → https://github.com/owner/repo/pull/<Number>, HeadSHA → stub-sha-<Number>,
 // Base → "main", State → PRStateOpen.
+//
+// Conflicted and Blocked describe world-state causes, not prescribed
+// outcomes — the fake's MergePR derives its return value from these
+// properties the same way real GitHub derives its response from the actual
+// world. A PR with Conflicted=true cannot be merged until the conflict is
+// resolved; a PR with Blocked=true is gated by branch protection.
 type StubPR struct {
-	Number  int
-	Title   string
-	URL     string
-	Branch  string
-	Base    string
-	HeadSHA string
-	State   PRState
+	Number     int
+	Title      string
+	URL        string
+	Branch     string
+	Base       string
+	HeadSHA    string
+	State      PRState
+	Conflicted bool
+	Blocked    bool
 }
 
 // StubGitHubConfig declares the starting state of the fake's world and any
@@ -816,6 +824,12 @@ func (s *stubGitHub) MergePR(prNumber int, _ string, _ MergeOpts) MergeResult {
 	}
 	if pr.State != PRStateOpen {
 		return MergeResult{Merged: false, Message: fmt.Sprintf("PR %d not open (state=%s)", prNumber, pr.State)}
+	}
+	if pr.Conflicted {
+		return MergeResult{Conflict: true, Message: fmt.Sprintf("PR %d has merge conflicts", prNumber)}
+	}
+	if pr.Blocked {
+		return MergeResult{Blocked: true, Message: fmt.Sprintf("PR %d blocked by branch protection", prNumber)}
 	}
 	pr.State = PRStateMerged
 	return MergeResult{Merged: true}

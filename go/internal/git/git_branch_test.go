@@ -13,11 +13,8 @@ import (
 // PrevBranch stays empty.
 func TestSetStackHead_SkipsWhenNoBranchesAvailable(t *testing.T) {
 	log := &testLog{}
-	gh := &StubGitHub{IsAvailable: true, OpenPRBranches: nil}
-	r := &Repo{
-		logger: log,
-		github: gh,
-	}
+	gh := NewStubGitHubCfg(StubGitHubConfig{Available: true})
+	r := newRepoForTest(Config{Logger: log}, gh)
 
 	setStackHead(r, []string{"ralph/some-task"})
 
@@ -35,7 +32,7 @@ func TestSetStackHead_SkipsWhenNoBranchesAvailable(t *testing.T) {
 // empty — the early-return path is silent.
 func TestSetStackHead_SilentWhenNoCompletedBranches(t *testing.T) {
 	log := &testLog{}
-	r := &Repo{logger: log}
+	r := newRepoForTest(Config{Logger: log}, nil)
 
 	setStackHead(r, nil)
 
@@ -52,13 +49,12 @@ func TestCheckoutExistingBranch_NoStoredBranch_RenamesBranch(t *testing.T) {
 	runner := newStubRunner()
 	runner.On("branch", "", nil)
 
-	r := &Repo{
-		projectDir:     "/project",
-		workDir:        "/project/worktrees/wt1",
-		worktreeBranch: "ralph/wip-branch",
-		runner:         runner,
-		logger:         logging.New(nil),
-	}
+	r := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/worktrees/wt1", Logger: logging.New(nil)},
+		nil,
+		withRunner(runner),
+		withWorktreeBranch("ralph/wip-branch"),
+	)
 
 	checkedOut, err := checkoutExistingBranch(r, BranchTaskMeta{}, "ralph-xyz", "Fix login")
 	if err != nil {
@@ -79,13 +75,12 @@ func TestCheckoutExistingBranch_RenameFailure_ReturnsError(t *testing.T) {
 	runner := newStubRunner()
 	runner.On("branch", "", renameErr)
 
-	r := &Repo{
-		projectDir:     "/project",
-		workDir:        "/project/worktrees/wt1",
-		worktreeBranch: "ralph/next",
-		runner:         runner,
-		logger:         logging.New(nil),
-	}
+	r := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/worktrees/wt1", Logger: logging.New(nil)},
+		nil,
+		withRunner(runner),
+		withWorktreeBranch("ralph/next"),
+	)
 
 	_, err := checkoutExistingBranch(r, BranchTaskMeta{}, "ralph-xyz", "Fix login")
 	if err == nil {
@@ -105,14 +100,12 @@ func TestBranchForTask_UsesStoredBranchWhenRemoteEmpty(t *testing.T) {
 	// rev-list returns "" (no commits ahead) — RemoteBranchHasCommits returns false
 	runner.On("rev-list", "", nil)
 
-	r := &Repo{
-		projectDir:     "/project",
-		workDir:        "/project/worktrees/wt1",
-		worktreeBranch: "ralph/wip-branch",
-		runner:         runner,
-		logger:         logging.New(nil),
-		github:         &StubGitHub{},
-	}
+	r := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/worktrees/wt1", Logger: logging.New(nil)},
+		NewStubGitHubCfg(StubGitHubConfig{}),
+		withRunner(runner),
+		withWorktreeBranch("ralph/wip-branch"),
+	)
 
 	branch, err := r.BranchForTask(context.Background(), "ralph-abc", "My task", BranchTaskMeta{
 		Branch: "ralph/ralph-abc-my-task",
