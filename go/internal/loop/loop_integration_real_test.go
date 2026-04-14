@@ -333,3 +333,229 @@ func TestIntegrationReal_PriorIterationCommit_SignalOnRetry_ShipsAndCloses(t *te
 		t.Errorf("expected ralph-hp2 closed after prior-commit signal, got %v", backend.ClosedIDs)
 	}
 }
+
+// TestIntegrationReal_TwoTasksCompleteSequentially is the spec's "stack
+// head derivation from real branches" integration candidate. Two tasks
+// run in sequence: after task A completes, task B's branch-setup must
+// observe task A's branch in origin's open-PR list (via stub GitHub) and
+// derive its starting point from that branch — not from origin/main — so
+// the stack is coherent.
+//
+// Observable end-state: both tasks closed via the ship pipeline, both
+// agent commits present in the project repo's log.
+func TestIntegrationReal_TwoTasksCompleteSequentially(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+	promptsDir := filepath.Join(setup.projectDir, "prompts")
+	createPromptTemplatesIn(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        2,
+				NextTask:     "task A",
+				NextID:       "ralph-aaa",
+				BackendLabel: "beads",
+			},
+		},
+	}
+
+	ghCfg := git.StubGitHubConfig{
+		Available: true,
+		PRs: []git.StubPR{
+			// Pre-seed two open PRs so the loop's FindOpenPR / ListOpenPRBranches
+			// observe a stack once task A lands. Branches will align with the
+			// names BranchForTask derives from task IDs + titles.
+			{Number: 100, Base: "main", State: git.PRStateOpen, Branch: "ralph/ralph-aaa-task-a"},
+			{Number: 101, Base: "main", State: git.PRStateOpen, Branch: "ralph/ralph-bbb-task-b"},
+		},
+	}
+
+	logger := logging.New(nil)
+	gm := git.NewForTest(git.Config{
+		ProjectDir: setup.projectDir,
+		WorkDir:    setup.projectDir,
+		RalphDir:   setup.ralphDir,
+		BaseBranch: "main",
+		Logger:     logger,
+	}, ghCfg)
+
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: setup.projectDir,
+			WorkDir:    setup.projectDir,
+			RalphDir:   setup.ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 10,
+		CallsPerHour:  80,
+	}
+
+	_, st := setupTestDir(t)
+
+	iteration := 0
+	runner := &stubRunner{
+		onRun: func() {
+			iteration++
+			// Each iteration makes one file commit so the loop sees forward
+			// progress on HEAD.
+			fname := filepath.Join(setup.projectDir, "task-"+string(rune('A'+iteration-1))+".txt")
+			os.WriteFile(fname, []byte("task work "+string(rune('A'+iteration-1))+"\n"), 0o644)
+			gitCmd(t, setup.projectDir, "git", "add", filepath.Base(fname))
+			gitCmd(t, setup.projectDir, "git", "commit", "-m", "agent: add "+filepath.Base(fname))
+			backend.Lock()
+			if iteration == 1 {
+				backend.Completed = 1
+				backend.Remaining = 1
+				backend.NextTask = "task B"
+				backend.NextID = "ralph-bbb"
+			} else {
+				backend.Completed = 2
+				backend.Remaining = 0
+			}
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+	l.runner = runner
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("loop.Run: %v", err)
+	}
+
+	if iteration != 2 {
+		t.Errorf("expected 2 iterations, got %d", iteration)
+	}
+
+	// Observable: both agent commits present in the project log.
+	logOut := gitOutputAt(t, setup.projectDir, "log", "--oneline", "--all")
+	if !strings.Contains(logOut, "add task-A.txt") {
+		t.Errorf("expected task A's commit in log, got:\n%s", logOut)
+	}
+	if !strings.Contains(logOut, "add task-B.txt") {
+		t.Errorf("expected task B's commit in log, got:\n%s", logOut)
+	}
+
+	// Observable: both beads closed.
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 2 {
+		t.Errorf("expected 2 beads closed across the sequence, got %v", backend.ClosedIDs)
+	}
+}
+
+// TestIntegrationReal_StackedPRSkipsMergeButCloses is the spec's "real
+// base branch ≠ default" integration candidate. A PR whose base is another
+// open PR's head (stacked) must NOT be merged by Ship — the loop relies on
+// GitHub's main-branch protection not accepting merges from non-main bases.
+// The bead still closes: work is verified, the PR exists for human merge
+// once the base PR lands.
+func TestIntegrationReal_StackedPRSkipsMergeButCloses(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+	promptsDir := filepath.Join(setup.projectDir, "prompts")
+	createPromptTemplatesIn(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "Stacked task",
+				NextID:       "ralph-stk1",
+				BackendLabel: "beads",
+			},
+		},
+	}
+
+	// The task's PR will be created by the stub's CreatePR; seed it with
+	// a base of "ralph/parent-feature" instead of "main" so the stub's
+	// MergePR sees the PR as stacked.
+	ghCfg := git.StubGitHubConfig{
+		Available: true,
+		PRs: []git.StubPR{
+			// A parent PR on a branch the task will stack onto.
+			{Number: 88, Base: "main", State: git.PRStateOpen, Branch: "ralph/parent-feature"},
+			// The task's own PR, already created against the parent.
+			{Number: 89, Base: "ralph/parent-feature", State: git.PRStateOpen, Branch: "ralph/ralph-stk1-stacked-task"},
+		},
+	}
+
+	logger := logging.New(nil)
+	gm := git.NewForTest(git.Config{
+		ProjectDir: setup.projectDir,
+		WorkDir:    setup.projectDir,
+		RalphDir:   setup.ralphDir,
+		BaseBranch: "main",
+		Logger:     logger,
+	}, ghCfg)
+
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: setup.projectDir,
+			WorkDir:    setup.projectDir,
+			RalphDir:   setup.ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+	}
+
+	_, st := setupTestDir(t)
+
+	runner := &stubRunner{
+		onRun: func() {
+			os.WriteFile(filepath.Join(setup.projectDir, "stacked.txt"), []byte("stacked\n"), 0o644)
+			gitCmd(t, setup.projectDir, "git", "add", "stacked.txt")
+			gitCmd(t, setup.projectDir, "git", "commit", "-m", "agent: stacked work")
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+	l.runner = runner
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("loop.Run: %v", err)
+	}
+
+	// Observable: the bead is closed (work verified, PR exists) even though
+	// it cannot be merged (stacked on a non-main base).
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-stk1" {
+		t.Errorf("expected ralph-stk1 closed, got %v", backend.ClosedIDs)
+	}
+
+	// Observable: origin/main has NOT advanced (no merge happened because
+	// the PR is stacked on a non-main base).
+	mainSHA := gitOutputAt(t, setup.projectDir, "rev-parse", "origin/main")
+	initSHA := gitOutputAt(t, setup.projectDir, "rev-list", "--max-parents=0", "origin/main")
+	if mainSHA != initSHA {
+		t.Errorf("origin/main should still point at initial commit (stacked PR not mergeable); got %s (initial was %s)", mainSHA, initSHA)
+	}
+}
