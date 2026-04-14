@@ -229,9 +229,9 @@ func TestShip_PackageFunction_CreatesPR(t *testing.T) {
 	}
 }
 
-// shipPR skips CreatePR and returns an empty result when branchAheadOfMain
-// reports the branch is not ahead of main after pushing — prevents spurious
-// 422 API errors on empty/already-merged branches.
+// shipPR skips CreatePR and returns an empty result when branchHasUnmergedWork
+// reports the branch has no commits ahead of main — prevents spurious 422 API
+// errors on empty/already-merged branches.
 func TestShip_SkipsCreatePRWhenNotAheadOfMain(t *testing.T) {
 	// Empty world: if CreatePR were called, a PR would appear. We verify it
 	// wasn't by checking ListAllPRs is empty after shipPR returns.
@@ -239,11 +239,11 @@ func TestShip_SkipsCreatePRWhenNotAheadOfMain(t *testing.T) {
 
 	opts := ShipOpts{}
 	infra := shipInfra{
-		push:              func(ctx context.Context) error { return nil },
-		hasUncommitted:    func() bool { return false },
-		commitAll:         func(string) {},
-		branchAheadOfMain: func(string) bool { return false },
-		logger:            discardLog{},
+		push:                  func(ctx context.Context) error { return nil },
+		hasUncommitted:        func() bool { return false },
+		commitAll:             func(string) {},
+		branchHasUnmergedWork: func(string) bool { return false },
+		logger:                discardLog{},
 	}
 
 	result, err := shipPR(context.Background(), nil, gh, "/wt", "ralph/test-branch", "", opts, infra)
@@ -252,10 +252,47 @@ func TestShip_SkipsCreatePRWhenNotAheadOfMain(t *testing.T) {
 	}
 	prs, _ := gh.ListAllPRs("")
 	if len(prs) != 0 {
-		t.Errorf("CreatePR must not be called when branch is not ahead of main; world has PRs: %+v", prs)
+		t.Errorf("CreatePR must not be called when branch has no commits ahead of main; world has PRs: %+v", prs)
 	}
 	if result.PRNumber != 0 {
 		t.Errorf("PRNumber = %d, want 0 (no-op)", result.PRNumber)
+	}
+}
+
+// shipPR creates a PR when the branch is diverged from main — has commits
+// ahead of main AND main has commits not on the branch. This is the fix for
+// the bug where Ship silently orphaned work on diverged branches.
+func TestShip_CreatesPRWhenDivergedFromMain(t *testing.T) {
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 42,
+			Branch: "ralph/e63z-diverged",
+			Title:  "diverged branch work",
+			State:  PRStateOpen,
+		}},
+	})
+
+	opts := ShipOpts{
+		TaskID:    "ralph-e63z",
+		TaskTitle: "diverged branch work",
+	}
+	// Branch is diverged: has commits ahead of main (branchHasUnmergedWork=true)
+	// but is NOT a linear ancestor of main (BranchIsAheadOfMain would be false).
+	infra := shipInfra{
+		push:                  func(ctx context.Context) error { return nil },
+		hasUncommitted:        func() bool { return false },
+		commitAll:             func(string) {},
+		branchHasUnmergedWork: func(string) bool { return true },
+		logger:                discardLog{},
+	}
+
+	result, err := shipPR(context.Background(), nil, gh, "/wt", "ralph/e63z-diverged", "https://github.com/test/repo.git", opts, infra)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.PRNumber != 42 {
+		t.Errorf("PRNumber = %d, want 42; diverged branch with unmerged work must create a PR", result.PRNumber)
 	}
 }
 

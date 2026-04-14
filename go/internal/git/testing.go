@@ -407,6 +407,7 @@ type StubRepoConfig struct {
 	RemoteBranchHasCommits map[string]bool
 	RemoteBranchIsOnMain   map[string]bool
 	BranchIsAheadOfMain    map[string]bool
+	BranchHasUnmergedWork  map[string]bool
 	BranchIsAncestorOfMain map[string]bool
 
 	// PRChainHealthy overrides PRChainIsHealthy output. When PRChainHealthyMsg
@@ -748,6 +749,10 @@ func (s *stubRepo) RemoteBranchIsOnMain(branch string) bool {
 
 func (s *stubRepo) BranchIsAheadOfMain(branch string) bool {
 	return s.cfg.BranchIsAheadOfMain[branch]
+}
+
+func (s *stubRepo) BranchHasUnmergedWork(branch string) bool {
+	return s.cfg.BranchHasUnmergedWork[branch]
 }
 
 func (s *stubRepo) BranchIsAncestorOfMain(branch string) bool {

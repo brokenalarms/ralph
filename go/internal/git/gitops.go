@@ -112,6 +112,7 @@ type Ops interface {
 	RemoteBranchHasCommits(branch string) bool
 	RemoteBranchIsOnMain(branch string) bool
 	BranchIsAheadOfMain(branch string) bool
+	BranchHasUnmergedWork(branch string) bool
 	BranchIsAncestorOfMain(branch string) bool
 	DeleteRemoteBranchByName(branch string) error
 

@@ -212,6 +212,18 @@ func (r *repo) BranchIsAheadOfMain(branch string) bool {
 	return r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, remote) == nil
 }
 
+// BranchHasUnmergedWork returns true if the remote branch has any commits
+// that are not on origin's default branch — i.e. git rev-list --count
+// origin/<default>..<branch> > 0. This is a superset of BranchIsAheadOfMain
+// that also returns true for diverged branches (branch has commits ahead of
+// main AND main has commits not on branch). Use this in Ship to avoid
+// skipping PR creation for diverged branches with real unmerged work.
+func (r *repo) BranchHasUnmergedWork(branch string) bool {
+	defaultBranch := r.detectDefaultBranch()
+	out := r.gitOutput(r.workDir, "rev-list", "--count", "origin/"+defaultBranch+"..origin/"+branch)
+	return strings.TrimSpace(out) != "0" && strings.TrimSpace(out) != ""
+}
+
 func (r *repo) mRebaseInProgress() bool {
 	gitDir := r.gitOutput(r.workDir, "rev-parse", "--git-dir")
 	if gitDir == "" {
