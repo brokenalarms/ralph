@@ -2,7 +2,6 @@ package git
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -254,17 +253,3 @@ func withBranchRenamed(v bool) repoTestOpt {
 	return func(d *repoTestDeps) { d.branchRenamed = v }
 }
 
-// errRunner returns a Runner where every call returns an error.
-func errRunner(msg string) Runner {
-	return &errRunnerImpl{stubRunner: newStubRunner(), err: fmt.Errorf("%s", msg)}
-}
-
-type errRunnerImpl struct {
-	*stubRunner
-	err error
-}
-
-func (e *errRunnerImpl) Run(ctx context.Context, dir string, args ...string) (string, error) {
-	e.stubRunner.Run(ctx, dir, args...)
-	return "", e.err
-}

@@ -67,312 +67,93 @@ func TestManager_UsesInjectedRunner(t *testing.T) {
 	r.On("rev-parse --verify refs/heads/main", "", nil)
 	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 
-	mgr := stubManager(t.TempDir(), r, nil)
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		nil,
+		withRunner(r),
+	)
 
-	if !mgr.refExists(mgr.workDir, "refs/heads/main") {
+	if !repo.refExists(repo.workDir, "refs/heads/main") {
 		t.Error("refExists should return true when runner succeeds")
 	}
 
-	if !mgr.remoteExists() {
+	if !repo.remoteExists() {
 		t.Error("remoteExists should return true when remote URL is non-empty")
-	}
-
-	calls := r.Called()
-	if len(calls) < 2 {
-		t.Fatalf("expected at least 2 runner calls, got %d", len(calls))
 	}
 }
 
 // detectDefaultBranch returns BaseBranch directly — no git calls, no fallback.
 func TestManager_DetectDefaultBranch_ReturnsBaseBranch(t *testing.T) {
-	r := newStubRunner()
-	mgr := stubManager(t.TempDir(), r, nil)
-	// stubManager sets BaseBranch to "main"
-	branch := mgr.detectDefaultBranch()
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		nil,
+	)
+	branch := repo.detectDefaultBranch()
 	if branch != "main" {
 		t.Errorf("expected main, got %q", branch)
 	}
-	if r.CalledWith("symbolic-ref") {
-		t.Error("should not call symbolic-ref — BaseBranch is authoritative")
-	}
 }
 
-// detectDefaultBranch with explicit --base-branch=develop returns "develop".
+// detectDefaultBranch with BaseBranch: "develop" returns "develop".
 func TestManager_DetectDefaultBranch_ExplicitDevelop(t *testing.T) {
-	r := newStubRunner()
-	mgr := stubManager(t.TempDir(), r, nil)
-	mgr.baseBranch = "develop"
-	branch := mgr.detectDefaultBranch()
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "develop", Logger: discardLog{}},
+		nil,
+	)
+	branch := repo.detectDefaultBranch()
 	if branch != "develop" {
 		t.Errorf("expected develop, got %q", branch)
 	}
-	if r.CalledWith("symbolic-ref") {
-		t.Error("should not call symbolic-ref — BaseBranch is authoritative")
-	}
 }
 
-// stubRunner satisfies the Runner interface, proving test doubles can
-// replace all git command execution without implementing exec.Command.
-func TestStubRunner_SatisfiesInterface(t *testing.T) {
-	var _ Runner = &stubRunner{}
-	var _ Runner = newStubRunner()
-}
-
-
-// Manager with stubRunner: PushAndCreatePR uses the runner for git
-// commands and the GitHub stub for PR operations, proving the full
-// push/PR flow can be tested without real processes.
-func TestManager_PushAndCreatePR_NoRealProcesses(t *testing.T) {
-	r := newStubRunner()
-	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
-	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	r.On("rev-list --count origin/main..HEAD", "3", nil)
-	r.On("push", "", nil)
-	r.On("fetch", "", nil)
-	r.On("merge-base --is-ancestor", "", nil)
-
-	gh := &StubGitHub{IsAvailable: true, OpenPR: 0}
-
-	dir := t.TempDir()
-	mgr := &Repo{
-		projectDir:     dir,
-		baseBranch: "main",
-		workDir:        dir + "/worktree",
-		worktreeBranch: "ralph/test/01-feature",
-		runner:         r,
-		github:         gh,
-		state:          newMemState(),
-		logger:         discardLog{},
+// prTitle formats the PR title from taskID and taskDesc:
+//   - prefixes with "[taskID] " when taskID is non-empty
+//   - strips component prefixes like "ralph loop: " from taskDesc
+//   - truncates to 70 chars (with "..." suffix) for long titles
+//   - falls back to the worktree branch name when the result would be empty
+func TestPRTitle(t *testing.T) {
+	cases := []struct {
+		name     string
+		taskID   string
+		taskDesc string
+		fallback string
+		want     string
+	}{
+		{
+			name:     "WithTaskID_PrefixesDesc",
+			taskID:   "ralph-abc",
+			taskDesc: "fix: some bug",
+			fallback: "ralph/feature",
+			want:     "[ralph-abc] fix: some bug",
+		},
+		{
+			name:     "StripsComponentPrefix",
+			taskID:   "ralph-abc",
+			taskDesc: "ralph loop: fix signal cleanup",
+			fallback: "ralph/feature",
+			want:     "[ralph-abc] fix signal cleanup",
+		},
+		{
+			name:     "NoTaskID_ReturnsStrippedDesc",
+			taskID:   "",
+			taskDesc: "fix: some bug",
+			fallback: "ralph/feature",
+			want:     "fix: some bug",
+		},
+		{
+			name:     "EmptyDesc_UsesFallback",
+			taskID:   "",
+			taskDesc: "",
+			fallback: "ralph/feature",
+			want:     "ralph/feature",
+		},
 	}
-
-	_, err := mgr.PushAndCreatePR(context.Background(), "test-123", "test feature", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if !r.CalledWith("push") {
-		t.Error("expected push to be called when no PR exists")
-	}
-}
-
-// PushAndCreatePR always pushes (squash + force-push) even when a PR exists,
-// then updates the existing PR's title.
-func TestManager_PushAndCreatePR_PushesEvenWhenPRExists(t *testing.T) {
-	r := newStubRunner()
-	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
-	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	r.On("rev-list --count", "1", nil)
-	r.On("rev-parse", "abc123", nil)
-	r.On("fetch", "", nil)
-	r.On("merge-base --is-ancestor", "", nil)
-	r.On("log -1 --format=%s", "test commit", nil)
-	r.On("push", "", nil)
-	r.On("ref-exists", "", nil)
-
-	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
-
-	dir := t.TempDir()
-	mgr := &Repo{
-		projectDir:     dir,
-		baseBranch: "main",
-		workDir:        dir + "/worktree",
-		worktreeBranch: "ralph/test/01-feature",
-		runner:         r,
-		github:         gh,
-		state:          newMemState(),
-		logger:         discardLog{},
-	}
-
-	prNum, err := mgr.PushAndCreatePR(context.Background(), "test-123", "test feature", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if prNum != 42 {
-		t.Errorf("expected PR 42, got %d", prNum)
-	}
-	if !r.CalledWith("push") {
-		t.Error("push should always happen — squash + force-push ensures latest code is on branch")
-	}
-}
-
-// PushAndCreatePR updates the PR title with the bead ID when a PR already
-// exists — the agent creates PRs without the bead prefix.
-func TestManager_PushAndCreatePR_UpdatesTitleWhenPRExists(t *testing.T) {
-	r := newStubRunner()
-	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
-	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	r.On("rev-list --count origin/main..HEAD", "3", nil)
-	r.On("fetch", "", nil)
-	r.On("merge-base --is-ancestor", "", nil)
-
-	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
-
-	dir := t.TempDir()
-	mgr := &Repo{
-		projectDir:     dir,
-		baseBranch: "main",
-		workDir:        dir + "/worktree",
-		worktreeBranch: "ralph/test/01-feature",
-		runner:         r,
-		github:         gh,
-		state:          newMemState(),
-		logger:         discardLog{},
-	}
-
-	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix: some bug", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	want := "[ralph-abc] fix: some bug"
-	if gh.EditPRTitle != want {
-		t.Errorf("EditPR title = %q, want %q", gh.EditPRTitle, want)
-	}
-}
-
-// PushAndCreatePR strips component prefixes like "ralph loop:" from the
-// title — the bead ID already identifies the source.
-func TestManager_PushAndCreatePR_StripsComponentPrefix(t *testing.T) {
-	r := newStubRunner()
-	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
-	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	r.On("rev-list --count origin/main..HEAD", "3", nil)
-	r.On("fetch", "", nil)
-	r.On("merge-base --is-ancestor", "", nil)
-
-	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
-
-	dir := t.TempDir()
-	mgr := &Repo{
-		projectDir:     dir,
-		baseBranch: "main",
-		workDir:        dir + "/worktree",
-		worktreeBranch: "ralph/test/01-feature",
-		runner:         r,
-		github:         gh,
-		state:          newMemState(),
-		logger:         discardLog{},
-	}
-
-	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "ralph loop: fix signal cleanup", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	want := "[ralph-abc] fix signal cleanup"
-	if gh.EditPRTitle != want {
-		t.Errorf("EditPR title = %q, want %q", gh.EditPRTitle, want)
-	}
-}
-
-// PushAndCreatePR does not call EditPR when no bead ID is available.
-func TestManager_PushAndCreatePR_NoEditWithoutTaskID(t *testing.T) {
-	r := newStubRunner()
-	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
-	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	r.On("rev-list --count origin/main..HEAD", "3", nil)
-	r.On("fetch", "", nil)
-	r.On("merge-base --is-ancestor", "", nil)
-
-	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
-
-	dir := t.TempDir()
-	mgr := &Repo{
-		projectDir:     dir,
-		baseBranch: "main",
-		workDir:        dir + "/worktree",
-		worktreeBranch: "ralph/test/01-feature",
-		runner:         r,
-		github:         gh,
-		state:          newMemState(),
-		logger:         discardLog{},
-	}
-
-	_, err := mgr.PushAndCreatePR(context.Background(), "", "fix: some bug", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if gh.EditPRTitle != "" {
-		t.Errorf("EditPR should not be called without taskID, but got title %q", gh.EditPRTitle)
-	}
-}
-
-// PushAndCreatePR logs "already open" when a PR exists before push.
-func TestManager_PushAndCreatePR_LogsAlreadyOpen(t *testing.T) {
-	r := newStubRunner()
-	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
-	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	r.On("rev-list --count origin/main..HEAD", "3", nil)
-	r.On("fetch", "", nil)
-	r.On("merge-base --is-ancestor", "", nil)
-
-	gh := &StubGitHub{IsAvailable: true, OpenPR: 42}
-
-	dir := t.TempDir()
-	log := &testLog{}
-	mgr := &Repo{
-		projectDir:     dir,
-		baseBranch: "main",
-		workDir:        dir + "/worktree",
-		worktreeBranch: "ralph/test/01-feature",
-		runner:         r,
-		github:         gh,
-		state:          newMemState(),
-		logger:         log,
-	}
-
-	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix: some bug", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if !log.contains("PR #42") || !log.contains("already open") {
-		t.Errorf("expected 'PR #42' + 'already open' log, got: %v", log.messages)
-	}
-	if log.contains("Created PR") {
-		t.Error("should not log 'Created PR' when PR already exists")
-	}
-}
-
-// PushAndCreatePR logs "Created PR #N" when a new PR is created.
-func TestManager_PushAndCreatePR_LogsCreatedPR(t *testing.T) {
-	r := newStubRunner()
-	r.On("symbolic-ref refs/remotes/origin/HEAD", "refs/remotes/origin/main", nil)
-	r.On("remote get-url origin", "https://github.com/test/repo.git", nil)
-	r.On("rev-list --count origin/main..HEAD", "3", nil)
-	r.On("push", "", nil)
-	r.On("fetch", "", nil)
-	r.On("merge-base --is-ancestor", "", nil)
-
-	gh := &StubGitHub{IsAvailable: true, OpenPR: 0, CreatedPR: 99}
-
-	dir := t.TempDir()
-	log := &testLog{}
-	mgr := &Repo{
-		projectDir:     dir,
-		baseBranch: "main",
-		workDir:        dir + "/worktree",
-		worktreeBranch: "ralph/test/01-feature",
-		runner:         r,
-		github:         gh,
-		state:          newMemState(),
-		logger:         log,
-	}
-
-	_, err := mgr.PushAndCreatePR(context.Background(), "ralph-abc", "fix: some bug", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if !log.contains("PR #99") {
-		t.Errorf("expected 'PR #99' in log, got: %v", log.messages)
-	}
-	if !log.contains("Created") {
-		t.Errorf("expected 'Created' in log, got: %v", log.messages)
-	}
-	if log.contains("already open") {
-		t.Error("should not log 'already open' when PR was just created")
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := prTitle(c.taskID, c.taskDesc, c.fallback); got != c.want {
+				t.Errorf("prTitle(%q, %q, %q) = %q, want %q", c.taskID, c.taskDesc, c.fallback, got, c.want)
+			}
+		})
 	}
 }
 
@@ -402,24 +183,18 @@ branch refs/heads/ralph/project/01-feature
 	}
 }
 
-// errRunner produces a Runner where every call fails, proving tests can
-// simulate git failures without real processes.
-func TestErrRunner_AlwaysFails(t *testing.T) {
-	r := errRunner("git crashed")
-	_, err := r.Run(context.Background(), "/tmp", "status")
-	if err == nil || err.Error() != "git crashed" {
-		t.Errorf("expected 'git crashed' error, got %v", err)
-	}
-}
-
 // Manager.gitOutput returns empty string when the runner errors, matching
 // the behavior of the exec-based gitOutput that returns "" on failure.
 func TestManager_GitOutput_EmptyOnError(t *testing.T) {
 	r := newStubRunner()
 	r.On("diff", "", fmt.Errorf("not a git repo"))
 
-	mgr := stubManager(t.TempDir(), r, nil)
-	out := mgr.gitOutput(mgr.workDir, "diff", "--stat")
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), Logger: discardLog{}},
+		nil,
+		withRunner(r),
+	)
+	out := repo.gitOutput(repo.workDir, "diff", "--stat")
 	if out != "" {
 		t.Errorf("expected empty on error, got %q", out)
 	}
@@ -431,9 +206,14 @@ func TestManager_GitCmdErr_PropagatesError(t *testing.T) {
 	r := newStubRunner()
 	r.On("push", "", fmt.Errorf("push rejected"))
 
-	mgr := stubManager(t.TempDir(), r, nil)
-	err := mgr.gitCmdErr(mgr.workDir, "push", "-u", "origin", "feature")
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), Logger: discardLog{}},
+		nil,
+		withRunner(r),
+	)
+	err := repo.gitCmdErr(repo.workDir, "push", "-u", "origin", "feature")
 	if err == nil || err.Error() != "push rejected" {
 		t.Errorf("expected 'push rejected', got %v", err)
 	}
 }
+

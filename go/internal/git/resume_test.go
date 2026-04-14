@@ -2,15 +2,14 @@ package git
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 )
 
 // ResumeTask returns an empty result for an empty task ID.
 func TestResumeTask_EmptyTaskID(t *testing.T) {
-	mgr := stubManager(t.TempDir(), nil, nil)
-	result, err := mgr.ResumeTask(context.Background(), ResumeTaskMeta{}, ResumeTaskOpts{})
+	repo := newRepoForTest(Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}}, nil)
+	result, err := repo.ResumeTask(context.Background(), ResumeTaskMeta{}, ResumeTaskOpts{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -22,12 +21,13 @@ func TestResumeTask_EmptyTaskID(t *testing.T) {
 // ResumeTask finds an existing PR via external-ref and delegates to Ship.
 // When Ship reports AlreadyMerged, returns Handled=true with AlreadyMerged=true.
 func TestResumeTask_AlreadyMergedViaPRURL(t *testing.T) {
-	gh := NewStubGitHub()
-	gh.PRState = PRStateMerged
-	gh.PRNumber = 42
-	mgr := stubManager(t.TempDir(), nil, gh)
+	gh := NewStubGitHubCfg(StubGitHubConfig{
+		Available: true,
+		PRs:       []StubPR{{Number: 42, State: PRStateMerged}},
+	})
+	repo := newRepoForTest(Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}}, gh)
 
-	result, err := mgr.ResumeTask(context.Background(), ResumeTaskMeta{
+	result, err := repo.ResumeTask(context.Background(), ResumeTaskMeta{
 		TaskID:      "ralph-abc",
 		TaskTitle:   "fix something",
 		ExternalRef: "https://github.com/owner/repo/pull/42",
@@ -48,14 +48,18 @@ func TestResumeTask_AlreadyMergedViaPRURL(t *testing.T) {
 
 // ResumeTask handles a closed PR by clearing metadata and returning Handled=false.
 func TestResumeTask_ClosedPRClearsMetadata(t *testing.T) {
-	gh := NewStubGitHub()
-	gh.PRState = PRStateClosed
-	gh.PRNumber = 99
-	mgr := stubManager(t.TempDir(), nil, gh)
-	mgr.worktreeBranch = "ralph/next"
-	mgr.branchRenamed = true // stale from previous run
+	gh := NewStubGitHubCfg(StubGitHubConfig{
+		Available: true,
+		PRs:       []StubPR{{Number: 99, State: PRStateClosed}},
+	})
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withWorktreeBranch("ralph/next"),
+		withBranchRenamed(true), // stale from previous run
+	)
 
-	result, err := mgr.ResumeTask(context.Background(), ResumeTaskMeta{
+	result, err := repo.ResumeTask(context.Background(), ResumeTaskMeta{
 		TaskID:      "ralph-cdr3",
 		TaskTitle:   "Fix auth bug",
 		ExternalRef: "https://github.com/owner/repo/pull/99",
@@ -76,9 +80,10 @@ func TestResumeTask_ClosedPRClearsMetadata(t *testing.T) {
 
 // ResumeTask handles a closed PR: the branch is renamed to a task-specific name.
 func TestResumeTask_ClosedPRRenamesBranch(t *testing.T) {
-	gh := NewStubGitHub()
-	gh.PRState = PRStateClosed
-	gh.PRNumber = 439
+	gh := NewStubGitHubCfg(StubGitHubConfig{
+		Available: true,
+		PRs:       []StubPR{{Number: 439, State: PRStateClosed}},
+	})
 
 	dir := t.TempDir()
 	worktreeDir := t.TempDir()
@@ -86,19 +91,15 @@ func TestResumeTask_ClosedPRRenamesBranch(t *testing.T) {
 	// branch -m succeeds (rename), branch -D succeeds
 	runner.On("branch", "", nil)
 
-	mgr := &Repo{
-		projectDir:     dir,
-		workDir:        worktreeDir, // distinct from ProjectDir so rename is allowed
-		worktreeBranch: "ralph/next",
-		branchRenamed:  true, // stale from previous run
-		baseBranch:     "main",
-		runner:         runner,
-		github:         gh,
-		state:          newMemState(),
-		logger:         discardLog{},
-	}
+	repo := newRepoForTest(
+		Config{ProjectDir: dir, WorkDir: worktreeDir, BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/next"),
+		withBranchRenamed(true), // stale from previous run
+	)
 
-	result, err := mgr.ResumeTask(context.Background(), ResumeTaskMeta{
+	result, err := repo.ResumeTask(context.Background(), ResumeTaskMeta{
 		TaskID:      "ralph-cdr3",
 		TaskTitle:   "Fix auth bug",
 		ExternalRef: "https://github.com/owner/repo/pull/439",
@@ -111,7 +112,7 @@ func TestResumeTask_ClosedPRRenamesBranch(t *testing.T) {
 	}
 
 	// Branch must be renamed from ralph/next to a task-specific name.
-	if mgr.worktreeBranch == "ralph/next" {
+	if repo.worktreeBranch == "ralph/next" {
 		t.Error("branch should be renamed from ralph/next")
 	}
 	if result.NewBranch == "" {
@@ -122,15 +123,18 @@ func TestResumeTask_ClosedPRRenamesBranch(t *testing.T) {
 // ResumeTask returns no result when neither external-ref nor branch metadata
 // points to an existing PR, and the remote branch is absent.
 func TestResumeTask_NoPriorWork(t *testing.T) {
-	gh := NewStubGitHub()
-	gh.FindPRErr = errors.New("not found")
-	gh.PRNumber = 0
+	// Empty world → FindPR returns zero values → no PR found.
+	gh := NewStubGitHubCfg(StubGitHubConfig{Available: true})
 	runner := newStubRunner()
 	// ls-remote returns nothing — remote branch absent.
 	runner.On("ls-remote", "", nil)
-	mgr := stubManager(t.TempDir(), runner, gh)
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(runner),
+	)
 
-	result, err := mgr.ResumeTask(context.Background(), ResumeTaskMeta{
+	result, err := repo.ResumeTask(context.Background(), ResumeTaskMeta{
 		TaskID:    "ralph-xyz",
 		TaskTitle: "new work",
 	}, ResumeTaskOpts{})
@@ -147,17 +151,26 @@ func TestResumeTask_NoPriorWork(t *testing.T) {
 
 // ResumeTask stores the external-ref URL when PR was found via branch (not external-ref).
 func TestResumeTask_FoundViaBranchStoresPRURL(t *testing.T) {
-	gh := NewStubGitHub()
-	gh.PRState = PRStateMerged
-	gh.PRNumber = 55
+	gh := NewStubGitHubCfg(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 55,
+			Branch: "ralph/ralph-mm1-add-feature",
+			State:  PRStateMerged,
+		}},
+	})
 
 	runner := newStubRunner()
 	// remote get-url origin returns a valid GitHub URL so buildPRURL can construct the link.
 	runner.On("remote", "https://github.com/owner/repo.git", nil)
 
-	mgr := stubManager(t.TempDir(), runner, gh)
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(runner),
+	)
 
-	result, err := mgr.ResumeTask(context.Background(), ResumeTaskMeta{
+	result, err := repo.ResumeTask(context.Background(), ResumeTaskMeta{
 		TaskID:      "ralph-mm1",
 		TaskTitle:   "add feature",
 		Branch:      "ralph/ralph-mm1-add-feature",
