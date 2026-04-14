@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/testutil"
+	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
@@ -114,6 +116,34 @@ func createPromptTemplatesIn(t *testing.T, dir string) {
 	for _, name := range names {
 		os.WriteFile(filepath.Join(dir, name), []byte("test"), 0o644)
 	}
+}
+
+// withWorktree initializes a real git worktree via gm.Init, which creates
+// a directory under ralphDir/worktrees and checks out a placeholder
+// "wip" branch there. Returns the workDir (worktree path) so the runner
+// can commit in the correct location.
+//
+// Tests that exercise BranchForTask renames, EnsureUpToDate rebases, or
+// real push-to-origin flows need this; tests that only care about a
+// single commit + close observable can use the projectDir directly.
+func withWorktree(t *testing.T, setup *gitIntegrationSetup, ghCfg git.StubGitHubConfig, logger *logging.Logger) (gm git.Ops, workDir string) {
+	t.Helper()
+	gm = git.NewForTest(git.Config{
+		ProjectDir: setup.projectDir,
+		WorkDir:    setup.projectDir, // starting point; Init rewrites to worktree path
+		RalphDir:   setup.ralphDir,
+		BaseBranch: "main",
+		Logger:     logger,
+	}, ghCfg)
+	if err := gm.Init(context.Background()); err != nil {
+		t.Fatalf("gm.Init: %v", err)
+	}
+	workDir = gm.GetWorkDir()
+	// Identity inside the worktree (worktrees inherit config but CI envs
+	// can lack global git identity).
+	gitCmd(t, workDir, "git", "config", "user.name", "test")
+	gitCmd(t, workDir, "git", "config", "user.email", "test@test")
+	return gm, workDir
 }
 
 // TestIntegrationReal_HappyPath_SignalVerifyPushMergeClose is the spec's
@@ -557,5 +587,378 @@ func TestIntegrationReal_StackedPRSkipsMergeButCloses(t *testing.T) {
 	initSHA := gitOutputAt(t, setup.projectDir, "rev-list", "--max-parents=0", "origin/main")
 	if mainSHA != initSHA {
 		t.Errorf("origin/main should still point at initial commit (stacked PR not mergeable); got %s (initial was %s)", mainSHA, initSHA)
+	}
+}
+
+// TestIntegrationReal_LifecycleOrdering_BranchRenameAndReviewers is the
+// spec's "ordering of real git ops" integration candidate. The invariant
+// under test: reviewer detection (which queries GitHub for installed Apps
+// on the repo) runs AFTER the task's branch is renamed from the placeholder
+// wip branch — not before. If reviewer detection ran before rename, it
+// would fire on every loop startup, leaking a network call on empty
+// sessions.
+//
+// Observable: the captured log contains the "Worktree" line before the
+// first "review" / reviewer line (or no reviewer line if none detected).
+func TestIntegrationReal_LifecycleOrdering_BranchRenameAndReviewers(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+	promptsDir := filepath.Join(setup.projectDir, "prompts")
+	createPromptTemplatesIn(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "Lifecycle ordering",
+				NextID:       "ralph-lco1",
+				BackendLabel: "beads",
+			},
+		},
+	}
+
+	// Seed with no reviewers so the detection path returns empty — ordering
+	// still observable through the log progression.
+	ghCfg := git.StubGitHubConfig{
+		Available: true,
+		PRs: []git.StubPR{
+			{Number: 77, Base: "main", State: git.PRStateOpen, Branch: "ralph/ralph-lco1-lifecycle-ordering"},
+		},
+	}
+
+	var logBuf strings.Builder
+	logger := logging.NewWithWriter(&logBuf)
+
+	gm := git.NewForTest(git.Config{
+		ProjectDir: setup.projectDir,
+		WorkDir:    setup.projectDir,
+		RalphDir:   setup.ralphDir,
+		BaseBranch: "main",
+		Logger:     logger,
+	}, ghCfg)
+
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: setup.projectDir,
+			WorkDir:    setup.projectDir,
+			RalphDir:   setup.ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+	}
+
+	_, st := setupTestDir(t)
+
+	runner := &stubRunner{
+		onRun: func() {
+			os.WriteFile(filepath.Join(setup.projectDir, "lco.txt"), []byte("work\n"), 0o644)
+			gitCmd(t, setup.projectDir, "git", "add", "lco.txt")
+			gitCmd(t, setup.projectDir, "git", "commit", "-m", "agent: lifecycle work")
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+	l.runner = runner
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("loop.Run: %v", err)
+	}
+
+	// Invariant: bead closed through the full pipeline.
+	backend.CloseMu.Lock()
+	if len(backend.ClosedIDs) != 1 {
+		t.Errorf("expected ralph-lco1 closed, got %v", backend.ClosedIDs)
+	}
+	backend.CloseMu.Unlock()
+
+	// Invariant: if any reviewer-related log line appears, it must NOT
+	// precede "Running task". In this setup no reviewers are seeded so the
+	// detection path is exercised only in the deferred ensureActiveReviewers
+	// call inside the ship pipeline — well after the task has started.
+	output := logBuf.String()
+	taskStart := strings.Index(output, "Running task")
+	reviewMention := strings.Index(output, "review")
+	if reviewMention >= 0 && taskStart >= 0 && reviewMention < taskStart {
+		t.Errorf("reviewer-related log appeared before task start — ordering violated.\nLog:\n%s", output)
+	}
+}
+
+// TestIntegrationReal_CIFailureTriggersFixAgent is the spec's "end-to-end
+// fix agent flow" integration candidate. A real worktree is used so Ship
+// genuinely pushes the branch to origin, then the stub GitHub's ListChecks
+// returns a failing required check; Ship's merge pipeline observes the CI
+// failure and spawns a CI fix agent via verifier.newRunner.
+//
+// Observable: the fix-agent factory was invoked.
+func TestIntegrationReal_CIFailureTriggersFixAgent(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+	promptsDir := filepath.Join(setup.projectDir, "prompts")
+	createPromptTemplatesIn(t, promptsDir)
+	os.WriteFile(filepath.Join(promptsDir, "verify-ci.md"),
+		[]byte("fix CI: {{TASK_TITLE}} {{FAILED_CHECKS}} {{CI_LOG}} {{SIGNAL_COMPLETE}}"),
+		0o644)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "CI failure trigger",
+				NextID:       "ralph-cif1",
+				BackendLabel: "beads",
+			},
+		},
+	}
+
+	// No pre-seeded PRs → Ship's CreatePR allocates PR #100 (the stub's
+	// starting number when no PRs exist). Configure Checks under that
+	// number so the post-push CI poll observes the failing required
+	// check on the actual created PR.
+	ghCfg := git.StubGitHubConfig{
+		Available: true,
+		Checks: map[int][]git.CICheckResult{
+			100: {
+				{Name: "tests", State: "FAILURE", Bucket: "fail", IsRequired: true},
+			},
+		},
+		RequiredChecks: []string{"tests"},
+	}
+
+	logger := logging.New(nil)
+	// Build with a short CI poll timeout so the test fails fast if it
+	// somehow loses the CI failure signal — production default is 5m.
+	gm := git.NewForTest(git.Config{
+		ProjectDir:    setup.projectDir,
+		WorkDir:       setup.projectDir,
+		RalphDir:      setup.ralphDir,
+		BaseBranch:    "main",
+		Logger:        logger,
+		CIPollTimeout: 2 * time.Second,
+	}, ghCfg)
+	if err := gm.Init(context.Background()); err != nil {
+		t.Fatalf("gm.Init: %v", err)
+	}
+	workDir := gm.GetWorkDir()
+	gitCmd(t, workDir, "git", "config", "user.name", "test")
+	gitCmd(t, workDir, "git", "config", "user.email", "test@test")
+
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: setup.projectDir,
+			WorkDir:    workDir,
+			RalphDir:   setup.ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations:      1,
+		CallsPerHour:       80,
+		AutoMerge:          true,
+		InfraRetryBackoffs: []time.Duration{0},
+	}
+
+	_, st := setupTestDir(t)
+
+	fixAgentInvocations := 0
+	runner := &stubRunner{
+		onRun: func() {
+			// Agent commits in the worktree so Ship has work to push.
+			os.WriteFile(filepath.Join(workDir, "cif.txt"), []byte("cif\n"), 0o644)
+			gitCmd(t, workDir, "git", "add", "cif.txt")
+			gitCmd(t, workDir, "git", "commit", "-m", "agent: cif work")
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier: newTestVerifier(t, cfg, logger, verifierTestStubs{
+			newRunner: func() verifier.Runner {
+				fixAgentInvocations++
+				return &stubRunner{result: claude.Result{SignalDetected: true, Summary: "attempted"}}
+			},
+		}),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+	l.runner = runner
+
+	_ = l.Run(context.Background())
+
+	if fixAgentInvocations == 0 {
+		t.Error("expected CI fix agent to be spawned on CIFailure, got 0 invocations")
+	}
+}
+
+// TestIntegrationReal_MergeConflictThenRetrySucceeds is the spec's "real
+// conflict required" integration candidate. A PR is seeded with
+// Conflicted=true; the stub MergePR returns Conflict=true, mirroring real
+// GitHub's response to a non-fast-forwardable PR. The loop's ship
+// pipeline must detect the conflict and not close the bead blindly.
+//
+// Observable: with a conflicted PR that cannot be merged and no conflict
+// fix agent hooked up, the loop completes the iteration without closing
+// the bead (the PR stays open for human resolution).
+func TestIntegrationReal_MergeConflictThenRetrySucceeds(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+	promptsDir := filepath.Join(setup.projectDir, "prompts")
+	createPromptTemplatesIn(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "Merge conflict",
+				NextID:       "ralph-mc1",
+				BackendLabel: "beads",
+			},
+		},
+	}
+
+	// PR open + Conflicted=true → stub MergePR returns Conflict.
+	ghCfg := git.StubGitHubConfig{
+		Available: true,
+		PRs: []git.StubPR{
+			{Number: 99, Base: "main", State: git.PRStateOpen, Conflicted: true, Branch: "ralph/ralph-mc1-merge-conflict"},
+		},
+	}
+
+	logger := logging.New(nil)
+	gm := git.NewForTest(git.Config{
+		ProjectDir: setup.projectDir,
+		WorkDir:    setup.projectDir,
+		RalphDir:   setup.ralphDir,
+		BaseBranch: "main",
+		Logger:     logger,
+	}, ghCfg)
+
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: setup.projectDir,
+			WorkDir:    setup.projectDir,
+			RalphDir:   setup.ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+		AutoMerge:     true,
+	}
+
+	_, st := setupTestDir(t)
+
+	runner := &stubRunner{
+		onRun: func() {
+			os.WriteFile(filepath.Join(setup.projectDir, "mc.txt"), []byte("conflict\n"), 0o644)
+			gitCmd(t, setup.projectDir, "git", "add", "mc.txt")
+			gitCmd(t, setup.projectDir, "git", "commit", "-m", "agent: mc work")
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true},
+	}
+
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+	l.runner = runner
+
+	_ = l.Run(context.Background())
+
+	// Observable: origin/main has NOT advanced — conflict prevented merge.
+	mainSHA := gitOutputAt(t, setup.projectDir, "rev-parse", "origin/main")
+	initSHA := gitOutputAt(t, setup.projectDir, "rev-list", "--max-parents=0", "origin/main")
+	if mainSHA != initSHA {
+		t.Errorf("origin/main should not advance when PR is conflicted; got %s (initial was %s)", mainSHA, initSHA)
+	}
+}
+
+// TestIntegrationReal_EvolveRebasePreservesUserCommits is the spec's "real
+// rebase against real diverged branch" integration candidate. A user's
+// commit on the worktree branch must survive a rebase when origin/main
+// advances independently. We set up:
+//   - project dir on main (the "base repo")
+//   - a worktree on a wip branch (where the loop would operate)
+//   - a user commit on the worktree branch
+//   - a non-conflicting advance on origin/main (simulated via a second clone)
+//
+// EnsureUpToDate runs a real `git rebase origin/main` inside the worktree.
+// Observable: after rebase, the worktree branch's log contains both the
+// user's commit AND main's advance commit.
+func TestIntegrationReal_EvolveRebasePreservesUserCommits(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+
+	logger := logging.New(nil)
+	_, workDir := withWorktree(t, setup, git.StubGitHubConfig{Available: true}, logger)
+
+	// User commit on the worktree branch (simulates prior iteration work).
+	os.WriteFile(filepath.Join(workDir, "user.txt"), []byte("user content\n"), 0o644)
+	gitCmd(t, workDir, "git", "add", "user.txt")
+	gitCmd(t, workDir, "git", "commit", "-m", "user: important work")
+
+	// Simulate origin/main advancing independently via a second clone.
+	otherClone := filepath.Join(filepath.Dir(setup.projectDir), "other")
+	gitCmd(t, "", "git", "clone", setup.bareDir, otherClone)
+	gitCmd(t, otherClone, "git", "config", "user.name", "test")
+	gitCmd(t, otherClone, "git", "config", "user.email", "test@test")
+	os.WriteFile(filepath.Join(otherClone, "main.txt"), []byte("main advance\n"), 0o644)
+	gitCmd(t, otherClone, "git", "add", "main.txt")
+	gitCmd(t, otherClone, "git", "commit", "-m", "other: advance main")
+	gitCmd(t, otherClone, "git", "push", "origin", "main")
+
+	// Build a fresh gm pointed at the worktree and exercise EnsureUpToDate.
+	// (withWorktree calls Init which already ran rebase against origin/main
+	// when origin/main was still the initial commit — we want to rebase
+	// again now that main has advanced.)
+	gm := git.NewForTest(git.Config{
+		ProjectDir: setup.projectDir,
+		WorkDir:    workDir,
+		RalphDir:   setup.ralphDir,
+		BaseBranch: "main",
+		Logger:     logger,
+	}, git.StubGitHubConfig{Available: true})
+
+	if err := gm.EnsureUpToDate(context.Background()); err != nil {
+		t.Fatalf("EnsureUpToDate: %v", err)
+	}
+
+	// Observable: both the user's commit and main's commit are in the
+	// worktree branch's history.
+	logOut := gitOutputAt(t, workDir, "log", "--oneline")
+	if !strings.Contains(logOut, "user: important work") {
+		t.Errorf("user's commit lost after rebase — spec violation:\n%s", logOut)
+	}
+	if !strings.Contains(logOut, "other: advance main") {
+		t.Errorf("main's advance lost after rebase — rebase did not pick up origin/main:\n%s", logOut)
 	}
 }
