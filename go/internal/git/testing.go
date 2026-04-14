@@ -647,3 +647,336 @@ func (s *StubRepo) ListAllPRs(workDir string) ([]PRInfo, error) {
 	}
 	return s.GH.ListAllPRs(workDir)
 }
+
+// --- New stub API (migration target per docs/specs/stub-interface-rewrite.md) ---
+//
+// stubGitHub is a true in-memory fake of the gitHub interface. Its behavior
+// is fixed: every test runs against the same model. What varies per test is
+// the initial state of the world (PRs, Checks, static return values) passed
+// in through StubGitHubConfig.
+//
+// Construction is the one and only configuration seam. The stub's internal
+// state is reachable only through gitHub interface methods — the same methods
+// production uses — so tests observe "what the SUT did" by querying the
+// world, not by reading stub fields.
+//
+// Added alongside the legacy StubGitHub in this scaffold commit. The final
+// commit of the rewrite deletes the legacy type and renames NewStubGitHubCfg
+// to NewStubGitHub.
+
+// StubPR describes a pull request that exists in the fake's world.
+// Unset fields are filled in with deterministic defaults at construction:
+// URL → https://github.com/owner/repo/pull/<Number>, HeadSHA → stub-sha-<Number>,
+// Base → "main", State → PRStateOpen.
+//
+// Conflicted and Blocked describe world-state causes, not prescribed
+// outcomes — the fake's MergePR derives its return value from these
+// properties the same way real GitHub derives its response from the actual
+// world. A PR with Conflicted=true cannot be merged until the conflict is
+// resolved; a PR with Blocked=true is gated by branch protection.
+type StubPR struct {
+	Number     int
+	Title      string
+	URL        string
+	Branch     string
+	Base       string
+	HeadSHA    string
+	State      PRState
+	Conflicted bool
+	Blocked    bool
+}
+
+// StubGitHubConfig declares the starting state of the fake's world and any
+// static return values. All fields are plain data; none programs per-call
+// behavior. For fault injection, set the *Err field for the method that
+// should fail — a single value per field, no sequencing.
+type StubGitHubConfig struct {
+	Available bool
+
+	// The world.
+	PRs    []StubPR
+	Checks map[int][]CICheckResult
+
+	// Static return values.
+	RunLog           string
+	Reviewers        []Reviewer
+	RequiredChecks   []string
+	JobStepCount     int
+	PollReviewResult *AutoReview
+	FetchThreadIDs   map[int]string
+	PRDiffOutput     string
+	SearchPRResult   int
+
+	// Fault injection — single error per method.
+	CreatePRErr           error
+	CreatePRViaAPIErr     error
+	EditPRErr             error
+	ReopenPRErr           error
+	ListChecksErr         error
+	FindOpenPRErr         error
+	FindPRErr             error
+	GetPRErr              error
+	ListAllPRsErr         error
+	ListOpenPRBranchesErr error
+	SearchPRErr           error
+	PRDiffErr             error
+	GetJobStepCountErr    error
+	DetectReviewersErr    error
+	PollReviewErr         error
+	RequiredChecksErr     error
+	ReplyToReviewErr      error
+	FetchThreadIDsErr     error
+	ResolveThreadErr      error
+}
+
+// stubGitHub is the unexported fake. Tests never see this type directly;
+// they receive it only through the gitHub interface value returned by
+// NewStubGitHubCfg.
+type stubGitHub struct {
+	cfg          StubGitHubConfig
+	prs          map[int]*StubPR
+	nextPRNumber int
+}
+
+// Compile-time check that stubGitHub implements the full gitHub interface.
+var _ gitHub = (*stubGitHub)(nil)
+
+// NewStubGitHubCfg returns a stubGitHub initialized with cfg's world, typed
+// as the gitHub interface so callers cannot reach into its internal state.
+//
+// Migration note: this will be renamed to NewStubGitHub in the final commit
+// of the stub-interface rewrite, once the legacy NewStubGitHub() is deleted.
+func NewStubGitHubCfg(cfg StubGitHubConfig) gitHub {
+	s := &stubGitHub{
+		cfg: cfg,
+		prs: make(map[int]*StubPR, len(cfg.PRs)),
+	}
+	maxNum := 0
+	for i := range cfg.PRs {
+		pr := cfg.PRs[i] // copy
+		normalizeStubPR(&pr)
+		s.prs[pr.Number] = &pr
+		if pr.Number > maxNum {
+			maxNum = pr.Number
+		}
+	}
+	s.nextPRNumber = maxNum + 1
+	if s.nextPRNumber == 1 {
+		// No pre-loaded PRs: start numbering at something that can't collide
+		// with a default test assumption.
+		s.nextPRNumber = 100
+	}
+	return s
+}
+
+// normalizeStubPR fills in deterministic defaults for unset fields.
+func normalizeStubPR(pr *StubPR) {
+	if pr.Base == "" {
+		pr.Base = "main"
+	}
+	if pr.State == "" {
+		pr.State = PRStateOpen
+	}
+	if pr.HeadSHA == "" {
+		pr.HeadSHA = fmt.Sprintf("stub-sha-%d", pr.Number)
+	}
+	if pr.URL == "" {
+		pr.URL = fmt.Sprintf("https://github.com/owner/repo/pull/%d", pr.Number)
+	}
+}
+
+func (s *stubGitHub) Available() bool { return s.cfg.Available }
+
+func (s *stubGitHub) FindOpenPR(branch, repoURL string) (int, error) {
+	if s.cfg.FindOpenPRErr != nil {
+		return 0, s.cfg.FindOpenPRErr
+	}
+	for _, pr := range s.prs {
+		if pr.State == PRStateOpen && pr.Branch == branch {
+			return pr.Number, nil
+		}
+	}
+	return 0, nil
+}
+
+func (s *stubGitHub) CreatePR(opts CreatePROpts) (int, error) {
+	if s.cfg.CreatePRErr != nil {
+		return 0, s.cfg.CreatePRErr
+	}
+	num := s.nextPRNumber
+	s.nextPRNumber++
+	pr := &StubPR{
+		Number: num,
+		Title:  opts.Title,
+		Branch: opts.Head,
+		Base:   opts.Base,
+		State:  PRStateOpen,
+	}
+	normalizeStubPR(pr)
+	s.prs[num] = pr
+	return num, nil
+}
+
+func (s *stubGitHub) MergePR(prNumber int, _ string, _ MergeOpts) MergeResult {
+	pr, ok := s.prs[prNumber]
+	if !ok {
+		return MergeResult{Merged: false, Message: fmt.Sprintf("PR %d not found", prNumber)}
+	}
+	if pr.State != PRStateOpen {
+		return MergeResult{Merged: false, Message: fmt.Sprintf("PR %d not open (state=%s)", prNumber, pr.State)}
+	}
+	if pr.Conflicted {
+		return MergeResult{Conflict: true, Message: fmt.Sprintf("PR %d has merge conflicts", prNumber)}
+	}
+	if pr.Blocked {
+		return MergeResult{Blocked: true, Message: fmt.Sprintf("PR %d blocked by branch protection", prNumber)}
+	}
+	pr.State = PRStateMerged
+	return MergeResult{Merged: true}
+}
+
+func (s *stubGitHub) ListChecks(prNumber int, _ string) ([]CICheckResult, error) {
+	return s.cfg.Checks[prNumber], s.cfg.ListChecksErr
+}
+
+func (s *stubGitHub) EditPR(prNumber int, _, title, _ string) error {
+	if s.cfg.EditPRErr != nil {
+		return s.cfg.EditPRErr
+	}
+	if pr, ok := s.prs[prNumber]; ok {
+		pr.Title = title
+	}
+	return nil
+}
+
+func (s *stubGitHub) GetRunLog(_ int, _ string) string {
+	return s.cfg.RunLog
+}
+
+func (s *stubGitHub) FindPR(branch, _ string) (int, string, string, error) {
+	if s.cfg.FindPRErr != nil {
+		return 0, "", "", s.cfg.FindPRErr
+	}
+	for _, pr := range s.prs {
+		if pr.Branch == branch {
+			return pr.Number, pr.Title, pr.URL, nil
+		}
+	}
+	return 0, "", "", nil
+}
+
+func (s *stubGitHub) SearchPR(_, _ string) (int, error) {
+	return s.cfg.SearchPRResult, s.cfg.SearchPRErr
+}
+
+func (s *stubGitHub) PRDiff(_ string, _ int) (string, error) {
+	return s.cfg.PRDiffOutput, s.cfg.PRDiffErr
+}
+
+func (s *stubGitHub) GetPR(_ string, prNumber int) (*PRDetail, error) {
+	if s.cfg.GetPRErr != nil {
+		return nil, s.cfg.GetPRErr
+	}
+	pr, ok := s.prs[prNumber]
+	if !ok {
+		return nil, nil
+	}
+	return &PRDetail{
+		State:   pr.State,
+		BaseRef: pr.Base,
+		HeadRef: pr.Branch,
+		HeadSHA: pr.HeadSHA,
+	}, nil
+}
+
+func (s *stubGitHub) ListOpenPRBranches(_ string) ([]string, error) {
+	if s.cfg.ListOpenPRBranchesErr != nil {
+		return nil, s.cfg.ListOpenPRBranchesErr
+	}
+	// Collect open PR branches in deterministic (number-ascending) order so
+	// tests don't depend on map iteration order.
+	nums := make([]int, 0, len(s.prs))
+	for n := range s.prs {
+		nums = append(nums, n)
+	}
+	sortInts(nums)
+	var branches []string
+	for _, n := range nums {
+		if s.prs[n].State == PRStateOpen {
+			branches = append(branches, s.prs[n].Branch)
+		}
+	}
+	return branches, nil
+}
+
+func (s *stubGitHub) ReopenPR(prNumber int, _ string) error {
+	if s.cfg.ReopenPRErr != nil {
+		return s.cfg.ReopenPRErr
+	}
+	if pr, ok := s.prs[prNumber]; ok {
+		pr.State = PRStateOpen
+	}
+	return nil
+}
+
+func (s *stubGitHub) CreatePRViaAPI(_ string, opts CreatePROpts) (int, error) {
+	if s.cfg.CreatePRViaAPIErr != nil {
+		return 0, s.cfg.CreatePRViaAPIErr
+	}
+	return s.CreatePR(opts)
+}
+
+func (s *stubGitHub) GetJobStepCount(_ string, _ int) (int, error) {
+	return s.cfg.JobStepCount, s.cfg.GetJobStepCountErr
+}
+
+func (s *stubGitHub) ListAllPRs(_ string) ([]PRInfo, error) {
+	if s.cfg.ListAllPRsErr != nil {
+		return nil, s.cfg.ListAllPRsErr
+	}
+	nums := make([]int, 0, len(s.prs))
+	for n := range s.prs {
+		nums = append(nums, n)
+	}
+	sortInts(nums)
+	out := make([]PRInfo, 0, len(nums))
+	for _, n := range nums {
+		pr := s.prs[n]
+		out = append(out, PRInfo{Number: pr.Number, Head: pr.Branch, Base: pr.Base, State: pr.State})
+	}
+	return out, nil
+}
+
+func (s *stubGitHub) DetectActiveReviewers(_ string) ([]Reviewer, error) {
+	return s.cfg.Reviewers, s.cfg.DetectReviewersErr
+}
+
+func (s *stubGitHub) PollReview(_, _ string, _ int, _ time.Duration) (*AutoReview, error) {
+	return s.cfg.PollReviewResult, s.cfg.PollReviewErr
+}
+
+func (s *stubGitHub) GetRequiredChecks(_, _ string) ([]string, error) {
+	return s.cfg.RequiredChecks, s.cfg.RequiredChecksErr
+}
+
+func (s *stubGitHub) ReplyToReviewComment(_ string, _, _ int, _ string) error {
+	return s.cfg.ReplyToReviewErr
+}
+
+func (s *stubGitHub) FetchReviewThreadIDs(_ string, _ int, _ []int) (map[int]string, error) {
+	return s.cfg.FetchThreadIDs, s.cfg.FetchThreadIDsErr
+}
+
+func (s *stubGitHub) ResolveReviewThread(_ string) error {
+	return s.cfg.ResolveThreadErr
+}
+
+// sortInts sorts a slice in ascending order. Local helper to avoid importing
+// sort in this file purely for one call site.
+func sortInts(a []int) {
+	for i := 1; i < len(a); i++ {
+		for j := i; j > 0 && a[j-1] > a[j]; j-- {
+			a[j-1], a[j] = a[j], a[j-1]
+		}
+	}
+}

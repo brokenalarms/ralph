@@ -148,6 +148,9 @@ func (c *capturingGitHub) CreatePR(opts CreatePROpts) (int, error) {
 
 // stubManager creates a Manager wired to stubs for both git commands and
 // GitHub operations. The Manager's dirs are set to the given directory.
+//
+// Deprecated: migrating callers to newRepoForTest as part of the
+// stub-interface rewrite. Once no callers remain, this helper is deleted.
 func stubManager(dir string, runner *stubRunner, gh *StubGitHub) *Repo {
 	if runner == nil {
 		runner = newStubRunner()
@@ -164,6 +167,91 @@ func stubManager(dir string, runner *stubRunner, gh *StubGitHub) *Repo {
 		state:      newMemState(),
 		logger:     discardLog{},
 	}
+}
+
+// newRepoForTest constructs a *Repo wired to test-supplied dependencies.
+// This is the one and only seam for building a real Repo with an injected
+// stub gitHub inside internal/git tests. Package-private and _test.go-only:
+// unreachable from production code and from tests in other packages.
+//
+// Callers always supply cfg and gh — these are the two things a test must
+// state. Runner and state default to no-op stubs (newStubRunner() returns
+// "", nil for any command; newMemState() is an in-memory map). Tests that
+// need specific runner or state behavior pass them explicitly via the
+// variadic options.
+//
+// Rationale: passing nil for dependencies is fragile — a code change that
+// touches an unexercised path panics instead of failing cleanly. Defaulting
+// here means every path produces sensible no-op behavior, and tests that
+// care about a particular dependency opt in rather than opting out.
+func newRepoForTest(cfg Config, gh gitHub, opts ...repoTestOpt) *Repo {
+	tc := repoTestDeps{
+		runner: newStubRunner(),
+		state:  newMemState(),
+	}
+	for _, opt := range opts {
+		opt(&tc)
+	}
+	if gh == nil {
+		gh = NewStubGitHubCfg(StubGitHubConfig{})
+	}
+	projectDir := cfg.ProjectDir
+	if projectDir == "" {
+		projectDir = cfg.WorkDir
+	}
+	return &Repo{
+		projectDir:                  projectDir,
+		workDir:                     cfg.WorkDir,
+		ralphDir:                    cfg.RalphDir,
+		baseBranch:                  cfg.BaseBranch,
+		resume:                      cfg.Resume,
+		logger:                      cfg.Logger,
+		compileCheckTimeout:         cfg.CompileCheckTimeout,
+		ciPollTimeout:               cfg.CIPollTimeout,
+		copilotGatedTimeout:         cfg.CopilotGatedTimeout,
+		copilotOpportunisticTimeout: cfg.CopilotOpportunisticTimeout,
+		codeRabbitTimeout:           cfg.CodeRabbitTimeout,
+		github:                      gh,
+		runner:                      tc.runner,
+		state:                       tc.state,
+		worktreeBranch:              tc.worktreeBranch,
+		branchRenamed:               tc.branchRenamed,
+	}
+}
+
+// repoTestDeps holds the optional test dependencies. Accessed only through
+// the repoTestOpt functions below.
+type repoTestDeps struct {
+	runner         Runner
+	state          stateStore
+	worktreeBranch string
+	branchRenamed  bool
+}
+
+type repoTestOpt func(*repoTestDeps)
+
+// withRunner overrides the default no-op runner. Use when a test needs to
+// inspect or control git subprocess invocations.
+func withRunner(r Runner) repoTestOpt {
+	return func(d *repoTestDeps) { d.runner = r }
+}
+
+// withState overrides the default in-memory state store.
+func withState(s stateStore) repoTestOpt {
+	return func(d *repoTestDeps) { d.state = s }
+}
+
+// withWorktreeBranch sets the Repo's worktreeBranch field, which production
+// code normally initializes through SetupWorktree / RenameBranchTo. Tests
+// use this to pre-seed a specific branch name without running real git.
+func withWorktreeBranch(name string) repoTestOpt {
+	return func(d *repoTestDeps) { d.worktreeBranch = name }
+}
+
+// withBranchRenamed sets the Repo's branchRenamed flag. Production code
+// sets this inside RenameBranchForTask after a successful rename.
+func withBranchRenamed(v bool) repoTestOpt {
+	return func(d *repoTestDeps) { d.branchRenamed = v }
 }
 
 // errRunner returns a Runner where every call returns an error.
