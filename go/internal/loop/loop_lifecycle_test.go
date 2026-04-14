@@ -27,7 +27,7 @@ func TestLoop_AllTasksComplete(t *testing.T) {
 		Total:     3,
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 
 	logger := logging.New(nil)
 	cfg := Config{
@@ -71,7 +71,7 @@ func TestLoop_NoTasksError(t *testing.T) {
 		Total:     0,
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 
 	logger := logging.New(nil)
 	cfg := Config{
@@ -118,7 +118,7 @@ func TestLoop_StopFileDetection(t *testing.T) {
 		NextTask:  "Some task",
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 
 	logger := logging.New(nil)
 	cfg := Config{
@@ -167,7 +167,7 @@ func TestLoop_ContextCancellation(t *testing.T) {
 		NextTask:  "Some task",
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 
 	logger := logging.New(nil)
 
@@ -214,7 +214,7 @@ func TestLoop_MaxIterationsFromState(t *testing.T) {
 		Total:     1,
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 
 	logger := logging.New(nil)
 	cfg := Config{
@@ -265,7 +265,7 @@ func TestLoop_WaitResumeOnNewTasks(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 
 	var (
 		callsMu sync.Mutex
@@ -352,7 +352,7 @@ func TestLoop_WaitExitOnCancel(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -398,7 +398,7 @@ func TestLoop_WaitExitOnStopFile(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -446,7 +446,7 @@ func TestLoop_NoWaitExitsImmediately(t *testing.T) {
 	}
 
 	logger := logging.New(nil)
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -534,7 +534,7 @@ func TestLoop_LifecycleStates(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -599,7 +599,7 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 		result: claude.Result{SignalDetected: true, Summary: "done"},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -680,7 +680,7 @@ func TestLoop_OnIterationStartCalledEachIteration(t *testing.T) {
 		result: claude.Result{SignalDetected: true},
 	}
 
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
@@ -730,7 +730,7 @@ func TestLoop_WaitMode_ReReadsSkippedTasksOnTick(t *testing.T) {
 	backend.BackendLabel = "beads"
 
 	logger := logging.New(nil)
-	gm := &git.StubRepo{ProjectDir: dir, WorkDir: dir}
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 	cfg := Config{
 		Dirs: workctx.WorkContext{
 			ProjectDir: dir,
