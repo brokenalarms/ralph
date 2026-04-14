@@ -11,7 +11,7 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 )
 
-// Log is the logging interface used by Repo and its helpers. A single Emit
+// Log is the logging interface used by repo and its helpers. A single Emit
 // method handles full lines and in-place partial lines via logging.Opts.Append.
 // *logging.Logger satisfies this; tests provide stubs.
 type Log interface {
@@ -44,9 +44,9 @@ type Config struct {
 	CodeRabbitTimeout           time.Duration
 }
 
-// Repo implements Ops. Constructed by New(); tests in the git package
+// repo implements Ops. Constructed by New(); tests in the git package
 // construct it directly for stub injection.
-type Repo struct {
+type repo struct {
 	projectDir     string
 	workDir        string
 	worktreeBranch string
@@ -77,7 +77,7 @@ func New(cfg Config) Ops {
 	if projectDir == "" {
 		projectDir = cfg.WorkDir
 	}
-	return &Repo{
+	return &repo{
 		projectDir:                  projectDir,
 		workDir:                     cfg.WorkDir,
 		ralphDir:                    cfg.RalphDir,
@@ -110,12 +110,12 @@ func newStateStore(ralphDir string) stateStore {
 
 // SetKnownPRNumber stores a PR number discovered earlier (e.g. during Ship)
 // so that AutoMergeCurrentBranch and FlushUnpushedWork can skip the FindOpenPR lookup.
-func (r *Repo) SetKnownPRNumber(n int) {
+func (r *repo) SetKnownPRNumber(n int) {
 	r.knownPRNumber = n
 }
 
 // Init runs the git pre-flight checks and worktree setup that must
-// complete before the orchestrator can use this Repo. Bundles the
+// complete before the orchestrator can use this repo. Bundles the
 // individual operations so callers don't have to know the right
 // sequence:
 //
@@ -137,9 +137,9 @@ func (r *Repo) SetKnownPRNumber(n int) {
 //
 // Init should be called once immediately after New, before any task
 // execution. Production callers (cmd/ralph) call this; tests that don't
-// exercise worktree setup can skip it and use the constructed Repo
+// exercise worktree setup can skip it and use the constructed repo
 // directly.
-func (r *Repo) Init(ctx context.Context) error {
+func (r *repo) Init(ctx context.Context) error {
 	if err := r.ValidateRemoteBranch(ctx); err != nil {
 		return err
 	}
@@ -157,7 +157,7 @@ func (r *Repo) Init(ctx context.Context) error {
 }
 
 // SetupWorktree creates (or resumes) a git worktree for isolated work.
-func (r *Repo) SetupWorktree(ctx context.Context) error {
+func (r *repo) SetupWorktree(ctx context.Context) error {
 	r.workDir = r.projectDir
 
 	if !IsGitRepo(r.projectDir) {
@@ -236,7 +236,7 @@ func (r *Repo) SetupWorktree(ctx context.Context) error {
 // Only restores the worktree path and state — no rebase or reset. The actual
 // branch setup happens later in checkoutExistingBranch once the task is known
 // and the correct base branch can be determined.
-func (r *Repo) tryResumeWorktree() error {
+func (r *repo) tryResumeWorktree() error {
 	if r.state == nil {
 		return fmt.Errorf("no state store")
 	}
@@ -263,7 +263,7 @@ func (r *Repo) tryResumeWorktree() error {
 // withStash stashes any uncommitted changes, runs fn, then reapplies the stash.
 // Used by EnsureUpToDate and RebaseOntoDefaultBranch to avoid duplicating
 // the stash/pop logic.
-func (r *Repo) withStash(stashMsg string, fn func()) {
+func (r *repo) withStash(stashMsg string, fn func()) {
 	dirty := r.gitCmdErr(r.workDir, "diff", "--quiet") != nil ||
 		r.gitCmdErr(r.workDir, "diff", "--cached", "--quiet") != nil
 	if dirty {
@@ -289,7 +289,7 @@ func (r *Repo) withStash(stashMsg string, fn func()) {
 // changes, rebases onto origin, and reapplies the stash. If rebase fails
 // after auto-resolve, it aborts and returns an error — the caller decides
 // what to do (e.g. push anyway and let GitHub handle merge conflicts).
-func (r *Repo) EnsureUpToDate(ctx context.Context) error {
+func (r *repo) EnsureUpToDate(ctx context.Context) error {
 	if r.workDir == "" || r.workDir == r.projectDir {
 		return nil
 	}
@@ -365,7 +365,7 @@ func (r *Repo) EnsureUpToDate(ctx context.Context) error {
 	return result
 }
 
-func (r *Repo) tryRebase(ctx context.Context, defaultBranch string) bool {
+func (r *repo) tryRebase(ctx context.Context, defaultBranch string) bool {
 	if r.gitCmdErrCtx(ctx, r.workDir, "rebase", "--update-refs", "origin/"+defaultBranch) == nil {
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch}, "Rebased onto origin/%s", defaultBranch)
 		return true
@@ -373,7 +373,7 @@ func (r *Repo) tryRebase(ctx context.Context, defaultBranch string) bool {
 	return false
 }
 
-func (r *Repo) tryAutoResolve(ctx context.Context, defaultBranch string) bool {
+func (r *repo) tryAutoResolve(ctx context.Context, defaultBranch string) bool {
 	if r.autoResolveAndContinue(ctx, defaultBranch) {
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: defaultBranch}, "Rebased onto origin/%s (auto-resolved)", defaultBranch)
 		return true
@@ -387,7 +387,7 @@ func (r *Repo) tryAutoResolve(ctx context.Context, defaultBranch string) bool {
 // Records the previous branch name for stacked PR targeting.
 // Only renames once per task (tracked by BranchRenamed).
 // Returns an error if the rename fails — callers must abort the iteration.
-func (r *Repo) RenameBranchForTask(taskDesc, taskID string) error {
+func (r *repo) RenameBranchForTask(taskDesc, taskID string) error {
 	if r.branchRenamed || r.worktreeBranch == "" || taskDesc == "" {
 		return nil
 	}
@@ -418,7 +418,7 @@ func (r *Repo) RenameBranchForTask(taskDesc, taskID string) error {
 
 // RenameBranchTo renames the current worktree branch to a specific name.
 // Used when the bead already has a stored branch name from a previous run.
-func (r *Repo) RenameBranchTo(name string) {
+func (r *repo) RenameBranchTo(name string) {
 	if r.branchRenamed || r.worktreeBranch == "" || name == "" {
 		return
 	}
@@ -451,7 +451,7 @@ func (r *Repo) RenameBranchTo(name string) {
 // (in-progress work on a task branch), the reset is skipped so EnsureUpToDate
 // can rebase them safely — preserving work across loop restarts.
 // No-ops silently when the worktree is already at the target ref.
-func (r *Repo) ResetToDefaultBranch() {
+func (r *repo) ResetToDefaultBranch() {
 	defaultBranch := r.detectDefaultBranch()
 	_ = r.gitCmdErr(r.workDir, "fetch", "origin", defaultBranch)
 	target := "origin/" + defaultBranch
@@ -476,7 +476,7 @@ func (r *Repo) ResetToDefaultBranch() {
 
 // SetPrevBranch sets the previous branch for stacked PR targeting and
 // persists it to state so it survives process restarts.
-func (r *Repo) SetPrevBranch(branch string) {
+func (r *repo) SetPrevBranch(branch string) {
 	r.prevBranch = branch
 	if r.state != nil {
 		_ = r.state.Write("prev_branch", branch)
@@ -488,7 +488,7 @@ func (r *Repo) SetPrevBranch(branch string) {
 // and the ref can be dropped without data loss. Unlike `git branch -d`, this
 // ignores the upstream-tracking config (which is preserved across renames and
 // gives false negatives when a task branch inherits origin/main as upstream).
-func (r *Repo) branchSafeToDelete(branch string) bool {
+func (r *repo) branchSafeToDelete(branch string) bool {
 	defaultBranch := r.detectDefaultBranch()
 	for _, ref := range []string{"origin/" + defaultBranch, defaultBranch} {
 		if !r.refExists(r.projectDir, ref) {
@@ -505,7 +505,7 @@ func (r *Repo) branchSafeToDelete(branch string) bool {
 // gets its own branch. RenameBranchForTask will rename it to a task-specific
 // name before the first commit. Uncommitted changes are discarded only when
 // switching to a different task; resuming the same task preserves in-progress work.
-func (r *Repo) PrepareForNextTask(nextTaskID string) {
+func (r *repo) PrepareForNextTask(nextTaskID string) {
 	r.branchRenamed = false
 	if r.state != nil {
 		_ = r.state.Write("branch_renamed", "false")
@@ -550,7 +550,7 @@ func (r *Repo) PrepareForNextTask(nextTaskID string) {
 // SquashToOneCommit squashes all commits since baseSHA into a single commit
 // with the given message. No-op if there is already exactly one commit
 // ahead of base. Returns an error if there are no commits to squash.
-func (r *Repo) SquashToOneCommit(baseSHA, message string) error {
+func (r *repo) SquashToOneCommit(baseSHA, message string) error {
 	countStr := r.gitOutput(r.workDir, "rev-list", "--count", baseSHA+"..HEAD")
 	count := 0
 	if countStr != "" {
@@ -568,7 +568,7 @@ func (r *Repo) SquashToOneCommit(baseSHA, message string) error {
 }
 
 // RemoveWorktree force-removes a worktree and deletes its branch.
-func (r *Repo) RemoveWorktree() {
+func (r *repo) RemoveWorktree() {
 	r.gitCmd(r.projectDir, "worktree", "remove", "--force", r.workDir)
 	r.gitCmd(r.projectDir, "branch", "-D", r.worktreeBranch)
 }
@@ -576,7 +576,7 @@ func (r *Repo) RemoveWorktree() {
 // TagTaskStart creates a lightweight git tag marking the start of a task iteration.
 // The tag name is task/{taskID}/start when a backend ID is available,
 // or task/{seq}-{slug}/start derived from the current branch name.
-func (r *Repo) TagTaskStart(taskID string) {
+func (r *repo) TagTaskStart(taskID string) {
 	tag := r.taskTag(taskID, "start")
 	if tag == "" {
 		return
@@ -587,7 +587,7 @@ func (r *Repo) TagTaskStart(taskID string) {
 }
 
 // TagTaskEnd creates a lightweight git tag marking the end of a task iteration.
-func (r *Repo) TagTaskEnd(taskID string) {
+func (r *repo) TagTaskEnd(taskID string) {
 	tag := r.taskTag(taskID, "end")
 	if tag == "" {
 		return
@@ -599,7 +599,7 @@ func (r *Repo) TagTaskEnd(taskID string) {
 
 // taskTag builds a tag name like task/{id}/{suffix}. Returns empty
 // string if there's not enough info to build a meaningful tag.
-func (r *Repo) taskTag(taskID, suffix string) string {
+func (r *repo) taskTag(taskID, suffix string) string {
 	if r.workDir == "" || r.workDir == r.projectDir {
 		return ""
 	}

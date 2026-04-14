@@ -1008,7 +1008,7 @@ exit 1
 	opts := CreatePROpts{
 		Head: "ralph/my-branch",
 		Base: "main",
-		Repo: "https://github.com/owner/repo.git",
+		repo: "https://github.com/owner/repo.git",
 	}
 	prNum, err := g.CreatePRViaAPI("owner/repo", opts)
 	if err != nil {

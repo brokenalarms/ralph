@@ -47,11 +47,11 @@ func refExists(dir, ref string) bool {
 	return gitCmdErr(dir, "rev-parse", "--verify", ref) == nil
 }
 
-// Repo-level git command wrappers that delegate to the injected Runner.
+// repo-level git command wrappers that delegate to the injected Runner.
 // These mirror the standalone wrappers above but route through r.run()
 // so tests can intercept all git calls.
 
-func (r *Repo) run() Runner {
+func (r *repo) run() Runner {
 	if r.runner != nil {
 		return r.runner
 	}
@@ -60,59 +60,59 @@ func (r *Repo) run() Runner {
 
 // GetRunner returns the injected Runner, or the package default if none is set.
 // Used by cmd/ralph functions that need to route git commands through the same
-// runner as the Repo for testability.
-func (r *Repo) GetRunner() Runner {
+// runner as the repo for testability.
+func (r *repo) GetRunner() Runner {
 	return r.run()
 }
 
-func (r *Repo) gitCmd(dir string, args ...string) {
+func (r *repo) gitCmd(dir string, args ...string) {
 	r.run().Run(context.Background(), dir, args...)
 }
 
-func (r *Repo) gitCmdCtx(ctx context.Context, dir string, args ...string) {
+func (r *repo) gitCmdCtx(ctx context.Context, dir string, args ...string) {
 	r.run().Run(ctx, dir, args...)
 }
 
-func (r *Repo) gitCmdErr(dir string, args ...string) error {
+func (r *repo) gitCmdErr(dir string, args ...string) error {
 	_, err := r.run().Run(context.Background(), dir, args...)
 	return err
 }
 
-func (r *Repo) gitCmdErrCtx(ctx context.Context, dir string, args ...string) error {
+func (r *repo) gitCmdErrCtx(ctx context.Context, dir string, args ...string) error {
 	_, err := r.run().Run(ctx, dir, args...)
 	return err
 }
 
-func (r *Repo) gitOutput(dir string, args ...string) string {
+func (r *repo) gitOutput(dir string, args ...string) string {
 	out, _ := r.run().Run(context.Background(), dir, args...)
 	return out
 }
 
-func (r *Repo) refExists(dir, ref string) bool {
+func (r *repo) refExists(dir, ref string) bool {
 	return r.gitCmdErr(dir, "rev-parse", "--verify", ref) == nil
 }
 
 // DetectDefaultBranch returns the resolved default branch name.
-func (r *Repo) DetectDefaultBranch() string {
+func (r *repo) DetectDefaultBranch() string {
 	return r.detectDefaultBranch()
 }
 
-func (r *Repo) detectDefaultBranch() string {
+func (r *repo) detectDefaultBranch() string {
 	return detectDefaultBranch(r.projectDir, r.baseBranch, r.run())
 }
 
 // OriginRev returns the commit hash of origin/<branch>.
-func (r *Repo) OriginRev(branch string) string {
+func (r *repo) OriginRev(branch string) string {
 	return r.gitOutput(r.workDir, "rev-parse", "origin/"+branch)
 }
 
-func (r *Repo) remoteExists() bool {
+func (r *repo) remoteExists() bool {
 	return r.gitOutput(r.projectDir, "remote", "get-url", "origin") != ""
 }
 
 // FindRemoteBranchForTask searches remote branches for one containing the
 // given task/bead ID. Returns the branch name or empty string.
-func (r *Repo) FindRemoteBranchForTask(taskID string) string {
+func (r *repo) FindRemoteBranchForTask(taskID string) string {
 	if taskID == "" {
 		return ""
 	}
@@ -130,7 +130,7 @@ func (r *Repo) FindRemoteBranchForTask(taskID string) string {
 
 // CheckoutRemoteBranch checks out a remote branch in the worktree,
 // creating a local tracking branch.
-func (r *Repo) CheckoutRemoteBranch(branch string) {
+func (r *repo) CheckoutRemoteBranch(branch string) {
 	_ = r.gitCmdErr(r.workDir, "fetch", "origin", branch)
 	_ = r.gitCmdErr(r.workDir, "checkout", "-B", branch, "origin/"+branch)
 	r.worktreeBranch = branch
@@ -142,28 +142,28 @@ func (r *Repo) CheckoutRemoteBranch(branch string) {
 }
 
 // DeleteRemoteBranchByName deletes a specific remote branch.
-func (r *Repo) DeleteRemoteBranchByName(branch string) error {
+func (r *repo) DeleteRemoteBranchByName(branch string) error {
 	return r.gitCmdErr(r.workDir, "push", "origin", "--delete", branch)
 }
 
 // RemoteBranchDiffFromMain returns the diff stat between origin/<branch> and
 // origin/<defaultBranch>. Empty means no difference (work is on main).
-func (r *Repo) RemoteBranchDiffFromMain(branch, defaultBranch string) string {
+func (r *repo) RemoteBranchDiffFromMain(branch, defaultBranch string) string {
 	return r.gitOutput(r.workDir, "diff", "--stat", "origin/"+defaultBranch, "origin/"+branch)
 }
 
 // RemoteURL returns the origin remote URL.
-func (r *Repo) RemoteURL() string {
+func (r *repo) RemoteURL() string {
 	return r.gitOutput(r.projectDir, "remote", "get-url", "origin")
 }
 
 // FetchBranch fetches a specific branch from origin.
-func (r *Repo) FetchBranch(branch string) error {
+func (r *repo) FetchBranch(branch string) error {
 	return r.gitCmdErr(r.workDir, "fetch", "origin", branch)
 }
 
 // RemoteBranchHasCommits checks if origin/<branch> has commits beyond the default branch.
-func (r *Repo) RemoteBranchHasCommits(branch string) bool {
+func (r *repo) RemoteBranchHasCommits(branch string) bool {
 	remote := "origin/" + branch
 	if !r.refExists(r.workDir, remote) {
 		return false
@@ -176,7 +176,7 @@ func (r *Repo) RemoteBranchHasCommits(branch string) bool {
 // RemoteBranchIsOnMain returns true if a remote branch is a descendant of
 // origin's default branch (i.e., main is an ancestor). Returns false if the
 // branch has diverged — caller should treat it as stale and start fresh.
-func (r *Repo) RemoteBranchIsOnMain(branch string) bool {
+func (r *repo) RemoteBranchIsOnMain(branch string) bool {
 	defaultBranch := r.detectDefaultBranch()
 	remote := "origin/" + branch
 
@@ -196,7 +196,7 @@ func (r *Repo) RemoteBranchIsOnMain(branch string) bool {
 // BranchIsAncestorOfMain returns true if a remote branch's tip is an
 // ancestor of origin's default branch — meaning its work has already
 // landed on main (via merge or squash-merge).
-func (r *Repo) BranchIsAncestorOfMain(branch string) bool {
+func (r *repo) BranchIsAncestorOfMain(branch string) bool {
 	defaultBranch := r.detectDefaultBranch()
 	remote := "origin/" + branch
 	return r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", remote, "origin/"+defaultBranch) == nil
@@ -206,13 +206,13 @@ func (r *Repo) BranchIsAncestorOfMain(branch string) bool {
 // ancestor of the remote branch — meaning the branch is cleanly ahead
 // of main with unmerged work. Returns false for landed branches (equal
 // to or behind main) and diverged branches (neither is ancestor).
-func (r *Repo) BranchIsAheadOfMain(branch string) bool {
+func (r *repo) BranchIsAheadOfMain(branch string) bool {
 	defaultBranch := r.detectDefaultBranch()
 	remote := "origin/" + branch
 	return r.gitCmdErr(r.workDir, "merge-base", "--is-ancestor", "origin/"+defaultBranch, remote) == nil
 }
 
-func (r *Repo) mRebaseInProgress() bool {
+func (r *repo) mRebaseInProgress() bool {
 	gitDir := r.gitOutput(r.workDir, "rev-parse", "--git-dir")
 	if gitDir == "" {
 		return false
@@ -222,7 +222,7 @@ func (r *Repo) mRebaseInProgress() bool {
 	return errMerge == nil || errApply == nil
 }
 
-func (r *Repo) findWorktreeForBranch(dir, branch string) string {
+func (r *repo) findWorktreeForBranch(dir, branch string) string {
 	out := r.gitOutput(dir, "worktree", "list", "--porcelain")
 	return parseWorktreeForBranch(out, branch)
 }

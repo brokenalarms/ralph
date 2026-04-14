@@ -340,7 +340,7 @@ func TestClearSignalFiles_PreservesState(t *testing.T) {
 // Verifies the dirty-working-tree check rejects working trees with
 // uncommitted changes, preventing the .gitignore commit from sweeping
 // in unrelated staged work. The check itself lives inline in runMain
-// after git.Repo construction; this test exercises gm.HasUncommittedChanges
+// after git.New construction; this test exercises gm.HasUncommittedChanges
 // directly with a real git repo.
 func TestDirtyWorkingTree_HasUncommittedChanges(t *testing.T) {
 	dir := t.TempDir()

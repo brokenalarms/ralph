@@ -31,18 +31,17 @@ func initBareRepoWithOrigin(t *testing.T) (projectDir string, bareDir string) {
 
 // setupRebaseMgr creates a Manager with a worktree ready for rebase testing.
 // The worktree's origin points at the bare repo so fetch/push work correctly.
-func setupRebaseMgr(t *testing.T, project, bare string) *Repo {
+func setupRebaseMgr(t *testing.T, project, bare string) *repo {
 	t.Helper()
 	ralphDir := filepath.Join(project, ".ralph")
 	state := newMemState()
 
-	mgr := &Repo{
-		projectDir:  project,
-		baseBranch: "main",
-		ralphDir:    ralphDir,
-				state:       state,
-		logger:      &testLog{},
-	}
+	mgr := newRepoForTest(Config{
+		ProjectDir: project,
+		BaseBranch: "main",
+		RalphDir:   ralphDir,
+		Logger:     &testLog{},
+	}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -222,13 +221,12 @@ func TestTagTaskStart_WithTaskID(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Repo{
-		projectDir:  project,
-		baseBranch: "main",
-		ralphDir:    ralphDir,
-				state:       newMemState(),
-		logger:      &testLog{},
-	}
+	mgr := newRepoForTest(Config{
+		ProjectDir: project,
+		BaseBranch: "main",
+		RalphDir:   ralphDir,
+		Logger:     &testLog{},
+	}, nil, withRunner(&execRunner{}))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -245,13 +243,12 @@ func TestTagTaskEnd_WithTaskID(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Repo{
-		projectDir:  project,
-		baseBranch: "main",
-		ralphDir:    ralphDir,
-				state:       newMemState(),
-		logger:      &testLog{},
-	}
+	mgr := newRepoForTest(Config{
+		ProjectDir: project,
+		BaseBranch: "main",
+		RalphDir:   ralphDir,
+		Logger:     &testLog{},
+	}, nil, withRunner(&execRunner{}))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -268,13 +265,12 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Repo{
-		projectDir:  project,
-		baseBranch: "main",
-		ralphDir:    ralphDir,
-				state:       newMemState(),
-		logger:      &testLog{},
-	}
+	mgr := newRepoForTest(Config{
+		ProjectDir: project,
+		BaseBranch: "main",
+		RalphDir:   ralphDir,
+		Logger:     &testLog{},
+	}, nil, withRunner(&execRunner{}))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -289,12 +285,12 @@ func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
 
 // Tags are no-ops when running without a worktree (WorkDir == ProjectDir)
 func TestTagTaskStart_NoOpWithoutWorktree(t *testing.T) {
-	mgr := &Repo{
-		projectDir: "/some/dir",
-		baseBranch: "main",
-		workDir:    "/some/dir",
-		logger:     &testLog{},
-	}
+	mgr := newRepoForTest(Config{
+		ProjectDir: "/some/dir",
+		BaseBranch: "main",
+		WorkDir:    "/some/dir",
+		Logger:     &testLog{},
+	}, nil)
 	mgr.TagTaskStart("ralph-abc")
 }
 
@@ -303,13 +299,12 @@ func TestTagTaskStart_SkipsWipBranch(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Repo{
-		projectDir:  project,
-		baseBranch: "main",
-		ralphDir:    ralphDir,
-				state:       newMemState(),
-		logger:      &testLog{},
-	}
+	mgr := newRepoForTest(Config{
+		ProjectDir: project,
+		BaseBranch: "main",
+		RalphDir:   ralphDir,
+		Logger:     &testLog{},
+	}, nil, withRunner(&execRunner{}))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -328,13 +323,12 @@ func TestTagStartEnd_DifferentCommits(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := &Repo{
-		projectDir:  project,
-		baseBranch: "main",
-		ralphDir:    ralphDir,
-				state:       newMemState(),
-		logger:      &testLog{},
-	}
+	mgr := newRepoForTest(Config{
+		ProjectDir: project,
+		BaseBranch: "main",
+		RalphDir:   ralphDir,
+		Logger:     &testLog{},
+	}, nil, withRunner(&execRunner{}))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}

@@ -44,8 +44,8 @@ import (
 //      state that the SUT drives between them.
 //
 // Tests deleted en masse (35 total). Phase D (git.NewForTest + a new
-// loop_integration_real_test.go that uses real *git.Repo against
-// initBareRepo) will re-add the 8 spec-enumerated integration candidates
+// loop_integration_real_test.go that uses a real git.Ops backed by an
+// in-process bare repo) will re-add the 8 spec-enumerated integration candidates
 // above, and loop-module unit-tests already cover the non-integration
 // scenarios through the migrated files in phase C (loop_completion_test.go,
 // loop_verification_test.go, loop_finalize_test.go, loop_signal_test.go,

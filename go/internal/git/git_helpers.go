@@ -99,21 +99,21 @@ func parseBranchList(out string) []string {
 	return branches
 }
 
-// Repo methods that mirror the package-level helpers but route
-// through the Repo's injected Runner.
+// repo methods that mirror the package-level helpers but route
+// through the repo's injected Runner.
 
-func (r *Repo) HasDiff() bool {
+func (r *repo) HasDiff() bool {
 	if r.gitOutput(r.workDir, "diff", "--stat") != "" {
 		return true
 	}
 	return r.gitOutput(r.workDir, "diff", "--cached", "--stat") != ""
 }
 
-func (r *Repo) HeadRev() string {
+func (r *repo) HeadRev() string {
 	return r.gitOutput(r.workDir, "rev-parse", "HEAD")
 }
 
-func (r *Repo) HasUncommittedChanges() bool {
+func (r *repo) HasUncommittedChanges() bool {
 	return r.hasUncommittedChangesIn(r.workDir)
 }
 
@@ -122,19 +122,19 @@ func (r *Repo) HasUncommittedChanges() bool {
 // Init runs the dirty-tree check before SetupWorktree has had a chance to
 // move WorkDir to a worktree subdirectory — so checking WorkDir would be
 // the wrong question.
-func (r *Repo) hasUncommittedChangesIn(dir string) bool {
+func (r *repo) hasUncommittedChangesIn(dir string) bool {
 	return r.gitCmdErr(dir, "diff", "--quiet") != nil ||
 		r.gitCmdErr(dir, "diff", "--cached", "--quiet") != nil
 }
 
-func (r *Repo) CommitAll(message string) {
+func (r *repo) CommitAll(message string) {
 	r.gitCmd(r.workDir, "add", "-A")
 	_ = r.gitCmdErr(r.workDir, "commit", "-m", message)
 }
 
 // RevertFilesToRef restores files to their state in the given ref and amends
 // the current commit. Used to undo out-of-scope changes made by fix agents.
-func (r *Repo) RevertFilesToRef(files []string, ref string) {
+func (r *repo) RevertFilesToRef(files []string, ref string) {
 	for _, f := range files {
 		_ = r.gitCmdErr(r.workDir, "checkout", ref, "--", f)
 	}
@@ -142,11 +142,11 @@ func (r *Repo) RevertFilesToRef(files []string, ref string) {
 	_ = r.gitCmdErr(r.workDir, "commit", "--amend", "--no-edit")
 }
 
-func (r *Repo) EmptyCommit(message string) {
+func (r *repo) EmptyCommit(message string) {
 	_ = r.gitCmdErr(r.workDir, "commit", "--allow-empty", "-m", message)
 }
 
-func (r *Repo) ChangedFiles(headBefore, headAfter string) []string {
+func (r *repo) ChangedFiles(headBefore, headAfter string) []string {
 	seen := make(map[string]bool)
 	var result []string
 
@@ -172,7 +172,7 @@ func (r *Repo) ChangedFiles(headBefore, headAfter string) []string {
 
 // DiffFilesBetween returns the list of files modified between two refs.
 // Unlike ChangedFiles, this does not include uncommitted or cached changes.
-func (r *Repo) DiffFilesBetween(from, to string) []string {
+func (r *repo) DiffFilesBetween(from, to string) []string {
 	if from == "" || to == "" || from == to {
 		return nil
 	}
@@ -187,21 +187,21 @@ func (r *Repo) DiffFilesBetween(from, to string) []string {
 	return files
 }
 
-func (r *Repo) DiffStatRange(from, to string) string {
+func (r *repo) DiffStatRange(from, to string) string {
 	if from == "" || to == "" || from == to {
 		return ""
 	}
 	return r.gitOutput(r.workDir, "diff", "--stat", from, to)
 }
 
-func (r *Repo) DiffFull(from, to string) string {
+func (r *repo) DiffFull(from, to string) string {
 	return r.gitOutput(r.workDir, "diff", from+".."+to)
 }
 
 // ConflictDiff returns the three-way merge diff between HEAD and the base
 // branch (or the default branch), showing what diverges. Used to give a
 // conflict resolution agent context about the conflicting changes.
-func (r *Repo) ConflictDiff() string {
+func (r *repo) ConflictDiff() string {
 	baseBranch := r.detectDefaultBranch()
 	if r.prevBranch != "" {
 		baseBranch = r.prevBranch
@@ -215,21 +215,21 @@ func (r *Repo) ConflictDiff() string {
 	return "Conflicting files:\n" + files + "\n\nDiff (ours vs base):\n" + diff
 }
 
-func (r *Repo) LogOneline(from, to string) string {
+func (r *repo) LogOneline(from, to string) string {
 	return r.gitOutput(r.workDir, "log", "--oneline", from+".."+to)
 }
 
-func (r *Repo) RecentChangedFiles(n int) string {
+func (r *repo) RecentChangedFiles(n int) string {
 	return r.gitOutput(r.workDir, "diff", "--name-only", fmt.Sprintf("HEAD~%d", n), "HEAD")
 }
 
-func (r *Repo) ListProjectBranches() []string {
+func (r *repo) ListProjectBranches() []string {
 	out := r.gitOutput(r.projectDir, "branch", "--list", BranchListPattern(), "--sort=refname")
 	return parseBranchList(out)
 }
 
 
-func (r *Repo) ValidateRemoteBranch(ctx context.Context) error {
+func (r *repo) ValidateRemoteBranch(ctx context.Context) error {
 	branch := r.detectDefaultBranch()
 	r.gitCmdCtx(ctx, r.projectDir, "fetch", "origin", branch)
 	if !r.refExists(r.projectDir, "origin/"+branch) {
@@ -238,7 +238,7 @@ func (r *Repo) ValidateRemoteBranch(ctx context.Context) error {
 	return nil
 }
 
-func (r *Repo) EnsureGitignored(entry string) {
+func (r *repo) EnsureGitignored(entry string) {
 	gitignorePath := filepath.Join(r.projectDir, ".gitignore")
 	existing := ""
 	if data, err := os.ReadFile(gitignorePath); err == nil {
@@ -266,7 +266,7 @@ func (r *Repo) EnsureGitignored(entry string) {
 	}
 }
 
-func (r *Repo) PruneOrphanedWorktrees() {
+func (r *repo) PruneOrphanedWorktrees() {
 	worktreeRoot := filepath.Join(r.ralphDir, "worktrees")
 	entries, err := os.ReadDir(worktreeRoot)
 	if err != nil {

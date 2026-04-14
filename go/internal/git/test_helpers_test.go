@@ -132,8 +132,8 @@ type discardLog struct{}
 
 func (discardLog) Emit(logging.Opts, string, ...any) {}
 
-// newRepoForTest constructs a *Repo wired to test-supplied dependencies.
-// This is the one and only seam for building a real Repo with an injected
+// newRepoForTest constructs a *repo wired to test-supplied dependencies.
+// This is the one and only seam for building a real repo with an injected
 // stub gitHub inside internal/git tests. Package-private and _test.go-only:
 // unreachable from production code and from tests in other packages.
 //
@@ -147,7 +147,7 @@ func (discardLog) Emit(logging.Opts, string, ...any) {}
 // touches an unexercised path panics instead of failing cleanly. Defaulting
 // here means every path produces sensible no-op behavior, and tests that
 // care about a particular dependency opt in rather than opting out.
-func newRepoForTest(cfg Config, gh gitHub, opts ...repoTestOpt) *Repo {
+func newRepoForTest(cfg Config, gh gitHub, opts ...repoTestOpt) *repo {
 	tc := repoTestDeps{
 		runner: newStubRunner(),
 		state:  newMemState(),
@@ -162,7 +162,7 @@ func newRepoForTest(cfg Config, gh gitHub, opts ...repoTestOpt) *Repo {
 	if projectDir == "" {
 		projectDir = cfg.WorkDir
 	}
-	return &Repo{
+	return &repo{
 		projectDir:                  projectDir,
 		workDir:                     cfg.WorkDir,
 		ralphDir:                    cfg.RalphDir,
@@ -208,27 +208,27 @@ func withState(s stateStore) repoTestOpt {
 	return func(d *repoTestDeps) { d.state = s }
 }
 
-// withWorktreeBranch sets the Repo's worktreeBranch field, which production
+// withWorktreeBranch sets the repo's worktreeBranch field, which production
 // code normally initializes through SetupWorktree / RenameBranchTo. Tests
 // use this to pre-seed a specific branch name without running real git.
 func withWorktreeBranch(name string) repoTestOpt {
 	return func(d *repoTestDeps) { d.worktreeBranch = name }
 }
 
-// withBranchRenamed sets the Repo's branchRenamed flag. Production code
+// withBranchRenamed sets the repo's branchRenamed flag. Production code
 // sets this inside RenameBranchForTask after a successful rename.
 func withBranchRenamed(v bool) repoTestOpt {
 	return func(d *repoTestDeps) { d.branchRenamed = v }
 }
 
-// withPrevBranch pre-seeds the Repo's prevBranch field, which production
+// withPrevBranch pre-seeds the repo's prevBranch field, which production
 // populates during stack head detection. Tests use this to exercise
 // stacked-PR paths without running real git to derive the stack.
 func withPrevBranch(name string) repoTestOpt {
 	return func(d *repoTestDeps) { d.prevBranch = name }
 }
 
-// withKnownPRNumber pre-seeds the Repo's knownPRNumber, which production
+// withKnownPRNumber pre-seeds the repo's knownPRNumber, which production
 // sets via SetKnownPRNumber after discovering a PR during Ship. Tests use
 // this to exercise the "PR already known" fast path.
 func withKnownPRNumber(n int) repoTestOpt {

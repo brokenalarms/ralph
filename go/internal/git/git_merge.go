@@ -27,7 +27,7 @@ const (
 
 // resolveBaseBranch returns PrevBranch if set, otherwise the default branch.
 // Single source of truth for "what is this branch based on."
-func (r *Repo) resolveBaseBranch() string {
+func (r *repo) resolveBaseBranch() string {
 	if r.prevBranch != "" {
 		return r.prevBranch
 	}
@@ -37,7 +37,7 @@ func (r *Repo) resolveBaseBranch() string {
 // Push squashes all commits into one and force-pushes the branch.
 // Always uses --force-with-lease (safe — only forces if remote matches
 // last fetch). Squash ensures stacked PRs cascade cleanly on merge.
-func (r *Repo) Push(ctx context.Context) error {
+func (r *repo) Push(ctx context.Context) error {
 	if r.worktreeBranch == "" || r.workDir == r.projectDir {
 		return nil
 	}
@@ -123,7 +123,7 @@ func reopenClosedPR(gh gitHub, workDir, branch, nwo, repoURL, title, body string
 	return number, nil
 }
 
-func (r *Repo) reopenClosedPR(gh gitHub, repoURL, title, body string) (int, error) {
+func (r *repo) reopenClosedPR(gh gitHub, repoURL, title, body string) (int, error) {
 	nwo := NWOFromRemote(repoURL)
 	return reopenClosedPR(gh, r.workDir, r.worktreeBranch, nwo, repoURL, title, body, r.logger)
 }
@@ -179,7 +179,7 @@ func CreatePR(ctx context.Context, gh gitHub, workDir, branch, remoteURL string,
 		Base:  opts.BaseBranch,
 		Title: title,
 		Body:  body,
-		Repo:  remoteURL,
+		repo:  remoteURL,
 		Dir:   workDir,
 	}
 	newPR, createErr := gh.CreatePR(createOpts)
@@ -220,11 +220,11 @@ func CreatePR(ctx context.Context, gh gitHub, workDir, branch, remoteURL string,
 	return newPR, nil
 }
 
-// Repo.CreatePR delegates to the package function. The summary string is
+// repo.CreatePR delegates to the package function. The summary string is
 // passed through formatPRBody as the Summary section; callers needing
 // description / acceptance criteria use the package function CreatePR
 // directly.
-func (r *Repo) CreatePR(ctx context.Context, taskID, taskDesc, summary string) (int, error) {
+func (r *repo) CreatePR(ctx context.Context, taskID, taskDesc, summary string) (int, error) {
 	return CreatePR(ctx, r.github, r.workDir, r.worktreeBranch, r.RemoteURL(), EnsurePROpts{
 		TaskID:     taskID,
 		TaskDesc:   taskDesc,
@@ -235,7 +235,7 @@ func (r *Repo) CreatePR(ctx context.Context, taskID, taskDesc, summary string) (
 }
 
 // ShipOpts configures the Ship pipeline. All fields are data — no func or
-// interface fields. Repo.Ship fills infrastructure from its own fields.
+// interface fields. repo.Ship fills infrastructure from its own fields.
 type ShipOpts struct {
 	TaskID    string
 	TaskTitle string
@@ -419,11 +419,11 @@ func shipPR(ctx context.Context, runner Runner, gh gitHub, workDir, branch, remo
 	}, nil
 }
 
-// Repo.Ship runs the full push + PR + reviewer poll + merge pipeline.
-// ShipOpts carries only data; infrastructure callbacks come from Repo fields.
+// repo.Ship runs the full push + PR + reviewer poll + merge pipeline.
+// ShipOpts carries only data; infrastructure callbacks come from repo fields.
 // When opts.PRNumber is non-zero, Ship skips push+PR and proceeds directly to
 // reviewer polling and merge using that PR.
-func (r *Repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
+func (r *repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 	if opts.BaseBranch == "" {
 		opts.BaseBranch = r.resolveBaseBranch()
 	}
@@ -544,7 +544,7 @@ func (r *Repo) Ship(ctx context.Context, opts ShipOpts) (ShipResult, error) {
 // PushAndCreatePR composes Push and CreatePR. Squashes, force-pushes, then
 // ensures a PR exists. Returns the PR number. The summary argument flows
 // into the Summary section of the formatted PR body.
-func (r *Repo) PushAndCreatePR(ctx context.Context, taskID, taskDesc, summary string) (int, error) {
+func (r *repo) PushAndCreatePR(ctx context.Context, taskID, taskDesc, summary string) (int, error) {
 	result, err := r.Ship(ctx, ShipOpts{TaskID: taskID, TaskTitle: taskDesc, Summary: summary})
 	return result.PRNumber, err
 }
@@ -563,7 +563,7 @@ func prTitle(taskID, taskDesc, fallback string) string {
 	return title
 }
 
-func (r *Repo) prTitle(taskID, taskDesc string) string {
+func (r *repo) prTitle(taskID, taskDesc string) string {
 	return prTitle(taskID, taskDesc, r.worktreeBranch)
 }
 
@@ -571,7 +571,7 @@ func (r *Repo) prTitle(taskID, taskDesc string) string {
 // merges. If main moves between CI passing and the merge attempt, loops
 // back to rebase+push again. Returns typed errors (CIFailureError,
 // MergeConflictError) that callers can handle.
-func (r *Repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
+func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 	if r.worktreeBranch == "" || r.workDir == r.projectDir {
 		return false, nil
 	}
@@ -682,7 +682,7 @@ var ErrPRAlreadyMerged = fmt.Errorf("PR already merged")
 // It checks whether a PR exists in another state (merged or closed). If
 // merged, returns ErrPRAlreadyMerged. If closed, reopens and returns the
 // PR number so the caller can proceed with the normal merge flow.
-func (r *Repo) resolveClosedPR(gh gitHub, repoURL string) (int, error) {
+func (r *repo) resolveClosedPR(gh gitHub, repoURL string) (int, error) {
 	number, _, _, findErr := gh.FindPR(r.worktreeBranch, repoURL)
 	if findErr != nil || number == 0 {
 		return 0, nil
@@ -708,7 +708,7 @@ func (r *Repo) resolveClosedPR(gh gitHub, repoURL string) (int, error) {
 			opts := CreatePROpts{
 				Head: r.worktreeBranch,
 				Base: baseBranch,
-				Repo: repoURL,
+				repo: repoURL,
 				Dir:  r.workDir,
 			}
 			if apiPR, apiErr := gh.CreatePRViaAPI(nwo, opts); apiErr == nil && apiPR != 0 {
@@ -728,7 +728,7 @@ func (r *Repo) resolveClosedPR(gh gitHub, repoURL string) (int, error) {
 // the last push. Returns true when origin/<base> is not an ancestor of HEAD,
 // meaning main moved while CI was running and the branch must be rebased
 // before merging. Uses a local ancestry check to avoid creating merge commits.
-func (r *Repo) branchNeedsUpdate() bool {
+func (r *repo) branchNeedsUpdate() bool {
 	baseBranch := r.resolveBaseBranch()
 	_ = r.gitCmdErr(r.workDir, "fetch", "origin", baseBranch)
 	if !r.refExists(r.workDir, "origin/"+baseBranch) {
@@ -750,8 +750,8 @@ type ExecuteMergeOpts struct {
 }
 
 // executeMerge attempts the squash-merge and handles CI-gated retries.
-// It is a package function — callers compose it without a Repo receiver.
-// Repo.executeMerge delegates here.
+// It is a package function — callers compose it without a repo receiver.
+// repo.executeMerge delegates here.
 func executeMerge(ctx context.Context, gh gitHub, opts ExecuteMergeOpts, logger Log) (bool, error) {
 	nwo := NWOFromRemote(opts.RepoURL)
 	prLink := logging.PRLinkOpt(nwo, opts.PRNumber)
@@ -816,8 +816,8 @@ func postMergeLog(nwo string, prNumber int, defaultBranch string, logger Log) (b
 	return true, nil
 }
 
-// Repo.executeMerge delegates to the package-level executeMerge function.
-func (r *Repo) executeMerge(ctx context.Context, prNumber int, repoURL string) (bool, error) {
+// repo.executeMerge delegates to the package-level executeMerge function.
+func (r *repo) executeMerge(ctx context.Context, prNumber int, repoURL string) (bool, error) {
 	return executeMerge(ctx, r.github, ExecuteMergeOpts{
 		PRNumber:       prNumber,
 		RepoURL:        repoURL,
@@ -830,12 +830,12 @@ func (r *Repo) executeMerge(ctx context.Context, prNumber int, repoURL string) (
 }
 
 // GetCIFailureLog retrieves the failed CI run's log output for the given PR.
-func (r *Repo) GetCIFailureLog(prNumber int) string {
+func (r *repo) GetCIFailureLog(prNumber int) string {
 	return r.github.GetRunLog(prNumber, r.workDir)
 }
 
-// mergeOpts returns the merge options for the current Repo configuration.
-func (r *Repo) mergeOpts() MergeOpts {
+// mergeOpts returns the merge options for the current repo configuration.
+func (r *repo) mergeOpts() MergeOpts {
 	return MergeOpts{
 		DeleteBranch: true,
 	}
@@ -860,7 +860,7 @@ func NWOFromRemote(remoteURL string) string {
 
 // DeleteRemoteBranch removes the current branch from the remote. Used to
 // clean up after a PR has been merged externally.
-func (r *Repo) DeleteRemoteBranch() {
+func (r *repo) DeleteRemoteBranch() {
 	if r.worktreeBranch == "" {
 		return
 	}
@@ -903,12 +903,12 @@ type MergeRetryOpts struct {
 	// SleepFunc is used for infrastructure backoff delays. Defaults to time.Sleep.
 	SleepFunc func(time.Duration)
 
-	// The following fields are filled by Repo.MergeWithRetry before delegating
+	// The following fields are filled by repo.MergeWithRetry before delegating
 	// to the package-level MergeWithRetry function. They enable callers to compose
-	// the retry pipeline without a Repo receiver.
+	// the retry pipeline without a repo receiver.
 
 	// ResolveConflict is called to rebase and force-push when a merge conflict
-	// is detected. Defaults to Repo.ResolveConflict when nil.
+	// is detected. Defaults to repo.ResolveConflict when nil.
 	ResolveConflict func(ctx context.Context) error
 
 	// AwaitCI polls CI status after a fix agent pushes. pushedAt filters
@@ -926,7 +926,7 @@ type MergeRetryOpts struct {
 // resolve PR merge conflicts before the next merge attempt. Returns an
 // UnresolvedConflictError if the rebase couldn't resolve the divergence,
 // signaling that retrying will not help.
-func (r *Repo) ResolveConflict(ctx context.Context) error {
+func (r *repo) ResolveConflict(ctx context.Context) error {
 	baseBranch := r.resolveBaseBranch()
 	r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: baseBranch}, "Rebasing onto %s to resolve merge conflicts...", baseBranch)
 	if err := r.EnsureUpToDate(ctx); err != nil {
@@ -952,8 +952,8 @@ func (r *Repo) ResolveConflict(ctx context.Context) error {
 // main attempt budget. Infrastructure failures use a separate retry counter
 // with exponential backoff.
 //
-// It is a package function — callers compose it without a Repo receiver.
-// Repo.MergeWithRetry delegates here after filling in infrastructure callbacks.
+// It is a package function — callers compose it without a repo receiver.
+// repo.MergeWithRetry delegates here after filling in infrastructure callbacks.
 func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, error), opts MergeRetryOpts) (bool, error) {
 	sleepFn := opts.SleepFunc
 	if sleepFn == nil {
@@ -1047,9 +1047,9 @@ func MergeWithRetry(ctx context.Context, mergeFunc func(context.Context) (bool, 
 	return false, fmt.Errorf("merge failed after %d attempts", MaxMergeAttempts)
 }
 
-// Repo.MergeWithRetry delegates to the package-level MergeWithRetry function
-// after filling in infrastructure callbacks from Repo fields.
-func (r *Repo) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, error) {
+// repo.MergeWithRetry delegates to the package-level MergeWithRetry function
+// after filling in infrastructure callbacks from repo fields.
+func (r *repo) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, error) {
 	if opts.ResolveConflict == nil {
 		opts.ResolveConflict = r.ResolveConflict
 	}
@@ -1067,7 +1067,7 @@ func (r *Repo) MergeWithRetry(ctx context.Context, opts MergeRetryOpts) (bool, e
 
 // FlushUnpushedWork pushes any unpushed commits and optionally merges
 // the PR. This is the safety net called before exiting or entering wait mode.
-func (r *Repo) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, autoMerge bool) (merged bool, err error) {
+func (r *repo) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, autoMerge bool) (merged bool, err error) {
 	if r.worktreeBranch == WipBranchName() {
 		return false, nil
 	}
@@ -1116,7 +1116,7 @@ func (r *Repo) FlushUnpushedWork(ctx context.Context, taskID, taskDesc string, a
 // PostMergeUpdateMain fetches origin/main and rebases the worktree onto it
 // after a PR merge, then moves the worktree to the placeholder branch and
 // deletes the stale task branch. It does not modify the ProjectDir checkout.
-func (r *Repo) PostMergeUpdateMain() {
+func (r *repo) PostMergeUpdateMain() {
 	defaultBranch := r.detectDefaultBranch()
 	r.gitCmd(r.projectDir, "fetch", "origin", defaultBranch)
 

@@ -78,7 +78,7 @@ type CreatePROpts struct {
 	Base string
 	Title string
 	Body string
-	Repo string
+	repo string
 	Dir  string
 }
 
@@ -127,7 +127,7 @@ type MergeResult struct {
 
 // gitHub abstracts GitHub CLI operations. Unexported — the production
 // implementation (ghCLI) is always constructed by New(). Git-package
-// tests inject StubGitHub via same-package construction.
+// tests inject stubGitHub via newStubGitHub (same-package, unexported).
 type gitHub interface {
 	Available() bool
 	FindOpenPR(branch, repoURL string) (prNumber int, err error)
@@ -221,9 +221,9 @@ func (g *ghCLI) ListOpenPRBranches(repoURL string) ([]string, error) {
 }
 
 func (g *ghCLI) CreatePR(opts CreatePROpts) (int, error) {
-	nwo := NWOFromRemote(opts.Repo)
+	nwo := NWOFromRemote(opts.repo)
 	if nwo == "" {
-		return 0, fmt.Errorf("cannot determine owner/repo from %q", opts.Repo)
+		return 0, fmt.Errorf("cannot determine owner/repo from %q", opts.repo)
 	}
 	return g.CreatePRViaAPI(nwo, opts)
 }
@@ -670,7 +670,7 @@ func (g *ghCLI) CreatePRViaAPI(nwo string, opts CreatePROpts) (int, error) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if strings.Contains(string(out), "already exists") {
-			if existing, findErr := g.FindOpenPR(opts.Head, opts.Repo); findErr == nil && existing != 0 {
+			if existing, findErr := g.FindOpenPR(opts.Head, opts.repo); findErr == nil && existing != 0 {
 				return existing, nil
 			}
 		}

@@ -62,8 +62,8 @@ func TestConfigIsDataOnly(t *testing.T) {
 }
 
 // TestNoExportedRepoConstructors verifies that no exported function in the
-// git package returns *Repo. New() returns Ops. Any exported function
-// returning *Repo (like the deleted NewRepoForTesting) would leak the
+// git package returns *repo. New() returns Ops. Any exported function
+// returning *repo (like the deleted NewRepoForTesting) would leak the
 // concrete type outside the package.
 func TestNoExportedRepoConstructors(t *testing.T) {
 	fset := token.NewFileSet()
@@ -83,7 +83,7 @@ func TestNoExportedRepoConstructors(t *testing.T) {
 				}
 				for _, result := range fd.Type.Results.List {
 					tn := typeStr(result.Type)
-					if tn == "*Repo" || tn == "Repo" {
+					if tn == "*repo" || tn == "repo" {
 						t.Errorf("%s: exported function %s returns %s — only Ops should escape the package", filename, fd.Name.Name, tn)
 					}
 				}
