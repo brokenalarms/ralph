@@ -27,6 +27,15 @@
 - Each test should explain in a comment why it exists and what user functionality it proves — not just assert correctness mechanically.
 - Do not write tests that assert specific strings from prompt templates. Prompts are natural-language guidance — test behavior, not prose.
 
+## Stubs and test doubles
+- A test stub implements exactly the production interface — the same methods, nothing else. It is indistinguishable in shape from the real implementation.
+- Stub configuration happens at construction via a `StubXConfig` struct passed to `NewStubX(cfg)`. The constructor is the only configuration seam.
+- Every field on a stub type is unexported. Tests never read or write stub state directly after construction. Tests never call methods on a stub that are not part of the production interface.
+- Multi-call behavior (pagination, polling, retries) is expressed as sequenced responses on the config: `cfg.ListChecksResponses = [][]CICheckResult{...}`. The stub advances an internal index on each call and plays them back. For tests needing per-call errors, the config carries a parallel `[]error` slice.
+- Callback-valued fields on stubs (`ListChecksFunc func(...)`, `CreatePRFunc func(...)`) are forbidden. They smuggle test logic into the stub through a side channel that production code does not have. The subject under test must only see the production interface.
+- Partial-stub hybrids — types that embed a stub and override a subset of its methods — are forbidden. The pattern confuses which layer is under test and, in Go, silently breaks when the embedded stub's methods call each other (static dispatch keeps those calls inside the embedded type). Build one stub that fully implements the interface via plain state.
+- Stubs live at external boundaries (network, subprocess, filesystem the test does not want to touch), not at module boundaries. When testing module A, use real A with stubs at A's external dependencies. When testing a consumer of A, use a fully-constructed stub A. Never build a half-real, half-stub instance of the same module.
+
 ## Go test package naming
 Go test files declare either the **internal** package (`package foo`) or the **external** package (`package foo_test`).
 
