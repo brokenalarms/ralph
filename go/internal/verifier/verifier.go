@@ -290,6 +290,11 @@ func (v *Verifier) FixModel() string {
 	return verify.CapModel(v.cfg.ModelCap, base)
 }
 
+// FixAgentResult is the result of a fix-agent spawn. It is an alias for
+// claude.Result so callers can reference it without importing the claude
+// package directly.
+type FixAgentResult = claude.Result
+
 // FixAgentSpawn carries inputs shared by the various SpawnXFixAgent helpers.
 type FixAgentSpawn struct {
 	Ctx        context.Context

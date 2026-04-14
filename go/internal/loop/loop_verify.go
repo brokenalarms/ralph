@@ -22,12 +22,12 @@ const (
 	fixFailed
 )
 
-// fixLoopOpts parameterizes one cycle of "spawn a fix agent, observe whether
+// fixLoopSpec parameterizes one cycle of "spawn a fix agent, observe whether
 // it made commits, push if it did". Each tryFix* wrapper supplies its
 // fix-specific spawn callback and (optionally) a post-commit pre-push hook
 // (e.g. for CI's out-of-scope file revert) and a post-push hook (e.g. for
 // review's resolve-comments call).
-type fixLoopOpts struct {
+type fixLoopSpec struct {
 	// spawn invokes the fix agent. The result's SignalDetected gates the
 	// rest of the loop.
 	spawn func() verifier.FixAgentResult
@@ -60,8 +60,8 @@ type fixLoopOpts struct {
 // fixLoop owns the shared "spawn → check commits → push" scaffolding for
 // the three fix flows. The two HeadRev() calls in this function are the
 // only HeadRev() reads in the file; the per-fix wrappers compose the
-// scaffold via fixLoopOpts callbacks rather than re-reading state.
-func (l *Loop) fixLoop(ctx context.Context, opts fixLoopOpts) fixLoopResult {
+// scaffold via fixLoopSpec callbacks rather than re-reading state.
+func (l *Loop) fixLoop(ctx context.Context, opts fixLoopSpec) fixLoopResult {
 	headBefore := l.git.HeadRev()
 	fixResult := opts.spawn()
 	if !fixResult.SignalDetected {
@@ -123,7 +123,7 @@ func (l *Loop) tryFixCI(ctx context.Context, ciErr *git.CIFailureError, nextTask
 		}
 	}
 
-	result := l.fixLoop(ctx, fixLoopOpts{
+	result := l.fixLoop(ctx, fixLoopSpec{
 		fixName:       "CI",
 		autoCommitMsg: "fix: auto-commit CI fix agent changes",
 		noCommitsMsg:  "Fix agent made no new commits — likely infrastructure failure",
@@ -183,7 +183,7 @@ func (l *Loop) tryFixConflict(ctx context.Context, taskID, nextTask, workDir, ra
 	conflictDiff := l.git.ConflictDiff()
 	taskDesc := l.taskDescription(taskID)
 
-	result := l.fixLoop(ctx, fixLoopOpts{
+	result := l.fixLoop(ctx, fixLoopSpec{
 		fixName:      "Conflict",
 		noCommitsMsg: "Conflict agent made no new commits — nothing to push",
 		spawn: func() verifier.FixAgentResult {
@@ -280,7 +280,7 @@ func (l *Loop) tryFixReviewComments(ctx context.Context, reviewerName string, re
 	}
 	reviewCtx := formatReviewContext(reviewerName, prNumber, actionable)
 
-	result := l.fixLoop(ctx, fixLoopOpts{
+	result := l.fixLoop(ctx, fixLoopSpec{
 		fixName:       reviewerName,
 		autoCommitMsg: "fix: address " + reviewerName + " review feedback",
 		noCommitsMsg:  fmt.Sprintf("%s fix agent made no new commits — proceeding to merge anyway", reviewerName),
