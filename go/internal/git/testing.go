@@ -438,6 +438,39 @@ type stubRepo struct {
 // Compile-time check that *stubRepo satisfies Ops.
 var _ Ops = (*stubRepo)(nil)
 
+// NewForTest returns a real *repo (as Ops) configured for integration
+// testing: real execRunner, real state store (file-backed via cfg.RalphDir
+// or nil when unset), real logger — but with gitHub swapped for a
+// stubGitHub built from ghCfg. External integration tests construct a real
+// bare repo on disk, pass its path in cfg.ProjectDir/WorkDir, and assert
+// on the observable git state (branches, commits, origin/main) after the
+// SUT runs.
+//
+// This is the third and final construction seam (alongside New and NewStub).
+// Production code uses New; loop-module unit tests use NewStub; loop-module
+// integration tests that need real git state transitions use NewForTest.
+func NewForTest(cfg Config, ghCfg StubGitHubConfig) Ops {
+	projectDir := cfg.ProjectDir
+	if projectDir == "" {
+		projectDir = cfg.WorkDir
+	}
+	return &repo{
+		projectDir:                  projectDir,
+		workDir:                     cfg.WorkDir,
+		ralphDir:                    cfg.RalphDir,
+		baseBranch:                  cfg.BaseBranch,
+		resume:                      cfg.Resume,
+		logger:                      cfg.Logger,
+		compileCheckTimeout:         cfg.CompileCheckTimeout,
+		ciPollTimeout:               cfg.CIPollTimeout,
+		copilotGatedTimeout:         cfg.CopilotGatedTimeout,
+		copilotOpportunisticTimeout: cfg.CopilotOpportunisticTimeout,
+		codeRabbitTimeout:           cfg.CodeRabbitTimeout,
+		github:                      newStubGitHub(ghCfg),
+		state:                       newStateStore(cfg.RalphDir),
+	}
+}
+
 // NewStub returns a stubRepo as the Ops interface. External packages use
 // this to isolate unit tests from the git module.
 func NewStub(cfg StubRepoConfig) Ops {
