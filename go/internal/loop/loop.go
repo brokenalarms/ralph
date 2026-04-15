@@ -780,18 +780,23 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 			continue
 		}
 		if mergeResult.CIFailure && mergeResult.CIFailureDetail != nil {
-			// CI fix: spawn fix agent; if it pushed new commits, retry merge.
-			fixResult := l.tryFixCI(ctx, mergeResult.CIFailureDetail, title, workDir, rawLogPath)
-			if fixResult == git.CIFixApplied {
-				continue
-			}
-			// Infrastructure failure: fix agent found nothing to fix and CI never
-			// ran (zero job steps). Work is verified locally — signal the caller to
-			// close the bead and leave the PR open for merge when CI recovers.
-			if fixResult == git.CIFixNoCommits && mergeResult.InfrastructureFailure {
+			// Infrastructure failure (zero job steps): CI never actually ran —
+			// billing, runner allocation, or a broken workflow file. The work is
+			// already verified locally by pre-iteration tests + the pre-push
+			// compile check, so there is nothing for a fix agent to do.
+			// Close the bead, leave the PR open, and move on — it will merge
+			// when CI infrastructure recovers. Spawning an expensive fix agent
+			// here wastes tokens and produces a spurious "fix agent" log line
+			// that misreads as "tests are failing".
+			if mergeResult.InfrastructureFailure {
 				l.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn},
 					"CI infrastructure failure (zero job steps) — closing bead, PR open for merge when CI recovers")
 				return prResultNum, prResultURL, false, true, true, false
+			}
+			// Real CI failure: spawn fix agent; if it pushed new commits, retry merge.
+			fixResult := l.tryFixCI(ctx, mergeResult.CIFailureDetail, title, workDir, rawLogPath)
+			if fixResult == git.CIFixApplied {
+				continue
 			}
 			// Transient CI failure — re-trigger CI and retry with backoff.
 			if fixResult == git.CIFixNoCommits && infraRetries < len(infraRetryBackoffs) {

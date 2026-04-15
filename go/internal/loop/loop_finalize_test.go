@@ -12,16 +12,19 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 	"github.com/brokenalarms/ralph/internal/state"
 	"github.com/brokenalarms/ralph/internal/testutil"
+	"github.com/brokenalarms/ralph/internal/verifier"
 	"github.com/brokenalarms/ralph/internal/workctx"
 )
 
 // shipResult holds the values returned by a ship stub for finalize tests.
 type shipResult struct {
-	prNumber  int
-	prURL     string
-	merged    bool
-	ciFailure bool
-	stacked   bool
+	prNumber        int
+	prURL           string
+	merged          bool
+	ciFailure       bool
+	stacked         bool
+	ciInfraFailure  bool                 // InfrastructureFailure flag on ShipResult
+	ciFailureDetail *git.CIFailureError  // populated when the loop needs to route through tryFixCI
 }
 
 // finalizeSetup bundles a Loop and pre-built params for finalize tests.
@@ -46,11 +49,13 @@ func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *tes
 		WorkDir:    dir,
 		HeadRev:    "after-sha",
 		Ship: git.ShipResult{
-			PRNumber:  ship.prNumber,
-			PRURL:     ship.prURL,
-			Merged:    ship.merged,
-			CIFailure: ship.ciFailure,
-			Stacked:   ship.stacked,
+			PRNumber:              ship.prNumber,
+			PRURL:                 ship.prURL,
+			Merged:                ship.merged,
+			CIFailure:             ship.ciFailure,
+			Stacked:               ship.stacked,
+			InfrastructureFailure: ship.ciInfraFailure,
+			CIFailureDetail:       ship.ciFailureDetail,
 		},
 	})
 	autoMerge := ship.merged || ship.ciFailure || ship.stacked
@@ -386,6 +391,84 @@ func TestFinalizePR_DependencyBlockedClose_SkipsWithBlockerIDs(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("task should be skipped, skipped=%v", backend.SkippedIDs)
+	}
+}
+
+// Ship reports CI infrastructure failure (zero job steps): work is verified
+// locally, CI never actually ran. completeTask must close the bead with a
+// "merge pending CI recovery" reason and MUST NOT spawn the CI fix agent —
+// there is no test failure for the agent to address.
+func TestFinalizePR_CIInfraFailure_ClosesBeadAndSkipsFixAgent(t *testing.T) {
+	dir, st := setupTestDir(t)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	// Spy runner factory: fails the test if the verifier is ever asked to
+	// spawn a fix agent. In the infra-failure path this factory must not be
+	// invoked — the short-circuit returns before tryFixCI runs.
+	runnerInvoked := false
+	failingRunner := &stubRunner{onRun: func() { runnerInvoked = true }}
+	stubs := verifierTestStubs{
+		newRunner:     func() verifier.Runner { return failingRunner },
+		queryResponse: "NO: stub",
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		HeadRev:    "after-sha",
+		Ship: git.ShipResult{
+			PRNumber:              77,
+			PRURL:                 "https://github.com/owner/repo/pull/77",
+			Merged:                false,
+			CIFailure:             true,
+			InfrastructureFailure: true,
+			CIFailureDetail:       &git.CIFailureError{PRNumber: 77},
+		},
+	})
+	cfg := Config{
+		AutoMerge: true,
+		Dirs:      workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: filepath.Join(dir, ".ralph")},
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger, stubs),
+		VerifyHook:  passingVerifyHook(),
+	})
+
+	p := completeTaskParams{
+		result:     claude.Result{SignalDetected: true, OnSignalUsed: true},
+		headBefore: "before-sha",
+		workDir:    dir,
+		taskID:     "ralph-infra",
+		nextTask:   "Task whose PR hits CI infra failure",
+	}
+
+	out := l.completeTask(context.Background(), p)
+
+	if runnerInvoked {
+		t.Fatal("CI fix agent runner must not be invoked on infrastructure failure")
+	}
+
+	backend.CloseMu.Lock()
+	defer backend.CloseMu.Unlock()
+	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-infra" {
+		t.Fatalf("expected CloseTask for ralph-infra, got %v", backend.ClosedIDs)
+	}
+	if len(backend.CloseReasons) == 0 || !strings.Contains(backend.CloseReasons[0], "CI recovery") {
+		t.Errorf("close reason should mention CI recovery, got %q", backend.CloseReasons)
+	}
+	if out.ct == nil {
+		t.Error("infra failure should return a CompletedTask so the loop advances")
+	}
+	if out.merged {
+		t.Error("infra failure must not report merged — PR is left open")
 	}
 }
 

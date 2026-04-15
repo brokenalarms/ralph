@@ -738,6 +738,11 @@ func TestIntegrationReal_CIFailureTriggersFixAgent(t *testing.T) {
 			},
 		},
 		RequiredChecks: []string{"tests"},
+		// Non-zero job steps: CI actually ran and produced failures, so this
+		// is a real test failure (not an infrastructure failure). The fix
+		// agent must be spawned. Zero would trigger the infra-failure
+		// short-circuit and skip the fix agent entirely.
+		JobStepCount: 12,
 	}
 
 	logger := logging.New(nil)
