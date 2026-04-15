@@ -20,6 +20,7 @@ setup_repo() {
 
   mkdir -p "$tmp/repo/scripts"
   cp "$SCRIPT_DIR/sync-and-build.sh" "$tmp/repo/scripts/"
+  cp "$SCRIPT_DIR/sync-and-tag.sh" "$tmp/repo/scripts/"
 
   cat > "$tmp/repo/scripts/build-go.sh" <<'STUB'
 #!/usr/bin/env bash
