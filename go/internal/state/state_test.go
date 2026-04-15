@@ -601,6 +601,81 @@ func TestSkippedTasks_RoundTrip(t *testing.T) {
 	}
 }
 
+// Proves: AddPushedBranch records branches in push order (oldest first) and
+// GetPushedBranches returns them in the same order.
+func TestAddPushedBranch_RecordsInOrder(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5)
+
+	if err := st.AddPushedBranch("ralph/task-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddPushedBranch("ralph/task-b"); err != nil {
+		t.Fatal(err)
+	}
+
+	branches, err := st.GetPushedBranches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(branches) != 2 || branches[0] != "ralph/task-a" || branches[1] != "ralph/task-b" {
+		t.Errorf("expected [ralph/task-a, ralph/task-b] oldest-first, got %v", branches)
+	}
+}
+
+// Proves: AddPushedBranch is idempotent — pushing the same branch twice produces one entry.
+func TestAddPushedBranch_NoDuplicates(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5)
+
+	st.AddPushedBranch("ralph/task-a")
+	st.AddPushedBranch("ralph/task-a")
+
+	branches, _ := st.GetPushedBranches()
+	if len(branches) != 1 {
+		t.Errorf("expected 1 entry (no duplicate), got %d: %v", len(branches), branches)
+	}
+}
+
+// Proves: AddPushedBranch ignores empty branch names.
+func TestAddPushedBranch_IgnoresEmpty(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5)
+
+	if err := st.AddPushedBranch(""); err != nil {
+		t.Errorf("AddPushedBranch(\"\") returned error: %v", err)
+	}
+	branches, _ := st.GetPushedBranches()
+	if len(branches) != 0 {
+		t.Errorf("expected empty list, got %v", branches)
+	}
+}
+
+// Proves: pushed_branches round-trips through JSON serialization.
+func TestPushedBranches_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Init(5)
+
+	st.AddPushedBranch("ralph/task-a")
+	st.AddPushedBranch("ralph/task-b")
+
+	s, _ := st.Load()
+	data, _ := json.Marshal(s)
+	if !strings.Contains(string(data), `"pushed_branches"`) {
+		t.Errorf("expected pushed_branches in JSON, got %s", data)
+	}
+
+	var s2 State
+	json.Unmarshal(data, &s2)
+	if len(s2.PushedBranches) != 2 {
+		t.Errorf("expected 2 pushed branches after round-trip, got %d", len(s2.PushedBranches))
+	}
+}
+
 // Verifies CheckStop returns true when the stop file exists and removes it,
 // proving the graceful shutdown signal is consumed exactly once.
 func TestStore_CheckStop(t *testing.T) {

@@ -12,10 +12,28 @@ import (
 	"github.com/brokenalarms/ralph/internal/tasks"
 )
 
-// completedBranches returns the branches of completed tasks fetched from
-// state and the task backend. The result is passed to git.BranchForTask for
-// stack head detection. Reads l.state and l.taskBackend via the receiver.
+// completedBranches returns the branches pushed during this session, oldest
+// first. The result is passed to git.BranchForTask for stack head detection.
+//
+// Primary source: state.GetPushedBranches(), which records every push in
+// chronological order regardless of PR creation outcome. This correctly
+// includes branches from pr_creation_failed skips.
+//
+// Fallback: for sessions that predate pushed_branches (old state files),
+// reads CompletedTasks from state and fetches branch names from the task
+// backend metadata.
 func (l *Loop) completedBranches() []string {
+	pushed, err := l.state.GetPushedBranches()
+	if err == nil && len(pushed) > 0 {
+		return pushed
+	}
+	return l.legacyCompletedBranches()
+}
+
+// legacyCompletedBranches is the pre-pushed_branches fallback for sessions
+// started before the PushedBranches field was introduced. It derives branches
+// from completed task entries via the task backend metadata.
+func (l *Loop) legacyCompletedBranches() []string {
 	completedTasks, err := l.state.GetCompletedTasks()
 	if err != nil || len(completedTasks) == 0 {
 		return nil
