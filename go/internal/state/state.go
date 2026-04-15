@@ -18,6 +18,12 @@ type CompletedTaskEntry struct {
 	Merged bool   `json:"merged"`
 }
 
+// PushedBranches is the ordered list of branches that were successfully pushed
+// to origin during this loop run, oldest first. This is the single source of
+// truth for stack head detection: it captures all pushes in chronological
+// order, regardless of whether PR creation succeeded or failed. completedBranches()
+// reads from this list; setStackHead walks it newest-first to find the stack parent.
+
 // State represents the ralph loop state persisted in .ralph/state.json.
 // Fields use interface{} values for numeric/string flexibility — the bash
 // implementation stores numbers as JSON numbers and strings as JSON strings,
@@ -35,6 +41,7 @@ type State struct {
 	LastTestTime   string `json:"last_test_time,omitempty"`
 	CompletedTasks []CompletedTaskEntry `json:"completed_tasks,omitempty"`
 	SkippedTasks   []string             `json:"skipped_tasks,omitempty"`
+	PushedBranches []string             `json:"pushed_branches,omitempty"`
 
 	// Overflow captures unknown keys so round-tripping preserves them.
 	Overflow map[string]json.RawMessage `json:"-"`
@@ -92,6 +99,7 @@ func (s *State) UnmarshalJSON(data []byte) error {
 		"last_test_result": true, "last_test_output": true, "last_test_time": true,
 		"completed_tasks": true,
 		"skipped_tasks":   true,
+		"pushed_branches": true,
 	}
 
 	alias.Overflow = nil
@@ -332,6 +340,35 @@ func (st *Store) GetSkippedTasks() ([]string, error) {
 		return nil, err
 	}
 	return s.SkippedTasks, nil
+}
+
+// AddPushedBranch appends a branch name to the pushed-branches list if not
+// already present. Branches are stored oldest-first (append order), which
+// matches the chronological push order used by setStackHead for stack detection.
+func (st *Store) AddPushedBranch(branch string) error {
+	if branch == "" {
+		return nil
+	}
+	s, err := st.Load()
+	if err != nil {
+		return err
+	}
+	for _, existing := range s.PushedBranches {
+		if existing == branch {
+			return nil
+		}
+	}
+	s.PushedBranches = append(s.PushedBranches, branch)
+	return st.Save(s)
+}
+
+// GetPushedBranches returns all branches pushed during this loop run, oldest first.
+func (st *Store) GetPushedBranches() ([]string, error) {
+	s, err := st.Load()
+	if err != nil {
+		return nil, err
+	}
+	return s.PushedBranches, nil
 }
 
 // getField extracts a named field from State as a string.

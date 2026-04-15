@@ -59,26 +59,31 @@ func (r *repo) BranchForTask(ctx context.Context, taskID, title string, meta Bra
 	return r.worktreeBranch, nil
 }
 
-// setStackHead finds the most recent completed branch that is cleanly ahead of
-// main and sets it as the stack base for the next task.
+// setStackHead finds the most recent pushed branch that still has unmerged
+// work ahead of main and sets it as the stack base for the next task.
+//
+// The candidate list (completedBranches) contains every branch pushed this
+// session in chronological order (oldest first). Walking it newest-first
+// ensures the most recently pushed branch is preferred as the stack parent.
+//
+// A branch qualifies if it:
+//   - exists on the remote (FetchBranch succeeds)
+//   - has commits not yet on main (RemoteBranchHasCommits)
+//   - is cleanly ahead of main (BranchIsAheadOfMain)
+//
+// There is no open-PR requirement: a branch pushed via a pr_creation_failed
+// skip has commits ahead of main but no PR yet. Relying solely on
+// BranchIsAheadOfMain correctly handles both cases — merged branches fail
+// this check because their work is already on main.
 func setStackHead(r *repo, completedBranches []string) {
 	r.prevBranch = ""
 	if len(completedBranches) == 0 {
 		return
 	}
 
-	openBranches, err := r.ListOpenPRBranches()
-	if err != nil || len(openBranches) == 0 {
-		return
-	}
-	openSet := make(map[string]bool, len(openBranches))
-	for _, b := range openBranches {
-		openSet[b] = true
-	}
-
 	for i := len(completedBranches) - 1; i >= 0; i-- {
 		branch := completedBranches[i]
-		if branch == "" || !openSet[branch] {
+		if branch == "" {
 			continue
 		}
 		if err := r.FetchBranch(branch); err != nil {

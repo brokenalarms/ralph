@@ -1032,3 +1032,4 @@ func TestLoop_BranchForTask_RenameFailure_AbortsIteration(t *testing.T) {
 		t.Errorf("no bead should be closed when branch setup fails, got %v", backend.ClosedIDs)
 	}
 }
+

@@ -9,22 +9,56 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 )
 
-// setStackHead falls through silently when GitHub reports no open PR branches —
-// PrevBranch stays empty.
-func TestSetStackHead_SkipsWhenNoBranchesAvailable(t *testing.T) {
+// setStackHead leaves prevBranch empty when the candidate branch has no
+// remote commits (RemoteBranchHasCommits returns false). The open-PR check
+// was removed so that pr_creation_failed branches (pushed but no PR) are
+// also eligible; the remote-commits guard still prevents selecting stale
+// candidates.
+func TestSetStackHead_SkipsWhenRemoteBranchHasNoCommits(t *testing.T) {
 	log := &testLog{}
-	gh := newStubGitHub(StubGitHubConfig{Available: true})
-	r := newRepoForTest(Config{Logger: log}, gh)
+	r := newRepoForTest(Config{Logger: log}, nil)
+	// Default stub runner returns "" for rev-list → RemoteBranchHasCommits false.
 
 	setStackHead(r, []string{"ralph/some-task"})
 
 	if r.prevBranch != "" {
-		t.Errorf("PrevBranch should be empty when no open PR branches, got %q", r.prevBranch)
+		t.Errorf("prevBranch should be empty when remote branch has no commits, got %q", r.prevBranch)
 	}
 	for _, msg := range log.messages {
 		if strings.Contains(msg, "Stack head") {
-			t.Errorf("should not log 'Stack head' when no open PR branches, got: %s", msg)
+			t.Errorf("should not log 'Stack head' when remote branch has no commits, got: %s", msg)
 		}
+	}
+}
+
+// setStackHead selects a branch that has commits ahead of main even when
+// that branch has no open PR — this is the pr_creation_failed scenario where
+// the push succeeded but CreatePR errored. The fix removes the open-PR gate
+// and relies solely on RemoteBranchHasCommits + BranchIsAheadOfMain.
+func TestSetStackHead_SelectsPushedNoPRBranch(t *testing.T) {
+	log := &testLog{}
+	runner := newStubRunner()
+	// FetchBranch succeeds (default no-op).
+	// RemoteBranchHasCommits: rev-list returns "1" → true.
+	runner.On("rev-list", "1", nil)
+	// BranchIsAheadOfMain: merge-base succeeds (exit 0) → true.
+	runner.On("merge-base", "", nil)
+
+	r := newRepoForTest(Config{Logger: log}, nil, withRunner(runner))
+
+	setStackHead(r, []string{"ralph/task-a"})
+
+	if r.prevBranch != "ralph/task-a" {
+		t.Errorf("expected prevBranch=ralph/task-a (pushed with no PR), got %q", r.prevBranch)
+	}
+	found := false
+	for _, msg := range log.messages {
+		if strings.Contains(msg, "Stack head: ralph/task-a") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'Stack head: ralph/task-a' log, got: %v", log.messages)
 	}
 }
 

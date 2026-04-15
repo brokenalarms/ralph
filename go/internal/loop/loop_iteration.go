@@ -298,6 +298,17 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 
 	prNumber, shipURL, merged, ciFailure, ciInfraFailure, stacked, pushedBranch := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
 
+	// Record every successful push in chronological order so completedBranches()
+	// can build the correct stack for the next iteration. This captures both
+	// the normal ship path (PR created) and the pr_creation_failed path (push
+	// succeeded but PR creation errored). Ordering matters: setStackHead walks
+	// newest-first so the most recently pushed branch becomes the stack parent.
+	if pushedBranch != "" {
+		if err := l.state.AddPushedBranch(pushedBranch); err != nil {
+			l.logger.Emit(logging.Opts{Domain: "state", Level: logging.Warn}, "AddPushedBranch: %v", err)
+		}
+	}
+
 	// Recovery: if ship didn't produce a PR, find any existing PR in any state.
 	if prNumber == 0 && p.taskID != "" {
 		if ref, _ := l.taskBackend.GetExternalRef(p.taskID); ref != "" {
