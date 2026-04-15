@@ -217,7 +217,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 				prState, _ := l.git.GetPRState(prNum)
 				if prState == git.PRStateOpen {
 					l.logger.Emit(logging.Opts{Domain: logging.Git}, "Found open PR #%d from prior attempt — routing through merge", prNum)
-					_, _, merged, _, _, _ := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
+					_, _, merged, _, _, _, _ := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
 					prRef := fmt.Sprintf("PR #%d", prNum)
 					closeReason := fmt.Sprintf("Verified — %s open, merge pending", prRef)
 					if merged {
@@ -296,7 +296,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		return completeTaskOut{action: signalComplete}
 	}
 
-	prNumber, shipURL, merged, ciFailure, ciInfraFailure, stacked := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
+	prNumber, shipURL, merged, ciFailure, ciInfraFailure, stacked, pushedBranch := l.doShip(ctx, p.taskID, p.nextTask, p.result.Summary, p.rawLogPath, p.workDir)
 
 	// Recovery: if ship didn't produce a PR, find any existing PR in any state.
 	if prNumber == 0 && p.taskID != "" {
@@ -328,6 +328,36 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	}
 
 	if prNumber == 0 {
+		// Two distinct sub-cases are collapsed into prNumber==0:
+		//
+		//   (a) pushedBranch == "": nothing was pushed to the remote. The
+		//       agent signalled with no new commits and no prior-iteration
+		//       commits to ship. Closing the bead is correct — work is
+		//       verified complete.
+		//
+		//   (b) pushedBranch != "": the Phase 1 push succeeded but CreatePR
+		//       failed (rate limit, 422, network). Commits are now on the
+		//       remote branch. Closing the bead would orphan that branch —
+		//       bead tracking loses the link to the work that exists on
+		//       origin. Skip instead, encoding the branch in the skip reason
+		//       so triage can rediscover the orphaned branch.
+		if pushedBranch != "" {
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+				"No PR created but branch %s was pushed — skipping bead %s (CreatePR failed; work lives on remote)",
+				pushedBranch, p.taskID)
+			if p.taskID != "" {
+				if ctx.Err() != nil {
+					l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+					return completeTaskOut{action: signalComplete}
+				}
+				// Machine-parseable reason: "pr_creation_failed:<branch>".
+				// Downstream triage (and the task-manager prompt) parses this
+				// to locate orphaned remote branches whose PRs failed to create.
+				l.skipTask(p.taskID, fmt.Sprintf("pr_creation_failed:%s", pushedBranch))
+			}
+			return completeTaskOut{action: signalSkipped}
+		}
+
 		l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "No PR created — closing bead for task %s", p.taskID)
 		if p.taskID != "" {
 			if ctx.Err() != nil {

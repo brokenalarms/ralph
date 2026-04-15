@@ -320,6 +320,13 @@ type ShipResult struct {
 	// ConflictDetail is set when MergeWithRetry encountered an unresolvable
 	// merge conflict. The loop should call tryFixConflict and retry Ship.
 	ConflictDetail *UnresolvedConflictError
+
+	// PushedBranch is the worktree branch name set after a successful push
+	// in shipPR. An empty string means no push occurred (nothing to ship, or
+	// push failed). When this is non-empty but PRNumber == 0, the push
+	// landed commits on the remote but CreatePR failed — the caller must
+	// not close the bead (that would orphan the pushed branch).
+	PushedBranch string
 }
 
 // shipInfra holds the infrastructure callbacks used by shipPR. These are
@@ -369,6 +376,7 @@ func shipPR(ctx context.Context, runner Runner, gh gitHub, workDir, branch, remo
 		commitAll(msg)
 	}
 
+	pushedBranch := ""
 	if infra.push != nil {
 		if err := infra.push(ctx); err != nil {
 			if ctx.Err() != nil {
@@ -379,13 +387,17 @@ func shipPR(ctx context.Context, runner Runner, gh gitHub, workDir, branch, remo
 			}
 			return ShipResult{}, fmt.Errorf("push failed: %w", err)
 		}
+		// Push succeeded — commits are now on the remote branch. Downstream
+		// callers use this signal to avoid closing a bead when CreatePR fails
+		// (which would orphan the pushed branch).
+		pushedBranch = branch
 	}
 
 	if infra.branchHasUnmergedWork != nil && !infra.branchHasUnmergedWork(branch) {
 		if infra.logger != nil {
 			infra.logger.Emit(logging.Opts{Domain: logging.Git}, "Ship: branch %s has no commits ahead of main — skipping PR creation", branch)
 		}
-		return ShipResult{}, nil
+		return ShipResult{PushedBranch: pushedBranch}, nil
 	}
 
 	baseBranch := opts.BaseBranch
@@ -399,7 +411,7 @@ func shipPR(ctx context.Context, runner Runner, gh gitHub, workDir, branch, remo
 		Logger:      infra.logger,
 	})
 	if err != nil {
-		return ShipResult{PRNumber: prNumber}, err
+		return ShipResult{PRNumber: prNumber, PushedBranch: pushedBranch}, err
 	}
 
 	// Look up the PR URL for the external ref.
@@ -418,9 +430,10 @@ func shipPR(ctx context.Context, runner Runner, gh gitHub, workDir, branch, remo
 	}
 
 	return ShipResult{
-		PRNumber: prNumber,
-		PRURL:    prURL,
-		PRTitle:  prTitle,
+		PRNumber:     prNumber,
+		PRURL:        prURL,
+		PRTitle:      prTitle,
+		PushedBranch: pushedBranch,
 	}, nil
 }
 

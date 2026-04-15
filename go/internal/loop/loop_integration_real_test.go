@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -251,6 +252,134 @@ func TestIntegrationReal_HappyPath_SignalVerifyPushMergeClose(t *testing.T) {
 	defer backend.CloseMu.Unlock()
 	if len(backend.ClosedIDs) != 1 || backend.ClosedIDs[0] != "ralph-hp1" {
 		t.Errorf("expected ralph-hp1 closed, got %v", backend.ClosedIDs)
+	}
+}
+
+// TestIntegrationReal_PushSucceededPRCreationFailed_SkipsAndPreservesBranch
+// drives a full iteration end-to-end against a real bare repo where Phase 1's
+// push lands on origin but the stub GitHub's CreatePR returns an error. The
+// close-vs-skip decision in completeTask must SKIP (not close) the bead —
+// closing would orphan the freshly-pushed branch with no bead reference.
+//
+// This guards against the regression that motivated ralph-mhtr: a HTTP 422
+// from CreatePR collapsed into the "prNumber == 0 → close the bead" branch,
+// quietly abandoning pushed work.
+//
+// Assertions: (1) the pushed branch still exists on the bare remote, (2) the
+// bead was skipped (not closed), (3) the skip reason carries the documented
+// "pr_creation_failed:<branch>" prefix so downstream triage can find it.
+func TestIntegrationReal_PushSucceededPRCreationFailed_SkipsAndPreservesBranch(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+	promptsDir := filepath.Join(setup.projectDir, "prompts")
+	createPromptTemplatesIn(t, promptsDir)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "Task whose PR creation fails",
+				NextID:       "ralph-orph",
+				BackendLabel: "beads",
+			},
+		},
+	}
+
+	// Both CreatePR paths fail — primary (gh pr create) and the REST API
+	// fallback that CreatePR tries on client-side-failure. Push itself is
+	// not stubbed; it hits the real bare repo over a file:// remote, so
+	// the branch really lands on origin before CreatePR is attempted.
+	ghCfg := git.StubGitHubConfig{
+		Available:         true,
+		CreatePRErr:       errors.New("Validation Failed: base=invalid (422)"),
+		CreatePRViaAPIErr: errors.New("Validation Failed: base=invalid (422)"),
+	}
+
+	logger := logging.New(nil)
+	gm, workDir := withWorktree(t, setup, ghCfg, logger)
+
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: setup.projectDir,
+			WorkDir:    workDir,
+			RalphDir:   setup.ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+	}
+
+	_, st := setupTestDir(t)
+
+	runner := &stubRunner{
+		onRun: func() {
+			path := filepath.Join(workDir, "work.txt")
+			os.WriteFile(path, []byte("orphan-candidate\n"), 0o644)
+			gitCmd(t, workDir, "git", "add", "work.txt")
+			gitCmd(t, workDir, "git", "commit", "-m", "agent: work that would orphan if bead closed")
+			backend.Lock()
+			backend.Completed = 1
+			backend.Remaining = 0
+			backend.Unlock()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+	l.runner = runner
+
+	if err := l.Run(context.Background()); err != nil {
+		t.Fatalf("loop.Run: %v", err)
+	}
+
+	// Observable #1: bead was NOT closed. Closing would orphan the remote
+	// branch — that's the bug we're guarding against.
+	backend.CloseMu.Lock()
+	if len(backend.ClosedIDs) != 0 {
+		backend.CloseMu.Unlock()
+		t.Fatalf("bead must not be closed when push succeeded but CreatePR failed (would orphan branch), closed=%v reasons=%v", backend.ClosedIDs, backend.CloseReasons)
+	}
+	backend.CloseMu.Unlock()
+
+	// Observable #2: bead was skipped with a reason carrying the branch
+	// name in the documented machine-parseable format.
+	backend.SkipMu.Lock()
+	defer backend.SkipMu.Unlock()
+	var skipReason string
+	for i, id := range backend.SkippedIDs {
+		if id == "ralph-orph" {
+			skipReason = backend.SkipReasons[i]
+			break
+		}
+	}
+	if skipReason == "" {
+		t.Fatalf("expected bead ralph-orph to be skipped, got skipped=%v", backend.SkippedIDs)
+	}
+	if !strings.HasPrefix(skipReason, "pr_creation_failed:") {
+		t.Errorf("skip reason must use pr_creation_failed: prefix, got %q", skipReason)
+	}
+
+	// Observable #3: the pushed branch is still present on the bare remote.
+	// The skip reason contains the branch name after the colon — use it to
+	// assert the remote ref exists. If the bead had closed, triage would
+	// have no way to rediscover this branch; this assertion locks in that
+	// the skip reason actually points at something real.
+	branchName := strings.TrimPrefix(skipReason, "pr_creation_failed:")
+	if branchName == "" {
+		t.Fatalf("skip reason must carry a non-empty branch name, got %q", skipReason)
+	}
+	if !refExistsAt(setup.bareDir, "refs/heads/"+branchName) {
+		remoteBranches := gitOutputAt(t, setup.bareDir, "branch", "--list")
+		t.Errorf("pushed branch %q must still exist on origin after CreatePR failure; bare branches:\n%s", branchName, remoteBranches)
 	}
 }
 

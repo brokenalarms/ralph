@@ -25,6 +25,7 @@ type shipResult struct {
 	stacked         bool
 	ciInfraFailure  bool                 // InfrastructureFailure flag on ShipResult
 	ciFailureDetail *git.CIFailureError  // populated when the loop needs to route through tryFixCI
+	pushedBranch    string               // PushedBranch flag: non-empty when Phase 1 push succeeded on this branch
 }
 
 // finalizeSetup bundles a Loop and pre-built params for finalize tests.
@@ -56,6 +57,7 @@ func buildFinalizeSetup(t *testing.T, dir, taskID, nextTask string, backend *tes
 			Stacked:               ship.stacked,
 			InfrastructureFailure: ship.ciInfraFailure,
 			CIFailureDetail:       ship.ciFailureDetail,
+			PushedBranch:          ship.pushedBranch,
 		},
 	})
 	autoMerge := ship.merged || ship.ciFailure || ship.stacked
@@ -495,6 +497,61 @@ func TestFinalizePR_StackedPR_ClosesWithoutMerge(t *testing.T) {
 	defer backend.CloseMu.Unlock()
 	if len(backend.ClosedIDs) == 0 || backend.ClosedIDs[0] != "ralph-stk1" {
 		t.Errorf("stacked PR should still close the task, got %v", backend.ClosedIDs)
+	}
+}
+
+// When Phase 1's push succeeded but CreatePR failed, ship returns prNumber=0
+// and a non-empty pushedBranch. completeTask must SKIP (not close) the bead —
+// closing would orphan the pushed remote branch with no way for triage to
+// find it. The skip reason must carry the branch name in a machine-parseable
+// "pr_creation_failed:<branch>" form so downstream tooling can locate the
+// orphan.
+func TestFinalizePR_PushSucceededPRCreationFailed_SkipsWithBranch(t *testing.T) {
+	dir, _ := setupTestDir(t)
+
+	backend := &testutil.TrackingBackend{
+		MutableBackend: testutil.MutableBackend{StubBackend: testutil.StubBackend{Remaining: 1, Total: 1}},
+	}
+
+	fs := buildFinalizeSetup(t, dir, "ralph-orph", "Task whose PR fails to create", backend, shipResult{
+		prNumber:     0,
+		pushedBranch: "ralph/ralph-orph-task-whose-pr-fails",
+	})
+
+	out := fs.loop.completeTask(context.Background(), fs.p)
+
+	backend.CloseMu.Lock()
+	if len(backend.ClosedIDs) != 0 {
+		backend.CloseMu.Unlock()
+		t.Fatalf("CloseTask must not be called when push succeeded but CreatePR failed — that would orphan the branch. got %v", backend.ClosedIDs)
+	}
+	backend.CloseMu.Unlock()
+
+	backend.SkipMu.Lock()
+	defer backend.SkipMu.Unlock()
+	found := false
+	for i, id := range backend.SkippedIDs {
+		if id != "ralph-orph" {
+			continue
+		}
+		found = true
+		reason := backend.SkipReasons[i]
+		if !strings.HasPrefix(reason, "pr_creation_failed:") {
+			t.Errorf("skip reason must use documented prefix pr_creation_failed:, got %q", reason)
+		}
+		if !strings.Contains(reason, "ralph/ralph-orph-task-whose-pr-fails") {
+			t.Errorf("skip reason must carry pushed branch name, got %q", reason)
+		}
+	}
+	if !found {
+		t.Errorf("bead ralph-orph must be skipped when push succeeded but CreatePR failed, skipped=%v", backend.SkippedIDs)
+	}
+
+	if out.ct != nil {
+		t.Errorf("pushed-but-no-PR path must not return a CompletedTask (nothing to record), got %+v", out.ct)
+	}
+	if out.merged {
+		t.Error("pushed-but-no-PR path must not report merged")
 	}
 }
 

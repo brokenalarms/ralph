@@ -662,7 +662,14 @@ iterLoop:
 // doShip executes the full two-phase ship pipeline: push + PR creation (Phase 1),
 // then reviewer polling and merge (Phase 2, only when AutoMerge is enabled).
 // Retries up to 5 times on review fix requests or CI failures.
-func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, workDir string) (prNumber int, prResultURL string, merged bool, ciFailure bool, ciInfraFailure bool, stacked bool) {
+//
+// pushedBranch is set to the worktree branch name if Phase 1's push succeeded
+// (regardless of whether CreatePR then succeeded or failed). An empty
+// pushedBranch means nothing was pushed to the remote. Callers rely on this
+// signal to distinguish "agent had no code to ship" (safe to close the bead)
+// from "push succeeded but CreatePR failed" (must skip, not close — the
+// pushed branch is now orphaned if the bead closes).
+func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, workDir string) (prNumber int, prResultURL string, merged bool, ciFailure bool, ciInfraFailure bool, stacked bool, pushedBranch string) {
 	// Pre-fetch task description and acceptance criteria so git/github can
 	// build the PR body internally. The orchestrator owns the data, the
 	// git package owns the markdown formatting.
@@ -712,8 +719,13 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 		Acceptance:  taskAccept,
 		Summary:     summary,
 	})
+	// result.PushedBranch is populated by shipPR when the push leg succeeded,
+	// even if CreatePR then returned an error. Thread it through so the
+	// caller can distinguish "nothing was pushed" from "push landed on
+	// remote but PR creation failed".
+	pushedBranch = result.PushedBranch
 	if err != nil {
-		return result.PRNumber, result.PRURL, false, false, false, false
+		return result.PRNumber, result.PRURL, false, false, false, false, pushedBranch
 	}
 
 	// Link task to PR as soon as PR is available.
@@ -735,7 +747,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 	l.ensureActiveReviewers()
 
 	if !l.cfg.AutoMerge || result.PRNumber == 0 {
-		return result.PRNumber, result.PRURL, false, false, false, false
+		return result.PRNumber, result.PRURL, false, false, false, false, pushedBranch
 	}
 
 	// Phase 2: Ship with merge enabled. Pass the PR number so Ship
@@ -770,7 +782,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 		})
 		if mergeErr != nil {
 			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Ship (merge): %v", mergeErr)
-			return prResultNum, prResultURL, false, false, false, false
+			return prResultNum, prResultURL, false, false, false, false, pushedBranch
 		}
 		if mergeResult.ReviewFixNeeded {
 			// Review fix needed: spawn fix agent, mark addressed, retry.
@@ -791,7 +803,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 			if mergeResult.InfrastructureFailure {
 				l.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn},
 					"CI infrastructure failure (zero job steps) — closing bead, PR open for merge when CI recovers")
-				return prResultNum, prResultURL, false, true, true, false
+				return prResultNum, prResultURL, false, true, true, false, pushedBranch
 			}
 			// Real CI failure: spawn fix agent; if it pushed new commits, retry merge.
 			fixResult := l.tryFixCI(ctx, mergeResult.CIFailureDetail, title, workDir, rawLogPath)
@@ -812,7 +824,7 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 				}
 				select {
 				case <-ctx.Done():
-					return prResultNum, prResultURL, false, false, false, false
+					return prResultNum, prResultURL, false, false, false, false, pushedBranch
 				case <-time.After(delay):
 				}
 				continue
@@ -824,9 +836,9 @@ func (l *Loop) doShip(ctx context.Context, taskID, title, summary, rawLogPath, w
 				continue
 			}
 			// Agent could not resolve — give up.
-			return prResultNum, prResultURL, false, false, false, false
+			return prResultNum, prResultURL, false, false, false, false, pushedBranch
 		}
-		return prResultNum, prResultURL, mergeResult.Merged, mergeResult.CIFailure, false, mergeResult.Stacked
+		return prResultNum, prResultURL, mergeResult.Merged, mergeResult.CIFailure, false, mergeResult.Stacked, pushedBranch
 	}
-	return prResultNum, prResultURL, mergeResult.Merged, mergeResult.CIFailure, false, mergeResult.Stacked
+	return prResultNum, prResultURL, mergeResult.Merged, mergeResult.CIFailure, false, mergeResult.Stacked, pushedBranch
 }
