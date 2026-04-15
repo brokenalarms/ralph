@@ -1192,3 +1192,55 @@ func TestIntegrationReal_ResumeWithDivergentLocalCommits_DoesNotCrash(t *testing
 		t.Errorf("in-flight commit missing from branch history:\n%s", logOutput)
 	}
 }
+
+// TestIntegrationReal_BranchForTask_SetStackHeadBeforePrepare proves that
+// setStackHead runs before PrepareForNextTask in BranchForTask. Observable
+// consequence: when CompletedBranches contains a pushed branch still ahead of
+// main, the new wip branch is anchored at that branch's tip — not at
+// origin/main. If the order were reversed, prevBranch would be empty when
+// PrepareForNextTask runs, causing the branch to start from origin/main instead.
+func TestIntegrationReal_BranchForTask_SetStackHeadBeforePrepare(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+
+	// Create and push task A's branch with one commit ahead of main.
+	stackBranch := "ralph/ralph-a-task-a"
+	gitCmd(t, setup.projectDir, "git", "checkout", "-b", stackBranch)
+	os.WriteFile(filepath.Join(setup.projectDir, "task-a.txt"), []byte("task A\n"), 0o644)
+	gitCmd(t, setup.projectDir, "git", "add", "task-a.txt")
+	gitCmd(t, setup.projectDir, "git", "commit", "-m", "task A commit")
+	gitCmd(t, setup.projectDir, "git", "push", "origin", stackBranch)
+	parentTip := gitOutputAt(t, setup.projectDir, "rev-parse", stackBranch)
+	gitCmd(t, setup.projectDir, "git", "checkout", "main")
+
+	logger := logging.New(nil)
+	// GitHub unavailable so validateStackParent returns early without clearing
+	// prevBranch — allows the test to focus purely on the ordering invariant.
+	gm, workDir := withWorktree(t, setup, git.StubGitHubConfig{Available: false}, logger)
+
+	// Call BranchForTask with the stack parent in CompletedBranches.
+	if _, err := gm.BranchForTask(context.Background(), "ralph-b", "task b", git.BranchTaskMeta{
+		CompletedBranches: []string{stackBranch},
+	}); err != nil {
+		t.Fatalf("BranchForTask: %v", err)
+	}
+
+	// The new wip branch must be exactly at the stack parent's tip — 0 commits
+	// ahead of it. If setStackHead ran after PrepareForNextTask, the branch
+	// would start from origin/main and this assertion would fail.
+	countAhead := gitOutputAt(t, workDir, "rev-list", "--count", "origin/"+stackBranch+"..HEAD")
+	if countAhead != "0" {
+		t.Errorf("new branch has %s commit(s) ahead of stack parent — setStackHead ran after PrepareForNextTask", countAhead)
+	}
+
+	// Stack parent's commit must be present on the new branch.
+	countMain := gitOutputAt(t, workDir, "rev-list", "--count", "origin/main..HEAD")
+	if countMain != "1" {
+		t.Errorf("new branch has %s commit(s) ahead of origin/main, want 1 (stack parent's commit)", countMain)
+	}
+
+	// HEAD must equal the stack parent's tip.
+	headTip := gitOutputAt(t, workDir, "rev-parse", "HEAD")
+	if headTip != parentTip {
+		t.Errorf("new branch tip = %q, want %q (stack parent tip)", headTip, parentTip)
+	}
+}

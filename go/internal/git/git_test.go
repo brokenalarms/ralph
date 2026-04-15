@@ -503,7 +503,7 @@ func TestRenameBranchForTask_DoesNotSetPrevBranch(t *testing.T) {
 	}
 
 	mgr.RenameBranchForTask("first task", "ralph-aaa")
-	mgr.PrepareForNextTask("ralph-bbb")
+	mgr.PrepareForNextTask("ralph-bbb", "")
 	mgr.RenameBranchForTask("second task", "ralph-bbb")
 
 	if mgr.prevBranch != "" {
@@ -529,7 +529,7 @@ func TestPrepareForNextTask_CreatesFreshBranch(t *testing.T) {
 		t.Fatal("branch should have been renamed from ralph/next")
 	}
 
-	mgr.PrepareForNextTask("ralph-bbb")
+	mgr.PrepareForNextTask("ralph-bbb", "")
 
 	if mgr.worktreeBranch != "ralph/next" {
 		t.Errorf("after PrepareForNextTask, branch = %q, want ralph/next", mgr.worktreeBranch)
@@ -578,7 +578,7 @@ func TestPrepareForNextTask_DiscardsUncommittedChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mgr.PrepareForNextTask("ralph-bbb")
+	mgr.PrepareForNextTask("ralph-bbb", "")
 
 	// Tracked file must be restored to its committed content.
 	got, err := os.ReadFile(trackedFile)
@@ -617,7 +617,7 @@ func TestPrepareForNextTask_DeletesOldBranch(t *testing.T) {
 	run(t, "git", "-C", mgr.workDir, "commit", "-m", "task work")
 	run(t, "git", "-C", project, "merge", "--ff-only", taskBranch)
 
-	mgr.PrepareForNextTask("ralph-next1")
+	mgr.PrepareForNextTask("ralph-next1", "")
 
 	// Worktree must be on the placeholder branch.
 	if mgr.worktreeBranch != WipBranchName() {
@@ -657,7 +657,7 @@ func TestPrepareForNextTask_PreservesUnmergedTaskBranch(t *testing.T) {
 	run(t, "git", "-C", mgr.workDir, "commit", "-m", "in-progress work")
 	commitSHA := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "HEAD"))
 
-	mgr.PrepareForNextTask("ralph-different")
+	mgr.PrepareForNextTask("ralph-different", "")
 
 	// Worktree must be on the placeholder branch.
 	if mgr.worktreeBranch != WipBranchName() {
@@ -761,7 +761,7 @@ func TestPrepareForNextTask_CleansOnTaskSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mgr.PrepareForNextTask("ralph-bbb")
+	mgr.PrepareForNextTask("ralph-bbb", "")
 
 	got, err := os.ReadFile(trackedFile)
 	if err != nil {
@@ -804,7 +804,7 @@ func TestPrepareForNextTask_PreservesChangesWhenResumingSameTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mgr.PrepareForNextTask("ralph-aaa")
+	mgr.PrepareForNextTask("ralph-aaa", "")
 
 	got, err := os.ReadFile(trackedFile)
 	if err != nil {
@@ -815,6 +815,94 @@ func TestPrepareForNextTask_PreservesChangesWhenResumingSameTask(t *testing.T) {
 	}
 	if _, err := os.Stat(untrackedFile); os.IsNotExist(err) {
 		t.Error("untracked file should be preserved when resuming same task")
+	}
+}
+
+// BranchForTask anchors the new wip branch at origin/main when CompletedBranches
+// is empty, even when HEAD has commits from a previous task. Proves that
+// PrepareForNextTask uses the resolved base (origin/main) rather than HEAD,
+// so previous-task commits cannot leak into the next task's branch.
+func TestBranchForTask_AnchorsAtOriginMain_NoPreviousCommits(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	mgr := newRepoForTest(Config{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		Logger:     &testLog{},
+	}, nil, withRunner(&execRunner{}), withState(newMemState()))
+
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// Simulate previous-task work: rename to a task branch and make a commit.
+	mgr.RenameBranchForTask("prev task", "ralph-prev")
+	writeFile(t, mgr.workDir, "prev-work.txt", "previous task work\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "previous task commit")
+
+	// Call BranchForTask for a new task with no completed branches.
+	// setStackHead finds prevBranch="" (no candidates), so baseRef="origin/main".
+	// The new wip branch must start from origin/main, not from the stale HEAD.
+	if _, err := mgr.BranchForTask(context.Background(), "ralph-new", "new task", BranchTaskMeta{}); err != nil {
+		t.Fatalf("BranchForTask: %v", err)
+	}
+
+	// The new branch must have 0 commits ahead of origin/main — previous-task
+	// commit must not have leaked into the new wip.
+	countStr := strings.TrimSpace(gitOutput(mgr.workDir, "rev-list", "--count", "origin/main..HEAD"))
+	if countStr != "0" {
+		t.Errorf("new wip branch has %s commit(s) ahead of origin/main — previous task's commits leaked in", countStr)
+	}
+}
+
+// BranchForTask anchors the new wip branch at the tip of the stack parent
+// branch when CompletedBranches contains a pushed branch still ahead of main.
+// Proves setStackHead detects the parent before PrepareForNextTask creates the
+// new branch — if the order were reversed, baseRef would default to origin/main.
+func TestBranchForTask_AnchorsAtStackParent(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+
+	// Create and push the stack-parent branch (task A) with one commit.
+	stackBranch := "ralph/ralph-a-task-a"
+	run(t, "git", "-C", project, "checkout", "-b", stackBranch)
+	writeFile(t, project, "task-a.txt", "task A work\n")
+	run(t, "git", "-C", project, "commit", "-m", "task A commit")
+	run(t, "git", "-C", project, "push", "origin", stackBranch)
+	parentTip := strings.TrimSpace(gitOutput(project, "rev-parse", stackBranch))
+	run(t, "git", "-C", project, "checkout", "main")
+
+	mgr := newRepoForTest(Config{
+		ProjectDir: project,
+		RalphDir:   ralphDir,
+		BaseBranch: "main",
+		Logger:     &testLog{},
+	}, nil, withRunner(&execRunner{}), withState(newMemState()))
+
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	// BranchForTask with CompletedBranches containing the stack parent.
+	// setStackHead detects stackBranch as head; baseRef="origin/stackBranch".
+	if _, err := mgr.BranchForTask(context.Background(), "ralph-b", "task b", BranchTaskMeta{
+		CompletedBranches: []string{stackBranch},
+	}); err != nil {
+		t.Fatalf("BranchForTask: %v", err)
+	}
+
+	// The new wip branch must be exactly at the stack parent's tip.
+	tip := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "HEAD"))
+	if tip != parentTip {
+		t.Errorf("new wip branch tip = %q, want %q (tip of %s)", tip, parentTip, stackBranch)
+	}
+
+	// Exactly the stack parent's commit must be ahead of origin/main.
+	count := strings.TrimSpace(gitOutput(mgr.workDir, "rev-list", "--count", "origin/main..HEAD"))
+	if count != "1" {
+		t.Errorf("new wip branch has %s commit(s) ahead of origin/main, want 1 (stack parent's)", count)
 	}
 }
 

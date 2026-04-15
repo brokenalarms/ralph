@@ -587,7 +587,7 @@ func (s *stubRepo) SyncWorktreeBase(_ context.Context, _ []string) error {
 // branchRenamed), then rename the branch for the task. Returns the resulting
 // branch name.
 func (s *stubRepo) BranchForTask(_ context.Context, taskID, title string, meta BranchTaskMeta) (string, error) {
-	s.PrepareForNextTask(taskID)
+	s.PrepareForNextTask(taskID, "")
 	if s.cfg.BranchForTaskErr != nil {
 		return "", s.cfg.BranchForTaskErr
 	}
@@ -613,7 +613,7 @@ func (s *stubRepo) BranchForTask(_ context.Context, taskID, title string, meta B
 	return s.worktreeBranch, nil
 }
 
-func (s *stubRepo) PrepareForNextTask(_ string) {
+func (s *stubRepo) PrepareForNextTask(_, _ string) {
 	s.branchRenamed = false
 	s.prevBranch = s.worktreeBranch
 }

@@ -27,14 +27,24 @@ func (r *repo) SyncWorktreeBase(ctx context.Context, completedBranches []string)
 }
 
 // BranchForTask prepares a branch for the given task: detects the stack head,
-// resets/rebases if in a worktree, and checks out or renames to the task branch.
+// anchors a fresh wip branch at the resolved base, resets/rebases if in a
+// worktree, and checks out or renames to the task branch.
 // Returns the resulting branch name.
 func (r *repo) BranchForTask(ctx context.Context, taskID, title string, meta BranchTaskMeta) (string, error) {
-	r.PrepareForNextTask(taskID)
+	// Resolve stack head before creating the new branch so baseRef is known.
+	setStackHead(r, meta.CompletedBranches)
+
+	baseRef := "origin/" + r.detectDefaultBranch()
+	if r.prevBranch != "" {
+		baseRef = "origin/" + r.prevBranch
+	}
+
+	r.PrepareForNextTask(taskID, baseRef)
 
 	if r.worktreeBranch != "" && r.workDir != r.projectDir {
-		setStackHead(r, meta.CompletedBranches)
 		if r.prevBranch == "" {
+			// PrepareForNextTask already anchored at origin/main; this is a
+			// defensive no-op when HEAD == origin/main, kept for safety.
 			r.ResetToDefaultBranch()
 		}
 		if err := r.EnsureUpToDate(ctx); err != nil {
@@ -49,8 +59,6 @@ func (r *repo) BranchForTask(ctx context.Context, taskID, title string, meta Bra
 				return "", err
 			}
 		}
-	} else {
-		setStackHead(r, meta.CompletedBranches)
 	}
 
 	if _, err := checkoutExistingBranch(r, meta, taskID, title); err != nil {

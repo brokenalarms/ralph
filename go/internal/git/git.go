@@ -555,11 +555,17 @@ func (r *repo) branchSafeToDelete(branch string) bool {
 	return false
 }
 
-// PrepareForNextTask creates a fresh wip branch from HEAD so the next task
-// gets its own branch. RenameBranchForTask will rename it to a task-specific
-// name before the first commit. Uncommitted changes are discarded only when
-// switching to a different task; resuming the same task preserves in-progress work.
-func (r *repo) PrepareForNextTask(nextTaskID string) {
+// PrepareForNextTask creates a fresh wip branch anchored at baseRef so the
+// next task starts from the correct stack base. If baseRef is empty, the branch
+// is created at the current HEAD (preserving prior behaviour for call sites
+// that do not need stack-aware anchoring). RenameBranchForTask will rename the
+// placeholder to a task-specific name before the first commit.
+//
+// Uncommitted changes are discarded only when switching to a different task;
+// resuming the same task preserves in-progress work. When resuming the same
+// task and the branch already has commits ahead of baseRef, the checkout is
+// skipped entirely — the existing branch is kept as-is.
+func (r *repo) PrepareForNextTask(nextTaskID, baseRef string) {
 	r.branchRenamed = false
 	if r.state != nil {
 		_ = r.state.Write("branch_renamed", "false")
@@ -578,12 +584,37 @@ func (r *repo) PrepareForNextTask(nextTaskID string) {
 		r.gitCmdErr(r.workDir, "clean", "-fd", "--exclude=.ralph/")
 	}
 
+	// Same-task resume: if the branch already has local commits ahead of
+	// baseRef, keep the current branch — EnsureUpToDate will rebase them.
+	if nextTaskID != "" && lastTaskID != "" && nextTaskID == lastTaskID && baseRef != "" {
+		countStr := r.gitOutput(r.workDir, "rev-list", "--count", baseRef+"..HEAD")
+		var count int
+		fmt.Sscanf(countStr, "%d", &count)
+		if count > 0 {
+			return
+		}
+	}
+
+	// Fetch the base so the subsequent checkout can reference it.
+	if baseRef != "" {
+		baseBranch := strings.TrimPrefix(baseRef, "origin/")
+		_ = r.gitCmdErr(r.projectDir, "fetch", "origin", baseBranch)
+	}
+
 	newBranch := WipBranchName()
 	oldBranch := r.worktreeBranch
 	if oldBranch == newBranch {
 		return
 	}
-	if err := r.gitCmdErr(r.workDir, "checkout", "-B", newBranch); err == nil {
+
+	var checkoutErr error
+	if baseRef != "" {
+		checkoutErr = r.gitCmdErr(r.workDir, "checkout", "-B", newBranch, baseRef)
+	} else {
+		checkoutErr = r.gitCmdErr(r.workDir, "checkout", "-B", newBranch)
+	}
+
+	if checkoutErr == nil {
 		r.worktreeBranch = newBranch
 		if r.state != nil {
 			_ = r.state.Write("worktree_branch", newBranch)
