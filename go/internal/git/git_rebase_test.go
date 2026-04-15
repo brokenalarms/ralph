@@ -476,3 +476,116 @@ func TestRebaseOntoDefaultBranch_CancelledContextReturnsContextError(t *testing.
 	}
 }
 
+// validateStackParent clears prevBranch when the remote branch has been
+// deleted (e.g. auto-deleted after its PR merged). This is the source bug
+// for HTTP 422 base=invalid on a later CreatePR: setStackHead sets
+// prevBranch at session start, then the parent PR merges during the
+// iteration and its branch vanishes server-side. Without this guard, Push
+// squashes against the stale local ref and CreatePR sends a base that
+// GitHub no longer recognises.
+func TestValidateStackParent_ClearsWhenRemoteBranchDeleted(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	// Create parent branch on origin, one commit ahead of main, and fetch
+	// it into the worktree so the local remote-tracking ref exists.
+	run(t, "git", "-C", project, "checkout", "-b", "stack-parent")
+	writeFile(t, project, "parent.txt", "parent work\n")
+	run(t, "git", "-C", project, "commit", "-m", "parent")
+	run(t, "git", "-C", project, "push", "origin", "stack-parent")
+	run(t, "git", "-C", project, "checkout", "main")
+	run(t, "git", "-C", mgr.workDir, "fetch", "origin", "stack-parent")
+
+	mgr.SetPrevBranch("stack-parent")
+
+	// Sanity: with the branch present on origin, validate does not clear.
+	mgr.validateStackParent(context.Background())
+	if mgr.prevBranch != "stack-parent" {
+		t.Fatalf("prevBranch should remain while parent is live, got %q", mgr.prevBranch)
+	}
+
+	// Simulate the parent PR merging and its branch being auto-deleted:
+	// delete the branch from the bare remote. The worktree's local
+	// remote-tracking ref refs/remotes/origin/stack-parent is still
+	// present — this is the stale-cache condition that produced the bug.
+	run(t, "git", "-C", bare, "branch", "-D", "stack-parent")
+
+	mgr.validateStackParent(context.Background())
+	if mgr.prevBranch != "" {
+		t.Errorf("prevBranch should be cleared after remote branch deletion, got %q", mgr.prevBranch)
+	}
+}
+
+// validateStackParent clears prevBranch when the parent branch still
+// exists on the remote but its tip has landed on main (squash-merge).
+// The branch may linger briefly between merge and auto-delete; in that
+// window GitHub may still reject CreatePR with base=invalid, and even
+// if it doesn't, stacking a new PR on an already-merged parent would
+// produce a PR with no unique diff.
+func TestValidateStackParent_ClearsWhenParentLandedOnMain(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	// Create parent branch with a commit, push, then squash-merge its work
+	// into main so the parent tip is no longer ahead of main.
+	run(t, "git", "-C", project, "checkout", "-b", "stack-parent")
+	writeFile(t, project, "parent.txt", "parent work\n")
+	run(t, "git", "-C", project, "commit", "-m", "parent work")
+	run(t, "git", "-C", project, "push", "origin", "stack-parent")
+
+	// Land the parent's work on main via a new commit with the same content
+	// (simulating a squash-merge: same tree, different commit). Push main.
+	run(t, "git", "-C", project, "checkout", "main")
+	writeFile(t, project, "parent.txt", "parent work\n")
+	run(t, "git", "-C", project, "commit", "-m", "squash-merge parent")
+	run(t, "git", "-C", project, "push", "origin", "main")
+
+	// The parent branch still exists on origin but its commit is now an
+	// ancestor of main — BranchIsAheadOfMain returns false.
+	run(t, "git", "-C", mgr.workDir, "fetch", "origin")
+
+	mgr.SetPrevBranch("stack-parent")
+	mgr.validateStackParent(context.Background())
+	if mgr.prevBranch != "" {
+		t.Errorf("prevBranch should be cleared when parent no longer ahead of main, got %q", mgr.prevBranch)
+	}
+}
+
+// validateStackParent is a no-op when prevBranch is empty — the common
+// case at session start before any stack is established.
+func TestValidateStackParent_EmptyPrevBranchNoOp(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	mgr.SetPrevBranch("")
+	mgr.validateStackParent(context.Background())
+	if mgr.prevBranch != "" {
+		t.Errorf("prevBranch must remain empty, got %q", mgr.prevBranch)
+	}
+}
+
+// EnsureUpToDate invokes validateStackParent on every call — not just at
+// startup. This is the invariant that prevents "stack parent merged
+// mid-session" from surfacing as base=invalid at CreatePR time: each
+// sync re-queries remote state and clears stale prevBranch.
+func TestEnsureUpToDate_InvokesValidateStackParent(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	run(t, "git", "-C", project, "checkout", "-b", "stack-parent")
+	writeFile(t, project, "parent.txt", "parent\n")
+	run(t, "git", "-C", project, "commit", "-m", "parent")
+	run(t, "git", "-C", project, "push", "origin", "stack-parent")
+	run(t, "git", "-C", project, "checkout", "main")
+	run(t, "git", "-C", mgr.workDir, "fetch", "origin", "stack-parent")
+
+	mgr.SetPrevBranch("stack-parent")
+	run(t, "git", "-C", bare, "branch", "-D", "stack-parent")
+
+	if err := mgr.EnsureUpToDate(context.Background()); err != nil {
+		t.Fatalf("EnsureUpToDate should not error when parent vanished, got: %v", err)
+	}
+	if mgr.prevBranch != "" {
+		t.Errorf("EnsureUpToDate must clear stale prevBranch, got %q", mgr.prevBranch)
+	}
+}

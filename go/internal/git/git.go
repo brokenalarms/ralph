@@ -286,6 +286,74 @@ func (r *repo) withStash(stashMsg string, fn func()) {
 	}
 }
 
+// validateStackParent re-verifies that r.prevBranch still corresponds to a
+// live remote branch with an open PR. The parent PR can merge and get its
+// branch auto-deleted between setStackHead (at iteration start) and a later
+// Ship/CreatePR call — GitHub then rejects CreatePR with HTTP 422
+// base=invalid because the local remote-tracking ref is stale.
+//
+// Checks, in order:
+//  1. `git fetch origin <prevBranch>` — if this errors, the remote branch
+//     is gone (auto-deleted after merge). Clear prevBranch.
+//  2. BranchIsAheadOfMain(prevBranch) — if main is no longer an ancestor of
+//     the branch, the branch has either been squash-merged into main or
+//     diverged; either way it's no longer a valid stack base. Clear.
+//  3. ListOpenPRBranches excludes prevBranch (only checked when gh is
+//     available, signaled by a non-nil non-empty list) — the branch exists
+//     on remote but its PR was closed/merged. Clear.
+//
+// On a confirmed vanish, prevBranch is cleared so subsequent rebases and
+// CreatePR calls target the default branch. On ambiguous signals (gh
+// unavailable, transient fetch error with local state intact), prevBranch
+// is left alone — better to retry with possibly-stale base than to wipe
+// valid stack state on a transient failure.
+func (r *repo) validateStackParent(ctx context.Context) {
+	if r.prevBranch == "" {
+		return
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return
+	}
+	parent := r.prevBranch
+
+	// A vanished parent is expected in a healthy stacked workflow (parent
+	// merges, subsequent PRs advance to main) — log at info level so it
+	// shows up in the narrative without looking like a failure.
+
+	// (1) Confirm the remote branch still exists by fetching it.
+	if err := r.FetchBranch(parent); err != nil {
+		r.logger.Emit(logging.Opts{Domain: logging.Git},
+			"Stack parent %s no longer on remote — falling back to %s", parent, r.detectDefaultBranch())
+		r.SetPrevBranch("")
+		return
+	}
+
+	// (2) If the branch exists but its tip is no longer ahead of main, its
+	// work has landed (squash-merge) or it diverged — either way it's not
+	// a valid base anymore.
+	if !r.BranchIsAheadOfMain(parent) {
+		r.logger.Emit(logging.Opts{Domain: logging.Git},
+			"Stack parent %s has landed on main — falling back to %s", parent, r.detectDefaultBranch())
+		r.SetPrevBranch("")
+		return
+	}
+
+	// (3) Final check against GitHub's PR state, when gh is available.
+	// An empty/nil result means gh is unavailable — don't act on that.
+	openBranches, err := r.ListOpenPRBranches()
+	if err != nil || len(openBranches) == 0 {
+		return
+	}
+	for _, b := range openBranches {
+		if b == parent {
+			return
+		}
+	}
+	r.logger.Emit(logging.Opts{Domain: logging.Git},
+		"Stack parent %s has no open PR — falling back to %s", parent, r.detectDefaultBranch())
+	r.SetPrevBranch("")
+}
+
 // EnsureUpToDate fetches the latest base branch, stashes any uncommitted
 // changes, rebases onto origin, and reapplies the stash. If rebase fails
 // after auto-resolve, it aborts and returns an error — the caller decides
@@ -294,6 +362,10 @@ func (r *repo) EnsureUpToDate(ctx context.Context) error {
 	if r.workDir == "" || r.workDir == r.projectDir {
 		return nil
 	}
+
+	// Re-validate the stack parent before every sync. The parent PR may have
+	// merged and been deleted since we last checked — see validateStackParent.
+	r.validateStackParent(ctx)
 
 	// Rebase onto stack head if set, otherwise the default branch.
 	baseBranch := r.detectDefaultBranch()

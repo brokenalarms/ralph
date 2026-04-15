@@ -50,6 +50,11 @@ func (r *repo) Push(ctx context.Context) error {
 		r.logger.Emit(logging.Opts{Domain: "build"}, "Pre-push compile check passed")
 	}
 
+	// The stack parent may have merged and been deleted between iteration
+	// start and now. Re-query GitHub before squashing against a base that
+	// may no longer exist — otherwise CreatePR will fail with base=invalid.
+	r.validateStackParent(ctx)
+
 	baseBranch := r.resolveBaseBranch()
 	_ = r.gitCmdErr(r.workDir, "fetch", "origin", baseBranch)
 	baseRef := "origin/" + baseBranch
