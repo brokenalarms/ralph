@@ -175,7 +175,7 @@ func (r *repo) resolveByState(ctx context.Context, prNumber int, meta ResumeTask
 
 	case shipResult.Closed:
 		r.logger.Emit(logging.Opts{Domain: "git", Level: logging.Warn, Link: r.buildPRLink(prNumber)}, "is closed (not merged) — re-running agent")
-		r.PrepareForNextTask(meta.TaskID)
+		r.PrepareForNextTask(meta.TaskID, "")
 		_ = r.RenameBranchForTask(meta.TaskTitle, meta.TaskID)
 		newBranch := ""
 		if meta.TaskID != "" && strings.Contains(r.worktreeBranch, meta.TaskID) {

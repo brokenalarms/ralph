@@ -1158,7 +1158,7 @@ func (r *repo) PostMergeUpdateMain() {
 	// Force-delete is safe here and intentional; PrepareForNextTask's
 	// conservative delete would spuriously preserve the branch.
 	staleTaskBranch := r.worktreeBranch
-	r.PrepareForNextTask("")
+	r.PrepareForNextTask("", "")
 	if staleTaskBranch != "" && staleTaskBranch != WipBranchName() && staleTaskBranch != r.worktreeBranch {
 		if err := r.gitCmdErr(r.projectDir, "branch", "-D", staleTaskBranch); err == nil {
 			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Deleted local branch %s", staleTaskBranch)
