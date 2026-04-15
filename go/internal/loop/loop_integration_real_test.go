@@ -962,3 +962,99 @@ func TestIntegrationReal_EvolveRebasePreservesUserCommits(t *testing.T) {
 		t.Errorf("main's advance lost after rebase — rebase did not pick up origin/main:\n%s", logOut)
 	}
 }
+
+// TestIntegrationReal_ResumeWithDivergentLocalCommits_DoesNotCrash covers the
+// resume scenario where the worktree branch has in-flight local commits that
+// conflict with a moved-forward origin/main. Pre-fix, initialize() failed fatal
+// with status=error and a nonsensical "PR #0 has unresolvable merge conflicts"
+// message. Post-fix, the local-rebase abort is recoverable: a warning is
+// logged, the loop proceeds, and the in-flight commits are preserved intact.
+//
+// Observable: initialize returns nil; state.json status is not "error"; the
+// log contains the branch-qualified warning and NO "PR #0" reference; the
+// worktree branch still carries the user commit after the failed rebase.
+func TestIntegrationReal_ResumeWithDivergentLocalCommits_DoesNotCrash(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+
+	// Seed a shared file on main so both sides can diverge from it.
+	os.WriteFile(filepath.Join(setup.projectDir, "shared.txt"), []byte("original\n"), 0o644)
+	gitCmd(t, setup.projectDir, "git", "add", "shared.txt")
+	gitCmd(t, setup.projectDir, "git", "commit", "-m", "seed: shared")
+	gitCmd(t, setup.projectDir, "git", "push", "origin", "main")
+
+	var logBuf strings.Builder
+	logger := logging.NewWithWriter(&logBuf)
+
+	// withWorktree calls Init which sets up a wip branch worktree. At this
+	// point origin/main still matches the worktree's base.
+	gm, workDir := withWorktree(t, setup, git.StubGitHubConfig{Available: true}, logger)
+
+	// Simulate in-flight work on the worktree branch: a local commit that
+	// modifies the shared file one way.
+	os.WriteFile(filepath.Join(workDir, "shared.txt"), []byte("worktree change\n"), 0o644)
+	gitCmd(t, workDir, "git", "add", "shared.txt")
+	gitCmd(t, workDir, "git", "commit", "-m", "agent: in-flight work")
+	localSHA := gitOutputAt(t, workDir, "rev-parse", "HEAD")
+
+	// Advance origin/main independently with a conflicting change to the same
+	// file (second clone to avoid touching the worktree's project dir).
+	otherClone := filepath.Join(filepath.Dir(setup.projectDir), "other")
+	gitCmd(t, "", "git", "clone", setup.bareDir, otherClone)
+	gitCmd(t, otherClone, "git", "config", "user.name", "test")
+	gitCmd(t, otherClone, "git", "config", "user.email", "test@test")
+	os.WriteFile(filepath.Join(otherClone, "shared.txt"), []byte("main change\n"), 0o644)
+	gitCmd(t, otherClone, "git", "add", "shared.txt")
+	gitCmd(t, otherClone, "git", "commit", "-m", "other: conflicting advance")
+	gitCmd(t, otherClone, "git", "push", "origin", "main")
+
+	backend := &testutil.StubBackend{Remaining: 0, Completed: 0, Total: 0}
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: setup.projectDir,
+			WorkDir:    workDir,
+			RalphDir:   setup.ralphDir,
+		},
+		MaxIterations: 1,
+	}
+	_, st := setupTestDir(t)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
+
+	// Core assertion: initialize does not crash when the initial rebase
+	// aborts due to conflicting local commits.
+	if err := l.initialize(context.Background()); err != nil {
+		t.Fatalf("initialize returned error on divergent local commits (regression): %v", err)
+	}
+
+	// Status must not have been marked error by initialize.
+	if status, _ := st.Read("status"); status == "error" {
+		t.Errorf("state.status should not be 'error' after local-rebase abort; got %q", status)
+	}
+
+	// Warning must be present with branch-qualified, PR-free message.
+	logOut := logBuf.String()
+	if !strings.Contains(logOut, "could not be rebased onto origin/main") {
+		t.Errorf("expected LocalRebaseConflictError warning in log, got:\n%s", logOut)
+	}
+	if !strings.Contains(logOut, "continuing with stale base") {
+		t.Errorf("expected 'continuing with stale base' in log, got:\n%s", logOut)
+	}
+	if strings.Contains(logOut, "PR #0") {
+		t.Errorf("log must not reference 'PR #0' for a local-rebase failure:\n%s", logOut)
+	}
+
+	// In-flight commits must still be on the worktree branch — rebase --abort
+	// preserved state.
+	if got := gitOutputAt(t, workDir, "rev-parse", "HEAD"); got != localSHA {
+		t.Errorf("local commit lost after failed rebase; HEAD=%s want=%s", got, localSHA)
+	}
+	logOutput := gitOutputAt(t, workDir, "log", "--oneline")
+	if !strings.Contains(logOutput, "agent: in-flight work") {
+		t.Errorf("in-flight commit missing from branch history:\n%s", logOutput)
+	}
+}

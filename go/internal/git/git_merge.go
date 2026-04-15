@@ -930,6 +930,13 @@ func (r *repo) ResolveConflict(ctx context.Context) error {
 	baseBranch := r.resolveBaseBranch()
 	r.logger.Emit(logging.Opts{Domain: logging.Git, Branch: baseBranch}, "Rebasing onto %s to resolve merge conflicts...", baseBranch)
 	if err := r.EnsureUpToDate(ctx); err != nil {
+		// A local rebase abort in the PR-merge pipeline IS an unresolvable
+		// merge conflict — surface it with PR semantics so MergeWithRetry
+		// routes it to OnConflict.
+		var localConflict *LocalRebaseConflictError
+		if errors.As(err, &localConflict) {
+			return &UnresolvedConflictError{}
+		}
 		return fmt.Errorf("conflict resolution rebase failed: %w", err)
 	}
 

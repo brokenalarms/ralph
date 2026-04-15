@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -37,7 +38,16 @@ func (r *repo) BranchForTask(ctx context.Context, taskID, title string, meta Bra
 			r.ResetToDefaultBranch()
 		}
 		if err := r.EnsureUpToDate(ctx); err != nil {
-			return "", err
+			// A local-rebase abort is recoverable — the branch still has its
+			// in-flight commits. Warn and proceed with the stale base; the
+			// agent will either resolve or a later merge pipeline (which uses
+			// UnresolvedConflictError semantics) will handle it.
+			var localConflict *LocalRebaseConflictError
+			if errors.As(err, &localConflict) {
+				r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%v — continuing with stale base", localConflict)
+			} else {
+				return "", err
+			}
 		}
 	} else {
 		setStackHead(r, meta.CompletedBranches)

@@ -101,8 +101,9 @@ func TestRebaseOntoDefaultBranch_CleanRebase(t *testing.T) {
 }
 
 // Genuine divergence (both sides modified the same line differently) causes
-// EnsureUpToDate to return *UnresolvedConflictError so callers know the
-// branch could not be synced.
+// EnsureUpToDate to return *LocalRebaseConflictError so callers know the
+// branch could not be synced. The error is distinct from
+// *UnresolvedConflictError (which carries PR-merge semantics).
 func TestRebaseOntoDefaultBranch_DivergesOnConflict(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	mgr := setupRebaseMgr(t, project, bare)
@@ -116,11 +117,14 @@ func TestRebaseOntoDefaultBranch_DivergesOnConflict(t *testing.T) {
 
 	err := mgr.RebaseOntoDefaultBranch(context.Background())
 	if err == nil {
-		t.Fatal("expected UnresolvedConflictError, got nil")
+		t.Fatal("expected LocalRebaseConflictError, got nil")
 	}
-	var conflictErr *UnresolvedConflictError
+	var conflictErr *LocalRebaseConflictError
 	if !errors.As(err, &conflictErr) {
-		t.Fatalf("expected *UnresolvedConflictError, got %T: %v", err, err)
+		t.Fatalf("expected *LocalRebaseConflictError, got %T: %v", err, err)
+	}
+	if strings.Contains(err.Error(), "PR #") {
+		t.Errorf("error message should not reference a PR number: %v", err)
 	}
 }
 
@@ -147,7 +151,10 @@ func TestEnsureUpToDate_SquashMergedCommit(t *testing.T) {
 }
 
 // Genuine divergence: local commit and origin/main commit both modify the same
-// line differently. EnsureUpToDate must return an *UnresolvedConflictError.
+// line differently. EnsureUpToDate must return a *LocalRebaseConflictError
+// carrying the branch and base names — callers on startup/branch-setup paths
+// treat this as recoverable, while the merge-retry pipeline wraps it into
+// *UnresolvedConflictError for PR semantics.
 func TestEnsureUpToDate_GenuineConflictReturnsError(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	mgr := setupRebaseMgr(t, project, bare)
@@ -170,11 +177,17 @@ func TestEnsureUpToDate_GenuineConflictReturnsError(t *testing.T) {
 
 	err := mgr.EnsureUpToDate(context.Background())
 	if err == nil {
-		t.Fatal("expected UnresolvedConflictError, got nil")
+		t.Fatal("expected LocalRebaseConflictError, got nil")
 	}
-	var conflictErr *UnresolvedConflictError
+	var conflictErr *LocalRebaseConflictError
 	if !errors.As(err, &conflictErr) {
-		t.Fatalf("expected *UnresolvedConflictError, got %T: %v", err, err)
+		t.Fatalf("expected *LocalRebaseConflictError, got %T: %v", err, err)
+	}
+	if conflictErr.Base != "main" {
+		t.Errorf("expected Base=main, got %q", conflictErr.Base)
+	}
+	if strings.Contains(err.Error(), "PR #") {
+		t.Errorf("error message should not reference a PR number: %v", err)
 	}
 }
 

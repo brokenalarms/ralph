@@ -359,7 +359,7 @@ func (r *repo) EnsureUpToDate(ctx context.Context) error {
 
 		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "Rebase conflict with local work — stack diverged, continuing")
 		r.gitCmd(r.workDir, "rebase", "--abort")
-		result = &UnresolvedConflictError{}
+		result = &LocalRebaseConflictError{Branch: r.worktreeBranch, Base: baseBranch}
 	})
 	return result
 }

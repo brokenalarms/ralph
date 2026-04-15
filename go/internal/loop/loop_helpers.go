@@ -2,12 +2,14 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/analyzer"
 	"github.com/brokenalarms/ralph/internal/claude"
+	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 )
 
@@ -44,8 +46,16 @@ func (l *Loop) initWorktree(ctx context.Context) error {
 			l.state.Write("status", "stopped")
 			return nil
 		}
-		l.state.Write("status", "error")
-		return fmt.Errorf("initial rebase failed: %w", err)
+		// A local-rebase abort on an in-flight branch is recoverable: the
+		// branch state is intact, the agent or the next task boundary will
+		// handle divergence. Warn and continue rather than stranding the loop.
+		var localConflict *git.LocalRebaseConflictError
+		if errors.As(err, &localConflict) {
+			l.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn}, "%v — continuing with stale base", localConflict)
+		} else {
+			l.state.Write("status", "error")
+			return fmt.Errorf("initial rebase failed: %w", err)
+		}
 	}
 
 	// If resuming the same task, mark the branch as already renamed so

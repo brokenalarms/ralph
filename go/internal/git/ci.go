@@ -173,6 +173,21 @@ func (e *UnresolvedConflictError) Error() string {
 	return fmt.Sprintf("PR #%d has unresolvable merge conflicts — auto-resolve failed", e.PRNumber)
 }
 
+// LocalRebaseConflictError is returned when rebasing local worktree commits
+// onto the remote base branch aborts due to conflicts. The branch state is
+// preserved intact (the rebase was aborted), so callers on the startup and
+// branch-setup paths can log and continue — the agent or a later task
+// boundary will handle the divergence. It is distinct from
+// UnresolvedConflictError, which carries PR-merge semantics.
+type LocalRebaseConflictError struct {
+	Branch string
+	Base   string
+}
+
+func (e *LocalRebaseConflictError) Error() string {
+	return fmt.Sprintf("local commits on %s could not be rebased onto origin/%s — divergent changes", e.Branch, e.Base)
+}
+
 
 
 // CIFetchFunc is the signature for fetching PR check status.
