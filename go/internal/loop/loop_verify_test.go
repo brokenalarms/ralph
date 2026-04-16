@@ -543,9 +543,8 @@ func TestOnSignal_NoPriorCommits_Rejects(t *testing.T) {
 	}
 }
 
-// Proves: first agent attempt uses cfg.Model; subsequent attempts (when prior
-// attempts exist on disk) use cfg.AgentEscalationModel, with ModelCap applied
-// as a ceiling over both.
+// Proves: every runAgent call uses cfg.Model regardless of prior attempts recorded
+// on disk — cross-iteration escalation was removed; each iteration starts at baseline.
 func TestAgentModelEscalation(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -554,13 +553,13 @@ func TestAgentModelEscalation(t *testing.T) {
 
 	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
 
-	const firstModel = verify.ModelSonnet
+	const baseModel = verify.ModelSonnet
 	const escalationModel = verify.ModelOpus
 	cfg := Config{
 		Dirs:                 workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
 		MaxIterations:        1,
 		CallsPerHour:         80,
-		Model:                firstModel,
+		Model:                baseModel,
 		AgentEscalationModel: escalationModel,
 	}
 	logger := logging.New(nil)
@@ -581,23 +580,23 @@ func TestAgentModelEscalation(t *testing.T) {
 
 	task := taskContext{id: "ralph-abc", title: "Fix login"}
 
-	// First run: no prior attempts on disk — should use Model (sonnet).
+	// First run: no prior attempts on disk — uses cfg.Model.
 	l.runAgent(context.Background(), task, 0)
 
-	// Record a prior attempt to simulate a retry.
+	// Record a prior attempt to simulate a prior iteration having run.
 	l.attempts.Record("ralph-abc", "Fix login", "first try failed", "", "continue")
 
-	// Second run: one prior attempt on disk — should use AgentEscalationModel (opus).
+	// Second run: prior attempt exists on disk — still uses cfg.Model, not escalation model.
 	l.runAgent(context.Background(), task, 1)
 
 	if len(capturedModels) != 2 {
 		t.Fatalf("expected 2 runner calls, got %d", len(capturedModels))
 	}
-	if capturedModels[0] != firstModel {
-		t.Errorf("attempt 1: expected %s (sonnet), got %s", firstModel, capturedModels[0])
+	if capturedModels[0] != baseModel {
+		t.Errorf("attempt 1: expected %s (sonnet), got %s", baseModel, capturedModels[0])
 	}
-	if capturedModels[1] != escalationModel {
-		t.Errorf("attempt 2: expected %s (opus escalation), got %s", escalationModel, capturedModels[1])
+	if capturedModels[1] != baseModel {
+		t.Errorf("attempt 2: expected %s (sonnet, not escalation), got %s", baseModel, capturedModels[1])
 	}
 }
 
@@ -633,7 +632,7 @@ func TestAgentModelEscalation_ModelCapApplied(t *testing.T) {
 		},
 	}
 
-	// Record a prior attempt so escalation model would normally be used.
+	// Record a prior attempt — ModelCap must still be applied as ceiling over cfg.Model.
 	l.attempts.Record("ralph-cap", "Fix login", "first try failed", "", "continue")
 
 	l.runAgent(context.Background(), taskContext{id: "ralph-cap", title: "Fix login"}, 1)
