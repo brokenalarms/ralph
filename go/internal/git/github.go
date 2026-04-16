@@ -112,6 +112,9 @@ func formatPRBody(description, acceptance, summary string) string {
 type MergeOpts struct {
 	DeleteBranch bool
 	Subject      string
+	// Admin bypasses branch protection rules. Requires administrator access.
+	// Only set this when isInfrastructureFailure has confirmed the CI never ran.
+	Admin bool
 }
 
 // MergeResult is the structured outcome of a merge attempt.
@@ -256,6 +259,9 @@ func (g *ghCLI) MergePR(prNumber int, repoURL string, opts MergeOpts) MergeResul
 	args := []string{"api", "-X", "PUT", endpoint, "--include", "-f", "merge_method=squash"}
 	if opts.Subject != "" {
 		args = append(args, "-f", "commit_title="+opts.Subject)
+	}
+	if opts.Admin {
+		args = append(args, "-F", "bypass_restrictions=true")
 	}
 	cmd := exec.Command("gh", args...)
 	out, err := cmd.CombinedOutput()
