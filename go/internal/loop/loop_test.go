@@ -203,6 +203,42 @@ func (s *stubIterationHook) OnIterationStart() {
 	}
 }
 
+// stubBinaryHasher satisfies BinaryHasher for evolve tests.
+// Calls is incremented on each Hash() call so tests can observe
+// how many times the binary was checked. Hashes is a sequence of
+// byte slices to return on successive Hash() calls; when exhausted
+// the last element is repeated. A single-element Hashes slice
+// simulates an unchanged binary; a two-element slice with different
+// values simulates a swap after the first call.
+type stubBinaryHasher struct {
+	Hashes [][]byte
+	Calls  int
+}
+
+func (h *stubBinaryHasher) Hash() ([]byte, error) {
+	if len(h.Hashes) == 0 {
+		return []byte("unchanged"), nil
+	}
+	idx := h.Calls
+	if idx >= len(h.Hashes) {
+		idx = len(h.Hashes) - 1
+	}
+	h.Calls++
+	return h.Hashes[idx], nil
+}
+
+// unchangedBinaryHasher returns a BinaryHasher that always reports the same
+// hash — simulating a loop run where no new binary was installed.
+func unchangedBinaryHasher() *stubBinaryHasher {
+	return &stubBinaryHasher{Hashes: [][]byte{[]byte("same-hash")}}
+}
+
+// changedBinaryHasher returns a BinaryHasher that reports a different hash
+// on every call past the first — simulating a post-task binary swap.
+func changedBinaryHasher() *stubBinaryHasher {
+	return &stubBinaryHasher{Hashes: [][]byte{[]byte("old-hash"), []byte("new-hash")}}
+}
+
 func setupTestDir(t *testing.T) (string, *state.Store) {
 	t.Helper()
 	dir := t.TempDir()

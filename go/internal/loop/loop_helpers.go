@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +13,36 @@ import (
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
 )
+
+// binaryHashChanged returns true when the on-disk binary at os.Executable()
+// has a different SHA-256 than the hash captured at loop startup. Returns
+// false when the startup hash is unset (hash guard disabled) or on error.
+func (l *Loop) binaryHashChanged() bool {
+	if len(l.startupBinaryHash) == 0 {
+		return false
+	}
+	current, err := l.binaryHasher.Hash()
+	if err != nil {
+		l.logger.Emit(logging.Opts{Domain: "loop", Level: logging.Warn}, "Evolve: binary hash check failed: %v — skipping restart", err)
+		return false
+	}
+	return !bytes.Equal(l.startupBinaryHash, current)
+}
+
+// maybeEvolve checks whether the on-disk binary has changed since loop
+// startup. If it has, it records the evolve_restart status and returns
+// signalEvolve so the caller can restart. When the binary is unchanged,
+// it logs the decision and returns fallback so the iteration continues
+// normally. Must be called only after execRunPostTask has returned.
+func (l *Loop) maybeEvolve(fallback postSignalAction) postSignalAction {
+	if l.binaryHashChanged() {
+		l.logger.Phase("Evolve: binary changed — restarting")
+		l.state.Write("status", "evolve_restart") //nolint:errcheck
+		return signalEvolve
+	}
+	l.logger.Emit(logging.Opts{Domain: "loop"}, "Evolve: binary unchanged — continuing")
+	return fallback
+}
 
 // initialize performs all one-time setup: skipped task loading,
 // state config write, and worktree sync. The caller is responsible for
