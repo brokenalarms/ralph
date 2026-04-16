@@ -295,12 +295,19 @@ func (r *repo) withStash(stashMsg string, fn func()) {
 // Checks, in order:
 //  1. `git fetch origin <prevBranch>` — if this errors, the remote branch
 //     is gone (auto-deleted after merge). Clear prevBranch.
-//  2. BranchIsAheadOfMain(prevBranch) — if main is no longer an ancestor of
-//     the branch, the branch has either been squash-merged into main or
-//     diverged; either way it's no longer a valid stack base. Clear.
+//  2. BranchIsAncestorOfMain(prevBranch) — if the branch's tip is in main's
+//     history, its work has landed via a regular (non-squash) merge. Clear.
+//     Squash-merged branches do NOT trigger this check (their original tip
+//     is not on main); they're caught by the GitHub check below.
 //  3. ListOpenPRBranches excludes prevBranch (only checked when gh is
 //     available, signaled by a non-nil non-empty list) — the branch exists
 //     on remote but its PR was closed/merged. Clear.
+//
+// Diverged branches that still hold unmerged work (e.g. after a pre-push
+// rebase failure) are NOT cleared by check (2): main is not an ancestor of
+// them, but neither is their tip an ancestor of main. The branch is still a
+// valid stack parent — the next task chains onto it, and the merge pipeline
+// re-aligns the chain via --update-refs.
 //
 // On a confirmed vanish, prevBranch is cleared so subsequent rebases and
 // CreatePR calls target the default branch. On ambiguous signals (gh
@@ -328,10 +335,9 @@ func (r *repo) validateStackParent(ctx context.Context) {
 		return
 	}
 
-	// (2) If the branch exists but its tip is no longer ahead of main, its
-	// work has landed (squash-merge) or it diverged — either way it's not
-	// a valid base anymore.
-	if !r.BranchIsAheadOfMain(parent) {
+	// (2) If the branch's tip is an ancestor of main, its work has landed
+	// via a regular merge — the branch is redundant as a stack parent.
+	if r.BranchIsAncestorOfMain(parent) {
 		r.logger.Emit(logging.Opts{Domain: logging.Git},
 			"Stack parent %s has landed on main — falling back to %s", parent, r.detectDefaultBranch())
 		r.SetPrevBranch("")
@@ -340,6 +346,9 @@ func (r *repo) validateStackParent(ctx context.Context) {
 
 	// (3) Final check against GitHub's PR state, when gh is available.
 	// An empty/nil result means gh is unavailable — don't act on that.
+	// This is the path that catches squash-merged parents (their PR is
+	// closed; topology alone can't distinguish squash-merge from a diverged
+	// branch with unmerged work).
 	openBranches, err := r.ListOpenPRBranches()
 	if err != nil || len(openBranches) == 0 {
 		return

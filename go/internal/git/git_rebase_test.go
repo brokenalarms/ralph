@@ -516,38 +516,63 @@ func TestValidateStackParent_ClearsWhenRemoteBranchDeleted(t *testing.T) {
 	}
 }
 
-// validateStackParent clears prevBranch when the parent branch still
-// exists on the remote but its tip has landed on main (squash-merge).
-// The branch may linger briefly between merge and auto-delete; in that
-// window GitHub may still reject CreatePR with base=invalid, and even
-// if it doesn't, stacking a new PR on an already-merged parent would
-// produce a PR with no unique diff.
+// validateStackParent clears prevBranch when the parent branch's tip is
+// already on main (regular merge: the original commit is an ancestor of
+// main). Stacking a new PR onto an already-landed parent would either be
+// rejected by GitHub or produce a PR with no unique diff.
 func TestValidateStackParent_ClearsWhenParentLandedOnMain(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	mgr := setupRebaseMgr(t, project, bare)
 
-	// Create parent branch with a commit, push, then squash-merge its work
-	// into main so the parent tip is no longer ahead of main.
+	// Create parent branch with a commit, push it, then fast-forward main
+	// to that same commit so parent's tip becomes an ancestor of main.
 	run(t, "git", "-C", project, "checkout", "-b", "stack-parent")
 	writeFile(t, project, "parent.txt", "parent work\n")
 	run(t, "git", "-C", project, "commit", "-m", "parent work")
 	run(t, "git", "-C", project, "push", "origin", "stack-parent")
 
-	// Land the parent's work on main via a new commit with the same content
-	// (simulating a squash-merge: same tree, different commit). Push main.
 	run(t, "git", "-C", project, "checkout", "main")
-	writeFile(t, project, "parent.txt", "parent work\n")
-	run(t, "git", "-C", project, "commit", "-m", "squash-merge parent")
+	run(t, "git", "-C", project, "merge", "--ff-only", "stack-parent")
 	run(t, "git", "-C", project, "push", "origin", "main")
 
-	// The parent branch still exists on origin but its commit is now an
-	// ancestor of main — BranchIsAheadOfMain returns false.
 	run(t, "git", "-C", mgr.workDir, "fetch", "origin")
 
 	mgr.SetPrevBranch("stack-parent")
 	mgr.validateStackParent(context.Background())
 	if mgr.prevBranch != "" {
-		t.Errorf("prevBranch should be cleared when parent no longer ahead of main, got %q", mgr.prevBranch)
+		t.Errorf("prevBranch should be cleared when parent has landed on main, got %q", mgr.prevBranch)
+	}
+}
+
+// validateStackParent does NOT clear prevBranch when the parent is diverged
+// from main but still has unmerged work. Pre-fix (ralph-op9h),
+// BranchIsAheadOfMain rejected diverged branches, causing the stack parent
+// to be wiped any time a pre-push rebase failed or another contributor
+// landed a commit on main mid-iteration. The fix uses BranchIsAncestorOfMain
+// (true only when work has actually landed via a regular merge) and lets
+// the GitHub check distinguish squash-merge from rebase-failure divergence.
+func TestValidateStackParent_PreservesDivergedParentWithUnmergedWork(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	mgr := setupRebaseMgr(t, project, bare)
+
+	// Set up a diverged parent branch: branch has its own commit, main has
+	// a different commit, and neither is an ancestor of the other.
+	run(t, "git", "-C", project, "checkout", "-b", "stack-parent")
+	writeFile(t, project, "parent.txt", "parent work\n")
+	run(t, "git", "-C", project, "commit", "-m", "parent work")
+	run(t, "git", "-C", project, "push", "origin", "stack-parent")
+
+	run(t, "git", "-C", project, "checkout", "main")
+	writeFile(t, project, "main.txt", "contributor commit\n")
+	run(t, "git", "-C", project, "commit", "-m", "contributor commit on main")
+	run(t, "git", "-C", project, "push", "origin", "main")
+
+	run(t, "git", "-C", mgr.workDir, "fetch", "origin")
+
+	mgr.SetPrevBranch("stack-parent")
+	mgr.validateStackParent(context.Background())
+	if mgr.prevBranch != "stack-parent" {
+		t.Errorf("prevBranch should be preserved when parent is diverged but still has unmerged work, got %q", mgr.prevBranch)
 	}
 }
 
