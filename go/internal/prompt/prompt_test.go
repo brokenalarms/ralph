@@ -1098,6 +1098,37 @@ func TestBuildReviewPrompt_IncludesBeadCreationGuidance(t *testing.T) {
 	}
 }
 
+// Proves: task-manager.md instructs the agent to never attempt manual gh-based
+// stack drains, and instead prompts the user to run `ralph merge <top-pr-number>`,
+// because ralph merge does the critical up-front --update-refs rebase that prevents
+// downstream PRs from being auto-closed (the tabi 2026-04-16 cascade).
+func TestTaskManagerPrompt_StackMergeSection(t *testing.T) {
+	dir := promptsDir(t)
+	result, err := BuildTaskManagerPrompt(dir, "/proj", "/proj/.ralph")
+	if err != nil {
+		t.Fatalf("BuildTaskManagerPrompt error: %v", err)
+	}
+
+	required := []struct {
+		substr string
+		reason string
+	}{
+		{"Stack merges", "prompt must have a Stack merges section"},
+		{"ralph merge", "prompt must specify the exact ralph merge command"},
+		{"gh pr merge", "prompt must prohibit gh pr merge on stacked PRs"},
+		{"gh pr close", "prompt must prohibit gh pr close on stacked PRs"},
+		{"--update-refs", "prompt must explain that ralph merge does the critical --update-refs rebase"},
+		{"top", "prompt must include guidance for identifying the top PR of a stack"},
+		{"never", "prompt must explicitly prohibit manual stack drain operations"},
+	}
+
+	for _, tc := range required {
+		if !strings.Contains(strings.ToLower(result), strings.ToLower(tc.substr)) {
+			t.Errorf("missing %q: %s", tc.substr, tc.reason)
+		}
+	}
+}
+
 // Proves: BuildReviewPrompt includes task creation quality guidelines so
 // the review agent creates beads with sufficient detail for loop agents to
 // execute without needing to infer architectural intent.
