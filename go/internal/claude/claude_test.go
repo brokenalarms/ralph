@@ -1075,6 +1075,96 @@ func TestPoll_ZeroIdleTimeoutDisablesDetection(t *testing.T) {
 	}
 }
 
+// Verifies that poll kills the session and returns WallClockTimeout=true when
+// MaxRunDuration elapses, even when the raw log is continuously written to
+// (so idle detection never fires).
+func TestPoll_WallClockTimeoutKillsSession(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// Keep writing content lines so idle detection never fires.
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+				fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"type":"text_delta","text":"working"}}`)
+				f.Close()
+				time.Sleep(30 * time.Millisecond)
+			}
+		}
+	}()
+	defer close(stop)
+
+	cfg := RunConfig{
+		WorkDir:        dir,
+		RalphDir:       dir,
+		Prompt:         "echo test",
+		RawLog:         rawLog,
+		Quiet:          true,
+		Signals:        signals,
+		PollInterval:   50 * time.Millisecond,
+		IdleTimeout:    5 * time.Second,
+		MaxRunDuration: 200 * time.Millisecond,
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "2")
+
+	if !result.WallClockTimeout {
+		t.Error("expected WallClockTimeout to be true")
+	}
+	if result.IdleTimeout {
+		t.Error("expected IdleTimeout to be false (activity was continuous)")
+	}
+	if result.SignalDetected {
+		t.Error("expected SignalDetected to be false on wall-clock timeout")
+	}
+}
+
+// Verifies that the wall-clock cap is disabled when MaxRunDuration is zero,
+// so long-running legitimate sessions complete normally.
+func TestPoll_ZeroMaxRunDurationDisables(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// Write completion after a short delay — with zero wall-clock cap, it should complete.
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		os.WriteFile(signals.Complete, []byte("done"), 0o644)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:        dir,
+		RalphDir:       dir,
+		Prompt:         "echo test",
+		RawLog:         rawLog,
+		Quiet:          true,
+		Signals:        signals,
+		PollInterval:   50 * time.Millisecond,
+		MaxRunDuration: 0,
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "1")
+
+	if result.WallClockTimeout {
+		t.Error("expected no wall-clock timeout when MaxRunDuration is 0")
+	}
+	if !result.SignalDetected {
+		t.Error("expected SignalDetected to be true")
+	}
+}
+
 // --- Content activity classification tests ---
 
 // Verifies that rate_limit_event is classified as non-content so it does not

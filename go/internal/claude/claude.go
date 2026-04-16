@@ -58,6 +58,10 @@ type RunConfig struct {
 	// for this duration. Zero disables idle detection.
 	IdleTimeout time.Duration
 
+	// MaxRunDuration is the hard wall-clock cap on total agent run time.
+	// Zero disables the wall-clock backstop.
+	MaxRunDuration time.Duration
+
 	// IdleTimeoutProgress is the shorter idle timeout used when the
 	// HasProgress callback reports that work was already done in this
 	// iteration (e.g. git diff exists). Zero falls back to IdleTimeout.
@@ -98,6 +102,7 @@ type Result struct {
 	AllComplete        bool      // true if the all-complete signal was found
 	NoCodeNeeded       bool      // true if agent confirmed no code changes required (already fixed / not a bug)
 	IdleTimeout        bool      // true if the session was killed due to idle timeout
+	WallClockTimeout   bool      // true if the session was killed due to wall-clock max-run-duration
 	FeedbackKill       bool      // true if killed because user feedback arrived
 	RateLimited        bool      // true if Claude reported hitting its usage limit
 	ResetAt            time.Time // when the rate limit resets (valid when RateLimited is true)
@@ -451,6 +456,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 
 	taskLogged := false
 	lastActivity := time.Now()
+	runStart := time.Now()
 	processDone := make(chan struct{})
 
 	// Seed the log offset so we only scan lines written during this session.
@@ -607,6 +613,13 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 					gracefulKill(cmd, processDone)
 					return Result{IdleTimeout: true}
 				}
+			}
+
+			// Check wall-clock timeout — fires regardless of log activity.
+			if cfg.MaxRunDuration > 0 && time.Since(runStart) >= cfg.MaxRunDuration {
+				r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model}, "Wall-clock timeout (%s max run duration) — killing session", cfg.MaxRunDuration)
+				gracefulKill(cmd, processDone)
+				return Result{WallClockTimeout: true}
 			}
 		}
 	}

@@ -633,13 +633,19 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 		})
 		return actionRetry
 	}
-	if result.IdleTimeout {
-		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Restarting iteration %d after idle timeout", runIteration)
+	if result.IdleTimeout || result.WallClockTimeout {
+		kind := "idle timeout"
+		analysis := "idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output"
+		if result.WallClockTimeout {
+			kind = "wall-clock timeout"
+			analysis = "wall_clock_timeout: run exceeded max-run-duration hard cap"
+		}
+		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Restarting iteration %d after %s", runIteration, kind)
 		diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
 		l.recordAttempt(AttemptEvent{
-			Summary:  "Killed: idle timeout (no output for configured duration)",
+			Summary:  fmt.Sprintf("Killed: %s", kind),
 			DiffStat: diffStat,
-			Analysis: "idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output",
+			Analysis: analysis,
 		})
 		l.taskIdleTimeouts++
 		if l.taskIdleTimeouts >= l.maxIdleTimeoutFailures() {

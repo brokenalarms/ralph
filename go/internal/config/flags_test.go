@@ -112,6 +112,8 @@ func TestDefaultsDeriveFromFlagRegistry(t *testing.T) {
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
 	t.Setenv("RALPH_IDLE_TIMEOUT", "")
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
+	t.Setenv("RALPH_MAX_RUN_DURATION", "")
+	t.Setenv("RALPH_FIX_MAX_RUN_DURATION", "")
 	t.Setenv("RALPH_BASE_BRANCH", "")
 
 
@@ -139,6 +141,12 @@ func TestDefaultsDeriveFromFlagRegistry(t *testing.T) {
 	}
 	if cfg.IdleTimeoutProgress != check.IdleTimeoutProgress {
 		t.Errorf("IdleTimeoutProgress: Defaults()=%v, registry=%v", cfg.IdleTimeoutProgress, check.IdleTimeoutProgress)
+	}
+	if cfg.MaxRunDuration != check.MaxRunDuration {
+		t.Errorf("MaxRunDuration: Defaults()=%v, registry=%v", cfg.MaxRunDuration, check.MaxRunDuration)
+	}
+	if cfg.FixMaxRunDuration != check.FixMaxRunDuration {
+		t.Errorf("FixMaxRunDuration: Defaults()=%v, registry=%v", cfg.FixMaxRunDuration, check.FixMaxRunDuration)
 	}
 	if cfg.BaseBranch != check.BaseBranch {
 		t.Errorf("BaseBranch: Defaults()=%q, registry=%q", cfg.BaseBranch, check.BaseBranch)
