@@ -443,11 +443,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 	}
 
 	taskStart := time.Now()
-	agentModel := l.cfg.Model
-	if l.attempts.Count(task.id, task.title) > 0 {
-		agentModel = l.cfg.AgentEscalationModel
-	}
-	agentModel = verify.CapModel(l.cfg.ModelCap, agentModel)
+	agentModel := verify.CapModel(l.cfg.ModelCap, l.cfg.Model)
 	l.logger.Emit(logging.Opts{Domain: logging.LLM, Model: agentModel}, "Agent model: %s", agentModel)
 	result, runErr := l.runner.Run(claude.RunConfig{
 		Ctx:                 ctx,
