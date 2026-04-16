@@ -171,7 +171,7 @@ func (s *stubGitHub) CreatePR(opts CreatePROpts) (int, error) {
 	return num, nil
 }
 
-func (s *stubGitHub) MergePR(prNumber int, _ string, _ MergeOpts) MergeResult {
+func (s *stubGitHub) MergePR(prNumber int, _ string, opts MergeOpts) MergeResult {
 	pr, ok := s.prs[prNumber]
 	if !ok {
 		return MergeResult{Merged: false, Message: fmt.Sprintf("PR %d not found", prNumber)}
@@ -182,7 +182,7 @@ func (s *stubGitHub) MergePR(prNumber int, _ string, _ MergeOpts) MergeResult {
 	if pr.Conflicted {
 		return MergeResult{Conflict: true, Message: fmt.Sprintf("PR %d has merge conflicts", prNumber)}
 	}
-	if pr.Blocked {
+	if pr.Blocked && !opts.Admin {
 		return MergeResult{Blocked: true, Message: fmt.Sprintf("PR %d blocked by branch protection", prNumber)}
 	}
 	pr.State = PRStateMerged

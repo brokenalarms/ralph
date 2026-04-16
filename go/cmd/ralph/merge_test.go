@@ -44,6 +44,22 @@ func TestMergeHelp_InfraFailureFallthroughDocumented(t *testing.T) {
 	}
 }
 
+// Proves ralph merge -h documents --admin-on-infra-failure and its scope:
+// branch-protection bypass only when CI failure is classified as infra (zero job steps).
+func TestMergeHelp_AdminOnInfraFailureFlagDocumented(t *testing.T) {
+	out := captureMergeHelp(t)
+
+	if !strings.Contains(out, "--admin-on-infra-failure") {
+		t.Error("merge help should list --admin-on-infra-failure flag")
+	}
+	if !strings.Contains(out, "zero job steps") {
+		t.Error("--admin-on-infra-failure help should mention zero job steps as the classification signal")
+	}
+	if !strings.Contains(out, "real test failures") {
+		t.Error("--admin-on-infra-failure help should clarify it has no effect on real test failures")
+	}
+}
+
 func captureMergeHelp(t *testing.T) string {
 	t.Helper()
 	r, w, _ := os.Pipe()

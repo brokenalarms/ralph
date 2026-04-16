@@ -12,6 +12,10 @@ import (
 type MergeStackOpts struct {
 	TopPR      string // PR number (as string, e.g. "321")
 	SkipCIWait bool   // when true, skip AwaitCI and merge immediately (use when CI is known to be down)
+	// AdminOnInfraFailure authorizes admin-merge bypass of branch protection
+	// when isInfrastructureFailure returns true (zero job steps). Has no effect
+	// when CI failure has non-zero job steps (real test failures).
+	AdminOnInfraFailure bool
 }
 
 // MergeStackResult reports what MergeStack accomplished.
@@ -86,9 +90,11 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 			}
 		}
 
+		isInfra := false
 		if opts.SkipCIWait {
 			r.logger.Emit(logging.Opts{Domain: logging.CI}, "CI wait skipped for PR #%d (--no-ci-wait) — classifying via job-step count", pr.number)
 			if r.isInfrastructureFailure(ctx, pr.number) {
+				isInfra = true
 				r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "PR #%d CI is infrastructure-only (zero job steps) — proceeding with merge", pr.number)
 			} else {
 				r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "PR #%d has executed CI job steps — proceeding anyway per --no-ci-wait", pr.number)
@@ -101,6 +107,7 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 			}
 			if ciStatus == CIFailed {
 				if r.isInfrastructureFailure(ctx, pr.number) {
+					isInfra = true
 					r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "CI failure on PR #%d is infrastructure-only (zero job steps) — proceeding with merge", pr.number)
 				} else {
 					return merged, fmt.Errorf("CI failed on PR #%d", pr.number)
@@ -110,13 +117,23 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 			}
 		}
 
+		mergeOpts := MergeOpts{DeleteBranch: true}
+		if isInfra && opts.AdminOnInfraFailure {
+			r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn},
+				"⚠ --admin-on-infra-failure: PR #%d CI has zero job steps (infra outage). Merging with admin override. Required checks will not have run.", pr.number)
+			mergeOpts.Admin = true
+		}
+
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Merging PR #%d...", pr.number)
-		result := r.MergeStackPR(pr.number, MergeOpts{DeleteBranch: true})
+		result := r.MergeStackPR(pr.number, mergeOpts)
 		if !result.Merged {
 			if result.Conflict {
 				return merged, fmt.Errorf("PR #%d has merge conflicts — cannot merge", pr.number)
 			}
 			if result.Blocked {
+				if isInfra {
+					return merged, fmt.Errorf("PR #%d blocked by branch protection despite infra-only CI failure — re-run with --admin-on-infra-failure to bypass", pr.number)
+				}
 				return merged, fmt.Errorf("PR #%d blocked by branch protection: %s", pr.number, result.Message)
 			}
 			return merged, fmt.Errorf("merge failed for PR #%d: %s", pr.number, result.Message)

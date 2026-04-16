@@ -25,6 +25,12 @@ var noCIWaitFlag = mergeFlag{
 		"Use when GitHub Actions is known to be down and required checks will never run.",
 }
 
+var adminOnInfraFailureFlag = mergeFlag{
+	name: "--admin-on-infra-failure",
+	help: "Admin-bypass branch protection when CI failure is classified as infrastructure " +
+		"(zero job steps). Has no effect on real test failures.",
+}
+
 func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 	if hasHelpFlag(sub.Args) || len(sub.Args) == 0 {
 		printMergeUsage()
@@ -33,9 +39,14 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 
 	var prNumber string
 	skipCIWait := false
+	adminOnInfraFailure := false
 	for _, arg := range sub.Args {
 		if arg == noCIWaitFlag.name {
 			skipCIWait = true
+			continue
+		}
+		if arg == adminOnInfraFailureFlag.name {
+			adminOnInfraFailure = true
 			continue
 		}
 		if !strings.HasPrefix(arg, "-") && prNumber == "" {
@@ -72,7 +83,7 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 		cancel()
 	}()
 
-	if _, err := gm.MergeStack(ctx, git.MergeStackOpts{TopPR: prNumber, SkipCIWait: skipCIWait}); err != nil {
+	if _, err := gm.MergeStack(ctx, git.MergeStackOpts{TopPR: prNumber, SkipCIWait: skipCIWait, AdminOnInfraFailure: adminOnInfraFailure}); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "%v", err)
 		return 1
 	}
@@ -80,7 +91,7 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 }
 
 func printMergeUsage() {
-	fmt.Printf(`Usage: ralph merge <top-pr-number> [%s]
+	fmt.Printf(`Usage: ralph merge <top-pr-number> [flags]
 
 Companion for ralph loop when --auto-merge is off. Give it any PR
 in the stack — it finds the bottom, rebases the entire chain onto
@@ -93,11 +104,18 @@ proceeds automatically — no flag required. This is the infra-failure
 fallthrough: checks that never started are not treated as real failures.
 
 FLAGS:
-  %s    %s
+  %s
+    %s
+
+  %s
+    %s
 
 Examples:
-  ralph merge 321             Merge the stack from bottom to PR #321
-  ralph merge 314             Merge just PR #314 if it's the only open one
-  ralph merge 321 %s  Skip CI wait (use when Actions is down)
-`, noCIWaitFlag.name, noCIWaitFlag.name, noCIWaitFlag.help, noCIWaitFlag.name)
+  ralph merge 321                         Merge the stack from bottom to PR #321
+  ralph merge 314                         Merge just PR #314 if it's the only open one
+  ralph merge 321 %s     Skip CI wait (use when Actions is down)
+  ralph merge 321 %s  Bypass branch protection on infra-only CI failure
+`, noCIWaitFlag.name, noCIWaitFlag.help,
+		adminOnInfraFailureFlag.name, adminOnInfraFailureFlag.help,
+		noCIWaitFlag.name, adminOnInfraFailureFlag.name)
 }

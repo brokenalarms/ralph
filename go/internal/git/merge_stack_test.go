@@ -383,6 +383,117 @@ func TestMergeStack_DirtyTreeRejected(t *testing.T) {
 	}
 }
 
+// When --admin-on-infra-failure is set and isInfrastructureFailure returns true
+// (zero job steps), runMergeStack must pass Admin: true to MergeStackPR so that
+// branch protection is bypassed and the PR merges despite the infra outage.
+func TestMergeStack_AdminOnInfraFailureProceedsWithAdmin(t *testing.T) {
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number:  1,
+			Branch:  "pr1",
+			Base:    "main",
+			State:   PRStateOpen,
+			Blocked: true, // branch protection requires required checks to pass
+		}},
+		Checks:       map[int][]CICheckResult{1: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+		JobStepCount: 0, // zero job steps = infra outage, not real failure
+	})
+	runner := newStubRunner().On("remote get-url origin", "https://github.com/owner/repo.git", nil)
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(runner),
+	)
+
+	result, err := repo.MergeStack(context.Background(), MergeStackOpts{
+		TopPR:               "1",
+		AdminOnInfraFailure: true,
+	})
+	if err != nil {
+		t.Fatalf("expected success with admin-on-infra-failure, got: %v", err)
+	}
+	if result.MergedCount != 1 {
+		t.Errorf("expected 1 merged, got %d", result.MergedCount)
+	}
+	pr, _ := gh.GetPR("owner/repo", 1)
+	if pr == nil || pr.State != PRStateMerged {
+		t.Errorf("expected PR 1 merged via admin override, got state=%v", pr)
+	}
+}
+
+// When isInfrastructureFailure returns true but --admin-on-infra-failure is NOT
+// set, runMergeStack proceeds without admin, hits branch protection, and surfaces
+// a specific error naming the infra-only context to guide the operator.
+func TestMergeStack_AdminOnInfraFailureNotSetReturnsBlocked(t *testing.T) {
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number:  1,
+			Branch:  "pr1",
+			Base:    "main",
+			State:   PRStateOpen,
+			Blocked: true, // branch protection still blocks merge
+		}},
+		Checks:       map[int][]CICheckResult{1: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+		JobStepCount: 0, // zero job steps = infra outage
+	})
+	runner := newStubRunner().On("remote get-url origin", "https://github.com/owner/repo.git", nil)
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(runner),
+	)
+
+	_, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "1"}) // AdminOnInfraFailure not set
+	if err == nil {
+		t.Fatal("expected error when branch protection blocks merge without admin flag")
+	}
+	if !strings.Contains(err.Error(), "blocked by branch protection despite infra-only CI failure") {
+		t.Errorf("expected infra-specific blocked error, got: %v", err)
+	}
+}
+
+// When --admin-on-infra-failure is set but CI failure has non-zero job steps
+// (real test failures), the flag must have no effect: runMergeStack aborts
+// with the existing 'CI failed' error and never attempts admin merge.
+func TestMergeStack_AdminFlagNoEffectOnRealFailure(t *testing.T) {
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number:  1,
+			Branch:  "pr1",
+			Base:    "main",
+			State:   PRStateOpen,
+			Blocked: true,
+		}},
+		Checks:       map[int][]CICheckResult{1: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+		JobStepCount: 3, // non-zero: real test failure, not infra
+	})
+	runner := newStubRunner().On("remote get-url origin", "https://github.com/owner/repo.git", nil)
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(runner),
+	)
+
+	_, err := repo.MergeStack(context.Background(), MergeStackOpts{
+		TopPR:               "1",
+		AdminOnInfraFailure: true,
+	})
+	if err == nil {
+		t.Fatal("expected CI failure error when job steps > 0")
+	}
+	if !strings.Contains(err.Error(), "CI failed on PR #1") {
+		t.Errorf("expected 'CI failed' error, got: %v", err)
+	}
+	// Verify the PR was NOT merged — admin flag must have no effect on real failures.
+	pr, _ := gh.GetPR("owner/repo", 1)
+	if pr != nil && pr.State == PRStateMerged {
+		t.Errorf("PR must not be merged when CI failure is real (non-zero job steps)")
+	}
+}
+
 // initBareRepoIn initializes a git repo with one commit in the given directory.
 func initBareRepoIn(t *testing.T, dir string) {
 	t.Helper()
