@@ -12,10 +12,10 @@ import (
 type MergeStackOpts struct {
 	TopPR      string // PR number (as string, e.g. "321")
 	SkipCIWait bool   // when true, skip AwaitCI and merge immediately (use when CI is known to be down)
-	// AdminOnInfraFailure authorizes admin-merge bypass of branch protection
+	// AdminMergeOnCIInfraFailure authorizes admin-merge bypass of branch protection
 	// when isInfrastructureFailure returns true (zero job steps). Has no effect
 	// when CI failure has non-zero job steps (real test failures).
-	AdminOnInfraFailure bool
+	AdminMergeOnCIInfraFailure bool
 }
 
 // MergeStackResult reports what MergeStack accomplished.
@@ -118,9 +118,9 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 		}
 
 		mergeOpts := MergeOpts{DeleteBranch: true}
-		if isInfra && opts.AdminOnInfraFailure {
+		if isInfra && opts.AdminMergeOnCIInfraFailure {
 			r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn},
-				"⚠ --admin-on-infra-failure: PR #%d CI has zero job steps (infra outage). Merging with admin override. Required checks will not have run.", pr.number)
+				"⚠ --admin-merge-on-ci-infra-failure: PR #%d CI has zero job steps (infra outage). Merging with admin override. Required checks will not have run.", pr.number)
 			mergeOpts.Admin = true
 		}
 
@@ -132,7 +132,7 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 			}
 			if result.Blocked {
 				if isInfra {
-					return merged, fmt.Errorf("PR #%d blocked by branch protection despite infra-only CI failure — re-run with --admin-on-infra-failure to bypass", pr.number)
+					return merged, fmt.Errorf("PR #%d blocked by branch protection despite infra-only CI failure — re-run with --admin-merge-on-ci-infra-failure to bypass", pr.number)
 				}
 				return merged, fmt.Errorf("PR #%d blocked by branch protection: %s", pr.number, result.Message)
 			}

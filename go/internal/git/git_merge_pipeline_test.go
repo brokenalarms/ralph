@@ -1261,3 +1261,168 @@ func TestAutoMerge_NoOpPush_CIFailureDetected(t *testing.T) {
 		t.Errorf("expected failing check 'test', got: %v", ciErr.Failures)
 	}
 }
+
+// AutoMergeCurrentBranch with --admin-merge-on-ci-infra-failure set merges
+// with Admin:true when isInfrastructureFailure is true — bypassing branch protection.
+func TestAutoMerge_AdminMergeOnCIInfraFailure_MergesWithAdmin(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("rev-parse HEAD", "abc123", nil)
+	runner.On("reset --hard", "", nil)
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number:  42,
+			Branch:  "ralph/test/01-admin-infra",
+			Title:   "admin infra test",
+			State:   PRStateOpen,
+			Blocked: true, // branch protection blocks merge without Admin
+		}},
+		Checks:       map[int][]CICheckResult{42: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+		JobStepCount: 0, // zero job steps → infra failure, not real test failure
+	})
+
+	repo := newRepoForTest(
+		Config{
+			ProjectDir:                 "/project",
+			WorkDir:                    "/project/wt",
+			BaseBranch:                 "main",
+			Logger:                     &testLog{},
+			AdminMergeOnCIInfraFailure: true,
+		},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-admin-infra"),
+	)
+
+	merged, err := repo.AutoMergeCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil error with admin-merge-on-ci-infra-failure set and infra failure, got: %v", err)
+	}
+	if !merged {
+		t.Error("expected merged=true when Admin bypass used for infra-only CI failure")
+	}
+	pr, _ := gh.GetPR("test/repo", 42)
+	if pr == nil || pr.State != PRStateMerged {
+		t.Errorf("expected PR 42 merged via admin override, got state=%v", pr)
+	}
+}
+
+// AutoMergeCurrentBranch with --admin-merge-on-ci-infra-failure NOT set and a blocked
+// PR falls through with the existing behavior: executeMerge returns an error because
+// branch protection is not bypassed.
+func TestAutoMerge_AdminMergeOnCIInfraFailure_NotSet_BlockedNotBypassed(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("rev-parse HEAD", "abc123", nil)
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number:  43,
+			Branch:  "ralph/test/01-no-admin-infra",
+			Title:   "no admin infra test",
+			State:   PRStateOpen,
+			Blocked: true, // branch protection blocks merge
+		}},
+		Checks:       map[int][]CICheckResult{43: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+		JobStepCount: 0, // zero job steps → infra failure, not real test failure
+	})
+
+	repo := newRepoForTest(
+		Config{
+			ProjectDir: "/project",
+			WorkDir:    "/project/wt",
+			BaseBranch: "main",
+			Logger:     &testLog{},
+			// AdminMergeOnCIInfraFailure not set
+		},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-no-admin-infra"),
+	)
+
+	merged, err := repo.AutoMergeCurrentBranch(context.Background())
+	if err == nil {
+		t.Fatal("expected error when branch protection blocks merge and admin flag is not set")
+	}
+	if merged {
+		t.Error("expected merged=false when branch protection not bypassed")
+	}
+	pr, _ := gh.GetPR("test/repo", 43)
+	if pr != nil && pr.State == PRStateMerged {
+		t.Error("PR must not be merged when admin flag is not set")
+	}
+}
+
+// AutoMergeCurrentBranch never calls MergePR with Admin:true when CI fails with
+// non-zero job steps (real test failure) — the flag is scoped to infra failures only.
+func TestAutoMerge_AdminMergeOnCIInfraFailure_NoEffectOnRealFailure(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("rev-parse HEAD", "abc123", nil)
+
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number:  44,
+			Branch:  "ralph/test/01-real-failure",
+			Title:   "real failure test",
+			State:   PRStateOpen,
+			Blocked: true,
+		}},
+		Checks:       map[int][]CICheckResult{44: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+		JobStepCount: 3, // non-zero: real test failure, not infra
+	})
+
+	repo := newRepoForTest(
+		Config{
+			ProjectDir:                 "/project",
+			WorkDir:                    "/project/wt",
+			BaseBranch:                 "main",
+			Logger:                     &testLog{},
+			AdminMergeOnCIInfraFailure: true,
+		},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-real-failure"),
+	)
+
+	_, err := repo.AutoMergeCurrentBranch(context.Background())
+	var ciErr *CIFailureError
+	if !errors.As(err, &ciErr) {
+		t.Fatalf("expected CIFailureError for real test failure regardless of flag, got: %v", err)
+	}
+	pr, _ := gh.GetPR("test/repo", 44)
+	if pr != nil && pr.State == PRStateMerged {
+		t.Error("PR must not be merged when CI failure is real (non-zero job steps)")
+	}
+}

@@ -177,6 +177,17 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return boolStr(cfg.AutoMerge) },
 	},
 	{
+		Long:      "--admin-merge-on-ci-infra-failure",
+		Help:      "Admin-bypass branch protection when AutoMerge detects a CI infrastructure failure (zero job steps). Has no effect on real test failures.",
+		ConfigKey: "admin_merge_on_ci_infra_failure",
+		Kind:      KindBool, TrackCLI: true,
+		Apply: func(cfg *Config, _ string) error {
+			cfg.AdminMergeOnCIInfraFailure = true
+			return nil
+		},
+		Read: func(cfg *Config) string { return boolStr(cfg.AdminMergeOnCIInfraFailure) },
+	},
+	{
 		Long: "--evolve",
 		Help: "Self-improving mode: after each merged task, pull main, rebuild, restart (requires --auto-merge)",
 		Kind: KindBool,
