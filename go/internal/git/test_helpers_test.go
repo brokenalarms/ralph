@@ -235,3 +235,39 @@ func withKnownPRNumber(n int) repoTestOpt {
 	return func(d *repoTestDeps) { d.knownPRNumber = n }
 }
 
+// listChecksCounter wraps a gitHub stub and counts calls to ListChecks.
+// AwaitCI calls ListChecks internally — a counter of zero proves AwaitCI was
+// never invoked. Embed in tests that need to assert "no CI polling occurred".
+type listChecksCounter struct {
+	gitHub
+	n int
+}
+
+func (c *listChecksCounter) ListChecks(prNumber int, repoURL string) ([]CICheckResult, error) {
+	c.n++
+	return c.gitHub.ListChecks(prNumber, repoURL)
+}
+
+// sequencedJobStepGH wraps a gitHub stub and returns different JobStepCount
+// values on successive GetJobStepCount calls. Use when a test needs the
+// pre-AwaitCI infra check to behave differently from the post-AwaitCI check
+// (e.g. first call returns an error so AwaitCI runs; second call returns 0 so
+// the timeout fallback fires).
+type sequencedJobStepGH struct {
+	gitHub
+	responses []struct {
+		count int
+		err   error
+	}
+	call int
+}
+
+func (s *sequencedJobStepGH) GetJobStepCount(nwo string, prNumber int) (int, error) {
+	if s.call < len(s.responses) {
+		r := s.responses[s.call]
+		s.call++
+		return r.count, r.err
+	}
+	return s.gitHub.GetJobStepCount(nwo, prNumber)
+}
+

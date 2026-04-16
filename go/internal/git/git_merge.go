@@ -672,12 +672,25 @@ func (r *repo) AutoMergeCurrentBranch(ctx context.Context) (bool, error) {
 		awaitPushedAt = time.Time{}
 	}
 
+	if r.isInfrastructureFailure(ctx, prNumber) {
+		r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI infrastructure failure detected on PR #%d (zero job steps) — skipping CI wait and proceeding to merge", prNumber)
+		return r.executeMerge(ctx, prNumber, repoURL)
+	}
+
 	checks, status, ciErr := r.AwaitCI(ctx, prNumber, repoURL, awaitPushedAt)
 	if ciErr != nil {
+		if r.isInfrastructureFailure(ctx, prNumber) {
+			r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI timed out on PR #%d and job steps are zero — infrastructure failure, proceeding to merge", prNumber)
+			return r.executeMerge(ctx, prNumber, repoURL)
+		}
 		r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI did not complete within timeout — leaving PR open")
 		return false, ciErr
 	}
 	if status == CIFailed {
+		if r.isInfrastructureFailure(ctx, prNumber) {
+			r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn, Link: prLink}, "CI failure on PR #%d is infrastructure-only (zero job steps) — proceeding to merge", prNumber)
+			return r.executeMerge(ctx, prNumber, repoURL)
+		}
 		return false, &CIFailureError{PRNumber: prNumber, Failures: failedChecks(checks)}
 	}
 	if status == CIPassed {
