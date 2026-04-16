@@ -68,7 +68,7 @@ func (r *repo) BranchForTask(ctx context.Context, taskID, title string, meta Bra
 }
 
 // setStackHead finds the most recent pushed branch that still has unmerged
-// work ahead of main and sets it as the stack base for the next task.
+// work and sets it as the stack base for the next task.
 //
 // The candidate list (completedBranches) contains every branch pushed this
 // session in chronological order (oldest first). Walking it newest-first
@@ -77,11 +77,17 @@ func (r *repo) BranchForTask(ctx context.Context, taskID, title string, meta Bra
 // A branch qualifies if it:
 //   - exists on the remote (FetchBranch succeeds)
 //   - has commits not yet on main (RemoteBranchHasCommits)
-//   - is cleanly ahead of main (BranchIsAheadOfMain)
+//   - has any commits ahead of main, INCLUDING diverged branches where main
+//     has commits the branch does not (BranchHasUnmergedWork)
+//
+// Diverged branches are valid stack parents — a pre-push rebase failure can
+// leave the branch with both unique commits AND main commits it lacks, but
+// the work is still real and the next task should chain onto it. The
+// downstream merge pipeline re-aligns the chain via --update-refs.
 //
 // There is no open-PR requirement: a branch pushed via a pr_creation_failed
-// skip has commits ahead of main but no PR yet. Relying solely on
-// BranchIsAheadOfMain correctly handles both cases — merged branches fail
+// skip has commits ahead of main but no PR yet. Relying on
+// BranchHasUnmergedWork correctly handles both cases — merged branches fail
 // this check because their work is already on main.
 func setStackHead(r *repo, completedBranches []string) {
 	r.prevBranch = ""
@@ -100,8 +106,8 @@ func setStackHead(r *repo, completedBranches []string) {
 		if !r.RemoteBranchHasCommits(branch) {
 			continue
 		}
-		if !r.BranchIsAheadOfMain(branch) {
-			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Branch %s not ahead of main — skipping", branch)
+		if !r.BranchHasUnmergedWork(branch) {
+			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Branch %s has no unmerged work — skipping", branch)
 			continue
 		}
 		r.prevBranch = branch

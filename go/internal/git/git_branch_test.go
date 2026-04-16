@@ -62,6 +62,50 @@ func TestSetStackHead_SelectsPushedNoPRBranch(t *testing.T) {
 	}
 }
 
+// setStackHead selects a branch in a diverged state — branch has commits not
+// on main AND main has commits not on branch. This simulates a pre-push
+// rebase failure where the branch was pushed without resolving the diverged
+// state. BranchIsAheadOfMain returns false for diverged branches (the
+// pre-fix predicate skipped them), but BranchHasUnmergedWork returns true
+// because the branch still has real unique commits. Such branches are valid
+// stack parents — the next task chains onto them, and the merge pipeline
+// re-aligns the chain via --update-refs.
+//
+// Regression bead: ralph-op9h. Pre-fix, this test failed with prevBranch==""
+// and a "No stacked parents" log entry.
+func TestSetStackHead_SelectsDivergedBranchWithUnmergedWork(t *testing.T) {
+	log := &testLog{}
+	runner := newStubRunner()
+	// FetchBranch succeeds (default no-op).
+	// RemoteBranchHasCommits: rev-list returns "1" → true.
+	// BranchHasUnmergedWork: rev-list --count also returns "1" → true.
+	runner.On("rev-list", "1", nil)
+	// BranchIsAheadOfMain: merge-base --is-ancestor returns error → false
+	// (diverged: main is NOT ancestor of branch). Pre-fix this caused the
+	// branch to be skipped; post-fix this predicate is no longer consulted.
+	runner.On("merge-base", "", fmt.Errorf("not an ancestor"))
+
+	r := newRepoForTest(Config{Logger: log}, nil, withRunner(runner))
+
+	setStackHead(r, []string{"ralph/diverged-task"})
+
+	if r.prevBranch != "ralph/diverged-task" {
+		t.Errorf("expected prevBranch=ralph/diverged-task (diverged with unmerged work), got %q", r.prevBranch)
+	}
+	foundStackHead := false
+	for _, msg := range log.messages {
+		if strings.Contains(msg, "Stack head: ralph/diverged-task") {
+			foundStackHead = true
+		}
+		if strings.Contains(msg, "No stacked parents") {
+			t.Errorf("should not log 'No stacked parents' when branch has unmerged work, got: %s", msg)
+		}
+	}
+	if !foundStackHead {
+		t.Errorf("expected 'Stack head: ralph/diverged-task' log, got: %v", log.messages)
+	}
+}
+
 // setStackHead does NOT log "No stacked parents" when completedBranches is
 // empty — the early-return path is silent.
 func TestSetStackHead_SilentWhenNoCompletedBranches(t *testing.T) {
