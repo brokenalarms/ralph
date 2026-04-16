@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -102,12 +103,13 @@ func TestMergeStack_NoPRsFound(t *testing.T) {
 	}
 }
 
-// MergeStack returns error when CI fails on a PR.
+// MergeStack returns error when CI fails on a PR with real test failures (job steps > 0).
 func TestMergeStack_CIFailureStops(t *testing.T) {
 	gh := newStubGitHub(StubGitHubConfig{
-		Available: true,
-		PRs: []StubPR{{Number: 1, Branch: "pr1", Base: "main", State: PRStateOpen}},
-		Checks: map[int][]CICheckResult{1:{{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+		Available:    true,
+		PRs:          []StubPR{{Number: 1, Branch: "pr1", Base: "main", State: PRStateOpen}},
+		Checks:       map[int][]CICheckResult{1: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+		JobStepCount: 3, // real test failures — not an infrastructure outage
 	})
 	repo := newRepoForTest(
 		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
@@ -212,6 +214,149 @@ func TestMergeStack_SinglePRSuccess(t *testing.T) {
 	pr, _ := gh.GetPR("owner/repo", 42)
 	if pr == nil || pr.State != PRStateMerged {
 		t.Errorf("expected PR 42 to be merged in the world, got state=%v", pr)
+	}
+}
+
+// MergeStack proceeds through the merge when CI failed but no job steps ran —
+// the GitHub Actions billing/runner outage left every required check in the
+// "never executed" state. isInfrastructureFailure classifies this as infra,
+// not test failure, so the bottom-up drain continues instead of aborting the
+// stack.
+func TestMergeStack_InfraFailureProceeds(t *testing.T) {
+	gh := newStubGitHub(StubGitHubConfig{
+		Available:    true,
+		PRs:          []StubPR{{Number: 1, Branch: "pr1", Base: "main", State: PRStateOpen}},
+		Checks:       map[int][]CICheckResult{1: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+		JobStepCount: 0, // zero job steps = infrastructure outage, not real failure
+	})
+	runner := newStubRunner().On("remote get-url origin", "https://github.com/owner/repo.git", nil)
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(runner),
+	)
+
+	result, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "1"})
+	if err != nil {
+		t.Fatalf("expected success on infra failure, got: %v", err)
+	}
+	if result.MergedCount != 1 {
+		t.Errorf("expected 1 merged, got %d", result.MergedCount)
+	}
+	pr, _ := gh.GetPR("owner/repo", 1)
+	if pr == nil || pr.State != PRStateMerged {
+		t.Errorf("expected PR 1 merged despite infra CI failure, got state=%v", pr)
+	}
+}
+
+// MergeStack with --no-ci-wait skips AwaitCI entirely and merges the stack
+// without polling for CI. Used when the operator already knows CI is down
+// and wants to drain a stack via branch-protection-allowed merges.
+func TestMergeStack_SkipCIWaitMergesWithoutPolling(t *testing.T) {
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs:       []StubPR{{Number: 1, Branch: "pr1", Base: "main", State: PRStateOpen}},
+		// No Checks entry — AwaitCI would block waiting for results, but
+		// SkipCIWait means it's never called.
+	})
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+	)
+
+	result, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "1", SkipCIWait: true})
+	if err != nil {
+		t.Fatalf("expected success with SkipCIWait, got: %v", err)
+	}
+	if result.MergedCount != 1 {
+		t.Errorf("expected 1 merged, got %d", result.MergedCount)
+	}
+	pr, _ := gh.GetPR("owner/repo", 1)
+	if pr == nil || pr.State != PRStateMerged {
+		t.Errorf("expected PR 1 merged when SkipCIWait, got state=%v", pr)
+	}
+}
+
+// MergeStack drains a 7-PR stack when every PR's CI is in the infra-outage
+// state (failed checks, zero job steps executed). Mirrors the tabi 2026-04-16
+// scenario where a billing failure left PRs #670–#676 with red checks but no
+// runs — every PR should still merge bottom-up.
+func TestMergeStack_StackInfraFailureAllMerge(t *testing.T) {
+	prs := make([]StubPR, 7)
+	checks := make(map[int][]CICheckResult, 7)
+	prevHead := "main"
+	for i := 0; i < 7; i++ {
+		num := 670 + i
+		head := fmt.Sprintf("ralph/stack-%d", num)
+		prs[i] = StubPR{Number: num, Branch: head, Base: prevHead, State: PRStateOpen}
+		checks[num] = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
+		prevHead = head
+	}
+	gh := newStubGitHub(StubGitHubConfig{
+		Available:    true,
+		PRs:          prs,
+		Checks:       checks,
+		JobStepCount: 0, // every PR's CI never ran
+	})
+	runner := newStubRunner().On("remote get-url origin", "https://github.com/owner/repo.git", nil)
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(runner),
+	)
+
+	result, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "676"})
+	if err != nil {
+		t.Fatalf("expected stack drain on infra outage, got: %v", err)
+	}
+	if result.MergedCount != 7 || result.TotalPRs != 7 {
+		t.Errorf("expected 7/7 merged, got %d/%d", result.MergedCount, result.TotalPRs)
+	}
+	for i := 0; i < 7; i++ {
+		num := 670 + i
+		pr, _ := gh.GetPR("owner/repo", num)
+		if pr == nil || pr.State != PRStateMerged {
+			t.Errorf("expected PR #%d merged, got state=%v", num, pr)
+		}
+	}
+}
+
+// MergeStack on a 7-PR stack aborts on the first PR when CI failures are real
+// (job steps executed, tests failed). Counterpart to the infra-outage test —
+// confirms isInfrastructureFailure correctly distinguishes real failures.
+func TestMergeStack_StackRealFailureStopsAtFirst(t *testing.T) {
+	prs := make([]StubPR, 7)
+	checks := make(map[int][]CICheckResult, 7)
+	prevHead := "main"
+	for i := 0; i < 7; i++ {
+		num := 670 + i
+		head := fmt.Sprintf("ralph/stack-%d", num)
+		prs[i] = StubPR{Number: num, Branch: head, Base: prevHead, State: PRStateOpen}
+		checks[num] = []CICheckResult{{Name: "ci", State: "FAILURE", Bucket: "fail"}}
+		prevHead = head
+	}
+	gh := newStubGitHub(StubGitHubConfig{
+		Available:    true,
+		PRs:          prs,
+		Checks:       checks,
+		JobStepCount: 5, // tests actually ran and failed
+	})
+	runner := newStubRunner().On("remote get-url origin", "https://github.com/owner/repo.git", nil)
+	repo := newRepoForTest(
+		Config{ProjectDir: t.TempDir(), BaseBranch: "main", Logger: discardLog{}},
+		gh,
+		withRunner(runner),
+	)
+
+	result, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "676"})
+	if err == nil {
+		t.Fatal("expected error on first PR's real CI failure")
+	}
+	if !strings.Contains(err.Error(), "CI failed on PR #670") {
+		t.Errorf("expected error to name PR #670 (bottom of stack), got: %v", err)
+	}
+	if result.MergedCount != 0 {
+		t.Errorf("expected 0 merged, got %d", result.MergedCount)
 	}
 }
 

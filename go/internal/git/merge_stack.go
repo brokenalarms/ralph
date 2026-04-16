@@ -10,7 +10,8 @@ import (
 
 // MergeStackOpts configures a MergeStack call.
 type MergeStackOpts struct {
-	TopPR string // PR number (as string, e.g. "321")
+	TopPR      string // PR number (as string, e.g. "321")
+	SkipCIWait bool   // when true, skip AwaitCI and merge immediately (use when CI is known to be down)
 }
 
 // MergeStackResult reports what MergeStack accomplished.
@@ -49,11 +50,11 @@ func (r *repo) MergeStack(ctx context.Context, opts MergeStackOpts) (MergeStackR
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "  PR #%d: %s", pr.number, pr.head)
 	}
 
-	merged, err := r.runMergeStack(ctx, stack.prs, defaultBranch)
+	merged, err := r.runMergeStack(ctx, stack.prs, defaultBranch, opts)
 	return MergeStackResult{MergedCount: merged, TotalPRs: len(stack.prs)}, err
 }
 
-func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch string) (int, error) {
+func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch string, opts MergeStackOpts) (int, error) {
 	topBranch := prs[len(prs)-1].head
 	allBranches := make([]string, len(prs))
 	for i, pr := range prs {
@@ -85,15 +86,29 @@ func (r *repo) runMergeStack(ctx context.Context, prs []stackPR, defaultBranch s
 			}
 		}
 
-		r.logger.Emit(logging.Opts{Domain: logging.CI}, "Waiting for CI on PR #%d...", pr.number)
-		_, ciStatus, ciErr := r.AwaitCI(ctx, pr.number, repoURL, pushedAt)
-		if ciErr != nil {
-			r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "CI polling error: %v", ciErr)
+		if opts.SkipCIWait {
+			r.logger.Emit(logging.Opts{Domain: logging.CI}, "CI wait skipped for PR #%d (--no-ci-wait) — classifying via job-step count", pr.number)
+			if r.isInfrastructureFailure(ctx, pr.number) {
+				r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "PR #%d CI is infrastructure-only (zero job steps) — proceeding with merge", pr.number)
+			} else {
+				r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "PR #%d has executed CI job steps — proceeding anyway per --no-ci-wait", pr.number)
+			}
+		} else {
+			r.logger.Emit(logging.Opts{Domain: logging.CI}, "Waiting for CI on PR #%d...", pr.number)
+			_, ciStatus, ciErr := r.AwaitCI(ctx, pr.number, repoURL, pushedAt)
+			if ciErr != nil {
+				r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "CI polling error: %v", ciErr)
+			}
+			if ciStatus == CIFailed {
+				if r.isInfrastructureFailure(ctx, pr.number) {
+					r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Warn}, "CI failure on PR #%d is infrastructure-only (zero job steps) — proceeding with merge", pr.number)
+				} else {
+					return merged, fmt.Errorf("CI failed on PR #%d", pr.number)
+				}
+			} else {
+				r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Success}, "CI passed for PR #%d", pr.number)
+			}
 		}
-		if ciStatus == CIFailed {
-			return merged, fmt.Errorf("CI failed on PR #%d", pr.number)
-		}
-		r.logger.Emit(logging.Opts{Domain: logging.CI, Level: logging.Success}, "CI passed for PR #%d", pr.number)
 
 		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Merging PR #%d...", pr.number)
 		result := r.MergeStackPR(pr.number, MergeOpts{DeleteBranch: true})
