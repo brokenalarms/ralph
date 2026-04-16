@@ -640,7 +640,8 @@ func TestAutoMerge_CIFailureReturnsTypedError(t *testing.T) {
 			Branch: "ralph/test-feature",
 			State:  PRStateOpen,
 		}},
-		Checks: map[int][]CICheckResult{42: {{Name: "test", State: "FAILURE", Bucket: "fail"}}},
+		Checks:       map[int][]CICheckResult{42: {{Name: "test", State: "FAILURE", Bucket: "fail"}}},
+		JobStepCount: 1, // real failure: jobs executed steps, not an infra outage
 	})
 	repo := setupAutoMergeManager(t, gh)
 

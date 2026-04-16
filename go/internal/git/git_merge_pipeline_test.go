@@ -110,7 +110,8 @@ func TestAutoMerge_MainMovedWhileCIRunning_ReturnsMergeConflictError(t *testing.
 			Title:  "some PR",
 			State:  PRStateOpen,
 		}},
-		Checks: map[int][]CICheckResult{42: {{Name: "ci", State: "SUCCESS", Bucket: "pass"}}},
+		Checks:       map[int][]CICheckResult{42: {{Name: "ci", State: "SUCCESS", Bucket: "pass"}}},
+		JobStepCount: 1, // CI ran and passed; not an infra outage
 	})
 
 	repo := newRepoForTest(
@@ -296,10 +297,10 @@ func TestShip_CreatesPRWhenDivergedFromMain(t *testing.T) {
 	}
 }
 
-// AutoMergeCurrentBranch returns CIFailureError when CI fails due to
-// infrastructure (zero steps executed). Branch protection is never bypassed —
-// the loop closes the bead and leaves the PR open for CI to gate naturally.
-func TestAutoMerge_InfraFailure_ReturnsCIFailureError(t *testing.T) {
+// AutoMergeCurrentBranch proceeds to merge when CI reports failure but all
+// jobs executed zero steps (infrastructure/billing outage). The pre-AwaitCI
+// infra check detects this and skips polling entirely — no CIFailureError.
+func TestAutoMerge_InfraFailure_ProceedsToMerge(t *testing.T) {
 	stubCISleep(t)
 
 	runner := newStubRunner()
@@ -333,13 +334,118 @@ func TestAutoMerge_InfraFailure_ReturnsCIFailureError(t *testing.T) {
 		withWorktreeBranch("ralph/test/01-infra-failure"),
 	)
 
-	_, err := repo.AutoMergeCurrentBranch(context.Background())
-	if err == nil {
-		t.Fatal("expected CIFailureError for infra CI failure, got nil")
+	merged, err := repo.AutoMergeCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil error for infra CI failure, got: %v", err)
 	}
-	var ciErr *CIFailureError
-	if !errors.As(err, &ciErr) {
-		t.Fatalf("expected CIFailureError, got %T: %v", err, err)
+	if !merged {
+		t.Error("expected merged=true when CI failure is infrastructure-only (zero job steps)")
+	}
+}
+
+// AutoMergeCurrentBranch does not call AwaitCI when isInfrastructureFailure
+// is true before polling begins — it jumps directly to executeMerge.
+func TestAutoMerge_InfraFailure_SkipsCIWait(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("rev-parse HEAD", "abc123", nil)
+	runner.On("reset --hard", "", nil)
+
+	inner := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 55,
+			Branch: "ralph/test/01-skip-ci-wait",
+			Title:  "skip ci wait test",
+			State:  PRStateOpen,
+		}},
+		JobStepCount: 0,
+	})
+	counter := &listChecksCounter{gitHub: inner}
+
+	repo := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: &testLog{}},
+		counter,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-skip-ci-wait"),
+	)
+
+	merged, err := repo.AutoMergeCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil error, got: %v", err)
+	}
+	if !merged {
+		t.Error("expected merged=true when infra failure detected before AwaitCI")
+	}
+	if counter.n != 0 {
+		t.Errorf("AwaitCI must not be called when infra failure is detected pre-poll (ListChecks calls=%d, want 0)", counter.n)
+	}
+}
+
+// AutoMergeCurrentBranch falls through to executeMerge when AwaitCI times out
+// and isInfrastructureFailure returns true (zero job steps) — the timeout is
+// an infra symptom, not a real CI failure.
+func TestAutoMerge_CITimeout_InfraFailure_ProceedsToMerge(t *testing.T) {
+	stubCISleep(t)
+
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("rev-parse HEAD", "abc123", nil)
+	runner.On("reset --hard", "", nil)
+
+	// First GetJobStepCount call (pre-AwaitCI check) returns an error so the
+	// pre-check does not short-circuit. Second call (post-timeout check) returns
+	// 0, classifying the timeout as an infrastructure failure → proceed to merge.
+	inner := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs: []StubPR{{
+			Number: 77,
+			Branch: "ralph/test/01-ci-timeout-infra",
+			Title:  "ci timeout infra test",
+			State:  PRStateOpen,
+		}},
+		ListChecksErr: errors.New("simulated CI unavailable"),
+	})
+	seq := &sequencedJobStepGH{
+		gitHub: inner,
+		responses: []struct {
+			count int
+			err   error
+		}{
+			{0, errors.New("step count unavailable before poll")}, // pre-AwaitCI: infra check fails → poll runs
+			{0, nil}, // post-timeout: infra check succeeds → merge
+		},
+	}
+
+	repo := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: &testLog{}, CIPollTimeout: 1 * time.Millisecond},
+		seq,
+		withRunner(runner),
+		withWorktreeBranch("ralph/test/01-ci-timeout-infra"),
+	)
+
+	merged, err := repo.AutoMergeCurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil error when CI times out and infra failure detected, got: %v", err)
+	}
+	if !merged {
+		t.Error("expected merged=true when AwaitCI timeout is classified as infrastructure failure")
 	}
 }
 
@@ -367,7 +473,8 @@ func TestAutoMerge_CIFailure_AlwaysReturnsCIFailureError(t *testing.T) {
 			Title:  "ci failure test",
 			State:  PRStateOpen,
 		}},
-		Checks: map[int][]CICheckResult{100: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+		Checks:       map[int][]CICheckResult{100: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+		JobStepCount: 1, // real failure: jobs executed steps, not an infra outage
 	})
 
 	repo := newRepoForTest(
@@ -388,10 +495,11 @@ func TestAutoMerge_CIFailure_AlwaysReturnsCIFailureError(t *testing.T) {
 	}
 }
 
-// Ship sets ShipResult.InfrastructureFailure when CI fails with zero job steps
-// executed (billing/runner allocation failure). The git module classifies the
-// failure; the loop uses the field to decide whether to close the bead.
-func TestShip_InfrastructureFailure_SetOnCIFailure(t *testing.T) {
+// Ship with AutoMerge=true proceeds to merge when CI reports zero job steps
+// (infrastructure/billing outage). AutoMergeCurrentBranch detects the outage
+// before polling and jumps directly to MergePR — the PR merges rather than
+// being left open. CIFailure is false because the merge succeeded.
+func TestShip_InfrastructureFailure_MergesInsteadOfFailing(t *testing.T) {
 	stubCISleep(t)
 
 	runner := newStubRunner()
@@ -429,11 +537,11 @@ func TestShip_InfrastructureFailure_SetOnCIFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.CIFailure {
-		t.Error("expected CIFailure=true")
+	if !result.Merged {
+		t.Error("expected Merged=true: infra failure should bypass CI and merge")
 	}
-	if !result.InfrastructureFailure {
-		t.Error("expected InfrastructureFailure=true when GetJobStepCount returns 0")
+	if result.CIFailure {
+		t.Error("expected CIFailure=false: merge succeeded, no CI failure to report")
 	}
 }
 
@@ -511,7 +619,10 @@ func TestAutoMerge_CITimeout_ReturnsErrorWithoutMerging(t *testing.T) {
 			State:  PRStateOpen,
 		}},
 		// ListChecksErr causes AwaitCI to exhaust its timeout returning an error.
-		ListChecksErr: fmt.Errorf("API unavailable"),
+		// GetJobStepCountErr makes isInfrastructureFailure return false so the
+		// timeout is treated as a real timeout (not an infra outage), leaving the PR open.
+		ListChecksErr:    fmt.Errorf("API unavailable"),
+		GetJobStepCountErr: fmt.Errorf("API unavailable"),
 	})
 
 	repo := newRepoForTest(
@@ -693,7 +804,8 @@ func TestMergeWithRetry_CIFailureWithNoCallback_ReturnsError(t *testing.T) {
 			Branch: "ralph/test/01-ci-no-callback",
 			State:  PRStateOpen,
 		}},
-		Checks: map[int][]CICheckResult{55: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+		Checks:       map[int][]CICheckResult{55: {{Name: "ci", State: "FAILURE", Bucket: "fail"}}},
+		JobStepCount: 1, // real failure: jobs executed steps, not an infra outage
 	})
 
 	repo := newRepoForTest(
@@ -1130,6 +1242,7 @@ func TestAutoMerge_NoOpPush_CIFailureDetected(t *testing.T) {
 			Bucket:    "fail",
 			StartedAt: failStart,
 		}}},
+		JobStepCount: 1, // real failure: jobs executed steps, not an infra outage
 	})
 
 	repo := newRepoForTest(
