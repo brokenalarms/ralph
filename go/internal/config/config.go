@@ -68,6 +68,8 @@ type Config struct {
 	Evolve                     bool
 	IdleTimeout                time.Duration
 	IdleTimeoutProgress        time.Duration
+	MaxRunDuration             time.Duration
+	FixMaxRunDuration          time.Duration
 	WatcherInterval            int
 	StuckThreshold             int
 	StuckConfirmationThreshold int

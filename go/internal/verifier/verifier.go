@@ -62,6 +62,7 @@ type Config struct {
 	PromptsDir            string
 	RalphDir              string
 	IdleTimeout           time.Duration
+	FixMaxRunDuration     time.Duration
 	TestTimeout           time.Duration
 	CompileCheckTimeout   time.Duration
 
@@ -543,9 +544,10 @@ func (v *Verifier) runFixAgent(ctx context.Context, description, prompt, workDir
 		RawLog:       rawLogPath,
 		Quiet:        true,
 		Signals:      v.cfg.Signals,
-		PollInterval: 2 * time.Second,
-		IdleTimeout:  v.cfg.IdleTimeout,
-		Model:        model,
+		PollInterval:   2 * time.Second,
+		IdleTimeout:    v.cfg.IdleTimeout,
+		MaxRunDuration: v.cfg.FixMaxRunDuration,
+		Model:          model,
 	})
 
 	if !result.SignalDetected {

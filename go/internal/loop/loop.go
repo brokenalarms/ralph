@@ -152,6 +152,7 @@ type Config struct {
 	CallsPerHour          int
 	IdleTimeout           time.Duration
 	IdleTimeoutProgress   time.Duration
+	MaxRunDuration        time.Duration
 	PostSignalTimeout     time.Duration
 	PostTask              string
 	VerifyBuild           string
@@ -465,6 +466,7 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 		PollInterval:        2 * time.Second,
 		IdleTimeout:         l.cfg.IdleTimeout,
 		IdleTimeoutProgress: l.cfg.IdleTimeoutProgress,
+		MaxRunDuration:      l.cfg.MaxRunDuration,
 		HasProgress: func() bool {
 			if l.git.HeadRev() != prep.headBefore {
 				return true

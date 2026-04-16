@@ -144,6 +144,36 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.IdleTimeoutProgress.String() },
 	},
 	{
+		Long: "--max-run-duration", MetaVar: "<dur>",
+		Help: "Hard wall-clock cap on agent run time; kills session if exceeded", Default: "60m",
+		EnvVar: "RALPH_MAX_RUN_DURATION",
+		Kind: KindDuration,
+		Apply: func(cfg *Config, val string) error {
+			d, err := parseDuration(val)
+			if err != nil {
+				return err
+			}
+			cfg.MaxRunDuration = d
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.MaxRunDuration.String() },
+	},
+	{
+		Long: "--fix-max-run-duration", MetaVar: "<dur>",
+		Help: "Hard wall-clock cap on fix-agent run time; kills session if exceeded", Default: "30m",
+		EnvVar: "RALPH_FIX_MAX_RUN_DURATION",
+		Kind: KindDuration,
+		Apply: func(cfg *Config, val string) error {
+			d, err := parseDuration(val)
+			if err != nil {
+				return err
+			}
+			cfg.FixMaxRunDuration = d
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.FixMaxRunDuration.String() },
+	},
+	{
 		Long: "--tmux",
 		Help: "Run in tmux 3-pane layout (status / output / plan)",
 		Kind: KindBool,
