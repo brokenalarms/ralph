@@ -383,10 +383,10 @@ func TestMergeStack_DirtyTreeRejected(t *testing.T) {
 	}
 }
 
-// When --admin-on-infra-failure is set and isInfrastructureFailure returns true
+// When --admin-merge-on-ci-infra-failure is set and isInfrastructureFailure returns true
 // (zero job steps), runMergeStack must pass Admin: true to MergeStackPR so that
 // branch protection is bypassed and the PR merges despite the infra outage.
-func TestMergeStack_AdminOnInfraFailureProceedsWithAdmin(t *testing.T) {
+func TestMergeStack_AdminMergeOnCIInfraFailureProceedsWithAdmin(t *testing.T) {
 	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
@@ -407,11 +407,11 @@ func TestMergeStack_AdminOnInfraFailureProceedsWithAdmin(t *testing.T) {
 	)
 
 	result, err := repo.MergeStack(context.Background(), MergeStackOpts{
-		TopPR:               "1",
-		AdminOnInfraFailure: true,
+		TopPR:                      "1",
+		AdminMergeOnCIInfraFailure: true,
 	})
 	if err != nil {
-		t.Fatalf("expected success with admin-on-infra-failure, got: %v", err)
+		t.Fatalf("expected success with admin-merge-on-ci-infra-failure, got: %v", err)
 	}
 	if result.MergedCount != 1 {
 		t.Errorf("expected 1 merged, got %d", result.MergedCount)
@@ -422,10 +422,10 @@ func TestMergeStack_AdminOnInfraFailureProceedsWithAdmin(t *testing.T) {
 	}
 }
 
-// When isInfrastructureFailure returns true but --admin-on-infra-failure is NOT
+// When isInfrastructureFailure returns true but --admin-merge-on-ci-infra-failure is NOT
 // set, runMergeStack proceeds without admin, hits branch protection, and surfaces
 // a specific error naming the infra-only context to guide the operator.
-func TestMergeStack_AdminOnInfraFailureNotSetReturnsBlocked(t *testing.T) {
+func TestMergeStack_AdminMergeOnCIInfraFailureNotSetReturnsBlocked(t *testing.T) {
 	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
 		PRs: []StubPR{{
@@ -445,7 +445,7 @@ func TestMergeStack_AdminOnInfraFailureNotSetReturnsBlocked(t *testing.T) {
 		withRunner(runner),
 	)
 
-	_, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "1"}) // AdminOnInfraFailure not set
+	_, err := repo.MergeStack(context.Background(), MergeStackOpts{TopPR: "1"}) // AdminMergeOnCIInfraFailure not set
 	if err == nil {
 		t.Fatal("expected error when branch protection blocks merge without admin flag")
 	}
@@ -478,8 +478,8 @@ func TestMergeStack_AdminFlagNoEffectOnRealFailure(t *testing.T) {
 	)
 
 	_, err := repo.MergeStack(context.Background(), MergeStackOpts{
-		TopPR:               "1",
-		AdminOnInfraFailure: true,
+		TopPR:                      "1",
+		AdminMergeOnCIInfraFailure: true,
 	})
 	if err == nil {
 		t.Fatal("expected CI failure error when job steps > 0")

@@ -1025,6 +1025,7 @@ func TestConfigToState_ArgsFromState_Roundtrip(t *testing.T) {
 		"--wait",
 		"--refactor",
 		"--base-branch", "main",
+		"--admin-merge-on-ci-infra-failure",
 	})
 
 	state := ConfigToState(&original)
@@ -1051,6 +1052,9 @@ func TestConfigToState_ArgsFromState_Roundtrip(t *testing.T) {
 	}
 	if restored.BaseBranch != original.BaseBranch {
 		t.Errorf("BaseBranch = %q, want %q", restored.BaseBranch, original.BaseBranch)
+	}
+	if restored.AdminMergeOnCIInfraFailure != original.AdminMergeOnCIInfraFailure {
+		t.Errorf("AdminMergeOnCIInfraFailure = %v, want %v", restored.AdminMergeOnCIInfraFailure, original.AdminMergeOnCIInfraFailure)
 	}
 }
 

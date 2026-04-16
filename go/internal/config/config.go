@@ -109,6 +109,11 @@ type Config struct {
 	ConnectivityCheckTimeout time.Duration
 	InternetRestoreInterval  time.Duration
 
+	// AdminMergeOnCIInfraFailure enables admin-bypass of branch protection when
+	// CI failure is classified as infrastructure-only (zero job steps). Has no
+	// effect on real test failures.
+	AdminMergeOnCIInfraFailure bool
+
 	cliSet map[string]bool
 }
 

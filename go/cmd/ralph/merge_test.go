@@ -5,6 +5,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/brokenalarms/ralph/internal/config"
+	"github.com/brokenalarms/ralph/internal/logging"
 )
 
 // Proves ralph merge -h includes a FLAGS section listing --no-ci-wait with a
@@ -44,19 +47,43 @@ func TestMergeHelp_InfraFailureFallthroughDocumented(t *testing.T) {
 	}
 }
 
-// Proves ralph merge -h documents --admin-on-infra-failure and its scope:
+// Proves ralph merge -h documents --admin-merge-on-ci-infra-failure and its scope:
 // branch-protection bypass only when CI failure is classified as infra (zero job steps).
-func TestMergeHelp_AdminOnInfraFailureFlagDocumented(t *testing.T) {
+func TestMergeHelp_AdminMergeOnCIInfraFailureFlagDocumented(t *testing.T) {
 	out := captureMergeHelp(t)
 
-	if !strings.Contains(out, "--admin-on-infra-failure") {
-		t.Error("merge help should list --admin-on-infra-failure flag")
+	if !strings.Contains(out, "--admin-merge-on-ci-infra-failure") {
+		t.Error("merge help should list --admin-merge-on-ci-infra-failure flag")
 	}
 	if !strings.Contains(out, "zero job steps") {
-		t.Error("--admin-on-infra-failure help should mention zero job steps as the classification signal")
+		t.Error("--admin-merge-on-ci-infra-failure help should mention zero job steps as the classification signal")
 	}
 	if !strings.Contains(out, "real test failures") {
-		t.Error("--admin-on-infra-failure help should clarify it has no effect on real test failures")
+		t.Error("--admin-merge-on-ci-infra-failure help should clarify it has no effect on real test failures")
+	}
+}
+
+// Passing an old flag name (--admin-on-infra-failure) that was renamed must
+// return an unknown-flag error, not be silently ignored.
+func TestMergeUnknownFlag_ReturnsError(t *testing.T) {
+	r, w, _ := os.Pipe()
+	old := os.Stderr
+	os.Stderr = w
+	log := logging.New(os.Stderr)
+
+	sub := config.Subcommand{Name: "merge", Dir: t.TempDir(), Args: []string{"321", "--admin-on-infra-failure"}}
+	rc := handleMerge(sub, log)
+
+	w.Close()
+	os.Stderr = old
+	data, _ := io.ReadAll(r)
+	out := string(data)
+
+	if rc == 0 {
+		t.Error("expected non-zero return code for unknown flag --admin-on-infra-failure")
+	}
+	if !strings.Contains(out, "unknown flag") {
+		t.Errorf("expected 'unknown flag' error message in stderr, got: %q", out)
 	}
 }
 
