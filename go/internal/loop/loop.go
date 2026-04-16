@@ -2,7 +2,9 @@ package loop
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -87,6 +89,34 @@ type VerifyHook interface {
 	Verify(ctx context.Context, dir, headBefore string) (bool, string)
 }
 
+// BinaryHasher computes the SHA-256 of the running binary on demand.
+// Production uses liveBinaryHasher (reads os.Executable()); tests may
+// inject a stub that returns different hashes to simulate a binary swap.
+type BinaryHasher interface {
+	Hash() ([]byte, error)
+}
+
+// liveBinaryHasher is the production BinaryHasher. It resolves symlinks so
+// that wrapper scripts pointing at the real binary don't mask a swap.
+type liveBinaryHasher struct{}
+
+func (h *liveBinaryHasher) Hash() ([]byte, error) {
+	path, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	path, err = filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(data)
+	return sum[:], nil
+}
+
 // See docs/specs/orchestrator-modules.md for the full rationale on the
 // Modules carve-out. Modules holds the construction-time dependencies
 // the loop composes; loop.New copies each field onto Loop's private
@@ -101,11 +131,12 @@ type Modules struct {
 	Verifier     *verifier.Verifier
 	Runner       claudeRunner   // nil → agent.New(logger)
 	Querier      querier        // nil → agent.New(logger); one-shot LLM queries
-	Connectivity Connectivity   // nil → live gh CLI / net checks
-	IterationHook IterationHook // nil → no-op
-	PostTaskHook PostTaskHook   // nil → fallback to runPostTask script path
-	WaitHook     WaitHook       // nil → no-op
-	VerifyHook   VerifyHook     // nil → fallback to runSimpleVerifyCompletion
+	Connectivity  Connectivity   // nil → live gh CLI / net checks
+	IterationHook IterationHook  // nil → no-op
+	PostTaskHook  PostTaskHook   // nil → fallback to runPostTask script path
+	WaitHook      WaitHook       // nil → no-op
+	VerifyHook    VerifyHook     // nil → fallback to runSimpleVerifyCompletion
+	BinaryHasher  BinaryHasher   // nil → reads os.Executable() SHA-256
 }
 
 // Config holds all parameters needed by the execution loop. Pure data —
@@ -240,6 +271,8 @@ type Loop struct {
 	postTaskHook      PostTaskHook
 	waitHook          WaitHook
 	verifyHook        VerifyHook
+	binaryHasher      BinaryHasher
+	startupBinaryHash []byte
 	completedTasks    []CompletedTask
 	activeReviewers   []git.Reviewer
 	reviewersDetected bool
@@ -297,6 +330,11 @@ func New(cfg Config, mods Modules) *Loop {
 		MaxPromptAttempts:      cfg.MaxPromptAttempts,
 		MaxIdleTimeoutFailures: cfg.MaxIdleTimeoutFailures,
 	})
+	bh := mods.BinaryHasher
+	if bh == nil {
+		bh = &liveBinaryHasher{}
+	}
+
 	l := &Loop{
 		cfg:           cfg,
 		state:         st,
@@ -315,6 +353,7 @@ func New(cfg Config, mods Modules) *Loop {
 		postTaskHook:  mods.PostTaskHook,
 		waitHook:      mods.WaitHook,
 		verifyHook:    mods.VerifyHook,
+		binaryHasher:  bh,
 	}
 	return l
 }
@@ -503,6 +542,14 @@ func (l *Loop) Run(ctx context.Context) error {
 	}
 	if err := l.initialize(ctx); err != nil {
 		return err
+	}
+
+	if l.cfg.Evolve {
+		if h, err := l.binaryHasher.Hash(); err == nil {
+			l.startupBinaryHash = h
+		} else {
+			l.logger.Emit(logging.Opts{Domain: "loop", Level: logging.Warn}, "Evolve: startup binary hash failed: %v — evolve hash guard disabled", err)
+		}
 	}
 
 	var runIteration int
