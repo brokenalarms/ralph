@@ -1075,6 +1075,189 @@ func TestPoll_ZeroIdleTimeoutDisablesDetection(t *testing.T) {
 	}
 }
 
+// --- Content activity classification tests ---
+
+// Verifies that rate_limit_event is classified as non-content so it does not
+// reset the idle watchdog. This is the root cause of the 45-minute stall.
+func TestIsContentActivity_RateLimitEventIsFalse(t *testing.T) {
+	line := `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day"}}`
+	if isContentActivity(line) {
+		t.Error("rate_limit_event should not be classified as content activity")
+	}
+}
+
+// Verifies that system events do not reset the idle watchdog.
+func TestIsContentActivity_SystemEventIsFalse(t *testing.T) {
+	if isContentActivity(`{"type":"system","subtype":"init"}`) {
+		t.Error("system event should not be classified as content activity")
+	}
+}
+
+// Verifies that ping/keepalive events do not reset the idle watchdog.
+func TestIsContentActivity_PingEventIsFalse(t *testing.T) {
+	if isContentActivity(`{"type":"ping"}`) {
+		t.Error("ping event should not be classified as content activity")
+	}
+}
+
+// Verifies that result events do not reset the idle watchdog.
+func TestIsContentActivity_ResultEventIsFalse(t *testing.T) {
+	if isContentActivity(`{"type":"result","subtype":"success"}`) {
+		t.Error("result event should not be classified as content activity")
+	}
+}
+
+// Verifies that error events do not reset the idle watchdog.
+func TestIsContentActivity_ErrorEventIsFalse(t *testing.T) {
+	if isContentActivity(`{"type":"error","error":"something went wrong"}`) {
+		t.Error("error event should not be classified as content activity")
+	}
+}
+
+// Verifies that user message echoes do not reset the idle watchdog.
+func TestIsContentActivity_UserMessageIsFalse(t *testing.T) {
+	if isContentActivity(`{"type":"user","message":{"role":"user","content":"fix the bug"}}`) {
+		t.Error("user message should not be classified as content activity")
+	}
+}
+
+// Verifies that plaintext/stderr lines (not JSON) conservatively reset the
+// idle watchdog — better to miss an idle than kill a live session.
+func TestIsContentActivity_PlaintextIsTrue(t *testing.T) {
+	if !isContentActivity("some stderr plaintext line") {
+		t.Error("plaintext line should be treated as content activity (conservative)")
+	}
+}
+
+// Verifies that unparseable JSON conservatively resets the idle watchdog.
+func TestIsContentActivity_UnparseableJSONIsTrue(t *testing.T) {
+	if !isContentActivity(`{"type":"broken_json`, ) {
+		t.Error("unparseable JSON should be treated as content activity (conservative)")
+	}
+}
+
+// Verifies that content_block_delta with a text delta resets the idle watchdog.
+func TestIsContentActivity_TextDeltaIsTrue(t *testing.T) {
+	line := `{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`
+	if !isContentActivity(line) {
+		t.Error("content_block_delta with text_delta should be content activity")
+	}
+}
+
+// Verifies that content_block_delta with a thinking delta resets the idle watchdog.
+func TestIsContentActivity_ThinkingDeltaIsTrue(t *testing.T) {
+	line := `{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"reasoning..."}}`
+	if !isContentActivity(line) {
+		t.Error("content_block_delta with thinking_delta should be content activity")
+	}
+}
+
+// Verifies that content_block_delta for tool input (not text/thinking) does NOT
+// reset the idle watchdog — tool input streaming is infrastructure, not content.
+func TestIsContentActivity_InputJsonDeltaIsFalse(t *testing.T) {
+	line := `{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"key\":\"val\"}"}}`
+	if isContentActivity(line) {
+		t.Error("content_block_delta with input_json_delta should not be content activity")
+	}
+}
+
+// Verifies that content_block_start for a text block resets the idle watchdog.
+func TestIsContentActivity_TextBlockStartIsTrue(t *testing.T) {
+	if !isContentActivity(`{"type":"content_block_start","content_block":{"type":"text"}}`) {
+		t.Error("content_block_start for text should be content activity")
+	}
+}
+
+// Verifies that content_block_start for a thinking block resets the idle watchdog.
+func TestIsContentActivity_ThinkingBlockStartIsTrue(t *testing.T) {
+	if !isContentActivity(`{"type":"content_block_start","content_block":{"type":"thinking"}}`) {
+		t.Error("content_block_start for thinking should be content activity")
+	}
+}
+
+// Verifies that content_block_start for a tool_use block resets the idle watchdog.
+func TestIsContentActivity_ToolUseBlockStartIsTrue(t *testing.T) {
+	if !isContentActivity(`{"type":"content_block_start","content_block":{"type":"tool_use"}}`) {
+		t.Error("content_block_start for tool_use should be content activity")
+	}
+}
+
+// Verifies that message_start with role=assistant resets the idle watchdog.
+func TestIsContentActivity_MessageStartAssistantIsTrue(t *testing.T) {
+	if !isContentActivity(`{"type":"message_start","message":{"role":"assistant","id":"msg_123"}}`) {
+		t.Error("message_start with role=assistant should be content activity")
+	}
+}
+
+// Verifies that message_start with role=user does NOT reset the idle watchdog.
+func TestIsContentActivity_MessageStartUserIsFalse(t *testing.T) {
+	if isContentActivity(`{"type":"message_start","message":{"role":"user"}}`) {
+		t.Error("message_start with role=user should not be content activity")
+	}
+}
+
+// Verifies that message_delta with a stop_reason resets the idle watchdog.
+func TestIsContentActivity_MessageDeltaWithStopReasonIsTrue(t *testing.T) {
+	if !isContentActivity(`{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`) {
+		t.Error("message_delta with stop_reason should be content activity")
+	}
+}
+
+// Verifies that message_delta without stop_reason does NOT reset the idle watchdog.
+func TestIsContentActivity_MessageDeltaNoStopReasonIsFalse(t *testing.T) {
+	if isContentActivity(`{"type":"message_delta","delta":{"stop_reason":null}}`) {
+		t.Error("message_delta without stop_reason should not be content activity")
+	}
+}
+
+// Regression test: proves that rate_limit_event lines written repeatedly to the
+// raw log do NOT prevent the idle timeout from firing. This was the root cause
+// of the 45-minute stall — periodic non-content events reset the mtime-based
+// watchdog before this fix.
+func TestPoll_RateLimitEventsDoNotPreventIdleTimeout(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// Write rate_limit_event lines faster than the idle timeout — with the old
+	// mtime-based detection these would have prevented the timeout from firing.
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+				fmt.Fprintln(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning"}}`)
+				f.Close()
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+	}()
+	defer close(stop)
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		IdleTimeout:  200 * time.Millisecond,
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "2")
+
+	if !result.IdleTimeout {
+		t.Error("expected IdleTimeout to fire even when rate_limit_events are written continuously")
+	}
+}
+
 // --- Process group cleanup tests ---
 
 // Verifies that stopProcessGroup kills child processes spawned by a bash

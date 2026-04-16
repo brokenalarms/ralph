@@ -354,6 +354,93 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	return result, nil
 }
 
+// isContentActivity returns true if a raw-log line represents real assistant
+// work (text, thinking, tool-use) that should reset the idle watchdog.
+// Infrastructure events (rate_limit_event, system, ping, result, error, user
+// message echoes) return false. Unparseable/plaintext lines return true so we
+// err on the side of keeping the session alive.
+func isContentActivity(line string) bool {
+	if len(line) == 0 {
+		return false
+	}
+	if line[0] != '{' {
+		// Plaintext/stderr — conservative: treat as content activity.
+		return true
+	}
+
+	var ev struct {
+		Type  string `json:"type"`
+		Delta *struct {
+			Type       string  `json:"type"`
+			Text       string  `json:"text"`
+			Thinking   string  `json:"thinking"`
+			StopReason *string `json:"stop_reason"`
+		} `json:"delta"`
+		ContentBlock *struct {
+			Type string `json:"type"`
+		} `json:"content_block"`
+		Message *struct {
+			Role string `json:"role"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		// Unparseable JSON — conservative: treat as content activity.
+		return true
+	}
+
+	switch ev.Type {
+	case "content_block_delta":
+		if ev.Delta == nil {
+			return false
+		}
+		// text_delta and thinking_delta are content; input_json_delta is not.
+		return ev.Delta.Type == "text_delta" || ev.Delta.Type == "thinking_delta" ||
+			ev.Delta.Text != "" || ev.Delta.Thinking != ""
+	case "content_block_start":
+		if ev.ContentBlock == nil {
+			return false
+		}
+		t := ev.ContentBlock.Type
+		return t == "text" || t == "thinking" || t == "tool_use"
+	case "message_start":
+		return ev.Message != nil && ev.Message.Role == "assistant"
+	case "message_delta":
+		return ev.Delta != nil && ev.Delta.StopReason != nil && *ev.Delta.StopReason != ""
+	case "rate_limit_event", "system", "ping", "result", "error", "user":
+		return false
+	default:
+		// Unknown event types — conservative: treat as content activity.
+		return true
+	}
+}
+
+// scanNewLinesForActivity reads lines appended to rawLog since lastOffset,
+// advances lastOffset to the end of the last complete line consumed, and
+// returns true if any line represents content activity. Partial lines at the
+// end (no trailing newline yet) are left for the next call.
+func scanNewLinesForActivity(rawLog string, lastOffset *int64) bool {
+	f, err := os.Open(rawLog)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(*lastOffset, 0); err != nil {
+		return false
+	}
+
+	found := false
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		*lastOffset += int64(len(line)) + 1 // +1 for the '\n'
+		if isContentActivity(line) {
+			found = true
+		}
+	}
+	return found
+}
+
 // poll checks for process exit and signal files on a ticker.
 func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 	if cfg.Ctx == nil {
@@ -365,6 +452,14 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 	taskLogged := false
 	lastActivity := time.Now()
 	processDone := make(chan struct{})
+
+	// Seed the log offset so we only scan lines written during this session.
+	var logOffset int64
+	if cfg.RawLog != "" {
+		if info, err := os.Stat(cfg.RawLog); err == nil {
+			logOffset = info.Size()
+		}
+	}
 
 	// Watch for process exit in a goroutine so we don't block on ticker.
 	go func() {
@@ -403,11 +498,10 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				return Result{}
 			}
 
-			// Track raw log activity for idle detection.
-			if info, err := os.Stat(cfg.RawLog); err == nil {
-				if info.ModTime().After(lastActivity) {
-					lastActivity = info.ModTime()
-				}
+			// Track content activity for idle detection — only real assistant
+			// output (text, thinking, tool-use) resets the watchdog.
+			if cfg.RawLog != "" && scanNewLinesForActivity(cfg.RawLog, &logOffset) {
+				lastActivity = time.Now()
 			}
 
 			// Detect task pickup — the stream formatter already emits
