@@ -720,6 +720,188 @@ func TestTryFixReviewComments_LogsEachActionableComment(t *testing.T) {
 	}
 }
 
+// Proves: each Spawn*FixAgent entrypoint uses cfg.FixModel (default sonnet) on
+// attempt 1 and cfg.FixEscalationModel (default opus) on attempt 2. The runner
+// factory stub captures the Model field from the RunConfig passed to runner.Run.
+func TestFixModelEscalation(t *testing.T) {
+	const firstModel = verify.ModelSonnet
+	const escalationModel = verify.ModelOpus
+
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+	promptsDir := filepath.Join(dir, "prompts")
+	os.MkdirAll(promptsDir, 0o755)
+
+	spawn := verifier.FixAgentSpawn{
+		Ctx:        context.Background(),
+		TaskTitle:  "test task",
+		WorkDir:    dir,
+		RawLogPath: filepath.Join(ralphDir, "raw.log"),
+	}
+
+	newCaptureRunner := func(captured *[]string) verifier.RunnerFactory {
+		return func() verifier.Runner {
+			return &stubRunner{
+				result: claude.Result{SignalDetected: true},
+				onRunCfg: func(cfg claude.RunConfig) {
+					*captured = append(*captured, cfg.Model)
+				},
+			}
+		}
+	}
+
+	makeVrf := func(captured *[]string) *verifier.Verifier {
+		return verifier.New(verifier.Config{
+			FixModel:           firstModel,
+			FixEscalationModel: escalationModel,
+			RalphDir:           ralphDir,
+			PromptsDir:         promptsDir,
+		}, logging.New(nil), newCaptureRunner(captured), nil)
+	}
+
+	tests := []struct {
+		name string
+		run  func(vrf *verifier.Verifier, captured *[]string)
+	}{
+		{
+			name: "SpawnTestFixAgent",
+			run: func(vrf *verifier.Verifier, captured *[]string) {
+				vrf.SpawnTestFixAgent(spawn, "ac", "output", 1, 3)
+				vrf.SpawnTestFixAgent(spawn, "ac", "output", 2, 3)
+			},
+		},
+		{
+			name: "SpawnCompileFixAgent",
+			run: func(vrf *verifier.Verifier, captured *[]string) {
+				vrf.SpawnCompileFixAgent(spawn, "ac", "errors", 1, 3)
+				vrf.SpawnCompileFixAgent(spawn, "ac", "errors", 2, 3)
+			},
+		},
+		{
+			name: "SpawnVerifyFixAgent",
+			run: func(vrf *verifier.Verifier, captured *[]string) {
+				vrf.SpawnVerifyFixAgent(spawn, "desc", "ac", "rejected", 1, 3)
+				vrf.SpawnVerifyFixAgent(spawn, "desc", "ac", "rejected", 2, 3)
+			},
+		},
+		{
+			name: "SpawnCIFixAgent",
+			run: func(vrf *verifier.Verifier, captured *[]string) {
+				vrf.SpawnCIFixAgent(verifier.CIFixInput{Spawn: spawn, PRNumber: 1, RequiredFailures: []string{"ci"}})
+			},
+		},
+		{
+			name: "SpawnCopilotFixAgent",
+			run: func(vrf *verifier.Verifier, captured *[]string) {
+				vrf.SpawnCopilotFixAgent(spawn, "review context")
+			},
+		},
+		{
+			name: "SpawnConflictFixAgent",
+			run: func(vrf *verifier.Verifier, captured *[]string) {
+				vrf.SpawnConflictFixAgent(spawn, "diff", "bead desc")
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var captured []string
+			vrf := makeVrf(&captured)
+			tc.run(vrf, &captured)
+
+			if len(captured) == 0 {
+				t.Fatal("no runner.Run calls recorded")
+			}
+			// Attempt 1 must use first model (sonnet).
+			if captured[0] != firstModel {
+				t.Errorf("attempt 1: expected %s, got %s", firstModel, captured[0])
+			}
+			// Attempt 2 must use escalation model (opus) — only for methods that accept attempt.
+			if len(captured) >= 2 {
+				if captured[1] != escalationModel {
+					t.Errorf("attempt 2: expected %s, got %s", escalationModel, captured[1])
+				}
+			}
+		})
+	}
+}
+
+// Proves: ModelCap clamps the fix-agent escalation model. With ModelCap=sonnet
+// and FixEscalationModel=opus, attempt 2 still uses sonnet.
+func TestFixModelEscalation_ModelCapApplied(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	var capturedModels []string
+	vrf := verifier.New(verifier.Config{
+		FixModel:           verify.ModelSonnet,
+		FixEscalationModel: verify.ModelOpus,
+		ModelCap:           verify.ModelSonnet,
+		RalphDir:           ralphDir,
+	}, logging.New(nil), func() verifier.Runner {
+		return &stubRunner{
+			result: claude.Result{SignalDetected: true},
+			onRunCfg: func(cfg claude.RunConfig) {
+				capturedModels = append(capturedModels, cfg.Model)
+			},
+		}
+	}, nil)
+
+	spawn := verifier.FixAgentSpawn{
+		Ctx:     context.Background(),
+		WorkDir: dir,
+	}
+	// Attempt 2 would normally escalate to opus, but ModelCap=sonnet clamps it.
+	vrf.SpawnTestFixAgent(spawn, "ac", "output", 2, 3)
+
+	if len(capturedModels) != 1 {
+		t.Fatalf("expected 1 runner call, got %d", len(capturedModels))
+	}
+	if capturedModels[0] != verify.ModelSonnet {
+		t.Errorf("ModelCap not applied: expected %s (sonnet), got %s", verify.ModelSonnet, capturedModels[0])
+	}
+}
+
+// Proves: when FixModel and FixEscalationModel are unset in Config, defaults
+// are ModelSonnet for attempt 1 and ModelOpus for attempt 2+.
+func TestFixModelEscalation_DefaultModels(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	os.MkdirAll(ralphDir, 0o755)
+
+	var capturedModels []string
+	vrf := verifier.New(verifier.Config{
+		RalphDir: ralphDir,
+	}, logging.New(nil), func() verifier.Runner {
+		return &stubRunner{
+			result: claude.Result{SignalDetected: true},
+			onRunCfg: func(cfg claude.RunConfig) {
+				capturedModels = append(capturedModels, cfg.Model)
+			},
+		}
+	}, nil)
+
+	spawn := verifier.FixAgentSpawn{
+		Ctx:     context.Background(),
+		WorkDir: dir,
+	}
+	vrf.SpawnTestFixAgent(spawn, "ac", "output", 1, 3)
+	vrf.SpawnTestFixAgent(spawn, "ac", "output", 2, 3)
+
+	if len(capturedModels) != 2 {
+		t.Fatalf("expected 2 runner calls, got %d", len(capturedModels))
+	}
+	if capturedModels[0] != verify.ModelSonnet {
+		t.Errorf("default attempt 1: expected %s (sonnet), got %s", verify.ModelSonnet, capturedModels[0])
+	}
+	if capturedModels[1] != verify.ModelOpus {
+		t.Errorf("default attempt 2: expected %s (opus), got %s", verify.ModelOpus, capturedModels[1])
+	}
+}
+
 // Phase C deletion: TestTryFixCI_RevertsOutOfScopeFiles and
 // TestTryFixCI_DoesNotRevertInScopeFiles both rely on HeadRevFunc
 // (sequenced "before-sha"/"after-sha") and DiffFilesBetweenFunc

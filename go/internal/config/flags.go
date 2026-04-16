@@ -577,6 +577,30 @@ var Flags = []FlagDef{
 		},
 		Read: func(cfg *Config) string { return cfg.VerifyEscalationModel },
 	},
+	{
+		Long: "--fix-model", MetaVar: "<model>",
+		Help:      "Model for fix agents on first attempt",
+		Default:   ModelSonnet,
+		ConfigKey: "fix_model",
+		Kind:      KindString, TrackCLI: true,
+		Apply: func(cfg *Config, val string) error {
+			cfg.FixModel = val
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.FixModel },
+	},
+	{
+		Long: "--fix-escalation-model", MetaVar: "<model>",
+		Help:      "Model for fix agents on retry attempts (subsequent attempts after first)",
+		Default:   ModelOpus,
+		ConfigKey: "fix_escalation_model",
+		Kind:      KindString, TrackCLI: true,
+		Apply: func(cfg *Config, val string) error {
+			cfg.FixEscalationModel = val
+			return nil
+		},
+		Read: func(cfg *Config) string { return cfg.FixEscalationModel },
+	},
 }
 
 var (

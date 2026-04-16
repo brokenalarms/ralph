@@ -166,6 +166,8 @@ type Config struct {
 	VerifyDir             string // project root where tests are run; empty disables verification
 	VerifyModel           string // model for the first LLM verification attempt; defaults to haiku
 	VerifyEscalationModel string // model for subsequent LLM verification attempts; defaults to sonnet
+	FixModel              string // model for fix agents on attempt 1; defaults to sonnet
+	FixEscalationModel    string // model for fix agents on attempt 2+; defaults to opus
 
 	// Attempt limits — overrides package defaults when set.
 	MaxPromptAttempts      int
