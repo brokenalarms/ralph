@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -9,6 +10,46 @@ import (
 )
 
 var rateLimitRe = regexp.MustCompile(`(?i)hit your limit`)
+
+type rateLimitEventPayload struct {
+	Type          string `json:"type"`
+	RateLimitInfo struct {
+		Status        string  `json:"status"`
+		ResetsAt      int64   `json:"resetsAt"`
+		RateLimitType string  `json:"rateLimitType"`
+		Utilization   float64 `json:"utilization"`
+	} `json:"rate_limit_info"`
+}
+
+// ParseRateLimitEvent parses a single raw log line as a rate_limit_event JSON
+// event. Returns ok=false for malformed JSON or non-rate_limit_event lines.
+// Throttled statuses (throttled, exceeded, blocked) set throttled=true.
+// allowed_warning sets warning=true. allowed and unknown statuses return
+// ok=true with both flags false (safe no-op).
+func ParseRateLimitEvent(line string) (resetAt time.Time, throttled bool, warning bool, rateLimitType string, utilization float64, ok bool) {
+	if len(line) == 0 || line[0] != '{' {
+		return
+	}
+	var ev rateLimitEventPayload
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		return
+	}
+	if ev.Type != "rate_limit_event" {
+		return
+	}
+	ok = true
+	info := ev.RateLimitInfo
+	resetAt = time.Unix(info.ResetsAt, 0)
+	rateLimitType = info.RateLimitType
+	utilization = info.Utilization
+	switch info.Status {
+	case "throttled", "exceeded", "blocked":
+		throttled = true
+	case "allowed_warning":
+		warning = true
+	}
+	return
+}
 var resetTimeRe = regexp.MustCompile(`(?i)resets?\s+(\d{1,2})\s*(am|pm)`)
 
 // ParseRateLimitReset scans text for Claude's rate limit message and
@@ -53,7 +94,8 @@ func nextHourBoundary(now time.Time) time.Time {
 }
 
 // ScanRawLogForRateLimit reads the last portion of a raw log file's content
-// and checks for rate limit messages.
+// and checks for rate limit messages. JSON rate_limit_event entries are checked
+// first; plaintext 'hit your limit' regex is the fallback.
 func ScanRawLogForRateLimit(logContent string, now time.Time) (resetAt time.Time, found bool) {
 	lines := strings.Split(logContent, "\n")
 	// Check last 50 lines — the rate limit message appears near the end
@@ -61,7 +103,18 @@ func ScanRawLogForRateLimit(logContent string, now time.Time) (resetAt time.Time
 	if start < 0 {
 		start = 0
 	}
-	for _, line := range lines[start:] {
+	tail := lines[start:]
+
+	// JSON rate_limit_event scan first.
+	for _, line := range tail {
+		resetAt, throttled, _, _, _, ok := ParseRateLimitEvent(line)
+		if ok && throttled {
+			return resetAt, true
+		}
+	}
+
+	// Plaintext / stream-json text extraction fallback.
+	for _, line := range tail {
 		text := extractStreamText(line)
 		if text == "" {
 			continue
@@ -71,7 +124,7 @@ func ScanRawLogForRateLimit(logContent string, now time.Time) (resetAt time.Time
 		}
 	}
 	// Also check raw lines (non-JSON stderr output from Claude CLI)
-	for _, line := range lines[start:] {
+	for _, line := range tail {
 		if resetAt, found := ParseRateLimitReset(line, now); found {
 			return resetAt, true
 		}

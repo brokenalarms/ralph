@@ -419,32 +419,58 @@ func isContentActivity(line string) bool {
 	}
 }
 
-// scanNewLinesForActivity reads lines appended to rawLog since lastOffset,
-// advances lastOffset to the end of the last complete line consumed, and
-// returns true if any line represents content activity. Partial lines at the
-// end (no trailing newline yet) are left for the next call.
-func scanNewLinesForActivity(rawLog string, lastOffset *int64) bool {
+// newLinesScan holds results from scanning newly appended raw log lines.
+type newLinesScan struct {
+	hasActivity   bool
+	rlThrottled   bool
+	rlResetAt     time.Time
+	rlWarning     bool
+	rlType        string
+	rlUtilization float64
+}
+
+// scanNewLines reads lines appended to rawLog since lastOffset, advances
+// lastOffset to the end of the last complete line consumed, and returns
+// activity and rate-limit information. Partial lines at the end (no trailing
+// newline yet) are left for the next call.
+func scanNewLines(rawLog string, lastOffset *int64) newLinesScan {
 	f, err := os.Open(rawLog)
 	if err != nil {
-		return false
+		return newLinesScan{}
 	}
 	defer f.Close()
 
 	if _, err := f.Seek(*lastOffset, 0); err != nil {
-		return false
+		return newLinesScan{}
 	}
 
-	found := false
+	var result newLinesScan
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Text()
 		*lastOffset += int64(len(line)) + 1 // +1 for the '\n'
 		if isContentActivity(line) {
-			found = true
+			result.hasActivity = true
+		}
+		resetAt, throttled, warning, rateLimitType, utilization, ok := ParseRateLimitEvent(line)
+		if ok {
+			if throttled && !result.rlThrottled {
+				result.rlThrottled = true
+				result.rlResetAt = resetAt
+				result.rlType = rateLimitType
+				result.rlUtilization = utilization
+			}
+			if warning && !result.rlWarning && !result.rlThrottled {
+				result.rlWarning = true
+				result.rlResetAt = resetAt
+				result.rlType = rateLimitType
+				result.rlUtilization = utilization
+			}
 		}
 	}
-	return found
+	return result
 }
+
 
 // poll checks for process exit and signal files on a ticker.
 func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
@@ -455,6 +481,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 	defer ticker.Stop()
 
 	taskLogged := false
+	warningLogged := false
 	lastActivity := time.Now()
 	runStart := time.Now()
 	processDone := make(chan struct{})
@@ -504,10 +531,25 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				return Result{}
 			}
 
-			// Track content activity for idle detection — only real assistant
-			// output (text, thinking, tool-use) resets the watchdog.
-			if cfg.RawLog != "" && scanNewLinesForActivity(cfg.RawLog, &logOffset) {
-				lastActivity = time.Now()
+			// Scan new log lines for content activity and rate limit events.
+			if cfg.RawLog != "" {
+				scan := scanNewLines(cfg.RawLog, &logOffset)
+				if scan.hasActivity {
+					lastActivity = time.Now()
+				}
+				if scan.rlThrottled {
+					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model},
+						"Claude rate limit throttled (%s %.0f%%) — resets at %s",
+						scan.rlType, scan.rlUtilization*100, scan.rlResetAt.Format("3:04pm"))
+					gracefulKill(cmd, processDone)
+					return Result{RateLimited: true, ResetAt: scan.rlResetAt}
+				}
+				if scan.rlWarning && !warningLogged {
+					warningLogged = true
+					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Info, Model: cfg.Model},
+						"rate limit warning: %s at %.0f%%, resets at %s",
+						scan.rlType, scan.rlUtilization*100, scan.rlResetAt.Format("3:04pm"))
+				}
 			}
 
 			// Detect task pickup — the stream formatter already emits

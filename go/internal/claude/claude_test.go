@@ -1348,6 +1348,96 @@ func TestPoll_RateLimitEventsDoNotPreventIdleTimeout(t *testing.T) {
 	}
 }
 
+// Verifies that a throttled rate_limit_event in the stream causes poll to kill
+// the agent and return RateLimited=true with the correct ResetAt.
+func TestPoll_ThrottledRateLimitEventKillsSession(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+	}
+
+	resetsAt := int64(1776412800)
+	// Write the throttled event to the log before the process exits so poll sees it.
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		fmt.Fprintf(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"throttled","resetsAt":%d,"rateLimitType":"daily","utilization":1.0}}%s`, resetsAt, "\n")
+		f.Close()
+	}()
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "5")
+
+	if !result.RateLimited {
+		t.Error("expected RateLimited=true for throttled rate_limit_event")
+	}
+	expected := time.Unix(resetsAt, 0)
+	if !result.ResetAt.Equal(expected) {
+		t.Errorf("expected ResetAt=%v, got %v", expected, result.ResetAt)
+	}
+}
+
+// Verifies that an allowed_warning rate_limit_event emits exactly one info log
+// per run and does not kill or interrupt the agent.
+func TestPoll_AllowedWarningRateLimitEventLogsOnce(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "test",
+		RawLog:       rawLog,
+		Quiet:        true,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		IdleTimeout:  400 * time.Millisecond,
+	}
+
+	// Write three allowed_warning events — only the first should log.
+	go func() {
+		for i := 0; i < 3; i++ {
+			time.Sleep(60 * time.Millisecond)
+			f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+			fmt.Fprintln(f, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1776412800,"rateLimitType":"seven_day","utilization":0.84}}`)
+			f.Close()
+		}
+	}()
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "5")
+
+	if result.RateLimited {
+		t.Error("expected RateLimited=false for allowed_warning events")
+	}
+	if !result.IdleTimeout {
+		t.Error("expected IdleTimeout — agent should not have been killed by warning")
+	}
+	warningLogs := 0
+	for _, msg := range log.logs {
+		if strings.Contains(msg, "rate limit warning") {
+			warningLogs++
+		}
+	}
+	if warningLogs != 1 {
+		t.Errorf("expected exactly 1 rate limit warning log, got %d: %v", warningLogs, log.logs)
+	}
+}
+
 // --- Process group cleanup tests ---
 
 // Verifies that stopProcessGroup kills child processes spawned by a bash
