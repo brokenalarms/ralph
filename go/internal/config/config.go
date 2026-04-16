@@ -81,6 +81,8 @@ type Config struct {
 	AgentEscalationModel    string
 	VerifyModel             string
 	VerifyEscalationModel   string
+	FixModel                string
+	FixEscalationModel      string
 	PostSignalTimeout       time.Duration
 	PostTask                string
 	VerifyBuild             string

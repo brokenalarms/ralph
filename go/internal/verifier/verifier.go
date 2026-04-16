@@ -56,7 +56,8 @@ type Config struct {
 	ProjectDir            string // project root used as fallback when ralph:verify is absent from VerifyDir
 	VerifyModel           string
 	VerifyEscalationModel string
-	FixModel              string // model used by all fix agents; defaults to ModelOpus
+	FixModel              string // model for fix agents on attempt 1; defaults to ModelSonnet
+	FixEscalationModel    string // model for fix agents on attempt 2+; defaults to ModelOpus
 	ModelCap              string // maximum model tier ceiling from --model flag; empty means no cap
 	PromptsDir            string
 	RalphDir              string
@@ -279,15 +280,24 @@ func (v *Verifier) verifyModel(attempt int) string {
 	return verify.CapModel(v.cfg.ModelCap, model)
 }
 
-// FixModel returns the model to use for all fix agents, capped by ModelCap
-// when set. Exported so callers (e.g. loop pipeline logging) can reference
-// the same model the fix agent will use.
-func (v *Verifier) FixModel() string {
-	base := v.cfg.FixModel
-	if base == "" {
-		base = verify.ModelOpus
+// FixModel returns the model for the given 1-indexed attempt number, capped
+// by ModelCap when set. Attempt 1 uses FixModel (sonnet); subsequent attempts
+// escalate to FixEscalationModel (opus). Exported so callers (e.g. loop
+// pipeline logging) can reference the same model the fix agent will use.
+func (v *Verifier) FixModel(attempt int) string {
+	var model string
+	if attempt <= 1 {
+		model = v.cfg.FixModel
+		if model == "" {
+			model = verify.ModelSonnet
+		}
+	} else {
+		model = v.cfg.FixEscalationModel
+		if model == "" {
+			model = verify.ModelOpus
+		}
 	}
-	return verify.CapModel(v.cfg.ModelCap, base)
+	return verify.CapModel(v.cfg.ModelCap, model)
 }
 
 // FixAgentResult is the result of a fix-agent spawn. It is an alias for
@@ -316,7 +326,7 @@ func (v *Verifier) SpawnTestFixAgent(in FixAgentSpawn, taskAcceptance, testOutpu
 		"{{SIGNAL_COMPLETE}}":  signalPath,
 	})
 
-	return v.runFixAgent(in.Ctx, "test failures", fixPrompt, in.WorkDir, in.RawLogPath)
+	return v.runFixAgent(in.Ctx, "test failures", fixPrompt, in.WorkDir, in.RawLogPath, attempt)
 }
 
 // SpawnCompileFixAgent spawns a fix agent to address compile/type errors.
@@ -331,12 +341,12 @@ func (v *Verifier) SpawnCompileFixAgent(in FixAgentSpawn, taskAcceptance, compil
 		"{{SIGNAL_COMPLETE}}":  signalPath,
 	})
 
-	return v.runFixAgent(in.Ctx, "build errors", fixPrompt, in.WorkDir, in.RawLogPath)
+	return v.runFixAgent(in.Ctx, "build errors", fixPrompt, in.WorkDir, in.RawLogPath, attempt)
 }
 
 // SpawnVerifyFixAgent spawns a fix agent to address LLM verification rejection.
 func (v *Verifier) SpawnVerifyFixAgent(in FixAgentSpawn, taskDesc, taskAcceptance, rejectionDetails string, attempt, maxAttempts int) claude.Result {
-	v.logger.Emit(logging.Opts{Domain: logging.LLM, Model: v.FixModel()}, "Spawning fix agent for verification rejection (attempt %d/%d)", attempt, maxAttempts)
+	v.logger.Emit(logging.Opts{Domain: logging.LLM, Model: v.FixModel(attempt)}, "Spawning fix agent for verification rejection (attempt %d/%d)", attempt, maxAttempts)
 
 	signalPath := filepath.Join(v.cfg.RalphDir, ".signal_complete")
 	fixPrompt := v.loadVerifyPrompt("verify-fix.md", map[string]string{
@@ -347,7 +357,7 @@ func (v *Verifier) SpawnVerifyFixAgent(in FixAgentSpawn, taskDesc, taskAcceptanc
 		"{{SIGNAL_COMPLETE}}":     signalPath,
 	})
 
-	return v.runFixAgent(in.Ctx, "verification rejection", fixPrompt, in.WorkDir, in.RawLogPath)
+	return v.runFixAgent(in.Ctx, "verification rejection", fixPrompt, in.WorkDir, in.RawLogPath, attempt)
 }
 
 // CIFixInput is the per-call input for SpawnCIFixAgent. RequiredFailures is
@@ -383,7 +393,7 @@ func (v *Verifier) SpawnCIFixAgent(in CIFixInput) claude.Result {
 		"{{SIGNAL_COMPLETE}}": signalPath,
 	})
 
-	return v.runFixAgent(in.Spawn.Ctx, "CI failures", fixPrompt, in.Spawn.WorkDir, in.Spawn.RawLogPath)
+	return v.runFixAgent(in.Spawn.Ctx, "CI failures", fixPrompt, in.Spawn.WorkDir, in.Spawn.RawLogPath, 1)
 }
 
 // SpawnCopilotFixAgent spawns a fix agent to address actionable Copilot review
@@ -399,7 +409,7 @@ func (v *Verifier) SpawnCopilotFixAgent(in FixAgentSpawn, reviewContext string) 
 		"{{SIGNAL_COMPLETE}}": signalPath,
 	})
 
-	return v.runFixAgent(in.Ctx, "Copilot review feedback", fixPrompt, in.WorkDir, in.RawLogPath)
+	return v.runFixAgent(in.Ctx, "Copilot review feedback", fixPrompt, in.WorkDir, in.RawLogPath, 1)
 }
 
 // SpawnConflictFixAgent spawns a fix agent to resolve merge conflicts that
@@ -415,7 +425,7 @@ func (v *Verifier) SpawnConflictFixAgent(in FixAgentSpawn, conflictDiff, beadDes
 		"{{SIGNAL_COMPLETE}}":  signalPath,
 	})
 
-	return v.runFixAgent(in.Ctx, "conflict resolution", fixPrompt, in.WorkDir, in.RawLogPath)
+	return v.runFixAgent(in.Ctx, "conflict resolution", fixPrompt, in.WorkDir, in.RawLogPath, 1)
 }
 
 // PreIterationInput holds inputs for RunPreIterationTests.
@@ -520,8 +530,9 @@ func (v *Verifier) RunPreIterationTests(in PreIterationInput) PreIterationResult
 // agent.New(logger); tests: stub), runs the given prompt, and logs the
 // outcome. Verifier does NOT touch the main loop's runner — Loop stops its
 // own runner before calling any Spawn*FixAgent method.
-func (v *Verifier) runFixAgent(ctx context.Context, description, prompt, workDir, rawLogPath string) claude.Result {
-	v.logger.Emit(logging.Opts{Domain: logging.LLM, Model: v.FixModel()}, "Spawning fix agent: %s", description)
+func (v *Verifier) runFixAgent(ctx context.Context, description, prompt, workDir, rawLogPath string, attempt int) claude.Result {
+	model := v.FixModel(attempt)
+	v.logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Spawning fix agent: %s", description)
 
 	runner := v.newRunner()
 	result, _ := runner.Run(claude.RunConfig{
@@ -534,13 +545,13 @@ func (v *Verifier) runFixAgent(ctx context.Context, description, prompt, workDir
 		Signals:      v.cfg.Signals,
 		PollInterval: 2 * time.Second,
 		IdleTimeout:  v.cfg.IdleTimeout,
-		Model:        v.FixModel(),
+		Model:        model,
 	})
 
 	if !result.SignalDetected {
-		v.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: v.FixModel()}, "Fix agent exited without signal (%s)", description)
+		v.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: model}, "Fix agent exited without signal (%s)", description)
 	} else if result.Summary != "" {
-		v.logger.Emit(logging.Opts{Domain: logging.LLM, Model: v.FixModel()}, "Fix agent (%s): %s", description, result.Summary)
+		v.logger.Emit(logging.Opts{Domain: logging.LLM, Model: model}, "Fix agent (%s): %s", description, result.Summary)
 	}
 
 	return result

@@ -113,6 +113,8 @@ Run `ralph task` to build up a backlog, then `ralph loop` to work through it.
 | `--agent-escalation-model <model>` | Model for agent on retry attempts | claude-opus-4-6 | |
 | `--verify-model <model>` | Model for LLM verification (first attempt) | claude-haiku-4-5-20251001 | |
 | `--verify-escalation-model <model>` | Model for verification escalation (subsequent attempts) | claude-sonnet-4-6 | |
+| `--fix-model <model>` | Model for fix agents (first attempt) | claude-sonnet-4-6 | |
+| `--fix-escalation-model <model>` | Model for fix agents on retry attempts | claude-opus-4-6 | |
 | `--refactor` | Enable LLM-based adaptive refactoring | — | |
 
 ## Architecture
@@ -134,6 +136,8 @@ The loop uses a tiered model strategy to balance cost and quality:
 - **Agent retry** — opus (default `--agent-escalation-model`); escalated automatically on subsequent attempts
 - **Verification first pass** — haiku (default `--verify-model`)
 - **Verification retry** — sonnet (default `--verify-escalation-model`)
+- **Fix agent first pass** — sonnet (default `--fix-model`); covers test/compile/verify/CI/Copilot/conflict fix agents
+- **Fix agent retry** — opus (default `--fix-escalation-model`); escalated automatically on subsequent attempts
 
 `--model` acts as a ceiling — no LLM call may use a higher-tier model than the value set.
 
