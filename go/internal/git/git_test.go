@@ -874,12 +874,17 @@ func TestBranchForTask_AnchorsAtStackParent(t *testing.T) {
 	parentTip := strings.TrimSpace(gitOutput(project, "rev-parse", stackBranch))
 	run(t, "git", "-C", project, "checkout", "main")
 
+	// setStackHead now requires an open PR for the top completed branch.
+	gh := newStubGitHub(StubGitHubConfig{
+		Available: true,
+		PRs:       []StubPR{{Number: 1, Branch: stackBranch}},
+	})
 	mgr := newRepoForTest(Config{
 		ProjectDir: project,
 		RalphDir:   ralphDir,
 		BaseBranch: "main",
 		Logger:     &testLog{},
-	}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	}, gh, withRunner(&execRunner{}), withState(newMemState()))
 
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
