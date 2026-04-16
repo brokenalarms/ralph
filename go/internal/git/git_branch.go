@@ -21,7 +21,18 @@ type BranchTaskMeta struct {
 func (r *repo) SyncWorktreeBase(ctx context.Context, completedBranches []string) error {
 	setStackHead(r, completedBranches)
 	if r.prevBranch == "" {
-		r.ResetToDefaultBranch()
+		if len(completedBranches) > 0 {
+			// Stack drained (top branch merged or PR closed) — local commits on
+			// the worktree are ghosts from the prior stack and cannot cleanly
+			// rebase onto an advanced origin/main. Force-reset discards them;
+			// any dirty WIP is captured via `git stash create` (a dangling
+			// commit, not on the shared stash stack) and re-applied after reset.
+			r.forceResetToDefaultBranch()
+		} else {
+			// No prior stack — local commits may be genuine mid-task WIP from
+			// a loop restart. Preserve and let EnsureUpToDate rebase or abort.
+			r.ResetToDefaultBranch()
+		}
 	}
 	return r.EnsureUpToDate(ctx)
 }

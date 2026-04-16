@@ -732,6 +732,167 @@ func TestResetToDefaultBranch_PreservesLocalCommits(t *testing.T) {
 	}
 }
 
+// SyncWorktreeBase force-resets the worktree to origin/<default> when the
+// stack is drained (prevBranch==""). Local commits from the prior stack are
+// ghosts — they cannot rebase cleanly onto an advanced main and must be
+// discarded rather than preserved. This is the regression from ralph-pf1n.
+func TestSyncWorktreeBase_StackDrain_DiscardsLocalCommits(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	log := &testLog{}
+	ralphDir := filepath.Join(project, ".ralph")
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+	run(t, "git", "-C", mgr.workDir, "remote", "set-url", "origin", bare)
+	run(t, "git", "-C", mgr.workDir, "fetch", "origin")
+	run(t, "git", "-C", mgr.workDir, "config", "user.name", "test")
+	run(t, "git", "-C", mgr.workDir, "config", "user.email", "test@test")
+
+	mgr.RenameBranchForTask("ghost task", "ralph-ghost")
+
+	// Commit 3 ghost commits that must be discarded.
+	for i := 0; i < 3; i++ {
+		writeFile(t, mgr.workDir, fmt.Sprintf("ghost%d.txt", i), fmt.Sprintf("ghost %d\n", i))
+		run(t, "git", "-C", mgr.workDir, "commit", "-m", fmt.Sprintf("ghost %d", i))
+	}
+
+	originHead := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "origin/main"))
+
+	// Non-empty completedBranches with default stub gh (no open PRs) triggers
+	// setStackHead's "no stacked parents — top has no open PR" drain path.
+	if err := mgr.SyncWorktreeBase(context.Background(), []string{"ralph/prior-drained"}); err != nil {
+		t.Fatalf("SyncWorktreeBase: %v", err)
+	}
+
+	got := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "HEAD"))
+	if got != originHead {
+		t.Errorf("HEAD = %q after SyncWorktreeBase, want origin/main = %q (ghost commits not discarded)", got, originHead)
+	}
+	ahead := strings.TrimSpace(gitOutput(mgr.workDir, "rev-list", "--count", "origin/main..HEAD"))
+	if ahead != "0" {
+		t.Errorf("HEAD still %s commits ahead of origin/main, want 0", ahead)
+	}
+	for _, msg := range log.messages {
+		if strings.Contains(msg, "Preserving") && strings.Contains(msg, "deferring to rebase") {
+			t.Errorf("force-reset path must not emit preservation log, got: %s", msg)
+		}
+	}
+}
+
+// SyncWorktreeBase on a drained stack captures dirty WIP via `git stash
+// create` (dangling commit, not on the shared stash stack), hard-resets to
+// origin/<default>, then re-applies the WIP. The shared stash list is never
+// mutated.
+func TestSyncWorktreeBase_StackDrain_CleanWIPReapplied(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+	run(t, "git", "-C", mgr.workDir, "remote", "set-url", "origin", bare)
+	run(t, "git", "-C", mgr.workDir, "fetch", "origin")
+	run(t, "git", "-C", mgr.workDir, "config", "user.name", "test")
+	run(t, "git", "-C", mgr.workDir, "config", "user.email", "test@test")
+
+	mgr.RenameBranchForTask("ghost task", "ralph-ghost2")
+
+	// A ghost commit so HEAD diverges from origin/main (triggers the force-reset).
+	writeFile(t, mgr.workDir, "ghost.txt", "ghost\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "ghost")
+
+	// Dirty WIP that cleanly re-applies onto origin/main: add a new tracked file.
+	writeFile(t, mgr.workDir, "wip.txt", "wip content\n")
+
+	stashesBefore := strings.TrimSpace(gitOutput(project, "stash", "list"))
+
+	if err := mgr.SyncWorktreeBase(context.Background(), []string{"ralph/prior-drained"}); err != nil {
+		t.Fatalf("SyncWorktreeBase: %v", err)
+	}
+
+	originHead := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "origin/main"))
+	got := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "HEAD"))
+	if got != originHead {
+		t.Errorf("HEAD = %q, want origin/main = %q", got, originHead)
+	}
+	wip, err := os.ReadFile(filepath.Join(mgr.workDir, "wip.txt"))
+	if err != nil {
+		t.Fatalf("wip.txt missing after force-reset: %v", err)
+	}
+	if string(wip) != "wip content\n" {
+		t.Errorf("wip.txt = %q, want 'wip content\\n' — WIP not re-applied", string(wip))
+	}
+	stashesAfter := strings.TrimSpace(gitOutput(project, "stash", "list"))
+	if stashesAfter != stashesBefore {
+		t.Errorf("git stash list mutated: before=%q after=%q — shared stash stack must not change", stashesBefore, stashesAfter)
+	}
+}
+
+// SyncWorktreeBase on a drained stack with conflicting WIP: the stash-apply
+// fails, the worktree is hard-reset a second time to a clean origin/<default>,
+// a log line explains what happened, and the shared stash stack is untouched.
+func TestSyncWorktreeBase_StackDrain_ConflictingWIPDiscarded(t *testing.T) {
+	project, bare := initBareRepoWithOrigin(t)
+	log := &testLog{}
+	ralphDir := filepath.Join(project, ".ralph")
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+	run(t, "git", "-C", mgr.workDir, "remote", "set-url", "origin", bare)
+	run(t, "git", "-C", mgr.workDir, "fetch", "origin")
+	run(t, "git", "-C", mgr.workDir, "config", "user.name", "test")
+	run(t, "git", "-C", mgr.workDir, "config", "user.email", "test@test")
+
+	mgr.RenameBranchForTask("ghost task", "ralph-ghost3")
+
+	// Ghost commit adds a file with content "B".
+	writeFile(t, mgr.workDir, "conflict.txt", "B\n")
+	run(t, "git", "-C", mgr.workDir, "commit", "-m", "ghost B")
+
+	// Dirty WIP changes the file to "C". Stash captures the diff B→C.
+	// After reset to origin/main (no conflict.txt), apply stash tries to
+	// modify a file whose base version "B" doesn't exist → conflict.
+	if err := os.WriteFile(filepath.Join(mgr.workDir, "conflict.txt"), []byte("C\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stashesBefore := strings.TrimSpace(gitOutput(project, "stash", "list"))
+
+	if err := mgr.SyncWorktreeBase(context.Background(), []string{"ralph/prior-drained"}); err != nil {
+		t.Fatalf("SyncWorktreeBase: %v", err)
+	}
+
+	originHead := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "origin/main"))
+	got := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "HEAD"))
+	if got != originHead {
+		t.Errorf("HEAD = %q, want origin/main = %q", got, originHead)
+	}
+	// Working tree must be clean (no conflict markers, no stray file).
+	status := strings.TrimSpace(gitOutput(mgr.workDir, "status", "--porcelain"))
+	if status != "" {
+		t.Errorf("worktree not clean after conflicting WIP discard: %q", status)
+	}
+	if _, err := os.Stat(filepath.Join(mgr.workDir, "conflict.txt")); !os.IsNotExist(err) {
+		t.Errorf("conflict.txt should not exist on origin/main, stat err: %v", err)
+	}
+	found := false
+	for _, msg := range log.messages {
+		if strings.Contains(msg, "WIP could not be re-applied") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'WIP could not be re-applied' log, got: %v", log.messages)
+	}
+	stashesAfter := strings.TrimSpace(gitOutput(project, "stash", "list"))
+	if stashesAfter != stashesBefore {
+		t.Errorf("git stash list mutated: before=%q after=%q — shared stash stack must not change", stashesBefore, stashesAfter)
+	}
+}
+
 // PrepareForNextTask discards uncommitted changes when switching to a different
 // task (last_task_id differs from nextTaskID), so stale files don't leak across tasks.
 func TestPrepareForNextTask_CleansOnTaskSwitch(t *testing.T) {
