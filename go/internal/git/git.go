@@ -540,6 +540,50 @@ func (r *repo) ResetToDefaultBranch() {
 	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Reset worktree to %s", target)
 }
 
+// forceResetToDefaultBranch hard-resets the worktree to origin/<default>,
+// discarding any local commits ahead of main. Uncommitted working-tree
+// changes are captured via `git stash create` (a dangling commit that does
+// NOT appear in any worktree's `git stash list`) and re-applied after the
+// reset. On apply conflict, the worktree is reset again to discard the WIP
+// cleanly; the dangling stash commit is left for git gc.
+//
+// Used by SyncWorktreeBase when setStackHead returns prevBranch="" — the
+// local commits are known ghosts from a drained stack and must be discarded,
+// not preserved. All other callers must use ResetToDefaultBranch.
+func (r *repo) forceResetToDefaultBranch() {
+	defaultBranch := r.detectDefaultBranch()
+	_ = r.gitCmdErr(r.workDir, "fetch", "origin", defaultBranch)
+	target := "origin/" + defaultBranch
+	if !r.refExists(r.workDir, target) {
+		return
+	}
+	if r.gitOutput(r.workDir, "rev-parse", "HEAD") == r.gitOutput(r.workDir, "rev-parse", target) {
+		return
+	}
+
+	// Capture dirty state as a dangling commit — never mutates .git/refs/stash.
+	stashSHA := r.gitOutput(r.workDir, "stash", "create")
+
+	r.gitCmd(r.workDir, "reset", "--hard", target)
+	r.branchRenamed = false
+	if r.state != nil {
+		_ = r.state.Write("branch_renamed", "false")
+	}
+	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Reset worktree to %s", target)
+
+	if stashSHA == "" {
+		return
+	}
+
+	if err := r.gitCmdErr(r.workDir, "stash", "apply", stashSHA); err != nil {
+		r.logger.Emit(logging.Opts{Domain: logging.Git, Level: logging.Warn},
+			"WIP could not be re-applied onto %s (stash %s) — discarded: %v", target, stashSHA, err)
+		r.gitCmd(r.workDir, "reset", "--hard", target)
+		return
+	}
+	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Re-applied WIP from stash %s", stashSHA)
+}
+
 // SetPrevBranch sets the previous branch for stacked PR targeting and
 // persists it to state so it survives process restarts.
 func (r *repo) SetPrevBranch(branch string) {
