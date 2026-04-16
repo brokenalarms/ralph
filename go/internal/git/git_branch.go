@@ -67,54 +67,59 @@ func (r *repo) BranchForTask(ctx context.Context, taskID, title string, meta Bra
 	return r.worktreeBranch, nil
 }
 
-// setStackHead finds the most recent pushed branch that still has unmerged
-// work and sets it as the stack base for the next task.
+// setStackHead sets the stack parent for the next task.
 //
-// The candidate list (completedBranches) contains every branch pushed this
-// session in chronological order (oldest first). Walking it newest-first
-// ensures the most recently pushed branch is preferred as the stack parent.
+// Only completedBranches[len-1] (the newest completed branch) is considered.
+// Both guards must pass for prevBranch to be set:
+//   - The branch has an open PR (ListOpenPRBranches membership)
+//   - The branch is cleanly ahead of main (BranchIsAheadOfMain)
 //
-// A branch qualifies if it:
-//   - exists on the remote (FetchBranch succeeds)
-//   - has commits not yet on main (RemoteBranchHasCommits)
-//   - has any commits ahead of main, INCLUDING diverged branches where main
-//     has commits the branch does not (BranchHasUnmergedWork)
-//
-// Diverged branches are valid stack parents — a pre-push rebase failure can
-// leave the branch with both unique commits AND main commits it lacks, but
-// the work is still real and the next task should chain onto it. The
-// downstream merge pipeline re-aligns the chain via --update-refs.
-//
-// There is no open-PR requirement: a branch pushed via a pr_creation_failed
-// skip has commits ahead of main but no PR yet. Relying on
-// BranchHasUnmergedWork correctly handles both cases — merged branches fail
-// this check because their work is already on main.
+// This prevents squash-merged branches from qualifying: after a PR lands via
+// squash-merge, the local branch is diverged from main (it has commits main
+// does not, but main has the squashed commit the branch lacks). BranchIsAheadOfMain
+// returns false for diverged branches, so the stale branch is rejected and the
+// next task starts from main instead.
 func setStackHead(r *repo, completedBranches []string) {
 	r.prevBranch = ""
 	if len(completedBranches) == 0 {
 		return
 	}
 
-	for i := len(completedBranches) - 1; i >= 0; i-- {
-		branch := completedBranches[i]
-		if branch == "" {
-			continue
-		}
-		if err := r.FetchBranch(branch); err != nil {
-			continue
-		}
-		if !r.RemoteBranchHasCommits(branch) {
-			continue
-		}
-		if !r.BranchHasUnmergedWork(branch) {
-			r.logger.Emit(logging.Opts{Domain: logging.Git}, "Branch %s has no unmerged work — skipping", branch)
-			continue
-		}
-		r.prevBranch = branch
-		r.logger.Emit(logging.Opts{Domain: logging.Git}, "Stack head: %s", branch)
+	top := completedBranches[len(completedBranches)-1]
+	if top == "" {
 		return
 	}
-	r.logger.Emit(logging.Opts{Domain: logging.Git}, "No stacked parents — starting from %s", r.DetectDefaultBranch())
+
+	openBranches, err := r.ListOpenPRBranches()
+	if err != nil {
+		r.logger.Emit(logging.Opts{Domain: logging.Git}, "No stacked parents — ListOpenPRBranches error: %v", err)
+		return
+	}
+
+	hasOpenPR := false
+	for _, b := range openBranches {
+		if b == top {
+			hasOpenPR = true
+			break
+		}
+	}
+	if !hasOpenPR {
+		r.logger.Emit(logging.Opts{Domain: logging.Git}, "No stacked parents — %s has no open PR", top)
+		return
+	}
+
+	if err := r.FetchBranch(top); err != nil {
+		r.logger.Emit(logging.Opts{Domain: logging.Git}, "No stacked parents — FetchBranch(%s) error: %v", top, err)
+		return
+	}
+
+	if !r.BranchIsAheadOfMain(top) {
+		r.logger.Emit(logging.Opts{Domain: logging.Git}, "No stacked parents — %s is not ahead of main", top)
+		return
+	}
+
+	r.prevBranch = top
+	r.logger.Emit(logging.Opts{Domain: logging.Git}, "Stack head: %s", top)
 }
 
 // checkoutExistingBranch checks meta for a branch from a previous iteration.

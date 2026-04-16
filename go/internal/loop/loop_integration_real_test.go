@@ -1193,98 +1193,6 @@ func TestIntegrationReal_ResumeWithDivergentLocalCommits_DoesNotCrash(t *testing
 	}
 }
 
-// The two tests below — TestIntegrationReal_StackContinuesAfterDivergedPush
-// and TestIntegrationReal_StackContinuesAfterCIInfraFailure — guard against
-// the regression introduced by the module-boundary refactor series (PRs
-// #517/#518/#524/#530/#532/#556) where setStackHead in git_branch.go and
-// validateStackParent in git.go drifted from rev-list-count semantics
-// ("branch has any commits not on main") to merge-base ancestor semantics
-// ("branch is cleanly ahead of main"). The ancestor predicate rejects
-// diverged branches even when they hold real unmerged work, breaking the
-// stack any time a pre-push rebase fails or another contributor lands a
-// commit on main mid-iteration.
-//
-// Any future change to stack-parent selection logic in BranchForTask, Push,
-// or EnsureUpToDate must continue to pass these tests. The tests use a real
-// git.Manager via withWorktree (NOT stubRepo or StubGit.MergeRetryFunc),
-// because stubbing setStackHead, BranchForTask, Push, or CreatePR
-// bypasses the exact code paths that regressed here.
-
-// TestIntegrationReal_StackContinuesAfterDivergedPush guards the regression
-// from ralph-op9h: when task A's pre-push rebase fails and A is pushed in a
-// diverged state (A has commits not on main AND main has a commit not on A),
-// task B must still chain its PR onto A — not onto main. Pre-fix, setStackHead
-// rejected diverged A and B's PR was created with base=main, orphaning A's
-// work and every subsequent stack PR onto main.
-func TestIntegrationReal_StackContinuesAfterDivergedPush(t *testing.T) {
-	setup := newGitIntegrationSetup(t)
-
-	// Task A: branch from main, commit, push.
-	branchA := "ralph/ralph-a-task-a"
-	gitCmd(t, setup.projectDir, "git", "checkout", "-b", branchA)
-	os.WriteFile(filepath.Join(setup.projectDir, "task-a.txt"), []byte("task A\n"), 0o644)
-	gitCmd(t, setup.projectDir, "git", "add", "task-a.txt")
-	gitCmd(t, setup.projectDir, "git", "commit", "-m", "task A commit")
-	gitCmd(t, setup.projectDir, "git", "push", "origin", branchA)
-
-	// Another contributor lands a commit on origin/main while A was in flight.
-	// Push it via a side clone so the push happens against the bare remote
-	// without touching the project clone's working tree state.
-	sideClone := filepath.Join(t.TempDir(), "side")
-	gitCmd(t, "", "git", "clone", setup.bareDir, sideClone)
-	gitCmd(t, sideClone, "git", "config", "user.name", "test")
-	gitCmd(t, sideClone, "git", "config", "user.email", "test@test")
-	os.WriteFile(filepath.Join(sideClone, "main.txt"), []byte("main update\n"), 0o644)
-	gitCmd(t, sideClone, "git", "add", "main.txt")
-	gitCmd(t, sideClone, "git", "commit", "-m", "main: contributor commit")
-	gitCmd(t, sideClone, "git", "push", "origin", "main")
-
-	gitCmd(t, setup.projectDir, "git", "checkout", "main")
-	gitCmd(t, setup.projectDir, "git", "fetch", "origin")
-
-	// Sanity check: branchA is diverged from main — both have unique commits.
-	aheadOfMain := gitOutputAt(t, setup.projectDir, "rev-list", "--count", "origin/main..origin/"+branchA)
-	behindMain := gitOutputAt(t, setup.projectDir, "rev-list", "--count", "origin/"+branchA+"..origin/main")
-	if aheadOfMain == "0" || behindMain == "0" {
-		t.Fatalf("expected diverged branch — ahead=%s, behind=%s", aheadOfMain, behindMain)
-	}
-
-	logger := logging.New(nil)
-	// Seed gh stub with branchA's open PR so validateStackParent's GitHub
-	// check sees it as a live stack parent (open PRs include branchA).
-	ghCfg := git.StubGitHubConfig{
-		Available: true,
-		PRs: []git.StubPR{
-			{Number: 685, Base: "main", State: git.PRStateOpen, Branch: branchA},
-		},
-	}
-	gm, workDir := withWorktree(t, setup, ghCfg, logger)
-
-	// Task B: BranchForTask must select branchA as the stack head despite
-	// the divergence.
-	branchB, err := gm.BranchForTask(context.Background(), "ralph-b", "task b", git.BranchTaskMeta{
-		CompletedBranches: []string{branchA},
-	})
-	if err != nil {
-		t.Fatalf("BranchForTask: %v", err)
-	}
-
-	// Make a commit on B and create its PR. The PR's Base must be branchA,
-	// not main — this is the observable that regressed.
-	os.WriteFile(filepath.Join(workDir, "task-b.txt"), []byte("task B\n"), 0o644)
-	gitCmd(t, workDir, "git", "add", "task-b.txt")
-	gitCmd(t, workDir, "git", "commit", "-m", "task B commit")
-
-	if _, err := gm.PushAndCreatePR(context.Background(), "ralph-b", "task b", ""); err != nil {
-		t.Fatalf("PushAndCreatePR: %v", err)
-	}
-
-	bPR := findStubPR(t, gm, workDir, branchB)
-	if bPR.Base != branchA {
-		t.Errorf("PR for task B base = %q, want %q (stack parent, even though diverged)", bPR.Base, branchA)
-	}
-}
-
 // TestIntegrationReal_StackContinuesAfterCIInfraFailure locks in the user-
 // reported guarantee from ralph-op9h: CI infrastructure failure on the
 // parent PR must not affect stack continuation — stack formation runs before
@@ -1358,10 +1266,11 @@ func findStubPR(t *testing.T, gm git.Ops, workDir, branch string) git.PRInfo {
 
 // TestIntegrationReal_BranchForTask_SetStackHeadBeforePrepare proves that
 // setStackHead runs before PrepareForNextTask in BranchForTask. Observable
-// consequence: when CompletedBranches contains a pushed branch still ahead of
-// main, the new wip branch is anchored at that branch's tip — not at
-// origin/main. If the order were reversed, prevBranch would be empty when
-// PrepareForNextTask runs, causing the branch to start from origin/main instead.
+// consequence: when CompletedBranches contains a pushed branch with an open
+// PR and ahead of main, the new wip branch is anchored at that branch's tip —
+// not at origin/main. If the order were reversed, prevBranch would be empty
+// when PrepareForNextTask runs, causing the branch to start from origin/main
+// instead.
 func TestIntegrationReal_BranchForTask_SetStackHeadBeforePrepare(t *testing.T) {
 	setup := newGitIntegrationSetup(t)
 
@@ -1376,9 +1285,16 @@ func TestIntegrationReal_BranchForTask_SetStackHeadBeforePrepare(t *testing.T) {
 	gitCmd(t, setup.projectDir, "git", "checkout", "main")
 
 	logger := logging.New(nil)
-	// GitHub unavailable so validateStackParent returns early without clearing
-	// prevBranch — allows the test to focus purely on the ordering invariant.
-	gm, workDir := withWorktree(t, setup, git.StubGitHubConfig{Available: false}, logger)
+	// Seed gh stub with stackBranch's open PR so setStackHead's guard (open PR
+	// AND ahead of main) selects it as the stack head. The stack branch is
+	// cleanly ahead of main, so BranchIsAheadOfMain returns true.
+	ghCfg := git.StubGitHubConfig{
+		Available: true,
+		PRs: []git.StubPR{
+			{Number: 685, Base: "main", State: git.PRStateOpen, Branch: stackBranch},
+		},
+	}
+	gm, workDir := withWorktree(t, setup, ghCfg, logger)
 
 	// Call BranchForTask with the stack parent in CompletedBranches.
 	if _, err := gm.BranchForTask(context.Background(), "ralph-b", "task b", git.BranchTaskMeta{
@@ -1405,5 +1321,338 @@ func TestIntegrationReal_BranchForTask_SetStackHeadBeforePrepare(t *testing.T) {
 	headTip := gitOutputAt(t, workDir, "rev-parse", "HEAD")
 	if headTip != parentTip {
 		t.Errorf("new branch tip = %q, want %q (stack parent tip)", headTip, parentTip)
+	}
+}
+
+// The four tests below lock in the setStackHead gating fix from ralph-j6r5:
+// the stack parent is chosen only when the newest completed branch has an
+// open PR AND is cleanly ahead of main. Both guards are required — either
+// alone can be fooled (open-PR alone by transient remote state; ahead-of-main
+// alone by locally-stale branches after a squash-merge). These tests exercise
+// the downstream observables — prevBranch, new-branch anchor, and the
+// resulting PR's base+commit-count — through BranchForTask and
+// PushAndCreatePR against a real bare repo. Any future change to stack-parent
+// selection must continue to pass these assertions.
+
+// TestIntegrationReal_SetStackHead_AllPRsSquashMerged_StartsFromMain covers
+// AC4: every PR in the completed chain has been squash-merged to main. The
+// local branch still carries its original tip (diverged from main, which
+// advanced with the squashed commit). The stub's open-PR list is disjoint
+// from the top completed branch, so setStackHead must not pick it as the
+// stack parent. The next PR opens against main with exactly one commit.
+func TestIntegrationReal_SetStackHead_AllPRsSquashMerged_StartsFromMain(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+
+	// Task A: push a real commit to branchA. Then independently advance main
+	// with an unrelated commit so branchA is diverged from main — the shape
+	// of a locally-stale branch after its PR was squash-merged on GitHub.
+	branchA := "ralph/ralph-a-task-a"
+	gitCmd(t, setup.projectDir, "git", "checkout", "-b", branchA)
+	os.WriteFile(filepath.Join(setup.projectDir, "task-a.txt"), []byte("task A\n"), 0o644)
+	gitCmd(t, setup.projectDir, "git", "add", "task-a.txt")
+	gitCmd(t, setup.projectDir, "git", "commit", "-m", "task A commit")
+	gitCmd(t, setup.projectDir, "git", "push", "origin", branchA)
+
+	gitCmd(t, setup.projectDir, "git", "checkout", "main")
+	os.WriteFile(filepath.Join(setup.projectDir, "squashed.txt"), []byte("squashed representative\n"), 0o644)
+	gitCmd(t, setup.projectDir, "git", "add", "squashed.txt")
+	gitCmd(t, setup.projectDir, "git", "commit", "-m", "main: squash-merge representative of A")
+	gitCmd(t, setup.projectDir, "git", "push", "origin", "main")
+	mainTip := gitOutputAt(t, setup.projectDir, "rev-parse", "main")
+
+	// Precondition: branchA is diverged from main (each has commits the other
+	// lacks). This is the exact pre-fix trap — BranchHasUnmergedWork accepted
+	// this state.
+	aheadOfMain := gitOutputAt(t, setup.projectDir, "rev-list", "--count", "origin/main..origin/"+branchA)
+	behindMain := gitOutputAt(t, setup.projectDir, "rev-list", "--count", "origin/"+branchA+"..origin/main")
+	if aheadOfMain == "0" || behindMain == "0" {
+		t.Fatalf("expected diverged branchA — ahead=%s, behind=%s", aheadOfMain, behindMain)
+	}
+
+	logger := logging.New(nil)
+	// Stub: PR for branchA is MERGED. ListOpenPRBranches returns only OPEN
+	// PRs, so the open-PR set is empty — the first setStackHead guard fails.
+	ghCfg := git.StubGitHubConfig{
+		Available: true,
+		PRs: []git.StubPR{
+			{Number: 680, Base: "main", State: git.PRStateMerged, Branch: branchA},
+		},
+	}
+	gm, workDir := withWorktree(t, setup, ghCfg, logger)
+
+	branchB, err := gm.BranchForTask(context.Background(), "ralph-b", "task b", git.BranchTaskMeta{
+		CompletedBranches: []string{branchA},
+	})
+	if err != nil {
+		t.Fatalf("BranchForTask: %v", err)
+	}
+
+	// Observable 1: prevBranch is empty — setStackHead rejected branchA.
+	if got := gm.GetPrevBranch(); got != "" {
+		t.Errorf("GetPrevBranch() = %q, want empty (branchA's PR is merged, not a valid stack parent)", got)
+	}
+
+	// Observable 2: the new branch is anchored at origin/main, not at the
+	// stale branchA tip. HEAD must equal origin/main.
+	headTip := gitOutputAt(t, workDir, "rev-parse", "HEAD")
+	if headTip != mainTip {
+		t.Errorf("new branch tip = %q, want origin/main tip %q (squash-merged parent was not rejected)", headTip, mainTip)
+	}
+
+	// Write a new commit and push — the eventual PR must target main with
+	// exactly one commit ahead of it.
+	os.WriteFile(filepath.Join(workDir, "task-b.txt"), []byte("task B\n"), 0o644)
+	gitCmd(t, workDir, "git", "add", "task-b.txt")
+	gitCmd(t, workDir, "git", "commit", "-m", "task B commit")
+
+	if _, err := gm.PushAndCreatePR(context.Background(), "ralph-b", "task b", ""); err != nil {
+		t.Fatalf("PushAndCreatePR: %v", err)
+	}
+
+	bPR := findStubPR(t, gm, workDir, branchB)
+	if bPR.Base != "main" {
+		t.Errorf("PR for task B base = %q, want %q (must target main, not the squash-merged parent)", bPR.Base, "main")
+	}
+
+	// Observable 3: the pushed branch is exactly one commit ahead of
+	// origin/main. Push squashes against base; if the stale parent had been
+	// used as base, this count would be wrong (0 if base=branchA's tip, or
+	// the branch would carry ghost commits from branchA).
+	countAhead := gitOutputAt(t, workDir, "rev-list", "--count", "origin/main..origin/"+branchB)
+	if countAhead != "1" {
+		t.Errorf("origin/%s is %s commit(s) ahead of origin/main, want 1 (new PR must have exactly one commit)", branchB, countAhead)
+	}
+}
+
+// TestIntegrationReal_SetStackHead_MidStackMerged_TopStillAhead_ChainsOnTop
+// covers AC5: the mid-stack PR was merged via ralph merge --update-refs and
+// the top PR is still open and ahead of main. setStackHead must select the
+// top branch as the stack parent, and the next PR must target it.
+func TestIntegrationReal_SetStackHead_MidStackMerged_TopStillAhead_ChainsOnTop(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+
+	// Task A: one commit ahead of main.
+	branchA := "ralph/ralph-a-task-a"
+	gitCmd(t, setup.projectDir, "git", "checkout", "-b", branchA)
+	os.WriteFile(filepath.Join(setup.projectDir, "task-a.txt"), []byte("task A\n"), 0o644)
+	gitCmd(t, setup.projectDir, "git", "add", "task-a.txt")
+	gitCmd(t, setup.projectDir, "git", "commit", "-m", "task A commit")
+	gitCmd(t, setup.projectDir, "git", "push", "origin", branchA)
+
+	// Task B: stacked on A, one commit further.
+	branchB := "ralph/ralph-b-task-b"
+	gitCmd(t, setup.projectDir, "git", "checkout", "-b", branchB)
+	os.WriteFile(filepath.Join(setup.projectDir, "task-b.txt"), []byte("task B\n"), 0o644)
+	gitCmd(t, setup.projectDir, "git", "add", "task-b.txt")
+	gitCmd(t, setup.projectDir, "git", "commit", "-m", "task B commit")
+	gitCmd(t, setup.projectDir, "git", "push", "origin", branchB)
+	branchBTip := gitOutputAt(t, setup.projectDir, "rev-parse", branchB)
+
+	// Simulate A merging via --update-refs: fast-forward main to A's tip.
+	// origin/B is already on top of A1 and is now cleanly ahead of new main.
+	gitCmd(t, setup.projectDir, "git", "checkout", "main")
+	gitCmd(t, setup.projectDir, "git", "merge", "--ff-only", branchA)
+	gitCmd(t, setup.projectDir, "git", "push", "origin", "main")
+
+	logger := logging.New(nil)
+	// Stub: A is MERGED, B is OPEN. Only B appears in ListOpenPRBranches.
+	ghCfg := git.StubGitHubConfig{
+		Available: true,
+		PRs: []git.StubPR{
+			{Number: 681, Base: "main", State: git.PRStateMerged, Branch: branchA},
+			{Number: 682, Base: branchA, State: git.PRStateOpen, Branch: branchB},
+		},
+	}
+	gm, workDir := withWorktree(t, setup, ghCfg, logger)
+
+	branchC, err := gm.BranchForTask(context.Background(), "ralph-c", "task c", git.BranchTaskMeta{
+		CompletedBranches: []string{branchA, branchB},
+	})
+	if err != nil {
+		t.Fatalf("BranchForTask: %v", err)
+	}
+
+	// Observable 1: prevBranch = branchB (the top). setStackHead must only
+	// consider the newest completed branch, never walk back to A.
+	if got := gm.GetPrevBranch(); got != branchB {
+		t.Errorf("GetPrevBranch() = %q, want %q (top is open and ahead of main)", got, branchB)
+	}
+
+	// Observable 2: the new branch is anchored at origin/B.
+	headTip := gitOutputAt(t, workDir, "rev-parse", "HEAD")
+	if headTip != branchBTip {
+		t.Errorf("new branch tip = %q, want %q (origin/%s)", headTip, branchBTip, branchB)
+	}
+
+	// Observable 3: PushAndCreatePR for the new task targets branchB.
+	os.WriteFile(filepath.Join(workDir, "task-c.txt"), []byte("task C\n"), 0o644)
+	gitCmd(t, workDir, "git", "add", "task-c.txt")
+	gitCmd(t, workDir, "git", "commit", "-m", "task C commit")
+
+	if _, err := gm.PushAndCreatePR(context.Background(), "ralph-c", "task c", ""); err != nil {
+		t.Fatalf("PushAndCreatePR: %v", err)
+	}
+
+	cPR := findStubPR(t, gm, workDir, branchC)
+	if cPR.Base != branchB {
+		t.Errorf("PR for task C base = %q, want %q (stack parent is the top open+ahead branch)", cPR.Base, branchB)
+	}
+}
+
+// TestIntegrationReal_SetStackHead_TopPRClosed_OlderPRsOpen_StartsFromMain
+// covers AC6: the top PR was closed (merged out-of-order via the GitHub UI,
+// or abandoned by the user) but older PRs below are still open. setStackHead
+// must not revive the orphaned older PRs — only completedBranches[len-1] is
+// considered, and because it has no open PR, prevBranch is empty.
+func TestIntegrationReal_SetStackHead_TopPRClosed_OlderPRsOpen_StartsFromMain(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+
+	// Task A: one commit ahead of main. Stays OPEN in the stub.
+	branchA := "ralph/ralph-a-task-a"
+	gitCmd(t, setup.projectDir, "git", "checkout", "-b", branchA)
+	os.WriteFile(filepath.Join(setup.projectDir, "task-a.txt"), []byte("task A\n"), 0o644)
+	gitCmd(t, setup.projectDir, "git", "add", "task-a.txt")
+	gitCmd(t, setup.projectDir, "git", "commit", "-m", "task A commit")
+	gitCmd(t, setup.projectDir, "git", "push", "origin", branchA)
+
+	// Task B: stacked on A. Marked CLOSED in the stub (abandoned without merge).
+	branchB := "ralph/ralph-b-task-b"
+	gitCmd(t, setup.projectDir, "git", "checkout", "-b", branchB)
+	os.WriteFile(filepath.Join(setup.projectDir, "task-b.txt"), []byte("task B\n"), 0o644)
+	gitCmd(t, setup.projectDir, "git", "add", "task-b.txt")
+	gitCmd(t, setup.projectDir, "git", "commit", "-m", "task B commit")
+	gitCmd(t, setup.projectDir, "git", "push", "origin", branchB)
+
+	gitCmd(t, setup.projectDir, "git", "checkout", "main")
+	mainTip := gitOutputAt(t, setup.projectDir, "rev-parse", "main")
+
+	logger := logging.New(nil)
+	// Stub: A is OPEN, B is CLOSED. ListOpenPRBranches returns only [A] —
+	// so the top (B) fails the open-PR guard. setStackHead must not walk
+	// back to A.
+	ghCfg := git.StubGitHubConfig{
+		Available: true,
+		PRs: []git.StubPR{
+			{Number: 683, Base: "main", State: git.PRStateOpen, Branch: branchA},
+			{Number: 684, Base: branchA, State: git.PRStateClosed, Branch: branchB},
+		},
+	}
+	gm, workDir := withWorktree(t, setup, ghCfg, logger)
+
+	branchC, err := gm.BranchForTask(context.Background(), "ralph-c", "task c", git.BranchTaskMeta{
+		CompletedBranches: []string{branchA, branchB},
+	})
+	if err != nil {
+		t.Fatalf("BranchForTask: %v", err)
+	}
+
+	// Observable 1: prevBranch is empty. The older open PR is not revived.
+	if got := gm.GetPrevBranch(); got != "" {
+		t.Errorf("GetPrevBranch() = %q, want empty (orphaned older PR must not be revived)", got)
+	}
+
+	// Observable 2: the new branch is anchored at origin/main, not origin/A.
+	headTip := gitOutputAt(t, workDir, "rev-parse", "HEAD")
+	if headTip != mainTip {
+		t.Errorf("new branch tip = %q, want origin/main tip %q (older open PR must not anchor the new branch)", headTip, mainTip)
+	}
+
+	// Observable 3: PushAndCreatePR targets main, not branchA.
+	os.WriteFile(filepath.Join(workDir, "task-c.txt"), []byte("task C\n"), 0o644)
+	gitCmd(t, workDir, "git", "add", "task-c.txt")
+	gitCmd(t, workDir, "git", "commit", "-m", "task C commit")
+
+	if _, err := gm.PushAndCreatePR(context.Background(), "ralph-c", "task c", ""); err != nil {
+		t.Fatalf("PushAndCreatePR: %v", err)
+	}
+
+	cPR := findStubPR(t, gm, workDir, branchC)
+	if cPR.Base != "main" {
+		t.Errorf("PR for task C base = %q, want %q (orphaned older PR must not become the stack parent)", cPR.Base, "main")
+	}
+}
+
+// TestIntegrationReal_SetStackHead_TopOpenButNotAhead_StartsFromMain covers
+// AC7: the top completed branch has an open PR on GitHub but is not cleanly
+// ahead of main (locally stale — e.g., main advanced independently while the
+// remote branch didn't, producing a diverged state). The ahead-of-main guard
+// catches this case that the open-PR guard alone would miss.
+func TestIntegrationReal_SetStackHead_TopOpenButNotAhead_StartsFromMain(t *testing.T) {
+	setup := newGitIntegrationSetup(t)
+
+	// Push branchA with a commit. Then advance main independently so branchA
+	// is diverged from main: branchA has its own commit, main has a commit
+	// branchA doesn't — `merge-base --is-ancestor origin/main origin/A`
+	// returns non-zero, so BranchIsAheadOfMain(A) = false.
+	branchA := "ralph/ralph-a-task-a"
+	gitCmd(t, setup.projectDir, "git", "checkout", "-b", branchA)
+	os.WriteFile(filepath.Join(setup.projectDir, "task-a.txt"), []byte("task A\n"), 0o644)
+	gitCmd(t, setup.projectDir, "git", "add", "task-a.txt")
+	gitCmd(t, setup.projectDir, "git", "commit", "-m", "task A commit")
+	gitCmd(t, setup.projectDir, "git", "push", "origin", branchA)
+
+	gitCmd(t, setup.projectDir, "git", "checkout", "main")
+	os.WriteFile(filepath.Join(setup.projectDir, "main-change.txt"), []byte("main advances\n"), 0o644)
+	gitCmd(t, setup.projectDir, "git", "add", "main-change.txt")
+	gitCmd(t, setup.projectDir, "git", "commit", "-m", "main: independent advance")
+	gitCmd(t, setup.projectDir, "git", "push", "origin", "main")
+	mainTip := gitOutputAt(t, setup.projectDir, "rev-parse", "main")
+
+	// Precondition check: branchA is diverged from main.
+	aheadOfMain := gitOutputAt(t, setup.projectDir, "rev-list", "--count", "origin/main..origin/"+branchA)
+	behindMain := gitOutputAt(t, setup.projectDir, "rev-list", "--count", "origin/"+branchA+"..origin/main")
+	if aheadOfMain == "0" || behindMain == "0" {
+		t.Fatalf("expected diverged branchA — ahead=%s, behind=%s", aheadOfMain, behindMain)
+	}
+
+	logger := logging.New(nil)
+	// Stub: branchA's PR is OPEN — so the first guard (open PR) passes.
+	// The second guard (ahead of main) must still reject because branchA
+	// has fallen behind main in the diverged direction.
+	ghCfg := git.StubGitHubConfig{
+		Available: true,
+		PRs: []git.StubPR{
+			{Number: 685, Base: "main", State: git.PRStateOpen, Branch: branchA},
+		},
+	}
+	gm, workDir := withWorktree(t, setup, ghCfg, logger)
+
+	branchB, err := gm.BranchForTask(context.Background(), "ralph-b", "task b", git.BranchTaskMeta{
+		CompletedBranches: []string{branchA},
+	})
+	if err != nil {
+		t.Fatalf("BranchForTask: %v", err)
+	}
+
+	// Observable 1: prevBranch is empty. Open PR alone is not enough — the
+	// ahead-of-main guard rejected the stale branch.
+	if got := gm.GetPrevBranch(); got != "" {
+		t.Errorf("GetPrevBranch() = %q, want empty (branchA is open but not ahead of main)", got)
+	}
+
+	// Observable 2: the new branch is anchored at origin/main, not the stale
+	// branchA tip.
+	headTip := gitOutputAt(t, workDir, "rev-parse", "HEAD")
+	if headTip != mainTip {
+		t.Errorf("new branch tip = %q, want origin/main tip %q (stale open-PR branch must not be the anchor)", headTip, mainTip)
+	}
+
+	// Observable 3: the eventual PR targets main with exactly one commit.
+	os.WriteFile(filepath.Join(workDir, "task-b.txt"), []byte("task B\n"), 0o644)
+	gitCmd(t, workDir, "git", "add", "task-b.txt")
+	gitCmd(t, workDir, "git", "commit", "-m", "task B commit")
+
+	if _, err := gm.PushAndCreatePR(context.Background(), "ralph-b", "task b", ""); err != nil {
+		t.Fatalf("PushAndCreatePR: %v", err)
+	}
+
+	bPR := findStubPR(t, gm, workDir, branchB)
+	if bPR.Base != "main" {
+		t.Errorf("PR for task B base = %q, want %q (stale branch must not be the stack parent)", bPR.Base, "main")
+	}
+
+	countAhead := gitOutputAt(t, workDir, "rev-list", "--count", "origin/main..origin/"+branchB)
+	if countAhead != "1" {
+		t.Errorf("origin/%s is %s commit(s) ahead of origin/main, want 1", branchB, countAhead)
 	}
 }
