@@ -14,6 +14,17 @@ import (
 	"github.com/brokenalarms/ralph/internal/logging"
 )
 
+type mergeFlag struct {
+	name string
+	help string
+}
+
+var noCIWaitFlag = mergeFlag{
+	name: "--no-ci-wait",
+	help: "Skip AwaitCI and rely on infrastructure-failure classification. " +
+		"Use when GitHub Actions is known to be down and required checks will never run.",
+}
+
 func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 	if hasHelpFlag(sub.Args) || len(sub.Args) == 0 {
 		printMergeUsage()
@@ -23,7 +34,7 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 	var prNumber string
 	skipCIWait := false
 	for _, arg := range sub.Args {
-		if arg == "--no-ci-wait" {
+		if arg == noCIWaitFlag.name {
 			skipCIWait = true
 			continue
 		}
@@ -69,7 +80,7 @@ func handleMerge(sub config.Subcommand, log *logging.Logger) int {
 }
 
 func printMergeUsage() {
-	fmt.Println(`Usage: ralph merge <top-pr-number> [--no-ci-wait]
+	fmt.Printf(`Usage: ralph merge <top-pr-number> [%s]
 
 Companion for ralph loop when --auto-merge is off. Give it any PR
 in the stack — it finds the bottom, rebases the entire chain onto
@@ -77,11 +88,16 @@ main using --update-refs, force-pushes all branches, then merges
 bottom-up waiting for CI between each merge.
 
 Uses rebasecontinue.Run --auto for mechanical conflict resolution.
-When CI fails with zero job steps (infrastructure outage), proceeds
-with merge automatically. Use --no-ci-wait to skip CI waiting entirely.
+When CI fails with zero job steps (infrastructure outage), the merge
+proceeds automatically — no flag required. This is the infra-failure
+fallthrough: checks that never started are not treated as real failures.
+
+FLAGS:
+  %s    %s
 
 Examples:
   ralph merge 321             Merge the stack from bottom to PR #321
   ralph merge 314             Merge just PR #314 if it's the only open one
-  ralph merge 321 --no-ci-wait  Skip CI wait (use when CI is known to be down)`)
+  ralph merge 321 %s  Skip CI wait (use when Actions is down)
+`, noCIWaitFlag.name, noCIWaitFlag.name, noCIWaitFlag.help, noCIWaitFlag.name)
 }
