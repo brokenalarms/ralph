@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -668,10 +667,9 @@ func TestHandleRunResult_OfflineContextCancelledReturnsBreak(t *testing.T) {
 	}
 }
 
-// Verifies that the FeedbackKill path records an attempt and returns actionRetry
-// with decremented counters.
+// Verifies that the FeedbackKill path records an in-memory attempt and returns actionRetry.
 func TestHandleRunResult_FeedbackKillReturnsRetry(t *testing.T) {
-	l, ralphDir := newHandleRunResultLoop(t, onlineStubConnectivity())
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
 
 	runIter := 3
 	result := claude.Result{FeedbackKill: true}
@@ -682,17 +680,21 @@ func TestHandleRunResult_FeedbackKillReturnsRetry(t *testing.T) {
 		t.Fatalf("expected actionRetry, got %d", action)
 	}
 
-	tracker := attempts.New(attempts.Config{RalphDir: ralphDir})
-	history := tracker.Read("task-fk", "Feedback task")
-	if !strings.Contains(history, "user feedback") {
-		t.Errorf("expected attempt recorded with feedback context, got: %s", history)
+	found := false
+	for _, ev := range l.taskAttempts {
+		if strings.Contains(ev.Analysis, "user_feedback") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected in-memory attempt recorded with user_feedback analysis")
 	}
 }
 
-// Verifies that the IdleTimeout path records an attempt and returns actionRetry
-// with decremented counters.
+// Verifies that the IdleTimeout path records an in-memory attempt and returns actionRetry.
 func TestHandleRunResult_IdleTimeoutReturnsRetry(t *testing.T) {
-	l, ralphDir := newHandleRunResultLoop(t, onlineStubConnectivity())
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
 
 	runIter := 3
 	result := claude.Result{IdleTimeout: true}
@@ -703,25 +705,29 @@ func TestHandleRunResult_IdleTimeoutReturnsRetry(t *testing.T) {
 		t.Fatalf("expected actionRetry, got %d", action)
 	}
 
-	tracker := attempts.New(attempts.Config{RalphDir: ralphDir})
-	history := tracker.Read("task-it", "Idle task")
-	if !strings.Contains(history, "idle timeout") {
-		t.Errorf("expected attempt recorded with idle timeout, got: %s", history)
+	found := false
+	for _, ev := range l.taskAttempts {
+		if strings.Contains(ev.Analysis, "idle_timeout") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected in-memory attempt recorded with idle_timeout analysis")
 	}
 }
 
 // Verifies that after MaxIdleTimeoutFailures consecutive idle timeouts,
 // handleRunResult skips the task instead of retrying.
 func TestHandleRunResult_IdleTimeoutSkipsAfterMaxFailures(t *testing.T) {
-	l, ralphDir := newHandleRunResultLoop(t, onlineStubConnectivity())
+	l, _ := newHandleRunResultLoop(t, onlineStubConnectivity())
 
 	backend := &testutil.StubBackend{}
 	l.taskBackend = backend
 
-	tracker := attempts.New(attempts.Config{RalphDir: ralphDir})
-	for i := 0; i < l.attempts.MaxIdleTimeoutFailures()-1; i++ {
-		tracker.RecordIdleTimeoutFailure("task-it-max")
-	}
+	// Seed in-memory idle timeout count to one below the threshold
+	l.currentTaskID = "task-it-max"
+	l.taskIdleTimeouts = l.maxIdleTimeoutFailures() - 1
 
 	runIter := 3
 	result := claude.Result{IdleTimeout: true}

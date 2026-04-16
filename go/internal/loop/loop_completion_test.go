@@ -331,9 +331,8 @@ func TestLoop_RecordsAttemptAfterIteration(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	history := l.attempts.Read("ralph-auth", "Fix the auth bug")
-	if !strings.Contains(history, "### Attempt 1") {
-		t.Error("expected attempt 1 to be recorded after iteration")
+	if len(l.taskAttempts) == 0 {
+		t.Error("expected at least one attempt recorded after iteration without signal")
 	}
 }
 
@@ -393,9 +392,15 @@ func TestLoop_RecordsAttemptOnIdleTimeout(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	history := l.attempts.Read("ralph-slow", "Slow task")
-	if !strings.Contains(history, "idle_timeout") {
-		t.Errorf("expected idle_timeout in attempt history, got: %s", history)
+	found := false
+	for _, ev := range l.taskAttempts {
+		if strings.Contains(ev.Analysis, "idle_timeout") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected idle_timeout in attempt analysis after idle timeout")
 	}
 }
 
@@ -436,8 +441,9 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 		Connectivity: onlineStubConnectivity(),
 	})
 
-	// Seed an existing attempt
-	l.attempts.Record("ralph-done", "Done task", "first try failed", "", "continue")
+	// Seed an existing in-memory attempt for the task
+	l.currentTaskID = "ralph-done"
+	l.taskAttempts = append(l.taskAttempts, AttemptEvent{Summary: "first try failed", Analysis: "continue"})
 
 	l.runner = &stubRunner{
 		result: claude.Result{SignalDetected: true, Summary: "task completed"},
@@ -445,15 +451,14 @@ func TestLoop_ClearsAttemptsOnSignalCompletion(t *testing.T) {
 
 	_ = l.Run(context.Background())
 
-	history := l.attempts.Read("ralph-done", "Done task")
-	if history != "" {
-		t.Errorf("expected attempt history to be cleared after signal, got: %s", history)
+	if len(l.taskAttempts) != 0 {
+		t.Errorf("expected attempt history to be cleared after signal, got %d events", len(l.taskAttempts))
 	}
 }
 
 // loopForAttemptContextTest constructs a minimal Loop with the given ralph
-// dir and a fresh attempts tracker. The Loop's attemptContext method reads
-// l.attempts and l.cfg.Dirs.RalphDir via the receiver.
+// dir. The Loop's attemptContext method reads l.taskAttempts and
+// l.cfg.Dirs.RalphDir via the receiver.
 func loopForAttemptContextTest(t *testing.T, dir, ralphDir string) *Loop {
 	t.Helper()
 	_, st := setupTestDir(t)
@@ -501,7 +506,8 @@ func TestLoop_CombinesAttemptsAndReflection(t *testing.T) {
 	ralphDir := filepath.Join(dir, ".ralph")
 
 	l := loopForAttemptContextTest(t, dir, ralphDir)
-	l.attempts.Record("ralph-combo", "Combo task", "tried approach A", "", "halted: stagnation")
+	l.currentTaskID = "ralph-combo"
+	l.taskAttempts = append(l.taskAttempts, AttemptEvent{Summary: "tried approach A", Analysis: "halted: stagnation"})
 
 	// Write a reflection
 	reflDir := filepath.Join(ralphDir, "reflections")
@@ -559,25 +565,41 @@ func TestLoop_CrossTaskReflectionsFedForward(t *testing.T) {
 	}
 }
 
-// Verifies that cross-task attempt entries are NOT included in the prompt.
-// Only reflections (distilled insights) should cross task boundaries.
+// Verifies that runAgent resets taskAttempts when the task ID changes, so a
+// new task's agent never sees a prior task's in-memory attempt events.
 func TestLoop_CrossTaskAttemptEntriesExcluded(t *testing.T) {
-	dir := t.TempDir()
+	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
 
-	l := loopForAttemptContextTest(t, dir, ralphDir)
-	l.attempts.Record("ralph-prev", "Previous task", "Halted: stagnation", "", "no code changes for 3 iterations")
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
+	cfg := Config{
+		Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations: 1,
+		CallsPerHour:  80,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: &testutil.StubBackend{},
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
+	l.runner = &stubRunner{}
 
-	// Build context for the next task — should NOT include cross-task attempts
-	ctx := l.attemptContext("ralph-next", "Next task")
-	if strings.Contains(ctx, "ralph-prev") {
-		t.Error("cross-task attempt entries should not appear in prompt")
-	}
-	if strings.Contains(ctx, "stagnation") {
-		t.Error("cross-task halt reasons should not appear in prompt")
-	}
-	if strings.Contains(ctx, "Recent attempt outcomes") {
-		t.Error("'Recent attempt outcomes' section should not exist")
+	// Simulate prev task leaving in-memory events
+	l.currentTaskID = "ralph-prev"
+	l.taskAttempts = []AttemptEvent{{Summary: "Halted: stagnation", Analysis: "no code changes for 3 iterations"}}
+
+	// Run agent for a different task — must reset prior-task events
+	l.runAgent(context.Background(), taskContext{id: "ralph-next", title: "Next task"}, 0)
+
+	for _, ev := range l.taskAttempts {
+		if strings.Contains(ev.Summary, "stagnation") {
+			t.Error("cross-task attempt entry should not appear in new task's attempt history")
+		}
 	}
 }
 

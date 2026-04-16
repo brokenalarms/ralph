@@ -72,7 +72,7 @@ func (l *Loop) closeResumedTask(ctx context.Context, taskID, taskTitle string, r
 		closeReason = fmt.Sprintf("Verified — %s open, merge pending", prRef)
 	}
 	if result.AlreadyMerged {
-		l.attempts.Clear(taskID, taskTitle)
+		l.clearAttempts()
 		l.state.RecordCompletedTask(taskID, taskTitle)
 	}
 	stateReason := "ralph: PR open or stacked"

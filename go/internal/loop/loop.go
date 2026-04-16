@@ -11,7 +11,6 @@ import (
 
 	"github.com/brokenalarms/ralph/internal/agent"
 	"github.com/brokenalarms/ralph/internal/analyzer"
-	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
 	"github.com/brokenalarms/ralph/internal/logging"
@@ -160,7 +159,7 @@ type Config struct {
 	Wait                  bool
 	Verbose               bool
 	Model                 string
-	AgentEscalationModel  string // model for agent on retry attempts; defaults to opus
+	AgentEscalationModel  string // deprecated: no effect; cross-iteration escalation was removed in ralph-pg95
 	ModelCap              string // maximum model tier for all LLM calls; empty means no cap
 	Version               string
 	VerifyDir             string // project root where tests are run; empty disables verification
@@ -265,7 +264,9 @@ type Loop struct {
 	querier           querier
 	verifier          *verifier.Verifier
 	analyzer          *analyzer.Analyzer
-	attempts          *attempts.Tracker
+	taskAttempts      []AttemptEvent // in-memory attempt events for the current task, reset per task
+	taskIdleTimeouts  int            // consecutive idle timeout count for the current task
+	currentTaskID     string         // tracks which task's attempts are in taskAttempts
 	logger            *logging.Logger
 	signals           claude.SignalPaths
 	connectivity      Connectivity
@@ -327,11 +328,6 @@ func New(cfg Config, mods Modules) *Loop {
 		q = agent.New(logger)
 	}
 
-	at := attempts.New(attempts.Config{
-		RalphDir:               cfg.Dirs.RalphDir,
-		MaxPromptAttempts:      cfg.MaxPromptAttempts,
-		MaxIdleTimeoutFailures: cfg.MaxIdleTimeoutFailures,
-	})
 	bh := mods.BinaryHasher
 	if bh == nil {
 		bh = &liveBinaryHasher{}
@@ -347,7 +343,6 @@ func New(cfg Config, mods Modules) *Loop {
 		querier:       q,
 		verifier:      mods.Verifier,
 		analyzer:      analyzer.New(),
-		attempts:      at,
 		logger:        logger,
 		signals:       signals,
 		connectivity:  connectivity,
@@ -437,6 +432,16 @@ func (l *Loop) waitForRate(ctx context.Context) bool {
 }
 
 func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int) agentRunResult {
+	taskKey := task.id
+	if taskKey == "" {
+		taskKey = task.title
+	}
+	if taskKey != l.currentTaskID {
+		l.taskAttempts = nil
+		l.taskIdleTimeouts = 0
+		l.currentTaskID = taskKey
+	}
+
 	prep, ok := l.prepareAndBuildPrompt(ctx, task.id, task.title)
 	if !ok {
 		return agentRunResult{action: actionDone}

@@ -949,14 +949,14 @@ func TestPostReviewCleanup(t *testing.T) {
 		t.Error("ralph-def.md should exist in reflections/archived/")
 	}
 
-	// AC3: attempt data cleared for completed tasks
-	if _, err := os.Stat(filepath.Join(attDir, "ralph-abc.log")); !os.IsNotExist(err) {
-		t.Error("ralph-abc.log attempts should be cleared")
+	// AC3: legacy attempt files on disk are left alone — ralph no longer writes or
+	// deletes .ralph/attempts/ files; users may clean up manually.
+	if _, err := os.Stat(filepath.Join(attDir, "ralph-abc.log")); err != nil {
+		t.Error("ralph-abc.log should be left on disk (ralph does not delete legacy attempt files)")
 	}
-	if _, err := os.Stat(filepath.Join(attDir, "ralph-def.log")); !os.IsNotExist(err) {
-		t.Error("ralph-def.log attempts should be cleared")
+	if _, err := os.Stat(filepath.Join(attDir, "ralph-def.log")); err != nil {
+		t.Error("ralph-def.log should be left on disk (ralph does not delete legacy attempt files)")
 	}
-	// Unrelated task's attempts should be preserved
 	if _, err := os.Stat(filepath.Join(attDir, "ralph-ghi.log")); err != nil {
 		t.Error("ralph-ghi.log should be preserved")
 	}

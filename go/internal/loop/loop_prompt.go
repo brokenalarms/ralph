@@ -69,17 +69,17 @@ func (l *Loop) buildPrompt(taskPrompt, attemptHistory, testStatus string) (strin
 
 // attemptContext assembles attempt history, reflections, and cross-task
 // learnings into a single block for the prompt. Returns empty string if no
-// prior context exists. Reads l.attempts and l.cfg.Dirs.RalphDir via the
-// receiver.
+// prior context exists. Reads l.taskAttempts and l.cfg.Dirs.RalphDir via
+// the receiver.
 func (l *Loop) attemptContext(taskID, taskName string) string {
 	var parts []string
 
-	// Same-task attempt history (retries of this specific task)
-	if history := l.attempts.Read(taskID, taskName); history != "" {
+	// Same-task attempt history (in-memory, iteration-scoped)
+	if history := renderAttemptHistory(l.taskAttempts, l.cfg.MaxPromptAttempts); history != "" {
 		parts = append(parts, "## Previous attempts on this task\n"+history)
 	}
 
-	// Same-task reflection
+	// Same-task reflection (written to disk by the agent at task end)
 	if reflection := readReflection(l.cfg.Dirs.RalphDir, taskID, taskName); reflection != "" {
 		parts = append(parts, "### Previous reflection\n"+reflection)
 	}
@@ -90,7 +90,7 @@ func (l *Loop) attemptContext(taskID, taskName string) string {
 		excludeKey = git.Slugify(taskName)
 	}
 
-	reflections := l.attempts.RecentReflections(excludeKey, maxCrossTaskReflections)
+	reflections := recentReflections(l.cfg.Dirs.RalphDir, excludeKey, maxCrossTaskReflections)
 	if len(reflections) > 0 {
 		var crossParts []string
 		for _, r := range reflections {

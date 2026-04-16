@@ -167,16 +167,16 @@ func (l *Loop) processRunOutcome(result claude.Result, elapsed time.Duration, ru
 		if analysisResult.Detail != "" {
 			l.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Error}, "  %s", analysisResult.Detail)
 		}
-		l.attempts.Record(taskID, nextTask, "Halted: "+analysisResult.Reason, diffStat, analysisResult.Detail)
+		l.recordAttempt(AttemptEvent{Summary: "Halted: " + analysisResult.Reason, DiffStat: diffStat, Analysis: analysisResult.Detail})
 		l.state.Write("status", "halted_"+analysisResult.Reason)
 		l.git.TagTaskEnd(taskID)
 		return diffStat, true, analysisResult.Action
 	case analyzer.Warn:
 		l.logger.Emit(logging.Opts{Domain: logging.Analyzer, Level: logging.Warn}, "Analysis: %s", analysisResult.Reason)
-		l.attempts.Record(taskID, nextTask, summary, diffStat, "warn: "+analysisDesc)
+		l.recordAttempt(AttemptEvent{Summary: summary, DiffStat: diffStat, Analysis: "warn: " + analysisDesc})
 	default:
 		if !result.SignalDetected {
-			l.attempts.Record(taskID, nextTask, summary, diffStat, analysisDesc)
+			l.recordAttempt(AttemptEvent{Summary: summary, DiffStat: diffStat, Analysis: analysisDesc})
 		}
 	}
 
