@@ -101,6 +101,40 @@ and reads them via the multimodal Read tool.
 - The agent cannot run `bd close` — the orchestrator owns closing beads after
   verification
 
+## Stack merges: always prompt the user to run ralph merge
+
+When the user asks to merge a stack of stacked PRs, or when you detect a chain
+of ralph-authored open PRs that are not advancing, you MUST NOT attempt to drain
+the stack manually. Specifically:
+
+- **NEVER run `gh pr merge`** on any PR in a ralph-managed stack
+- **NEVER run `gh pr close`** on any PR in a ralph-managed stack
+- **NEVER run manual `git rebase` chains** on ralph-stacked PRs
+
+These operations caused the tabi 2026-04-16 cascade: an agent attempted to merge
+#669 without first rebasing the whole stack with `--update-refs`, so downstream
+PRs #670–#676 ended up with stale ancestor SHAs, were auto-closed by GitHub, and
+could not be reopened. Seven fresh PRs had to be opened manually.
+
+**The correct action is to prompt the user to run:**
+
+```
+ralph merge <top-pr-number>
+```
+
+`ralph merge` does the one critical step that manual agents skip: it runs
+`git rebase --update-refs origin/main` on the top branch, rewriting every branch
+in the chain with fresh SHAs and force-pushing all of them atomically before any
+merge happens — so bottom-up merges are clean and no auto-closes occur.
+
+**Identifying the top PR:** When the user hasn't specified which PR is the top,
+use `gh pr list --author @me --state open` to find all open ralph-authored PRs.
+The top PR is the one with the highest PR number in the open chain — the last one
+pushed, with no open child depending on it.
+
+Provide the user with the exact command to run, including the top PR number you
+identified, and explain what `ralph merge` will do. Do not attempt to run it yourself.
+
 ## Constraints
 
 - You share the filesystem with the ralph loop. Do not modify files the loop
