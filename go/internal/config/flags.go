@@ -543,7 +543,7 @@ var Flags = []FlagDef{
 	},
 	{
 		Long: "--agent-escalation-model", MetaVar: "<model>",
-		Help:      "Model for agent on retry attempts (subsequent attempts after first)",
+		Help:      "Deprecated: no effect. Cross-iteration model escalation was removed.",
 		Default:   ModelOpus,
 		ConfigKey: "agent_escalation_model",
 		Kind:      KindString, TrackCLI: true,

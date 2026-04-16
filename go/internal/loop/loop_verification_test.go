@@ -92,13 +92,16 @@ func TestLoop_VerificationFailureBlocksClose(t *testing.T) {
 		t.Error("task should not be recorded as completed when verification fails")
 	}
 
-	// Attempt should be recorded
-	history := l.attempts.Read("ralph-bug", "fix the bug")
-	if history == "" {
-		t.Error("expected a failed attempt to be recorded")
+	// Attempt should be recorded in-memory
+	found := false
+	for _, ev := range l.taskAttempts {
+		if strings.Contains(ev.Summary, "verification failed") || strings.Contains(ev.Analysis, "verification_failed") {
+			found = true
+			break
+		}
 	}
-	if !strings.Contains(history, "verification failed") {
-		t.Errorf("attempt should mention verification failure, got: %s", history)
+	if !found {
+		t.Error("expected a failed attempt to be recorded with verification failure context")
 	}
 }
 

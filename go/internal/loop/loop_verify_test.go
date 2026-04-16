@@ -543,8 +543,8 @@ func TestOnSignal_NoPriorCommits_Rejects(t *testing.T) {
 	}
 }
 
-// Proves: every runAgent call uses cfg.Model regardless of prior attempts recorded
-// on disk — cross-iteration escalation was removed; each iteration starts at baseline.
+// Proves: every runAgent call uses cfg.Model — no model escalation exists.
+// AgentEscalationModel config is accepted but has no effect on model selection.
 func TestAgentModelEscalation(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -580,13 +580,11 @@ func TestAgentModelEscalation(t *testing.T) {
 
 	task := taskContext{id: "ralph-abc", title: "Fix login"}
 
-	// First run: no prior attempts on disk — uses cfg.Model.
+	// First call: no prior attempts — uses cfg.Model.
 	l.runAgent(context.Background(), task, 0)
 
-	// Record a prior attempt to simulate a prior iteration having run.
-	l.attempts.Record("ralph-abc", "Fix login", "first try failed", "", "continue")
-
-	// Second run: prior attempt exists on disk — still uses cfg.Model, not escalation model.
+	// Second call: with in-memory prior attempt — still uses cfg.Model, not escalation model.
+	l.taskAttempts = append(l.taskAttempts, AttemptEvent{Summary: "first try failed", Analysis: "continue"})
 	l.runAgent(context.Background(), task, 1)
 
 	if len(capturedModels) != 2 {
@@ -632,8 +630,9 @@ func TestAgentModelEscalation_ModelCapApplied(t *testing.T) {
 		},
 	}
 
-	// Record a prior attempt — ModelCap must still be applied as ceiling over cfg.Model.
-	l.attempts.Record("ralph-cap", "Fix login", "first try failed", "", "continue")
+	// Seed a prior attempt — ModelCap must still be applied as ceiling over cfg.Model.
+	l.currentTaskID = "ralph-cap"
+	l.taskAttempts = append(l.taskAttempts, AttemptEvent{Summary: "first try failed", Analysis: "continue"})
 
 	l.runAgent(context.Background(), taskContext{id: "ralph-cap", title: "Fix login"}, 1)
 

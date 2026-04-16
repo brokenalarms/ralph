@@ -38,8 +38,6 @@ var forbiddenModuleTypes = map[string]bool{
 	"git.GitOps":          true,
 	"*state.Store":        true,
 	"state.Store":         true,
-	"*attempts.Tracker":   true,
-	"attempts.Tracker":    true,
 	"*ratelimit.Limiter":  true,
 	"ratelimit.Limiter":   true,
 	"*analyzer.Analyzer":  true,

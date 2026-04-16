@@ -149,10 +149,11 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 				l.skipTask(p.taskID, skipReason)
 			}
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "Verification failed for no-code-needed claim — retrying")
-			l.attempts.Record(p.taskID, p.nextTask,
-				"Agent claimed no code needed but verification failed",
-				p.diffStat,
-				"no_code_needed_rejected: verifier did not confirm the claim")
+			l.recordAttempt(AttemptEvent{
+				Summary:  "Agent claimed no code needed but verification failed",
+				DiffStat: p.diffStat,
+				Analysis: "no_code_needed_rejected: verifier did not confirm the claim",
+			})
 			return completeTaskOut{action: signalRetry}
 		}
 	} else if !p.result.OnSignalUsed {
@@ -160,10 +161,11 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		// If not (legacy/test path), run verification here as fallback.
 		if passed, reason := l.verifyCompletion(ctx, p.headBefore); !passed {
 			l.logger.Emit(logging.Opts{Domain: logging.Test, Level: logging.Warn}, "Verification failed: %s", reason)
-			l.attempts.Record(p.taskID, p.nextTask,
-				"Signal received but verification failed: "+reason,
-				p.diffStat,
-				"verification_failed: fix must pass tests and produce commits before closing")
+			l.recordAttempt(AttemptEvent{
+				Summary:  "Signal received but verification failed: " + reason,
+				DiffStat: p.diffStat,
+				Analysis: "verification_failed: fix must pass tests and produce commits before closing",
+			})
 			return completeTaskOut{action: signalRetry}
 		}
 	}
@@ -180,7 +182,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		}
 	}
 
-	l.attempts.Clear(p.taskID, p.nextTask)
+	l.clearAttempts()
 	l.state.RecordCompletedTask(p.taskID, p.nextTask)
 	l.state.TouchPlanFlash()
 
@@ -578,16 +580,14 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 
 	attemptContext := l.attemptContext(taskID, nextTask)
 	if attemptContext != "" {
-		attemptCount := strings.Count(attemptContext, "### Attempt ")
-		reflectionCount := strings.Count(attemptContext, "## Recent learnings")
-		if attemptCount > 0 || reflectionCount > 0 {
-			var parts []string
-			if attemptCount > 0 {
-				parts = append(parts, fmt.Sprintf("%d prior attempt(s)", attemptCount))
-			}
-			if reflectionCount > 0 {
-				parts = append(parts, "learnings from other tasks")
-			}
+		var parts []string
+		if len(l.taskAttempts) > 0 {
+			parts = append(parts, fmt.Sprintf("%d prior attempt(s)", len(l.taskAttempts)))
+		}
+		if strings.Contains(attemptContext, "## Recent learnings") {
+			parts = append(parts, "learnings from other tasks")
+		}
+		if len(parts) > 0 {
 			l.logger.Emit(logging.Opts{}, "Including %s", strings.Join(parts, " + "))
 		}
 	}
@@ -626,22 +626,24 @@ func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr
 	if result.FeedbackKill {
 		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Restarting iteration %d — user feedback received", runIteration)
 		diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
-		l.attempts.Record(taskID, nextTask,
-			"Killed: user feedback received (see bead notes for content)",
-			diffStat,
-			"user_feedback: check bead notes for details")
+		l.recordAttempt(AttemptEvent{
+			Summary:  "Killed: user feedback received (see bead notes for content)",
+			DiffStat: diffStat,
+			Analysis: "user_feedback: check bead notes for details",
+		})
 		return actionRetry
 	}
 	if result.IdleTimeout {
 		l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Restarting iteration %d after idle timeout", runIteration)
 		diffStat := l.git.DiffStatRange(headBefore, l.git.HeadRev())
-		l.attempts.Record(taskID, nextTask,
-			"Killed: idle timeout (no output for configured duration)",
-			diffStat,
-			"idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output")
-		count, _ := l.attempts.RecordIdleTimeoutFailure(taskID)
-		if count >= l.attempts.MaxIdleTimeoutFailures() {
-			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Idle timeout %d times for %s — skipping task", count, taskID)
+		l.recordAttempt(AttemptEvent{
+			Summary:  "Killed: idle timeout (no output for configured duration)",
+			DiffStat: diffStat,
+			Analysis: "idle_timeout: consider a lighter approach or make incremental progress rather than deep-thinking without output",
+		})
+		l.taskIdleTimeouts++
+		if l.taskIdleTimeouts >= l.maxIdleTimeoutFailures() {
+			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Idle timeout %d times for %s — skipping task", l.taskIdleTimeouts, taskID)
 			l.skipTask(taskID, "idle_timeout_max_failures")
 			return actionRetry
 		}

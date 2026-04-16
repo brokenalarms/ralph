@@ -78,7 +78,7 @@ type Config struct {
 	Wait                    bool
 	Verbose                 bool
 	Model                   string
-	AgentEscalationModel    string
+	AgentEscalationModel    string // deprecated: no effect; cross-iteration escalation removed
 	VerifyModel             string
 	VerifyEscalationModel   string
 	FixModel                string

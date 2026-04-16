@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/agent"
-	"github.com/brokenalarms/ralph/internal/attempts"
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/config"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -257,30 +256,15 @@ func handleReview(sub config.Subcommand, log *logging.Logger) int {
 	return exitCode
 }
 
-// postReviewCleanup clears completed_tasks from state.json, archives
-// reflections, and removes attempt data for completed tasks.
+// postReviewCleanup clears completed_tasks from state.json and archives reflections.
 func postReviewCleanup(ralphDir string, log *logging.Logger) {
 	st := state.NewStore(ralphDir)
-	tasks, err := st.GetCompletedTasks()
-	if err != nil {
-		log.Emit(logging.Opts{Domain: "review", Level: logging.Warn}, "Failed to read completed tasks: %v", err)
-	}
 
 	archived, err := prompt.ArchiveReflections(ralphDir)
 	if err != nil {
 		log.Emit(logging.Opts{Domain: "review", Level: logging.Warn}, "Failed to archive reflections: %v", err)
 	} else if len(archived) > 0 {
 		log.Emit(logging.Opts{Domain: "review"}, "Archived %d reflections", len(archived))
-	}
-
-	if len(tasks) > 0 {
-		ids := make([]string, len(tasks))
-		for i, t := range tasks {
-			ids[i] = t.ID
-		}
-		tracker := attempts.New(attempts.Config{RalphDir: ralphDir})
-		tracker.ClearForTasks(ids)
-		log.Emit(logging.Opts{Domain: "review"}, "Cleared attempt data for %d tasks", len(tasks))
 	}
 
 	if err := st.ClearCompletedTasks(); err != nil {
