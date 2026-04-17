@@ -510,10 +510,11 @@ func (l *Loop) execRunPostTask(ctx context.Context, taskID string, prNumber int,
 		return
 	}
 	runPostTask(ctx, runPostTaskParams{
-		postTask:    l.cfg.PostTask,
-		worktreeDir: l.cfg.VerifyDir,
-		projectDir:  l.cfg.Dirs.ProjectDir,
-		logger:      l.logger,
+		postTask:      l.cfg.PostTask,
+		worktreeDir:   l.cfg.VerifyDir,
+		projectDir:    l.cfg.Dirs.ProjectDir,
+		defaultBranch: l.git.DetectDefaultBranch(),
+		logger:        l.logger,
 	}, taskID, prNumber, merged)
 }
 
