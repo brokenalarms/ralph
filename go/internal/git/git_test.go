@@ -385,10 +385,11 @@ func TestSlugify_LimitsToFourWords(t *testing.T) {
 func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := t.TempDir()
 	state := newMemState()
 	log := &testLog{}
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(state))
 
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree failed: %v", err)
@@ -417,7 +418,7 @@ func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 // SetupWorktree in a non-git directory should return an error
 func TestSetupWorktree_NonGitDirErrors(t *testing.T) {
 	tmp := t.TempDir()
-	mgr := newRepoForTest(Config{ProjectDir: tmp, RalphDir: filepath.Join(tmp, ".ralph"), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}))
+	mgr := newRepoForTest(Config{ProjectDir: tmp, RalphDir: filepath.Join(tmp, ".ralph"), WorktreeRoot: t.TempDir(), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}))
 
 	err := mgr.SetupWorktree(context.Background())
 	if err == nil {
@@ -432,11 +433,12 @@ func TestSetupWorktree_NonGitDirErrors(t *testing.T) {
 func TestSetupWorktree_Resume(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := t.TempDir()
 	state := newMemState()
 	log := &testLog{}
 
 	// First run: create worktree
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("first SetupWorktree: %v", err)
 	}
@@ -444,7 +446,7 @@ func TestSetupWorktree_Resume(t *testing.T) {
 	firstBranch := mgr.worktreeBranch
 
 	// Second run: resume
-	mgr2 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log, Resume: true}, nil, withRunner(&execRunner{}), withState(state))
+	mgr2 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: log, Resume: true}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("resume SetupWorktree: %v", err)
 	}
@@ -462,10 +464,11 @@ func TestSetupWorktree_Resume(t *testing.T) {
 func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := t.TempDir()
 	state := newMemState()
 	log := &testLog{}
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -475,7 +478,7 @@ func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 
 	log.messages = nil
 
-	mgr2 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log, Resume: true}, nil, withRunner(&execRunner{}), withState(state))
+	mgr2 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: log, Resume: true}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("resume SetupWorktree: %v", err)
 	}
@@ -494,10 +497,11 @@ func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 func TestRenameBranchForTask_DoesNotSetPrevBranch(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := t.TempDir()
 	state := newMemState()
 	log := &testLog{}
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -516,9 +520,10 @@ func TestRenameBranchForTask_DoesNotSetPrevBranch(t *testing.T) {
 func TestPrepareForNextTask_CreatesFreshBranch(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := t.TempDir()
 	state := newMemState()
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -553,7 +558,7 @@ func TestPrepareForNextTask_DiscardsUncommittedChanges(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: t.TempDir(), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -603,7 +608,7 @@ func TestPrepareForNextTask_DeletesOldBranch(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: t.TempDir(), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -642,7 +647,7 @@ func TestPrepareForNextTask_PreservesUnmergedTaskBranch(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 
 	log := &testLog{}
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: t.TempDir(), BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(newMemState()))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -698,7 +703,7 @@ func TestResetToDefaultBranch_PreservesLocalCommits(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 
 	log := &testLog{}
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: t.TempDir(), BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(newMemState()))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -740,7 +745,7 @@ func TestSyncWorktreeBase_StackDrain_DiscardsLocalCommits(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	log := &testLog{}
 	ralphDir := filepath.Join(project, ".ralph")
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: t.TempDir(), BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(newMemState()))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -787,7 +792,7 @@ func TestSyncWorktreeBase_StackDrain_DiscardsLocalCommits(t *testing.T) {
 func TestSyncWorktreeBase_StackDrain_CleanWIPReapplied(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	ralphDir := filepath.Join(project, ".ralph")
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: t.TempDir(), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -836,7 +841,7 @@ func TestSyncWorktreeBase_StackDrain_ConflictingWIPDiscarded(t *testing.T) {
 	project, bare := initBareRepoWithOrigin(t)
 	log := &testLog{}
 	ralphDir := filepath.Join(project, ".ralph")
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: t.TempDir(), BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(newMemState()))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -901,7 +906,7 @@ func TestPrepareForNextTask_CleansOnTaskSwitch(t *testing.T) {
 	state := newMemState()
 	_ = state.Write("last_task_id", "ralph-aaa")
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: t.TempDir(), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -944,7 +949,7 @@ func TestPrepareForNextTask_PreservesChangesWhenResumingSameTask(t *testing.T) {
 	state := newMemState()
 	_ = state.Write("last_task_id", "ralph-aaa")
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: t.TempDir(), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -988,10 +993,11 @@ func TestBranchForTask_AnchorsAtOriginMain_NoPreviousCommits(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 
 	mgr := newRepoForTest(Config{
-		ProjectDir: project,
-		RalphDir:   ralphDir,
-		BaseBranch: "main",
-		Logger:     &testLog{},
+		ProjectDir:   project,
+		RalphDir:     ralphDir,
+		WorktreeRoot: t.TempDir(),
+		BaseBranch:   "main",
+		Logger:       &testLog{},
 	}, nil, withRunner(&execRunner{}), withState(newMemState()))
 
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -1041,10 +1047,11 @@ func TestBranchForTask_AnchorsAtStackParent(t *testing.T) {
 		PRs:       []StubPR{{Number: 1, Branch: stackBranch}},
 	})
 	mgr := newRepoForTest(Config{
-		ProjectDir: project,
-		RalphDir:   ralphDir,
-		BaseBranch: "main",
-		Logger:     &testLog{},
+		ProjectDir:   project,
+		RalphDir:     ralphDir,
+		WorktreeRoot: t.TempDir(),
+		BaseBranch:   "main",
+		Logger:       &testLog{},
 	}, gh, withRunner(&execRunner{}), withState(newMemState()))
 
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
@@ -1092,10 +1099,11 @@ func TestSetPrevBranch(t *testing.T) {
 func TestSetupWorktree_ResumeKeepsValidBranch(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := t.TempDir()
 	state := newMemState()
 	log := &testLog{}
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -1105,7 +1113,7 @@ func TestSetupWorktree_ResumeKeepsValidBranch(t *testing.T) {
 	branchBefore := mgr.worktreeBranch
 
 	// Resume without squash-merging — branch should be preserved
-	mgr2 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log, Resume: true}, nil, withRunner(&execRunner{}), withState(state))
+	mgr2 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: log, Resume: true}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("resume SetupWorktree: %v", err)
 	}
@@ -1125,7 +1133,7 @@ func TestRenameBranchForTask_RenamesBranch(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	state := newMemState()
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: t.TempDir(), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -1153,7 +1161,7 @@ func TestRenameBranchForTask_IncludesTaskID(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	state := newMemState()
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: t.TempDir(), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -1174,7 +1182,7 @@ func TestRenameBranchForTask_OnlyRenamesOnce(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	state := newMemState()
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: t.TempDir(), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -1208,17 +1216,18 @@ func TestRenameBranchForTask_NoOpWithoutWorktree(t *testing.T) {
 func TestWorktreeDirUsesDateBasedName(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := t.TempDir()
 	state := newMemState()
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
 	today := time.Now().Format("20060102")
 	expected := fmt.Sprintf("ralph-%s-01", today)
-	if !strings.Contains(mgr.workDir, "/worktrees/"+expected) {
-		t.Errorf("WorkDir = %q, want it to contain %q", mgr.workDir, expected)
+	if filepath.Base(mgr.workDir) != expected || filepath.Dir(mgr.workDir) != worktreeRoot {
+		t.Errorf("WorkDir = %q, want %q under %q", mgr.workDir, expected, worktreeRoot)
 	}
 }
 
@@ -1226,19 +1235,38 @@ func TestWorktreeDirUsesDateBasedName(t *testing.T) {
 func TestSecondRunSameDayIncrementsSuffix(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := t.TempDir()
 	state := newMemState()
 
 	today := time.Now().Format("20060102")
-	os.MkdirAll(filepath.Join(ralphDir, "worktrees", "ralph-"+today+"-01"), 0o755)
+	os.MkdirAll(filepath.Join(worktreeRoot, "ralph-"+today+"-01"), 0o755)
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
 
 	expected := fmt.Sprintf("ralph-%s-02", today)
-	if !strings.Contains(mgr.workDir, "/worktrees/"+expected) {
-		t.Errorf("WorkDir = %q, want it to contain %q", mgr.workDir, expected)
+	if filepath.Base(mgr.workDir) != expected || filepath.Dir(mgr.workDir) != worktreeRoot {
+		t.Errorf("WorkDir = %q, want %q under %q", mgr.workDir, expected, worktreeRoot)
+	}
+}
+
+// Worktree is created outside the project directory tree, preventing agents
+// from navigating up to projectDir via parent directories.
+func TestWorktreeIsOutsideProjectDir(t *testing.T) {
+	project, _ := initBareRepo(t)
+	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := t.TempDir()
+	state := newMemState()
+
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	if err := mgr.SetupWorktree(context.Background()); err != nil {
+		t.Fatalf("SetupWorktree: %v", err)
+	}
+
+	if strings.HasPrefix(mgr.workDir, project) {
+		t.Errorf("WorkDir %q is a descendant of projectDir %q — agents can escape to the project", mgr.workDir, project)
 	}
 }
 
@@ -1246,11 +1274,12 @@ func TestSecondRunSameDayIncrementsSuffix(t *testing.T) {
 func TestBranchNamingIgnoresStale(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := t.TempDir()
 	state := newMemState()
 
 	run(t, "git", "-C", project, "branch", "ralph/project/old-stale")
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -1268,9 +1297,10 @@ func TestBranchNamingIgnoresStale(t *testing.T) {
 func TestStaleWorktreeBranchCleanedUpViaPrune(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := t.TempDir()
 	state := newMemState()
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("first SetupWorktree: %v", err)
 	}
@@ -1278,7 +1308,7 @@ func TestStaleWorktreeBranchCleanedUpViaPrune(t *testing.T) {
 
 	os.RemoveAll(firstWorkDir)
 
-	mgr2 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	mgr2 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
 	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("second SetupWorktree after prune: %v", err)
 	}
@@ -1291,15 +1321,16 @@ func TestStaleWorktreeBranchCleanedUpViaPrune(t *testing.T) {
 func TestLiveRalphWorktreeRemovedWhenBranchExists(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := t.TempDir()
 	state := newMemState()
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("first SetupWorktree: %v", err)
 	}
 	firstWorkDir := mgr.workDir
 
-	mgr2 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
+	mgr2 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
 	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("second SetupWorktree: %v", err)
 	}
@@ -1316,13 +1347,14 @@ func TestLiveRalphWorktreeRemovedWhenBranchExists(t *testing.T) {
 func TestWorktreeInheritsGitignore(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
+	worktreeRoot := t.TempDir()
 
 	preSetupMgr := newRepoForTest(Config{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}))
 	preSetupMgr.EnsureGitignored(".ralph")
 	run(t, "git", "-C", project, "push", "origin", "main", "-q")
 
 	state := newMemState()
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -1379,7 +1411,7 @@ func TestRenameBranchForTask_RenamesAndSetsFlag(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	st := newMemState()
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(st))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, WorktreeRoot: t.TempDir(), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(st))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("SetupWorktree: %v", err)
 	}
@@ -1401,8 +1433,7 @@ func TestRenameBranchForTask_RenamesAndSetsFlag(t *testing.T) {
 func TestPruneOrphanedWorktrees_RemovesOrphaned(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
-	worktreeRoot := filepath.Join(ralphDir, "worktrees")
-	os.MkdirAll(worktreeRoot, 0o755)
+	worktreeRoot := t.TempDir()
 	log := &testLog{}
 
 	// Create an orphaned directory (not tracked by git)
@@ -1414,7 +1445,7 @@ func TestPruneOrphanedWorktrees_RemovesOrphaned(t *testing.T) {
 	activeDir := filepath.Join(worktreeRoot, "ralph-20260322-active")
 	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/next", activeDir, "HEAD")
 
-	mgr := newRepoForTest(Config{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}, nil, withRunner(&execRunner{}))
+	mgr := newRepoForTest(Config{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, Logger: log, BaseBranch: "main"}, nil, withRunner(&execRunner{}))
 	mgr.PruneOrphanedWorktrees()
 
 	// Orphaned directory should be removed
@@ -1438,7 +1469,7 @@ func TestPruneOrphanedWorktrees_NoWorktreeDir(t *testing.T) {
 	ralphDir := filepath.Join(project, ".ralph")
 	log := &testLog{}
 
-	mgr := newRepoForTest(Config{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}, nil, withRunner(&execRunner{}))
+	mgr := newRepoForTest(Config{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, WorktreeRoot: filepath.Join(t.TempDir(), "nonexistent"), Logger: log, BaseBranch: "main"}, nil, withRunner(&execRunner{}))
 	mgr.PruneOrphanedWorktrees()
 
 	if len(log.messages) > 0 {
@@ -1450,14 +1481,13 @@ func TestPruneOrphanedWorktrees_NoWorktreeDir(t *testing.T) {
 func TestPruneOrphanedWorktrees_IgnoresFiles(t *testing.T) {
 	project, _ := initBareRepo(t)
 	ralphDir := filepath.Join(project, ".ralph")
-	worktreeRoot := filepath.Join(ralphDir, "worktrees")
-	os.MkdirAll(worktreeRoot, 0o755)
+	worktreeRoot := t.TempDir()
 	log := &testLog{}
 
 	filePath := filepath.Join(worktreeRoot, "some-file.txt")
 	os.WriteFile(filePath, []byte("keep"), 0o644)
 
-	mgr := newRepoForTest(Config{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, Logger: log, BaseBranch: "main"}, nil, withRunner(&execRunner{}))
+	mgr := newRepoForTest(Config{ProjectDir: project, WorkDir: project, RalphDir: ralphDir, WorktreeRoot: worktreeRoot, Logger: log, BaseBranch: "main"}, nil, withRunner(&execRunner{}))
 	mgr.PruneOrphanedWorktrees()
 
 	if _, err := os.Stat(filePath); err != nil {

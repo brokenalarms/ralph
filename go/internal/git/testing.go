@@ -459,6 +459,7 @@ func NewForTest(cfg Config, ghCfg StubGitHubConfig) Ops {
 		projectDir:                  projectDir,
 		workDir:                     cfg.WorkDir,
 		ralphDir:                    cfg.RalphDir,
+		worktreeRoot:                cfg.WorktreeRoot,
 		baseBranch:                  cfg.BaseBranch,
 		resume:                      cfg.Resume,
 		logger:                      cfg.Logger,
