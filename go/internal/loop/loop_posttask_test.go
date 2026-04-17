@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -776,6 +777,131 @@ func TestCompleteTask_NotifyOnNoCommitsPath(t *testing.T) {
 	if !strings.Contains(got, "Task done: [ralph-nc1] Update docs") {
 		t.Errorf("expected TaskCompleted on no-commits path, got %q", got)
 	}
+}
+
+// runPostTask checkouts out main in projectDir before running the post-task
+// script when merged=true, so scripts that do git pull --rebase see fresh main.
+func TestRunPostTask_MergedTrue_ChecksOutMainInProjectDir(t *testing.T) {
+	projectDir := initPostTaskRepo(t)
+	// Start on a feature branch whose remote ref has been deleted (simulating a
+	// merged PR's scenario — the remote tracking ref no longer exists).
+	runGit(t, projectDir, "checkout", "-b", "fix/some-feature")
+
+	currentBranch := currentGitBranch(t, projectDir)
+	if currentBranch != "fix/some-feature" {
+		t.Fatalf("setup: expected to be on fix/some-feature, got %q", currentBranch)
+	}
+
+	envFile := filepath.Join(projectDir, "post-task-env.txt")
+	scriptPath := filepath.Join(projectDir, "post-task.sh")
+	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\ngit -C %s rev-parse --abbrev-ref HEAD > %s\n", projectDir, envFile)), 0o755)
+
+	var logBuf bytes.Buffer
+	runPostTask(context.Background(), runPostTaskParams{
+		postTask:      scriptPath,
+		worktreeDir:   projectDir,
+		projectDir:    projectDir,
+		defaultBranch: "main",
+		logger:        logging.New(&logBuf),
+	}, "ralph-test", 0, true)
+
+	got := strings.TrimSpace(func() string {
+		data, _ := os.ReadFile(envFile)
+		return string(data)
+	}())
+	if got != "main" {
+		t.Errorf("post-task script ran on branch %q, want %q — projectDir was not switched to main", got, "main")
+	}
+}
+
+// runPostTask leaves projectDir unchanged when merged=false, even when the
+// directory is on a feature branch.
+func TestRunPostTask_MergedFalse_SkipsCheckout(t *testing.T) {
+	projectDir := initPostTaskRepo(t)
+	runGit(t, projectDir, "checkout", "-b", "fix/in-progress")
+
+	envFile := filepath.Join(projectDir, "post-task-env.txt")
+	scriptPath := filepath.Join(projectDir, "post-task.sh")
+	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\ngit -C %s rev-parse --abbrev-ref HEAD > %s\n", projectDir, envFile)), 0o755)
+
+	runPostTask(context.Background(), runPostTaskParams{
+		postTask:      scriptPath,
+		worktreeDir:   projectDir,
+		projectDir:    projectDir,
+		defaultBranch: "main",
+		logger:        logging.New(nil),
+	}, "ralph-test", 0, false)
+
+	got := strings.TrimSpace(func() string {
+		data, _ := os.ReadFile(envFile)
+		return string(data)
+	}())
+	if got != "fix/in-progress" {
+		t.Errorf("expected projectDir to stay on fix/in-progress (merged=false), got %q", got)
+	}
+}
+
+// runPostTask is a no-op for the checkout step when projectDir is already on
+// main — git checkout main when already on main succeeds silently.
+func TestRunPostTask_AlreadyOnMain_CheckoutIsNoOp(t *testing.T) {
+	projectDir := initPostTaskRepo(t)
+
+	envFile := filepath.Join(projectDir, "post-task-env.txt")
+	scriptPath := filepath.Join(projectDir, "post-task.sh")
+	os.WriteFile(scriptPath, []byte(fmt.Sprintf("#!/bin/sh\ngit -C %s rev-parse --abbrev-ref HEAD > %s\n", projectDir, envFile)), 0o755)
+
+	var logBuf bytes.Buffer
+	runPostTask(context.Background(), runPostTaskParams{
+		postTask:      scriptPath,
+		worktreeDir:   projectDir,
+		projectDir:    projectDir,
+		defaultBranch: "main",
+		logger:        logging.New(&logBuf),
+	}, "ralph-test", 0, true)
+
+	got := strings.TrimSpace(func() string {
+		data, _ := os.ReadFile(envFile)
+		return string(data)
+	}())
+	if got != "main" {
+		t.Errorf("expected projectDir to remain on main, got %q", got)
+	}
+	logOutput := logBuf.String()
+	if strings.Contains(logOutput, "exited with error") {
+		t.Errorf("checkout from main to main should not produce errors, got log: %s", logOutput)
+	}
+}
+
+// initPostTaskRepo creates a local git repo on main with one commit. Returns
+// the project dir path.
+func initPostTaskRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.name", "test")
+	runGit(t, dir, "config", "user.email", "test@test")
+	runGit(t, dir, "commit", "--allow-empty", "-m", "init")
+	return dir
+}
+
+// runGit runs a git command in dir and fails the test on error.
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := append([]string{"-C", dir}, args...)
+	out, err := exec.Command("git", cmd...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// currentGitBranch returns the current branch name in dir.
+func currentGitBranch(t *testing.T, dir string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse --abbrev-ref HEAD: %v", err)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // completeTask: when Ship returns a non-zero PRNumber on a diverged branch,
