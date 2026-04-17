@@ -35,6 +35,7 @@ type Config struct {
 	ProjectDir                  string
 	WorkDir                     string
 	RalphDir                    string
+	WorktreeRoot                string // overrides global ~/.ralph/worktrees/<hash>/ (used by tests)
 	BaseBranch                  string
 	Resume                      bool
 	Logger                      Log
@@ -51,6 +52,7 @@ type Config struct {
 type repo struct {
 	projectDir     string
 	workDir        string
+	worktreeRoot   string // overrides global ~/.ralph/worktrees/<hash>/ when set
 	worktreeBranch string
 	prevBranch     string
 	branchRenamed  bool
@@ -84,6 +86,7 @@ func New(cfg Config) Ops {
 		projectDir:                  projectDir,
 		workDir:                     cfg.WorkDir,
 		ralphDir:                    cfg.RalphDir,
+		worktreeRoot:                cfg.WorktreeRoot,
 		baseBranch:                  cfg.BaseBranch,
 		resume:                      cfg.Resume,
 		logger:                      cfg.Logger,
@@ -174,9 +177,13 @@ func (r *repo) SetupWorktree(ctx context.Context) error {
 		}
 	}
 
+	worktreeRoot, err := r.resolveWorktreeRoot()
+	if err != nil {
+		return fmt.Errorf("resolving worktree root: %w", err)
+	}
+
 	today := time.Now().Format("20060102")
 	runSeq := 1
-	worktreeRoot := filepath.Join(r.ralphDir, "worktrees")
 	if entries, err := os.ReadDir(worktreeRoot); err == nil {
 		prefix := "ralph-" + today + "-"
 		for _, e := range entries {
@@ -189,9 +196,9 @@ func (r *repo) SetupWorktree(ctx context.Context) error {
 	// Use a placeholder branch name; RenameBranchForTask will rename it
 	// to a proper task branch before the first commit.
 	r.worktreeBranch = WipBranchName()
-	r.workDir = filepath.Join(r.ralphDir, "worktrees", fmt.Sprintf("ralph-%s-%02d", today, runSeq))
+	r.workDir = filepath.Join(worktreeRoot, fmt.Sprintf("ralph-%s-%02d", today, runSeq))
 
-	if err := os.MkdirAll(filepath.Join(r.ralphDir, "worktrees"), 0o755); err != nil {
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
 		return fmt.Errorf("creating worktrees dir: %w", err)
 	}
 
@@ -203,7 +210,7 @@ func (r *repo) SetupWorktree(ctx context.Context) error {
 
 	// Clean up leftover wip branch from a previous run.
 	if r.refExists(r.projectDir, r.worktreeBranch) {
-		if wt := r.findWorktreeForBranch(r.projectDir, r.worktreeBranch); wt != "" && strings.Contains(wt, "/.ralph/worktrees/") {
+		if wt := r.findWorktreeForBranch(r.projectDir, r.worktreeBranch); wt != "" && hasPathPrefix(wt, worktreeRoot) {
 			r.gitCmd(r.projectDir, "worktree", "remove", "--force", wt)
 		}
 		_ = r.gitCmdErr(r.projectDir, "branch", "-D", r.worktreeBranch)
