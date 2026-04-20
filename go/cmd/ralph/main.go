@@ -183,6 +183,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 	log.Emit(logging.Opts{}, "Max iterations: %d", cfg.MaxIterations)
 
 	st.Write("started_at", time.Now().UTC().Format("2006-01-02T15:04:05Z"))
+	st.ClearPushedBranches()
 
 	// Construct the verifier module. Verifier holds no module references —
 	// it exposes stateless operations that Loop orchestrates. See

@@ -362,6 +362,16 @@ func (st *Store) AddPushedBranch(branch string) error {
 	return st.Save(s)
 }
 
+// ClearPushedBranches resets the pushed-branches list so a new run starts clean.
+func (st *Store) ClearPushedBranches() {
+	s, err := st.Load()
+	if err != nil {
+		return
+	}
+	s.PushedBranches = nil
+	st.Save(s)
+}
+
 // GetPushedBranches returns all branches pushed during this loop run, oldest first.
 func (st *Store) GetPushedBranches() ([]string, error) {
 	s, err := st.Load()
