@@ -68,16 +68,6 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxIterations) },
 	},
 	{
-		Short: "-p", Long: "--prompt", MetaVar: "<text>",
-		Help: "Prompt override (otherwise Claude reads repo context)",
-		Kind: KindString,
-		Apply: func(cfg *Config, val string) error {
-			cfg.Prompt = val
-			return nil
-		},
-		Read: func(cfg *Config) string { return cfg.Prompt },
-	},
-	{
 		Short: "-q", Long: "--quiet",
 		Help: "Suppress Claude output streaming (log only)",
 		Kind: KindBool,
@@ -88,10 +78,9 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return boolStr(cfg.Quiet) },
 	},
 	{
-		Long: "--calls-per-hour", MetaVar: "<N>",
 		Help: "Max Claude calls per hour", Default: "80",
 		ConfigKey: "calls_per_hour",
-		Kind: KindInt, TrackCLI: true,
+		Kind: KindInt,
 		Apply: func(cfg *Config, val string) error {
 			n, err := strconv.Atoi(val)
 			if err != nil {
@@ -103,9 +92,8 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return strconv.Itoa(cfg.CallsPerHour) },
 	},
 	{
-		Long: "--idle-timeout", MetaVar: "<dur>",
 		Help: "Kill session after this idle duration", Default: "10m",
-		EnvVar: "RALPH_IDLE_TIMEOUT",
+		EnvVar: "RALPH_IDLE_TIMEOUT", ConfigKey: "idle_timeout",
 		Kind: KindDuration,
 		Apply: func(cfg *Config, val string) error {
 			d, err := parseDuration(val)
@@ -118,9 +106,8 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.IdleTimeout.String() },
 	},
 	{
-		Long: "--idle-timeout-progress", MetaVar: "<dur>",
 		Help: "Shorter idle timeout when progress detected", Default: "5m",
-		EnvVar: "RALPH_IDLE_TIMEOUT_PROGRESS",
+		EnvVar: "RALPH_IDLE_TIMEOUT_PROGRESS", ConfigKey: "idle_timeout_progress",
 		Kind: KindDuration,
 		Apply: func(cfg *Config, val string) error {
 			d, err := parseDuration(val)
@@ -133,9 +120,8 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.IdleTimeoutProgress.String() },
 	},
 	{
-		Long: "--max-run-duration", MetaVar: "<dur>",
 		Help: "Hard wall-clock cap on agent run time; kills session if exceeded", Default: "60m",
-		EnvVar: "RALPH_MAX_RUN_DURATION",
+		EnvVar: "RALPH_MAX_RUN_DURATION", ConfigKey: "max_run_duration",
 		Kind: KindDuration,
 		Apply: func(cfg *Config, val string) error {
 			d, err := parseDuration(val)
@@ -148,9 +134,8 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.MaxRunDuration.String() },
 	},
 	{
-		Long: "--fix-max-run-duration", MetaVar: "<dur>",
 		Help: "Hard wall-clock cap on fix-agent run time; kills session if exceeded", Default: "30m",
-		EnvVar: "RALPH_FIX_MAX_RUN_DURATION",
+		EnvVar: "RALPH_FIX_MAX_RUN_DURATION", ConfigKey: "fix_max_run_duration",
 		Kind: KindDuration,
 		Apply: func(cfg *Config, val string) error {
 			d, err := parseDuration(val)
@@ -196,10 +181,9 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return boolStr(cfg.AutoMerge) },
 	},
 	{
-		Long:      "--admin-merge-on-ci-infra-failure",
 		Help:      "Admin-bypass branch protection when AutoMerge detects a CI infrastructure failure (zero job steps). Has no effect on real test failures.",
 		ConfigKey: "admin_merge_on_ci_infra_failure",
-		Kind:      KindBool, TrackCLI: true,
+		Kind:      KindBool,
 		Apply: func(cfg *Config, _ string) error {
 			cfg.AdminMergeOnCIInfraFailure = true
 			return nil
@@ -364,7 +348,6 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return fmt.Sprintf("%t", cfg.Notify) },
 	},
 	{
-		Long: "--post-signal-timeout", MetaVar: "<dur>",
 		Help:      "Timeout for post-signal operations (verification, push, merge)", Default: "15m",
 		EnvVar:    "RALPH_POST_SIGNAL_TIMEOUT",
 		ConfigKey: "post_signal_timeout",
@@ -393,10 +376,9 @@ var Flags = []FlagDef{
 	},
 	// Review timeouts
 	{
-		Long: "--copilot-review-timeout", MetaVar: "<dur>",
 		Help: "Timeout when waiting for a gated Copilot code review", Default: "120s",
 		ConfigKey: "copilot_review_timeout",
-		Kind:      KindDuration, TrackCLI: true,
+		Kind:      KindDuration,
 		Apply: func(cfg *Config, val string) error {
 			d, err := parseDuration(val)
 			if err != nil {
@@ -408,10 +390,9 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.ReviewerGatedTimeout.String() },
 	},
 	{
-		Long: "--copilot-opportunistic-timeout", MetaVar: "<dur>",
 		Help: "Timeout when waiting for an opportunistic (non-gated) Copilot code review", Default: "90s",
 		ConfigKey: "copilot_opportunistic_timeout",
-		Kind:      KindDuration, TrackCLI: true,
+		Kind:      KindDuration,
 		Apply: func(cfg *Config, val string) error {
 			d, err := parseDuration(val)
 			if err != nil {
@@ -423,10 +404,9 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.ReviewerOpportunisticTimeout.String() },
 	},
 	{
-		Long: "--coderabbit-review-timeout", MetaVar: "<dur>",
 		Help: "Timeout when waiting for a CodeRabbit code review", Default: "60s",
 		ConfigKey: "coderabbit_review_timeout",
-		Kind:      KindDuration, TrackCLI: true,
+		Kind:      KindDuration,
 		Apply: func(cfg *Config, val string) error {
 			d, err := parseDuration(val)
 			if err != nil {
@@ -439,10 +419,9 @@ var Flags = []FlagDef{
 	},
 	// Attempt limits
 	{
-		Long: "--max-prompt-attempts", MetaVar: "<N>",
 		Help: "Max recent attempts shown in agent prompt context", Default: "3",
 		ConfigKey: "max_prompt_attempts",
-		Kind:      KindInt, TrackCLI: true,
+		Kind:      KindInt,
 		Apply: func(cfg *Config, val string) error {
 			n, err := strconv.Atoi(val)
 			if err != nil {
@@ -454,10 +433,9 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxPromptAttempts) },
 	},
 	{
-		Long: "--max-idle-timeout-failures", MetaVar: "<N>",
 		Help: "Max consecutive idle timeout failures before skipping a task", Default: "3",
 		ConfigKey: "max_idle_timeout_failures",
-		Kind:      KindInt, TrackCLI: true,
+		Kind:      KindInt,
 		Apply: func(cfg *Config, val string) error {
 			n, err := strconv.Atoi(val)
 			if err != nil {
@@ -469,10 +447,9 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxIdleTimeoutFailures) },
 	},
 	{
-		Long: "--max-llm-verify-attempts", MetaVar: "<N>",
 		Help: "Max LLM verification attempts before skipping a task", Default: "3",
 		ConfigKey: "max_llm_verify_attempts",
-		Kind:      KindInt, TrackCLI: true,
+		Kind:      KindInt,
 		Apply: func(cfg *Config, val string) error {
 			n, err := strconv.Atoi(val)
 			if err != nil {
@@ -484,10 +461,9 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxLLMVerifyAttempts) },
 	},
 	{
-		Long: "--max-test-fix-attempts", MetaVar: "<N>",
 		Help: "Max fix agent spawns for failing tests or compile errors", Default: "3",
 		ConfigKey: "max_test_fix_attempts",
-		Kind:      KindInt, TrackCLI: true,
+		Kind:      KindInt,
 		Apply: func(cfg *Config, val string) error {
 			n, err := strconv.Atoi(val)
 			if err != nil {
@@ -500,10 +476,9 @@ var Flags = []FlagDef{
 	},
 	// Test/compile timeouts
 	{
-		Long: "--test-timeout", MetaVar: "<dur>",
 		Help: "Maximum duration for the ralph:verify test suite", Default: "5m",
 		ConfigKey: "test_timeout",
-		Kind:      KindDuration, TrackCLI: true,
+		Kind:      KindDuration,
 		Apply: func(cfg *Config, val string) error {
 			d, err := parseDuration(val)
 			if err != nil {
@@ -515,10 +490,9 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.TestTimeout.String() },
 	},
 	{
-		Long: "--compile-check-timeout", MetaVar: "<dur>",
 		Help: "Maximum duration for pre-push compile check", Default: "60s",
 		ConfigKey: "compile_check_timeout",
-		Kind:      KindDuration, TrackCLI: true,
+		Kind:      KindDuration,
 		Apply: func(cfg *Config, val string) error {
 			d, err := parseDuration(val)
 			if err != nil {
@@ -531,10 +505,9 @@ var Flags = []FlagDef{
 	},
 	// Network timeouts
 	{
-		Long: "--connectivity-check-timeout", MetaVar: "<dur>",
 		Help: "Timeout for internet connectivity probe", Default: "3s",
 		ConfigKey: "connectivity_check_timeout",
-		Kind:      KindDuration, TrackCLI: true,
+		Kind:      KindDuration,
 		Apply: func(cfg *Config, val string) error {
 			d, err := parseDuration(val)
 			if err != nil {
@@ -546,10 +519,9 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.ConnectivityCheckTimeout.String() },
 	},
 	{
-		Long: "--internet-restore-interval", MetaVar: "<dur>",
 		Help: "How often to recheck internet connectivity while waiting for restoration", Default: "30s",
 		ConfigKey: "internet_restore_interval",
-		Kind:      KindDuration, TrackCLI: true,
+		Kind:      KindDuration,
 		Apply: func(cfg *Config, val string) error {
 			d, err := parseDuration(val)
 			if err != nil {
@@ -561,11 +533,10 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.InternetRestoreInterval.String() },
 	},
 	{
-		Long: "--agent-escalation-model", MetaVar: "<model>",
 		Help:      "Deprecated: no effect. Cross-iteration model escalation was removed.",
 		Default:   ModelOpus,
 		ConfigKey: "agent_escalation_model",
-		Kind:      KindString, TrackCLI: true,
+		Kind:      KindString,
 		Apply: func(cfg *Config, val string) error {
 			cfg.AgentEscalationModel = val
 			return nil
@@ -573,11 +544,10 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.AgentEscalationModel },
 	},
 	{
-		Long: "--verify-model", MetaVar: "<model>",
 		Help:      "Model for LLM verification (first attempt)",
 		Default:   ModelHaiku,
 		ConfigKey: "verify_model",
-		Kind:      KindString, TrackCLI: true,
+		Kind:      KindString,
 		Apply: func(cfg *Config, val string) error {
 			cfg.VerifyModel = val
 			return nil
@@ -585,11 +555,10 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.VerifyModel },
 	},
 	{
-		Long: "--verify-escalation-model", MetaVar: "<model>",
 		Help:      "Model for LLM verification escalation (subsequent attempts)",
 		Default:   ModelSonnet,
 		ConfigKey: "verify_escalation_model",
-		Kind:      KindString, TrackCLI: true,
+		Kind:      KindString,
 		Apply: func(cfg *Config, val string) error {
 			cfg.VerifyEscalationModel = val
 			return nil
@@ -597,11 +566,10 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.VerifyEscalationModel },
 	},
 	{
-		Long: "--fix-model", MetaVar: "<model>",
 		Help:      "Model for fix agents on first attempt",
 		Default:   ModelSonnet,
 		ConfigKey: "fix_model",
-		Kind:      KindString, TrackCLI: true,
+		Kind:      KindString,
 		Apply: func(cfg *Config, val string) error {
 			cfg.FixModel = val
 			return nil
@@ -609,11 +577,10 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.FixModel },
 	},
 	{
-		Long: "--fix-escalation-model", MetaVar: "<model>",
 		Help:      "Model for fix agents on retry attempts (subsequent attempts after first)",
 		Default:   ModelOpus,
 		ConfigKey: "fix_escalation_model",
-		Kind:      KindString, TrackCLI: true,
+		Kind:      KindString,
 		Apply: func(cfg *Config, val string) error {
 			cfg.FixEscalationModel = val
 			return nil

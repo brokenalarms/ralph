@@ -151,7 +151,6 @@ func TestGenerateResumeScript(t *testing.T) {
 		MaxIterations: 20,
 		Quiet:         true,
 		AutoMerge:     true,
-		CallsPerHour:  40,
 	}
 
 	log := logging.New(nil)
@@ -169,9 +168,6 @@ func TestGenerateResumeScript(t *testing.T) {
 	}
 	if !strings.Contains(content, "--quiet") {
 		t.Error("resume script should contain --quiet")
-	}
-	if !strings.Contains(content, "--calls-per-hour 40") {
-		t.Error("resume script should contain --calls-per-hour 40")
 	}
 	if !strings.Contains(content, "--auto-merge") {
 		t.Error("resume script should contain --auto-merge")
@@ -220,7 +216,6 @@ func TestGenerateResumeScript_AllFlags(t *testing.T) {
 		Evolve:        true,
 		BaseBranch:    "main",
 		Wait:          true,
-		CallsPerHour:  40,
 		Verbose:       true,
 	}
 
@@ -236,7 +231,6 @@ func TestGenerateResumeScript_AllFlags(t *testing.T) {
 	for _, flag := range []string{
 		"--max 30",
 		"--quiet",
-		"--calls-per-hour 40",
 		"--auto-merge",
 		"--evolve",
 		"--base-branch main",
