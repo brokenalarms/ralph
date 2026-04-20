@@ -59,11 +59,11 @@ func run(args []string) int {
 	return 0
 }
 
-// modelCap returns the model ceiling for all LLM interactions when --model
+// modelCap returns the model ceiling for all LLM interactions when --model-ceiling
 // was explicitly set via the CLI. An empty string means no cap (full
 // escalation ladder applies).
 func modelCap(cfg config.Config) string {
-	if cfg.CLISet("model") {
+	if cfg.CLISet("model_ceiling") {
 		return cfg.Model
 	}
 	return ""

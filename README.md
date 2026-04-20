@@ -109,7 +109,7 @@ Run `ralph task` to build up a backlog, then `ralph loop` to work through it.
 | `--idle-timeout <dur>` | Kill idle session after duration | 10m | `RALPH_IDLE_TIMEOUT` |
 | `--idle-timeout-progress <dur>` | Shorter idle timeout when progress detected | 5m | `RALPH_IDLE_TIMEOUT_PROGRESS` |
 | `--post-signal-timeout <dur>` | Timeout for post-signal operations | 15m | `RALPH_POST_SIGNAL_TIMEOUT` |
-| `--model <model>` | Model ceiling for all LLM interactions (loop agent, fix agents, verification) | claude-sonnet-4-6 | |
+| `--model-ceiling <model>` | Model ceiling for all LLM interactions (loop agent, fix agents, verification) | claude-sonnet-4-6 | |
 | `--agent-escalation-model <model>` | Model for agent on retry attempts | claude-opus-4-6 | |
 | `--verify-model <model>` | Model for LLM verification (first attempt) | claude-haiku-4-5-20251001 | |
 | `--verify-escalation-model <model>` | Model for verification escalation (subsequent attempts) | claude-sonnet-4-6 | |
@@ -131,14 +131,14 @@ The orchestrator owns the entire push/PR/merge lifecycle. The agent writes code 
 
 The loop uses a tiered model strategy to balance cost and quality:
 
-- **Agent first pass** — sonnet (default `--model`)
+- **Agent first pass** — sonnet (default `--model-ceiling`)
 - **Agent retry** — opus (default `--agent-escalation-model`); escalated automatically on subsequent attempts
 - **Verification first pass** — haiku (default `--verify-model`)
 - **Verification retry** — sonnet (default `--verify-escalation-model`)
 - **Fix agent first pass** — sonnet (default `--fix-model`); covers test/compile/verify/CI/Copilot/conflict fix agents
 - **Fix agent retry** — opus (default `--fix-escalation-model`); escalated automatically on subsequent attempts
 
-`--model` acts as a ceiling — no LLM call may use a higher-tier model than the value set.
+`--model-ceiling` acts as a ceiling — no LLM call may use a higher-tier model than the value set.
 
 ### Verification pipeline
 

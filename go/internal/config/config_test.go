@@ -1009,4 +1009,42 @@ func TestConfigToState_ArgsFromState_Roundtrip(t *testing.T) {
 	}
 }
 
+// Proves: model_ceiling in config.toml is loaded into cfg.Model,
+// satisfying AC#4 of ralph-2l84.
+func TestModelCeilingLoadedFromTOML(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "config.toml")
+	os.WriteFile(tomlPath, []byte("model_ceiling = "+ModelHaiku+"\n"), 0o644)
+
+	cfg, _ := Parse(nil)
+	if err := cfg.LoadConfigFile(tomlPath); err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	if cfg.Model != ModelHaiku {
+		t.Errorf("cfg.Model = %q, want %q", cfg.Model, ModelHaiku)
+	}
+}
+
+// Proves: --model-ceiling on CLI takes precedence over model_ceiling in config.toml,
+// and CLI value does not write back to the toml file.
+func TestModelCeilingCLIOverridesToML(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "config.toml")
+	os.WriteFile(tomlPath, []byte("model_ceiling = "+ModelHaiku+"\n"), 0o644)
+
+	cfg, _ := Parse([]string{"--model-ceiling", ModelOpus})
+	if err := cfg.LoadConfigFile(tomlPath); err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	if cfg.Model != ModelOpus {
+		t.Errorf("cfg.Model = %q, want %q (CLI should override config.toml)", cfg.Model, ModelOpus)
+	}
+
+	// config.toml must not be modified by the CLI flag
+	raw, _ := os.ReadFile(tomlPath)
+	if string(raw) != "model_ceiling = "+ModelHaiku+"\n" {
+		t.Errorf("config.toml was modified: %s", raw)
+	}
+}
+
 
