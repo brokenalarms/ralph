@@ -162,7 +162,7 @@ func TestDefaultsDeriveFromFlagRegistry(t *testing.T) {
 // Verifies that InitConfig generates entries for all flags with ConfigKeys.
 func TestInitConfigUsesRegistry(t *testing.T) {
 	dir := t.TempDir()
-	path := dir + "/ralph.toml"
+	path := dir + "/config.toml"
 
 	if err := InitConfig(path); err != nil {
 		t.Fatalf("InitConfig failed: %v", err)

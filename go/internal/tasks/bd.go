@@ -523,8 +523,8 @@ func (b *BD) ProjectContext() (string, error) {
 
 	sections = append(sections, fmt.Sprintf("Project directory: %s", b.ProjectDir))
 
-	if configData, err := os.ReadFile(filepath.Join(b.ProjectDir, "ralph.toml")); err == nil {
-		sections = append(sections, "## Ralph config (ralph.toml)\n```\n"+strings.TrimSpace(string(configData))+"\n```")
+	if configData, err := os.ReadFile(filepath.Join(b.ProjectDir, "config.toml")); err == nil {
+		sections = append(sections, "## Ralph config (config.toml)\n```\n"+strings.TrimSpace(string(configData))+"\n```")
 	}
 
 	if out, err := run(ctx, b.ProjectDir, "list", "--flat"); err == nil && out != "" {

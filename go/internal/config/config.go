@@ -340,7 +340,58 @@ func (c *Config) LoadConfigFile(path string) error {
 	return scanner.Err()
 }
 
-// InitConfig generates a ralph.toml file at the given path with default values
+// SaveConfigFile writes back any CLI-set values to the config file at path.
+// Lines for keys not in cliSet are preserved verbatim, keeping comments and ordering.
+func (c *Config) SaveConfigFile(path string) error {
+	if len(c.cliSet) == 0 {
+		return nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(string(data), "\n")
+	// Drop the trailing empty element produced by Split when the file ends with \n.
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		eqIdx := strings.Index(trimmed, "=")
+		if eqIdx < 0 {
+			continue
+		}
+		key := strings.TrimSpace(trimmed[:eqIdx])
+		if !c.cliSet[key] {
+			continue
+		}
+		fd := configMap[key]
+		if fd == nil {
+			continue
+		}
+		var val string
+		if fd.Kind == KindBool {
+			if fd.Read(c) == "true" {
+				val = "true"
+			} else {
+				val = "false"
+			}
+		} else {
+			val = fd.Read(c)
+		}
+		lines[i] = fmt.Sprintf("%s = %s", key, val)
+	}
+
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+}
+
+// InitConfig generates a config.toml file at the given path with default values
 // derived from the Flags registry. Returns an error if the file already exists.
 func InitConfig(path string) error {
 	if _, err := os.Stat(path); err == nil {
