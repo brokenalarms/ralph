@@ -3,9 +3,11 @@ package loop
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brokenalarms/ralph/internal/claude"
 	"github.com/brokenalarms/ralph/internal/git"
@@ -293,89 +295,73 @@ func TestLoop_PrepareAndBuildPrompt_ReturnsPrompt(t *testing.T) {
 	}
 }
 
-// Verifies HasProgress's snapshot semantics: a pre-existing diff does not
-// count as progress (the agent-didn't-do-anything case), while a new HEAD
-// commit during the iteration does. An agent that only writes a signal file
-// without changing code must not trigger the shorter progress timeout.
+// Verifies that idle timeout selection is driven by log activity, not git state.
 //
-// Case "no diff at start, new diff appears (no commit) → progress" was
-// removed in the Phase C migration because the new stubRepo has no
-// interface method that flips HasDiff during execution, and the spec
-// forbids post-construction mutable fields. Integration coverage of that
-// path belongs in the real-git integration tests.
-func TestLoop_HasProgress_SnapshotsDiffState(t *testing.T) {
+// A real claude.Runner (with CmdFactory) is used so poll() actually executes.
+// The subprocess writes a plaintext line to the raw log after 100ms, flipping
+// activitySeen in poll(). That causes the short IdleTimeoutProgress to fire
+// rather than the long IdleTimeout, proving log activity — not git state —
+// controls which timeout is active.
+func TestLoop_HasProgress_LogActivityDrivesTimeout(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
 	promptsDir := filepath.Join(dir, "prompts")
 	createPromptTemplates(t, promptsDir)
-	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-abc"}
+	os.MkdirAll(ralphDir, 0o755)
 
-	tests := []struct {
-		name         string
-		diffAtStart  bool
-		commitDuring bool // SUT-style mutation via CommitAll during the run
-		wantProgress bool
-	}{
-		{
-			name:         "pre-existing diff, no new activity → no progress",
-			diffAtStart:  true,
-			commitDuring: false,
-			wantProgress: false,
-		},
-		{
-			name:         "pre-existing diff, HEAD moved → progress",
-			diffAtStart:  true,
-			commitDuring: true,
-			wantProgress: true,
-		},
-		{
-			name:         "no diff, no head movement → no progress",
-			diffAtStart:  false,
-			commitDuring: false,
-			wantProgress: false,
+	backend := &testutil.StubBackend{Remaining: 1, Total: 1, NextTask: "Fix login", NextID: "ralph-abc"}
+	// Pre-existing diff and HEAD movement must not trigger the short timeout —
+	// only log activity should.
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		HasDiff:    true,
+		HeadRev:    "stub-head-0",
+	})
+
+	cfg := Config{
+		Dirs:                workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
+		MaxIterations:       1,
+		CallsPerHour:        80,
+		IdleTimeout:         30 * time.Second,   // long — must not fire
+		IdleTimeoutProgress: 100 * time.Millisecond, // short — fires once activity seen
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:       st,
+		Git:         gm,
+		TaskBackend: backend,
+		Logger:      logger,
+		Verifier:    newTestVerifier(t, cfg, logger),
+	})
+
+	// Real runner with a CmdFactory: subprocess writes a plaintext line after
+	// 100ms then sleeps. poll() detects the content on the first 2s tick,
+	// flips activitySeen, then fires IdleTimeoutProgress (100ms) on the next tick.
+	l.runner = &claude.Runner{
+		Logger: logger,
+		CmdFactory: func(rc claude.RunConfig, rawLog *os.File) *exec.Cmd {
+			cmd := exec.Command("sh", "-c", "sleep 0.1; printf 'agent output\\n'; sleep 30")
+			cmd.Dir = rc.WorkDir
+			cmd.Stdout = rawLog
+			cmd.Stderr = rawLog
+			return cmd
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			gm := git.NewStub(git.StubRepoConfig{
-				ProjectDir: dir,
-				WorkDir:    dir,
-				HasDiff:    tc.diffAtStart,
-				HeadRev:    "stub-head-0",
-			})
-			cfg := Config{
-				Dirs:          workctx.WorkContext{ProjectDir: dir, WorkDir: dir, RalphDir: ralphDir, PromptsDir: promptsDir},
-				MaxIterations: 1,
-				CallsPerHour:  80,
-			}
-			logger := logging.New(nil)
-			l := New(cfg, Modules{
-				State:       st,
-				Git:         gm,
-				TaskBackend: backend,
-				Logger:      logger,
-				Verifier:    newTestVerifier(t, cfg, logger),
-			})
+	// Simulate HEAD moving mid-run — must not affect timeout selection.
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		gm.CommitAll("simulated commit during run")
+	}()
 
-			var capturedHasProgress func() bool
-			l.runner = &stubRunner{
-				onRunCfg: func(cfg claude.RunConfig) {
-					capturedHasProgress = cfg.HasProgress
-					if tc.commitDuring {
-						gm.CommitAll("simulated progress commit")
-					}
-				},
-			}
-			l.runAgent(context.Background(), taskContext{id: "ralph-abc", title: "Fix login"}, 0)
+	start := time.Now()
+	l.runAgent(context.Background(), taskContext{id: "ralph-abc", title: "Fix login"}, 0)
+	elapsed := time.Since(start)
 
-			if capturedHasProgress == nil {
-				t.Fatal("HasProgress was not passed to runner")
-			}
-			got := capturedHasProgress()
-			if got != tc.wantProgress {
-				t.Errorf("HasProgress() = %v, want %v", got, tc.wantProgress)
-			}
-		})
+	// With PollInterval=2s: activity detected at ~2s, then IdleTimeoutProgress
+	// (100ms) fires at ~4s. The long IdleTimeout (30s) must not have fired.
+	if elapsed >= 10*time.Second {
+		t.Errorf("log activity should trigger short progress timeout (~4s), but took %s — long idle timeout may have fired", elapsed)
 	}
 }
