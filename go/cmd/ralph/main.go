@@ -469,10 +469,10 @@ func printSummary(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.
 	if gm.GetWorktreeBranch() != "" && gm.GetProjectDir() != "" {
 		log.Emit(logging.Opts{}, "Worktree:   %s", gm.GetWorkDir())
 
-		branches := gm.ListProjectBranches()
-		if len(branches) > 1 {
-			log.Emit(logging.Opts{}, "Branches:")
-			for _, b := range branches {
+		pushed, _ := st.GetPushedBranches()
+		if len(pushed) > 0 {
+			log.Emit(logging.Opts{}, "Pushed branches:")
+			for _, b := range pushed {
 				log.Emit(logging.Opts{}, "  %s", b)
 			}
 		} else {

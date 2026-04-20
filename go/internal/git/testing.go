@@ -373,7 +373,6 @@ type StubRepoConfig struct {
 	ConflictDiff           string
 	RecentChangedFiles     string
 	CIFailureLog           string
-	ProjectBranches        []string
 
 	// Ship / merge results — prescribed outcomes where deriving from state
 	// would require an unreasonable modeling burden.
@@ -780,6 +779,4 @@ func (s *stubRepo) ListAllPRs(workDir string) ([]PRInfo, error) {
 	return s.gh.ListAllPRs(workDir)
 }
 
-func (s *stubRepo) ListProjectBranches() []string {
-	return s.cfg.ProjectBranches
-}
+

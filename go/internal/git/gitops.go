@@ -123,8 +123,6 @@ type Ops interface {
 	GitHubAvailable() bool
 	ListAllPRs(workDir string) ([]PRInfo, error)
 
-	// ListProjectBranches returns ralph-managed branches for the project.
-	ListProjectBranches() []string
 }
 
 // Compile-time check that *repo satisfies Ops.

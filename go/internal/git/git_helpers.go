@@ -83,22 +83,6 @@ func RepoRoot(dir string) (string, error) {
 	return out, nil
 }
 
-func parseBranchList(out string) []string {
-	if out == "" {
-		return nil
-	}
-	var branches []string
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		line = strings.TrimPrefix(line, "* ")
-		line = strings.TrimPrefix(line, "+ ")
-		if line != "" {
-			branches = append(branches, line)
-		}
-	}
-	return branches
-}
-
 // repo methods that mirror the package-level helpers but route
 // through the repo's injected Runner.
 
@@ -222,12 +206,6 @@ func (r *repo) LogOneline(from, to string) string {
 func (r *repo) RecentChangedFiles(n int) string {
 	return r.gitOutput(r.workDir, "diff", "--name-only", fmt.Sprintf("HEAD~%d", n), "HEAD")
 }
-
-func (r *repo) ListProjectBranches() []string {
-	out := r.gitOutput(r.projectDir, "branch", "--list", BranchListPattern(), "--sort=refname")
-	return parseBranchList(out)
-}
-
 
 func (r *repo) ValidateRemoteBranch(ctx context.Context) error {
 	branch := r.detectDefaultBranch()
