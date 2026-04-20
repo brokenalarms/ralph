@@ -103,17 +103,6 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return strconv.Itoa(cfg.CallsPerHour) },
 	},
 	{
-		Long: "--refactor",
-		Help: "Enable LLM-based adaptive refactoring (checks every 5 task completions)",
-		ConfigKey: "refactor",
-		Kind: KindBool, TrackCLI: true,
-		Apply: func(cfg *Config, _ string) error {
-			cfg.Refactor = true
-			return nil
-		},
-		Read: func(cfg *Config) string { return boolStr(cfg.Refactor) },
-	},
-	{
 		Long: "--idle-timeout", MetaVar: "<dur>",
 		Help: "Kill session after this idle duration", Default: "10m",
 		EnvVar: "RALPH_IDLE_TIMEOUT",

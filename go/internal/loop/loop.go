@@ -129,7 +129,6 @@ type Modules struct {
 	Logger       *logging.Logger
 	Verifier     *verifier.Verifier
 	Runner       claudeRunner   // nil → agent.New(logger)
-	Querier      querier        // nil → agent.New(logger); one-shot LLM queries
 	Connectivity  Connectivity   // nil → live gh CLI / net checks
 	IterationHook IterationHook  // nil → no-op
 	PostTaskHook  PostTaskHook   // nil → fallback to runPostTask script path
@@ -145,7 +144,6 @@ type Config struct {
 	Dirs                  workctx.WorkContext
 	PlanFile              string
 	MaxIterations         int
-	Refactor              bool
 	Quiet                 bool
 	AutoMerge             bool
 	Evolve                bool
@@ -220,20 +218,10 @@ func (c *liveConnectivity) WaitForInternet(ctx context.Context, logger *logging.
 }
 
 // claudeRunner abstracts the streaming-agent session for testability.
-// Run/StopStreaming/InjectMessage drive the interactive agent — this
-// interface does NOT include one-shot queries, which go through querier.
 type claudeRunner interface {
 	Run(cfg claude.RunConfig) (claude.Result, error)
 	StopStreaming()
 	InjectMessage(msg string) error
-}
-
-// querier abstracts one-shot LLM queries (no streaming, no signal polling).
-// Used by the refactor-decision helper. The verifier defines its own
-// identical Querier interface — in production both are satisfied by
-// *agent.Runner, but they are injected separately.
-type querier interface {
-	Query(ctx context.Context, workDir, prompt, model string, allowedTools []string) (string, error)
 }
 
 // CompletedTask holds summary info for a task completed during this session.
@@ -262,7 +250,6 @@ type Loop struct {
 	taskBackend       tasks.Backend
 	limiter           *ratelimit.Limiter
 	runner            claudeRunner
-	querier           querier
 	verifier          *verifier.Verifier
 	analyzer          *analyzer.Analyzer
 	taskAttempts      []AttemptEvent // in-memory attempt events for the current task, reset per task
@@ -324,11 +311,6 @@ func New(cfg Config, mods Modules) *Loop {
 		runner = agent.New(logger)
 	}
 
-	q := mods.Querier
-	if q == nil {
-		q = agent.New(logger)
-	}
-
 	bh := mods.BinaryHasher
 	if bh == nil {
 		bh = &liveBinaryHasher{}
@@ -341,7 +323,6 @@ func New(cfg Config, mods Modules) *Loop {
 		taskBackend:   taskBackend,
 		limiter:       limiter,
 		runner:        runner,
-		querier:       q,
 		verifier:      mods.Verifier,
 		analyzer:      analyzer.New(),
 		logger:        logger,
@@ -611,10 +592,6 @@ iterLoop:
 			if task.id != "" && branch != "" && strings.Contains(branch, task.id) {
 				_ = l.taskBackend.SetMetadata(task.id, "branch", branch)
 			}
-		}
-
-		if err := l.maybeRefactor(ctx, len(sessionTasks)); err != nil {
-			l.logger.Emit(logging.Opts{Level: logging.Warn}, "Refactor iteration error: %v", err)
 		}
 
 		if l.iterationHook != nil {

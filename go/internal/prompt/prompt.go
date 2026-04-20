@@ -104,35 +104,6 @@ func BuildPrompt(v Vars) (string, error) {
 	return r.Replace(result), nil
 }
 
-// BuildRefactorPrompt assembles the refactor iteration prompt.
-func BuildRefactorPrompt(v Vars, recentFiles string) (string, error) {
-	shared, err := readTemplate(v.PromptsDir, "shared.md")
-	if err != nil {
-		return "", err
-	}
-	refactor, err := readTemplate(v.PromptsDir, "refactor.md")
-	if err != nil {
-		return "", err
-	}
-	signal, err := readTemplate(v.PromptsDir, "signal.md")
-	if err != nil {
-		return "", err
-	}
-
-	result := shared + "\n" + refactor + "\n" + signal
-
-	r := strings.NewReplacer(
-		"{{WORK_DIR}}", v.WorkDir,
-		"{{RALPH_DIR}}", v.RalphDir,
-		"{{RECENT_FILES}}", recentFiles,
-		"{{SIGNAL_TOKEN}}", v.SignalToken,
-		"{{CURRENT_TASK_TOKEN}}", v.CurrentTaskToken,
-		"{{ALL_COMPLETE_TOKEN}}", v.AllCompleteToken,
-		"{{NO_CODE_NEEDED_TOKEN}}", v.NoCodeNeededToken,
-	)
-	return r.Replace(result), nil
-}
-
 // executionInstructions returns the bd execution template content.
 func executionInstructions(v Vars) (string, error) {
 	return readTemplate(v.PromptsDir, "execution-bd.md")
@@ -157,14 +128,14 @@ func BuildTaskManagerPrompt(promptsDir, projectDir, ralphDir string) (string, er
 }
 
 // BuildReviewPrompt assembles the system prompt for the interactive review
-// session, combining the shared quality standards with the refactor style guide,
+// session, combining the shared quality standards with the code style guide,
 // post-mortem reflection analysis, and shared bead creation guidance.
 func BuildReviewPrompt(promptsDir, projectDir, ralphDir, reflections string) (string, error) {
 	shared, err := readTemplate(promptsDir, "shared.md")
 	if err != nil {
 		return "", err
 	}
-	style, err := readTemplate(promptsDir, "refactor-style.md")
+	style, err := readTemplate(promptsDir, "style-guide.md")
 	if err != nil {
 		return "", err
 	}

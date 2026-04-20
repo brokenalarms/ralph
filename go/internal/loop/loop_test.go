@@ -24,8 +24,8 @@ import (
 // construct directly. Tests then build Modules{} inline.
 //
 // Optional stubs override the production defaults for verifier's two
-// sub-modules: newRunner (fix-agent runner factory) and querier (one-shot
-// LLM caller). Both default to agent.New(logger) when nil.
+// sub-modules: newRunner (fix-agent runner factory) and querier. Both
+// default to agent.New(logger) when nil.
 func newTestVerifier(t *testing.T, cfg Config, logger *logging.Logger, stubs ...verifierTestStubs) *verifier.Verifier {
 	t.Helper()
 	var s verifierTestStubs
@@ -70,9 +70,7 @@ type stubRunner struct {
 	onRun    func()
 	onRunCfg func(cfg claude.RunConfig)
 	result   claude.Result
-	// queryFn is the per-test override for the Query method. When nil,
-	// Query returns "NO: stub" so refactor checks short-circuit without
-	// an actual LLM call.
+	// queryFn is the per-test override for the Query method.
 	queryFn func(ctx context.Context, workDir, prompt, model string) (string, error)
 }
 
@@ -90,9 +88,7 @@ func (s *stubRunner) StopStreaming() {}
 
 func (s *stubRunner) InjectMessage(_ string) error { return nil }
 
-// Query satisfies claudeRunner. Tests that exercise the refactor-decision
-// path set s.queryFn to control the response; the default returns "NO" so
-// refactor checks short-circuit without an actual LLM call.
+// Query satisfies claudeRunner for tests that control one-shot LLM responses.
 func (s *stubRunner) Query(ctx context.Context, workDir, prompt, model string, _ []string) (string, error) {
 	if s.queryFn != nil {
 		return s.queryFn(ctx, workDir, prompt, model)
@@ -102,8 +98,6 @@ func (s *stubRunner) Query(ctx context.Context, workDir, prompt, model string, _
 
 // stubQuerier satisfies verifier.Querier for tests that need to control
 // LLM verification responses without going through the full agent runner.
-// Tests construct &stubQuerier{fn: func(...) (string, error) { ... }} and
-// pass it into newTestModules.
 type stubQuerier struct {
 	fn func(ctx context.Context, workDir, prompt, model string) (string, error)
 }
@@ -306,7 +300,7 @@ func TestRun_ExitsOnGitHubUnreachable(t *testing.T) {
 func createPromptTemplates(t *testing.T, dir string) {
 	t.Helper()
 	os.MkdirAll(dir, 0o755)
-	for _, name := range []string{"shared.md", "internal.md", "reflection.md", "signal.md", "feedback.md", "refactor.md", "refactor-style.md", "execution-bd.md", "bead-creation.md"} {
+	for _, name := range []string{"shared.md", "internal.md", "reflection.md", "signal.md", "feedback.md", "execution-bd.md", "bead-creation.md"} {
 		os.WriteFile(filepath.Join(dir, name), []byte("test"), 0o644)
 	}
 }
