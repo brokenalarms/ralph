@@ -133,24 +133,39 @@ func checkGitHubConnectivity(ctx context.Context) error {
 
 type runVerifyBuildParams struct {
 	verifyBuild string
+	worktreeDir string
 	projectDir  string
 	testTimeout time.Duration
 	logger      *logging.Logger
 }
 
-// runVerifyBuild executes the --verify-build script if configured. Runs in
-// the project directory with a timeout matching the test suite timeout.
-// Returns empty string if the script passes or is not configured.
-// Returns a build failure message (stdout+stderr) if the script exits non-zero.
+// runVerifyBuild executes the verify-build script if configured. Uses the
+// verify_build config/CLI value first; falls back to detecting a
+// ralph:verify-build npm script or ralph-verify-build Makefile target
+// (worktree then project root). Runs in the project directory with a timeout
+// matching the test suite timeout. Returns empty string if the script passes
+// or is not configured. Returns a build failure message (stdout+stderr) if
+// the script exits non-zero.
 func runVerifyBuild(ctx context.Context, p runVerifyBuildParams) string {
-	if p.verifyBuild == "" {
+	var script string
+	if p.verifyBuild != "" {
+		script = p.verifyBuild
+		p.logger.Emit(logging.Opts{Domain: "build"}, "Using verify_build config: %s", script)
+	} else {
+		tc := verify.DetectVerifyBuild(p.worktreeDir, p.projectDir)
+		if tc != nil {
+			script = tc.Cmd + " " + strings.Join(tc.Args, " ")
+			p.logger.Emit(logging.Opts{Domain: "build"}, "Detected ralph:verify-build script: %s (in %s)", script, tc.Dir)
+		}
+	}
+	if script == "" {
 		return ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, p.testTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sh", "-c", p.verifyBuild)
+	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	cmd.Dir = p.projectDir
-	p.logger.Emit(logging.Opts{Domain: "build"}, "Running verify-build: %s", p.verifyBuild)
+	p.logger.Emit(logging.Opts{Domain: "build"}, "Running verify-build: %s", script)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		p.logger.Emit(logging.Opts{Domain: "build", Level: logging.Success}, "Build health check passed")
@@ -173,9 +188,9 @@ type runPostTaskParams struct {
 	logger        *logging.Logger
 }
 
-// runPostTask executes the post-task script if configured. Checks for a
-// ralph:post-task npm script or ralph-post-task Makefile target first (worktree
-// then project root); falls back to the --post-task CLI flag. Runs in the
+// runPostTask executes the post-task script if configured. Uses the post_task
+// config/CLI value first; falls back to detecting a ralph:post-task npm script
+// or ralph-post-task Makefile target (worktree then project root). Runs in the
 // project directory with RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED env vars.
 // When merged=true, checks out the default branch and pulls in projectDir first
 // so the script sees fresh main. Non-zero exit warns and continues.
@@ -184,19 +199,19 @@ func runPostTask(ctx context.Context, p runPostTaskParams, taskID string, prNumb
 		checkoutMainInProjectDir(ctx, p.projectDir, p.defaultBranch, p.logger)
 	}
 
-	tc := verify.DetectPostTask(p.worktreeDir, p.projectDir)
 	var script string
-	var scriptDir string
-	if tc != nil {
-		script = tc.Cmd + " " + strings.Join(tc.Args, " ")
-		scriptDir = tc.Dir
-		p.logger.Emit(logging.Opts{Domain: "post-task"}, "Detected ralph:post-task script: %s (in %s)", script, scriptDir)
-	} else if p.postTask != "" {
+	if p.postTask != "" {
 		script = p.postTask
-		scriptDir = p.projectDir
-		p.logger.Emit(logging.Opts{Domain: "post-task"}, "Using --post-task CLI flag: %s (in %s)", script, scriptDir)
+		p.logger.Emit(logging.Opts{Domain: "post-task"}, "Using post_task config: %s (in %s)", script, p.projectDir)
 	} else {
-		p.logger.Emit(logging.Opts{Domain: "post-task"}, "No ralph:post-task script found in package.json and no --post-task CLI flag — skipping post-task")
+		tc := verify.DetectPostTask(p.worktreeDir, p.projectDir)
+		if tc != nil {
+			script = tc.Cmd + " " + strings.Join(tc.Args, " ")
+			p.logger.Emit(logging.Opts{Domain: "post-task"}, "Detected ralph:post-task script: %s (in %s)", script, tc.Dir)
+		}
+	}
+	if script == "" {
+		p.logger.Emit(logging.Opts{Domain: "post-task"}, "No post_task config and no ralph:post-task script found in package.json — skipping post-task")
 		return
 	}
 	prStr := strconv.Itoa(prNumber)
