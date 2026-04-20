@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -150,21 +151,40 @@ func RunTests(ctx context.Context, timeout time.Duration, dirs ...string) Result
 	cmd := exec.CommandContext(ctx, tc.Cmd, tc.Args...)
 	cmd.Dir = tc.Dir
 	cmd.WaitDelay = 3 * time.Second
-	out, err := cmd.CombinedOutput()
+
+	tracker := newTestTracker()
+	stdout, _ := cmd.StdoutPipe()
+	cmd.Stderr = cmd.Stdout // merge stderr into stdout pipe
+
+	if startErr := cmd.Start(); startErr != nil {
+		return Result{
+			Passed: false,
+			Reason: fmt.Sprintf("failed to start test command: %v", startErr),
+			Command: command,
+			Dir:     tc.Dir,
+		}
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		tracker.observe(scanner.Text())
+	}
+
+	err := cmd.Wait()
 	if err != nil {
-		output := string(out)
-		tail := lastNLines(output, 30)
 		reason := fmt.Sprintf("test suite failed: %v", err)
+		details := lastNLines(tracker.allOutput(), 30)
 		if ctx.Err() == context.DeadlineExceeded {
 			reason = fmt.Sprintf(
 				"test suite timed out after %s — a test may be hanging. Do not run the full suite; run individual test files to isolate",
 				timeout.Truncate(time.Second),
 			)
+			details = tracker.timeoutSummary()
 		}
 		return Result{
 			Passed:  false,
 			Reason:  reason,
-			Details: tail,
+			Details: details,
 			Command: command,
 			Dir:     tc.Dir,
 		}
@@ -405,6 +425,68 @@ func filterFailures(s string) string {
 	return strings.Join(kept, "\n")
 }
 
+// testTracker observes test output line-by-line, tracking which test was last
+// started (=== RUN), last completed (--- PASS/FAIL), and which packages
+// passed. When the suite times out, timeoutSummary returns a focused report
+// instead of a useless goroutine dump.
+type testTracker struct {
+	lastStarted   string // last "=== RUN   TestXxx" line
+	lastCompleted string // last "--- PASS: TestXxx" or "--- FAIL: TestXxx" line
+	passedPkgs    []string
+	failedPkgs    []string
+	lines         []string
+}
+
+func newTestTracker() *testTracker {
+	return &testTracker{}
+}
+
+func (t *testTracker) observe(line string) {
+	t.lines = append(t.lines, line)
+	trimmed := strings.TrimSpace(line)
+
+	if strings.HasPrefix(trimmed, "=== RUN") {
+		t.lastStarted = trimmed
+	} else if strings.HasPrefix(trimmed, "--- PASS:") || strings.HasPrefix(trimmed, "--- FAIL:") {
+		t.lastCompleted = trimmed
+	} else if strings.HasPrefix(trimmed, "ok ") {
+		t.passedPkgs = append(t.passedPkgs, trimmed)
+	} else if strings.HasPrefix(trimmed, "FAIL\t") {
+		t.failedPkgs = append(t.failedPkgs, trimmed)
+	}
+}
+
+func (t *testTracker) allOutput() string {
+	return strings.Join(t.lines, "\n")
+}
+
+func (t *testTracker) timeoutSummary() string {
+	var b strings.Builder
+
+	if t.lastCompleted != "" {
+		fmt.Fprintf(&b, "Last completed test before timeout:\n  %s\n\n", t.lastCompleted)
+	}
+	if t.lastStarted != "" {
+		fmt.Fprintf(&b, "Last started test (likely hanging):\n  %s\n\n", t.lastStarted)
+	}
+	if len(t.failedPkgs) > 0 {
+		b.WriteString("Failed packages:\n")
+		for _, f := range t.failedPkgs {
+			fmt.Fprintf(&b, "  %s\n", f)
+		}
+		b.WriteString("\n")
+	}
+	if len(t.passedPkgs) > 0 {
+		fmt.Fprintf(&b, "%d packages passed before timeout (skip these)\n", len(t.passedPkgs))
+	}
+
+	result := b.String()
+	if result == "" {
+		return lastNLines(t.allOutput(), 30)
+	}
+	return result
+}
+
 func lastNLines(s string, n int) string {
 	lines := strings.Split(s, "\n")
 	if len(lines) <= n {
@@ -412,3 +494,4 @@ func lastNLines(s string, n int) string {
 	}
 	return strings.Join(lines[len(lines)-n:], "\n")
 }
+

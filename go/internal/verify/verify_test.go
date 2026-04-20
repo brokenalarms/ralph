@@ -326,6 +326,38 @@ func TestLastNLines_ShortInput(t *testing.T) {
 
 // filterFailures strips passing "ok" package lines from go test output,
 // keeping only FAIL lines and error details visible in compile check logs.
+func TestTestTracker_TimeoutSummary(t *testing.T) {
+	tracker := newTestTracker()
+	lines := []string{
+		"=== RUN   TestAlpha",
+		"--- PASS: TestAlpha (0.01s)",
+		"=== RUN   TestBeta",
+		"--- PASS: TestBeta (0.02s)",
+		"ok \tgithub.com/example/pkg1\t0.05s",
+		"=== RUN   TestGamma",
+		"--- PASS: TestGamma (0.01s)",
+		"=== RUN   TestDelta",
+		// TestDelta never completes — this is the hanging test
+	}
+	for _, line := range lines {
+		tracker.observe(line)
+	}
+
+	summary := tracker.timeoutSummary()
+	if !strings.Contains(summary, "TestGamma") {
+		t.Errorf("expected last completed test TestGamma in summary, got:\n%s", summary)
+	}
+	if !strings.Contains(summary, "TestDelta") {
+		t.Errorf("expected last started test TestDelta in summary, got:\n%s", summary)
+	}
+	if !strings.Contains(summary, "likely hanging") {
+		t.Errorf("expected 'likely hanging' label in summary, got:\n%s", summary)
+	}
+	if !strings.Contains(summary, "1 packages passed") {
+		t.Errorf("expected passed package count in summary, got:\n%s", summary)
+	}
+}
+
 func TestFilterFailures(t *testing.T) {
 	input := strings.Join([]string{
 		"ok \tgithub.com/example/pkg1\t0.003s",
