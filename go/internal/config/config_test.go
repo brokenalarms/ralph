@@ -78,9 +78,7 @@ func TestAllFlags(t *testing.T) {
 
 	args := []string{
 		"-n", "10",
-		"-p", "fix tests",
 		"-q",
-		"--calls-per-hour", "40",
 		"--tmux",
 		"--auto-merge",
 		"--evolve",
@@ -97,14 +95,8 @@ func TestAllFlags(t *testing.T) {
 	if cfg.MaxIterations != 10 {
 		t.Errorf("MaxIterations = %d, want 10", cfg.MaxIterations)
 	}
-	if cfg.Prompt != "fix tests" {
-		t.Errorf("Prompt = %q, want \"fix tests\"", cfg.Prompt)
-	}
 	if !cfg.Quiet {
 		t.Error("Quiet should be true")
-	}
-	if cfg.CallsPerHour != 40 {
-		t.Errorf("CallsPerHour = %d, want 40", cfg.CallsPerHour)
 	}
 	if !cfg.UseTmux {
 		t.Error("UseTmux should be true")
@@ -173,6 +165,63 @@ func TestAutoMergeFlag(t *testing.T) {
 	}
 }
 
+// Verifies that flags moved to config.toml-only produce an unknown option error
+// when passed on the CLI, preventing accidental use of the old interface.
+func TestConfigOnlyFlagsRejectedOnCLI(t *testing.T) {
+	removed := []string{
+		"--calls-per-hour",
+		"--idle-timeout",
+		"--idle-timeout-progress",
+		"--max-run-duration",
+		"--fix-max-run-duration",
+		"--post-signal-timeout",
+		"--agent-escalation-model",
+		"--verify-model",
+		"--verify-escalation-model",
+		"--fix-model",
+		"--fix-escalation-model",
+		"--copilot-review-timeout",
+		"--copilot-opportunistic-timeout",
+		"--coderabbit-review-timeout",
+		"--max-prompt-attempts",
+		"--max-idle-timeout-failures",
+		"--max-llm-verify-attempts",
+		"--max-test-fix-attempts",
+		"--test-timeout",
+		"--compile-check-timeout",
+		"--connectivity-check-timeout",
+		"--internet-restore-interval",
+		"--admin-merge-on-ci-infra-failure",
+	}
+	for _, flag := range removed {
+		_, err := Parse([]string{flag, "dummy"})
+		if err == nil || !strings.Contains(err.Error(), "unknown") {
+			t.Errorf("config-only flag %s should produce unknown option error on CLI, got: %v", flag, err)
+		}
+	}
+}
+
+// Verifies that flags previously missing a ConfigKey now have one,
+// ensuring they can be loaded from config.toml.
+func TestNewConfigKeysExist(t *testing.T) {
+	required := map[string]bool{
+		"idle_timeout":          false,
+		"idle_timeout_progress": false,
+		"max_run_duration":      false,
+		"fix_max_run_duration":  false,
+	}
+	for _, f := range Flags {
+		if _, ok := required[f.ConfigKey]; ok {
+			required[f.ConfigKey] = true
+		}
+	}
+	for key, found := range required {
+		if !found {
+			t.Errorf("ConfigKey %q missing from Flags registry", key)
+		}
+	}
+}
+
 // --merge-admin was removed; passing it should produce a parse error.
 func TestMergeAdminFlagRemoved(t *testing.T) {
 	_, err := Parse([]string{"--merge-admin"})
@@ -217,15 +266,22 @@ func TestHelpFlag(t *testing.T) {
 	}
 }
 
-// Verifies that --idle-timeout and --idle-timeout-progress flags override
+// Verifies that idle_timeout and idle_timeout_progress config keys override
 // defaults, accepting both Go duration strings and bare seconds.
-func TestIdleTimeoutFlags(t *testing.T) {
+func TestIdleTimeoutConfigKeys(t *testing.T) {
 	t.Setenv("RALPH_IDLE_TIMEOUT", "")
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 
-	cfg, err := Parse([]string{"--idle-timeout", "5m", "--idle-timeout-progress", "15s"})
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	os.WriteFile(path, []byte("idle_timeout = 5m\nidle_timeout_progress = 15s\n"), 0o644)
+
+	cfg, err := Parse(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := cfg.LoadConfigFile(path); err != nil {
+		t.Fatalf("LoadConfigFile failed: %v", err)
 	}
 	if cfg.IdleTimeout != 5*time.Minute {
 		t.Errorf("IdleTimeout = %s, want 5m", cfg.IdleTimeout)
@@ -235,9 +291,13 @@ func TestIdleTimeoutFlags(t *testing.T) {
 	}
 
 	// Bare integer interpreted as seconds.
-	cfg, err = Parse([]string{"--idle-timeout", "120"})
+	os.WriteFile(path, []byte("idle_timeout = 120\n"), 0o644)
+	cfg, err = Parse(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := cfg.LoadConfigFile(path); err != nil {
+		t.Fatalf("LoadConfigFile failed: %v", err)
 	}
 	if cfg.IdleTimeout != 2*time.Minute {
 		t.Errorf("IdleTimeout = %s, want 2m0s for bare 120", cfg.IdleTimeout)
@@ -273,7 +333,7 @@ func TestUnknownFlag(t *testing.T) {
 
 // Verifies that flags requiring a value return an error when the value is missing.
 func TestMissingArgValue(t *testing.T) {
-	for _, flag := range []string{"-n", "-p", "--calls-per-hour", "--idle-timeout", "--idle-timeout-progress"} {
+	for _, flag := range []string{"-n"} {
 		_, err := Parse([]string{flag})
 		if err == nil {
 			t.Errorf("Parse(%q) should error on missing value", flag)
@@ -283,7 +343,7 @@ func TestMissingArgValue(t *testing.T) {
 
 // Verifies that non-numeric values for integer flags produce an error.
 func TestInvalidNumericArg(t *testing.T) {
-	for _, flag := range []string{"-n", "--calls-per-hour"} {
+	for _, flag := range []string{"-n"} {
 		_, err := Parse([]string{flag, "abc"})
 		if err == nil {
 			t.Errorf("Parse(%q, \"abc\") should error on non-numeric value", flag)
@@ -959,7 +1019,6 @@ func TestConfigToState_ArgsFromState_Roundtrip(t *testing.T) {
 		"--evolve",
 		"--wait",
 		"--base-branch", "main",
-		"--admin-merge-on-ci-infra-failure",
 	})
 
 	state := ConfigToState(&original)
@@ -983,9 +1042,6 @@ func TestConfigToState_ArgsFromState_Roundtrip(t *testing.T) {
 	}
 	if restored.BaseBranch != original.BaseBranch {
 		t.Errorf("BaseBranch = %q, want %q", restored.BaseBranch, original.BaseBranch)
-	}
-	if restored.AdminMergeOnCIInfraFailure != original.AdminMergeOnCIInfraFailure {
-		t.Errorf("AdminMergeOnCIInfraFailure = %v, want %v", restored.AdminMergeOnCIInfraFailure, original.AdminMergeOnCIInfraFailure)
 	}
 }
 

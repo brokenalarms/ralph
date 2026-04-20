@@ -34,12 +34,12 @@ func TestFlagUsageContainsDefaults(t *testing.T) {
 	}
 }
 
-// Verifies that help text includes env var names for flags that define them,
-// preventing env var documentation from drifting out of sync.
+// Verifies that help text includes env var names for flags that appear in CLI help.
+// Config-only flags (Long == "") are excluded since they don't appear in help output.
 func TestFlagUsageContainsEnvVars(t *testing.T) {
 	usage := FlagUsage()
 	for _, f := range Flags {
-		if f.EnvVar == "" {
+		if f.EnvVar == "" || f.Long == "" {
 			continue
 		}
 		if !strings.Contains(usage, f.EnvVar) {
