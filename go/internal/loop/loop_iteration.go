@@ -540,7 +540,6 @@ func (l *Loop) buildCompletedTask(taskID, nextTask, summary string, prNumber int
 type iterationPrompt struct {
 	fullPrompt string
 	headBefore string
-	diffBefore bool // true if a diff already existed when this iteration started
 	rawLogPath string
 	logStart   int
 	workDir    string
@@ -575,7 +574,6 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	}
 
 	headBefore := l.git.HeadRev()
-	diffBefore := l.git.HasDiff()
 	rawLogPath := filepath.Join(ralphDir, "raw.log")
 	logStart := fileLineCount(rawLogPath)
 
@@ -602,7 +600,6 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	return iterationPrompt{
 		fullPrompt: fullPrompt,
 		headBefore: headBefore,
-		diffBefore: diffBefore,
 		rawLogPath: rawLogPath,
 		logStart:   logStart,
 		workDir:    l.git.GetWorkDir(),

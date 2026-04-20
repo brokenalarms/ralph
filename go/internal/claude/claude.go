@@ -62,15 +62,10 @@ type RunConfig struct {
 	// Zero disables the wall-clock backstop.
 	MaxRunDuration time.Duration
 
-	// IdleTimeoutProgress is the shorter idle timeout used when the
-	// HasProgress callback reports that work was already done in this
-	// iteration (e.g. git diff exists). Zero falls back to IdleTimeout.
+	// IdleTimeoutProgress is the shorter idle timeout used once the agent has
+	// produced content output (text, thinking, tool use) in the raw log.
+	// Zero falls back to IdleTimeout.
 	IdleTimeoutProgress time.Duration
-
-	// HasProgress returns true when the current iteration has already
-	// produced observable work (new commits, unstaged changes). Used to
-	// select the shorter IdleTimeoutProgress. May be nil.
-	HasProgress func() bool
 
 	// OnSignal is called when the agent writes a completion signal.
 	// If it returns true, the signal is accepted (agent killed, result returned).
@@ -482,6 +477,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 
 	taskLogged := false
 	warningLogged := false
+	activitySeen := false
 	lastActivity := time.Now()
 	runStart := time.Now()
 	processDone := make(chan struct{})
@@ -536,6 +532,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 				scan := scanNewLines(cfg.RawLog, &logOffset)
 				if scan.hasActivity {
 					lastActivity = time.Now()
+					activitySeen = true
 				}
 				if scan.rlThrottled {
 					r.Logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: cfg.Model},
@@ -646,7 +643,7 @@ func (r *Runner) poll(cmd *exec.Cmd, cfg RunConfig) Result {
 			// Check idle timeout.
 			if cfg.IdleTimeout > 0 {
 				timeout := cfg.IdleTimeout
-				if cfg.IdleTimeoutProgress > 0 && cfg.HasProgress != nil && cfg.HasProgress() {
+				if cfg.IdleTimeoutProgress > 0 && activitySeen {
 					timeout = cfg.IdleTimeoutProgress
 				}
 				idle := time.Since(lastActivity)

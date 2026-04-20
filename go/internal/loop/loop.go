@@ -448,15 +448,6 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 		IdleTimeout:         l.cfg.IdleTimeout,
 		IdleTimeoutProgress: l.cfg.IdleTimeoutProgress,
 		MaxRunDuration:      l.cfg.MaxRunDuration,
-		HasProgress: func() bool {
-			if l.git.HeadRev() != prep.headBefore {
-				return true
-			}
-			if prep.diffBefore {
-				return false
-			}
-			return l.git.HasDiff()
-		},
 		OnSignal: func(summary string) bool {
 			// Stop the main runner before spawning fix-agent subprocesses
 			// inside runVerifyPipeline. The main agent session is wrapping

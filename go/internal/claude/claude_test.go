@@ -1004,8 +1004,8 @@ func TestPoll_ActivityResetsIdleTimer(t *testing.T) {
 	}
 }
 
-// Verifies that the shorter progress-aware timeout is used when HasProgress
-// returns true, catching sessions that did work then went idle.
+// Verifies that the shorter progress-aware timeout fires once the agent has
+// produced content output in the raw log (text activity flips activitySeen).
 func TestPoll_ProgressTimeoutShorterThanDefault(t *testing.T) {
 	dir := t.TempDir()
 	rawLog := filepath.Join(dir, "raw.log")
@@ -1024,18 +1024,25 @@ func TestPoll_ProgressTimeoutShorterThanDefault(t *testing.T) {
 		PollInterval:        50 * time.Millisecond,
 		IdleTimeout:         5 * time.Second,
 		IdleTimeoutProgress: 200 * time.Millisecond,
-		HasProgress:         func() bool { return true },
 	}
+
+	// Write a content activity line to the raw log after a short delay, simulating
+	// the agent producing output. This causes activitySeen to flip true, switching
+	// the idle timer to IdleTimeoutProgress (200ms) instead of IdleTimeout (5s).
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		os.WriteFile(rawLog, []byte("agent output line\n"), 0o644)
+	}()
 
 	start := time.Now()
 	result := runWithCommand(t, &runner, cfg, "sleep", "1")
 	elapsed := time.Since(start)
 
 	if !result.IdleTimeout {
-		t.Error("expected IdleTimeout to be true with progress timeout")
+		t.Error("expected IdleTimeout to be true after content activity seen")
 	}
 	if elapsed > 2*time.Second {
-		t.Errorf("progress timeout should fire quickly, took %s", elapsed)
+		t.Errorf("progress timeout should fire quickly after content, took %s", elapsed)
 	}
 }
 
