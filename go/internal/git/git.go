@@ -35,7 +35,6 @@ type Config struct {
 	ProjectDir                  string
 	WorkDir                     string
 	RalphDir                    string
-	WorktreeRoot                string // overrides global ~/.ralph/worktrees/<hash>/ (used by tests)
 	BaseBranch                  string
 	Resume                      bool
 	Logger                      Log
@@ -52,7 +51,6 @@ type Config struct {
 type repo struct {
 	projectDir     string
 	workDir        string
-	worktreeRoot   string // overrides global ~/.ralph/worktrees/<hash>/ when set
 	worktreeBranch string
 	prevBranch     string
 	branchRenamed  bool
@@ -86,7 +84,6 @@ func New(cfg Config) Ops {
 		projectDir:                  projectDir,
 		workDir:                     cfg.WorkDir,
 		ralphDir:                    cfg.RalphDir,
-		worktreeRoot:                cfg.WorktreeRoot,
 		baseBranch:                  cfg.BaseBranch,
 		resume:                      cfg.Resume,
 		logger:                      cfg.Logger,

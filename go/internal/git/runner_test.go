@@ -163,12 +163,12 @@ func TestParseWorktreeForBranch(t *testing.T) {
 HEAD abc123
 branch refs/heads/main
 
-worktree /home/user/.ralph/worktrees/ralph-20260101-01
+worktree /home/user/project/.ralph/worktrees/ralph-20260101-01
 HEAD def456
 branch refs/heads/ralph/project/01-feature
 `
 	path := parseWorktreeForBranch(porcelain, "ralph/project/01-feature")
-	if path != "/home/user/.ralph/worktrees/ralph-20260101-01" {
+	if path != "/home/user/project/.ralph/worktrees/ralph-20260101-01" {
 		t.Errorf("expected worktree path, got %q", path)
 	}
 

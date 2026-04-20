@@ -2,7 +2,6 @@ package git
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -279,25 +278,12 @@ func hasPathPrefix(path, prefix string) bool {
 	return strings.HasPrefix(path, prefix)
 }
 
-// worktreeRootForProject returns the global worktree root for projectDir.
-// Worktrees live at ~/.ralph/worktrees/<hash>/ so they are outside any
-// project directory tree, preventing agents from escaping via parent traversal.
-func worktreeRootForProject(projectDir string) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("could not determine home directory: %w", err)
-	}
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(projectDir)))[:12]
-	return filepath.Join(home, ".ralph", "worktrees", hash), nil
-}
-
-// resolveWorktreeRoot returns r.worktreeRoot when set (tests inject a temp
-// dir), otherwise computes the global path from projectDir.
+// resolveWorktreeRoot returns the worktree root directory under ralphDir.
 func (r *repo) resolveWorktreeRoot() (string, error) {
-	if r.worktreeRoot != "" {
-		return r.worktreeRoot, nil
+	if r.ralphDir == "" {
+		return "", fmt.Errorf("ralphDir is required for worktree root")
 	}
-	return worktreeRootForProject(r.projectDir)
+	return filepath.Join(r.ralphDir, "worktrees"), nil
 }
 
 func (r *repo) PruneOrphanedWorktrees() {
