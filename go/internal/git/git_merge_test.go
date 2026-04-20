@@ -109,26 +109,21 @@ func TestPostMergeUpdateMain_PreservesUncommittedWorkingTreeChanges(t *testing.T
 // the rebase path is clean, and force-language would be alarming for users
 // monitoring the stream log.
 func TestPostMergeUpdateMain_RebasePathLogsCleanly(t *testing.T) {
-	project, _ := initBareRepo(t)
-	bare := filepath.Join(filepath.Dir(project), "bare.git")
-	ralphDir := filepath.Join(project, ".ralph")
 	log := &testLog{}
+	runner := newStubRunner()
+	runner.On("fetch", "", nil)
+	runner.On("rebase", "", nil)
+	runner.On("checkout", "", nil)
+	runner.On("clean", "", nil)
+	runner.On("branch", "", nil)
+	runner.On("rev-list", "0", nil)
 
 	repo := newRepoForTest(
-		Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log},
+		Config{ProjectDir: "/project", WorkDir: "/worktree", BaseBranch: "main", Logger: log},
 		nil,
-		withRunner(&execRunner{}),
+		withRunner(runner),
+		withWorktreeBranch("ralph/task-branch"),
 	)
-	if err := repo.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	// Push a commit to origin/main so PostMergeUpdateMain has work to do.
-	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
-	run(t, "git", "clone", bare, tmpClone)
-	writeFile(t, tmpClone, "new-file.txt", "content\n")
-	run(t, "git", "-C", tmpClone, "commit", "-m", "merged PR")
-	run(t, "git", "-C", tmpClone, "push", "origin", "main")
 
 	repo.PostMergeUpdateMain()
 
@@ -337,19 +332,23 @@ func TestPushAndCreatePR_BaseBranchMainTargetsMain(t *testing.T) {
 // PR titles must include the bead ID prefix so PRs are traceable back to
 // their originating task.
 func TestPushAndCreatePR_IncludesBeadIDInTitle(t *testing.T) {
-	project, cleanup := initBareRepoWithBranch(t, "main")
-	defer cleanup()
-
-	wtDir := filepath.Join(t.TempDir(), "worktree")
-	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
-	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
+	runner := newStubRunner()
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("remote get-url origin", "https://github.com/owner/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("rev-parse", "abc123", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("log", "feature commit", nil)
+	runner.On("push", "", nil)
+	runner.On("rev-list --count", "1", nil)
 
 	gh := newStubGitHub(StubGitHubConfig{Available: true})
 
 	repo := newRepoForTest(
-		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "main", Logger: &testLog{}},
+		Config{ProjectDir: "/project", WorkDir: "/worktree", BaseBranch: "main", Logger: &testLog{}},
 		gh,
-		withRunner(&execRunner{}),
+		withRunner(runner),
 		withWorktreeBranch("ralph/test/feature"),
 	)
 
@@ -367,19 +366,23 @@ func TestPushAndCreatePR_IncludesBeadIDInTitle(t *testing.T) {
 // When no bead ID is provided, the PR title should be the task
 // description without any bracketed prefix.
 func TestPushAndCreatePR_NoBeadID(t *testing.T) {
-	project, cleanup := initBareRepoWithBranch(t, "main")
-	defer cleanup()
-
-	wtDir := filepath.Join(t.TempDir(), "worktree")
-	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test/feature", wtDir)
-	run(t, "git", "-C", wtDir, "commit", "--allow-empty", "-m", "feature commit")
+	runner := newStubRunner()
+	runner.On("diff --quiet", "", nil)
+	runner.On("diff --cached --quiet", "", nil)
+	runner.On("remote get-url origin", "https://github.com/owner/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("rev-parse", "abc123", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("log", "feature commit", nil)
+	runner.On("push", "", nil)
+	runner.On("rev-list --count", "1", nil)
 
 	gh := newStubGitHub(StubGitHubConfig{Available: true})
 
 	repo := newRepoForTest(
-		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "main", Logger: &testLog{}},
+		Config{ProjectDir: "/project", WorkDir: "/worktree", BaseBranch: "main", Logger: &testLog{}},
 		gh,
-		withRunner(&execRunner{}),
+		withRunner(runner),
 		withWorktreeBranch("ralph/test/feature"),
 	)
 

@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -579,8 +580,7 @@ func TestValidateStackParent_PreservesDivergedParentWithUnmergedWork(t *testing.
 // validateStackParent is a no-op when prevBranch is empty — the common
 // case at session start before any stack is established.
 func TestValidateStackParent_EmptyPrevBranchNoOp(t *testing.T) {
-	project, bare := initBareRepoWithOrigin(t)
-	mgr := setupRebaseMgr(t, project, bare)
+	mgr := newRepoForTest(Config{ProjectDir: "/project", WorkDir: "/worktree", BaseBranch: "main", Logger: &testLog{}}, nil)
 
 	mgr.SetPrevBranch("")
 	mgr.validateStackParent(context.Background())
@@ -589,23 +589,15 @@ func TestValidateStackParent_EmptyPrevBranchNoOp(t *testing.T) {
 	}
 }
 
-// EnsureUpToDate invokes validateStackParent on every call — not just at
-// startup. This is the invariant that prevents "stack parent merged
-// mid-session" from surfacing as base=invalid at CreatePR time: each
-// sync re-queries remote state and clears stale prevBranch.
 func TestEnsureUpToDate_InvokesValidateStackParent(t *testing.T) {
-	project, bare := initBareRepoWithOrigin(t)
-	mgr := setupRebaseMgr(t, project, bare)
+	runner := newStubRunner()
+	runner.On("fetch origin stack-parent", "", fmt.Errorf("couldn't find remote ref"))
+	runner.On("fetch origin main", "", nil)
+	runner.On("rev-parse --verify", "abc123", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
 
-	run(t, "git", "-C", project, "checkout", "-b", "stack-parent")
-	writeFile(t, project, "parent.txt", "parent\n")
-	run(t, "git", "-C", project, "commit", "-m", "parent")
-	run(t, "git", "-C", project, "push", "origin", "stack-parent")
-	run(t, "git", "-C", project, "checkout", "main")
-	run(t, "git", "-C", mgr.workDir, "fetch", "origin", "stack-parent")
-
+	mgr := newRepoForTest(Config{ProjectDir: "/project", WorkDir: "/worktree", BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(runner), withWorktreeBranch("ralph/feature"))
 	mgr.SetPrevBranch("stack-parent")
-	run(t, "git", "-C", bare, "branch", "-D", "stack-parent")
 
 	if err := mgr.EnsureUpToDate(context.Background()); err != nil {
 		t.Fatalf("EnsureUpToDate should not error when parent vanished, got: %v", err)
