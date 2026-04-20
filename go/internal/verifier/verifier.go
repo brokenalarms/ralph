@@ -548,7 +548,6 @@ func (v *Verifier) runFixAgent(ctx context.Context, description, prompt, workDir
 		RalphDir:     v.cfg.RalphDir,
 		Prompt:       prompt,
 		RawLog:       rawLogPath,
-		Quiet:        true,
 		Signals:      v.cfg.Signals,
 		PollInterval:   2 * time.Second,
 		IdleTimeout:    v.cfg.IdleTimeout,

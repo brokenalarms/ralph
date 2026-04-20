@@ -78,7 +78,6 @@ func TestAllFlags(t *testing.T) {
 
 	args := []string{
 		"-n", "10",
-		"-q",
 		"--tmux",
 		"--auto-merge",
 		"--evolve",
@@ -94,9 +93,6 @@ func TestAllFlags(t *testing.T) {
 	}
 	if cfg.MaxIterations != 10 {
 		t.Errorf("MaxIterations = %d, want 10", cfg.MaxIterations)
-	}
-	if !cfg.Quiet {
-		t.Error("Quiet should be true")
 	}
 	if !cfg.UseTmux {
 		t.Error("UseTmux should be true")
@@ -377,7 +373,7 @@ func TestParseSubcommand(t *testing.T) {
 	}
 
 	// "loop" with flags passes them through as Args
-	sub, ok = ParseSubcommand([]string{"loop", "--max", "20", "--quiet"})
+	sub, ok = ParseSubcommand([]string{"loop", "--max", "20", "--auto-merge"})
 	if !ok {
 		t.Fatal("expected subcommand for 'loop' with flags")
 	}
@@ -385,7 +381,7 @@ func TestParseSubcommand(t *testing.T) {
 		t.Errorf("Name = %q, want loop", sub.Name)
 	}
 	if len(sub.Args) != 3 || sub.Args[0] != "--max" {
-		t.Errorf("Args = %v, want [--max 20 --quiet]", sub.Args)
+		t.Errorf("Args = %v, want [--max 20 --auto-merge]", sub.Args)
 	}
 
 	// "review" is a subcommand
@@ -934,7 +930,6 @@ func TestConfigToState_CapturesNonDefaults(t *testing.T) {
 		"--max", "20",
 		"--auto-merge",
 		"--evolve",
-		"--quiet",
 	})
 
 	m := ConfigToState(&cfg)
@@ -947,9 +942,6 @@ func TestConfigToState_CapturesNonDefaults(t *testing.T) {
 	}
 	if m["evolve"] != "true" {
 		t.Errorf("evolve = %q, want true", m["evolve"])
-	}
-	if m["quiet"] != "true" {
-		t.Errorf("quiet = %q, want true", m["quiet"])
 	}
 	// Default values should be omitted.
 	if _, ok := m["calls-per-hour"]; ok {
@@ -964,7 +956,6 @@ func TestArgsFromState_ReconstructsArgs(t *testing.T) {
 		"max":        "20",
 		"auto-merge": "true",
 		"evolve":     "true",
-		"quiet":      "true",
 	}
 
 	args := ArgsFromState(state)
@@ -986,9 +977,6 @@ func TestArgsFromState_ReconstructsArgs(t *testing.T) {
 	}
 	if !cfg.Evolve {
 		t.Error("Evolve should be true")
-	}
-	if !cfg.Quiet {
-		t.Error("Quiet should be true")
 	}
 }
 

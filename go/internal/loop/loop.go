@@ -144,7 +144,6 @@ type Config struct {
 	Dirs                  workctx.WorkContext
 	PlanFile              string
 	MaxIterations         int
-	Quiet                 bool
 	AutoMerge             bool
 	Evolve                bool
 	CallsPerHour          int
@@ -440,7 +439,6 @@ func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int)
 		TaskID:              task.id,
 		RawLog:              prep.rawLogPath,
 		LogFile:             filepath.Join(l.cfg.Dirs.RalphDir, "loop.log"),
-		Quiet:               l.cfg.Quiet,
 		Verbose:             l.cfg.Verbose,
 		Model:               agentModel,
 		Signals:             l.signals,
