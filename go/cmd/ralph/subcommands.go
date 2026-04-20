@@ -164,9 +164,6 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 	if loadErr := cfg.LoadConfigFile(configPath); loadErr != nil {
 		log.Emit(logging.Opts{Level: logging.Warn}, "Failed to load config.toml: %v", loadErr)
 	}
-	if saveErr := cfg.SaveConfigFile(configPath); saveErr != nil {
-		log.Emit(logging.Opts{Level: logging.Warn}, "Failed to save config.toml: %v", saveErr)
-	}
 
 	existingPID, err := pidfile.Check(filepath.Join(ralphDir, "loop.pid"))
 	if err != nil {
