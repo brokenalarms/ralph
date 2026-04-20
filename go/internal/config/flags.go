@@ -67,16 +67,6 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return strconv.Itoa(cfg.MaxIterations) },
 	},
 	{
-		Short: "-q", Long: "--quiet",
-		Help: "Suppress Claude output streaming (log only)",
-		Kind: KindBool,
-		Apply: func(cfg *Config, _ string) error {
-			cfg.Quiet = true
-			return nil
-		},
-		Read: func(cfg *Config) string { return boolStr(cfg.Quiet) },
-	},
-	{
 		Help: "Max Claude calls per hour", Default: "80",
 		ConfigKey: "calls_per_hour",
 		Kind: KindInt,

@@ -50,7 +50,6 @@ type RunConfig struct {
 	Prompt    string
 	RawLog    string // path to raw JSON log file
 	LogFile   string // path to human-readable log file
-	Quiet     bool   // suppress terminal streaming
 	Signals   SignalPaths
 	PollInterval time.Duration
 
@@ -291,7 +290,7 @@ func (r *Runner) Run(cfg RunConfig) (Result, error) {
 	// Start optional terminal tail (pure Go — no external process to orphan).
 	tailStop := make(chan struct{})
 	var tailDone <-chan struct{}
-	if !cfg.Quiet && cfg.LogFile != "" {
+	if cfg.LogFile != "" {
 		tailDone = startTailGoroutine(cfg.LogFile, tailStop)
 	}
 

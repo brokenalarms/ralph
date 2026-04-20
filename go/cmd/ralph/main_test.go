@@ -148,7 +148,6 @@ func TestGenerateResumeScript(t *testing.T) {
 	cfg := config.Config{
 		ProjectDir:    dir,
 		MaxIterations: 20,
-		Quiet:         true,
 		AutoMerge:     true,
 	}
 
@@ -164,9 +163,6 @@ func TestGenerateResumeScript(t *testing.T) {
 	content := string(data)
 	if !strings.Contains(content, "--max 20") {
 		t.Error("resume script should contain --max 20")
-	}
-	if !strings.Contains(content, "--quiet") {
-		t.Error("resume script should contain --quiet")
 	}
 	if !strings.Contains(content, "--auto-merge") {
 		t.Error("resume script should contain --auto-merge")
@@ -210,7 +206,6 @@ func TestGenerateResumeScript_AllFlags(t *testing.T) {
 	cfg := config.Config{
 		ProjectDir:    dir,
 		MaxIterations: 30,
-		Quiet:         true,
 		AutoMerge:     true,
 		Evolve:        true,
 		BaseBranch:    "main",
@@ -229,7 +224,6 @@ func TestGenerateResumeScript_AllFlags(t *testing.T) {
 	content := string(data)
 	for _, flag := range []string{
 		"--max 30",
-		"--quiet",
 		"--auto-merge",
 		"--evolve",
 		"--base-branch main",

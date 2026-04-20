@@ -23,7 +23,6 @@ type Config struct {
 	ProjectDir                 string
 	MaxIterations              int
 	Prompt                     string
-	Quiet                      bool
 	CallsPerHour               int
 	UseTmux                    bool
 	AutoMerge                  bool
