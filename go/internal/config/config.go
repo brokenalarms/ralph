@@ -188,7 +188,7 @@ func Parse(args []string) (Config, error) {
 			if err := f.Apply(&cfg, ""); err != nil {
 				return cfg, err
 			}
-			if f.TrackCLI && f.ConfigKey != "" {
+			if f.ConfigKey != "" {
 				cfg.cliSet[f.ConfigKey] = true
 			}
 			i++
@@ -200,7 +200,7 @@ func Parse(args []string) (Config, error) {
 			if err := f.Apply(&cfg, v); err != nil {
 				return cfg, fmt.Errorf("invalid value for %s: %q", args[i], v)
 			}
-			if f.TrackCLI && f.ConfigKey != "" {
+			if f.ConfigKey != "" {
 				cfg.cliSet[f.ConfigKey] = true
 			}
 			i += 2
@@ -300,57 +300,6 @@ func (c *Config) LoadConfigFile(path string) error {
 		_ = fd.Apply(c, value)
 	}
 	return scanner.Err()
-}
-
-// SaveConfigFile writes back any CLI-set values to the config file at path.
-// Lines for keys not in cliSet are preserved verbatim, keeping comments and ordering.
-func (c *Config) SaveConfigFile(path string) error {
-	if len(c.cliSet) == 0 {
-		return nil
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-
-	lines := strings.Split(string(data), "\n")
-	// Drop the trailing empty element produced by Split when the file ends with \n.
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		eqIdx := strings.Index(trimmed, "=")
-		if eqIdx < 0 {
-			continue
-		}
-		key := strings.TrimSpace(trimmed[:eqIdx])
-		if !c.cliSet[key] {
-			continue
-		}
-		fd := configMap[key]
-		if fd == nil {
-			continue
-		}
-		var val string
-		if fd.Kind == KindBool {
-			if fd.Read(c) == "true" {
-				val = "true"
-			} else {
-				val = "false"
-			}
-		} else {
-			val = fd.Read(c)
-		}
-		lines[i] = fmt.Sprintf("%s = %s", key, val)
-	}
-
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
 }
 
 // InitConfig generates a config.toml file at the given path with default values

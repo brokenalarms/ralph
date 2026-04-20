@@ -25,7 +25,6 @@ type FlagDef struct {
 	EnvVar    string
 	ConfigKey string
 	Kind      FlagKind
-	TrackCLI  bool
 	Apply     func(cfg *Config, val string) error
 	Read      func(cfg *Config) string // returns current value; "" means default/unset for bools
 }
@@ -56,7 +55,7 @@ var Flags = []FlagDef{
 		Short: "-n", Long: "--max", MetaVar: "<N>",
 		Help: "Max iterations", Default: "50",
 		EnvVar: "RALPH_MAX_ITERATIONS", ConfigKey: "max_iterations",
-		Kind: KindInt, TrackCLI: true,
+		Kind: KindInt,
 		Apply: func(cfg *Config, val string) error {
 			n, err := strconv.Atoi(val)
 			if err != nil {
@@ -161,7 +160,7 @@ var Flags = []FlagDef{
 		Long: "--base-branch", MetaVar: "<name>",
 		Help: "Base branch for rebase/merge", Default: "develop",
 		EnvVar: "RALPH_BASE_BRANCH", ConfigKey: "base_branch",
-		Kind: KindString, TrackCLI: true,
+		Kind: KindString,
 		Apply: func(cfg *Config, val string) error {
 			if val != "" {
 				cfg.BaseBranch = val
@@ -184,7 +183,7 @@ var Flags = []FlagDef{
 		Long:      "--admin-merge-on-ci-infra-failure",
 		Help:      "Admin-bypass branch protection when AutoMerge detects a CI infrastructure failure (zero job steps). Has no effect on real test failures.",
 		ConfigKey: "admin_merge_on_ci_infra_failure",
-		Kind:      KindBool, TrackCLI: true,
+		Kind:      KindBool,
 		Apply: func(cfg *Config, _ string) error {
 			cfg.AdminMergeOnCIInfraFailure = true
 			return nil
@@ -319,7 +318,7 @@ var Flags = []FlagDef{
 		Long: "--post-task", MetaVar: "<script>",
 		Help:      "Run external script after each task completes",
 		ConfigKey: "post_task",
-		Kind:      KindString, TrackCLI: true,
+		Kind:      KindString,
 		Apply: func(cfg *Config, val string) error {
 			cfg.PostTask = val
 			return nil
@@ -330,7 +329,7 @@ var Flags = []FlagDef{
 		Long: "--verify-build", MetaVar: "<script>",
 		Help:      "Run external script before pre-iteration tests to check project-level build health",
 		ConfigKey: "verify_build",
-		Kind:      KindString, TrackCLI: true,
+		Kind:      KindString,
 		Apply: func(cfg *Config, val string) error {
 			cfg.VerifyBuild = val
 			return nil
@@ -368,7 +367,7 @@ var Flags = []FlagDef{
 		Help:      "Model ceiling for all LLM interactions (loop agent, fix agents, verification, task, review). When set, no LLM call may use a higher-tier model.",
 		Default:   ModelSonnet,
 		ConfigKey: "model",
-		Kind:      KindString, TrackCLI: true,
+		Kind:      KindString,
 		Apply: func(cfg *Config, val string) error {
 			cfg.Model = val
 			return nil
