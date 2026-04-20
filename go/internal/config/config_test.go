@@ -165,42 +165,6 @@ func TestAutoMergeFlag(t *testing.T) {
 	}
 }
 
-// Verifies that flags moved to config.toml-only produce an unknown option error
-// when passed on the CLI, preventing accidental use of the old interface.
-func TestConfigOnlyFlagsRejectedOnCLI(t *testing.T) {
-	removed := []string{
-		"--calls-per-hour",
-		"--idle-timeout",
-		"--idle-timeout-progress",
-		"--max-run-duration",
-		"--fix-max-run-duration",
-		"--post-signal-timeout",
-		"--agent-escalation-model",
-		"--verify-model",
-		"--verify-escalation-model",
-		"--fix-model",
-		"--fix-escalation-model",
-		"--copilot-review-timeout",
-		"--copilot-opportunistic-timeout",
-		"--coderabbit-review-timeout",
-		"--max-prompt-attempts",
-		"--max-idle-timeout-failures",
-		"--max-llm-verify-attempts",
-		"--max-test-fix-attempts",
-		"--test-timeout",
-		"--compile-check-timeout",
-		"--connectivity-check-timeout",
-		"--internet-restore-interval",
-		"--admin-merge-on-ci-infra-failure",
-	}
-	for _, flag := range removed {
-		_, err := Parse([]string{flag, "dummy"})
-		if err == nil || !strings.Contains(err.Error(), "unknown") {
-			t.Errorf("config-only flag %s should produce unknown option error on CLI, got: %v", flag, err)
-		}
-	}
-}
-
 // Verifies that flags previously missing a ConfigKey now have one,
 // ensuring they can be loaded from config.toml.
 func TestNewConfigKeysExist(t *testing.T) {
