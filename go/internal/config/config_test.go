@@ -404,16 +404,19 @@ func TestParseSubcommand(t *testing.T) {
 	}
 }
 
-// Verifies that subcommand parsing recognizes an existing directory argument
-// as the target dir.
-func TestSubcommandWithDir(t *testing.T) {
+// Verifies that subcommands always use cwd — positional directory arguments
+// are passed through as Args, not consumed as Dir.
+func TestSubcommandAlwaysUsesCwd(t *testing.T) {
 	dir := t.TempDir()
 	sub, ok := ParseSubcommand([]string{"task", dir})
 	if !ok {
 		t.Fatal("expected subcommand")
 	}
-	if sub.Dir != dir {
-		t.Errorf("Dir = %q, want %q", sub.Dir, dir)
+	if sub.Dir != "." {
+		t.Errorf("Dir = %q, want \".\" (cwd)", sub.Dir)
+	}
+	if len(sub.Args) != 1 || sub.Args[0] != dir {
+		t.Errorf("Args = %v, want [%s]", sub.Args, dir)
 	}
 }
 

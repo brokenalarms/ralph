@@ -8,11 +8,12 @@ Autonomous [Claude Code](https://docs.anthropic.com/en/docs/claude-code) task or
 # Install ralph and dependencies (bd, gh, tmux, Go)
 ./install.sh
 
-# Create some tasks
-ralph task ~/myproject
+# Create some tasks (run from your project directory)
+cd ~/myproject
+ralph task
 
 # Run the loop
-ralph loop --wait --auto-merge --base-branch main --evolve
+ralph loop --auto-merge --base-branch main --evolve
 ```
 
 ## Recommended workflow
@@ -201,7 +202,7 @@ make test     # runs the test suite
 Ralph uses [bd](https://github.com/brokenalarms/bd) as its task backend. The loop reads from the bd backlog, claims tasks, and closes them after successful merge. Use `ralph task` for interactive triage:
 
 ```bash
-ralph task ~/myproject
+ralph task
 ```
 
 ## .ralph directory

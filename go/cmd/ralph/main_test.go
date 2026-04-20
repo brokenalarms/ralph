@@ -54,13 +54,12 @@ func TestRun_LoopSubcommand(t *testing.T) {
 	}
 }
 
-// Proves: `ralph review` is recognized as a subcommand.
+// Proves: `ralph review` is recognized as a subcommand and routes to handleReview.
 func TestRun_ReviewSubcommand(t *testing.T) {
-	dir := t.TempDir()
-	code := run([]string{"review", dir})
-	// Should fail (no git repo / no prompts) but not with "unknown command".
-	if code != 1 {
-		t.Errorf("ralph review in non-git dir should exit 1, got %d", code)
+	// review -h should print help and exit 0, confirming routing works.
+	code := run([]string{"review", "-h"})
+	if code != 0 {
+		t.Errorf("ralph review -h should exit 0, got %d", code)
 	}
 }
 

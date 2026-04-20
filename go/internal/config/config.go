@@ -125,38 +125,22 @@ func ParseSubcommand(args []string) (Subcommand, bool) {
 	case "stop":
 		return Subcommand{Name: "stop", Dir: ".", Args: args[1:]}, true
 	case "feedback":
-		return parseSubcommandWithDir(args, "feedback"), true
+		return Subcommand{Name: "feedback", Dir: ".", Args: args[1:]}, true
 	case "attach":
-		return parseSubcommandWithDir(args, "attach"), true
+		return Subcommand{Name: "attach", Dir: ".", Args: args[1:]}, true
 	case "task":
-		return parseSubcommandWithDir(args, "task"), true
+		return Subcommand{Name: "task", Dir: ".", Args: args[1:]}, true
 	case "loop":
-		return parseSubcommandWithDir(args, "loop"), true
+		return Subcommand{Name: "loop", Dir: ".", Args: args[1:]}, true
 	case "review":
-		return parseSubcommandWithDir(args, "review"), true
+		return Subcommand{Name: "review", Dir: ".", Args: args[1:]}, true
 	case "merge":
-		return parseSubcommandWithDir(args, "merge"), true
+		return Subcommand{Name: "merge", Dir: ".", Args: args[1:]}, true
 	case "filter-stream":
 		return parseFilterStream(args), true
 	default:
 		return Subcommand{}, false
 	}
-}
-
-func parseSubcommandWithDir(args []string, name string) Subcommand {
-	sub := Subcommand{Name: name, Dir: "."}
-	rest := args[1:]
-
-	// If the next arg exists, doesn't start with '-', and is a directory, use it.
-	if len(rest) > 0 && len(rest[0]) > 0 && rest[0][0] != '-' {
-		if info, err := os.Stat(rest[0]); err == nil && info.IsDir() {
-			sub.Dir = rest[0]
-			rest = rest[1:]
-		}
-	}
-
-	sub.Args = rest
-	return sub
 }
 
 // parseFilterStream handles `ralph filter-stream <rawlog>` where the argument
