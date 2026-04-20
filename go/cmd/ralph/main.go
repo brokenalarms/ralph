@@ -258,7 +258,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 	if status, _ := st.Read("status"); status == "evolve_restart" {
 		printSessionSummary(sessionTasks, log)
-		if err := evolveRestart(cfg.ProjectDir, config.ResolveSourceDir(), scriptPath, cfg.BaseBranch, args, log); err != nil {
+		if err := evolveRestart(cfg.ProjectDir, scriptPath, cfg.BaseBranch, args, log); err != nil {
 			log.Emit(logging.Opts{Level: logging.Error}, "Evolve restart failed: %v", err)
 		}
 	}
