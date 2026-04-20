@@ -761,7 +761,8 @@ func TestBD_ProjectContext_AssemblesAllSections(t *testing.T) {
 	b := setupBD(t, runner)
 
 	// Write a config.toml so config is included.
-	os.WriteFile(filepath.Join(b.ProjectDir, "config.toml"), []byte("max_iterations = 10\n"), 0644)
+	os.MkdirAll(filepath.Join(b.ProjectDir, ".ralph"), 0755)
+	os.WriteFile(filepath.Join(b.ProjectDir, ".ralph", "config.toml"), []byte("max_iterations = 10\n"), 0644)
 
 	got, err := b.ProjectContext()
 	if err != nil {
