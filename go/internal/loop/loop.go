@@ -533,6 +533,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	var lastAction analyzer.Action
 	var lastTaskMerged bool
 	var sessionTasks []CompletedTask
+	var currentTaskID string
 	st, _ := l.state.Load()
 	iteration := st.Iteration
 
@@ -557,6 +558,7 @@ iterLoop:
 		runIteration++
 		iteration++
 		lastTaskMerged = false
+		currentTaskID = task.id
 
 		// Retry counters are local variables inside runVerifyPipeline, so
 		// they are naturally scoped per-iteration — no reset needed.
@@ -574,6 +576,7 @@ iterLoop:
 			if err != nil {
 				if ctx.Err() != nil {
 					l.state.Write("status", "stopped")
+					l.setPhaseInterrupted(task.id)
 				} else {
 					l.state.Write("status", "error")
 				}
@@ -673,6 +676,13 @@ iterLoop:
 			// signalComplete: fall through to tagTaskEnd
 		}
 		l.git.TagTaskEnd(task.id)
+		currentTaskID = ""
+	}
+
+	// Catch-all: if the loop exited due to Ctrl-C and a task was in-flight,
+	// set phase=interrupted so the task manager sees it as safe to update.
+	if ctx.Err() != nil && currentTaskID != "" {
+		l.setPhaseInterrupted(currentTaskID)
 	}
 
 	l.completedTasks = sessionTasks

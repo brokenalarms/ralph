@@ -501,10 +501,6 @@ func (s *stateTrackingBackend) SetState(id, dimension, value, reason string) err
 // Verifies that the loop sets phase=implementing when starting a task and
 // phase=verified after verification passes, ensuring the bd close guard
 // will allow the task to be closed.
-
-// Verifies that the loop sets phase=implementing when starting a task and
-// phase=verified after verification passes, ensuring the bd close guard
-// will allow the task to be closed.
 func TestLoop_LifecycleStates(t *testing.T) {
 	dir, st := setupTestDir(t)
 	ralphDir := filepath.Join(dir, ".ralph")
@@ -638,6 +634,78 @@ func TestLoop_LifecycleStates_NoVerifiedOnFailure(t *testing.T) {
 	}
 	if !hasImplementing {
 		t.Error("phase=implementing should still be set at task start")
+	}
+}
+
+// Verifies that pressing Ctrl-C (context cancellation) during a task sets
+// phase=interrupted on the bead, so the task manager treats it as safe to
+// update without user confirmation.
+func TestLoop_CtrlC_SetsPhaseInterrupted(t *testing.T) {
+	dir, st := setupTestDir(t)
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	backend := &stateTrackingBackend{
+		MutableBackend: testutil.MutableBackend{
+			StubBackend: testutil.StubBackend{
+				Remaining:    1,
+				Completed:    0,
+				Total:        1,
+				NextTask:     "task being interrupted",
+				NextID:       "ralph-ctrlc",
+				BackendLabel: "beads",
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	runner := &stubRunner{
+		onRun: func() {
+			cancel()
+		},
+		result: claude.Result{SignalDetected: true, Summary: "done"},
+	}
+
+	gm := git.NewStub(git.StubRepoConfig{ProjectDir: dir, WorkDir: dir})
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		MaxIterations: 5,
+		CallsPerHour:  80,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  backend,
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: onlineStubConnectivity(),
+		VerifyHook:   passingVerifyHook(),
+	})
+	l.runner = runner
+
+	_ = l.Run(ctx)
+
+	var phaseValues []string
+	for _, call := range backend.stateCalls {
+		if call.id == "ralph-ctrlc" && call.dimension == "phase" {
+			phaseValues = append(phaseValues, call.value)
+		}
+	}
+
+	if len(phaseValues) == 0 {
+		t.Fatal("expected at least one phase SetState call for ralph-ctrlc")
+	}
+	last := phaseValues[len(phaseValues)-1]
+	if last != "interrupted" {
+		t.Errorf("last phase SetState = %q, want %q; all phase values: %v", last, "interrupted", phaseValues)
 	}
 }
 

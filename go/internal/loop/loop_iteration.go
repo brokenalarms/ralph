@@ -264,6 +264,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		if p.taskID != "" {
 			if ctx.Err() != nil {
 				l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+				l.setPhaseInterrupted(p.taskID)
 				return completeTaskOut{action: signalComplete}
 			}
 			closeReason := "verified complete (no new commits)"
@@ -294,6 +295,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 
 	if ctx.Err() != nil {
 		l.logger.Emit(logging.Opts{Level: logging.Warn}, "Post-signal timeout — aborting before push")
+		l.setPhaseInterrupted(p.taskID)
 		return completeTaskOut{action: signalComplete}
 	}
 
@@ -360,6 +362,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 			if p.taskID != "" {
 				if ctx.Err() != nil {
 					l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+					l.setPhaseInterrupted(p.taskID)
 					return completeTaskOut{action: signalComplete}
 				}
 				// Machine-parseable reason: "pr_creation_failed:<branch>".
@@ -374,6 +377,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 		if p.taskID != "" {
 			if ctx.Err() != nil {
 				l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+				l.setPhaseInterrupted(p.taskID)
 				return completeTaskOut{action: signalComplete}
 			}
 			branch := l.git.GetWorktreeBranch()
@@ -396,6 +400,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 			// the PR open — it will merge when CI infrastructure recovers.
 			if ctx.Err() != nil {
 				l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+				l.setPhaseInterrupted(p.taskID)
 				return completeTaskOut{action: signalComplete}
 			}
 			prRef := ct.PRURL
@@ -431,6 +436,7 @@ func (l *Loop) completeTask(ctx context.Context, p completeTaskParams) completeT
 	if p.taskID != "" {
 		if ctx.Err() != nil {
 			l.logger.Emit(logging.Opts{Level: logging.Warn}, "Ctrl-C received — leaving bead %s open", p.taskID)
+			l.setPhaseInterrupted(p.taskID)
 			return completeTaskOut{action: signalComplete}
 		}
 		prRef := ct.PRURL
@@ -516,6 +522,19 @@ func (l *Loop) execRunPostTask(ctx context.Context, taskID string, prNumber int,
 		defaultBranch: l.git.DetectDefaultBranch(),
 		logger:        l.logger,
 	}, taskID, prNumber, merged)
+}
+
+// setPhaseInterrupted marks a task phase=interrupted so the task manager
+// knows the loop stopped mid-work and the bead is safe to update.
+func (l *Loop) setPhaseInterrupted(taskID string) {
+	if taskID == "" {
+		return
+	}
+	if err := l.taskBackend.SetState(taskID, "phase", "interrupted", "ralph: Ctrl-C"); err != nil {
+		l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=interrupted: %v", err)
+	} else {
+		l.logger.Emit(logging.Opts{Domain: logging.Beads}, "%s → interrupted", taskID)
+	}
 }
 
 // buildCompletedTask assembles the CompletedTask record for a signal.
