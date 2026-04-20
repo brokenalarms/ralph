@@ -363,10 +363,10 @@ var Flags = []FlagDef{
 		Read: func(cfg *Config) string { return cfg.PostSignalTimeout.String() },
 	},
 	{
-		Long: "--model", MetaVar: "<model>",
-		Help:      "Model ceiling for all LLM interactions (loop agent, fix agents, verification, task, review). When set, no LLM call may use a higher-tier model.",
+		Long: "--model-ceiling", MetaVar: "<model>",
+		Help:      "Model ceiling for all LLM interactions. When unset, agents will escalate to more advanced models following failures.",
 		Default:   ModelSonnet,
-		ConfigKey: "model",
+		ConfigKey: "model_ceiling",
 		Kind:      KindString,
 		Apply: func(cfg *Config, val string) error {
 			cfg.Model = val

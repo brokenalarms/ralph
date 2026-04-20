@@ -944,10 +944,10 @@ func TestHandleLoop_RefusesDuplicateLoop(t *testing.T) {
 	}
 }
 
-// Proves: modelCap returns the model string when --model is explicitly set via
-// the CLI. This is the enforcement point for the --model ceiling.
+// Proves: modelCap returns the model string when --model-ceiling is explicitly set via
+// the CLI. This is the enforcement point for the model ceiling.
 func TestModelCap_ExplicitlySetViaCLI(t *testing.T) {
-	cfg, err := config.Parse([]string{"--model", config.ModelSonnet})
+	cfg, err := config.Parse([]string{"--model-ceiling", config.ModelSonnet})
 	if err != nil {
 		t.Fatalf("config.Parse: %v", err)
 	}
@@ -957,7 +957,7 @@ func TestModelCap_ExplicitlySetViaCLI(t *testing.T) {
 	}
 }
 
-// Proves: modelCap returns empty string when --model is not explicitly set via
+// Proves: modelCap returns empty string when --model-ceiling is not explicitly set via
 // the CLI, meaning no ceiling is applied and the full escalation ladder is used.
 func TestModelCap_DefaultNotExplicit(t *testing.T) {
 	cfg, err := config.Parse([]string{})
@@ -966,33 +966,33 @@ func TestModelCap_DefaultNotExplicit(t *testing.T) {
 	}
 	cap := modelCap(cfg)
 	if cap != "" {
-		t.Errorf("expected empty cap when --model not set via CLI, got %q", cap)
+		t.Errorf("expected empty cap when --model-ceiling not set via CLI, got %q", cap)
 	}
 }
 
-// Proves: with --model=sonnet, the resolved model for ralph task and ralph
-// review is sonnet (not the default opus). This is AC#11 for the CLI path.
+// Proves: with --model-ceiling=sonnet, the resolved model for ralph task and ralph
+// review is sonnet (not the default opus).
 func TestTaskReviewModelResolution_SonnetCap(t *testing.T) {
-	cfg, err := config.Parse([]string{"--model", config.ModelSonnet})
+	cfg, err := config.Parse([]string{"--model-ceiling", config.ModelSonnet})
 	if err != nil {
 		t.Fatalf("config.Parse: %v", err)
 	}
 	resolved := verify.CapModel(modelCap(cfg), agent.ModelOpus)
 	if resolved != config.ModelSonnet {
-		t.Errorf("--model=sonnet: expected %s, got %s", config.ModelSonnet, resolved)
+		t.Errorf("--model-ceiling=sonnet: expected %s, got %s", config.ModelSonnet, resolved)
 	}
 }
 
-// Proves: with --model=opus (or no cap), the resolved model for ralph task
-// and ralph review is opus (full ladder). This is AC#12 for the CLI path.
+// Proves: with --model-ceiling=opus (or no cap), the resolved model for ralph task
+// and ralph review is opus (full ladder).
 func TestTaskReviewModelResolution_OpusCap(t *testing.T) {
-	cfg, err := config.Parse([]string{"--model", config.ModelOpus})
+	cfg, err := config.Parse([]string{"--model-ceiling", config.ModelOpus})
 	if err != nil {
 		t.Fatalf("config.Parse: %v", err)
 	}
 	resolved := verify.CapModel(modelCap(cfg), agent.ModelOpus)
 	if resolved != config.ModelOpus {
-		t.Errorf("--model=opus: expected %s, got %s", config.ModelOpus, resolved)
+		t.Errorf("--model-ceiling=opus: expected %s, got %s", config.ModelOpus, resolved)
 	}
 }
 
