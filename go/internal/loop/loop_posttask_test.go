@@ -466,7 +466,7 @@ func TestLoop_PostTaskScript_LogsWhenNotConfigured(t *testing.T) {
 	})
 
 	logOutput := logBuf.String()
-	if !strings.Contains(logOutput, "No ralph:post-task script found in package.json and no --post-task CLI flag — skipping post-task") {
+	if !strings.Contains(logOutput, "No post_task config and no ralph:post-task script found in package.json — skipping post-task") {
 		t.Errorf("expected 'skipping post-task' log message, got: %s", logOutput)
 	}
 }
@@ -869,6 +869,40 @@ func TestRunPostTask_AlreadyOnMain_CheckoutIsNoOp(t *testing.T) {
 	logOutput := logBuf.String()
 	if strings.Contains(logOutput, "exited with error") {
 		t.Errorf("checkout from main to main should not produce errors, got log: %s", logOutput)
+	}
+}
+
+// runPostTask runs the post_task config value even when package.json also has
+// a ralph:post-task script, proving config.toml takes priority over package.json.
+func TestRunPostTask_ConfigTOMLOverridesPackageJSON(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a package.json ralph:post-task that records which source ran.
+	pkgScriptFile := filepath.Join(dir, "pkg-ran.txt")
+	pkgScript := filepath.Join(dir, "pkg-post-task.sh")
+	os.WriteFile(pkgScript, []byte(fmt.Sprintf("#!/bin/sh\necho package > %s\n", pkgScriptFile)), 0o755)
+	pkgJSON := fmt.Sprintf(`{"scripts":{"ralph:post-task":"sh %s"}}`, pkgScript)
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(pkgJSON), 0o644)
+
+	// Write a config.toml post_task that records which source ran.
+	cfgScriptFile := filepath.Join(dir, "cfg-ran.txt")
+	cfgScript := filepath.Join(dir, "cfg-post-task.sh")
+	os.WriteFile(cfgScript, []byte(fmt.Sprintf("#!/bin/sh\necho config > %s\n", cfgScriptFile)), 0o755)
+
+	runPostTask(context.Background(), runPostTaskParams{
+		postTask:    cfgScript,
+		worktreeDir: dir,
+		projectDir:  dir,
+		logger:      logging.New(nil),
+	}, "ralph-test", 0, false)
+
+	// Config script must have run.
+	if _, err := os.Stat(cfgScriptFile); err != nil {
+		t.Errorf("config post_task script did not run: %v", err)
+	}
+	// Package.json script must NOT have run.
+	if _, err := os.Stat(pkgScriptFile); err == nil {
+		t.Error("package.json ralph:post-task ran but config.toml post_task should have taken priority")
 	}
 }
 

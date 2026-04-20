@@ -223,14 +223,14 @@ func TestDetectPostTaskCommand_None(t *testing.T) {
 	}
 }
 
-// DetectPostTaskCommand prefers ralph:post-task npm script over the CLI flag.
-func TestDetectPostTaskCommand_NPMTakesPriorityOverCLI(t *testing.T) {
+// DetectPostTaskCommand prefers the config/CLI value over ralph:post-task in package.json.
+func TestDetectPostTaskCommand_ConfigTakesPriorityOverNPM(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"ralph:post-task":"node ./scripts/post-task.js"}}`), 0o644)
 
-	got := DetectPostTaskCommand("/path/to/cli-post-task.sh", dir)
-	if got != "npm run ralph:post-task" {
-		t.Errorf("expected npm script to take priority, got %q", got)
+	got := DetectPostTaskCommand("/path/to/config-post-task.sh", dir)
+	if got != "/path/to/config-post-task.sh" {
+		t.Errorf("expected config value to take priority over package.json, got %q", got)
 	}
 }
 

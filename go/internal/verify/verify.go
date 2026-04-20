@@ -104,16 +104,18 @@ func DetectTestCommand(dirs ...string) *TestCommand {
 	return detectScript("ralph:verify", "ralph-verify", dirs...)
 }
 
-// DetectPostTaskCommand looks for a ralph:post-task script in the project,
-// falling back to the CLI --post-task value. Accepts multiple directories
-// checked in order (typically worktree first, project root second).
-// Returns empty string when neither is configured (post-task is optional).
-func DetectPostTaskCommand(cliPostTask string, dirs ...string) string {
+// DetectPostTaskCommand returns the post-task command to run. Uses configPostTask
+// (from config.toml or CLI) first; falls back to detecting a ralph:post-task
+// script in the given directories. Returns empty string when nothing is configured.
+func DetectPostTaskCommand(configPostTask string, dirs ...string) string {
+	if configPostTask != "" {
+		return configPostTask
+	}
 	tc := detectScript("ralph:post-task", "ralph-post-task", dirs...)
 	if tc != nil {
 		return tc.Cmd + " " + strings.Join(tc.Args, " ")
 	}
-	return cliPostTask
+	return ""
 }
 
 // DetectPostTask returns the TestCommand for the detected ralph:post-task
@@ -121,6 +123,13 @@ func DetectPostTaskCommand(cliPostTask string, dirs ...string) string {
 // in any of the given directories. Does not consider the CLI fallback.
 func DetectPostTask(dirs ...string) *TestCommand {
 	return detectScript("ralph:post-task", "ralph-post-task", dirs...)
+}
+
+// DetectVerifyBuild returns the TestCommand for the detected ralph:verify-build
+// script, including which directory it was found in. Returns nil if not found
+// in any of the given directories. Does not consider the config.toml value.
+func DetectVerifyBuild(dirs ...string) *TestCommand {
+	return detectScript("ralph:verify-build", "ralph-verify-build", dirs...)
 }
 
 // RunTests executes the detected test command and returns the result.

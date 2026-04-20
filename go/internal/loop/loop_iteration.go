@@ -579,6 +579,7 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 	taskPrompt := l.buildTaskPrompt(nextTask, taskID)
 	buildStatus := runVerifyBuild(ctx, runVerifyBuildParams{
 		verifyBuild: l.cfg.VerifyBuild,
+		worktreeDir: l.cfg.VerifyDir,
 		projectDir:  l.cfg.Dirs.ProjectDir,
 		testTimeout: l.cfg.TestTimeout,
 		logger:      l.logger,
