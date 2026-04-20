@@ -209,7 +209,6 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 		Dirs:                     dirs,
 		PlanFile:                 planFile,
 		MaxIterations:            cfg.MaxIterations,
-		Refactor:                 cfg.Refactor,
 		Quiet:                    cfg.Quiet,
 		Verbose:                  cfg.Verbose,
 		AutoMerge:                cfg.AutoMerge,

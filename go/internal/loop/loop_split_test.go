@@ -18,7 +18,7 @@ func TestLoopHelpersSplitFileStructure(t *testing.T) {
 	assertFileUnderLines(t, filepath.Join(dir, "loop_helpers.go"), 300)
 
 	// Split files must exist.
-	for _, name := range []string{"loop_git.go", "loop_refactor.go", "loop_utils.go"} {
+	for _, name := range []string{"loop_git.go", "loop_utils.go"} {
 		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			t.Errorf("expected %s to exist after split", name)
@@ -40,7 +40,6 @@ func TestLoopTestSplitFileStructure(t *testing.T) {
 	testFiles := []string{
 		"loop_lifecycle_test.go",
 		"loop_prompt_test.go",
-		"loop_refactor_test.go",
 		"loop_branch_test.go",
 		"loop_completion_test.go",
 		"loop_verification_test.go",

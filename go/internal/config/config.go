@@ -62,7 +62,6 @@ type Config struct {
 	Prompt                     string
 	Quiet                      bool
 	CallsPerHour               int
-	Refactor                   bool
 	UseTmux                    bool
 	AutoMerge                  bool
 	Evolve                     bool

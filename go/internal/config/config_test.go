@@ -9,8 +9,7 @@ import (
 )
 
 // Verifies that Parse with no arguments returns defaults derived from the Flags
-// registry: cwd project dir, 50 iterations, 80 calls/hr, refactor disabled,
-// idle timeouts at 10m/5m.
+// registry: cwd project dir, 50 iterations, 80 calls/hr, idle timeouts at 10m/5m.
 func TestDefaultValues(t *testing.T) {
 	// Clear env vars so defaults are deterministic.
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
@@ -24,9 +23,6 @@ func TestDefaultValues(t *testing.T) {
 
 	if cfg.MaxIterations != 50 {
 		t.Errorf("MaxIterations = %d, want 50", cfg.MaxIterations)
-	}
-	if cfg.Refactor {
-		t.Error("Refactor should default to false")
 	}
 	if cfg.ProjectDir != "." {
 		t.Errorf("ProjectDir = %q, want \".\"", cfg.ProjectDir)
@@ -85,7 +81,6 @@ func TestAllFlags(t *testing.T) {
 		"-p", "fix tests",
 		"-q",
 		"--calls-per-hour", "40",
-		"--refactor",
 		"--tmux",
 		"--auto-merge",
 		"--evolve",
@@ -110,9 +105,6 @@ func TestAllFlags(t *testing.T) {
 	}
 	if cfg.CallsPerHour != 40 {
 		t.Errorf("CallsPerHour = %d, want 40", cfg.CallsPerHour)
-	}
-	if !cfg.Refactor {
-		t.Error("Refactor should be true")
 	}
 	if !cfg.UseTmux {
 		t.Error("UseTmux should be true")
@@ -851,60 +843,6 @@ func TestWaitIntervalEnvVarRemoved(t *testing.T) {
 	}
 }
 
-// Verifies --refactor defaults to false and is set when the flag is present.
-func TestRefactorFlag(t *testing.T) {
-	cfg, err := Parse(nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Refactor {
-		t.Error("Refactor should default to false")
-	}
-
-	cfg, err = Parse([]string{"--refactor"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !cfg.Refactor {
-		t.Error("Refactor should be true after --refactor")
-	}
-}
-
-// Verifies refactor = true from config file sets Refactor.
-func TestRefactorConfigFromFile(t *testing.T) {
-	t.Setenv("RALPH_MAX_ITERATIONS", "")
-	t.Setenv("RALPH_IDLE_TIMEOUT", "")
-	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
-
-	dir := t.TempDir()
-	tomlPath := filepath.Join(dir, "ralph.toml")
-	os.WriteFile(tomlPath, []byte("refactor = true\n"), 0o644)
-
-	cfg, _ := Parse(nil)
-	cfg.LoadConfigFile(tomlPath)
-
-	if !cfg.Refactor {
-		t.Error("Refactor should be true from config file")
-	}
-}
-
-// Verifies InitConfig includes the refactor config key.
-func TestInitConfigIncludesRefactorKey(t *testing.T) {
-	dir := t.TempDir()
-	tomlPath := filepath.Join(dir, "ralph.toml")
-
-	err := InitConfig(tomlPath)
-	if err != nil {
-		t.Fatalf("InitConfig failed: %v", err)
-	}
-
-	data, _ := os.ReadFile(tomlPath)
-	content := string(data)
-	if !strings.Contains(content, "refactor") {
-		t.Error("generated config missing key refactor")
-	}
-}
-
 // Verifies ConfigToState captures non-default config values as a map
 // suitable for state.json persistence.
 func TestConfigToState_CapturesNonDefaults(t *testing.T) {
@@ -938,9 +876,6 @@ func TestConfigToState_CapturesNonDefaults(t *testing.T) {
 	// Default values should be omitted.
 	if _, ok := m["calls-per-hour"]; ok {
 		t.Error("calls-per-hour should be omitted when at default")
-	}
-	if _, ok := m["refactor"]; ok {
-		t.Error("refactor should be omitted when false")
 	}
 }
 
@@ -986,7 +921,7 @@ func TestArgsFromState_IgnoresUnknownKeys(t *testing.T) {
 		"dir":         "/tmp/project",
 		"auto-merge":  "true",
 		"evolve":      "true",
-		"no-refactor": "true", // removed flag from old binary
+		"refactor":    "true", // removed flag from old binary
 		"some-future": "value",
 	}
 
@@ -1046,9 +981,6 @@ func TestConfigToState_ArgsFromState_Roundtrip(t *testing.T) {
 	}
 	if restored.Wait != original.Wait {
 		t.Errorf("Wait = %v, want %v", restored.Wait, original.Wait)
-	}
-	if restored.Refactor != original.Refactor {
-		t.Errorf("Refactor = %v, want %v", restored.Refactor, original.Refactor)
 	}
 	if restored.BaseBranch != original.BaseBranch {
 		t.Errorf("BaseBranch = %q, want %q", restored.BaseBranch, original.BaseBranch)

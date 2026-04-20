@@ -115,7 +115,6 @@ Run `ralph task` to build up a backlog, then `ralph loop` to work through it.
 | `--verify-escalation-model <model>` | Model for verification escalation (subsequent attempts) | claude-sonnet-4-6 | |
 | `--fix-model <model>` | Model for fix agents (first attempt) | claude-sonnet-4-6 | |
 | `--fix-escalation-model <model>` | Model for fix agents on retry attempts | claude-opus-4-6 | |
-| `--refactor` | Enable LLM-based adaptive refactoring | — | |
 
 ## Architecture
 
