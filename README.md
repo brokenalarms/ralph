@@ -21,22 +21,23 @@ ralph loop --auto-merge --base-branch main --evolve
 Add this alias for rapid iteration:
 
 ```bash
-alias loop='ralph loop --wait --auto-merge --base-branch main --evolve'
+alias loop='ralph loop --auto-merge --base-branch main --evolve'
 ```
 
-- `--wait` — keeps the loop running after the backlog empties, polling for new tasks
 - `--auto-merge` — squash-merges each PR automatically after CI passes
 - `--base-branch main` — rebases and merges into `main` (change to match your repo)
 - `--evolve` — re-execs ralph after each merge so improvements take effect immediately
 
-Run two tmux windows side by side, named `{project}-loop` and `{project}-task`:
+The loop runs until you press Ctrl-C. When the backlog empties it polls for new tasks — no flag needed. To rebuild the project on each iteration (useful for self-improving loops), add `--post-task <build-script>` alongside `--evolve`.
+
+Run two windows side by side, named `{project}-loop` and `{project}-task`:
 
 ```
-{project}-loop: loop               # runs the loop alias
+{project}-loop: loop               # runs the loop alias indefinitely
 {project}-task: ralph task         # interactive triage: create tasks, write specs
 ```
 
-Both windows stay live so you can monitor the loop and add tasks from anywhere — including from your phone via [Shellfish](https://shellfishapp.com/) (iOS) or any SSH client on Android.
+The loop window runs unattended while the task window gives you a live triage interface — add tasks at any time and the loop picks them up immediately. Both windows stay live so you can monitor and triage from anywhere, including from your phone via [Shellfish](https://shellfishapp.com/) (iOS) or any SSH client on Android.
 
 ## How it works
 
@@ -95,27 +96,38 @@ Run `ralph task` to build up a backlog, then `ralph loop` to work through it.
 | Flag | Description | Default | Env var |
 |---|---|---|---|
 | `-n, --max <N>` | Max iterations | 50 | `RALPH_MAX_ITERATIONS` |
-| `-p, --prompt <text>` | Prompt override | — | |
-| `-q, --quiet` | Suppress streaming output (log only) | — | |
 | `-v, --verbose` | Show all tool calls in stream log | — | |
-| `--calls-per-hour <N>` | Max Claude calls per hour | 80 | |
 | `--base-branch <name>` | Base branch for rebase/merge | develop | `RALPH_BASE_BRANCH` |
 | `--auto-merge` | Squash-merge PRs after task completion | — | |
-| `--evolve` | Re-exec ralph after each merged task to incorporate the latest version. Requires `--auto-merge`. Use with `--post-task` to rebuild before re-exec. | — | |
-| `--post-task <script>` | Run a command after each task completes, before evolve re-exec. Receives `RALPH_TASK_ID`, `RALPH_PR_NUMBER`, and `RALPH_MERGED` env vars. | — | |
-| `--verify-build <script>` | Run external script before pre-iteration tests to check project-level build health | — | |
-| `--wait` | Keep running after all tasks complete, polling for new work | — | |
+| `--evolve` | Self-improving mode: re-exec ralph after each merged task so improvements take effect immediately (requires `--auto-merge`) | — | |
+| `--post-task <script>` | Run a script after each task completes, before evolve re-exec. Receives `RALPH_TASK_ID`, `RALPH_PR_NUMBER`, and `RALPH_MERGED` env vars. | — | |
+| `--verify-build <script>` | Run a script before pre-iteration tests to check project-level build health | — | |
+| `--model-ceiling <model>` | Model ceiling for all LLM interactions — no call may use a higher-tier model than this | claude-sonnet-4-6 | |
 | `--notify` | Send macOS notification on each task completion | — | |
 | `--tmux` | Run in tmux 3-pane layout (status / output / plan) | — | |
-| `--idle-timeout <dur>` | Kill idle session after duration | 10m | `RALPH_IDLE_TIMEOUT` |
-| `--idle-timeout-progress <dur>` | Shorter idle timeout when progress detected | 5m | `RALPH_IDLE_TIMEOUT_PROGRESS` |
-| `--post-signal-timeout <dur>` | Timeout for post-signal operations | 15m | `RALPH_POST_SIGNAL_TIMEOUT` |
-| `--model-ceiling <model>` | Model ceiling for all LLM interactions (loop agent, fix agents, verification) | claude-sonnet-4-6 | |
-| `--agent-escalation-model <model>` | Model for agent on retry attempts | claude-opus-4-6 | |
-| `--verify-model <model>` | Model for LLM verification (first attempt) | claude-haiku-4-5-20251001 | |
-| `--verify-escalation-model <model>` | Model for verification escalation (subsequent attempts) | claude-sonnet-4-6 | |
-| `--fix-model <model>` | Model for fix agents (first attempt) | claude-sonnet-4-6 | |
-| `--fix-escalation-model <model>` | Model for fix agents on retry attempts | claude-opus-4-6 | |
+
+All other tuning (timeouts, model escalation, attempt limits, thresholds) lives in `.ralph/config.toml` — see [Configuration](#configuration) below.
+
+## Configuration
+
+Ralph reads `.ralph/config.toml` on startup. The file is created automatically with defaults on first run. CLI flags override config file values.
+
+Example `.ralph/config.toml`:
+
+```toml
+base_branch = "main"
+post_task = "make build"
+
+# Tuning — defaults shown
+max_iterations = 50
+calls_per_hour = 80
+test_timeout = "5m"
+verify_model = "claude-haiku-4-5-20251001"
+fix_model = "claude-sonnet-4-6"
+fix_escalation_model = "claude-opus-4-6"
+```
+
+Run `ralph loop --help` to see all available options and their corresponding config keys.
 
 ## Architecture
 
@@ -132,14 +144,14 @@ The orchestrator owns the entire push/PR/merge lifecycle. The agent writes code 
 
 The loop uses a tiered model strategy to balance cost and quality:
 
-- **Agent first pass** — sonnet (default `--model-ceiling`)
-- **Agent retry** — opus (default `--agent-escalation-model`); escalated automatically on subsequent attempts
-- **Verification first pass** — haiku (default `--verify-model`)
-- **Verification retry** — sonnet (default `--verify-escalation-model`)
-- **Fix agent first pass** — sonnet (default `--fix-model`); covers test/compile/verify/CI/Copilot/conflict fix agents
-- **Fix agent retry** — opus (default `--fix-escalation-model`); escalated automatically on subsequent attempts
+- **Agent first pass** — sonnet
+- **Agent retry** — opus; escalated automatically on subsequent attempts
+- **Verification first pass** — haiku
+- **Verification retry** — sonnet
+- **Fix agent first pass** — sonnet; covers test/compile/verify/CI/Copilot/conflict fix agents
+- **Fix agent retry** — opus; escalated automatically on subsequent attempts
 
-`--model-ceiling` acts as a ceiling — no LLM call may use a higher-tier model than the value set.
+`--model-ceiling` sets the ceiling from the CLI — no LLM call may use a higher-tier model than the value set. Per-stage model defaults are configured in `.ralph/config.toml` (`verify_model`, `fix_model`, `fix_escalation_model`, etc.).
 
 ### Verification pipeline
 
@@ -211,6 +223,7 @@ Ralph stores all runtime state in `.ralph/` inside the project directory. Add it
 
 ```
 .ralph/
+  config.toml         # tuning knobs — created automatically with defaults on first run
   state.json          # iteration count, status, current task, skipped tasks
   reflections/        # post-task reflections from the agent
   worktrees/          # git worktree directories
