@@ -705,6 +705,57 @@ func TestInitConfigGeneratesFile(t *testing.T) {
 	}
 }
 
+// Verifies that InitConfig omits keys with empty defaults (post_task, verify_build)
+// so the generated file doesn't contain confusing "post_task = " lines.
+func TestInitConfigOmitsEmptyDefaults(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "config.toml")
+
+	if err := InitConfig(tomlPath); err != nil {
+		t.Fatalf("InitConfig failed: %v", err)
+	}
+
+	data, err := os.ReadFile(tomlPath)
+	if err != nil {
+		t.Fatalf("failed to read generated config: %v", err)
+	}
+
+	content := string(data)
+	for _, key := range []string{"post_task", "verify_build"} {
+		if strings.Contains(content, key) {
+			t.Errorf("generated config should not contain empty-default key %q", key)
+		}
+	}
+}
+
+// Verifies that InitConfig writes keys in alphabetical order.
+func TestInitConfigKeysAreAlphabetical(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "config.toml")
+
+	if err := InitConfig(tomlPath); err != nil {
+		t.Fatalf("InitConfig failed: %v", err)
+	}
+
+	data, err := os.ReadFile(tomlPath)
+	if err != nil {
+		t.Fatalf("failed to read generated config: %v", err)
+	}
+
+	var keys []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if eqIdx := strings.Index(line, " = "); eqIdx >= 0 {
+			keys = append(keys, line[:eqIdx])
+		}
+	}
+
+	for i := 1; i < len(keys); i++ {
+		if keys[i] < keys[i-1] {
+			t.Errorf("keys not in alphabetical order: %q comes after %q", keys[i], keys[i-1])
+		}
+	}
+}
+
 // Verifies that InitConfig refuses to overwrite an existing config file,
 // matching bats test "init-config refuses to overwrite existing config".
 func TestInitConfigRefusesToOverwrite(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -309,17 +310,26 @@ func InitConfig(path string) error {
 		return fmt.Errorf("config file already exists: %s", path)
 	}
 
-	var b strings.Builder
+	type entry struct {
+		key string
+		val string
+	}
+	var entries []entry
 	for _, f := range Flags {
 		if f.ConfigKey == "" {
 			continue
 		}
-		switch f.Kind {
-		case KindBool:
-			fmt.Fprintf(&b, "%s = false\n", f.ConfigKey)
-		default:
-			fmt.Fprintf(&b, "%s = %s\n", f.ConfigKey, f.Default)
+		if f.Kind == KindBool {
+			entries = append(entries, entry{f.ConfigKey, "false"})
+		} else if f.Default != "" {
+			entries = append(entries, entry{f.ConfigKey, f.Default})
 		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].key < entries[j].key })
+
+	var b strings.Builder
+	for _, e := range entries {
+		fmt.Fprintf(&b, "%s = %s\n", e.key, e.val)
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
