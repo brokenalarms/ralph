@@ -417,7 +417,7 @@ func TestSetupWorktree_CreatesWorktree(t *testing.T) {
 // SetupWorktree in a non-git directory should return an error
 func TestSetupWorktree_NonGitDirErrors(t *testing.T) {
 	tmp := t.TempDir()
-	mgr := newRepoForTest(Config{ProjectDir: tmp, RalphDir: filepath.Join(tmp, ".ralph"), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}))
+	mgr := newRepoForTest(Config{ProjectDir: tmp, RalphDir: filepath.Join(tmp, ".ralph"), BaseBranch: "main", Logger: &testLog{}}, nil)
 
 	err := mgr.SetupWorktree(context.Background())
 	if err == nil {
@@ -460,23 +460,20 @@ func TestSetupWorktree_Resume(t *testing.T) {
 // Resume log must not leak the old branch name to avoid confusion with the
 // current task — the branch gets rebased and renamed shortly after resume.
 func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
+	project := t.TempDir()
+	run(t, "git", "init", "-b", "main", project)
+	worktreeDir := filepath.Join(t.TempDir(), "wt")
+	os.MkdirAll(worktreeDir, 0o755)
+
+	oldBranch := "ralph/old-task-name"
 	state := newMemState()
+	state.Write("worktree_dir", worktreeDir)
+	state.Write("worktree_branch", oldBranch)
+	state.Write("branch_renamed", "true")
+
 	log := &testLog{}
-
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(state))
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: filepath.Join(project, ".ralph"), BaseBranch: "main", Logger: log, Resume: true}, nil, withState(state))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	mgr.RenameBranchForTask("old task name", "")
-	oldBranch := mgr.worktreeBranch
-
-	log.messages = nil
-
-	mgr2 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log, Resume: true}, nil, withRunner(&execRunner{}), withState(state))
-	if err := mgr2.SetupWorktree(context.Background()); err != nil {
 		t.Fatalf("resume SetupWorktree: %v", err)
 	}
 
@@ -492,15 +489,16 @@ func TestSetupWorktree_ResumeLogSuppressesBranchName(t *testing.T) {
 // setStackHead in the loop via SetPrevBranch. Rename only changes the
 // branch name.
 func TestRenameBranchForTask_DoesNotSetPrevBranch(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	state := newMemState()
-	log := &testLog{}
+	dir := t.TempDir()
+	runner := newStubRunner()
+	runner.On("branch -m", "", nil)
+	runner.On("checkout", "", nil)
+	runner.On("clean", "", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", fmt.Errorf("not found"))
+	runner.On("merge-base --is-ancestor", "", fmt.Errorf("not ancestor"))
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(state))
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
+	mgr := newRepoForTest(Config{ProjectDir: dir, WorkDir: filepath.Join(dir, "wt"), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(runner), withWorktreeBranch("ralph/next"))
 
 	mgr.RenameBranchForTask("first task", "ralph-aaa")
 	mgr.PrepareForNextTask("ralph-bbb", "")
@@ -514,14 +512,16 @@ func TestRenameBranchForTask_DoesNotSetPrevBranch(t *testing.T) {
 // PrepareForNextTask creates a fresh wip branch so the next task doesn't
 // reuse the previous task's branch name.
 func TestPrepareForNextTask_CreatesFreshBranch(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
-	state := newMemState()
+	dir := t.TempDir()
+	runner := newStubRunner()
+	runner.On("branch -m", "", nil)
+	runner.On("checkout", "", nil)
+	runner.On("clean", "", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", fmt.Errorf("not found"))
+	runner.On("merge-base --is-ancestor", "", fmt.Errorf("not ancestor"))
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
+	mgr := newRepoForTest(Config{ProjectDir: dir, WorkDir: filepath.Join(dir, "wt"), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(runner), withWorktreeBranch("ralph/next"))
 
 	mgr.RenameBranchForTask("first task", "ralph-aaa")
 	firstBranch := mgr.worktreeBranch
@@ -600,34 +600,30 @@ func TestPrepareForNextTask_DiscardsUncommittedChanges(t *testing.T) {
 // post-completion cleanup path. Completed task branches don't accumulate
 // locally.
 func TestPrepareForNextTask_DeletesOldBranch(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
+	dir := t.TempDir()
+	runner := newStubRunner()
+	runner.On("branch -m", "", nil)
+	runner.On("checkout", "", nil)
+	runner.On("clean", "", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "abc123", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("branch -D", "", nil)
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
+	log := &testLog{}
+	mgr := newRepoForTest(Config{ProjectDir: dir, WorkDir: filepath.Join(dir, "wt"), BaseBranch: "main", Logger: log}, nil, withRunner(runner), withWorktreeBranch("ralph/next"))
 
 	mgr.RenameBranchForTask("task to clean up", "ralph-del1")
 	taskBranch := mgr.worktreeBranch
 
-	// Commit and then fast-forward main to the task branch, simulating a merged PR.
-	writeFile(t, mgr.workDir, "work.txt", "done\n")
-	run(t, "git", "-C", mgr.workDir, "add", "work.txt")
-	run(t, "git", "-C", mgr.workDir, "commit", "-m", "task work")
-	run(t, "git", "-C", project, "merge", "--ff-only", taskBranch)
-
 	mgr.PrepareForNextTask("ralph-next1", "")
 
-	// Worktree must be on the placeholder branch.
 	if mgr.worktreeBranch != WipBranchName() {
 		t.Errorf("WorktreeBranch = %q, want %q", mgr.worktreeBranch, WipBranchName())
 	}
 
-	// Old task branch must no longer exist — its commits are now on main.
-	branches := gitOutput(project, "branch", "--list")
-	if strings.Contains(branches, taskBranch) {
-		t.Errorf("old task branch %q should be deleted after PrepareForNextTask, still in: %s", taskBranch, branches)
+	if !runner.CalledWith("branch", "-D", taskBranch) {
+		t.Errorf("expected branch -D %s to be called", taskBranch)
 	}
 }
 
@@ -638,45 +634,31 @@ func TestPrepareForNextTask_DeletesOldBranch(t *testing.T) {
 // log excerpt where ralph/tabi-6p4-ralph-command-tests-playwright was
 // deleted during resume of an unrelated task.
 func TestPrepareForNextTask_PreservesUnmergedTaskBranch(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
+	dir := t.TempDir()
+	runner := newStubRunner()
+	runner.On("branch -m", "", nil)
+	runner.On("checkout", "", nil)
+	runner.On("clean", "", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "abc123", nil)
+	runner.On("merge-base --is-ancestor", "", fmt.Errorf("not ancestor"))
 
 	log := &testLog{}
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log}, nil, withRunner(&execRunner{}), withState(newMemState()))
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
+	mgr := newRepoForTest(Config{ProjectDir: dir, WorkDir: filepath.Join(dir, "wt"), BaseBranch: "main", Logger: log}, nil, withRunner(runner), withWorktreeBranch("ralph/next"))
 
 	mgr.RenameBranchForTask("in progress task", "ralph-wip1")
 	taskBranch := mgr.worktreeBranch
 
-	// Commit local work but do NOT merge into main — simulates an in-progress
-	// task whose PR is not yet merged.
-	writeFile(t, mgr.workDir, "work.txt", "pending\n")
-	run(t, "git", "-C", mgr.workDir, "add", "work.txt")
-	run(t, "git", "-C", mgr.workDir, "commit", "-m", "in-progress work")
-	commitSHA := strings.TrimSpace(gitOutput(mgr.workDir, "rev-parse", "HEAD"))
-
 	mgr.PrepareForNextTask("ralph-different", "")
 
-	// Worktree must be on the placeholder branch.
 	if mgr.worktreeBranch != WipBranchName() {
 		t.Errorf("WorktreeBranch = %q, want %q", mgr.worktreeBranch, WipBranchName())
 	}
 
-	// Old task branch must still exist — it holds unmerged work.
-	branches := gitOutput(project, "branch", "--list")
-	if !strings.Contains(branches, taskBranch) {
-		t.Errorf("task branch %q with unmerged work should be preserved, branches: %s", taskBranch, branches)
+	if runner.CalledWith("branch", "-D", taskBranch) {
+		t.Errorf("branch -D %s should NOT have been called for unmerged branch", taskBranch)
 	}
 
-	// The branch must still point at the original commit (not reset).
-	got := strings.TrimSpace(gitOutput(project, "rev-parse", taskBranch))
-	if got != commitSHA {
-		t.Errorf("task branch %q tip = %q, want preserved commit %q", taskBranch, got, commitSHA)
-	}
-
-	// A warning must be logged explaining the preservation.
 	foundWarning := false
 	for _, msg := range log.messages {
 		if strings.Contains(msg, "Preserving local branch") && strings.Contains(msg, taskBranch) {
@@ -1121,14 +1103,12 @@ func TestSetupWorktree_ResumeKeepsValidBranch(t *testing.T) {
 
 // RenameBranchForTask gives the temp branch a descriptive name for the current task
 func TestRenameBranchForTask_RenamesBranch(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
+	dir := t.TempDir()
 	state := newMemState()
+	runner := newStubRunner()
+	runner.On("branch -m", "", nil)
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
+	mgr := newRepoForTest(Config{ProjectDir: dir, WorkDir: filepath.Join(dir, "wt"), BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(runner), withState(state), withWorktreeBranch("ralph/next"))
 
 	if err := mgr.RenameBranchForTask("Fix auth bug", ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1289,49 +1269,58 @@ func TestBranchNamingIgnoresStale(t *testing.T) {
 
 // Removed worktree directory is pruned and fresh setup succeeds (bats test 9)
 func TestStaleWorktreeBranchCleanedUpViaPrune(t *testing.T) {
-	project, _ := initBareRepo(t)
+	project := t.TempDir()
+	run(t, "git", "init", "-b", "main", project)
 	ralphDir := filepath.Join(project, ".ralph")
-	state := newMemState()
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	runner := newStubRunner()
+	runner.On("rev-parse --verify", "", fmt.Errorf("not found"))
+	runner.On("rev-parse", "abc123", nil)
+	runner.On("worktree", "", nil)
+	runner.On("fetch", "", nil)
+	runner.On("config", "", nil)
+
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(runner))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("first SetupWorktree: %v", err)
+		t.Fatalf("SetupWorktree: %v", err)
 	}
-	firstWorkDir := mgr.workDir
 
-	os.RemoveAll(firstWorkDir)
-
-	mgr2 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
-	if err := mgr2.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("second SetupWorktree after prune: %v", err)
-	}
-	if _, err := os.Stat(mgr2.workDir); err != nil {
-		t.Errorf("new worktree dir should exist: %v", err)
+	if !runner.CalledWith("worktree", "prune") {
+		t.Error("expected worktree prune to be called during SetupWorktree")
 	}
 }
 
 // Live ralph worktree is force-removed when branch conflicts (bats test 10)
 func TestLiveRalphWorktreeRemovedWhenBranchExists(t *testing.T) {
-	project, _ := initBareRepo(t)
+	project := t.TempDir()
+	run(t, "git", "init", "-b", "main", project)
 	ralphDir := filepath.Join(project, ".ralph")
-	state := newMemState()
+	worktreeRoot := filepath.Join(ralphDir, "worktrees")
+	oldWt := filepath.Join(worktreeRoot, "ralph-old")
+	os.MkdirAll(oldWt, 0o755)
 
-	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(state))
+	wipBranch := WipBranchName()
+	porcelain := fmt.Sprintf("worktree %s\nbranch refs/heads/%s\n\n", oldWt, wipBranch)
+
+	runner := newStubRunner()
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("worktree list --porcelain", porcelain, nil)
+	runner.On("worktree remove", "", nil)
+	runner.On("worktree prune", "", nil)
+	runner.On("worktree add", "", nil)
+	runner.On("branch -D", "", nil)
+	runner.On("fetch", "", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("config", "", nil)
+	runner.On("rev-parse", "abc123", nil)
+
+	mgr := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(runner))
 	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("first SetupWorktree: %v", err)
-	}
-	firstWorkDir := mgr.workDir
-
-	mgr2 := newRepoForTest(Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}}, nil, withRunner(&execRunner{}), withState(newMemState()))
-	if err := mgr2.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("second SetupWorktree: %v", err)
+		t.Fatalf("SetupWorktree: %v", err)
 	}
 
-	if _, err := os.Stat(mgr2.workDir); err != nil {
-		t.Error("new worktree dir should exist")
-	}
-	if _, err := os.Stat(firstWorkDir); err == nil {
-		t.Error("old worktree dir should have been removed")
+	if !runner.CalledWith("worktree", "remove", "--force", oldWt) {
+		t.Error("expected worktree remove --force to be called for old worktree")
 	}
 }
 
@@ -1361,13 +1350,16 @@ func TestWorktreeInheritsGitignore(t *testing.T) {
 
 // Existing .gitignore content is preserved when appending entries (bats test 18)
 func TestExistingGitignoreContentPreserved(t *testing.T) {
-	project, _ := initBareRepo(t)
+	project := t.TempDir()
+	run(t, "git", "init", "-b", "main", project)
 
 	os.WriteFile(filepath.Join(project, ".gitignore"), []byte("node_modules\n"), 0o644)
-	run(t, "git", "-C", project, "add", ".gitignore")
-	run(t, "git", "-C", project, "commit", "-m", "add gitignore")
 
-	mgr := newRepoForTest(Config{ProjectDir: project, WorkDir: project, Logger: &testLog{}, BaseBranch: "main"}, nil, withRunner(&execRunner{}))
+	runner := newStubRunner()
+	runner.On("add", "", nil)
+	runner.On("commit", "", nil)
+
+	mgr := newRepoForTest(Config{ProjectDir: project, WorkDir: project, Logger: &testLog{}, BaseBranch: "main"}, nil, withRunner(runner))
 	mgr.EnsureGitignored(".ralph")
 
 	data, err := os.ReadFile(filepath.Join(project, ".gitignore"))

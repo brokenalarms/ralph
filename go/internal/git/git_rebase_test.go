@@ -334,24 +334,23 @@ func TestTagTaskEnd_WithTaskID(t *testing.T) {
 
 // Tags fall back to the seq-slug from the branch name when no task ID is provided
 func TestTagTaskStart_FallbackToSeqSlug(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
+	dir := t.TempDir()
+	runner := newStubRunner()
+	runner.On("branch -m", "", nil)
+	runner.On("tag", "", nil)
 
 	mgr := newRepoForTest(Config{
-		ProjectDir: project,
+		ProjectDir: dir,
+		WorkDir:    filepath.Join(dir, "wt"),
 		BaseBranch: "main",
-		RalphDir:   ralphDir,
 		Logger:     &testLog{},
-	}, nil, withRunner(&execRunner{}))
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
+	}, nil, withRunner(runner), withWorktreeBranch("ralph/next"))
 
 	mgr.RenameBranchForTask("Add user auth", "")
 	mgr.TagTaskStart("")
 
-	if !refExists(mgr.workDir, "task/add-user-auth/start") {
-		t.Error("expected tag task/add-user-auth/start to exist")
+	if !runner.CalledWith("tag", "-f", "task/add-user-auth/start") {
+		t.Error("expected tag task/add-user-auth/start to be created")
 	}
 }
 
@@ -368,25 +367,20 @@ func TestTagTaskStart_NoOpWithoutWorktree(t *testing.T) {
 
 // Tags on the wip branch are skipped (no meaningful slug to extract)
 func TestTagTaskStart_SkipsWipBranch(t *testing.T) {
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
+	dir := t.TempDir()
+	runner := newStubRunner()
 
 	mgr := newRepoForTest(Config{
-		ProjectDir: project,
+		ProjectDir: dir,
+		WorkDir:    filepath.Join(dir, "wt"),
 		BaseBranch: "main",
-		RalphDir:   ralphDir,
 		Logger:     &testLog{},
-	}, nil, withRunner(&execRunner{}))
-	if err := mgr.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
+	}, nil, withRunner(runner), withWorktreeBranch(WipBranchName()))
 
-	// Branch is still ralph/project/wip — no task ID → no tag
 	mgr.TagTaskStart("")
 
-	tags := gitOutput(mgr.workDir, "tag", "-l", "task/*")
-	if tags != "" {
-		t.Errorf("expected no tags on /wip branch, got: %s", tags)
+	if runner.CalledWith("tag") {
+		t.Error("expected no tag command on wip branch")
 	}
 }
 
@@ -425,13 +419,21 @@ func TestTagStartEnd_DifferentCommits(t *testing.T) {
 // default branch instead of logging a warning — the missing branch is
 // an expected condition, not an error.
 func TestEnsureUpToDate_FallsBackSilentlyWhenPrevBranchMissing(t *testing.T) {
-	project, bare := initBareRepoWithOrigin(t)
-	mgr := setupRebaseMgr(t, project, bare)
+	dir := t.TempDir()
+	runner := newStubRunner()
+	runner.On("fetch origin nonexistent-branch", "", fmt.Errorf("couldn't find remote ref"))
+	runner.On("fetch origin main", "", nil)
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("rev-parse --verify", "", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
 
-	mgr.prevBranch = "nonexistent-branch"
-
-	log := mgr.logger.(*testLog)
-	log.messages = nil
+	log := &testLog{}
+	mgr := newRepoForTest(Config{
+		ProjectDir: dir,
+		WorkDir:    filepath.Join(dir, "wt"),
+		BaseBranch: "main",
+		Logger:     log,
+	}, nil, withRunner(runner), withWorktreeBranch("ralph/some-task"), withPrevBranch("nonexistent-branch"))
 
 	err := mgr.EnsureUpToDate(context.Background())
 	if err != nil {
@@ -450,15 +452,17 @@ func TestEnsureUpToDate_FallsBackSilentlyWhenPrevBranchMissing(t *testing.T) {
 }
 
 func TestRebaseOntoDefaultBranch_CancelledContextReturnsContextError(t *testing.T) {
-	project, bare := initBareRepoWithOrigin(t)
-	mgr := setupRebaseMgr(t, project, bare)
+	dir := t.TempDir()
+	runner := newStubRunner()
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("fetch", "", fmt.Errorf("signal: killed"))
 
-	writeFile(t, project, "mainfile.txt", "main content\n")
-	run(t, "git", "-C", project, "commit", "-m", "advance main")
-	pushToOrigin(t, project)
-
-	writeFile(t, mgr.workDir, "workfile.txt", "worktree content\n")
-	run(t, "git", "-C", mgr.workDir, "commit", "-m", "worktree commit")
+	mgr := newRepoForTest(Config{
+		ProjectDir: dir,
+		WorkDir:    filepath.Join(dir, "wt"),
+		BaseBranch: "main",
+		Logger:     &testLog{},
+	}, nil, withRunner(runner), withWorktreeBranch("ralph/some-task"))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

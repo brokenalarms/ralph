@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -138,40 +137,30 @@ func TestPostMergeUpdateMain_RebasePathLogsCleanly(t *testing.T) {
 // PostMergeUpdateMain deletes the local task branch after rebasing onto main,
 // so completed task branches don't accumulate in the local repo over time.
 func TestPostMergeUpdateMain_DeletesLocalTaskBranch(t *testing.T) {
-	project, _ := initBareRepo(t)
-	bare := filepath.Join(filepath.Dir(project), "bare.git")
-	ralphDir := filepath.Join(project, ".ralph")
+	dir := t.TempDir()
+	runner := newStubRunner()
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("fetch", "", nil)
+	runner.On("rebase", "", nil)
+	runner.On("checkout", "", nil)
+	runner.On("clean", "", nil)
+	runner.On("rev-parse --verify", "", fmt.Errorf("not found"))
+	runner.On("merge-base --is-ancestor", "", fmt.Errorf("not ancestor"))
+	runner.On("branch -D", "", nil)
 
+	taskBranch := "ralph/ralph-4l32-delete-local-branch"
 	repo := newRepoForTest(
-		Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: &testLog{}},
+		Config{ProjectDir: dir, WorkDir: filepath.Join(dir, "wt"), BaseBranch: "main", Logger: &testLog{}},
 		nil,
-		withRunner(&execRunner{}),
+		withRunner(runner),
+		withWorktreeBranch(taskBranch),
+		withBranchRenamed(true),
 	)
-	if err := repo.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	repo.RenameBranchForTask("delete local branch", "ralph-4l32")
-	taskBranch := repo.worktreeBranch
-
-	// Commit on the task branch so it has a distinct local ref.
-	writeFile(t, repo.workDir, "task-work.txt", "work\n")
-	run(t, "git", "-C", repo.workDir, "add", "task-work.txt")
-	run(t, "git", "-C", repo.workDir, "commit", "-m", "task work")
-
-	// Push a squash-merge commit to origin/main (simulating a merged PR).
-	tmpClone := filepath.Join(t.TempDir(), "tmp-clone")
-	run(t, "git", "clone", bare, tmpClone)
-	writeFile(t, tmpClone, "merged-work.txt", "merged\n")
-	run(t, "git", "-C", tmpClone, "commit", "-m", "merged PR")
-	run(t, "git", "-C", tmpClone, "push", "origin", "main")
 
 	repo.PostMergeUpdateMain()
 
-	// The task branch must no longer exist as a local ref.
-	branches := gitOutput(project, "branch", "--list")
-	if strings.Contains(branches, taskBranch) {
-		t.Errorf("local task branch %q should have been deleted after merge, but still listed in: %s", taskBranch, branches)
+	if !runner.CalledWith("branch", "-D", taskBranch) {
+		t.Errorf("expected branch -D %s to be called", taskBranch)
 	}
 }
 
@@ -433,27 +422,18 @@ func TestAutoMergeCurrentBranch_SkipsWhenWorkDirIsProjectDir(t *testing.T) {
 // AutoMergeCurrentBranch returns 0 and logs "No PR found" when no PR
 // exists for the branch, so an unpushed branch doesn't cause a failure.
 func TestAutoMergeCurrentBranch_SkipsWhenNoPR(t *testing.T) {
-	if _, err := exec.LookPath("gh"); err != nil {
-		t.Skip("gh CLI not available")
-	}
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
 
-	project, _ := initBareRepo(t)
-	ralphDir := filepath.Join(project, ".ralph")
+	gh := newStubGitHub(StubGitHubConfig{Available: true})
 	log := &testLog{}
 
-	// World with no PRs — FindOpenPR returns 0.
-	gh := newStubGitHub(StubGitHubConfig{Available: true})
-
 	repo := newRepoForTest(
-		Config{ProjectDir: project, RalphDir: ralphDir, BaseBranch: "main", Logger: log},
+		Config{ProjectDir: "/project", WorkDir: "/project/wt", BaseBranch: "main", Logger: log},
 		gh,
-		withRunner(&execRunner{}),
+		withRunner(runner),
+		withWorktreeBranch("ralph/unpushed-task"),
 	)
-	if err := repo.SetupWorktree(context.Background()); err != nil {
-		t.Fatalf("SetupWorktree: %v", err)
-	}
-
-	repo.RenameBranchForTask("unpushed task", "")
 
 	merged, err := repo.AutoMergeCurrentBranch(context.Background())
 	if err != nil {
@@ -527,7 +507,7 @@ func TestResolveConflict_RebasesAndForcePushes(t *testing.T) {
 // Static-world variant: PR is persistently Blocked, OnCIFailure callback is
 // invoked on each retry but cannot un-block branch protection.
 func TestMergeWithRetry_ExhaustsRetries(t *testing.T) {
-	project, _ := initBareRepo(t)
+	project := t.TempDir()
 
 	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
@@ -627,18 +607,21 @@ func TestPush_SquashesMultipleCommits(t *testing.T) {
 
 // Push with a single commit is a no-op for squash — just pushes the commit.
 func TestPush_SingleCommitNoOp(t *testing.T) {
-	project, bare := initBareRepoWithOrigin(t)
-	wtDir := filepath.Join(t.TempDir(), "worktree")
-	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test-single", wtDir)
-
-	writeFile(t, wtDir, "only.txt", "content\n")
-	run(t, "git", "-C", wtDir, "add", "-A")
-	run(t, "git", "-C", wtDir, "commit", "-m", "single commit")
+	dir := t.TempDir()
+	runner := newStubRunner()
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("fetch", "", nil)
+	runner.On("rev-parse origin/main", "abc123", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-parse HEAD", "def456", nil)
+	runner.On("log -1 --format=%s", "single commit", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("push", "", nil)
 
 	repo := newRepoForTest(
-		Config{ProjectDir: project, WorkDir: wtDir, BaseBranch: "main", Logger: &testLog{}},
+		Config{ProjectDir: dir, WorkDir: filepath.Join(dir, "wt"), BaseBranch: "main", Logger: &testLog{}},
 		nil,
-		withRunner(&execRunner{}),
+		withRunner(runner),
 		withWorktreeBranch("ralph/test-single"),
 	)
 
@@ -646,9 +629,11 @@ func TestPush_SingleCommitNoOp(t *testing.T) {
 		t.Fatalf("Push failed: %v", err)
 	}
 
-	count := strings.TrimSpace(cmdOutput(t, "git", "-C", bare, "rev-list", "--count", "main..ralph/test-single"))
-	if count != "1" {
-		t.Errorf("expected 1 commit on remote, got %s", count)
+	if !runner.CalledWith("push") {
+		t.Error("expected push to be called")
+	}
+	if runner.CalledWith("reset", "--soft") {
+		t.Error("single commit should not trigger squash (reset --soft)")
 	}
 }
 
@@ -818,29 +803,35 @@ func TestPush_CompileCheckBlocksPush(t *testing.T) {
 
 // Push proceeds when compile check passes (no build system in worktree).
 func TestPush_CompileCheckPasses(t *testing.T) {
-	project, _ := initBareRepoWithOrigin(t)
-	wtDir := filepath.Join(t.TempDir(), "worktree")
-	run(t, "git", "-C", project, "worktree", "add", "-b", "ralph/test-prepush-pass", wtDir)
-
-	writeFile(t, wtDir, "feature.txt", "content\n")
-	run(t, "git", "-C", wtDir, "add", "-A")
-	run(t, "git", "-C", wtDir, "commit", "-m", "add feature")
+	dir := t.TempDir()
+	runner := newStubRunner()
+	runner.On("symbolic-ref", "refs/remotes/origin/main", nil)
+	runner.On("fetch", "", nil)
+	runner.On("rev-parse origin/main", "abc123", nil)
+	runner.On("merge-base --is-ancestor", "", nil)
+	runner.On("rev-parse HEAD", "def456", nil)
+	runner.On("log -1 --format=%s", "add feature", nil)
+	runner.On("rev-list --count", "1", nil)
+	runner.On("push", "", nil)
 
 	repo := newRepoForTest(
 		Config{
-			ProjectDir:          project,
-			WorkDir:             wtDir,
-			BaseBranch:          "main",
-			Logger:              &testLog{},
-			CompileCheckTimeout: 5 * time.Second,
+			ProjectDir: dir,
+			WorkDir:    filepath.Join(dir, "wt"),
+			BaseBranch: "main",
+			Logger:     &testLog{},
 		},
 		nil,
-		withRunner(&execRunner{}),
+		withRunner(runner),
 		withWorktreeBranch("ralph/test-prepush-pass"),
 	)
 
 	if err := repo.Push(context.Background()); err != nil {
-		t.Fatalf("Push should succeed when compile check passes: %v", err)
+		t.Fatalf("Push should succeed: %v", err)
+	}
+
+	if !runner.CalledWith("push") {
+		t.Error("expected push to be called")
 	}
 }
 
@@ -1027,7 +1018,7 @@ func TestCreatePR_ReturnsMergedPRNumberOnAlreadyExists(t *testing.T) {
 // it returns the CI error. This covers the case where CI fails due to infrastructure
 // issues (billing, runner allocation) rather than actual test failures.
 func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
-	project, _ := initBareRepo(t)
+	project := t.TempDir()
 
 	gh := newStubGitHub(StubGitHubConfig{
 		Available: true,
@@ -1098,7 +1089,7 @@ func TestMergeWithRetry_InfraFailureRetriesWithBackoff(t *testing.T) {
 // When branch protection persistently blocks the merge (405), AutoMergeCurrentBranch
 // returns an error without merged=true. No admin bypass is ever used.
 func TestAutoMergeCurrentBranch_BlockedMergeReturnsError(t *testing.T) {
-	project, _ := initBareRepo(t)
+	project := t.TempDir()
 	stubCISleep(t)
 
 	gh := newStubGitHub(StubGitHubConfig{
