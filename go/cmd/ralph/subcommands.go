@@ -152,6 +152,19 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 	}
 	cfg.ProjectDir = repoRoot
 
+	configPath := filepath.Join(cfg.ProjectDir, "config.toml")
+	if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
+		if initErr := config.InitConfig(configPath); initErr != nil {
+			log.Emit(logging.Opts{Level: logging.Warn}, "Failed to create config.toml: %v", initErr)
+		}
+	}
+	if loadErr := cfg.LoadConfigFile(configPath); loadErr != nil {
+		log.Emit(logging.Opts{Level: logging.Warn}, "Failed to load config.toml: %v", loadErr)
+	}
+	if saveErr := cfg.SaveConfigFile(configPath); saveErr != nil {
+		log.Emit(logging.Opts{Level: logging.Warn}, "Failed to save config.toml: %v", saveErr)
+	}
+
 	scriptPath, _ := os.Executable()
 	ralphDir := filepath.Join(cfg.ProjectDir, ".ralph")
 

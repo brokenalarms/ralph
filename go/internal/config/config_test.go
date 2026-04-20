@@ -448,10 +448,10 @@ func TestStopSubcommandIntegration(t *testing.T) {
 	}
 }
 
-// --- Config file (ralph.toml) tests, ported from config.bats ---
+// --- Config file (config.toml) tests, ported from config.bats ---
 
-// Verifies that LoadConfigFile sets values from a ralph.toml file,
-// matching bats test "load_config sets variables from ralph.toml".
+// Verifies that LoadConfigFile sets values from a config.toml file,
+// matching bats test "load_config sets variables from config.toml".
 func TestLoadConfigSetsValuesFromTOML(t *testing.T) {
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
 
@@ -459,7 +459,7 @@ func TestLoadConfigSetsValuesFromTOML(t *testing.T) {
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 
 	dir := t.TempDir()
-	tomlPath := filepath.Join(dir, "ralph.toml")
+	tomlPath := filepath.Join(dir, "config.toml")
 	os.WriteFile(tomlPath, []byte("max_iterations = 25\ncalls_per_hour = 40\nstuck_threshold = 10\nstagnation_threshold = 5\n"), 0o644)
 
 	cfg, _ := Parse(nil)
@@ -488,7 +488,7 @@ func TestCLIArgsOverrideConfigFile(t *testing.T) {
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 
 	dir := t.TempDir()
-	tomlPath := filepath.Join(dir, "ralph.toml")
+	tomlPath := filepath.Join(dir, "config.toml")
 	os.WriteFile(tomlPath, []byte("max_iterations = 25\ncalls_per_hour = 40\n"), 0o644)
 
 	cfg, _ := Parse([]string{"-n", "99"})
@@ -514,7 +514,7 @@ func TestLoadConfigNoOpWhenFileMissing(t *testing.T) {
 	origMax := cfg.MaxIterations
 	origStuck := cfg.StuckThreshold
 
-	err := cfg.LoadConfigFile("/nonexistent/path/ralph.toml")
+	err := cfg.LoadConfigFile("/nonexistent/path/config.toml")
 	if err != nil {
 		t.Fatalf("expected nil error for missing file, got %v", err)
 	}
@@ -535,7 +535,7 @@ func TestLoadConfigIgnoresCommentsAndBlankLines(t *testing.T) {
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 
 	dir := t.TempDir()
-	tomlPath := filepath.Join(dir, "ralph.toml")
+	tomlPath := filepath.Join(dir, "config.toml")
 	content := "# This is a comment\nmax_iterations = 30\n\n  # indented comment\ncalls_per_hour = 60\n"
 	os.WriteFile(tomlPath, []byte(content), 0o644)
 
@@ -559,7 +559,7 @@ func TestLoadConfigStripsInlineComments(t *testing.T) {
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 
 	dir := t.TempDir()
-	tomlPath := filepath.Join(dir, "ralph.toml")
+	tomlPath := filepath.Join(dir, "config.toml")
 	os.WriteFile(tomlPath, []byte("max_iterations = 15 # keep it short\n"), 0o644)
 
 	cfg, _ := Parse(nil)
@@ -579,7 +579,7 @@ func TestLoadConfigHandlesQuotedValues(t *testing.T) {
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 
 	dir := t.TempDir()
-	tomlPath := filepath.Join(dir, "ralph.toml")
+	tomlPath := filepath.Join(dir, "config.toml")
 	os.WriteFile(tomlPath, []byte("max_iterations = \"20\"\n"), 0o644)
 
 	cfg, _ := Parse(nil)
@@ -599,7 +599,7 @@ func TestLoadConfigHandlesAllKeys(t *testing.T) {
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 
 	dir := t.TempDir()
-	tomlPath := filepath.Join(dir, "ralph.toml")
+	tomlPath := filepath.Join(dir, "config.toml")
 	content := `max_iterations = 10
 calls_per_hour = 20
 watcher_interval = 5
@@ -646,7 +646,7 @@ func TestStagnationThresholdFromConfig(t *testing.T) {
 	t.Setenv("RALPH_IDLE_TIMEOUT_PROGRESS", "")
 
 	dir := t.TempDir()
-	tomlPath := filepath.Join(dir, "ralph.toml")
+	tomlPath := filepath.Join(dir, "config.toml")
 	os.WriteFile(tomlPath, []byte("stagnation_threshold = 2\n"), 0o644)
 
 	cfg, _ := Parse(nil)
@@ -657,11 +657,11 @@ func TestStagnationThresholdFromConfig(t *testing.T) {
 	}
 }
 
-// Verifies that InitConfig generates a ralph.toml with all expected keys,
-// matching bats test "init-config generates ralph.toml".
+// Verifies that InitConfig generates a config.toml with all expected keys,
+// matching bats test "init-config generates config.toml".
 func TestInitConfigGeneratesFile(t *testing.T) {
 	dir := t.TempDir()
-	tomlPath := filepath.Join(dir, "ralph.toml")
+	tomlPath := filepath.Join(dir, "config.toml")
 
 	err := InitConfig(tomlPath)
 	if err != nil {
@@ -685,7 +685,7 @@ func TestInitConfigGeneratesFile(t *testing.T) {
 // matching bats test "init-config refuses to overwrite existing config".
 func TestInitConfigRefusesToOverwrite(t *testing.T) {
 	dir := t.TempDir()
-	tomlPath := filepath.Join(dir, "ralph.toml")
+	tomlPath := filepath.Join(dir, "config.toml")
 	os.WriteFile(tomlPath, []byte("existing"), 0o644)
 
 	err := InitConfig(tomlPath)
@@ -748,14 +748,14 @@ func TestBranchStrategyFlag_Rejected(t *testing.T) {
 	}
 }
 
-// Verifies that branch_strategy in ralph.toml is silently ignored
+// Verifies that branch_strategy in config.toml is silently ignored
 // so existing config files don't cause errors.
 func TestBranchStrategyConfigFile_SilentlyIgnored(t *testing.T) {
 	t.Setenv("RALPH_MAX_ITERATIONS", "")
 
 
 	dir := t.TempDir()
-	tomlPath := filepath.Join(dir, "ralph.toml")
+	tomlPath := filepath.Join(dir, "config.toml")
 	os.WriteFile(tomlPath, []byte("branch_strategy = stacked\n"), 0o644)
 
 	cfg, _ := Parse(nil)
@@ -764,7 +764,7 @@ func TestBranchStrategyConfigFile_SilentlyIgnored(t *testing.T) {
 }
 
 // Verifies base_branch defaults to "develop", can be set via --base-branch CLI
-// flag, via ralph.toml, and that CLI takes precedence over config file.
+// flag, via config.toml, and that CLI takes precedence over config file.
 func TestBaseBranch(t *testing.T) {
 	t.Setenv("RALPH_BASE_BRANCH", "")
 
@@ -779,7 +779,7 @@ func TestBaseBranch(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	tomlPath := filepath.Join(dir, "ralph.toml")
+	tomlPath := filepath.Join(dir, "config.toml")
 	os.WriteFile(tomlPath, []byte("base_branch = staging\n"), 0o644)
 
 	cfg, _ = Parse(nil)
@@ -958,7 +958,6 @@ func TestConfigToState_ArgsFromState_Roundtrip(t *testing.T) {
 		"--auto-merge",
 		"--evolve",
 		"--wait",
-		"--refactor",
 		"--base-branch", "main",
 		"--admin-merge-on-ci-infra-failure",
 	})
@@ -987,6 +986,106 @@ func TestConfigToState_ArgsFromState_Roundtrip(t *testing.T) {
 	}
 	if restored.AdminMergeOnCIInfraFailure != original.AdminMergeOnCIInfraFailure {
 		t.Errorf("AdminMergeOnCIInfraFailure = %v, want %v", restored.AdminMergeOnCIInfraFailure, original.AdminMergeOnCIInfraFailure)
+	}
+}
+
+// Verifies that SaveConfigFile writes CLI-set values back to config.toml,
+// proving AC4: running with --base-branch main updates config.toml.
+func TestSaveConfigFileWritesBackCLIValues(t *testing.T) {
+	t.Setenv("RALPH_BASE_BRANCH", "")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	os.WriteFile(path, []byte("base_branch = staging\nmax_iterations = 10\n"), 0o644)
+
+	cfg, _ := Parse([]string{"--base-branch", "main"})
+	if err := cfg.SaveConfigFile(path); err != nil {
+		t.Fatalf("SaveConfigFile failed: %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	content := string(data)
+	if !strings.Contains(content, "base_branch = main") {
+		t.Errorf("expected base_branch = main in config, got:\n%s", content)
+	}
+	// max_iterations was not CLI-set, so it must be preserved unchanged.
+	if !strings.Contains(content, "max_iterations = 10") {
+		t.Errorf("expected max_iterations = 10 preserved, got:\n%s", content)
+	}
+}
+
+// Verifies that SaveConfigFile preserves comments and ordering,
+// proving AC write-back comment preservation.
+func TestSaveConfigFilePreservesComments(t *testing.T) {
+	t.Setenv("RALPH_BASE_BRANCH", "")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	content := "# Ralph config\nbase_branch = develop\n# max iterations\nmax_iterations = 50\n"
+	os.WriteFile(path, []byte(content), 0o644)
+
+	cfg, _ := Parse([]string{"--base-branch", "main"})
+	if err := cfg.SaveConfigFile(path); err != nil {
+		t.Fatalf("SaveConfigFile failed: %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	updated := string(data)
+	if !strings.Contains(updated, "# Ralph config") {
+		t.Errorf("comment '# Ralph config' was lost:\n%s", updated)
+	}
+	if !strings.Contains(updated, "# max iterations") {
+		t.Errorf("comment '# max iterations' was lost:\n%s", updated)
+	}
+	if !strings.Contains(updated, "base_branch = main") {
+		t.Errorf("expected base_branch = main after write-back:\n%s", updated)
+	}
+}
+
+// Verifies that SaveConfigFile is a no-op when no CLI flags were set,
+// leaving the file unchanged.
+func TestSaveConfigFileNoOpWhenNoCLIFlags(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	original := "base_branch = staging\n"
+	os.WriteFile(path, []byte(original), 0o644)
+
+	cfg, _ := Parse(nil)
+	if err := cfg.SaveConfigFile(path); err != nil {
+		t.Fatalf("SaveConfigFile failed: %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	if string(data) != original {
+		t.Errorf("file was modified unexpectedly:\ngot:  %q\nwant: %q", string(data), original)
+	}
+}
+
+// Verifies AC3: a config.toml with base_branch = staging causes the loop to use staging.
+// Tests LoadConfigFile + SaveConfigFile round-trip for persisted values.
+func TestConfigTOMLPersistenceRoundtrip(t *testing.T) {
+	t.Setenv("RALPH_BASE_BRANCH", "")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	// First run: no CLI flag, InitConfig creates file with defaults (develop).
+	if err := InitConfig(path); err != nil {
+		t.Fatalf("InitConfig failed: %v", err)
+	}
+
+	// Second run: pass --base-branch main, which writes back to config.toml.
+	cfg1, _ := Parse([]string{"--base-branch", "main"})
+	cfg1.LoadConfigFile(path)
+	if err := cfg1.SaveConfigFile(path); err != nil {
+		t.Fatalf("SaveConfigFile failed: %v", err)
+	}
+
+	// Third run: no CLI flag — should pick up main from the persisted config.
+	cfg2, _ := Parse(nil)
+	cfg2.LoadConfigFile(path)
+	if cfg2.BaseBranch != "main" {
+		t.Errorf("BaseBranch = %q, want \"main\" (persisted from previous CLI override)", cfg2.BaseBranch)
 	}
 }
 
