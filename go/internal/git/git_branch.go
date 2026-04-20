@@ -20,6 +20,7 @@ type BranchTaskMeta struct {
 // the first iteration, before any task-specific branch setup.
 func (r *repo) SyncWorktreeBase(ctx context.Context, completedBranches []string) error {
 	setStackHead(r, completedBranches)
+	r.stackHeadResolved = true
 	if r.prevBranch == "" {
 		if len(completedBranches) > 0 {
 			// Stack drained (top branch merged or PR closed) — local commits on
@@ -43,7 +44,13 @@ func (r *repo) SyncWorktreeBase(ctx context.Context, completedBranches []string)
 // Returns the resulting branch name.
 func (r *repo) BranchForTask(ctx context.Context, taskID, title string, meta BranchTaskMeta) (string, error) {
 	// Resolve stack head before creating the new branch so baseRef is known.
-	setStackHead(r, meta.CompletedBranches)
+	// Skip on the first task if SyncWorktreeBase already ran setStackHead at
+	// startup — the result is still valid and re-running emits duplicate logs.
+	if r.stackHeadResolved {
+		r.stackHeadResolved = false
+	} else {
+		setStackHead(r, meta.CompletedBranches)
+	}
 
 	baseRef := "origin/" + r.detectDefaultBranch()
 	if r.prevBranch != "" {

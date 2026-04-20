@@ -199,6 +199,67 @@ func TestCheckoutExistingBranch_RenameFailure_ReturnsError(t *testing.T) {
 	}
 }
 
+// countingGitHub wraps a gitHub stub and counts ListOpenPRBranches calls.
+type countingGitHub struct {
+	gitHub
+	listOpenPRBranchesCalls int
+}
+
+func (c *countingGitHub) ListOpenPRBranches(repoURL string) ([]string, error) {
+	c.listOpenPRBranchesCalls++
+	return c.gitHub.ListOpenPRBranches(repoURL)
+}
+
+// SyncWorktreeBase followed by BranchForTask on the first iteration must not
+// call setStackHead twice. On first task, BranchForTask skips setStackHead
+// because SyncWorktreeBase already ran it; on second task, it runs normally.
+func TestBranchForTask_SkipsSetStackHeadAfterSyncWorktreeBase(t *testing.T) {
+	log := &testLog{}
+	gh := &countingGitHub{gitHub: newStubGitHub(StubGitHubConfig{Available: true})}
+	runner := newStubRunner()
+	runner.On("remote get-url origin", "https://github.com/test/repo.git", nil)
+	runner.On("fetch", "", nil)
+	runner.On("branch", "", nil)
+	runner.On("rev-list", "", nil)
+
+	r := newRepoForTest(
+		Config{ProjectDir: "/project", WorkDir: "/project/worktrees/wt1", Logger: log},
+		gh,
+		withRunner(runner),
+		withWorktreeBranch("ralph/wip"),
+	)
+
+	// SyncWorktreeBase calls setStackHead once (ListOpenPRBranches count → 1).
+	_ = r.SyncWorktreeBase(context.Background(), []string{"ralph/task-a"})
+	afterSync := gh.listOpenPRBranchesCalls
+
+	// First BranchForTask must skip setStackHead (count stays at 1).
+	_, _ = r.BranchForTask(context.Background(), "ralph-abc", "Task A", BranchTaskMeta{
+		Branch:            "ralph/ralph-abc-task-a",
+		CompletedBranches: []string{"ralph/task-a"},
+	})
+	afterFirstTask := gh.listOpenPRBranchesCalls
+
+	// Second BranchForTask must call setStackHead again (count increments).
+	r.worktreeBranch = "ralph/wip"
+	r.branchRenamed = false
+	_, _ = r.BranchForTask(context.Background(), "ralph-def", "Task B", BranchTaskMeta{
+		Branch:            "ralph/ralph-def-task-b",
+		CompletedBranches: []string{"ralph/task-a"},
+	})
+	afterSecondTask := gh.listOpenPRBranchesCalls
+
+	if afterSync != 1 {
+		t.Errorf("SyncWorktreeBase should call ListOpenPRBranches once, got %d", afterSync)
+	}
+	if afterFirstTask != afterSync {
+		t.Errorf("first BranchForTask should skip setStackHead (count unchanged at %d), got %d", afterSync, afterFirstTask)
+	}
+	if afterSecondTask != afterFirstTask+1 {
+		t.Errorf("second BranchForTask should call setStackHead (count %d+1), got %d", afterFirstTask, afterSecondTask)
+	}
+}
+
 // BranchForTask uses the stored branch from meta when one exists, renaming
 // the worktree branch to match without fetching from remote.
 func TestBranchForTask_UsesStoredBranchWhenRemoteEmpty(t *testing.T) {

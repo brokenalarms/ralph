@@ -55,6 +55,11 @@ type repo struct {
 	prevBranch     string
 	branchRenamed  bool
 
+	// stackHeadResolved is set by SyncWorktreeBase after calling setStackHead
+	// at startup. BranchForTask clears and skips setStackHead on the first task
+	// so that the two calls don't emit duplicate log lines.
+	stackHeadResolved bool
+
 	knownPRNumber int
 	runner           Runner
 
