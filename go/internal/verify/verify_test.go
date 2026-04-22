@@ -134,6 +134,30 @@ func TestRunTests_Timeout(t *testing.T) {
 	}
 }
 
+// RunTests kills grandchild processes on timeout, not just the direct child.
+// Before the fix, exec.CommandContext sent SIGKILL only to the direct child
+// (make/npm), leaving grandchildren alive and holding the stdout pipe open —
+// causing RunTests to block indefinitely.
+func TestRunTests_TimeoutKillsGrandchildren(t *testing.T) {
+	dir := t.TempDir()
+	// The Makefile spawns a background sleep (grandchild) that would hold the
+	// pipe open for 60s if not killed via process group.
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte(
+		"ralph-verify:\n\tsleep 60 & sleep 60\n",
+	), 0o644)
+
+	start := time.Now()
+	result := RunTests(context.Background(), 200*time.Millisecond, dir)
+	elapsed := time.Since(start)
+
+	if result.Passed {
+		t.Error("expected timeout failure")
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("RunTests took %s — grandchild processes likely held the pipe open past timeout", elapsed)
+	}
+}
+
 // RunTests fails when context is cancelled, proving that Ctrl-C
 // stops a long-running test suite instead of blocking indefinitely.
 func TestRunTests_CancelledContext(t *testing.T) {

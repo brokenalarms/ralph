@@ -8,10 +8,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/brokenalarms/ralph/internal/config"
 )
+
+// killProcessGroup configures cmd to run in its own process group and sets
+// Cancel to kill the entire group (not just the direct child). This ensures
+// grandchild processes spawned by npm/make are cleaned up on timeout.
+func killProcessGroup(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+}
 
 // Model IDs used as defaults for verification escalation.
 const (
@@ -151,6 +162,7 @@ func RunTests(ctx context.Context, timeout time.Duration, dirs ...string) Result
 	cmd := exec.CommandContext(ctx, tc.Cmd, tc.Args...)
 	cmd.Dir = tc.Dir
 	cmd.WaitDelay = 3 * time.Second
+	killProcessGroup(cmd)
 
 	tracker := newTestTracker()
 	stdout, _ := cmd.StdoutPipe()
@@ -349,6 +361,7 @@ func CompileCheck(ctx context.Context, timeout time.Duration, dir string) Result
 		cmd := exec.CommandContext(ctx, "go", "test", "-run=^$", "-count=1", "./...")
 		cmd.Dir = goDir
 		cmd.WaitDelay = 3 * time.Second
+		killProcessGroup(cmd)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return Result{
@@ -375,6 +388,7 @@ func CompileCheck(ctx context.Context, timeout time.Duration, dir string) Result
 		commands = append(commands, tsCmd)
 		cmd.Dir = dir
 		cmd.WaitDelay = 3 * time.Second
+		killProcessGroup(cmd)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return Result{
