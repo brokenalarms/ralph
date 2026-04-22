@@ -155,17 +155,6 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 	scriptPath, _ := os.Executable()
 	ralphDir := filepath.Join(cfg.ProjectDir, ".ralph")
 
-	configPath := filepath.Join(ralphDir, "config.toml")
-	if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
-		os.MkdirAll(ralphDir, 0o755)
-		if initErr := config.InitConfig(configPath); initErr != nil {
-			log.Emit(logging.Opts{Level: logging.Warn}, "Failed to create config.toml: %v", initErr)
-		}
-	}
-	if loadErr := cfg.LoadConfigFile(configPath); loadErr != nil {
-		log.Emit(logging.Opts{Level: logging.Warn}, "Failed to load config.toml: %v", loadErr)
-	}
-
 	existingPID, err := pidfile.Check(filepath.Join(ralphDir, "loop.pid"))
 	if err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "PID file check failed: %v", err)

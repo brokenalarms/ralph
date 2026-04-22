@@ -89,7 +89,7 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 
 	// Phase 1 — initialize the .ralph state directory and detect resume
 	// status. Pure local-state setup; no git operations.
-	resume, exitCode := initRalphDir(ctx, cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(ctx, &cfg, ralphDir, logFile, stateFile, log)
 	if exitCode >= 0 {
 		return exitCode
 	}
@@ -283,10 +283,20 @@ func runMain(cfg config.Config, dirs workctx.WorkContext, scriptPath string, arg
 //   - resume=false, exitCode=-1: fresh run
 //   - exitCode=0: clean exit (user declined to rerun completed task)
 //   - exitCode=1: hard error
-func initRalphDir(ctx context.Context, cfg config.Config, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
+func initRalphDir(ctx context.Context, cfg *config.Config, ralphDir, logFile, stateFile string, log *logging.Logger) (bool, int) {
 	if err := os.MkdirAll(ralphDir, 0o755); err != nil {
 		log.Emit(logging.Opts{Level: logging.Error}, "Failed to create .ralph dir: %v", err)
 		return false, 1
+	}
+
+	configPath := filepath.Join(ralphDir, "config.toml")
+	if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
+		if initErr := config.InitConfig(configPath); initErr != nil {
+			log.Emit(logging.Opts{Level: logging.Warn}, "Failed to create config.toml: %v", initErr)
+		}
+	}
+	if loadErr := cfg.LoadConfigFile(configPath); loadErr != nil {
+		log.Emit(logging.Opts{Level: logging.Warn}, "Failed to load config.toml: %v", loadErr)
 	}
 
 	touchFile(logFile)

@@ -276,7 +276,7 @@ func TestInitRalphDir_CreatesDirectory(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir}
 
 	log := logging.New(nil)
-	resume, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), &cfg, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue (exitCode < 0), got %d", exitCode)
@@ -366,7 +366,7 @@ func TestInitRalphDir_DetectsResume(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir}
 	log := logging.New(nil)
 
-	resume, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), &cfg, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue, got exit code %d", exitCode)
@@ -634,7 +634,7 @@ func TestInitRalphDir_WaitAutoResetsOnCompleted(t *testing.T) {
 	cfg := config.Config{ProjectDir: dir, Wait: true}
 	log := logging.New(nil)
 
-	resume, exitCode := initRalphDir(context.Background(), cfg, ralphDir, logFile, stateFile, log)
+	resume, exitCode := initRalphDir(context.Background(), &cfg, ralphDir, logFile, stateFile, log)
 
 	if exitCode >= 0 {
 		t.Fatalf("expected continue (exitCode < 0), got %d — --wait should auto-reset", exitCode)
@@ -668,7 +668,7 @@ func TestInitRalphDir_NoWaitCompletedBlocksOnPrompt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, exitCode := initRalphDir(ctx, cfg, ralphDir, logFile, stateFile, log)
+	_, exitCode := initRalphDir(ctx, &cfg, ralphDir, logFile, stateFile, log)
 
 	if exitCode != 0 {
 		t.Errorf("expected exit code 0 (prompt cancelled), got %d", exitCode)
