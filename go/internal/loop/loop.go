@@ -631,6 +631,7 @@ iterLoop:
 		if resumeResult.Handled {
 			l.onResumeDone(ctx, task.id, task.title, resumeResult)
 			l.git.TagTaskEnd(task.id)
+			l.state.WriteRunBranch("")
 			continue
 		}
 
@@ -666,7 +667,10 @@ iterLoop:
 				lastTaskMerged = true
 			}
 			switch out.action {
-			case signalRetry, signalSkipped:
+			case signalRetry:
+				continue
+			case signalSkipped:
+				l.state.WriteRunBranch("")
 				continue
 			case signalEvolve:
 				break iterLoop
@@ -674,6 +678,7 @@ iterLoop:
 			// signalComplete: fall through to tagTaskEnd
 		}
 		l.git.TagTaskEnd(task.id)
+		l.state.WriteRunBranch("")
 		currentTaskID = ""
 	}
 
