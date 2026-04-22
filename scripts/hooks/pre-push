@@ -1,32 +1,4 @@
 #!/usr/bin/env bash
-# Bumps patch version in package.json and amends into HEAD before push.
-set -euo pipefail
-
-REPO_ROOT="$(git rev-parse --show-toplevel)"
-PACKAGE_JSON="$REPO_ROOT/package.json"
-
-# Check if any non-deletion refs are being pushed
-pushing=false
-while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
-  if [ "$local_sha" != "0000000000000000000000000000000000000000" ]; then
-    pushing=true
-  fi
-done
-
-[ "$pushing" = false ] && exit 0
-
-current=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('$PACKAGE_JSON', 'utf8')).version)")
-IFS='.' read -r major minor patch <<< "$current"
-next="${major}.${minor}.$((patch + 1))"
-
-node -e "
-  const fs = require('fs');
-  const pkg = JSON.parse(fs.readFileSync('$PACKAGE_JSON', 'utf8'));
-  pkg.version = '$next';
-  fs.writeFileSync('$PACKAGE_JSON', JSON.stringify(pkg, null, 2) + '\n');
-"
-
-git add "$PACKAGE_JSON"
-git commit --amend --no-edit --no-verify
-
-echo "[pre-push] $current → $next"
+# Version bumping moved to sync-and-tag.sh where it runs as a new commit
+# before push, ensuring git resolves the bump into the push refs.
+exit 0

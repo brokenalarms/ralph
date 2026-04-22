@@ -14,7 +14,12 @@ setup_repo() {
 
   git init --bare --quiet "$tmp/remote.git"
   git clone --quiet "$tmp/remote.git" "$tmp/repo"
-  (cd "$tmp/repo" && git commit --allow-empty -m "init" --quiet && git push --quiet)
+
+  cat > "$tmp/repo/package.json" <<'PKG'
+{"version": "1.0.0"}
+PKG
+
+  (cd "$tmp/repo" && git add package.json && git commit -m "init" --quiet && git push --quiet)
   git -C "$tmp/repo" tag v0.0.1
   git -C "$tmp/repo" push --tags --quiet
 
@@ -103,10 +108,61 @@ HOOK
   ! echo "$output" | grep -q "BUILD_RAN"   || fail "compose fail: build ran despite sync failure"
 }
 
+# Test: version bumped as a new commit when local commits exist
+test_version_bumped_on_push() {
+  # sync-and-tag.sh must bump the patch version and commit it as a new commit when pushing
+  local tmp
+  tmp=$(setup_repo)
+  trap "rm -rf '$tmp'" RETURN
+
+  (cd "$tmp/repo" && git commit --allow-empty -m "local change" --quiet)
+  local_sha=$(git -C "$tmp/repo" rev-parse HEAD)
+
+  bash "$tmp/repo/scripts/sync-and-tag.sh" 2>&1
+
+  version=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('$tmp/repo/package.json','utf8')).version)")
+  head_sha=$(git -C "$tmp/repo" rev-parse HEAD)
+  parent_sha=$(git -C "$tmp/repo" rev-parse HEAD~1)
+
+  [ "$version" = "1.0.1" ]         || fail "version bump: expected 1.0.1, got $version"
+  [ "$head_sha" != "$local_sha" ]  || fail "version bump: HEAD should be new bump commit, not the local change commit"
+  [ "$parent_sha" = "$local_sha" ] || fail "version bump: parent of HEAD should be the original local commit"
+  git -C "$tmp/repo" log -1 --format="%s" | grep -q "bump version" || fail "version bump: HEAD commit message should mention 'bump version'"
+}
+
+# Test: second run with no new local commits does not increment version again
+test_no_double_bump_on_second_run() {
+  # After pushing once, a second invocation with nothing new must not produce another version bump
+  local tmp
+  tmp=$(setup_repo)
+  trap "rm -rf '$tmp'" RETURN
+
+  (cd "$tmp/repo" && git commit --allow-empty -m "local change" --quiet)
+
+  bash "$tmp/repo/scripts/sync-and-tag.sh" 2>&1
+  v1=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('$tmp/repo/package.json','utf8')).version)")
+
+  bash "$tmp/repo/scripts/sync-and-tag.sh" 2>&1
+  v2=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('$tmp/repo/package.json','utf8')).version)")
+
+  [ "$v1" = "1.0.1" ]  || fail "double bump: first run should bump to 1.0.1, got $v1"
+  [ "$v1" = "$v2" ]    || fail "double bump: second run must not bump again ($v1 → $v2)"
+}
+
+# Test: pre-push hook does not amend HEAD
+test_prepush_hook_no_amend() {
+  # The pre-push hook must not amend HEAD; version bumping moved to sync-and-tag.sh
+  grep -q "\-\-amend" "$SCRIPT_DIR/hooks/pre-push" && fail "pre-push hook: must not contain --amend"
+  return 0
+}
+
 test_tag_no_build_when_uptodate
 test_tag_pull_failure_no_build
 test_build_runs_via_compose
 test_build_skipped_on_sync_failure
+test_version_bumped_on_push
+test_no_double_bump_on_second_run
+test_prepush_hook_no_amend
 
 if ((failures > 0)); then
   echo "$failures test(s) failed"

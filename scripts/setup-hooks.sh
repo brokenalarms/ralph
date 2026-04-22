@@ -23,7 +23,6 @@ HOOK
 
 chmod +x "$hooks_dir/post-rewrite"
 
-# pre-push: bump patch version in package.json and amend into HEAD
 ln -sf "$root/scripts/hooks/pre-push" "$hooks_dir/pre-push"
 
-echo "Git hooks installed (post-merge, post-rewrite → build; pre-push → version bump)."
+echo "Git hooks installed (post-merge, post-rewrite → build; pre-push → no-op)."
