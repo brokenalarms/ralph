@@ -719,6 +719,32 @@ func TestCapModel(t *testing.T) {
 	}
 }
 
+// RunTests kills the process group on timeout, ensuring that grandchild
+// processes (e.g. a background sleep spawned by npm) cannot hold the stdout
+// pipe's write end open and block scanner.Scan() indefinitely after the
+// timeout fires.
+func TestRunTests_GrandchildKilledOnTimeout(t *testing.T) {
+	dir := t.TempDir()
+	// ralph-verify starts a persistent background process then exits immediately.
+	// Without Setpgid + group kill, the grandchild holds the write end of the
+	// stdout pipe, so scanner.Scan() never gets EOF after the timeout fires.
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("ralph-verify:\n\tsleep 999 &\n"), 0o644)
+
+	start := time.Now()
+	result := RunTests(context.Background(), 200*time.Millisecond, dir)
+	elapsed := time.Since(start)
+
+	if elapsed > 3*time.Second {
+		t.Errorf("RunTests blocked for %v — grandchild held stdout pipe open after timeout", elapsed)
+	}
+	if result.Passed {
+		t.Error("expected timeout failure, got pass")
+	}
+	if !strings.Contains(result.Reason, "timed out") {
+		t.Errorf("expected timeout reason, got: %s", result.Reason)
+	}
+}
+
 // RunTests populates Command and Dir so callers can log what was detected.
 func TestRunTests_PopulatesCommandAndDir(t *testing.T) {
 	dir := t.TempDir()
