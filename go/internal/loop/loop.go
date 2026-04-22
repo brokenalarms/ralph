@@ -413,6 +413,10 @@ func (l *Loop) waitForRate(ctx context.Context) bool {
 }
 
 func (l *Loop) runAgent(ctx context.Context, task taskContext, runIteration int) agentRunResult {
+	if ctx.Err() != nil {
+		return agentRunResult{action: actionDone}
+	}
+
 	taskKey := task.id
 	if taskKey == "" {
 		taskKey = task.title

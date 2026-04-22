@@ -289,6 +289,10 @@ func (l *Loop) maxLLMVerifyAttempts() int {
 // reports results; Loop writes state. Returns the human-readable status
 // message to append to the agent prompt.
 func (l *Loop) runPreIterationTests(ctx context.Context) string {
+	if ctx.Err() != nil {
+		return ""
+	}
+
 	result := l.verifier.RunPreIterationTests(verifier.PreIterationInput{Ctx: ctx})
 	if result.TestResult.ScriptMissing {
 		return result.Message

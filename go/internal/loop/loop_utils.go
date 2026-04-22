@@ -147,6 +147,10 @@ type runVerifyBuildParams struct {
 // or is not configured. Returns a build failure message (stdout+stderr) if
 // the script exits non-zero.
 func runVerifyBuild(ctx context.Context, p runVerifyBuildParams) string {
+	if ctx.Err() != nil {
+		return ""
+	}
+
 	var script string
 	if p.verifyBuild != "" {
 		script = p.verifyBuild

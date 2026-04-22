@@ -368,6 +368,8 @@ func cleanup(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backe
 	st.ClearCLIConfig()
 
 	if interrupted {
+		log.Emit(logging.Opts{Level: logging.Warn}, "Session interrupted — cleaning up")
+		log.Emit(logging.Opts{}, "Writing interrupted state to bead...")
 		st.Write("status", "stopped")
 	}
 
@@ -376,6 +378,7 @@ func cleanup(cfg config.Config, gm git.Ops, st *state.Store, backend tasks.Backe
 		strings.HasSuffix(gm.GetWorktreeBranch(), "/next") &&
 		gm.GetWorkDir() != cfg.ProjectDir {
 		if interrupted {
+			log.Emit(logging.Opts{}, "Cleaning up worktree %s...", gm.GetWorktreeBranch())
 			gm.RemoveWorktree()
 		}
 	}
