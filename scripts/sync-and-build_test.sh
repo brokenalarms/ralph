@@ -14,7 +14,12 @@ setup_repo() {
 
   git init --bare --quiet "$tmp/remote.git"
   git clone --quiet "$tmp/remote.git" "$tmp/repo"
-  (cd "$tmp/repo" && git commit --allow-empty -m "init" --quiet && git push --quiet)
+
+  cat > "$tmp/repo/package.json" <<'PKG'
+{"version": "1.0.0"}
+PKG
+
+  (cd "$tmp/repo" && git add package.json && git commit -m "init" --quiet && git push --quiet)
   git -C "$tmp/repo" tag v0.0.1
   git -C "$tmp/repo" push --tags --quiet
 
