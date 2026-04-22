@@ -154,13 +154,10 @@ func handleLoop(sub config.Subcommand, log *logging.Logger) int {
 
 	scriptPath, _ := os.Executable()
 	ralphDir := filepath.Join(cfg.ProjectDir, ".ralph")
-	if err := os.MkdirAll(ralphDir, 0o755); err != nil {
-		log.Emit(logging.Opts{Level: logging.Error}, "Failed to create .ralph dir: %v", err)
-		return 1
-	}
 
 	configPath := filepath.Join(ralphDir, "config.toml")
 	if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
+		os.MkdirAll(ralphDir, 0o755)
 		if initErr := config.InitConfig(configPath); initErr != nil {
 			log.Emit(logging.Opts{Level: logging.Warn}, "Failed to create config.toml: %v", initErr)
 		}
