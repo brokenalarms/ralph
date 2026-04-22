@@ -475,7 +475,7 @@ func TestEvolveRestart_RemovesPIDFile(t *testing.T) {
 
 	log := logging.New(nil)
 
-	// Will fail at rebuild (nonexistent source), but PID file should already
+	// Will fail at exec (nonexistent binary), but PID file should already
 	// be removed by that point.
 	_ = evolveRestart(dir, "/nonexistent/ralph", "develop", nil, log)
 
@@ -484,7 +484,7 @@ func TestEvolveRestart_RemovesPIDFile(t *testing.T) {
 	}
 }
 
-// Verifies evolveRestart proceeds (and fails on git) when no stop file exists,
+// Verifies evolveRestart proceeds (and fails on exec) when no stop file exists,
 // confirming the stop-file check only fires when the file is present.
 func TestEvolveRestart_NoStopFileProceeds(t *testing.T) {
 	dir := t.TempDir()
@@ -493,10 +493,10 @@ func TestEvolveRestart_NoStopFileProceeds(t *testing.T) {
 
 	log := logging.New(nil)
 
-	// No stop file → should attempt rebuild, which fails with nonexistent project dir.
+	// No stop file → should attempt exec, which fails with nonexistent binary.
 	err := evolveRestart(dir, "/nonexistent/ralph", "develop", nil, log)
 	if err == nil {
-		t.Fatal("expected error with nonexistent source dir, got nil")
+		t.Fatal("expected error with nonexistent binary, got nil")
 	}
 }
 

@@ -65,19 +65,13 @@ func evolveRestart(projectDir, scriptPath, baseBranch string, args []string, log
 		return nil
 	}
 
-	// Remove PID file before rebuild/exec so the new process (which inherits
+	// Remove PID file before exec so the new process (which inherits
 	// our PID via syscall.Exec) doesn't see itself as a duplicate.
 	os.Remove(filepath.Join(ralphDir, "loop.pid"))
 
-	// PostMergeReset already synced main. Just build — no git sync needed.
-	rebuildScript := filepath.Join(projectDir, "scripts", "build-go.sh")
-	rebuildCmd := exec.Command("bash", rebuildScript)
-	rebuildCmd.Stdout = os.Stdout
-	rebuildCmd.Stderr = os.Stderr
-	if err := rebuildCmd.Run(); err != nil {
-		return fmt.Errorf("rebuild failed: %w", err)
-	}
-
+	// The binary is already updated — evolve triggers because the on-disk
+	// binary hash changed, meaning an external build already ran (post-merge
+	// hook, another ralph instance, manual make install). No rebuild needed.
 	clearSignalFiles(ralphDir)
 
 	// Kill child processes (tail, stream-filter) before exec — otherwise
