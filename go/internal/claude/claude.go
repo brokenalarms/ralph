@@ -423,27 +423,44 @@ type newLinesScan struct {
 	rlUtilization float64
 }
 
-// scanNewLines reads lines appended to rawLog since lastOffset, advances
-// lastOffset to the end of the last complete line consumed, and returns
-// activity and rate-limit information. Partial lines at the end (no trailing
-// newline yet) are left for the next call.
+// scanNewLines reads new output appended to rawLog since *lastOffset.
+// Activity is detected by file growth — immune to scanner buffer limits.
+// Rate-limit events are detected by scanning the new lines with a 1MB
+// scanner buffer; if an oversized line (e.g. a full file read as a single
+// JSON line) exceeds the buffer, the scanner skips to EOF — rate-limit
+// events are always small so the skip is safe.
 func scanNewLines(rawLog string, lastOffset *int64) newLinesScan {
-	f, err := os.Open(rawLog)
+	info, err := os.Stat(rawLog)
 	if err != nil {
 		return newLinesScan{}
+	}
+	size := info.Size()
+
+	grew := size > *lastOffset
+	if !grew {
+		return newLinesScan{}
+	}
+
+	f, err := os.Open(rawLog)
+	if err != nil {
+		// Can't open but file grew — report activity conservatively.
+		*lastOffset = size
+		return newLinesScan{hasActivity: true}
 	}
 	defer f.Close()
 
 	if _, err := f.Seek(*lastOffset, 0); err != nil {
-		return newLinesScan{}
+		*lastOffset = size
+		return newLinesScan{hasActivity: true}
 	}
 
 	var result newLinesScan
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
-		*lastOffset += int64(len(line)) + 1 // +1 for the '\n'
-		if isContentActivity(line) {
+		*lastOffset += int64(len(line)) + 1 // +1 for '\n'
+		if !result.hasActivity && isContentActivity(line) {
 			result.hasActivity = true
 		}
 		resetAt, throttled, warning, rateLimitType, utilization, ok := ParseRateLimitEvent(line)
@@ -461,6 +478,12 @@ func scanNewLines(rawLog string, lastOffset *int64) newLinesScan {
 				result.rlUtilization = utilization
 			}
 		}
+	}
+	// Scanner errored on oversized line — skip to EOF so we don't re-scan
+	// it every tick. Conservatively report activity since we can't parse it.
+	if scanner.Err() != nil {
+		*lastOffset = size
+		result.hasActivity = true
 	}
 	return result
 }

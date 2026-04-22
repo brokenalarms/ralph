@@ -991,6 +991,77 @@ func TestPoll_ActivityResetsIdleTimer(t *testing.T) {
 	}
 }
 
+// Regression test: an oversized raw log line (e.g. a full CSS file returned as
+// a tool result) must not break the idle watchdog. Before the fix, the default
+// 64KB bufio.Scanner buffer would error on such lines, causing scanNewLines to
+// stop detecting activity entirely — the idle timer would fire even though the
+// agent was working.
+func TestPoll_OversizedRawLogLineDoesNotBreakIdleDetection(t *testing.T) {
+	dir := t.TempDir()
+	rawLog := filepath.Join(dir, "raw.log")
+	signals := DefaultSignalPaths(dir)
+
+	log := &testLogger{}
+	runner := Runner{Logger: log}
+
+	// Write a mix of normal activity, an oversized line (100KB), and more
+	// activity. The idle timer should stay reset throughout.
+	stop := make(chan struct{})
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		// Normal activity line.
+		f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		fmt.Fprintln(f, `{"type":"content_block_start","content_block":{"type":"text"}}`)
+		f.Close()
+
+		time.Sleep(50 * time.Millisecond)
+		// Oversized line — simulates a large file read result (100KB).
+		f, _ = os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		bigContent := strings.Repeat("x", 100*1024)
+		fmt.Fprintf(f, `{"type":"user","message":{"content":"%s"}}`+"\n", bigContent)
+		f.Close()
+
+		// Continue writing normal activity after the oversized line.
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				f, _ := os.OpenFile(rawLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+				fmt.Fprintln(f, `{"type":"content_block_delta","delta":{"text":"working"}}`)
+				f.Close()
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+	}()
+
+	// Complete after living past the idle timeout.
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.WriteFile(signals.Complete, []byte("done"), 0o644)
+		close(stop)
+	}()
+
+	cfg := RunConfig{
+		WorkDir:      dir,
+		RalphDir:     dir,
+		Prompt:       "echo test",
+		RawLog:       rawLog,
+		Signals:      signals,
+		PollInterval: 50 * time.Millisecond,
+		IdleTimeout:  200 * time.Millisecond,
+	}
+
+	result := runWithCommand(t, &runner, cfg, "sleep", "1")
+
+	if result.IdleTimeout {
+		t.Error("expected no idle timeout — oversized raw log line should not break activity detection")
+	}
+	if !result.SignalDetected {
+		t.Error("expected SignalDetected to be true")
+	}
+}
+
 // Verifies that the shorter progress-aware timeout fires once the agent has
 // produced content output in the raw log (text activity flips activitySeen).
 func TestPoll_ProgressTimeoutShorterThanDefault(t *testing.T) {
