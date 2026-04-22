@@ -8,7 +8,6 @@ hooks_dir="$root/.git/hooks"
 cat > "$hooks_dir/post-merge" <<'HOOK'
 #!/usr/bin/env bash
 root="$(git rev-parse --show-toplevel)"
-git -C "$root" fetch --tags --quiet 2>/dev/null || true
 "$root/scripts/build-go.sh"
 HOOK
 
@@ -18,11 +17,13 @@ cat > "$hooks_dir/post-rewrite" <<'HOOK'
 #!/usr/bin/env bash
 if [ "$1" = "rebase" ]; then
   root="$(git rev-parse --show-toplevel)"
-  git -C "$root" fetch --tags --quiet 2>/dev/null || true
   "$root/scripts/build-go.sh"
 fi
 HOOK
 
 chmod +x "$hooks_dir/post-rewrite"
 
-echo "Git hooks installed (post-merge, post-rewrite → fetch tags + build)."
+# pre-push: bump patch version in package.json and amend into HEAD
+ln -sf "$root/scripts/hooks/pre-push" "$hooks_dir/pre-push"
+
+echo "Git hooks installed (post-merge, post-rewrite → build; pre-push → version bump)."

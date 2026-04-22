@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Pull latest, push local commits, and wait for CI to create the version tag.
+# Pull latest and push local commits. Version bumping happens in the pre-push
+# hook; tagging happens in CI from package.json.
 set -euo pipefail
 
 root="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
@@ -17,24 +18,4 @@ if [ "$ahead" != "0" ]; then
     echo "[sync] Push failed" >&2
     exit 1
   fi
-
-  # Wait for CI to create the version tag.
-  old_tag=$(git -C "$root" describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --abbrev=0 2>/dev/null || echo "none")
-  echo -n "[sync] Waiting for version tag (current: $old_tag)"
-  delay=1
-  for i in 1 2 3 4 5 6 7; do
-    git -C "$root" fetch --tags --quiet 2>/dev/null || true
-    new_tag=$(git -C "$root" describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --abbrev=0 2>/dev/null || echo "none")
-    if [ "$new_tag" != "$old_tag" ]; then
-      echo " → $new_tag"
-      break
-    fi
-    if [ "$i" -lt 7 ]; then
-      echo -n "."
-      sleep "$delay"
-      delay=$((delay * 2))
-    else
-      echo " (timed out, using $old_tag)"
-    fi
-  done
 fi

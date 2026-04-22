@@ -33,7 +33,6 @@ STUB
   cat > "$tmp/repo/.git/hooks/post-merge" <<'HOOK'
 #!/usr/bin/env bash
 root="$(git rev-parse --show-toplevel)"
-git -C "$root" fetch --tags --quiet 2>/dev/null || true
 "$root/scripts/build-go.sh"
 HOOK
   chmod +x "$tmp/repo/.git/hooks/post-merge"

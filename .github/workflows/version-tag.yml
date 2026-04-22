@@ -1,9 +1,7 @@
-name: Bump patch version
-
+name: Tag version from package.json
 on:
   push:
     branches: [main]
-
 jobs:
   tag:
     runs-on: ubuntu-latest
@@ -14,21 +12,17 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-
-      - name: Bump patch tag
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Create version tag from package.json
         run: |
-          # Skip if this commit already has a version tag.
-          if git describe --tags --exact-match HEAD 2>/dev/null | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "Tag already exists on merge commit: $(git describe --tags --exact-match HEAD)"
+          version=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version)")
+          tag="v${version}"
+          if git tag --list | grep -qxF "$tag"; then
+            echo "Tag $tag already exists — skipping"
             exit 0
           fi
-
-          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
-          latest=${latest:-v0.1.0}
-          major=$(echo "$latest" | sed 's/^v//' | cut -d. -f1)
-          minor=$(echo "$latest" | sed 's/^v//' | cut -d. -f2)
-          patch=$(echo "$latest" | sed 's/^v//' | cut -d. -f3)
-          new_tag="v${major}.${minor}.$((patch + 1))"
-          git tag "$new_tag"
-          git push origin "$new_tag"
-          echo "Created tag: $new_tag (was $latest)"
+          git tag "$tag"
+          git push origin "$tag"
+          echo "Created tag: $tag"

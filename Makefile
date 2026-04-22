@@ -1,8 +1,8 @@
 PREFIX   ?= $(HOME)/.local
 BINDIR   ?= $(PREFIX)/bin
 BINARY   := ralph
-VERSION  := $(shell git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --abbrev=0 2>/dev/null || echo v0.1.0-dev)
-LDFLAGS  := -X github.com/brokenalarms/ralph/internal/config.Version=$(VERSION:v%=%)
+VERSION  := $(shell node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('package.json','utf8')).version)" 2>/dev/null || echo 0.1.0-dev)
+LDFLAGS  := -X github.com/brokenalarms/ralph/internal/config.Version=$(VERSION)
 
 .PHONY: build install uninstall test clean
 
