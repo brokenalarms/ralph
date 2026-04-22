@@ -568,6 +568,10 @@ type iterationPrompt struct {
 // feedback, assembles attempt context, and builds the full prompt. Returns
 // false if Run() should break (internet or rate limit unavailable).
 func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask string) (iterationPrompt, bool) {
+	if ctx.Err() != nil {
+		return iterationPrompt{}, false
+	}
+
 	if taskID != "" {
 		if err := l.taskBackend.SetState(taskID, "phase", "implementing", "ralph: starting task"); err != nil {
 			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "SetState phase=implementing: %v", err)
@@ -632,6 +636,9 @@ func (l *Loop) prepareAndBuildPrompt(ctx context.Context, taskID, nextTask strin
 // is responsible for not counting this iteration.
 func (l *Loop) handleRunResult(ctx context.Context, result claude.Result, runErr error, taskID, nextTask, headBefore string, runIteration int) loopAction {
 	if runErr != nil {
+		if ctx.Err() != nil {
+			return actionDone
+		}
 		if !l.connectivity.IsOnline() {
 			l.logger.Emit(logging.Opts{Domain: logging.LLM, Level: logging.Warn, Model: l.cfg.Model}, "Claude failed — internet appears down")
 			if !l.connectivity.WaitForInternet(ctx, l.logger) {
