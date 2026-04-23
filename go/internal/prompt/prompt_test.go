@@ -790,16 +790,18 @@ func TestTaskManagerPrompt_StartupIncludesBdReady(t *testing.T) {
 	}
 }
 
-// Proves: execution-bd.md no longer instructs bd create — agent must not
-// run any bd commands. The orchestrator owns the full bead lifecycle.
-func TestExecutionBD_NoBdCreateInstruction(t *testing.T) {
+// Proves: execution-bd.md does not mention bd commands — the agent should
+// have no awareness of the task management system.
+func TestExecutionBD_NoBdReferences(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(promptsDir(t), "execution-bd.md"))
 	if err != nil {
 		t.Fatalf("reading execution-bd.md: %v", err)
 	}
 	s := string(content)
-	if strings.Contains(s, "bd create") {
-		t.Error("execution-bd.md must not instruct bd create — agent should not run any bd commands")
+	for _, banned := range []string{"bd create", "bd update", "bd close", "bd init", "bd prime", "`bd`"} {
+		if strings.Contains(s, banned) {
+			t.Errorf("execution-bd.md must not reference %q — agent should not know about task management", banned)
+		}
 	}
 }
 
