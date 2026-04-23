@@ -91,6 +91,11 @@ func (l *Loop) selectNextTaskInner(ctx context.Context, p selectNextTaskParams, 
 			l.state.Write("status", "completed")
 			return taskContext{}, actionDone
 		}
+		if allSkipped, _ := tasks.HasOpenButAllSkipped(l.taskBackend); allSkipped {
+			l.logger.Emit(logging.Opts{Domain: logging.Beads, Level: logging.Warn}, "All remaining tasks are skipped or blocked — exiting")
+			l.state.Write("status", "all_skipped")
+			return taskContext{}, actionDone
+		}
 		if resumed := l.waitForTasks(ctx); !resumed {
 			return taskContext{}, actionDone
 		}

@@ -1162,6 +1162,66 @@ func TestBD_HasRemaining_ExcludesSkipped(t *testing.T) {
 	}
 }
 
+// HasOpenButAllSkipped returns true when open tasks exist but HasRemaining
+// is false because all are filtered by the skip list.
+func TestBD_HasOpenButAllSkipped_ReturnsTrue(t *testing.T) {
+	runner := mockBD(
+		"1",
+		map[string]string{"open": "1", "in_progress": "0", "closed": "0"},
+		"[]",
+		`[{"id":"ralph-only","title":"Only task"}]`,
+	)
+	b := setupBD(t, runner)
+	b.SetSkippedIDs([]string{"ralph-only"})
+
+	got, err := HasOpenButAllSkipped(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got {
+		t.Error("HasOpenButAllSkipped should return true when tasks exist but all are skipped")
+	}
+}
+
+// HasOpenButAllSkipped returns false when no tasks exist at all.
+func TestBD_HasOpenButAllSkipped_NoTasks(t *testing.T) {
+	runner := mockBD(
+		"0",
+		map[string]string{"open": "0", "in_progress": "0", "closed": "0"},
+		"[]",
+		"[]",
+	)
+	b := setupBD(t, runner)
+
+	got, err := HasOpenButAllSkipped(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got {
+		t.Error("HasOpenButAllSkipped should return false when no tasks exist")
+	}
+}
+
+// HasOpenButAllSkipped returns false when tasks exist and at least one is available.
+func TestBD_HasOpenButAllSkipped_TasksAvailable(t *testing.T) {
+	runner := mockBD(
+		"2",
+		map[string]string{"open": "2", "in_progress": "0", "closed": "0"},
+		"[]",
+		`[{"id":"ralph-a","title":"Task A"},{"id":"ralph-b","title":"Task B"}]`,
+	)
+	b := setupBD(t, runner)
+	b.SetSkippedIDs([]string{"ralph-a"})
+
+	got, err := HasOpenButAllSkipped(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got {
+		t.Error("HasOpenButAllSkipped should return false when at least one task remains after skip filter")
+	}
+}
+
 // Proves: SetSkippedIDs with empty list clears any previous skips.
 func TestBD_SetSkippedIDs_EmptyClearsSkips(t *testing.T) {
 	runner := mockBD(

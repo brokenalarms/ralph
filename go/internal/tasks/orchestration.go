@@ -43,6 +43,24 @@ func Next(b Backend, resumeID string, skippedIDs []string) (TaskInfo, error) {
 	return b.GetNextTaskInfo()
 }
 
+// HasOpenButAllSkipped reports whether open tasks exist but none are available
+// after the skip filter is applied. When true, polling will never yield new
+// work and the loop should exit rather than waiting forever.
+func HasOpenButAllSkipped(b Backend) (bool, error) {
+	count, err := b.CountRemaining()
+	if err != nil {
+		return false, err
+	}
+	if count == 0 {
+		return false, nil
+	}
+	has, err := b.HasRemaining()
+	if err != nil {
+		return false, err
+	}
+	return !has, nil
+}
+
 // Progress returns the completed and total task counts from the backend.
 func Progress(b Backend) (completed, total int) {
 	c, _ := b.CountCompleted()
