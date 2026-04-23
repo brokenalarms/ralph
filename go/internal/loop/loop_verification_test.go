@@ -911,6 +911,55 @@ func TestLoop_LLMVerificationLogColors(t *testing.T) {
 	}
 }
 
+// TestRun_ConfigVerifyBypassesStartupGate proves that setting cfg.Verify allows
+// the loop to start without a ralph:verify script — the greenfield use case where
+// the first tasks create the project scaffolding that will contain the test suite.
+func TestRun_ConfigVerifyBypassesStartupGate(t *testing.T) {
+	dir, st := setupTestDir(t)
+	// Remove the Makefile that setupTestDir creates — simulate a greenfield project
+	// with no ralph:verify script anywhere.
+	os.Remove(filepath.Join(dir, "Makefile"))
+
+	ralphDir := filepath.Join(dir, ".ralph")
+	promptsDir := filepath.Join(dir, "prompts")
+	createPromptTemplates(t, promptsDir)
+
+	gm := git.NewStub(git.StubRepoConfig{
+		ProjectDir: dir,
+		WorkDir:    dir,
+		RemoteURL:  "https://github.com/owner/repo.git",
+	})
+
+	cfg := Config{
+		Dirs: workctx.WorkContext{
+			ProjectDir: dir,
+			WorkDir:    dir,
+			RalphDir:   ralphDir,
+			PromptsDir: promptsDir,
+		},
+		VerifyDir:     dir,
+		Verify:        "true",
+		MaxIterations: 1,
+		CallsPerHour:  80,
+	}
+	logger := logging.New(nil)
+	l := New(cfg, Modules{
+		State:        st,
+		Git:          gm,
+		TaskBackend:  &testutil.TrackingBackend{},
+		Logger:       logger,
+		Verifier:     newTestVerifier(t, cfg, logger),
+		Connectivity: &stubConnectivity{},
+	})
+
+	err := l.Run(context.Background())
+	// The loop should NOT fail with "no ralph:verify script found".
+	// It may stop for other reasons (no tasks, max iterations) — that's fine.
+	if err != nil && strings.Contains(err.Error(), "no ralph:verify script found") {
+		t.Errorf("startup gate should pass when cfg.Verify is set, got: %v", err)
+	}
+}
+
 // Keep a reference to fmt so the import stays used even though all explicit
 // callers were reframed away. fmt is retained because the fmt.Errorf
 // fallback remains useful for any future test additions in this file.

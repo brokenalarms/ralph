@@ -109,11 +109,29 @@ func detectScript(npmScript, makeTarget string, dirs ...string) *TestCommand {
 
 // DetectTestCommand looks for an explicit ralph:verify script in the project.
 // Projects must declare what "verified" means — the loop does not guess.
+// Script detection runs first; configVerify is a fallback used only when no
+// ralph:verify script is found in package.json or Makefile.
 // Accepts multiple directories checked in order; returns the first match.
-// Returns nil if no ralph:verify script is found; callers should refuse to
-// start the loop without a verify command.
-func DetectTestCommand(dirs ...string) *TestCommand {
-	return detectScript("ralph:verify", "ralph-verify", dirs...)
+// Returns nil if neither a ralph:verify script nor configVerify is present;
+// callers should refuse to start the loop without a verify command.
+func DetectTestCommand(configVerify string, dirs ...string) *TestCommand {
+	if tc := detectScript("ralph:verify", "ralph-verify", dirs...); tc != nil {
+		return tc
+	}
+	if configVerify != "" {
+		parts := strings.Fields(configVerify)
+		cmd := parts[0]
+		args := parts[1:]
+		dir := "."
+		for _, d := range dirs {
+			if d != "" {
+				dir = d
+				break
+			}
+		}
+		return &TestCommand{Cmd: cmd, Args: args, Dir: dir}
+	}
+	return nil
 }
 
 // DetectPostTaskCommand returns the post-task command to run. Uses configPostTask
@@ -145,16 +163,17 @@ func DetectVerifyBuild(dirs ...string) *TestCommand {
 }
 
 // RunTests executes the detected test command and returns the result.
-// Accepts multiple directories checked in order — the command runs in the
-// first directory where ralph:verify is found. Returns a failure if no
-// ralph:verify command is detected.
-func RunTests(ctx context.Context, timeout time.Duration, dirs ...string) Result {
-	tc := DetectTestCommand(dirs...)
+// When configVerify is non-empty it is used as the command instead of detecting
+// ralph:verify scripts. Accepts multiple directories checked in order — the command
+// runs in the first directory where ralph:verify is found. Returns a failure if
+// no ralph:verify command is detected.
+func RunTests(ctx context.Context, timeout time.Duration, configVerify string, dirs ...string) Result {
+	tc := DetectTestCommand(configVerify, dirs...)
 	if tc == nil {
 		return Result{Passed: false, ScriptMissing: true, Reason: "no ralph:verify script found — add a \"ralph:verify\" script to package.json"}
 	}
 
-	command := tc.Cmd + " " + strings.Join(tc.Args, " ")
+	command := strings.TrimRight(tc.Cmd+" "+strings.Join(tc.Args, " "), " ")
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

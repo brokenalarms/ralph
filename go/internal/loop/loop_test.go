@@ -42,6 +42,7 @@ func newTestVerifier(t *testing.T, cfg Config, logger *logging.Logger, stubs ...
 	return verifier.New(verifier.Config{
 		VerifyDir:             cfg.VerifyDir,
 		ProjectDir:            cfg.Dirs.ProjectDir,
+		ConfigVerify:          cfg.Verify,
 		VerifyModel:           cfg.VerifyModel,
 		VerifyEscalationModel: cfg.VerifyEscalationModel,
 		FixModel:              cfg.FixModel,

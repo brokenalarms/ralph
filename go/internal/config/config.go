@@ -49,6 +49,7 @@ type Config struct {
 	PostSignalTimeout       time.Duration
 	PostTask                string
 	VerifyBuild             string
+	Verify                  string
 	Notify                  bool
 	CIPollTimeout           time.Duration
 
@@ -297,22 +298,28 @@ func InitConfig(path string) error {
 		key string
 		val string
 	}
-	var entries []entry
+	var regular, commented []entry
 	for _, f := range Flags {
 		if f.ConfigKey == "" {
 			continue
 		}
 		if f.Kind == KindBool {
-			entries = append(entries, entry{f.ConfigKey, "false"})
+			regular = append(regular, entry{f.ConfigKey, "false"})
 		} else if f.Default != "" {
-			entries = append(entries, entry{f.ConfigKey, f.Default})
+			regular = append(regular, entry{f.ConfigKey, f.Default})
+		} else if f.CommentInInit {
+			commented = append(commented, entry{f.ConfigKey, ""})
 		}
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].key < entries[j].key })
+	sort.Slice(regular, func(i, j int) bool { return regular[i].key < regular[j].key })
+	sort.Slice(commented, func(i, j int) bool { return commented[i].key < commented[j].key })
 
 	var b strings.Builder
-	for _, e := range entries {
+	for _, e := range regular {
 		fmt.Fprintf(&b, "%s = %s\n", e.key, e.val)
+	}
+	for _, e := range commented {
+		fmt.Fprintf(&b, "# %s = \n", e.key)
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
