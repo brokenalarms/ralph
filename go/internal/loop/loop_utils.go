@@ -185,28 +185,22 @@ func runVerifyBuild(ctx context.Context, p runVerifyBuildParams) string {
 }
 
 type runPostTaskParams struct {
-	postTask      string
-	worktreeDir   string
-	projectDir    string
-	defaultBranch string
-	logger        *logging.Logger
+	postTask    string
+	worktreeDir string
+	projectDir  string
+	logger      *logging.Logger
 }
 
 // runPostTask executes the post-task script if configured. Uses the post_task
 // config/CLI value first; falls back to detecting a ralph:post-task npm script
 // or ralph-post-task Makefile target (worktree then project root). Runs in the
-// project directory with RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED env vars.
-// When merged=true, checks out the default branch and pulls in projectDir first
-// so the script sees fresh main. Non-zero exit warns and continues.
+// worktree directory with RALPH_TASK_ID, RALPH_PR_NUMBER, and RALPH_MERGED env vars.
+// Non-zero exit warns and continues.
 func runPostTask(ctx context.Context, p runPostTaskParams, taskID string, prNumber int, merged bool) {
-	if merged {
-		checkoutMainInProjectDir(ctx, p.projectDir, p.defaultBranch, p.logger)
-	}
-
 	var script string
 	if p.postTask != "" {
 		script = p.postTask
-		p.logger.Emit(logging.Opts{Domain: "post-task"}, "Using post_task config: %s (in %s)", script, p.projectDir)
+		p.logger.Emit(logging.Opts{Domain: "post-task"}, "Using post_task config: %s (in %s)", script, p.worktreeDir)
 	} else {
 		tc := verify.DetectPostTask(p.worktreeDir, p.projectDir)
 		if tc != nil {
@@ -220,7 +214,7 @@ func runPostTask(ctx context.Context, p runPostTaskParams, taskID string, prNumb
 	}
 	prStr := strconv.Itoa(prNumber)
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
-	cmd.Dir = p.projectDir
+	cmd.Dir = p.worktreeDir
 	cmd.Env = append(os.Environ(),
 		"RALPH_TASK_ID="+taskID,
 		"RALPH_PR_NUMBER="+prStr,
@@ -231,25 +225,5 @@ func runPostTask(ctx context.Context, p runPostTaskParams, taskID string, prNumb
 	p.logger.Emit(logging.Opts{Domain: "post-task"}, "Running %s (task=%s pr=%d merged=%t)", script, taskID, prNumber, merged)
 	if err := cmd.Run(); err != nil {
 		p.logger.Emit(logging.Opts{Domain: "post-task", Level: logging.Warn}, "Script exited with error: %v", err)
-	}
-}
-
-// checkoutMainInProjectDir checks out the default branch in projectDir and pulls
-// to ensure post-task scripts run against fresh main after a successful merge.
-// Errors are logged but do not block the post-task script — a failed checkout
-// is better tolerated than a hard failure here.
-func checkoutMainInProjectDir(ctx context.Context, projectDir, defaultBranch string, logger *logging.Logger) {
-	if defaultBranch == "" {
-		defaultBranch = "main"
-	}
-	logger.Emit(logging.Opts{Domain: "post-task"}, "Checking out %s in projectDir before post-task", defaultBranch)
-	checkoutCmd := exec.CommandContext(ctx, "git", "-C", projectDir, "checkout", defaultBranch)
-	if out, err := checkoutCmd.CombinedOutput(); err != nil {
-		logger.Emit(logging.Opts{Domain: "post-task", Level: logging.Warn}, "git checkout %s failed: %v — %s", defaultBranch, err, strings.TrimSpace(string(out)))
-		return
-	}
-	pullCmd := exec.CommandContext(ctx, "git", "-C", projectDir, "pull", "--rebase")
-	if out, err := pullCmd.CombinedOutput(); err != nil {
-		logger.Emit(logging.Opts{Domain: "post-task", Level: logging.Warn}, "git pull --rebase failed: %v — %s", err, strings.TrimSpace(string(out)))
 	}
 }
