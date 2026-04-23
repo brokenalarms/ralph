@@ -9,23 +9,29 @@ import (
 // StubBackend implements tasks.Backend for testing without shelling out to
 // bd or reading plan files. Configure fields to control task state.
 type StubBackend struct {
-	Remaining    int
-	Completed    int
-	Total        int
-	NextTask     string
-	NextID       string
-	NextPriority *int
-	BackendLabel string
-	Description  string
-	Acceptance   string
-	FullContext   string
-	SkippedTask   string
-	SkipReason    string
-	ResumeIDSet   string // last value passed to SetResumeTaskID
+	Remaining          int
+	Completed          int
+	Total              int
+	NextTask           string
+	NextID             string
+	NextPriority       *int
+	BackendLabel       string
+	Description        string
+	Acceptance         string
+	FullContext        string
+	SkippedTask        string
+	SkipReason         string
+	ResumeIDSet        string // last value passed to SetResumeTaskID
+	HasRemainingResult *bool  // when non-nil, HasRemaining returns this value instead of Remaining > 0
 }
 
-func (s *StubBackend) Init() error                    { return nil }
-func (s *StubBackend) HasRemaining() (bool, error)    { return s.Remaining > 0, nil }
+func (s *StubBackend) Init() error { return nil }
+func (s *StubBackend) HasRemaining() (bool, error) {
+	if s.HasRemainingResult != nil {
+		return *s.HasRemainingResult, nil
+	}
+	return s.Remaining > 0, nil
+}
 func (s *StubBackend) CountCompleted() (int, error)   { return s.Completed, nil }
 func (s *StubBackend) CountRemaining() (int, error)   { return s.Remaining, nil }
 func (s *StubBackend) CountTotal() (int, error)       { return s.Total, nil }

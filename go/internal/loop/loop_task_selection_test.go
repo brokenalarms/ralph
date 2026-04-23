@@ -181,6 +181,35 @@ func TestSelectNextTask_SetResumeIDOnFirstIteration(t *testing.T) {
 	}
 }
 
+// selectNextTask exits with actionDone and status all_skipped when wait=true
+// but all open tasks are in the skipped list — avoids infinite poll loop.
+func TestSelectNextTask_WaitMode_AllSkipped(t *testing.T) {
+	falseVal := false
+	backend := &testutil.StubBackend{
+		Remaining:          1,    // CountRemaining returns 1 (open task exists)
+		HasRemainingResult: &falseVal, // HasRemaining returns false (all skipped)
+		Total:              1,
+		NextID:             "",
+		NextTask:           "",
+	}
+	l, _ := newTestLoopForSelection(t, backend)
+
+	_, action := l.selectNextTask(context.Background(), selectNextTaskParams{
+		runIteration:  1,
+		maxIterations: 100,
+		wait:          true,
+		completedIDs:  map[string]bool{},
+	})
+
+	if action != actionDone {
+		t.Fatalf("expected actionDone when all tasks are skipped, got %v", action)
+	}
+	status, _ := l.state.Read("status")
+	if status != "all_skipped" {
+		t.Errorf("expected status all_skipped, got %q", status)
+	}
+}
+
 // selectNextTask does NOT call SetResumeTaskID on subsequent iterations
 // (runIteration > 0) to prevent back-to-back retries on the same task after
 // a no-signal exit.

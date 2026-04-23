@@ -515,9 +515,13 @@ func (l *Loop) execRunPostTask(ctx context.Context, taskID string, prNumber int,
 		l.postTaskHook.OnPostTask(ctx, taskID, prNumber, merged)
 		return
 	}
+	worktreeDir := l.cfg.VerifyDir
+	if worktreeDir == "" {
+		worktreeDir = l.cfg.Dirs.WorkDir
+	}
 	runPostTask(ctx, runPostTaskParams{
 		postTask:    l.cfg.PostTask,
-		worktreeDir: l.cfg.VerifyDir,
+		worktreeDir: worktreeDir,
 		projectDir:  l.cfg.Dirs.ProjectDir,
 		logger:      l.logger,
 	}, taskID, prNumber, merged)
