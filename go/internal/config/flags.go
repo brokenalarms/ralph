@@ -148,7 +148,7 @@ var Flags = []FlagDef{
 	},
 	{
 		Long: "--base-branch", MetaVar: "<name>",
-		Help: "Base branch for rebase/merge", Default: "develop",
+		Help: "Remote branch (origin/<name>) used for rebase and PR targets. The loop never touches your local checkout.", Default: "develop",
 		EnvVar: "RALPH_BASE_BRANCH", ConfigKey: "base_branch",
 		Kind: KindString,
 		Apply: func(cfg *Config, val string) error {
